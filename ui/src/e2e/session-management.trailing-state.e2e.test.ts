@@ -1,6 +1,7 @@
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import type { SessionCapability } from "../lib/sessions/session-capability.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -9,11 +10,25 @@ import {
   controlUiSessionUrl,
   createSessionManagementE2eSuite,
   installMockGateway,
-  requireRecord,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
+
+async function seedPullRequestSummary(page: Page, key: string, state: "open" | "merged") {
+  await page.evaluate(
+    (summary) => {
+      const app = document.querySelector("openclaw-app") as HTMLElement & {
+        runtime: { context: { sessions: SessionCapability } };
+      };
+      app.runtime.context.sessions.setPullRequestSummary(summary.key, {
+        numbers: [1],
+        state: summary.state,
+      });
+    },
+    { key, state },
+  );
+}
 
 suite.define(() => {
   it("vertically centers session actions in a two-line row", async () => {
@@ -50,7 +65,7 @@ suite.define(() => {
       const row = page.locator('[data-session-key="agent:main:two-line"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
       const pin = row.getByRole("button", { name: "Unpin session" });
-      const menu = row.getByRole("button", { name: "Open session menu" });
+      const menu = row.locator("[data-sidebar-session-archive]");
       await expect.poll(() => actionOpacity(pin)).toBe("1");
       await captureUiProof(suite, page, "sidebar-session-actions-centered.png");
 
@@ -167,7 +182,7 @@ suite.define(() => {
       await accessibility.detach();
       const state = row.locator(".sidebar-session-indicator .session-glyph__ring");
       const pin = row.getByRole("button", { name: "Pin session" });
-      const menu = row.getByRole("button", { name: "Open session menu" });
+      const menu = row.locator("[data-sidebar-session-archive]");
       await expect.poll(() => state.isVisible()).toBe(true);
       await expect.poll(() => actionOpacity(state)).toBe("1");
       await page.mouse.move(500, 500);
@@ -272,7 +287,7 @@ suite.define(() => {
       await row.waitFor({ state: "visible", timeout: 10_000 });
       const fork = row.locator(".sidebar-recent-session__name .sidebar-session-fork-indicator");
       const pin = row.getByRole("button", { name: "Pin session" });
-      const menu = row.getByRole("button", { name: "Open session menu" });
+      const menu = row.locator("[data-sidebar-session-archive]");
       await expect.poll(() => fork.isVisible()).toBe(true);
       await expect.poll(() => row.locator(".session-row-state").count()).toBe(0);
 
@@ -307,8 +322,13 @@ suite.define(() => {
     await page.addInitScript(() => {
       localStorage.setItem("openclaw:sidebar:sessions:show-preview", "false");
     });
-    const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
+    await installMockGateway(page, {
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.patch",
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+      ],
       methodResponses: {
         [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD]: { subscribed: true },
         "sessions.list": sessionsListResponse([
@@ -336,34 +356,7 @@ suite.define(() => {
       );
       await codingToggle.waitFor({ state: "visible" });
       await codingToggle.click();
-      await expect
-        .poll(async () => {
-          const requests = await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD);
-          return requests.some((request) => {
-            const sessionKeys = requireRecord(request.params).sessionKeys;
-            return Array.isArray(sessionKeys) && sessionKeys.includes(pullRequestKey);
-          });
-        })
-        .toBe(true);
-      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
-        sessions: {
-          [pullRequestKey]: {
-            pullRequests: [
-              {
-                branch: "fix/unread-pr",
-                number: 1,
-                owner: "openclaw",
-                repo: "openclaw",
-                state: "merged",
-                title: "Unread row pull request",
-                url: "https://example.test/openclaw/openclaw/pull/1",
-              },
-            ],
-            rateLimited: false,
-            status: "ready",
-          },
-        },
-      });
+      await seedPullRequestSummary(page, pullRequestKey, "merged");
 
       const plainRow = page.locator(`[data-session-key="${plainKey}"]`);
       const pullRequestRow = page.locator(`[data-session-key="${pullRequestKey}"]`);
@@ -419,7 +412,7 @@ suite.define(() => {
       await page.mouse.move(0, 0);
       await pullRequestIcon.waitFor({ state: "visible" });
       await unreadBadge.waitFor({ state: "visible" });
-      await pullRequestRow.getByRole("button", { name: "Open session menu" }).focus();
+      await pullRequestRow.locator("[data-sidebar-session-archive]").focus();
       await pullRequestIcon.waitFor({ state: "hidden" });
       await unreadBadge.waitFor({ state: "visible" });
       expect(await unreadBadge.boundingBox()).toEqual(badgeBounds);
@@ -458,7 +451,7 @@ suite.define(() => {
       await row.waitFor({ state: "visible", timeout: 10_000 });
       const state = row.locator(".sidebar-session-indicator .session-glyph__ring");
       const pin = row.getByRole("button", { name: "Pin session" });
-      const menu = row.getByRole("button", { name: "Open session menu" });
+      const menu = row.locator("[data-sidebar-session-archive]");
       await expect.poll(() => state.isVisible()).toBe(true);
       await expect.poll(() => actionOpacity(state)).toBe("1");
       await expect.poll(() => pin.isVisible()).toBe(true);
@@ -480,7 +473,7 @@ suite.define(() => {
     await page.addInitScript(() => {
       localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
     });
-    const gateway = await installMockGateway(page, {
+    await installMockGateway(page, {
       featureMethods: [
         "chat.metadata",
         "chat.startup",
@@ -519,34 +512,7 @@ suite.define(() => {
       );
       await codingToggle.waitFor({ state: "visible" });
       await codingToggle.click();
-      await expect
-        .poll(async () => {
-          const requests = await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD);
-          return requests.some((request) => {
-            const sessionKeys = requireRecord(request.params).sessionKeys;
-            return Array.isArray(sessionKeys) && sessionKeys.includes("agent:main:combined-state");
-          });
-        })
-        .toBe(true);
-      await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
-        sessions: {
-          "agent:main:combined-state": {
-            pullRequests: [
-              {
-                branch: "fix/combined-state",
-                number: 1,
-                owner: "openclaw",
-                repo: "openclaw",
-                state: "open",
-                title: "Combined state fix",
-                url: "https://example.test/openclaw/openclaw/pull/1",
-              },
-            ],
-            rateLimited: false,
-            status: "ready",
-          },
-        },
-      });
+      await seedPullRequestSummary(page, "agent:main:combined-state", "open");
 
       const row = page.locator('[data-session-key="agent:main:combined-state"]');
       await row.waitFor({ state: "visible", timeout: 10_000 });
@@ -608,7 +574,7 @@ suite.define(() => {
       const link = row.locator(".sidebar-recent-session__link");
       const titleRow = row.locator(".sidebar-recent-session__title-row");
       const pin = row.getByRole("button", { name: "Pin session" });
-      const menu = row.getByRole("button", { name: "Open session menu" });
+      const menu = row.locator("[data-sidebar-session-archive]");
       await expect
         .poll(() => link.evaluate((element) => getComputedStyle(element).paddingRight))
         .toBe("2px");

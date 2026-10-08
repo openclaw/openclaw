@@ -97,15 +97,12 @@ export function createTelegramUpdateOffsetPersistence(
     startDrain();
   };
 
-  const stop = async () => {
-    stopController.abort(new Error("Telegram update-offset persistence stopped."));
-    await activeDrain?.catch(() => undefined);
-  };
-
   return {
-    getAcceptedUpdateId: () => acceptedUpdateId,
     getCommittedUpdateId: () => committedUpdateId,
     persistUpdateId,
-    stop,
+    async stop() {
+      stopController.abort(new Error("Telegram update-offset persistence stopped."));
+      await activeDrain?.catch(() => undefined);
+    },
   };
 }

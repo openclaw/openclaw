@@ -1,12 +1,44 @@
-// Qa Lab type declarations define plugin contracts.
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import type { QaThinkingLevel } from "../../qa-thinking.js";
+import type { QaTerminalRequesterSettlement } from "../mock-openai/terminal-requester-settlement.js";
+import type { MockProviderVariant } from "./mock-provider-variant.js";
 
 export type QaProviderMode = "mock-openai" | "aimock" | "live-frontier";
 export type QaProviderModeInput = QaProviderMode;
 
+export type QaMockRequestSnapshot = {
+  raw: string;
+  body: Record<string, unknown>;
+  prompt: string;
+  allInputText: string;
+  toolOutput: string;
+  model: string;
+  providerVariant: MockProviderVariant;
+  imageInputCount: number;
+  plannedToolCallId?: string;
+  plannedToolName?: string;
+  toolOutputCallId?: string;
+  toolOutputStructuredError?: true;
+};
+
+/** Provider observation only; Gateway run/receipt identity must be collected separately. */
+export type QaMockContinuationCheckpoint = Readonly<{
+  cursor: number;
+  sessionId: string;
+  toolOutputCallId: string;
+}>;
+
+export type QaMockContinuationHold = {
+  reached: Promise<QaMockContinuationCheckpoint>;
+  release(): void;
+  cancel(): void;
+};
+
 export type QaMockProviderServer = {
   baseUrl: string;
+  sessionObserverUrl?: string;
+  terminalRequesters?: QaTerminalRequesterSettlement;
+  holdNextContinuation?: (sessionId: string, signal: AbortSignal) => QaMockContinuationHold;
   stop(): Promise<void>;
 };
 
@@ -23,13 +55,7 @@ type QaProviderGatewayModelsInput = {
   liveProviderConfigs?: Record<string, ModelProviderConfig>;
 };
 
-type QaProviderDefaultImageInput = {
-  modelProviderIds: readonly string[];
-};
-
 type QaProviderTurnTimeoutInput = {
-  primaryModel: string;
-  alternateModel: string;
   modelRef: string;
   fallbackMs: number;
 };
@@ -43,8 +69,6 @@ export type QaProviderDefinition = {
     serverLabel: string;
   };
   defaultModel(options?: { alternate?: boolean; preferredLiveModel?: string }): string;
-  defaultImageGenerationProviderIds: readonly string[];
-  defaultImageGenerationModel(input: QaProviderDefaultImageInput): string | null;
   usesFastModeByDefault(modelRef: string): boolean;
   resolveModelParams(input: QaProviderModelParamsInput): Record<string, unknown>;
   resolveTurnTimeoutMs(input: QaProviderTurnTimeoutInput): number;
@@ -53,7 +77,4 @@ export type QaProviderDefinition = {
     providers: Record<string, ModelProviderConfig>;
   } | null;
   mockAuthProviders?: readonly string[];
-  usesModelProviderPlugins: boolean;
-  scrubsLiveProviderEnv: boolean;
-  appliesLiveEnvAliases: boolean;
 };

@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import {
   filterCommandPaletteItems,
@@ -8,26 +7,6 @@ import {
 } from "./command-palette-catalog-search.ts";
 
 describe("command palette catalog search", () => {
-  it("reports failed acquisition from a successful catalog read while keeping its rows", async () => {
-    const result = await loadCommandPaletteCatalogItems({
-      client: createTestGatewayClient(async () => ({
-        models: [{ provider: "ollama", id: "retained", name: "Retained model", available: true }],
-        providerOutcomes: [{ provider: "ollama", status: "unavailable" }],
-      })),
-      agentId: "main",
-      agents: async () => null,
-      methodAvailable: (method) => method === "models.list",
-    });
-
-    expect(result.items).toContainEqual(
-      expect.objectContaining({ category: "models", label: "Retained model" }),
-    );
-    expect(result.modelSearchError).toBe(
-      "Some models could not be refreshed. Open Models to try again.",
-    );
-    expect(result.modelRequestFailed).toBe(false);
-  });
-
   it("opens meeting transcripts from search without querying agent chat history", () => {
     const items = filterCommandPaletteItems({
       query: "meeting",
@@ -48,16 +27,16 @@ describe("command palette catalog search", () => {
     expect(regular).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ category: "apps", label: "iPhone" }),
-        expect.objectContaining({ category: "settings", routeId: "profile" }),
+        expect.objectContaining({ category: "settings", action: "nav:profile" }),
       ]),
     );
-    expect(regular.some((item) => item.routeId === "security")).toBe(false);
-    expect(admin.some((item) => item.routeId === "security")).toBe(true);
+    expect(regular.some((item) => item.action === "nav:security")).toBe(false);
+    expect(admin.some((item) => item.action === "nav:security")).toBe(true);
     expect(regular.some((item) => item.label === "Meeting capture")).toBe(false);
     expect(admin).toContainEqual(
       expect.objectContaining({
         label: "Meeting capture",
-        routeId: "communications",
+        action: "nav:communications",
         search: "?section=transcripts",
       }),
     );
@@ -72,7 +51,6 @@ describe("command palette catalog search", () => {
               {
                 id: "nightly",
                 name: "Nightly invoices",
-                description: "Reconciles customer billing",
               },
             ],
           };
@@ -98,24 +76,13 @@ describe("command palette catalog search", () => {
               },
             ],
           };
-        case "models.list":
-          return {
-            models: [
-              {
-                id: "gpt-search",
-                name: "Search model",
-                provider: "openai",
-                tags: ["fast"],
-              },
-            ],
-          };
         default:
           throw new Error(`Unexpected method: ${method}`);
       }
     });
 
-    const { items } = await loadCommandPaletteCatalogItems({
-      client: { request } as unknown as GatewayBrowserClient,
+    const items = await loadCommandPaletteCatalogItems({
+      client: createTestGatewayClient(request),
       agentId: "main",
       agents: async () => ({
         defaultId: "main",
@@ -131,8 +98,7 @@ describe("command palette catalog search", () => {
         expect.objectContaining({ category: "agents", label: "Main assistant" }),
         expect.objectContaining({ category: "automations", label: "Nightly invoices" }),
         expect.objectContaining({ category: "skills", label: "Forecast brief" }),
-        expect.objectContaining({ category: "plugins", label: "Weather helper" }),
-        expect.objectContaining({ category: "models", label: "Search model" }),
+        expect.objectContaining({ category: "plugins", label: "Weather helper", icon: "plug" }),
       ]),
     );
     expect(request).toHaveBeenCalledWith(
@@ -141,10 +107,6 @@ describe("command palette catalog search", () => {
     );
     expect(request).toHaveBeenCalledWith("skills.status", { agentId: "main" });
     expect(request).toHaveBeenCalledWith("plugins.list", {});
-    expect(request).toHaveBeenCalledWith("models.list", {
-      view: "configured",
-      agentId: "main",
-      preparedOnly: true,
-    });
+    expect(request).not.toHaveBeenCalledWith("models.list", expect.anything());
   });
 });

@@ -1,33 +1,46 @@
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
+  appendTranscriptEvent,
   appendTranscriptMessage,
+  patchSessionEntryCore,
   readActiveTranscriptEntryAnchor,
-  readClosedTranscriptTurn,
-  upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { readClosedTranscriptTurnInDatabase } from "../../config/sessions/session-accessor.transcript-range.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { createDeferredCore } from "../../shared/deferred.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+  runOpenClawAgentWorkerWrite,
+  SQLITE_SESSION_WRITER_QUEUES,
+} from "../../state/openclaw-agent-write-admission.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import {
   drainPendingContextEngineTurnsBeforeRun,
   finalizeAcceptedContextEngineTurn,
   type ContextEngineTurnAttemptFacts,
 } from "./context-engine-turn-attempt.js";
-import { enqueueContextEngineTurnIntent } from "./context-engine-turn-outbox.js";
+import {
+  enqueueContextEngineTurnCommit,
+  enqueueContextEngineTurnIntent,
+} from "./context-engine-turn-outbox.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-context-turn-range-");
 
-afterEach(() => {
-  closeOpenClawAgentDatabasesForTest();
-});
+async function seedTurnSession(
+  target: Parameters<typeof patchSessionEntryCore>[0] & { sessionId: string },
+) {
+  const entry = { sessionId: target.sessionId, updatedAt: 1 };
+  // Queue assertions measure outbox settlement, independent of automatic session housekeeping.
+  await patchSessionEntryCore(target, () => entry, {
+    fallbackEntry: entry,
+    skipMaintenance: true,
+    workerGuard: {},
+  });
+}
 
-// Keep durable-engine setup identical across range and recovery cases so each
-// test varies only the transcript state that owns the behavior under test.
 function createDurableLease() {
   const commitTurn = vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => ({
     status: "committed",
@@ -62,24 +75,26 @@ function createDurableLease() {
   return { commitTurn, lease };
 }
 
-// Build a closed accepted turn with optional history and persist its admission
-// intent, matching the durable host lifecycle before finalization starts.
-async function createAcceptedTurnFixture(params: {
-  answer: string;
-  logicalTurnId: string;
-  prefix: string[];
-  sessionId: string;
-}) {
-  const tempDir = tempDirs.make("openclaw-context-turn-range-");
+async function createAcceptedTurnFixture(
+  params: {
+    answer?: string;
+    logicalTurnId?: string;
+    metadataCount?: number;
+    prefix?: string[];
+    sessionId?: string;
+  } = {},
+) {
+  const sessionId = params.sessionId ?? "accepted-turn";
+  const tempDir = sessionDirs.make();
   const target = {
     agentId: "main",
-    sessionId: params.sessionId,
-    sessionKey: `agent:main:${params.sessionId}`,
+    sessionId,
+    sessionKey: `agent:main:${sessionId}`,
     storePath: path.join(tempDir, "sessions.json"),
   };
-  await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+  await seedTurnSession(target);
   let parentId: string | undefined;
-  for (const [index, content] of params.prefix.entries()) {
+  for (const [index, content] of (params.prefix ?? []).entries()) {
     const entry = await appendTranscriptMessage(target, {
       message: { role: "assistant", content },
       parentId,
@@ -87,14 +102,28 @@ async function createAcceptedTurnFixture(params: {
     });
     parentId = entry?.messageId;
   }
+  const priorId = parentId;
   const admitted = await appendTranscriptMessage(target, {
     message: { role: "user", content: "current" },
     parentId,
     now: 10_000,
   });
+  parentId = admitted?.messageId;
+  for (let index = 0; index < (params.metadataCount ?? 0); index += 1) {
+    const id = `metadata-${index}`;
+    await appendTranscriptEvent(target, {
+      type: "custom",
+      id,
+      parentId,
+      timestamp: new Date(10_001 + index).toISOString(),
+      customType: "turn-progress",
+      data: { index },
+    });
+    parentId = id;
+  }
   const terminal = await appendTranscriptMessage(target, {
-    message: { role: "assistant", content: params.answer },
-    parentId: admitted?.messageId,
+    message: { role: "assistant", content: params.answer ?? "answer" },
+    parentId,
     now: 11_000,
   });
   if (!admitted?.anchor || !terminal?.anchor) {
@@ -102,7 +131,7 @@ async function createAcceptedTurnFixture(params: {
   }
   const admission = {
     ...admitted.anchor,
-    logicalTurnId: params.logicalTurnId,
+    logicalTurnId: params.logicalTurnId ?? "logical-turn",
     role: "user" as const,
   };
   const database = openOpenClawAgentDatabase({
@@ -115,9 +144,25 @@ async function createAcceptedTurnFixture(params: {
     engineId: "test",
     isHeartbeat: false,
   });
+  const readRow = (key = admission.logicalTurnId) =>
+    database.db
+      .prepare(
+        "SELECT payload_json, attempt_count, last_error FROM context_engine_turn_outbox WHERE advancement_key = ?",
+      )
+      .get(key) as
+      | { payload_json: string; attempt_count: number; last_error: string | null }
+      | undefined;
+  const readPayload = (key = admission.logicalTurnId): unknown => {
+    const row = readRow(key);
+    return row ? JSON.parse(row.payload_json) : undefined;
+  };
   return {
     admission,
     database,
+    target,
+    priorId,
+    readRow,
+    readPayload,
     facts: {
       boundary: { admission, terminal: terminal.anchor },
       sessionIdUsed: target.sessionId,
@@ -131,6 +176,152 @@ async function createAcceptedTurnFixture(params: {
 }
 
 describe("accepted context-engine turn finalization", () => {
+  it("commits the accepted session first and preserves bounded retries for other sessions", async () => {
+    const { database, facts } = await createAcceptedTurnFixture({
+      answer: "answer",
+      logicalTurnId: "accepted-after-orphans",
+      prefix: [],
+      sessionId: "accepted-after-orphans",
+    });
+    database.db
+      .prepare("DELETE FROM context_engine_turn_outbox WHERE advancement_key = ?")
+      .run(facts.boundary.admission.logicalTurnId);
+    const retrySessionId = "retry-ready";
+    enqueueContextEngineTurnCommit({
+      database,
+      engineId: "test",
+      payload: {
+        boundary: {
+          admission: {
+            ...facts.boundary.admission,
+            logicalTurnId: retrySessionId,
+            sessionId: retrySessionId,
+            sessionKey: `agent:main:${retrySessionId}`,
+          },
+          terminal: {
+            ...facts.boundary.terminal,
+            sessionId: retrySessionId,
+            sessionKey: `agent:main:${retrySessionId}`,
+          },
+        },
+        isHeartbeat: false,
+        messages: [],
+      },
+    });
+    for (let index = 0; index < 15; index += 1) {
+      const sessionId = `orphaned-admission-${index}`;
+      enqueueContextEngineTurnIntent({
+        admission: {
+          ...facts.boundary.admission,
+          logicalTurnId: sessionId,
+          sessionId,
+          sessionKey: `agent:main:${sessionId}`,
+        },
+        database,
+        engineId: "test",
+        isHeartbeat: false,
+      });
+    }
+    enqueueContextEngineTurnIntent({
+      admission: facts.boundary.admission,
+      database,
+      engineId: "test",
+      isHeartbeat: false,
+    });
+    const { commitTurn, lease } = createDurableLease();
+
+    await finalizeAcceptedContextEngineTurn({ facts, lease });
+
+    expect(commitTurn.mock.calls.map(([turn]) => turn.sessionId)).toEqual([
+      facts.sessionIdUsed,
+      retrySessionId,
+    ]);
+  });
+
+  it.each([null, "missing", "metadata-0", "metadata-1", "terminal"])(
+    "preserves the depth boundary for a broken ancestry ending at %s",
+    async (parent) => {
+      const { database, facts } = await createAcceptedTurnFixture({
+        answer: "answer",
+        logicalTurnId: "broken-metadata-turn",
+        metadataCount: 2,
+        prefix: [],
+        sessionId: "broken-metadata-turn",
+      });
+      database.db
+        .prepare(
+          "UPDATE transcript_event_identities SET parent_id = ? WHERE session_id = ? AND event_id = ?",
+        )
+        .run(
+          parent === "terminal" ? facts.boundary.terminal.entryId : parent,
+          facts.sessionIdUsed,
+          "metadata-0",
+        );
+      expect(
+        readClosedTranscriptTurnInDatabase(database.db, {
+          boundary: facts.boundary,
+          maxEvents: 2,
+          maxBytes: 1024,
+        }),
+      ).toEqual({ kind: "too-large" });
+      expect(
+        readClosedTranscriptTurnInDatabase(database.db, {
+          boundary: facts.boundary,
+          maxEvents: 3,
+          maxBytes: 1024,
+        }),
+      ).toEqual({ kind: "non-descendant" });
+    },
+  );
+
+  it("bounds ancestry reads while preserving the accepted range and depth limit", async () => {
+    const { database, facts } = await createAcceptedTurnFixture({
+      answer: "answer",
+      logicalTurnId: "metadata-turn",
+      metadataCount: 64,
+      prefix: [],
+      sessionId: "metadata-turn",
+    });
+    const reads = trackSqliteStatementExecutions(database.db, ["read"], (sql) =>
+      /^\s*(?:select|with)\b/i.test(sql) ? "read" : null,
+    );
+    try {
+      expect(
+        readClosedTranscriptTurnInDatabase(database.db, {
+          boundary: facts.boundary,
+          maxEvents: 65,
+          maxBytes: 1024,
+        }),
+      ).toMatchObject({
+        kind: "ok",
+        messages: [
+          { role: "user", content: "current" },
+          { role: "assistant", content: "answer" },
+        ],
+      });
+      expect(reads.counts.read).toBeLessThanOrEqual(8);
+    } finally {
+      reads.restore();
+    }
+    expect(
+      readClosedTranscriptTurnInDatabase(database.db, {
+        boundary: facts.boundary,
+        maxEvents: 64,
+        maxBytes: 1024,
+      }),
+    ).toEqual({ kind: "too-large" });
+    const { commitTurn, lease } = createDurableLease();
+    await finalizeAcceptedContextEngineTurn({ facts, lease });
+    expect(commitTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messages: [
+          expect.objectContaining({ role: "user", content: "current" }),
+          expect.objectContaining({ role: "assistant", content: "answer" }),
+        ],
+      }),
+    );
+  });
+
   it("silently skips engines without durable turn ownership but rejects partial declarations", async () => {
     const admission = {
       agentId: "main",
@@ -161,40 +352,19 @@ describe("accepted context-engine turn finalization", () => {
       aborted: false,
       yieldAborted: false,
     } satisfies ContextEngineTurnAttemptFacts;
-    const makeLease = (engine: ContextEngine): ContextEngineLogicalTurnLease => ({
-      engine,
-      effectiveEngine: engine,
-      effectiveEngineId: engine.info.id,
-      effectiveEnginePluginId: undefined,
-      degraded: false,
-      degradedReason: undefined,
-      selectForHost: vi.fn(),
-      degradeBeforeStart: vi.fn(),
-      begin: vi.fn(),
-      deferDisposalUntil: () => undefined,
-      dispose: async () => undefined,
-    });
-    const makeEngine = (declaresDurableAdvancement: boolean): ContextEngine => ({
-      info: {
-        id: declaresDurableAdvancement ? "partial" : "legacy",
-        name: declaresDurableAdvancement ? "Partial" : "Legacy",
-        ...(declaresDurableAdvancement
-          ? {
-              transcriptSemantics: {
-                turnAdvancementIdempotency: "atomic-idempotent-v1" as const,
-              },
-            }
-          : {}),
-      },
-      ingest: async () => ({ ingested: false }),
-      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
-      compact: async () => ({ ok: true, compacted: false }),
-    });
+    const makeLease = (declaresDurableAdvancement: boolean) => {
+      const { lease } = createDurableLease();
+      delete lease.engine.commitTurn;
+      if (!declaresDurableAdvancement) {
+        delete lease.engine.info.transcriptSemantics;
+      }
+      return lease;
+    };
     const warn = vi.fn();
 
     await finalizeAcceptedContextEngineTurn({
       facts,
-      lease: makeLease(makeEngine(false)),
+      lease: makeLease(false),
       warn,
     });
 
@@ -202,7 +372,7 @@ describe("accepted context-engine turn finalization", () => {
 
     await finalizeAcceptedContextEngineTurn({
       facts,
-      lease: makeLease(makeEngine(true)),
+      lease: makeLease(true),
       warn,
     });
 
@@ -212,42 +382,12 @@ describe("accepted context-engine turn finalization", () => {
   });
 
   it("advances only the admitted durable range and rejects stale admission facts", async () => {
-    const tempDir = tempDirs.make("openclaw-context-turn-attempt-");
-    const target = {
-      agentId: "main",
-      sessionId: "accepted-turn",
-      sessionKey: "agent:main:accepted-turn",
-      storePath: path.join(tempDir, "sessions.json"),
-    };
-    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
-    const prior = await appendTranscriptMessage(target, {
-      message: { role: "assistant", content: "prior" },
-      now: 1_000,
-    });
-    const admitted = await appendTranscriptMessage(target, {
-      message: { role: "user", content: "current" },
-      parentId: prior?.messageId,
-      now: 2_000,
-    });
-    const terminal = await appendTranscriptMessage(target, {
-      message: { role: "assistant", content: "answer" },
-      parentId: admitted?.messageId,
-      now: 3_000,
-    });
-    if (!admitted?.anchor || !terminal?.anchor) {
-      throw new Error("expected admitted turn transcript");
-    }
-
+    const { admission, database, facts, target, priorId, readPayload, readRow } =
+      await createAcceptedTurnFixture({ prefix: ["prior"] });
+    const terminal = facts.boundary.terminal;
     expect(
-      readClosedTranscriptTurn({
-        boundary: {
-          admission: {
-            ...admitted.anchor,
-            logicalTurnId: "bounded-turn-read",
-            role: "user",
-          },
-          terminal: terminal.anchor,
-        },
+      readClosedTranscriptTurnInDatabase(database.db, {
+        boundary: facts.boundary,
         maxEvents: 2,
         maxBytes: 1024,
       }),
@@ -258,31 +398,15 @@ describe("accepted context-engine turn finalization", () => {
         { role: "assistant", content: "answer" },
       ],
     });
-
     const { commitTurn, lease } = createDurableLease();
-    const admission = {
-      ...admitted.anchor,
-      logicalTurnId: "logical-turn-1",
-      role: "user" as const,
-    };
-    const database = openOpenClawAgentDatabase({
-      agentId: target.agentId,
-      path: admission.storePath,
-    });
-    enqueueContextEngineTurnIntent({
-      admission,
-      database,
-      engineId: "test",
-      isHeartbeat: false,
-    });
     const baseFacts = {
-      boundary: { admission, terminal: terminal.anchor },
-      sessionIdUsed: target.sessionId,
-      sessionKey: target.sessionKey,
-      sessionTarget: target,
-      promptError: false,
-      aborted: false,
-      yieldAborted: false,
+      ...facts,
+      runtimeContext: {
+        provider: "test",
+        modelId: "model",
+        modelContextWindow: 200_000,
+        tokenBudget: 180_000,
+      },
     };
 
     await finalizeAcceptedContextEngineTurn({ facts: baseFacts, lease });
@@ -290,6 +414,7 @@ describe("accepted context-engine turn finalization", () => {
     expect(commitTurn).toHaveBeenCalledOnce();
     expect(commitTurn).toHaveBeenCalledWith(
       expect.objectContaining({
+        runtimeContext: baseFacts.runtimeContext,
         messages: [
           expect.objectContaining({ role: "user", content: "current" }),
           expect.objectContaining({ role: "assistant", content: "answer" }),
@@ -315,17 +440,7 @@ describe("accepted context-engine turn finalization", () => {
     expect(warn).toHaveBeenCalledWith(
       "[context-engine] skipped accepted turn advancement: accepted context-engine transcript range is stale",
     );
-    expect(
-      JSON.parse(
-        (
-          database.db
-            .prepare(
-              "SELECT payload_json FROM context_engine_turn_outbox WHERE advancement_key = ?",
-            )
-            .get(admission.logicalTurnId) as { payload_json: string }
-        ).payload_json,
-      ),
-    ).toMatchObject({ state: "blocked", failure: "stale" });
+    expect(readPayload()).toMatchObject({ state: "blocked", failure: "stale" });
 
     const nextAdmission = {
       ...admission,
@@ -340,7 +455,7 @@ describe("accepted context-engine turn finalization", () => {
 
     const sibling = await appendTranscriptMessage(target, {
       message: { role: "assistant", content: "sibling" },
-      parentId: prior?.messageId,
+      parentId: priorId,
       now: 4_000,
     });
     if (!sibling) {
@@ -360,9 +475,9 @@ describe("accepted context-engine turn finalization", () => {
       )
       .run(
         target.sessionId,
-        terminal.anchor.activeMessagePosition + 1,
+        terminal.activeMessagePosition + 1,
         siblingIdentity.seq,
-        terminal.anchor.activeMessagePosition + 1,
+        terminal.activeMessagePosition + 1,
       );
     database.db
       .prepare(
@@ -400,17 +515,10 @@ describe("accepted context-engine turn finalization", () => {
     expect(warn).toHaveBeenCalledWith(
       "[context-engine] skipped accepted turn advancement: accepted context-engine transcript range is non-descendant",
     );
-    expect(
-      JSON.parse(
-        (
-          database.db
-            .prepare(
-              "SELECT payload_json FROM context_engine_turn_outbox WHERE advancement_key = ?",
-            )
-            .get(siblingAdmission.logicalTurnId) as { payload_json: string }
-        ).payload_json,
-      ),
-    ).toMatchObject({ state: "blocked", failure: "non-descendant" });
+    expect(readPayload(siblingAdmission.logicalTurnId)).toMatchObject({
+      state: "blocked",
+      failure: "non-descendant",
+    });
 
     for (const flag of ["aborted", "promptError", "yieldAborted"] as const) {
       const rejectedAdmission = { ...admission, logicalTurnId: `logical-turn-${flag}` };
@@ -430,11 +538,7 @@ describe("accepted context-engine turn finalization", () => {
         warn,
       });
       expect(commitTurn, flag).toHaveBeenCalledOnce();
-      expect(
-        database.db
-          .prepare("SELECT 1 FROM context_engine_turn_outbox WHERE advancement_key = ?")
-          .get(rejectedAdmission.logicalTurnId),
-      ).toBeUndefined();
+      expect(readRow(rejectedAdmission.logicalTurnId)).toBeUndefined();
     }
   });
 
@@ -470,57 +574,212 @@ describe("accepted context-engine turn finalization", () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("target changed after admission"));
   });
 
-  it("commits a small accepted turn when the historical prefix exceeds the accepted-turn cap", async () => {
-    const padding = "x".repeat(3 * 1024 * 1024);
-    const { facts } = await createAcceptedTurnFixture({
-      answer: "answer",
-      logicalTurnId: "logical-turn-large-prefix",
-      prefix: [0, 1, 2].map((index) => `prefix-${index} ${padding}`),
-      sessionId: "large-prefix-turn",
-    });
-    const { commitTurn, lease } = createDurableLease();
-    const warn = vi.fn();
+  it.each(["history", "accepted turn"] as const)(
+    "applies the byte cap only to the accepted range, with oversized %s",
+    async (oversized) => {
+      const { database, facts, readRow, readPayload } = await createAcceptedTurnFixture({
+        answer: oversized === "accepted turn" ? `answer ${"x".repeat(9 * 1024 * 1024)}` : "answer",
+        prefix:
+          oversized === "history"
+            ? [0, 1, 2].map((index) => `prefix-${index} ${"x".repeat(3 * 1024 * 1024)}`)
+            : ["prior"],
+      });
+      const { commitTurn, lease } = createDurableLease();
+      const warn = vi.fn();
+      const hostOutboxSql = trackSqliteStatementExecutions(database.db, ["outbox"], (sql) =>
+        sql.includes("context_engine_turn_outbox") ? "outbox" : null,
+      );
+      try {
+        await finalizeAcceptedContextEngineTurn({ facts, lease, warn });
+      } finally {
+        hostOutboxSql.restore();
+      }
+      expect(hostOutboxSql.counts.outbox).toBe(0);
+      if (oversized === "history") {
+        expect(warn).not.toHaveBeenCalled();
+        expect(commitTurn).toHaveBeenCalledOnce();
+        expect(commitTurn.mock.calls[0]?.[0].messages).toEqual([
+          expect.objectContaining({ role: "user", content: "current" }),
+          expect.objectContaining({ role: "assistant", content: "answer" }),
+        ]);
+        expect(commitTurn.mock.calls[0]?.[0]).not.toHaveProperty("prePromptMessageCount");
+        expect(readRow()).toBeUndefined();
+      } else {
+        expect(commitTurn).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledWith(
+          "[context-engine] skipped accepted turn advancement: accepted context-engine transcript range is too-large",
+        );
+        expect(readPayload()).toMatchObject({ state: "blocked", failure: "too-large" });
+      }
+    },
+  );
 
-    await finalizeAcceptedContextEngineTurn({ facts, lease, warn });
-
-    expect(warn).not.toHaveBeenCalledWith(
-      expect.stringContaining("accepted context-engine transcript range is too-large"),
-    );
-    expect(commitTurn).toHaveBeenCalledOnce();
-    const commitParams = commitTurn.mock.calls[0]?.[0];
-    expect(commitParams?.messages).toEqual([
-      expect.objectContaining({ role: "user", content: "current" }),
-      expect.objectContaining({ role: "assistant", content: "answer" }),
-    ]);
-    expect(commitParams).not.toHaveProperty("prePromptMessageCount");
-  });
-
-  it("still blocks an accepted turn whose own range exceeds the cap", async () => {
-    const { admission, database, facts } = await createAcceptedTurnFixture({
-      answer: `answer ${"x".repeat(9 * 1024 * 1024)}`,
-      logicalTurnId: "logical-turn-oversized",
-      prefix: ["prior"],
-      sessionId: "oversized-turn",
-    });
-    const { commitTurn, lease } = createDurableLease();
-    const warn = vi.fn();
-
-    await finalizeAcceptedContextEngineTurn({ facts, lease, warn });
-
-    expect(commitTurn).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(
-      "[context-engine] skipped accepted turn advancement: accepted context-engine transcript range is too-large",
-    );
-    expect(
-      JSON.parse(
-        (
+  it.each(["finalization", "commit recovery", "publication recovery"] as const)(
+    "queues %s behind an in-flight worker write",
+    async (operation) => {
+      const { admission, database, facts, readPayload, readRow } =
+        await createAcceptedTurnFixture();
+      const { commitTurn, lease } = createDurableLease();
+      const warn = vi.fn();
+      const recovery = operation !== "finalization";
+      if (operation === "commit recovery") {
+        commitTurn.mockRejectedValueOnce(new Error("engine offline"));
+        await finalizeAcceptedContextEngineTurn({ facts, lease, warn });
+        expect(readPayload()).toMatchObject({ state: "ready" });
+      } else if (operation === "publication recovery") {
+        // Acceptance must survive a failed publication transaction for the next run to recover.
+        const terminal = database.db
+          .prepare(
+            "SELECT event.seq AS seq, event.event_json AS event_json FROM transcript_events AS event JOIN transcript_event_identities AS identity ON identity.session_id = event.session_id AND identity.seq = event.seq WHERE identity.session_id = ? AND identity.event_id = ?",
+          )
+          .get(facts.sessionIdUsed, facts.boundary.terminal.entryId) as {
+          seq: number;
+          event_json: string;
+        };
+        const setJson = (value: string) =>
           database.db
-            .prepare(
-              "SELECT payload_json FROM context_engine_turn_outbox WHERE advancement_key = ?",
-            )
-            .get(admission.logicalTurnId) as { payload_json: string }
-        ).payload_json,
-      ),
-    ).toMatchObject({ state: "blocked", failure: "too-large" });
-  });
+            .prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = ?")
+            .run(value, facts.sessionIdUsed, terminal.seq);
+        setJson("{");
+        try {
+          await finalizeAcceptedContextEngineTurn({ facts, lease, warn });
+        } finally {
+          setJson(terminal.event_json);
+        }
+        expect(warn).toHaveBeenCalledWith(
+          expect.stringContaining("[context-engine] skipped accepted turn advancement:"),
+        );
+        expect(commitTurn).not.toHaveBeenCalled();
+        expect(readPayload()).toMatchObject({ state: "accepted" });
+      }
+      warn.mockClear();
+      const commitsBefore = commitTurn.mock.calls.length;
+      const admitted = createDeferredCore();
+      const releaseWorker = createDeferredCore();
+      const worker = runOpenClawAgentWorkerWrite(
+        { agentId: database.agentId, path: database.path },
+        async () => {
+          admitted.resolve();
+          await releaseWorker.promise;
+        },
+      );
+      await admitted.promise;
+      const nextAdmission = { ...admission, logicalTurnId: "logical-turn-after-pending" };
+      const settling = recovery
+        ? drainPendingContextEngineTurnsBeforeRun({ admission: nextAdmission, lease, warn })
+        : finalizeAcceptedContextEngineTurn({ facts, lease, warn });
+      try {
+        // Inspect before yielding: a host write would bypass the held worker's queue.
+        if (!recovery) {
+          expect(readPayload()).toMatchObject({ state: "admitted" });
+        }
+        expect(commitTurn).toHaveBeenCalledTimes(commitsBefore);
+        expect(
+          [...SQLITE_SESSION_WRITER_QUEUES.values()].reduce(
+            (count, queue) => count + queue.pending.length,
+            0,
+          ),
+        ).toBe(1);
+      } finally {
+        releaseWorker.resolve();
+        await worker;
+        await settling;
+      }
+      expect(warn).not.toHaveBeenCalled();
+      expect(lease.degradeBeforeStart).not.toHaveBeenCalled();
+      expect(commitTurn).toHaveBeenCalledTimes(commitsBefore + 1);
+      expect(readRow()).toBeUndefined();
+      if (recovery) {
+        expect(readPayload(nextAdmission.logicalTurnId)).toMatchObject({ state: "admitted" });
+      }
+      if (operation === "publication recovery") {
+        expect(commitTurn.mock.calls[0]?.[0]).toMatchObject({
+          advancementKey: admission.logicalTurnId,
+          messages: [
+            expect.objectContaining({ role: "user", content: "current" }),
+            expect.objectContaining({ role: "assistant", content: "answer" }),
+          ],
+        });
+      }
+    },
+  );
+
+  it.each([{ outcome: "committed" as const }, { outcome: "failed" as const }])(
+    "settles a drained row behind a worker write that starts during commitTurn ($outcome)",
+    async ({ outcome }) => {
+      const { admission, database, facts } = await createAcceptedTurnFixture({
+        answer: "answer",
+        logicalTurnId: `logical-turn-during-commit-${outcome}`,
+        prefix: [],
+        sessionId: `during-commit-${outcome}`,
+      });
+      const { commitTurn, lease } = createDurableLease();
+      const warn = vi.fn();
+      const readRow = () =>
+        database.db
+          .prepare(
+            "SELECT payload_json, attempt_count, last_error FROM context_engine_turn_outbox WHERE advancement_key = ?",
+          )
+          .get(admission.logicalTurnId) as
+          | { payload_json: string; attempt_count: number; last_error: string | null }
+          | undefined;
+      let releaseWorker!: () => void;
+      let worker: Promise<void> | undefined;
+      let commitReturning!: () => void;
+      const commitSettling = new Promise<void>((resolve) => {
+        commitReturning = resolve;
+      });
+      commitTurn.mockImplementationOnce(async () => {
+        let workerAdmitted!: () => void;
+        const admitted = new Promise<void>((resolve) => {
+          workerAdmitted = resolve;
+        });
+        worker = runOpenClawAgentWorkerWrite(
+          { agentId: database.agentId, path: database.path },
+          async () => {
+            workerAdmitted();
+            await new Promise<void>((resolve) => {
+              releaseWorker = resolve;
+            });
+          },
+        );
+        await admitted;
+        commitReturning();
+        if (outcome === "failed") {
+          throw new Error("engine offline");
+        }
+        return { status: "committed" };
+      });
+
+      const finalizing = finalizeAcceptedContextEngineTurn({ facts, lease, warn });
+      await commitSettling;
+      // Let the drain reach its settlement write without a timer.
+      for (let hop = 0; hop < 20; hop += 1) {
+        await Promise.resolve();
+      }
+      const rowWhileWorkerHeld = readRow();
+      const queuedWhileWorkerHeld = [...SQLITE_SESSION_WRITER_QUEUES.values()].reduce(
+        (count, queue) => count + queue.pending.length,
+        0,
+      );
+      releaseWorker();
+      await worker;
+      await finalizing;
+
+      expect(JSON.parse(rowWhileWorkerHeld?.payload_json ?? "{}")).toMatchObject({
+        state: "ready",
+      });
+      expect(rowWhileWorkerHeld?.attempt_count).toBe(0);
+      expect(queuedWhileWorkerHeld).toBe(1);
+      if (outcome === "committed") {
+        expect(readRow()).toBeUndefined();
+        expect(warn).not.toHaveBeenCalled();
+      } else {
+        expect(readRow()).toMatchObject({ attempt_count: 1, last_error: "engine offline" });
+        expect(warn).toHaveBeenCalledWith(
+          `[context-engine] durable turn advancement remains queued: ${admission.logicalTurnId}: engine offline`,
+        );
+      }
+    },
+  );
 });

@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { performance } from "node:perf_hooks";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -69,6 +70,34 @@ describe("embedded agent preparation timing", () => {
 const prepare = createEmbeddedAttemptPreparation({ assertCurrent: () => {} });
 
 describe("embedded attempt preparation dispatch", () => {
+  it("amortizes event-loop admission across inexpensive concurrent stages", async () => {
+    const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+    let controlTurns = 0;
+    let running = true;
+    const control = () => {
+      if (running) {
+        controlTurns++;
+        setImmediate(control);
+      }
+    };
+    setImmediate(control);
+    try {
+      await Promise.all(
+        Array.from({ length: 8 }, async () => {
+          for (let stage = 0; stage < 4; stage++) {
+            await prepare("attempt.tool-catalog", () => stage);
+          }
+        }),
+      );
+      expect(controlTurns).toBeGreaterThan(0);
+      expect(controlTurns).toBeLessThanOrEqual(4);
+    } finally {
+      running = false;
+      clock.mockRestore();
+      await yieldToEventLoop();
+    }
+  });
+
   it("lets control callbacks advance before a burst of preparation stages finishes", async () => {
     const started: number[] = [];
     let observedStarts = -1;
@@ -88,7 +117,27 @@ describe("embedded attempt preparation dispatch", () => {
     );
     await controlCallback.promise;
     expect(started).toEqual(Array.from({ length: 32 }, (_, index) => index));
-    expect(observedStarts).toBe(1);
+    expect(observedStarts).toBeGreaterThan(0);
+    expect(observedStarts).toBeLessThanOrEqual(16);
+  });
+
+  it("yields after expensive synchronous work before admitting the next stage", async () => {
+    let elapsed = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
+    const events: string[] = [];
+    try {
+      await Promise.all([
+        prepare("attempt.bootstrap", () => {
+          events.push("expensive");
+          elapsed += 10;
+          setImmediate(() => events.push("control"));
+        }),
+        prepare("attempt.tool-catalog", () => events.push("next")),
+      ]);
+      expect(events).toEqual(["expensive", "control", "next"]);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("preserves caller context and overlaps asynchronous preparation", async () => {

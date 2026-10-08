@@ -1,0 +1,224 @@
+---
+summary: "Register an AgentHarnessV2, plus the optional isolated-completion and delegated-execution capabilities"
+read_when:
+  - You are writing the plugin entry that calls `api.registerAgentHarness`
+  - You are implementing `runIsolatedCompletionV2`
+  - You need to let a trusted plugin execute a session your harness owns
+title: "Register an agent harness"
+sidebarTitle: "Registration"
+---
+
+The registration call itself, and the two optional capabilities a registered harness can add: one fresh tool-free inference call, and consent for a trusted delegate to execute an existing model-locked session. Part of the [Agent harness plugins](/plugins/sdk-agent-harness) reference.
+
+## Register a harness
+
+**Import:** `openclaw/plugin-sdk/agent-harness`
+
+```typescript
+import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+
+const myHarness: AgentHarnessV2 = {
+  id: "my-harness",
+  label: "My native agent harness",
+
+  supports(ctx) {
+    const routeSupportsHarness =
+      ctx.modelProvider?.runtimePolicy?.compatibleIds.includes("my-harness") === true;
+    const canReproduceRequest = ctx.modelProvider?.requestTransportOverrides !== "present";
+    return ctx.provider === "my-provider" && routeSupportsHarness && canReproduceRequest
+      ? { supported: true, priority: 100 }
+      : { supported: false, reason: "effective route is not harness-compatible" };
+  },
+
+  async runAttempt(params) {
+    // Start or resume your native thread.
+    // Use params.prompt, params.tools, params.images, params.onPartialReply,
+    // params.onAgentEvent, and the other prepared attempt fields.
+    return await runMyNativeTurn(params);
+  },
+};
+
+export default definePluginEntry({
+  id: "my-native-agent",
+  name: "My Native Agent",
+  description: "Runs selected models through a native agent daemon.",
+  register(api) {
+    api.registerAgentHarness(myHarness);
+  },
+});
+```
+
+`authBootstrap` is intentionally absent from this generic example. Add
+`authBootstrap: "harness"` only when the harness meets the
+[harness-owned auth bootstrap contract](/plugins/sdk-agent-harness/core-ownership#harness-owned-auth-bootstrap).
+
+### Executor controller plugins
+
+A harness can delegate self-hosted executor connection management to a separate
+plugin. Register one controller with `api.registerAgentExecutorController(...)`.
+The registry assigns ownership from the registering plugin's ID; the controller
+does not choose another ID or register a second harness.
+
+Declare `activation.onAgentHarnesses` with the runtime IDs that use this
+controller, for example `["my-harness"]`. This manifest hint includes the plugin
+in the prepared runtime registry without registering a harness. Startup
+activation alone does not include the plugin in every model-selected registry.
+
+```typescript
+import type { AgentExecutorController } from "openclaw/plugin-sdk/agent-harness-runtime";
+
+const controller: AgentExecutorController = {
+  workspaceDirectory: "/srv/agent/workspace",
+  async ensure(binding, context) {
+    context.assertCurrent();
+    await connectExecutor(binding, context.signal);
+    context.assertCurrent();
+  },
+  async retire(binding, context) {
+    context.assertCurrent();
+    await disconnectExecutor(binding, context.signal);
+    context.assertCurrent();
+  },
+};
+
+api.registerAgentExecutorController(controller);
+```
+
+`workspaceDirectory` is an absolute path on the executor. It can differ from the
+Gateway's workspace. `AgentExecutorBinding` contains `sessionKey`, `agentId`,
+`nativeSessionId`, `environmentId`, `remoteUrl`, and `workspaceDirectory`.
+`ensure` idempotently connects or reconnects that exact environment; `retire`
+idempotently releases that environment's connection. Neither operation creates
+or deletes the native agent session. The controller owns its transport,
+credentials, and process management. For Agents API, each native session owns
+its direct executor process; multiple sessions can share the same host and
+persistent workspace. Readiness and connection requests are separate: the
+harness invokes `ensure` for a current `environment_connection` action, including
+while its input submission waits, rather than probing before every turn.
+
+Harness implementations import `resolveAgentExecutorController(pluginId)` from
+`openclaw/plugin-sdk/agent-harness-runtime` and resolve the explicitly configured
+plugin during an admitted invocation. Resolution uses only that invocation's
+registry and fails for a missing, disabled, or unavailable owner. It does not
+activate plugins or fall back to a process-global registry. Handles expire when
+their registry generation or owner retires or their registration is replaced;
+resolve a new handle in each invocation instead of caching one across turns.
+
+Pass an `AgentExecutorContext` with a required `signal` and `assertCurrent`.
+The host combines caller cancellation with registry and plugin lifetime, checks
+authority before and after each operation, and preserves the caller's scope when
+the controller calls `assertCurrent`. Controller implementations must honor the
+signal and recheck authority after awaits and before each side effect. The
+assertion expires when the operation finishes.
+
+The harness retains session binding persistence, native readiness checks, work
+settlement before retirement, and retryable cleanup. An executor controller
+does not confer permission to reset unrelated sessions or stop a shared runtime.
+
+A harness whose `reset` cannot settle required native work throws
+`AgentHarnessSessionCleanupError` from `openclaw/plugin-sdk/agent-harness-runtime`.
+The host waits for the other cleanup callbacks, then rejects the reset before
+replacing the local session. Ordinary reset-hook errors remain best effort.
+Reply-driven resets use the same required-cleanup check before committing their
+session boundary.
+
+### Isolated completion
+
+The optional `runIsolatedCompletionV2(params)` capability serves product paths
+that require one fresh prompt-only inference call with a literal empty
+model-callable tool surface. Core passes provider and model ids, prompts,
+deadline controls, and one prepared `authorization`:
+
+- `owner: "host"` contains the exact transport `model` and resolved `auth`.
+- `owner: "harness"` contains the prepared runtime auth plan and a credential
+  snapshot restricted to the single profile selected for that call. Core owns
+  automatic fallback order and invokes the harness separately for each candidate.
+
+Agents API is a documented exception to the literal empty tool surface: it
+creates a fresh session without an executor, supplied functions, web search,
+vaults, or subagents, but the service may retain built-in helpers. This restricted
+mode is enabled by default. Rejecting tool-bearing output does not prevent a
+helper from acting during inference. Callers requiring a literal zero-tool
+guarantee must select a runtime that provides it.
+
+Each new isolated completion uses the configuration and agent/workspace directories
+of its admitted runtime generation. Explicit model, auth-profile, and runtime
+selections remain fixed while that generation is prepared. Registry preparation
+selects provider and harness owners, including their declared harness dependencies.
+Preparation does not add memory or context-engine plugins merely because the
+agent selects them, or unrelated startup plugins, and does not adopt Gateway
+agent capabilities.
+
+Host-authorized calls must use the supplied model and credential without substitution.
+Harnesses using the shared host-prepared completion helper
+preserve the exact route, deadline, sampling options, and empty tool surface.
+Harness-authorized calls may resolve only the supplied prepared
+route and scoped profiles, or the harness's native account when the plan leaves
+auth to the harness. The harness must not switch routes, reuse a native thread,
+attach tools, invoke agent lifecycle hooks, or deliver output.
+
+To report the same execution route in utility-model settings, a harness may add
+`resolveIsolatedCompletionRuntime({ authorizationOwner })`, where the owner is
+`"host"` or `"harness"`. Return `"openclaw"` when that authorization owner uses the
+shared host-prepared completion helper,
+or `"self"` when the harness executes the call. Without this hook, the settings
+report the harness itself. Keep the selector synchronous and side-effect-free,
+and reuse it in isolated dispatch so the reported route follows execution.
+
+When supplied, call `params.assertCurrent()` after preparation awaits and
+immediately before each credential handoff, inference request, or process start,
+including retries.
+It revalidates the caller's live authority and expires when the completion ends.
+A thrown assertion ends execution; do not treat it as a credential failure or
+retry with another profile. Continue to honor `abortSignal`; cleanup must remain
+available after authority expires.
+
+Return `{ assistant: AssistantMessage }`. Core accepts only terminal text/thinking
+content with a `stop` or `length` stop reason; tool calls, failed stops, and empty
+output are rejected. Title requests set `outputTextPolicy: "strict-visible"`:
+keep reasoning separate without recovering ambiguous reasoning as visible text;
+an empty visible result is valid. The host-prepared helper maps this policy to
+strict parsing before recovery. Omission preserves ordinary recovery behavior.
+CLI-backed title calls also allow clean empty output without a silent-reply token;
+ordinary CLI calls still reject empty responses.
+Older external harnesses may ignore the policy; a final title filter cannot
+restore provenance that a harness already discarded, so this is not a universal
+reasoning-privacy guarantee. Except for the documented Agents API limitation,
+if the harness cannot enforce isolation, omit the capability.
+Callers that require isolated completion then fail closed before invoking that
+harness; OpenClaw does not replay the request through another runtime.
+Plugin callers request isolated execution through
+`api.runtime.llm.complete({ execution: { mode: "isolated-agent-runtime" } })`;
+the harness callback is the provider-side enforcement SPI, not a second caller
+API.
+
+The legacy `runIsolatedCompletion(params)` host-auth-only capability is
+deprecated and remains available for external plugins through 2026-10-12.
+Implement V2 for harness-owned or native authentication; OpenClaw never invents
+a host credential when only the legacy capability is present.
+
+Native agent servers often have ambient built-in tools even when OpenClaw sends
+an empty tool list. Disable and attest those native capabilities for the fresh
+turn, use a separate transport that can serialize a true zero-tool request, or
+leave the capability unsupported. Agents API retains the documented exception
+above until its service can enforce that boundary.
+
+Audit evidence follows the same boundary. OpenClaw can record registered plugin
+ownership and run admission, but it cannot claim an external native side effect
+from an ACP update or transcript. A side effect wholly inside that runtime is
+`unsupported` unless an adapter invokes an OpenClaw-owned callback before the
+action. Do not reconstruct the callback from native tool status events.
+
+### Delegated execution
+
+A harness owner may set `delegatedExecutionPluginIds` to the ids of trusted
+plugins that need to execute an existing model-locked session, such as a voice
+transport continuing a Codex-backed conversation. This is static owner consent,
+not a core allowlist. Keep it narrow.
+
+Delegates receive only work admission and embedded execution. OpenClaw requires
+the exact stored session key, store path, and session id; `modelSelectionLocked:
+true`; and matching `agentHarnessId` and `agentHarnessRuntimeOverride` values.
+The run is then scoped through the harness owner. Session creation, patching,
+reset, deletion, archive, and Gateway mutation remain owner-only.

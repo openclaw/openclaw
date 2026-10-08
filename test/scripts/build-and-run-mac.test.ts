@@ -1,28 +1,23 @@
-// Build And Run Mac tests cover build and run mac script behavior.
 import { execFileSync, spawnSync } from "node:child_process";
 import {
   chmodSync,
   copyFileSync,
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
-  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import path, { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const scriptPath = "scripts/build-and-run-mac.sh";
-const tempRoots: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function runStopExistingLocalApp(params: { fakeLsof?: string; fakePgrep: string }) {
-  const root = mkdtempSync(join(tmpdir(), "openclaw-build-run-mac-test-"));
-  tempRoots.push(root);
+  const root = tempDirs.make("openclaw-build-run-mac-test-");
   const binDir = join(root, "bin");
   const killCallsPath = join(root, "kill-calls.txt");
   const pgrepCallsPath = join(root, "pgrep-calls.txt");
@@ -89,7 +84,7 @@ function runStopExistingLocalApp(params: { fakeLsof?: string; fakePgrep: string 
   );
   chmodSync(harnessPath, 0o755);
 
-  const result = spawnSync("bash", [harnessPath], {
+  const result = spawnSync("/bin/bash", [harnessPath], {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -105,31 +100,38 @@ function runStopExistingLocalApp(params: { fakeLsof?: string; fakePgrep: string 
   return { killCalls, pgrepCalls, result };
 }
 
-afterEach(() => {
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { force: true, recursive: true });
-  }
-});
-
 describe("scripts/build-and-run-mac.sh", () => {
   it.each(["pnpm", "corepack"])(
     "prepares the Apple resource bundle before SwiftPM with %s",
     (runner) => {
-      const root = mkdtempSync(join(tmpdir(), "openclaw-mac-mermaid-test-"));
-      tempRoots.push(root);
+      const root = tempDirs.make("openclaw-mac-mermaid-test-");
       const binDir = join(root, "bin");
       mkdirSync(binDir);
       mkdirSync(join(root, "apps/macos"), { recursive: true });
       for (const sourcePath of [
         scriptPath,
         "scripts/prepare-apple-mermaid.mjs",
+        "scripts/lib/pnpm-lockfile-documents.mjs",
         "scripts/pnpm-runner.mts",
         "scripts/windows-cmd-helpers.mjs",
+        "scripts/run-node-package-bin.mts",
       ]) {
         const target = join(root, sourcePath);
         mkdirSync(dirname(target), { recursive: true });
         copyFileSync(sourcePath, target);
       }
+      for (const directory of ["packages/mermaid-renderer", "packages/normalization-core"]) {
+        mkdirSync(join(root, directory), { recursive: true });
+      }
+      for (const file of ["package.json", "pnpm-workspace.yaml", "tsconfig.json"]) {
+        writeFileSync(join(root, file), "{}\n");
+      }
+      writeFileSync(
+        join(root, "pnpm-lock.yaml"),
+        "importers:\n  packages/mermaid-renderer: {}\npackages: {}\nsnapshots: {}\n",
+      );
+      mkdirSync(join(root, "patches"));
+      writeFileSync(join(root, ".npmrc"), "");
       const resources = join(
         root,
         "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid",
@@ -172,7 +174,7 @@ describe("scripts/build-and-run-mac.sh", () => {
         chmodSync(target, 0o755);
       }
 
-      const result = spawnSync("bash", [join(root, scriptPath)], {
+      const result = spawnSync("/bin/bash", [join(root, scriptPath)], {
         encoding: "utf8",
         env: {
           ...process.env,
@@ -189,7 +191,7 @@ describe("scripts/build-and-run-mac.sh", () => {
   );
 
   it("prints help before build or launch side effects", () => {
-    const result = spawnSync("bash", [scriptPath, "--help"], {
+    const result = spawnSync("/bin/bash", [scriptPath, "--help"], {
       cwd: process.cwd(),
       encoding: "utf8",
     });
@@ -201,7 +203,7 @@ describe("scripts/build-and-run-mac.sh", () => {
   });
 
   it("rejects unknown options before build or launch side effects", () => {
-    const result = spawnSync("bash", [scriptPath, "--wat"], {
+    const result = spawnSync("/bin/bash", [scriptPath, "--wat"], {
       cwd: process.cwd(),
       encoding: "utf8",
     });
@@ -263,7 +265,6 @@ describe("scripts/build-and-run-mac.sh", () => {
   });
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 // Platform contract: macOS tooling must not select Homebrew Bash through PATH.
 const nativeScripts = [
   "scripts/lib/plistbuddy.sh",
@@ -308,7 +309,7 @@ const nativeScripts = [
   "scripts/restart-mac.sh",
   "scripts/stage-cloudflared-macos.sh",
   "scripts/stage-cua-driver-macos.sh",
-  "scripts/stage-mac-node-worker.sh",
+  "scripts/stage-mac-runtime.sh",
   "scripts/test-macos-health-render.sh",
 ];
 
@@ -320,6 +321,7 @@ const portableScripts = [
   "scripts/ci-hydrate-live-auth.sh",
   "scripts/ci-hydrate-testbox-env.sh",
   "scripts/connect.sh",
+  "scripts/dev/computer-use-macos-live-rig.sh",
   "scripts/docker/setup.sh",
   "scripts/docker/shared-image-artifact.sh",
   "scripts/docs-spellcheck.sh",
@@ -370,14 +372,12 @@ const portableScripts = [
   "scripts/e2e/sandbox-browser-sidecar-docker.sh",
   "scripts/e2e/session-runtime-context-docker.sh",
   "scripts/e2e/skill-install-docker.sh",
-  "scripts/e2e/status-corrupt-plugin-deps.sh",
   "scripts/e2e/system-agent-first-run-docker.sh",
   "scripts/e2e/system-agent-rescue-docker.sh",
   "scripts/e2e/systemd-sealed-service-definition.sh",
   "scripts/e2e/update-channel-switch-docker.sh",
   "scripts/e2e/update-corrupt-plugin-docker.sh",
   "scripts/e2e/update-first-hop-compat-docker.sh",
-  "scripts/e2e/update-run-package-self-upgrade-docker.sh",
   "scripts/e2e/upgrade-survivor-docker.sh",
   "scripts/github/find-reusable-release-validation.sh",
   "scripts/github/resolve-openclaw-ref.sh",

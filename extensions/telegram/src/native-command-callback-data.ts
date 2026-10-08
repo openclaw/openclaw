@@ -1,4 +1,3 @@
-// Telegram plugin module implements native command callback data behavior.
 const TELEGRAM_NATIVE_COMMAND_CALLBACK_PREFIX = "tgcmd:";
 const TELEGRAM_OPAQUE_CALLBACK_PREFIX = "tgcb1:";
 
@@ -27,10 +26,7 @@ export function hasTelegramOpaqueCallbackPrefix(data?: string | null): boolean {
 }
 
 export function parseTelegramOpaqueCallbackData(data?: string | null): string | null {
-  if (!data) {
-    return null;
-  }
-  if (!hasTelegramOpaqueCallbackPrefix(data)) {
+  if (!data || !hasTelegramOpaqueCallbackPrefix(data)) {
     return null;
   }
   const encoded = data.slice(TELEGRAM_OPAQUE_CALLBACK_PREFIX.length);

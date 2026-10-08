@@ -1,24 +1,19 @@
 import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
-/**
- * Shared Claude CLI backend normalization for args, thinking, and isolated runs.
- */
+import {
+  requiresClaudeMandatoryAdaptiveThinking,
+  resolveClaudeHaiku55ModelIdentity,
+} from "openclaw/plugin-sdk/claude-model-runtime";
 import type {
   CliBackendConfig,
   CliBackendNormalizeConfigContext,
   CliBackendResolveExecutionArgsContext,
 } from "openclaw/plugin-sdk/cli-backend";
 import { resolveExecModePolicy } from "openclaw/plugin-sdk/exec-approvals-runtime";
-import { requiresClaudeMandatoryAdaptiveThinking } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeSortedUniqueTrimmedStringList,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_CLI_BACKEND_ID } from "./cli-constants.js";
-export {
-  CLAUDE_CLI_BACKEND_ID,
-  CLAUDE_CLI_CLEAR_ENV,
-  CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
-  CLAUDE_CLI_DEFAULT_MODEL_REF,
-  CLAUDE_CLI_MODEL_ALIASES,
-  CLAUDE_CLI_SESSION_ID_FIELDS,
-} from "./cli-constants.js";
 
 const CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG = "--dangerously-skip-permissions";
 const CLAUDE_PERMISSION_MODE_ARG = "--permission-mode";
@@ -33,38 +28,19 @@ const CLAUDE_EFFORT_ARG = "--effort";
 const CLAUDE_BARE_ARG = "--bare";
 const CLAUDE_SAFE_MODE_ARG = "--safe-mode";
 const CLAUDE_DISABLE_SLASH_COMMANDS_ARG = "--disable-slash-commands";
-const CLAUDE_CHROME_ARG = "--chrome";
 const CLAUDE_NO_CHROME_ARG = "--no-chrome";
 const CLAUDE_TOOLS_ARG = "--tools";
 const CLAUDE_ALLOWED_TOOLS_ARG = "--allowedTools";
 const CLAUDE_DISALLOWED_TOOLS_ARG = "--disallowedTools";
-const CLAUDE_MCP_CONFIG_ARG = "--mcp-config";
 const CLAUDE_STRICT_MCP_CONFIG_ARG = "--strict-mcp-config";
 const CLAUDE_NO_SESSION_PERSISTENCE_ARG = "--no-session-persistence";
 const CLAUDE_MAX_TURNS_ARG = "--max-turns";
-const CLAUDE_SESSION_ID_ARG = "--session-id";
-const CLAUDE_RESUME_ARG = "--resume";
-const CLAUDE_RESUME_SESSION_AT_ARG = "--resume-session-at";
-const CLAUDE_RESUME_SHORT_ARG = "-r";
-const CLAUDE_CONTINUE_ARG = "--continue";
-const CLAUDE_CONTINUE_SHORT_ARG = "-c";
-const CLAUDE_FORK_SESSION_ARG = "--fork-session";
 const CLAUDE_SAFE_SETTING_SOURCES = "user";
-const CLAUDE_BYPASS_PERMISSION_MODE = "bypassPermissions";
-const CLAUDE_DEFAULT_PERMISSION_MODE = "default";
-const CLAUDE_NO_TOOLS_VALUE = "";
 const CLAUDE_DENY_MCP_TOOLS_VALUE = "mcp__*";
 const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
 const CLAUDE_RESTRICTED_SETTINGS =
   '{"disableAllHooks":true,"enabledPlugins":{},"autoMemoryEnabled":false,"claudeMdExcludes":["**/CLAUDE.md","**/CLAUDE.local.md","**/.claude/rules/**"]}';
 
-type ClaudeCliEffort = "low" | "medium" | "high" | "xhigh" | "max";
-type ClaudeCliEffortArgAction =
-  | { mode: "preserve" }
-  | { mode: "omit" }
-  | { mode: "set"; effort: ClaudeCliEffort };
-
-/** Return whether a provider id refers to the Claude CLI backend. */
 export function isClaudeCliProvider(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === CLAUDE_CLI_BACKEND_ID;
 }
@@ -98,7 +74,10 @@ export function resolveClaudeCliThinkingEnv(
   thinkingLevel: CliBackendResolveExecutionArgsContext["thinkingLevel"],
   modelId?: string,
 ): Record<string, string> | undefined {
-  if (requiresClaudeMandatoryAdaptiveThinking({ id: modelId })) {
+  if (
+    requiresClaudeMandatoryAdaptiveThinking({ id: modelId }) ||
+    (thinkingLevel !== "off" && resolveClaudeHaiku55ModelIdentity({ id: modelId }))
+  ) {
     return undefined;
   }
   switch (thinkingLevel) {
@@ -123,17 +102,19 @@ export function resolveClaudeCliThinkingEnv(
   }
 }
 
-/** Return whether the startup-probed Claude Code build supports the cache-control flag. */
+/** Parse only stable versions; prereleases do not establish native feature support. */
+export function parseClaudeCodeVersion(versionOutput: string | undefined): string | undefined {
+  return versionOutput?.match(/(?:^|\s)(\d+\.\d+\.\d+)(?=$|\s)/u)?.[1];
+}
+
 export function supportsClaudeDynamicSystemPromptSections(
   versionOutput: string | undefined,
 ): boolean {
-  // Only stable version tokens prove flag support. A prerelease suffix could
-  // predate the stable release and turn every local invocation into an argv error.
-  const match = versionOutput?.match(/(?:^|\D)(\d+)\.(\d+)\.(\d+)(?=$|\s)/u);
-  if (!match) {
+  const parsed = parseClaudeCodeVersion(versionOutput);
+  if (!parsed) {
     return false;
   }
-  const version = match.slice(1).map(Number);
+  const version = parsed.split(".").map(Number);
   const minimum =
     CLAUDE_EXCLUDE_DYNAMIC_SYSTEM_PROMPT_SECTIONS_MINIMUM_VERSION.split(".").map(Number);
   for (const [index, component] of version.entries()) {
@@ -220,32 +201,30 @@ function normalizeClaudeBackendArgs(
   return normalized;
 }
 
-/** Resolve whether a run preserves, removes, or sets a Claude CLI effort override. */
-function resolveClaudeCliEffortArgAction(
+function applyClaudeCliEffortArgs(
+  args: readonly string[],
   thinkingLevel?: string | null,
   modelId?: string,
-): ClaudeCliEffortArgAction {
-  switch (normalizeOptionalLowercaseString(thinkingLevel)) {
+): string[] {
+  const level = normalizeOptionalLowercaseString(thinkingLevel);
+  switch (level) {
     case "off":
       return requiresClaudeMandatoryAdaptiveThinking({ id: modelId })
-        ? { mode: "set", effort: "low" }
-        : { mode: "preserve" };
+        ? [...stripClaudeEffortArgs(args), CLAUDE_EFFORT_ARG, "low"]
+        : [...args];
     case "minimal":
     case "low":
-      return { mode: "set", effort: "low" };
+      return [...stripClaudeEffortArgs(args), CLAUDE_EFFORT_ARG, "low"];
     case "adaptive":
       // Adaptive runs delegate effort to Claude Code, so no static override may survive.
-      return { mode: "omit" };
+      return stripClaudeEffortArgs(args);
     case "medium":
-      return { mode: "set", effort: "medium" };
     case "high":
-      return { mode: "set", effort: "high" };
     case "xhigh":
-      return { mode: "set", effort: "xhigh" };
     case "max":
-      return { mode: "set", effort: "max" };
+      return [...stripClaudeEffortArgs(args), CLAUDE_EFFORT_ARG, level];
     default:
-      return { mode: "preserve" };
+      return [...args];
   }
 }
 
@@ -278,7 +257,7 @@ const CLAUDE_SIDE_QUESTION_VARIADIC_VALUE_ARGS = new Set([
   CLAUDE_DISALLOWED_TOOLS_ARG,
   "--disallowed-tools",
   CLAUDE_TOOLS_ARG,
-  CLAUDE_MCP_CONFIG_ARG,
+  "--mcp-config",
 ]);
 
 const CLAUDE_TOOL_AVAILABILITY_ARGS = new Set([
@@ -315,7 +294,7 @@ const CLAUDE_RESTRICTED_BARE_ARGS = new Set([
   CLAUDE_BARE_ARG,
   CLAUDE_SAFE_MODE_ARG,
   CLAUDE_DISABLE_SLASH_COMMANDS_ARG,
-  CLAUDE_CHROME_ARG,
+  "--chrome",
   CLAUDE_NO_CHROME_ARG,
   CLAUDE_STRICT_MCP_CONFIG_ARG,
   CLAUDE_LEGACY_SKIP_PERMISSIONS_ARG,
@@ -325,17 +304,17 @@ const CLAUDE_RESTRICTED_BARE_ARGS = new Set([
 
 const CLAUDE_SIDE_QUESTION_VALUE_ARGS = new Set([
   CLAUDE_PERMISSION_MODE_ARG,
-  CLAUDE_SESSION_ID_ARG,
-  CLAUDE_RESUME_ARG,
-  CLAUDE_RESUME_SESSION_AT_ARG,
-  CLAUDE_RESUME_SHORT_ARG,
+  "--session-id",
+  "--resume",
+  "--resume-session-at",
+  "-r",
   CLAUDE_MAX_TURNS_ARG,
 ]);
 
 const CLAUDE_SIDE_QUESTION_BARE_ARGS = new Set([
-  CLAUDE_CONTINUE_ARG,
-  CLAUDE_CONTINUE_SHORT_ARG,
-  CLAUDE_FORK_SESSION_ARG,
+  "--continue",
+  "-c",
+  "--fork-session",
   CLAUDE_BARE_ARG,
   CLAUDE_SAFE_MODE_ARG,
   CLAUDE_STRICT_MCP_CONFIG_ARG,
@@ -380,20 +359,16 @@ function stripClaudeArgs(
   return normalized;
 }
 
-function stripClaudeSideQuestionConflictingArgs(args: readonly string[]): string[] {
-  return stripClaudeArgs(args, {
-    bare: CLAUDE_SIDE_QUESTION_BARE_ARGS,
-    variadicValue: CLAUDE_SIDE_QUESTION_VARIADIC_VALUE_ARGS,
-    value: CLAUDE_SIDE_QUESTION_VALUE_ARGS,
-  });
-}
-
 function resolveClaudeCliSideQuestionExecutionArgs(baseArgs: readonly string[]): string[] {
   return [
-    ...stripClaudeSideQuestionConflictingArgs(stripClaudeEffortArgs(baseArgs)),
+    ...stripClaudeArgs(stripClaudeEffortArgs(baseArgs), {
+      bare: CLAUDE_SIDE_QUESTION_BARE_ARGS,
+      variadicValue: CLAUDE_SIDE_QUESTION_VARIADIC_VALUE_ARGS,
+      value: CLAUDE_SIDE_QUESTION_VALUE_ARGS,
+    }),
     CLAUDE_SAFE_MODE_ARG,
     CLAUDE_TOOLS_ARG,
-    CLAUDE_NO_TOOLS_VALUE,
+    "",
     CLAUDE_DISALLOWED_TOOLS_ARG,
     CLAUDE_DENY_MCP_TOOLS_VALUE,
     CLAUDE_STRICT_MCP_CONFIG_ARG,
@@ -401,29 +376,34 @@ function resolveClaudeCliSideQuestionExecutionArgs(baseArgs: readonly string[]):
     CLAUDE_MAX_TURNS_ARG,
     "1",
     CLAUDE_PERMISSION_MODE_ARG,
-    CLAUDE_DEFAULT_PERMISSION_MODE,
+    "default",
   ];
+}
+
+function readClaudeToolDenials(args: readonly string[]): string[] {
+  const denials: string[] = [];
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i] ?? "";
+    if (arg === CLAUDE_DISALLOWED_TOOLS_ARG || arg === "--disallowed-tools") {
+      while (typeof args[i + 1] === "string" && !args[i + 1]?.startsWith("-")) {
+        i += 1;
+        denials.push(...(args[i] ?? "").split(","));
+      }
+    } else if (
+      arg.startsWith(`${CLAUDE_DISALLOWED_TOOLS_ARG}=`) ||
+      arg.startsWith("--disallowed-tools=")
+    ) {
+      denials.push(...arg.slice(arg.indexOf("=") + 1).split(","));
+    }
+  }
+  return denials;
 }
 
 function resolveClaudeCliRestrictedExecutionArgs(
   baseArgs: readonly string[],
   availability: NonNullable<CliBackendResolveExecutionArgsContext["toolAvailability"]>,
 ): string[] {
-  const preservedDenials: string[] = [];
-  for (let i = 0; i < baseArgs.length; i += 1) {
-    const arg = baseArgs[i] ?? "";
-    if (arg === CLAUDE_DISALLOWED_TOOLS_ARG || arg === "--disallowed-tools") {
-      while (typeof baseArgs[i + 1] === "string" && !baseArgs[i + 1]?.startsWith("-")) {
-        i += 1;
-        preservedDenials.push(...(baseArgs[i] ?? "").split(","));
-      }
-    } else if (
-      arg.startsWith(`${CLAUDE_DISALLOWED_TOOLS_ARG}=`) ||
-      arg.startsWith("--disallowed-tools=")
-    ) {
-      preservedDenials.push(...arg.slice(arg.indexOf("=") + 1).split(","));
-    }
-  }
+  const preservedDenials = readClaudeToolDenials(baseArgs);
   const normalized = stripClaudeArgs(baseArgs, {
     bare: CLAUDE_RESTRICTED_BARE_ARGS,
     variadicValue: CLAUDE_RESTRICTED_VARIADIC_VALUE_ARGS,
@@ -449,39 +429,33 @@ function resolveClaudeCliRestrictedExecutionArgs(
       availability.openClaw.map((toolName) => `${OPENCLAW_MCP_TOOL_PREFIX}${toolName}`).join(","),
     );
   }
-  const denials = [
-    ...new Set([
-      ...preservedDenials.map((entry) => entry.trim()).filter(Boolean),
-      ...(availability.openClaw.length === 0 ? [CLAUDE_DENY_MCP_TOOLS_VALUE] : []),
-    ]),
-  ].toSorted();
+  const denials = normalizeSortedUniqueTrimmedStringList([
+    ...preservedDenials,
+    ...(availability.openClaw.length === 0 ? [CLAUDE_DENY_MCP_TOOLS_VALUE] : []),
+  ]);
   if (denials.length > 0) {
     normalized.push(CLAUDE_DISALLOWED_TOOLS_ARG, denials.join(","));
   }
   return normalized;
 }
 
-/** Resolve final Claude CLI execution args for one backend invocation. */
 export function resolveClaudeCliExecutionArgs(
   context: CliBackendResolveExecutionArgsContext,
   options: { excludeDynamicSystemPromptSections?: boolean } = {},
 ): string[] {
-  const executionArgs = (() => {
-    if (context.executionMode === "side-question") {
-      return resolveClaudeCliSideQuestionExecutionArgs(context.baseArgs);
-    }
-    const action = resolveClaudeCliEffortArgAction(context.thinkingLevel, context.modelId);
-    switch (action.mode) {
-      case "preserve":
-        return [...context.baseArgs];
-      case "omit":
-        return stripClaudeEffortArgs(context.baseArgs);
-      case "set":
-        return [...stripClaudeEffortArgs(context.baseArgs), CLAUDE_EFFORT_ARG, action.effort];
-      default:
-        return action satisfies never;
-    }
-  })();
+  const baseArgs = context.hostOwnedTools?.includes("exec")
+    ? [
+        ...stripClaudeArgs(context.baseArgs, {
+          variadicValue: new Set([CLAUDE_DISALLOWED_TOOLS_ARG, "--disallowed-tools"]),
+        }),
+        CLAUDE_DISALLOWED_TOOLS_ARG,
+        [...new Set([...readClaudeToolDenials(context.baseArgs), "Bash"])].join(","),
+      ]
+    : context.baseArgs;
+  const executionArgs =
+    context.executionMode === "side-question"
+      ? resolveClaudeCliSideQuestionExecutionArgs(baseArgs)
+      : applyClaudeCliEffortArgs(baseArgs, context.thinkingLevel, context.modelId);
   const resolvedArgs = context.toolAvailability
     ? resolveClaudeCliRestrictedExecutionArgs(executionArgs, context.toolAvailability)
     : executionArgs;
@@ -490,16 +464,13 @@ export function resolveClaudeCliExecutionArgs(
     : resolvedArgs;
 }
 
-/** Normalize Claude CLI backend config before registration or execution. */
 export function normalizeClaudeBackendConfig(
   config: CliBackendConfig,
   context?: CliBackendNormalizeConfigContext,
 ): CliBackendConfig {
   const output = config.output ?? "jsonl";
   const input = config.input ?? "stdin";
-  const permissionMode = isOpenClawRequestedYolo(context)
-    ? CLAUDE_BYPASS_PERMISSION_MODE
-    : undefined;
+  const permissionMode = isOpenClawRequestedYolo(context) ? "bypassPermissions" : undefined;
   return {
     ...config,
     args: normalizeClaudeBackendArgs(config.args, permissionMode),

@@ -122,7 +122,7 @@ describe("bundled channel-provider skill contracts", () => {
       },
       eligible: true,
     },
-  ])("$label", ({ pluginId, config, eligible, disabled = false }) => {
+  ])("$label", async ({ pluginId, config, eligible, disabled = false }) => {
     const workspaceDir = resolve(process.cwd(), "extensions", pluginId);
     // Load the shipped asset without discovering operator skills or activating plugin runtimes.
     const entries = loadWorkspaceSkills(workspaceDir, { config, workspaceOnly: true });
@@ -137,7 +137,7 @@ describe("bundled channel-provider skill contracts", () => {
       modelVisible: eligible,
     });
 
-    const snapshot = buildSkillSnapshot(workspaceDir, { config, entries });
+    const snapshot = await buildSkillSnapshot(workspaceDir, { config, entries });
     expect(snapshot.prompt.includes(`<name>${pluginId}</name>`)).toBe(eligible);
   });
 

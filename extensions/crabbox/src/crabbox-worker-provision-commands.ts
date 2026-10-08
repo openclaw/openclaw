@@ -1,13 +1,26 @@
-import { WorkerProviderError } from "openclaw/plugin-sdk/plugin-entry";
-import { crabboxCommandError } from "./crabbox-worker-command-error.js";
 import {
+  WorkerProviderError,
+  type WorkerDesktopEndpoint,
+  type WorkerProvider,
+} from "openclaw/plugin-sdk/plugin-entry";
+import {
+  crabboxCommandError,
+  crabboxCommandOutput,
+  isFixedLeaseIdUnsupported,
   isUnrecognizedLease,
+  leaseRunArgs,
   runCrabboxCommand,
+  runCrabboxCommandWithCoordinatorRetry,
   type CrabboxCommandRunner,
+  type LeaseCommandContext,
 } from "./crabbox-worker-command.js";
+import {
+  createCrabboxWorkerDesktopEndpoint,
+  createCrabboxWorkerDesktopSetup,
+} from "./crabbox-worker-desktop-setup.js";
 import { withCrabboxWorkerEnvProfile } from "./crabbox-worker-env-profile.js";
 import { parseInspectJson, type ParsedInspect } from "./crabbox-worker-inspect.js";
-import type { parseCrabboxProfile } from "./crabbox-worker-profile.js";
+import { buildCrabboxAllocationArgs, type parseCrabboxProfile } from "./crabbox-worker-profile.js";
 import {
   CRABBOX_LIFECYCLE_TIMEOUT_MS,
   CRABBOX_MACHINE0_READY_WAIT_TIMEOUT,
@@ -16,10 +29,26 @@ import {
   resolveCrabboxReadyPollIntervalMs,
 } from "./crabbox-worker-timeouts.js";
 
-export type LeaseCommandContext = { binary: string; id: string; provider: string };
-export type InspectCommandResult =
-  | { status: "found"; inspect: ParsedInspect }
-  | { status: "unknown" };
+/** Allocation retains host and project authority independently of cancellation or cleanup. */
+export function createCrabboxProvisionAuthority(
+  options: Parameters<WorkerProvider["provision"]>[2],
+): { signal?: AbortSignal; assertCurrent: () => void } {
+  const assertHostCurrent = options?.assertCurrent;
+  if (!assertHostCurrent) {
+    throw new WorkerProviderError(
+      "Crabbox provisioning requires current Gateway allocation authority",
+    );
+  }
+  const signal = options?.signal;
+  const project = options?.project;
+  const assertCurrent = () => {
+    signal?.throwIfAborted();
+    assertHostCurrent();
+    project?.assertCurrent();
+  };
+  assertCurrent();
+  return { signal, assertCurrent };
+}
 type ProvisionInspectContext = Omit<LeaseCommandContext, "id"> & {
   deadline: number;
   inspect: ParsedInspect;
@@ -27,6 +56,7 @@ type ProvisionInspectContext = Omit<LeaseCommandContext, "id"> & {
   runCommand: CrabboxCommandRunner;
   stopLease: (context: LeaseCommandContext) => Promise<void>;
   signal?: AbortSignal;
+  sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 };
 
 // Crabbox states describe lease usability, not proven cleanup: released leases can retain
@@ -45,22 +75,22 @@ const NON_RUNNABLE_STATES = new Set([
   "terminated",
 ]);
 
-export async function inspectWithContext(params: {
-  context: Omit<LeaseCommandContext, "id">;
-  expectedLeaseId?: string;
-  id: string;
-  runCommand: CrabboxCommandRunner;
-  timeoutMs?: number;
-  waitForReady?: boolean;
-  signal?: AbortSignal;
-}): Promise<InspectCommandResult> {
+export async function inspectWithContext(
+  params: LeaseCommandContext & {
+    runCommand: CrabboxCommandRunner;
+    timeoutMs?: number;
+    waitForReady?: boolean;
+    signal?: AbortSignal;
+    sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
+  },
+): Promise<ParsedInspect | undefined> {
   const action = params.waitForReady ? "status" : "inspect";
-  const result = await runCrabboxCommand({
+  const result = await runCrabboxCommandWithCoordinatorRetry({
     action,
     args: [
       action,
       "--provider",
-      params.context.provider,
+      params.provider,
       "--network",
       "public",
       "--id",
@@ -70,10 +100,11 @@ export async function inspectWithContext(params: {
         : []),
       "--json",
     ],
-    binary: params.context.binary,
+    binary: params.binary,
     runCommand: params.runCommand,
     signal: params.signal,
-    timeoutMs: params.timeoutMs ?? resolveCrabboxLifecycleTimeoutMs(params.context.provider),
+    sleep: params.sleep,
+    timeoutMs: params.timeoutMs ?? resolveCrabboxLifecycleTimeoutMs(params.provider),
   });
   if (result.termination === "exit" && result.code === 0) {
     // A successful but malformed response cannot attest the fixed lease. Provision callers
@@ -86,13 +117,13 @@ export async function inspectWithContext(params: {
         error instanceof Error ? error.message : "Crabbox inspect returned invalid output",
       );
     }
-    if (params.expectedLeaseId && inspect.id !== params.expectedLeaseId) {
+    if (inspect.id !== params.id) {
       throw new WorkerProviderError("Crabbox inspect returned a different lease id");
     }
-    return { status: "found", inspect };
+    return inspect;
   }
-  if (result.termination === "exit" && isUnrecognizedLease(result, params.id)) {
-    return { status: "unknown" };
+  if (isUnrecognizedLease(result, params.id, "inspect")) {
+    return undefined;
   }
   throw crabboxCommandError(action, result);
 }
@@ -107,28 +138,46 @@ export function remainingProvisionTimeout(deadline: number, maximum: number): nu
 
 export const isNonRunnableState = (state: string) => NON_RUNNABLE_STATES.has(state.toLowerCase());
 
-export function leaseRunArgs(
-  context: LeaseCommandContext,
-  forwardedEnvNames: readonly string[] = [],
-  envProfilePath?: string,
-): string[] {
-  return [
-    "run",
-    "--provider",
-    context.provider,
-    "--network",
-    "public",
-    "--tailscale=false",
-    "--id",
-    context.id,
-    "--keep=true",
-    // Workspace transfer is owned by the worker tunnel; lease scripts must not
-    // rsync the gateway checkout into the box just to execute setup or diagnostics.
-    "--no-sync",
-    ...forwardedEnvNames.flatMap((name) => ["--allow-env", name]),
-    ...(envProfilePath ? ["--env-from-profile", envProfilePath] : []),
-    "--script-stdin",
-  ];
+export async function runProvisionWarmup(
+  params: LeaseCommandContext & {
+    profile: ReturnType<typeof parseCrabboxProfile>;
+    slug: string;
+    runCommand: CrabboxCommandRunner;
+    timeoutMs: () => number;
+    signal?: AbortSignal;
+  },
+): Promise<void> {
+  const result = await runCrabboxCommand({
+    ...params,
+    action: "warmup",
+    args: ["warmup", ...buildCrabboxAllocationArgs(params.profile, params.id, params.slug)],
+    timeoutMs: params.timeoutMs(),
+  });
+  if (result.termination === "exit" && result.code === 0) {
+    return;
+  }
+  // Crabbox internal/cli/run.go rejects this capability before Warmup/Acquire.
+  if (isFixedLeaseIdUnsupported(result, params.provider)) {
+    throw new WorkerProviderError(
+      `Crabbox backend ${params.provider} does not support fixed idempotent lease IDs. OpenClaw cloud workers need a Crabbox backend with fixed lease ID support.`,
+    );
+  }
+  const error = crabboxCommandError("warmup", result);
+  if (result.termination === "exit" && result.code !== null) {
+    try {
+      const observed = await inspectWithContext({
+        ...params,
+        timeoutMs: Math.min(params.timeoutMs(), resolveCrabboxLifecycleTimeoutMs(params.provider)),
+      });
+      if (observed && isNonRunnableState(observed.state) && observed.failureError) {
+        error.message += `; lease failure: ${observed.failureError}`;
+      }
+    } catch {
+      // Inspection only enriches the failure; it cannot change cleanup or replay authority.
+      params.signal?.throwIfAborted();
+    }
+  }
+  throw error;
 }
 
 function assertProvisionSecurityPolicy(params: { inspect: ParsedInspect; provider: string }): void {
@@ -154,22 +203,19 @@ export async function waitForProvisionReady(
   const inspectAgain = async (): Promise<ParsedInspect> => {
     params.signal?.throwIfAborted();
     const replay = await inspectWithContext({
-      context: { binary: params.binary, provider: params.provider },
-      expectedLeaseId: inspect.id,
+      ...params,
       id: inspect.id,
-      runCommand: params.runCommand,
-      signal: params.signal,
       timeoutMs: remainingProvisionTimeout(
         params.deadline,
         resolveCrabboxLifecycleTimeoutMs(params.provider),
       ),
       waitForReady: params.provider === "machine0",
     });
-    if (replay.status === "unknown") {
+    if (!replay) {
       throw new Error("Crabbox operation lease disappeared while waiting for SSH readiness");
     }
     params.signal?.throwIfAborted();
-    return replay.inspect;
+    return replay;
   };
   try {
     inspect = params.refresh ? await inspectAgain() : params.inspect;
@@ -189,7 +235,7 @@ export async function waitForProvisionReady(
     }
     if (isNonRunnableState(inspect.state)) {
       throw new WorkerProviderError(
-        "Crabbox operation lease entered a terminal state while waiting for SSH",
+        `Crabbox operation lease entered a terminal state while waiting for SSH${inspect.failureError ? `: ${inspect.failureError}` : ""}`,
       );
     }
     return inspect;
@@ -214,10 +260,16 @@ export async function runProvisionSetup(
   },
 ): Promise<void> {
   try {
+    const run =
+      params.phase === "profile setup" ||
+      params.phase === "node runtime preparation" ||
+      params.phase === "node enrollment setup"
+        ? runCrabboxCommandWithCoordinatorRetry
+        : runCrabboxCommand;
     const result = await withCrabboxWorkerEnvProfile(
       params.forwardedEnv,
       (names, profilePath, childEnv) =>
-        runCrabboxCommand({
+        run({
           action: params.phase,
           args: leaseRunArgs({ ...params, id: params.inspect.id }, names, profilePath),
           binary: params.binary,
@@ -225,15 +277,14 @@ export async function runProvisionSetup(
           input: params.setup,
           runCommand: params.runCommand,
           signal: params.signal,
+          sleep: params.sleep,
           timeoutMs: remainingProvisionTimeout(
             params.deadline,
             params.timeoutMs ?? CRABBOX_SETUP_TIMEOUT_MS,
           ),
         }),
     );
-    if (result.termination !== "exit" || result.code !== 0) {
-      throw new WorkerProviderError(crabboxCommandError(params.phase, result).message);
-    }
+    crabboxCommandOutput(params.phase, result);
   } catch (error) {
     params.signal?.throwIfAborted();
     return await failProvisionAfterCleanup({ ...params, id: params.inspect.id }, error);
@@ -241,15 +292,36 @@ export async function runProvisionSetup(
   params.signal?.throwIfAborted();
 }
 
-export async function runProvisionSetupAndWaitReady(
-  params: Parameters<typeof runProvisionSetup>[0] & {
-    sleep: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
+export async function prepareProvisionDesktop(
+  params: ProvisionInspectContext & {
+    wallpaperBase64: string;
+    prepareBeforeEnrollment: boolean;
   },
-): Promise<ParsedInspect> {
-  await runProvisionSetup(params);
-  // Setup may restart SSH or change its endpoint. Re-read the authoritative lease before
-  // returning any endpoint or security attestation to core bootstrap.
-  return await waitForProvisionReady({ ...params, refresh: true });
+): Promise<{ setup: string; endpoint: WorkerDesktopEndpoint } | undefined> {
+  if (!params.profile.desktop) {
+    return undefined;
+  }
+  let desktop: { setup: string; endpoint: WorkerDesktopEndpoint };
+  try {
+    const { id, sshUser } = params.inspect;
+    desktop = {
+      setup: createCrabboxWorkerDesktopSetup(
+        id,
+        params.wallpaperBase64,
+        params.profile.target,
+        sshUser,
+      ),
+      endpoint: createCrabboxWorkerDesktopEndpoint(id, params.profile.target, sshUser),
+    };
+  } catch (error) {
+    params.signal?.throwIfAborted();
+    return await failProvisionAfterCleanup({ ...params, id: params.inspect.id }, error);
+  }
+  if (params.prepareBeforeEnrollment) {
+    // Project capture needs the desktop prepared; other leases batch it with enrollment.
+    await runProvisionSetup({ ...params, phase: "desktop setup", setup: desktop.setup });
+  }
+  return desktop;
 }
 
 export async function failProvisionAfterCleanup(
@@ -261,5 +333,5 @@ export async function failProvisionAfterCleanup(
   } catch (cleanupError) {
     throw WorkerProviderError.cleanupIndeterminate(params.id, provisionError, cleanupError);
   }
-  throw provisionError;
+  throw WorkerProviderError.cleanupComplete(params.id, provisionError);
 }

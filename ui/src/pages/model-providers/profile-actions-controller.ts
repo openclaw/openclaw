@@ -1,10 +1,22 @@
-import type { ModelAuthOrderSetResult } from "../../../../src/gateway/server-methods/models-auth-status.types.js";
+import type {
+  ModelAuthLogoutResult,
+  ModelAuthOrderSetResult,
+} from "../../../../src/gateway/server-methods/models-auth-status.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ModelsProbeResult } from "../../api/types.ts";
+import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
+import {
+  mergeProbeResults,
+  modelProviderErrorMessage,
+  modelProviderMutationWarnings,
+} from "./config-mutation.ts";
 import type { ModelProviderLogoutTarget } from "./data.ts";
 import type { ModelProvidersData } from "./load.ts";
+import { showProfileActionError, showProfileLogoutSuccess } from "./profiles-view.ts";
+import { updateRecordEntry } from "./record-state.ts";
 
 type PendingProfileOrder = {
-  cardId: string;
   profileIds: string[] | null;
   optimisticOrder: string[];
 };
@@ -21,20 +33,72 @@ type ProfileActionsControllerOptions = {
   canMutate: () => boolean;
   isBusy: (key: string) => boolean;
   setBusy: (key: string, value: boolean) => void;
-  clearProbe: (cardId: string) => void;
+  setProbeResult: (cardId: string, result: ModelsProbeResult | null) => void;
+  setProbeError: (cardId: string, message: string) => void;
   clearMessage: (cardId: string) => void;
-  setError: (cardId: string, error: unknown) => void;
-  setLogoutSuccess: (cardId: string) => void;
   cancelRefresh: () => void;
   refresh: () => Promise<void>;
+  getConfig: () => RuntimeConfigCapability;
   isCurrentClient: (client: GatewayBrowserClient, epoch: number) => boolean;
 };
 
 export class ModelProviderProfileActionsController {
+  private probeEpochs = new Map<string, number>();
   private readonly pendingOrders = new Map<string, PendingProfileOrder>();
   private readonly activeOrderProviders = new Set<string>();
 
   constructor(private readonly options: ProfileActionsControllerOptions) {}
+
+  resetProbes(): void {
+    this.probeEpochs = new Map();
+  }
+
+  clearProbe(cardId: string): void {
+    this.probeEpochs.set(cardId, (this.probeEpochs.get(cardId) ?? 0) + 1);
+    this.options.setBusy("probe:" + cardId, false);
+    this.options.setProbeResult(cardId, null);
+  }
+
+  async probe(cardId: string, providers: string[]) {
+    const client = this.options.getClient();
+    const key = `probe:${cardId}`;
+    if (!client || !this.options.canMutate() || this.options.isBusy(key)) {
+      return;
+    }
+    const clientEpoch = this.options.getClientEpoch();
+    const agentId = this.options.getAgentId();
+    const agentEpoch = this.options.getAgentEpoch();
+    const probeEpoch = (this.probeEpochs.get(cardId) ?? 0) + 1;
+    this.probeEpochs.set(cardId, probeEpoch);
+    const ownsProbe = () =>
+      this.isCurrentScope(client, clientEpoch, agentEpoch, agentId) &&
+      this.probeEpochs.get(cardId) === probeEpoch;
+    this.options.setBusy(key, true);
+    this.options.clearMessage(cardId);
+    try {
+      const results: ModelsProbeResult[] = [];
+      for (const provider of providers) {
+        if (!ownsProbe()) {
+          return;
+        }
+        results.push(
+          await client.request<ModelsProbeResult>("models.probe", { provider, agentId }),
+        );
+      }
+      if (ownsProbe()) {
+        this.options.setProbeResult(cardId, mergeProbeResults(cardId, results));
+      }
+    } catch (error) {
+      if (!ownsProbe()) {
+        return;
+      }
+      this.options.setProbeError(cardId, modelProviderErrorMessage(error));
+    } finally {
+      if (ownsProbe()) {
+        this.options.setBusy(key, false);
+      }
+    }
+  }
 
   resetOrders(): void {
     this.pendingOrders.clear();
@@ -48,7 +112,7 @@ export class ModelProviderProfileActionsController {
     const optimisticOrder =
       profileIds ?? providerStatus?.profiles.map((profile) => profile.profileId) ?? [];
     this.options.setOrders({ ...this.options.getOrders(), [provider]: optimisticOrder });
-    this.pendingOrders.set(provider, { cardId, profileIds, optimisticOrder });
+    this.pendingOrders.set(provider, { profileIds, optimisticOrder });
     this.options.clearMessage(cardId);
     void this.flushOrder(provider);
   }
@@ -72,33 +136,41 @@ export class ModelProviderProfileActionsController {
     const agentId = this.options.getAgentId();
     const agentEpoch = this.options.getAgentEpoch();
     const isCurrentScope = () => this.isCurrentScope(client, clientEpoch, agentEpoch, agentId);
-    this.options.clearProbe(cardId);
+    this.clearProbe(cardId);
     this.options.setBusy(key, true);
     this.options.clearMessage(cardId);
     try {
-      let logoutError: unknown;
-      try {
-        await client.request("models.authLogout", { ...target, agentId });
-      } catch (error) {
-        logoutError = error;
-      }
-      // A logout can change credentials before reporting failure. Refresh either
-      // outcome, but never update a different agent or a newer visit to this agent.
+      const result = await this.options.getConfig().runExternalMutation(
+        async (activeClient) => {
+          const receipt = await activeClient.request<ModelAuthLogoutResult>("models.authLogout", {
+            ...target,
+            agentId,
+          });
+          invalidateModelAuthStatusRequests(activeClient);
+          return receipt;
+        },
+        { canDispatch: () => isCurrentScope() && this.options.canMutate() },
+      );
       if (!isCurrentScope()) {
         return;
       }
-      await this.options.refresh();
-      if (!isCurrentScope()) {
+      if (!result.ok) {
+        await this.options.refresh();
+        if (isCurrentScope()) {
+          showProfileActionError(result.error);
+        }
         return;
       }
-      if (logoutError) {
-        this.options.setError(cardId, logoutError);
-        return;
+      const warning = await modelProviderMutationWarnings(result, async () => {
+        await this.options.refresh();
+        return this.options.getData()?.error;
+      });
+      if (isCurrentScope()) {
+        showProfileLogoutSuccess(warning || undefined);
       }
-      this.options.setLogoutSuccess(cardId);
     } catch (error) {
       if (isCurrentScope()) {
-        this.options.setError(cardId, error);
+        showProfileActionError(error);
       }
     } finally {
       if (isCurrentScope()) {
@@ -132,6 +204,7 @@ export class ModelProviderProfileActionsController {
             ...(pending.profileIds ? { profileIds: pending.profileIds } : {}),
             agentId,
           });
+          invalidateModelAuthStatusRequests(client);
           if (!this.isCurrentScope(client, clientEpoch, agentEpoch, agentId)) {
             return;
           }
@@ -146,14 +219,14 @@ export class ModelProviderProfileActionsController {
             }
           }
           if (this.clearOptimisticOrder(provider, pending.optimisticOrder) && result.warning) {
-            this.options.setError(pending.cardId, result.warning);
+            showProfileActionError(result.warning);
           }
         } catch (error) {
           if (!this.isCurrentScope(client, clientEpoch, agentEpoch, agentId)) {
             return;
           }
           if (this.clearOptimisticOrder(provider, pending.optimisticOrder)) {
-            this.options.setError(pending.cardId, error);
+            showProfileActionError(error);
           }
         }
       }
@@ -185,9 +258,7 @@ export class ModelProviderProfileActionsController {
     if (orders[provider] !== expected) {
       return false;
     }
-    const next = { ...orders };
-    delete next[provider];
-    this.options.setOrders(next);
+    this.options.setOrders(updateRecordEntry<string[]>(orders, provider, null));
     return true;
   }
 
@@ -197,18 +268,11 @@ export class ModelProviderProfileActionsController {
     if (!data || !authStatus) {
       return;
     }
-    const providers = [...authStatus.providers];
-    for (const [index, candidate] of providers.entries()) {
-      if ((candidate.authProvider ?? candidate.provider) !== provider) {
-        continue;
-      }
-      const { profileOrder: _order, profileOrderStored: _stored, ...base } = candidate;
-      providers[index] = {
-        ...base,
-        profileOrder: [...profileIds],
-        profileOrderStored: true,
-      };
-    }
+    const providers = authStatus.providers.map((candidate) =>
+      (candidate.authProvider ?? candidate.provider) === provider
+        ? { ...candidate, profileOrder: [...profileIds], profileOrderStored: true }
+        : candidate,
+    );
     this.options.setData({ ...data, authStatus: { ...authStatus, providers } });
   }
 }

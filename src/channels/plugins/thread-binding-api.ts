@@ -1,32 +1,11 @@
-/**
- * Bundled channel thread-binding public artifact loader.
- *
- * Reads lightweight thread placement and inbound conversation hooks without full plugin loading.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { loadOptionalBundledChannelPublicArtifact } from "./optional-public-artifact.js";
+import type { ChannelMessagingAdapter } from "./types.core.js";
 
 type ThreadBindingPlacement = "current" | "child";
 
-type ThreadBindingInboundConversationParams = {
-  from?: string;
-  to?: string;
-  conversationId?: string;
-  threadId?: string | number;
-  threadParentId?: string | number;
-  isGroup: boolean;
-};
-
-type ThreadBindingConversationRef = {
-  conversationId?: string;
-  parentConversationId?: string;
-};
-
-type ThreadBindingApi = {
+type ThreadBindingApi = Pick<ChannelMessagingAdapter, "resolveInboundConversation"> & {
   defaultTopLevelPlacement?: unknown;
-  resolveInboundConversation?: (
-    params: ThreadBindingInboundConversationParams,
-  ) => ThreadBindingConversationRef | null;
 };
 
 function loadBundledChannelThreadBindingApi(channelId: string): ThreadBindingApi | undefined {
@@ -41,9 +20,6 @@ function normalizeThreadBindingPlacement(value: unknown): ThreadBindingPlacement
   return normalized === "current" || normalized === "child" ? normalized : undefined;
 }
 
-/**
- * Resolves the default top-level thread-binding placement for a bundled channel.
- */
 export function resolveBundledChannelThreadBindingDefaultPlacement(
   channelId: string,
 ): ThreadBindingPlacement | undefined {
@@ -52,12 +28,11 @@ export function resolveBundledChannelThreadBindingDefaultPlacement(
   );
 }
 
-/**
- * Resolves inbound conversation refs from a bundled channel thread-binding artifact.
- */
 export function resolveBundledChannelThreadBindingInboundConversation(
-  params: ThreadBindingInboundConversationParams & { channelId: string },
-): ThreadBindingConversationRef | null | undefined {
+  params: Parameters<NonNullable<ThreadBindingApi["resolveInboundConversation"]>>[0] & {
+    channelId: string;
+  },
+): ReturnType<NonNullable<ThreadBindingApi["resolveInboundConversation"]>> | undefined {
   const api = loadBundledChannelThreadBindingApi(params.channelId);
   if (typeof api?.resolveInboundConversation !== "function") {
     return undefined;

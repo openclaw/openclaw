@@ -1,23 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { registerSingleProviderPlugin } from "../../plugin-sdk/plugin-test-runtime.js";
-import { loadBundledPluginPublicSurface } from "../../plugin-sdk/test-helpers/public-surface-loader.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import type { StreamFn } from "../runtime/index.js";
 import { materializePreparedRuntimeModel } from "./materialize-model.js";
 
 describe("xAI OAuth runtime materialization", () => {
-  it("retains the selected alias through auth resolution and sends its canonical target", async () => {
-    const plugin = await loadBundledPluginPublicSurface<{
+  it("retains the selected concrete model through auth resolution and transport", async () => {
+    const plugin = await loadBundledPluginFacade<{
       default: Parameters<typeof registerSingleProviderPlugin>[0];
     }>({ pluginId: "xai", artifactBasename: "index.js" });
     const provider = await registerSingleProviderPlugin(plugin.default);
     const model: ProviderRuntimeModel = {
       provider: "xai",
-      id: "auto",
-      name: "Subscription default",
+      id: "grok-4.6",
+      name: "Grok 4.6",
       api: "openai-responses",
       baseUrl: "https://cli-chat-proxy.grok.com/v1",
-      params: { canonicalModelId: "grok-4.6" },
+      params: { canonicalModelId: "grok-fixture-unselected" },
       reasoning: true,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -26,7 +26,7 @@ describe("xAI OAuth runtime materialization", () => {
     };
     const materialized = await materializePreparedRuntimeModel({
       provider: "xai",
-      modelId: "auto",
+      modelId: "grok-4.6",
       model,
       config: {},
       plan: {
@@ -40,11 +40,11 @@ describe("xAI OAuth runtime materialization", () => {
         expect(request.authProfileId).toBe("xai:fixture");
         expect(request.authProfileMode).toBe("oauth");
         return {
-          model: provider.normalizeResolvedModel?.({ provider: "xai", modelId: "auto", model }),
+          model: provider.normalizeResolvedModel?.({ provider: "xai", modelId: "grok-4.6", model }),
         };
       },
     });
-    expect(materialized?.id).toBe("auto");
+    expect(materialized?.id).toBe("grok-4.6");
     expect(materialized?.thinkingLevelMap?.xhigh).toBe("xhigh");
     let wireModelId: string | undefined;
     let wireHeaders: Record<string, string> | undefined;
@@ -55,7 +55,7 @@ describe("xAI OAuth runtime materialization", () => {
     };
     const wrapped = provider.wrapStreamFn?.({
       provider: "xai",
-      modelId: "auto",
+      modelId: "grok-4.6",
       model: materialized,
       streamFn,
       extraParams: { tool_stream: false },

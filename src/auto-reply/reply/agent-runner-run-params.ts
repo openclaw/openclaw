@@ -1,34 +1,33 @@
-/** Builds embedded-agent run parameters from queued follow-up run state. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   modelFallbackOverrideFromAvailability,
   resolveModelFallbackAvailability,
 } from "../../agents/agent-scope.js";
-import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
+import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import {
+  findModelInCatalog,
+  modelSupportsInput,
+  prepareModelRunCapabilities,
+  type PreparedModelThinkingCapability,
+} from "../../agents/model-catalog-lookup.js";
 import { modelTransportRoutesMatch } from "../../agents/model-compat-catalog.js";
 import {
+  needsThinkHydration,
+  normalizeThinkingCatalogProviders,
+} from "../../agents/thinking-runtime.js";
+import {
+  findConfiguredProviderModel,
   resolveMergedModelProviderConfig,
-  resolveMergedModelProviderModels,
 } from "../../config/model-provider-config.js";
+import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { resolveProviderScopedAuthProfile } from "./agent-runner-auth-profile.js";
+import type { AgentFallbackCandidateCommonParams } from "./agent-runner-fallback-cycle.types.js";
 import type { FollowupRun } from "./queue.js";
 
-/** Callback used to detect providers that require final-answer tags. */
-type ReasoningTagProviderResolver = (
-  provider: string,
-  options: {
-    config: FollowupRun["run"]["config"];
-    workspaceDir: string;
-    modelId: string;
-  },
-) => boolean;
-
-/** Builds model fallback options for an embedded follow-up run. */
 export function resolveModelFallbackOptions(
   run: FollowupRun["run"],
-  configOverride: FollowupRun["run"]["config"] = run.config,
+  config: FollowupRun["run"]["config"] = run.config,
 ) {
-  const config = configOverride;
   const modelFallbackAvailability = resolveModelFallbackAvailability({
     cfg: config,
     agentId: run.agentId,
@@ -37,6 +36,7 @@ export function resolveModelFallbackOptions(
     modelOverrideSource: run.modelOverrideSource,
     hasAutoFallbackProvenance: run.hasAutoFallbackProvenance === true,
     modelSelectionLocked: run.modelSelectionLocked,
+    subagentSpawnLineage: run.subagentSpawnLineage,
   });
   return {
     cfg: config,
@@ -51,25 +51,6 @@ export function resolveModelFallbackOptions(
   };
 }
 
-/** Resolves whether final-answer tags should be enforced for an embedded follow-up run. */
-function resolveEnforceFinalTagWithResolver(
-  run: FollowupRun["run"],
-  provider: string,
-  model: string,
-  isReasoningTagProvider?: ReasoningTagProviderResolver,
-): boolean {
-  return (
-    (run.skipProviderRuntimeHints ? false : undefined) ??
-    (run.enforceFinalTag ||
-      isReasoningTagProvider?.(provider, {
-        config: run.config,
-        workspaceDir: run.workspaceDir,
-        modelId: model,
-      }) ||
-      false)
-  );
-}
-
 /** Prepare the selected candidate's input before placement can bypass local model resolution. */
 export async function resolveRunModelHasVision(params: {
   run: FollowupRun["run"];
@@ -78,10 +59,12 @@ export async function resolveRunModelHasVision(params: {
 }): Promise<boolean> {
   const { run, provider, model } = params;
   const providerConfig = resolveMergedModelProviderConfig(run.config, provider);
-  const configured = resolveMergedModelProviderModels({
-    models: providerConfig?.models,
-    normalizeModelId: normalizeLowercaseStringOrEmpty,
-  }).get(normalizeLowercaseStringOrEmpty(model));
+  const configured = findConfiguredProviderModel(
+    providerConfig,
+    provider,
+    model,
+    normalizeLowercaseStringOrEmpty,
+  );
   if (configured?.input !== undefined) {
     return modelSupportsInput(configured, "image");
   }
@@ -107,68 +90,73 @@ export async function resolveRunModelHasVision(params: {
   return modelSupportsInput(findModelInCatalog(catalog, provider, model), "image");
 }
 
-/** Builds the shared embedded-agent run params from a queued follow-up run. */
 export async function buildEmbeddedRunBaseParams(params: {
   run: FollowupRun["run"];
   provider: string;
   model: string;
+  agentRuntime?: string;
   runId: string;
   promptCacheKey?: string;
   authProfile: ReturnType<typeof resolveProviderScopedAuthProfile>;
   allowTransientCooldownProbe?: boolean;
-  isReasoningTagProvider?: ReasoningTagProviderResolver;
 }) {
   const config = params.run.config;
-  const modelFallbackAvailability = resolveModelFallbackAvailability({
-    cfg: config,
-    agentId: params.run.agentId,
-    sessionKey: params.run.sessionKey,
-    hasSessionModelOverride: params.run.hasSessionModelOverride === true,
-    modelOverrideSource: params.run.modelOverrideSource,
-    hasAutoFallbackProvenance: params.run.hasAutoFallbackProvenance === true,
-    modelSelectionLocked: params.run.modelSelectionLocked,
-  });
-  const modelFallbacksOverride = modelFallbackOverrideFromAvailability(modelFallbackAvailability);
-  const enforceFinalTag = resolveEnforceFinalTagWithResolver(
-    params.run,
-    params.provider,
-    params.model,
-    params.isReasoningTagProvider,
-  );
+  const { modelFallbackAvailability, fallbacksOverride: modelFallbacksOverride } =
+    resolveModelFallbackOptions(params.run);
+  let modelThinkingCapability: PreparedModelThinkingCapability | undefined;
+  if (params.agentRuntime) {
+    let thinkingCatalog = params.run.thinkingCatalog;
+    if (needsThinkHydration(thinkingCatalog, params.provider, params.model, params.agentRuntime)) {
+      const { loadProviderScopedThinkingCatalog } =
+        await import("../../agents/model-catalog.runtime.js");
+      thinkingCatalog = normalizeThinkingCatalogProviders(
+        await loadProviderScopedThinkingCatalog({
+          config,
+          provider: params.provider,
+          model: params.model,
+          agentRuntime: params.agentRuntime,
+          agentId: params.run.agentId,
+          agentDir: params.run.agentDir,
+          workspaceDir: params.run.workspaceDir,
+        }),
+      );
+    }
+    modelThinkingCapability = prepareModelRunCapabilities(
+      [thinkingCatalog, []],
+      [params.provider, params.model, params.agentRuntime],
+    ).modelThinkingCapability;
+  }
+  const enforceFinalTag =
+    !params.run.skipProviderRuntimeHints &&
+    (params.run.enforceFinalTag ||
+      isReasoningTagProvider(params.provider, {
+        config,
+        workspaceDir: params.run.workspaceDir,
+        modelId: params.model,
+      }));
   // Runtime policy keys may differ from session keys for direct-message scoped policy.
-  const runParams = {
-    sessionFile: params.run.sessionFile,
-    workspaceDir: params.run.workspaceDir,
-    cwd: params.run.cwd,
+  return {
+    ...buildReplyRunStateParams(params.run),
+    providerReviewAcknowledgment: params.run.providerReviewAcknowledgment,
     permissionMode: params.run.permissionMode,
     sessionRoot: params.run.sessionRoot,
     agentDir: params.run.agentDir,
     config,
-    toolOverrides: params.run.toolOverrides,
-    skillsSnapshot: params.run.skillsSnapshot,
-    ownerNumbers: params.run.ownerNumbers,
-    inputProvenance: params.run.inputProvenance,
     trustedInternalHandoff: params.run.trustedInternalHandoff,
     scheduledToolPolicy: params.run.scheduledToolPolicy,
     runtimePluginToolGrant: params.run.runtimePluginToolGrant,
-    senderIsOwner: params.run.senderIsOwner,
-    conversationToolPolicy: params.run.conversationToolPolicy,
-    channelContext: params.run.channelContext,
-    approvalReviewerDeviceId: params.run.approvalReviewerDeviceId,
     enforceFinalTag,
     silentExpected: params.run.silentExpected,
-    allowEmptyAssistantReplyAsSilent: params.run.allowEmptyAssistantReplyAsSilent,
-    terminalReplyExpectation: params.run.terminalReplyExpectation,
     silentReplyPromptMode: params.run.silentReplyPromptMode,
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
-    clientCaps: params.run.clientCaps,
     toolBindings: params.run.toolBindings,
-    taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
     skillWorkshopProposalRevision: params.run.skillWorkshopProposalRevision,
     skillLibraryAuthoring: params.run.skillLibraryAuthoring,
     provider: params.provider,
     model: params.model,
     modelHasVision: await resolveRunModelHasVision(params),
+    ...(modelThinkingCapability ? { modelThinkingCapability } : {}),
+    requestedRouteResolution: "resolved" as const,
     modelSelectionLocked: params.run.modelSelectionLocked,
     modelFallbackAvailability,
     modelFallbacksOverride,
@@ -181,9 +169,74 @@ export async function buildEmbeddedRunBaseParams(params: {
     execOverrides: params.run.execOverrides,
     bashElevated: params.run.bashElevated,
     timeoutMs: params.run.timeoutMs,
+    runTimeoutOverrideMs: params.run.runTimeoutOverrideMs,
     runId: params.runId,
     promptCacheKey: params.promptCacheKey,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
   };
-  return runParams;
+}
+
+/** Project prepared turn facts shared by the CLI and embedded runtime adapters. */
+export function buildFallbackCandidateTurnParams(params: AgentFallbackCandidateCommonParams) {
+  const { turn } = params;
+  return {
+    preparedTtsPreferences: turn.opts?.preparedTtsPreferences,
+    preparedRunAdmission: params.preparedRunAdmission,
+    messageActionTurnCapability: params.messageActionTurnCapability,
+    trigger: turn.isHeartbeat ? "heartbeat" : "user",
+    lane: params.runLane,
+    fastModeStartedAtMs: params.fastModeStartedAtMs,
+    fastModeAutoProgressState: params.fastModeAutoProgressState,
+    isFinalFallbackAttempt: params.isFinalFallbackAttempt,
+    prompt: turn.commandBody,
+    transcriptPrompt: turn.transcriptCommandBody,
+    media: turn.followupRun.media,
+    userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
+    contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,
+    onContextEngineTurnCandidate: params.onContextEngineTurnCandidate,
+    currentInboundEventKind: turn.followupRun.currentInboundEventKind,
+    currentInboundContext: turn.followupRun.currentInboundContext,
+    extraSystemPrompt: turn.followupRun.run.extraSystemPrompt,
+    sourceReplyDeliveryMode: turn.followupRun.run.sourceReplyDeliveryMode,
+    // Omit false so heartbeat routes require explicit recipients without changing subagent defaults.
+    ...(turn.isHeartbeat ? { requireExplicitMessageTarget: true as const } : {}),
+    cleanupBundleMcpOnRunEnd: turn.opts?.cleanupBundleMcpOnRunEnd,
+    silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
+    suppressNextUserMessagePersistence: params.suppressQueuedUserPersistenceForCandidate,
+    onUserMessagePersisted: params.notifyUserMessagePersisted,
+    prepareAssistantTranscriptMessage: turn.opts?.prepareAssistantTranscriptMessage,
+    toolsAllow: turn.opts?.toolsAllow,
+    disableTools: turn.opts?.disableTools,
+    continuesConversation: turn.opts?.continuesConversation,
+    bootstrapContextMode: turn.opts?.bootstrapContextMode,
+    bootstrapContextRunKind: params.bootstrapContextRunKind,
+    images: params.currentTurnImages.images,
+    imageOrder: params.currentTurnImages.imageOrder,
+    abortSignal: params.runAbortSignal,
+    replyOperation: turn.replyOperation,
+    bootstrapPromptWarningSignaturesSeen: params.bootstrapPromptWarningSignaturesSeen,
+    bootstrapPromptWarningSignature: params.bootstrapPromptWarningSignaturesSeen.at(-1),
+  } satisfies Partial<RunEmbeddedAgentInternalParams>;
+}
+
+/** Carry the same session-selected facts while each adapter owns runtime and route overrides. */
+export function buildReplyRunStateParams(run: FollowupRun["run"]) {
+  return {
+    sessionFile: run.sessionFile,
+    workspaceDir: run.workspaceDir,
+    cwd: run.cwd,
+    toolOverrides: run.toolOverrides,
+    skillsSnapshot: run.skillsSnapshot,
+    ownerNumbers: run.ownerNumbers,
+    inputProvenance: run.inputProvenance,
+    senderIsOwner: run.senderIsOwner,
+    conversationToolPolicy: run.conversationToolPolicy,
+    channelContext: run.channelContext,
+    approvalReviewerDeviceId: run.approvalReviewerDeviceId,
+    terminalReplyExpectation: run.terminalReplyExpectation,
+    clientCaps: run.clientCaps,
+    bootstrapUserProfileId: run.bootstrapUserProfileId,
+    gatewayUiCommandTarget: run.gatewayUiCommandTarget,
+    taskSuggestionDeliveryMode: run.taskSuggestionDeliveryMode,
+  };
 }

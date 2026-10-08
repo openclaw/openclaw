@@ -1,9 +1,19 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
+import type { ProviderReviewAcknowledgment } from "../../sessions/provider-review.js";
 import { admitChatSend } from "./chat-send-admission.js";
-import { runChatSendPreAdmission } from "./chat-send-pre-admission.js";
+import type { ChatSendDiagnostics } from "./chat-send-diagnostics.js";
+import {
+  respondChatSendAdmissionError,
+  runChatSendPreAdmission,
+} from "./chat-send-pre-admission.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
-import { prepareChatSendSession } from "./chat-send-session.js";
+import {
+  prepareChatSendNativeRuntimeRestriction,
+  prepareChatSendSession,
+  qualifyChatSendSession,
+  type PreparedChatSendSession,
+} from "./chat-send-session.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 /** Normalize, prepare, and exclusively admit one new chat.send request. */
@@ -13,23 +23,49 @@ export async function prepareAndAdmitChatSend(
     respond,
     context,
     client,
+    hasCurrentClientAuthority,
     sessionMutationAuthorization,
   }: Pick<
     GatewayRequestHandlerOptions,
-    "params" | "respond" | "context" | "client" | "sessionMutationAuthorization"
+    | "params"
+    | "respond"
+    | "context"
+    | "client"
+    | "hasCurrentClientAuthority"
+    | "sessionMutationAuthorization"
   >,
   onAdmissionOwned?: () => Promise<boolean>,
   options?: {
     trustedSystemInput?: boolean;
+    isDirectExternalUser?: boolean;
     goalResume?: SessionGoalOperation & { action: "resume" };
+    providerReviewAcknowledgment?: ProviderReviewAcknowledgment;
   },
+  diagnostics?: ChatSendDiagnostics,
 ) {
-  const normalizedRequest = normalizeChatSendRequest({
+  const phase = diagnostics?.scope("admission");
+  const assertCurrent =
+    sessionMutationAuthorization || hasCurrentClientAuthority
+      ? () => {
+          sessionMutationAuthorization?.assertCurrent();
+          if (hasCurrentClientAuthority?.() === false) {
+            throw new Error("Gateway caller authority is no longer active.");
+          }
+        }
+      : undefined;
+  const withCurrent = sessionMutationAuthorization?.withCurrent;
+  const assertCurrentAsync = async () =>
+    withCurrent ? withCurrent(() => assertCurrent?.()) : assertCurrent?.();
+  const normalization = normalizeChatSendRequest({
     params,
     client,
     ...(options?.trustedSystemInput ? { trustedSystemInput: true } : {}),
     ...(options?.goalResume ? { goalResume: options.goalResume } : {}),
+    ...(options?.providerReviewAcknowledgment
+      ? { providerReviewAcknowledgment: options.providerReviewAcknowledgment }
+      : {}),
   });
+  const normalizedRequest = normalization instanceof Promise ? await normalization : normalization;
   if (!normalizedRequest.ok) {
     respond(
       false,
@@ -42,27 +78,36 @@ export async function prepareAndAdmitChatSend(
     );
     return undefined;
   }
-  const preparedSession = prepareChatSendSession({
+  if (normalizedRequest.value.goalOperation) {
+    try {
+      assertCurrent?.();
+    } catch (error) {
+      respondChatSendAdmissionError(error, respond);
+      return undefined;
+    }
+  }
+  const loadedSession = await prepareChatSendSession({
     request: normalizedRequest.value,
     context,
     client,
+    isDirectExternalUser: options?.isDirectExternalUser,
   });
-  if (!preparedSession.ok) {
+  if (!loadedSession.ok) {
     respond(
       false,
       undefined,
-      typeof preparedSession.error === "string"
-        ? errorShape(ErrorCodes.INVALID_REQUEST, preparedSession.error)
-        : preparedSession.error,
+      typeof loadedSession.error === "string"
+        ? errorShape(ErrorCodes.INVALID_REQUEST, loadedSession.error)
+        : loadedSession.error,
     );
     return undefined;
   }
   if (normalizedRequest.value.mentions) {
     const mentions = context.mentionInbox?.validateRecipients(
       client,
-      preparedSession.value.entry
-        ? { sessionKey: preparedSession.value.sessionKey, agentId: preparedSession.value.agentId }
-        : { agentId: preparedSession.value.agentId },
+      loadedSession.value.entry
+        ? { sessionKey: loadedSession.value.sessionKey, agentId: loadedSession.value.agentId }
+        : { agentId: loadedSession.value.agentId },
       normalizedRequest.value.mentions.map((mention) => mention.profileId),
     );
     if (!mentions?.ok) {
@@ -78,27 +123,58 @@ export async function prepareAndAdmitChatSend(
       return undefined;
     }
   }
-  const shouldAdmit = await runChatSendPreAdmission({
+  phase?.mark("authority");
+  const preparation = {
     request: normalizedRequest.value,
-    session: preparedSession.value,
+    session: loadedSession.value,
     respond,
     context,
     client,
-    assertCurrent: sessionMutationAuthorization?.assertCurrent,
-  });
+    assertCurrent,
+    assertCurrentAsync,
+    withCurrent,
+  };
+  const shouldAdmit = await runChatSendPreAdmission(preparation);
   if (!shouldAdmit) {
     return undefined;
   }
-  const admitted = await admitChatSend({
-    request: normalizedRequest.value,
-    session: preparedSession.value,
-    respond,
-    context,
-    client,
-    onAdmissionOwned,
-  });
-  if (!admitted.ok) {
+  let session: PreparedChatSendSession;
+  try {
+    session = qualifyChatSendSession(loadedSession.value);
+  } catch (error) {
+    respondChatSendAdmissionError(error, respond);
     return undefined;
   }
-  return { normalizedRequest, preparedSession, admitted };
+  let admitted: Awaited<ReturnType<typeof admitChatSend>> | undefined;
+  try {
+    const nativeRestriction = await prepareChatSendNativeRuntimeRestriction({
+      ...preparation,
+      session,
+    });
+    if (nativeRestriction) {
+      respond(false, undefined, nativeRestriction);
+      return undefined;
+    }
+    phase?.mark("runAdmission");
+    admitted = await admitChatSend({
+      ...preparation,
+      session,
+      onAdmissionOwned,
+      hasCurrentClientAuthority,
+      withPreparedCurrent: sessionMutationAuthorization?.withPreparedCurrent,
+    });
+    if (!admitted.ok) {
+      return undefined;
+    }
+    phase?.finish();
+    return {
+      request: normalizedRequest.value,
+      session,
+      admission: admitted.value,
+    };
+  } finally {
+    if (!admitted?.ok) {
+      session.releaseSessionTarget();
+    }
+  }
 }

@@ -1,19 +1,64 @@
 import type { ToolStreamHost } from "./tool-stream-contract.ts";
 
-export function syncToolStreamMessages(host: ToolStreamHost) {
+type ToolStreamState = Pick<
+  ToolStreamHost,
+  | "toolStreamById"
+  | "toolStreamOrder"
+  | "chatToolMessages"
+  | "chatStreamSegments"
+  | "activityEventSeqById"
+  | "knownAgentRunIds"
+  | "waitingApprovalStatuses"
+> & { toolStreamSyncTimer?: number | null };
+
+export function canResetToolStream(host: Partial<ToolStreamState>): host is ToolStreamState {
+  return (
+    host.toolStreamById instanceof Map &&
+    Array.isArray(host.toolStreamOrder) &&
+    Array.isArray(host.chatToolMessages) &&
+    Array.isArray(host.chatStreamSegments)
+  );
+}
+
+export function syncToolStreamMessages(host: ToolStreamState) {
   host.chatToolMessages = host.toolStreamOrder
     .map((id) => host.toolStreamById.get(id)?.message)
     .filter((msg): msg is Record<string, unknown> => Boolean(msg));
 }
 
-export function cancelToolStreamSync(host: ToolStreamHost) {
+export function closeToolStreamBoundary(
+  host: Partial<Pick<ToolStreamHost, "toolStreamById" | "chatToolMessages">>,
+  runId: string,
+  boundaryRunId: string,
+): number | undefined {
+  let latestTimestamp: number | undefined;
+  const replacements = new Map<Record<string, unknown>, Record<string, unknown>>();
+  for (const entry of host.toolStreamById?.values() ?? []) {
+    if (entry.runId !== runId || entry.boundaryRunId) {
+      continue;
+    }
+    latestTimestamp = Math.max(latestTimestamp ?? entry.startedAt, entry.startedAt);
+    entry.boundaryRunId = boundaryRunId;
+    const message = { ...entry.message, boundaryRunId };
+    replacements.set(entry.message, message);
+    entry.message = message;
+  }
+  if (replacements.size && host.chatToolMessages) {
+    host.chatToolMessages = host.chatToolMessages.map(
+      (message) => replacements.get(message) ?? message,
+    );
+  }
+  return latestTimestamp;
+}
+
+export function cancelToolStreamSync(host: Pick<ToolStreamState, "toolStreamSyncTimer">) {
   if (host.toolStreamSyncTimer != null) {
     clearTimeout(host.toolStreamSyncTimer);
     host.toolStreamSyncTimer = null;
   }
 }
 
-export function resetToolStream(host: ToolStreamHost) {
+export function resetToolStream(host: ToolStreamState) {
   cancelToolStreamSync(host);
   host.toolStreamById.clear();
   host.toolStreamOrder = [];
@@ -26,22 +71,20 @@ export function resetToolStream(host: ToolStreamHost) {
   // until snapshot reconciliation observes the approval leaving the queue.
 }
 
-export function resetToolStreamRun(host: ToolStreamHost, runId: string) {
+export function resetToolStreamRun(host: ToolStreamState, runId: string) {
   cancelToolStreamSync(host);
-  const removedIdentities = new Set<string>();
-  for (const identity of host.toolStreamOrder) {
-    const entry = host.toolStreamById.get(identity);
-    if (entry?.runId !== runId) {
-      continue;
-    }
-    removedIdentities.add(identity);
-  }
+  const removedIdentities = new Set(
+    host.toolStreamOrder.filter((identity) => host.toolStreamById.get(identity)?.runId === runId),
+  );
   for (const identity of removedIdentities) {
     host.toolStreamById.delete(identity);
   }
   const activityPrefix = `tool:[${JSON.stringify(runId)},`;
   for (const sequenceIdentity of host.activityEventSeqById?.keys() ?? []) {
-    if (sequenceIdentity.startsWith(activityPrefix)) {
+    if (
+      sequenceIdentity.startsWith(activityPrefix) ||
+      sequenceIdentity.startsWith(`item:${runId}:`)
+    ) {
       host.activityEventSeqById?.delete(sequenceIdentity);
     }
   }

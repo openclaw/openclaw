@@ -9,6 +9,7 @@ import type { InboundEventKind } from "../../channels/inbound-event/kind.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
+import type { PreparedTtsPreferences } from "../../tts/tts-preferences.js";
 import {
   copyReplyPayloadMetadata,
   getReplyPayloadMetadata,
@@ -22,8 +23,16 @@ import type { ReplyOperation } from "./reply-run-registry.js";
 
 const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
 
-export const NO_VISIBLE_REPLY_FALLBACK_TEXT =
-  "No reply was generated for this message. This is usually a temporary model failure - please try again.";
+const NO_VISIBLE_REPLY_FALLBACK_TEXT =
+  "⚠️ OpenClaw couldn't produce or deliver a reply. Please try again. If this keeps happening, ask the operator to check the gateway logs.";
+
+export function buildNoVisibleReplyFallbackText(runId?: string): string {
+  const reference = normalizeOptionalString(runId);
+  // Caller-supplied IDs must not inject markup, mentions, or unbounded text into a channel.
+  return reference && /^[a-z0-9][a-z0-9_-]{0,127}$/iu.test(reference)
+    ? `${NO_VISIBLE_REPLY_FALLBACK_TEXT} Reference: ${reference}.`
+    : NO_VISIBLE_REPLY_FALLBACK_TEXT;
+}
 
 export const QUEUE_CAP_REJECTION_TEXT =
   "This message was not queued because the session queue is full. Please try again after the current response finishes.";
@@ -136,7 +145,7 @@ export function formatSuppressedReplyPayloadForLog(reply: ReplyPayload): string 
 async function maybeApplyTtsToReplyPayload(
   params: Parameters<
     Awaited<ReturnType<typeof ttsRuntimeLoader.load>>["maybeApplyTtsToPayload"]
-  >[0],
+  >[0] & { preparedTtsPreferences: PreparedTtsPreferences },
 ) {
   if (isReplyPayloadStatusNotice(params.payload)) {
     return params.payload;
@@ -144,6 +153,7 @@ async function maybeApplyTtsToReplyPayload(
   if (
     !shouldAttemptTtsPayload({
       cfg: params.cfg,
+      preparedTtsPreferences: params.preparedTtsPreferences,
       ttsAuto: params.ttsAuto,
       agentId: params.agentId,
       channelId: params.channel,
@@ -160,11 +170,15 @@ async function maybeApplyTtsToReplyPayload(
 }
 
 export function createFinalizationAwareTtsPayloadApplier(params: {
+  preparedTtsPreferences: PreparedTtsPreferences;
   getReplyOperation: () => ReplyOperation | undefined;
   hasInboundAudio: () => boolean;
 }) {
   return async (
-    ttsParams: Omit<Parameters<typeof maybeApplyTtsToReplyPayload>[0], "inboundAudio">,
+    ttsParams: Omit<
+      Parameters<typeof maybeApplyTtsToReplyPayload>[0],
+      "inboundAudio" | "preparedTtsPreferences"
+    >,
   ) => {
     const replyOperation = params.getReplyOperation();
     // Provider fallbacks can outlive the default lease, but remain bounded by
@@ -175,6 +189,7 @@ export function createFinalizationAwareTtsPayloadApplier(params: {
     try {
       return await maybeApplyTtsToReplyPayload({
         ...ttsParams,
+        preparedTtsPreferences: params.preparedTtsPreferences,
         inboundAudio: params.hasInboundAudio(),
       });
     } finally {

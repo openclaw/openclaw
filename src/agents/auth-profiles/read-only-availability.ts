@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   isSecretRef,
   LEGACY_DOUBLE_UNDERSCORE_ENV_MARKER_PREFIX,
-  resolveSecretInputRef,
+  parseSecretRef,
 } from "../../config/types.secrets.js";
 import { canResolveEnvSecretRefInReadOnlyPath } from "../../plugin-sdk/secret-ref-readonly.internal.js";
 import {
@@ -18,6 +18,7 @@ import {
   SECRETREF_ENV_HEADER_MARKER_PREFIX,
 } from "../model-auth-markers.js";
 import { hasUsableOAuthCredential, resolveTokenExpiryState } from "./credential-state.js";
+import { isOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import type { AuthProfileCredential } from "./types.js";
 
 type ReadOnlyCredentialAvailability = boolean | undefined;
@@ -74,18 +75,12 @@ function resolveSecretInputReadOnlyAvailability(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): ReadOnlyCredentialAvailability {
-  const { ref } = resolveSecretInputRef({
-    value,
-    refValue,
-    defaults: cfg.secrets?.defaults,
-  });
+  const ref =
+    parseSecretRef(refValue, cfg.secrets?.defaults) ?? parseSecretRef(value, cfg.secrets?.defaults);
   if (ref) {
     return resolveSecretRefReadOnlyAvailability(ref, cfg, env);
   }
-  if (!hasSecret(value)) {
-    return false;
-  }
-  if (hasMalformedSecretInputSyntax(value)) {
+  if (!hasSecret(value) || hasMalformedSecretInputSyntax(value)) {
     return false;
   }
   return isKnownEnvApiKeyMarker(value)
@@ -116,6 +111,9 @@ export function resolveStoredCredentialReadOnlyAvailability(params: {
   }
   if (hasUsableOAuthCredential(credential, { now })) {
     return true;
+  }
+  if (isOAuthRefreshFence(credential)) {
+    return false;
   }
   // Refresh material is runnable only when the caller owns a refresh path.
   // Ref-only OAuth may hydrate from the runtime snapshot, so it stays unknown.

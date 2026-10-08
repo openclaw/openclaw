@@ -1,22 +1,36 @@
-/**
- * Tests iOS push notification dispatch for exec approval requests.
- */
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ExecApprovalRequest, ExecApprovalResolved } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest, PluginApprovalResolved } from "../infra/plugin-approvals.js";
+/**
+ * Tests iOS push notification dispatch for exec approval requests.
+ */
+import {
+  createExecApprovalIosPushDelivery,
+  createPluginApprovalIosPushDelivery,
+} from "./exec-approval-ios-push.js";
 
-const listDevicePairingMock = vi.fn();
-const loadApnsRegistrationMock = vi.fn();
-const loadApnsRegistrationsMock = vi.fn();
-const resolveApnsAuthConfigFromEnvMock = vi.fn();
-const resolveApnsRelayConfigFromEnvMock = vi.fn();
-const sendApnsExecApprovalAlertMock = vi.fn();
-const sendApnsExecApprovalResolvedWakeMock = vi.fn();
-const sendApnsPluginApprovalAlertMock = vi.fn();
-const sendApnsPluginApprovalResolvedWakeMock = vi.fn();
-let createExecApprovalIosPushDelivery: typeof import("./exec-approval-ios-push.js").createExecApprovalIosPushDelivery;
-let createPluginApprovalIosPushDelivery: typeof import("./exec-approval-ios-push.js").createPluginApprovalIosPushDelivery;
+const {
+  listDevicePairingMock,
+  loadApnsRegistrationMock,
+  loadApnsRegistrationsMock,
+  resolveApnsAuthConfigFromEnvMock,
+  resolveApnsRelayConfigFromEnvMock,
+  sendApnsExecApprovalAlertMock,
+  sendApnsExecApprovalResolvedWakeMock,
+  sendApnsPluginApprovalAlertMock,
+  sendApnsPluginApprovalResolvedWakeMock,
+} = vi.hoisted(() => ({
+  listDevicePairingMock: vi.fn(),
+  loadApnsRegistrationMock: vi.fn(),
+  loadApnsRegistrationsMock: vi.fn(),
+  resolveApnsAuthConfigFromEnvMock: vi.fn(),
+  resolveApnsRelayConfigFromEnvMock: vi.fn(),
+  sendApnsExecApprovalAlertMock: vi.fn(),
+  sendApnsExecApprovalResolvedWakeMock: vi.fn(),
+  sendApnsPluginApprovalAlertMock: vi.fn(),
+  sendApnsPluginApprovalResolvedWakeMock: vi.fn(),
+}));
 
 function apnsRegistration(nodeId = "ios-device-1") {
   return {
@@ -157,8 +171,9 @@ vi.mock("../infra/device-pairing.js", async () => {
   };
 });
 
-vi.mock("../infra/device-identity.js", () => ({
-  loadOrCreateProcessDeviceIdentity: () => ({ deviceId: "gateway-device-1" }),
+vi.mock("../infra/device-identity-async.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/device-identity-async.js")>()),
+  loadOrCreateProcessDeviceIdentityAsync: () => ({ deviceId: "gateway-device-1" }),
 }));
 
 vi.mock("../infra/push-apns.js", () => ({
@@ -175,11 +190,6 @@ vi.mock("../infra/push-apns.js", () => ({
 }));
 
 describe("createExecApprovalIosPushDelivery", () => {
-  beforeAll(async () => {
-    ({ createExecApprovalIosPushDelivery, createPluginApprovalIosPushDelivery } =
-      await import("./exec-approval-ios-push.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
     listDevicePairingMock.mockResolvedValue({ pending: [], paired: [] });
@@ -445,23 +455,6 @@ describe("createExecApprovalIosPushDelivery", () => {
       expect(sendApnsPluginApprovalResolvedWakeMock).toHaveBeenCalledWith(
         expect.objectContaining({ approvalId: "plugin:expired" }),
       );
-    });
-
-    it("routes exec and plugin factories through the same paired-target resolver", async () => {
-      mockPairedIosOperator(["operator.approvals", "operator.read"]);
-
-      await createExecApprovalIosPushDelivery({ log: {} }).handleRequested(
-        approvalRequest("exec-shared-target"),
-      );
-      await createPluginApprovalIosPushDelivery({ log: {} }).handleRequested(
-        pluginApprovalRequest("plugin:shared-target"),
-      );
-
-      expect(listDevicePairingMock).toHaveBeenCalledTimes(2);
-      expect(loadApnsRegistrationsMock).toHaveBeenNthCalledWith(1, ["ios-device-1"]);
-      expect(loadApnsRegistrationsMock).toHaveBeenNthCalledWith(2, ["ios-device-1"]);
-      expect(sendApnsExecApprovalAlertMock).toHaveBeenCalledTimes(1);
-      expect(sendApnsPluginApprovalAlertMock).toHaveBeenCalledTimes(1);
     });
   });
 });

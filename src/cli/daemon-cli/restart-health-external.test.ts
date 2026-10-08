@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import {
   inspectPortUsage,
+  createConfigIO,
   mockGatewayLockReplacement,
   callGateway,
   gatewayResponseError,
@@ -42,7 +43,7 @@ describe("restart health", () => {
 
     expect(snapshot.healthy).toBe(false);
     expect(snapshot.probeError).toContain("read ECONNRESET");
-    expect(diagnostics).toContain("Gateway probe failed: read ECONNRESET");
+    expect(diagnostics).toContain("Gateway check failed: read ECONNRESET");
     expect(diagnostics).toContain("Port diagnostics errors: listener inspection warning");
     expect(diagnostics).toContain("\\nGateway probe succeeded: spoofed");
     expect(diagnostics.split("\n")).toHaveLength(2);
@@ -99,6 +100,42 @@ describe("restart health", () => {
     expect(inspectPortUsage).toHaveBeenCalledTimes(1);
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
+  it("checks replacement ownership and health in the selected Gateway state directory", async () => {
+    const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-selected-gateway" };
+    const previousLockIdentity = mockGatewayLockReplacement();
+    const replacement = { ...previousLockIdentity, ownerId: "selected-replacement", pid: 4300 };
+    readActiveGatewayLockIdentity.mockImplementation(
+      async (options?: { env?: NodeJS.ProcessEnv }) =>
+        options?.env?.OPENCLAW_STATE_DIR === env.OPENCLAW_STATE_DIR
+          ? replacement
+          : previousLockIdentity,
+    );
+    const selectedConfig = { gateway: { auth: { mode: "none" } } };
+    createConfigIO.mockImplementation((options: { env: NodeJS.ProcessEnv }) => ({
+      readBestEffortConfig: async () =>
+        options.env.OPENCLAW_STATE_DIR === env.OPENCLAW_STATE_DIR ? selectedConfig : {},
+    }));
+    inspectPortUsage.mockResolvedValue({
+      port: 18789,
+      status: "busy",
+      listeners: [{ pid: 4300, commandLine: "openclaw-gateway" }],
+      hints: [],
+    });
+    callGateway.mockImplementation(gatewayHealthResponse());
+
+    const { waitForGatewayHealthyListener } = await import("./restart-health.js");
+    const snapshot = await waitForGatewayHealthyListener({
+      port: 18789,
+      env,
+      previousLockIdentity,
+      attempts: 1,
+      delayMs: 500,
+    });
+
+    expect(snapshot.healthy).toBe(true);
+    expect(callGateway).toHaveBeenCalledWith(expect.objectContaining({ config: selectedConfig }));
   });
 
   it.each([

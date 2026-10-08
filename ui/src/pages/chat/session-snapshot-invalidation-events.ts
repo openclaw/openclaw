@@ -1,4 +1,9 @@
-type SnapshotInvalidation = { sessionKey: string } | { sessionKey?: undefined };
+export type SessionSnapshotInvalidationReason = "cache-eviction";
+
+type SnapshotInvalidation =
+  | { sessionKey: string; scopePrefix?: undefined; reason?: SessionSnapshotInvalidationReason }
+  | { sessionKey?: undefined; scopePrefix: string; reason?: undefined }
+  | { sessionKey?: undefined; scopePrefix?: undefined; reason?: undefined };
 
 type SnapshotInvalidationListener = (invalidation: SnapshotInvalidation) => void | Promise<void>;
 
@@ -7,7 +12,7 @@ const invalidationListeners = new Set<SnapshotInvalidationListener>();
 export let snapshotStoreGeneration = 0;
 
 function notifySnapshotInvalidation(invalidation: SnapshotInvalidation): Promise<void> {
-  if (!invalidation.sessionKey) {
+  if (!invalidation.sessionKey && !invalidation.scopePrefix) {
     snapshotStoreGeneration += 1;
   }
   return Promise.all(
@@ -26,13 +31,27 @@ function parseSnapshotInvalidation(value: string): SnapshotInvalidation {
   try {
     const parsed: unknown = JSON.parse(value);
     if (
+      parsed &&
+      typeof parsed === "object" &&
+      "scopePrefix" in parsed &&
+      typeof parsed.scopePrefix === "string" &&
+      parsed.scopePrefix.startsWith("scope:[")
+    ) {
+      return { scopePrefix: parsed.scopePrefix };
+    }
+    if (
       parsed !== null &&
       typeof parsed === "object" &&
       "sessionKey" in parsed &&
       typeof parsed.sessionKey === "string" &&
       parsed.sessionKey
     ) {
-      return { sessionKey: parsed.sessionKey };
+      return {
+        sessionKey: parsed.sessionKey,
+        ...("reason" in parsed && parsed.reason === "cache-eviction"
+          ? { reason: "cache-eviction" as const }
+          : {}),
+      };
     }
   } catch {}
   // Counter values from older tabs carried no scope, so they still retire every snapshot.

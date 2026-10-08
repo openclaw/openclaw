@@ -31,7 +31,9 @@ import androidx.compose.ui.test.DeviceConfigurationOverride
 import androidx.compose.ui.test.FontScale
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsFocused
 import androidx.compose.ui.test.assertTextContains
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyDescendant
@@ -84,6 +86,33 @@ class CommandPaletteLogicTest {
   fun appearanceSearchFromSettingsReturnsToSettingsHome() = verifyAppearanceSearch(HomeDestination.Settings)
 
   @Test
+  fun workspacePageRemainsReachableThroughPagesMenuAndSearchWithBackToOrigin() {
+    val workshop = nativeString("Skill Workshop")
+    val workshopDescription = nativeString("Review generated skill proposals before they become live skills.")
+    withShell(HomeDestination.Connect) { backDispatcher, assertRuntimeUnchanged ->
+      composeRule.onNodeWithTag("sidebar-open-overview").performClick()
+      composeRule.onNodeWithTag("sidebar-pages-menu").performClick()
+      composeRule.onNodeWithText(workshop).performScrollTo().performClick()
+      composeRule.onNodeWithText(workshopDescription).assertIsDisplayed()
+      assertRuntimeUnchanged()
+      composeRule.runOnIdle { backDispatcher.onBackPressed() }
+      composeRule.onNodeWithTag("sidebar-open-overview").assertIsDisplayed()
+
+      composeRule.onNodeWithContentDescription(nativeString("Search")).performClick()
+      composeRule.onNode(hasSetTextAction()).performTextReplacement(workshop)
+      val searchResults = hasScrollAction() and hasAnyDescendant(hasSetTextAction())
+      composeRule
+        .onNode(hasText(workshop) and hasClickAction() and hasSetTextAction().not() and hasAnyAncestor(searchResults))
+        .performScrollTo()
+        .performClick()
+      composeRule.onNodeWithText(workshopDescription).assertIsDisplayed()
+      composeRule.onNodeWithContentDescription(nativeString("Back")).performClick()
+      composeRule.onNodeWithTag("sidebar-open-overview").assertIsDisplayed()
+      assertRuntimeUnchanged()
+    }
+  }
+
+  @Test
   fun localizedCopyDrivesRenderingAndSearchWithoutChangingActionIdentity() {
     val item =
       CommandItem(
@@ -134,9 +163,12 @@ class CommandPaletteLogicTest {
     assertEquals("Empty search must keep the compact quick-action menu", 5, quickActions.size)
     assertEquals(providerSubtitle, quickActions.single { it.action == providerAction }.subtitle.resolveNativeText())
 
-    val categoryMatches = commandItems(query = nativeString("Agents & automation"), desktopObserveAvailable = false, providerSubtitle = providerSubtitle)
-    assertTrue(categoryMatches.any { it.action == CommandAction.Settings(SettingsRoute.CronJobs) })
+    val categoryMatches = commandItems(query = nativeString("Configuration"), desktopObserveAvailable = false, providerSubtitle = providerSubtitle)
     assertEquals(providerSubtitle, categoryMatches.single { it.action == providerAction }.subtitle.resolveNativeText())
+    val workspaceMatches = commandItems(query = nativeString("Workspace"), desktopObserveAvailable = false, providerSubtitle = providerSubtitle)
+    assertTrue(workspaceMatches.any { it.action == CommandAction.Settings(SettingsRoute.CronJobs) })
+    assertTrue(workspaceMatches.any { it.action == CommandAction.Settings(SettingsRoute.SkillWorkshop) })
+    assertFalse(workspaceMatches.any { it.action == providerAction })
 
     // These destinations are outside the main Settings row group but still own routes.
     listOf(nativeString("Profile") to SettingsRoute.Profile, nativeString("Licenses") to SettingsRoute.Licenses).forEach { (query, route) ->
@@ -162,7 +194,7 @@ class CommandPaletteLogicTest {
   fun settingsRowsKeepLocalizedTitlesAndStatusesReadable() {
     val fontScale = mutableStateOf(1f)
     val title = nativeString("Providers & Models")
-    val value = nativeString("Review readiness")
+    val value = nativeString("Connect to manage providers")
     assertTrue(title.startsWith("Fournisseurs"))
     withShell(HomeDestination.Settings, Modifier.width(320.dp), { fontScale.value }) { backDispatcher, assertRuntimeUnchanged ->
       for (scale in listOf(1f, 2f)) {
@@ -189,15 +221,15 @@ class CommandPaletteLogicTest {
       composeRule.onNodeWithText(nativeString("Theme family")).assertIsDisplayed()
       composeRule.runOnIdle { backDispatcher.onBackPressed() }
       composeRule.onNode(SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex)).performScrollToNode(hasText(nativeString("Licenses")))
+      val licensesRow = composeRule.onNodeWithContentDescription(settingsRowDisclosureDescription(nativeString("Licenses"), opensRoute = true))
       assertEquals(
         listOf(nativeString("Licenses")),
-        composeRule
-          .onNodeWithText(nativeString("Licenses"))
+        licensesRow
           .fetchSemanticsNode()
           .config[SemanticsProperties.Text]
           .map { it.text },
       )
-      composeRule.onNodeWithText(nativeString("Licenses")).performClick()
+      licensesRow.performScrollTo().performClick()
       composeRule.onNodeWithText(nativeString("OpenClaw appreciates its partners in the open-source community.")).assertIsDisplayed()
       assertRuntimeUnchanged()
     }
@@ -276,9 +308,57 @@ class CommandPaletteLogicTest {
   @Test
   fun inactiveQueuedSidebarRowsDoNotShowQueuedActivity() = verifyThreadActivity(queued = true, sidebar = true)
 
+  @Test
+  fun matchingThreadsReplaceEmptyActionsWithoutLosingQueryFocus() =
+    verifyThreadActivity(queued = false) { model ->
+      val query = composeRule.onNode(hasSetTextAction())
+      val searchResults = hasScrollAction() and hasAnyDescendant(hasSetTextAction())
+      val actions = composeRule.onNodeWithText(nativeString("Quick actions"), ignoreCase = true)
+      val emptyActions = composeRule.onNodeWithText(nativeString("No actions found"))
+      query.assertIsFocused().assertTextEquals("Activity")
+      emptyActions.assertDoesNotExist()
+      actions.assertDoesNotExist()
+
+      assertTrue(model.isConnected.value)
+      query.performTextReplacement("no-matching-result")
+      emptyActions.assertIsDisplayed()
+      actions.assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("No matching threads yet.")).assertIsDisplayed()
+      query.assertIsFocused().assertTextEquals("no-matching-result")
+
+      query.performTextReplacement(nativeString("Appearance"))
+      emptyActions.assertDoesNotExist()
+      actions.assertIsDisplayed()
+      composeRule.onNode(hasText(nativeString("Appearance")) and hasClickAction() and hasSetTextAction().not() and hasAnyAncestor(searchResults)).assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("No matching threads yet.")).assertIsDisplayed()
+
+      query.performTextReplacement("")
+      actions.assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("Open Chat")).assertIsDisplayed()
+      query.performTextReplacement("Activity")
+      query.assertIsFocused().assertTextEquals("Activity")
+      emptyActions.assertDoesNotExist()
+      actions.assertDoesNotExist()
+      composeRule.onNodeWithText("Activity idle").assertIsDisplayed()
+      assertEquals("agent:main:selected-elsewhere", model.chatSessionKey.value)
+    }
+
+  @Test
+  fun emptyOfflineSearchRetainsConnectionGuidance() {
+    withShell(HomeDestination.Settings) { _, assertRuntimeUnchanged ->
+      composeRule.onNodeWithContentDescription(nativeString("Search settings")).performClick()
+      composeRule.onNode(hasSetTextAction()).performTextReplacement("no-matching-result")
+      composeRule.onNodeWithText(nativeString("No actions found")).assertIsDisplayed()
+      composeRule.onNodeWithText(nativeString("Connect the Gateway to search threads.")).assertIsDisplayed()
+      composeRule.onNode(hasSetTextAction()).assertIsFocused()
+      assertRuntimeUnchanged()
+    }
+  }
+
   private fun verifyThreadActivity(
     queued: Boolean,
     sidebar: Boolean = false,
+    verifySearch: (MainViewModel) -> Unit = {},
   ) {
     val selectedKey = "agent:main:selected-elsewhere"
     val activeKey = "agent:main:activity-active"
@@ -433,6 +513,7 @@ class CommandPaletteLogicTest {
         }
         assertResultActivity()
         assertEquals(0, controller.pendingRunCount.value)
+        verifySearch(model)
       }
     } finally {
       restoreRequest()

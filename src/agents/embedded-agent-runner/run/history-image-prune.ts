@@ -1,4 +1,5 @@
 import path from "node:path";
+import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildInboundMediaNoteProjection } from "../../../auto-reply/media-note.js";
 import {
   readPersistedMediaFacts,
@@ -41,55 +42,38 @@ type PrunableContextAgent = {
  */
 const PRESERVE_RECENT_COMPLETED_TURNS = 3;
 function resolvePruneBeforeIndex(messages: AgentMessage[]): number {
-  const completedTurnStarts: number[] = [];
-  let currentTurnStart = -1;
-  let currentTurnHasAssistantReply = false;
-
-  for (let i = 0; i < messages.length; i++) {
-    const role = messages[i]?.role;
-    if (role === "user") {
-      if (currentTurnStart >= 0 && currentTurnHasAssistantReply) {
-        completedTurnStarts.push(currentTurnStart);
+  let turnsToKeep = PRESERVE_RECENT_COMPLETED_TURNS;
+  let pruneBefore = -1;
+  let hasAssistantReply = false;
+  let firstToolResult = -1;
+  // Only a later user message closes a turn; ignore the active tool loop.
+  const lastUser = messages.findLastIndex((message) => message?.role === "user");
+  for (let index = lastUser - 1; index >= 0; index--) {
+    const role = messages[index]?.role;
+    if (role === "assistant") {
+      hasAssistantReply = true;
+    } else if (role === "toolResult" && hasAssistantReply) {
+      firstToolResult = index;
+    } else if (role === "user") {
+      if (hasAssistantReply) {
+        if (turnsToKeep === 0) {
+          return pruneBefore;
+        }
+        turnsToKeep -= 1;
+        if (turnsToKeep === 0) {
+          pruneBefore = index;
+        }
       }
-      currentTurnStart = i;
-      currentTurnHasAssistantReply = false;
-      continue;
-    }
-    if (role === "toolResult") {
-      if (currentTurnStart < 0) {
-        currentTurnStart = i;
-      }
-      continue;
-    }
-    if (role === "assistant" && currentTurnStart >= 0) {
-      currentTurnHasAssistantReply = true;
+      hasAssistantReply = false;
+      firstToolResult = -1;
     }
   }
-
-  // Only a later user message closes a turn; tool-loop replies must not move
-  // the cutoff and rewrite the warm prefix during the active turn.
-  if (completedTurnStarts.length <= PRESERVE_RECENT_COMPLETED_TURNS) {
-    return -1;
-  }
-  return completedTurnStarts.at(-PRESERVE_RECENT_COMPLETED_TURNS) ?? -1;
-}
-
-function resolveMessageMediaFacts(message: AgentMessage): MediaFact[] {
-  const runtimeMedia = readRuntimePromptMediaFacts(message);
-  if (runtimeMedia) {
-    return runtimeMedia;
-  }
-  return readPersistedMediaFacts(message) ?? [];
+  // History can start with an orphan tool-result turn, without an initial user.
+  return turnsToKeep === 0 && firstToolResult >= 0 ? pruneBefore : -1;
 }
 
 function wasStructurallyMediaPruned(message: AgentMessage): boolean {
-  const meta = Reflect.get(message, "__openclaw");
-  return (
-    Boolean(meta) &&
-    typeof meta === "object" &&
-    !Array.isArray(meta) &&
-    (meta as Record<string, unknown>).mediaImagePruned === true
-  );
+  return asNonArrayRecord(Reflect.get(message, "__openclaw")).mediaImagePruned === true;
 }
 
 function replaceLegacyFactlessMediaText(text: string): string {
@@ -197,11 +181,7 @@ function cloneMessageWithContent(
     stripLegacyMediaContextFields(clone);
   }
   if (dropImageMetadata) {
-    const meta = clone["__openclaw"];
-    const nextMeta =
-      meta && typeof meta === "object" && !Array.isArray(meta)
-        ? { ...(meta as Record<string, unknown>) }
-        : {};
+    const nextMeta = { ...asNonArrayRecord(clone["__openclaw"]) };
     delete nextMeta.mediaImageBlockFactIndexes;
     delete nextMeta.mediaImageLayout;
     if (dropMedia) {
@@ -230,9 +210,18 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
     if (!message || (message.role !== "user" && message.role !== "toolResult")) {
       continue;
     }
-    const media = message.role === "user" ? resolveMessageMediaFacts(message) : [];
+    const media =
+      message.role === "user"
+        ? (readRuntimePromptMediaFacts(message) ?? readPersistedMediaFacts(message) ?? [])
+        : [];
     const hasOwnedMedia = media.length > 0;
     const structuredMediaWasPruned = wasStructurallyMediaPruned(message);
+    const pruneText = (text: string) =>
+      hasOwnedMedia
+        ? replaceOwnedMediaProjection(text, media)
+        : structuredMediaWasPruned
+          ? text
+          : replaceLegacyFactlessMediaText(text);
 
     // Materialize blank marked turns here so this earlier boundary still prunes stale paths.
     const lateMediaProjection =
@@ -249,11 +238,7 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
       : message.content;
 
     if (typeof content === "string") {
-      const nextText = hasOwnedMedia
-        ? replaceOwnedMediaProjection(content, media)
-        : structuredMediaWasPruned
-          ? content
-          : replaceLegacyFactlessMediaText(content);
+      const nextText = pruneText(content);
       if (nextText !== message.content || hasOwnedMedia) {
         prunedMessages ??= messages.slice();
         prunedMessages[i] = cloneMessageWithContent(message, nextText, hasOwnedMedia);
@@ -265,30 +250,29 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
       continue;
     }
 
-    const nextContent = content.map((block) => {
-      const typed = block as { type?: unknown; text?: unknown } | null | undefined;
-      if (typed?.type === "text" && typeof typed.text === "string") {
-        const text = hasOwnedMedia
-          ? replaceOwnedMediaProjection(typed.text, media)
-          : structuredMediaWasPruned
-            ? typed.text
-            : replaceLegacyFactlessMediaText(typed.text);
-        if (text !== typed.text) {
-          return { ...block, text } as (typeof content)[number];
-        }
+    // Metadata-only projections still own a fresh array for downstream transforms.
+    const contentLength = content.length;
+    let nextContent = hasOwnedMedia || lateMediaText ? content.slice(0, contentLength) : undefined;
+    let prunedImageBlock = false;
+    for (let index = 0; index < contentLength; index += 1) {
+      if (!(index in content)) {
+        continue;
       }
-      return typed?.type === "image"
-        ? ({ type: "text", text: PRUNED_HISTORY_IMAGE_MARKER } as (typeof content)[number])
-        : block;
-    });
-    const prunedImageBlock = content.some(
-      (block) => (block as { type?: unknown } | null | undefined)?.type === "image",
-    );
-    if (
-      hasOwnedMedia ||
-      lateMediaText ||
-      nextContent.some((block, index) => block !== content[index])
-    ) {
+      const block = content[index];
+      let nextBlock = block;
+      if (block?.type === "text" && typeof block.text === "string") {
+        const text = pruneText(block.text);
+        nextBlock = text === block.text ? block : { ...block, text };
+      } else if (block?.type === "image") {
+        prunedImageBlock = true;
+        nextBlock = { type: "text", text: PRUNED_HISTORY_IMAGE_MARKER };
+      }
+      if (nextBlock !== undefined && nextBlock !== block) {
+        nextContent ??= content.slice(0, contentLength);
+        nextContent[index] = nextBlock;
+      }
+    }
+    if (nextContent) {
       prunedMessages ??= messages.slice();
       prunedMessages[i] = cloneMessageWithContent(
         message,
@@ -306,18 +290,31 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
 export function installHistoryImagePruneContextTransform(
   agent: PrunableContextAgent,
   mediaOptions?: Parameters<typeof hydratePromptMediaMessages>[1],
+  onPruned?: (messages: ReadonlyMap<number, AgentMessage>) => void,
 ): () => void {
   const originalTransformContext = agent.transformContext;
   agent.transformContext = async (messages: AgentMessage[], signal?: AbortSignal) => {
-    const prunedInput = pruneProcessedHistoryImages(messages) ?? messages;
+    const pruned = new Map<number, AgentMessage>();
+    const prune = (source: AgentMessage[]) => {
+      const projected = pruneProcessedHistoryImages(source);
+      projected?.forEach((message, index) => {
+        const original = source[index];
+        if (original && message !== original) {
+          pruned.set(index, original);
+        }
+      });
+      return projected ?? source;
+    };
+    const prunedInput = prune(messages);
     const hydratedInput = mediaOptions
       ? await hydratePromptMediaMessages(prunedInput, mediaOptions)
       : prunedInput;
     const transformed = originalTransformContext
       ? await originalTransformContext.call(agent, hydratedInput, signal)
       : hydratedInput;
-    const sourceMessages = Array.isArray(transformed) ? transformed : hydratedInput;
-    return pruneProcessedHistoryImages(sourceMessages) ?? sourceMessages;
+    const result = prune(transformed);
+    onPruned?.(pruned);
+    return result;
   };
   return () => {
     agent.transformContext = originalTransformContext;

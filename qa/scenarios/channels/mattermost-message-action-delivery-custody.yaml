@@ -1,0 +1,32 @@
+title: Mattermost message-action delivery custody
+
+scenario:
+  id: mattermost-message-action-delivery-custody
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - channels.message-actions
+      - channels.outbound-direct-text-media-sends
+    secondary:
+      - channels.native-threads
+  objective: Prove Mattermost message actions preserve sender ownership, durable queue state, ambiguous-send custody, thread placement, and rich delivery evidence through the public plugin boundary.
+  successCriteria:
+    - A current sender completes a queued DM retry, while a retired sender cannot post late and leaves no replayable queue entry.
+    - An accepted post whose redirect outlives its sender remains durably ambiguous across a SQLite reopen and is not blindly replayed.
+    - Generic replyTo and threadId inputs become Mattermost root_id placement through the public plugin artifact.
+    - Text, media, presentation, receipt, progress, and activity bookkeeping retain their required delivery order.
+    - A post accepted before bookkeeping failure returns partial delivery evidence and is issued exactly once.
+  docsRefs:
+    - docs/concepts/qa-e2e-automation.md
+    - docs/channels/mattermost.md
+  codeRefs:
+    - src/infra/outbound/message-action-runner.ts
+    - src/infra/outbound/delivery-queue-recovery.ts
+    - src/infra/delivery-queue-sqlite.ts
+    - extensions/mattermost/channel-plugin-api.ts
+    - test/e2e/mattermost-send-owner.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/mattermost-send-owner.e2e.test.ts
+    summary: Exercise the canonical message-action runner, durable SQLite queue recovery, public Mattermost plugin artifact, and a real loopback Mattermost HTTP boundary.

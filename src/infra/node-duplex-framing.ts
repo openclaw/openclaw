@@ -135,7 +135,10 @@ export function createNodeDuplexEndpoint(options: {
     if (!frame.last) {
       return;
     }
-    const assembled = Buffer.concat(incomingFragments, incomingBytes + fragment.byteLength);
+    const assembled =
+      incomingFragments.length === 1
+        ? fragment
+        : Buffer.concat(incomingFragments, incomingBytes + fragment.byteLength);
     const message = new Uint8Array(assembled.buffer, assembled.byteOffset, assembled.byteLength);
     incomingFragments.length = 0;
     incoming.fragment = 0;

@@ -1,7 +1,7 @@
 // Status JSON tests cover command output and runtime JSON writes.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../runtime.js";
 import { statusJsonCommand } from "./status-json.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   scanStatusJsonFast: vi.fn(),
@@ -45,12 +45,11 @@ vi.mock("../infra/update-channels.js", () => ({
 
 function createRuntimeCapture() {
   const logs: string[] = [];
-  const runtime: RuntimeEnv = {
+  const runtime = {
+    ...createTestRuntime(),
     log: vi.fn((value: unknown) => {
       logs.push(String(value));
     }),
-    error: vi.fn(),
-    exit: vi.fn() as unknown as RuntimeEnv["exit"],
   };
   return { runtime, logs };
 }

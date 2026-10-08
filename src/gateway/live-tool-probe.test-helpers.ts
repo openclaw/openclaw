@@ -114,7 +114,13 @@ export function shouldRetryToolReadProbe(params: {
     return true;
   }
   const lower = normalizeLowercaseStringOrEmpty(params.text);
-  if (params.provider === "mistral" && (lower.includes("noncea=") || lower.includes("nonceb="))) {
+  if (
+    params.provider === "mistral" &&
+    (lower.includes("noncea=") ||
+      lower.includes("nonceb=") ||
+      lower.includes("testmarkera=") ||
+      lower.includes("testmarkerb="))
+  ) {
     return true;
   }
   return false;

@@ -1,19 +1,20 @@
+import {
+  inferToolMetaFromArgs,
+  projectAgentToolActivity,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { onInternalDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
+import { terminateCodexBackgroundTerminals } from "./attempt-client-cleanup.js";
 import { isCodexAppServerApprovalRequest } from "./client.js";
 import { shouldAutoApproveCodexAppServerApprovals } from "./config.js";
-import {
-  emitDynamicToolErrorDiagnostic,
-  emitDynamicToolStartedDiagnostic,
-  emitDynamicToolTerminalDiagnostic,
-} from "./dynamic-tool-diagnostics.js";
+import { createCodexDynamicToolDiagnostics } from "./dynamic-tool-diagnostics.js";
 import {
   handleDynamicToolCallWithTimeout,
   hasPendingDynamicToolTerminalDiagnostic,
   isDynamicToolTerminalDiagnosticEvent,
   isMatchingDynamicToolTerminalDiagnostic,
   resolveDynamicToolCallTimeoutMs,
-  shouldBlockTerminalReleaseForNonTerminalDynamicToolResult,
   toCodexDynamicToolProgressResponse,
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
@@ -24,11 +25,11 @@ import { readCodexDynamicToolCallParams } from "./protocol-validators.js";
 import type { JsonValue } from "./protocol.js";
 import type { CodexAttemptLifecycleController } from "./run-attempt-lifecycle-controller.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
+import type { CodexAttemptNotificationController } from "./run-attempt-notification-controller.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
 import { toTranscriptToolResult } from "./run-attempt-tools.js";
 import type { CodexAttemptTurnState } from "./run-attempt-turn-state.js";
 import {
-  inferCodexDynamicToolMeta,
   isCodexCommandBearingToolCall,
   resolveCodexToolProgressDetailMode,
   sanitizeCodexToolArguments,
@@ -45,6 +46,7 @@ export function createCodexAttemptServerRequestController(
   resources: CodexAttemptResources,
   turnRuntime: CodexAttemptTurnState,
   lifecycle: CodexAttemptLifecycleController,
+  waitForNativeItems: CodexAttemptNotificationController["waitForNativeTerminalItems"],
 ) {
   const { prompt, state: resourceState, projectorRef, trajectoryRecorder } = resources;
   const { context } = prompt;
@@ -69,13 +71,46 @@ export function createCodexAttemptServerRequestController(
   } = turnRuntime;
   const {
     emitExecutionPhaseOnce,
-    scheduleTurnReleaseAfterTerminalDynamicTool,
+    recordDynamicToolResult,
     scheduleTerminalDynamicToolReleaseCheck,
   } = lifecycle;
+  let refreshDrain: ReturnType<typeof createDeferred<void>> | undefined;
+  let refreshStopping = false;
+  const settlePluginRuntimeRefresh = async (turnId: string) => {
+    if (!params.pluginRuntimeRefreshPending?.()) {
+      return;
+    }
+    refreshDrain ??= createDeferred<void>();
+    state.pluginRuntimeRefreshStop = refreshDrain.promise;
+    if (!refreshStopping && pendingOpenClawDynamicToolCompletionIds.size === 0) {
+      refreshStopping = true;
+      state.pendingTerminalDynamicToolRelease = undefined;
+      turnRuntime.steeringQueueRef.current?.cancel();
+      // Replies resume the old model. Persist every admitted result before stopping;
+      // Codex's interrupt completion does not depend on receiving these replies.
+      void turnRuntime
+        .interruptTurn(turnId, { locallyCompleted: true })
+        .then(async (confirmed) => {
+          if (!confirmed) {
+            throw new Error("Plugin reload could not confirm the previous Codex turn stopped.");
+          }
+          await terminateCodexBackgroundTerminals(
+            resourceState.client,
+            resourceState.thread.threadId,
+            params.oneShotCliRun === true,
+            waitForNativeItems,
+          );
+        })
+        .then(refreshDrain.resolve, refreshDrain.reject)
+        .finally(turnRuntime.completeTurn);
+    }
+    await refreshDrain.promise;
+  };
   const handleServerRequest = async (
     request: CodexAppServerServerRequest,
     scope: CodexThreadRouteScope,
     requestSignal: AbortSignal = new AbortController().signal,
+    setExecutionTimeoutMs?: (timeoutMs: number) => void,
   ) => {
     const signal = AbortSignal.any([runAbortController.signal, requestSignal]);
     const turnId = turnIdRef.current;
@@ -111,19 +146,13 @@ export function createCodexAttemptServerRequestController(
         if (approvalResult.kind === "handled") {
           return approvalResult.response;
         }
-        return await userInputBridgeRef.current?.handleElicitationRequest({
-          id: request.id,
-          params: request.params,
-        });
+        return await userInputBridgeRef.current?.handleElicitationRequest(request, signal);
       }
       if (request.method === "item/tool/requestUserInput") {
         if (scope.turnId === turnId) {
           markCurrentTurnRequestProgress();
         }
-        return await userInputBridgeRef.current?.handleRequest({
-          id: request.id,
-          params: request.params,
-        });
+        return await userInputBridgeRef.current?.handleRequest(request, signal);
       }
       if (request.method !== "item/tool/call") {
         if (isCodexAppServerApprovalRequest(request.method)) {
@@ -152,7 +181,9 @@ export function createCodexAttemptServerRequestController(
       const replayedExecution = openClawDynamicToolExecutions.get(call);
       if (replayedExecution) {
         markCurrentTurnRequestProgress();
-        return toCodexDynamicToolProtocolResponse(await replayedExecution) as JsonValue;
+        const response = await replayedExecution;
+        await settlePluginRuntimeRefresh(turnId);
+        return toCodexDynamicToolProtocolResponse(response) as JsonValue;
       }
       const toolCallOrdinal = allocateCodexToolOutcomeOrdinal?.(call.callId);
       markCurrentTurnRequestProgress();
@@ -166,6 +197,7 @@ export function createCodexAttemptServerRequestController(
       });
       projector?.recordDynamicToolCall({
         callId: call.callId,
+        namespace: call.namespace,
         tool: call.tool,
         arguments: call.arguments,
       });
@@ -174,14 +206,21 @@ export function createCodexAttemptServerRequestController(
         tool: call.tool,
         toolCallId: call.callId,
       });
-      const toolMeta = inferCodexDynamicToolMeta(
-        call,
-        resolveCodexToolProgressDetailMode(params.toolProgressDetail),
-      );
+      const toolMeta = inferToolMetaFromArgs(call.tool, call.arguments, {
+        detailMode: resolveCodexToolProgressDetailMode(params.toolProgressDetail),
+      });
       const toolArgs = sanitizeCodexToolArguments(call.arguments);
       const commandBearing = isCodexCommandBearingToolCall(call.tool, toolArgs);
-      const shouldEmitDynamicToolProgress = shouldEmitTranscriptToolProgress(call.tool, toolArgs);
+      const shouldEmitDynamicToolProgress = shouldEmitTranscriptToolProgress(call.tool);
       if (shouldEmitDynamicToolProgress) {
+        const activity = projectAgentToolActivity({
+          toolCallId: call.callId,
+          name: call.tool,
+          phase: "start",
+          args: toolArgs,
+          meta: toolMeta,
+        });
+        void emitCodexAppServerEvent(params, { stream: "item", data: activity });
         void emitCodexAppServerEvent(params, {
           stream: "tool",
           data: {
@@ -195,19 +234,29 @@ export function createCodexAttemptServerRequestController(
           },
         });
       }
-      const dynamicToolTimeoutMs = resolveDynamicToolCallTimeoutMs({ call, config: params.config });
+      const dynamicToolTimeoutMs = resolveDynamicToolCallTimeoutMs({
+        call,
+        config: params.config,
+        toolBridge,
+      });
+      setExecutionTimeoutMs?.(dynamicToolTimeoutMs);
       const toolStartedAt = Date.now();
+      const diagnosticContext = {
+        call,
+        agentId: sessionAgentId,
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+      };
+      const diagnostics = createCodexDynamicToolDiagnostics(diagnosticContext);
       let terminalDiagnosticObserved = false;
       const unsubscribeToolDiagnosticObserver = onInternalDiagnosticEvent(
         (event) => {
           if (
             isDynamicToolTerminalDiagnosticEvent(event) &&
             isMatchingDynamicToolTerminalDiagnostic({
+              ...diagnosticContext,
               event,
-              call,
-              runId: params.runId,
-              sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
             })
           ) {
             terminalDiagnosticObserved = true;
@@ -220,13 +269,7 @@ export function createCodexAttemptServerRequestController(
           // Publish the execution claim before persistence yields, so a replay
           // cannot become another owner of this call's progress or result.
           await projector?.transcriptCheckpoint.flush();
-          emitDynamicToolStartedDiagnostic({
-            call,
-            agentId: sessionAgentId,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-          });
+          diagnostics.started();
           const response = await handleDynamicToolCallWithTimeout({
             call,
             toolBridge,
@@ -289,6 +332,14 @@ export function createCodexAttemptServerRequestController(
         }
         if (shouldEmitDynamicToolProgress) {
           const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);
+          const activity = projectAgentToolActivity({
+            toolCallId: call.callId,
+            name: call.tool,
+            phase: "result",
+            args: response.executedArguments ?? call.arguments,
+            result: toTranscriptToolResult(progressResponse),
+            isError: !protocolResponse.success,
+          });
           void emitCodexAppServerEvent(params, {
             stream: "tool",
             data: {
@@ -302,60 +353,30 @@ export function createCodexAttemptServerRequestController(
               result: toTranscriptToolResult(progressResponse),
             },
           });
+          void emitCodexAppServerEvent(params, { stream: "item", data: activity });
         }
         if (
           !terminalDiagnosticObserved &&
-          !hasPendingDynamicToolTerminalDiagnostic({
-            call,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-          })
+          !hasPendingDynamicToolTerminalDiagnostic(diagnosticContext)
         ) {
-          emitDynamicToolTerminalDiagnostic({
-            response,
-            call,
-            agentId: sessionAgentId,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            durationMs: toolDurationMs,
-          });
+          diagnostics.terminal(response, toolDurationMs);
         }
         pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
-        if (response.terminate === true && response.success) {
-          scheduleTurnReleaseAfterTerminalDynamicTool({
-            call,
-            response,
-            durationMs: toolDurationMs,
-          });
-        } else if (!shouldBlockTerminalReleaseForNonTerminalDynamicToolResult(response)) {
-          scheduleTerminalDynamicToolReleaseCheck();
+        if (params.pluginRuntimeRefreshPending?.()) {
+          await settlePluginRuntimeRefresh(turnId);
         } else {
-          state.currentTurnHadNonTerminalDynamicToolResult = true;
-          state.pendingTerminalDynamicToolRelease = undefined;
+          recordDynamicToolResult({ call, response, durationMs: toolDurationMs });
         }
         return protocolResponse as JsonValue;
       } catch (error) {
         pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
         if (
           !terminalDiagnosticObserved &&
-          !hasPendingDynamicToolTerminalDiagnostic({
-            call,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-          })
+          !hasPendingDynamicToolTerminalDiagnostic(diagnosticContext)
         ) {
-          emitDynamicToolErrorDiagnostic({
-            call,
-            agentId: sessionAgentId,
-            runId: params.runId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            durationMs: Math.max(0, Date.now() - toolStartedAt),
-          });
+          diagnostics.error(Math.max(0, Date.now() - toolStartedAt));
         }
+        await settlePluginRuntimeRefresh(turnId);
         throw error;
       } finally {
         toolOutcomeOrdinals.delete(call.callId);

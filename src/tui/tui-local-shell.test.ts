@@ -48,6 +48,7 @@ function createOverlayHandle(): OverlayHandle {
     focus: vi.fn(),
     unfocus: vi.fn(),
     isFocused: vi.fn(() => true),
+    getBounds: () => undefined,
   };
 }
 

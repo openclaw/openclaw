@@ -1,11 +1,20 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import { join } from "node:path";
+import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
+import { ok } from "@openclaw/normalization-core/result";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
+import { PluginRuntimeApplicationError } from "../plugins/lifecycle.js";
+import { applyClawHubSkillUninstall } from "../skills/lifecycle/clawhub-uninstall.js";
 import { digestClawHubSkillTree } from "../skills/lifecycle/skill-tree-digest.js";
-import { applyClawPackageRemovals, planClawPackageRemovals } from "./package-remove.js";
+import {
+  applyClawPackageRemovals,
+  planClawPackageRemovals,
+  type PackageRemovalDeps,
+} from "./package-remove.js";
 import type { PersistedClawInstall, PersistedClawPackageRef } from "./provenance.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -34,10 +43,34 @@ function packageRef(overrides: Partial<PersistedClawPackageRef> = {}): Persisted
   };
 }
 
+function installedPlugin() {
+  return {
+    status: "found" as const,
+    pluginId: "audit",
+    record: {
+      source: "clawhub" as const,
+      integrity: "sha256:audit",
+      installedAt: "1970-01-01T00:00:00.001Z",
+    },
+    installedVersion: "1.0.0",
+  };
+}
+
+function packageLeaseScope(
+  assertOwned: () => void = () => {},
+): NonNullable<PackageRemovalDeps["withPackageLease"]> {
+  return async (_artifact, operation) =>
+    operation({
+      signal: new AbortController().signal,
+      assertOwned,
+      assertOwnedInTransaction: assertOwned,
+    });
+}
+
 function packageRefStore(...initial: PersistedClawPackageRef[]) {
   let refs = initial;
   return {
-    acquirePackageLease: vi.fn(() => ({ heartbeat: vi.fn(), release: vi.fn() })),
+    withPackageLease: packageLeaseScope(),
     readPackageRefs: vi.fn(() => refs),
     readInstallRecords: vi.fn(() => []),
     claimPackageRef: vi.fn(
@@ -104,6 +137,268 @@ async function trackedQualifiedSkillFixture() {
 }
 
 describe("Claw package removal", () => {
+  it.each(["initial claim", "completion claim", "compensation claim"] as const)(
+    "keeps an unknown %s terminal without replaying the write",
+    async (phase) => {
+      const ref = packageRef();
+      const store = packageRefStore(ref);
+      const unknown = new SqliteWorkerError("Package claim outcome is unknown", "outcome-unknown");
+      const cleanupError = new Error("Plugin cleanup failed");
+      const claimPackageRef = vi.fn<NonNullable<PackageRemovalDeps["claimPackageRef"]>>(
+        (claimedRef, status) => {
+          if (phase === "initial claim" || claimPackageRef.mock.calls.length === 2) {
+            throw unknown;
+          }
+          return store.claimPackageRef(claimedRef, status);
+        },
+      );
+      const uninstallPlugin = vi.fn<NonNullable<PackageRemovalDeps["uninstallPlugin"]>>(
+        async () => {
+          if (phase === "compensation claim") {
+            throw cleanupError;
+          }
+          return ok({
+            pluginId: "audit",
+            requestedPluginId: "audit",
+            pluginIds: ["audit"],
+            removed: [],
+            warnings: [],
+          });
+        },
+      );
+      const pending = applyClawPackageRemovals(
+        [
+          {
+            packageRef: ref,
+            workspace: install.workspace,
+            action: "uninstall",
+            affectedClawAgentIds: [],
+            pluginId: "audit",
+          },
+        ],
+        {
+          deps: {
+            ...store,
+            claimPackageRef,
+            resolvePlugin: vi.fn(async () => installedPlugin()),
+            uninstallPlugin,
+          },
+        },
+      );
+      if (phase === "compensation claim") {
+        const error = await pending.catch((cause: unknown) => cause);
+        expect(error).toMatchObject({ code: "outcome-unknown" });
+        expect(collectNestedErrorCandidates(error)).toEqual(
+          expect.arrayContaining([cleanupError, unknown]),
+        );
+      } else {
+        await expect(pending).rejects.toBe(unknown);
+      }
+      expect(claimPackageRef).toHaveBeenCalledTimes(phase === "initial claim" ? 1 : 2);
+      expect(uninstallPlugin).toHaveBeenCalledTimes(phase === "initial claim" ? 0 : 1);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps late unknown worker settlement terminal (aggregate: %s)",
+    async (aggregate) => {
+      const ref = packageRef();
+      const store = packageRefStore(ref);
+      const unknown = new SqliteWorkerError("Package claim outcome is unknown", "outcome-unknown");
+      const failure = aggregate ? new AggregateError([unknown], "Lease cleanup failed") : unknown;
+      const pending = applyClawPackageRemovals(
+        [
+          {
+            packageRef: ref,
+            workspace: install.workspace,
+            action: "retain",
+            reason: "Package is independently owned outside this Claw.",
+            affectedClawAgentIds: [],
+          },
+        ],
+        {
+          deps: {
+            ...store,
+            withPackageLease: async (artifact, operation, options) => {
+              await packageLeaseScope()(artifact, operation, options);
+              throw failure;
+            },
+          },
+        },
+      );
+      if (aggregate) {
+        const error = await pending.catch((cause: unknown) => cause);
+        expect(error).toMatchObject({ code: "outcome-unknown" });
+        expect(collectNestedErrorCandidates(error)).toContain(failure);
+      } else {
+        await expect(pending).rejects.toBe(failure);
+      }
+      expect(store.claimPackageRef).toHaveBeenCalledOnce();
+      expect(store.readPackageRefs()[0]?.status).toBe("pending");
+    },
+  );
+
+  it.each(["lease lost during resolution", "uninstall failed"])(
+    "keeps mutation and compensation with their current package owner: %s",
+    async (failure) => {
+      const ref = packageRef();
+      const store = packageRefStore(ref);
+      let leaseLost = false;
+      const uninstallPlugin = vi.fn<NonNullable<PackageRemovalDeps["uninstallPlugin"]>>(
+        async () => {
+          if (failure === "uninstall failed") {
+            throw new Error(failure);
+          }
+          return ok({
+            pluginId: "audit",
+            requestedPluginId: "audit",
+            pluginIds: ["audit"],
+            removed: [],
+            warnings: [],
+          });
+        },
+      );
+      const heartbeat = () => {
+        if (leaseLost) {
+          throw new Error(failure);
+        }
+      };
+      await expect(
+        applyClawPackageRemovals(
+          [
+            {
+              packageRef: ref,
+              workspace: install.workspace,
+              action: "uninstall",
+              affectedClawAgentIds: [],
+              pluginId: "audit",
+            },
+          ],
+          {
+            deps: {
+              ...store,
+              withPackageLease: packageLeaseScope(heartbeat),
+              uninstallPlugin,
+              resolvePlugin: vi.fn(async () => {
+                leaseLost = failure === "lease lost during resolution";
+                return {
+                  status: "found" as const,
+                  pluginId: "audit",
+                  record: {
+                    source: "clawhub" as const,
+                    integrity: "sha256:audit",
+                    installedAt: "1970-01-01T00:00:00.001Z",
+                  },
+                  installedVersion: "1.0.0",
+                };
+              }),
+            },
+          },
+        ),
+      ).resolves.toMatchObject({ packages: [{ action: "error", reason: failure }] });
+      if (leaseLost) {
+        expect(uninstallPlugin).not.toHaveBeenCalled();
+        expect(store.readPackageRefs()[0]?.status).toBe("pending");
+      } else {
+        expect(uninstallPlugin).toHaveBeenCalledOnce();
+        expect(store.readPackageRefs()[0]?.status).toBe("failed");
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "preserves partial package effects and stops only runtime failures (runtime=%s)",
+    async (runtime) => {
+      const refs = ["first", "failed", "last"].map((ref) =>
+        packageRef({ ref, integrity: `sha256:${ref}` }),
+      );
+      const store = packageRefStore(...refs);
+      const failure = runtime
+        ? new PluginRuntimeApplicationError("Plugin activation failed.", {
+            operationId: "replacement",
+            generation: 3,
+            pluginIds: ["failed"],
+            phase: "activate",
+            committed: true,
+          })
+        : new Error("Package removal failed.");
+      const uninstallPlugin = vi.fn<NonNullable<PackageRemovalDeps["uninstallPlugin"]>>(
+        async (input) => {
+          input.onWarning?.(`${input.pluginId} cleanup warning`);
+          if (input.pluginId === "failed") {
+            throw failure;
+          }
+          return ok({
+            pluginId: input.pluginId,
+            requestedPluginId: input.pluginId,
+            pluginIds: [input.pluginId],
+            removed: ["directory"],
+            warnings: [`${input.pluginId} cleanup warning`],
+          });
+        },
+      );
+      const result = await applyClawPackageRemovals(
+        refs.map((ref) => ({
+          packageRef: ref,
+          workspace: install.workspace,
+          action: "uninstall" as const,
+          affectedClawAgentIds: [],
+          pluginId: ref.ref,
+        })),
+        {
+          deps: {
+            ...store,
+            uninstallPlugin,
+            resolvePlugin: async ({ clawhubPackage }) => ({
+              status: "found",
+              pluginId: clawhubPackage,
+              installedVersion: "1.0.0",
+              record: {
+                source: "clawhub",
+                integrity: `sha256:${clawhubPackage}`,
+                installedAt: "1970-01-01T00:00:00.001Z",
+              },
+            }),
+          },
+        },
+      );
+      expect(result.packages).toEqual([
+        { kind: "plugin", ref: "first", version: "1.0.0", action: "uninstalled" },
+        {
+          kind: "plugin",
+          ref: "failed",
+          version: "1.0.0",
+          action: "error",
+          reason: failure.message,
+        },
+        {
+          kind: "plugin",
+          ref: "last",
+          version: "1.0.0",
+          action: runtime ? "retained" : "uninstalled",
+          ...(runtime
+            ? { reason: "Package cleanup stopped after a Gateway runtime replacement failed." }
+            : {}),
+        },
+      ]);
+      expect(result.runtimeFailure).toBe(runtime ? failure : undefined);
+      expect(result.warnings).toEqual(
+        runtime
+          ? ["first cleanup warning", "failed cleanup warning"]
+          : ["first cleanup warning", "failed cleanup warning", "last cleanup warning"],
+      );
+      expect(uninstallPlugin.mock.calls.map(([input]) => input.pluginId)).toEqual(
+        runtime ? ["first", "failed"] : ["first", "failed", "last"],
+      );
+      expect(store.readPackageRefs().map((ref) => ref.status)).toEqual([
+        "complete",
+        "failed",
+        "complete",
+      ]);
+      expect(store.claimPackageRef.mock.calls.some(([ref]) => ref.ref === "last")).toBe(!runtime);
+    },
+  );
+
   it("retains referenced plugins by default while releasing the Claw reference", async () => {
     const ref = packageRef();
     const decisions = await planClawPackageRemovals(install, [ref], {
@@ -125,16 +420,19 @@ describe("Claw package removal", () => {
   it("requires separate selection before invoking the canonical plugin lifecycle", async () => {
     const ref = packageRef();
     const store = packageRefStore(ref);
-    const uninstallPlugin = vi.fn().mockResolvedValue(undefined);
+    const uninstallPlugin = vi.fn().mockResolvedValue(
+      ok({
+        pluginId: "audit",
+        requestedPluginId: "audit",
+        pluginIds: ["audit"],
+        removed: [],
+        warnings: [],
+      }),
+    );
     const decisions = await planClawPackageRemovals(install, [ref], {
       deps: {
         ...store,
-        resolvePlugin: vi.fn().mockResolvedValue({
-          status: "found",
-          pluginId: "audit",
-          record: { source: "clawhub", integrity: "sha256:audit", installedAt: 1 },
-          installedVersion: "1.0.0",
-        }),
+        resolvePlugin: vi.fn().mockResolvedValue(installedPlugin()),
       },
       referencedCleanup: {
         mode: "remove-selected",
@@ -148,19 +446,18 @@ describe("Claw package removal", () => {
         deps: {
           ...store,
           uninstallPlugin,
-          resolvePlugin: vi.fn().mockResolvedValue({
-            status: "found",
-            pluginId: "audit",
-            record: { source: "clawhub", integrity: "sha256:audit", installedAt: 1 },
-            installedVersion: "1.0.0",
-          }),
+          resolvePlugin: vi.fn().mockResolvedValue(installedPlugin()),
         },
       }),
-    ).resolves.toMatchObject([{ action: "uninstalled" }]);
-    expect(uninstallPlugin).toHaveBeenCalledWith("audit", {
-      force: true,
+    ).resolves.toMatchObject({ packages: [{ action: "uninstalled" }] });
+    expect(uninstallPlugin).toHaveBeenCalledWith({
+      pluginId: "audit",
+      caller: "cli",
       invalidateRuntimeCache: false,
       clawManaged: true,
+      applyRuntime: undefined,
+      beforePersistentApply: expect.any(Function),
+      onWarning: expect.any(Function),
     });
   });
 
@@ -215,22 +512,95 @@ describe("Claw package removal", () => {
           },
         },
       ),
-    ).resolves.toMatchObject([
-      {
-        action: "error",
-        reason: "Plugin audit@1.0.0 changed after removal planning.",
-      },
-    ]);
+    ).resolves.toMatchObject({
+      packages: [
+        {
+          action: "error",
+          reason: "Plugin audit@1.0.0 changed after removal planning.",
+        },
+      ],
+    });
 
     expect(uninstallPlugin).not.toHaveBeenCalled();
     expect(store.claimPackageRef).toHaveBeenLastCalledWith(
       expect.objectContaining({ ref: "audit" }),
       "complete",
-      expect.anything(),
+      expect.objectContaining({
+        lease: expect.objectContaining({ assertOwned: expect.any(Function) }),
+      }),
     );
   });
 
-  it.each(["discovery", "uninstall"])(
+  it.each(["resolved", "rejected"])(
+    "waits for the package claim before uninstalling when persistence is %s",
+    async (outcome) => {
+      const ref = packageRef();
+      const store = packageRefStore(ref);
+      const started = createDeferred();
+      const resume = createDeferred();
+      const failure = new Error("Package claim was refused.");
+      const uninstallPlugin = vi.fn<NonNullable<PackageRemovalDeps["uninstallPlugin"]>>(async () =>
+        ok({
+          pluginId: "audit",
+          requestedPluginId: "audit",
+          pluginIds: ["audit"],
+          removed: [],
+          warnings: [],
+        }),
+      );
+      const removing = applyClawPackageRemovals(
+        [
+          {
+            packageRef: ref,
+            workspace: install.workspace,
+            action: "uninstall",
+            affectedClawAgentIds: [],
+            pluginId: "audit",
+          },
+        ],
+        {
+          deps: {
+            ...store,
+            claimPackageRef: async (claimed, status) => {
+              if (status === "pending") {
+                started.resolve();
+                await resume.promise;
+                if (outcome === "rejected") {
+                  throw failure;
+                }
+              }
+              return store.claimPackageRef(claimed, status);
+            },
+            resolvePlugin: vi.fn().mockResolvedValue(installedPlugin()),
+            uninstallPlugin,
+          },
+        },
+      );
+      try {
+        await awaitGateBeforeSettlement(
+          started.promise,
+          removing,
+          "Removal settled before reaching its package claim.",
+        );
+        expect(uninstallPlugin).not.toHaveBeenCalled();
+        expect(store.readPackageRefs()).toEqual([ref]);
+      } finally {
+        resume.resolve();
+      }
+
+      await expect(removing).resolves.toMatchObject({
+        packages: [
+          outcome === "resolved"
+            ? { action: "uninstalled" }
+            : { action: "error", reason: failure.message },
+        ],
+      });
+      expect(uninstallPlugin).toHaveBeenCalledTimes(outcome === "resolved" ? 1 : 0);
+      expect(store.readPackageRefs()).toEqual([ref]);
+    },
+  );
+
+  it.each(["claim", "discovery", "uninstall"])(
     "refuses package mutations when parent deletion ends during %s",
     async (stage) => {
       const ref = packageRef();
@@ -247,6 +617,16 @@ describe("Claw package removal", () => {
         },
         deps: {
           ...store,
+          claimPackageRef: async (
+            claimed: PersistedClawPackageRef,
+            status: PersistedClawPackageRef["status"],
+          ) => {
+            if (stage === "claim") {
+              started.resolve();
+              await resume.promise;
+            }
+            return store.claimPackageRef(claimed, status);
+          },
           resolvePlugin: vi.fn(async () => {
             if (stage === "discovery") {
               started.resolve();
@@ -263,14 +643,21 @@ describe("Claw package removal", () => {
               installedVersion: "1.0.0",
             };
           }),
-          uninstallPlugin: vi.fn(
-            async (_id: string, apply?: { beforePersistentApply?: () => void }) => {
+          uninstallPlugin: vi.fn<NonNullable<PackageRemovalDeps["uninstallPlugin"]>>(
+            async (apply) => {
               if (stage === "uninstall") {
                 started.resolve();
                 await resume.promise;
               }
               apply?.beforePersistentApply?.();
               uninstall();
+              return ok({
+                pluginId: "audit",
+                requestedPluginId: "audit",
+                pluginIds: ["audit"],
+                removed: [],
+                warnings: [],
+              });
             },
           ),
         },
@@ -288,72 +675,30 @@ describe("Claw package removal", () => {
         options,
       );
       try {
-        await started.promise;
+        await awaitGateBeforeSettlement(
+          started.promise,
+          removing,
+          `Removal settled before its ${stage} authority checkpoint.`,
+        );
         active = false;
       } finally {
         resume.resolve();
       }
 
-      await expect(removing).resolves.toMatchObject([
-        { action: "error", reason: "Parent deletion ended." },
-      ]);
+      await expect(removing).resolves.toMatchObject({
+        packages: [{ action: "error", reason: "Parent deletion ended." }],
+      });
       expect(uninstall).not.toHaveBeenCalled();
       expect(store.readPackageRefs()).toEqual([{ ...ref, status: "pending" }]);
     },
   );
-
-  it("leaves failed provenance when an error occurs after uninstall starts", async () => {
-    const ref = packageRef();
-    const store = packageRefStore(ref);
-    const heartbeat = vi.fn(() => {
-      throw new Error("lease lost");
-    });
-
-    await expect(
-      applyClawPackageRemovals(
-        [
-          {
-            packageRef: ref,
-            workspace: install.workspace,
-            action: "uninstall",
-            affectedClawAgentIds: [],
-            pluginId: "audit",
-          },
-        ],
-        {
-          deps: {
-            ...store,
-            acquirePackageLease: vi.fn(() => ({ heartbeat, release: vi.fn() })),
-            uninstallPlugin: vi.fn().mockResolvedValue(undefined),
-            resolvePlugin: vi.fn().mockResolvedValue({
-              status: "found",
-              pluginId: "audit",
-              record: { source: "clawhub", integrity: "sha256:audit", installedAt: 1 },
-              installedVersion: "1.0.0",
-            }),
-          },
-        },
-      ),
-    ).resolves.toMatchObject([{ action: "error", reason: "lease lost" }]);
-
-    expect(store.claimPackageRef).toHaveBeenLastCalledWith(
-      expect.objectContaining({ ref: "audit" }),
-      "failed",
-      expect.anything(),
-    );
-  });
 
   it("requires an explicit override to remove a selected shared reference", async () => {
     const ref = packageRef();
     const other = packageRef({ agentId: "other" });
     const deps = {
       readPackageRefs: vi.fn().mockReturnValue([ref, other]),
-      resolvePlugin: vi.fn().mockResolvedValue({
-        status: "found",
-        pluginId: "audit",
-        record: { source: "clawhub", integrity: "sha256:audit", installedAt: 1 },
-        installedVersion: "1.0.0",
-      }),
+      resolvePlugin: vi.fn().mockResolvedValue(installedPlugin()),
     };
     const selected = ["plugin:audit@1.0.0"];
 
@@ -395,7 +740,7 @@ describe("Claw package removal", () => {
   });
 
   it("retains a same-version plugin whose installed integrity drifted", async () => {
-    const ref = packageRef();
+    const ref = packageRef({ relationship: "managed" });
     const decisions = await planClawPackageRemovals(install, [ref], {
       deps: {
         readPackageRefs: vi.fn().mockReturnValue([ref]),
@@ -410,14 +755,13 @@ describe("Claw package removal", () => {
     expect(decisions).toMatchObject([
       {
         action: "retain",
-        reason:
-          "Claw add introduced this shared requirement; removal releases its dependency edge and retains the artifact. Use its canonical owner separately to uninstall it.",
+        reason: "Installed plugin changed after the Claw was added.",
       },
     ]);
   });
 
   it("retains a plugin reinstalled directly after Claw provenance", async () => {
-    const ref = packageRef({ updatedAtMs: 10 });
+    const ref = packageRef({ relationship: "managed", updatedAtMs: 10 });
     const decisions = await planClawPackageRemovals(install, [ref], {
       deps: {
         readPackageRefs: vi.fn().mockReturnValue([ref]),
@@ -437,8 +781,7 @@ describe("Claw package removal", () => {
     expect(decisions).toMatchObject([
       {
         action: "retain",
-        reason:
-          "Claw add introduced this shared requirement; removal releases its dependency edge and retains the artifact. Use its canonical owner separately to uninstall it.",
+        reason: "Package has a current non-Claw owner or pre-existing origin.",
       },
     ]);
   });
@@ -467,15 +810,73 @@ describe("Claw package removal", () => {
         },
       },
     ]);
-    await expect(applyClawPackageRemovals(decisions, { deps: store })).resolves.toMatchObject([
-      { action: "uninstalled" },
-    ]);
+    await expect(applyClawPackageRemovals(decisions, { deps: store })).resolves.toMatchObject({
+      packages: [{ action: "uninstalled" }],
+    });
     await expect(readFile(join(current.skillDir, "SKILL.md"), "utf8")).rejects.toThrow();
     const lock = JSON.parse(await readFile(current.lockPath, "utf8")) as {
       skills: Record<string, unknown>;
     };
     expect(lock.skills).toEqual({});
   });
+
+  it.each(["preparation", "staged validation", "successor lease"])(
+    "fences skill effects after ownership loss during %s",
+    async (phase) => {
+      const current = await trackedQualifiedSkillFixture();
+      const currentInstall = { ...install, workspace: current.workspaceDir };
+      const ref = packageRef({ kind: "skill", ref: "@owner/triage", relationship: "managed" });
+      const store = packageRefStore(ref);
+      const decisions = await planClawPackageRemovals(currentInstall, [ref], { deps: store });
+      let owned = true;
+      let retainedDir = current.skillDir;
+      let packageOwned = true;
+      const results = await applyClawPackageRemovals(decisions, {
+        assertCurrent: () => {
+          if (!owned) {
+            throw new Error("removal superseded");
+          }
+        },
+        deps: {
+          ...store,
+          withPackageLease: packageLeaseScope(() => {
+            if (!packageOwned) {
+              throw new Error("Package lease superseded.");
+            }
+          }),
+          uninstallSkill: async (plan, options) => {
+            const pending = applyClawHubSkillUninstall(plan, {
+              ...options,
+              rename: async (from, to) => {
+                await rename(from, to);
+                retainedDir = String(to);
+                if (phase === "staged validation" || phase === "successor lease") {
+                  owned = false;
+                  if (phase === "successor lease") {
+                    packageOwned = false;
+                  }
+                }
+              },
+            });
+            if (phase === "preparation") {
+              owned = false;
+            }
+            return await pending;
+          },
+        },
+      });
+      expect(results).toMatchObject({
+        packages: [{ action: "error", reason: expect.stringContaining("removal superseded") }],
+      });
+      const expectedDir = phase === "successor lease" ? retainedDir : current.skillDir;
+      await expect(readFile(join(expectedDir, "SKILL.md"), "utf8")).resolves.toContain(
+        "name: triage",
+      );
+      const lock = JSON.parse(await readFile(current.lockPath, "utf8"));
+      expect(lock.skills.triage).toBeDefined();
+      expect(store.readPackageRefs()[0]?.status).toBe("pending");
+    },
+  );
 
   it("treats equal skill refs in separate agent workspaces as separate artifacts", async () => {
     const ref = packageRef({ kind: "skill", ref: "triage", relationship: "managed" });
@@ -570,12 +971,12 @@ describe("Claw package removal", () => {
     await expect(
       applyClawPackageRemovals(decisions, {
         deps: {
-          acquirePackageLease: vi.fn(() => ({ heartbeat: vi.fn(), release: vi.fn() })),
+          withPackageLease: packageLeaseScope(),
           readPackageRefs: vi.fn(() => refs),
           claimPackageRef,
         },
       }),
-    ).resolves.toMatchObject([{ action: "retained" }]);
+    ).resolves.toMatchObject({ packages: [{ action: "retained" }] });
   });
 
   it("releases a reference whose independent ownership was derived from install time", async () => {
@@ -596,6 +997,6 @@ describe("Claw package removal", () => {
         ],
         { deps: store },
       ),
-    ).resolves.toMatchObject([{ action: "retained" }]);
+    ).resolves.toMatchObject({ packages: [{ action: "retained" }] });
   });
 });

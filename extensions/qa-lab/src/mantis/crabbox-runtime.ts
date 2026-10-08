@@ -1,19 +1,51 @@
-// Qa Lab plugin module implements crabbox runtime behavior.
 import { spawn, type SpawnOptions } from "node:child_process";
-import path from "node:path";
-import { pathExists } from "openclaw/plugin-sdk/security-runtime";
-import { trimToValue } from "../mantis-options.runtime.js";
+import {
+  ensureManagedCrabboxBinary,
+  resolveCrabboxBinary,
+} from "@openclaw/crabbox-provider/cli-runtime-api.js";
+import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isTruthyOptIn } from "../mantis-options.runtime.js";
+
+export type MantisCrabboxLeaseOptions = {
+  idleTimeout?: string;
+  keepLease?: boolean;
+  leaseId?: string;
+  machineClass?: string;
+  provider?: string;
+  ttl?: string;
+};
+
+export function resolveMantisCrabboxLeaseOptions(
+  opts: MantisCrabboxLeaseOptions,
+  env: NodeJS.ProcessEnv,
+  defaults: { idleTimeout?: string; keepLease?: boolean; ttl?: string } = {},
+) {
+  return {
+    provider:
+      trimToValue(opts.provider) ?? trimToValue(env.OPENCLAW_MANTIS_CRABBOX_PROVIDER) ?? "hetzner",
+    machineClass:
+      trimToValue(opts.machineClass) ?? trimToValue(env.OPENCLAW_MANTIS_CRABBOX_CLASS) ?? "beast",
+    idleTimeout:
+      trimToValue(opts.idleTimeout) ??
+      trimToValue(env.OPENCLAW_MANTIS_CRABBOX_IDLE_TIMEOUT) ??
+      defaults.idleTimeout ??
+      "60m",
+    ttl:
+      trimToValue(opts.ttl) ??
+      trimToValue(env.OPENCLAW_MANTIS_CRABBOX_TTL) ??
+      defaults.ttl ??
+      "120m",
+    leaseId: trimToValue(opts.leaseId) ?? trimToValue(env.OPENCLAW_MANTIS_CRABBOX_LEASE_ID),
+    keepLease: opts.keepLease ?? (defaults.keepLease || isTruthyOptIn(env.OPENCLAW_MANTIS_KEEP_VM)),
+  };
+}
 
 type CommandResult = {
   stderr: string;
   stdout: string;
 };
 
-export type CommandRunner = (
-  command: string,
-  args: readonly string[],
-  options: SpawnOptions,
-) => Promise<CommandResult>;
+export type CommandRunner = typeof defaultCommandRunner;
 
 export type CrabboxInspect = {
   host?: string;
@@ -73,19 +105,21 @@ export async function defaultCommandRunner(
 
 export async function resolveCrabboxBin(params: {
   env: NodeJS.ProcessEnv;
-  envName: string;
   explicit?: string;
   repoRoot: string;
 }) {
-  const configured = trimToValue(params.explicit) ?? trimToValue(params.env[params.envName]);
-  if (configured) {
-    return configured;
-  }
-  const sibling = path.resolve(params.repoRoot, "../crabbox/bin/crabbox");
-  if (await pathExists(sibling)) {
-    return sibling;
-  }
-  return "crabbox";
+  const candidate = resolveCrabboxBinary({
+    cwd: params.repoRoot,
+    explicit: trimToValue(params.explicit) ?? trimToValue(params.env.OPENCLAW_MANTIS_CRABBOX_BIN),
+    openclawRoot: params.repoRoot,
+    pathEnv: params.env.PATH,
+  });
+  const { binary } = await ensureManagedCrabboxBinary({
+    binary: candidate,
+    cwd: params.repoRoot,
+    env: params.env,
+  });
+  return binary;
 }
 
 function extractLeaseId(output: string) {
@@ -96,95 +130,89 @@ export function shellQuote(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-export async function runCommand(params: {
-  args: readonly string[];
-  command: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  runner: CommandRunner;
-  stdio?: "inherit" | "pipe";
-}) {
-  return params.runner(params.command, params.args, {
-    cwd: params.cwd,
-    env: params.env,
-    stdio: params.stdio ?? "pipe",
-  });
-}
-
-export async function warmupCrabbox(params: {
+export function createMantisCrabboxSession(params: {
   crabboxBin: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
-  idleTimeout: string;
-  machineClass: string;
-  market?: string;
-  provider: string;
-  runner: CommandRunner;
-  ttl: string;
-}) {
-  const marketArgs = params.market ? ["--market", params.market] : [];
-  const result = await runCommand({
-    command: params.crabboxBin,
-    args: [
-      "warmup",
-      "--provider",
-      params.provider,
-      "--desktop",
-      "--browser",
-      "--class",
-      params.machineClass,
-      ...marketArgs,
-      "--idle-timeout",
-      params.idleTimeout,
-      "--ttl",
-      params.ttl,
-    ],
-    cwd: params.cwd,
-    env: params.env,
-    runner: params.runner,
-    stdio: "inherit",
-  });
-  const leaseId = extractLeaseId(`${result.stdout}\n${result.stderr}`);
-  if (!leaseId) {
-    throw new Error("Crabbox warmup did not print a lease id.");
-  }
-  return leaseId;
-}
-
-export async function inspectCrabbox(params: {
-  crabboxBin: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  leaseId: string;
+  leaseId?: string;
   provider: string;
   runner: CommandRunner;
 }) {
-  const result = await runCommand({
-    command: params.crabboxBin,
-    args: ["inspect", "--provider", params.provider, "--id", params.leaseId, "--json"],
-    cwd: params.cwd,
-    env: params.env,
-    runner: params.runner,
-  });
-  return JSON.parse(result.stdout) as CrabboxInspect;
-}
-
-export async function stopCrabbox(params: {
-  crabboxBin: string;
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  leaseId: string;
-  provider: string;
-  runner: CommandRunner;
-}) {
-  await runCommand({
-    command: params.crabboxBin,
-    args: ["stop", "--provider", params.provider, params.leaseId],
-    cwd: params.cwd,
-    env: params.env,
-    runner: params.runner,
-    stdio: "inherit",
-  });
+  let leaseId = params.leaseId;
+  const createdLease = leaseId === undefined;
+  const run = (args: readonly string[], stdio: "inherit" | "pipe" = "pipe") =>
+    params.runner(params.crabboxBin, args, { cwd: params.cwd, env: params.env, stdio });
+  const requireLeaseId = () => {
+    if (!leaseId) {
+      throw new Error("Crabbox lease id is unavailable before acquisition.");
+    }
+    return leaseId;
+  };
+  return {
+    createdLease,
+    get leaseId() {
+      return leaseId;
+    },
+    async acquire(options: {
+      idleTimeout: string;
+      machineClass: string;
+      market?: string;
+      ttl: string;
+    }) {
+      if (leaseId !== undefined) {
+        return leaseId;
+      }
+      const result = await run(
+        [
+          "warmup",
+          "--provider",
+          params.provider,
+          "--desktop",
+          "--browser",
+          "--class",
+          options.machineClass,
+          ...(options.market ? ["--market", options.market] : []),
+          "--idle-timeout",
+          options.idleTimeout,
+          "--ttl",
+          options.ttl,
+        ],
+        "inherit",
+      );
+      const acquired = extractLeaseId(`${result.stdout}\n${result.stderr}`);
+      if (!acquired) {
+        throw new Error("Crabbox warmup did not print a lease id.");
+      }
+      leaseId = acquired;
+      return acquired;
+    },
+    async inspect() {
+      const result = await run([
+        "inspect",
+        "--provider",
+        params.provider,
+        "--id",
+        requireLeaseId(),
+        "--json",
+      ]);
+      return JSON.parse(result.stdout) as CrabboxInspect;
+    },
+    describe(inspected?: CrabboxInspect) {
+      return {
+        bin: params.crabboxBin,
+        createdLease,
+        id: leaseId ?? "unallocated",
+        provider: params.provider,
+        ...(inspected ? { slug: inspected.slug, state: inspected.state } : {}),
+        vncCommand: leaseId
+          ? `${params.crabboxBin} vnc --provider ${params.provider} --id ${leaseId} --open`
+          : "unallocated",
+      };
+    },
+    async stop() {
+      await run(["stop", "--provider", params.provider, requireLeaseId()], "inherit");
+    },
+  };
 }
 
 function crabboxSshPortCandidates(inspect: Pick<CrabboxInspect, "sshFallbackPorts" | "sshPort">) {
@@ -239,12 +267,10 @@ async function sshCommand(params: {
   for (const port of candidates) {
     const command = sshCommandForPort(params.inspect, port);
     try {
-      await runCommand({
-        args: command.probeArgs,
-        command: "ssh",
+      await params.runner("ssh", command.probeArgs, {
         cwd: params.cwd,
         env: params.env,
-        runner: params.runner,
+        stdio: "pipe",
       });
       return command.value;
     } catch (error) {
@@ -268,9 +294,9 @@ export async function copyCrabboxArtifacts(params: {
 }) {
   const { host, sshArgs, sshUser } = await sshCommand(params);
   const excludeArgs = params.exclude?.flatMap((pattern) => ["--exclude", pattern]) ?? [];
-  await runCommand({
-    command: "rsync",
-    args: [
+  await params.runner(
+    "rsync",
+    [
       "-az",
       "-e",
       sshArgs,
@@ -278,8 +304,45 @@ export async function copyCrabboxArtifacts(params: {
       `${sshUser}@${host}:${params.remoteOutputDir}/`,
       `${params.outputDir}/`,
     ],
-    cwd: params.cwd,
-    env: params.env,
-    runner: params.runner,
-  });
+    {
+      cwd: params.cwd,
+      env: params.env,
+      stdio: "pipe",
+    },
+  );
+}
+
+export function renderMantisBrowserDiscoveryScript() {
+  return `browser_bin=""
+for candidate in "\${BROWSER:-}" "\${CHROME_BIN:-}" google-chrome chromium chromium-browser; do
+  if [ -n "$candidate" ] && command -v "$candidate" >/dev/null 2>&1; then
+    browser_bin="$(command -v "$candidate")"
+    break
+  fi
+done
+if [ -z "$browser_bin" ]; then
+  echo "No browser binary found. Checked BROWSER, CHROME_BIN, google-chrome, chromium, chromium-browser." >&2
+  exit 127
+fi`;
+}
+
+export function renderMantisDesktopRecordingScript(fileName: string, durationSeconds: number) {
+  return `video_pid=""
+if command -v ffmpeg >/dev/null 2>&1; then
+  :
+else
+  sudo apt-get update -y >>"$out/apt.log" 2>&1 || true
+  sudo DEBIAN_FRONTEND=noninteractive apt-get install -y ffmpeg >>"$out/apt.log" 2>&1 || true
+fi
+if command -v ffmpeg >/dev/null 2>&1; then
+  display_input="$DISPLAY"
+  case "$display_input" in
+    *.*) ;;
+    *) display_input="$display_input.0" ;;
+  esac
+  ffmpeg -hide_banner -loglevel error -y -f x11grab -framerate 15 -i "$display_input" -t ${durationSeconds} -pix_fmt yuv420p "$out/${fileName}" >"$out/ffmpeg.log" 2>&1 &
+  video_pid=$!
+else
+  echo "ffmpeg missing; video artifact skipped" >"$out/ffmpeg.log"
+fi`;
 }

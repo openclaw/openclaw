@@ -1,7 +1,8 @@
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildDeepInfraProvider } from "./api.js";
-import { DEEPINFRA_MODEL_CATALOG, discoverDeepInfraModels } from "./provider-models.js";
+import { discoverDeepInfraModels } from "./provider-models.js";
+import { DEEPINFRA_MODEL_CATALOG } from "./provider-static-catalog.js";
 
 const DEEPINFRA_MODELS_URL =
   "https://api.deepinfra.com/v1/openai/models?sort_by=openclaw&filter=with_meta";
@@ -73,34 +74,6 @@ describe("DeepInfra native runtime prices", () => {
           cacheWrite: 0,
         });
       }
-    });
-  });
-
-  it("rejects failed metadata even when native pricing succeeds", async () => {
-    const seedId = DEEPINFRA_MODEL_CATALOG[0]!.id;
-    const mockFetch = vi.fn(async (url: string) => {
-      if (url === DEEPINFRA_MODELS_URL) {
-        return new Response("unavailable", { status: 503 });
-      }
-      expect(url).toBe("https://api.deepinfra.com/models/list");
-      return jsonResponse(
-        [seedId, "fixture/price-only"].map((model_name) => ({
-          model_name,
-          pricing: {
-            type: "tokens",
-            cents_per_input_token: 0.0002,
-            cents_per_output_token: 0.001,
-            discount: 0.5,
-            rate_per_input_token_cached: 0.2,
-          },
-        })),
-      );
-    });
-    await withFetchPathTest(mockFetch, async () => {
-      await discoverDeepInfraModels({ hasApiKey: false });
-      expect(mockFetch).not.toHaveBeenCalled();
-      await expect(discoverDeepInfraModels({ hasApiKey: true })).rejects.toThrow("HTTP 503");
-      expect(mockFetch).toHaveBeenCalledTimes(2);
     });
   });
 

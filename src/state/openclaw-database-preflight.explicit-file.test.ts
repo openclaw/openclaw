@@ -1,0 +1,225 @@
+import { deepStrictEqual } from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
+import { closeOpenClawAgentDatabasesForTest } from "./openclaw-agent-db.js";
+import {
+  assertOpenClawDatabasesReady,
+  preflightOpenClawStateDatabasePath,
+} from "./openclaw-database-preflight.js";
+import {
+  snapshotSourceFamily,
+  writeUnreadableNewerStateSchema,
+} from "./openclaw-database-preflight.test-support.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import { closeOpenClawStateDatabaseForTest } from "./openclaw-state-db.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+});
+
+describe("explicit copied shared-state preflight", () => {
+  function execDatabase(databasePath: string, sql: string) {
+    const database = new (requireNodeSqlite().DatabaseSync)(databasePath);
+    try {
+      database.exec(sql);
+    } finally {
+      database.close();
+    }
+  }
+
+  function createExplicitStateDatabase(): string {
+    const stateDir = tempDirs.make("openclaw-explicit-state-preflight-");
+    const databasePath = path.join(stateDir, "candidate.sqlite");
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(databasePath);
+    try {
+      // Match production bootstrap: one durable commit, not one per schema object.
+      runSqliteImmediateTransactionSync(database, () => {
+        database.exec(
+          `${OPENCLAW_STATE_SCHEMA_SQL}; PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`,
+        );
+        database
+          .prepare(
+            `INSERT INTO schema_meta (
+               meta_key, role, schema_version, agent_id, app_version, created_at, updated_at
+             ) VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)`,
+          )
+          .run(OPENCLAW_STATE_SCHEMA_VERSION);
+      });
+    } finally {
+      database.close();
+    }
+    return databasePath;
+  }
+
+  it.each([
+    {
+      name: "retired cron history",
+      create: () => {
+        const databasePath = createExplicitStateDatabase();
+        execDatabase(
+          databasePath,
+          `
+          CREATE TABLE cron_run_logs (
+            store_key TEXT NOT NULL, job_id TEXT NOT NULL,
+            seq INTEGER NOT NULL, ts INTEGER NOT NULL,
+            entry_json TEXT NOT NULL, created_at INTEGER NOT NULL,
+            PRIMARY KEY (store_key, job_id, seq)
+          );
+          INSERT INTO cron_run_logs VALUES
+            ('store', 'retained-job', 1, 1000,
+             '{"ts":1000,"jobId":"retained-job","action":"finished","status":"ok"}', 1000);
+        `,
+        );
+        return databasePath;
+      },
+      expected: {
+        status: "indeterminate",
+        reason: expect.stringMatching(/legacy-cron-run-logs.*doctor --fix/),
+      },
+    },
+    {
+      name: "drifted canonical index",
+      create: () => {
+        const databasePath = createExplicitStateDatabase();
+        execDatabase(
+          databasePath,
+          "DROP INDEX idx_task_runs_status; CREATE INDEX idx_task_runs_status ON task_runs(task_id);",
+        );
+        return databasePath;
+      },
+      expected: {
+        status: "startup-repairable",
+        requiresWrite: true,
+        issues: [
+          {
+            code: "missing-or-drifted-index",
+            message: "missing or drifted index idx_task_runs_status",
+            objectName: "idx_task_runs_status",
+          },
+        ],
+      },
+    },
+    {
+      name: "negative schema metadata",
+      create: () => {
+        const databasePath = createExplicitStateDatabase();
+        execDatabase(databasePath, "PRAGMA user_version = -1;");
+        return databasePath;
+      },
+      expected: {
+        foundVersion: -1,
+        status: "indeterminate",
+        reason: expect.stringContaining("invalid schema version metadata"),
+      },
+    },
+  ])("classifies $name without changing the source", async ({ create, expected }) => {
+    const databasePath = create();
+    const before = snapshotSourceFamily(databasePath);
+    await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toEqual({
+      schema: "openclaw.state-schema-preflight.v1",
+      databasePath,
+      targetVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+      foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+      ownership: null,
+      issues: [],
+      requiresWrite: false,
+      ...expected,
+    });
+    deepStrictEqual(snapshotSourceFamily(databasePath), before);
+  });
+
+  it("rejects genuine drift alongside legacy additive columns without writes", async () => {
+    const initialPath = createExplicitStateDatabase();
+    const stateDir = path.dirname(initialPath);
+    const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(databasePath));
+    fs.renameSync(initialPath, databasePath);
+    execDatabase(
+      databasePath,
+      "ALTER TABLE task_runs DROP COLUMN tool_use_count; ALTER TABLE task_runs DROP COLUMN last_tool_name; ALTER TABLE apns_registrations DROP COLUMN relay_origin; ALTER TABLE task_runs ADD COLUMN unrecognized INTEGER NOT NULL DEFAULT 0;",
+    );
+    const before = snapshotSourceFamily(databasePath);
+    expect(await preflightOpenClawStateDatabasePath(databasePath)).toMatchObject({
+      foundVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+      status: "incompatible",
+    });
+    const admission = assertOpenClawDatabasesReady({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+      operation: "gateway-startup",
+      config: {},
+    });
+    await expect(admission).rejects.toThrow("requires repair");
+    deepStrictEqual(snapshotSourceFamily(databasePath), before);
+  });
+
+  it.each(["gateway-startup", "explicit-file"] as const)(
+    "reports only the newer schema for an unreadable catalog through %s",
+    async (operation) => {
+      const initialPath = createExplicitStateDatabase();
+      const stateDir = path.dirname(initialPath);
+      const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+      fs.mkdirSync(path.dirname(databasePath));
+      fs.renameSync(initialPath, databasePath);
+      writeUnreadableNewerStateSchema(databasePath);
+      const before = snapshotSourceFamily(databasePath);
+      let message: string;
+      if (operation === "explicit-file") {
+        const result = await preflightOpenClawStateDatabasePath(databasePath);
+        expect(result).toMatchObject({
+          status: "incompatible",
+          foundVersion: OPENCLAW_STATE_SCHEMA_VERSION + 1,
+          requiresWrite: false,
+          issues: [],
+        });
+        message = result.reason ?? "";
+      } else {
+        const failure = await assertOpenClawDatabasesReady({
+          env: { OPENCLAW_STATE_DIR: stateDir },
+          operation,
+          config: {},
+        }).catch((error: unknown) => error);
+        expect(failure).toBeInstanceOf(Error);
+        message = String(failure);
+      }
+      expect(message).toMatch(/newer/);
+      expect(message).toMatch(/build.*supports/);
+      expect(message).toMatch(/restore.*backup/);
+      expect(message).not.toMatch(/doctor --fix|registry query failed|integrity_check failed/);
+      deepStrictEqual(snapshotSourceFamily(databasePath), before);
+    },
+  );
+
+  it("rejects an explicit preflight path with sidecars without touching it", async () => {
+    const databasePath = createExplicitStateDatabase();
+    const sqlite = requireNodeSqlite();
+    const writer = new sqlite.DatabaseSync(databasePath);
+    try {
+      writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
+      writer
+        .prepare(
+          "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES ('preflight.live', '{}', 1)",
+        )
+        .run();
+      const before = snapshotSourceFamily(databasePath);
+
+      await expect(preflightOpenClawStateDatabasePath(databasePath)).resolves.toMatchObject({
+        foundVersion: null,
+        status: "indeterminate",
+        requiresWrite: false,
+        reason: expect.stringMatching(/consolidated snapshot.*sidecars.*online backup/iu),
+      });
+      deepStrictEqual(snapshotSourceFamily(databasePath), before);
+    } finally {
+      writer.close();
+    }
+  });
+});

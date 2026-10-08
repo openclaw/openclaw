@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
 import { redactRegisteredSecretValues } from "../logging/secret-redaction-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -55,42 +59,62 @@ function expectOAuthFormCall(expectedUrl: string, expectedForm: Record<string, s
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  clearRuntimeConfigSnapshot();
 });
 
 describe("GitHub OAuth client", () => {
-  it.each(["managed-user", "managed-user_org"])(
-    "verifies the supplied %s credential at a fixed origin and registers redaction",
-    async (login) => {
-      const token = `synthetic-bound-credential-${login}`;
-      vi.spyOn(globalThis, "fetch").mockResolvedValue(
-        new Response(
-          JSON.stringify({
-            id: 202,
-            login,
-            avatar_url: null,
-          }),
-          { headers: { "x-oauth-scopes": "read:org, repo, repo" } },
-        ),
-      );
-      expect(await verifyGitHubCredential(token)).toEqual({
-        status: "available",
-        account: { accountId: 202, login, avatarUrl: null },
-        scopes: ["read:org", "repo"],
-      });
-      expect(fetch).toHaveBeenCalledExactlyOnceWith(
-        "https://api.github.com/user",
-        expect.objectContaining({
-          method: "GET",
-          redirect: "error",
-          signal: expect.any(AbortSignal),
-          headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}` },
+  it("verifies a managed credential at a fixed origin and registers redaction", async () => {
+    const login = "managed-user_org";
+    const token = `synthetic-bound-credential-${login}`;
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: 202,
+          login,
+          avatar_url: null,
         }),
-      );
-      expect(redactRegisteredSecretValues(`failed with ${token}`, () => "[REDACTED]")).toBe(
-        "failed with [REDACTED]",
-      );
-    },
-  );
+        { headers: { "x-oauth-scopes": "read:org, repo, repo" } },
+      ),
+    );
+    expect(await verifyGitHubCredential(token)).toEqual({
+      status: "available",
+      account: { accountId: 202, login, avatarUrl: null },
+      scopes: ["read:org", "repo"],
+    });
+    expect(fetch).toHaveBeenCalledExactlyOnceWith(
+      "https://api.github.com/user",
+      expect.objectContaining({
+        method: "GET",
+        redirect: "error",
+        signal: expect.any(AbortSignal),
+        headers: { Accept: "application/vnd.github+json", Authorization: `Bearer ${token}` },
+      }),
+    );
+    expect(redactRegisteredSecretValues(`failed with ${token}`, () => "[REDACTED]")).toBe(
+      "failed with [REDACTED]",
+    );
+  });
+
+  it.each([
+    ["https://api.ghe.example.test", "https://api.ghe.example.test/user"],
+    ["https://ghe.example.test/api/v3", "https://ghe.example.test/api/v3/user"],
+  ])("verifies enterprise credentials at %s", async (apiBaseUrl, expectedUrl) => {
+    setRuntimeConfigSnapshot({ gateway: { github: { apiBaseUrl } } });
+    const probe = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse({ id: 303, login: "enterprise-user", avatar_url: null }));
+    await expect(
+      verifyGitHubCredential("synthetic-enterprise-token", { apiBaseUrl }),
+    ).resolves.toMatchObject({
+      status: "available",
+      account: { accountId: 303, login: "enterprise-user" },
+    });
+    expect(probe).toHaveBeenCalledExactlyOnceWith(
+      expectedUrl,
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
 
   it("reuses a verified account within the TTL and re-probes after it", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);

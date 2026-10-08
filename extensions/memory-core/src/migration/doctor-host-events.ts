@@ -101,6 +101,21 @@ async function memoryHostEventSourceNeedsMigration(params: {
   );
 }
 
+async function moveLegacyMemoryHostEventFile(
+  source: ReadyLegacyMemoryHostEventSource,
+  target: string,
+) {
+  const { statRegularFileSync } = await import("openclaw/plugin-sdk/file-access-runtime");
+  return source.root.move(source.relativePath, target, {
+    assertBeforeMutation: () => {
+      // Discovery and reads precede awaited work; every move still requires a regular file.
+      if (statRegularFileSync(source.filePath).missing) {
+        throw new Error("Memory Core host event file no longer exists");
+      }
+    },
+  });
+}
+
 async function finalizeLegacyMemoryHostEventSource(params: {
   source: ReadyLegacyMemoryHostEventSource;
   changes: string[];
@@ -114,7 +129,7 @@ async function finalizeLegacyMemoryHostEventSource(params: {
     throw new Error(`Missing Memory Core host event archive path for ${params.source.filePath}`);
   }
   try {
-    await params.source.root.move(params.source.relativePath, archivedRelativePath);
+    await moveLegacyMemoryHostEventFile(params.source, archivedRelativePath);
     params.changes.push(
       `Archived Memory Core host events legacy source -> ${path.join(params.source.workspaceDir, archivedRelativePath)}`,
     );
@@ -137,7 +152,7 @@ async function restoreClaimedMemoryHostEventSource(params: {
       return;
     }
     if (!(await params.source.root.exists(params.activeRelativePath))) {
-      await params.source.root.move(params.source.relativePath, params.activeRelativePath);
+      await moveLegacyMemoryHostEventFile(params.source, params.activeRelativePath);
       return;
     }
     params.warnings.push(
@@ -155,7 +170,7 @@ async function migrateLegacyMemoryHostEventSource(params: {
   context: PluginDoctorStateMigrationContext;
   changes: string[];
   warnings: string[];
-}): Promise<"completed" | "blocked"> {
+}): Promise<"completed" | "blocked" | "warning"> {
   const { normalizeMemoryHostEventRecordForStorage, resolveMemoryHostEventLogPath } =
     await import("openclaw/plugin-sdk/memory-host-events");
   const activeRelativePath = path.relative(
@@ -167,7 +182,7 @@ async function migrateLegacyMemoryHostEventSource(params: {
   let claimFinalized = source.storage === "archive";
   if (source.storage === "active") {
     const generation = await resolveMemoryHostEventArchivePath(source);
-    await source.root.move(source.relativePath, generation.claimRelativePath);
+    await moveLegacyMemoryHostEventFile(source, generation.claimRelativePath);
     source = {
       ...source,
       filePath: path.join(source.workspaceDir, generation.claimRelativePath),
@@ -274,7 +289,7 @@ async function migrateLegacyMemoryHostEventSource(params: {
         params.warnings.push(
           `Skipped Memory Core host event recovery because ${source.filePath} changed other than by append; left the archive in place`,
         );
-        return "blocked";
+        return "warning";
       }
     }
     const firstCandidateOrdinal =
@@ -404,7 +419,9 @@ async function migrateLegacyMemoryHostEventSource(params: {
     const checkpointCapacity = checkpointValue ? 0 : 1;
     if (
       checkpointCapacity > 0 &&
-      (await checkpointStore.entries()).length >= MAX_MEMORY_HOST_EVENT_MIGRATION_CHECKPOINTS
+      (checkpointStore.count
+        ? await checkpointStore.count()
+        : (await checkpointStore.entries()).length) >= MAX_MEMORY_HOST_EVENT_MIGRATION_CHECKPOINTS
     ) {
       // Checkpoints use reject-new and never expire while their raw archives remain.
       // Stop before import/archive once durable processed-generation capacity is full.
@@ -568,6 +585,7 @@ export const hostEventsStateMigration: PluginDoctorStateMigration = {
   async migrateLegacyState(params) {
     const changes: string[] = [];
     const warnings: string[] = [];
+    let advisoryWarningCount = 0;
     const blockedWorkspaces = new Set<string>();
     for (const source of await collectLegacyMemoryHostEventSources(params.config, params.env)) {
       if (blockedWorkspaces.has(source.workspaceDir)) {
@@ -581,18 +599,28 @@ export const hostEventsStateMigration: PluginDoctorStateMigration = {
       if (!(await memoryHostEventSourceNeedsMigration({ source, context: params.context }))) {
         continue;
       }
+      const warningStart = warnings.length;
       const result = await migrateLegacyMemoryHostEventSource({
         source,
         context: params.context,
         changes,
         warnings,
       });
-      if (result === "blocked") {
+      if (result === "warning") {
+        advisoryWarningCount += warnings.length - warningStart;
+      }
+      if (result !== "completed") {
         // Archive generations encode append order. A later generation cannot
         // overtake an older source that still needs repair or durable import.
         blockedWorkspaces.add(source.workspaceDir);
       }
     }
-    return { changes, warnings };
+    return {
+      changes,
+      warnings,
+      ...(warnings.length > 0 && advisoryWarningCount === warnings.length
+        ? { warningDisposition: "recoverable" as const }
+        : {}),
+    };
   },
 };

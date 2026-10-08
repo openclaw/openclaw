@@ -20,11 +20,7 @@ RUN_LOG="$(mktemp -t openclaw-plugin-binding-command-escape-log.XXXXXX)"
 # describe the same required behavior, and only one exists in a target source.
 FOCUSED_TEST_REGEX="lets authorized (plugin-owned binding commands fall through to command processing|gateway-style plugin commands escape plugin-owned bindings)|keeps authorized unknown slash text in a plugin-owned binding routed to the bound plugin|keeps unauthorized plugin-owned binding slash replies suppressed while routed to the bound plugin"
 
-cleanup() {
-  docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
-  rm -f "$RUN_LOG"
-}
-trap cleanup EXIT
+trap 'docker_e2e_cleanup_container_run "$CONTAINER_NAME" "$RUN_LOG"' EXIT
 
 docker_e2e_build_or_reuse \
   "$IMAGE_NAME" \

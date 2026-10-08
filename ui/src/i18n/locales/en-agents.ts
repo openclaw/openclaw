@@ -2,6 +2,14 @@
 export const agentChip = {
   menuLabel: "Agent menu",
   agents: "Agents",
+  search: "Find an agent…",
+  noMatches: "No matching agents",
+  showAll: "Show all",
+  seeAllAgents: "See all agents",
+  namedSettings: "{name} settings",
+  agentSettings: "Agent settings",
+  newConversation: "New conversation",
+  workspaceMenuLabel: "Workspace menu",
   switchAgent: "Switch agent",
   working: "Working…",
   ready: "Ready to chat",
@@ -11,7 +19,6 @@ export const agentChip = {
   getApps: "Get the apps",
   discord: "Discord community",
   viewChangelog: "View changelog",
-  agentSettings: "Agent settings",
 };
 
 export const agentScope = {
@@ -30,8 +37,13 @@ export const identity = {
   name: "Display name",
   namePlaceholder: "Agent name",
   emoji: "Emoji",
+  chooseEmoji: "Choose emoji",
+  searchEmoji: "Search emoji…",
+  noEmojiMatches: "No matching emoji",
   chooseImage: "Choose image…",
   replaceImage: "Replace image…",
   imageUnusable: "That image can't be used. Pick an image file up to 2 MB.",
+  imageTooDetailed:
+    "That image is too detailed to store as an avatar. Try a simpler image, or set a workspace image path with openclaw agents set-identity --agent <id> --avatar <path>.",
   fileHint: "Saving mirrors identity fields to IDENTITY.md; configured values take precedence.",
 };

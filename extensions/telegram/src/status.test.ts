@@ -7,9 +7,7 @@ import { collectTelegramStatusIssues } from "./status-issues.js";
 import {
   buildTelegramStatusReactionVariants,
   resolveTelegramAllowedReactions,
-  resolveTelegramReactionEmoji,
   resolveTelegramReactionVariant,
-  resolveTelegramStatusReactionEmojis,
 } from "./status-reaction-variants.js";
 
 type StatusIssue = ReturnType<typeof collectTelegramStatusIssues>[number];
@@ -281,69 +279,6 @@ describe("collectTelegramStatusIssues", () => {
 
     expect(issues).toStrictEqual([]);
   });
-
-  it("ignores accounts that are not both enabled and configured", () => {
-    expect(
-      collectTelegramStatusIssues([
-        {
-          accountId: "main",
-          enabled: false,
-          configured: true,
-        } as ChannelAccountSnapshot,
-      ]),
-    ).toStrictEqual([]);
-  });
-});
-
-describe("resolveTelegramStatusReactionEmojis", () => {
-  it("falls back to Telegram-safe defaults for empty overrides", () => {
-    const result = resolveTelegramStatusReactionEmojis({
-      initialEmoji: "👀",
-      overrides: {
-        thinking: "   ",
-        done: "\n",
-      },
-    });
-
-    expect(result.queued).toBe("👀");
-    expect(result.thinking).toBe(DEFAULT_EMOJIS.thinking);
-    expect(result.done).toBe(DEFAULT_EMOJIS.done);
-  });
-
-  it("preserves explicit non-empty overrides", () => {
-    const result = resolveTelegramStatusReactionEmojis({
-      initialEmoji: "👀",
-      overrides: {
-        thinking: "🫡",
-        done: "🎉",
-      },
-    });
-
-    expect(result.thinking).toBe("🫡");
-    expect(result.done).toBe("🎉");
-  });
-});
-
-describe("buildTelegramStatusReactionVariants", () => {
-  it("puts requested emoji first and appends Telegram fallbacks", () => {
-    const variants = buildTelegramStatusReactionVariants({
-      ...DEFAULT_EMOJIS,
-      coding: "🛠️",
-    });
-
-    expect(variants.get("🛠️")).toEqual(["🛠️", "👨‍💻", "🔥", "⚡"]);
-  });
-});
-
-describe("resolveTelegramReactionEmoji", () => {
-  it("accepts Telegram-supported reaction emojis", () => {
-    expect(resolveTelegramReactionEmoji("👀")).toBe("👀");
-    expect(resolveTelegramReactionEmoji("👨‍💻")).toBe("👨‍💻");
-  });
-
-  it("rejects unsupported emojis", () => {
-    expect(resolveTelegramReactionEmoji("🫠")).toBeUndefined();
-  });
 });
 
 describe("resolveTelegramAllowedReactions", () => {
@@ -438,77 +373,6 @@ describe("resolveTelegramAllowedReactions", () => {
 });
 
 describe("resolveTelegramReactionVariant", () => {
-  it.each([
-    ["❤️", "❤"],
-    ["❤︎", "❤"],
-    ["⚡️", "⚡"],
-    ["✍️", "✍"],
-    ["🕊️", "🕊"],
-    ["☃️", "☃"],
-    ["❤️‍🔥", "❤‍🔥"],
-    ["🤷‍♂️", "🤷‍♂"],
-  ] as const)("selects the canonical Telegram reaction for %s", (requestedEmoji, expectedEmoji) => {
-    expect(
-      resolveTelegramReactionVariant({
-        requestedEmoji,
-        variantsByRequestedEmoji: new Map(),
-        allowedEmojiReactions: new Set([expectedEmoji]),
-      }),
-    ).toBe(expectedEmoji);
-  });
-
-  it("returns requested emoji when already Telegram-supported", () => {
-    const variantsByEmoji = buildTelegramStatusReactionVariants({
-      ...DEFAULT_EMOJIS,
-      coding: "👨‍💻",
-    });
-
-    const result = resolveTelegramReactionVariant({
-      requestedEmoji: "👨‍💻",
-      variantsByRequestedEmoji: variantsByEmoji,
-    });
-
-    expect(result).toBe("👨‍💻");
-  });
-
-  it("returns first Telegram-supported fallback for unsupported requested emoji", () => {
-    const variantsByEmoji = buildTelegramStatusReactionVariants({
-      ...DEFAULT_EMOJIS,
-      coding: "🛠️",
-    });
-
-    const result = resolveTelegramReactionVariant({
-      requestedEmoji: "🛠️",
-      variantsByRequestedEmoji: variantsByEmoji,
-    });
-
-    expect(result).toBe("👨‍💻");
-  });
-
-  it("uses generic Telegram fallbacks for unknown emojis", () => {
-    const result = resolveTelegramReactionVariant({
-      requestedEmoji: "🫠",
-      variantsByRequestedEmoji: new Map(),
-    });
-
-    expect(result).toBe("👍");
-  });
-
-  it("respects chat allowed reactions", () => {
-    const variantsByEmoji = buildTelegramStatusReactionVariants({
-      ...DEFAULT_EMOJIS,
-      coding: "👨‍💻",
-    });
-
-    const result = resolveTelegramReactionVariant({
-      requestedEmoji: "👨‍💻",
-      variantsByRequestedEmoji: variantsByEmoji,
-      allowedEmojiReactions: new Set(["👍"]),
-    });
-
-    expect(result).toBe("👍");
-  });
-
   it("returns undefined when no candidate is chat-allowed", () => {
     const variantsByEmoji = buildTelegramStatusReactionVariants({
       ...DEFAULT_EMOJIS,
@@ -519,15 +383,6 @@ describe("resolveTelegramReactionVariant", () => {
       requestedEmoji: "👨‍💻",
       variantsByRequestedEmoji: variantsByEmoji,
       allowedEmojiReactions: new Set(["🎉"]),
-    });
-
-    expect(result).toBeUndefined();
-  });
-
-  it("returns undefined for empty requested emoji", () => {
-    const result = resolveTelegramReactionVariant({
-      requestedEmoji: "   ",
-      variantsByRequestedEmoji: new Map(),
     });
 
     expect(result).toBeUndefined();

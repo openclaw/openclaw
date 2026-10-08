@@ -5,6 +5,7 @@ export TERM=xterm-256color
 export NO_COLOR=1
 
 source scripts/lib/openclaw-e2e-instance.sh
+source scripts/e2e/lib/onboard/first-agent-flow.sh
 source scripts/e2e/lib/prepublish-plugin-registry.sh
 
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
@@ -18,7 +19,7 @@ export npm_config_audit=false
 export OPENAI_API_KEY="sk-openclaw-release-typed-onboarding"
 
 PORT="18789"
-MOCK_PORT="44190"
+MOCK_PORT="0"
 SUCCESS_MARKER="OPENCLAW_E2E_OK_TYPED_ONBOARDING"
 scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-typed-onboarding.XXXXXX")"
 LOG_DIR="$scenario_tmp/logs"
@@ -93,28 +94,17 @@ onboarding_log_contains() {
 }
 
 drive_typed_onboarding() {
-  local hook_mode="${OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE:-}"
   wait_for_log "Continue?" 60
   send $'y\r' 0.4
-  if [[ "$hook_mode" != "interactive" ]]; then
-    wait_for_log "Help make OpenClaw better?" 60
-    send $'\r' 0.4
-    wait_for_log "What should we call your first agent?" 60
-    send $'\r' 0.4
-    wait_for_log "to search" 60
-    send $'ollama\r' 0.4
-    return
-  fi
-
+  wait_for_log "Help make OpenClaw better?" 60
+  send $'\r' 0.4
+  wait_for_first_agent_prompt onboarding_log_contains 60 0.4
+  send $'\r' 0.4
   wait_for_log "to search" 60
   send $'ollama\r' 0.4
-  wait_for_log "Enable hooks?" 60
-  send $' \r' 0.4
-  send $'\r' 0.4
 }
 
 openclaw_e2e_install_package "$INSTALL_LOG"
-echo "Installed the OpenClaw package."
 openclaw_prepublish_plugin_registry_start_mounted "$scenario_tmp/registry" plugin_registry_pid '["@openclaw/codex"]'
 command -v openclaw >/dev/null
 package_root="$(openclaw_e2e_package_root)"
@@ -122,7 +112,7 @@ entry="$(openclaw_e2e_package_entrypoint "$package_root")"
 openclaw_e2e_enable_openclaw_cli_timeout
 
 mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" "$OPENAI_LOG")"
-openclaw_e2e_wait_mock_openai "$MOCK_PORT"
+MOCK_PORT="$(openclaw_e2e_wait_mock_openai "$MOCK_PORT" 80 400 "" "$mock_pid" "$OPENAI_LOG")"
 echo "Mock OpenAI provider is ready."
 
 input_fifo_dir="$(mktemp -d "$scenario_tmp/input.XXXXXX")"

@@ -1,4 +1,3 @@
-// Test Skip Inventory tests cover skipped, conditional, todo, and focused test reporting.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -85,112 +84,28 @@ describe("collectTestSkipInventoryReport", () => {
     const report = collectTestSkipInventoryReport({ repoRoot: makeSkipInventoryFixture() });
 
     expect(
-      report.findings.map((finding) => ({
-        file: finding.file,
-        kind: finding.kind,
-        method: finding.method,
-        reason: finding.reason,
-        target: finding.target,
-      })),
+      report.findings.map(({ file, kind, method, reason, target }) => [
+        file,
+        kind,
+        method,
+        reason,
+        target,
+      ]),
     ).toEqual([
-      {
-        file: "extensions/provider/live.test.ts",
-        kind: "alias",
-        method: "skip",
-        reason: "live-gate",
-        target: "describe",
-      },
-      {
-        file: "src/example.test.ts",
-        kind: "call",
-        method: "skip",
-        reason: "explicit-skip",
-        target: "describe",
-      },
-      {
-        file: "src/example.test.ts",
-        kind: "call",
-        method: "skipIf",
-        reason: "platform-gate",
-        target: "it",
-      },
-      {
-        file: "src/example.test.ts",
-        kind: "call",
-        method: "todo",
-        reason: "todo",
-        target: "test",
-      },
-      {
-        file: "src/example.test.ts",
-        kind: "call",
-        method: "only",
-        reason: "focused-only",
-        target: "it",
-      },
-      {
-        file: "src/example.test.ts",
-        kind: "alias",
-        method: "skip",
-        reason: "platform-gate",
-        target: "it",
-      },
-      {
-        file: "src/example.test.ts",
-        kind: "call",
-        method: "skip",
-        reason: "platform-gate",
-        target: "it",
-      },
-      {
-        file: "src/example.test.ts",
-        kind: "call",
-        method: "runIf",
-        reason: "platform-gate",
-        target: "it",
-      },
-      {
-        file: "src/example.test.ts",
-        kind: "call",
-        method: "runIf",
-        reason: "platform-gate",
-        target: "it",
-      },
-      {
-        file: "src/example.test.ts",
-        kind: "alias",
-        method: "skip",
-        reason: "conditional-skip",
-        target: "it",
-      },
-      {
-        file: "src/example.test.ts",
-        kind: "call",
-        method: "only",
-        reason: "focused-only",
-        target: "it",
-      },
-      {
-        file: "src/example.test.ts",
-        kind: "call",
-        method: "skip",
-        reason: "explicit-skip",
-        target: "test",
-      },
-      {
-        file: "test/scripts/test-live.test.ts",
-        kind: "alias",
-        method: "skip",
-        reason: "platform-gate",
-        target: "it",
-      },
-      {
-        file: "ui/src/e2e/chat-flow.e2e.test.ts",
-        kind: "alias",
-        method: "skip",
-        reason: "optional-dependency",
-        target: "describe",
-      },
+      ["extensions/provider/live.test.ts", "alias", "skip", "live-gate", "describe"],
+      ["src/example.test.ts", "call", "skip", "explicit-skip", "describe"],
+      ["src/example.test.ts", "call", "skipIf", "platform-gate", "it"],
+      ["src/example.test.ts", "call", "todo", "todo", "test"],
+      ["src/example.test.ts", "call", "only", "focused-only", "it"],
+      ["src/example.test.ts", "alias", "skip", "platform-gate", "it"],
+      ["src/example.test.ts", "call", "skip", "platform-gate", "it"],
+      ["src/example.test.ts", "call", "runIf", "platform-gate", "it"],
+      ["src/example.test.ts", "call", "runIf", "platform-gate", "it"],
+      ["src/example.test.ts", "alias", "skip", "conditional-skip", "it"],
+      ["src/example.test.ts", "call", "only", "focused-only", "it"],
+      ["src/example.test.ts", "call", "skip", "explicit-skip", "test"],
+      ["test/scripts/test-live.test.ts", "alias", "skip", "platform-gate", "it"],
+      ["ui/src/e2e/chat-flow.e2e.test.ts", "alias", "skip", "optional-dependency", "describe"],
     ]);
     expect(report.summary).toMatchObject({
       findingCount: 14,
@@ -288,5 +203,52 @@ describe("collectTestSkipInventoryReport", () => {
         createTempDir("openclaw-skip-limit-"),
       ]),
     ).toThrow("--limit expects a non-negative integer");
+  });
+
+  it.each([
+    { limit: 1, shown: 1 },
+    { limit: 2, shown: 2 },
+    { limit: 0, shown: 3 },
+  ])("preserves first-seen groups and the global cap with limit $limit", ({ limit, shown }) => {
+    const repoRoot = createTempDir("openclaw-skip-groups-");
+    writeRepoFile(repoRoot, "src/a.test.ts", 'test.todo("a");\n');
+    writeRepoFile(
+      repoRoot,
+      "src/z.test.ts",
+      'it.skip("z", () => {});\nit.only("second", () => {});\n',
+    );
+    const report = collectTestSkipInventoryReport({ repoRoot });
+    const findings = report.findings;
+    report.findings = [...findings.slice(1, 2), ...findings.slice(0, 1), ...findings.slice(2)];
+    const rows = [
+      "- src/z.test.ts (2)",
+      '  L1 it.skip explicit-skip: it.skip("z", () => {});',
+      ...(shown >= 2 ? ['  L2 it.only focused-only: it.only("second", () => {});'] : []),
+      ...(shown === 3 ? ["- src/a.test.ts (1)", '  L1 test.todo todo: test.todo("a");'] : []),
+      ...(shown < 3
+        ? [`... ${3 - shown} more finding(s) not shown; pass --limit 0 to show all.`]
+        : []),
+    ];
+    expect(renderTestSkipInventoryReport(report, { limit })).toBe(
+      [
+        "OpenClaw test skip inventory",
+        "Scanned files: 2",
+        "Findings: 3 in 2 file(s)",
+        "Reasons: explicit-skip: 1, focused-only: 1, todo: 1",
+        "",
+        "Findings:",
+        ...rows,
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("keeps the empty report output unchanged", () => {
+    const report = collectTestSkipInventoryReport({
+      repoRoot: createTempDir("openclaw-skip-empty-"),
+    });
+    expect(renderTestSkipInventoryReport(report)).toBe(
+      "OpenClaw test skip inventory\nScanned files: 0\nFindings: 0 in 0 file(s)\nReasons: none\n\nFindings: none\n",
+    );
   });
 });

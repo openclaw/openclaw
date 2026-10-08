@@ -46,8 +46,9 @@ describe("cron trigger CLI options", () => {
     }
   });
 
-  it("reads --trigger-script client-side and sends trigger metadata on add", async () => {
-    const scriptPath = path.join(fixtureRoot, "watch.js");
+  it.each(["watch.js", "watch.js "])("reads trigger file %j on add", async (fileName) => {
+    const scriptPath = path.join(fixtureRoot, fileName);
+    await fs.writeFile(path.join(fixtureRoot, "watch.js"), "json({ fire: false })", "utf8");
     await fs.writeFile(scriptPath, "  json({ fire: true })  \n", "utf8");
     const program = new Command().exitOverride();
     registerCronAddCommand(program);
@@ -116,8 +117,9 @@ describe("cron trigger CLI options", () => {
     }
   });
 
-  it("reads --script client-side and sends payload budgets on add", async () => {
-    const scriptPath = path.join(fixtureRoot, "job.js");
+  it.each(["job.js", "job.js "])("reads payload file %j and budgets on add", async (fileName) => {
+    const scriptPath = path.join(fixtureRoot, fileName);
+    await fs.writeFile(path.join(fixtureRoot, "job.js"), "return { notify: 'wrong file' }", "utf8");
     await fs.writeFile(scriptPath, "  return { notify: 'done' }  \n", "utf8");
     const program = new Command().exitOverride();
     registerCronAddCommand(program);
@@ -191,8 +193,13 @@ describe("cron trigger CLI options", () => {
     }
   });
 
-  it("reads script payload updates client-side", async () => {
-    const scriptPath = path.join(fixtureRoot, "edit-job.js");
+  it.each(["edit-job.js", "edit-job.js "])("reads payload file %j on edit", async (fileName) => {
+    const scriptPath = path.join(fixtureRoot, fileName);
+    await fs.writeFile(
+      path.join(fixtureRoot, "edit-job.js"),
+      "return { state: { ok: false } }",
+      "utf8",
+    );
     await fs.writeFile(scriptPath, "return { state: { ok: true } }\n", "utf8");
     const program = new Command().exitOverride();
     registerCronEditCommand(program);

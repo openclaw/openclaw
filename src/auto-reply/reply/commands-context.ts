@@ -1,4 +1,3 @@
-/** Builds normalized command context from inbound message and authorization state. */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -16,7 +15,6 @@ export function resolveCommandChannel(ctx: MsgContext): string {
   return normalizeLowercaseStringOrEmpty(ctx.OriginatingChannel ?? ctx.Provider ?? ctx.Surface);
 }
 
-/** Builds command routing/auth metadata consumed by command handlers. */
 export function buildCommandContext(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -53,6 +51,7 @@ export function buildCommandContext(params: {
     accountId: normalizeOptionalString(ctx.AccountId),
     ownerList: auth.ownerList,
     senderIsOwner: auth.senderIsOwner,
+    ...(auth.assertOwnerCurrent ? { assertOwnerCurrent: auth.assertOwnerCurrent } : {}),
     isAuthorizedSender: auth.isAuthorizedSender,
     senderId: auth.senderId,
     abortKey,

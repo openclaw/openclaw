@@ -1,0 +1,225 @@
+import type { SpawnOptions } from "node:child_process";
+import { EventEmitter } from "node:events";
+import { Writable } from "node:stream";
+import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { startFaceTimeAudioPump } from "../src/audio-pump.js";
+
+class FakePipe extends Writable {
+  writes: Buffer[] = [];
+
+  override _write(
+    chunk: Buffer,
+    _encoding: BufferEncoding,
+    callback: (error?: Error | null) => void,
+  ) {
+    this.writes.push(Buffer.from(chunk));
+    callback();
+  }
+}
+
+class FakeProcess extends EventEmitter {
+  readonly pid = 1234;
+  readonly stdin = new FakePipe();
+  readonly stdout = new EventEmitter();
+  readonly stderr = new EventEmitter();
+  readonly kills: Array<NodeJS.Signals | undefined> = [];
+  killed = false;
+
+  kill(signal?: NodeJS.Signals) {
+    this.kills.push(signal);
+    this.killed = true;
+    this.emit("exit", null, signal);
+    return true;
+  }
+}
+
+const spawnMock = vi.hoisted(() =>
+  vi.fn<(command: string, args: string[], options: SpawnOptions) => unknown>(),
+);
+vi.mock("node:child_process", () => ({ spawn: spawnMock }));
+
+describe("FaceTime native audio bridge", () => {
+  let activePump: ReturnType<typeof startFaceTimeAudioPump>;
+  function createPump(overrides: Partial<Parameters<typeof startFaceTimeAudioPump>[0]> = {}) {
+    const processes: FakeProcess[] = [];
+    const spawn = spawnMock.mockImplementation(() => {
+      const process = new FakeProcess();
+      processes.push(process);
+      return process;
+    });
+    activePump = startFaceTimeAudioPump({
+      captureBinary: "/capture",
+      logger: console,
+      onInputAudio() {},
+      ...overrides,
+    });
+    return { pump: activePump, processes, spawn };
+  }
+  beforeEach(() => {
+    spawnMock.mockReset();
+    vi.useFakeTimers();
+  });
+  afterEach(async () => {
+    await activePump.stop();
+    vi.useRealTimers();
+  });
+  it("publishes suppression and route readiness from assembled native lines", async () => {
+    const onInputAudio = vi.fn();
+    const { pump, processes, spawn } = createPump({ onInputAudio });
+
+    expect(spawn.mock.calls[0]?.[0]).toBe("/capture");
+    expect(spawn.mock.calls[0]?.[2]?.stdio).toEqual(["pipe", "pipe", "pipe"]);
+    expect(pump.processOutputSuppressed()).toBe(false);
+    processes[0]?.stderr.emit("data", "facetime-audio-capture: started FaceTime process");
+    expect(pump.processOutputSuppressed()).toBe(false);
+    processes[0]?.stderr.emit("data", " tap\n");
+    await pump.suppressionReady();
+    expect(pump.processOutputSuppressed()).toBe(true);
+    const route = pump.routeReady();
+    processes[0]?.stderr.emit("data", "facetime-audio-capture: verified OpenClaw-Mic input");
+    processes[0]?.stderr.emit("data", " route\n");
+    await route;
+    processes[0]?.stdout.emit("data", Buffer.from([1, 2]));
+    expect(onInputAudio).toHaveBeenCalledWith(Buffer.from([1, 2]));
+  });
+
+  it("assembles fatal markers split across stderr chunks", () => {
+    const onError = vi.fn(async () => false);
+    const { processes } = createPump({ onError });
+
+    processes[0]?.stderr.emit("data", "facetime-audio-capture: fatal-safety");
+    expect(onError).not.toHaveBeenCalled();
+    processes[0]?.stderr.emit("data", "-retained: process tap failed\n");
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "native FaceTime safety monitor reported a fatal error: process tap failed",
+      }),
+    );
+  });
+
+  it("reports playback drain after the separate output process should be audible", async () => {
+    const onPlaybackDrained = vi.fn();
+    const { pump, processes, spawn } = createPump({ onPlaybackDrained });
+
+    const audio = Buffer.alloc(4_800, 4);
+    pump.writeOutputAudio(audio, { itemId: "greeting" });
+    const outputIndex = spawn.mock.calls.findIndex((call) => call[0].endsWith("sox"));
+    expect(outputIndex).toBeGreaterThanOrEqual(0);
+    expect(spawn.mock.calls[outputIndex]?.[1]).toContain("OpenClaw-Feed");
+    expect(processes[outputIndex]?.stdin.writes).toEqual([audio]);
+    expect(processes[0]?.stdin.writes).toEqual([]);
+    pump.finishOutputAudio();
+    expect(pump.playedAudioFrames()).toBe(0);
+    expect(pump.queuedAudioFrames()).toBe(2_400);
+    expect(pump.getPlaybackState()).toEqual([{ itemId: "greeting", audioEndMs: 0 }]);
+    await vi.advanceTimersByTimeAsync(199);
+    expect(onPlaybackDrained).not.toHaveBeenCalled();
+    expect(pump.getPlaybackState()).toEqual([{ itemId: "greeting", audioEndMs: 99 }]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(pump.playedAudioFrames()).toBe(2_400);
+    expect(pump.queuedAudioFrames()).toBe(0);
+    expect(onPlaybackDrained).toHaveBeenCalledWith({
+      generation: 1,
+      playedFrames: 2_400,
+    });
+    expect(pump.getPlaybackState()).toEqual([]);
+  });
+
+  it("retains per-item progress across starvation until the response finishes", async () => {
+    const { pump } = createPump();
+    pump.writeOutputAudio(Buffer.alloc(9_600), { itemId: "prefix" });
+    pump.writeOutputAudio(Buffer.alloc(38_400), { itemId: "answer" });
+    await vi.advanceTimersByTimeAsync(600);
+    expect(pump.getPlaybackState()).toEqual([
+      { itemId: "prefix", audioEndMs: 200 },
+      { itemId: "answer", audioEndMs: 300 },
+    ]);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(pump.queuedAudioFrames()).toBe(0);
+    expect(pump.getPlaybackState()).toEqual([
+      { itemId: "prefix", audioEndMs: 200 },
+      { itemId: "answer", audioEndMs: 800 },
+    ]);
+
+    pump.writeOutputAudio(Buffer.alloc(4_800), { itemId: "answer" });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(pump.getPlaybackState()).toEqual([
+      { itemId: "prefix", audioEndMs: 200 },
+      { itemId: "answer", audioEndMs: 850 },
+    ]);
+    pump.finishOutputAudio();
+    await vi.advanceTimersByTimeAsync(50);
+    expect(pump.getPlaybackState()).toEqual([]);
+
+    pump.writeOutputAudio(Buffer.alloc(4_800), { itemId: "next-answer" });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(pump.getPlaybackState()).toEqual([{ itemId: "next-answer", audioEndMs: 100 }]);
+    pump.finishOutputAudio();
+    expect(pump.getPlaybackState()).toEqual([]);
+  });
+
+  it("invalidates stale drain callbacks when barge-in clears playback", async () => {
+    const onPlaybackDrained = vi.fn();
+    const { pump, processes, spawn } = createPump({ onPlaybackDrained });
+    pump.writeOutputAudio(Buffer.alloc(480), { itemId: "interrupted" });
+    pump.finishOutputAudio();
+    pump.clearOutputAudio();
+    const captureIndex = spawn.mock.calls.findIndex((call) => call[0] === "/capture");
+    const outputIndices = spawn.mock.calls.flatMap((call, index) =>
+      call[0].endsWith("sox") ? [index] : [],
+    );
+    expect(processes[captureIndex]?.kills).toEqual([]);
+    expect(outputIndices).toHaveLength(2);
+    expect(processes[outputIndices[0] ?? -1]?.kills).toEqual(["SIGKILL"]);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(onPlaybackDrained).not.toHaveBeenCalled();
+    expect(pump.queuedAudioFrames()).toBe(0);
+    expect(pump.getPlaybackState()).toEqual([]);
+  });
+
+  it("reports capture-process death as immediate suppression loss", () => {
+    const onSuppressionLost = vi.fn();
+    const { pump, processes } = createPump({
+      onError: vi.fn(async () => false),
+      onSuppressionLost,
+    });
+    processes[0]?.stderr.emit("data", "facetime-audio-capture: started FaceTime process tap\n");
+    processes[0]?.emit("exit", 1, null);
+    expect(pump.processOutputSuppressed()).toBe(false);
+    expect(onSuppressionLost).toHaveBeenCalledOnce();
+  });
+
+  it("does not report intentional media suspension as a playback failure", async () => {
+    const onError = vi.fn(async () => false);
+    const { pump, processes } = createPump({ onError });
+
+    pump.writeOutputAudio(Buffer.alloc(4_800), { itemId: "suspended" });
+    await pump.suspendMedia();
+
+    expect(processes[1]?.kills).toEqual(["SIGKILL"]);
+    expect(onError).not.toHaveBeenCalled();
+    expect(processes[0]?.kills).toEqual([]);
+    expect(pump.getPlaybackState()).toEqual([]);
+    await pump.stop();
+  });
+
+  it("strips credential-shaped environment variables from native children", async () => {
+    await withEnvAsync({ OPENAI_API_KEY: "secret", SAFE_VALUE: "yes" }, async () => {
+      const { pump, processes, spawn } = createPump();
+
+      for (const call of spawn.mock.calls) {
+        expect(call[2].env).not.toHaveProperty("OPENAI_API_KEY");
+        expect(call[2].env).toHaveProperty("SAFE_VALUE", "yes");
+      }
+      await pump.stop();
+      const captureIndex = spawn.mock.calls.findIndex((call) => call[0] === "/capture");
+      const outputIndex = spawn.mock.calls.findIndex((call) => call[0].endsWith("sox"));
+      expect(processes[captureIndex]?.stdin.writes).toEqual([
+        Buffer.from([4, 0, 0, 0, 4, 0, 0, 0, 0]),
+      ]);
+      expect(processes[outputIndex]?.kills).toEqual(["SIGKILL"]);
+    });
+  });
+});

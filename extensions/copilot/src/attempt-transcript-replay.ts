@@ -6,6 +6,20 @@ export type AttemptTranscriptMessage =
   | NonNullable<TranscriptRecorder["message"]>
   | Extract<AgentMessage, { role: "assistant" | "toolResult" }>;
 
+export function userText(content: unknown): string {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content) && content.length === 1) {
+    // SAFETY: Fields stay unknown until checked below; retain primitive access and repeated getter reads.
+    const part = content[0] as { text?: unknown; type?: unknown };
+    if (part?.type === "text" && typeof part.text === "string") {
+      return part.text;
+    }
+  }
+  return JSON.stringify(content) ?? "";
+}
+
 function readAssistantToolCallIds(message: AttemptTranscriptMessage): string[] {
   return message.role === "assistant"
     ? message.content.flatMap((part) => (part.type === "toolCall" ? [part.id] : []))
@@ -63,5 +77,38 @@ export function isCompleteToolGroup(
     results.every(
       (message, index) => message.role === "toolResult" && message.toolCallId === order[index],
     )
+  );
+}
+
+export function isSameUserTurn(
+  candidate: Exclude<AgentMessage, { role: "user" }> | TranscriptRecorder["message"],
+  current: TranscriptRecorder["message"],
+  currentRunUserKey: string,
+): boolean {
+  if (candidate?.role !== "user" || !current) {
+    return false;
+  }
+  if (candidate === current) {
+    return true;
+  }
+  const candidateKey = candidate.idempotencyKey;
+  const currentKey = current.idempotencyKey;
+  if (typeof candidateKey === "string" || typeof currentKey === "string") {
+    if (typeof candidateKey === "string" && typeof currentKey === "string") {
+      return candidateKey === currentKey;
+    }
+    if (
+      typeof candidateKey !== "string" ||
+      typeof currentKey === "string" ||
+      (!candidateKey.startsWith("copilot:") && candidateKey !== currentRunUserKey)
+    ) {
+      return false;
+    }
+  }
+  // The embedded-runner boundary identifies the active user as the last user
+  // and stamps it with this recorder timestamp; historical turns are ineligible.
+  return (
+    candidate.timestamp === current.timestamp &&
+    userText(candidate.content) === userText(current.content)
   );
 }

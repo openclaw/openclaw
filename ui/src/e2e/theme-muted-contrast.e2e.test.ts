@@ -63,7 +63,7 @@ function themeConfigResponse(
   const config = {
     ui: { prefs: { ...(family === "claw" ? {} : { theme: family }), themeMode: mode, accent } },
   };
-  const hash = `theme-contrast-${family}-${mode}`;
+  const hash = `theme-contrast-${family}-${mode}-${accent ?? "default"}`;
   return {
     appliedConfigHash: hash,
     config,
@@ -184,14 +184,14 @@ suite.define(() => {
         await selectedCard.waitFor({ state: "visible" });
         await gateway.waitForRequest("config.get");
         const initialConfigGets = (await gateway.getRequests("config.get")).length;
-        const committed = themeConfigResponse(family, mode, accent);
+        const committed = themeConfigResponse(family, mode, "theme");
         await gateway.deferNext("config.patch");
         await selectedCard.click();
         const patch = await gateway.waitForRequest("config.patch");
         const raw = (patch.params as { raw?: unknown } | undefined)?.raw;
         expect(typeof raw).toBe("string");
         expect(JSON.parse(String(raw))).toMatchObject({
-          ui: { prefs: { theme: family === "claw" ? null : family } },
+          ui: { prefs: { theme: family === "claw" ? null : family, accent: "theme" } },
         });
 
         // Theme clicks apply immediately; the eventual Gateway acknowledgement must not revert them.
@@ -211,6 +211,27 @@ suite.define(() => {
         await expect
           .poll(() => selectedCard.getAttribute("class"))
           .toContain("settings-theme-card--active");
+
+        // Reapply each extreme through the real picker after theme defaults,
+        // rather than accidentally dropping custom-accent contrast coverage.
+        if (accent) {
+          await gateway.setMethodResponse("config.get", themeConfigResponse(family, mode, accent));
+          await page.locator("[data-accent-custom]").fill(accent);
+          const accentPatch = await gateway.waitForRequest("config.patch", { after: 1 });
+          // SAFETY: This is the config.patch request emitted by the exercised picker;
+          // the parsed payload below is checked against its complete prefs contract.
+          expect(JSON.parse((accentPatch.params as { raw: string }).raw)).toEqual({
+            ui: { prefs: { accent } },
+          });
+          await expect
+            .poll(async () => (await gateway.getRequests("config.get")).length)
+            .toBe(initialConfigGets + 2);
+          await expect
+            .poll(() =>
+              page.evaluate(() => document.documentElement.style.getPropertyValue("--accent")),
+            )
+            .toBe(accent);
+        }
 
         const visibleDescription = page.locator(".settings-section__desc").first();
         await visibleDescription.waitFor({ state: "visible" });
@@ -297,9 +318,9 @@ suite.define(() => {
           `${resolved}: actual rendered muted Appearance description, including ancestor backgrounds and opacity`,
         ).toBeGreaterThanOrEqual(4.5);
 
-        const picker = page.locator("#settings-font-chat");
-        await picker.click();
-        const selected = picker.locator("wa-option:state(selected)");
+        const picker = page.locator("openclaw-select-picker:has(#settings-font-chat)");
+        await picker.locator(".picker-select__trigger").click();
+        const selected = picker.locator('[role="option"][aria-selected="true"]');
         await selected.waitFor({ state: "visible" });
         const optionPaint = async (option: typeof selected) => {
           await option.evaluate(finishElementAnimations);
@@ -316,9 +337,9 @@ suite.define(() => {
             };
           });
         };
-        // Options are slotted into a shadow listbox: light-DOM ancestors miss its painted surface.
+        // Composite translucent option fills against the painted menu surface.
         const listboxBackground = await picker
-          .locator('[part="listbox"]')
+          .locator(".picker-select__menu")
           .evaluate((element) => getComputedStyle(element).backgroundColor);
         const assertOptionContrast = async (option: typeof selected) => {
           const paint = await optionPaint(option);
@@ -338,12 +359,12 @@ suite.define(() => {
           }
           return { paint, background, outline: optionColors.outline! };
         };
-        const selectedValue = await selected.getAttribute("value");
+        const selectedValue = await selected.getAttribute("data-value");
         const initialPaint = await optionPaint(selected);
         await page.keyboard.press("ArrowDown");
-        const current = picker.locator("wa-option:state(current)");
-        await expect.poll(() => current.getAttribute("value")).not.toBe(selectedValue);
-        expect(await selected.getAttribute("value")).toBe(selectedValue);
+        const current = picker.locator('[role="option"][data-active]');
+        await expect.poll(() => current.getAttribute("data-value")).not.toBe(selectedValue);
+        expect(await selected.getAttribute("data-value")).toBe(selectedValue);
         await expect
           .poll(async () => (await optionPaint(selected)).background)
           .toBe(initialPaint.background);
@@ -352,11 +373,11 @@ suite.define(() => {
         expect(focused.paint.outline).not.toBe("none");
         expect(focused.paint.outlineWidth).toBeGreaterThanOrEqual(2);
         expect(contrastRatio(focused.outline, focused.background)).toBeGreaterThanOrEqual(3);
-        await picker.locator('wa-option[value="system"]').hover();
-        await assertOptionContrast(picker.locator('wa-option[value="system"]'));
+        await picker.locator('[role="option"][data-value="system"]').hover();
+        await assertOptionContrast(picker.locator('[role="option"][data-value="system"]'));
         await page.keyboard.press("Escape");
         expect(new URL(page.url()).pathname).toBe("/settings/appearance");
-        expect(await selected.getAttribute("value")).toBe(selectedValue);
+        expect(await selected.getAttribute("data-value")).toBe(selectedValue);
 
         if (captureUiProof) {
           await mkdir(path.join(suite.artifactDir, "theme-muted-contrast"), { recursive: true });

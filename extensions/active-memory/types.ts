@@ -1,36 +1,36 @@
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { SessionTranscriptTargetParams } from "openclaw/plugin-sdk/session-transcript-runtime";
 
-const DEFAULT_TIMEOUT_MS = 15_000;
+export const DEFAULT_TIMEOUT_MS = 15_000;
 // CLI-runtime recalls dispatch through a fresh CLI process (spawn + MCP
 // handshake + tool roundtrips); measured runs take 14-20s, so the plain
 // default budget would time out most of them. Explicit timeoutMs config
 // always wins over this default.
-const DEFAULT_CLI_RUNTIME_RECALL_TIMEOUT_MS = 45_000;
-const DEFAULT_AGENT_ID = "main";
-const DEFAULT_MAX_SUMMARY_CHARS = 220;
-const DEFAULT_RECENT_USER_TURNS = 2;
-const DEFAULT_RECENT_ASSISTANT_TURNS = 1;
-const DEFAULT_RECENT_USER_CHARS = 220;
-const DEFAULT_RECENT_ASSISTANT_CHARS = 180;
-const DEFAULT_CACHE_TTL_MS = 15_000;
-const DEFAULT_MAX_CACHE_ENTRIES = 1000;
-const CACHE_SWEEP_INTERVAL_MS = 1000;
-const DEFAULT_MIN_TIMEOUT_MS = 250;
-const DEFAULT_SETUP_GRACE_TIMEOUT_MS = 0;
-const MAX_TIMEOUT_MS = 120_000;
-const MAX_SETUP_GRACE_TIMEOUT_MS = 30_000;
-const DEFAULT_QUERY_MODE = "recent" as const;
-const DEFAULT_ACTIVE_MEMORY_MODE = "escalate" as const;
-const DEFAULT_TRANSCRIPT_DIR = "active-memory";
-const ACTIVE_MEMORY_RECALL_LANE = "active-memory";
-const ACTIVE_MEMORY_CLEANUP_RETRY_DELAYS_MS = [0, 50, 250] as const;
-const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
-const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
-const DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_search", "memory_get"] as const;
-const LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_recall"] as const;
-const MAX_ACTIVE_MEMORY_TOOLS_ALLOW = 32;
-const STRUCTURED_MEMORY_FAILURE_STATUSES = new Set([
+export const DEFAULT_CLI_RUNTIME_RECALL_TIMEOUT_MS = 45_000;
+export const DEFAULT_AGENT_ID = "main";
+export const DEFAULT_MAX_SUMMARY_CHARS = 220;
+export const DEFAULT_RECENT_USER_TURNS = 2;
+export const DEFAULT_RECENT_ASSISTANT_TURNS = 1;
+export const DEFAULT_RECENT_USER_CHARS = 220;
+export const DEFAULT_RECENT_ASSISTANT_CHARS = 180;
+export const DEFAULT_CACHE_TTL_MS = 15_000;
+export const DEFAULT_MAX_CACHE_ENTRIES = 1000;
+export const CACHE_SWEEP_INTERVAL_MS = 1000;
+export const DEFAULT_MIN_TIMEOUT_MS = 250;
+export const DEFAULT_SETUP_GRACE_TIMEOUT_MS = 0;
+export const MAX_TIMEOUT_MS = 120_000;
+export const MAX_SETUP_GRACE_TIMEOUT_MS = 30_000;
+export const DEFAULT_QUERY_MODE = "recent" as const;
+export const DEFAULT_ACTIVE_MEMORY_MODE = "escalate" as const;
+export const DEFAULT_TRANSCRIPT_DIR = "active-memory";
+export const ACTIVE_MEMORY_RECALL_LANE = "active-memory";
+export const ACTIVE_MEMORY_CLEANUP_RETRY_DELAYS_MS = [0, 50, 250] as const;
+export const DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS = 3;
+export const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 60_000;
+export const DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_search", "memory_get"] as const;
+export const LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW = ["memory_recall"] as const;
+export const MAX_ACTIVE_MEMORY_TOOLS_ALLOW = 32;
+export const STRUCTURED_MEMORY_FAILURE_STATUSES = new Set([
   "error",
   "failed",
   "failure",
@@ -47,13 +47,13 @@ const STRUCTURED_MEMORY_FAILURE_STATUSES = new Set([
   "disabled",
   "blocked",
 ]);
-const STRUCTURED_MEMORY_EMPTY_STATUSES = new Set([
+export const STRUCTURED_MEMORY_EMPTY_STATUSES = new Set([
   "not_found",
   "empty",
   "no_results",
   "no_matches",
 ]);
-const ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW = new Set([
+export const ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW = new Set([
   "*",
   "agents_list",
   "apply_patch",
@@ -87,15 +87,19 @@ const ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW = new Set([
   "web_search",
   "write",
 ]);
-const DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS = 32_000;
-const DEFAULT_TRANSCRIPT_READ_MAX_LINES = 2_000;
-const DEFAULT_TRANSCRIPT_READ_MAX_BYTES = 50 * 1024 * 1024;
-const TIMEOUT_PARTIAL_DATA_GRACE_MS = 500;
-const HOOK_TIMEOUT_RECOVERY_GRACE_MS = TIMEOUT_PARTIAL_DATA_GRACE_MS + 1_000;
-const MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS = 480;
-const TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS = 25;
+export const DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS = 32_000;
+export const DEFAULT_TRANSCRIPT_READ_MAX_LINES = 2_000;
+export const DEFAULT_TRANSCRIPT_READ_MAX_BYTES = 50 * 1024 * 1024;
+export const TIMEOUT_PARTIAL_DATA_GRACE_MS = 500;
+export const HOOK_TIMEOUT_RECOVERY_GRACE_MS = TIMEOUT_PARTIAL_DATA_GRACE_MS + 1_000;
+// Optional trigger lookup must give up strictly before the preflight
+// watchdog fires, or the watchdog skips the whole invocation instead of
+// letting model recall continue without trigger context.
+export const TRIGGER_LOOKUP_SETTLE_RESERVE_MS = 50;
+export const MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS = 480;
+export const TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS = 25;
 
-const NO_RECALL_VALUES = new Set([
+export const NO_RECALL_VALUES = new Set([
   "",
   "none",
   "no_reply",
@@ -114,12 +118,12 @@ const NO_RECALL_VALUES = new Set([
   "n/a",
 ]);
 
-const TIMEOUT_BOILERPLATE_PATTERNS = [
+export const TIMEOUT_BOILERPLATE_PATTERNS = [
   /^(?:error:\s*)?(?:the\s+)?(?:llm|model|request|operation|agent)\s+(?:request\s+)?timed out\b/i,
   /^(?:error:\s*)?active-memory timeout after \d+ms\b/i,
 ];
 
-const RECALLED_CONTEXT_LINE_PATTERNS = [
+export const RECALLED_CONTEXT_LINE_PATTERNS = [
   /^🧩\s*active memory:/i,
   /^🔎\s*active memory debug:/i,
   /^🧠\s*memory search:/i,
@@ -128,30 +132,24 @@ const RECALLED_CONTEXT_LINE_PATTERNS = [
   /^active memory:/i,
 ];
 
-type ActiveRecallPluginConfig = Partial<
+export type ActiveRecallPluginConfig = Partial<
   Omit<ResolvedActiveRecallPluginConfig, "timeoutMsIsDefault">
 > & {
   modelFallbackPolicy?: "default-remote" | "resolved-only";
 };
 
-type ResolvedActiveRecallPluginConfig = {
+export type ResolvedActiveRecallPluginConfig = {
   enabled: boolean;
   mode: ActiveMemoryMode;
   agents: string[];
   model?: string;
   modelFallback?: string;
-  allowedChatTypes: Array<"direct" | "group" | "channel" | "explicit">;
+  allowedChatTypes: ActiveMemoryChatType[];
   allowedChatIds: string[];
   deniedChatIds: string[];
   thinking: ActiveMemoryThinkingLevel;
   fastMode?: ActiveMemoryFastMode;
-  promptStyle:
-    | "balanced"
-    | "strict"
-    | "contextual"
-    | "recall-heavy"
-    | "precision-heavy"
-    | "preference-only";
+  promptStyle: ActiveMemoryPromptStyle;
   toolsAllow: string[];
   promptOverride?: string;
   promptAppend?: string;
@@ -173,17 +171,12 @@ type ResolvedActiveRecallPluginConfig = {
   transcriptDir: string;
 };
 
-type ActiveRecallRecentTurn = {
+export type ActiveRecallRecentTurn = {
   role: "user" | "assistant";
   text: string;
 };
 
-type PluginDebugEntry = {
-  pluginId: string;
-  lines: string[];
-};
-
-type ActiveMemorySearchDebug = {
+export type ActiveMemorySearchDebug = {
   backend?: string;
   configuredMode?: string;
   effectiveMode?: string;
@@ -195,44 +188,42 @@ type ActiveMemorySearchDebug = {
   error?: string;
 };
 
-type ActiveRecallResult =
+export type ActiveRecallResult = {
+  elapsedMs: number;
+  searchDebug?: ActiveMemorySearchDebug;
+} & (
   | {
       status: "empty" | "failed" | "no_relevant_memory" | "timeout" | "unavailable";
-      elapsedMs: number;
       summary: string | null;
-      searchDebug?: ActiveMemorySearchDebug;
     }
   | {
       status: "timeout_partial";
-      elapsedMs: number;
       summary: string;
-      searchDebug?: ActiveMemorySearchDebug;
     }
   | {
       status: "ok";
-      elapsedMs: number;
       rawReply: string;
       summary: string;
-      searchDebug?: ActiveMemorySearchDebug;
-    };
+    }
+);
 
-type ActiveMemoryPartialTimeoutData = Partial<RecallSubagentResult> & {
+export type ActiveMemoryPartialTimeoutData = Partial<RecallSubagentResult> & {
   cleanupFailed?: boolean;
 };
 
-type ActiveMemoryPartialTimeoutError = Error & {
+export type ActiveMemoryPartialTimeoutError = Error & {
   activeMemoryPartialData?: ActiveMemoryPartialTimeoutData;
 };
 
-type TranscriptReadLimits = {
+export type TranscriptReadLimits = {
   maxChars?: number;
   maxLines?: number;
   maxBytes?: number;
 };
 
-type ActiveMemoryTranscriptSource = SessionTranscriptTargetParams;
+export type ActiveMemoryTranscriptSource = SessionTranscriptTargetParams;
 
-type RecallSubagentResult = {
+export type RecallSubagentResult = {
   rawReply: string;
   resultStatus?: "failed" | "unavailable";
   transcriptPath?: string;
@@ -241,31 +232,31 @@ type RecallSubagentResult = {
   hasUnavailableMemorySearchResult?: boolean;
 };
 
-type TerminalMemorySearchResult = {
+export type TerminalMemorySearchResult = {
   status: "unavailable";
   hasUsableMemoryResult: boolean;
   searchDebug?: ActiveMemorySearchDebug;
 };
 
-type TerminalMemorySearchWatch = {
+export type TerminalMemorySearchWatch = {
   promise: Promise<TerminalMemorySearchResult>;
   stop: () => void;
 };
 
-type CachedActiveRecallResult = {
+export type CachedActiveRecallResult = {
   expiresAt: number;
   result: ActiveRecallResult;
 };
 
-type ActiveMemoryChatType = "direct" | "group" | "channel" | "explicit";
-type ActiveMemoryMode = "escalate" | "always" | "off";
+export type ActiveMemoryChatType = "direct" | "group" | "channel" | "explicit";
+export type ActiveMemoryMode = "escalate" | "always" | "off";
 
-type ActiveMemoryToggleEntry = {
+export type ActiveMemoryToggleEntry = {
   sessionKey: string;
   disabled: true;
   updatedAt: number;
 };
-type ActiveMemoryThinkingLevel =
+export type ActiveMemoryThinkingLevel =
   | "off"
   | "minimal"
   | "low"
@@ -274,9 +265,11 @@ type ActiveMemoryThinkingLevel =
   | "xhigh"
   | "adaptive"
   | "max";
-type ActiveMemoryFastMode = boolean | "auto";
-type ConversationRecallContext = NonNullable<OpenClawPluginToolContext["conversationRecall"]>;
-type ActiveMemoryPromptStyle =
+export type ActiveMemoryFastMode = boolean | "auto";
+export type ConversationRecallContext = NonNullable<
+  OpenClawPluginToolContext["conversationRecall"]
+>;
+export type ActiveMemoryPromptStyle =
   | "balanced"
   | "strict"
   | "contextual"
@@ -284,87 +277,14 @@ type ActiveMemoryPromptStyle =
   | "precision-heavy"
   | "preference-only";
 
-const ACTIVE_MEMORY_STATUS_PREFIX = "🧩 Active Memory:";
-const ACTIVE_MEMORY_DEBUG_PREFIX = "🔎 Active Memory Debug:";
-const ACTIVE_MEMORY_PLUGIN_TAG = "active_memory_plugin";
-const ACTIVE_MEMORY_CONTEXT_HEADER = "Context:";
-const ACTIVE_MEMORY_OPEN_TAG = `<${ACTIVE_MEMORY_PLUGIN_TAG}>`;
-const ACTIVE_MEMORY_CLOSE_TAG = `</${ACTIVE_MEMORY_PLUGIN_TAG}>`;
-const MAX_LOG_VALUE_CHARS = 300;
-type CircuitBreakerEntry = {
+export const ACTIVE_MEMORY_STATUS_PREFIX = "🧩 Active Memory:";
+export const ACTIVE_MEMORY_DEBUG_PREFIX = "🔎 Active Memory Debug:";
+export const ACTIVE_MEMORY_PLUGIN_TAG = "active_memory_plugin";
+export const ACTIVE_MEMORY_CONTEXT_HEADER = "Context:";
+export const ACTIVE_MEMORY_OPEN_TAG = `<${ACTIVE_MEMORY_PLUGIN_TAG}>`;
+export const ACTIVE_MEMORY_CLOSE_TAG = `</${ACTIVE_MEMORY_PLUGIN_TAG}>`;
+export const MAX_LOG_VALUE_CHARS = 300;
+export type CircuitBreakerEntry = {
   consecutiveTimeouts: number;
   lastTimeoutAt: number;
-};
-
-export {
-  ACTIVE_MEMORY_CLEANUP_RETRY_DELAYS_MS,
-  ACTIVE_MEMORY_CLOSE_TAG,
-  ACTIVE_MEMORY_DEBUG_PREFIX,
-  ACTIVE_MEMORY_OPEN_TAG,
-  ACTIVE_MEMORY_PLUGIN_TAG,
-  ACTIVE_MEMORY_RECALL_LANE,
-  ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW,
-  ACTIVE_MEMORY_STATUS_PREFIX,
-  ACTIVE_MEMORY_CONTEXT_HEADER,
-  CACHE_SWEEP_INTERVAL_MS,
-  DEFAULT_ACTIVE_MEMORY_TOOLS_ALLOW,
-  DEFAULT_ACTIVE_MEMORY_MODE,
-  DEFAULT_AGENT_ID,
-  DEFAULT_CACHE_TTL_MS,
-  DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS,
-  DEFAULT_CIRCUIT_BREAKER_MAX_TIMEOUTS,
-  DEFAULT_MAX_CACHE_ENTRIES,
-  DEFAULT_MAX_SUMMARY_CHARS,
-  DEFAULT_MIN_TIMEOUT_MS,
-  DEFAULT_PARTIAL_TRANSCRIPT_MAX_CHARS,
-  DEFAULT_QUERY_MODE,
-  DEFAULT_RECENT_ASSISTANT_CHARS,
-  DEFAULT_RECENT_ASSISTANT_TURNS,
-  DEFAULT_RECENT_USER_CHARS,
-  DEFAULT_RECENT_USER_TURNS,
-  DEFAULT_CLI_RUNTIME_RECALL_TIMEOUT_MS,
-  DEFAULT_SETUP_GRACE_TIMEOUT_MS,
-  DEFAULT_TIMEOUT_MS,
-  DEFAULT_TRANSCRIPT_DIR,
-  DEFAULT_TRANSCRIPT_READ_MAX_BYTES,
-  DEFAULT_TRANSCRIPT_READ_MAX_LINES,
-  HOOK_TIMEOUT_RECOVERY_GRACE_MS,
-  LANCEDB_ACTIVE_MEMORY_TOOLS_ALLOW,
-  MAX_ACTIVE_MEMORY_SEARCH_QUERY_CHARS,
-  MAX_ACTIVE_MEMORY_TOOLS_ALLOW,
-  MAX_LOG_VALUE_CHARS,
-  MAX_SETUP_GRACE_TIMEOUT_MS,
-  MAX_TIMEOUT_MS,
-  NO_RECALL_VALUES,
-  RECALLED_CONTEXT_LINE_PATTERNS,
-  STRUCTURED_MEMORY_EMPTY_STATUSES,
-  STRUCTURED_MEMORY_FAILURE_STATUSES,
-  TERMINAL_MEMORY_SEARCH_POLL_INTERVAL_MS,
-  TIMEOUT_BOILERPLATE_PATTERNS,
-  TIMEOUT_PARTIAL_DATA_GRACE_MS,
-};
-
-export type {
-  ActiveMemoryChatType,
-  ActiveMemoryMode,
-  ActiveMemoryFastMode,
-  ActiveMemoryPartialTimeoutData,
-  ActiveMemoryPartialTimeoutError,
-  ActiveMemoryPromptStyle,
-  ActiveMemorySearchDebug,
-  ActiveMemoryThinkingLevel,
-  ActiveMemoryToggleEntry,
-  ActiveMemoryTranscriptSource,
-  ActiveRecallPluginConfig,
-  ActiveRecallRecentTurn,
-  ActiveRecallResult,
-  CachedActiveRecallResult,
-  CircuitBreakerEntry,
-  ConversationRecallContext,
-  PluginDebugEntry,
-  RecallSubagentResult,
-  ResolvedActiveRecallPluginConfig,
-  TerminalMemorySearchResult,
-  TerminalMemorySearchWatch,
-  TranscriptReadLimits,
 };

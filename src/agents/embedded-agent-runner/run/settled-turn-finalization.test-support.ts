@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import type { AdmittedRunContext } from "../../admitted-run-context.js";
 import {
@@ -27,14 +28,7 @@ export function createSettledProviderFailureAttempt(
         stopReason: "toolUse",
         content: [{ type: "toolCall", id: "call-write", name: "write", arguments: {} }],
       }),
-      {
-        role: "toolResult",
-        toolCallId: "call-write",
-        toolName: "write",
-        content: [{ type: "text", text: "Note saved" }],
-        isError: false,
-        timestamp: 1,
-      },
+      makeTextToolResult("call-write", "write", "Note saved", false, 1),
       buildEmbeddedRunnerAssistant({
         stopReason: "error",
         errorMessage: "503 upstream connection refused",
@@ -178,10 +172,12 @@ export function projectSettledProviderFailureAttempt(
     didSendViaMessagingTool: () => false,
     getAcceptedSessionSpawns: () => [],
     getAssistantTurnCount: () => 1,
+    hasSuccessfulModelResponse: () => false,
     getCompactionCount: () => 0,
     getHeartbeatToolResponse: () => undefined,
     getItemLifecycle: () => base.itemLifecycle,
     getLastAssistantTextMessageIndex: () => undefined,
+    getKeptAnswer: () => undefined,
     getLastCompactionTokensAfter: () => undefined,
     getLastToolError: () => undefined,
     getLatestMcpAppChannelView: () => undefined,
@@ -191,6 +187,8 @@ export function projectSettledProviderFailureAttempt(
     getMessagingToolSentTexts: () => [],
     getMessagingToolSourceReplyPayloads: () => [],
     getSourceReplyDelivered: () => undefined,
+    getSourceReplyDeliveryState: () => undefined,
+    endsWithSourceProgress: () => false,
     getPendingToolMediaReply: () => undefined,
     getToolAutoDeliveryMediaUrls: () => [],
     getReplayState: () => ({ replayInvalid: false, hadPotentialSideEffects: true }),

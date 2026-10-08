@@ -6,55 +6,57 @@ import {
   normalizeOptionalString,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  readAcpSessionMetaForEntry,
-  resolveSessionStorePathForAcp,
-} from "../acp/runtime/session-meta.js";
+import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
+import { resolveSessionStorePathForAcp } from "../acp/runtime/session-meta.js";
 import { resolveCurrentSessionAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
-import { resolveConfiguredProviderFallback } from "../agents/configured-provider-fallback.js";
 import {
   resolveAuthoredModelContextTokens,
   resolveContextTokensForModelFromCache as resolveContextTokensForModel,
+  resolveModelContextTokenProjectionFromCache as resolveModelContextTokenProjection,
 } from "../agents/context-resolution.js";
 import { waitForContextWindowCacheLoad } from "../agents/context.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import {
+  buildModelAliasIndex,
+  resolveConfiguredPrimaryProviderFallback,
+} from "../agents/model-selection-shared.js";
 import { parseModelRef, resolvePersistedSelectedModelRef } from "../agents/model-selection.js";
+import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../agents/prepared-model-catalog.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
+import { createStatusModelResolver } from "./status-model-auth.js";
 
 function resolveStatusModelRefFromRaw(params: {
   cfg: OpenClawConfig;
   rawModel: string;
   defaultProvider: string;
+  agentId?: string;
 }): { provider: string; model: string } | null {
   const trimmed = params.rawModel.trim();
   if (!trimmed) {
     return null;
   }
-  const configuredModels = params.cfg.agents?.defaults?.models ?? {};
   if (!trimmed.includes("/")) {
-    // Bare model names may be aliases from agents.defaults.models before falling back to default provider.
-    const aliasKey = normalizeLowercaseStringOrEmpty(trimmed);
-    for (const [modelKey, entry] of Object.entries(configuredModels)) {
-      const aliasValue = (entry as { alias?: unknown } | undefined)?.alias;
-      const alias = normalizeOptionalString(aliasValue) ?? "";
-      if (!alias || normalizeOptionalLowercaseString(alias) !== aliasKey) {
-        continue;
+    const aliasIndex = buildModelAliasIndex({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      defaultProvider: params.defaultProvider,
+      allowManifestNormalization: false,
+      allowPluginNormalization: false,
+      // Status must not discover provider metadata while resolving configured aliases.
+      manifestPlugins: [],
+    });
+    return (
+      aliasIndex.byAlias.get(normalizeLowercaseStringOrEmpty(trimmed))?.ref ?? {
+        provider: params.defaultProvider,
+        model: trimmed,
       }
-      const parsed = parseModelRef(modelKey, params.defaultProvider, {
-        allowManifestNormalization: false,
-        allowPluginNormalization: false,
-      });
-      if (parsed) {
-        return parsed;
-      }
-    }
-    return { provider: params.defaultProvider, model: trimmed };
+    );
   }
   return parseModelRef(trimmed, params.defaultProvider, {
     allowManifestNormalization: false,
@@ -71,34 +73,31 @@ function resolveConfiguredStatusModelRef(params: {
   const agentRawModel = params.agentId
     ? resolveAgentModelPrimaryValue(resolveAgentConfig(params.cfg, params.agentId)?.model)
     : undefined;
-  if (agentRawModel) {
-    // Agent-specific primary model wins over global defaults for session status rows.
-    const parsed = resolveStatusModelRefFromRaw({
-      cfg: params.cfg,
-      rawModel: agentRawModel,
-      defaultProvider: params.defaultProvider,
-    });
-    if (parsed) {
-      return parsed;
+  // Agent-specific primary model wins over global defaults for session status rows.
+  for (const rawModel of [
+    agentRawModel,
+    resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model),
+  ]) {
+    if (rawModel) {
+      const parsed = resolveStatusModelRefFromRaw({
+        cfg: params.cfg,
+        rawModel,
+        defaultProvider: params.defaultProvider,
+        agentId: params.agentId,
+      });
+      if (parsed) {
+        return parsed;
+      }
     }
   }
 
-  const defaultsRawModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model);
-  if (defaultsRawModel) {
-    const parsed = resolveStatusModelRefFromRaw({
-      cfg: params.cfg,
-      rawModel: defaultsRawModel,
-      defaultProvider: params.defaultProvider,
-    });
-    if (parsed) {
-      return parsed;
-    }
-  }
-
-  const fallbackProvider = resolveConfiguredProviderFallback({
+  const fallbackProvider = resolveConfiguredPrimaryProviderFallback({
     cfg: params.cfg,
+    agentId: params.agentId,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
+    allowManifestNormalization: false,
+    allowPluginNormalization: false,
   });
   if (fallbackProvider) {
     return fallbackProvider;
@@ -157,18 +156,11 @@ function resolveStatusModelComparisonLabel(params: {
 }
 
 function resolveSessionModelRef(
-  cfg: OpenClawConfig,
+  resolved: { provider: string; model: string },
   entry?:
     | SessionEntry
     | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
-  agentId?: string,
 ): { provider: string; model: string } {
-  const resolved = resolveConfiguredStatusModelRef({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-    agentId,
-  });
   const defaultProvider = resolved.provider || DEFAULT_PROVIDER;
   const providerlessPersisted =
     resolveProviderlessPersistedStatusModelRef({
@@ -227,7 +219,7 @@ function resolveSessionRuntime(params: {
   });
   const runtime = resolveCurrentSessionAgentRuntimeMetadata({
     cfg: params.cfg,
-    agentId: params.agentId ?? "",
+    agentId: params.agentId ?? acpAgentId,
     provider: params.provider,
     model: params.model,
     sessionKey: acpSessionKey,
@@ -250,9 +242,12 @@ function resolveSessionRuntime(params: {
 }
 
 export const statusSummaryRuntime = {
+  getPublishedPreparedModelCatalogOwnerSnapshot,
+  createStatusModelResolver,
   waitForContextWindowCacheLoad,
   resolveAuthoredModelContextTokens,
   resolveContextTokensForModel,
+  resolveModelContextTokenProjection,
   classifySessionKey: classifySessionKind,
   resolveSessionModelRef,
   resolveSessionRuntime,

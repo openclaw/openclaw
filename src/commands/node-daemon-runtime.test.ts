@@ -55,6 +55,7 @@ describe.skipIf(process.platform === "win32")("node-host runtime install boundar
       stdout: JSON.stringify({
         nodeVersion: "26.8.1",
         sqliteVersion: "3.53.4",
+        sqliteProbe: { available: true, version: "3.53.4", text: true, blob: true, json: true },
         nodeSharedSqlite: false,
       }),
       stderr: "",
@@ -74,7 +75,7 @@ describe.skipIf(process.platform === "win32")("node-host runtime install boundar
 
   it("surfaces an exec failure through the install plan without Node upgrade advice", async () => {
     runExec.mockRejectedValue(new Error("spawn EACCES"));
-    await expect(install()).rejects.toThrow(/Node runtime probe failed.*\/usr\/bin\/node.*EACCES/s);
+    await expect(install()).rejects.toThrow(/Node runtime check failed.*\/usr\/bin\/node.*EACCES/s);
   });
 
   it("uses OPENCLAW_WRAPPER even when native runtime probes cannot execute", async () => {

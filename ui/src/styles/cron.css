@@ -15,8 +15,6 @@
   overflow: visible;
 }
 
-/* ── Compact overview chrome ── */
-
 .cron-page[data-panel-mode="overview"] .settings-page {
   gap: var(--space-4);
 }
@@ -38,7 +36,8 @@
   font-size: var(--control-ui-text-xs);
 }
 
-.cron-admin-note svg {
+.cron-admin-note svg,
+.cron-row-run svg {
   width: 12px;
   height: 12px;
 }
@@ -51,8 +50,6 @@
   gap: var(--space-4);
   min-width: 0;
 }
-
-/* ── List toolbar ── */
 
 .cron-toolbar {
   display: flex;
@@ -100,7 +97,9 @@
   pointer-events: none;
 }
 
-.cron-search-box__icon svg {
+.cron-search-box__icon svg,
+.cron-trigger-icon svg,
+.cron-trigger-summary svg {
   width: 100%;
   height: 100%;
   stroke: currentColor;
@@ -134,7 +133,8 @@
   gap: 6px;
 }
 
-.cron-new-task svg {
+.cron-new-task svg,
+.cron-filter-popover__trigger svg {
   width: 14px;
   height: 14px;
 }
@@ -147,7 +147,9 @@
   flex: 0 0 auto;
 }
 
-.cron-refresh svg {
+.cron-refresh svg,
+.cron-detail-actions .btn svg,
+.cron-trigger-summary svg {
   width: 13px;
   height: 13px;
 }
@@ -179,11 +181,6 @@
   justify-content: center;
   padding: 0;
   height: 32px;
-}
-
-.cron-filter-popover__trigger svg {
-  width: 14px;
-  height: 14px;
 }
 
 .cron-filter-popover__panel {
@@ -229,7 +226,7 @@
   grid-template-columns: var(--cron-table-columns);
   gap: var(--space-3);
   align-items: center;
-  padding: 0 var(--space-4);
+  padding: var(--space-2) var(--space-4);
 }
 
 .cron-table__head {
@@ -238,14 +235,10 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  padding-top: var(--space-2);
-  padding-bottom: var(--space-2);
   border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
 }
 
 .cron-table__row {
-  padding-top: var(--space-2);
-  padding-bottom: var(--space-2);
   cursor: var(--cursor-action);
   transition: background var(--duration-fast) var(--ease-out);
 }
@@ -289,7 +282,9 @@
   color: var(--muted);
 }
 
-.cron-table__state svg {
+.cron-table__state svg,
+.cron-back svg,
+.cron-condition-activity__icon svg {
   width: 13px;
   height: 13px;
   stroke: currentColor;
@@ -347,7 +342,8 @@
   min-width: 0;
 }
 
-.cron-table__name-text {
+.cron-table__name-text,
+.cron-table__cell-value {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -393,13 +389,6 @@
 
 .cron-table__cell-label {
   display: none;
-}
-
-.cron-table__cell-value {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .cron-table__last {
@@ -462,11 +451,6 @@
   flex: 0 0 auto;
 }
 
-.cron-row-run svg {
-  width: 12px;
-  height: 12px;
-}
-
 .cron-empty-state {
   padding: var(--space-6) var(--space-4);
   display: grid;
@@ -481,13 +465,12 @@
   font-weight: 650;
 }
 
-.cron-empty-state__copy {
+.cron-empty-state__copy,
+.cron-help {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
   line-height: 1.45;
 }
-
-/* ── Detail view ── */
 
 .cron-back-row {
   display: flex;
@@ -509,13 +492,6 @@
 
 .cron-back:hover {
   color: var(--text-strong);
-}
-
-.cron-back svg {
-  width: 13px;
-  height: 13px;
-  stroke: currentColor;
-  fill: none;
 }
 
 .cron-detail-header {
@@ -590,13 +566,6 @@
   flex: 0 0 auto;
 }
 
-.cron-detail-actions .btn svg {
-  width: 13px;
-  height: 13px;
-}
-
-/* ── Editor ── */
-
 /* Bare fieldset wrapper so busy-state disabling covers every section. */
 .cron-editor {
   display: flex;
@@ -664,12 +633,6 @@
   width: 100%;
 }
 
-.cron-help {
-  color: var(--muted);
-  font-size: var(--control-ui-text-sm);
-  line-height: 1.45;
-}
-
 .cron-error {
   color: var(--danger);
 }
@@ -697,7 +660,6 @@
   border-color: var(--danger);
 }
 
-/* Human-readable schedule line under the schedule rows. */
 .cron-schedule-summary {
   display: flex;
   align-items: center;
@@ -733,14 +695,6 @@
   vertical-align: middle;
 }
 
-.cron-trigger-icon svg,
-.cron-trigger-summary svg {
-  width: 100%;
-  height: 100%;
-  stroke: currentColor;
-  fill: none;
-}
-
 .cron-trigger-summary {
   display: inline-flex;
   align-items: center;
@@ -750,11 +704,6 @@
   font-size: var(--control-ui-text-xs);
   font-weight: 600;
   vertical-align: middle;
-}
-
-.cron-trigger-summary svg {
-  width: 13px;
-  height: 13px;
 }
 
 .cron-trigger-script {
@@ -772,8 +721,6 @@
 .cron-advanced > .settings-group {
   margin-top: var(--space-3);
 }
-
-/* Validation status */
 
 .cron-form-status {
   border: 1px solid var(--danger-subtle);
@@ -836,8 +783,6 @@
   line-height: 1.4;
 }
 
-/* Job actions menu */
-
 .cron-job-menu {
   position: relative;
 }
@@ -878,8 +823,6 @@
   color: var(--danger);
 }
 
-/* ── Run history ── */
-
 .cron-runs {
   display: flex;
   flex-direction: column;
@@ -908,13 +851,6 @@
 .cron-condition-activity__icon {
   display: inline-flex;
   color: var(--accent-2);
-}
-
-.cron-condition-activity__icon svg {
-  width: 13px;
-  height: 13px;
-  stroke: currentColor;
-  fill: none;
 }
 
 .cron-condition-activity__metrics {
@@ -1140,7 +1076,7 @@
   }
 
   .cron-editor-actions {
-    padding-bottom: calc(var(--space-3) + var(--safe-area-bottom));
+    padding-bottom: var(--space-3);
   }
 
   .cron-editor-actions > .btn {
@@ -1153,8 +1089,6 @@
     -webkit-overflow-scrolling: touch;
   }
 }
-
-/* ── Responsive ── */
 
 @media (max-width: 900px) {
   /* Keep every table fact, but label and arrange it as a compact card. */
@@ -1222,11 +1156,6 @@
     justify-content: center;
     font-size: 0;
   }
-
-  .cron-new-task svg {
-    width: 14px;
-    height: 14px;
-  }
 }
 
 @media (max-width: 400px) {
@@ -1245,7 +1174,7 @@
 }
 
 .shell--embed-settings .cron-editor-actions {
-  padding-bottom: calc(var(--space-3) + var(--safe-area-bottom));
+  padding-bottom: var(--space-3);
 }
 
 /* Web Awesome popup surfaces own positioning, dismissal, and focus. */
@@ -1263,8 +1192,8 @@
   width: min(280px, calc(100vw - 48px));
 }
 
-.cron-job-menu::part(menu) {
-  min-width: 170px;
+.cron-job-menu::part(menu),
+.cron-filter-dropdown__details::part(menu) {
   padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
@@ -1272,11 +1201,10 @@
   box-shadow: var(--overlay-shadow);
 }
 
+.cron-job-menu::part(menu) {
+  min-width: 170px;
+}
+
 .cron-filter-dropdown__details::part(menu) {
   width: min(300px, calc(100vw - 48px));
-  padding: var(--menu-padding);
-  border: 1px solid var(--overlay-border);
-  border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
-  box-shadow: var(--overlay-shadow);
 }

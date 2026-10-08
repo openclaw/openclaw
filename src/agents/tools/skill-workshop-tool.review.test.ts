@@ -160,7 +160,7 @@ describe("skill_workshop review mode", () => {
   it("selects a pending proposal for revision from a configured agent directory", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-review-agent-dir-");
     const agentDir = await tempDirs.make("openclaw-skill-workshop-review-agent-state-");
-    const config = { agents: { entries: { main: { default: true, agentDir } } } };
+    const config = { agents: { entries: { main: { agentDir } } } };
     const foregroundTool = createSkillWorkshopTool({ workspaceDir, config });
     const created = await foregroundTool.execute("create-configured", {
       action: "create",
@@ -592,6 +592,6 @@ describe("skill_workshop review mode", () => {
       }),
     ).rejects.toThrow("reached its proposal mutation limit");
     expect(proposalMutationBudget.mutatedProposalIds).toBeUndefined();
-    expect(proposalMutationBudget.failedMutations).toBe(1);
+    expect(proposalMutationBudget.remaining).toBe(0);
   });
 });

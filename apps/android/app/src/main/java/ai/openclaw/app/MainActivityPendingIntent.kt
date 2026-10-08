@@ -8,15 +8,11 @@ import android.content.Intent
 internal fun mainActivityPendingIntent(
   context: Context,
   requestCode: Int,
-): PendingIntent {
-  val intent =
-    Intent(context, MainActivity::class.java).apply {
-      flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-    }
-  return PendingIntent.getActivity(
+): PendingIntent =
+  PendingIntent.getActivity(
     context,
     requestCode,
-    intent,
+    Intent(context, MainActivity::class.java)
+      .setFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
   )
-}

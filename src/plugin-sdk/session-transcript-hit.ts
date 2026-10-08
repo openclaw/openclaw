@@ -1,7 +1,5 @@
-// Session transcript hit helpers describe and load matched transcript snippets for plugins.
 import path from "node:path";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
-import { uniqueStrings } from "../../packages/normalization-core/src/string-normalization.js";
 import { parseUsageCountedSessionIdFromFileName } from "../config/sessions/artifacts.js";
 import { loadCombinedSessionStoreForGatewayCore as loadGatewaySessionStore } from "../config/sessions/combined-store-gateway.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -26,7 +24,12 @@ export function loadCombinedSessionStoreForGateway(
   cfg: OpenClawConfig,
   opts: { agentId?: string; configuredAgentsOnly?: boolean } = {},
 ) {
-  const result = loadGatewaySessionStore(cfg, { ...opts, includeIncognito: false });
+  // This published view has no projection option; installed plugins receive complete entries.
+  const result = loadGatewaySessionStore(cfg, {
+    ...opts,
+    includeIncognito: false,
+    projection: "full",
+  });
   return {
     storePath: result.storePath,
     // Plugin search hits can be re-persisted into durable transcripts, so the
@@ -107,9 +110,8 @@ export function resolveTranscriptStemToSessionKeys(params: {
       matches.push(sessionKey);
     }
   }
-  const deduped = uniqueStrings(matches);
-  if (deduped.length > 0) {
-    return deduped;
+  if (matches.length > 0) {
+    return matches;
   }
   const archivedOwnerAgentId = normalizeOptionalString(params.archivedOwnerAgentId);
   if (!archivedOwnerAgentId) {

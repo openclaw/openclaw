@@ -10,6 +10,8 @@ export type ProviderLocalServiceTarget = {
   headers?: HeadersInit;
   service?: ModelProviderLocalServiceConfig;
   reconcile?: ProviderLocalServiceReconciler;
+  /** Reports readiness waits only; reconciliation and request work stay outside. */
+  onReadinessWait?: (waiting: boolean) => void;
 };
 
 /** Configured provider endpoint whose host-owned local service may be leased. */
@@ -49,18 +51,14 @@ function readConfiguredProviderBaseUrl(
 function normalizeProviderBaseUrl(value: string): string | undefined {
   const trimmed = value.trim();
   const candidate = /^[a-z][a-z\d+.-]*:\/\//iu.test(trimmed) ? trimmed : `http://${trimmed}`;
-  try {
-    const url = new URL(candidate);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return undefined;
-    }
-    url.search = "";
-    url.hash = "";
-    url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
-    return url.toString().replace(/\/$/u, "");
-  } catch {
+  const url = URL.parse(candidate);
+  if (!url || (url.protocol !== "http:" && url.protocol !== "https:")) {
     return undefined;
   }
+  url.search = "";
+  url.hash = "";
+  url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
+  return url.toString().replace(/\/$/u, "");
 }
 
 function configuredProviderBaseUrlVariants(value: string): Set<string> {

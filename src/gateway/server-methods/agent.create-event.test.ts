@@ -2,11 +2,11 @@
  * Tests agent creation event emission from gateway agent methods.
  */
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   forgetActiveSessionForShutdown,
   listActiveSessionsForShutdown,
@@ -44,7 +44,7 @@ vi.mock("../../commands/agent.js", () => ({
 
 vi.mock("../../agents/prepared-model-runtime.js", () => ({
   acquireAgentRunPreparedModelRuntime: vi.fn(async () => ({
-    release: vi.fn(),
+    [Symbol.asyncDispose]: vi.fn(async () => {}),
     snapshot: {},
   })),
   loadPublishedGatewayReplyDispatchRuntime: vi.fn(async ({ agentId }: { agentId: string }) => ({
@@ -60,10 +60,6 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime: {},
 }));
 
-vi.mock("../../tasks/detached-task-runtime.js", () => ({
-  createRunningTaskRun: vi.fn(),
-}));
-
 import { agentHandlers } from "./agent.js";
 
 function firstMockCall<T extends readonly unknown[]>(mock: { mock: { calls: readonly T[] } }) {
@@ -71,11 +67,12 @@ function firstMockCall<T extends readonly unknown[]>(mock: { mock: { calls: read
 }
 
 describe("agent handler session create events", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-agent-create-event-");
   let tempDir: string;
   let storePath: string;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-create-event-"));
+    tempDir = sessionDirs.make();
     storePath = path.join(tempDir, "sessions.json");
     configMocks.storePath = storePath;
     configMocks.workspaceDir = tempDir;
@@ -85,11 +82,10 @@ describe("agent handler session create events", () => {
     await fs.writeFile(storePath, "{}\n", "utf8");
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     for (const entry of listActiveSessionsForShutdown()) {
       forgetActiveSessionForShutdown(entry.sessionId);
     }
-    await fs.rm(tempDir, { recursive: true, force: true });
     vi.restoreAllMocks();
   });
 
@@ -127,7 +123,7 @@ describe("agent handler session create events", () => {
     const responseCall = firstMockCall(respond) as
       | [boolean, { status?: string; runId?: string }, unknown, { runId?: string }]
       | undefined;
-    expect(responseCall?.[0]).toBe(true);
+    expect(responseCall?.[0], JSON.stringify(responseCall)).toBe(true);
     expect(responseCall?.[1]?.status).toBe("accepted");
     expect(responseCall?.[1]?.runId).toBe("idem-agent-create-event");
     expect(responseCall?.[2]).toBeUndefined();
@@ -149,7 +145,6 @@ describe("agent handler session create events", () => {
         expect(call?.[3]).toEqual({
           agentId: "main",
           dropIfSlow: true,
-          sessionKeys: ["agent:main:subagent:create-test"],
         });
       },
       { timeout: 2_000, interval: 5 },

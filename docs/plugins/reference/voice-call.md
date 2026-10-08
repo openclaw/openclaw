@@ -15,7 +15,7 @@ OpenClaw voice-call plugin for Twilio, Telnyx, and Plivo phone calls.
 ## Distribution
 
 - Package: `@openclaw/voice-call`
-- Install route: npm or ClawHub
+- Install route: npm or ClawHub: `clawhub:@openclaw/voice-call`
 
 ## Surface
 

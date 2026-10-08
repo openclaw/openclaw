@@ -66,7 +66,27 @@ Selects the agent whose model and credentials own ambient OpenClaw system work: 
 }
 ```
 
-An explicit request `agentId` always wins, followed by `systemAgent.agentId`, a retained legacy default owner, and finally the sole configured agent. Delegated consults with a requesting agent keep that requester as their owner. The four reads above opt in individually; other agent-scoped Gateway methods, such as `tools.*`, `commands.*`, chat history, and session-catalog reads, do not use this setting as a general default. Surfaces that pick one agent's view also keep requiring an explicit choice, because silently adopting this owner would hide the other agents: `openclaw sessions` (add `--agent <id>` or `--all-agents`), `openclaw hooks` status, `openclaw models`, stored session lookup by id, and TUI startup. Ambient work in an ownerless multi-agent fleet fails with an actionable error, except queued-delivery recovery, which records the failing delivery and keeps draining the rest of the queue. Upgrade-only ownership lives at `agents.defaults.authInheritance.agentId` for inherited credentials and `agents.defaults.sessionStore.agentId` for retired `main` session rows or unscoped rows in a fixed `session.store`.
+An explicit request `agentId` always wins, followed by `systemAgent.agentId`, a legacy default owner when ownership is not explicit, and finally the sole configured agent. Retained migration provenance alone never designates an explicit fleet's runtime default. Delegated consults with a requesting agent keep that requester as their owner.
+
+With `agents.ownership: "explicit"`, this setting also supplies the recorded default
+for operations that support default-agent selection, including the agent-list
+badge, unbound channel routing, unscoped Gateway reads, `openclaw sessions`,
+`openclaw hooks` status, and TUI startup. Doctor records the migrated default here
+so these operations keep the same owner after restart. Explicit bindings, requests,
+and session-store owners take precedence. Use `--agent <id>` to select a different
+agent or `openclaw sessions --all-agents` to inspect the whole fleet. Operations
+that require explicit selection, such as `openclaw models`, keep that requirement.
+
+An ownerless multi-agent fleet has no default badge. Set a configured id with
+`openclaw config set agents.defaults.systemAgent.agentId <id>`. A sole configured
+agent can still own unqualified Gateway session requests without a saved default
+designation. Ambient work
+without an owner fails with an actionable error, except queued-delivery recovery,
+which records the failing delivery and keeps draining the rest of the queue.
+Changing the runtime default does not relocate existing workspaces or legacy data.
+Upgrade-only ownership lives at `agents.defaults.authInheritance.agentId` for
+inherited credentials and `agents.defaults.sessionStore.agentId` for retired
+`main` session rows or unscoped rows in a fixed `session.store`.
 
 ## `agents.defaults.compaction`
 
@@ -106,7 +126,7 @@ An explicit request `agentId` always wins, followed by `systemAgent.agentId`, a 
 - `mode`: `default` or `safeguard` (chunked summarization for long histories). See [Compaction](/concepts/compaction).
 - `provider`: id of a registered compaction provider plugin. When set, the provider's `summarize()` is called instead of built-in LLM summarization. Falls back to built-in on failure. Setting a provider forces `mode: "safeguard"`. See [Compaction](/concepts/compaction).
 - `thinkingLevel`: thinking level used only for embedded OpenClaw compaction summaries (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, `max`, `ultra`, or `inherit`). When omitted, the provider can supply a compaction preference; otherwise it defaults to `low`. Native local Ollama prefers `off` so summarization does not spend its request budget on thinking. Set `inherit` to reuse the session's current thinking level, or choose an explicit level to override the provider default. The selected level is clamped to the compaction model/runtime. Native Codex app-server compaction ignores this setting because the native compact request has no per-operation thinking override; OpenClaw logs a warning when configured.
-- `timeoutSeconds`: safety window for each model request in built-in compaction. Multi-stage compaction refreshes the window when its next serial model request starts, so a complete compaction can exceed this value while an unresponsive request is still aborted. Plugin-owned compaction receives one window for the complete operation. Default: `180`.
+- `timeoutSeconds`: how long a built-in compaction model request may go without progress. Each request start and each streamed output token (text, reasoning or tool-call deltas; not keepalives) refreshes the window, so a slow request that keeps streaming finishes while a silent one is aborted after one window. The complete compaction stops after 10 windows (30 minutes by default) even if it keeps streaming. This also applies when a plugin context engine calls `delegateCompactionToRuntime`; the plugin's own compaction work receives one window for the complete operation. Default: `180`.
 - `keepRecentTokens`: agent cut-point budget for keeping the most recent transcript tail verbatim. Default: `20000`.
 - `recentTurnsPreserve`: number of most recent user/assistant turns kept verbatim outside safeguard summarization. Default: `3`.
 - `identifierPolicy`: `strict` (default) or `off`. `strict` prepends built-in opaque identifier retention guidance during compaction summarization.
@@ -117,7 +137,7 @@ An explicit request `agentId` always wins, followed by `systemAgent.agentId`, a 
 - `model`: optional `provider/model-id` or bare alias from `agents.defaults.models` for compaction summarization only. Bare aliases resolve before dispatch; configured literal model IDs retain precedence on collisions. Use this when the main session should keep one model but compaction summaries should run on another; when unset, compaction uses the session's primary model.
 - `maxActiveTranscriptBytes`: byte threshold (`number` or strings like `"20mb"`) that opts in to normal local compaction before a run when the transcript window the model sees (everything since the latest compaction or reset, plus its kept tail) reaches the threshold. For Codex app-server sessions, the same threshold caps native rollout transcripts and oversized native threads restart fresh. Disabled when unset or `0`. When a context engine returns an explicit compacted successor identity, OpenClaw adopts it; the built-in SQLite compactor keeps the current identity.
 - `notifyUser`: when `true`, sends brief context-maintenance notices to the user: when compaction starts and completes (for example, "Compacting context..." and "Compaction complete"), and when a pre-compaction memory flush is exhausted so the reply continues in a degraded state (for example, "Memory maintenance temporarily failed; continuing your reply."). Disabled by default to keep these notices silent.
-- `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. Set `model` to an exact provider/model such as `ollama/qwen3:8b` when this housekeeping turn should stay on a local model; the override does not inherit the active session fallback chain. `forceFlushTranscriptBytes` forces the flush when the model-visible transcript window reaches the threshold even if token counters are stale; after compaction, that window includes the retained tail and subsequent turns rather than discarded history. Skipped when workspace is read-only.
+- `memoryFlush`: silent agentic turn before auto-compaction to store durable memories. The host resolves these settings with the active context window and fills timing fields that the selected memory provider omits from its plan. Set `model` to an exact provider/model such as `ollama/qwen3:8b` when this housekeeping turn should stay on a local model; the override does not inherit the active session fallback chain. `forceFlushTranscriptBytes` forces the flush when the model-visible transcript window reaches the threshold even if token counters are stale; after compaction, that window includes the retained tail and subsequent turns rather than discarded history. File-arm providers require writable workspace access; tools-arm providers do not.
 
 Custom compaction instructions are code-owned. Implement a compaction provider
 plugin with `summarize()` for custom summary construction, and use
@@ -135,6 +155,12 @@ Prunes **old tool results** from in-memory context before sending to the LLM. Do
     defaults: {
       contextPruning: {
         mode: "cache-ttl", // off (default) | cache-ttl
+        ttl: "1h", // duration string; bare numbers are minutes (default 5m)
+        tools: { allow: [], deny: [] }, // tool names eligible for / excluded from pruning
+        hardClear: {
+          enabled: true, // false skips the hard-clear step
+          placeholder: "[Old tool result content cleared]",
+        },
       },
     },
   },
@@ -144,6 +170,9 @@ Prunes **old tool results** from in-memory context before sending to the LLM. Do
 <Accordion title="cache-ttl mode behavior">
 
 - `mode: "cache-ttl"` enables pruning passes.
+- `ttl` sets how long a cache entry is considered fresh before a new pruning round can start. It is a duration string whose bare numbers are minutes; the built-in default is 5 minutes, and the bundled Anthropic plugin seeds `1h`.
+- `tools.allow` and `tools.deny` scope which tool names are prunable.
+- `hardClear.enabled: false` skips the hard-clear step, and `hardClear.placeholder` replaces the default `[Old tool result content cleared]` text.
 - Pruning soft-trims oversized tool results first, then hard-clears older tool results if needed.
 
 **Soft-trim** keeps beginning + end and inserts `...` in the middle.

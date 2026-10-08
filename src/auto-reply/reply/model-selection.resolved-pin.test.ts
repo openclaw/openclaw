@@ -1,0 +1,451 @@
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
+import {
+  getContextWindowCaches,
+  providerContextTokenCacheKey,
+} from "../../agents/context-cache.js";
+import { resetContextWindowCacheForTest } from "../../agents/context.test-support.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
+import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
+import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
+import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
+import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
+
+vi.mock("../../agents/auth-profiles.runtime.js", () => ({
+  ensureAuthProfileStore: () => ({ version: 1, profiles: {} }),
+}));
+
+beforeEach(() => resetContextWindowCacheForTest());
+afterEach(() => {
+  resetPluginRuntimeStateForTest();
+  resetContextWindowCacheForTest();
+});
+
+test("keeps thinking defaults separate for distinct literal model IDs", async () => {
+  await withStateDirEnv("reply-thinking-identities-", async () => {
+    const selection = await createModelSelectionState({
+      agentId: "main",
+      cfg: { plugins: { enabled: false } },
+      agentCfg: undefined,
+      defaultProvider: "custom",
+      defaultModel: "model",
+      provider: "custom",
+      model: "model",
+      hasModelDirective: false,
+      preparedModelCatalog: {
+        routeVariants: [],
+        entries: [
+          { provider: "custom", id: "model", name: "Plain", reasoning: false },
+          { provider: "custom", id: "custom/model", name: "Namespaced", reasoning: true },
+        ],
+      },
+    });
+    expect(
+      await selection.resolveDefaultThinkingLevel({
+        provider: "custom",
+        model: "model",
+        agentRuntime: "openclaw",
+      }),
+    ).toBe("off");
+    expect(
+      await selection.resolveDefaultThinkingLevel({
+        provider: "custom",
+        model: "custom/model",
+        agentRuntime: "openclaw",
+      }),
+    ).toBe("medium");
+  });
+});
+
+test.each(["origin", "notice"])(
+  "resets a heartbeat fallback whose %s names another literal model",
+  async (source) => {
+    await withStateDirEnv("reply-heartbeat-origin-", async () => {
+      const entry: SessionEntry = {
+        sessionId: "heartbeat",
+        updatedAt: 1,
+        providerOverride: "custom",
+        modelOverride: "fallback",
+        modelOverrideSource: "auto",
+        modelOverrideRouteResolution: "resolved",
+        ...(source === "origin"
+          ? {
+              modelOverrideFallbackOriginProvider: "custom",
+              modelOverrideFallbackOriginModel: "model",
+            }
+          : {
+              fallbackNotice: {
+                kind: "active",
+                selectedModel: "custom/model",
+                activeModel: "custom/fallback",
+              },
+            }),
+      };
+      const selection = await createModelSelectionState({
+        agentId: "main",
+        cfg: { plugins: { enabled: false } },
+        agentCfg: undefined,
+        sessionEntry: entry,
+        sessionStore: { heartbeat: entry },
+        sessionKey: "heartbeat",
+        defaultProvider: "custom",
+        defaultModel: "custom/model",
+        provider: "custom",
+        model: "fallback",
+        hasModelDirective: false,
+        isHeartbeat: true,
+      });
+      expect(selection).toMatchObject({
+        provider: "custom",
+        model: "custom/model",
+        resetModelOverride: true,
+        resetModelOverrideReason: "stale",
+      });
+      expect(entry.modelOverride).toBeUndefined();
+    });
+  },
+);
+
+const metadataSnapshot = createPluginMetadataSnapshotFixture({
+  plugins: [
+    {
+      id: "fixture",
+      providers: ["custom", "demo-cli"],
+      modelIdNormalization: {
+        providers: { custom: { aliases: { latest: "middle", middle: "final" } } },
+      },
+    },
+  ],
+});
+
+type SelectionCase = {
+  name: string;
+  pin: string;
+  expected: string;
+  allow?: string[];
+  raw?: boolean;
+  disallowed?: boolean;
+  inherited?: boolean;
+  locked?: boolean;
+  configuredProvider?: boolean;
+  heartbeat?: boolean;
+  operatorRestricted?: boolean;
+  operatorRejected?: boolean;
+};
+
+test.each<SelectionCase>([
+  { name: "resolved alias-like model", pin: "middle", expected: "middle" },
+  { name: "legacy raw model normalized once", pin: "latest", expected: "middle", raw: true },
+  { name: "explicit heartbeat override", pin: "middle", expected: "heartbeat", heartbeat: true },
+  { name: "role-denied stored pin", pin: "middle", expected: "default", operatorRestricted: true },
+  {
+    name: "role-denied inherited pin",
+    pin: "middle",
+    expected: "default",
+    inherited: true,
+    operatorRestricted: true,
+  },
+  {
+    name: "role-denied locked pin",
+    pin: "middle",
+    expected: "middle",
+    locked: true,
+    operatorRestricted: true,
+    operatorRejected: true,
+  },
+  {
+    name: "resolved prefix rejected by a colliding exact allowlist",
+    pin: "custom/model",
+    expected: "default",
+    allow: ["custom/default", "custom/model"],
+    disallowed: true,
+  },
+  {
+    name: "inherited raw prefix allowed as the plain model",
+    pin: "custom/model",
+    expected: "model",
+    allow: ["custom/default", "custom/model"],
+    raw: true,
+    inherited: true,
+  },
+  {
+    name: "locked resolved prefix outside the exact allowlist",
+    pin: "custom/model",
+    expected: "custom/model",
+    allow: ["custom/default", "custom/model"],
+    locked: true,
+  },
+  {
+    name: "inherited resolved prefix allowed by its namespace wildcard",
+    pin: "custom/model",
+    expected: "custom/model",
+    allow: ["custom/default", "custom/custom/*"],
+    inherited: true,
+  },
+  {
+    name: "resolved prefix allowed by its exact configured ref",
+    pin: "custom/model",
+    expected: "custom/model",
+    allow: ["custom/default", "custom/custom/model"],
+    configuredProvider: true,
+  },
+])("selects $name through the reply owner", async (fixture) => {
+  await withStateDirEnv("reply-resolved-pin-", async () => {
+    const allow = fixture.allow ?? (fixture.disallowed ? ["custom/default"] : undefined);
+    const cfg: OpenClawConfig = {
+      plugins: { enabled: false },
+      agents: {
+        entries: { main: {} },
+        defaults: {
+          model: "custom/default",
+          ...(allow ? { modelPolicy: { allow } } : {}),
+        },
+      },
+      ...(fixture.configuredProvider
+        ? {
+            models: {
+              providers: {
+                custom: {
+                  api: "openai-responses",
+                  baseUrl: "https://custom.example/v1",
+                  models: [],
+                },
+              },
+            },
+          }
+        : {}),
+    };
+    const registry = createEmptyPluginRegistry();
+    setActivePluginRegistry(registry);
+    const provider = "custom";
+    const pinnedEntry: SessionEntry = { sessionId: "resolved-pin", updatedAt: 1 };
+    applyModelOverrideToSessionEntry({
+      entry: pinnedEntry,
+      selection: { provider, model: fixture.pin },
+    });
+    if (fixture.raw) {
+      delete pinnedEntry.modelOverrideRouteResolution;
+    }
+    const entry: SessionEntry = fixture.inherited
+      ? { sessionId: "child", updatedAt: 1 }
+      : pinnedEntry;
+    if (fixture.locked) {
+      entry.modelSelectionLocked = true;
+    }
+    const sessionKey = "agent:main:resolved-pin";
+    const parentSessionKey = "agent:main:parent-pin";
+    const sessionStore = {
+      [sessionKey]: entry,
+      ...(fixture.inherited ? { [parentSessionKey]: pinnedEntry } : {}),
+    };
+    const entries = [
+      "default",
+      "model",
+      "custom/model",
+      "customness/model",
+      "team/Reader",
+      "middle",
+      "final",
+      "denied",
+      "cli-model",
+      "plain-model",
+    ].map((id) => ({ provider: "custom", id, name: id }));
+    entries.push({ provider: "custom/team", id: "Reader", name: "Other provider" });
+    const preparedModelCatalog: ModelCatalogSnapshot = {
+      entries,
+      routeVariants: entries,
+      authoritative: true,
+    };
+    await withPluginRuntimeGenerationScope(
+      { metadataSnapshot, pluginRegistry: registry },
+      async () => {
+        const pendingSelection = createModelSelectionState({
+          cfg,
+          agentId: "main",
+          agentCfg: cfg.agents?.defaults,
+          sessionEntry: entry,
+          sessionStore,
+          sessionKey,
+          parentSessionKey: fixture.inherited ? parentSessionKey : undefined,
+          defaultProvider: "custom",
+          defaultModel: "default",
+          provider: fixture.inherited ? provider : "custom",
+          model: fixture.heartbeat ? "heartbeat" : fixture.inherited ? fixture.pin : "default",
+          hasModelDirective: false,
+          isHeartbeat: fixture.heartbeat,
+          hasResolvedHeartbeatModelOverride: fixture.heartbeat,
+          preparedModelCatalog,
+          ...(fixture.operatorRestricted
+            ? {
+                operatorAuthority: createAdmittedRunOperatorAuthority({
+                  profileId: "limited-operator",
+                  scopes: ["operator.write"],
+                  assertCurrent: () => {},
+                  modelPolicy: prepareOperatorModelPolicy({ cfg, policy: { sourceAgent: "main" } }),
+                }),
+              }
+            : {}),
+        });
+        if (fixture.operatorRejected) {
+          await expect(pendingSelection).rejects.toThrow(
+            "Your operator role cannot use this model",
+          );
+          expect(pinnedEntry.modelOverride).toBe(fixture.pin);
+          return;
+        }
+        const selection = await pendingSelection;
+        expect(selection).toMatchObject({
+          provider: "custom",
+          model: fixture.expected,
+          resetModelOverride: fixture.disallowed === true && !fixture.inherited,
+        });
+        if (fixture.disallowed) {
+          expect(selection.resetModelOverrideReason).toBe("disallowed");
+        }
+        if (fixture.disallowed && !fixture.inherited) {
+          expect(entry.modelOverride).toBeUndefined();
+        } else {
+          expect(pinnedEntry.modelOverride).toBe(fixture.pin);
+        }
+        if (fixture.inherited) {
+          expect(entry.modelOverride).toBeUndefined();
+        }
+      },
+    );
+  });
+});
+
+test.each([
+  {
+    name: "native Synthetic window",
+    runtime: "codex",
+    window: 128_000,
+    synthetic: true,
+    prompt: undefined,
+    expected: 128_000,
+  },
+  {
+    name: "native genuine window",
+    runtime: "codex",
+    window: 64_000,
+    synthetic: false,
+    prompt: undefined,
+    expected: 64_000,
+  },
+  {
+    name: "native reported prompt",
+    runtime: "codex",
+    window: 128_000,
+    synthetic: true,
+    prompt: 777_000,
+    expected: 777_000,
+  },
+  {
+    name: "native selection without native inventory",
+    runtime: "codex",
+    window: undefined,
+    synthetic: false,
+    prompt: undefined,
+    expected: 200_000,
+  },
+  {
+    name: "API selection beside native inventory",
+    runtime: "openclaw",
+    window: 128_000,
+    synthetic: true,
+    prompt: undefined,
+    expected: 1_000_000,
+  },
+])(
+  "prepares $name context from the current runtime",
+  async ({ runtime, window, synthetic, prompt, expected }) => {
+    await withStateDirEnv("reply-context-runtime-", async () => {
+      const provider = "openai";
+      const model = "directive-capacity-fixture";
+      const cfg: OpenClawConfig = {
+        plugins: { enabled: false },
+        agents: {
+          defaults: { model: `${provider}/${model}`, models: { [`${provider}/${model}`]: {} } },
+        },
+      };
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      const entry: SessionEntry = {
+        sessionId: "runtime-context",
+        updatedAt: 1,
+        providerOverride: provider,
+        modelOverride: model,
+        agentRuntimeOverride: runtime,
+        agentHarnessId: "previous-native-runtime",
+      };
+      const sessionKey = "agent:main:runtime-context";
+      expect(resolveSessionModelRef(cfg, entry, "main")).toEqual({ provider, model });
+      expect(
+        resolveEffectiveAgentRuntime({
+          cfg,
+          agentId: "main",
+          provider,
+          modelId: model,
+          sessionKey,
+          sessionEntry: entry,
+        }),
+      ).toBe(runtime);
+      const api: ModelCatalogEntry = {
+        provider,
+        id: model,
+        name: "API fixture",
+        contextWindow: 1_000_000,
+      };
+      const native: ModelCatalogEntry | undefined =
+        window === undefined
+          ? undefined
+          : {
+              provider,
+              id: model,
+              name: "Native fixture",
+              nativeRuntime: "codex",
+              contextWindow: window,
+              ...(synthetic ? { contextWindowSource: "synthetic" } : {}),
+              ...(prompt === undefined ? {} : { contextTokens: prompt }),
+            };
+      const entries = native ? (runtime === "openclaw" ? [native, api] : [native]) : [api];
+      getContextWindowCaches().discoveredTokenCache.set(
+        providerContextTokenCacheKey(provider, model),
+        1_000_000,
+      );
+      const state = await createModelSelectionState({
+        cfg,
+        agentId: "main",
+        agentCfg: cfg.agents?.defaults,
+        sessionEntry: entry,
+        sessionStore: { [sessionKey]: entry },
+        sessionKey,
+        defaultProvider: provider,
+        defaultModel: model,
+        provider,
+        model,
+        hasModelDirective: false,
+        preparedModelCatalog: { entries: [api], routeVariants: entries, authoritative: true },
+      });
+      expect({ provider: state.provider, model: state.model }).toEqual({ provider, model });
+      expect(
+        resolveContextTokens({
+          cfg,
+          provider: state.provider,
+          model: state.model,
+          nativeRuntime: state.nativeRuntime,
+          modelContextWindow: state.modelContextWindow,
+          modelContextWindowSource: state.modelContextWindowSource,
+          modelContextTokens: state.modelContextTokens,
+        }),
+      ).toBe(expected);
+    });
+  },
+);

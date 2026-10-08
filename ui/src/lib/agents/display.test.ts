@@ -1,8 +1,8 @@
 // Control UI tests cover agents utils behavior.
 import { describe, expect, it } from "vitest";
+import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-display.js";
 import { AVATAR_MAX_DATA_URL_CHARS } from "../../../../src/shared/avatar-limits.js";
 import {
-  assistantAvatarFallbackUrl,
   isRenderableControlUiAvatarUrl,
   resolveAgentAvatarUrl,
   resolveAssistantTextAvatar,
@@ -21,6 +21,21 @@ import {
 } from "./display.ts";
 
 describe("buildModelOptions", () => {
+  it("keeps known unavailable choices visible but disabled", () => {
+    const config = { agents: { defaults: { models: { "fixture/blocked": {} } } } };
+    const options = buildModelOptions(config, "fixture/blocked", [
+      { provider: "fixture", id: "blocked", name: "Blocked model", available: false },
+      { provider: "fixture", id: "ready", name: "Ready model", available: true },
+      { provider: "fixture", id: "unknown", name: "Unknown model" },
+    ]);
+
+    expect(options).toContainEqual(
+      expect.objectContaining({ value: "fixture/blocked", disabled: true }),
+    );
+    expect(options.find((option) => option.value === "fixture/ready")?.disabled).not.toBe(true);
+    expect(options.find((option) => option.value === "fixture/unknown")?.disabled).not.toBe(true);
+  });
+
   const model = "openai/gpt-5.6-luna";
   const catalog = [
     {
@@ -273,6 +288,18 @@ describe("createPrimaryModelExclusion", () => {
   });
 });
 
+describe("formatAgentRuntimeLabel", () => {
+  it.each([undefined, {}, { id: "  " }])("does not invent a runtime for %j", (runtime) => {
+    expect(formatAgentRuntimeLabel(runtime)).toBe("-");
+  });
+
+  it("retains a known runtime and its reported fallback", () => {
+    expect(formatAgentRuntimeLabel({ id: "custom", fallback: "remote" })).toBe(
+      "custom (fallback remote)",
+    );
+  });
+});
+
 describe("normalizeAgentTargetLabel", () => {
   it("uses resolved configured names but preserves ids for synthesized defaults", () => {
     expect(
@@ -399,13 +426,6 @@ describe("resolveEffectiveModelFallbacks", () => {
   });
 });
 
-describe("assistantAvatarFallbackUrl", () => {
-  it("uses the bundled Molty png for assistant profile fallbacks", () => {
-    expect(assistantAvatarFallbackUrl("/ui")).toBe("/ui/apple-touch-icon.png");
-    expect(assistantAvatarFallbackUrl("")).toBe("/apple-touch-icon.png");
-  });
-});
-
 describe("resolveAssistantTextAvatar", () => {
   it("rejects unsafe invisible controls in assistant text avatars", () => {
     expect(resolveAssistantTextAvatar("VC")).toBe("VC");
@@ -493,7 +513,7 @@ describe("resolveAgentSkillsFilter", () => {
         {
           agents: {
             defaults: { skills: [" github ", "weather"] },
-            entries: { main: { default: true } },
+            entries: { main: {} },
           },
         },
         "main",
@@ -552,7 +572,7 @@ describe("buildAgentContext", () => {
               fallbacks: ["openai/gpt-5.2-codex"],
             },
           },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       },
       null,
@@ -562,6 +582,7 @@ describe("buildAgentContext", () => {
 
     expect(context.workspace).toBe("/tmp/default-workspace");
     expect(context.model).toBe("openai/gpt-5.5 (+1 fallback)");
+    expect(context.runtime).toBe("-");
   });
 
   it("shows inherited skill filters in the agent context", () => {
@@ -570,7 +591,7 @@ describe("buildAgentContext", () => {
       {
         agents: {
           defaults: { skills: ["github", "weather"] },
-          entries: { main: { default: true } },
+          entries: { main: {} },
         },
       },
       null,

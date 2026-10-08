@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { dirname } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
@@ -6,8 +7,12 @@ import { createPostCompactionLoopGuard } from "./embedded-agent-runner/post-comp
 import { resolveToolExecutionErrorKind } from "./tool-result-error.js";
 import { ToolInputError, type AnyAgentTool } from "./tools/common.js";
 
+const requireFromHere = createRequire(import.meta.url);
+// Bun aliases bare `undici` to its compatibility module. Resolve the installed package so this
+// fixture constructs the same library-owned timeout error that production receives from npm.
+// Remove this package-root resolution after bun#42716 ships Undici timeout error metadata.
 const undiciErrors = (
-  createRequire(import.meta.url)("undici") as {
+  requireFromHere(dirname(requireFromHere.resolve("undici/package.json"))) as {
     errors: { ConnectTimeoutError: new (message: string) => Error };
   }
 ).errors;

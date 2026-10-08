@@ -1,12 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
-import { WizardCancelledError } from "../wizard/prompts.js";
 import { setupGuidedCustodianTestSuite } from "./onboard-guided.custodian.test-support.js";
+import type { GuidedOnboardingDeps } from "./onboard-guided.js";
 
 describe("runGuidedOnboarding quick start", () => {
   const {
-    candidate,
-    detection,
+    ensureAuthProfileStore,
     localOnboarding,
     makeRuntime,
     promptAuthChoiceGrouped,
@@ -16,118 +15,55 @@ describe("runGuidedOnboarding quick start", () => {
     setupDeps,
   } = setupGuidedCustodianTestSuite();
 
-  it.each([
-    { label: "fresh install", acceptRisk: false, acknowledgedAt: undefined, failFirst: false },
-    {
-      label: "explicit risk acceptance",
-      acceptRisk: true,
-      acknowledgedAt: undefined,
-      failFirst: false,
-    },
-    {
-      label: "a later working candidate",
-      acceptRisk: true,
-      acknowledgedAt: undefined,
-      failFirst: true,
-    },
-    {
-      label: "acknowledged incomplete config",
-      acceptRisk: false,
-      acknowledgedAt: "2026-08-01T00:00:00.000Z",
-      failFirst: false,
-    },
-  ])(
-    "quick start requires a provider choice for $label and launches after stdin is restored",
-    async ({ acceptRisk, acknowledgedAt, failFirst }) => {
-      if (acknowledgedAt) {
-        localOnboarding.persisted.config = { wizard: { securityAcknowledgedAt: acknowledgedAt } };
-      }
-      const prompter = createWizardPrompter(undefined, { selectValues: ["quick"] });
-      const deps = setupDeps({
-        prompter,
-        detect: vi.fn(async () =>
-          detection({
-            candidates: [candidate("claude-cli", "Claude Code"), candidate("codex-cli", "Codex")],
-          }),
-        ),
-        applySetup: vi.fn(async () => ({
-          ...setupApplyResult(),
-          gateway: { status: "skipped" as const, reason: "explicit" as const },
-        })),
-      });
-      if (failFirst) {
-        promptAuthChoiceGrouped
-          .mockResolvedValueOnce("candidate:claude-cli")
-          .mockImplementationOnce(async () => {
-            expect(deps.activate).toHaveBeenCalledOnce();
-            return "candidate:codex-cli";
-          });
-        vi.mocked(deps.activate).mockResolvedValueOnce({
-          ok: false,
-          status: "auth",
-          error: "expired login",
-        });
-      }
-      const runtime = makeRuntime();
-
-      await runGuidedOnboardingImpl({ acceptRisk }, runtime, deps);
-
-      expect(prompter.select).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({
-          initialValue: "quick",
-          options: [
-            expect.objectContaining({ value: "quick" }),
-            expect.objectContaining({ value: "custom" }),
-          ],
-        }),
+  it("quick start restores stdin before foreground launch", async () => {
+    const prompter = createWizardPrompter(undefined, { selectValues: ["quick", "one"] });
+    const deps = setupDeps({
+      prompter,
+      applySetup: vi.fn(async () => ({
+        ...setupApplyResult(),
+        gateway: { status: "skipped" as const, reason: "explicit" as const },
+      })),
+    });
+    promptAuthChoiceGrouped.mockImplementationOnce(async () => {
+      expect(deps.activate).not.toHaveBeenCalled();
+      expect(ensureAuthProfileStore).not.toHaveBeenCalled();
+      expect(localOnboarding.begin).not.toHaveBeenCalled();
+      expect(deps.applySetup).not.toHaveBeenCalled();
+      return "candidate:claude-cli";
+    });
+    const runtime = makeRuntime();
+    await runGuidedOnboardingImpl({}, runtime, deps);
+    expect(prompter.confirm).not.toHaveBeenCalled();
+    expect(prompter.text).not.toHaveBeenCalled();
+    expect(localOnboarding.persisted.config?.telemetry).toBeUndefined();
+    expect(localOnboarding.persisted.config?.wizard?.securityAcknowledgedAt).toEqual(
+      expect.any(String),
+    );
+    expect(deps.persistAccessMode).toHaveBeenCalledWith("full");
+    expect(deps.applySetup).toHaveBeenCalledWith(
+      expect.objectContaining({ installDaemon: false, firstAgent: { name: "main" } }),
+      { beforePersistentApply: expect.any(Function) },
+    );
+    expect(deps.runSetupMemoryImportStep).not.toHaveBeenCalled();
+    expect(deps.runAppRecommendations).not.toHaveBeenCalled();
+    expect(deps.runBrowserHandoff).not.toHaveBeenCalled();
+    expect(deps.launchHatchTui).not.toHaveBeenCalled();
+    expect(deps.runForegroundGateway).toHaveBeenCalledExactlyOnceWith({ runtime });
+    expect(promptAuthChoiceGrouped).toHaveBeenCalledOnce();
+    expect(restoreTerminalState.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.runForegroundGateway.mock.invocationCallOrder[0]!,
+    );
+    const securityNotes = vi
+      .mocked(prompter.note)
+      .mock.calls.filter(([message]) =>
+        message.includes("https://docs.openclaw.ai/gateway/security"),
       );
-      expect(prompter.confirm).not.toHaveBeenCalled();
-      expect(prompter.text).not.toHaveBeenCalled();
-      expect(localOnboarding.persisted.config?.telemetry).toBeUndefined();
-      expect(localOnboarding.persisted.config?.wizard?.securityAcknowledgedAt).toEqual(
-        acknowledgedAt ?? expect.any(String),
-      );
-      expect(deps.persistAccessMode).toHaveBeenCalledWith("full");
-      expect(deps.applySetup).toHaveBeenCalledWith(
-        expect.objectContaining({ installDaemon: false, firstAgent: { name: "main" } }),
-        { beforePersistentApply: expect.any(Function) },
-      );
-      expect(deps.runSetupMemoryImportStep).not.toHaveBeenCalled();
-      expect(deps.runAppRecommendations).not.toHaveBeenCalled();
-      expect(deps.runBrowserHandoff).not.toHaveBeenCalled();
-      expect(deps.launchHatchTui).not.toHaveBeenCalled();
-      expect(deps.runForegroundGateway).toHaveBeenCalledExactlyOnceWith({ runtime });
-      expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(failFirst ? 2 : 1);
-      expect(promptAuthChoiceGrouped.mock.invocationCallOrder[0]).toBeLessThan(
-        vi.mocked(deps.activate).mock.invocationCallOrder[0]!,
-      );
-      if (failFirst) {
-        expect(JSON.stringify(vi.mocked(prompter.note).mock.calls)).toContain("expired login");
-      }
-      expect(restoreTerminalState.mock.invocationCallOrder[0]).toBeLessThan(
-        deps.runForegroundGateway.mock.invocationCallOrder[0]!,
-      );
-      const securityNotes = vi
-        .mocked(prompter.note)
-        .mock.calls.filter(([message]) =>
-          message.includes("https://docs.openclaw.ai/gateway/security"),
-        );
-      expect(securityNotes).toEqual(
-        acknowledgedAt
-          ? []
-          : [
-              [
-                "OpenClaw runs an AI agent with real access to this machine. Security guide: https://docs.openclaw.ai/gateway/security",
-                "Security disclaimer",
-              ],
-            ],
-      );
-      expect(prompter.note).not.toHaveBeenCalledWith(
-        expect.stringContaining("Recommended safer setup"),
-        expect.anything(),
-      );
-    },
-  );
+    expect(securityNotes).toHaveLength(1);
+    expect(prompter.note).not.toHaveBeenCalledWith(
+      expect.stringContaining("Recommended safer setup"),
+      expect.anything(),
+    );
+  });
 
   it("preserves guarded discovery consent in an incomplete config", async () => {
     localOnboarding.persisted.config = {
@@ -169,7 +105,7 @@ describe("runGuidedOnboarding quick start", () => {
   it("custom setup keeps telemetry, first-agent, access, and provider choices in order", async () => {
     const prompter = createWizardPrompter(
       { text: vi.fn(async () => "helper"), confirm: vi.fn(async () => true) },
-      { selectValues: ["custom", "full"] },
+      { selectValues: ["custom", "one", "full"] },
     );
     const deps = setupDeps({ prompter });
 
@@ -178,13 +114,15 @@ describe("runGuidedOnboarding quick start", () => {
     expect(vi.mocked(prompter.select).mock.calls.map(([params]) => params.message)).toEqual([
       "How would you like to start?",
       "Help make OpenClaw better?",
+      "What would you like to create?",
       "How should I set things up?",
     ]);
     const selects = vi.mocked(prompter.select).mock.invocationCallOrder;
     const firstAgentPrompt = vi.mocked(prompter.text).mock.invocationCallOrder[0]!;
     expect(selects[1]).toBeLessThan(firstAgentPrompt);
-    expect(firstAgentPrompt).toBeLessThan(selects[2]!);
-    expect(selects[2]).toBeLessThan(promptAuthChoiceGrouped.mock.invocationCallOrder[0]!);
+    expect(selects[2]).toBeLessThan(firstAgentPrompt);
+    expect(firstAgentPrompt).toBeLessThan(selects[3]!);
+    expect(selects[3]).toBeLessThan(promptAuthChoiceGrouped.mock.invocationCallOrder[0]!);
     expect(promptAuthChoiceGrouped.mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(deps.activate).mock.invocationCallOrder[0]!,
     );
@@ -209,25 +147,6 @@ describe("runGuidedOnboarding quick start", () => {
     expect(deps.runForegroundGateway).not.toHaveBeenCalled();
   });
 
-  it("runs in the foreground when systemd is unavailable", async () => {
-    const prompter = createWizardPrompter(undefined, { selectValues: ["quick"] });
-    const deps = setupDeps({
-      prompter,
-      applySetup: vi.fn(async () => ({
-        ...setupApplyResult(),
-        gateway: { status: "skipped" as const, reason: "systemd-unavailable" as const },
-      })),
-    });
-    const runtime = makeRuntime();
-
-    await expect(runGuidedOnboardingImpl({}, runtime, deps)).resolves.toBeUndefined();
-
-    expect(runtime.exit).not.toHaveBeenCalled();
-    expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
-    expect(deps.runForegroundGateway).toHaveBeenCalledExactlyOnceWith({ runtime });
-    expect(prompter.outro).toHaveBeenCalledOnce();
-  });
-
   it("preserves external Gateway ownership and uses the existing browser handoff", async () => {
     const prompter = createWizardPrompter(undefined, { selectValues: ["quick"] });
     const runBrowserHandoff = vi.fn(async () => ({ handedOff: true as const }));
@@ -247,65 +166,105 @@ describe("runGuidedOnboarding quick start", () => {
     expect(prompter.outro).toHaveBeenCalledWith("Your browser is ready — I'll be in Settings.");
   });
 
-  it("cancelling the lane choice does not acknowledge security or scan the machine", async () => {
-    const prompter = createWizardPrompter({
-      select: vi.fn(async () => {
-        throw new WizardCancelledError();
+  it("reports failed team setup without opening a coordinator chat", async () => {
+    const prompter = createWizardPrompter(undefined, { selectValues: ["quick", "team"] });
+    const deps = setupDeps({
+      prompter,
+      applySetup: vi.fn(async () => {
+        throw new Error(
+          "The requested team was not created because an agent roster already exists.",
+        );
       }),
     });
-    const deps = setupDeps({ prompter });
-    const runtime = makeRuntime();
 
-    await runGuidedOnboardingImpl({}, runtime, deps);
-
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(deps.persistRiskAcknowledgement).not.toHaveBeenCalled();
-    expect(deps.detect).not.toHaveBeenCalled();
+    await expect(runGuidedOnboardingImpl({}, makeRuntime(), deps)).rejects.toThrow(
+      "Onboarding did not complete: The requested team was not created",
+    );
+    expect(deps.runSystemAgentChat).not.toHaveBeenCalled();
     expect(deps.runForegroundGateway).not.toHaveBeenCalled();
+    expect(localOnboarding.complete).not.toHaveBeenCalled();
   });
 
-  it.each(["empty detection", "failed candidates"])(
-    "quick start retains foreground setup after the user chooses a provider with %s",
-    async (failure) => {
-      if (failure === "failed candidates") {
-        promptAuthChoiceGrouped.mockResolvedValueOnce("candidate:claude-cli");
-      }
-      promptAuthChoiceGrouped.mockResolvedValueOnce("openai-api-key");
-      const prompter = createWizardPrompter(
-        { text: vi.fn(async () => "synthetic-key") },
-        { selectValues: ["quick"] },
-      );
-      const deps = setupDeps({
-        prompter,
-        detect: vi.fn(async () =>
-          detection({
-            candidates:
-              failure === "empty detection" ? [] : [candidate("claude-cli", "Claude Code")],
-            manualProviders: [{ id: "openai-api-key", label: "OpenAI" }],
-          }),
-        ),
+  it.each(["Writer"])(
+    "rejects coordinator %s before provider discovery or receipt creation",
+    async (agentName) => {
+      const prompter = createWizardPrompter(undefined, { selectValues: ["quick"] });
+      const deps = setupDeps({ prompter });
+
+      const failure = await runGuidedOnboardingImpl(
+        { team: true, agentName },
+        makeRuntime(),
+        deps,
+      ).catch((error: unknown) => error);
+
+      expect(localOnboarding.begin).not.toHaveBeenCalled();
+      expect(deps.detect).not.toHaveBeenCalled();
+      expect(deps.activate).not.toHaveBeenCalled();
+      expect(deps.applySetup).not.toHaveBeenCalled();
+      expect(localOnboarding.states.size).toBe(0);
+      expect(failure).toMatchObject({
+        message: expect.stringContaining("Team member ids must be distinct"),
       });
-      if (failure === "failed candidates") {
-        vi.mocked(deps.activate).mockResolvedValueOnce({
-          ok: false,
-          status: "auth",
-          error: "expired login",
-        });
-      }
-
-      await runGuidedOnboardingImpl({}, makeRuntime(), deps);
-
-      expect(promptAuthChoiceGrouped).toHaveBeenCalledTimes(
-        failure === "failed candidates" ? 2 : 1,
-      );
-      expect(deps.applySetup).toHaveBeenCalledOnce();
-      expect(vi.mocked(deps.applySetup).mock.calls[0]?.[0]).toEqual(
-        expect.objectContaining({ installDaemon: false }),
-      );
-      expect(deps.runSetupMemoryImportStep).not.toHaveBeenCalled();
-      expect(deps.runAppRecommendations).not.toHaveBeenCalled();
-      expect(deps.runForegroundGateway).toHaveBeenCalledOnce();
-      expect(deps.runBrowserHandoff).not.toHaveBeenCalled();
     },
   );
+
+  it("carries the team coordinator to the handoff without an inference config write", async () => {
+    const prompter = createWizardPrompter(undefined, { selectValues: ["quick", "team"] });
+    const deps = setupDeps({
+      prompter,
+      applySetup: vi.fn<NonNullable<GuidedOnboardingDeps["applySetup"]>>(async ({ workspace }) => {
+        const config = localOnboarding.persisted.config;
+        const specialists = ["researcher", "writer", "reviewer"];
+        localOnboarding.persisted.config = {
+          ...config,
+          agents: {
+            ...config?.agents,
+            ownership: "explicit",
+            defaults: {
+              ...config?.agents?.defaults,
+              workspace,
+              systemAgent: { agentId: "coordinator" },
+            },
+            entries: Object.fromEntries(
+              ["coordinator", ...specialists].map((id) => [
+                id,
+                {
+                  workspace: `${workspace}/${id}`,
+                  subagents:
+                    id === "coordinator"
+                      ? { allowAgents: specialists, delegationMode: "prefer" }
+                      : { allowAgents: [] },
+                },
+              ]),
+            ),
+          },
+        };
+        return { ...setupApplyResult(), lines: ["Workspace prepared"] };
+      }),
+    });
+    vi.mocked(deps.activate).mockResolvedValueOnce({
+      ok: true,
+      modelRef: "fixture/model",
+      latencyMs: 1,
+      lines: [],
+    });
+    await runGuidedOnboardingImpl({}, makeRuntime(), deps);
+
+    expect(prompter.select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: "What would you like to create?",
+        initialValue: "one",
+      }),
+    );
+    expect(deps.applySetup).toHaveBeenCalledWith(
+      expect.objectContaining({ firstAgent: { name: "coordinator", team: true } }),
+      { beforePersistentApply: expect.any(Function) },
+    );
+    expect(localOnboarding.begin).toHaveBeenCalledWith(
+      expect.objectContaining({ teamCoordinatorId: "coordinator" }),
+    );
+    expect(deps.runForegroundGateway).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: "coordinator" }),
+    );
+  });
 });

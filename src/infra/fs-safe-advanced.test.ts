@@ -1,5 +1,5 @@
+import { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 import { describe, expect, it } from "vitest";
-import { sanitizeUntrustedFileName } from "./fs-safe-advanced.js";
 
 // Guards the fs-safe 0.5.2 adoption: the package now owns untrusted filename
 // sanitization, including Windows reserved-name suffixing the old local copy lacked.

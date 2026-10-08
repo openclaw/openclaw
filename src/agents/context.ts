@@ -1,10 +1,10 @@
-// Load session runtime model metadata so we can infer context windows when the
-// agent reports a model id. This includes custom models.json entries.
-
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/config.js";
+import type { resolveProjectedSessionContextTokenBudget } from "../config/sessions/context-token-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { computeBackoff, type BackoffPolicy } from "../infra/backoff.js";
-import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { settlesWithin } from "../shared/settle-within.js";
 import {
   applyConfiguredContextWindows,
   prepareContextWindowCaches,
@@ -19,30 +19,20 @@ import {
   replaceDiscoveredContextTokenCache,
 } from "./context-cache.js";
 import {
-  type ContextTokenResolution,
   type ContextTokenResolutionParams,
-  type ModelsConfig,
-  resolveContextTokenResolutionFromCache,
-  resolveContextTokensForModelFromCache,
+  type ModelContextTokenProjection,
+  resolveConfiguredContextTokenLimits,
+  resolveModelContextTokenProjectionFromCache,
 } from "./context-resolution.js";
 import {
   beginContextWindowCacheRefresh,
   CONTEXT_WINDOW_RUNTIME_STATE,
 } from "./context-runtime-state.js";
+import { findModelInCatalog } from "./model-catalog-lookup.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
+import { resolveModelContextWindowProfile } from "./model-context-window.js";
+import type { LoadPreparedModelCatalogParams } from "./prepared-model-catalog.js";
 
-export {
-  ANTHROPIC_CONTEXT_1M_TOKENS,
-  ANTHROPIC_FABLE_CONTEXT_TOKENS,
-  ANTHROPIC_MYTHOS_5_CONTEXT_TOKENS,
-  ANTHROPIC_OPUS_5_CONTEXT_TOKENS,
-  ANTHROPIC_SONNET_5_CONTEXT_TOKENS,
-  ANTHROPIC_VERTEX_CONTEXT_1M_TOKENS,
-} from "./context-resolution.js";
-export { resetContextWindowCacheForTest } from "./context-runtime-state.js";
-export {
-  applyConfiguredContextWindows,
-  applyDiscoveredContextWindows,
-} from "./context-cache-projection.js";
 const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   initialMs: 1_000,
   maxMs: 60_000,
@@ -56,7 +46,7 @@ function primeConfiguredContextWindowsFromConfig(cfg: OpenClawConfig): OpenClawC
   applyConfiguredContextWindows({
     cache: caches.configuredTokenCache,
     windowCache: caches.contextWindowCache,
-    modelsConfig: cfg.models as ModelsConfig | undefined,
+    modelsConfig: cfg.models,
   });
   CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = cfg;
   CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures = 0;
@@ -107,29 +97,22 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
       }
       let stagedTokenCache = new Map<string, number>();
       try {
-        const catalogResult = await (async () => {
-          const { loadPreparedModelCatalogOwnerSnapshot } = await loadPreparedModelCatalogRuntime();
-          return await loadPreparedModelCatalogOwnerSnapshot({
-            config: cfg,
-            readOnly: true,
-          }).then(
-            (value) => ({ status: "fulfilled" as const, value }),
-            (reason: unknown) => ({ status: "rejected" as const, reason }),
-          );
-        })();
+        const { loadPreparedModelCatalogOwnerSnapshot } = await loadPreparedModelCatalogRuntime();
+        const owner = await loadPreparedModelCatalogOwnerSnapshot({
+          config: cfg,
+          readOnly: true,
+        });
         if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
           return;
         }
-        if (catalogResult.status === "fulfilled") {
-          stagedTokenCache = await prepareDiscoveredContextTokenCache({
-            modelCatalog: catalogResult.value.modelCatalog,
-            assertCurrent: () => {
-              if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
-                throw new Error("context window cache generation was superseded");
-              }
-            },
-          });
-        }
+        stagedTokenCache = await prepareDiscoveredContextTokenCache({
+          modelCatalog: owner.modelCatalog,
+          assertCurrent: () => {
+            if (CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation) {
+              throw new Error("context window cache generation was superseded");
+            }
+          },
+        });
       } catch {
         // Static and discovered rows belong to one atomic generation. If its owner fails, keep
         // config overrides only instead of mixing in independently rediscovered static metadata.
@@ -179,18 +162,26 @@ export async function prewarmContextWindowCacheAfterReady(params: {
     if (shouldStop()) {
       return;
     }
-    // Gateway publication intentionally exposes configured/static turn facts. Full catalog
-    // inventory is a separate control-plane load and must not run in post-ready warmup.
+    // Consume only accepted inventory; this passive read does not acquire or renew it.
+    // A retired owner cannot lend another account's limits during projection yields.
+    const modelCatalog = owner.readFullModelCatalog?.() ?? owner.modelCatalog;
+    const isCurrent = () =>
+      !shouldStop() &&
+      owner.isCurrent() &&
+      (owner.readFullModelCatalog?.() ?? owner.modelCatalog) === modelCatalog;
+    if (!isCurrent()) {
+      return;
+    }
     const caches = await prepareContextWindowCaches({
       config: owner.config,
-      modelCatalog: owner.modelCatalog,
+      modelCatalog,
       assertCurrent: () => {
-        if (shouldStop()) {
+        if (!isCurrent()) {
           throw new Error("context window cache prewarm cancelled");
         }
       },
     });
-    if (shouldStop()) {
+    if (!isCurrent()) {
       return;
     }
     replaceContextWindowCaches(caches);
@@ -234,29 +225,21 @@ export async function waitForContextWindowCacheLoad(options?: {
     return "timeout";
   }
 
-  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-  try {
-    return await Promise.race([
-      promise.then(() => "loaded" as const),
-      new Promise<"timeout">((resolve) => {
-        timeoutHandle = setTimeout(() => resolve("timeout"), timeoutMs);
-        (timeoutHandle as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.();
-      }),
-    ]);
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
-  }
+  return (await settlesWithin(promise, timeoutMs)) ? "loaded" : "timeout";
 }
 
-/** Replace cached model context metadata for the active runtime configuration. */
-export async function refreshContextWindowCache(cfg: OpenClawConfig): Promise<void> {
+/** Restore configured context limits without acquiring a model catalog. */
+export function resetContextWindowCache(cfg: OpenClawConfig): void {
   beginContextWindowCacheRefresh();
   const caches = getContextWindowCaches();
   caches.configuredTokenCache.clear();
   caches.contextWindowCache.clear();
   primeConfiguredContextWindowsFromConfig(cfg);
+}
+
+/** Replace cached model context metadata for the active runtime configuration. */
+export async function refreshContextWindowCache(cfg: OpenClawConfig): Promise<void> {
+  resetContextWindowCache(cfg);
   await ensureContextWindowCacheLoaded();
 }
 
@@ -294,132 +277,136 @@ export function lookupContextTokens(
 export function resolveContextTokensForModel(
   params: ContextTokenResolutionParams,
 ): number | undefined {
-  const lookupOptions = {
-    allowAsyncLoad: params.allowAsyncLoad,
-    skipRuntimeConfigLoad: Boolean(params.cfg),
-  };
-  prepareContextWindowCache(lookupOptions);
-  return resolveContextTokensForModelFromCache(
-    params,
-    (modelId) => lookupCachedContextTokens(modelId),
-    (modelId) => lookupCachedContextWindow(modelId),
-  );
+  return resolveModelContextTokenProjection(params).contextTokens;
 }
 
-type BundledStaticCatalogContext = {
-  contextWindow?: number;
-  contextTokens?: number;
-};
-
-type BundledStaticCatalogContextResolver = (lookup: {
-  provider: string;
-  modelId: string;
-}) => Promise<BundledStaticCatalogContext | undefined>;
-
-type BundledManifestCatalogModelResolver = (lookup: {
-  provider: string;
-  modelId: string;
-}) => BundledStaticCatalogContext | undefined;
-
-type BundledStaticCatalogResolverPair = {
-  manifestModelResolver: BundledManifestCatalogModelResolver;
-  providerContextResolver: BundledStaticCatalogContextResolver;
-};
-
-const bundledStaticCatalogResolverPairs = new WeakMap<object, BundledStaticCatalogResolverPair>();
-let ambientBundledStaticCatalogResolverPair: BundledStaticCatalogResolverPair | undefined;
-const staticCatalogContextModuleLoader = createLazyImportLoader(
-  () => import("./embedded-agent-runner/model.static-catalog.js"),
-);
-
-function toContextParams(context: BundledStaticCatalogContext | undefined) {
-  const modelContextWindow =
-    typeof context?.contextWindow === "number" && context.contextWindow > 0
-      ? context.contextWindow
-      : undefined;
-  const modelContextTokens =
-    typeof context?.contextTokens === "number" && context.contextTokens > 0
-      ? context.contextTokens
-      : undefined;
-  if (modelContextWindow === undefined && modelContextTokens === undefined) {
-    return undefined;
+export function resolveModelContextTokenProjection(
+  params: ContextTokenResolutionParams,
+): ModelContextTokenProjection {
+  const nativeRuntime = normalizeLowercaseStringOrEmpty(params.nativeRuntime);
+  if (!nativeRuntime || nativeRuntime === "openclaw") {
+    prepareContextWindowCache({
+      allowAsyncLoad: params.allowAsyncLoad,
+      skipRuntimeConfigLoad: Boolean(params.cfg),
+    });
   }
-  return {
-    ...(modelContextWindow !== undefined ? { modelContextWindow } : {}),
-    ...(modelContextTokens !== undefined ? { modelContextTokens } : {}),
-  };
+  return resolveModelContextTokenProjectionFromCache(params);
 }
 
-/**
- * Resolves the offline bundled static catalog context for one provider/model
- * pair. Read-only callers (no config authored row, no async catalog load)
- * inject the returned `modelContextTokens`/`modelContextWindow` into
- * `resolveContextTokensForModel` so bundled catalog models keep their real
- * context windows instead of the generic default fallback.
- *
- * Mirrors the status summary seam: manifest `modelCatalog` rows resolve
- * synchronously first; provider-owned static catalog hook rows load as the
- * fallback. Best-effort by contract — any enrichment failure returns undefined
- * so callers keep their existing config/default fallback behavior.
- */
-export async function resolveBundledStaticCatalogContext(
-  params: Pick<ContextTokenResolutionParams, "cfg" | "provider" | "model">,
-): Promise<
-  Pick<ContextTokenResolutionParams, "modelContextTokens" | "modelContextWindow"> | undefined
-> {
+type ContextBudgetPreparationParams = ContextTokenResolutionParams &
+  Pick<LoadPreparedModelCatalogParams, "agentId" | "agentDir" | "workspaceDir" | "env"> & {
+    profileId?: string;
+    contextWindow?: string;
+    route?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
+    knownContextBudget?: ReturnType<typeof resolveProjectedSessionContextTokenBudget>;
+  };
+
+export async function resolveContextTokenBudgetForModel(
+  params: ContextBudgetPreparationParams,
+): Promise<ModelContextTokenProjection> {
+  const input = { ...params, allowAsyncLoad: false };
+  const current = resolveModelContextTokenProjection(input);
   const provider = params.provider?.trim();
   const model = params.model?.trim();
   if (!provider || !model) {
-    return undefined;
+    return current;
   }
   try {
-    const staticCatalogModule = await staticCatalogContextModuleLoader.load();
-    let pair: BundledStaticCatalogResolverPair;
-    if (params.cfg && typeof params.cfg === "object") {
-      pair = bundledStaticCatalogResolverPairs.get(params.cfg) ?? {
-        manifestModelResolver: staticCatalogModule.createBundledStaticCatalogModelResolver({
-          cfg: params.cfg,
-          // Runtime-discovery manifest rows still provide a cold-cache fallback.
-          includeRuntimeDiscovery: true,
-        }),
-        providerContextResolver:
-          staticCatalogModule.createBundledProviderStaticCatalogContextResolver({
-            cfg: params.cfg,
-          }),
-      };
-      bundledStaticCatalogResolverPairs.set(params.cfg, pair);
-    } else {
-      ambientBundledStaticCatalogResolverPair ??= {
-        manifestModelResolver: staticCatalogModule.createBundledStaticCatalogModelResolver({
-          includeRuntimeDiscovery: true,
-        }),
-        providerContextResolver:
-          staticCatalogModule.createBundledProviderStaticCatalogContextResolver({}),
-      };
-      pair = ambientBundledStaticCatalogResolverPair;
+    const runtime = await loadPreparedModelCatalogRuntime();
+    const request = {
+      config: params.cfg ?? getRuntimeConfig(),
+      agentId: params.agentId,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+    };
+    const published = runtime.getPublishedPreparedModelCatalogOwnerSnapshot(request);
+    const nativeRuntime = normalizeLowercaseStringOrEmpty(params.nativeRuntime);
+    const { createSessionContextCapacityResolver } = await import("./session-context-capacity.js");
+    const capacity = createSessionContextCapacityResolver(published)(provider, model, {
+      nativeRuntime: nativeRuntime && nativeRuntime !== "openclaw" ? nativeRuntime : undefined,
+      profileId: params.profileId,
+      contextWindow: params.contextWindow,
+      route: params.route,
+    });
+    if (capacity?.state === "ready") {
+      const projection =
+        capacity.synthetic && current.source !== "fallback"
+          ? current
+          : resolveModelContextTokenProjection({
+              ...input,
+              modelContextTokens: capacity.synthetic ? undefined : capacity.contextTokens,
+              modelContextWindow: capacity.contextTokens,
+              modelContextWindowSource: capacity.synthetic ? "synthetic" : undefined,
+            });
+      const contextTokens = minPositiveContextTokens(
+        projection.contextTokens,
+        current.source === "fallback" ? undefined : current.contextTokens,
+        capacity.contextTokenLimit,
+      );
+      return { ...projection, contextTokens };
     }
-    const context =
-      pair.manifestModelResolver({ provider, modelId: model }) ??
-      (await pair.providerContextResolver({ provider, modelId: model }));
-    return toContextParams(context) ?? undefined;
+    if (
+      published ||
+      params.profileId ||
+      params.route ||
+      (nativeRuntime && nativeRuntime !== "openclaw") ||
+      (params.knownContextBudget && params.knownContextBudget.contextTokensSource !== "synthetic")
+    ) {
+      return current;
+    }
+    const catalog = await runtime.loadPreparedModelCatalogSnapshot({
+      ...request,
+      readOnly: true,
+      providerDiscoveryProviderIds: [provider],
+      scopedLiveProviderDiscovery: false,
+    });
+    const entry = findModelInCatalog(
+      [...catalog.entries, ...(catalog.staticEntries ?? [])].filter(
+        (candidate) => !candidate.nativeRuntime,
+      ),
+      provider,
+      model,
+    );
+    const profile = resolveModelContextWindowProfile({
+      catalogEntry: entry,
+      selected: params.contextWindow,
+    });
+    if (!entry) {
+      return current;
+    }
+    const projection = resolveModelContextTokenProjection({
+      ...input,
+      modelContextWindow: profile.contextTokens,
+      modelContextWindowSource: profile.contextWindow ? undefined : entry.contextWindowSource,
+      modelContextTokens: entry.contextTokens,
+    });
+    const { fixedContextWindow } = resolveConfiguredContextTokenLimits({
+      ...input,
+      cfg: request.config,
+      provider,
+      model,
+    });
+    const promptTokens = asPositiveFiniteNumber(entry.contextTokens);
+    const contextTokenLimit =
+      promptTokens !== undefined || profile.contextWindow
+        ? minPositiveContextTokens(
+            promptTokens,
+            profile.contextWindow
+              ? profile.contextTokens
+              : (fixedContextWindow ??
+                  (entry.contextWindowSource === "synthetic" ? undefined : profile.contextTokens)),
+          )
+        : undefined;
+    return {
+      ...projection,
+      contextTokens: minPositiveContextTokens(
+        projection.contextTokens,
+        current.source === "fallback" ? undefined : current.contextTokens,
+        contextTokenLimit,
+      ),
+    };
   } catch {
-    // Enrichment must never break the caller's fallback chain.
-    return undefined;
+    return current;
   }
-}
-
-export async function resolveContextTokenBudgetForModel(
-  params: Omit<ContextTokenResolutionParams, "modelContextTokens" | "modelContextWindow">,
-): Promise<ContextTokenResolution | undefined> {
-  const staticCatalogContext = await resolveBundledStaticCatalogContext(params);
-  const lookupOptions = {
-    allowAsyncLoad: params.allowAsyncLoad,
-    skipRuntimeConfigLoad: Boolean(params.cfg),
-  };
-  prepareContextWindowCache(lookupOptions);
-  return resolveContextTokenResolutionFromCache(
-    { ...params, ...staticCatalogContext },
-    (modelId) => lookupCachedContextTokens(modelId),
-    (modelId) => lookupCachedContextWindow(modelId),
-  );
 }

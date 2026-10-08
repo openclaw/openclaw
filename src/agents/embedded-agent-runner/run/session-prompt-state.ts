@@ -6,15 +6,19 @@ import {
 import type { ContextEngineSessionTarget } from "../../../context-engine/types.js";
 import { registerAgentRunContext } from "../../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
-import type { AgentRunSessionTarget } from "../../run-session-target.js";
+import { adoptExecRequestSession } from "../../../infra/exec-request-context.js";
+import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
+import type { CustomMessage } from "../../sessions/messages.js";
+import { appendSessionTranscriptNote } from "../../sessions/session-manager-write-admission.js";
 import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
 import type { AcceptedCompactionSuccessor } from "../compaction-successor.js";
 import { log } from "../logger.js";
-import type { PreparedEmbeddedRunInput } from "./execution-context.js";
+import type { RunEmbeddedAgentParamsWithSessionFile } from "./internal-params.js";
 import {
   buildContextEngineCompactionSessionTarget,
   prepareInitialSessionWriter,
 } from "./session-bootstrap.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const CONTINUATION_PROMPT =
   "Continue the current task from the existing transcript, preserving completed work. If an action was interrupted, inspect its state before deciding whether to retry it. Do not restart the task or repeat completed actions.";
@@ -25,11 +29,12 @@ type ActivePrompt = {
   internal: boolean;
 };
 
-export function createEmbeddedRunSessionPromptState(input: {
-  runParams: PreparedEmbeddedRunInput["runParams"];
+export async function createEmbeddedRunSessionPromptState(input: {
+  runParams: RunEmbeddedAgentParamsWithSessionFile;
   sessionAgentId: string;
   resolvedSessionKey: string;
-  lifecycleGeneration: PreparedEmbeddedRunInput["lifecycleGeneration"];
+  lifecycleGeneration: NonNullable<RunEmbeddedAgentParamsWithSessionFile["lifecycleGeneration"]>;
+  onInterrupt: (reason: Error) => void;
 }) {
   const { runParams: params, sessionAgentId, resolvedSessionKey, lifecycleGeneration } = input;
   let activeSessionId = params.sessionId;
@@ -50,10 +55,12 @@ export function createEmbeddedRunSessionPromptState(input: {
         expectedWriterRunId,
       }
     : undefined;
-  const initialWriter = prepareInitialSessionWriter({
+  const initialOwner = await prepareInitialSessionWriter({
     runParams: params,
     target: activeSessionTarget,
+    onInterrupt: input.onInterrupt,
   });
+  const initialWriter = initialOwner?.writer;
   const initialTarget = initialWriter ? { ...activeSessionTarget } : undefined;
   let sessionTargetAdopted = false;
   let committedCompactionSuccessor: AcceptedCompactionSuccessor | undefined;
@@ -62,6 +69,7 @@ export function createEmbeddedRunSessionPromptState(input: {
   let settleOwnedTranscriptProjection = false;
   let suppressNextUserMessagePersistence = params.suppressNextUserMessagePersistence ?? false;
   let basePromptOverride: string | undefined;
+  let continuation: EmbeddedRunAttemptParams["continuation"];
   let compactionContinuationInstruction: string | undefined;
   const activePrompt: ActivePrompt = {
     get override() {
@@ -74,9 +82,10 @@ export function createEmbeddedRunSessionPromptState(input: {
     internal: false,
   };
 
-  const notifySessionIdChanged = () => {
+  const notifySessionIdChanged = (previousSessionId: string) => {
     // Update host provenance before callbacks can close the exact run owner.
     registerAgentRunContext(params.runId, { sessionId: activeSessionId, lifecycleGeneration });
+    adoptExecRequestSession({ runId: params.runId, previousSessionId, sessionId: activeSessionId });
     params.replyOperation?.updateSessionId(activeSessionId);
     params.onSessionIdChanged?.(activeSessionId);
   };
@@ -84,8 +93,9 @@ export function createEmbeddedRunSessionPromptState(input: {
     if (!nextSessionId || nextSessionId === activeSessionId) {
       return;
     }
+    const previousSessionId = activeSessionId;
     activeSessionId = nextSessionId;
-    notifySessionIdChanged();
+    notifySessionIdChanged(previousSessionId);
   };
   const capturePreparedCompactionTarget = (
     target: Pick<AcceptedCompactionSuccessor, "sessionId" | "sessionFile" | "sessionTarget">,
@@ -103,7 +113,7 @@ export function createEmbeddedRunSessionPromptState(input: {
   };
   const notifyCompactionSessionAdopted = (previousSessionId: string | undefined) => {
     if (previousSessionId && previousSessionId !== activeSessionId) {
-      notifySessionIdChanged();
+      notifySessionIdChanged(previousSessionId);
     }
   };
   // Internal control prompts are model-only context, never operator-authored transcript turns.
@@ -112,13 +122,16 @@ export function createEmbeddedRunSessionPromptState(input: {
     Object.assign(activePrompt, { persisted: true, internal: true });
     suppressNextUserMessagePersistence = true;
   };
+  if (params.pluginRuntimeRefreshContinuation) {
+    activateInternalPrompt(params.prompt);
+  }
   const activateCompactionContinuation = (instruction: string) => {
     compactionContinuationInstruction = instruction;
     activateInternalPrompt(basePromptOverride ?? "");
   };
   const clearCompactionContinuation = () => (compactionContinuationInstruction = undefined);
   const onUserMessagePersisted: NonNullable<
-    PreparedEmbeddedRunInput["runParams"]["onUserMessagePersisted"]
+    RunEmbeddedAgentParamsWithSessionFile["onUserMessagePersisted"]
   > = (message) => {
     const messageMetadata = message as {
       __openclaw?: { beforeAgentRunBlocked?: unknown };
@@ -158,6 +171,7 @@ export function createEmbeddedRunSessionPromptState(input: {
   };
 
   return {
+    [Symbol.asyncDispose]: async () => await initialOwner?.close(),
     get sessionId() {
       return activeSessionId;
     },
@@ -185,19 +199,57 @@ export function createEmbeddedRunSessionPromptState(input: {
     get sessionWriterFence() {
       return existingWriterFence ?? initialWriter?.committedFence;
     },
-    withSessionWriterContext: <T>(run: () => Promise<T>): Promise<T> =>
-      initialWriter && !initialWriter.committedFence
-        ? withOwnedSessionTranscriptWrites(
-            {
-              sessionTarget: initialTarget,
-              initialWriter,
-              withTranscriptWrite: async (write) => await write(),
-            },
-            run,
-          )
-        : runWithoutOwnedSessionTranscriptWrites(run),
+    withSessionWriterContext: <T>(run: () => Promise<T>): Promise<T> => {
+      const withContext = () =>
+        initialWriter && !initialWriter.committedFence
+          ? withOwnedSessionTranscriptWrites(
+              {
+                sessionTarget: initialTarget,
+                initialWriter,
+                withTranscriptWrite: initialWriter.withTranscriptWrite,
+              },
+              run,
+            )
+          : runWithoutOwnedSessionTranscriptWrites(run);
+      return initialOwner ? initialOwner.run(withContext) : withContext();
+    },
+    recordOutputLimitNotice: async (toolCallId: string | undefined) => {
+      const note: CustomMessage = {
+        role: "custom",
+        customType: "incomplete-tool-call",
+        content:
+          `Runtime notice: The tool call${toolCallId ? ` ${JSON.stringify(toolCallId.slice(0, 200))}` : ""} was cut off at the provider's output limit (max_output_tokens) and was not executed. ` +
+          "Split the remaining work into smaller tool calls with shorter arguments. Earlier actions may have completed; verify their results before continuing and do not repeat completed actions.",
+        display: false,
+        details: { reason: "max_output_tokens", ...(toolCallId ? { toolCallId } : {}) },
+        timestamp: Date.now(),
+      };
+      if (params.sessionManager) {
+        await params.sessionManager.appendMessageAsync(note);
+      } else {
+        const target = activeSessionTarget;
+        if (!target?.agentId || !target.sessionId || !target.sessionKey || !target.storePath) {
+          throw new Error("Missing session transcript target for output-limit recovery");
+        }
+        await appendSessionTranscriptNote(
+          {
+            ...target,
+            agentId: target.agentId,
+            sessionId: target.sessionId,
+            sessionKey: target.sessionKey,
+            storePath: target.storePath,
+            ...(existingWriterFence ?? initialWriter?.committedFence),
+          },
+          note,
+          { config: params.config },
+        );
+      }
+    },
     get activePrompt() {
       return activePrompt;
+    },
+    get continuation() {
+      return continuation;
     },
     get suppressNextUserMessagePersistence() {
       return suppressNextUserMessagePersistence;
@@ -229,7 +281,20 @@ export function createEmbeddedRunSessionPromptState(input: {
         await waitForSessionTranscriptProjection({ ...target, sessionId }, abortSignal);
       }
     },
-    continueFromCurrentTranscript: (options?: { includeToolFailureInstruction?: boolean }) => {
+    continueFromCurrentTranscript: (options?: {
+      includeToolFailureInstruction?: boolean;
+      messages?: NonNullable<EmbeddedRunAttemptParams["continuation"]>["messages"];
+    }) => {
+      // Raw model runs load no transcript history; the original prompt is their only task context.
+      if (params.modelRun === true || params.promptMode === "none") {
+        return;
+      }
+      if (options?.messages) {
+        continuation = {
+          prompt: params.prompt,
+          messages: [...(continuation?.messages ?? []), ...options.messages],
+        };
+      }
       const prompt = options?.includeToolFailureInstruction
         ? `${CONTINUATION_PROMPT} ${TOOL_FAILURE_INSTRUCTION}`
         : CONTINUATION_PROMPT;

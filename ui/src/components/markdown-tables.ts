@@ -1,22 +1,19 @@
 import { html, render } from "lit";
 import type { MarkdownIt } from "markdown-it";
+import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { t } from "../i18n/index.ts";
-import { copyToClipboard } from "../lib/clipboard.ts";
 import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
 import { toolIcons } from "./icons-tools.ts";
 import { icons } from "./icons.ts";
-import { escapeMarkdownHtml } from "./markdown-text.ts";
+import { copyMarkdownText } from "./markdown-copy.ts";
 
 const tableShellSelector = ".chat-text .markdown-table[data-table-interactions]";
 const tableViewportSelector = ".markdown-table__viewport";
 const enhancedTableShells = new WeakSet<HTMLElement>();
 const tableOwnerStates = new WeakMap<HTMLElement, TableOwnerState>();
-const tableCopyResetTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>();
-const tableCopyAttempts = new WeakMap<HTMLElement, number>();
 
 type TableOwnerState = {
   release: () => void;
-  sync: () => void;
   closeDialog?: () => void;
 };
 
@@ -42,11 +39,11 @@ export function installMarkdownTables(markdownParser: MarkdownIt): void {
     if (!tableInteractionsEnabled(env)) {
       return defaultTableClose?.(tokens, index, options, env, renderer) ?? "</table>\n";
     }
-    return `</table></div><div class="markdown-table__actions"><button type="button" class="markdown-table__expand" aria-label="${escapeMarkdownHtml(t("common.expandTable"))}"></button><button type="button" class="markdown-table__copy" aria-label="${escapeMarkdownHtml(t("common.copyTable"))}"></button></div></div>`;
+    return `</table></div><div class="markdown-table__actions"><button type="button" class="markdown-table__expand" aria-label="${escapeHtml(t("common.expandTable"))}"></button><button type="button" class="markdown-table__copy" aria-label="${escapeHtml(t("common.copyTable"))}"></button></div></div>`;
   };
 }
 
-function tableText(table: HTMLTableElement): string {
+export function markdownTableCopyText(table: HTMLTableElement): string {
   return [...table.rows]
     .map((row) => [...row.cells].map((cell) => cell.textContent?.trim() ?? "").join("\t"))
     .join("\n");
@@ -57,17 +54,17 @@ function syncTableOverflow(shell: HTMLElement): void {
   if (!viewport) {
     return;
   }
-  const overflows = viewport.scrollWidth - viewport.clientWidth > 1;
-  shell.classList.toggle("markdown-table--can-scroll-left", overflows && viewport.scrollLeft > 1);
+  const { scrollWidth, clientWidth, scrollLeft } = viewport;
+  const overflows = scrollWidth - clientWidth > 1;
+  shell.classList.toggle("markdown-table--can-scroll-left", overflows && scrollLeft > 1);
   shell.classList.toggle(
     "markdown-table--can-scroll-right",
-    overflows && viewport.scrollLeft + viewport.clientWidth < viewport.scrollWidth - 1,
+    overflows && scrollLeft + clientWidth < scrollWidth - 1,
   );
 }
 
 function enhanceTableShell(shell: HTMLElement): void {
   if (enhancedTableShells.has(shell)) {
-    syncTableOverflow(shell);
     return;
   }
   const viewport = shell.querySelector<HTMLElement>(tableViewportSelector);
@@ -77,55 +74,95 @@ function enhanceTableShell(shell: HTMLElement): void {
     return;
   }
   enhancedTableShells.add(shell);
-  render(toolIcons.maximize, expand);
+  render(html`${toolIcons.maximize}<span>${t("common.expandTable")}</span>`, expand);
   render(icons.copy, copy);
   viewport.addEventListener("scroll", () => syncTableOverflow(shell), { passive: true });
-  syncTableOverflow(shell);
 }
 
 export function enhanceMarkdownTables(owner: HTMLElement): TableOwnerState {
   let state = tableOwnerStates.get(owner);
   if (!state) {
-    const observedViewports = new Set<HTMLElement>();
+    const observedNodes = new Set<HTMLElement>();
     const resizeObserver =
       typeof ResizeObserver === "function"
         ? new ResizeObserver((entries) => {
-            for (const entry of entries) {
-              const shell = entry.target.closest<HTMLElement>(tableShellSelector);
+            const shells = new Set(
+              entries.map((entry) => entry.target.closest<HTMLElement>(tableShellSelector)),
+            );
+            for (const shell of shells) {
               if (shell) {
                 syncTableOverflow(shell);
               }
             }
           })
         : null;
-    const syncOwnerTables = () => {
-      for (const viewport of observedViewports) {
-        if (!viewport.isConnected || !owner.contains(viewport)) {
-          resizeObserver?.unobserve(viewport);
-          observedViewports.delete(viewport);
+    const syncTables = (shells: Iterable<HTMLElement>) => {
+      for (const shell of shells) {
+        if (!owner.contains(shell)) {
+          continue;
         }
-      }
-      for (const shell of owner.querySelectorAll<HTMLElement>(tableShellSelector)) {
-        const viewport = shell.querySelector<HTMLElement>(tableViewportSelector);
         enhanceTableShell(shell);
-        if (viewport && !observedViewports.has(viewport)) {
-          observedViewports.add(viewport);
-          resizeObserver?.observe(viewport);
+        // Both boxes are observed after layout; mutation-time reads would force
+        // layout again after each table's chrome is installed.
+        if (!resizeObserver) {
+          syncTableOverflow(shell);
+        }
+        for (const node of shell.querySelectorAll<HTMLElement>(`${tableViewportSelector}, table`)) {
+          if (!observedNodes.has(node)) {
+            observedNodes.add(node);
+            resizeObserver?.observe(node);
+          }
         }
       }
     };
-    const mutationObserver = new MutationObserver(syncOwnerTables);
-    mutationObserver.observe(owner, { childList: true, subtree: true });
+    const mutationObserver = new MutationObserver((records) => {
+      const shells = new Set<HTMLElement>();
+      for (const record of records) {
+        const target =
+          record.target instanceof Element ? record.target : record.target.parentElement;
+        const shell = target?.closest<HTMLElement>(tableShellSelector);
+        // Icon/copy feedback belongs to the controls and cannot change the table's width.
+        if (shell && (target === shell || target?.closest(tableViewportSelector))) {
+          shells.add(shell);
+        }
+        for (const node of record.addedNodes) {
+          if (!(node instanceof HTMLElement)) {
+            continue;
+          }
+          if (node.matches(tableShellSelector)) {
+            shells.add(node);
+          }
+          for (const added of node.querySelectorAll<HTMLElement>(tableShellSelector)) {
+            shells.add(added);
+          }
+        }
+        for (const node of record.removedNodes) {
+          if (!(node instanceof HTMLElement) || owner.contains(node)) {
+            continue;
+          }
+          const removed = [
+            node,
+            ...node.querySelectorAll<HTMLElement>(`${tableViewportSelector}, table`),
+          ];
+          for (const observed of removed) {
+            if (observedNodes.delete(observed)) {
+              resizeObserver?.unobserve(observed);
+            }
+          }
+        }
+      }
+      syncTables(shells);
+    });
     state = {
       release: () => {
         mutationObserver.disconnect();
         resizeObserver?.disconnect();
       },
-      sync: syncOwnerTables,
     };
     tableOwnerStates.set(owner, state);
+    syncTables(owner.querySelectorAll<HTMLElement>(tableShellSelector));
+    mutationObserver.observe(owner, { childList: true, subtree: true, characterData: true });
   }
-  state.sync();
   return state;
 }
 
@@ -188,6 +225,7 @@ async function showTableDialog(
       html`
         <div
           class="markdown-table-dialog chat-text"
+          dir=${getComputedStyle(table).direction}
           @click=${dismissLink}
           @auxclick=${dismissLink}
           @keydown=${dismissLink}
@@ -236,27 +274,23 @@ export function handleMarkdownTableInteraction(event: Event): void {
   }
   const copy = target.closest<HTMLElement>(".markdown-table__copy");
   if (copy) {
-    const attempt = (tableCopyAttempts.get(copy) ?? 0) + 1;
-    tableCopyAttempts.set(copy, attempt);
-    const isCurrent = () => copy.isConnected && tableCopyAttempts.get(copy) === attempt;
-    void copyToClipboard(tableText(table), isCurrent).then((copied) => {
-      if (!isCurrent()) {
-        return;
-      }
-      copy.setAttribute("aria-label", t(copied ? "common.copied" : "common.copyFailed"));
-      if (copied) {
-        render(icons.check, copy);
-      }
-      clearTimeout(tableCopyResetTimers.get(copy));
-      const resetTimer = setTimeout(
-        () => {
+    const text = markdownTableCopyText(table);
+    copyMarkdownText(
+      copy,
+      text,
+      () =>
+        table.isConnected &&
+        shell.querySelector("table") === table &&
+        markdownTableCopyText(table) === text,
+      (copied) => {
+        if (copied === undefined) {
           render(icons.copy, copy);
           copy.setAttribute("aria-label", t("common.copyTable"));
-          tableCopyResetTimers.delete(copy);
-        },
-        copied ? 1500 : 2000,
-      );
-      tableCopyResetTimers.set(copy, resetTimer);
-    });
+        } else {
+          copy.setAttribute("aria-label", t(copied ? "common.copied" : "common.copyFailed"));
+          render(copied ? icons.check : icons.copy, copy);
+        }
+      },
+    );
   }
 }

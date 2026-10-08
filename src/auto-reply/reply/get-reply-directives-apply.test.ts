@@ -1,5 +1,16 @@
 // Tests applying parsed directives to get-reply execution options.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  getContextWindowCaches,
+  providerContextTokenCacheKey,
+} from "../../agents/context-cache.js";
+import { resetContextWindowCacheForTest } from "../../agents/context.test-support.js";
+import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
+import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
 import { applyMixedDirectives } from "./directive-handling.mixed-inline.test-helpers.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
@@ -34,17 +45,70 @@ vi.mock("./directive-handling.impl.js", () => ({
   handleDirectiveOnly: (params: HandleDirectiveOnlyParams) => mocks.handleDirective(params),
 }));
 
-vi.mock("./directive-handling.persist.runtime.js", () => ({
-  applySessionModelSelection: (...args: unknown[]) => mocks.applyModelSelection(...args),
+vi.mock("../../model-picker/apply-session-model-selection.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../model-picker/apply-session-model-selection.js")>()),
+  applySessionModelSelectionInternal: (...args: unknown[]) => mocks.applyModelSelection(...args),
 }));
 
 beforeEach(() => {
+  resetContextWindowCacheForTest();
   mocks.handleDirective.mockReset();
   mocks.applyModelSelection.mockReset();
   mocks.systemEvent.mockReset();
 });
 
+afterEach(() => resetContextWindowCacheForTest());
+
 describe("applyInlineDirectiveOverrides", () => {
+  it.each(["thinking", "catalog"] as const)(
+    "cancels a reply directive during %s discovery without consuming its late result",
+    async (stage) => {
+      const held = createDeferred();
+      const entered = createDeferred();
+      const controller = new AbortController();
+      const wait = async () => {
+        entered.resolve();
+        await held.promise;
+      };
+      const pending = applyMixedDirectives({
+        body: stage === "thinking" ? "/think low" : "/status",
+        abortSignal: controller.signal,
+        resolveDefaultThinkingLevel: async () => {
+          if (stage === "thinking") {
+            await wait();
+          }
+          return "off";
+        },
+        resolveThinkingCatalog: async () => {
+          if (stage === "catalog") {
+            await wait();
+          }
+          return [];
+        },
+      });
+      await entered.promise;
+      const outcome = pending.then(
+        () => "completed",
+        (error: unknown) => (error instanceof Error ? error.name : "unknown"),
+      );
+      controller.abort();
+      try {
+        expect(
+          await Promise.race([
+            outcome,
+            new Promise<string>((resolve) => {
+              setImmediate(() => resolve("pending"));
+            }),
+          ]),
+        ).toBe("AbortError");
+        expect(mocks.handleDirective).not.toHaveBeenCalled();
+      } finally {
+        held.resolve();
+        await Promise.allSettled([pending]);
+      }
+    },
+  );
+
   it("returns the elevated denial for a prepared global owner", async () => {
     const ctx = buildTestCtx({
       Body: "/elevated on",
@@ -244,7 +308,6 @@ describe("applyInlineDirectiveOverrides", () => {
           commandBodyNormalized: "hello /model openai/gpt-5.4 --runtime openclaw",
         },
         directives,
-        messageProviderKey: "webchat",
         elevatedEnabled: true,
         elevatedAllowed: true,
         elevatedFailures: [],
@@ -343,7 +406,6 @@ describe("applyInlineDirectiveOverrides", () => {
           commandBodyNormalized: body,
         },
         directives,
-        messageProviderKey: "webchat",
         elevatedEnabled: true,
         elevatedAllowed: true,
         elevatedFailures: [],
@@ -399,3 +461,130 @@ describe("applyInlineDirectiveOverrides", () => {
     expect(mocks.handleDirective).not.toHaveBeenCalled();
   });
 });
+
+it.each([
+  {
+    name: "native Synthetic window",
+    runtime: "codex",
+    window: 128_000,
+    synthetic: true,
+    prompt: undefined,
+    expected: 128_000,
+  },
+  {
+    name: "native genuine window",
+    runtime: "codex",
+    window: 64_000,
+    synthetic: false,
+    prompt: undefined,
+    expected: 64_000,
+  },
+  {
+    name: "native reported prompt",
+    runtime: "codex",
+    window: 128_000,
+    synthetic: true,
+    prompt: 777_000,
+    expected: 777_000,
+  },
+  {
+    name: "native selection without native inventory",
+    runtime: "codex",
+    window: undefined,
+    synthetic: false,
+    prompt: undefined,
+    expected: 200_000,
+  },
+  {
+    name: "API selection beside native inventory",
+    runtime: "openclaw",
+    window: 128_000,
+    synthetic: true,
+    prompt: undefined,
+    expected: 1_000_000,
+  },
+])(
+  "continues mixed directives with $name from the committed runtime",
+  async ({ runtime, window, synthetic, prompt, expected }) => {
+    const provider = "openai";
+    const model = "directive-capacity-fixture";
+    const cfg: OpenClawConfig = {
+      plugins: { enabled: false },
+      commands: { text: true },
+      agents: {
+        defaults: { model: `${provider}/${model}`, models: { [`${provider}/${model}`]: {} } },
+      },
+    };
+    const sessionKey = "agent:main:runtime-context";
+    const freshEntry: SessionEntry = {
+      sessionId: "runtime-context",
+      updatedAt: 2,
+      providerOverride: provider,
+      modelOverride: model,
+      agentRuntimeOverride: runtime,
+      agentHarnessId: "previous-native-runtime",
+    };
+    const api: ModelCatalogEntry = {
+      provider,
+      id: model,
+      name: "API fixture",
+      contextWindow: 1_000_000,
+    };
+    const native: ModelCatalogEntry | undefined =
+      window === undefined
+        ? undefined
+        : {
+            provider,
+            id: model,
+            name: "Native fixture",
+            nativeRuntime: "codex",
+            contextWindow: window,
+            ...(synthetic ? { contextWindowSource: "synthetic" } : {}),
+            ...(prompt === undefined ? {} : { contextTokens: prompt }),
+          };
+    const entries = native ? (runtime === "openclaw" ? [native, api] : [native]) : [api];
+    getContextWindowCaches().discoveredTokenCache.set(
+      providerContextTokenCacheKey(provider, model),
+      1_000_000,
+    );
+    mocks.handleDirective.mockImplementation(async (params) => {
+      if (!params.persistenceState) {
+        throw new Error("Expected mixed directive persistence");
+      }
+      params.sessionStore[params.sessionKey] = freshEntry;
+      params.persistenceState.outcome = { kind: "applied", provider, model, modelCatalog: entries };
+      return undefined;
+    });
+    const { result, sessionStore } = await applyMixedDirectives({
+      body: "hello /verbose on",
+      cfg,
+      sessionKey,
+      provider,
+      model,
+      defaultProvider: provider,
+      defaultModel: model,
+      allowedModels: entries,
+      sessionEntry: {
+        ...freshEntry,
+        updatedAt: 1,
+        agentRuntimeOverride: runtime === "codex" ? "openclaw" : "codex",
+      },
+    });
+    expect(sessionStore[sessionKey]).toBe(freshEntry);
+    expect(resolveSessionModelRef(cfg, sessionStore[sessionKey], "main")).toEqual({
+      provider,
+      model,
+    });
+    expect(
+      resolveEffectiveAgentRuntime({
+        cfg,
+        agentId: "main",
+        provider,
+        modelId: model,
+        sessionKey,
+        sessionEntry: sessionStore[sessionKey],
+      }),
+    ).toBe(runtime);
+    expect(result).toMatchObject({ kind: "continue", provider, model, contextTokens: expected });
+  },
+);

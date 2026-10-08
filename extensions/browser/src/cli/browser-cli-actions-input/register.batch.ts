@@ -1,19 +1,14 @@
-/**
- * Browser CLI batch command: runs nested act requests in one /act call.
- */
 import type { Command } from "commander";
+import { danger, defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserActRequest } from "../../browser/client-actions.types.js";
-import { BROWSER_TAB_REFERENCE_HELP, type BrowserParentOpts } from "../browser-cli-shared.js";
-import { danger, defaultRuntime } from "../core-api.js";
 import {
-  callBrowserAct,
-  logBrowserActionResult,
-  readActionsPayload,
-  resolveBrowserActionContext,
-} from "./shared.js";
+  BROWSER_TAB_REFERENCE_HELP,
+  runBrowserCliCommand,
+  type BrowserParentOpts,
+} from "../browser-cli-shared.js";
+import { runBrowserAction, readActionsPayload } from "./shared.js";
 
-/** Registers the Browser CLI batch command. */
 export function registerBrowserBatchCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -26,7 +21,7 @@ export function registerBrowserBatchCommands(
     .option("--continue", "Continue through all actions instead of stopping on first error")
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
-      const { parent, profile } = resolveBrowserActionContext(cmd, parentOpts);
+      const parent = parentOpts(cmd);
       if (opts.actions !== undefined && opts.actionsFile !== undefined) {
         defaultRuntime.error(danger("Specify only one of --actions or --actions-file"));
         defaultRuntime.exit(1);
@@ -37,9 +32,7 @@ export function registerBrowserBatchCommands(
         defaultRuntime.exit(1);
         return;
       }
-      let actions: unknown[];
-      let result: { results?: Array<{ ok: boolean; error?: string }> };
-      try {
+      await runBrowserCliCommand(async () => {
         const payload = await readActionsPayload({
           actions: opts.actions,
           actionsFile: opts.actionsFile,
@@ -59,41 +52,19 @@ export function registerBrowserBatchCommands(
         if (!parsed.length) {
           throw new Error("actions must contain at least one entry");
         }
-        actions = parsed;
+        const actions = parsed;
         const targetId = normalizeOptionalString(opts.targetId);
-        const body: Record<string, unknown> = {
+        const request = {
           kind: "batch",
           actions,
           ...(targetId ? { targetId } : {}),
           ...(opts.continue ? { stopOnError: false } : {}),
-        };
-        const request = body as unknown as BrowserActRequest;
-        result = await callBrowserAct<{
-          results?: Array<{ ok: boolean; error?: string }>;
-        }>({
+        } as BrowserActRequest;
+        await runBrowserAction({
           parent,
-          profile,
           body: request,
+          successMessage: `batch ran ${actions.length} action(s)`,
         });
-      } catch (err) {
-        defaultRuntime.error(danger(String(err)));
-        defaultRuntime.exit(1);
-        return;
-      }
-      const failures = (result.results ?? []).flatMap((entry, index) =>
-        entry.ok ? [] : [`action ${index + 1}: ${entry.error ?? "failed"}`],
-      );
-      // /act represents recoverable child errors in a successful response.
-      // Surface them as a command failure so text-mode scripts do not report a false success.
-      if (failures.length) {
-        if (parent?.json) {
-          defaultRuntime.writeJson(result);
-        } else {
-          defaultRuntime.error(danger(`batch failed: ${failures.join("; ")}`));
-        }
-        defaultRuntime.exit(1);
-        return;
-      }
-      logBrowserActionResult(parent, result, `batch ran ${actions.length} action(s)`);
+      });
     });
 }

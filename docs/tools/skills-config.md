@@ -214,7 +214,7 @@ fails closed.
 OpenClaw does not execute install policy during normal Gateway startup.
 Installs and updates fail closed when policy is enabled but unavailable.
 `openclaw doctor` performs static validation; `openclaw doctor --deep`
-executes a synthetic install probe against the configured command.
+executes a synthetic install check against the configured command.
 
 Bulk updates apply policy per target: a blocked skill or plugin update fails
 that target without disabling the policy or skipping later targets in the
@@ -322,15 +322,20 @@ different visible skill set per agent.
 ```json5
 {
   agents: {
+    ownership: "explicit",
     defaults: {
       skills: ["github", "weather"], // shared baseline
+      heartbeat: { agentId: "writer" },
+      systemAgent: { agentId: "writer" },
+      authInheritance: { agentId: "writer" },
     },
     entries: {
-      writer: { default: true }, // inherits github, weather
+      writer: { workspace: "~/.openclaw/workspace" }, // inherits github, weather
       docs: { skills: ["docs-search"] }, // replaces defaults entirely
       "locked-down": { skills: [] }, // no skills
     },
   },
+  talk: { agentId: "writer" },
 }
 ```
 
@@ -367,7 +372,7 @@ different visible skill set per agent.
   and weekly Workshop maintenance, without proposal scanning or automatic rollback
   snapshots. Immediate foreground repairs still use scanner-gated proposal apply.
   User-prompted skill creation,
-  `/learn`, and manual history scan continue to work in every mode.
+  `/learn`, and manual learning sessions continue to work in every mode.
 </ParamField>
 
 See [Self-learning](/tools/self-learning) for eligibility, privacy, cost,

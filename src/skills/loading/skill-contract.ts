@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-// Skill contract types describe loaded skill metadata, sources, and prompt surfaces.
 import type { SourceInfo } from "../../agents/sessions/source-info.js";
+import { decodeXml, escapeXml } from "../../shared/xml.js";
+import { resolveSkillReadPath } from "../workspace-skill-read-path.js";
 
 export interface Skill {
   name: string;
@@ -11,8 +12,14 @@ export interface Skill {
   locationNote?: string;
   /** Prepared instructions for transferred bundles or non-filesystem locators such as node://. */
   readContent?: string;
+  /** Prepared runtime identity of instruction bytes, or the complete delivered bundle tree. */
+  contentHash?: string;
   filePath: string;
   baseDir: string;
+  /** Discovery provenance for collision diagnostics, never read authority. */
+  discoveryRoot?: { path: string; worktree: boolean };
+  /** Assigned by Gateway discovery, never accepted from the workspace provider. */
+  fileHost?: "gateway" | "workspace";
   /** @deprecated Ignored; retained for API compatibility until the next Plugin SDK major. */
   promptVersion?: string;
   sourceInfo: SourceInfo;
@@ -23,45 +30,16 @@ export interface Skill {
 
 export { createSyntheticSourceInfo } from "../../agents/sessions/source-info.js";
 
+// Preserve the names and signatures in SDK-reachable namespace declarations.
 export function escapeSkillXml(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
+  return escapeXml(str);
 }
 
 export function decodeSkillXml(value: string): string {
-  return value
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&amp;/g, "&");
+  return decodeXml(value);
 }
 
 export const COMPACT_DESCRIPTION_MAX_CHARS = 220;
-const SKILL_FRONTMATTER_BLOCK = /^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/u;
-const SKILL_TITLE_HEADING = /^#\s+(.+?)\s*#*\s*$/mu;
-
-function humanizeSkillIdentifier(value: string): string {
-  return value
-    .trim()
-    .split(/[-_]+/u)
-    .filter(Boolean)
-    .map((word) => `${word.slice(0, 1).toUpperCase()}${word.slice(1)}`)
-    .join(" ");
-}
-
-export function resolveSkillDisplayName(content: string, fallbackName: string): string {
-  const body = content.replace(SKILL_FRONTMATTER_BLOCK, "");
-  const heading = body.match(SKILL_TITLE_HEADING)?.[1]?.trim();
-  const displayName = heading || humanizeSkillIdentifier(fallbackName) || fallbackName;
-  // A captured heading can retain the whole skill body in metadata caches.
-  // Copy UTF-16 code units without changing lone surrogates.
-  return Buffer.from(displayName, "utf16le").toString("utf16le");
-}
 
 function truncateSkillDescription(description: string, maxChars: number): string {
   const normalized = description.replace(/\s+/g, " ").trim();
@@ -94,7 +72,7 @@ export function compactSkillsPromptForContext(prompt: string, contextTokenBudget
     catalog.replace(
       /<description>([\s\S]*?)<\/description>/gu,
       (_match, description: string) =>
-        `<description>${escapeSkillXml(truncateSkillDescription(decodeSkillXml(description), maxChars))}</description>`,
+        `<description>${escapeXml(truncateSkillDescription(decodeXml(description), maxChars))}</description>`,
     ) +
     prompt.slice(end);
   // Names, mapped locations and loading notes are an identity floor, not optional prose.
@@ -102,14 +80,16 @@ export function compactSkillsPromptForContext(prompt: string, contextTokenBudget
   let lo = 64;
   let hi = COMPACT_DESCRIPTION_MAX_CHARS;
   let result = render(lo);
-  while (lo <= hi) {
-    const mid = Math.floor((lo + hi) / 2);
-    const candidate = render(mid);
-    if (candidate.length <= targetChars) {
-      result = candidate;
-      lo = mid + 1;
-    } else {
-      hi = mid - 1;
+  if (result.length <= targetChars) {
+    while (lo <= hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      const candidate = render(mid);
+      if (candidate.length <= targetChars) {
+        result = candidate;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
     }
   }
   return result.length < prompt.length ? result : prompt;
@@ -132,14 +112,14 @@ function formatSkillCatalog(
   ];
   for (const skill of skills) {
     lines.push("  <skill>");
-    lines.push(`    <name>${escapeSkillXml(skill.name)}</name>`);
+    lines.push(`    <name>${escapeXml(skill.name)}</name>`);
     const description = descriptionForSkill(skill);
     if (description !== undefined) {
-      lines.push(`    <description>${escapeSkillXml(description)}</description>`);
+      lines.push(`    <description>${escapeXml(description)}</description>`);
     }
-    lines.push(`    <location>${escapeSkillXml(skill.filePath)}</location>`);
+    lines.push(`    <location>${escapeXml(resolveSkillReadPath(skill))}</location>`);
     if (skill.locationNote) {
-      lines.push(`    <location_note>${escapeSkillXml(skill.locationNote)}</location_note>`);
+      lines.push(`    <location_note>${escapeXml(skill.locationNote)}</location_note>`);
     }
     lines.push("  </skill>");
   }

@@ -9,12 +9,13 @@ import {
   resetCodeModeTestState,
   runUntilCompleted,
 } from "./code-mode.test-support.js";
+import type { McpOAuthIdentity } from "./mcp-oauth-identity.js";
 
 const oauthStatus = vi.hoisted(() => vi.fn());
 const startAuthorization = vi.hoisted(() => vi.fn());
 
 vi.mock("./mcp-oauth.js", () => ({
-  readMcpOAuthCredentialsStatus: oauthStatus,
+  readMcpOAuthCredentialsStatuses: oauthStatus,
   startMcpOAuthAuthorization: startAuthorization,
 }));
 
@@ -76,7 +77,11 @@ describe("requester MCP connect runtime", () => {
   const created: Array<Parameters<CreateSessionMcpRuntime>[0]> = [];
 
   beforeEach(() => {
-    oauthStatus.mockReset().mockResolvedValue({ state: "unauthenticated" });
+    oauthStatus
+      .mockReset()
+      .mockImplementation(async (identities: readonly McpOAuthIdentity[]) =>
+        identities.map(() => ({ state: "unauthenticated" })),
+      );
     startAuthorization.mockReset().mockResolvedValue({
       status: "redirect",
       authorizationUrl: "https://auth.example/authorize?state=opaque",
@@ -94,7 +99,7 @@ describe("requester MCP connect runtime", () => {
 
   afterEach(async () => {
     await manager.disposeAll();
-    resetCodeModeTestState();
+    await resetCodeModeTestState();
   });
 
   it("materializes connect before authorization and real tools on the next message", async () => {
@@ -126,7 +131,9 @@ describe("requester MCP connect runtime", () => {
     expect(disconnected.tools.map((tool) => tool.name)).toEqual(["calendar__connect"]);
     expect(created.find((params) => params.requesterScope)?.includeServerNames).toEqual(new Set());
     expect(startAuthorization).not.toHaveBeenCalled();
-    await expect(disconnected.tools[0]!.execute("connect", {})).resolves.toMatchObject({
+    const connecting = disconnected.tools[0]!.execute("connect", {});
+    expect(startAuthorization).toHaveBeenCalledOnce();
+    await expect(connecting).resolves.toMatchObject({
       details: {
         mcpConnect: {
           serverName: "calendar",
@@ -170,7 +177,9 @@ describe("requester MCP connect runtime", () => {
     expect(disconnected.tools[0]?.resultContentSource).toBe("network");
     await disconnected.dispose();
 
-    oauthStatus.mockResolvedValue({ state: "authorized" });
+    oauthStatus.mockImplementation(async (identities: readonly McpOAuthIdentity[]) =>
+      identities.map(() => ({ state: "authorized" })),
+    );
     const connectedRuntime = await manager.getOrCreate(request);
     const connected = await materializeBundleMcpToolsForRun({ runtime: connectedRuntime });
 

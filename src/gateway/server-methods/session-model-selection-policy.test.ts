@@ -6,10 +6,10 @@ import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-po
 const cfg = {
   agents: {
     defaults: { model: "anthropic/claude-opus-4-6" },
-    list: [
-      { id: "main", default: true },
-      { id: "work", model: "anthropic/claude-sonnet-4-6" },
-    ],
+    entries: {
+      main: {},
+      work: { model: "anthropic/claude-sonnet-4-6" },
+    },
   },
 } satisfies OpenClawConfig;
 
@@ -33,7 +33,7 @@ describe("resolveGatewayModelSelectionPolicy", () => {
     ).toBe("agent");
   });
 
-  it("discloses session-only selection without writable config", () => {
+  it("discloses session-only selection without admin scope", () => {
     expect(
       resolveGatewayModelSelectionPolicy({
         callerScopes: ["operator.write"],
@@ -41,14 +41,20 @@ describe("resolveGatewayModelSelectionPolicy", () => {
         scope: "global",
       }).target,
     ).toBe("session");
-    expect(
-      withEnv({ OPENCLAW_NIX_MODE: "1" }, () =>
-        resolveGatewayModelSelectionPolicy({
-          callerScopes: ["operator.admin"],
-          cfg,
-          scope: "global",
-        }),
-      ).target,
-    ).toBe("session");
   });
+
+  it.each(["OPENCLAW_NIX_MODE", "OPENCLAW_CONFIG_READONLY"])(
+    "discloses session-only selection without writable config in %s",
+    (mode) => {
+      expect(
+        withEnv({ [mode]: "1" }, () =>
+          resolveGatewayModelSelectionPolicy({
+            callerScopes: ["operator.admin"],
+            cfg,
+            scope: "global",
+          }),
+        ).target,
+      ).toBe("session");
+    },
+  );
 });

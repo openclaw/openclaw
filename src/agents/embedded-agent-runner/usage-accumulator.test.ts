@@ -99,6 +99,21 @@ describe("usage-accumulator", () => {
       expect(toNormalizedUsage(run)?.cost).toBeUndefined();
     });
 
+    it("preserves billed-zero provenance only while every contribution is billed", () => {
+      const attempt = createAccumulatorWithUsage({
+        input: 100,
+        cost: { total: 0, totalOrigin: "provider-billed" },
+      });
+      const run = createUsageAccumulator();
+      mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
+      expect(toNormalizedUsage(run)?.cost).toEqual({ total: 0, totalOrigin: "provider-billed" });
+
+      mergeUsageIntoAccumulator(run, { input: 100, cost: { total: 0 } });
+      expect(toNormalizedUsage(run)?.cost).toEqual({ total: 0 });
+      mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
+      expect(toNormalizedUsage(run)?.cost).toEqual({ total: 0 });
+    });
+
     it("ignores undefined or zero-only usage", () => {
       const acc = createUsageAccumulator();
 

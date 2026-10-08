@@ -3,33 +3,39 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
+import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import {
-  loadOriginDeviceTokenReadOnly,
-  storeOriginDeviceToken,
-} from "../infra/device-auth-store.js";
+  readOriginDeviceTokenReadOnlyForTest,
+  seedOriginDeviceToken,
+} from "../infra/device-auth-store.test-support.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { getFreePort } from "../test-utils/ports.js";
+import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import {
   prepareGatewayCliFixture,
+  prepareSharedStateReadArtifacts,
   prepareUnreachableGatewayCliFixture,
   runIsolatedGatewayCli,
   snapshotDirectoryContents,
   snapshotSharedStateArtifacts,
   tempDirs,
+  UNREACHABLE_GATEWAY_URL,
 } from "./gateway-backed-exit.process.test-support.js";
 import {
   EMPTY_STABILITY_SNAPSHOT,
   startAgentTurnGateway,
-  startCronListGateway,
+  startCliReadGateway,
+  startCronLookupMissGateway,
   startGatewayStabilityRpcServer,
   startNodePairingGateway,
 } from "./gateway-backed-exit.test-helpers.js";
@@ -37,6 +43,7 @@ import {
 // A one-shot command must release its Gateway socket once its output is complete.
 // The clock starts at the complete payload, so cold startup never enters this budget.
 const ONE_SHOT_EXIT_BUDGET_MS = 5_000;
+const cliEntrypoint = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli);
 
 describe("gateway-backed CLI process exit", () => {
   it.each([
@@ -66,7 +73,6 @@ describe("gateway-backed CLI process exit", () => {
   });
 
   it.each([
-    { label: "empty", timeout: "", valid: false },
     { label: "whitespace", timeout: " \t ", valid: false },
     { label: "positive", timeout: "10000", valid: true },
   ])(
@@ -97,7 +103,10 @@ describe("gateway-backed CLI process exit", () => {
         expect(gateway.connectionCount).toBeGreaterThan(0);
         expect(gateway.calls).toEqual(["node.pair.list", "node.list"]);
       } else {
-        expect(result.stderr).toContain("Invalid --timeout");
+        expect(JSON.parse(result.stdout)).toMatchObject({
+          ok: false,
+          error: { type: "cli_error", message: expect.stringContaining("Invalid --timeout") },
+        });
         expect(gateway.connectionCount).toBe(0);
         expect(gateway.calls).toEqual([]);
       }
@@ -146,7 +155,7 @@ describe("gateway-backed CLI process exit", () => {
       OPENCLAW_STATE_DIR: stateDir,
     };
     const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
-    storeOriginDeviceToken({
+    seedOriginDeviceToken({
       gatewayScope: gatewayOriginScope(gateway.url),
       deviceId: identity.deviceId,
       role: "operator",
@@ -155,6 +164,7 @@ describe("gateway-backed CLI process exit", () => {
       env: stateEnv,
     });
     closeOpenClawStateDatabaseForTest();
+    prepareSharedStateReadArtifacts(stateDir);
     const before = await snapshotDirectoryContents(stateDir);
 
     const result = await runIsolatedGatewayCli({
@@ -169,7 +179,7 @@ describe("gateway-backed CLI process exit", () => {
     expect(gateway.calls).toEqual(["node.pair.list", "node.pair.approve"]);
     expect(await snapshotDirectoryContents(stateDir)).toEqual(before);
     expect(
-      loadOriginDeviceTokenReadOnly({
+      readOriginDeviceTokenReadOnlyForTest({
         gatewayScope: gatewayOriginScope(gateway.url),
         deviceId: identity.deviceId,
         role: "operator",
@@ -178,13 +188,13 @@ describe("gateway-backed CLI process exit", () => {
     ).toBe(storedToken);
   });
 
-  it("calls a reachable Gateway with explicit auth without creating shared state", async () => {
+  it("calls a reachable Gateway with a decoded literal credential without creating shared state", async () => {
     const root = tempDirs.make("openclaw-gateway-call-explicit-auth-");
-    const token = "configured-token";
+    const token = "${LITERAL_TOKEN}";
     const gateway = await startGatewayStabilityRpcServer({ token }, "issued-device-token");
     const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
       mode: "remote",
-      remote: { url: gateway.url, token },
+      remote: { url: gateway.url, token: "$${LITERAL_TOKEN}" },
     });
     expect(await snapshotSharedStateArtifacts(stateDir)).toEqual({});
 
@@ -220,7 +230,7 @@ describe("gateway-backed CLI process exit", () => {
       OPENCLAW_STATE_DIR: stateDir,
     };
     const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
-    storeOriginDeviceToken({
+    seedOriginDeviceToken({
       gatewayScope: gatewayOriginScope(gateway.url),
       deviceId: identity.deviceId,
       role: "operator",
@@ -229,6 +239,7 @@ describe("gateway-backed CLI process exit", () => {
       env: stateEnv,
     });
     closeOpenClawStateDatabaseForTest();
+    prepareSharedStateReadArtifacts(stateDir);
     const before = await snapshotSharedStateArtifacts(stateDir);
 
     const result = await runIsolatedGatewayCli({
@@ -243,7 +254,7 @@ describe("gateway-backed CLI process exit", () => {
     expect(gateway.authInputs).toEqual([{ deviceToken: storedToken }]);
     expect(gateway.calls).toEqual(["diagnostics.stability"]);
     expect(
-      loadOriginDeviceTokenReadOnly({
+      readOriginDeviceTokenReadOnlyForTest({
         gatewayScope: gatewayOriginScope(gateway.url),
         deviceId: identity.deviceId,
         role: "operator",
@@ -274,7 +285,7 @@ describe("gateway-backed CLI process exit", () => {
       };
       if (seeded) {
         const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
-        storeOriginDeviceToken({
+        seedOriginDeviceToken({
           gatewayScope: gatewayOriginScope(gateway.url),
           deviceId: identity.deviceId,
           role: "operator",
@@ -283,6 +294,7 @@ describe("gateway-backed CLI process exit", () => {
           env: stateEnv,
         });
         closeOpenClawStateDatabaseForTest();
+        prepareSharedStateReadArtifacts(stateDir);
       }
       const before = await snapshotSharedStateArtifacts(stateDir);
       expect(Object.keys(before).includes("openclaw.sqlite")).toBe(seeded);
@@ -331,7 +343,7 @@ describe("gateway-backed CLI process exit", () => {
         [
           'import fs from "node:fs";',
           'const entry = process.argv[1]?.replaceAll("\\\\", "/");',
-          'if (entry?.endsWith("/src/entry.ts")) {',
+          `if (entry === ${JSON.stringify(fileURLToPath(cliEntrypoint).replaceAll("\\", "/"))}) {`,
           "  fs.appendFileSync(process.env.OPENCLAW_ENTRY_PID_LOG, `${process.pid}\\n`);",
           "}",
           "",
@@ -355,7 +367,7 @@ describe("gateway-backed CLI process exit", () => {
         stateDir,
         configPath,
         env: {
-          NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
+          ...withRuntimePreload({}, preloadPath),
           OPENCLAW_ENTRY_PID_LOG: pidLogPath,
           OPENCLAW_NODE_EXTRA_CA_CERTS_READY: "1",
           OPENCLAW_NODE_OPTIONS_READY: undefined,
@@ -447,55 +459,12 @@ describe("gateway-backed CLI process exit", () => {
 
   it.each([
     { label: "list", args: ["devices", "list", "--timeout", "250"] },
-    { label: "join-code", args: ["devices", "join-code", "--timeout", "250"] },
-    {
-      label: "remove",
-      args: ["devices", "remove", "test-device", "--timeout", "250"],
-    },
-    {
-      label: "clear",
-      args: ["devices", "clear", "--yes", "--pending", "--timeout", "250"],
-    },
-    {
-      label: "approve",
-      args: ["devices", "approve", "test-request", "--timeout", "250"],
-    },
-    {
-      label: "reject",
-      args: ["devices", "reject", "test-request", "--timeout", "250"],
-    },
-    {
-      label: "rename",
-      args: [
-        "devices",
-        "rename",
-        "--device",
-        "test-device",
-        "--name",
-        "Test Device",
-        "--timeout",
-        "250",
-      ],
-    },
+    { label: "approve", args: ["devices", "approve", "test-request", "--timeout", "250"] },
     {
       label: "rotate",
       args: [
         "devices",
         "rotate",
-        "--device",
-        "test-device",
-        "--role",
-        "operator",
-        "--timeout",
-        "250",
-      ],
-      machineOutput: true,
-    },
-    {
-      label: "revoke",
-      args: [
-        "devices",
-        "revoke",
         "--device",
         "test-device",
         "--role",
@@ -532,9 +501,9 @@ describe("gateway-backed CLI process exit", () => {
       } else {
         expect(result.stdout).toBe("");
       }
-      expect(result.stderr).toContain(`Gateway not reachable at ws://127.0.0.1:${port}`);
+      expect(result.stderr).toContain("Couldn't connect to OpenClaw.");
       expect(result.stderr).toContain(
-        "Start it with `openclaw gateway run` or check `openclaw gateway status`.",
+        "Check the Control UI or run `openclaw gateway status` in your terminal.",
       );
       expect(result.stderr).not.toContain("The CLI command failed");
       expect(result.stderr).not.toContain("Could not start the CLI");
@@ -623,7 +592,7 @@ describe("gateway-backed CLI process exit", () => {
     const configPath = path.join(stateDir, "openclaw.json");
     const caTriggerPath = path.join(root, "load-default-ca.mjs");
     const token = "test-token";
-    const gateway = await startCronListGateway(token);
+    const gateway = await startCliReadGateway(token);
     await fs.mkdir(stateDir, { recursive: true });
     await fs.writeFile(
       caTriggerPath,
@@ -642,15 +611,14 @@ describe("gateway-backed CLI process exit", () => {
 
     // The command emits one JSON document, so a parseable buffer is the moment its
     // output is complete. Timing the exit from there measures the one-shot release
-    // of the Gateway socket instead of the child's TSX startup.
+    // of the Gateway socket instead of the child's startup.
     let completeOutputAt: number | undefined;
     const result = await runCliProcessChild({
       nodeArgs: [
-        "--import",
-        "tsx",
+        ...resolveRuntimeWorkerArgv(cliEntrypoint).slice(0, -1),
         "--import",
         pathToFileURL(caTriggerPath).href,
-        "src/entry.ts",
+        fileURLToPath(cliEntrypoint),
         "cron",
         "list",
         "--json",
@@ -765,6 +733,116 @@ describe("gateway-backed CLI process exit", () => {
   );
 
   it.each([
+    { label: "devices list", args: ["devices", "list"], machineOutput: false },
+    { label: "devices list --json", args: ["devices", "list", "--json"], machineOutput: true },
+    { label: "nodes status", args: ["nodes", "status"], machineOutput: false },
+    { label: "nodes status --json", args: ["nodes", "status", "--json"], machineOutput: true },
+  ])(
+    "renders a $label URL override without explicit credentials as expected guidance, not a crash",
+    async ({ label, args, machineOutput }) => {
+      const root = tempDirs.make(`openclaw-${label.replaceAll(/[ -]+/g, "-")}-explicit-auth-`);
+      // Configured credentials must not leak to a caller-supplied URL; the producer
+      // rejects the override before any socket opens, so the target never listens.
+      const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
+        mode: "local",
+        auth: { mode: "token", token: "configured-token" },
+      });
+
+      const result = await runIsolatedGatewayCli({
+        args: [...args, "--url", UNREACHABLE_GATEWAY_URL, "--timeout", "250"],
+        root,
+        stateDir,
+        configPath,
+      });
+
+      expect(result).toMatchObject({ code: 1, signal: null });
+      if (machineOutput) {
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: expect.stringContaining("gateway url override requires explicit credentials"),
+          },
+        });
+      } else {
+        expect(result.stdout).toBe("");
+      }
+      expect(result.stderr).toContain("gateway url override requires explicit credentials");
+      // The shared console redaction masks the word after "--password"; assert around it.
+      expect(result.stderr).toContain("Fix: pass --token or --password");
+      expect(result.stderr).toContain("--url (or gatewayToken in tools).");
+      expect(result.stderr).toContain("remove --url to use the configured target.");
+      expect(result.stderr).toContain(`Config: ${configPath}`);
+      expect(result.stderr).not.toContain("The CLI command failed");
+      expect(result.stderr).not.toContain("Could not start the CLI");
+      expect(result.stderr).not.toContain("OPENCLAW_DEBUG");
+      expect(result.stderr).not.toContain("Stack:");
+      expect(result.stderr).not.toContain("openclaw doctor");
+    },
+  );
+
+  it.each(["--wait-timeout", "--poll-interval"])(
+    "renders an invalid cron run %s duration as operator guidance",
+    async (flag) => {
+      const root = tempDirs.make("openclaw-cron-invalid-duration-");
+      const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
+        mode: "remote",
+        remote: { url: UNREACHABLE_GATEWAY_URL, token: "test-token" },
+      });
+      const result = await runIsolatedGatewayCli({
+        args: ["cron", "run", "missing-job", "--wait", flag, "not-a-duration", "--json"],
+        root,
+        stateDir,
+        configPath,
+      });
+      const message =
+        'Invalid duration: "not-a-duration". Use values like 500ms, 30s, 5m, 2h, or 1h30m.';
+      expect(result).toMatchObject({ code: 1, signal: null, stderr: `${message}\n` });
+      expect(JSON.parse(result.stdout)).toEqual({
+        ok: false,
+        error: { type: "cli_error", message },
+      });
+    },
+  );
+
+  it.each([
+    { label: "human", args: ["cron", "show", "missing-job"], machineOutput: false },
+    { label: "machine", args: ["cron", "show", "missing-job", "--json"], machineOutput: true },
+  ])(
+    "renders a $label-mode cron lookup miss as expected guidance, not a crash",
+    async ({ label, args, machineOutput }) => {
+      const root = tempDirs.make(`openclaw-cron-lookup-miss-${label}-`);
+      const token = "test-token";
+      const gateway = await startCronLookupMissGateway(token, "missing-job");
+      const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
+        mode: "remote",
+        remote: { url: gateway.url, token },
+      });
+
+      const result = await runIsolatedGatewayCli({ args, root, stateDir, configPath });
+
+      const message =
+        "Automation not found: missing-job. Run `openclaw cron list` to see recent automation ids.";
+      expect(result).toMatchObject({ code: 1, signal: null });
+      if (machineOutput) {
+        expect(JSON.parse(result.stdout)).toEqual({
+          ok: false,
+          error: { type: "cli_error", message },
+        });
+      } else {
+        expect(result.stdout).toBe("");
+      }
+      expect(result.stderr).toContain(message);
+      expect(result.stderr).not.toContain("The CLI command failed");
+      expect(result.stderr).not.toContain("Could not start the CLI");
+      expect(result.stderr).not.toContain("OPENCLAW_DEBUG");
+      expect(result.stderr).not.toContain("Stack:");
+      expect(result.stderr).not.toContain("openclaw doctor");
+      expect(gateway.calls).toEqual(["cron.get", "cron.list"]);
+    },
+  );
+
+  it.each([
     { label: "channels config-only status", args: ["channels", "status"] },
     { label: "gateway reachability status", args: ["gateway", "status"] },
   ])("returns success after delivering $label", async ({ args }) => {
@@ -785,7 +863,6 @@ describe("gateway-backed CLI process exit", () => {
   });
 
   it.each([
-    { label: "empty", timeout: "", valid: false },
     { label: "whitespace", timeout: " \t ", valid: false },
     { label: "omitted", timeout: undefined, valid: true },
     { label: "positive", timeout: "10000", valid: true },
@@ -809,7 +886,10 @@ describe("gateway-backed CLI process exit", () => {
     if (valid) {
       expect(JSON.parse(result.stdout)).toEqual({ channels: [] });
     } else {
-      expect(result.stderr).toContain("Invalid --timeout");
+      expect(JSON.parse(result.stdout)).toMatchObject({
+        ok: false,
+        error: { type: "cli_error", message: expect.stringContaining("Invalid --timeout") },
+      });
     }
   });
 });

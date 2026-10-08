@@ -8,12 +8,15 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { resolveNpmJsonEntries } from "../../../lib/npm-json-output.mts";
 import {
+  readJson as readRecoveryJson,
+  writeJson as writeRecoveryJson,
+} from "../fixtures/common.mjs";
+import {
   assertRecoveryApplied,
   assertRecoveryHistory,
   assertRecoveryInventory,
   assertRecoveryOriginals,
   assertRecoverySnapshot,
-  readRecoveryJson,
   readRecoveryMoves,
   recoveryEvent,
   recoveryFileIdentity,
@@ -22,7 +25,6 @@ import {
   recoveryVolumeSpec,
   recoveryWalIndexPaths,
   seedRecoveryFixture,
-  writeRecoveryJson,
   writeRecoveryTranscript,
 } from "./recovery-cleanup-fixture.mjs";
 
@@ -154,6 +156,10 @@ async function gateway(name, method, params) {
   ]);
 }
 
+function readChatHistory(name, { agentId, sessionKey }) {
+  return gateway(name, "chat.history", { agentId, sessionKey, limit: 20 });
+}
+
 async function readHistory(name, fixture) {
   const listing = await gateway(`${name}-list`, "sessions.list", {
     agentId: fixture.agentId,
@@ -163,11 +169,7 @@ async function readHistory(name, fixture) {
   assert.equal(listing.sessions.length, 1, "conversation not uniquely listed");
   assert.equal(listing.sessions[0].key, fixture.sessionKey);
   assert.equal(listing.sessions[0].sessionId, fixture.sessionId);
-  return await gateway(name, "chat.history", {
-    agentId: fixture.agentId,
-    sessionKey: fixture.sessionKey,
-    limit: 20,
-  });
+  return await readChatHistory(name, fixture);
 }
 
 async function inspect(name) {
@@ -249,11 +251,7 @@ async function proveHistory(stage, append) {
       message: newMessage,
     });
     assert(newInjected.ok && newInjected.messageId, "new conversation append failed");
-    const history = await gateway("new-history", "chat.history", {
-      agentId: fresh.agentId,
-      sessionKey: fresh.sessionKey,
-      limit: 20,
-    });
+    const history = await readChatHistory("new-history", fresh);
     const messages = [
       {
         id: newInjected.messageId,
@@ -265,11 +263,7 @@ async function proveHistory(stage, append) {
     saveEvidence({ histories: saved, newHistory: { ...fresh, messages } });
   } else {
     const fresh = evidence.newHistory;
-    const history = await gateway(`${stage}-new-history`, "chat.history", {
-      agentId: fresh.agentId,
-      sessionKey: fresh.sessionKey,
-      limit: 20,
-    });
+    const history = await readChatHistory(`${stage}-new-history`, fresh);
     assertRecoveryHistory(history, fresh.sessionId, fresh.messages);
     const hashes = [...saved, fresh].map((entry) => ({
       sessionKey: entry.sessionKey,
@@ -397,7 +391,7 @@ async function customRestore() {
       "agents",
       JSON.stringify({
         defaults: { heartbeat: { every: "0m" } },
-        list: [{ id: "main", default: true, agentDir, workspace: path.join(home, "workspace") }],
+        entries: { main: { agentDir, workspace: path.join(home, "workspace") } },
       }),
       "--strict-json",
     ],
@@ -588,14 +582,20 @@ try {
           .includes("plugin lifecycle resource ceiling exceeded:"),
         "updater exceeded the existing resource ceiling",
       );
-      const originals = assertRecoveryOriginals(fixture, readRecoveryMoves(stateDir));
+      const moves = readRecoveryMoves(stateDir);
+      const originals = assertRecoveryOriginals(fixture, moves);
       const files = Object.keys(recoveryTreeSnapshot([stateDir]));
       const known = new Set(fixture.preDoctorPaths);
       assert(
         !files.some((file) => file.includes(".pre-doctor-") && !known.has(file)),
         "public migration created an extra raw pre-Doctor copy",
       );
-      const destinations = [...new Set(readRecoveryMoves(stateDir).map((move) => move.sqlitePath))];
+      // Shared-index receipts also name unused agents that have no transcript database.
+      const destinations = [
+        ...new Set(
+          moves.filter((move) => move.kind === "transcript").map((move) => move.sqlitePath),
+        ),
+      ];
       saveEvidence({
         originals,
         spec: fixture.spec,

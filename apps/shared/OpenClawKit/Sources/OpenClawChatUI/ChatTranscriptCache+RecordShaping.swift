@@ -8,46 +8,21 @@ extension OpenClawChatSQLiteTranscriptCache {
     /// attachment bodies and ordinary tool arguments are never cache data.
     static func cacheableMessages(_ messages: [OpenClawChatMessage]) -> [OpenClawChatMessage] {
         messages.suffix(maxCachedMessagesPerSession).map { message in
-            OpenClawChatMessage(
-                id: message.id,
-                role: message.role,
-                content: message.content.map { item in
-                    OpenClawChatMessageContent(
-                        type: item.type,
-                        text: item.text,
-                        thinking: item.thinking,
-                        thinkingSignature: nil,
-                        mimeType: item.mimeType,
-                        fileName: item.fileName,
-                        artifactId: item.artifactId,
-                        url: item.url,
-                        openUrl: item.openUrl,
-                        alt: item.alt,
-                        width: item.width,
-                        height: item.height,
-                        sizeBytes: item.sizeBytes,
-                        durationSeconds: item.durationSeconds,
-                        content: nil,
-                        id: item.id,
-                        name: item.name,
-                        arguments: self.cacheablePatchArguments(item),
-                        details: self.cacheableDetails(item.details),
-                        isError: item.isError)
-                },
-                timestamp: message.timestamp,
-                transcriptMessageID: message.transcriptMessageID,
-                transcriptRunID: message.transcriptRunID,
-                isTruncated: message.isTruncated,
-                idempotencyKey: message.idempotencyKey,
-                toolCallId: message.toolCallId,
-                toolName: message.toolName,
-                usage: message.usage,
-                stopReason: message.stopReason,
-                errorMessage: message.errorMessage,
-                details: self.cacheableDetails(message.details),
-                isError: message.isError,
-                provenance: message.provenance,
-                historyMarker: message.historyMarker)
+            var cached = message
+            cached.activity = nil
+            cached.details = self.cacheableDetails(message.details)
+            cached.content = message.content.map { item in
+                var cached = item
+                cached.thinkingSignature = nil
+                cached.playback = nil
+                cached.content = nil
+                cached.preview = nil
+                cached.runId = nil
+                cached.arguments = self.cacheableToolArguments(item)
+                cached.details = self.cacheableDetails(item.details)
+                return cached
+            }
+            return cached
         }
     }
 
@@ -58,12 +33,28 @@ extension OpenClawChatSQLiteTranscriptCache {
         return AnyCodable(["diff": AnyCodable(capped)])
     }
 
-    private static func cacheablePatchArguments(_ item: OpenClawChatMessageContent) -> AnyCodable? {
+    private static func cacheableToolArguments(_ item: OpenClawChatMessageContent) -> AnyCodable? {
         guard let type = item.type?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
-              ["toolcall", "tool_call", "tooluse", "tool_use"].contains(type),
-              let name = item.name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+              ["toolcall", "tool_call", "tooluse", "tool_use"].contains(type)
+        else { return nil }
+
+        if item.name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == "tool_call",
+           let id = item.arguments?.dictionaryValue?["id"]?.stringValue?
+               .trimmingCharacters(in: .whitespacesAndNewlines),
+               !id.isEmpty
+        {
+            let call = ToolDisplayRegistry.displayCall(name: item.name, args: item.arguments)
+            var arguments = ["id": AnyCodable(id)]
+            arguments["args"] = self.cacheablePatchArguments(name: call.name, args: call.args)
+            return AnyCodable(arguments)
+        }
+        return self.cacheablePatchArguments(name: item.name, args: item.arguments)
+    }
+
+    private static func cacheablePatchArguments(name: String?, args: AnyCodable?) -> AnyCodable? {
+        guard let name = name?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
               ["apply_patch", "applypatch", "patch"].contains(name),
-              let arguments = item.arguments?.dictionaryValue
+              let arguments = args?.dictionaryValue
         else { return nil }
 
         for key in ["input", "patch", "diff"] {
@@ -78,21 +69,13 @@ extension OpenClawChatSQLiteTranscriptCache {
     private static func cacheableText(_ value: String) -> String {
         let limit = 64000
         let truncationMarker = "\n...(truncated)..."
-        return if value.utf16.count > limit {
-            self.utf16Prefix(value, limit: limit - truncationMarker.utf16.count) + truncationMarker
-        } else {
-            value
-        }
-    }
-
-    private static func utf16Prefix(_ value: String, limit: Int) -> String {
         let units = value.utf16
         guard units.count > limit else { return value }
-        var end = units.index(units.startIndex, offsetBy: limit)
+        var end = units.index(units.startIndex, offsetBy: limit - truncationMarker.utf16.count)
         if String.Index(end, within: value) == nil {
             end = units.index(before: end)
         }
-        guard let stringEnd = String.Index(end, within: value) else { return "" }
-        return String(value[..<stringEnd])
+        guard let stringEnd = String.Index(end, within: value) else { return truncationMarker }
+        return String(value[..<stringEnd]) + truncationMarker
     }
 }

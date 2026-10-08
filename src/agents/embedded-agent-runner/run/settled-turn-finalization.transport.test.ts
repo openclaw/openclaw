@@ -113,7 +113,7 @@ beforeEach(() => {
 });
 afterEach(() => admission.close());
 
-it.each(["HTTP", "WebSocket"])("finalizes after %s failure", async (failure) => {
+it.each(["HTTP", "WebSocket", "terminated"])("finalizes after %s failure", async (failure) => {
   const websocket = failure === "WebSocket";
   const apiKey = websocket ? syntheticLoopbackJwt() : "synthetic-loopback-key";
   const requests: Array<{ tools?: unknown[] }> = [];
@@ -126,6 +126,30 @@ it.each(["HTTP", "WebSocket"])("finalizes after %s failure", async (failure) => 
     request.on("end", () => {
       requests.push(JSON.parse(body));
       if (requests.length === 2) {
+        if (failure === "terminated") {
+          // Close a valid response body before completion so the real client fails.
+          response.writeHead(200, {
+            "content-type": "text/event-stream",
+            "cache-control": "no-store",
+          });
+          response.write(
+            `data: ${JSON.stringify({
+              type: "response.output_item.added",
+              output_index: 0,
+              item: {
+                type: "message",
+                id: "msg_cut",
+                role: "assistant",
+                status: "in_progress",
+                content: [],
+              },
+            })}\n\n`,
+            () => {
+              response.destroy();
+            },
+          );
+          return;
+        }
         response.writeHead(503, { "content-type": "application/json" });
         response.end(
           JSON.stringify({
@@ -234,7 +258,14 @@ it.each(["HTTP", "WebSocket"])("finalizes after %s failure", async (failure) => 
     }
     expect(assistant.stopReason).toBe("error");
     const error = Object.assign(new Error(assistant.errorMessage), { code: assistant.errorCode });
-    expect(isTransientNetworkError(error)).toBe(true);
+    if (failure === "terminated") {
+      // The bare transport message reaches the transcript unclassified; the
+      // recovery below must therefore come from the exact `terminated` match.
+      expect(assistant.errorMessage).toBe("terminated");
+      expect(isTransientNetworkError(error)).toBe(false);
+    } else {
+      expect(isTransientNetworkError(error)).toBe(true);
+    }
     expect(execute).toHaveBeenCalledOnce();
     expect(itemLifecycle).toEqual({ startedCount: 1, completedCount: 1, activeCount: 0 });
     const prefix = await readVisibleSessionTranscriptMessageEntries(target);

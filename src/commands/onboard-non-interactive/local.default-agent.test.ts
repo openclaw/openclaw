@@ -100,9 +100,10 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
         tailscaleMode: "off",
       }),
     );
-    mocks.commitConfig.mockImplementation(
-      async ({ nextConfig }: { nextConfig: OpenClawConfig }) => nextConfig,
-    );
+    // An early config conflict can leave the one-shot real writer unused.
+    mocks.commitConfig
+      .mockReset()
+      .mockImplementation(async ({ nextConfig }: { nextConfig: OpenClawConfig }) => nextConfig);
     mocks.ensureOnboardingAgent.mockImplementation(
       async ({ config }: { config: OpenClawConfig }) => ({
         config,
@@ -180,7 +181,6 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       legacyState: false,
       agentName: "robby",
     },
-    { label: "empty legacy roster", agents: { list: [] }, legacyState: false, agentName: "robby" },
     { label: "legacy workspace state", agents: {}, legacyState: true, agentName: "robby" },
   ])(
     "keeps auth and provisioning on the requested owner with $label config",
@@ -224,7 +224,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
                 ...config.agents,
                 entries: {
                   [agentId]: {
-                    ...(agentName ? { name: agentName } : { default: true }),
+                    ...(agentName ? { name: agentName } : {}),
                     workspace: expectedWorkspace,
                   },
                 },
@@ -420,7 +420,7 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       opts: {
         ...localOptions,
         authChoice: "demo-api-key",
-        gatewayPort: 70_000,
+        gatewayBind: "custom",
       },
       runtime,
       baseConfig: {},
@@ -444,8 +444,8 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
           authChoice: "skip",
         },
         runtime,
-        baseConfig: { agents: { entries: { ops: { default: true } } } },
-        sourceConfigBeforeMigrations: { agents: { entries: { ops: { default: true } } } },
+        baseConfig: { agents: { entries: { ops: {} } } },
+        sourceConfigBeforeMigrations: { agents: { entries: { ops: {} } } },
       }),
     ).rejects.toThrow("workspace is unwritable");
 
@@ -541,4 +541,43 @@ describe("runNonInteractiveLocalSetup default-agent ownership", () => {
       });
     },
   );
+  it("creates a role team through non-interactive onboarding and keeps coordinator ownership", async () => {
+    const { ensureOnboardingAgent } =
+      await vi.importActual<typeof import("../onboard-agent.js")>("../onboard-agent.js");
+    const { commitNonInteractiveOnboardConfig } =
+      await vi.importActual<typeof import("./config-write.js")>("./config-write.js");
+    await withTempHome(async (rawHome) => {
+      const home = await fs.realpath(rawHome);
+      const configDir = path.join(home, ".openclaw");
+      const workspace = path.join(home, "team-workspaces");
+      await fs.rm(path.join(configDir, "agents"), { recursive: true });
+      resetConfigRuntimeState();
+      mocks.ensureOnboardingAgent.mockImplementationOnce(ensureOnboardingAgent);
+      mocks.commitConfig.mockImplementationOnce(commitNonInteractiveOnboardConfig);
+
+      await runNonInteractiveSetup({ ...localOptions, workspace, team: true, json: true }, runtime);
+
+      const after = await readConfigFileSnapshot();
+      expect(after.valid).toBe(true);
+      expect(Object.keys(after.config.agents?.entries ?? {})).toEqual([
+        "coordinator",
+        "researcher",
+        "writer",
+        "reviewer",
+      ]);
+      expect(after.config.agents?.defaults?.systemAgent?.agentId).toBe("coordinator");
+      expect(after.config.agents?.entries?.coordinator).toMatchObject({
+        workspace: path.join(workspace, "coordinator"),
+        subagents: { allowAgents: ["researcher", "writer", "reviewer"], delegationMode: "prefer" },
+      });
+      await expect(
+        fs.stat(path.join(workspace, "coordinator", "BOOTSTRAP.md")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(mocks.logJson).toHaveBeenCalledWith(
+        expect.objectContaining({
+          workspaceDir: path.join(workspace, "coordinator"),
+        }),
+      );
+    });
+  });
 });

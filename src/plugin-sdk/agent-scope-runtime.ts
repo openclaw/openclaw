@@ -32,11 +32,11 @@ function resolveSessionAgentIdsCompatibility(params: SessionAgentResolutionParam
   defaultAgentId: string;
   sessionAgentId: string;
 } {
+  const normalized = { ...params, agentId: normalizeOptionalString(params.agentId) };
   try {
-    return resolveSessionAgentIdsStrict(params);
+    return resolveSessionAgentIdsStrict(normalized);
   } catch (error) {
-    const requestedAgentId =
-      normalizeOptionalString(params.agentId) ?? normalizeOptionalString(params.fallbackAgentId);
+    const requestedAgentId = normalized.agentId ?? normalizeOptionalString(params.fallbackAgentId);
     const config = params.config ?? {};
     if (
       !(error instanceof AgentSelectionRequiredError) ||
@@ -49,7 +49,7 @@ function resolveSessionAgentIdsCompatibility(params: SessionAgentResolutionParam
     if (!ambientAgentId) {
       throw error;
     }
-    return resolveSessionAgentIdsStrict({ ...params, fallbackAgentId: ambientAgentId });
+    return resolveSessionAgentIdsStrict({ ...normalized, fallbackAgentId: ambientAgentId });
   }
 }
 

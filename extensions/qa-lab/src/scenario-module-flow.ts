@@ -1,4 +1,3 @@
-// QA Lab scenario module references normalize into the canonical flow shape.
 import { z } from "zod";
 
 const qaFlowModuleExportArgSchema = z
@@ -35,6 +34,10 @@ const qaFlowExecutionShape = {
   providerMode: qaFlowProviderModeSchema.optional(),
   retryCount: z.number().int().min(0).max(1).optional(),
   runtime: z.enum(["openclaw", "codex"]).optional(),
+  liveConfiguredRuntime: z
+    .object({ id: z.literal("codex"), model: z.string().trim().min(1) })
+    .strict()
+    .optional(),
   timeoutMs: z.number().int().positive().optional(),
 };
 
@@ -49,6 +52,22 @@ const qaSharedFlowPreparationActions = [
 ] as const;
 // The DSL branch value is an action array, never a callable JavaScript `then`.
 const qaSharedFlowPositiveBranch = ["th", "en"].join("");
+
+function sendSharedFlowMarker(marker: string) {
+  return {
+    sendInbound: {
+      conversation: {
+        id: { ref: "config.conversationId" },
+        kind: { ref: "config.conversationKind" },
+      },
+      senderId: { ref: "config.senderId" },
+      senderName: "QA Driver",
+      text: {
+        expr: "`${config.mentionPrefix}Reply with only this exact marker: ${" + marker + "}`",
+      },
+    },
+  };
+}
 
 const qaSharedFlows = {
   "channel-access-control": {
@@ -69,47 +88,27 @@ const qaSharedFlows = {
               expr: "getTransportSnapshot().messages.filter((message) => message.direction === 'outbound').length",
             },
           },
+          sendSharedFlowMarker("marker"),
           {
-            sendInbound: {
-              conversation: {
-                id: { ref: "config.conversationId" },
-                kind: { ref: "config.conversationKind" },
-              },
-              senderId: { ref: "config.senderId" },
-              senderName: "QA Driver",
-              text: {
-                expr: "`${config.mentionPrefix}Reply with only this exact marker: ${marker}`",
-              },
+            if: {
+              expr: "config.expectReply",
+              [qaSharedFlowPositiveBranch]: [
+                {
+                  waitForOutbound: {
+                    textIncludes: { ref: "marker" },
+                    timeoutMs: { ref: "config.timeoutMs" },
+                  },
+                },
+              ],
+              else: [
+                {
+                  waitForNoOutbound: {
+                    quietMs: { ref: "config.timeoutMs" },
+                    sinceIndex: { ref: "outboundCount" },
+                  },
+                },
+              ],
             },
-          },
-          {
-            // Object literals with a `then` property become JavaScript thenables.
-            // Build the QA DSL branch as data so an accidental await cannot execute it.
-            if: Object.fromEntries([
-              ["expr", "config.expectReply"],
-              [
-                qaSharedFlowPositiveBranch,
-                [
-                  {
-                    waitForOutbound: {
-                      textIncludes: { ref: "marker" },
-                      timeoutMs: { ref: "config.timeoutMs" },
-                    },
-                  },
-                ],
-              ],
-              [
-                "else",
-                [
-                  {
-                    waitForNoOutbound: {
-                      quietMs: { ref: "config.timeoutMs" },
-                      sinceIndex: { ref: "outboundCount" },
-                    },
-                  },
-                ],
-              ],
-            ]),
           },
         ],
         detailsExpr: "`${config.markerPrefix}: expectReply=${config.expectReply}`",
@@ -128,19 +127,7 @@ const qaSharedFlows = {
               expr: "`${config.firstPrefix}_${randomUUID().slice(0, 8).toUpperCase()}`",
             },
           },
-          {
-            sendInbound: {
-              conversation: {
-                id: { ref: "config.conversationId" },
-                kind: { ref: "config.conversationKind" },
-              },
-              senderId: { ref: "config.senderId" },
-              senderName: "QA Driver",
-              text: {
-                expr: "`${config.mentionPrefix}Reply with only this exact marker: ${firstMarker}`",
-              },
-            },
-          },
+          sendSharedFlowMarker("firstMarker"),
           {
             waitForOutbound: {
               textIncludes: { ref: "firstMarker" },
@@ -173,19 +160,7 @@ const qaSharedFlows = {
               expr: "`${config.secondPrefix}_${randomUUID().slice(0, 8).toUpperCase()}`",
             },
           },
-          {
-            sendInbound: {
-              conversation: {
-                id: { ref: "config.conversationId" },
-                kind: { ref: "config.conversationKind" },
-              },
-              senderId: { ref: "config.senderId" },
-              senderName: "QA Driver",
-              text: {
-                expr: "`${config.mentionPrefix}Reply with only this exact marker: ${secondMarker}`",
-              },
-            },
-          },
+          sendSharedFlowMarker("secondMarker"),
           {
             waitForOutbound: {
               textIncludes: { ref: "secondMarker" },

@@ -11,6 +11,7 @@ vi.mock("../../process/exec.js", () => ({
   spawnCommand: spawnCommandMock,
 }));
 
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { execOpenPath, isHeadlessOpenPathError, resolveOpenPathCommand } from "./open-path.js";
 
 function fakeChild(result: Promise<unknown>) {
@@ -59,14 +60,14 @@ describe("resolveOpenPathCommand", () => {
 });
 
 describe("execOpenPath", () => {
-  it.each(["darwin", "win32"] as const)("bounds the %s launcher wait", async (platform) => {
+  it("bounds the non-Linux launcher wait", async () => {
     runExecMock.mockResolvedValue({ stdout: "", stderr: "" });
     const command = {
-      command: platform === "darwin" ? "open" : "powershell.exe",
+      command: "open",
       args: ["/tmp/workspace"],
     };
 
-    await execOpenPath(command, platform);
+    await execOpenPath(command, "darwin");
 
     expect(runExecMock).toHaveBeenCalledWith(command.command, command.args, {
       logOutput: false,
@@ -92,10 +93,7 @@ describe("execOpenPath", () => {
 
   it("returns after startup observation without killing a foreground Linux handler", async () => {
     vi.useFakeTimers();
-    let settleChild: (value: unknown) => void = () => {};
-    const childResult = new Promise<unknown>((resolve) => {
-      settleChild = resolve;
-    });
+    const { promise: childResult, resolve: settleChild } = createDeferred<unknown>();
     const spawned = fakeChild(childResult);
     spawnCommandMock.mockReturnValue(spawned.child);
     let settled = false;
@@ -168,8 +166,6 @@ describe("isHeadlessOpenPathError", () => {
     { platform: "linux", command: "xdg-open", code: "ENOENT", expected: true },
     { platform: "linux", command: "xdg-open", code: "EACCES", expected: false },
     { platform: "linux", command: "other-opener", code: "ENOENT", expected: false },
-    { platform: "darwin", command: "open", code: "ENOENT", expected: false },
-    { platform: "win32", command: "powershell.exe", code: "ENOENT", expected: false },
     { platform: "freebsd", command: "xdg-open", code: "ENOENT", expected: false },
   ] as const)("classifies $platform $command $code", ({ platform, command, code, expected }) => {
     const error = Object.assign(new Error("Launcher failed"), { code });

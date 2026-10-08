@@ -1,4 +1,3 @@
-// Discord plugin module owns the reply pipeline, draft preview, and delivery correlation setup.
 import {
   createChannelMessageReplyPipeline,
   resolveChannelStreamingBlockEnabled,
@@ -23,6 +22,11 @@ import { createDiscordReplyTypingFeedback } from "./reply-typing-feedback.js";
 type DiscordMessageProcessContext = NonNullable<
   Awaited<ReturnType<typeof buildDiscordMessageProcessContext>>
 >;
+
+export function formatDiscordGroupThreadReply(text: string, participant: { name: string }): string {
+  const name = participant.name.replace(/[\\`*_{}[\]()<>#!|]/g, "\\$&").replace(/\s+/g, " ");
+  return `**${name}**\n${text}`;
+}
 
 export function formatDiscordReasoningQuote(quoteText: string): string | undefined {
   const lines = quoteText
@@ -68,7 +72,7 @@ export function createDiscordBeforePayloadDelivery(params: {
       return null;
     }
     if (info.kind === "final" && !params.isFallbackOnlyToolWarningFinal(payload)) {
-      params.draftPreview.markFinalReplyStarted();
+      params.draftPreview.freezeProgress();
     }
     return payload;
   };
@@ -77,12 +81,15 @@ export function createDiscordBeforePayloadDelivery(params: {
 export function createDiscordMessageReplyRuntime(params: {
   ctx: DiscordMessagePreflightContext;
   processContext: DiscordMessageProcessContext;
+  replyReference: DiscordMessageProcessContext["replyPlan"]["replyReference"];
   sourceRepliesAreToolOnly: boolean;
   shouldDisableCoreTypingKeepalive: boolean;
   isRoomEvent: boolean;
   dispatchStartedAt: number;
   feedbackRest: RequestClient;
   deliveryRest: RequestClient;
+  onFinalReplyStart?: () => void;
+  onFinalReplyDelivered?: () => void;
 }) {
   const { ctx, processContext } = params;
   const {
@@ -97,9 +104,9 @@ export function createDiscordMessageReplyRuntime(params: {
     isDirectMessage,
     route,
   } = ctx;
-  const { ctxPayload, deliverTarget, replyReference } = processContext;
-  const typingChannelId = deliverTarget.startsWith("channel:")
-    ? deliverTarget.slice("channel:".length)
+  const { ctxPayload, replyPlan } = processContext;
+  const deliverChannelId = replyPlan.deliverTarget.startsWith("channel:")
+    ? replyPlan.deliverTarget.slice("channel:".length)
     : messageChannelId;
   let typingFeedback: ReturnType<typeof createDiscordReplyTypingFeedback> | undefined;
   const getTypingFeedback = () =>
@@ -107,7 +114,7 @@ export function createDiscordMessageReplyRuntime(params: {
       cfg,
       token,
       accountId,
-      channelId: typingChannelId,
+      channelId: deliverChannelId,
       rest: params.feedbackRest,
       log: logVerbose,
       keepaliveIntervalMs: params.shouldDisableCoreTypingKeepalive ? undefined : 0,
@@ -187,21 +194,19 @@ export function createDiscordMessageReplyRuntime(params: {
     }
   };
 
-  const deliverChannelId = deliverTarget.startsWith("channel:")
-    ? deliverTarget.slice("channel:".length)
-    : messageChannelId;
   const draftPreview = createDiscordDraftPreviewController({
+    groupThread: Boolean(ctxPayload.GroupThread),
     cfg,
     discordConfig,
     accountId,
+    abortSignal: ctx.abortSignal,
     sourceRepliesAreToolOnly: params.sourceRepliesAreToolOnly,
     textLimit,
     deliveryRest: params.deliveryRest,
     deliverChannelId,
-    replyReference,
-    tableMode,
-    maxLinesPerMessage,
-    chunkMode,
+    replyReference: params.replyReference,
+    onFinalReplyStart: params.onFinalReplyStart,
+    onFinalReplyDelivered: params.onFinalReplyDelivered,
     log: logVerbose,
   });
   const resolvedBlockStreamingEnabled = resolveChannelStreamingBlockEnabled(discordConfig);
@@ -215,7 +220,6 @@ export function createDiscordMessageReplyRuntime(params: {
     beginQueuedDeliveryCorrelation: beginDeliveryCorrelation,
     endDeliveryCorrelation,
     resolveCurrentTurnTranscriptFinalText,
-    deliverChannelId,
     draftPreview,
     resolvedBlockStreamingEnabled,
   };

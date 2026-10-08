@@ -1,7 +1,8 @@
-// QA Lab Slack scenario reply observation and channel readiness.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import type { QaGatewayChild } from "../../gateway-child.js";
+import { readLiveQaChannelAccounts } from "../shared/live-channel-status.js";
 import {
   type SlackChannelStatus,
   type SlackChannelReadinessMode,
@@ -15,8 +16,7 @@ import {
 import {
   listSlackMessages,
   listSlackThreadMessages,
-  collectSlackBlockText,
-  collectSlackActionValues,
+  recordSlackObservedMessage,
   isSutSlackMessage,
 } from "./slack-live.observations.js";
 
@@ -30,36 +30,42 @@ type SlackScenarioObservationContext = {
   sutIdentity: SlackAuthIdentity;
 };
 
-function recordSlackScenarioMessages(
-  params: SlackScenarioObservationContext & { messages: SlackMessage[] },
+function recordSlackScenarioMessage(
+  params: SlackScenarioObservationContext,
+  message: SlackMessage,
+  observedKeys?: Set<string>,
 ) {
-  let matchedMessage: SlackMessage | undefined;
-  for (const message of params.messages) {
-    const text = message.text ?? "";
-    if (
-      !message.ts ||
-      message.ts === params.sentTs ||
-      !isSutSlackMessage(message, params.sutIdentity)
-    ) {
-      continue;
-    }
-    const matchedScenario = text.includes(params.matchText);
-    params.observedMessages.push({
-      actionValues: collectSlackActionValues(message.blocks),
-      blockText: collectSlackBlockText(message.blocks),
-      botId: message.bot_id,
-      channelId: params.channelId,
+  if (
+    !message.ts ||
+    message.ts === params.sentTs ||
+    !isSutSlackMessage(message, params.sutIdentity)
+  ) {
+    return undefined;
+  }
+  const text = message.text ?? "";
+  const matchedScenario = text.includes(params.matchText);
+  const observedKey = `${params.channelId}:${message.ts}`;
+  if (!observedKeys?.has(observedKey)) {
+    observedKeys?.add(observedKey);
+    recordSlackObservedMessage({
+      ...params,
       matchedScenario,
+      message,
       scenarioId: params.observationScenarioId,
       scenarioTitle: params.observationScenarioTitle,
-      text,
-      threadTs: message.thread_ts,
-      ts: message.ts,
-      userId: message.user,
     });
-    if (matchedScenario && !matchedMessage) {
-      matchedMessage = message;
-    }
+  }
+  return matchedScenario ? message : undefined;
+}
+
+function recordSlackScenarioMessages(
+  params: SlackScenarioObservationContext,
+  messages: SlackMessage[],
+) {
+  let matchedMessage: SlackMessage | undefined;
+  for (const message of messages) {
+    const match = recordSlackScenarioMessage(params, message);
+    matchedMessage ??= match;
   }
   return matchedMessage;
 }
@@ -71,10 +77,9 @@ export async function waitForSlackScenarioReply(
     timeoutMs: number;
   },
 ) {
-  const observationContext: SlackScenarioObservationContext = params;
   const startedAt = Date.now();
   const inspectMessages = (messages: SlackMessage[]) => {
-    const matchedMessage = recordSlackScenarioMessages({ ...observationContext, messages });
+    const matchedMessage = recordSlackScenarioMessages(params, messages);
     return matchedMessage
       ? { message: matchedMessage, observedAt: new Date().toISOString() }
       : undefined;
@@ -107,9 +112,7 @@ export async function waitForSlackScenarioReply(
         { cause: error },
       );
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 1_000);
-    });
+    await sleep(1_000);
   }
   throw new Error(`timed out after ${params.timeoutMs}ms waiting for Slack message`);
 }
@@ -121,27 +124,26 @@ export async function observeSlackScenarioMessages(
     threadTs?: string;
   },
 ) {
-  const observationContext: SlackScenarioObservationContext = params;
   const startedAt = Date.now();
 
   while (true) {
-    recordSlackScenarioMessages({
-      ...observationContext,
-      messages: await listSlackMessages({
+    recordSlackScenarioMessages(
+      params,
+      await listSlackMessages({
         channelId: params.channelId,
         client: params.client,
         oldestTs: params.sentTs,
       }),
-    });
+    );
     try {
-      recordSlackScenarioMessages({
-        ...observationContext,
-        messages: await listSlackThreadMessages({
+      recordSlackScenarioMessages(
+        params,
+        await listSlackThreadMessages({
           channelId: params.channelId,
           client: params.client,
           threadTs: params.threadTs ?? params.sentTs,
         }),
-      });
+      );
     } catch (error) {
       throw new Error(
         `Slack conversations.replies failed while settling ${params.observationScenarioId}: ${formatErrorMessage(error)}`,
@@ -152,23 +154,13 @@ export async function observeSlackScenarioMessages(
     if (remainingMs <= 0) {
       return;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, Math.min(1_000, remainingMs));
-    });
+    await sleep(Math.min(1_000, remainingMs));
   }
 }
 
-export async function waitForSlackNoReply(params: {
-  channelId: string;
-  client: WebClient;
-  matchText: string;
-  observedMessages: SlackObservedMessage[];
-  observationScenarioId: string;
-  observationScenarioTitle: string;
-  sentTs: string;
-  sutIdentity: SlackAuthIdentity;
-  timeoutMs: number;
-}) {
+export async function waitForSlackNoReply(
+  params: SlackScenarioObservationContext & { client: WebClient; timeoutMs: number },
+) {
   const startedAt = Date.now();
   const observedKeys = new Set(
     params.observedMessages
@@ -183,42 +175,14 @@ export async function waitForSlackNoReply(params: {
       oldestTs: params.sentTs,
     });
     for (const message of messages) {
-      const text = message.text ?? "";
-      if (
-        !message.ts ||
-        message.ts === params.sentTs ||
-        !isSutSlackMessage(message, params.sutIdentity)
-      ) {
-        continue;
-      }
-      const matchedScenario = text.includes(params.matchText);
-      const observedKey = `${params.channelId}:${message.ts}`;
-      if (!observedKeys.has(observedKey)) {
-        observedKeys.add(observedKey);
-        params.observedMessages.push({
-          actionValues: collectSlackActionValues(message.blocks),
-          blockText: collectSlackBlockText(message.blocks),
-          botId: message.bot_id,
-          channelId: params.channelId,
-          matchedScenario,
-          scenarioId: params.observationScenarioId,
-          scenarioTitle: params.observationScenarioTitle,
-          text,
-          threadTs: message.thread_ts,
-          ts: message.ts,
-          userId: message.user,
-        });
-      }
-      if (matchedScenario) {
+      if (recordSlackScenarioMessage(params, message, observedKeys)) {
         throw new Error("unexpected Slack SUT reply observed");
       }
     }
     elapsedMs = Date.now() - startedAt;
     const remainingMs = params.timeoutMs - elapsedMs;
     if (remainingMs > 0) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, Math.min(1_000, remainingMs));
-      });
+      await sleep(Math.min(1_000, remainingMs));
     }
     elapsedMs = Date.now() - startedAt;
   }
@@ -234,25 +198,7 @@ async function waitForSlackChannelRunning(
   let lastStatus: SlackChannelStatus | undefined;
   while (Date.now() - startedAt < timeoutMs) {
     try {
-      const payload = (await gateway.call(
-        "channels.status",
-        { probe: false, timeoutMs: 2_000 },
-        { timeoutMs: 5_000 },
-      )) as {
-        channelAccounts?: Record<
-          string,
-          Array<{
-            accountId?: string;
-            connected?: boolean;
-            lastConnectedAt?: number;
-            lastDisconnect?: unknown;
-            lastError?: string | null;
-            restartPending?: boolean;
-            running?: boolean;
-          }>
-        >;
-      };
-      const accounts = payload.channelAccounts?.slack ?? [];
+      const accounts = await readLiveQaChannelAccounts(gateway, "slack");
       const match = accounts.find((entry) => entry.accountId === accountId);
       lastStatus = match
         ? {
@@ -264,18 +210,13 @@ async function waitForSlackChannelRunning(
             running: match.running,
           }
         : undefined;
-      if (isSlackChannelReadyForQa(lastStatus, mode)) {
-        if (!lastStatus) {
-          throw new Error(`slack account "${accountId}" status disappeared after readiness check`);
-        }
+      if (lastStatus && isSlackChannelReadyForQa(lastStatus, mode)) {
         return lastStatus;
       }
     } catch {
       // retry
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 500);
-    });
+    await sleep(500);
   }
   throw new Error(
     `slack account "${accountId}" did not become ready` +
@@ -303,9 +244,7 @@ export async function waitForSlackChannelStable(
     if (readyForMs >= SLACK_QA_READY_STABILITY_MS) {
       return;
     }
-    await new Promise((resolve) => {
-      setTimeout(resolve, Math.max(500, SLACK_QA_READY_STABILITY_MS - readyForMs));
-    });
+    await sleep(Math.max(500, SLACK_QA_READY_STABILITY_MS - readyForMs));
   }
   throw new Error(
     `slack account "${accountId}" did not remain ready for ${SLACK_QA_READY_STABILITY_MS}ms`,
@@ -340,8 +279,5 @@ function resolveSlackChannelReadySince(params: {
 
 function resolveSlackQaReadyTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
   const raw = env.OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS;
-  if (!raw) {
-    return SLACK_QA_DEFAULT_READY_TIMEOUT_MS;
-  }
   return parseStrictPositiveInteger(raw) ?? SLACK_QA_DEFAULT_READY_TIMEOUT_MS;
 }

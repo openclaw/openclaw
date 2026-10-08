@@ -15,7 +15,7 @@ OpenClaw Brave Search provider plugin for web search.
 ## Distribution
 
 - Package: `@openclaw/brave-plugin`
-- Install route: npm or ClawHub
+- Install route: npm or ClawHub: `clawhub:@openclaw/brave-plugin`
 
 ## Surface
 

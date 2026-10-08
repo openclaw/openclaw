@@ -1,29 +1,19 @@
 // Shared types for applying auth-choice selections during onboarding and agent setup.
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { applyAuthChoiceLoadedPluginProvider } from "../plugins/provider-auth-choice.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
-import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter } from "../wizard/prompts.js";
 import type { AuthChoice, OnboardOptions } from "./onboard-types.js";
 
-export type ApplyAuthChoiceParams = {
+export type ApplyAuthChoiceParams = Omit<
+  Parameters<typeof applyAuthChoiceLoadedPluginProvider>[0],
+  "authChoice" | "opts" | "signal" | "isRemote" | "beforePersistentEffect"
+> & {
   authChoice: AuthChoice;
-  config: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  prompter: WizardPrompter;
-  runtime: RuntimeEnv;
-  agentDir?: string;
-  workspaceDir?: string;
-  setDefaultModel: boolean;
-  preserveExistingDefaultModel?: boolean;
-  agentId?: string;
   opts?: Partial<OnboardOptions>;
 };
 
-export type ApplyAuthChoiceResult = {
-  config: OpenClawConfig;
-  agentModelOverride?: string;
-  retrySelection?: boolean;
-};
+export type ApplyAuthChoiceResult = NonNullable<
+  Awaited<ReturnType<typeof applyAuthChoiceLoadedPluginProvider>>
+>;
 
 export type PreparedAuthChoiceResult = ApplyAuthChoiceResult & {
   authProfiles: ProviderAuthResult["profiles"];

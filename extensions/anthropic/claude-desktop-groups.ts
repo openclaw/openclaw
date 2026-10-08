@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { containsAsciiControlCharacter } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { setBoundedCache } from "./session-catalog-scan.js";
 
 const groupCache = new Map<string, { signature: string; assignments: Map<string, string> }>();
@@ -226,21 +227,11 @@ function collectLevelDbValues(block: Uint8Array, values: Map<string, LevelDbValu
   });
 }
 
-function isPlainGroupName(name: string): boolean {
-  for (let index = 0; index < name.length; index += 1) {
-    const code = name.charCodeAt(index);
-    if (code < 0x20 || code === 0x7f) {
-      return false;
-    }
-  }
-  return true;
-}
-
 function scanGroupRecords(raw: Uint8Array, parsed: ParsedGroups): void {
   const text = localStorageText(raw);
   for (const match of text.matchAll(/"id":"(cg-[a-f0-9-]+)","name":"([^"\\]{1,500})"/gi)) {
     const [, id, name] = match;
-    if (id && name && isPlainGroupName(name) && !parsed.groups.has(id)) {
+    if (id && name && !containsAsciiControlCharacter(name) && !parsed.groups.has(id)) {
       parsed.groups.set(id, name);
     }
   }
@@ -288,14 +279,11 @@ export async function readClaudeDesktopCustomGroups(
     return cached.assignments;
   }
   const levelDbValues = new Map<string, LevelDbValue>();
-  const logRecords: ParsedGroups = { groups: new Map(), assignments: new Map() };
+  const parsed: ParsedGroups = { groups: new Map(), assignments: new Map() };
   let remainingBytes = MAX_LEVELDB_TOTAL_BYTES;
   let complete = true;
   for (const file of files
-    .filter(
-      (candidate): candidate is { filePath: string; mtimeMs: number; size: number } =>
-        candidate !== undefined,
-    )
+    .filter((candidate) => candidate !== undefined)
     .toSorted(
       (left, right) => right.mtimeMs - left.mtimeMs || right.filePath.localeCompare(left.filePath),
     )
@@ -310,7 +298,7 @@ export async function readClaudeDesktopCustomGroups(
       continue;
     }
     if (!file.filePath.endsWith(".ldb")) {
-      scanGroupRecords(raw, logRecords);
+      scanGroupRecords(raw, parsed);
       continue;
     }
     try {
@@ -325,10 +313,6 @@ export async function readClaudeDesktopCustomGroups(
   // The write-ahead log holds writes that have not been flushed into an SSTable yet, so
   // it seeds the result first and wins on conflict. It is scanned raw rather than replayed,
   // so its own internal ordering stays best-effort; SSTables then fill in the rest.
-  const parsed: ParsedGroups = {
-    groups: new Map(logRecords.groups),
-    assignments: new Map(logRecords.assignments),
-  };
   for (const { value } of levelDbValues.values()) {
     scanGroupRecords(value, parsed);
   }

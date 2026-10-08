@@ -13,6 +13,7 @@ import {
   transcriptRepairUserKey,
 } from "./legacy-transcript-repair.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import { projectTranscriptNavigationFields } from "./transcript-navigation-fields.js";
 import {
   scanSessionTranscriptNavigation,
   isSessionTranscriptLeafControl,
@@ -20,7 +21,7 @@ import {
   type SessionTranscriptTreeNode,
 } from "./transcript-tree.js";
 
-type StagedTranscriptRow = { seq: number; eventJson: string; createdAt: number | null };
+type StagedTranscriptRow = { seq: number; eventJson: string };
 
 export function withSqliteSessionImportStage<T>(run: (stage: SqliteSessionImportStage) => T): T {
   const directory = createPrivateSqliteTempDirectorySync(os.tmpdir(), "openclaw-session-import-");
@@ -36,7 +37,7 @@ export function withSqliteSessionImportStage<T>(run: (stage: SqliteSessionImport
       PRAGMA temp_store = FILE;
       CREATE TABLE rows (
         source INTEGER NOT NULL, seq INTEGER NOT NULL, event_json TEXT NOT NULL,
-        created_at INTEGER, PRIMARY KEY (source, seq)
+        PRIMARY KEY (source, seq)
       ) WITHOUT ROWID;
       CREATE TABLE seen (hash BLOB NOT NULL, event_json TEXT NOT NULL);
       CREATE INDEX seen_hash ON seen(hash);
@@ -65,9 +66,9 @@ export class SqliteSessionImportStage {
   private rejected = false;
 
   constructor(private readonly database: DatabaseSync) {
-    this.insert = database.prepare("INSERT INTO rows VALUES (?, ?, ?, ?)");
+    this.insert = database.prepare("INSERT INTO rows VALUES (?, ?, ?)");
     this.read = database.prepare(
-      "SELECT seq, event_json AS eventJson, created_at AS createdAt FROM rows WHERE source = ? ORDER BY seq",
+      "SELECT seq, event_json AS eventJson FROM rows WHERE source = ? ORDER BY seq",
     );
     this.findSeen = database.prepare(
       "SELECT 1 FROM seen WHERE hash = ? AND event_json = ? LIMIT 1",
@@ -75,8 +76,8 @@ export class SqliteSessionImportStage {
     this.insertSeen = database.prepare("INSERT INTO seen VALUES (?, ?)");
   }
 
-  append(source: number, seq: number, eventJson: string, createdAt: number | null): void {
-    this.insert.run(source, seq, eventJson, createdAt);
+  append(source: number, seq: number, eventJson: string): void {
+    this.insert.run(source, seq, eventJson);
   }
 
   rows(source: number): Iterable<StagedTranscriptRow> {
@@ -156,6 +157,27 @@ export class SqliteSessionImportStage {
     const update = this.database.prepare(
       "UPDATE rows SET event_json = ? WHERE source = ? AND seq = ?",
     );
+    // Rewriting `rows` while its cursor is open re-delivers the row, and the replay guard
+    // would then discard the re-delivered copy as a duplicate. Rows that need normalized
+    // provider metadata are recorded here and rewritten once the scan has finished; until
+    // then their stored bytes are still legacy, so readers normalize on the way out.
+    const normalizedRows = diskSet("normalized");
+    const storedEventJson = (seq: number): string | undefined => {
+      const row = readRow.get(source, seq);
+      if (!row) {
+        return undefined;
+      }
+      const eventJson = String(row.event_json);
+      if (!normalizedRows.has(String(seq))) {
+        return eventJson;
+      }
+      const entry: unknown = JSON.parse(eventJson);
+      if (!isRecord(entry)) {
+        return eventJson;
+      }
+      normalizeLegacyOpenAICodexTranscriptMetadata([entry]);
+      return JSON.stringify(entry);
+    };
     let changed = false;
     let recognized = true;
     let headerSeq: number | undefined;
@@ -172,7 +194,7 @@ export class SqliteSessionImportStage {
         }
         if (normalizeLegacyOpenAICodexTranscriptMetadata([entry]) > 0) {
           eventJson = JSON.stringify(entry);
-          update.run(eventJson, source, row.seq);
+          normalizedRows.add(String(row.seq));
           changed = true;
         }
         if (entry.type === "session") {
@@ -200,23 +222,14 @@ export class SqliteSessionImportStage {
         if (typeof entry.id === "string" && (indexed || leafControl)) {
           const previous = lookup(entry.id);
           if (previous) {
-            const previousRow = readRow.get(source, Number(previous.entry.importSeq));
-            if (previousRow && String(previousRow.event_json) === eventJson) {
+            if (storedEventJson(Number(previous.entry.importSeq)) === eventJson) {
               repeatedRows.add(String(row.seq));
               changed = true;
               continue;
             }
           }
         }
-        const metadata = { ...entry };
-        delete metadata.message;
-        // Navigation needs only these fields, never a tool result or opaque payload.
-        const navigation: Record<string, unknown> = {};
-        for (const key of ["type", "id", "parentId", "targetId", "appendParentId", "appendMode"]) {
-          if (Object.hasOwn(metadata, key)) {
-            navigation[key] = metadata[key];
-          }
-        }
+        const navigation = projectTranscriptNavigationFields(entry);
         lastEntry = navigation;
         yield { ...navigation, importSeq: row.seq };
       }
@@ -241,6 +254,15 @@ export class SqliteSessionImportStage {
       resetDescendantIds: diskSet("reset"),
       invalidLeafControlIds: diskSet("invalid"),
     });
+    for (const pending of this.database
+      .prepare("SELECT id FROM tree_sets WHERE kind = 'normalized'")
+      .iterate()) {
+      const seq = Number(pending.id);
+      const eventJson = storedEventJson(seq);
+      if (eventJson !== undefined) {
+        update.run(eventJson, source, seq);
+      }
+    }
     this.database
       .prepare(
         `DELETE FROM rows WHERE source = ? AND CAST(seq AS TEXT) IN (

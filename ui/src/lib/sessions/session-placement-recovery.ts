@@ -17,8 +17,10 @@ import {
   sessionPlacementRecoveryScopeStoragePrefix,
 } from "./session-placement-recovery-storage-key.ts";
 
+export type SessionPlacementStartMode = "dispatch" | "recover" | "retry";
+
 export type SessionPlacementTarget =
-  | { kind: "profile"; profileId: string; machineClass?: string }
+  | { kind: "profile"; profileId: string; os?: string; machineClass?: string }
   | { kind: "device"; deviceId: string }
   | { kind: "auto-device" };
 
@@ -65,7 +67,9 @@ const SESSION_PLACEMENT_ERROR_MAX_LENGTH = 4096;
 const PLACEMENT_CREATE_STRING_FIELDS = [
   "category",
   "displayName",
+  "titleSource",
   "model",
+  "agentRuntime",
   "contextWindow",
   "thinkingLevel",
   "worktreeBaseRef",
@@ -79,6 +83,7 @@ const PLACEMENT_CREATE_FIELDS = new Set<string>([
   "agentId",
   "message",
   "worktree",
+  "worktreeSource",
   "repository",
   "incognito",
   "visibility",
@@ -102,6 +107,14 @@ export function parseSessionPlacementCreateParams(
     record.key !== sessionKey ||
     record.agentId !== agentId ||
     record.message !== "" ||
+    (record.worktreeSource !== undefined &&
+      (!Value.Check(SessionsCreateParamsSchema.properties.worktreeSource, record.worktreeSource) ||
+        record.worktree !== true ||
+        record.repository !== undefined ||
+        record.projectId !== undefined ||
+        record.cwd !== undefined ||
+        record.worktreeBaseRef !== undefined ||
+        record.catalogId !== undefined)) ||
     (record.repository === undefined
       ? record.worktree !== true
       : !Value.Check(SessionsCreateParamsSchema.properties.repository, record.repository) ||
@@ -119,6 +132,8 @@ export function parseSessionPlacementCreateParams(
       !Value.Check(SessionPermissionModeSchema, record.permissionMode)) ||
     (record.toolOverrides !== undefined &&
       !Value.Check(SessionToolOverridesSchema, record.toolOverrides)) ||
+    (record.titleSource !== undefined &&
+      !Value.Check(SessionsCreateParamsSchema.properties.titleSource, record.titleSource)) ||
     (record.projectId !== undefined && record.cwd !== undefined) ||
     PLACEMENT_CREATE_STRING_FIELDS.some(
       (key) => record[key] !== undefined && !isNonEmptyString(record[key]),
@@ -142,14 +157,6 @@ function parseStoredSessionPlacementRecovery(
   }
 }
 
-function sessionPlacementRecoveryClaimsScope(
-  value: Partial<SessionPlacementRecovery>,
-  gatewayUrl: string,
-  recoveryScope: string,
-): boolean {
-  return value.gatewayUrl === gatewayUrl && value.recoveryScope === recoveryScope;
-}
-
 function parseSessionPlacementTarget(value: unknown): SessionPlacementTarget | null {
   if (!isRecord(value)) {
     return null;
@@ -157,9 +164,10 @@ function parseSessionPlacementTarget(value: unknown): SessionPlacementTarget | n
   if (
     value.kind === "profile" &&
     Object.keys(value).every(
-      (key) => key === "kind" || key === "profileId" || key === "machineClass",
+      (key) => key === "kind" || key === "profileId" || key === "os" || key === "machineClass",
     ) &&
     isNonEmptyString(value.profileId) &&
+    (value.os === undefined || (isNonEmptyString(value.os) && value.os.length <= 64)) &&
     (value.machineClass === undefined ||
       (isNonEmptyString(value.machineClass) && value.machineClass.length <= 128))
   ) {
@@ -196,7 +204,8 @@ function validateSessionPlacementRecovery(
     (value.attachments !== undefined && !Array.isArray(value.attachments)) ||
     !parseSessionPlacementTarget(value.target) ||
     !isNonEmptyString(value.agentId) ||
-    !sessionPlacementRecoveryClaimsScope(value, gatewayUrl, recoveryScope) ||
+    value.gatewayUrl !== gatewayUrl ||
+    value.recoveryScope !== recoveryScope ||
     (value.phase !== "creating" &&
       value.phase !== "dispatching" &&
       value.phase !== "sending" &&

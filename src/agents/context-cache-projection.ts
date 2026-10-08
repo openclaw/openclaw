@@ -1,6 +1,11 @@
+import { setImmediate as yieldToGateway } from "node:timers/promises";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { providerContextTokenCacheKey } from "./context-cache.js";
+import {
+  type ContextWindowCacheState,
+  minPositiveContextTokens,
+  providerContextTokenCacheKey,
+} from "./context-cache.js";
 import { type ModelsConfig, resolveAnthropicFixedContextWindow } from "./context-resolution.js";
 import { normalizeProviderId } from "./model-selection.js";
 
@@ -11,17 +16,13 @@ type ContextWindowModelEntry = {
   provider?: string;
   contextWindow?: number;
   contextTokens?: number;
+  contextWindowSource?: "synthetic";
+  nativeRuntime?: string;
 };
 
 export type ContextWindowCatalog = {
   entries: ContextWindowModelEntry[];
   staticEntries?: ContextWindowModelEntry[];
-};
-
-type PreparedContextWindowCaches = {
-  configuredTokenCache: Map<string, number>;
-  discoveredTokenCache: Map<string, number>;
-  contextWindowCache: Map<string, number>;
 };
 
 type ConfiguredProvider = NonNullable<ModelsConfig["providers"]>[string];
@@ -38,15 +39,16 @@ function applyDiscoveredContextWindow(
   cache: Map<string, number>,
   model: ContextWindowModelEntry,
 ): void {
-  if (!model?.id) {
+  const nativeRuntime = normalizeLowercaseStringOrEmpty(model.nativeRuntime);
+  if (!model?.id || (nativeRuntime && nativeRuntime !== "openclaw")) {
     return;
   }
-  const discoveredContextTokens =
-    typeof model.contextTokens === "number"
-      ? Math.trunc(model.contextTokens)
-      : typeof model.contextWindow === "number"
-        ? Math.trunc(model.contextWindow)
-        : undefined;
+  const discoveredContextTokens = minPositiveContextTokens(
+    typeof model.contextTokens === "number" ? Math.trunc(model.contextTokens) : undefined,
+    model.contextWindowSource !== "synthetic" && typeof model.contextWindow === "number"
+      ? Math.trunc(model.contextWindow)
+      : undefined,
+  );
   const contextTokens =
     resolveDiscoveredAnthropicFixedContextWindow(model) ?? discoveredContextTokens;
   if (!contextTokens || contextTokens <= 0) {
@@ -67,15 +69,6 @@ function applyDiscoveredContextWindow(
   const bareModelId = slash > 0 ? model.id.slice(slash + 1).trim() : "";
   if (prefixedProvider === provider && bareModelId) {
     cacheMinimum(cache, providerContextTokenCacheKey(provider, bareModelId), contextTokens);
-  }
-}
-
-export function applyDiscoveredContextWindows(params: {
-  cache: Map<string, number>;
-  models: ContextWindowModelEntry[];
-}): void {
-  for (const model of params.models) {
-    applyDiscoveredContextWindow(params.cache, model);
   }
 }
 
@@ -157,24 +150,21 @@ function resolveDiscoveredAnthropicFixedContextWindow(
     : undefined;
 }
 
-function yieldToGateway(): Promise<void> {
-  return new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}
-
 async function projectModels(params: {
   cache: Map<string, number>;
-  models: ContextWindowModelEntry[];
-  processed: { count: number };
+  modelCatalog: ContextWindowCatalog;
+  processed: number;
   assertCurrent?: () => void;
 }): Promise<void> {
-  for (const model of params.models) {
-    applyDiscoveredContextWindow(params.cache, model);
-    params.processed.count += 1;
-    if (params.processed.count % CONTEXT_PROJECTION_BATCH_SIZE === 0) {
-      await yieldToGateway();
-      params.assertCurrent?.();
+  let processed = params.processed;
+  for (const models of [params.modelCatalog.entries, params.modelCatalog.staticEntries ?? []]) {
+    for (const model of models) {
+      applyDiscoveredContextWindow(params.cache, model);
+      processed += 1;
+      if (processed % CONTEXT_PROJECTION_BATCH_SIZE === 0) {
+        await yieldToGateway();
+        params.assertCurrent?.();
+      }
     }
   }
 }
@@ -183,14 +173,14 @@ export async function prepareContextWindowCaches(params: {
   config: OpenClawConfig;
   modelCatalog: ContextWindowCatalog;
   assertCurrent?: () => void;
-}): Promise<PreparedContextWindowCaches> {
-  const caches: PreparedContextWindowCaches = {
+}): Promise<ContextWindowCacheState> {
+  const caches: ContextWindowCacheState = {
     configuredTokenCache: new Map(),
     discoveredTokenCache: new Map(),
     contextWindowCache: new Map(),
   };
-  const processed = { count: 0 };
-  const providers = (params.config.models as ModelsConfig | undefined)?.providers;
+  let processed = 0;
+  const providers = params.config.models?.providers;
   if (providers && typeof providers === "object") {
     for (const [providerId, provider] of Object.entries(providers)) {
       if (!Array.isArray(provider?.models)) {
@@ -203,8 +193,8 @@ export async function prepareContextWindowCaches(params: {
           providerId,
           model,
         });
-        processed.count += 1;
-        if (processed.count % CONTEXT_PROJECTION_BATCH_SIZE === 0) {
+        processed += 1;
+        if (processed % CONTEXT_PROJECTION_BATCH_SIZE === 0) {
           await yieldToGateway();
           params.assertCurrent?.();
         }
@@ -213,13 +203,7 @@ export async function prepareContextWindowCaches(params: {
   }
   await projectModels({
     cache: caches.discoveredTokenCache,
-    models: params.modelCatalog.entries,
-    processed,
-    assertCurrent: params.assertCurrent,
-  });
-  await projectModels({
-    cache: caches.discoveredTokenCache,
-    models: params.modelCatalog.staticEntries ?? [],
+    modelCatalog: params.modelCatalog,
     processed,
     assertCurrent: params.assertCurrent,
   });
@@ -232,17 +216,10 @@ export async function prepareDiscoveredContextTokenCache(params: {
   assertCurrent?: () => void;
 }): Promise<Map<string, number>> {
   const cache = new Map<string, number>();
-  const processed = { count: 0 };
   await projectModels({
     cache,
-    models: params.modelCatalog.entries,
-    processed,
-    assertCurrent: params.assertCurrent,
-  });
-  await projectModels({
-    cache,
-    models: params.modelCatalog.staticEntries ?? [],
-    processed,
+    modelCatalog: params.modelCatalog,
+    processed: 0,
     assertCurrent: params.assertCurrent,
   });
   params.assertCurrent?.();

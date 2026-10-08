@@ -1,4 +1,3 @@
-// Feishu inbound media chunk-idle timeout helper.
 import { saveMediaStream, type SavedMedia } from "openclaw/plugin-sdk/media-store";
 
 class FeishuInboundMediaTimeoutError extends Error {
@@ -23,6 +22,7 @@ function destroySource(source: unknown) {
 function withChunkIdleTimeout<T>(
   source: AsyncIterable<T>,
   chunkTimeoutMs: number,
+  teardownSource: () => void,
 ): AsyncIterable<T> {
   return {
     async *[Symbol.asyncIterator]() {
@@ -35,11 +35,7 @@ function withChunkIdleTimeout<T>(
           const timeoutPromise = new Promise<never>((_, reject) => {
             timeoutHandle = setTimeout(() => {
               reject(new FeishuInboundMediaTimeoutError(chunkTimeoutMs));
-              try {
-                destroySource(source);
-              } catch {
-                // Teardown is best-effort; the timeout must remain authoritative.
-              }
+              teardownSource();
             }, chunkTimeoutMs);
           });
           let result: IteratorResult<T>;
@@ -67,18 +63,35 @@ function withChunkIdleTimeout<T>(
   };
 }
 
-export function saveMediaStreamWithIdleTimeout(
+export async function saveMediaStreamWithIdleTimeout(
   stream: AsyncIterable<unknown>,
   contentType: string | undefined,
   maxBytes: number,
   fileName: string | undefined,
   chunkTimeoutMs: number,
 ): Promise<SavedMedia> {
-  return saveMediaStream(
-    withChunkIdleTimeout(stream, chunkTimeoutMs),
-    contentType,
-    "inbound",
-    maxBytes,
-    fileName,
-  );
+  let teardownAttempted = false;
+  const teardownSource = () => {
+    if (teardownAttempted) {
+      return;
+    }
+    teardownAttempted = true;
+    try {
+      destroySource(stream);
+    } catch {
+      // Teardown must not replace the storage or timeout error.
+    }
+  };
+  try {
+    return await saveMediaStream(
+      withChunkIdleTimeout(stream, chunkTimeoutMs, teardownSource),
+      contentType,
+      "inbound",
+      maxBytes,
+      fileName,
+    );
+  } catch (error) {
+    teardownSource();
+    throw error;
+  }
 }

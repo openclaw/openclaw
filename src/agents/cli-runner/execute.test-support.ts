@@ -36,7 +36,7 @@ export function setCliRunnerExecuteTestDeps(overrides: Partial<typeof executeDep
   Object.assign(executeDeps, overrides);
 }
 
-export const supervisorSpawnMock: UnknownMock = vi.fn();
+export const supervisorSpawnMock = vi.fn<SupervisorSpawnFn>();
 export const enqueueSystemEventMock: UnknownMock = vi.fn();
 export const requestHeartbeatMock: UnknownMock = vi.fn();
 
@@ -54,6 +54,9 @@ setCliRunnerExecuteTestDeps({
         // was requested; replay it through callbacks once to match production.
         const wrappedParams = {
           ...params,
+          ...(params.mode === "child" && params.resolveArgs
+            ? { argv: [...params.argv, ...params.resolveArgs()] }
+            : {}),
           onStdout: params.onStdout
             ? (chunk: string) => {
                 stdoutDelivered = true;
@@ -67,9 +70,7 @@ setCliRunnerExecuteTestDeps({
               }
             : undefined,
         };
-        const managedRun = (await supervisorSpawnMock(wrappedParams)) as Awaited<
-          ReturnType<SupervisorSpawnFn>
-        >;
+        const managedRun = await supervisorSpawnMock(wrappedParams);
         if (!managedRun) {
           // A defeated or reset once-mock returns undefined; fail loudly instead
           // of letting the run wedge into an opaque test timeout.

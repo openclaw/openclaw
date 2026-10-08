@@ -53,6 +53,50 @@ function cleanWorkspace(): string {
 }
 
 describe("node worker workspace origin fallback", () => {
+  it.each(["apply", "store"] as const)(
+    "does not hide source revocation as a recoverable seed %s failure",
+    async (boundary) => {
+      const localPath = cleanWorkspace();
+      let current = true;
+      const closed = new Error("initiating source closed");
+      const exec = vi.fn<WorkspaceExec>(async ({ argv, seed }) => {
+        if (seed?.action === boundary) {
+          current = false;
+          throw closed;
+        }
+        return {
+          ...spawnResult(
+            seed?.action === "apply"
+              ? "absent\n"
+              : argv.includes("rev-parse")
+                ? COMMIT
+                : MANIFEST_REF,
+          ),
+          workspaceDir: REMOTE_WORKSPACE,
+        };
+      });
+      await expect(
+        createNodeWorkerWorkspaceFallback(exec).trySyncWorkspace(
+          {
+            localPath,
+            sessionId: "session-1",
+            generation: 1,
+            authorize: () => {
+              if (!current) {
+                throw closed;
+              }
+            },
+          },
+          MANIFEST_REF,
+        ),
+      ).rejects.toBe(closed);
+      expect(exec.mock.calls.at(-1)?.[0].seed?.action).toBe(boundary);
+      if (boundary === "apply") {
+        expect(exec).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
   it("clones a clean commit without requiring it to be an advertised ref tip", async () => {
     const localPath = cleanWorkspace();
     const exec = vi.fn<WorkspaceExec>(async ({ argv, seed }) => ({
@@ -242,40 +286,53 @@ describe("node worker workspace origin fallback", () => {
       label: "fully inherited identity",
       gitAuthor: undefined,
       expected: ["Gateway Repository Author", "gateway-author@example.invalid"],
+      lookups: ["user.name", "user.email"],
     },
     {
       label: "configured name with inherited email",
       gitAuthor: { name: "Configured Author" },
       expected: ["Configured Author", "gateway-author@example.invalid"],
+      lookups: ["user.email"],
     },
     {
       label: "inherited name with configured email",
       gitAuthor: { email: "configured@example.invalid" },
       expected: ["Gateway Repository Author", "configured@example.invalid"],
+      lookups: ["user.name"],
     },
-  ])("projects $label into a materialized Git workspace", async ({ gitAuthor, expected }) => {
-    const localPath = cleanWorkspace();
-    const exec = vi.fn<WorkspaceExec>(async () => ({
-      ...spawnResult(),
-      workspaceDir: REMOTE_WORKSPACE,
-    }));
-    const result = {
-      mode: "git" as const,
-      remoteWorkspaceDir: REMOTE_WORKSPACE,
-      manifestRef: MANIFEST_REF,
-    };
+    {
+      label: "fully configured identity",
+      gitAuthor: { name: "Configured Author", email: "configured@example.invalid" },
+      expected: ["Configured Author", "configured@example.invalid"],
+      lookups: [],
+    },
+  ])(
+    "projects $label into a materialized Git workspace",
+    async ({ gitAuthor, expected, lookups }) => {
+      const localPath = cleanWorkspace();
+      const exec = vi.fn<WorkspaceExec>(async () => ({
+        ...spawnResult(),
+        workspaceDir: REMOTE_WORKSPACE,
+      }));
+      const result = {
+        mode: "git" as const,
+        remoteWorkspaceDir: REMOTE_WORKSPACE,
+        manifestRef: MANIFEST_REF,
+      };
 
-    await expect(
-      createNodeWorkerWorkspaceFallback(exec).finalizeSync(
-        { localPath, sessionId: "session-1", generation: 1, ...(gitAuthor ? { gitAuthor } : {}) },
-        result,
-      ),
-    ).resolves.toEqual(result);
-    expect(exec.mock.calls.map(([command]) => command.argv.slice(-2))).toEqual([
-      ["user.name", expected[0]],
-      ["user.email", expected[1]],
-    ]);
-  });
+      await expect(
+        createNodeWorkerWorkspaceFallback(exec).finalizeSync(
+          { localPath, sessionId: "session-1", generation: 1, ...(gitAuthor ? { gitAuthor } : {}) },
+          result,
+        ),
+      ).resolves.toEqual(result);
+      expect(exec.mock.calls.map(([command]) => command.argv.slice(-2))).toEqual([
+        ["user.name", expected[0]],
+        ["user.email", expected[1]],
+      ]);
+      expect(runCommandWithTimeout.mock.calls.map(([argv]) => argv.at(-1))).toEqual(lookups);
+    },
+  );
 
   it("fails closed when a node rejects its Gateway Git author", async () => {
     const localPath = cleanWorkspace();

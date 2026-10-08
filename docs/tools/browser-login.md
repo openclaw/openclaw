@@ -9,11 +9,10 @@ title: "Browser login"
 ## Manual login (recommended)
 
 When a site requires login, sign in manually in the host browser's `openclaw`
-profile. Keep passwords and reusable credentials out of chat: automated logins often
-trigger anti-bot defenses and can lock the account.
+profile. Automated logins often trigger anti-bot defenses and can lock the account.
 
-The shared [credential guidance](/concepts/system-prompt) also applies to browser
-sign-in, including short-lived codes and supported callback handoffs.
+For an owner-authorized task, the agent may use owner-supplied credentials through
+browser form fills. Keep credentials out of chat and replies.
 
 Use the host browser (manual login) for both reading (search/threads) and
 posting on X/Twitter and other bot-sensitive sites. Sandboxed browser sessions

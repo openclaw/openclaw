@@ -3,23 +3,37 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadSqliteVecExtension } from "../../packages/memory-host-sdk/src/engine-storage.js";
+import { z } from "zod";
 import { formatCliOperatorError } from "../cli/failure-output.js";
 import { backupGitCreateCommand, backupGitLogCommand } from "../commands/backup-git.js";
-import { readBackupFreshness } from "../commands/backup-health.js";
 import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
+import { clearRuntimeConfigSnapshot } from "../config/config.js";
 import { executeGitCommand, requireGitCommand as requireGit } from "../infra/git-exec.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { spawnCommand } from "../process/exec-spawn.js";
+import { readBackupRunFreshness } from "../state/backup-run-records.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createPathResolutionEnv, withEnvAsync } from "../test-utils/env.js";
 import { dumpGitBackupDatabase, restoreGitBackupDirectory } from "./git-backup-codec.js";
+import { gitBackupCommandRuntimeEntrypoint } from "./git-backup-command-runtime.test-support.js";
 import { createGitBackup, initializeGitBackupRepository, readGitBackupLog } from "./git-backup.js";
+import {
+  createAgentFixture,
+  createCatalogFixture,
+  createFormatFixture,
+  writeBackupManifest,
+} from "./git-backup.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   logDiagnostic: undefined as { stdout: string; stderr: string } | undefined,
@@ -76,6 +90,21 @@ vi.mock("./local-repository.js", async (importOriginal) => {
 
 const roots: string[] = [];
 
+async function withBackupStateEnv<T>(
+  values: Parameters<typeof withEnvAsync>[0],
+  run: () => Promise<T>,
+): Promise<T> {
+  return await withEnvAsync(values, async () => {
+    await using state = {
+      run,
+      async [Symbol.asyncDispose]() {
+        await closeOpenClawStateDatabaseAsync();
+      },
+    };
+    return await state.run();
+  });
+}
+
 async function tempRoot(): Promise<string> {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-backup-test-"));
   roots.push(root);
@@ -83,6 +112,10 @@ async function tempRoot(): Promise<string> {
 }
 
 afterEach(async () => {
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawAgentDatabasesForTest();
+  clearRuntimeConfigSnapshot();
   mocks.logDiagnostic = undefined;
   mocks.pushDiagnostic = undefined;
   mocks.snapshotRepositoryError = undefined;
@@ -92,165 +125,6 @@ afterEach(async () => {
     roots.splice(0).map(async (root) => await fs.rm(root, { recursive: true, force: true })),
   );
 });
-
-async function createFormatFixture(databasePath: string): Promise<void> {
-  const database = new DatabaseSync(databasePath, { allowExtension: true });
-  try {
-    await loadSqliteVecExtension({ db: database });
-    database.exec(`
-      PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
-      CREATE TABLE schema_meta (
-        meta_key TEXT NOT NULL PRIMARY KEY,
-        role TEXT NOT NULL,
-        schema_version INTEGER NOT NULL,
-        agent_id TEXT,
-        app_version TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      ) STRICT;
-      CREATE TABLE device_auth_tokens (
-        device_id TEXT NOT NULL,
-        role TEXT NOT NULL,
-        token TEXT NOT NULL,
-        scopes_json TEXT NOT NULL,
-        updated_at_ms INTEGER NOT NULL,
-        PRIMARY KEY (device_id, role)
-      ) STRICT;
-      CREATE TABLE channel_pairing_requests (
-        channel_key TEXT NOT NULL,
-        account_id TEXT NOT NULL,
-        request_id TEXT NOT NULL,
-        code TEXT NOT NULL,
-        created_at TEXT NOT NULL,
-        last_seen_at TEXT NOT NULL,
-        meta_json TEXT,
-        PRIMARY KEY (channel_key, account_id, request_id)
-      ) STRICT;
-      CREATE TABLE device_pairing_join_codes (
-        shortcode TEXT,
-        payload_json TEXT,
-        created_at_ms INTEGER,
-        expires_at_ms INTEGER
-      ) STRICT;
-      CREATE TABLE content (
-        id INTEGER PRIMARY KEY,
-        body TEXT NOT NULL,
-        huge INTEGER NOT NULL,
-        bytes BLOB NOT NULL,
-        optional TEXT
-      );
-      CREATE VIRTUAL TABLE content_fts USING fts5(body, content='content', content_rowid='id');
-      CREATE TRIGGER content_ai AFTER INSERT ON content BEGIN
-        INSERT INTO content_fts(rowid, body) VALUES (new.id, new.body);
-      END;
-      CREATE VIRTUAL TABLE memory_vec USING vec0(embedding float[2]);
-      CREATE TABLE empty_table (id INTEGER PRIMARY KEY, value TEXT);
-      CREATE TABLE session_transcript_index_state (id TEXT PRIMARY KEY, cursor INTEGER);
-    `);
-    database
-      .prepare(
-        `INSERT INTO schema_meta
-           (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
-         VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)`,
-      )
-      .run(OPENCLAW_STATE_SCHEMA_VERSION);
-    database
-      .prepare("INSERT INTO content (id, body, huge, bytes, optional) VALUES (?, ?, ?, ?, ?)")
-      .run(1, "hello lobster", 9_007_199_254_740_993n, Buffer.from([0, 1, 254, 255]), "");
-    database
-      .prepare("INSERT INTO content (id, body, huge, bytes, optional) VALUES (?, ?, ?, ?, ?)")
-      .run(2, "second row", -9_007_199_254_740_994n, Buffer.from([42]), null);
-    database.prepare("INSERT INTO session_transcript_index_state VALUES (?, ?)").run("main", 99);
-    database
-      .prepare(
-        `INSERT INTO device_auth_tokens
-           (device_id, role, token, scopes_json, updated_at_ms)
-         VALUES (?, ?, ?, ?, ?)`,
-      )
-      .run("device", "operator", "secret-token", "[]", 1);
-    database
-      .prepare(
-        `INSERT INTO channel_pairing_requests
-           (channel_key, account_id, request_id, code, created_at, last_seen_at, meta_json)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run("telegram", "default", "request", "pairing-code", "now", "now", null);
-    database
-      .prepare(
-        `INSERT INTO device_pairing_join_codes
-           (shortcode, payload_json, created_at_ms, expires_at_ms)
-         VALUES (?, ?, ?, ?)`,
-      )
-      .run(
-        "join-code",
-        JSON.stringify({ url: "wss://gateway.example", bootstrapToken: "bootstrap-secret" }),
-        1,
-        2,
-      );
-  } finally {
-    database.close();
-  }
-}
-
-function createAgentFixture(databasePath: string, agentId: string): void {
-  const database = new DatabaseSync(databasePath);
-  try {
-    database.exec(`
-      PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
-      CREATE TABLE schema_meta (
-        meta_key TEXT NOT NULL PRIMARY KEY,
-        role TEXT NOT NULL,
-        schema_version INTEGER NOT NULL,
-        agent_id TEXT,
-        app_version TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      ) STRICT;
-    `);
-    database
-      .prepare(
-        `INSERT INTO schema_meta
-           (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
-         VALUES ('primary', 'agent', ?, ?, NULL, 1, 1)`,
-      )
-      .run(OPENCLAW_AGENT_SCHEMA_VERSION, agentId);
-  } finally {
-    database.close();
-  }
-}
-
-async function writeBackupManifest(scopePath: string, agentId: string): Promise<void> {
-  await fs.mkdir(scopePath, { recursive: true });
-  await fs.writeFile(
-    path.join(scopePath, "manifest.json"),
-    `${JSON.stringify({
-      schemaVersion: 1,
-      identity: { role: "agent", agentId },
-      userVersion: 1,
-      excludedTables: [],
-      tables: {},
-    })}\n`,
-  );
-}
-
-async function listTree(root: string): Promise<Array<[string, string]>> {
-  const result: Array<[string, string]> = [];
-  async function visit(directory: string): Promise<void> {
-    for (const entry of (await fs.readdir(directory, { withFileTypes: true })).toSorted((a, b) =>
-      a.name.localeCompare(b.name),
-    )) {
-      const entryPath = path.join(directory, entry.name);
-      const relative = path.relative(root, entryPath);
-      if (entry.isDirectory()) {
-        await visit(entryPath);
-      } else {
-        result.push([relative, (await fs.readFile(entryPath)).toString("hex")]);
-      }
-    }
-  }
-  await visit(root);
-  return result;
-}
 
 function createStateDatabaseFixture(root: string): {
   stateDir: string;
@@ -288,38 +162,6 @@ describe("Git-backed SQLite snapshots", () => {
     }
   });
 
-  it("dumps byte-identical trees and skips a second unchanged create commit", async () => {
-    const root = await tempRoot();
-    const source = path.join(root, "source.sqlite");
-    const first = path.join(root, "first");
-    const second = path.join(root, "second");
-    await createFormatFixture(source);
-
-    await dumpGitBackupDatabase({
-      snapshotPath: source,
-      outputPath: first,
-      identity: { role: "global" },
-    });
-    await dumpGitBackupDatabase({
-      snapshotPath: source,
-      outputPath: second,
-      identity: { role: "global" },
-    });
-    expect(await listTree(second)).toEqual(await listTree(first));
-
-    const { stateDir, database } = createStateDatabaseFixture(root);
-    const repositoryPath = path.join(root, "repository");
-    await initializeGitBackupRepository({ repositoryPath, stateDir });
-    await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
-    await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
-    const created = await createGitBackup({ repositoryPath, stateDir, databases: [database] });
-    const unchanged = await createGitBackup({ repositoryPath, stateDir, databases: [database] });
-    expect(created.noChanges).toBe(false);
-    expect(unchanged.noChanges).toBe(true);
-    expect(unchanged).not.toHaveProperty("commit");
-    expect(await requireGit(repositoryPath, ["rev-list", "--count", "HEAD"])).toBe("1");
-  });
-
   it("backs up a configured external agent database for explicit and all scopes", async () => {
     const root = await fs.realpath(await tempRoot());
     const { stateDir } = createStateDatabaseFixture(root);
@@ -336,7 +178,7 @@ describe("Git-backed SQLite snapshots", () => {
     closeOpenClawAgentDatabaseByPath(agentDatabase.path);
     await fs.writeFile(configPath, JSON.stringify({ agents: { entries: { main: { agentDir } } } }));
 
-    await withEnvAsync(
+    await withBackupStateEnv(
       { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
       async () => {
         for (const { scope, selection } of [
@@ -364,6 +206,119 @@ describe("Git-backed SQLite snapshots", () => {
     );
   });
 
+  it.each(["missing", "old-schema", "removed"] as const)(
+    "refreshes --all backups without losing a configured %s agent",
+    async (condition) => {
+      clearRuntimeConfigSnapshot();
+      const root = await fs.realpath(await tempRoot());
+      const { stateDir } = createStateDatabaseFixture(root);
+      const repositoryPath = path.join(root, "repository");
+      const configPath = path.join(stateDir, "openclaw.json");
+      const entries = {
+        main: { agentDir: path.join(root, "main") },
+        ops: { agentDir: path.join(root, "ops") },
+      };
+      const { closeOpenClawAgentDatabaseByPath, openOpenClawAgentDatabase } =
+        await import("../state/openclaw-agent-db.js");
+      for (const [agentId, { agentDir }] of Object.entries(entries)) {
+        const agent = openOpenClawAgentDatabase({
+          agentId,
+          env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+          path: path.join(agentDir, "openclaw-agent.sqlite"),
+        });
+        closeOpenClawAgentDatabaseByPath(agent.path);
+      }
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({ agents: { ownership: "explicit", entries } }),
+      );
+      await closeOpenClawStateDatabaseAsync();
+
+      await withBackupStateEnv(
+        { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_CONFIG_PATH: configPath },
+        async () => {
+          const create = (agentId?: string) =>
+            spawnCommand(
+              [
+                process.execPath,
+                ...resolveRuntimeWorkerArgv(
+                  resolveRuntimeWorkerUrl(gitBackupCommandRuntimeEntrypoint),
+                ),
+                repositoryPath,
+                ...(agentId ? [agentId] : []),
+              ],
+              { env: { OPENCLAW_TEST_RUNTIME_LOG: "1" }, timeout: 30_000 },
+            );
+          const resultSchema = z.object({
+            commit: z.string(),
+            warnings: z.array(z.string()).optional(),
+          });
+          const first = resultSchema.parse(JSON.parse((await create()).stdout));
+          const opsTree = await requireGit(repositoryPath, ["rev-parse", "HEAD:agents/ops"]);
+          const mainTree = await requireGit(repositoryPath, ["rev-parse", "HEAD:agents/main"]);
+          const main = new DatabaseSync(path.join(entries.main.agentDir, "openclaw-agent.sqlite"));
+          try {
+            main.exec("UPDATE schema_meta SET updated_at = updated_at + 1");
+          } finally {
+            main.close();
+          }
+          const opsPath = path.join(entries.ops.agentDir, "openclaw-agent.sqlite");
+          if (condition === "missing") {
+            await fs.rm(opsPath);
+          } else if (condition === "old-schema") {
+            const ops = new DatabaseSync(opsPath);
+            try {
+              ops.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION - 1}`);
+            } finally {
+              ops.close();
+            }
+          } else {
+            await fs.writeFile(
+              configPath,
+              JSON.stringify({
+                agents: { ownership: "explicit", entries: { main: entries.main } },
+              }),
+            );
+          }
+          const output = await create();
+          const result = resultSchema.parse(JSON.parse(output.stdout));
+          expect(result.commit).toMatch(/^[a-f0-9]{40}$/u);
+          expect(result.commit).not.toBe(first.commit);
+          expect(await requireGit(repositoryPath, ["rev-parse", "HEAD:agents/main"])).not.toBe(
+            mainTree,
+          );
+          if (condition === "removed") {
+            expect(await requireGit(repositoryPath, ["ls-tree", "HEAD", "agents/ops"])).toBe("");
+            expect(output.stderr).not.toContain("Warning: Agent");
+            return;
+          }
+          expect(await requireGit(repositoryPath, ["rev-parse", "HEAD:agents/ops"])).toBe(opsTree);
+          const reason = condition === "missing" ? /ENOENT/u : /uses schema version/u;
+          expect(result.warnings).toEqual([expect.stringMatching(/agent ops.*degraded/iu)]);
+          const warning = result.warnings?.[0];
+          expect(warning).toMatch(reason);
+          expect(output.stderr).toContain(`Warning: ${warning}`);
+          expect((await readBackupRunFreshness(process.env)).latest).toMatchObject({
+            status: "ok",
+            kind: "git",
+            target: result.commit,
+            error: warning,
+          });
+          await expect(create("ops")).rejects.toThrow(reason);
+          await expect(
+            createGitBackup({
+              repositoryPath,
+              stateDir,
+              all: true,
+              databases: [{ path: opsPath, identity: { role: "agent", agentId: "ops" } }],
+            }),
+          ).rejects.toThrow("No Git backup databases were found for the selected scope.");
+          expect(await requireGit(repositoryPath, ["rev-parse", "HEAD"])).toBe(result.commit);
+        },
+      );
+    },
+  );
+
   it("stages only backup-owned paths in an adopted repository", async () => {
     const root = await tempRoot();
     const { stateDir, database } = createStateDatabaseFixture(root);
@@ -379,6 +334,7 @@ describe("Git-backed SQLite snapshots", () => {
 
     expect(created.noChanges).toBe(false);
     expect(unchanged.noChanges).toBe(true);
+    expect(unchanged).not.toHaveProperty("commit");
     expect(await requireGit(repositoryPath, ["status", "--porcelain", "--", "unrelated.txt"])).toBe(
       "A  unrelated.txt",
     );
@@ -491,18 +447,6 @@ describe("Git-backed SQLite snapshots", () => {
     expect(output).not.toContain("chmod 700");
   });
 
-  it("accepts a private adopted root", async () => {
-    const root = await tempRoot();
-    const stateDir = path.join(root, "state");
-    const repositoryPath = path.join(root, "repository");
-    await fs.mkdir(stateDir);
-    await fs.mkdir(repositoryPath, { mode: 0o700 });
-
-    await expect(initializeGitBackupRepository({ repositoryPath, stateDir })).resolves.toEqual({
-      repositoryPath,
-    });
-  });
-
   it.skipIf(process.platform !== "win32")(
     "initializes and reads history when Windows Git emits MSYS paths",
     async () => {
@@ -576,7 +520,7 @@ describe("Git-backed SQLite snapshots", () => {
     await requireGit(repositoryPath, ["config", "user.name", "OpenClaw Backup Test"]);
     await requireGit(repositoryPath, ["config", "user.email", "backup@example.invalid"]);
 
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    await withBackupStateEnv({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const runtime = createTestRuntime();
       const result = await backupGitCreateCommand(runtime, {
         repository: repositoryPath,
@@ -600,7 +544,7 @@ describe("Git-backed SQLite snapshots", () => {
         `Warning: Git backup committed, but push failed: ${result.pushWarning}`,
       );
 
-      const persisted = readBackupFreshness(process.env).latest?.error;
+      const persisted = (await readBackupRunFreshness(process.env)).latest?.error;
       expect(persisted).toBe(result.pushWarning);
     });
   });
@@ -757,7 +701,7 @@ describe("Git-backed SQLite snapshots", () => {
 
     const warning =
       "repository history contains non-backup commits; use a dedicated backup repository";
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+    await withBackupStateEnv({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const result = await backupGitCreateCommand(createTestRuntime(), {
         repository: repositoryPath,
         global: true,
@@ -767,7 +711,7 @@ describe("Git-backed SQLite snapshots", () => {
 
       expect(result).toMatchObject({ noChanges: false, pushed: false, pushWarning: warning });
       expect(result.commit).toMatch(/^[a-f0-9]{40}$/u);
-      expect(readBackupFreshness(process.env)).toMatchObject({
+      expect(await readBackupRunFreshness(process.env)).toMatchObject({
         latest: { status: "ok", kind: "git", pushFailed: true, error: warning },
         latestOk: { status: "ok", kind: "git", pushFailed: true, error: warning },
       });
@@ -842,6 +786,7 @@ describe("Git-backed SQLite snapshots", () => {
     expect(restored.tables.every((table) => table.ok)).toBe(true);
     expect(restored.manifest.tables).toEqual(manifest.tables);
     expect(manifest.tables).not.toHaveProperty("session_transcript_index_state");
+    expect(manifest.tables).not.toHaveProperty("session_transcript_fts_rows");
     if (process.platform !== "win32") {
       expect((await fs.stat(restoredPath)).mode & 0o777).toBe(0o600);
     }
@@ -886,6 +831,80 @@ describe("Git-backed SQLite snapshots", () => {
       database.close();
     }
   });
+
+  it.each([false, true])(
+    "redacts catalog credentials only for secret-excluded backups (exclude=%s)",
+    async (excludeSecrets) => {
+      const root = await tempRoot();
+      const source = path.join(root, "source.sqlite");
+      const dump = path.join(root, "dump");
+      const { catalog, malformedHeaders, unusableCatalogs, scopes } = createCatalogFixture(source);
+      const manifest = await dumpGitBackupDatabase({
+        snapshotPath: source,
+        outputPath: dump,
+        identity: { role: "agent", agentId: "main" },
+        excludeSecrets,
+      });
+      const rows = (await fs.readFile(path.join(dump, "tables", "cache_entries.jsonl"), "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      for (const scope of scopes) {
+        const fixtureRow = rows.find((entry) => entry.scope === scope && entry.key === "fixture");
+        expect(fixtureRow).toBeDefined();
+        expect(JSON.parse(fixtureRow.value_json)).toEqual(
+          excludeSecrets
+            ? {
+                ...catalog,
+                providers: {
+                  fixture: {
+                    api: "openai-completions",
+                    models: [{ id: "model" }],
+                  },
+                },
+              }
+            : catalog,
+        );
+        const malformedRow = rows.find(
+          (entry) => entry.scope === scope && entry.key === "malformed-headers",
+        );
+        expect(malformedRow).toBeDefined();
+        expect(JSON.parse(malformedRow.value_json)).toEqual(
+          excludeSecrets
+            ? {
+                generatedBy: "openclaw-plugin-model-catalog-v1",
+                providers: {
+                  fixture: {
+                    api: "openai-completions",
+                    models: [
+                      { id: "array-header" },
+                      { id: "object-header" },
+                      { id: "string-headers" },
+                    ],
+                  },
+                },
+              }
+            : malformedHeaders,
+        );
+        for (const [index, contents] of unusableCatalogs.entries()) {
+          expect(
+            rows.find((entry) => entry.scope === scope && entry.key === `broken-${index}`),
+          ).toEqual(
+            excludeSecrets ? undefined : { scope, key: `broken-${index}`, value_json: contents },
+          );
+        }
+      }
+      expect(rows).toContainEqual({
+        scope: "unrelated-cache",
+        key: "keep",
+        value_json: '{"value":"retained"}',
+      });
+      expect(manifest.userVersion).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+      expect(manifest.tables.cache_entries).toMatchObject({
+        rows: excludeSecrets ? 5 : 5 + scopes.length * unusableCatalogs.length,
+      });
+    },
+  );
 
   it("omits secret tables and reports the restore gap", async () => {
     const root = await tempRoot();

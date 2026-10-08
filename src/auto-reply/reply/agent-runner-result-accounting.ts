@@ -1,4 +1,7 @@
-import { resolveContextTokenBudgetForModel } from "../../agents/context.js";
+import {
+  resolveContextTokenBudgetForModel,
+  resolveModelContextTokenProjection,
+} from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { consolidateLiveModelSwitchAfterRun } from "../../agents/live-model-switch.js";
@@ -108,12 +111,10 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     : undefined;
 
   const runResult = execution.result;
-  const fallbackProvider = execution.resolved.provider;
-  const fallbackModel = execution.resolved.model;
-  const fallbackExhausted = execution.fallback.exhausted;
-  const fallbackAttempts = execution.fallback.attempts;
-  const directlySentBlockKeys = execution.directlySentBlockKeys;
-  const directlySentBlockPayloads = execution.directlySentBlockPayloads;
+  const { provider: fallbackProvider, model: fallbackModel } = execution.resolved;
+  const { exhausted: fallbackExhausted, attempts: fallbackAttempts } = execution.fallback;
+  const hasDirectlySentBlockReply = execution.hasDirectlySentBlockReply;
+  const directBlockDeliveries = execution.directBlockDeliveries;
   const terminalFailurePayload = execution.terminalFailurePayload;
   const { autoCompactionCount, didLogHeartbeatStrip } = execution;
 
@@ -201,10 +202,8 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     requestedModel: followupRun.run.model,
     durationMs: Date.now() - runStartedAt,
     compactionCount: typeof compactions === "number" ? compactions : undefined,
-    contextTokenBudget:
-      typeof ctxTokens === "number" && Number.isFinite(ctxTokens) ? ctxTokens : undefined,
-    contextUsedTokens:
-      typeof promptTokens === "number" && Number.isFinite(promptTokens) ? promptTokens : undefined,
+    contextTokenBudget: ctxTokens,
+    contextUsedTokens: promptTokens,
     promptTokens,
     usage,
     lastCallUsage,
@@ -259,47 +258,68 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     }
   }
   const runtimeContextTokens =
-    typeof runResult.meta?.agentMeta?.contextTokens === "number" &&
-    Number.isFinite(runResult.meta.agentMeta.contextTokens) &&
-    runResult.meta.agentMeta.contextTokens > 0
-      ? Math.floor(runResult.meta.agentMeta.contextTokens)
+    typeof ctxTokens === "number" && Number.isFinite(ctxTokens) && ctxTokens > 0
+      ? Math.floor(ctxTokens)
       : undefined;
-  const agentHarnessId = runResult.meta?.agentMeta?.agentHarnessId;
-  const contextResolution =
+  const contextParams = {
+    contextWindow: activeSessionEntry?.contextWindow,
+    profileId: followupRun.run.authProfileId,
+
+    nativeRuntime: runResult.meta?.agentMeta?.agentHarnessId,
+    cfg,
+    provider: sessionModel.provider,
+    model: sessionModel.model,
+    agentId: followupRun.run.agentId,
+    agentDir: followupRun.run.agentDir,
+    workspaceDir: followupRun.run.workspaceDir,
+    allowAsyncLoad: false,
+    allowUnscopedModelLookup: false,
+  };
+  let resolution =
     runtimeContextTokens === undefined
-      ? await resolveContextTokenBudgetForModel({
-          cfg,
-          provider: sessionModel.provider,
-          model: sessionModel.model,
-          allowAsyncLoad: false,
-          allowUnscopedModelLookup: false,
-        })
+      ? resolveModelContextTokenProjection(contextParams)
       : undefined;
-  const persistedContextBudget =
-    runtimeContextTokens === undefined && contextResolution === undefined
-      ? resolveProjectedSessionContextTokenBudget({
-          entry: activeSessionEntry,
-          provider: sessionModel.provider,
-          model: sessionModel.model,
-          agentHarnessId,
-          resolvedContextTokens: undefined,
-        })
-      : undefined;
+  const contextSelection = {
+    provider: sessionModel.provider,
+    model: sessionModel.model,
+    agentHarnessId: runResult.meta?.agentMeta?.agentHarnessId,
+  };
+  const projectBudget = () =>
+    resolveProjectedSessionContextTokenBudget({
+      ...contextSelection,
+      entry: activeSessionEntry,
+      resolvedContextTokens:
+        resolution?.source === "fallback" && resolution.contextTokensSource !== "synthetic"
+          ? undefined
+          : resolution?.contextTokens,
+      resolvedContextTokensSource:
+        resolution?.contextTokensSource ??
+        (resolution?.source === "model" ? "resolved-v1" : "resolved"),
+      authoredContextTokens: resolution?.authoredContextTokens,
+    });
+  let projected = projectBudget();
+  if (runtimeContextTokens === undefined) {
+    resolution = await resolveContextTokenBudgetForModel({
+      ...contextParams,
+      knownContextBudget: resolveProjectedSessionContextTokenBudget({
+        ...contextSelection,
+        entry: activeSessionEntry,
+        resolvedContextTokens: undefined,
+      }),
+    });
+    projected = projectBudget();
+  }
   const contextTokensUsed =
     runtimeContextTokens ??
-    contextResolution?.contextTokens ??
-    persistedContextBudget?.contextTokens ??
-    activeSessionEntry?.contextTokens ??
+    projected?.contextTokens ??
+    resolution?.contextTokens ??
     DEFAULT_CONTEXT_TOKENS;
   const contextTokensSource =
-    runResult.meta?.agentMeta?.contextTokensSource ??
-    (runtimeContextTokens !== undefined
-      ? "runtime"
-      : contextResolution
-        ? contextResolution.source === "model"
-          ? "resolved-v1"
-          : "resolved"
-        : persistedContextBudget?.contextTokensSource);
+    runtimeContextTokens !== undefined
+      ? (runResult.meta?.agentMeta?.contextTokensSource ?? "runtime")
+      : projected
+        ? projected.contextTokensSource
+        : "resolved";
 
   // Count first: terminal usage restores billing buckets without guessing context chronology.
   const compactionCount = await accountAgentTurnCompaction({
@@ -317,7 +337,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     cfg,
     agentDir: followupRun.run.agentDir,
     usage,
-    lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
+    lastCallUsage,
     currentContextSnapshot,
     promptTokens,
     isHeartbeat,
@@ -333,7 +353,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
       compactionCount === undefined ? runResult.meta?.agentMeta?.contextBudgetStatus : undefined,
     systemPromptReport: runResult.meta?.systemPromptReport,
     preserveFreshTotalTokensOnStaleUsage: preflightCompactionApplied,
-    agentHarnessId,
+    agentHarnessId: runResult.meta?.agentMeta?.agentHarnessId,
   });
   if (!isHeartbeat && !preserveUserFacingSessionState && !fallbackExhausted) {
     // A completed run that executed the persisted selection consumes the
@@ -360,8 +380,8 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     configuredFallbackModel,
     contextTokensUsed,
     didLogHeartbeatStrip,
-    directlySentBlockKeys,
-    directlySentBlockPayloads,
+    hasDirectlySentBlockReply,
+    directBlockDeliveries,
     fallbackAttempts,
     fallbackExhausted,
     fallbackTransition,
@@ -415,7 +435,7 @@ export async function accountFollowupTurn(params: {
     cfg: turn.config,
     defaultModel: defaults.defaultModel,
     followupRun: turn.queued,
-    isHeartbeat: defaults.opts?.isHeartbeat === true,
+    isHeartbeat: false,
     pendingToolTasks: execution.pendingToolTasks,
     replyOperation: turn.operation,
     preflightCompactionApplied: turn.preflightCompactionApplied,
@@ -444,7 +464,8 @@ export async function accountFollowupTurn(params: {
       nextSessionFile: queueKey,
       nextProvider: accounting.sessionModel.provider,
       nextModel: accounting.sessionModel.model,
-      nextModelOverrideSource: entry?.modelOverrideSource,
+      nextModelOverrideSource:
+        entry?.modelOverrideSource === "default" ? undefined : entry?.modelOverrideSource,
       nextAuthProfileId: entry?.authProfileOverride,
       nextAuthProfileIdSource: resolveCollapsedSessionAuthPinSource(entry),
     });
@@ -470,7 +491,7 @@ export async function accountFollowupTurn(params: {
   }
   if (turn.queued.run.verboseLevelOverride !== "off" || turn.queued.run.traceAuthorized === true) {
     turn.session.publish(
-      refreshSessionEntryFromStore({
+      await refreshSessionEntryFromStore({
         storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
         sessionKey,
         fallbackEntry: turn.session.current(),

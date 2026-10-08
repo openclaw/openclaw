@@ -1,6 +1,3 @@
-// Implements `openclaw uninstall`.
-// Handles interactive scope selection, service removal, state/workspace cleanup, and macOS app cleanup.
-
 import path from "node:path";
 import { cancel, confirm, isCancel, multiselect } from "@clack/prompts";
 import { styleSelectParams } from "../../packages/terminal-core/src/prompt-select-styled-params.js";
@@ -29,9 +26,6 @@ type UninstallOptions = {
   nonInteractive?: boolean;
   dryRun?: boolean;
 };
-
-const multiselectStyled = <T>(params: Parameters<typeof multiselect<T>>[0]) =>
-  multiselect(styleSelectParams(params));
 
 async function stopAndUninstallService(runtime: RuntimeEnv): Promise<boolean> {
   if (isNixMode) {
@@ -88,7 +82,6 @@ async function removeMacApp(runtime: RuntimeEnv, dryRun?: boolean): Promise<bool
   return result.ok;
 }
 
-/** Runs the uninstall flow for selected service/state/workspace/app scopes. */
 export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptions) {
   const scopes = new Set(
     (["service", "state", "workspace", "app"] as const).filter((scope) => opts.all || opts[scope]),
@@ -111,25 +104,27 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
       runtime.exit(1);
       return;
     }
-    const selection = await multiselectStyled<UninstallScope>({
-      message: "Uninstall which components?",
-      options: [
-        {
-          value: "service",
-          label: "Gateway service",
-          hint: "launchd / systemd / schtasks",
-        },
-        { value: "state", label: "State + config", hint: "~/.openclaw" },
-        { value: "workspace", label: "Workspace", hint: "agent files" },
-        {
-          value: "app",
-          label: "macOS app",
-          hint: "/Applications/OpenClaw.app",
-        },
-      ],
-      initialValues: ["service"],
-    });
-    if (isCancel(selection)) {
+    const selection = await multiselect<UninstallScope>(
+      styleSelectParams({
+        message: "Uninstall which components?",
+        options: [
+          {
+            value: "service",
+            label: "Gateway service",
+            hint: "launchd / systemd / schtasks",
+          },
+          { value: "state", label: "State + config", hint: "~/.openclaw" },
+          { value: "workspace", label: "Workspace", hint: "agent files" },
+          {
+            value: "app",
+            label: "macOS app",
+            hint: "/Applications/OpenClaw.app",
+          },
+        ],
+        initialValues: ["service"],
+      }),
+    );
+    if (typeof selection === "symbol") {
       cancel(stylePromptTitle("Uninstall cancelled.") ?? "Uninstall cancelled.");
       runtime.exit(0);
       return;
@@ -191,10 +186,9 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
 
   let cleanupPlan;
   if (removesLocalData && serviceSafe) {
-    const plan = await attemptCleanup("Failed to prepare local data cleanup", () =>
+    cleanupPlan = await attemptCleanup("Failed to prepare local data cleanup", () =>
       dryRun ? resolveCleanupPlanForDryRun() : resolveCleanupPlanForRemoval(runtime),
     );
-    cleanupPlan = plan;
     if (!cleanupPlan) {
       failed = true;
     }
@@ -248,7 +242,7 @@ export async function uninstallCommand(runtime: RuntimeEnv, opts: UninstallOptio
   }
 
   if (!failed) {
-    runtime.log("CLI still installed. Remove via npm/pnpm if desired.");
+    runtime.log("CLI removal instructions: https://docs.openclaw.ai/install/uninstall");
   }
 
   if (scopes.has("state") && !scopes.has("workspace") && cleanupPlan) {

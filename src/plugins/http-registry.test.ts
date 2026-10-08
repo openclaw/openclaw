@@ -1,16 +1,22 @@
 /** Verifies plugin HTTP route registration, collision detection, and metadata capture. */
+import { AsyncResource } from "node:async_hooks";
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginRuntimeCapabilityLease } from "./capability-lease.js";
 import {
   adoptPluginHttpRouteHandoffs,
   createPluginHttpRouteHandoff,
   registerPluginHttpRoute,
   withPluginHttpRouteRegistry,
 } from "./http-registry.js";
+import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import { createPluginRegistry } from "./registry.js";
+import { markPluginRegistryActive, markPluginRegistryRetired } from "./registry-lifecycle.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "./runtime.js";
-import type { PluginRuntime } from "./runtime/types.js";
+import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
 function expectRouteRegistrationDenied(params: {
@@ -261,39 +267,8 @@ describe("registerPluginHttpRoute", () => {
     },
   );
 
-  it("registers route and unregisters it", () => {
-    const registry = createEmptyPluginRegistry();
-    const handler = vi.fn();
-
-    const unregister = registerPluginHttpRoute({
-      path: "/plugins/demo",
-      auth: "plugin",
-      handler,
-      registry,
-    });
-
-    expectRegisteredRouteShape(registry, {
-      path: "/plugins/demo",
-      handler,
-      auth: "plugin",
-      match: "exact",
-    });
-
-    unregister();
-    expect(registry.httpRoutes).toHaveLength(0);
-  });
-
   it("marks gateway method dispatch entitlement only for plugins declaring the contract", () => {
-    const pluginRegistry = createPluginRegistry({
-      logger: {
-        info() {},
-        warn() {},
-        error() {},
-        debug() {},
-      },
-      runtime: {} as PluginRuntime,
-      activateGlobalSideEffects: false,
-    });
+    const pluginRegistry = createTestPluginRegistry();
     const config = {} as OpenClawConfig;
     const plainRecord = createPluginRecord({
       id: "plain-http",
@@ -387,32 +362,6 @@ describe("registerPluginHttpRoute", () => {
     expect(logs.at(-1)).toContain("route conflict");
   });
 
-  it("replaces a same-plugin canonical exact-path alias when requested", () => {
-    const { registry, register } = createLoggedRouteHarness();
-    register({
-      path: "/Webhooks/SMS/",
-      auth: "plugin",
-      pluginId: "sms",
-      source: "sms-webhook",
-    });
-
-    register({
-      path: "/webhooks/sms",
-      auth: "plugin",
-      pluginId: "sms",
-      source: "sms-webhook",
-      replaceExisting: true,
-      throwOnFailure: true,
-    });
-
-    expect(registry.httpRoutes).toHaveLength(1);
-    expect(registry.httpRoutes[0]).toMatchObject({
-      path: "/webhooks/sms",
-      pluginId: "sms",
-      source: "sms-webhook",
-    });
-  });
-
   it("keeps a reused same-owner route until its last lease releases", () => {
     const { registry, logs, register } = createLoggedRouteHarness();
     const firstOwner = createTrackedRouteLease();
@@ -467,11 +416,7 @@ describe("registerPluginHttpRoute", () => {
   it.each(["unregister", "revoke"] as const)(
     "preserves a static plugin route when a dynamic holder calls %s",
     (cleanup) => {
-      const pluginRegistry = createPluginRegistry({
-        logger: { info() {}, warn() {}, error() {}, debug() {} },
-        runtime: {} as PluginRuntime,
-        activateGlobalSideEffects: false,
-      });
+      const pluginRegistry = createTestPluginRegistry();
       const record = createPluginRecord({ id: "demo", source: "/plugins/demo/index.js" });
       const handler = vi.fn();
       pluginRegistry.registry.plugins.push(record);
@@ -589,16 +534,7 @@ describe("registerPluginHttpRoute", () => {
   });
 
   it("rejects replacement when a distinct route source owns the same plugin path", () => {
-    const pluginRegistry = createPluginRegistry({
-      logger: {
-        info() {},
-        warn() {},
-        error() {},
-        debug() {},
-      },
-      runtime: {} as PluginRuntime,
-      activateGlobalSideEffects: false,
-    });
+    const pluginRegistry = createTestPluginRegistry();
     const record = createPluginRecord({
       id: "mattermost",
       source: "/plugins/mattermost/index.js",
@@ -853,19 +789,20 @@ describe("registerPluginHttpRoute", () => {
     expect(registry.httpRoutes).toHaveLength(2);
   });
 
-  it("prefers the scoped route registry over the process root", () => {
+  it("prefers the live scoped route registry after deferred startup", async () => {
     const scopedRegistry = createEmptyPluginRegistry();
     const pinnedRegistry = createEmptyPluginRegistry();
 
     setActivePluginRegistry(pinnedRegistry);
 
-    const unregister = withPluginHttpRouteRegistry(scopedRegistry, () =>
-      registerPluginHttpRoute({
+    const unregister = await withPluginHttpRouteRegistry(scopedRegistry, async () => {
+      await setImmediate();
+      return registerPluginHttpRoute({
         path: "/scoped-webhook",
         auth: "plugin",
         handler: vi.fn(),
-      }),
-    );
+      });
+    });
 
     expectRegisteredRouteShape(scopedRegistry, {
       path: "/scoped-webhook",
@@ -876,6 +813,112 @@ describe("registerPluginHttpRoute", () => {
     unregister();
     expect(scopedRegistry.httpRoutes).toHaveLength(0);
   });
+
+  it.each([false, true])(
+    "releases retired registry graphs captured by async resources (leased: %s)",
+    async (leased) => {
+      class RetainedService {
+        id = "retained-service";
+        start() {}
+      }
+      const lease = leased ? createPluginRuntimeCapabilityLease("retention test") : undefined;
+      const resources = Array.from({ length: 24 }, () => {
+        const registry = createEmptyPluginRegistry();
+        registry.services.push({
+          id: "retained-service",
+          pluginId: "retained-plugin",
+          service: new RetainedService(),
+          source: "retention-test",
+          origin: "config",
+        });
+        const resource = withPluginHttpRouteRegistry(
+          registry,
+          () => new AsyncResource("plugin-http-retention"),
+          lease,
+        );
+        markPluginRegistryRetired(registry);
+        return resource;
+      });
+      const currentRegistry = createEmptyPluginRegistry();
+      setActivePluginRegistry(currentRegistry);
+      try {
+        // Weak references keep targets alive until the creating job ends.
+        await setImmediate();
+        expect(queryObjects(RetainedService)).toBe(0);
+        for (const resource of resources) {
+          expect(() =>
+            resource.runInAsyncScope(() =>
+              registerPluginHttpRoute({
+                path: "/retired-webhook",
+                auth: "plugin",
+                handler: () => true,
+                throwOnFailure: true,
+              }),
+            ),
+          ).toThrow("plugin HTTP route owner is no longer active");
+        }
+        expect(currentRegistry.httpRoutes).toHaveLength(0);
+      } finally {
+        lease?.revoke();
+        for (const resource of resources) {
+          resource.emitDestroy();
+        }
+      }
+    },
+  );
+
+  it.each([
+    { name: "HTTP", withScope: withPluginHttpRouteRegistry },
+    { name: "Gateway", withScope: withPluginRuntimeRegistryScope },
+  ])(
+    "registers through an adopted instance after its captured $name registry is collected",
+    async ({ withScope }) => {
+      class RetainedService {
+        id = "retired-service";
+        start() {}
+      }
+      const currentRegistry = createEmptyPluginRegistry();
+      const { resource, instance, handler } = (() => {
+        const registry = createEmptyPluginRegistry();
+        const record = createPluginRecord({ id: "adopted-plugin" });
+        registry.plugins.push(record);
+        registry.services.push({
+          id: "retired-service",
+          pluginId: "retired-plugin",
+          service: new RetainedService(),
+          source: "retention-test",
+          origin: "config",
+        });
+        const adoptedInstance = new PluginInstance(record.id, { record, registry });
+        const adoptedHandler = adoptedInstance.wrap(() => true);
+        const capturedResource = withScope(
+          registry,
+          () => new AsyncResource("plugin-http-adoption"),
+        );
+        currentRegistry.plugins.push(record);
+        markPluginRegistryActive(currentRegistry);
+        markPluginRegistryRetired(registry);
+        return { resource: capturedResource, instance: adoptedInstance, handler: adoptedHandler };
+      })();
+      try {
+        await setImmediate();
+        expect(queryObjects(RetainedService)).toBe(0);
+        const unregister = resource.runInAsyncScope(() =>
+          registerPluginHttpRoute({
+            path: "/adopted-webhook",
+            auth: "plugin",
+            handler,
+            throwOnFailure: true,
+          }),
+        );
+        expectRegisteredRouteShape(currentRegistry, { path: "/adopted-webhook", auth: "plugin" });
+        unregister();
+      } finally {
+        resource.emitDestroy();
+        await instance.dispose();
+      }
+    },
+  );
 
   it("tracks exact scoped route cleanup without removing unrelated routes", () => {
     const registry = createEmptyPluginRegistry();

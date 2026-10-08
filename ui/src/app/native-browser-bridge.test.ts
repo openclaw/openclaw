@@ -10,6 +10,7 @@ import {
 
 const tab = {
   id: "mac-1",
+  sessionKey: "agent:main:first",
   url: "https://example.com/",
   title: "Example",
   loading: false,
@@ -38,10 +39,13 @@ describe("native browser bridge wire contract", () => {
   });
 
   it.each([
-    { type: "open", tabId: "mac-1", url: "javascript:alert(1)" },
+    { type: "open", tabId: "mac-1", url: "javascript:alert(1)", sessionKey: "" },
     { type: "navigate", tabId: "mac-1", url: "file:///private/example" },
-    { type: "open", tabId: "", url: "about:blank" },
-    { type: "open", tabId: "mac-1", url: "https://example.com", activate: "true" },
+    { type: "open", tabId: "", url: "about:blank", sessionKey: "" },
+    { type: "open", tabId: "mac-1", url: "https://example.com", sessionKey: "", activate: "true" },
+    { type: "open", tabId: "mac-1", url: "https://example.com" },
+    { type: "open", tabId: "mac-1", url: "https://example.com", sessionKey: 42 },
+    { type: "open", tabId: "mac-1", url: "https://example.com", sessionKey: " session " },
     { type: "inspect", tabId: "mac-1", x: Number.NaN, y: 4 },
     {
       type: "present",
@@ -52,6 +56,7 @@ describe("native browser bridge wire contract", () => {
     },
     { type: "present", scope: "", tabId: null, rect: null, visible: false },
     { type: "unknown", tabId: "mac-1" },
+    { type: "download", tabId: " " },
   ])("rejects malformed or unsupported request %j before calling WebKit", async (message) => {
     const post = install();
     expect(await postNativeBrowserMessage(message as NativeBrowserMessage)).toMatchObject({
@@ -73,7 +78,7 @@ describe("native browser bridge wire contract", () => {
     };
     vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: bridge } });
     for (const message of [
-      { type: "open", tabId: "mac-1", url: "about:blank", activate: false },
+      { type: "open", tabId: "mac-1", url: "about:blank", sessionKey: "", activate: false },
       { type: "present", scope: "scope", tabId: null, rect: null, visible: false },
       { type: "release-scope", scope: "scope" },
     ] satisfies NativeBrowserMessage[]) {
@@ -82,10 +87,29 @@ describe("native browser bridge wire contract", () => {
       );
     }
     expect(messages).toEqual([
-      { type: "open", tabId: "mac-1", url: "about:blank", activate: false },
+      { type: "open", tabId: "mac-1", url: "about:blank", sessionKey: "", activate: false },
       { type: "present", scope: "scope", tabId: null, rect: null, visible: false },
       { type: "release-scope", scope: "scope" },
     ]);
+  });
+
+  it("downloads through the native tab and distinguishes a saved file from cancellation", async () => {
+    const post = install();
+    for (const cancelled of [false, true]) {
+      post.mockResolvedValueOnce({ ok: true, cancelled });
+      expect(await postNativeBrowserMessage({ type: "download", tabId: "mac-1" })).toEqual({
+        ok: true,
+        cancelled,
+      });
+      expect(post).toHaveBeenLastCalledWith({ type: "download", tabId: "mac-1" });
+    }
+    for (const reply of [{ ok: true }, { ok: true, cancelled: "false" }]) {
+      post.mockResolvedValueOnce(reply);
+      expect(await postNativeBrowserMessage({ type: "download", tabId: "mac-1" })).toEqual({
+        ok: false,
+        error: "Invalid native browser download",
+      });
+    }
   });
 
   it("rejects malformed snapshots and propagates native failures", async () => {
@@ -125,6 +149,19 @@ describe("native browser bridge wire contract", () => {
     });
   });
 
+  it("accepts released Mac state without session keys at initial read and on pushes", () => {
+    install();
+    const { sessionKey: _sessionKey, ...legacyTab } = tab;
+    vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", { revision: 1, tabs: [legacyTab] });
+    expect(readNativeBrowserState()).toEqual({ revision: 1, tabs: [legacyTab] });
+    const listener = vi.fn();
+    const unsubscribe = subscribeNativeBrowserState(listener);
+    const next = { revision: 2, tabs: [{ ...legacyTab, title: "Updated page" }] };
+    window.dispatchEvent(new CustomEvent("openclaw:native-browser-state", { detail: next }));
+    expect(listener).toHaveBeenCalledWith(next);
+    unsubscribe();
+  });
+
   it("validates initial state and ignores malformed, duplicate, stale, and unsubscribed pushes", () => {
     install();
     vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", { revision: 2, tabs: [tab] });
@@ -139,6 +176,8 @@ describe("native browser bridge wire contract", () => {
       { revision: 3, tabs: [tab, tab] },
       { revision: 3, tabs: [{ ...tab, openedBy: "other" }] },
       { revision: 3, tabs: [{ ...tab, loading: 1 }] },
+      { revision: 3, tabs: [{ ...tab, sessionKey: null }] },
+      { revision: 3, tabs: [{ ...tab, sessionKey: " session " }] },
       { revision: 3, tabs: [{ ...tab, url: "file:///example" }] },
       { revision: 3.5, tabs: [] },
     ]) {
@@ -152,5 +191,32 @@ describe("native browser bridge wire contract", () => {
     expect(listener).toHaveBeenCalledOnce();
     vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", { revision: 5, tabs: [tab, tab] });
     expect(readNativeBrowserState()).toBeNull();
+  });
+
+  it.each([
+    { name: "PNG", favicon: "data:image/png;base64,eA==", accepted: true },
+    { name: "mixed-case image type", favicon: "data:image/SVG+xml;base64,eA==", accepted: true },
+    { name: "size limit", favicon: "data:image/png;base64," + "A".repeat(98_282), accepted: true },
+    { name: "HTTP URL", favicon: "https://example.com/favicon.ico", accepted: false },
+    { name: "non-image", favicon: "data:text/html;base64,eA==", accepted: false },
+    { name: "oversized", favicon: "data:image/png;base64," + "A".repeat(98_283), accepted: false },
+    { name: "non-string", favicon: 42, accepted: false },
+    { name: "null", favicon: null, accepted: false },
+    { name: "empty payload", favicon: "data:image/png;base64,", accepted: false },
+    { name: "invalid base64", favicon: "data:image/png;base64,???", accepted: false },
+  ])("validates $name favicon on initial reads and pushes", ({ favicon, accepted }) => {
+    install();
+    const state = { revision: 1, tabs: [{ ...tab, favicon }] };
+    vi.stubGlobal("__OPENCLAW_NATIVE_BROWSER__", state);
+    expect(readNativeBrowserState()).toEqual(accepted ? state : null);
+    const listener = vi.fn();
+    const unsubscribe = subscribeNativeBrowserState(listener);
+    try {
+      const next = { ...state, revision: 2 };
+      window.dispatchEvent(new CustomEvent("openclaw:native-browser-state", { detail: next }));
+      expect(listener.mock.calls).toEqual(accepted ? [[next]] : []);
+    } finally {
+      unsubscribe();
+    }
   });
 });

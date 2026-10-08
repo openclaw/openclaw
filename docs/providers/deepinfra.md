@@ -14,8 +14,10 @@ it by switching the base URL.
 
 ```bash
 openclaw plugins install @openclaw/deepinfra-provider
-openclaw gateway restart
 ```
+
+Installation applies to a running Gateway automatically; otherwise it takes effect
+on the next startup. See [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect).
 
 ## Get an API key
 
@@ -128,8 +130,8 @@ so failed or empty acquisitions reach the shared publication owner unchanged.
 Hosted publication uses the same native parser. It preserves metadata without
 cost for unsupported or absent schedules, retains declared zero prices, and
 leaves the previous hosted catalog intact if the native feed fails validation.
-The existing [hosted catalog refresh and Gateway restart lifecycle](/concepts/models#hosted-catalog-updates)
-is unchanged.
+These updates follow the shared
+[hosted catalog publication lifecycle](/concepts/models#hosted-catalog-updates).
 
 ## Notes
 

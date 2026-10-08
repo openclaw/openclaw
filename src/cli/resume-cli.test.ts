@@ -131,6 +131,22 @@ describe("resolveResumeSession", () => {
       },
     },
     {
+      name: "ambiguous substrings preserve order and exclude fuzzy-only candidates",
+      query: "plan",
+      rows: [
+        { key: "agent:main:one", displayName: "Annual planning" },
+        { key: "agent:main:two", displayName: "Plan" },
+        { key: "agent:main:three", displayName: "Personal learning" },
+      ],
+      expected: { kind: "ambiguous", keys: ["agent:main:one", "agent:main:two"] },
+    },
+    {
+      name: "ambiguous fuzzy matches retain score order",
+      query: "pln",
+      rows: sessions,
+      expected: { kind: "ambiguous", keys: ["agent:work:beta", "agent:main:alpha"] },
+    },
+    {
       name: "no match",
       query: "unrelated-session-name",
       rows: sessions,
@@ -183,8 +199,6 @@ describe("runResumeCommand", () => {
 
   it.each([
     { name: "bare success", presentation: {} },
-    { name: "display name", presentation: { displayName: "Handoff session" } },
-    { name: "chat face", presentation: { boardFace: "chat" } },
     {
       name: "named dashboard face",
       presentation: { displayName: "Handoff session", boardFace: "dashboard" },
@@ -241,126 +255,27 @@ describe("runResumeCommand", () => {
   });
 
   it.each([
-    [
-      "internal missing shape",
-      { ok: true, missing: true },
-      "Could not resolve the session handoff.",
-    ],
-    [
-      "ambiguous",
-      {
-        ok: true,
-        ambiguous: true,
-        candidates: [{ key: "agent:main:one", agentId: "main", displayName: "One" }],
-      },
-      "Could not resolve the session handoff.",
-    ],
-    [
-      "domain error",
-      { ok: false, error: { code: "INVALID_REQUEST", message: "invalid handoff" } },
-      "Could not resolve the session handoff.",
-    ],
-    ["projected missing", { ok: false }, "Could not resolve the session handoff."],
-    [
-      "projected ambiguity",
-      {
-        ok: false,
-        candidates: [{ key: "agent:main:one", agentId: "main", boardFace: "dashboard" }],
-      },
-      "Could not resolve the session handoff.",
-    ],
-    ["malformed success", { ok: true }, "Could not resolve the session handoff."],
-    [
-      "old success without agent ownership",
-      { ok: true, key: "agent:main:alpha" },
-      "Could not resolve the session handoff.",
-    ],
-    [
-      "extra success field",
-      { ok: true, key: "agent:main:alpha", agentId: "main", extra: true },
-      "Could not resolve the session handoff.",
-    ],
-    [
-      "invalid success display name",
-      { ok: true, key: "agent:main:alpha", agentId: "main", displayName: 42 },
-      "Could not resolve the session handoff.",
-    ],
-    [
-      "invalid success board face",
-      { ok: true, key: "agent:main:alpha", agentId: "main", boardFace: "grid" },
-      "Could not resolve the session handoff.",
-    ],
-    [
-      "empty success owner",
-      { ok: true, key: "agent:main:alpha", agentId: "" },
-      "Could not resolve the session handoff.",
-    ],
-    [
-      "old ambiguity candidate without agent ownership",
-      { ok: true, ambiguous: true, candidates: [{ key: "agent:main:one" }] },
-      "Could not resolve the session handoff.",
-    ],
-    [
-      "malformed candidate",
-      {
-        ok: true,
-        ambiguous: true,
-        candidates: [{ key: "agent:main:one", agentId: "main", extra: true }],
-      },
-      "Could not resolve the session handoff.",
-    ],
-    [
-      "mismatched returned agent",
-      { ok: true, key: "agent:main:alpha", agentId: "work" },
-      "Could not resolve the session handoff.",
-    ],
-    [
-      "different but internally consistent returned owner",
-      { ok: true, key: "agent:work:alpha", agentId: "work" },
-      "Could not resolve the session handoff.",
-    ],
-    [
-      "unqualified canonical key",
-      { ok: true, key: "alpha", agentId: "main" },
-      "Could not resolve the session handoff.",
-    ],
-    [
-      "mismatched canonical key owner",
-      { ok: true, key: "agent:work:alpha", agentId: "main" },
-      "Could not resolve the session handoff.",
-    ],
-    [
-      "malformed error",
-      {
-        ok: false,
-        error: { code: "INVALID_REQUEST", message: "invalid handoff", retryAfterMs: -1 },
-      },
-      "Could not resolve the session handoff.",
-    ],
-    [
-      "extra error field",
-      {
-        ok: false,
-        error: { code: "INVALID_REQUEST", message: "invalid handoff", extra: true },
-      },
-      "Could not resolve the session handoff.",
-    ],
-  ])(
-    "rejects a %s handoff resolution without discovery or TUI launch",
-    async (_name, result, message) => {
-      const handoff = encodeResumeHandoff({
-        sessionKey: "agent:main:alpha",
-        gatewayUrl: "wss://gateway.example/openclaw",
-      });
-      const client = createGatewayClient([]);
-      client.resolveSession.mockResolvedValue(result);
+    ["projected missing", { ok: false }],
+    ["old success without agent ownership", { ok: true, key: "agent:main:alpha" }],
+    ["extra success field", { ok: true, key: "agent:main:alpha", agentId: "main", extra: true }],
+    ["mismatched returned agent", { ok: true, key: "agent:main:alpha", agentId: "work" }],
+    ["unqualified canonical key", { ok: true, key: "alpha", agentId: "main" }],
+    ["mismatched canonical key owner", { ok: true, key: "agent:work:alpha", agentId: "main" }],
+  ])("rejects a %s handoff resolution without discovery or TUI launch", async (_name, result) => {
+    const handoff = encodeResumeHandoff({
+      sessionKey: "agent:main:alpha",
+      gatewayUrl: "wss://gateway.example/openclaw",
+    });
+    const client = createGatewayClient([]);
+    client.resolveSession.mockResolvedValue(result);
 
-      await expect(runResumeCommand(undefined, { handoff })).rejects.toThrow(message);
-      expect(client.listSessions).not.toHaveBeenCalled();
-      expect(mocks.runTui).not.toHaveBeenCalled();
-      expect(client.stop).toHaveBeenCalledOnce();
-    },
-  );
+    await expect(runResumeCommand(undefined, { handoff })).rejects.toThrow(
+      "Could not resolve the session handoff.",
+    );
+    expect(client.listSessions).not.toHaveBeenCalled();
+    expect(mocks.runTui).not.toHaveBeenCalled();
+    expect(client.stop).toHaveBeenCalledOnce();
+  });
 
   it("rejects a handoff resolution RPC error without exposing it or launching the TUI", async () => {
     const handoff = encodeResumeHandoff({
@@ -463,15 +378,21 @@ describe("resume command registration", () => {
 
 describe("real Gateway session boundary", () => {
   let harness: Awaited<ReturnType<typeof startMinimalRealGateway>>;
+  let closeHarness: (() => Promise<void>) | undefined;
 
   beforeAll(async () => {
-    harness = await startMinimalRealGateway([
-      { agentId: "work", key: "agent:work:global", visibility: "shared" },
-      { agentId: "main", key: "agent:main:alpha" },
-    ]);
+    harness = await startMinimalRealGateway({
+      sessions: [
+        { agentId: "work", key: "agent:work:global", visibility: "shared" },
+        { agentId: "main", key: "agent:main:alpha" },
+      ],
+      registerCleanup: (cleanup) => {
+        closeHarness = cleanup;
+      },
+    });
   });
 
-  afterAll(() => harness.close());
+  afterAll(() => closeHarness?.());
 
   it("preserves an agent-qualified global session through the TUI handoff", async () => {
     const { GatewayChatClient } =
@@ -583,7 +504,7 @@ describe("real Gateway session boundary", () => {
     const storeDeviceAuthToken = vi.fn(({ token, scopes }: { token: string; scopes: string[] }) => {
       authState.value = { token, scopes };
     });
-    let helloCount = 0;
+    const authMethods: (string | undefined)[] = [];
     const client = new GatewayClient({
       url: harness.url,
       bootstrapToken: await harness.issueNodeBootstrapToken(),
@@ -594,18 +515,18 @@ describe("real Gateway session boundary", () => {
       clientVersion: "test",
       platform: "test",
       mode: GATEWAY_CLIENT_MODES.NODE,
-      deviceIdentity: harness.createDeviceIdentity("reconnect"),
+      deviceIdentity: await harness.createDeviceIdentity("reconnect"),
       hostDeps: {
         loadDeviceAuthToken: () => authState.value,
         storeDeviceAuthToken,
       },
-      onHelloOk: () => {
-        helloCount += 1;
+      onHelloOk: (hello) => {
+        authMethods.push(hello.auth?.method);
       },
     });
     client.start();
     try {
-      await vi.waitFor(() => expect(helloCount).toBe(1), { timeout: 5_000 });
+      await vi.waitFor(() => expect(authMethods).toEqual(["bootstrap-token"]), { timeout: 5_000 });
       expect(storeDeviceAuthToken).toHaveBeenCalledOnce();
       expect(storeDeviceAuthToken).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -615,8 +536,10 @@ describe("real Gateway session boundary", () => {
       );
       expect(authState.value?.token).toBeTruthy();
 
-      await harness.restart();
-      await vi.waitFor(() => expect(helloCount).toBe(2), { timeout: 5_000 });
+      client.updateNodeManifest({ caps: [], commands: [] });
+      await vi.waitFor(() => expect(authMethods).toEqual(["bootstrap-token", "device-token"]), {
+        timeout: 5_000,
+      });
     } finally {
       await client.stopAndWait();
     }

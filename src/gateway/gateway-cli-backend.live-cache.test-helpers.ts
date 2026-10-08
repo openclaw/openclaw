@@ -249,9 +249,9 @@ export function prepareClaudeCacheProbeBackend(params: {
   };
 }
 
-async function waitFor<T>(resolve: () => T | undefined): Promise<T> {
+async function waitFor<T>(resolve: () => T | undefined | Promise<T | undefined>): Promise<T> {
   for (let attempt = 0; attempt < 480; attempt += 1) {
-    const value = resolve();
+    const value = await resolve();
     if (value !== undefined) {
       return value;
     }
@@ -347,25 +347,32 @@ export async function verifyCliBackendAnnounceOrdering({
   if (!announceEntry?.sessionId) {
     throw new Error("CLI announce probe lost its requester session");
   }
-  const announceHistory = await loadCliSessionHistoryMessages({
-    sessionTarget: await resolveSessionTranscriptRuntimeTarget({
-      agentId: "dev",
-      sessionId: announceEntry.sessionId,
-      sessionKey: announceSessionKey,
-    }),
+  const sessionTarget = await resolveSessionTranscriptRuntimeTarget({
+    agentId: "dev",
+    sessionId: announceEntry.sessionId,
+    sessionKey: announceSessionKey,
   });
-  const assistantReplies = announceHistory.flatMap((message) => {
-    const record = message as { role?: unknown; content?: unknown };
-    return record.role === "assistant"
-      ? [extractTextFromChatContent(record.content, { joinWith: "" }) ?? ""]
-      : [];
+  const { parentReplyIndex, completionReplyIndex } = await waitFor(async () => {
+    const announceHistory = await loadCliSessionHistoryMessages({ sessionTarget });
+    const assistantReplies = announceHistory.flatMap((message) => {
+      const record = message as { role?: unknown; content?: unknown };
+      return record.role === "assistant"
+        ? [extractTextFromChatContent(record.content, { joinWith: "" }) ?? ""]
+        : [];
+    });
+    const observedParentReplyIndex = assistantReplies.findIndex((reply) =>
+      reply.includes(announceParentToken),
+    );
+    const observedCompletionReplyIndex = assistantReplies.findIndex((reply) =>
+      reply.includes(announceChildToken),
+    );
+    return observedParentReplyIndex >= 0 && observedCompletionReplyIndex >= 0
+      ? {
+          parentReplyIndex: observedParentReplyIndex,
+          completionReplyIndex: observedCompletionReplyIndex,
+        }
+      : undefined;
   });
-  const parentReplyIndex = assistantReplies.findIndex((reply) =>
-    reply.includes(announceParentToken),
-  );
-  const completionReplyIndex = assistantReplies.findIndex((reply) =>
-    reply.includes(announceChildToken),
-  );
   logStep("announce-child:transcript-order", {
     runId: deliveredAnnounceChild.runId,
     parentObservedAt: announceParentObservedAt,

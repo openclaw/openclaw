@@ -1,34 +1,31 @@
+import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 
 export function readChatSessionActionAccess(
   snapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase"> | null | undefined,
   hasLocalRun: boolean,
+  options: {
+    session?: Pick<GatewaySessionRow, "sharingRole">;
+    sessionAbortable?: boolean;
+  } = {},
 ) {
+  const adminAction = (method: string) =>
+    readSessionMethodAccess(snapshot, { method, requiredScope: "operator.admin" });
   return {
-    compact: readSessionMethodAccess(snapshot, {
-      method: "sessions.compact",
-      requiredScope: "operator.admin",
-    }),
+    compact: adminAction("sessions.compact"),
     abort: readSessionMethodAccess(snapshot, {
-      method: hasLocalRun ? "chat.abort" : "sessions.abort",
+      method: hasLocalRun && !options.sessionAbortable ? "chat.abort" : "sessions.abort",
       requiredScope: "operator.write",
+      sessionScope: true,
+      session: options.session,
     }),
-    rewind: readSessionMethodAccess(snapshot, {
-      method: "sessions.rewind",
-      requiredScope: "operator.admin",
-    }),
+    rewind: adminAction("sessions.rewind"),
     fork: readSessionMethodAccess(snapshot, {
       method: "sessions.fork",
       requiredScope: "operator.write",
     }),
-    reset: readSessionMethodAccess(snapshot, {
-      method: "sessions.reset",
-      requiredScope: "operator.admin",
-    }),
-    branchSwitch: readSessionMethodAccess(snapshot, {
-      method: "sessions.branches.switch",
-      requiredScope: "operator.admin",
-    }),
+    reset: adminAction("sessions.reset"),
+    branchSwitch: adminAction("sessions.branches.switch"),
   };
 }

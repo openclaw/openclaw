@@ -1,15 +1,19 @@
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { fileURLToPath } from "node:url";
 import {
+  captureCodexSessionContextReader,
   captureCodexSessionTranscriptReadAdmission,
   SessionTranscriptReadFenceError,
   validateCodexSessionTranscriptReadAdmission,
   validateCodexSessionTranscriptContextVersion,
+  type CodexSessionContextReader,
 } from "openclaw/plugin-sdk/codex-session-transcript-runtime";
-import { WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
-import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
-import type { TranscriptTurnAdmission } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
-  codexHistoryWorkerUrl,
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+  WorkerTaskPool,
+} from "openclaw/plugin-sdk/process-runtime";
+import { isIncognitoSessionKey } from "openclaw/plugin-sdk/session-key-runtime";
+import {
   runCodexHistoryWorkerInput,
   type CodexHistoryWorkerInput,
   type CodexHistoryWorkerResult,
@@ -19,35 +23,102 @@ import {
   type CodexHistoryReadResult,
 } from "./src/app-server/history-rejection.js";
 import type { JsonValue } from "./src/app-server/protocol.js";
+import { consumeCodexHistory } from "./src/app-server/session-history-read.js";
 import {
   resolveCodexHistoryTarget,
   type CodexMirroredSessionHistoryTarget,
 } from "./src/app-server/session-history.js";
 import type { SettledTurnMessages } from "./src/app-server/settled-turn-evidence.js";
+import { projectVerifiedSettledCodexMessages } from "./src/app-server/settled-turn-evidence.js";
+
+const codexHistoryWorkerEntrypoint = {
+  currentModuleUrl: import.meta.url,
+  sourceWorkerName: "session-history.worker",
+  distWorkerPath: "extensions/codex/session-history.worker.js",
+  package: {
+    name: "@openclaw/codex",
+    distWorkerPath: "session-history.worker.js",
+  },
+} as const;
+
+function resolveCodexHistoryWorkerUrl(): URL {
+  const sourceUrl = resolveRuntimeWorkerUrl(codexHistoryWorkerEntrypoint);
+  const sourceNeedsBuiltFallback =
+    /\.[cm]?ts$/u.test(sourceUrl.pathname) &&
+    (typeof process.versions.bun === "string" || resolveRuntimeWorkerArgv(sourceUrl).length === 1);
+  if (!sourceNeedsBuiltFallback) {
+    return sourceUrl;
+  }
+  // oxlint-disable-next-line no-warning-comments -- removal awaits Bun Worker preload resolver support.
+  // TODO: Remove this fallback once Bun Workers apply resolver hooks from execArgv --import preloads.
+  return resolveRuntimeWorkerUrl({
+    ...codexHistoryWorkerEntrypoint,
+    root: fileURLToPath(new URL("../..", import.meta.url)),
+  });
+}
 
 const historyReads = new WorkerTaskPool<CodexHistoryWorkerInput, CodexHistoryWorkerResult>({
-  workerUrl: codexHistoryWorkerUrl,
+  workerUrl: resolveCodexHistoryWorkerUrl(),
   maxWorkers: 1,
 });
 
-async function readHistory(
-  target: CodexMirroredSessionHistoryTarget,
-  operation: { kind: "messages" } | { kind: "settled"; evidence: SettledTurnMessages },
-  admission?: TranscriptTurnAdmission,
+export async function projectCodexSettledHistoryInWorker(
+  target: CodexMirroredSessionHistoryTarget & SettledTurnMessages,
   signal?: AbortSignal,
-): Promise<CodexHistoryWorkerResult> {
+  contextReader?: CodexSessionContextReader,
+): Promise<CodexHistoryReadResult<JsonValue[]>> {
   signal?.throwIfAborted();
-  const resolved = resolveCodexHistoryTarget(target, admission);
-  const receipt =
-    admission ??
-    (resolved.kind === "sqlite"
-      ? captureCodexSessionTranscriptReadAdmission(resolved.target)
+  if (contextReader && !target.sessionTarget) {
+    throw new Error("Actor history requires a captured sessionTarget");
+  }
+  const resolved = resolveCodexHistoryTarget(target);
+  const reader =
+    contextReader ??
+    (target.sessionTarget && resolved.kind === "sqlite"
+      ? captureCodexSessionContextReader({ ...target.sessionTarget, ...resolved.target }, signal)
       : undefined);
+  if (reader) {
+    if (resolved.kind !== "sqlite") {
+      throw new Error("Actor history requires a complete matching sessionTarget");
+    }
+    let result: CodexHistoryReadResult<JsonValue[]>;
+    try {
+      result = await reader(resolved.target, (messages, header) => {
+        signal?.throwIfAborted();
+        try {
+          return {
+            status: "ok",
+            value: consumeCodexHistory(messages, header, target.sessionId, (history) =>
+              projectVerifiedSettledCodexMessages(history, target),
+            ),
+          };
+        } catch (error) {
+          return { status: "rejected", reason: codexHistoryRejectionReason(error) };
+        }
+      });
+    } catch (error) {
+      if (error instanceof SessionTranscriptReadFenceError) {
+        result = { status: "rejected", reason: "snapshot_invalidated" };
+      } else {
+        throw error;
+      }
+    }
+    signal?.throwIfAborted();
+    return result;
+  }
+  const receipt =
+    resolved.kind === "sqlite"
+      ? captureCodexSessionTranscriptReadAdmission(resolved.target)
+      : undefined;
   const input: CodexHistoryWorkerInput = {
-    ...operation,
     target: resolved,
     sessionId: target.sessionId,
     ...(receipt ? { admission: { ...receipt } } : {}),
+    evidence: {
+      mirroredMessages: target.mirroredMessages,
+      settledMessages: target.settledMessages,
+      turnId: target.turnId,
+    },
   };
   // Incognito SQLite is held by this process; run the same lazy operation here.
   const result =
@@ -64,49 +135,13 @@ async function readHistory(
       }
     } catch (error) {
       return {
-        ...result,
-        result: {
-          status: "rejected",
-          reason:
-            error instanceof SessionTranscriptReadFenceError
-              ? "snapshot_invalidated"
-              : codexHistoryRejectionReason(error),
-        },
+        status: "rejected",
+        reason:
+          error instanceof SessionTranscriptReadFenceError
+            ? "snapshot_invalidated"
+            : codexHistoryRejectionReason(error),
       };
     }
   }
-  return result;
-}
-
-export async function readCodexHistoryMessagesInWorker(
-  target: CodexMirroredSessionHistoryTarget,
-  admission?: TranscriptTurnAdmission,
-  signal?: AbortSignal,
-): Promise<AgentMessage[] | undefined> {
-  const result = await readHistory(target, { kind: "messages" }, admission, signal);
-  return result.kind === "messages" && result.result.status === "ok"
-    ? result.result.value
-    : undefined;
-}
-
-export async function projectCodexSettledHistoryInWorker(
-  target: CodexMirroredSessionHistoryTarget & SettledTurnMessages,
-  signal?: AbortSignal,
-): Promise<CodexHistoryReadResult<JsonValue[]>> {
-  const result = await readHistory(
-    target,
-    {
-      kind: "settled",
-      evidence: {
-        mirroredMessages: target.mirroredMessages,
-        settledMessages: target.settledMessages,
-        turnId: target.turnId,
-      },
-    },
-    undefined,
-    signal,
-  );
-  return result.kind === "settled"
-    ? result.result
-    : { status: "rejected", reason: "history_read_failed" };
+  return result.result;
 }

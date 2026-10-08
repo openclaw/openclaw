@@ -2,10 +2,23 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { ensureMatrixCryptoRuntime, ensureMatrixSdkInstalled } from "./deps.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ensureMatrixSdkInstalled } from "./deps.js";
 
-const logStub = vi.fn();
+const cryptoRequire = vi.hoisted(() =>
+  Object.assign(vi.fn<(id: string) => unknown>(), { resolve: vi.fn<(id: string) => string>() }),
+);
+
+vi.mock("node:module", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:module")>();
+  const createRequire = (url: string | URL) =>
+    /\/matrix\/deps\.[jt]s$/.test(String(url)) ? cryptoRequire : actual.createRequire(url);
+  return new Proxy(actual, {
+    get(target, property, receiver) {
+      return property === "createRequire" ? createRequire : Reflect.get(target, property, receiver);
+    },
+  });
+});
 
 function resolveTestNativeBindingFilename(): string | null {
   switch (process.platform) {
@@ -50,19 +63,25 @@ function resolveTestNativeBindingFilename(): string | null {
 }
 
 describe("ensureMatrixCryptoRuntime", () => {
-  it("returns immediately when matrix SDK loads", async () => {
-    const requireFn = vi.fn(() => ({}));
+  let ensureMatrixCryptoRuntime: typeof import("./deps.js").ensureMatrixCryptoRuntime;
 
-    await ensureMatrixCryptoRuntime({
-      log: logStub,
-      requireFn,
-      resolveFn: () => "/tmp/download-lib.js",
+  beforeEach(async () => {
+    vi.resetModules();
+    cryptoRequire.mockReset().mockReturnValue({});
+    cryptoRequire.resolve.mockReset().mockImplementation(() => {
+      throw new Error("package not resolved");
     });
-
-    expect(requireFn).toHaveBeenCalledTimes(1);
+    ({ ensureMatrixCryptoRuntime } = await import("./deps.js"));
   });
 
-  it("bootstraps missing crypto runtime and retries matrix SDK load", async () => {
+  it("loads the matrix SDK once across repeated calls", async () => {
+    await ensureMatrixCryptoRuntime();
+    await ensureMatrixCryptoRuntime();
+
+    expect(cryptoRequire).toHaveBeenCalledTimes(1);
+  });
+
+  it("shares one bootstrap of missing crypto runtime and retries matrix SDK load", async () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-crypto-bootstrap-"));
     const scriptPath = path.join(tmpDir, "download-lib.js");
     const markerPath = path.join(tmpDir, "bootstrapped");
@@ -75,7 +94,8 @@ describe("ensureMatrixCryptoRuntime", () => {
         `fs.writeFileSync(${JSON.stringify(markerPath)}, "ok");`,
       ].join("\n"),
     );
-    const requireFn = vi.fn(() => {
+    cryptoRequire.resolve.mockReturnValue(scriptPath);
+    cryptoRequire.mockImplementation(() => {
       if (!fs.existsSync(markerPath)) {
         throw new Error(
           "Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu' (required by matrix sdk)",
@@ -85,33 +105,27 @@ describe("ensureMatrixCryptoRuntime", () => {
     });
 
     try {
-      await ensureMatrixCryptoRuntime({
-        log: logStub,
-        requireFn,
-        resolveFn: () => scriptPath,
-      });
+      await Promise.all([ensureMatrixCryptoRuntime(), ensureMatrixCryptoRuntime()]);
+      await ensureMatrixCryptoRuntime();
 
       expect(fs.readFileSync(markerPath, "utf8")).toBe("ok");
-      expect(requireFn).toHaveBeenCalledTimes(2);
+      expect(cryptoRequire).toHaveBeenCalledTimes(2);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
-  it("rethrows non-crypto module errors without bootstrapping", async () => {
-    const requireFn = vi.fn(() => {
+  it("rethrows non-crypto module errors and allows a later load to retry", async () => {
+    cryptoRequire.mockImplementationOnce(() => {
       throw new Error("Cannot find module 'not-the-matrix-crypto-runtime'");
     });
 
-    await expect(
-      ensureMatrixCryptoRuntime({
-        log: logStub,
-        requireFn,
-        resolveFn: () => "/tmp/download-lib.js",
-      }),
-    ).rejects.toThrow("Cannot find module 'not-the-matrix-crypto-runtime'");
+    await expect(ensureMatrixCryptoRuntime()).rejects.toThrow(
+      "Cannot find module 'not-the-matrix-crypto-runtime'",
+    );
+    await ensureMatrixCryptoRuntime();
 
-    expect(requireFn).toHaveBeenCalledTimes(1);
+    expect(cryptoRequire).toHaveBeenCalledTimes(2);
   });
 
   it("removes an incomplete native binding before loading the matrix SDK", async () => {
@@ -132,8 +146,12 @@ describe("ensureMatrixCryptoRuntime", () => {
     );
     fs.writeFileSync(nativeBindingPath, Buffer.alloc(16));
 
-    const requireFn = vi.fn(() => {
-      if (!fs.existsSync(nativeBindingPath) || fs.statSync(nativeBindingPath).size < 1_000_000) {
+    const bindingSizes: number[] = [];
+    cryptoRequire.resolve.mockReturnValue(scriptPath);
+    cryptoRequire.mockImplementation(() => {
+      const size = fs.existsSync(nativeBindingPath) ? fs.statSync(nativeBindingPath).size : 0;
+      bindingSizes.push(size);
+      if (size < 1_000_000) {
         throw new Error(
           "Cannot find module '@matrix-org/matrix-sdk-crypto-nodejs-linux-x64-gnu' (required by matrix sdk)",
         );
@@ -142,17 +160,11 @@ describe("ensureMatrixCryptoRuntime", () => {
     });
 
     try {
-      await ensureMatrixCryptoRuntime({
-        log: logStub,
-        requireFn,
-        resolveFn: () => scriptPath,
-      });
+      await ensureMatrixCryptoRuntime();
 
-      expect(requireFn).toHaveBeenCalledTimes(2);
+      expect(cryptoRequire).toHaveBeenCalledTimes(2);
       expect(fs.statSync(nativeBindingPath).size).toBe(1_000_000);
-      expect(logStub).toHaveBeenCalledWith(
-        "matrix: removed incomplete native crypto runtime (16 bytes); it will be downloaded again",
-      );
+      expect(bindingSizes).toEqual([0, 1_000_000]);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -164,15 +176,6 @@ describe("ensureMatrixSdkInstalled", () => {
     const resolveFn = vi.fn((_id: string) => "/fake/path");
     await expect(ensureMatrixSdkInstalled({ resolveFn })).resolves.toBeUndefined();
     expect(resolveFn).toHaveBeenCalled();
-  });
-
-  it("throws actionable repair error listing every missing package", async () => {
-    const resolveFn = vi.fn((_id: string) => {
-      throw new Error("Cannot find module");
-    });
-    await expect(ensureMatrixSdkInstalled({ resolveFn })).rejects.toThrow(
-      /Matrix plugin dependencies are missing: matrix-js-sdk, @matrix-org\/matrix-sdk-crypto-nodejs, @matrix-org\/matrix-sdk-crypto-wasm\. Repair this plugin with `openclaw plugins update matrix` or run `openclaw doctor --fix`\./,
-    );
   });
 
   it("lists only the packages that fail to resolve", async () => {
@@ -193,7 +196,7 @@ describe("ensureMatrixSdkInstalled", () => {
       throw new Error("Cannot find module");
     });
     await expect(ensureMatrixSdkInstalled({ resolveFn, confirm })).rejects.toThrow(
-      /Matrix plugin dependencies are missing/,
+      /Matrix plugin dependencies are missing: matrix-js-sdk, @matrix-org\/matrix-sdk-crypto-nodejs, @matrix-org\/matrix-sdk-crypto-wasm\. Repair this plugin with `openclaw plugins update matrix` or run `openclaw doctor --fix`\./,
     );
     expect(confirm).not.toHaveBeenCalled();
   });

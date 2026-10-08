@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // Prevents direct pairing-store group auth reads outside resolver helpers.
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
 import { createPairingGuardContext } from "./lib/pairing-guard-context.mts";
 import {
   collectFileViolations,
@@ -62,7 +62,7 @@ function containsPairingStoreSource(node: ts.Node) {
         return;
       }
     }
-    ts.forEachChild(current, visit);
+    current.forEachChild(visit);
   };
   visit(node);
   return found;
@@ -112,8 +112,7 @@ function isSuspiciousNormalizeWithStoreCall(node: ts.Node) {
   return hasStoreProp && hasGroupAllowProp;
 }
 
-function findViolations(content: string, filePath: string) {
-  const sourceFile = ts.createSourceFile(filePath, content, ts.ScriptTarget.Latest, true);
+function findViolations(_content: string, _filePath: string, sourceFile: ts.SourceFile) {
   const violations: Array<{ line: number; reason: string }> = [];
 
   const visit = (node: ts.Node) => {
@@ -122,7 +121,7 @@ function findViolations(content: string, filePath: string) {
       if (name && groupNameRe.test(name) && containsPairingStoreSource(node.initializer)) {
         const callName = getCallName(node.initializer);
         if (callName && allowedResolverCallNames.has(callName)) {
-          ts.forEachChild(node, visit);
+          node.forEachChild(visit);
           return;
         }
         violations.push({
@@ -149,7 +148,7 @@ function findViolations(content: string, filePath: string) {
       });
     }
 
-    ts.forEachChild(node, visit);
+    node.forEachChild(visit);
   };
 
   visit(sourceFile);

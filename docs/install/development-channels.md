@@ -162,16 +162,27 @@ Shows the active channel (with the source that decided it: config, git tag,
 git branch, installed version, or default), install kind (git or package),
 current version, and update availability.
 It also shows the last recorded update run, including a failed fetch. Plain
-`openclaw status` uses cached Git refs; use `openclaw update status` or
-`openclaw status --deep` to request a fresh availability check.
+`openclaw status` uses cached Git refs without fetching. If the latest recorded
+update fetch in the current state directory failed, it shows
+`update check stale: last update fetch failed` with the failure's age and a short
+reason instead of `up to date`. Ahead/behind counts are labeled `cached`.
+A later update run with a completed fetch clears the warning, even if the rest
+of the update is skipped, fails, or rolls back. A manual `git fetch` does not
+clear the recorded warning. Use `openclaw update status` for a fresh availability
+check or run `openclaw update` again. `openclaw status --deep` also fetches for
+that check, without changing the ledger.
 
 ## Tagging best practices
 
-- Tag releases you want git checkouts to land on: `vYYYY.M.PATCH` for stable,
+- Tag releases you want git checkouts to land on: `vYYYY.M.PATCH` with patch
+  `1` through `32` for regular stable,
   `vYYYY.M.PATCH-beta.N` for beta. Named prerelease suffixes such as
   `-alpha.N`, `-rc.N`, and `-next.N` are not stable or beta targets.
 - Legacy numeric stable tags such as `vYYYY.M.PATCH-1` and `v1.0.1-1` are still
-  recognized as stable git tags for compatibility.
+  recognized as stable git tags for compatibility, except monthly patches `33`
+  and higher. Those patches are reserved for extended-stable; final tags and
+  numeric correction variants are never regular stable targets or beta's stable
+  fallback. Extended-stable remains a package-only update channel.
 - `vYYYY.M.PATCH.beta.N` (dot-separated) is also recognized for compatibility;
   prefer `-beta.N`.
 - Keep tags immutable: never move or reuse a tag.
@@ -192,3 +203,4 @@ Beta and dev builds may **not** include a macOS app release. That is fine:
 
 - [Updating](/install/updating)
 - [Installer internals](/install/installer)
+- [Release policy](/reference/RELEASING) - how releases are cut and published into these channels

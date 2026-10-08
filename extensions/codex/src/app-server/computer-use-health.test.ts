@@ -27,7 +27,7 @@ describe("Codex Computer Use periodic health", () => {
       "thread/start",
       {
         input: [],
-        developerInstructions: "OpenClaw Computer Use readiness probe",
+        developerInstructions: "OpenClaw Computer Use readiness check",
         ephemeral: true,
       },
       { timeoutMs: 60_000 },
@@ -48,6 +48,35 @@ describe("Codex Computer Use periodic health", () => {
     expect(
       client.request.mock.calls.filter(([method]) => method === "mcpServer/tool/call"),
     ).toHaveLength(1);
+  });
+
+  it("keeps unified Computer Use health checks on the JavaScript probe", async () => {
+    vi.useFakeTimers();
+    const client = createClient();
+
+    startCodexComputerUseHealthMonitor({
+      client: client.client,
+      config: computerUseConfig({
+        healthCheckEnabled: true,
+        healthCheckIntervalMinutes: 30,
+        mcpServerName: "cua_repl",
+        pluginName: "unified-computer-use",
+      }),
+      tools: ["js", "js_reset", "turn_ended"],
+    });
+
+    await vi.advanceTimersByTimeAsync(30 * 60_000);
+
+    expect(client.request).toHaveBeenCalledWith(
+      "mcpServer/tool/call",
+      {
+        threadId: "health-probe-thread-1",
+        server: "cua_repl",
+        tool: "js",
+        arguments: { code: "await cua.listApps();" },
+      },
+      { timeoutMs: 60_000 },
+    );
   });
 
   it("reloads the owner-managed MCP runtime and retries once after a failed probe", async () => {
@@ -195,7 +224,7 @@ function createClient(options: { liveTestFailures?: number } = {}) {
     if (method === "config/mcpServer/reload") {
       return undefined;
     }
-    if (method === "thread/unsubscribe" || method === "thread/archive") {
+    if (method === "thread/unsubscribe") {
       expect(params).toEqual({ threadId: `health-probe-thread-${threadStarts}` });
       return undefined;
     }

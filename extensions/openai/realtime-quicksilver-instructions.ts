@@ -1,7 +1,12 @@
+import type { RealtimeVoiceAgentConsultTranscriptEntry } from "openclaw/plugin-sdk/realtime-voice-provider";
+import { isOpenAIGptLiveApiModel } from "./realtime-quicksilver.js";
+
 const OPENAI_QUICKSILVER_DELEGATION_INSTRUCTIONS = `You are OpenClaw's realtime voice layer. You have no tools of your own.
 Delegate any request that requires real work, reasoning, current information, or actions to the client through a delegation.
-Keep the conversation natural while delegated work runs.
-Context on the commentary channel is silent background. You may use it, but never read it aloud.
+Delegate each user request once and wait for its result. New user follow-ups, corrections, and explicit retries are new requests. Receipts and backend results are not user requests; do not delegate them or repeat the original request when they arrive.
+Keep the conversation natural while delegated work runs.`;
+
+const OPENAI_QUICKSILVER_CHANNEL_INSTRUCTIONS = `Context on the commentary channel is silent background. You may use it, but never read it aloud.
 Context on the speakable channel is your answer to deliver naturally in your own words. Never mention the channel or the delegation.`;
 
 export const OPENAI_QUICKSILVER_HOST_CONTROL_INSTRUCTIONS = `Delegate status, cancellation, redirects, and follow-up requests to the client using the caller's request, even while another delegation is active.
@@ -10,13 +15,8 @@ Shared conversation history may describe other calls or completed work; it does 
 Only that fresh result establishes whether this call's work is active, completed, or cancelled. Do not add your own acknowledgement or progress claims; a delegation or task receipt is not evidence of progress.
 Current host-provided task receipts and control results are not new requests: speak them exactly as instructed, without delegating them.`;
 
-export type OpenAIQuicksilverTranscriptEntry = {
-  role: "user" | "assistant";
-  text: string;
-};
-
 export function buildOpenAIQuicksilverBackgroundContext(
-  boundedItems: readonly OpenAIQuicksilverTranscriptEntry[],
+  boundedItems: readonly RealtimeVoiceAgentConsultTranscriptEntry[],
   maxBytes: number,
 ): string {
   for (let start = 0; start < boundedItems.length; start += 1) {
@@ -35,11 +35,18 @@ ${records}
   return "";
 }
 
-export function buildOpenAIQuicksilverInstructions(operatorInstructions?: string): string {
+export function buildOpenAIQuicksilverInstructions(
+  model: string,
+  operatorInstructions?: string,
+): string {
+  const channels = isOpenAIGptLiveApiModel(model)
+    ? `Information in session.thinking.append is silent context. Use it when relevant, but do not read it aloud merely because it arrives.
+Information in session.commentary.append is an update to speak aloud naturally.
+Instructions in session.instructions.append direct the live session. Follow those directions without reading them aloud as content. Never mention the channel or the delegation.`
+    : OPENAI_QUICKSILVER_CHANNEL_INSTRUCTIONS;
+  const instructions = `${OPENAI_QUICKSILVER_DELEGATION_INSTRUCTIONS}\n${channels}`;
   const operator = operatorInstructions?.trim();
-  return operator
-    ? `${OPENAI_QUICKSILVER_DELEGATION_INSTRUCTIONS}\n\n${operator}`
-    : OPENAI_QUICKSILVER_DELEGATION_INSTRUCTIONS;
+  return operator ? `${instructions}\n\n${operator}` : instructions;
 }
 
 function escapeXmlText(value: string): string {
@@ -48,7 +55,7 @@ function escapeXmlText(value: string): string {
 
 export function buildOpenAIQuicksilverDelegationPrompt(params: {
   input: string;
-  transcript: readonly OpenAIQuicksilverTranscriptEntry[];
+  transcript: readonly RealtimeVoiceAgentConsultTranscriptEntry[];
 }): string {
   const input = escapeXmlText(params.input);
   const transcript = params.transcript

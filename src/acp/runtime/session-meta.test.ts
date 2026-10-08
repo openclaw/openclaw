@@ -1,27 +1,41 @@
 /** Tests ACP session metadata persistence, joins, and migration helpers. */
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
-import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { buildAcpDatabaseSessionKey } from "./session-meta-keys.js";
+import { readAcpSessionMetaForEntry } from "./session-meta-readonly.js";
 import {
   listAcpSessionEntries,
   readAcpSessionEntry,
   readAcpSessionMeta,
   readAcpSessionMetaBatch,
-  readAcpSessionMetaForEntry,
-  repairAcpSessionMetaKeyForMigration,
   upsertAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "./session-meta.js";
+import { withAcpSessionTestDir as withTestDir } from "./session-meta.test-support.js";
 
 const ACP_AGENT_ID = "codex";
+
+function createMeta(
+  runtimeSessionName: string,
+  overrides: Partial<SessionAcpMeta> = {},
+): SessionAcpMeta {
+  return {
+    backend: "acpx",
+    agent: "codex",
+    runtimeSessionName,
+    mode: "persistent",
+    state: "idle",
+    lastActivityAt: 123,
+    ...overrides,
+  };
+}
 
 async function seedAcpSessionEntry(params: {
   storePath: string;
@@ -50,81 +64,9 @@ function readStoredAcpSessionEntry(params: {
 }
 
 describe("ACP session metadata SQLite store", () => {
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-  });
-
-  it("persists bare global metadata under a configured fixed-store owner", async () => {
-    await withTestDir({ prefix: "openclaw-acp-global-owner-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const cfg = {
-        session: { scope: "global", store: storePath },
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "ops" } },
-          entries: { ops: {}, research: {} },
-        },
-      } satisfies OpenClawConfig;
-      const databasePath = path.join(dir, "state", "openclaw.sqlite");
-      await replaceSessionEntry(
-        {
-          agentId: "ops",
-          storePath,
-          sessionKey: "global",
-        },
-        { sessionId: "ops-global", updatedAt: 100, sessionStartedAt: 100 },
-      );
-      const mutate = () => ({
-        backend: "acpx",
-        agent: "codex",
-        runtimeSessionName: "global",
-        mode: "persistent" as const,
-        state: "idle" as const,
-        lastActivityAt: 123,
-      });
-
-      const persisted = await upsertAcpSessionMeta({
-        cfg,
-        databasePath,
-        sessionKey: "global",
-        mutate,
-      });
-
-      expect(persisted?.acp?.runtimeSessionName).toBe("global");
-      expect(
-        readAcpSessionMeta({
-          cfg,
-          databasePath,
-          sessionKey: "global",
-        })?.runtimeSessionName,
-      ).toBe("global");
-      const conflictingMutate = vi.fn(mutate);
-      await expect(
-        upsertAcpSessionMeta({
-          cfg,
-          databasePath,
-          sessionKey: "global",
-          agentId: "research",
-          mutate: conflictingMutate,
-        }),
-      ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
-      expect(conflictingMutate).not.toHaveBeenCalled();
-      const ownerlessCfg = {
-        ...cfg,
-        agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
-      } satisfies OpenClawConfig;
-      const ownerlessMutate = vi.fn(mutate);
-      await expect(
-        upsertAcpSessionMeta({
-          cfg: ownerlessCfg,
-          databasePath,
-          sessionKey: "ownerless-global",
-          mutate: ownerlessMutate,
-        }),
-      ).rejects.toMatchObject({ code: "AGENT_SELECTION_REQUIRED" });
-      expect(ownerlessMutate).not.toHaveBeenCalled();
-    });
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
   });
 
   it("reads metadata under external state ownership without write admission", async () => {
@@ -138,7 +80,7 @@ describe("ACP session metadata SQLite store", () => {
       const storePath = path.join(dir, "agents", "main", "agent", "openclaw-agent.sqlite");
       const sessionKey = "agent:main:proof";
       await replaceSessionEntry(
-        { agentId: "main", storePath, sessionKey },
+        { agentId: "main", storePath, sessionKey, env },
         { sessionId: "proof-session", updatedAt: 100 },
       );
       await upsertAcpSessionMeta({
@@ -146,18 +88,12 @@ describe("ACP session metadata SQLite store", () => {
         databasePath,
         env,
         sessionKey,
-        mutate: () => ({
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "proof-runtime",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 100,
-        }),
+        mutate: () => createMeta("proof-runtime", { lastActivityAt: 100 }),
       });
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawAgentDatabasesAsync();
+      await closeOpenClawStateDatabaseAsync();
       claimOpenClawStateOwnership("test-supervisor", { env: externalEnv });
-      closeOpenClawStateDatabaseForTest();
+      await closeOpenClawStateDatabaseAsync();
       const before = fs.readFileSync(databasePath);
 
       expect(readAcpSessionMeta({ cfg, databasePath, env, sessionKey })).toMatchObject({
@@ -185,14 +121,7 @@ describe("ACP session metadata SQLite store", () => {
           databasePath,
           sessionKey: "global",
           agentId,
-          mutate: () => ({
-            backend: "acpx",
-            agent: "codex",
-            runtimeSessionName: agentId,
-            mode: "persistent",
-            state: "idle",
-            lastActivityAt: 123,
-          }),
+          mutate: () => createMeta(agentId),
         });
       }
 
@@ -219,161 +148,6 @@ describe("ACP session metadata SQLite store", () => {
     });
   });
 
-  it("batch-loads legacy bare metadata without rekeying during a read", async () => {
-    await withTestDir({ prefix: "openclaw-acp-batch-owner-" }, async (dir) => {
-      const databasePath = path.join(dir, "state", "openclaw.sqlite");
-      const cfg = {
-        session: { store: path.join(dir, "sessions.json") },
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "ops" } },
-          entries: { ops: {}, research: {} },
-        },
-      } satisfies OpenClawConfig;
-      const entry: SessionEntry = {
-        sessionId: "ops-global",
-        lifecycleRevision: "ops-revision",
-        updatedAt: 100,
-      };
-      writeAcpSessionMetaForMigration({
-        databasePath,
-        sessionKey: "global",
-        lifecycleRevision: "ops-revision",
-        meta: {
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "legacy-global",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 123,
-        },
-      });
-
-      const batch = readAcpSessionMetaBatch({
-        cfg,
-        databasePath,
-        entries: [{ sessionKey: "global", agentId: "ops", entry }],
-      });
-
-      expect(batch.get(entry)?.runtimeSessionName).toBe("legacy-global");
-      expect(
-        readAcpSessionMetaForEntry({
-          cfg,
-          databasePath,
-          sessionKey: "global",
-          agentId: "ops",
-          entry,
-        })?.runtimeSessionName,
-      ).toBe("legacy-global");
-      expect(
-        readAcpSessionMetaForEntry({ databasePath, sessionKey: "global", entry })
-          ?.runtimeSessionName,
-      ).toBe("legacy-global");
-      const database = new DatabaseSync(databasePath, {
-        readOnly: true,
-      });
-      try {
-        expect(
-          database.prepare("SELECT session_key FROM acp_sessions ORDER BY session_key").all(),
-        ).toEqual([{ session_key: "global" }]);
-      } finally {
-        database.close();
-      }
-    });
-  });
-
-  it("deletes the legacy row selected by fallback when metadata is cleared", async () => {
-    await withTestDir({ prefix: "openclaw-acp-clear-legacy-owner-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const databasePath = path.join(dir, "state", "openclaw.sqlite");
-      const cfg = {
-        session: { scope: "global", store: storePath },
-        agents: {
-          ownership: "explicit",
-          defaults: { sessionStore: { agentId: "ops" } },
-          entries: { ops: {}, research: {} },
-        },
-      } satisfies OpenClawConfig;
-      const entry: SessionEntry = {
-        sessionId: "ops-global",
-        lifecycleRevision: "ops-revision",
-        updatedAt: 100,
-      };
-      await replaceSessionEntry({ agentId: "ops", storePath, sessionKey: "global" }, entry);
-      writeAcpSessionMetaForMigration({
-        databasePath,
-        sessionKey: "global",
-        lifecycleRevision: "ops-revision",
-        meta: {
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "legacy-global",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 123,
-        },
-      });
-
-      await upsertAcpSessionMeta({
-        cfg,
-        databasePath,
-        sessionKey: "global",
-        mutate: (current) => {
-          expect(current?.runtimeSessionName).toBe("legacy-global");
-          return null;
-        },
-      });
-
-      expect(readAcpSessionMeta({ cfg, databasePath, sessionKey: "global" })).toBeUndefined();
-    });
-  });
-
-  it("escapes composite identities from legacy raw keys that use the old prefix", async () => {
-    await withTestDir({ prefix: "openclaw-acp-prefix-collision-" }, async (dir) => {
-      const databasePath = path.join(dir, "state", "openclaw.sqlite");
-      const rawSessionKey = "@agent:research:foo";
-      const rawEntry: SessionEntry = {
-        sessionId: "raw-session",
-        lifecycleRevision: "raw-revision",
-        updatedAt: 100,
-      };
-      writeAcpSessionMetaForMigration({
-        databasePath,
-        sessionKey: rawSessionKey,
-        lifecycleRevision: "raw-revision",
-        meta: {
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "literal-prefix-key",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 123,
-        },
-      });
-
-      const batch = readAcpSessionMetaBatch({
-        databasePath,
-        entries: [{ sessionKey: rawSessionKey, entry: rawEntry }],
-      });
-      expect(batch.get(rawEntry)?.runtimeSessionName).toBe("literal-prefix-key");
-      expect(
-        readAcpSessionMetaForEntry({ databasePath, sessionKey: rawSessionKey, entry: rawEntry })
-          ?.runtimeSessionName,
-      ).toBe("literal-prefix-key");
-      expect(
-        readAcpSessionMetaForEntry({
-          databasePath,
-          sessionKey: "foo",
-          agentId: "research",
-          entry: {
-            sessionId: "other-session",
-            lifecycleRevision: "other-revision",
-          },
-        }),
-      ).toBeUndefined();
-    });
-  });
-
   it("persists ACP metadata in SQLite without writing sessions.json acp blocks", async () => {
     await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
@@ -394,15 +168,7 @@ describe("ACP session metadata SQLite store", () => {
         databasePath,
         sessionKey,
         now: () => 200,
-        mutate: () => ({
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "codex-discord",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 123,
-          cwd: "/repo",
-        }),
+        mutate: () => createMeta("codex-discord", { cwd: "/repo" }),
       });
 
       expect(result?.acp?.runtimeSessionName).toBe("codex-discord");
@@ -452,14 +218,7 @@ describe("ACP session metadata SQLite store", () => {
         databasePath,
         sessionKey,
         now: () => 200,
-        mutate: () => ({
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "codex-sqlite",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 123,
-        }),
+        mutate: () => createMeta("codex-sqlite"),
       });
 
       expect(readStoredAcpSessionEntry({ storePath, sessionKey })?.acp).toBeUndefined();
@@ -485,20 +244,14 @@ describe("ACP session metadata SQLite store", () => {
         databasePath,
         sessionKey,
         now: () => 200,
-        mutate: () => ({
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "codex-new",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 123,
-        }),
+        mutate: () => createMeta("codex-new"),
       });
 
       expect(result?.sessionId).toEqual(expect.any(String));
       expect(result?.acp?.runtimeSessionName).toBe("codex-new");
       const storedEntry = readStoredAcpSessionEntry({ storePath, sessionKey });
       expect(storedEntry?.sessionId).toEqual(expect.any(String));
+      expect(storedEntry?.lifecycleRevision).toEqual(expect.any(String));
       expect(storedEntry?.updatedAt).toEqual(expect.any(Number));
       expect(storedEntry?.sessionStartedAt).toBeGreaterThan(200);
       expect(storedEntry?.acp).toBeUndefined();
@@ -533,14 +286,7 @@ describe("ACP session metadata SQLite store", () => {
         databasePath,
         sessionKey: rawSessionKey,
         now: () => 200,
-        mutate: () => ({
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "codex-normalized",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 123,
-        }),
+        mutate: () => createMeta("codex-normalized"),
       });
 
       expect(
@@ -556,6 +302,10 @@ describe("ACP session metadata SQLite store", () => {
           databasePath,
           sessionKey: storeSessionKey,
         })?.acp?.runtimeSessionName,
+      ).toBe("codex-normalized");
+      expect(
+        readAcpSessionMeta({ cfg, databasePath, sessionKey: `  ${rawSessionKey}  ` })
+          ?.runtimeSessionName,
       ).toBe("codex-normalized");
       expect(fs.existsSync(storePath)).toBe(false);
       const legacyEmbeddedEntry = readStoredAcpSessionEntry({
@@ -605,51 +355,6 @@ describe("ACP session metadata SQLite store", () => {
     });
   });
 
-  it("keeps SQLite ACP metadata visible when legacy store keys are canonicalized", async () => {
-    await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const databasePath = path.join(dir, "state", "openclaw.sqlite");
-      const cfg = { session: { store: storePath } } as OpenClawConfig;
-      const legacyStoreSessionKey = "agent:CODEX:acp:legacy-runtime";
-      const canonicalSessionKey = "agent:codex:acp:legacy-runtime";
-      await seedAcpSessionEntry({
-        storePath,
-        sessionKey: legacyStoreSessionKey,
-        entry: {
-          sessionId: "sess-acp",
-          updatedAt: 100,
-        },
-      });
-
-      await upsertAcpSessionMeta({
-        cfg,
-        databasePath,
-        sessionKey: canonicalSessionKey,
-        now: () => 200,
-        mutate: () => ({
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "codex-canonicalized",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 123,
-        }),
-      });
-
-      expect(
-        readStoredAcpSessionEntry({ storePath, sessionKey: canonicalSessionKey })?.sessionId,
-      ).toBe("sess-acp");
-      expect(
-        readAcpSessionEntry({
-          cfg,
-          databasePath,
-          sessionKey: canonicalSessionKey,
-        })?.acp?.runtimeSessionName,
-      ).toBe("codex-canonicalized");
-      expect(await listAcpSessionEntries({ cfg, databasePath })).toHaveLength(1);
-    });
-  });
-
   it("binds ACP metadata to the final accessor-selected entry for alias writes", async () => {
     await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
@@ -679,14 +384,7 @@ describe("ACP session metadata SQLite store", () => {
         databasePath,
         sessionKey: legacyStoreSessionKey,
         now: () => 200,
-        mutate: () => ({
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "codex-alias",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 123,
-        }),
+        mutate: () => createMeta("codex-alias"),
       });
 
       expect(
@@ -721,33 +419,20 @@ describe("ACP session metadata SQLite store", () => {
 
       writeAcpSessionMetaForMigration({
         databasePath,
-        sessionKey,
+        sessionKey: buildAcpDatabaseSessionKey(sessionKey, ACP_AGENT_ID),
         lifecycleRevision: "revision-old",
-        meta: {
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "codex-stale",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 123,
-        },
+        meta: createMeta("codex-stale"),
       });
 
       expect(readAcpSessionEntry({ cfg, databasePath, sessionKey })?.acp).toBeUndefined();
+      expect(readAcpSessionMeta({ cfg, databasePath, sessionKey })).toBeUndefined();
       expect(await listAcpSessionEntries({ cfg, databasePath })).toHaveLength(0);
 
       writeAcpSessionMetaForMigration({
         databasePath,
-        sessionKey,
+        sessionKey: buildAcpDatabaseSessionKey(sessionKey, ACP_AGENT_ID),
         lifecycleRevision: "revision-new",
-        meta: {
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "codex-current",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 124,
-        },
+        meta: createMeta("codex-current", { lastActivityAt: 124 }),
       });
 
       expect(readAcpSessionEntry({ cfg, databasePath, sessionKey })?.acp?.runtimeSessionName).toBe(
@@ -776,17 +461,10 @@ describe("ACP session metadata SQLite store", () => {
       // Simulate the pre-boundary layout, where session_id stored the logical id.
       writeAcpSessionMetaForMigration({
         databasePath,
-        sessionKey,
+        sessionKey: buildAcpDatabaseSessionKey(sessionKey, ACP_AGENT_ID),
         lifecycleRevision: "sess-existing",
         now: () => 100,
-        meta: {
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "codex-legacy",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 123,
-        },
+        meta: createMeta("codex-legacy"),
       });
 
       expect(readAcpSessionEntry({ cfg, databasePath, sessionKey })?.acp?.runtimeSessionName).toBe(
@@ -797,6 +475,7 @@ describe("ACP session metadata SQLite store", () => {
         readAcpSessionMetaForEntry({
           databasePath,
           sessionKey,
+          agentId: ACP_AGENT_ID,
           entry: {
             sessionId: "sess-existing",
             lifecycleRevision: "revision-next",
@@ -818,17 +497,10 @@ describe("ACP session metadata SQLite store", () => {
       });
       writeAcpSessionMetaForMigration({
         databasePath,
-        sessionKey: staleKey,
+        sessionKey: buildAcpDatabaseSessionKey(staleKey, ACP_AGENT_ID),
         lifecycleRevision: "sess-stale",
         now: () => 100,
-        meta: {
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "codex-stale-legacy",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 100,
-        },
+        meta: createMeta("codex-stale-legacy", { lastActivityAt: 100 }),
       });
       expect(readAcpSessionEntry({ cfg, databasePath, sessionKey: staleKey })?.acp).toBeUndefined();
     });
@@ -840,23 +512,17 @@ describe("ACP session metadata SQLite store", () => {
       const sessionKey = "agent:codex:acp:pre-revision";
       writeAcpSessionMetaForMigration({
         databasePath,
-        sessionKey,
+        sessionKey: buildAcpDatabaseSessionKey(sessionKey, ACP_AGENT_ID),
         sessionId: "sess-pre-revision",
         now: () => 100,
-        meta: {
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "codex-pre-revision",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 100,
-        },
+        meta: createMeta("codex-pre-revision", { lastActivityAt: 100 }),
       });
 
       expect(
         readAcpSessionMetaForEntry({
           databasePath,
           sessionKey,
+          agentId: ACP_AGENT_ID,
           entry: {
             sessionId: "sess-pre-revision",
             lifecycleRevision: undefined,
@@ -868,6 +534,7 @@ describe("ACP session metadata SQLite store", () => {
         readAcpSessionMetaForEntry({
           databasePath,
           sessionKey,
+          agentId: ACP_AGENT_ID,
           entry: {
             sessionId: "sess-pre-revision",
             lifecycleRevision: "revision-after-reset",
@@ -878,143 +545,36 @@ describe("ACP session metadata SQLite store", () => {
     });
   });
 
-  it("repairs ACP metadata rows when session-store keys are canonicalized", async () => {
-    await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
+  it.each([
+    "agent:codex:acp:binding:configured",
+    "agent:codex:ordinary",
+    "acp:bare",
+    "@acp:v1:literal",
+  ])("does not case-fold metadata outside free ACP keys: %s", async (sessionKey) => {
+    await withTestDir({ prefix: "openclaw-acp-case-boundary-" }, async (dir) => {
       const databasePath = path.join(dir, "state", "openclaw.sqlite");
-      const cfg = { session: { store: storePath } } as OpenClawConfig;
-      const legacyKey = "agent:CODEX:acp:legacy-runtime";
-      const canonicalKey = "agent:codex:acp:legacy-runtime";
-      await seedAcpSessionEntry({
-        storePath,
-        sessionKey: canonicalKey,
-        entry: {
-          sessionId: "sess-acp",
-          lifecycleRevision: "revision-acp",
-          updatedAt: 100,
-        },
-      });
+      const entry = {
+        sessionId: "case-boundary",
+        lifecycleRevision: "case-revision",
+        updatedAt: 100,
+      };
       writeAcpSessionMetaForMigration({
         databasePath,
-        sessionKey: legacyKey,
-        lifecycleRevision: "revision-acp",
+        sessionKey: sessionKey.toUpperCase(),
+        lifecycleRevision: entry.lifecycleRevision,
         meta: {
-          backend: "acpx",
+          backend: "fixture",
           agent: "codex",
-          runtimeSessionName: legacyKey,
+          runtimeSessionName: "excluded-alias",
           mode: "persistent",
           state: "idle",
-          lastActivityAt: 123,
+          lastActivityAt: 100,
         },
       });
-
+      expect(readAcpSessionMetaForEntry({ databasePath, sessionKey, entry })).toBeUndefined();
       expect(
-        repairAcpSessionMetaKeyForMigration({
-          databasePath,
-          sessionKey: canonicalKey,
-          entry: { lifecycleRevision: "revision-acp" },
-          now: () => 200,
-        }),
-      ).toBe(true);
-
-      expect(
-        readAcpSessionMetaForEntry({
-          databasePath,
-          sessionKey: legacyKey,
-          entry: { lifecycleRevision: "revision-acp" },
-        }),
+        readAcpSessionMetaBatch({ databasePath, entries: [{ sessionKey, entry }] }).get(entry),
       ).toBeUndefined();
-      expect(
-        readAcpSessionEntry({ cfg, databasePath, sessionKey: canonicalKey })?.acp
-          ?.runtimeSessionName,
-      ).toBe(legacyKey);
-    });
-  });
-
-  it("lists SQLite ACP rows while joining current session-store entries", async () => {
-    await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
-      const storePath = path.join(dir, "sessions.json");
-      const databasePath = path.join(dir, "state", "openclaw.sqlite");
-      const cfg = { session: { store: storePath } } as OpenClawConfig;
-      const sessionKey = "agent:codex:acp:s1";
-      await seedAcpSessionEntry({
-        storePath,
-        sessionKey,
-        entry: {
-          sessionId: "sess-acp",
-          updatedAt: 100,
-          model: "gpt-5.5",
-        },
-      });
-      await upsertAcpSessionMeta({
-        cfg,
-        databasePath,
-        sessionKey,
-        mutate: () => ({
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "codex-s1",
-          mode: "oneshot",
-          state: "running",
-          lastActivityAt: 321,
-        }),
-      });
-
-      const entries = await listAcpSessionEntries({ cfg, databasePath, clone: false });
-
-      expect(entries).toHaveLength(1);
-      expect(entries[0]).toMatchObject({
-        cfg,
-        storePath,
-        sessionKey,
-        storeSessionKey: sessionKey,
-        entry: {
-          sessionId: "sess-acp",
-          model: "gpt-5.5",
-        },
-        acp: {
-          backend: "acpx",
-          runtimeSessionName: "codex-s1",
-          mode: "oneshot",
-          state: "running",
-        },
-      });
-    });
-  });
-
-  it("honors OPENCLAW_STATE_DIR when joining listed SQLite rows to session stores", async () => {
-    await withTestDir({ prefix: "openclaw-acp-meta-" }, async (dir) => {
-      const env = { ...process.env, OPENCLAW_STATE_DIR: dir } as NodeJS.ProcessEnv;
-      const cfg = {} as OpenClawConfig;
-      const sessionKey = "agent:codex:acp:s1";
-      const storePath = path.join(dir, "agents", "codex", "sessions", "sessions.json");
-      await seedAcpSessionEntry({
-        storePath,
-        sessionKey,
-        entry: {
-          sessionId: "sess-acp",
-          updatedAt: 100,
-        },
-      });
-      await upsertAcpSessionMeta({
-        cfg,
-        env,
-        sessionKey,
-        mutate: () => ({
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "codex-s1",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 321,
-        }),
-      });
-
-      const entries = await listAcpSessionEntries({ cfg, env });
-
-      expect(entries).toHaveLength(1);
-      expect(entries[0]?.storePath).toBe(storePath);
-      expect(entries[0]?.entry?.sessionId).toBe("sess-acp");
     });
   });
 });

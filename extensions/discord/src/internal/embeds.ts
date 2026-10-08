@@ -1,4 +1,3 @@
-// Discord plugin module implements embeds behavior.
 import type { APIEmbed } from "discord-api-types/v10";
 import { stripUndefinedFields as clean } from "./undefined-fields.js";
 

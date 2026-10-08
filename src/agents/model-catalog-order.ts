@@ -1,6 +1,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import { resolveModelCatalogIdentityKey } from "./openai-model-routes.js";
+import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 
 /**
  * Provider catalogs declare models strongest-first. Preserve that owner order
@@ -11,6 +11,7 @@ export function assignProviderModelOrder(
   existingEntries: readonly ModelCatalogEntry[] = [],
   options: { appendUnknown?: boolean } = {},
 ): ModelCatalogEntry[] {
+  const keyOf = createModelCatalogIdentityKeyResolver();
   const orderByModel = new Map<string, number>();
   const nextOrderByProvider = new Map<string, number>();
   for (const entry of existingEntries) {
@@ -18,7 +19,7 @@ export function assignProviderModelOrder(
       continue;
     }
     const provider = normalizeProviderId(entry.provider);
-    const key = resolveModelCatalogIdentityKey(entry);
+    const key = keyOf(entry);
     orderByModel.set(key, entry.providerOrder);
     nextOrderByProvider.set(
       provider,
@@ -27,7 +28,7 @@ export function assignProviderModelOrder(
   }
   return entries.map((entry) => {
     const provider = normalizeProviderId(entry.provider);
-    const key = resolveModelCatalogIdentityKey(entry);
+    const key = keyOf(entry);
     const existingOrder = orderByModel.get(key);
     if (existingOrder !== undefined) {
       return { ...entry, providerOrder: existingOrder };
@@ -52,4 +53,21 @@ export function compareModelCatalogEntries(a: ModelCatalogEntry, b: ModelCatalog
   const orderComparison =
     (a.providerOrder ?? Number.MAX_SAFE_INTEGER) - (b.providerOrder ?? Number.MAX_SAFE_INTEGER);
   return orderComparison || a.id.localeCompare(b.id) || a.name.localeCompare(b.name);
+}
+
+/** Keep a session's selected row reachable without changing the provider-owned remainder. */
+export function orderModelCatalogForPicker(
+  entries: readonly ModelCatalogEntry[],
+  selected?: { provider: string; model: string },
+): ModelCatalogEntry[] {
+  const ordered = entries.toSorted(compareModelCatalogEntries);
+  if (selected) {
+    const keyOf = createModelCatalogIdentityKeyResolver();
+    const selectedKey = keyOf({ provider: selected.provider, id: selected.model });
+    const index = ordered.findIndex((entry) => keyOf(entry) === selectedKey);
+    if (index > 0) {
+      ordered.unshift(...ordered.splice(index, 1));
+    }
+  }
+  return ordered;
 }

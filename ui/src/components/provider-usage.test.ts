@@ -2,7 +2,25 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import type { ProviderUsageCostDaily } from "../../../src/infra/provider-usage.types.js";
 import { renderProviderUsageDetails } from "./provider-usage.ts";
+
+function dailyUsage(
+  date: string,
+  amount: number,
+  overrides: Partial<Omit<ProviderUsageCostDaily, "date" | "amount">> = {},
+): ProviderUsageCostDaily {
+  return {
+    date,
+    amount,
+    inputTokens: 0,
+    cacheReadTokens: 0,
+    cacheWriteTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+    ...overrides,
+  };
+}
 
 describe("renderProviderUsageDetails", () => {
   it.each([
@@ -17,34 +35,24 @@ describe("renderProviderUsageDetails", () => {
 
       render(
         renderProviderUsageDetails({
-          provider: "openai",
-          displayName: "OpenAI",
-          plan: "Admin API",
           windows: [],
           costHistory: {
             unit,
             periodDays: 30,
             daily: [
-              {
-                date: today,
-                amount: 12.5,
+              dailyUsage(today, 12.5, {
                 requests: 42,
                 inputTokens: 1_000,
                 cacheReadTokens: 400,
-                cacheWriteTokens: 0,
                 outputTokens: 250,
                 totalTokens: 1_250,
-              },
-              {
-                date: "2026-01-01",
-                amount: 0,
+              }),
+              dailyUsage("2026-01-01", 0, {
                 requests: 1,
                 inputTokens: 50,
-                cacheReadTokens: 0,
-                cacheWriteTokens: 0,
                 outputTokens: 10,
                 totalTokens: 60,
-              },
+              }),
             ],
             models: [
               {
@@ -67,7 +75,9 @@ describe("renderProviderUsageDetails", () => {
       expect(container.textContent).toContain("43 requests");
       expect(container.textContent).toContain("gpt-5.5");
       expect(container.textContent).toContain("Responses");
-      const bars = container.querySelectorAll<HTMLElement>(".provider-cost-chart span");
+      const chart = container.querySelector('[role="group"][aria-label="Daily provider cost"]');
+      expect(chart).not.toBeNull();
+      const bars = chart!.querySelectorAll<HTMLElement>('[role="img"]');
       expect(bars).toHaveLength(2);
       expect(bars?.[0]?.style.height).toBe("100%");
       expect(bars?.[1]?.style.height).toBe("0%");
@@ -95,33 +105,12 @@ describe("renderProviderUsageDetails", () => {
           unit: "credits",
           periodDays: 30,
           daily: [
-            {
-              date: today,
-              amount: 2,
-              cacheReadTokens: 2 ** 53,
-              cacheWriteTokens: 0,
-              inputTokens: 0,
-              outputTokens: 0,
-              totalTokens: 0,
-            },
-            {
-              date: today,
-              amount: Number.NaN,
+            dailyUsage(today, 2, { cacheReadTokens: 2 ** 53 }),
+            dailyUsage(today, Number.NaN, {
               cacheReadTokens: 1,
               cacheWriteTokens: -(2 ** 53),
-              inputTokens: 0,
-              outputTokens: 0,
-              totalTokens: 0,
-            },
-            {
-              date: today,
-              amount: -0,
-              cacheReadTokens: 0,
-              cacheWriteTokens: 0,
-              inputTokens: 0,
-              outputTokens: 0,
-              totalTokens: 0,
-            },
+            }),
+            dailyUsage(today, -0),
           ],
           models: [],
           categories: [],

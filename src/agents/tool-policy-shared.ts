@@ -5,16 +5,10 @@
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import {
-  CORE_TOOL_GROUPS,
-  resolveCoreToolProfilePolicy,
-  type ToolProfileId,
-} from "./tool-catalog.js";
+import { CORE_TOOL_GROUPS } from "./tool-catalog.js";
 
-type ToolProfilePolicy = {
-  allow?: string[];
-  deny?: string[];
-};
+export { resolveCoreToolProfilePolicy as resolveToolProfilePolicy } from "./tool-catalog.js";
+export type { ToolProfileId } from "./tool-catalog.js";
 
 const TOOL_NAME_ALIASES = new Map<string, string>([
   ["bash", "exec"],
@@ -24,12 +18,12 @@ const TOOL_NAME_ALIASES = new Map<string, string>([
 ]);
 
 const TOOL_ALLOWLIST_INTERSECTION = Symbol.for("openclaw.toolAllowlistIntersection");
-type ToolAllowlistWithIntersection = string[] & {
+type ToolAllowlistWithIntersection = readonly string[] & {
   [TOOL_ALLOWLIST_INTERSECTION]?: readonly string[][];
 };
 
 /** Core tool groups exposed to allow/deny policy config. */
-export const TOOL_GROUPS: Record<string, string[]> = { ...CORE_TOOL_GROUPS };
+const TOOL_GROUPS: Record<string, string[]> = { ...CORE_TOOL_GROUPS };
 
 /**
  * Preserves independent allowlists until a concrete tool surface can evaluate
@@ -49,7 +43,7 @@ export function attachToolAllowlistIntersection(
 
 /** Reads independent restrictions attached by a modifying-hook merger. */
 export function readToolAllowlistIntersection(
-  toolsAllow: string[],
+  toolsAllow: readonly string[],
 ): readonly string[][] | undefined {
   return (toolsAllow as ToolAllowlistWithIntersection)[TOOL_ALLOWLIST_INTERSECTION];
 }
@@ -65,8 +59,7 @@ export function isToolExecutionAllowed(allowNames: readonly string[], toolName: 
 
 /** Snapshot exact names for one synchronous batch; never retain this matcher across awaits. */
 export function createToolExecutionMatcher(allowNames: readonly string[]) {
-  const allowed = new Set<string>();
-  allowNames.forEach((name) => allowed.add(normalizeToolPolicyName(name)));
+  const allowed = new Set(allowNames.map(normalizeToolPolicyName));
   return (toolName: string) => allowed.has(normalizeToolPolicyName(toolName));
 }
 
@@ -143,10 +136,3 @@ export function expandToolGroups(list?: string[]) {
   }
   return uniqueStrings(expanded);
 }
-
-/** Resolves a built-in tool profile policy by id. */
-export function resolveToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {
-  return resolveCoreToolProfilePolicy(profile);
-}
-
-export type { ToolProfileId };

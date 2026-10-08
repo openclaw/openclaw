@@ -53,9 +53,13 @@ function keyPresses(keysyms: readonly number[]) {
 }
 
 suite.define(() => {
-  it.each(["canvas", "toolbar"])(
-    "keeps Shift held across a $0 click but never restores it after release and menu paste",
-    async (destination) => {
+  it.each([
+    { destination: "canvas", release: true },
+    { destination: "toolbar", release: true },
+    { destination: "toolbar", release: false },
+  ])(
+    "keeps Shift held across $destination focus and respects release=$release before paste",
+    async ({ destination, release }) => {
       await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
         const { panel, peer, input } = await openKeyboard(page);
         await page.keyboard.down("Shift");
@@ -65,11 +69,17 @@ suite.define(() => {
         await (
           destination === "canvas"
             ? panel.locator(".desktop-surface canvas")
-            : panel.getByRole("button", { name: "Use actual size", exact: true })
+            : panel.getByRole("combobox", { name: "Desktop size", exact: true })
         ).click();
         await expect.poll(peer.keyEvents).toEqual(held);
-        await page.keyboard.up("Shift");
+        if (release) {
+          await page.keyboard.up("Shift");
+        }
+        if (destination === "toolbar") {
+          await page.keyboard.press("Escape");
+        }
         await keyboardButton.click();
+        await expect.poll(() => input.evaluate((element) => element.matches(":focus"))).toBe(true);
         await input.evaluate((element) => {
           if (!(element instanceof HTMLTextAreaElement)) {
             throw new Error("Expected the desktop keyboard textarea");
@@ -83,7 +93,15 @@ suite.define(() => {
             }),
           );
         });
-        await expect.poll(peer.keyEvents).toEqual(keyPresses([0xffe1, 0x70]));
+        await expect
+          .poll(peer.keyEvents)
+          .toEqual([...keyPresses([0xffe1, 0x70]), ...(release ? [] : held)]);
+        if (!release) {
+          await page.keyboard.up("Shift");
+          await expect
+            .poll(peer.keyEvents)
+            .toEqual([...keyPresses([0xffe1, 0x70]), ...keyPresses([0xffe1])]);
+        }
       });
     },
   );
@@ -217,10 +235,20 @@ suite.define(() => {
       await expect.poll(peer.keyEvents).toEqual([...expected, ...keyPresses([0x5a, 0xff08])]);
       await page.screenshot({ path: path.join(artifactDirectory, "connected-control.png") });
 
+      await page.keyboard.down("Shift");
+      const beforeHandoff = [...expected, ...keyPresses([0x5a, 0xff08])];
+      await expect.poll(peer.keyEvents).toEqual([...beforeHandoff, { down: true, keysym: 0xffe1 }]);
       await gateway.setMethodResponse("desktop.observe", { ...desktopObserve, control: false });
+      await gateway.deferNext("desktop.observe");
       await panel.getByRole("button", { name: "Switch to view only", exact: true }).click();
       await gateway.waitForRequest("desktop.observe", { after: 1 });
+      const released = [...beforeHandoff, ...keyPresses([0xffe1])];
+      await expect.poll(peer.keyEvents).toEqual(released);
+      expect(await peer.events()).not.toContain("closed:1");
+      await gateway.resolveDeferred("desktop.observe");
       await expect.poll(peer.events).toContain("authenticated:2");
+      await expect.poll(peer.events).toContain("closed:1");
+      await page.keyboard.up("Shift");
       await panel
         .getByRole("status", { name: "Connecting to desktop…", exact: true })
         .waitFor({ state: "hidden" });
@@ -229,6 +257,18 @@ suite.define(() => {
       );
       expect(await input.isDisabled()).toBe(true);
       await page.screenshot({ path: path.join(artifactDirectory, "connected-view-only.png") });
+      await peer.disconnect("view-only reconnect");
+      await panel.getByRole("button", { name: "Reconnect", exact: true }).click();
+      await expect.poll(peer.events).toContain("authenticated:3");
+      await expect.poll(peer.events).toContain("closed:2");
+      await panel
+        .getByRole("status", { name: "Connecting to desktop…", exact: true })
+        .waitFor({ state: "hidden" });
+      expect(await panel.getByRole("button", { name: "Keyboard", exact: true }).isDisabled()).toBe(
+        true,
+      );
+      expect(await input.isDisabled()).toBe(true);
+      expect(await peer.keyEvents()).toEqual(released);
     });
   });
 

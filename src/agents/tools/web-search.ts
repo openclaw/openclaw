@@ -1,8 +1,3 @@
-/**
- * web_search built-in tool.
- *
- * Runs the configured runtime provider and returns normalized cached search results.
- */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import { runtimeWebSecretOwnerId } from "../../secrets/runtime-web-secret-owner.js";
@@ -11,12 +6,13 @@ import {
   truncateSanitizedExternalContent,
   wrapWebContent,
 } from "../../security/external-content.js";
+import { WebSearchProviderError } from "../../web-search/runtime-error.js";
 import { runWebSearch } from "../../web-search/runtime.js";
 import type { AnyAgentTool } from "./common.js";
 import { asToolParamsRecord, jsonResult, textResult } from "./common.js";
 import { normalizeWebSearchOutput, WebSearchOutputSchema } from "./web-search-output.js";
 import { MAX_SEARCH_COUNT } from "./web-search-provider-common.js";
-import { resolveWebSearchToolRuntimeContext } from "./web-tool-runtime-context.js";
+import { resolveWebToolRuntimeContext } from "./web-tool-runtime-context.js";
 
 const WebSearchSchema = {
   type: "object",
@@ -81,7 +77,6 @@ function isWebSearchDisabled(config?: OpenClawConfig): boolean {
   return Boolean(search && typeof search === "object" && search.enabled === false);
 }
 
-/** Creates the `web_search` tool, or `null` when web search is disabled by config. */
 export function createWebSearchTool(options?: {
   config?: OpenClawConfig;
   enabled?: boolean;
@@ -105,12 +100,17 @@ export function createWebSearchTool(options?: {
     execute: async (_toolCallId, args, signal) => {
       // Late binding lets long-lived agents pick up runtime web-search credentials/config without
       // rebuilding the tool object.
-      const { config, preferRuntimeProviders, providerSelectionId, runtimeWebSearch } =
-        resolveWebSearchToolRuntimeContext({
-          config: options?.config,
-          lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
-          runtimeWebSearch: options?.runtimeWebSearch,
-        });
+      const {
+        config,
+        preferRuntimeProviders,
+        providerSelectionId,
+        runtimeMetadata: runtimeWebSearch,
+      } = resolveWebToolRuntimeContext({
+        kind: "search",
+        config: options?.config,
+        lateBindRuntimeConfig: options?.lateBindRuntimeConfig,
+        runtimeMetadata: options?.runtimeWebSearch,
+      });
       if (isWebSearchDisabled(config)) {
         throw new Error("web_search is disabled.");
       }
@@ -129,6 +129,12 @@ export function createWebSearchTool(options?: {
         preferRuntimeProviders,
         args: toolArgs,
         signal,
+      }).catch((error: unknown) => {
+        signal?.throwIfAborted();
+        if (!(error instanceof WebSearchProviderError)) {
+          throw error;
+        }
+        return error.toResult();
       });
       const normalized = normalizeWebSearchOutput({
         result: result.result,

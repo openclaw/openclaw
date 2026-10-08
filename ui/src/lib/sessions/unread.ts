@@ -1,3 +1,6 @@
+import { ErrorCodes } from "@openclaw/gateway-client/browser";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+
 /**
  * Acknowledges unread state at most once per unread episode: the pending flag
  * clears when the server-confirmed read (unread=false) is observed, so fresh
@@ -53,10 +56,20 @@ export class SessionUnreadPatchGuard {
     return true;
   }
 
-  /** A failed read patch must unlatch the episode so later snapshots retry. */
-  patchFailed(activeSessionKey: string) {
+  /** Permanent rejections latch this episode; transport failures may retry. */
+  patchFailed(activeSessionKey: string, error?: unknown) {
     if (activeSessionKey.trim() === this.activeSessionKey) {
-      this.requested = false;
+      this.requested = isPermanentUnreadAckFailure(error);
     }
   }
+}
+
+/** Invalid state and missing access persist; transport failures may succeed on retry. */
+export function isPermanentUnreadAckFailure(error: unknown): boolean {
+  const code = asNullableRecord(error)?.gatewayCode;
+  return (
+    code === ErrorCodes.INVALID_REQUEST ||
+    code === ErrorCodes.FORBIDDEN ||
+    code === ErrorCodes.APPROVAL_NOT_FOUND
+  );
 }

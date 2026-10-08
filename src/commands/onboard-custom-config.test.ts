@@ -223,16 +223,16 @@ it("validates authored and inherited aliases without discovering plugin metadata
   }
 });
 
-it("preserves a list-form roster when applying custom-provider model state", () => {
+it("preserves the roster when applying custom-provider model state", () => {
   const result = applyCustomApiConfig({
     config: {
       agents: {
         ownership: "explicit",
         defaults: { systemAgent: { agentId: "ops" } },
-        list: [
-          { id: "main", name: "Main" },
-          { id: "ops", name: "Operations" },
-        ],
+        entries: {
+          main: { name: "Main" },
+          ops: { name: "Operations" },
+        },
       },
     },
     baseUrl: "https://llm.example.com/v1",
@@ -243,7 +243,7 @@ it("preserves a list-form roster when applying custom-provider model state", () 
     target: { agentId: "ops", agentDir: "/tmp/ops-agent", workspaceDir: "/tmp/ops-workspace" },
   });
 
-  expect(result.config.agents?.list).toBeUndefined();
+  expect(result.config.agents).not.toHaveProperty("list");
   expect(result.config.agents?.entries).toEqual({
     main: { name: "Main" },
     ops: {
@@ -380,11 +380,6 @@ describe("applyCustomApiConfig", () => {
       existingContextWindow: 8192,
       expectedContextWindow: 8192,
     },
-    {
-      name: "preserves existing custom model context window when already above minimum",
-      existingContextWindow: 131072,
-      expectedContextWindow: 131072,
-    },
   ])("$name", ({ existingContextWindow, expectedContextWindow }) => {
     const result = applyCustomModelConfigWithContextWindow(existingContextWindow);
     const model = result.config.models?.providers?.custom?.models?.find(
@@ -394,6 +389,16 @@ describe("applyCustomApiConfig", () => {
   });
 
   it.each([
+    ...["ftp://localhost/v1", "file:///tmp/model", "not-a-url"].map((baseUrl) => ({
+      name: `unsupported base URL ${baseUrl}`,
+      params: {
+        config: {},
+        baseUrl,
+        modelId: "foo-large",
+        compatibility: "openai" as const,
+      },
+      expectedMessage: "Custom provider base URL must be a valid HTTP or HTTPS URL.",
+    })),
     {
       name: "invalid compatibility values at runtime",
       params: {
@@ -437,9 +442,16 @@ describe("applyCustomApiConfig", () => {
     expect(provider?.headers).toEqual({ "api-key": "abcd1234" });
 
     const model = provider?.models?.find((m) => m.id === "o4-mini");
-    expect(model?.input).toEqual(["text", "image"]);
-    expect(model?.reasoning).toBe(true);
-    expect(model?.compat).toEqual({ supportsStore: false });
+    expect(Object.entries(model ?? {})).toEqual([
+      ["id", "o4-mini"],
+      ["name", "o4-mini (Custom Provider)"],
+      ["contextWindow", 400_000],
+      ["maxTokens", 16_384],
+      ["input", ["text", "image"]],
+      ["cost", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
+      ["reasoning", true],
+      ["compat", { supportsStore: false }],
+    ]);
 
     const modelRef = `${providerId}/${result.modelId}`;
     expect(result.config.agents?.defaults?.models?.[modelRef]?.params?.thinking).toBe("medium");
@@ -476,9 +488,16 @@ describe("applyCustomApiConfig", () => {
     expect(provider?.headers).toEqual({ "api-key": "key123" });
 
     const model = provider?.models?.find((m) => m.id === "gpt-4.1");
-    expect(model?.reasoning).toBe(false);
-    expect(model?.input).toEqual(["text"]);
-    expect(model?.compat).toEqual({ supportsStore: false });
+    expect(Object.entries(model ?? {})).toEqual([
+      ["id", "gpt-4.1"],
+      ["name", "gpt-4.1 (Custom Provider)"],
+      ["contextWindow", 400_000],
+      ["maxTokens", 16_384],
+      ["input", ["text"]],
+      ["cost", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
+      ["reasoning", false],
+      ["compat", { supportsStore: false }],
+    ]);
 
     const modelRef = `${providerId}/gpt-4.1`;
     expect(result.config.agents?.defaults?.models?.[modelRef]?.params?.thinking).toBeUndefined();
@@ -590,9 +609,15 @@ describe("applyCustomApiConfig", () => {
     expect(provider?.api).toBe("openai-completions");
     expect(provider?.authHeader).toBeUndefined();
     expect(provider?.headers).toBeUndefined();
-    expect(provider?.models?.[0]?.reasoning).toBe(false);
-    expect(provider?.models?.[0]?.input).toEqual(["text"]);
-    expect(provider?.models?.[0]?.compat).toBeUndefined();
+    expect(Object.entries(provider?.models?.[0] ?? {})).toEqual([
+      ["id", "foo-large"],
+      ["name", "foo-large (Custom Provider)"],
+      ["contextWindow", 128_000],
+      ["maxTokens", 4096],
+      ["input", ["text"]],
+      ["cost", { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }],
+      ["reasoning", false],
+    ]);
     expect(
       result.config.agents?.defaults?.models?.["custom/foo-large"]?.params?.thinking,
     ).toBeUndefined();

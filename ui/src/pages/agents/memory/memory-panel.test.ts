@@ -2,6 +2,7 @@
 
 import { nothing, render } from "lit";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../../app/context.ts";
 import {
@@ -12,7 +13,7 @@ import { i18n } from "../../../i18n/index.ts";
 import type { TranslationMap } from "../../../i18n/lib/types.ts";
 import { en } from "../../../i18n/locales/en.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
-import type { DreamingState } from "./dreaming.ts";
+import type { DreamDiaryActionMethod, DreamingState } from "./dreaming.ts";
 import type { DreamingViewState } from "./view.ts";
 import "./memory-panel.ts";
 
@@ -23,7 +24,6 @@ type TestMemoryPanel = HTMLElement & {
   agentId: string;
   dreaming: DreamingState;
   viewState: DreamingViewState;
-  toggleConfirmOpen: boolean;
   toggleConfirmLoading: boolean;
   pendingEnabled: boolean | null;
   applyAgentId: () => void;
@@ -31,7 +31,7 @@ type TestMemoryPanel = HTMLElement & {
   loadAll: () => Promise<void>;
   openWikiPage: (lookup: string) => Promise<unknown>;
   confirmDreamingTask: (
-    task: (state: DreamingState) => Promise<boolean>,
+    method: DreamDiaryActionMethod,
     confirmation: ConfirmDialogOptions,
   ) => Promise<void>;
   render: () => unknown;
@@ -62,14 +62,6 @@ beforeAll(() => {
 afterAll(() => {
   restoreTranslations();
 });
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
-}
 
 function contextWithGateway(
   client: GatewayBrowserClient,
@@ -163,34 +155,36 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     });
   });
 
-  it("does not run a confirmed dreaming action after the selected agent changes", async () => {
-    const confirmation = deferred<boolean>();
-    vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
-    const page = createPage(contextWithGateway({} as GatewayBrowserClient, true));
-    const task = vi.fn(async () => true);
-    document.body.append(page);
-    await page.updateComplete;
+  it.each([false, true])(
+    "keeps confirmed dreaming actions scoped to their agent (changed: %s)",
+    async (changed) => {
+      const confirmation = deferred<boolean>();
+      vi.mocked(showConfirmDialog).mockReturnValueOnce(confirmation.promise);
+      const method = "doctor.memory.repairDreamingArtifacts";
+      const request = vi.fn(async () => ({}));
+      const context = contextWithGateway({ request } as unknown as GatewayBrowserClient, true);
+      context.gateway.snapshot.hello = gatewayHelloForMethods([method], ["operator.write"]);
+      const page = createPage(context);
+      document.body.append(page);
+      await page.updateComplete;
 
-    const pending = page.confirmDreamingTask(task, { message: "Repair?" });
-    page.agentId = "support";
-    await page.updateComplete;
-    confirmation.resolve(true);
-    await pending;
+      const pending = page.confirmDreamingTask(method, { message: "Repair?" });
+      if (changed) {
+        page.agentId = "support";
+        await page.updateComplete;
+      }
+      confirmation.resolve(true);
+      await pending;
 
-    expect(task).not.toHaveBeenCalled();
-  });
-
-  it("loads the selected agent on the first gateway bind", async () => {
-    const client = {} as GatewayBrowserClient;
-    const context = contextWithGateway(client, true);
-    const page = createPage(context);
-
-    document.body.append(page);
-    await page.updateComplete;
-
-    expect(page.dreaming.selectedAgentId).toBe("main");
-    expect(page.loadAll).toHaveBeenCalledOnce();
-  });
+      if (changed) {
+        expect(request).not.toHaveBeenCalled();
+      } else {
+        expect(request).toHaveBeenCalledTimes(2);
+        expect(request).toHaveBeenNthCalledWith(1, method, { agentId: "main" });
+        expect(request).toHaveBeenNthCalledWith(2, "doctor.memory.status", { agentId: "main" });
+      }
+    },
+  );
 
   it("resets stale panel data when the selected agent changes", async () => {
     const client = {} as GatewayBrowserClient;
@@ -222,11 +216,12 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     await page.updateComplete;
     const previousState = page.dreaming;
     previousState.dreamDiaryContent = "old provider";
-    page.viewState.wikiPreviewOpen = true;
-    page.viewState.wikiPreviewLoading = true;
-    page.viewState.wikiPreviewTitle = "Old page";
-    page.viewState.wikiPreviewContent = "old wiki";
-    page.toggleConfirmOpen = true;
+    const wikiPreview = {
+      loading: true,
+      error: null,
+      page: { title: "Old page", path: "old.md", content: "old wiki" },
+    };
+    page.viewState.wikiPreview = wikiPreview;
     page.toggleConfirmLoading = true;
     page.pendingEnabled = true;
 
@@ -234,41 +229,43 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
 
     expect(page.dreaming).not.toBe(previousState);
     expect(page.dreaming.dreamDiaryContent).toBeNull();
-    expect(page.viewState.wikiPreviewOpen).toBe(false);
-    expect(page.viewState.wikiPreviewLoading).toBe(false);
-    expect(page.viewState.wikiPreviewTitle).toBe("");
-    expect(page.viewState.wikiPreviewContent).toBe("");
-    expect(page.toggleConfirmOpen).toBe(false);
+    expect(page.viewState.wikiPreview).toBeNull();
     expect(page.toggleConfirmLoading).toBe(false);
     expect(page.pendingEnabled).toBeNull();
 
-    page.viewState.wikiPreviewOpen = true;
-    page.toggleConfirmOpen = true;
+    page.viewState.wikiPreview = wikiPreview;
     page.toggleConfirmLoading = true;
     page.pendingEnabled = false;
     page.remove();
 
-    expect(page.viewState.wikiPreviewOpen).toBe(false);
-    expect(page.toggleConfirmOpen).toBe(false);
+    expect(page.viewState.wikiPreview).toBeNull();
     expect(page.toggleConfirmLoading).toBe(false);
     expect(page.pendingEnabled).toBeNull();
   });
 
-  it("discards a wiki response from a replaced gateway source", async () => {
-    const pending = deferred<unknown>();
-    const client = {
-      request: vi.fn(() => pending.promise),
-    } as unknown as GatewayBrowserClient;
-    const page = createPage(contextWithGateway(client, true));
-    document.body.append(page);
-    await page.updateComplete;
+  it.each([false, true])(
+    "discards a wiki response from a replaced gateway source (Lit rebound: %s)",
+    async (rebound) => {
+      const pending = deferred<unknown>();
+      const client = {
+        request: vi.fn(() => pending.promise),
+      } as unknown as GatewayBrowserClient;
+      const page = createPage(contextWithGateway(client, true));
+      document.body.append(page);
+      await page.updateComplete;
 
-    const preview = page.openWikiPage("old.md");
-    await replaceContext(page, contextWithGateway(client, false));
-    pending.resolve({ title: "Old", path: "old.md", content: "stale" });
+      const preview = page.openWikiPage("old.md");
+      const nextContext = contextWithGateway(client, false);
+      if (rebound) {
+        await replaceContext(page, nextContext);
+      } else {
+        page.context = nextContext;
+      }
+      pending.resolve({ title: "Old", path: "old.md", content: "stale" });
 
-    await expect(preview).resolves.toBeNull();
-  });
+      await expect(preview).resolves.toBeNull();
+    },
+  );
 
   it("discards a wiki response across a same-client reconnect", async () => {
     const pending = deferred<unknown>();
@@ -287,7 +284,7 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
 
     await expect(preview).resolves.toBeNull();
     expect(page.dreaming).not.toBe(previousState);
-    expect(page.viewState.wikiPreviewContent).toBe("");
+    expect(page.viewState.wikiPreview).toBeNull();
   });
 
   it("loads wiki previews for the selected agent", async () => {
@@ -445,16 +442,16 @@ describe("AgentMemoryPanel gateway lifecycle", () => {
     page.agentId = "support";
     document.body.append(page);
     await page.updateComplete;
-    page.viewState.wikiPreviewOpen = true;
-    page.viewState.wikiPreviewLoading = true;
-    page.viewState.wikiPreviewContent = "support-only";
+    page.viewState.wikiPreview = {
+      loading: true,
+      error: null,
+      page: { title: "Support", path: "support.md", content: "support-only" },
+    };
 
     page.agentId = "marketing";
     await page.updateComplete;
 
-    expect(page.viewState.wikiPreviewOpen).toBe(false);
-    expect(page.viewState.wikiPreviewLoading).toBe(false);
-    expect(page.viewState.wikiPreviewContent).toBe("");
+    expect(page.viewState.wikiPreview).toBeNull();
   });
 });
 
@@ -540,7 +537,7 @@ describe.runIf(process.env.OPENCLAW_UI_MEMORY_CHROMIUM_E2E === "1")(
         content: `# Dream Diary\n\n*April 5, 2026, 3:00 AM*\n\n${agentId} owns this dream.`,
       });
       const config = {
-        agents: { entries: { main: { default: true }, support: {} } },
+        agents: { entries: { main: {}, support: {} } },
         plugins: {
           entries: {
             "memory-core": { enabled: true, config: { dreaming: { enabled: true } } },
@@ -613,7 +610,7 @@ describe.runIf(process.env.OPENCLAW_UI_MEMORY_CHROMIUM_E2E === "1")(
       const requestCount = () =>
         gateway.getRequests("doctor.memory.status").then((requests) => requests.length);
       const chooseAgent = async (name: string) => {
-        const picker = page.locator(".memory-page .agent-scope-control openclaw-agent-select");
+        const picker = page.locator(".settings-sidebar openclaw-agent-select");
         await picker.locator(".agent-select__trigger").click();
         await picker
           .locator("wa-dropdown-item[data-agent-option]")

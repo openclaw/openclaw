@@ -1,6 +1,6 @@
-// Telegram plugin module implements telegram ingress worker behavior.
 import { parentPort, workerData } from "node:worker_threads";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { makeProxyFetch } from "openclaw/plugin-sdk/fetch-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   computeBackoff,
@@ -11,7 +11,6 @@ import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import { isRetryableTelegramApiError, readTelegramRetryAfterMs } from "./network-errors.js";
-import { makeProxyFetch } from "./proxy.js";
 import {
   TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS,
   resolveTelegramLongPollTimeoutSeconds,
@@ -113,13 +112,6 @@ function createTelegramGetUpdatesError(params: {
   );
 }
 
-function rejectPendingSpoolRequests(pendingSpoolRequests: PendingSpoolRequests, err: Error): void {
-  for (const pending of pendingSpoolRequests.values()) {
-    pending.reject(err);
-  }
-  pendingSpoolRequests.clear();
-}
-
 async function fetchJson(params: {
   fetch: typeof fetch;
   url: string;
@@ -144,7 +136,7 @@ async function fetchJson(params: {
     ).toString("utf8");
     let json: TelegramGetUpdatesJson;
     try {
-      json = JSON.parse(raw) as TelegramGetUpdatesJson;
+      json = (JSON.parse(raw) as TelegramGetUpdatesJson | null) ?? {};
     } catch (err) {
       if (!response.ok) {
         throw createTelegramGetUpdatesError({
@@ -181,8 +173,8 @@ export async function runTelegramIngressWorkerRuntime(params: {
   deps?: TelegramIngressRuntimeDeps;
 }): Promise<void> {
   const { options, port } = params;
+  const apiRoot = normalizeTelegramApiRoot(options.apiRoot ?? "https://api.telegram.org");
   const stopController = new AbortController();
-  let stopped = false;
   let activeController: AbortController | undefined;
   let nextSpoolRequestId = 0;
   const pendingSpoolRequests: PendingSpoolRequests = new Map();
@@ -194,7 +186,6 @@ export async function runTelegramIngressWorkerRuntime(params: {
   const fetchImpl = params.deps?.fetch ?? transport?.fetch ?? globalThis.fetch;
   const closeTransport =
     params.deps?.closeTransport ?? (() => transport?.close() ?? Promise.resolve());
-  const apiRoot = normalizeTelegramApiRoot(options.apiRoot ?? "https://api.telegram.org");
   const getUpdatesUrl = `${apiRoot}/bot${options.token}/getUpdates`;
   const pollTimeoutSeconds = resolveTelegramLongPollTimeoutSeconds(options.timeoutSeconds);
   let lastUpdateId = options.initialUpdateId;
@@ -204,11 +195,13 @@ export async function runTelegramIngressWorkerRuntime(params: {
 
   port.onMessage((message) => {
     if (message?.type === "stop") {
-      stopped = true;
       const err = new Error("telegram ingress worker stopped");
       stopController.abort(err);
       activeController?.abort(err);
-      rejectPendingSpoolRequests(pendingSpoolRequests, err);
+      for (const pending of pendingSpoolRequests.values()) {
+        pending.reject(err);
+      }
+      pendingSpoolRequests.clear();
       return;
     }
     if (message?.type !== "spool-ack") {
@@ -231,7 +224,7 @@ export async function runTelegramIngressWorkerRuntime(params: {
     queued: number;
   }): Promise<number> => {
     const requestId = String(++nextSpoolRequestId);
-    const updateId = await new Promise<number>((resolve, reject) => {
+    return await new Promise<number>((resolve, reject) => {
       pendingSpoolRequests.set(requestId, { resolve, reject });
       port.postMessage({
         type: "update",
@@ -240,12 +233,11 @@ export async function runTelegramIngressWorkerRuntime(params: {
         queued: requestParams.queued,
       });
     });
-    return updateId;
   };
 
   try {
     for (;;) {
-      if (stopped) {
+      if (stopController.signal.aborted) {
         break;
       }
       const offset = lastUpdateId === null ? null : lastUpdateId + 1;
@@ -271,7 +263,7 @@ export async function runTelegramIngressWorkerRuntime(params: {
           throw new Error("Telegram getUpdates returned a non-array result.");
         }
         for (const update of result) {
-          if (stopped) {
+          if (stopController.signal.aborted) {
             break;
           }
           const updateId = await requestSpoolUpdate({ update, queued: result.length });
@@ -308,7 +300,7 @@ export async function runTelegramIngressWorkerRuntime(params: {
           }
         }
       } catch (err) {
-        if (stopped) {
+        if (stopController.signal.aborted) {
           break;
         }
         consecutiveEmptyPolls = 0;
@@ -328,7 +320,7 @@ export async function runTelegramIngressWorkerRuntime(params: {
             { ref: false },
           );
         } catch (sleepErr) {
-          if (!stopped) {
+          if (!stopController.signal.aborted) {
             throw sleepErr;
           }
         }
@@ -345,11 +337,7 @@ const runtimePort =
     ? null
     : ({
         postMessage(message) {
-          Reflect.apply(
-            Reflect.get(workerPort, "postMessage") as (value: unknown) => void,
-            workerPort,
-            [message],
-          );
+          workerPort.postMessage(message, []);
         },
         onMessage(listener) {
           workerPort.on("message", listener);

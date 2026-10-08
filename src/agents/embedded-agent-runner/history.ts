@@ -1,35 +1,21 @@
-/**
- * Limits embedded-agent history length from session-key policy.
- */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType, type ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAccountId } from "../../routing/account-id.js";
-import { resolveNormalizedAccountEntry } from "../../routing/account-lookup.js";
+import { resolveChannelAccountEntry } from "../../routing/account-lookup.js";
 import { resolveLinkedDirectPeerId } from "../../routing/session-key.js";
 import type { AgentMessage } from "../runtime/index.js";
 
 const THREAD_SUFFIX_REGEX = /^(.*)(?::(?:thread|topic):\d+)$/i;
 const SESSION_HISTORY_PRELUDE = Symbol.for("openclaw.sessionHistoryPrelude");
 
-function isSessionHistoryPrelude(message: AgentMessage | undefined): boolean {
-  return Boolean(
-    message &&
-    (message as AgentMessage & { [SESSION_HISTORY_PRELUDE]?: true })[SESSION_HISTORY_PRELUDE],
-  );
-}
-
 function stripThreadSuffix(value: string): string {
-  const match = value.match(THREAD_SUFFIX_REGEX);
-  return match?.[1] ?? value;
+  return value.match(THREAD_SUFFIX_REGEX)?.[1] ?? value;
 }
 
 /**
- * Limits conversation history to recent user turns (and their associated
- * assistant responses). This reduces token usage for long-running DM sessions.
- *
  * Leading non-conversation messages (e.g. compactionSummary, branchSummary)
  * placed at index 0 by buildSessionContext are always preserved, since they
  * carry summarized pre-compaction context that history limiting must not drop.
@@ -42,21 +28,16 @@ export function limitHistoryTurns(
     return messages;
   }
 
-  // Preserve leading non-conversation messages (compactionSummary, branchSummary, etc.)
-  // that buildSessionContext places at index 0 to carry pre-compaction context.
-  let conversationStart = 0;
-  while (conversationStart < messages.length) {
-    if (isSessionHistoryPrelude(messages[conversationStart])) {
-      conversationStart++;
-      continue;
-    }
-    const role = messages.at(conversationStart)?.role;
-    if (role === "user" || role === "assistant") {
-      break;
-    }
-    conversationStart++;
+  const conversationStart = messages.findIndex(
+    (message) =>
+      !(message as AgentMessage & { [SESSION_HISTORY_PRELUDE]?: true })?.[
+        SESSION_HISTORY_PRELUDE
+      ] &&
+      (message?.role === "user" || message?.role === "assistant"),
+  );
+  if (conversationStart < 0) {
+    return messages;
   }
-
   let userCount = 0;
   for (let i = conversationStart; i < messages.length; i++) {
     if (messages[i]?.role === "user") {
@@ -74,19 +55,15 @@ export function limitHistoryTurns(
   const evictionBatchSize = maxUserTurns - targetUserTurns + 1;
   const userTurnsToKeep = targetUserTurns + ((userCount - targetUserTurns) % evictionBatchSize);
 
-  userCount = 0;
-  let lastUserIndex = messages.length;
-
-  for (let i = messages.length - 1; i >= conversationStart; i--) {
-    if (messages[i]?.role === "user") {
-      userCount++;
-      if (userCount > userTurnsToKeep) {
-        return [...messages.slice(0, conversationStart), ...messages.slice(lastUserIndex)];
-      }
-      lastUserIndex = i;
-    }
-  }
-  return messages;
+  let turnsRemaining = userTurnsToKeep;
+  const firstKeptIndex = messages.findLastIndex(
+    (message, index) =>
+      index >= conversationStart && message?.role === "user" && --turnsRemaining === 0,
+  );
+  return [
+    ...messages.slice(0, conversationStart),
+    ...messages.slice(firstKeptIndex < 0 ? messages.length : firstKeptIndex),
+  ];
 }
 
 /** Raw channel-config fields this resolver reads, at channel root or under `accounts.<id>`. */
@@ -97,12 +74,6 @@ type HistoryLimitChannelConfig = {
   accounts?: Record<string, HistoryLimitChannelConfig | undefined>;
 };
 
-/**
- * Extract provider + user ID from a session key and look up dmHistoryLimit.
- * Supports per-DM overrides and provider defaults.
- * For channel/group sessions, uses historyLimit from provider config.
- * Account-scoped values override the channel root for that account.
- */
 export function getHistoryLimitFromSessionKey(
   sessionKey: string | undefined,
   config: OpenClawConfig | undefined,
@@ -189,33 +160,27 @@ export function getHistoryLimitFromSessionKey(
   // match the routed `work-team`).
   const trimmedAccountId = routedAccountId?.trim();
   const accountConfig = trimmedAccountId
-    ? resolveNormalizedAccountEntry(
+    ? resolveChannelAccountEntry(
         providerConfig.accounts,
         normalizeAccountId(trimmedAccountId),
+        provider,
         normalizeAccountId,
       )
     : undefined;
 
-  // For DM sessions: per-DM override -> dmHistoryLimit.
   if (kind === "direct") {
-    if (userId) {
-      // An explicit account `dms` map replaces the root map under the account
-      // merge contract, so pick the owning map before indexing. Falling back per
-      // entry would leak root per-peer overrides into that account.
-      const dms = accountConfig?.dms ?? providerConfig.dms;
-      const perDmLimit = dms?.[userId]?.historyLimit;
-      if (perDmLimit !== undefined) {
-        return perDmLimit;
-      }
-    }
-    return accountConfig?.dmHistoryLimit ?? providerConfig.dmHistoryLimit;
+    // An explicit account `dms` map replaces the root map under the account
+    // merge contract, so pick the owning map before indexing. Falling back per
+    // entry would leak root per-peer overrides into that account.
+    const perDmLimit = userId
+      ? (accountConfig?.dms ?? providerConfig.dms)?.[userId]?.historyLimit
+      : undefined;
+    return perDmLimit !== undefined
+      ? perDmLimit
+      : (accountConfig?.dmHistoryLimit ?? providerConfig.dmHistoryLimit);
   }
 
-  // For channel/group sessions: use historyLimit from provider config
-  // This prevents context overflow in long-running channel sessions
-  if (kind === "channel" || kind === "group") {
-    return accountConfig?.historyLimit ?? providerConfig.historyLimit;
-  }
-
-  return undefined;
+  return kind === "channel" || kind === "group"
+    ? (accountConfig?.historyLimit ?? providerConfig.historyLimit)
+    : undefined;
 }

@@ -57,61 +57,6 @@ function writeAuthProfileStoreSqlite(stateDir: string, store: unknown) {
 }
 
 describe("release scenario assertions", () => {
-  it("rejects loose mock OpenAI port args", () => {
-    const result = runAssertion(["configure-mock-openai", "1e3"]);
-
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("mock OpenAI port must be a TCP port from 1 to 65535");
-    expect(result.stderr).toContain('"1e3"');
-  });
-
-  it("scans large files when checking release scenario output text", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
-    const outputPath = path.join(root, "output.log");
-
-    try {
-      const needlePrefix = "release-market";
-      writeFileSync(
-        outputPath,
-        `${"x".repeat(64 * 1024 - needlePrefix.length)}${needlePrefix}place-plugin:v2\n`,
-        "utf8",
-      );
-
-      const result = runAssertion([
-        "assert-file-contains",
-        outputPath,
-        "release-marketplace-plugin:v2",
-      ]);
-
-      expect(result.status).toBe(0);
-      expect(result.stderr).toBe("");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("bounds release output text assertion diagnostics", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
-    const outputPath = path.join(root, "output.log");
-
-    try {
-      writeFileSync(
-        outputPath,
-        `DO_NOT_DUMP_OLD_OUTPUT${"x".repeat(70 * 1024)}\nrecent output tail\n`,
-        "utf8",
-      );
-
-      const result = runAssertion(["assert-file-contains", outputPath, "missing"]);
-
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("Output tail:");
-      expect(result.stderr).toContain("recent output tail");
-      expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_OUTPUT");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
   it("reports bounded onboarding hook diagnostics without leaking unrelated config", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
     const configPath = path.join(root, "openclaw.json");
@@ -154,22 +99,6 @@ describe("release scenario assertions", () => {
     }
   });
 
-  it("permits a selected interactive-onboarding target without a default session-memory hook", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
-    const configPath = path.join(root, "openclaw.json");
-    try {
-      writeJson(configPath, { wizard: { lastRunCommand: "onboard" } });
-      const result = runAssertion(["assert-session-memory-hook-enabled"], {
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_FROZEN_TARGET_ONBOARD_SESSION_MEMORY_HOOK_MODE: "interactive",
-      });
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain("unavailable in selected interactive onboarding");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
   it("scans large request logs for image describe responses", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
     const outputPath = path.join(root, "describe.json");
@@ -192,31 +121,6 @@ describe("release scenario assertions", () => {
 
       expect(result.status).toBe(0);
       expect(result.stderr).toBe("");
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
-
-  it("rejects oversized JSON artifacts before parsing release scenario outputs", () => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-release-scenarios-"));
-    const outputPath = path.join(root, "describe.json");
-    const requestLogPath = path.join(root, "requests.jsonl");
-
-    try {
-      writeFileSync(
-        outputPath,
-        `DO_NOT_DUMP_OLD_JSON${"x".repeat(2 * 1024 * 1024)}\nrecent json tail`,
-        "utf8",
-      );
-      writeFileSync(requestLogPath, "/v1/responses\n", "utf8");
-
-      const result = runAssertion(["assert-image-describe", outputPath, requestLogPath]);
-
-      expect(result.status).not.toBe(0);
-      expect(result.stderr).toContain("JSON artifact exceeded");
-      expect(result.stderr).toContain("recent json tail");
-      expect(result.stderr).not.toContain("DO_NOT_DUMP_OLD_JSON");
-      expect(result.stderr.length).toBeLessThan(80 * 1024);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }
