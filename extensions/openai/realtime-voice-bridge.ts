@@ -419,6 +419,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
         // Callers may provide the resource root or a legacy endpoint ending in /openai.
         .replace(/\/openai(?:\/v1)?$/i, "");
       const url = `${base}/openai/v1/realtime?model=${encodeURIComponent(cfg.azureDeployment)}`;
+      const defaultHeaders: Record<string, string> = { "api-key": apiKey };
       return {
         url,
         headers: this.runtime.resolveProviderRequestHeaders({
@@ -426,8 +427,8 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
           baseUrl: url,
           capability: "audio",
           transport: "websocket",
-          defaultHeaders: { "api-key": apiKey },
-        }) ?? { "api-key": apiKey },
+          defaultHeaders,
+        }) ?? defaultHeaders,
       };
     }
 
@@ -493,7 +494,7 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeEvents implements Realti
         ? buildOpenAIRealtimeSidebandUrl(cfg.callId)
         : `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
     }
-    const defaultHeaders = cfg.azureEndpoint
+    const defaultHeaders: Record<string, string> = cfg.azureEndpoint
       ? { "api-key": apiKey }
       : { Authorization: `Bearer ${apiKey}` };
     return {
