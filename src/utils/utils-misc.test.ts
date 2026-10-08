@@ -74,6 +74,30 @@ describe("splitShellArgs", () => {
     expect(splitShellArgs(`echo "hi # still-literal"`)).toEqual(["echo", "hi # still-literal"]);
     expect(splitShellArgs(`echo hi#tail`)).toEqual(["echo", "hi#tail"]);
   });
+
+  // Regression for #166202: splitShellArgs must match POSIX shell word splitting
+  // for empty quoted words, hashes after empty quotes, and backslash-newline.
+  it("preserves empty quoted arguments and their word boundaries", () => {
+    expect(splitShellArgs(`cmd "" tail`)).toEqual(["cmd", "", "tail"]);
+    expect(splitShellArgs(`cmd '' tail`)).toEqual(["cmd", "", "tail"]);
+    expect(splitShellArgs(`program '' "" next`)).toEqual(["program", "", "", "next"]);
+    // A "#" right after an empty quoted word is a literal token suffix, not a comment.
+    expect(splitShellArgs(`cmd ""#x`)).toEqual(["cmd", "#x"]);
+    expect(splitShellArgs(`program ""#literal ''suffix prefix''`)).toEqual([
+      "program",
+      "#literal",
+      "suffix",
+      "prefix",
+    ]);
+    // An empty quoted word still counts as a word before a trailing comment.
+    expect(splitShellArgs(`program "" # comment`)).toEqual(["program", ""]);
+  });
+
+  it("removes backslash-newline line continuation outside quotes", () => {
+    expect(splitShellArgs("ba\\\nsh")).toEqual(["bash"]);
+    // Line continuation does not start a new empty word on its own.
+    expect(splitShellArgs("foo \\\n bar")).toEqual(["foo", "bar"]);
+  });
 });
 
 describe("splitCommandArgs", () => {
@@ -89,6 +113,11 @@ describe("splitCommandArgs", () => {
     { input: 'program "unfinished', expected: null },
     { input: "program 'unfinished", expected: null },
     { input: "program unfinished\\", expected: ["program", "unfinished\\"] },
+    // Negative control for #166202: the public command parser intentionally
+    // drops empty quoted entries and keeps literal backslashes; the shell-mode
+    // fix must not leak into this documented contract.
+    { input: `program '' "" next`, expected: ["program", "next"] },
+    { input: `'' ""`, expected: [] },
   ])("parses quote-only process arguments: $input", ({ input, expected }) => {
     expect(splitCommandArgs(input)).toEqual(expected);
   });

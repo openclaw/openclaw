@@ -78,20 +78,32 @@ function splitQuotedArgs(
   const backslashEscapes = syntax === "shell";
   const tokens: string[] = [];
   let buf = "";
+  // Tracks whether the current shell word has started (e.g. via a quote or
+  // escaped char) independently from buf contents, so empty quoted words such
+  // as `""` or `''` are preserved in shell mode. The public command parser
+  // keeps its documented empty-entry behavior.
+  let tokenStarted = false;
   let quote: "'" | '"' | undefined;
   let escaped = false;
 
   const pushToken = () => {
-    if (buf.length > 0) {
+    if (buf.length > 0 || (syntax === "shell" && tokenStarted)) {
       tokens.push(buf);
       buf = "";
+      tokenStarted = false;
     }
   };
 
   for (let i = 0; i < raw.length; i += 1) {
     const ch = raw.charAt(i);
     if (escaped) {
+      // POSIX line continuation: backslash-newline outside quotes is removed.
+      if (backslashEscapes && !quote && ch === "\n") {
+        escaped = false;
+        continue;
+      }
       buf += ch;
+      tokenStarted = true;
       escaped = false;
       continue;
     }
@@ -116,11 +128,12 @@ function splitQuotedArgs(
     }
     if (ch === "'" || ch === '"') {
       quote = ch;
+      tokenStarted = true;
       continue;
     }
     // In POSIX shells, "#" starts a comment only when it begins a word; keep
     // inline hashes inside tokens so URLs/fragments are not truncated.
-    if (syntax === "shell" && ch === "#" && buf.length === 0) {
+    if (syntax === "shell" && ch === "#" && !tokenStarted) {
       break;
     }
     if (/\s/.test(ch)) {
@@ -128,6 +141,7 @@ function splitQuotedArgs(
       continue;
     }
     buf += ch;
+    tokenStarted = true;
   }
 
   if (escaped || (!allowUnclosedQuotes && quote)) {
