@@ -101,13 +101,13 @@ function isEligibleHistoricalOAuthPeer(params: {
   );
 }
 
-function assertCredentialAllowsClaim(params: {
+function validateOAuthPeerClaim(params: {
   candidate: CandidateAuthProfileStore;
   store: AuthProfileStore;
   profileId: string;
   credential: OAuthCredential;
   generation: OAuthCredential;
-}): void {
+}): boolean {
   if (
     !isSameOAuthRefreshGeneration({
       profileId: params.profileId,
@@ -115,7 +115,7 @@ function assertCredentialAllowsClaim(params: {
       right: params.generation,
     })
   ) {
-    return;
+    return false;
   }
   if (isOAuthRefreshFence(params.credential)) {
     throw new Error(
@@ -123,7 +123,7 @@ function assertCredentialAllowsClaim(params: {
     );
   }
   if (!isExternalProfileOwned(params.store, params.profileId, params.credential)) {
-    return;
+    return isEligibleHistoricalOAuthPeer(params);
   }
   throw new Error(
     `OAuth refresh generation is still owned by an external credential source: ${params.candidate.databasePath}`,
@@ -212,15 +212,9 @@ export async function fenceOAuthRefreshPeers(params: {
             claims.push({ candidate });
             return false;
           }
-          assertCredentialAllowsClaim({
-            candidate,
-            store,
-            profileId: params.profileId,
-            credential,
-            generation: params.generation,
-          });
           if (
-            !isEligibleHistoricalOAuthPeer({
+            !validateOAuthPeerClaim({
+              candidate,
               store,
               profileId: params.profileId,
               credential,
@@ -398,11 +392,8 @@ export async function listOAuthRefreshGenerationPeers(params: {
     const peers: OAuthRefreshGenerationPeer[] = [];
     for (const candidate of await listPeerCandidates(params)) {
       const store = await loadCandidateAuthProfileStoreAsync(candidate);
-      if (!store) {
-        continue;
-      }
       const credential = store?.profiles[params.profileId];
-      if (credential?.type !== "oauth") {
+      if (!store || credential?.type !== "oauth") {
         continue;
       }
       const removable = isRemovableOAuthRefreshPeer({

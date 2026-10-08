@@ -67,14 +67,12 @@ function requestOwner(options: ThemeRequest) {
     if (options.hasCurrentClientAuthority?.() === false || client?.invalidated) {
       throw new Error("Theme request authority is no longer active.");
     }
-    if (capturedProfile && resolveUserProfileId(capturedProfile) !== profileId) {
-      throw new Error("The requesting profile changed. Ask again from your current profile.");
-    }
     if (
-      !runtimeIdentity &&
-      !participant &&
-      !client?.internal?.syntheticClient &&
-      client?.authenticatedUserProfile?.profileId !== capturedProfile
+      (capturedProfile && resolveUserProfileId(capturedProfile) !== profileId) ||
+      (!runtimeIdentity &&
+        !participant &&
+        !client?.internal?.syntheticClient &&
+        client?.authenticatedUserProfile?.profileId !== capturedProfile)
     ) {
       throw new Error("The requesting profile changed. Ask again from your current profile.");
     }

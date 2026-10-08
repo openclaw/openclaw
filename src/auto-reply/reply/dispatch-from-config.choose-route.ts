@@ -144,7 +144,7 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     }
     state.assertProgressCurrent();
     if (shouldRouteToOriginating) {
-      await sendPayloadAsync(payload, undefined, false);
+      await sendPayloadAsync(payload);
     } else {
       markInboundDedupeReplayUnsafe();
       turnLedger.sendQueued("tool", payload);
@@ -220,17 +220,15 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       operation.kind === "prepared"
         ? turnLedger.sendPreparedQueued("block", operation.plan)
         : turnLedger.sendQueued("block", payload);
-    if (delivery.queued) {
-      recordBlockOutcome(
-        payload,
-        delivery.outcome?.then((outcome) => ({
-          outcome,
-          pending: delivery.hasPendingDelivery?.(),
-        })) ?? Promise.resolve({ outcome: "failed-deliver" }),
-      );
-    } else {
-      recordBlockOutcome(payload, Promise.resolve({ outcome: "cancelled" }));
-    }
+    recordBlockOutcome(
+      payload,
+      delivery.queued
+        ? (delivery.outcome?.then((outcome) => ({
+            outcome,
+            pending: delivery.hasPendingDelivery?.(),
+          })) ?? Promise.resolve({ outcome: "failed-deliver" }))
+        : Promise.resolve({ outcome: "cancelled" }),
+    );
     return delivery;
   };
   const recordRoutedBlockReplyDelivery = (
@@ -437,11 +435,13 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     if (!isSessionWriterDeliveryAuthorized(normalizedPayload)) {
       return { queuedFinal: false, routedFinalCount: 0, sessionWriterDeliveryRevoked: true };
     }
-    let result = await state.routeReplyToOriginating(normalizedPayload, {
-      abortSignal,
-      kind: "final",
-      ...(hasTranscriptOwner ? { mirror: false } : {}),
-    });
+    const routeFinalPayload = (finalPayload: ReplyPayload) =>
+      state.routeReplyToOriginating(finalPayload, {
+        abortSignal,
+        kind: "final",
+        ...(hasTranscriptOwner ? { mirror: false } : {}),
+      });
+    let result = await routeFinalPayload(normalizedPayload);
     if (result) {
       let routedOutcome = resolveRoutedReplyDeliveryOutcome(result);
       if (!result.ok) {
@@ -458,13 +458,8 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
           return { queuedFinal: false, routedFinalCount: 0, sessionWriterDeliveryRevoked: true };
         }
         result =
-          (await state.routeReplyToOriginating(
+          (await routeFinalPayload(
             copyReplyPayloadMetadata(normalizedPayload, { text: fallbackText }),
-            {
-              abortSignal,
-              kind: "final",
-              ...(hasTranscriptOwner ? { mirror: false } : {}),
-            },
           )) ?? result;
         routedOutcome = resolveRoutedReplyDeliveryOutcome(result);
       }

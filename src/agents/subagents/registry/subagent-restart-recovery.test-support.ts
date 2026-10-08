@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import "./subagent-registry.persistence.mocks.test-support.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
@@ -10,6 +11,11 @@ import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-ru
 import { onAgentEvent } from "../../../infra/agent-events.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  registerOpenClawStateDatabaseAsyncResource,
+} from "../../../state/openclaw-state-db-cache.js";
+import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { captureEnv } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import {
@@ -143,6 +149,26 @@ export function useSubagentRestartRecoveryFixture() {
   });
 
   return {
+    async withStateReadAdmissionClosed(run: () => Promise<void>) {
+      const context = captureOpenClawStateWorkerContext();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const unregister = registerOpenClawStateDatabaseAsyncResource({
+        close: () => {
+          entered.resolve();
+          return release.promise;
+        },
+      });
+      const closing = closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
+      try {
+        await entered.promise;
+        await run();
+      } finally {
+        release.resolve();
+        await closing;
+        unregister();
+      }
+    },
     settle,
     activateGatewayRuntime,
     dispatchAgent,

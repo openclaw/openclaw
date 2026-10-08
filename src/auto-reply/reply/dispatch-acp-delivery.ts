@@ -712,11 +712,11 @@ export function createAcpDispatchDeliveryCoordinator(params: AcpDispatchDelivery
     hasDeliveredVisibleText: () => state.deliveredVisibleText,
     hasFailedVisibleTextDelivery: () => state.failedVisibleTextDelivery,
     getDeliverySuppressionReason: () => state.suppressionReason,
-    getRoutedCounts: () => ({ ...state.routedCounts }),
     applyRoutedCounts: (counts: Record<ReplyDispatchKind, number>) => {
       counts.tool += state.routedCounts.tool;
       counts.block += state.routedCounts.block;
       counts.final += state.routedCounts.final;
+      return counts;
     },
   };
 }

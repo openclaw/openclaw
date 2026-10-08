@@ -690,6 +690,18 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
     const peerConfig = params.cfg ?? {};
     let activePeerClaims = claim.peerClaims;
 
+    const failPeers = async (onFailure: (error: unknown) => void) => {
+      try {
+        await failOAuthRefreshPeerClaims({
+          profileId: params.profileId,
+          fence: claim.fence,
+          claims: activePeerClaims,
+        });
+      } catch (error) {
+        onFailure(error);
+      }
+    };
+
     const rediscoverPeerClaims = async (generation: OAuthCredential) => {
       try {
         activePeerClaims = mergeOAuthRefreshPeerClaims(
@@ -780,15 +792,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
                 }
               }
             }
-            try {
-              await failOAuthRefreshPeerClaims({
-                profileId: params.profileId,
-                fence: claim.fence,
-                claims: activePeerClaims,
-              });
-            } catch (error) {
-              cleanupErrors.push(error);
-            }
+            await failPeers((error) => cleanupErrors.push(error));
             try {
               await markOAuthRefreshClaimFailed({
                 personalStore: params.personalStore,
@@ -917,15 +921,7 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
             } catch (peerSettlementError) {
               if (peerSettlementError instanceof OAuthSettlementCredentialValidationError) {
                 const cleanupErrors: unknown[] = [];
-                try {
-                  await failOAuthRefreshPeerClaims({
-                    profileId: params.profileId,
-                    fence: claim.fence,
-                    claims: activePeerClaims,
-                  });
-                } catch (error) {
-                  cleanupErrors.push(error);
-                }
+                await failPeers((error) => cleanupErrors.push(error));
                 if (claimSettlement.persisted) {
                   try {
                     await markOAuthRefreshClaimFailed({
@@ -944,18 +940,12 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
                   cleanupErrors,
                 );
               }
-              try {
-                await failOAuthRefreshPeerClaims({
-                  profileId: params.profileId,
-                  fence: claim.fence,
-                  claims: activePeerClaims,
-                });
-              } catch (error) {
+              await failPeers((error) => {
                 authProfilesLog.warn("failed to terminally fence an OAuth refresh peer", {
                   profileId: params.profileId,
                   error: formatErrorMessage(error),
                 });
-              }
+              });
               authProfilesLog.warn("OAuth refresh peer settlement degraded", {
                 profileId: params.profileId,
                 error: formatErrorMessage(peerSettlementError),

@@ -41,24 +41,19 @@ export const splitTrailingDirective = (
 
   // Keep a possible final-reply MEDIA directive out of partial streaming
   // payloads. The final message parser still owns legacy MEDIA delivery.
-  const lastNewline = text.lastIndexOf("\n");
-  const lastLine = lastNewline < 0 ? text : text.slice(lastNewline + 1);
+  const mediaLineStart = text.lastIndexOf("\n") + 1;
+  const lastLine = text.slice(mediaLineStart);
   if (/^\s*MEDIA:/i.test(lastLine) || /^[\t ]*(MEDIA|MEDI|MED|ME|M)$/i.test(lastLine)) {
-    const mediaLineStart = lastNewline < 0 ? 0 : lastNewline + 1;
-    if (mediaLineStart < bufferStart) {
-      bufferStart = mediaLineStart;
-    }
+    bufferStart = Math.min(bufferStart, mediaLineStart);
   }
 
   if (bufferStart >= text.length) {
     return { text, tail: "" };
   }
 
+  const head = text.slice(0, bufferStart);
   return {
-    text:
-      trimTextBeforeTail && !options?.preserveTrailingWhitespace
-        ? text.slice(0, bufferStart).trimEnd()
-        : text.slice(0, bufferStart),
+    text: trimTextBeforeTail && !options?.preserveTrailingWhitespace ? head.trimEnd() : head,
     tail: text.slice(bufferStart),
   };
 };

@@ -229,13 +229,7 @@ async function dispatchDiscordCommandInteraction(
     return { accepted: false };
   }
   const sender = resolveDiscordSenderIdentity({ author: user, pluralkitInfo: null });
-  const channel = interaction.channel;
-  const channelContext = await resolveDiscordNativeInteractionChannelContext({
-    channel,
-    client: interaction.client,
-    hasGuild: Boolean(interaction.guild),
-    channelIdFallback: interaction.rawData.channel_id ?? "",
-  });
+  const channelContext = await resolveDiscordNativeInteractionChannelContext(interaction, "");
   const {
     isDirectMessage,
     isGroupDm,

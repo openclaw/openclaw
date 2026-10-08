@@ -13,6 +13,7 @@ export default {
     statusQueued: "Queued",
   },
   workboard: {
+    pageLoadFailed: "Workboard could not load. Check your connection and reload this page.",
     pinBoard: "Pin to sidebar",
     unpinBoard: "Unpin from sidebar",
     deleteBoard: "Delete board…",

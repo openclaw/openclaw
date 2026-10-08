@@ -19,7 +19,6 @@ import {
   OPENCLAW_AGENT_SCHEMA_VERSION,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { resolveAgentDir } from "./agent-scope.js";
@@ -442,21 +441,6 @@ describe("auth profile sqlite store", () => {
       } finally {
         database.close();
       }
-    });
-  });
-
-  it("reads existing sqlite auth stores without registering shared state", async () => {
-    await withAgentDirEnv("openclaw-auth-sqlite-readonly-", (agentDir) => {
-      saveAuthProfileStore(apiKeyStore("sk-test"), agentDir);
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
-      const stateDbPath = resolveOpenClawStateSqlitePath();
-      fs.rmSync(path.dirname(stateDbPath), { recursive: true, force: true });
-
-      const loaded = loadPersistedAuthProfileStore(agentDir);
-
-      expect(loaded?.profiles["openai:default"]).toMatchObject({ key: "sk-test" });
-      expect(fs.existsSync(stateDbPath)).toBe(false);
     });
   });
 

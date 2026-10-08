@@ -337,14 +337,14 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `fc53bf8c0fccd0dcbcccfcf75e2c306ab8953cae` with WebKit
+The pinned build pairs Bun `42bd1d282ad16189ff71789ddbf81fa89dcd9d3a` with WebKit
 `cb8d6f202b5a396caa204ee1bb75d78175aa841a` in prerelease
-`openclaw-v1.4.3-20261007-fc53bf8c0f-webkit-cb8d6f202b`.
-WebKit advances from `f1e1ca1156` in the previous `667c4ab22c` pin. This build
-fixes worker heap-cap termination, detached `import.meta.resolve` origins,
-external-URL package validation, and unlimited-child `bun test` deadlines.
-It includes GC cadence improvements and wakeups for idle worker event loops
-and passive collectors. The release publishes the four Darwin/Linux targets;
+`openclaw-v1.4.3-20261008-42bd1d282a-webkit-cb8d6f202b`.
+WebKit is unchanged from the previous `fc53bf8c0f` pin. This build defers full
+`node:vm` bytecode generation until payload reuse, returns integral heap-sampling
+byte sizes, and releases inspector snapshot metadata when sessions close.
+It retains the previous worker heap-cap, module-resolution, test-deadline,
+GC cadence, and idle-worker fixes. The release publishes the four Darwin/Linux targets;
 Windows publication remains gated on signing.
 
 The build adds an adaptive, bounded `node:vm` compilation cache for large module

@@ -7,6 +7,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { prepareAgentAuthProfileRowsRead } from "../agents/auth-profiles/sqlite-read.js";
+import { resolveStateDir } from "../config/state-dir.js";
 import { createScheduledGatewayRunner } from "../gateway/scheduled-run-gateway-context.js";
 import { GatewayConnectionWork } from "../gateway/server-connection-work.js";
 import { BrokerChild } from "../process/spawn-broker/child.js";
@@ -288,18 +289,26 @@ describe.each([
   );
 });
 
-it("replaces a scoped auth child when its captured environment or source changes", async () => {
+it("reuses equivalent state roots and replaces changed auth environments or sources", async () => {
   const { source } = createAuthDatabase();
-  const changedEnv = { ...process.env, OPENCLAW_FIXTURE: "changed" };
+  const implicitEnv = { ...process.env };
+  delete implicitEnv.OPENCLAW_STATE_DIR;
+  const explicitEnv = { ...implicitEnv, OPENCLAW_STATE_DIR: resolveStateDir(implicitEnv) };
+  const changedEnv = { ...implicitEnv, OPENCLAW_FIXTURE: "changed" };
+  const changedRoot = { ...changedEnv, OPENCLAW_STATE_DIR: path.dirname(source) };
   await withSqliteReadOnlyWorkerScope(async () => {
-    await read(source, "canonical");
+    await read(source, "canonical", undefined, implicitEnv);
+    await read(source, "canonical", undefined, explicitEnv);
+    expect(spawn).toHaveBeenCalledTimes(1);
     await read(source, "canonical", undefined, changedEnv);
     expect(vi.mocked(spawn).mock.results[0]?.value.exitCode).toBe(0);
-    await read(source, "snapshot", undefined, changedEnv);
+    await read(source, "canonical", undefined, changedRoot);
     expect(vi.mocked(spawn).mock.results[1]?.value.exitCode).toBe(0);
+    await read(source, "snapshot", undefined, changedRoot);
+    expect(vi.mocked(spawn).mock.results[2]?.value.exitCode).toBe(0);
   });
-  expect(spawn).toHaveBeenCalledTimes(3);
-  expect(vi.mocked(spawn).mock.results[2]?.value.exitCode).toBe(0);
+  expect(spawn).toHaveBeenCalledTimes(4);
+  expect(vi.mocked(spawn).mock.results[3]?.value.exitCode).toBe(0);
 });
 
 it("closes a scoped auth child before rejecting queued reads on shutdown", async () => {

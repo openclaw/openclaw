@@ -9,7 +9,7 @@ import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
-import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import {
   bulkSetSecretsStoreEntries,
   createInitialSecretsStoreState,
@@ -67,27 +67,12 @@ class SecretsPage extends OpenClawLightDomElement {
     this.notice = null;
   }
 
-  private get canList(): boolean {
-    return this.canCall("secrets.store.list");
-  }
-
-  private get canSet(): boolean {
-    return this.canCall("secrets.store.set");
-  }
-
-  private get canDelete(): boolean {
-    return this.canCall("secrets.store.delete");
-  }
-
   private canCall(method: "secrets.store.list" | "secrets.store.set" | "secrets.store.delete") {
-    return (
-      isGatewayMethodAdvertised(this.gateway.snapshot ?? {}, method) === true &&
-      canCallGatewayMethod(this.gateway.snapshot, method, "operator.admin")
-    );
+    return canCallGatewayMethod(this.gateway.snapshot, method, "operator.admin");
   }
 
   private ensureInitialData() {
-    if (this.canList && !this.store.loaded && !this.store.loading) {
+    if (this.canCall("secrets.store.list") && !this.store.loaded && !this.store.loading) {
       void this.runStoreTask(loadSecretsStore);
     }
   }
@@ -105,15 +90,8 @@ class SecretsPage extends OpenClawLightDomElement {
     }
   }
 
-  private refresh() {
-    if (!this.canList) {
-      return;
-    }
-    void this.runStoreTask(loadSecretsStore);
-  }
-
   private openEntry(entry?: (typeof this.store.entries)[number]) {
-    if (!this.canSet) {
+    if (!this.canCall("secrets.store.set")) {
       return;
     }
     this.notice = null;
@@ -184,7 +162,7 @@ class SecretsPage extends OpenClawLightDomElement {
   }
 
   private submitDraft() {
-    if (!this.canSet || !this.dialogMode) {
+    if (!this.canCall("secrets.store.set") || !this.dialogMode) {
       return;
     }
     const error = ENV_SECRET_REF_ID_RE.test(this.draft.name)
@@ -208,7 +186,7 @@ class SecretsPage extends OpenClawLightDomElement {
   }
 
   private openBulk() {
-    if (!this.canSet) {
+    if (!this.canCall("secrets.store.set")) {
       return;
     }
     this.notice = null;
@@ -230,7 +208,7 @@ class SecretsPage extends OpenClawLightDomElement {
   }
 
   private submitBulk() {
-    if (!this.canSet || !this.bulkOpen) {
+    if (!this.canCall("secrets.store.set") || !this.bulkOpen) {
       return;
     }
     const parsed = this.bulkParsed;
@@ -269,7 +247,7 @@ class SecretsPage extends OpenClawLightDomElement {
     const client = this.store.client;
     if (
       !client ||
-      !this.canDelete ||
+      !this.canCall("secrets.store.delete") ||
       !(await showConfirmDialog({
         title: t("common.delete"),
         message: t("secretsStore.confirmDelete", { name: entry.name }),
@@ -280,7 +258,11 @@ class SecretsPage extends OpenClawLightDomElement {
       return;
     }
     this.notice = null;
-    if (this.context.gateway !== gateway || this.store.client !== client || !this.canDelete) {
+    if (
+      this.context.gateway !== gateway ||
+      this.store.client !== client ||
+      !this.canCall("secrets.store.delete")
+    ) {
       this.store.error = t("secretsStore.deleteFailed");
       this.requestUpdate();
       return;
@@ -301,9 +283,9 @@ class SecretsPage extends OpenClawLightDomElement {
       busy: this.store.busy,
       error: this.store.error,
       notice: this.notice,
-      canList: this.canList,
-      canSet: this.canSet,
-      canDelete: this.canDelete,
+      canList: this.canCall("secrets.store.list"),
+      canSet: this.canCall("secrets.store.set"),
+      canDelete: this.canCall("secrets.store.delete"),
       dialogMode: this.dialogMode,
       draft: this.draft,
       formError: this.formError,
@@ -313,7 +295,11 @@ class SecretsPage extends OpenClawLightDomElement {
       bulkSecretCount: parsed.entries.filter((entry) => entry.kind === "secret").length,
       bulkEntryCount: parsed.entries.length,
       bulkInvalidNames: parsed.invalidNames,
-      onRefresh: () => this.refresh(),
+      onRefresh: () => {
+        if (this.canCall("secrets.store.list")) {
+          void this.runStoreTask(loadSecretsStore);
+        }
+      },
       onOpenAdd: () => this.openEntry(),
       onOpenEdit: (entry) => this.openEntry(entry),
       onCloseDialog: () => this.closeDialog(),

@@ -55,8 +55,7 @@ function findWindowsUnsupportedToken(command: string): string | null {
 function tokenizeWindowsSegment(segment: string): string[] | null {
   const tokens: string[] = [];
   let buf = "";
-  let inDouble = false;
-  let inSingle = false;
+  let quote: '"' | "'" | undefined;
   let wasQuoted = false;
 
   const pushToken = () => {
@@ -69,33 +68,26 @@ function tokenizeWindowsSegment(segment: string): string[] | null {
 
   for (let i = 0; i < segment.length; i += 1) {
     const ch = segment.charAt(i);
-    if (ch === '"' && !inSingle) {
-      if (!inDouble) {
-        wasQuoted = true;
-      }
-      inDouble = !inDouble;
-      continue;
-    }
-    if (ch === "'" && !inDouble) {
-      if (inSingle && segment[i + 1] === "'") {
+    if ((ch === '"' || ch === "'") && (!quote || quote === ch)) {
+      if (quote === "'" && segment[i + 1] === "'") {
         buf += "'";
         i += 1;
         continue;
       }
-      if (!inSingle) {
+      if (!quote) {
         wasQuoted = true;
       }
-      inSingle = !inSingle;
+      quote = quote ? undefined : ch;
       continue;
     }
-    if (!inDouble && !inSingle && /\s/.test(ch)) {
+    if (!quote && /\s/.test(ch)) {
       pushToken();
       continue;
     }
     buf += ch;
   }
 
-  if (inDouble || inSingle) {
+  if (quote) {
     return null;
   }
   pushToken();

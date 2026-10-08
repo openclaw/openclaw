@@ -11,9 +11,10 @@ import {
 import {
   readWorkspaceStateSnapshot,
   replaceWorkspaceAttestation,
-  WORKSPACE_ATTESTATION_RECENT_MS,
 } from "./workspace-state-store.js";
 import { ensureAgentWorkspace, WORKSPACE_VANISHED_ERROR_CODE } from "./workspace.js";
+
+const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
 
 let state: OpenClawTestState;
 beforeEach(async () => {

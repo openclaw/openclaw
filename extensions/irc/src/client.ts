@@ -5,6 +5,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { findGraphemeChunkEnd } from "openclaw/plugin-sdk/text-grapheme";
 import {
   parseIrcLine,
   parseIrcPrefix,
@@ -39,16 +40,9 @@ function takeIrcPrivmsgChunk(text: string, maxChars: number, maxBytes: number): 
   if (end === text.length) {
     return text;
   }
-  const fitted = text.slice(0, end);
-  // A delimiter just beyond the cap already gives this chunk a clean word boundary.
-  if (text[end] === " ") {
-    return fitted;
-  }
-  const splitAt = fitted.lastIndexOf(" ");
-  if (splitAt >= Math.floor(fitted.length / 2)) {
-    return fitted.slice(0, splitAt);
-  }
-  return fitted;
+  const splitAt = text.lastIndexOf(" ", end);
+  const preferredEnd = splitAt >= Math.floor(end / 2) ? splitAt : end;
+  return text.slice(0, findGraphemeChunkEnd(text, 0, end, preferredEnd));
 }
 
 type IrcPrivmsgEvent = {

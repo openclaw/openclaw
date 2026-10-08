@@ -11,7 +11,7 @@ import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./fix-metadata.js";
 
 type PolicyCheckId = (typeof POLICY_CHECK_IDS)[number];
 
-const REVIEW_REQUIRED_REPAIR_CHECK_IDS = new Set<PolicyCheckId>([
+export const REVIEW_REQUIRED_REPAIR_CHECK_IDS = new Set<PolicyCheckId>([
   CHECK_IDS.policyGatewayNonLoopbackBind,
   CHECK_IDS.policyGatewayNodeCommandDenied,
 ]);

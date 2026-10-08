@@ -139,7 +139,9 @@ describe("ordinary shared-state reader admission", () => {
           .length,
         warmContentVersion: reads.queries.filter((sql) => /\bconfig_machine_state\b/iu.test(sql))
           .length,
-        warmFreshness: reads.queries.filter((sql) => /^PRAGMA data_version\b/iu.test(sql)).length,
+        warmFreshness: reads.queries.filter((sql) =>
+          /(?:^PRAGMA data_version\b|\bFROM main\.pragma_data_version\(\))/iu.test(sql),
+        ).length,
       }).toEqual({
         coldPublishedVersion: 1,
         coldContentVersion: 1,

@@ -105,11 +105,6 @@ function classifyAssistantErrorFacts(msg: AssistantMessage, opts?: AssistantErro
     code: signal.code,
   };
 }
-function isMissingToolCallInputError(raw: string): boolean {
-  return (
-    Boolean(raw) && (TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw))
-  );
-}
 export function formatAssistantErrorText(
   msg: AssistantMessage,
   opts?: AssistantErrorTextOptions,
@@ -208,7 +203,7 @@ export function formatAssistantErrorText(
     );
   }
 
-  if (isMissingToolCallInputError(raw)) {
+  if (raw && (TOOL_CALL_INPUT_MISSING_RE.test(raw) || TOOL_CALL_INPUT_PATH_RE.test(raw))) {
     return (
       "Session history looks corrupted (tool call input missing). " +
       "Use /new to start a fresh session. " +

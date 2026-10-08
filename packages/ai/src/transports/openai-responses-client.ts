@@ -14,7 +14,7 @@ import {
 } from "../utils/stream-first-event-timeout.js";
 import { buildGuardedModelFetch } from "./host-policy.js";
 import { prepareModelRequestBody } from "./model-request-body.js";
-import { emitModelTransportDebug } from "./model-transport-debug.js";
+import { emitModelTransportDebug, emitModelTransportError } from "./model-transport-debug.js";
 import { formatModelTransportDebugBaseUrl } from "./model-transport-url.js";
 import { isOpenAICodexResponsesModel } from "./openai-completions-compat.js";
 import { postOpenAIResponsesCompaction } from "./openai-responses-compact-client.js";
@@ -263,8 +263,13 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
             params.multi_agent?.enabled !== true &&
             params.tools
           ) {
+            const synchronousTools = new Set(
+              context.tools?.flatMap((tool) => (tool.async === false ? [tool.name] : [])),
+            );
             params.tools = params.tools.map((tool) =>
-              tool.type === "function" ? { ...tool, async: true } : tool,
+              tool.type === "function" && !synchronousTools.has(tool.name)
+                ? { ...tool, async: true }
+                : tool,
             );
           }
           return params;
@@ -587,10 +592,13 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         const incompleteReason = output.diagnostics?.find(
           ({ type }) => type === "openai_responses_terminal",
         )?.details?.incompleteReason;
-        log.warn(
-          `[responses] error provider=${model.provider} api=${model.api} model=${model.id} ` +
+        emitModelTransportError(
+          log,
+          "responses",
+          `provider=${model.provider} api=${model.api} model=${model.id} ` +
             summarizeOpenAITransportError(error) +
             (typeof incompleteReason === "string" ? ` incompleteReason=${incompleteReason}` : ""),
+          options?.signal,
         );
         failTransportStream({ stream, output, signal: options?.signal, error });
       } finally {

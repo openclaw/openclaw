@@ -78,6 +78,17 @@ function eventNudgeText(nudge: CustodianEventNudge): string {
   return t("custodian.nudge.channelDegraded", { channel });
 }
 
+function renderNudgeDismiss(label: string, onDismiss: () => void) {
+  return html`<button
+    class="custodian__nudge-dismiss"
+    type="button"
+    aria-label=${t(label)}
+    @click=${onDismiss}
+  >
+    ${icons.x}
+  </button>`;
+}
+
 export function renderCustodianEventNudge(params: {
   nudge: CustodianEventNudge;
   disabled: boolean;
@@ -93,14 +104,7 @@ export function renderCustodianEventNudge(params: {
     >
       ${eventNudgeText(params.nudge)}
     </button>
-    <button
-      class="custodian__nudge-dismiss"
-      type="button"
-      aria-label=${t("custodian.nudge.dismiss")}
-      @click=${params.onDismiss}
-    >
-      ${icons.x}
-    </button>
+    ${renderNudgeDismiss("custodian.nudge.dismiss", params.onDismiss)}
   </div>`;
 }
 
@@ -130,14 +134,7 @@ export function renderCustodianChannelOnboardingNudge(params: {
     >
       ${t(params.error ? (params.retrying ? "common.loading" : "common.retry") : "custodian.nudge.channelSetupAction")}
     </button>
-    <button
-      class="custodian__nudge-dismiss"
-      type="button"
-      aria-label=${t("custodian.nudge.channelSetupDismiss")}
-      @click=${params.onDismiss}
-    >
-      ${icons.x}
-    </button>
+    ${renderNudgeDismiss("custodian.nudge.channelSetupDismiss", params.onDismiss)}
   </div>`;
 }
 

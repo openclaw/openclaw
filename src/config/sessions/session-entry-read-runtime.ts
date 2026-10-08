@@ -1,31 +1,19 @@
-import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
 } from "../../infra/sqlite-worker-identity.js";
-import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
-import {
-  isIncognitoSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../../routing/session-key.js";
+import { isIncognitoSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import { assertAgentDatabaseAdmitted } from "../../state/agent-database-admission.js";
 import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-registry-listing.js";
 import { retainOpenClawAgentDatabaseReadCandidates } from "../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
-import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-contract.js";
-import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
-import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { resolveStateDir } from "../state-dir.js";
 import { matchesPluginHostCleanupSession } from "./plugin-host-cleanup.js";
 import { listSessionEntriesReadOnly } from "./session-accessor.sqlite-entry-list.read.js";
-import {
-  loadSessionEntry,
-  loadSessionEntryReadOnlyResultInScope,
-} from "./session-accessor.sqlite-entry.js";
+import { loadSessionEntryReadOnlyResultInScope } from "./session-accessor.sqlite-entry.js";
 import { resolveSqliteAgentId, resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
 import type {
   SessionAccessScope,
@@ -219,97 +207,7 @@ export async function withSessionDiagnosticTextInWorker(
   );
 }
 
-/** Preserve logical lookup and writable open semantics on the canonical file-backed actor. */
-export async function readSessionEntryInWorker(
-  input: SessionAccessScope,
-  assertCallerCurrent: () => void = () => {},
-  onRegistryChange?: (change: AgentDatabaseRegistryChange) => void,
-) {
-  const { scope, env } = captureSessionEntryReadScope(input);
-  assertCallerCurrent();
-  const agentId = scope.agentId
-    ? normalizeAgentId(scope.agentId)
-    : parseAgentSessionKey(scope.sessionKey)?.agentId;
-  let storePath = scope.storePath ? path.resolve(scope.storePath) : undefined;
-  if (captureIncognitoSessionBinding(scope)) {
-    return readSessionEntryReadOnlyInWorker(scope, assertCallerCurrent);
-  }
-  // Incognito still belongs to its process-held native owner until that owner's complete cutover.
-  if (isNativeSessionEntryRead(scope, agentId)) {
-    return loadSessionEntry(scope);
-  }
-  if (!storePath) {
-    if (!agentId) {
-      throw new Error("Cannot resolve SQLite session scope without an agent id");
-    }
-    storePath = resolveOpenClawAgentSqlitePath({ agentId, env });
-  }
-  const candidates = captureSessionStoreReadCandidates(storePath);
-  const loadedRead = await withSessionStoreTarget(
-    { agentId, defaultAgentId: scope.defaultAgentId, storePath, env, candidates },
-    async (target, owner) => {
-      const sessionKey = resolveSqliteSessionKey(scope.sessionKey, target.logicalAgentId);
-      const options = { ...target.database, env };
-      const targetIdentity = readDatabasePathIdentitySync(options.path);
-      const execution = captureOpenClawAgentDatabaseExecution(
-        options,
-        targetIdentity.key.startsWith("file:")
-          ? {
-              expectedIdentity: {
-                kind: "file",
-                physicalIdentity: targetIdentity.key.slice("file:".length),
-                nativeLocation: targetIdentity.canonicalPath,
-                birthtime: targetIdentity.birthtime,
-              },
-            }
-          : { expectedCreationIdentity: targetIdentity },
-      );
-      const assertCurrent = () => {
-        execution.assertCurrent();
-        owner.assertCurrent();
-      };
-      const source = {
-        assertCurrent,
-        onRegistryChange(change) {
-          owner.onRegistryChange(change);
-          onRegistryChange?.(change);
-        },
-        createAdmission(binding) {
-          return () => ({
-            nativeLocations: binding.nativeLocations,
-            admission: createSqliteWorkerOperationAdmission((request, grant) => {
-              binding.authorize(request);
-              assertCurrent();
-              if (!grant()) {
-                throw new Error("Session read authority expired");
-              }
-            }, binding.attachment),
-          });
-        },
-      } satisfies AgentDatabaseRequestExecutionSource;
-      let entry: SessionEntry | undefined;
-      try {
-        entry = await runOpenClawAgentWorkerWrite(options, async () => {
-          await owner.refreshBeforeDispatch(() => execution.assertCurrent());
-          execution.assertCurrent();
-          await execution.prepare(source);
-          return execution.runExisting(source, (worker) =>
-            worker.execute({ type: "session.entry.read", input: { sessionKey } }),
-          );
-        });
-        await owner.revalidateTarget();
-        assertCurrent();
-      } finally {
-        await execution.release();
-      }
-      owner.assertCurrent();
-      return { entry, assertCurrent: owner.assertCurrent };
-    },
-    assertCallerCurrent,
-  );
-  loadedRead.assertCurrent();
-  return loadedRead.entry;
-}
+export { readSessionEntryInWorker } from "./session-entry-read-writable.js";
 
 /** Read descriptive summaries through the original store selection and reader lifetime. */
 export async function readSessionEntrySummariesInWorker(

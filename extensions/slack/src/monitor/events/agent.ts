@@ -6,11 +6,11 @@ import { markSlackStreamsStopped } from "../../streaming.js";
 import { authorizeSlackSystemEventSender } from "../auth.js";
 import { resolveSlackChatType } from "../channel-type.js";
 import type { SlackMonitorContext } from "../context.js";
+import { resolveSlackMonitorEventScope } from "../event-scope.js";
 import { resolveSlackSenderAuthentication } from "../ingress.js";
 import { resolveSlackSessionEventRoutingContext } from "../message-handler/prepare-routing.js";
 import { getSlackSessionRuns } from "../session-run-targets.js";
 import { createSlackCommandHandler, deliverSlackSlashResponseWithWebApi } from "../slash.js";
-import { resolveSlackListenerEventScope } from "./system-event-context.js";
 
 export function registerSlackAgentEvents(params: {
   ctx: SlackMonitorContext;
@@ -32,7 +32,7 @@ export function registerSlackAgentEvents(params: {
     if (ctx.shouldDropMismatchedSlackEvent(body)) {
       return;
     }
-    const eventScope = resolveSlackListenerEventScope({ ctx, body, context, client });
+    const eventScope = resolveSlackMonitorEventScope({ ctx, body, context, client });
     if (eventScope === null) {
       return;
     }
@@ -108,7 +108,7 @@ export function registerSlackAgentEvents(params: {
     if (runtimeContext.shouldDropMismatchedSlackEvent(body)) {
       return;
     }
-    const eventScope = resolveSlackListenerEventScope({
+    const eventScope = resolveSlackMonitorEventScope({
       ctx: runtimeContext,
       body,
       context,

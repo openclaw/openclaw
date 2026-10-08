@@ -173,8 +173,7 @@ export async function runDoctorRepairSequence(params: {
         env,
       }),
     );
-  const initialChannelRepairs = await collectCurrentChannelRepairs();
-  for (const mutation of initialChannelRepairs) {
+  for (const mutation of await collectCurrentChannelRepairs()) {
     applyMutation(mutation);
   }
   applyMutation(maybeRepairBundledPluginLoadPaths(state.candidate, env));
@@ -243,19 +242,15 @@ export async function runDoctorRepairSequence(params: {
     pluginMetadataSnapshotState.inventoryChanged = true;
     // Inventory repair changes the authoritative plugin generation. Replace the
     // shared Doctor base before later discovery so nested scopes cannot reuse stale metadata.
-    const currentScope = resolveCurrentPluginMetadataScope();
+    const currentScope = { ...resolveCurrentPluginMetadataScope(), env };
     pluginMetadataSnapshotState.current = runWithCurrentPluginMetadata(() =>
       resolveConfigWideDoctorPluginMetadataSnapshot({
         snapshot: loadPluginMetadataSnapshot({
-          config: currentScope.config,
-          env,
-          workspaceDir: currentScope.workspaceDir,
+          ...currentScope,
           // Later Doctor contributions reuse this cache owner. Carry the committed
           // records into it so registry refresh cannot restore the pre-repair base.
           index: loadInstalledPluginIndex({
-            config: currentScope.config,
-            env,
-            workspaceDir: currentScope.workspaceDir,
+            ...currentScope,
             installRecords: missingConfiguredPluginInstallRepair.records,
           }),
         }),
@@ -303,8 +298,7 @@ export async function runDoctorRepairSequence(params: {
       for (const mutation of channelCompatibilityMutations) {
         applyMutation(mutation);
       }
-      const channelRepairs = await collectCurrentChannelRepairs();
-      for (const mutation of channelRepairs) {
+      for (const mutation of await collectCurrentChannelRepairs()) {
         applyMutation(mutation);
       }
     }

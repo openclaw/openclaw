@@ -27,18 +27,13 @@ export function countLegacyTranscript(
   report: DoctorSessionSqliteTargetReport,
 ): void {
   const result = countTranscriptEventsForPath(record.transcriptPath);
-  if (result.status === "missing") {
+  if (result.status !== "ok") {
     report.issues.push({
-      code: "transcript_missing",
-      message: `Transcript file is missing: ${record.transcriptPath}`,
-      sessionKey: record.sessionKey,
-    });
-    return;
-  }
-  if (result.status === "malformed") {
-    report.issues.push({
-      code: "transcript_malformed",
-      message: result.message,
+      code: result.status === "missing" ? "transcript_missing" : "transcript_malformed",
+      message:
+        result.status === "missing"
+          ? `Transcript file is missing: ${record.transcriptPath}`
+          : result.message,
       sessionKey: record.sessionKey,
     });
     return;
@@ -161,13 +156,11 @@ function resolveActiveSqliteTranscriptFile(
   if (!transcriptPath.endsWith(".jsonl")) {
     return undefined;
   }
-  let stat: fs.Stats;
   try {
-    stat = fs.statSync(transcriptPath);
+    if (!fs.statSync(transcriptPath).isFile()) {
+      return undefined;
+    }
   } catch {
-    return undefined;
-  }
-  if (!stat.isFile()) {
     return undefined;
   }
   const sessionsDir = canonicalFilePath(path.dirname(target.storePath));

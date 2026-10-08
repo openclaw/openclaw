@@ -49,13 +49,11 @@ class NullProvider implements BoardProvider {
 
   async grant(_name: string, _decision: "granted" | "rejected"): Promise<void> {}
 
-  async pinWidget(_input: BoardPinWidgetInput): Promise<void> {
+  async pinWidget(this: void): Promise<void> {
     throw new Error("Session dashboard unavailable");
   }
 
-  async pinMcpApp(_input: BoardPinMcpAppInput): Promise<void> {
-    throw new Error("Session dashboard unavailable");
-  }
+  pinMcpApp = this.pinWidget;
 
   widgetFrameUrl(_name: string, _revision: number): string {
     return "";
@@ -63,13 +61,11 @@ class NullProvider implements BoardProvider {
 
   async refreshWidgetFrame(_name: string): Promise<void> {}
 
-  async widgetAppView(_name: string, _revision: number): Promise<BoardWidgetAppViewState> {
+  async widgetAppView(this: void): Promise<BoardWidgetAppViewState> {
     return { status: "stale", error: "Session dashboard unavailable" };
   }
 
-  async refreshWidgetAppView(_name: string, _revision: number): Promise<BoardWidgetAppViewState> {
-    return { status: "stale", error: "Session dashboard unavailable" };
-  }
+  refreshWidgetAppView = this.widgetAppView;
 }
 
 type BoardProviderCapabilities = Pick<
@@ -83,6 +79,10 @@ class ScopedGatewayBoardProvider implements BoardProvider {
   readonly loadError$: BoardSnapshotSignal<string | null>;
   readonly snapshot$: BoardSnapshotSignal<BoardSnapshot>;
   readonly events: BoardEventStream<BoardCommandEvent>;
+  readonly widgetFrameUrl: BoardProvider["widgetFrameUrl"];
+  readonly refreshWidgetFrame: BoardProvider["refreshWidgetFrame"];
+  readonly widgetAppView: BoardProvider["widgetAppView"];
+  readonly refreshWidgetAppView: BoardProvider["refreshWidgetAppView"];
   private active = true;
 
   constructor(
@@ -92,6 +92,10 @@ class ScopedGatewayBoardProvider implements BoardProvider {
     this.loadError$ = transport.loadError$;
     this.snapshot$ = transport.snapshot$;
     this.events = transport.events;
+    this.widgetFrameUrl = transport.widgetFrameUrl.bind(transport);
+    this.refreshWidgetFrame = transport.refreshWidgetFrame.bind(transport);
+    this.widgetAppView = transport.widgetAppView.bind(transport);
+    this.refreshWidgetAppView = transport.refreshWidgetAppView.bind(transport);
   }
 
   get sessionKey(): string {
@@ -132,48 +136,30 @@ class ScopedGatewayBoardProvider implements BoardProvider {
     this.active = false;
   }
 
-  async applyOps(ops: BoardOp[]): Promise<void> {
-    if (!this.canMutate) {
-      throw new Error("Session dashboard mutation unavailable");
+  private requireCapability(allowed: boolean, action: string): void {
+    if (!allowed) {
+      throw new Error(`Session dashboard ${action} unavailable`);
     }
+  }
+
+  async applyOps(ops: BoardOp[]): Promise<void> {
+    this.requireCapability(this.canMutate, "mutation");
     await this.transport.applyOps(ops);
   }
 
   async grant(name: string, decision: "granted" | "rejected"): Promise<void> {
-    if (!this.canGrant) {
-      throw new Error("Session dashboard approval unavailable");
-    }
+    this.requireCapability(this.canGrant, "approval");
     await this.transport.grant(name, decision);
   }
 
   async pinWidget(input: BoardPinWidgetInput): Promise<void> {
-    if (!this.canMutate || !this.canPinWidgets) {
-      throw new Error("Session dashboard widget pinning unavailable");
-    }
+    this.requireCapability(this.canMutate && this.canPinWidgets, "widget pinning");
     await this.transport.pinWidget(input);
   }
 
   async pinMcpApp(input: BoardPinMcpAppInput): Promise<void> {
-    if (!this.canMutate || !this.canPinMcpApps) {
-      throw new Error("Session dashboard MCP App pinning unavailable");
-    }
+    this.requireCapability(this.canMutate && this.canPinMcpApps, "MCP App pinning");
     await this.transport.pinMcpApp(input);
-  }
-
-  widgetFrameUrl(name: string, revision: number): string {
-    return this.transport.widgetFrameUrl(name, revision);
-  }
-
-  refreshWidgetFrame(name: string): Promise<void> {
-    return this.transport.refreshWidgetFrame(name);
-  }
-
-  widgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState> {
-    return this.transport.widgetAppView(name, revision);
-  }
-
-  refreshWidgetAppView(name: string, revision: number): Promise<BoardWidgetAppViewState> {
-    return this.transport.refreshWidgetAppView(name, revision);
   }
 }
 

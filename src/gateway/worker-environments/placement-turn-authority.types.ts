@@ -25,6 +25,7 @@ export type ClaimChange = {
       facts?: WorkerSessionTurnClaimFacts;
       workspaceResult?: WorkspaceResultPostimage;
       workspacePlacement?: WorkerSessionPlacementRecord;
+      retired?: true;
     }
   | { kind: "workspace-result"; facts?: WorkspaceResultPostimage }
   | { kind: "journal"; uncertain?: true }
@@ -47,11 +48,17 @@ export type RetainedClaim = {
   released: boolean;
   listeners: Set<() => void>;
 };
+export type RetainedPlacement = {
+  placement: WorkerSessionPlacementRecord | undefined;
+  sequence: number;
+  revoked: boolean;
+};
 export type PlacementAuthorityOwner = {
   identity: DatabasePathIdentity;
   active: boolean;
   claims: Map<string, Set<RetainedClaim>>;
   observations: Map<string | undefined, Set<{ revoked: boolean; indeterminate: boolean }>>;
+  placementReaders: Map<string, Set<RetainedPlacement>>;
   pending: Set<ClaimChange>;
   settlementListeners: Set<() => void>;
   sequence: number;

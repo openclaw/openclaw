@@ -73,10 +73,7 @@ function canonicalStoreOwnsProviderRoute(
 
 /** Synchronous Doctor/CLI and released coding-tool construction compatibility. */
 export function hasAnyAuthProfileStoreSource(agentDir?: string): boolean {
-  if (hasLocalAuthProfileStoreSource(agentDir)) {
-    return true;
-  }
-  if (hasAnyRuntimeAuthProfileStoreSource(agentDir)) {
+  if (hasLocalAuthProfileStoreSource(agentDir) || hasAnyRuntimeAuthProfileStoreSource(agentDir)) {
     return true;
   }
 
@@ -192,16 +189,12 @@ export async function hasAnyAuthProfileStoreSourceAsync(agentDir?: string): Prom
 
 /** Returns true when the requested agent dir has a local auth profile source. */
 export function hasLocalAuthProfileStoreSource(agentDir?: string): boolean {
-  if (hasRuntimeAuthProfileStoreSource(agentDir)) {
-    return true;
-  }
-  if (hasLegacyAuthProfileCredentialSource(agentDir)) {
-    return true;
-  }
-  if (inspectPersistedAuthProfileStoreRaw(agentDir).status !== "missing") {
-    return true;
-  }
-  return Boolean(readPersistedAuthProfileStateRaw(agentDir));
+  return (
+    hasRuntimeAuthProfileStoreSource(agentDir) ||
+    hasLegacyAuthProfileCredentialSource(agentDir) ||
+    inspectPersistedAuthProfileStoreRaw(agentDir).status !== "missing" ||
+    Boolean(readPersistedAuthProfileStateRaw(agentDir))
+  );
 }
 
 type AuthProfileSourceForProviderOptions = {
@@ -222,37 +215,16 @@ export function hasAuthProfileStoreSourceForProvider(
   if (profileIds?.length === 0) {
     return false;
   }
-  const localRuntimeStore = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
-  if (
-    storeHasProviderProfile(
-      coercePersistedAuthProfileStore(localRuntimeStore),
-      provider,
-      profileIds,
-    )
-  ) {
-    return true;
-  }
   // A retired credential source is intentionally opaque to runtime. Treat it
   // as potentially owning the provider so the canonical loader can fail closed
   // with AUTH_PROFILE_MIGRATION_REQUIRED instead of falling through to env auth.
-  if (hasLegacyAuthProfileCredentialSource(agentDir)) {
-    return true;
-  }
-  if (canonicalStoreOwnsProviderRoute(agentDir, provider, profileIds)) {
-    return true;
-  }
-
-  if (!agentDir) {
-    return false;
-  }
-  const mainRuntimeStore = getRuntimeAuthProfileStoreSnapshotCore();
-  if (
-    storeHasProviderProfile(coercePersistedAuthProfileStore(mainRuntimeStore), provider, profileIds)
-  ) {
-    return true;
-  }
-  if (hasLegacyAuthProfileCredentialSource()) {
-    return true;
-  }
-  return canonicalStoreOwnsProviderRoute(undefined, provider, profileIds);
+  const ownsProvider = (ownerAgentDir: string | undefined) =>
+    storeHasProviderProfile(
+      coercePersistedAuthProfileStore(getRuntimeAuthProfileStoreSnapshotCore(ownerAgentDir)),
+      provider,
+      profileIds,
+    ) ||
+    hasLegacyAuthProfileCredentialSource(ownerAgentDir) ||
+    canonicalStoreOwnsProviderRoute(ownerAgentDir, provider, profileIds);
+  return ownsProvider(agentDir) || (Boolean(agentDir) && ownsProvider(undefined));
 }

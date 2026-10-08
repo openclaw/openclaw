@@ -382,18 +382,14 @@ function renderRawResults(props: PluginCatalogResultsProps): TemplateResult {
     ${
       props.query.trim() && official.length > 0 && community.length > 0
         ? html`
-            ${renderSection({
-              id: "official",
-              title: t("pluginsPage.official"),
-              items: official,
-              props,
-            })}
-            ${renderSection({
-              id: "community",
-              title: t("pluginsPage.community"),
-              items: community,
-              props,
-            })}
+            ${(
+              [
+                ["official", official],
+                ["community", community],
+              ] as const
+            ).map(([id, entries]) =>
+              renderSection({ id, title: t(`pluginsPage.${id}`), items: entries, props }),
+            )}
           `
         : html`<div class="plugin-catalog-grid plugin-catalog-grid--results">
             ${repeat(
@@ -413,7 +409,7 @@ function renderRawResults(props: PluginCatalogResultsProps): TemplateResult {
               ?disabled=${props.loadingMore}
               @click=${props.onLoadMore}
             >
-              ${props.loadingMore ? t("pluginsPage.loadingMore") : t("pluginsPage.loadMore")}
+              ${t(props.loadingMore ? "pluginsPage.loadingMore" : "pluginsPage.loadMore")}
             </button>
           </div>`
         : nothing
@@ -465,8 +461,7 @@ function renderGroupedCatalog(props: PluginCatalogResultsProps): TemplateResult 
 }
 
 export function renderPluginCatalogResults(props: PluginCatalogResultsProps): TemplateResult {
-  const hasQuery = Boolean(props.query.trim());
-  const grouped = !hasQuery && props.intent === "all" && props.category === null;
+  const grouped = !props.query.trim() && props.intent === "all" && props.category === null;
   return html`<section class="plugin-catalog-results" aria-label=${t("pluginsPage.exploreTitle")}>
     <label class="plugin-catalog-search">
       <span aria-hidden="true">${icons.search}</span>

@@ -33,11 +33,7 @@ export type NpmMetadataCommandRunner = (
 function parseNpmPackageTargetMetadata(
   raw: string,
   packageName: string,
-): {
-  version: string | null;
-  nodeEngine: string | null;
-  schemaVersions?: OpenClawSchemaVersions;
-} {
+): Omit<NpmPackageTargetStatus, "error"> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw.trim()) as unknown;

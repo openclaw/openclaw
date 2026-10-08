@@ -22,7 +22,7 @@ import {
   type ModelAliasIndex,
   type ModelDirectiveSelection,
 } from "./model-selection-directive.js";
-import type { ReplySessionEntryHandle } from "./session-entry-handle.js";
+import { publishReplySessionEntry, type ReplySessionEntryHandle } from "./session-entry-handle.js";
 
 export async function applyResetModelOverride(params: {
   cfg: OpenClawConfig;
@@ -191,10 +191,6 @@ export async function applyResetModelOverride(params: {
     });
   }
   adoptPersistedSessionSnapshot(sessionEntry, appliedEntry);
-  if (sessionEntryHandle) {
-    sessionEntryHandle.replaceCurrent(sessionEntry);
-  } else if (sessionStore) {
-    sessionStore[sessionKey] = sessionEntry;
-  }
+  publishReplySessionEntry({ sessionEntryHandle, sessionStore, sessionKey }, sessionEntry);
   return { selection: selectionApplied ? selection : undefined, cleanedBody };
 }
