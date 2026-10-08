@@ -134,6 +134,19 @@ exact canonical audit definitions from admitted schema facts, retaining structur
 validation for other supported shapes. Schemas, stored bytes, retention, and update
 behavior are unchanged.
 
+Completed full expected-schema descriptions are shared across bundled module
+copies and inherited by newly created workers through that same launcher. The
+Gateway prepares the canonical shared-state and agent descriptions during boot
+admission, after SQLite runtime selection and before starting database workers.
+The cache is keyed by complete canonical SQL, so same-version additive definitions
+remain distinct. Only expected definitions are transferred: every admission still
+inspects its actual database, and newer database versions remain refused. Retained
+supervisors forward the caller's current definitions when creating each worker.
+Runtime shared-state comparisons select their existing table and index view from
+the full description. They do not construct another comparison database for that
+subset. The full maintenance policy still validates present lazy objects, and
+physical schema creation and migration SQL are unchanged.
+
 Runtime canonical-session readiness carries the pending work's captured physical
 source into the existing reclamation worker. The worker rereads current rows and
 certifies them in synchronous transactions, retaining the existing FIFO, live host
@@ -3625,15 +3638,23 @@ shared-state read-only worker. Preparation rechecks the current roster and local
 admission refusals after awaiting. Optional provenance-table absence keeps the
 legacy identity; reads do not create it.
 
-Final OAuth publication, credential subprocess, repository transfer, and provider
-consumption guards retain a synchronous current read because native, SDK, and
-foreign-process writers can revoke the agent outside host publication. That guard
+Final OAuth device-code token polling and publication, credential subprocess,
+repository transfer, and provider consumption guards retain a synchronous current
+read because native, SDK, and foreign-process writers can revoke the agent outside
+host publication. That guard
 uses the same indexed journal/provenance projection without a transaction envelope
 or journal payload scan; it never treats prepared facts as current authority.
 Retire this native guard at the next Plugin SDK major after synchronous writers
 are removed and the lifecycle owner publishes complete revocation facts. The
 accepted GitHub config draft mutation retains its synchronous incarnation check; the preparation cutover adds no new final config-publication contract.
 Schemas, stored bytes, permissions, retention, and update behavior are unchanged.
+
+The serving Claw monitor handler prepares its deletion journal through the shared
+worker before awaiting package ownership. It rechecks the serving scheduler binding
+after preparation and retains synchronous current journal guards at quiescence,
+drainage, and acknowledgement. Cron's synchronous enqueue, wake, and execution
+handoffs likewise retain their current deletion checks immediately before the effect;
+an awaited preparation reply cannot replace these final guards.
 
 Agent retirement also retains an owner-minted synchronous final-effect guard for
 filesystem and config mutation callbacks. The original host lease lifetime is

@@ -34,8 +34,23 @@ import {
 } from "./openclaw-state-db-readonly.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { resolveDatabasePath, resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { prepareOpenClawStateReadSource } from "./openclaw-state-worker-context.js";
+
+export async function readAgentDeletionRecoveryHoldsInWorker(
+  options: OpenClawStateDatabaseOptions = {},
+) {
+  const statePath = resolveDatabasePath(options);
+  const reply = await executeExistingOpenClawStateRead(
+    { ...options, path: statePath },
+    { type: "agentRecovery.holds", input: { statePath } },
+    { current: true },
+  );
+  if (reply && (!reply.ok || reply.type !== "agentRecovery.holds")) {
+    throw new Error("Unexpected agent recovery holds result");
+  }
+  return reply?.held ?? [];
+}
 
 export async function readAgentDeletionJournalForCreation(
   agentId: string,

@@ -1,6 +1,13 @@
-import type { AgentDeletionJournalEntry } from "./agent-deletion-journal.types.js";
+import type {
+  AgentDeletionJournalEntry,
+  HeldAgentDatabase,
+} from "./agent-deletion-journal.types.js";
 
 export type AgentRecoveryReadOperations = {
+  "agentRecovery.holds": {
+    input: { statePath: string };
+    output: { type: "agentRecovery.holds"; held: HeldAgentDatabase[] };
+  };
   "agentRecovery.creationJournal": {
     input: { agentId: string };
     output: {

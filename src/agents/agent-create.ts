@@ -23,11 +23,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
 import { normalizeAgentId, normalizeAgentIdStrict } from "../routing/session-key.js";
 import { runWithAgentCreationClaim } from "../state/agent-creation-claim.js";
+import { assertAgentDeletionRecoveryHoldPredicate } from "../state/agent-deletion-journal-recovery.kernel.js";
 import {
-  assertAgentDeletionRecoveryHoldPredicate,
-  readAgentDeletionRecoveryHolds,
-} from "../state/agent-deletion-journal-recovery.kernel.js";
-import { readAgentDeletionJournalForCreation } from "../state/agent-deletion-journal.read.js";
+  readAgentDeletionJournalForCreation,
+  readAgentDeletionRecoveryHoldsInWorker,
+} from "../state/agent-deletion-journal.read.js";
 import type { HeldAgentDatabase } from "../state/agent-deletion-journal.types.js";
 import { resolveAgentDeletionRecoveryHoldsInWorker } from "../state/agent-deletion-recovery.js";
 import { recordAgentProvenance, type AgentCreatedVia } from "../state/agent-provenance.js";
@@ -345,10 +345,6 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
   let creating = false;
   let identityPublished = false;
   let held: HeldAgentDatabase[] = [];
-  const readCurrentHolds = () =>
-    withExistingOpenClawStateDatabaseCurrentReadOnly(readAgentDeletionRecoveryHolds, {
-      allowNativeRead: true,
-    }) ?? [];
   const recoveryPathMatcher = createOpenClawAgentDatabasePathMatcher();
   const recoveryHoldPredicate = () => ({ agentId, held, applies: creating || !automaticBootstrap });
   const assertRecoveryPathCurrent = () => {
@@ -368,8 +364,8 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       );
     }
   };
-  const hasBootstrapHold = () =>
-    automaticBootstrap && readCurrentHolds().some((entry) => entry.agentId === agentId);
+  const hasBootstrapHold = async () =>
+    (await readAgentDeletionRecoveryHoldsInWorker()).some((entry) => entry.agentId === agentId);
   const assertHost = () => {
     params.beforePersistentApply?.();
     if (!identityPublished) {
@@ -384,7 +380,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
 
   try {
     return await withConfigMutationExclusive(async (lockedConfig) => {
-      held = automaticBootstrap ? [] : readCurrentHolds();
+      held = automaticBootstrap ? [] : await readAgentDeletionRecoveryHoldsInWorker();
       const recoveryPaths = selectedRecoveryPaths(
         lockedConfig,
         agentId,
@@ -400,7 +396,7 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
         );
       }
       const gateError =
-        recoveryPaths.length > 0 || hasBootstrapHold()
+        recoveryPaths.length > 0 || (automaticBootstrap && (await hasBootstrapHold()))
           ? undefined
           : await evaluateMainCreationGate(lockedConfig, agentId);
       if (gateError) {
@@ -408,9 +404,10 @@ export async function createAgent(params: CreateAgentParams): Promise<CreateAgen
       }
       beforePersistentApply();
       // Held bootstrap can still be a no-op; never claim its journal before that decision.
-      const deletion = hasBootstrapHold()
-        ? undefined
-        : await readAgentDeletionJournalForCreation(agentId);
+      const deletion =
+        automaticBootstrap && (await hasBootstrapHold())
+          ? undefined
+          : await readAgentDeletionJournalForCreation(agentId);
       beforePersistentApply();
       if (deletion && !deletion.cleanupCompleted) {
         return createError(
