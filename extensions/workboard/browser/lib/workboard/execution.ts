@@ -61,12 +61,12 @@ export async function startWorkboardCard(params: {
   mode?: WorkboardExecutionMode;
   requestUpdate?: () => void;
 }): Promise<string | null> {
-  const state = getWorkboardState(params.host);
+  const initialState = getWorkboardState(params.host);
   if (
     !params.client ||
-    !workboardMutationsReady(state) ||
-    state.dispatching ||
-    state.busyCardIds.has(params.card.id)
+    !workboardMutationsReady(initialState) ||
+    initialState.dispatching ||
+    initialState.busyCardIds.has(params.card.id)
   ) {
     return null;
   }
@@ -75,18 +75,18 @@ export async function startWorkboardCard(params: {
   const model =
     engine === "codex" || engine === "claude" ? WORKBOARD_ENGINE_MODELS[engine] : undefined;
   const scheduledAt = params.card.metadata?.automation?.scheduledAt;
-  state.error = null;
+  initialState.error = null;
   if (
     mode === "autonomous" &&
     (typeof scheduledAt === "number"
       ? scheduledAt > Date.now()
       : params.card.status === "scheduled")
   ) {
-    state.error = "Scheduled cards cannot start before their scheduled time.";
+    initialState.error = "Scheduled cards cannot start before their scheduled time.";
     params.requestUpdate?.();
     return null;
   }
-  const result = await runWorkboardCardMutation(
+  const mutationResult = await runWorkboardCardMutation(
     { ...params, cardId: params.card.id, reconcileConflict: false },
     async (state, client) => {
       assertCurrentCard(state, params.card);
@@ -153,7 +153,7 @@ export async function startWorkboardCard(params: {
       return sessionKey;
     },
   );
-  return result === false ? null : result;
+  return mutationResult === false ? null : mutationResult;
 }
 
 export async function stopWorkboardCard(params: {

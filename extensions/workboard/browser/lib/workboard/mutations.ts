@@ -113,12 +113,12 @@ export async function addWorkboardCardComment(params: {
   body?: string;
   requestUpdate?: () => void;
 }) {
-  const state = getWorkboardState(params.host);
-  const cardId = params.cardId ?? state.editingCardId;
+  const draftState = getWorkboardState(params.host);
+  const cardId = params.cardId ?? draftState.editingCardId;
   const draftField = params.body === undefined ? "draftCommentBody" : "detailCommentBody";
-  const submittedDraft = params.body ?? state.draftCommentBody;
+  const submittedDraft = params.body ?? draftState.draftCommentBody;
   const body = submittedDraft.trim();
-  if (!cardId || !body || state.draftSaving) {
+  if (!cardId || !body || draftState.draftSaving) {
     return;
   }
   await runWorkboardCardMutation(
