@@ -258,6 +258,7 @@ export async function loadSessionLogs(
     let pricing: ReturnType<typeof createUsageCostResolver> | undefined;
     const prepareCost = () =>
       (pricing ??= createUsageCostResolver({ config: scoped.config, agentDir }));
+    let lastUserMirrorKey: string | undefined;
 
     for await (const parsed of readTranscriptRecordsBestEffort(sessionFile)) {
       let role: SessionLogEntry["role"];
@@ -353,6 +354,13 @@ export async function loadSessionLogs(
       // Logs share pricing and timestamp interpretation with summaries and charts.
       // Recomputing here can turn unknown prices into zero or ignore tiered rates.
       const entry = await parseUsageCostTranscriptEntryAsync(parsed, prepareCost);
+      if (role === "user") {
+        // Same rule as the rollup: a re-mirrored copy of the previous prompt is not a new message.
+        if (entry?.mirrorKey && entry.mirrorKey === lastUserMirrorKey) {
+          continue;
+        }
+        lastUserMirrorKey = entry?.mirrorKey;
+      }
       const usage = role === "assistant" ? entry?.usage : undefined;
 
       logs.push({
