@@ -164,7 +164,8 @@ export function resolveVisibleActiveSessionRunState(params: {
     ) ||
     (sessionId !== undefined &&
       active.sessionId === sessionId &&
-      Boolean(sessionIdOwner) &&
+      sessionIdOwner !== undefined &&
+      sessionIdOwner !== "" &&
       chatRunBelongsToAgent(
         {
           agentId: active.agentId,

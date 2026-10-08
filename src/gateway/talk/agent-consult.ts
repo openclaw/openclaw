@@ -59,9 +59,9 @@ export async function startTalkRealtimeAgentConsult(
     request.client?.connect?.scopes,
     request.client,
   );
-  const unavailable = (message: string) => ({
+  const unavailable = (errorMessage: string) => ({
     ok: false as const,
-    error: errorShape(ErrorCodes.UNAVAILABLE, message),
+    error: errorShape(ErrorCodes.UNAVAILABLE, errorMessage),
   });
   return await new Promise<
     { ok: true; runId: string; idempotencyKey: string } | { ok: false; error: ErrorShape }

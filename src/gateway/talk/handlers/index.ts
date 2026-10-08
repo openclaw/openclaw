@@ -389,10 +389,11 @@ function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParams) {
         const rawConfigWithModel = model ? { ...rawConfig, model } : rawConfig;
         const defaultRawConfig = { ...rawConfig };
         delete defaultRawConfig.model;
-        const resolveConfig = (rawConfig: typeof defaultRawConfig) =>
+        const resolveConfig = (rawInput: typeof defaultRawConfig) =>
           available
-            ? (provider.resolveConfig?.({ ...realtimeResolveContext, rawConfig }) ?? rawConfig)
-            : rawConfig;
+            ? (provider.resolveConfig?.({ ...realtimeResolveContext, rawConfig: rawInput }) ??
+              rawInput)
+            : rawInput;
         const defaultProviderConfig = resolveConfig(defaultRawConfig);
         const providerConfig =
           available && rawConfigWithModel.model === undefined
