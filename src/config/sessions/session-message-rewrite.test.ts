@@ -263,7 +263,6 @@ it.each([false, true])(
             }
           },
         );
-        expect(sql.queries).toEqual([]);
       } finally {
         sql.restore();
         stop();
@@ -295,6 +294,7 @@ it.each([false, true])(
           }),
         ]);
       }
+      expect(sql.queries).toEqual([]);
     });
   },
 );

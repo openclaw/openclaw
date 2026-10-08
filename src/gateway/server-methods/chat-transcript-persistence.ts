@@ -6,12 +6,14 @@ import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
-  applySessionEntryOperation,
-  applySessionEntryTargetOperation,
   publishTranscriptUpdate,
   type SessionTranscriptWriteScope,
   type TranscriptEvent,
 } from "../../config/sessions/session-accessor.js";
+import {
+  applySessionEntryOperation,
+  applySessionEntryTargetOperation,
+} from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import { rewritePreparedAssistantTranscriptMessageForRun } from "../../config/sessions/session-message-rewrite.js";
 import { withPreparedTranscriptCorrection } from "../../config/sessions/session-transcript-correction.js";
