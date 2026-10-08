@@ -354,6 +354,7 @@ describe("plugin runtime mutations", () => {
   });
 
   it.each([
+    { action: "enable", applied: false },
     { action: "enable", applied: "earlier" },
     { action: "disable", applied: true },
   ] as const)(
@@ -424,9 +425,9 @@ describe("plugin runtime mutations", () => {
         expect(message?.text).toContain("Runtime phase: activate.");
         const calls = request.mock.calls.slice(actionStart);
         expect(calls.filter(([method]) => method === methodName)).toHaveLength(1);
-        expect(calls.filter(([method]) => method === "plugins.list")).toHaveLength(1);
-        expect(calls.filter(([method]) => method === "config.get")).toHaveLength(1);
-        expect(page.result?.generation).toBe(refreshed.generation);
+        expect(calls.filter(([method]) => method === "plugins.list")).toHaveLength(applied ? 1 : 0);
+        expect(calls.filter(([method]) => method === "config.get")).toHaveLength(applied ? 1 : 0);
+        expect(page.result?.generation).toBe(applied ? refreshed.generation : undefined);
         expect(page.querySelector(".plugins-install")).toBeNull();
       } finally {
         runtimeConfig.dispose();

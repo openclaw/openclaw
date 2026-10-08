@@ -361,6 +361,71 @@ it("reports when a listed install becomes unavailable", async () => {
   );
 });
 
+it("keeps the latest Install request while an older catalog detail is pending", async () => {
+  const details = ["Alpha", "Beta"].map((name) =>
+    discoveryDetail({
+      ...createPlugin({
+        id: name.toLowerCase(),
+        name,
+        installed: false,
+        state: "not-installed",
+      }),
+      catalogId: name === "Alpha" ? "ch_YWxwaGE" : "ch_YmV0YQ",
+    }),
+  );
+  const [alpha, beta] = details;
+  const alphaRead = deferred<PluginDiscoveryDetailResult>();
+  const betaRead = deferred<PluginDiscoveryDetailResult>();
+  const installation = deferred<unknown>();
+  const { request, harness } = pageGateway({
+    "plugins.catalog.browse": (params) => browseResult(params, details),
+    "plugins.catalog.categories": () => ({ categories: [] }),
+    "plugins.catalog.get": (params) =>
+      asNullableRecord(params)?.id === alpha!.plugin.id ? alphaRead.promise : betaRead.promise,
+    "plugins.install": () => installation.promise,
+    "plugins.list": () => createResult(),
+  });
+  const { page } = await mountRoute(harness, createResult(), "/plugins");
+  try {
+    await vi.waitFor(() =>
+      expect(page.querySelectorAll(".plugin-catalog-card__install")).toHaveLength(2),
+    );
+    page.querySelector<HTMLButtonElement>('[aria-label="Install Alpha"]')!.click();
+    page.querySelector<HTMLButtonElement>('[aria-label="Install Beta"]')!.click();
+    await vi.waitFor(() =>
+      expect(
+        request.mock.calls.filter(([method]) => method === "plugins.catalog.get"),
+      ).toHaveLength(2),
+    );
+    betaRead.resolve(beta!);
+    await vi.waitFor(() =>
+      expect(request).toHaveBeenCalledWith(
+        "plugins.install",
+        {
+          source: "clawhub",
+          packageName: "beta",
+        },
+        expect.objectContaining({ onSent: expect.any(Function) }),
+      ),
+    );
+    alphaRead.resolve(alpha!);
+    await alphaRead.promise;
+    await settlePage(page);
+
+    expect(request.mock.calls.filter(([method]) => method === "plugins.install")).toHaveLength(1);
+    expect(page.querySelector("openclaw-modal-dialog")).toBeNull();
+  } finally {
+    alphaRead.resolve(alpha!);
+    betaRead.resolve(beta!);
+    installation.resolve({
+      ok: true,
+      plugin: createPlugin({ id: "beta", name: "Beta", enabled: true, state: "enabled" }),
+      restartRequired: false,
+    });
+    await settlePage(page);
+  }
+});
+
 it.each(["disabled", "needs-setup"] as const)(
   "renders %s local settings controls while optional metadata settles",
   async (state) => {

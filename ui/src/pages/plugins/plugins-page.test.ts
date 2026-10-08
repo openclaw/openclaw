@@ -539,7 +539,7 @@ it("retains a failed uninstall, resumes inspection, and allows retry", async () 
   expect(page.messages["plugin:calendar"]).toBeUndefined();
 });
 
-it.each(["removed", "available", "navigated"] as const)(
+it.each(["removed", "available", "navigated", "failed"] as const)(
   "reconciles a local discovery uninstall with %s selection",
   async (outcome) => {
     const plugin = createPlugin({
@@ -621,14 +621,28 @@ it.each(["removed", "available", "navigated"] as const)(
       await waitForFast(() => expect(page.detail?.inspection?.plugin.id).toBe(other.id));
     }
     removed = true;
-    removing.resolve({ ok: true, pluginId: plugin.id, removed: ["install record"] });
+    if (outcome === "failed") {
+      removing.reject(
+        new GatewayRequestError({
+          code: "UNAVAILABLE",
+          message: "Plugin files were removed, but runtime activation failed.",
+        }),
+      );
+    } else {
+      removing.resolve({ ok: true, pluginId: plugin.id, removed: ["install record"] });
+    }
     await uninstall;
     await page.updateComplete;
     expect(missingCatalogReads).toBe(0);
-    if (outcome === "removed") {
+    if (outcome === "removed" || outcome === "failed") {
       await waitForFast(() =>
         expect(context.replace).toHaveBeenCalledWith("plugins", { pathname: "/plugins" }),
       );
+      if (outcome === "failed") {
+        expect(page.querySelector('.plugins-row-message[role="alert"]')?.textContent).toContain(
+          "Plugin files were removed, but runtime activation failed.",
+        );
+      }
     } else {
       expect(context.replace).not.toHaveBeenCalled();
       if (outcome === "available") {
