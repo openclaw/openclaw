@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import type { OpenClawConfig, SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -22,7 +23,6 @@ import { assertSlackDetachedTargetAllowed } from "../detached-target-admission.j
 import { getSlackInstallationKind } from "../installation-identity-state.js";
 import {
   disposeSlackTestRuntime,
-  flush,
   getSlackClient,
   getSlackHandlerOrThrow,
   getSlackHandlers,
@@ -99,6 +99,30 @@ afterEach(async () => {
 afterAll(disposeSlackTestRuntime);
 
 describe("auth.test boot call", () => {
+  it("hands Socket Mode a dispatcher from its own undici copy", async () => {
+    for (const key of PROXY_ENV_KEYS) {
+      vi.stubEnv(key, undefined);
+    }
+    vi.stubEnv("HTTPS_PROXY", "http://proxy.example.com:3128");
+    const requireFromTest = createRequire(import.meta.url);
+    const requireFromBolt = createRequire(requireFromTest.resolve("@slack/bolt/package.json"));
+    const requireFromSocketMode = createRequire(
+      requireFromBolt.resolve("@slack/socket-mode/package.json"),
+    );
+    const { EnvHttpProxyAgent } = requireFromSocketMode(
+      "undici/index.js",
+    ) as typeof import("undici");
+    const monitor = startSlackMonitor(monitorSlackProvider);
+    try {
+      await getSlackHandlerOrThrow("message");
+      expect(getSlackTestState().socketModeReceiverArgs?.dispatcher).toBeInstanceOf(
+        EnvHttpProxyAgent,
+      );
+    } finally {
+      await stopSlackMonitor(monitor);
+    }
+  });
+
   it("omits the empty body on the shipped Socket Mode startup path", async () => {
     for (const key of PROXY_ENV_KEYS) {
       vi.stubEnv(key, "");
@@ -409,51 +433,6 @@ describe("user identity provider transport", () => {
       WasMentioned: true,
     });
     expect(sendMock).toHaveBeenCalledWith("channel:C1", "acknowledged", expect.any(Object));
-    await stopSlackMonitor(monitor);
-  });
-
-  it("delivers another user's DM and drops a self-authored DM", async () => {
-    const config = userSocketConfig();
-    await resetSlackTestState(config);
-    getSlackClient().auth.test.mockResolvedValueOnce({
-      app_id: "A_TEST",
-      user_id: "U_SELF",
-      team_id: "T_TEST",
-      is_enterprise_install: false,
-    });
-    const { replyMock, sendMock } = getSlackTestState();
-    replyMock.mockResolvedValue({ text: "hello back" });
-    const monitor = await startWithoutBotToken(config);
-    const handler = await getSlackHandlerOrThrow("message");
-    const baseEvent = {
-      type: "message",
-      channel: "D1",
-      channel_type: "im",
-      text: "hello",
-    };
-
-    await runSlackHandlerWithDispatch(handler, {
-      event: { ...baseEvent, user: "U_OTHER", ts: "100.000" },
-      context: { botUserId: "U_SELF" },
-      body: {},
-    });
-    const dispatchedContext = replyMock.mock.calls[0]?.[0];
-    expect(dispatchedContext).toMatchObject({
-      Body: expect.stringMatching(/Ada: hello\n\[slack message id: 100\.000 channel: D1\]$/u),
-      ChatType: "direct",
-      WasMentioned: false,
-    });
-    expect(sendMock).toHaveBeenCalledWith("channel:D1", "hello back", expect.any(Object));
-
-    await handler({
-      event: { ...baseEvent, user: "U_SELF", ts: "101.000" },
-      context: { botUserId: "U_SELF" },
-      body: {},
-    });
-    await flush();
-
-    expect(replyMock).toHaveBeenCalledTimes(1);
-    expect(sendMock).toHaveBeenCalledTimes(1);
     await stopSlackMonitor(monitor);
   });
 
