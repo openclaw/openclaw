@@ -113,7 +113,11 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
     .command("list")
     .description("List Workboard cards")
     .option("--board <id>", "Board id")
-    .option("--status <status>", "Filter by status")
+    .addOption(
+      workboard
+        .createOption("--status <status>", "Filter by status")
+        .choices([...WORKBOARD_STATUSES]),
+    )
     .option("--include-archived", "Include archived cards (default false)")
     .option("--json", "Print JSON", false)
     .action(
