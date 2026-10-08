@@ -2922,7 +2922,10 @@ activation and recovery remain post-ready.
 Session-list facts are prepared with each immutable row and reused at publication.
 A replacement row owns new facts; the cache does not retain retired rows.
 Completion acknowledgments also carry decoded records and worker-computed physical
-versions; the host does not parse or hash the retained JSON again. Transaction and
+versions; the host does not parse or hash the retained JSON again. The transfer
+owners hash the physical rows only when those versions are needed. Plain decoding,
+including maintenance and session-list projections, does not retain discarded row
+versions. Transaction and
 commit authority, terminal-event
 atomicity, uncertain-write recovery, schemas, retention, and update behavior are
 unchanged. No migration or configuration change is required.
