@@ -3036,7 +3036,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/gateway/session-transcript-readers.test.ts",
   "src/gateway/session-transcript-title-reader.retention.test.ts",
   "src/gateway/session-transcript-title-reader.test.ts",
-  "src/gateway/session-utils-model.acp-owner.test.ts",
   "src/gateway/session-utils-model.thinking-default.test.ts",
   "src/gateway/session-utils-owners.test.ts",
   "src/gateway/session-utils-profile-reference.test.ts",
