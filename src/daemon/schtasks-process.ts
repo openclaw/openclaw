@@ -465,13 +465,13 @@ export async function terminateScheduledTaskGatewayListeners(
   assertCurrent?: () => void,
   stop?: {
     end: () => Promise<void>;
-    beforeMutation?: () => Promise<void>;
     restart?: boolean;
     onStopped?: () => void;
     warn: (message: string) => void;
     onSettlement?: (fact: ScheduledTaskSettlement) => void;
     onRecovery?: () => void;
   },
+  beforeMutation?: () => Promise<void>,
 ): Promise<number[] | null> {
   const windows = process.platform === "win32";
   const ownership = shouldManageGatewayListenerPort(env)
@@ -481,6 +481,8 @@ export async function terminateScheduledTaskGatewayListeners(
     if (stop && windows && shouldManageGatewayListenerPort(env)) {
       throw new Error("Gateway identity unavailable; stop refused and Gateway preserved.");
     }
+    await beforeMutation?.();
+    assertCurrent?.();
     await stop?.end();
     return [];
   }
@@ -494,10 +496,10 @@ export async function terminateScheduledTaskGatewayListeners(
       })
     : undefined;
   const terminate = async () => {
-    await stop?.beforeMutation?.();
+    await beforeMutation?.();
     const settle = stop && windows ? prepareScheduledTaskSettlement(resolveTaskName(env)) : null;
     try {
-      await stop?.beforeMutation?.();
+      await beforeMutation?.();
       const owner = ownership.owner;
       if (stop && windows && owner && ownership.pids.includes(owner.pid)) {
         let dispatched = false;

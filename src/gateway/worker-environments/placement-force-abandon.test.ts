@@ -4,6 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
+import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
@@ -46,7 +51,9 @@ describe("forced worker environment abandonment", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it("drains nested operations before recording result loss and releasing the claim", async () => {
+  it("drains nested operations before recording result loss and releasing the claim", async ({
+    signal,
+  }) => {
     const { store, environmentId } = await createActiveAbandonmentFixture(database);
     const claim = await store.claimTurn({
       ...REQUEST,
@@ -66,36 +73,62 @@ describe("forced worker environment abandonment", () => {
       }),
     ).toMatchObject({ kind: "execute" });
 
+    const closingTools = createDeferred();
+    const closeToolState = store.closeWorkerTurnToolState.bind(store);
+    const observeClosing = vi
+      .spyOn(store, "closeWorkerTurnToolState")
+      .mockImplementation((closing) => {
+        const pending = closeToolState(closing);
+        // The real owner stages its fail-closed admission fence before its first await.
+        closingTools.resolve();
+        return pending;
+      });
     const abandonment = forceAbandonWorkerEnvironment({
       placements: store,
       environmentId,
       resolveWorkspace: async () => ({ kind: "local" as const, path: root }),
     });
-
-    await vi.waitFor(() => {
-      expect(store.isWorkerTurnToolAuthorized(binding, "sessions_send")).toBe(false);
-    });
-    expect(store.get(REQUEST.sessionId)).toMatchObject({
-      state: "active",
-      turnClaim: { claimId: claim.claimId },
-    });
-    expect(
-      await store.completeWorkerSessionToolOperation({
+    let completion: Promise<boolean> | undefined;
+    const completeNestedOperation = () =>
+      (completion ??= store.completeWorkerSessionToolOperation({
         sourceSessionId: claim.sessionId,
         sourceClaimId: claim.claimId,
         toolCallId: "forced-send",
         requestDigest: "forced-send-digest",
         resultJson: '{"status":"ok"}',
-      }),
-    ).toBe(true);
-    await abandonment;
+      }));
 
-    expect(store.get(REQUEST.sessionId)).toMatchObject({
-      state: "failed",
-      turnClaim: null,
-      recoveryError: "Worker result abandoned by forced operator teardown",
-    });
-    expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          closingTools.promise,
+          abandonment,
+          "Forced abandonment settled before closing nested tool admission",
+        ),
+        signal,
+      );
+      expect(store.isWorkerTurnToolAuthorized(binding, "sessions_send")).toBe(false);
+      expect(store.get(REQUEST.sessionId)).toMatchObject({
+        state: "active",
+        turnClaim: { claimId: claim.claimId },
+      });
+      expect(await completeNestedOperation()).toBe(true);
+      await withinTest(abandonment, signal);
+
+      expect(store.get(REQUEST.sessionId)).toMatchObject({
+        state: "failed",
+        turnClaim: null,
+        recoveryError: "Worker result abandoned by forced operator teardown",
+      });
+      expect(await store.listPendingWorkspaceResultsAsync()).toEqual([]);
+    } finally {
+      try {
+        await completeNestedOperation();
+      } finally {
+        await Promise.allSettled([abandonment]);
+        observeClosing.mockRestore();
+      }
+    }
   });
 
   it("releases a pending reclaim claim when its workspace is already gone", async () => {

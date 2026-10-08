@@ -60,6 +60,10 @@ func finishOutboxFlush(_ vm: OpenClawChatViewModel, at gate: OutboxTestGate) asy
     let flush = vm.outboxFlushTask
     await gate.release()
     try await #require(flush).value
+    // A completed pass can install another coalesced request before it returns.
+    while let successor = vm.outboxFlushTask {
+        await successor.value
+    }
 }
 
 actor OutboxTestGate {
@@ -1763,6 +1767,8 @@ struct ChatViewModelOutboxTests {
         let vm = await makeOutboxViewModel(transport: transport, outbox: outbox)
 
         await MainActor.run { vm.load() }
+        await MainActor.run { vm.bootstrapTask }?.value
+        await waitForObservedState { vm.hasRestoredOutboxMessages }
         try await sendWhileOffline(vm, text: "doomed")
 
         // Gateway is reachable again but rejects the run on every attempt.
@@ -1770,8 +1776,6 @@ struct ChatViewModelOutboxTests {
         await transport.goOnline()
 
         try await finishOutboxFlush(vm, at: terminalGate)
-        // The held terminal write can coalesce a reconnect trigger into a successor pass.
-        await vm.outboxFlushTask?.value
         #expect(await store.loadCommands().map(\.status) == [.failed])
         let failed = try #require(await store.loadCommands().first)
         #expect(failed.retryCount == OpenClawChatViewModel.maxOutboxSendAttempts)
@@ -1831,8 +1835,6 @@ struct ChatViewModelOutboxTests {
         await transport.goOnline()
 
         try await finishOutboxFlush(vm, at: terminalGate)
-        // The held terminal write can coalesce a reconnect trigger into a successor pass.
-        await vm.outboxFlushTask?.value
         #expect(await store.loadCommands().first?.status == .sending)
         #expect(await MainActor.run { !vm.healthOK })
         #expect(await MainActor.run {
@@ -1855,8 +1857,6 @@ struct ChatViewModelOutboxTests {
         await transport.goOnline()
 
         try await finishOutboxFlush(vm, at: terminalGate)
-        // The held terminal write can coalesce a reconnect trigger into a successor pass.
-        await vm.outboxFlushTask?.value
         #expect(await store.loadCommands().map(\.status) == [.failed])
         let failed = try #require(await store.loadCommands().first)
         #expect(failed.retryCount == OpenClawChatViewModel.maxOutboxSendAttempts)

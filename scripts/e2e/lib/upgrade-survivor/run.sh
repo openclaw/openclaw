@@ -1540,6 +1540,7 @@ update_candidate() {
       >"$ARTIFACT_ROOT/recovery-update-metrics.log" 2>&1 || update_status=$?
   elif [ "$SCENARIO" = "legacy-operator-state" ] && [ "$after_repair" != "1" ]; then
     openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" node scripts/e2e/lib/upgrade-survivor/update-timeout-diagnostics.mjs \
+      --diagnostics-path "$ARTIFACT_ROOT/update-interruption.log" \
       -- "${update_env[@]}" openclaw "${update_args[@]}" >"$update_json" 2>"$update_err" || update_status=$?
   else
     openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" "${update_env[@]}" openclaw "${update_args[@]}" >"$update_json" 2>"$update_err" || update_status=$?

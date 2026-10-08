@@ -290,6 +290,81 @@ profile, and state/config overrides. Stop the Gateway through its owner before
 replacing the package, run the newly installed Doctor, then start and verify the
 Gateway. Do not lower schema markers or run an older build against migrated data.
 
+## Tauri companion runtime preparation
+
+The Tauri companion in `apps/linux` is separate from Windows Hub. Its Windows
+bundled-runtime path requires a Windows fork artifact marked Authenticode-signed
+in the shared release pin. An unsigned or missing artifact leaves that path
+unavailable; there is no user setting that enables it. The current Windows x64
+entry is unsigned preparation data. Both x64 and ARM64 use this admission rule;
+each requires its matching fork artifact and generated pin entry. An absent
+ARM64 artifact stays unavailable rather than selecting an x64 executable.
+
+When an artifact is admitted, fresh local setup installs a private Node-based CLI
+from the selected Stable or Beta channel, then uses the canonical CLI to install
+the Gateway on bundled Bun. Windows fresh setup does not offer Development; an
+existing source-installed CLI can still be used. Node remains CLI and installation
+tooling. Existing Gateways keep their runtime across startup, reconnects, and app
+updates. Choose **Use bundled runtime…** and confirm the displayed current runtime
+to change one. The CLI checks the captured runtime pin and service definition
+under its native service lock. Paused, changed, or unverifiable services refuse
+without automatic migration. The app does not implement a separate rollback;
+the canonical service owner retains its backup and recovery behavior.
+
+Fresh setup stays unelevated. When Windows uses a per-user Startup registration,
+later bundled-runtime adoption keeps that registration kind. The same Windows
+owner guards its launcher files and the absence of a Scheduled Task, stops the
+owned process, publishes the replacement command, and verifies readiness before
+committing the runtime pin. A failed publication or startup restores the previous
+command and running state. Startup launcher files remain unchanged; adoption does
+not convert the installation into a Scheduled Task or request UAC.
+
+An existing managed Gateway Scheduled Task requires administrator rights to
+replace its boot-trigger registration, even when the same account can access its
+process. The confirmation explains the administrator request. The app elevates
+only the existing CLI, with one UAC request when needed; an already-elevated app
+does not request UAC again. That CLI checks
+the captured pin again, performs the complete stop, replace, and start operation,
+verifies Gateway health, and exits. There is no resident elevated helper, stored
+credential, or automatic migration on startup or update.
+
+Cancelling UAC leaves the Gateway unchanged. An account without an administrator
+token does not receive a credential prompt. Both outcomes show the exact
+PowerShell command to run manually with administrator approval for the same
+Windows account. If the pin or definition changes while approval is pending,
+the CLI refuses the stale action and preserves the newer selection. Choosing an
+already-selected bundled runtime does not reinstall it.
+
+If installation succeeds but health verification fails, the app reports the
+Gateway as installed but unverified. Run `openclaw gateway status --deep` before
+retrying.
+
+The app decodes verified `bun.exe` bytes into an immutable directory under its
+account state directory, normally
+`%USERPROFILE%\.openclaw\tools\desktop-runtime\<tag>-<manifest-hash>\bin\bun.exe`.
+A file lock serializes publication, reparse points are rejected, and staged files
+are flushed and closed before a rename within the same directory. Published
+runtime directories are never overwritten or automatically removed, including
+those still referenced by a running service. Windows may keep executable files
+open; the canonical service owner stops the old process before changing its
+Scheduled Task definition.
+
+The fork release signs both Windows architectures with the OpenClaw Foundation
+Azure Artifact Signing identity. The release owner verifies a valid timestamped
+signature with subject
+`CN=OpenClaw Foundation, O=OpenClaw Foundation, L=Mill Valley, S=California, C=US`
+before generating the executable and archive hashes. Authenticode establishes
+publisher identity and file integrity; it does not
+promise SmartScreen reputation or a warning-free first launch. The app and
+installer have their own signing requirements. Local unsigned debug proof does
+not establish SmartScreen behavior for a downloaded release.
+
+For complete uninstall, quit the companion and run the canonical uninstaller
+using Node and a CLI package outside the state directory, as in the
+[independent npx uninstall flow](/install/uninstall). A Windows CLI cannot remove
+its own open runtime image from that directory; the uninstaller reports partial
+cleanup rather than claiming success.
+
 ## WSL2 Gateway
 
 WSL2 remains the most Linux-compatible Gateway runtime on Windows. Windows

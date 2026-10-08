@@ -9,7 +9,7 @@ use std::process::Command;
 use tauri::{path::BaseDirectory, AppHandle, Manager};
 
 const MANIFEST: &str = include_str!(concat!(env!("OUT_DIR"), "/desktop-runtime.json"));
-const LINUX_RESOURCE_PREFIX: &[u8] = b"OPENCLAW-BUN-RUNTIME-V1\n";
+const RESOURCE_PREFIX: &[u8] = b"OPENCLAW-BUN-RUNTIME-V1\n";
 
 type RuntimeResult<T> = Result<T, Box<dyn std::error::Error>>;
 
@@ -18,10 +18,35 @@ type RuntimeResult<T> = Result<T, Box<dyn std::error::Error>>;
 struct Manifest {
     tag: String,
     commit: String,
-    revision: String,
+    revision: Option<String>,
     platform: String,
     arch: String,
+    #[serde(rename = "authenticodeSigned")]
+    authenticode_signed: Option<bool>,
+    #[serde(rename = "testOnly")]
+    test_only: Option<bool>,
     files: BTreeMap<String, String>,
+}
+
+pub(crate) fn available() -> bool {
+    serde_json::from_str::<Manifest>(MANIFEST)
+        .is_ok_and(|manifest| validate_manifest(&manifest).is_ok())
+}
+
+fn bun_file() -> &'static str {
+    if cfg!(windows) {
+        "bin/bun.exe"
+    } else {
+        "bin/bun"
+    }
+}
+
+fn executable_path(directory: &Path) -> PathBuf {
+    let path = directory.join(bun_file());
+    #[cfg(windows)]
+    return crate::cli::ordinary_windows_path(&path);
+    #[cfg(not(windows))]
+    path
 }
 
 pub(crate) fn expected_bun_path() -> Result<PathBuf, String> {
@@ -29,7 +54,9 @@ pub(crate) fn expected_bun_path() -> Result<PathBuf, String> {
         .map_err(|_| "This build has no embedded runtime.".to_string())?;
     validate_manifest(&manifest)?;
     let prefix = crate::cli::openclaw_home().map_err(|error| error.to_string())?;
-    Ok(runtime_directory(&prefix, MANIFEST, &manifest).join("bin/bun"))
+    Ok(executable_path(&runtime_directory(
+        &prefix, MANIFEST, &manifest,
+    )))
 }
 
 fn runtime_directory(prefix: &Path, bytes: &str, manifest: &Manifest) -> PathBuf {
@@ -71,9 +98,13 @@ fn seed_at(
     verify_payload(source, manifest_bytes, &manifest, true)?;
     let store = prefix.join("tools/desktop-runtime");
     ensure_directory(&store)?;
+    #[cfg(windows)]
+    let _publication = lock_publication(&store)?;
     let destination = runtime_directory(prefix, manifest_bytes, &manifest);
-    if fs::symlink_metadata(&destination).is_ok() {
+    if path_exists(&destination)? {
         verify_payload(&destination, manifest_bytes, &manifest, false)?;
+        #[cfg(windows)]
+        probe(&executable_path(&destination), &manifest)?;
     } else {
         let staging = store.join(format!(".stage-{}", uuid::Uuid::new_v4()));
         fs::create_dir(&staging)?;
@@ -81,13 +112,14 @@ fn seed_at(
             for file in manifest.files.keys() {
                 let output = staging.join(file);
                 ensure_directory(output.parent().expect("runtime file parent"))?;
-                let mut input = open_payload(&source.join(file), manifest.platform == "linux")?;
+                let mut input = open_payload(&source.join(file), enveloped(&manifest))?;
                 let mut output_file = fs::OpenOptions::new()
                     .write(true)
                     .create_new(true)
                     .open(&output)?;
                 std::io::copy(&mut input, &mut output_file)?;
                 output_file.sync_all()?;
+                drop(output_file);
                 #[cfg(unix)]
                 {
                     use std::os::unix::fs::PermissionsExt;
@@ -100,8 +132,11 @@ fn seed_at(
                 .open(staging.join("manifest.json"))?;
             output.write_all(manifest_bytes.as_bytes())?;
             output.sync_all()?;
+            // Windows cannot rename a directory while a child handle denies deletion.
+            drop(output);
             verify_payload(&staging, manifest_bytes, &manifest, false)?;
-            probe(&staging.join("bin/bun"), &manifest)?;
+            probe(&executable_path(&staging), &manifest)?;
+            #[cfg(unix)]
             for directory in [
                 Some(staging.join("bin")),
                 manifest
@@ -117,10 +152,11 @@ fn seed_at(
             }
             // Never repair or overwrite a previously published runtime in place:
             // a service or CLI launcher may still reference those exact bytes.
-            if fs::symlink_metadata(&destination).is_ok() {
+            if path_exists(&destination)? {
                 verify_payload(&destination, manifest_bytes, &manifest, false)?;
             } else {
                 fs::rename(&staging, &destination)?;
+                #[cfg(unix)]
                 fs::File::open(&store).and_then(|directory| directory.sync_all())?;
             }
             Ok(())
@@ -130,8 +166,10 @@ fn seed_at(
         }
         result?;
     }
+    #[cfg(windows)]
+    let destination = fs::canonicalize(destination)?;
     Ok(BundledRuntime {
-        bun: destination.join("bin/bun"),
+        bun: executable_path(&destination),
         sqlite: manifest
             .files
             .contains_key("lib/libsqlite3.dylib")
@@ -151,6 +189,14 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
         "x64"
     };
     let expected = if platform == "darwin" { 2 } else { 1 };
+    let admitted = if platform == "windows" {
+        (manifest.authenticode_signed == Some(true) && manifest.test_only != Some(true))
+            || (cfg!(debug_assertions)
+                && manifest.authenticode_signed == Some(false)
+                && manifest.test_only == Some(true))
+    } else {
+        manifest.authenticode_signed.is_none() && manifest.test_only.is_none()
+    };
     let safe_tag = !manifest.tag.is_empty()
         && manifest
             .tag
@@ -161,12 +207,14 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
     if !safe_tag
         || manifest.platform != platform
         || manifest.arch != arch
-        || !matches!(platform, "linux" | "darwin")
+        || !matches!(platform, "linux" | "darwin" | "windows")
+        || !admitted
         || manifest.commit.len() != 40
         || !manifest.commit.bytes().all(|byte| byte.is_ascii_hexdigit())
-        || manifest.revision.is_empty()
+        || manifest.revision.as_deref().is_some_and(str::is_empty)
+        || (platform != "windows" && manifest.revision.is_none())
         || manifest.files.len() != expected
-        || !manifest.files.contains_key("bin/bun")
+        || !manifest.files.contains_key(bun_file())
         || (platform == "darwin" && !manifest.files.contains_key("lib/libsqlite3.dylib"))
         || manifest
             .files
@@ -178,15 +226,67 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
     Ok(())
 }
 
+fn enveloped(manifest: &Manifest) -> bool {
+    matches!(manifest.platform.as_str(), "linux" | "windows")
+}
+
+fn redirected(metadata: &fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_attributes() & 0x400 != 0 // FILE_ATTRIBUTE_REPARSE_POINT
+    }
+    #[cfg(not(windows))]
+    metadata.file_type().is_symlink()
+}
+
+fn path_exists(path: &Path) -> RuntimeResult<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+#[cfg(windows)]
+fn lock_publication(store: &Path) -> RuntimeResult<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        // Share reads/writes for cooperating publishers, but never rename/delete the lock.
+        .share_mode(3)
+        .custom_flags(0x00200000) // FILE_FLAG_OPEN_REPARSE_POINT
+        .open(store.join(".publish.lock"))?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() || redirected(&metadata) {
+        return Err("Runtime publication lock is redirected.".into());
+    }
+    file.lock()
+        .map_err(|error| format!("Runtime publication lock failed: {error}"))?;
+    Ok(file)
+}
+
 fn ensure_directory(path: &Path) -> RuntimeResult<()> {
     if let Some(parent) = path.parent().filter(|parent| *parent != path) {
         ensure_directory(parent)?;
     }
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_dir() => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            fs::create_dir(path).map_err(Into::into)
-        }
+        Ok(metadata) if metadata.is_dir() && !redirected(&metadata) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => match fs::create_dir(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let metadata = fs::symlink_metadata(path)?;
+                if metadata.is_dir() && !redirected(&metadata) {
+                    Ok(())
+                } else {
+                    Err("Runtime directory is redirected.".into())
+                }
+            }
+            Err(error) => Err(error.into()),
+        },
         _ => Err(format!(
             "Runtime directory is unavailable or redirected: {}",
             path.display()
@@ -202,7 +302,7 @@ fn verify_payload(
     bundled: bool,
 ) -> RuntimeResult<()> {
     let metadata = fs::symlink_metadata(root)?;
-    if !metadata.is_dir() {
+    if !metadata.is_dir() || redirected(&metadata) {
         return Err("Embedded runtime directory is redirected.".into());
     }
     let mut expected: Vec<PathBuf> = manifest.files.keys().map(PathBuf::from).collect();
@@ -215,11 +315,13 @@ fn verify_payload(
     collect_files(root, Path::new(""), &mut observed)?;
     expected.sort();
     observed.sort();
-    if observed != expected || fs::read(root.join("manifest.json"))? != bytes.as_bytes() {
+    let mut recorded_manifest = Vec::new();
+    open_payload(&root.join("manifest.json"), false)?.read_to_end(&mut recorded_manifest)?;
+    if observed != expected || recorded_manifest != bytes.as_bytes() {
         return Err("Embedded runtime manifest or file set changed; reinstall the app.".into());
     }
     for (file, expected_hash) in &manifest.files {
-        let mut input = open_payload(&root.join(file), bundled && manifest.platform == "linux")?;
+        let mut input = open_payload(&root.join(file), bundled && enveloped(manifest))?;
         let mut digest = Sha256::new();
         let mut buffer = [0; 64 * 1024];
         loop {
@@ -244,12 +346,28 @@ fn verify_payload(
 }
 
 fn open_payload(path: &Path, enveloped: bool) -> RuntimeResult<fs::File> {
-    let mut input = fs::File::open(path)?;
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_file() || redirected(&metadata) {
+        return Err("Embedded runtime file is redirected or not regular.".into());
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // Keep each admitted read stable against a concurrent writer or rename.
+        options.share_mode(1).custom_flags(0x00200000);
+    }
+    let mut input = options.open(path)?;
+    let metadata = input.metadata()?;
+    if !metadata.is_file() || redirected(&metadata) {
+        return Err("Embedded runtime file is redirected or not regular.".into());
+    }
     if enveloped {
         // The Linux bundle is data so linuxdeploy cannot rewrite its ELF bytes.
         // Installed executables have no envelope and retain the admitted hash.
-        let mut prefix = [0; LINUX_RESOURCE_PREFIX.len()];
-        if input.read_exact(&mut prefix).is_err() || prefix != LINUX_RESOURCE_PREFIX {
+        let mut prefix = [0; RESOURCE_PREFIX.len()];
+        if input.read_exact(&mut prefix).is_err() || prefix != RESOURCE_PREFIX {
             return Err("Embedded Bun resource envelope changed; reinstall the app.".into());
         }
     }
@@ -260,6 +378,9 @@ fn collect_files(root: &Path, relative: &Path, files: &mut Vec<PathBuf>) -> Runt
     for entry in fs::read_dir(root.join(relative))? {
         let entry = entry?;
         let kind = entry.file_type()?;
+        if redirected(&fs::symlink_metadata(entry.path())?) {
+            return Err("Embedded runtime contains redirected files.".into());
+        }
         let file = relative.join(entry.file_name());
         if kind.is_file() {
             files.push(file);
@@ -277,10 +398,12 @@ fn collect_files(root: &Path, relative: &Path, files: &mut Vec<PathBuf>) -> Runt
 }
 
 fn verify_revision(bun: &Path, manifest: &Manifest) -> Result<(), String> {
-    for (args, expected) in [
-        (vec!["--revision"], manifest.revision.as_str()),
-        (vec!["-p", "Bun.revision"], manifest.commit.as_str()),
-    ] {
+    let mut probes = Vec::new();
+    if let Some(revision) = &manifest.revision {
+        probes.push((vec!["--revision"], revision.as_str()));
+    }
+    probes.push((vec!["-p", "Bun.revision"], manifest.commit.as_str()));
+    for (args, expected) in probes {
         let output = Command::new(bun)
             .args(args)
             .env_clear()
@@ -309,12 +432,14 @@ mod tests {
             let root = std::env::temp_dir()
                 .canonicalize()
                 .unwrap()
-                .join(format!("bundled-runtime-{}", uuid::Uuid::new_v4()));
+                .join(format!("bundled runtime-雪-{}", uuid::Uuid::new_v4()));
+            #[cfg(windows)]
+            let root = crate::cli::ordinary_windows_path(&root);
             let source = root.join("app-resources");
             fs::create_dir_all(source.join("bin")).unwrap();
             write_source(&source, b"synthetic runtime");
             let mut files = BTreeMap::from([(
-                "bin/bun",
+                bun_file(),
                 Sha256::digest(b"synthetic runtime")
                     .iter()
                     .map(|byte| format!("{byte:02x}"))
@@ -331,9 +456,13 @@ mod tests {
                         .collect::<String>(),
                 );
             }
-            let manifest = serde_json::json!({ "tag": "test-fork", "commit": "a".repeat(40), "revision": "test-revision",
-                "platform": if cfg!(target_os = "macos") { "darwin" } else { "linux" },
-                "arch": if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" }, "files": files }).to_string();
+            let mut manifest = serde_json::json!({ "tag": "test-fork", "commit": "a".repeat(40), "revision": "test-revision",
+                "platform": if cfg!(target_os = "macos") { "darwin" } else { std::env::consts::OS },
+                "arch": if cfg!(target_arch = "aarch64") { "arm64" } else { "x64" }, "files": files });
+            if cfg!(windows) {
+                manifest["authenticodeSigned"] = true.into();
+            }
+            let manifest = manifest.to_string();
             fs::write(source.join("manifest.json"), &manifest).unwrap();
             Self {
                 prefix: root.join("state"),
@@ -356,12 +485,12 @@ mod tests {
     }
 
     fn write_source(source: &Path, bytes: &[u8]) {
-        let encoded = if cfg!(target_os = "linux") {
-            [LINUX_RESOURCE_PREFIX, bytes].concat()
+        let encoded = if cfg!(any(target_os = "linux", windows)) {
+            [RESOURCE_PREFIX, bytes].concat()
         } else {
             bytes.to_vec()
         };
-        fs::write(source.join("bin/bun"), encoded).unwrap();
+        fs::write(source.join(bun_file()), encoded).unwrap();
     }
 
     #[test]
@@ -416,18 +545,18 @@ mod tests {
         assert_eq!(fs::read(&runtime.bun).unwrap(), b"operator replacement");
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     #[test]
     fn rejects_corrupted_missing_or_truncated_resource_envelope() {
         let fixture = Fixture::new();
-        let mut corrupt = [LINUX_RESOURCE_PREFIX, b"synthetic runtime"].concat();
+        let mut corrupt = [RESOURCE_PREFIX, b"synthetic runtime"].concat();
         corrupt[0] = b'!';
         for bytes in [
             corrupt,
             b"synthetic runtime".to_vec(),
-            LINUX_RESOURCE_PREFIX[..5].to_vec(),
+            RESOURCE_PREFIX[..5].to_vec(),
         ] {
-            fs::write(fixture.source.join("bin/bun"), bytes).unwrap();
+            fs::write(fixture.source.join(bun_file()), bytes).unwrap();
             assert!(fixture
                 .seed()
                 .unwrap_err()
@@ -453,7 +582,7 @@ mod tests {
             fs::read_dir(fixture.prefix.join("tools/desktop-runtime"))
                 .unwrap()
                 .count(),
-            0
+            usize::from(cfg!(windows))
         );
     }
 
@@ -481,12 +610,117 @@ mod tests {
         symlink(&fixture.source, &fixture.prefix).unwrap();
         assert!(fixture.seed().is_err());
         fs::remove_file(&fixture.prefix).unwrap();
-        fs::remove_file(fixture.source.join("bin/bun")).unwrap();
+        fs::remove_file(fixture.source.join(bun_file())).unwrap();
         symlink(
             fixture.source.join("manifest.json"),
-            fixture.source.join("bin/bun"),
+            fixture.source.join(bun_file()),
         )
         .unwrap();
         assert!(fixture.seed().is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_admission_requires_signed_release_or_explicit_unsigned_debug_proof() {
+        let fixture = Fixture::new();
+        let original: serde_json::Value = serde_json::from_str(&fixture.manifest).unwrap();
+        for (signed, test_only, accepted) in [
+            (None, None, false),
+            (Some(false), None, false),
+            (Some(true), None, true),
+            (Some(true), Some(true), false),
+            (None, Some(true), false),
+            (Some(false), Some(true), cfg!(debug_assertions)),
+        ] {
+            let mut value = original.clone();
+            value.as_object_mut().unwrap().remove("revision");
+            value["authenticodeSigned"] = signed.into();
+            value["testOnly"] = test_only.into();
+            let manifest: Manifest = serde_json::from_value(value).unwrap();
+            assert_eq!(validate_manifest(&manifest).is_ok(), accepted);
+        }
+        let mut other_arch = original;
+        other_arch["arch"] = if cfg!(target_arch = "aarch64") {
+            "x64"
+        } else {
+            "arm64"
+        }
+        .into();
+        let manifest: Manifest = serde_json::from_value(other_arch).unwrap();
+        assert!(validate_manifest(&manifest).is_err());
+        let runtime = fixture.seed().unwrap();
+        assert!(runtime.bun.ends_with("bin/bun.exe"));
+        assert!(!runtime.bun.to_string_lossy().starts_with(r"\\?\"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_reuses_open_runtime_and_keeps_read_and_publication_handles_stable() {
+        let fixture = Fixture::new();
+        let runtime = fixture.seed().unwrap();
+        let reader = open_payload(&runtime.bun, false).unwrap();
+        assert_eq!(fixture.seed().unwrap().bun, runtime.bun);
+        assert!(fs::write(&runtime.bun, "replacement").is_err());
+        assert!(fs::rename(&runtime.bun, runtime.bun.with_extension("old")).is_err());
+        drop(reader);
+        let store = fixture.prefix.join("tools/desktop-runtime");
+        let publication = lock_publication(&store).unwrap();
+        assert!(fs::rename(store.join(".publish.lock"), store.join("old-lock")).is_err());
+        assert!(fs::remove_file(store.join(".publish.lock")).is_err());
+        drop(publication);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_concurrent_publishers_share_one_immutable_directory() {
+        let fixture = Fixture::new();
+        let barrier = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            let first = scope.spawn(|| {
+                barrier.wait();
+                fixture.seed().unwrap()
+            });
+            let second = scope.spawn(|| {
+                barrier.wait();
+                fixture.seed().unwrap()
+            });
+            assert_eq!(first.join().unwrap(), second.join().unwrap());
+        });
+        let entries: Vec<_> = fs::read_dir(fixture.prefix.join("tools/desktop-runtime"))
+            .unwrap()
+            .map(|entry| entry.unwrap())
+            .filter(|entry| entry.file_type().unwrap().is_dir())
+            .collect();
+        assert_eq!(entries.len(), 1);
+        assert!(!entries[0]
+            .file_name()
+            .to_string_lossy()
+            .starts_with(".stage-"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_rejects_junctions_and_reparse_source_files() {
+        let fixture = Fixture::new();
+        let result = Command::new("cmd.exe")
+            .args(["/d", "/c", "mklink", "/J"])
+            .arg(&fixture.prefix)
+            .arg(&fixture.source)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(fixture.seed().unwrap_err().contains("redirected"));
+        fs::remove_dir(&fixture.prefix).unwrap();
+        fs::remove_file(fixture.source.join(bun_file())).unwrap();
+        std::os::windows::fs::symlink_file(
+            fixture.source.join("manifest.json"),
+            fixture.source.join(bun_file()),
+        )
+        .unwrap();
+        assert!(fixture.seed().unwrap_err().contains("redirected"));
     }
 }

@@ -4,7 +4,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -63,12 +63,28 @@ impl OpenClawCli {
             return Ok(cli);
         }
 
-        let managed = home.join("bin/openclaw");
+        let managed = managed_launcher(&home);
         if managed.is_file() {
             return Ok(Self::new(managed, home));
         }
 
-        Ok(Self::new(PathBuf::from("openclaw"), home))
+        let cli = Self::new(PathBuf::from("openclaw"), home);
+        #[cfg(windows)]
+        let cli = {
+            let executable = env::split_paths(&cli.command_path()?)
+                .flat_map(|directory| {
+                    [
+                        directory.join("openclaw.exe"),
+                        directory.join("openclaw.cmd"),
+                    ]
+                })
+                .find(|candidate| candidate.is_file());
+            Self {
+                executable: executable.unwrap_or(cli.executable),
+                ..cli
+            }
+        };
+        Ok(cli)
     }
 
     fn new(executable: PathBuf, openclaw_home: PathBuf) -> Self {
@@ -118,9 +134,31 @@ impl OpenClawCli {
         I: IntoIterator<Item = S>,
         S: AsRef<std::ffi::OsStr>,
     {
+        #[cfg(windows)]
+        let mut command = self
+            .managed_windows_command()?
+            .unwrap_or_else(|| Command::new(&self.executable));
+        #[cfg(not(windows))]
         let mut command = Command::new(&self.executable);
         command.args(args);
-        command.env("PATH", self.command_path()?);
+        let command_path = self.command_path()?;
+        #[cfg(windows)]
+        let command_path = {
+            let program = Path::new(command.get_program());
+            if program.starts_with(self.openclaw_home.join("tools/desktop-cli")) {
+                env::join_paths(
+                    program
+                        .parent()
+                        .into_iter()
+                        .map(Path::to_path_buf)
+                        .chain(env::split_paths(&command_path)),
+                )
+                .map_err(|error| CliError::Environment(error.to_string()))?
+            } else {
+                command_path
+            }
+        };
+        command.env("PATH", command_path);
         command.stdin(Stdio::null());
         Ok(command)
     }
@@ -235,21 +273,101 @@ impl OpenClawCli {
             .map_err(|_| CliError::InvalidJson("Chrome setup returned no valid result.".into()))
     }
 
+    #[cfg(unix)]
     pub(crate) fn managed_wrapper(&self) -> Option<PathBuf> {
-        let managed = self.openclaw_home.join("bin/openclaw");
+        let managed = managed_launcher(&self.openclaw_home);
         (self.allow_runtime_management && self.executable == managed).then_some(managed)
+    }
+
+    #[cfg(windows)]
+    fn managed_windows_command(&self) -> Result<Option<Command>, CliError> {
+        if !self.allow_runtime_management
+            || self.executable != managed_launcher(&self.openclaw_home)
+        {
+            return Ok(None);
+        }
+        let metadata = fs::symlink_metadata(&self.executable)
+            .map_err(|error| CliError::Environment(error.to_string()))?;
+        if !metadata.is_file() || metadata.len() > 65536 {
+            return Ok(None);
+        }
+        let bytes =
+            fs::read(&self.executable).map_err(|error| CliError::Environment(error.to_string()))?;
+        let Ok(text) = std::str::from_utf8(&bytes) else {
+            return Ok(None);
+        };
+        let Some((slot, entry)) = private_windows_launcher(text) else {
+            return Ok(None);
+        };
+        let directory = self.openclaw_home.join("tools/desktop-cli").join(slot);
+        let mut command = Command::new(directory.join("node.exe"));
+        command.arg(directory.join(entry));
+        Ok(Some(command))
     }
 
     fn command_path(&self) -> Result<OsString, CliError> {
         let mut paths = vec![
             self.openclaw_home.join("bin"),
-            self.openclaw_home.join("tools/node/bin"),
+            self.openclaw_home.join(if cfg!(windows) {
+                "tools/node"
+            } else {
+                "tools/node/bin"
+            }),
         ];
         if let Some(current) = env::var_os("PATH") {
             paths.extend(env::split_paths(&current));
         }
         env::join_paths(paths)
             .map_err(|error| CliError::Environment(format!("Could not construct PATH: {error}")))
+    }
+}
+
+fn cli_name() -> &'static str {
+    if cfg!(windows) {
+        "openclaw.cmd"
+    } else {
+        "openclaw"
+    }
+}
+
+pub(crate) fn managed_launcher(prefix: &Path) -> PathBuf {
+    prefix.join("bin").join(cli_name())
+}
+
+#[cfg(windows)]
+fn private_windows_launcher(text: &str) -> Option<(&str, &str)> {
+    let start = "@echo off\r\nsetlocal DisableDelayedExpansion\r\n\"%~dp0..\\tools\\desktop-cli\\";
+    let slot = text.strip_prefix(start)?.split('\\').next()?;
+    if slot.len() != 32 || !slot.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let entry = "node_modules\\openclaw\\dist\\entry.js";
+    if text
+        != format!(
+            "{start}{slot}\\node.exe\" \"%~dp0..\\tools\\desktop-cli\\{slot}\\{entry}\" %*\r\n"
+        )
+    {
+        return None;
+    }
+    Some((slot, entry))
+}
+
+#[cfg(windows)]
+pub(crate) fn ordinary_windows_path(path: &Path) -> PathBuf {
+    use std::path::{Component, Prefix};
+    let mut parts = path.components();
+    match parts.next() {
+        Some(Component::Prefix(prefix)) => match prefix.kind() {
+            Prefix::VerbatimDisk(letter) => {
+                PathBuf::from(format!("{}:\\", char::from(letter))).join(parts.as_path())
+            }
+            Prefix::VerbatimUNC(server, share) => PathBuf::from(r"\\")
+                .join(server)
+                .join(share)
+                .join(parts.as_path()),
+            _ => path.to_path_buf(),
+        },
+        _ => path.to_path_buf(),
     }
 }
 
@@ -307,6 +425,141 @@ pub fn openclaw_home() -> Result<PathBuf, CliError> {
 mod tests {
     use super::{output_tail, OpenClawCli};
     use std::path::PathBuf;
+
+    #[cfg(windows)]
+    #[test]
+    fn ambient_windows_discovery_supports_executables_and_command_launchers() {
+        use std::{env, fs, process::Command};
+        const CHILD: &str = "OPENCLAW_CLI_DISCOVERY_TEST_CHILD";
+        if let Some(expected) = env::var_os(CHILD) {
+            let cli = OpenClawCli::discover().expect("discover ambient Windows CLI");
+            assert_eq!(cli.executable, PathBuf::from(expected));
+            return;
+        }
+        let root = env::temp_dir().join(format!("openclaw-discovery-{}", uuid::Uuid::new_v4()));
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(root.clone());
+        let ambient = root.join("ambient");
+        fs::create_dir_all(&ambient).unwrap();
+        let probe = root.join("probe.rs");
+        fs::write(&probe, "fn main() { println!(\"0.0.0-test\"); }").unwrap();
+        let executable = ambient.join("openclaw.exe");
+        let compiled = Command::new("rustc")
+            .arg(&probe)
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+        assert!(
+            compiled.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
+        let launcher = ambient.join("openclaw.cmd");
+        for (index, expected) in [&executable, &executable, &launcher]
+            .into_iter()
+            .enumerate()
+        {
+            if index == 1 {
+                fs::write(&launcher, "@echo off\r\necho 0.0.0-test\r\n").unwrap();
+            } else if index == 2 {
+                fs::remove_file(&executable).unwrap();
+            }
+            let output = Command::new(env::current_exe().unwrap())
+                .args(["--exact", "cli::tests::ambient_windows_discovery_supports_executables_and_command_launchers", "--nocapture"])
+                .env(CHILD, expected)
+                .env("HOME", &root)
+                .env("USERPROFILE", &root)
+                .env("PATH", &ambient)
+                .env_remove("OPENCLAW_DESKTOP_CLI")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn managed_windows_cli_preserves_native_arguments_and_operator_launchers() {
+        use std::{fs, process::Command};
+        let root = std::env::temp_dir().join(format!("openclaw-cli-{}", uuid::Uuid::new_v4()));
+        struct Cleanup(PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(root.clone());
+        let slot = "0123456789abcdef0123456789abcdef";
+        let directory = root.join("tools/desktop-cli").join(slot);
+        fs::create_dir_all(&directory).unwrap();
+        fs::create_dir_all(root.join("bin")).unwrap();
+        let probe = directory.join("probe.rs");
+        fs::write(
+            &probe,
+            "fn main() { for arg in std::env::args().skip(1) { println!(\"{}\", arg); } }",
+        )
+        .unwrap();
+        let compiled = Command::new("rustc")
+            .arg(&probe)
+            .arg("-o")
+            .arg(directory.join("node.exe"))
+            .output()
+            .unwrap();
+        assert!(
+            compiled.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
+        let wrapper = super::managed_launcher(&root);
+        let text = format!("@echo off\r\nsetlocal DisableDelayedExpansion\r\n\"%~dp0..\\tools\\desktop-cli\\{slot}\\node.exe\" \"%~dp0..\\tools\\desktop-cli\\{slot}\\node_modules\\openclaw\\dist\\entry.js\" %*\r\n");
+        fs::write(&wrapper, &text).unwrap();
+        let cli = OpenClawCli::new(wrapper.clone(), root);
+        let pin = r#"{"revision":"test","definition":"a & b %PATH% ! quoted"}"#;
+        let output = cli
+            .output(["gateway", "install", "--expected-runtime-pin", pin])
+            .unwrap();
+        assert!(output.status.success());
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        assert_eq!(
+            stdout.lines().skip(1).collect::<Vec<_>>(),
+            ["gateway", "install", "--expected-runtime-pin", pin]
+        );
+        let mut overridden = cli.clone();
+        overridden.allow_runtime_management = false;
+        assert_eq!(
+            overridden.command(["--version"]).unwrap().get_program(),
+            wrapper.as_os_str()
+        );
+        fs::write(&wrapper, format!("{text}rem operator customization\r\n")).unwrap();
+        assert_eq!(
+            cli.command(["--version"]).unwrap().get_program(),
+            wrapper.as_os_str()
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn canonical_windows_paths_keep_their_volume_and_unc_share() {
+        assert_eq!(
+            super::ordinary_windows_path(std::path::Path::new(r"\\?\C:\Users\Fixture\bun.exe")),
+            PathBuf::from(r"C:\Users\Fixture\bun.exe")
+        );
+        assert_eq!(
+            super::ordinary_windows_path(std::path::Path::new(r"\\?\UNC\server\share\bun.exe")),
+            PathBuf::from(r"\\server\share\bun.exe")
+        );
+    }
 
     #[test]
     fn output_tail_keeps_the_last_twelve_nonempty_lines() {

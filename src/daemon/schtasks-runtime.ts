@@ -52,6 +52,7 @@ import {
   createServiceRuntimeInspectionFailure,
   type GatewayServiceRuntime,
 } from "./service-runtime.js";
+import type { GatewayServiceDefinitionTransactionHooks } from "./service-stage.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceEnv,
@@ -194,8 +195,12 @@ export async function launchFallbackTaskScript(
   env: GatewayServiceEnv,
   installedCommand?: GatewayServiceCommandConfig | null,
   assertCurrent?: () => void,
+  definitionTransaction?: GatewayServiceDefinitionTransactionHooks,
 ): Promise<void> {
-  if (isUpdateOwnedGatewayServiceCommand()) {
+  if (
+    isUpdateOwnedGatewayServiceCommand() &&
+    definitionTransaction?.windowsRegistration !== "startup"
+  ) {
     throw new Error(
       "UPDATE_NATIVE_AUTHORITY: update-owned native commands require Task Scheduler; standalone startup fallback is unsupported.",
     );
@@ -203,6 +208,20 @@ export async function launchFallbackTaskScript(
   const scriptPath = resolveTaskScriptPath(env);
   const command =
     installedCommand === undefined ? await readScheduledTaskCommand(env) : installedCommand;
+  const assertSpawnCurrent = () => {
+    assertGatewayServiceUpdateCurrent();
+    definitionTransaction?.assertCurrent();
+    assertCurrent?.();
+  };
+  const beforeSpawn = async () => {
+    if (definitionTransaction) {
+      if (definitionTransaction.windowsRegistration !== "startup") {
+        throw new Error("Startup activation requires a captured Startup registration.");
+      }
+      await definitionTransaction.beforeWrite();
+    }
+    assertSpawnCurrent();
+  };
   if (command?.programArguments.length) {
     // Task inspection intentionally hides the wrapper flag so it can match the
     // inner Gateway. Direct fallback must restore that wrapper or it loses the
@@ -211,8 +230,9 @@ export async function launchFallbackTaskScript(
       command.environment?.OPENCLAW_SERVICE_KIND === "gateway"
         ? [...command.programArguments, WINDOWS_TASK_SUPERVISOR_FLAG]
         : command.programArguments;
+    await beforeSpawn();
     const { child } = await spawnWithFallback({
-      assertCurrent,
+      assertCurrent: assertSpawnCurrent,
       argv: programArguments,
       options: {
         cwd: command.workingDirectory || undefined,
@@ -251,8 +271,9 @@ export async function launchFallbackTaskScript(
   if (scriptProbe.status !== 0) {
     throw Object.assign(new Error("Windows login item script is not readable"), { code: "EACCES" });
   }
+  await beforeSpawn();
   const { child } = await spawnWithFallback({
-    assertCurrent,
+    assertCurrent: assertSpawnCurrent,
     // Node's verbatim /s shell contract preserves inner quotes; percent expansion is nonrecursive.
     argv: [getWindowsCmdExePath(), "/d", "/s", "/v:off", "/c", '""%OPENCLAW_TASK_SCRIPT%""'],
     options: {

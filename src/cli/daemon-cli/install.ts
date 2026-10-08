@@ -64,6 +64,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
+import { prepareDesktopRuntimeReceipt, type DesktopRuntimeReceipt } from "./install-receipt.js";
 import { resolveRestoreServiceCli } from "./install-restore-cli.js";
 import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./response.js";
 import { createDaemonInstallActionContext, resolveDaemonInstallBlockMessage } from "./shared.js";
@@ -178,9 +179,29 @@ export function mergeInstallInvocationEnv(params: {
 
 /** Install or refresh the managed Gateway service. */
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
+  let receipt: DesktopRuntimeReceipt;
+  try {
+    receipt = prepareDesktopRuntimeReceipt(opts);
+  } catch {
+    createDaemonInstallActionContext(opts.json).fail(
+      "Desktop runtime result could not be admitted. No service changes were attempted.",
+    );
+    return;
+  }
+  try {
+    await runDaemonInstallWithReceipt(opts, receipt);
+  } finally {
+    receipt?.close();
+  }
+}
+
+async function runDaemonInstallWithReceipt(
+  opts: DaemonInstallOptions,
+  receipt: DesktopRuntimeReceipt,
+) {
   let definitionBackup: GatewayServiceDefinitionBackupReceipt | undefined;
   const { json, stdout, warnings, warn, emit, emitMessage, fail } =
-    createDaemonInstallActionContext(opts.json, () => definitionBackup);
+    createDaemonInstallActionContext(opts.json, () => definitionBackup, receipt?.emit);
   const installBlock = resolveDaemonInstallBlockMessage("gateway");
   if (installBlock) {
     fail(installBlock);
@@ -190,7 +211,15 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const service = resolveGatewayService();
   let existingServiceCommand: GatewayServiceCommandConfig | null;
   try {
-    existingServiceCommand = await service.readCommand(process.env, { requireEffective: true });
+    existingServiceCommand = await service.readCommand(process.env, {
+      requireEffective: true,
+      ...(process.platform === "win32" &&
+      (opts.expectedRuntimePin !== undefined ||
+        isUpdateOwnedGatewayServiceCommand() ||
+        isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS))
+        ? { requireLoaded: true }
+        : {}),
+    });
   } catch (error) {
     const message = sanitizeServiceInspectionError(error).message;
     // No installer writes precede this read; the updater can retain the unchanged definition.
@@ -217,6 +246,10 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     env: process.env,
     existingServiceEnv,
   });
+  if (receipt && installEnv[OPENCLAW_WRAPPER_ENV_KEY]?.trim()) {
+    fail("Desktop runtime selection is unavailable for a wrapper-managed service.");
+    return;
+  }
   let pinSnapshot;
   try {
     pinSnapshot = readDaemonRuntimePinForInstall(
@@ -269,6 +302,11 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   let pinnedRuntimePath = opts.runtimePath ?? (opts.runtime ? undefined : pinSnapshot.pin?.path);
   const effectiveServiceEnv = mergeGatewayServiceEnv(process.env, existingServiceCommand);
   const assertWritable = async () => {
+    // Windows manual installs retain their existing repair/fallback contract.
+    // Guarded desktop selection requires explicit native-definition admission.
+    if (process.platform === "win32" && opts.expectedRuntimePin === undefined) {
+      return true;
+    }
     try {
       // Drop-ins can redirect effective state away from the files this install will publish.
       for (const environment of [effectiveServiceEnv, installEnv]) {
@@ -550,6 +588,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     service,
     successMessage,
     onVerified: async () => {
+      await receipt?.observe(cfg, port);
       if (!json) {
         defaultRuntime.log(successMessage);
       }
@@ -560,7 +599,10 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     install: async () => {
       if (
         isUpdateOwnedGatewayServiceCommand() ||
-        isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS)
+        isTruthyEnvValue(process.env.OPENCLAW_UPDATE_IN_PROGRESS) ||
+        (process.platform === "win32" &&
+          opts.expectedRuntimePin !== undefined &&
+          existingServiceCommand !== null)
       ) {
         definitionBackup = await reconcileGatewayServiceDefinition({
           env: installEnv,

@@ -14,12 +14,9 @@ import {
 } from "./launchd-service-files.js";
 import { stopLaunchAgent } from "./launchd-stop.js";
 import { assertNoSystemLaunchDaemonOwnership } from "./launchd-system.js";
-import {
-  readScheduledTaskDefinition,
-  restoreScheduledTaskDefinition,
-  setScheduledTaskXmlEnabled,
-} from "./schtasks-control.js";
+import { readScheduledTaskDefinition, restoreScheduledTaskDefinition } from "./schtasks-control.js";
 import { resolveTaskLauncherScriptPath, resolveTaskScriptPath } from "./schtasks-layout.js";
+import { matchesScheduledTaskDefinition, setScheduledTaskXmlEnabled } from "./schtasks-xml.js";
 import { auditScheduledTaskDefinition } from "./service-audit-schtasks.js";
 import type { ServiceDefinitionDrift } from "./service-audit-types.js";
 import {
@@ -44,16 +41,36 @@ import {
   resolveSystemdEnvironmentFilePath,
   resolveSystemdUnitPath,
 } from "./systemd-service-files.js";
+import {
+  getWindowsServiceRegistrationKind,
+  getWindowsStartupRegistrationGuards,
+} from "./windows-service-registration.js";
 
 type Context = {
   env: GatewayServiceEnv;
   command: GatewayServiceCommandConfig;
   assertCurrent: () => void;
 };
+type LiveContext = Context & { taskReference?: { xml: string } };
 const backupPath = (file: string, id: string) => `${file}.reconcile-${id}.bak`;
 const taskBytes = (xml: string) =>
   Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(xml, "utf16le")]);
 const taskPolicy = (xml: string) => sha256Hex(setScheduledTaskXmlEnabled(xml, false));
+function matchesRecordedTaskPolicy(
+  params: LiveContext,
+  receipt: GatewayServiceDefinitionBackupReceipt,
+  xml: string,
+): boolean {
+  const recorded = receipt.task?.afterPolicySha256;
+  const reference = params.taskReference?.xml;
+  return (
+    recorded !== undefined &&
+    (taskPolicy(xml) === recorded ||
+      (reference !== undefined &&
+        taskPolicy(reference) === recorded &&
+        matchesScheduledTaskDefinition(xml, reference, true)))
+  );
+}
 const receiptPath = (receipt: GatewayServiceDefinitionBackupReceipt) =>
   `${receipt.files[0]!.sourcePath}.reconcile-${receipt.id}.receipt.bak`;
 
@@ -102,9 +119,7 @@ function definitionFiles({ env, command }: Omit<Context, "assertCurrent">): stri
 
 function assertInventory(params: Context, receipt: GatewayServiceDefinitionBackupReceipt) {
   const files = definitionFiles(params);
-  const observed = [...new Set(params.command.definitionPaths ?? [])].filter(
-    (file) => !files.includes(file),
-  );
+  const observed = definitionGuards(params, files);
   if (
     !isDeepStrictEqual(
       files,
@@ -114,7 +129,9 @@ function assertInventory(params: Context, receipt: GatewayServiceDefinitionBacku
       observed.toSorted(),
       receipt.guards.map((file) => file.sourcePath).toSorted(),
     ) ||
-    Boolean(receipt.task) !== (process.platform === "win32") ||
+    Boolean(receipt.task) !==
+      (process.platform === "win32" &&
+        getWindowsServiceRegistrationKind(params.command) === "scheduled-task") ||
     (params.command.sourcePath &&
       path.resolve(params.command.sourcePath) !== path.resolve(files[0]!))
   ) {
@@ -124,8 +141,19 @@ function assertInventory(params: Context, receipt: GatewayServiceDefinitionBacku
   }
 }
 
+function definitionGuards(params: Omit<Context, "assertCurrent">, files: string[]): string[] {
+  return [
+    ...new Set([
+      ...(params.command.definitionPaths ?? []),
+      ...(process.platform === "win32"
+        ? getWindowsStartupRegistrationGuards(params.env, params.command)
+        : []),
+    ]),
+  ].filter((file) => !files.includes(file));
+}
+
 function mutationHooks(
-  params: Context,
+  params: LiveContext,
   receipt: GatewayServiceDefinitionBackupReceipt,
 ): GatewayServiceDefinitionTransactionHooks {
   const assertCurrent = () => {
@@ -151,6 +179,9 @@ function mutationHooks(
       );
     }
     receipt.task.afterPolicySha256 = taskPolicy(xml);
+    if (params.taskReference) {
+      params.taskReference.xml = xml;
+    }
     delete receipt.task.preparedXml;
     await checkpointReceipt(params, receipt);
   };
@@ -158,6 +189,7 @@ function mutationHooks(
     assertCurrent();
     const command = await resolveGatewayService().readCommand(params.env, {
       requireEffective: true,
+      ...(process.platform === "win32" ? { requireLoaded: true } : {}),
     });
     if (!command) {
       throw new Error("SERVICE_DEFINITION_UNKNOWN: Service definition disappeared.");
@@ -184,9 +216,21 @@ function mutationHooks(
       }
     }
     if (receipt.task) {
-      const current = taskPolicy(await readScheduledTaskDefinition(params.env));
+      const xml = await readScheduledTaskDefinition(params.env);
+      const observed = taskPolicy(xml);
+      // Keep the published receipt digest convention. Only this live, hash-bound
+      // reference can reconcile Scheduler's representation of an owned Enabled toggle.
+      const previous = matchesRecordedTaskPolicy(params, receipt, xml);
+      if (previous && observed !== receipt.task.afterPolicySha256) {
+        assertCurrent();
+        receipt.task.afterPolicySha256 = observed;
+        if (params.taskReference) {
+          params.taskReference.xml = xml;
+        }
+        await checkpointReceipt(params, receipt);
+        return beforeWrite(settlePrepared);
+      }
       if (settlePrepared && receipt.task.preparedXml) {
-        const previous = current === receipt.task.afterPolicySha256;
         receipt.task.recoveredPolicy = previous ? "previous" : "prepared";
         if (previous) {
           delete receipt.task.preparedXml;
@@ -196,13 +240,16 @@ function mutationHooks(
         }
         return beforeWrite(false);
       }
-      if (current !== receipt.task.afterPolicySha256) {
+      if (!previous) {
         throw new Error("SERVICE_DEFINITION_UNKNOWN: Scheduled Task changed.");
       }
     }
     assertCurrent();
   };
   return {
+    ...(process.platform === "win32"
+      ? { windowsRegistration: getWindowsServiceRegistrationKind(params.command) }
+      : {}),
     assertCurrent,
     beforeWrite,
     filePrepared: async (sourcePath, temporaryPath) => {
@@ -261,6 +308,11 @@ export async function captureGatewayServiceDefinitionBackup(
   params: Context & { inspect?: () => Promise<void> },
 ) {
   params.assertCurrent();
+  const live: LiveContext = {
+    env: params.env,
+    command: params.command,
+    assertCurrent: params.assertCurrent,
+  };
   const paths = definitionFiles(params);
   const receipt: GatewayServiceDefinitionBackupReceipt = {
     id: randomUUID(),
@@ -271,9 +323,10 @@ export async function captureGatewayServiceDefinitionBackup(
       }),
     ),
     guards: await Promise.all(
-      [...new Set(params.command.definitionPaths ?? [])]
-        .filter((file) => !paths.includes(file))
-        .map(async (sourcePath) => ({ sourcePath, after: await readServiceFileState(sourcePath) })),
+      definitionGuards(params, paths).map(async (sourcePath) => ({
+        sourcePath,
+        after: await readServiceFileState(sourcePath),
+      })),
     ),
   };
   if (!receipt.files[0]?.before) {
@@ -290,8 +343,12 @@ export async function captureGatewayServiceDefinitionBackup(
         return { sourcePath: file.sourcePath, contents };
       }),
   );
-  if (process.platform === "win32") {
+  if (
+    process.platform === "win32" &&
+    getWindowsServiceRegistrationKind(params.command) === "scheduled-task"
+  ) {
     const originalXml = await readScheduledTaskDefinition(params.env);
+    live.taskReference = { xml: originalXml };
     const contents = taskBytes(originalXml);
     originals.push({ sourcePath: `${paths[0]}.task.xml`, contents });
     receipt.task = {
@@ -299,7 +356,7 @@ export async function captureGatewayServiceDefinitionBackup(
       afterPolicySha256: taskPolicy(originalXml),
     };
   }
-  const hooks = mutationHooks(params, receipt);
+  const hooks = mutationHooks(live, receipt);
   // Bind audit facts to these bytes before any backup or installer publication.
   await params.inspect?.();
   await hooks.beforeWrite();
@@ -322,23 +379,26 @@ export async function captureGatewayServiceDefinitionBackup(
       return structuredClone(receipt);
     },
     compensate: async (): Promise<boolean> => {
-      const prepared = await prepareGatewayServiceDefinitionRestore({ ...params, receipt });
+      const prepared = await prepareGatewayServiceDefinitionRestore({ ...live, receipt });
       const changed =
         prepared.receipt.files.some((file) => !isDeepStrictEqual(file.before, file.after)) ||
         (prepared.task !== null &&
-          prepared.receipt.task?.afterPolicySha256 !==
-            taskPolicy(prepared.task.subarray(2).toString("utf16le")));
-      if (!changed) {
-        return false;
+          !matchesRecordedTaskPolicy(
+            live,
+            prepared.receipt,
+            prepared.task.subarray(2).toString("utf16le"),
+          ));
+      if (changed) {
+        await restorePreparedGatewayServiceDefinitionBackup(live, prepared);
       }
-      await restorePreparedGatewayServiceDefinitionBackup(params, prepared);
-      return true;
+      Object.assign(receipt, prepared.receipt);
+      return changed;
     },
   };
 }
 
 async function prepareGatewayServiceDefinitionRestore(
-  params: Context & { receipt: GatewayServiceDefinitionBackupReceipt },
+  params: LiveContext & { receipt: GatewayServiceDefinitionBackupReceipt },
 ) {
   const receipt = GatewayServiceDefinitionBackupReceiptSchema.parse(params.receipt);
   assertInventory(params, receipt);
@@ -391,7 +451,7 @@ export async function restoreGatewayServiceDefinitionBackup(
 }
 
 async function restorePreparedGatewayServiceDefinitionBackup(
-  params: Context,
+  params: LiveContext,
   {
     receipt,
     hooks,
@@ -462,7 +522,7 @@ async function restorePreparedGatewayServiceDefinitionBackup(
         await reloadSystemdUserManager(params.env, undefined, hooks.assertCurrent);
         await hooks.beforeWrite();
       }
-      if (file === primary && taskXml && receipt.task!.afterPolicySha256 !== taskPolicy(taskXml)) {
+      if (file === primary && taskXml && !matchesRecordedTaskPolicy(params, receipt, taskXml)) {
         try {
           await restoreScheduledTaskDefinition({
             env: params.env,

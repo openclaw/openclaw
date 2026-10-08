@@ -8,9 +8,28 @@ import { SERVICE_PROXY_ENV_KEYS } from "../daemon/service-env.js";
 import { normalizeServiceEnvKey } from "../daemon/service-managed-env.js";
 import {
   hasGatewayServiceEnvironmentOverride,
+  type GatewayService,
   type GatewayServiceCommandConfig,
   type GatewayServiceInstallArgs,
 } from "../daemon/service-types.js";
+
+/** Undefined marks unavailable Windows inspection; null preserves absent-service handling. */
+export async function readGatewayServiceCommandForDoctor(
+  service: Pick<GatewayService, "readCommand">,
+): Promise<GatewayServiceCommandConfig | null | undefined> {
+  try {
+    return process.platform === "win32"
+      ? await service.readCommand(process.env, { requireEffective: true, requireLoaded: true })
+      : await service.readCommand(process.env).catch(() => null);
+  } catch {
+    reportServiceDefinitionDrift({
+      ok: false,
+      issues: [],
+      definitionDriftError: "Service definition inspection could not be completed.",
+    });
+    return undefined;
+  }
+}
 
 export function formatServiceConfigIssues(issues: ServiceConfigIssue[]): string[] {
   return issues.map((issue) =>

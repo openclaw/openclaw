@@ -70,6 +70,71 @@ export function buildScheduledTaskXml(params: {
 </Task>`;
 }
 
+export function parseScheduledTaskXmlEnabled(output: string): boolean | null {
+  const normalized = output.replace(/^\uFEFF/u, "").replaceAll(String.fromCharCode(0), "");
+  const settings = /<Settings(?:\s[^>]*)?>([\s\S]*?)<\/Settings>/iu.exec(normalized)?.[1];
+  if (settings === undefined) {
+    return null;
+  }
+  const enabled = /<Enabled>\s*(true|false)\s*<\/Enabled>/iu.exec(settings)?.[1];
+  // Task Scheduler's schema defaults a missing Settings.Enabled value to true.
+  return enabled === undefined ? true : enabled.toLowerCase() === "true";
+}
+
+export function setScheduledTaskXmlEnabled(xml: string, enabled: boolean): string {
+  if (parseScheduledTaskXmlEnabled(xml) === null) {
+    throw new Error("Scheduled Task enabled state could not be inspected.");
+  }
+  return xml.replace(
+    /(<Settings(?:\s[^>]*)?>)([\s\S]*?)(<\/Settings>)/iu,
+    (_match, open: string, body: string, close: string) => {
+      const value = `<Enabled>${enabled}</Enabled>`;
+      const field = /<Enabled>\s*(true|false)\s*<\/Enabled>/iu;
+      return `${open}${field.test(body) ? body.replace(field, value) : `${value}${body}`}${close}`;
+    },
+  );
+}
+
+/** Only Settings.Enabled belongs to the native owner's stop/start policy transition. */
+function scheduledTaskDefinitionPolicy(xml: string): string {
+  if (parseScheduledTaskXmlEnabled(xml) === null) {
+    throw new Error("Scheduled Task enabled state could not be inspected.");
+  }
+  return xml.replace(
+    /(<Settings(?:\s[^>]*)?>)([\s\S]*?)(<\/Settings>)/iu,
+    (_match, open: string, body: string, close: string) => {
+      // Native exports omit default true and place false at their own schema position.
+      // Retain the preceding newline; an inline field must not consume the next line.
+      const line = /(\r*\n)[ \t]*<Enabled>\s*(true|false)\s*<\/Enabled>[ \t]*\r*\n/iu;
+      const remaining = line.test(body)
+        ? body.replace(line, "$1")
+        : body.replace(/<Enabled>\s*(true|false)\s*<\/Enabled>/iu, "");
+      return `${open}${remaining}${close}`;
+    },
+  );
+}
+
+export function matchesScheduledTaskDefinition(
+  current: string | null,
+  expected: string | null,
+  ignoreEnabled = false,
+): boolean {
+  if (current === expected) {
+    return true;
+  }
+  if (current === null || expected === null) {
+    return false;
+  }
+  const enabled = parseScheduledTaskXmlEnabled(current);
+  const expectedEnabled = parseScheduledTaskXmlEnabled(expected);
+  return (
+    enabled !== null &&
+    expectedEnabled !== null &&
+    (ignoreEnabled || enabled === expectedEnabled) &&
+    scheduledTaskDefinitionPolicy(current) === scheduledTaskDefinitionPolicy(expected)
+  );
+}
+
 export async function writeTaskXmlTempFile(xml: string): Promise<string> {
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-task-xml-"));
   const xmlPath = path.join(tmpDir, "task.xml");

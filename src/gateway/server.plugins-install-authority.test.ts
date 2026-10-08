@@ -34,6 +34,12 @@ const observation = vi.hoisted(() => ({
   indexWrites: [] as string[],
 }));
 
+// Automatic metadata repair owns the same lease as this fixture's manual mutation.
+vi.mock("./server-runtime-services.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-runtime-services.js")>()),
+  scheduleGatewayPostReadyMaintenance: () => {},
+}));
+
 // Hold existing async owner hooks; all installation, auth, storage, and activation remain real.
 vi.mock("../plugins/management-mutations.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/management-mutations.js")>();
@@ -332,6 +338,11 @@ describe("gateway plugin install authority", () => {
         await withTestTimeout(
           Promise.race([
             reached.promise,
+            reply.then((response) => {
+              throw "error" in response && response.error instanceof Error
+                ? response.error
+                : new Error("Install request settled before boundary", { cause: response });
+            }),
             finished.promise.then(({ error }) => {
               throw error instanceof Error
                 ? error

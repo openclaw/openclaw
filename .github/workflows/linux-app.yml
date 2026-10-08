@@ -379,10 +379,21 @@ jobs:
         run: cargo +stable test --locked --test native_keep_awake native_power_lifecycle -- --nocapture
 
   test-windows-power:
-    name: Test Windows power lifecycle
-    # Match the optional Windows desktop-test bundle runner.
-    runs-on: windows-2022
+    name: Test Windows companion (${{ matrix.arch }})
+    strategy:
+      matrix:
+        include:
+          - runner: windows-2022
+            arch: x64
+            target: x86_64-pc-windows-msvc
+          - runner: windows-11-arm
+            arch: arm64
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -393,7 +404,12 @@ jobs:
           submodules: false
 
       - name: Install Rust
-        run: rustup toolchain install stable --profile minimal
+        run: rustup toolchain install stable --profile minimal --target ${{ matrix.target }}
+
+      - name: Verify native Windows architecture
+        run: |
+          $actual = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+          if ($actual -ne '${{ matrix.arch }}') { throw "Expected ${{ matrix.arch }} Windows, got $actual" }
 
       - name: Cache Cargo
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -402,14 +418,22 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             apps/linux/src-tauri/target
-          key: windows-app-${{ runner.os }}-${{ hashFiles('apps/linux/src-tauri/Cargo.lock') }}
+          key: windows-app-${{ matrix.target }}-${{ hashFiles('apps/linux/src-tauri/Cargo.lock') }}
           restore-keys: |
-            windows-app-${{ runner.os }}-
+            windows-app-${{ matrix.target }}-
 
       - name: Verify native Windows power lifecycle
         working-directory: apps/linux/src-tauri
-        run: cargo +stable test --locked --test native_keep_awake native_power_lifecycle -- --nocapture
+        run: cargo +stable test --locked --target ${{ matrix.target }} --test native_keep_awake native_power_lifecycle -- --nocapture
 
       - name: Verify desktop sharing process ownership on Windows
         working-directory: apps/linux/src-tauri
-        run: cargo +stable test --locked --bin openclaw-desktop desktop_node_process::tests::job_joins_a_real_command_wrapper_and_its_descendant -- --nocapture
+        run: cargo +stable test --locked --target ${{ matrix.target }} --bin openclaw-desktop desktop_node_process::tests::job_joins_a_real_command_wrapper_and_its_descendant -- --nocapture
+
+      - name: Verify bundled runtime materialization
+        working-directory: apps/linux/src-tauri
+        run: cargo +stable test --locked --target ${{ matrix.target }} --bin openclaw-desktop bundled_runtime::tests -- --nocapture
+
+      - name: Verify Windows runtime paths and service actions
+        working-directory: apps/linux/src-tauri
+        run: cargo +stable test --locked --target ${{ matrix.target }} --bin openclaw-desktop windows -- --nocapture

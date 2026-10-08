@@ -430,12 +430,23 @@ type ParkedNativeTask = NativePluginFixture &
     settleBackend: () => Promise<void>;
   };
 
+type NativeRegistrationTimer = (onTimeout: () => void, timeoutMs: number) => () => void;
+
+const startNativeRegistrationTimer: NativeRegistrationTimer = (onTimeout, timeoutMs) => {
+  const deadline = setTimeout(onTimeout, timeoutMs);
+  return () => clearTimeout(deadline);
+};
+
 export async function withParkedNativeTask(
   run: (task: ParkedNativeTask) => Promise<void>,
   prompt = "Keep working until I cancel.",
-  ...embedded: [] | [session: AgentSession, finish: () => void]
+  ...embedded:
+    | []
+    | [registrationTimer: NativeRegistrationTimer]
+    | [session: AgentSession, finish: () => void]
 ): Promise<void> {
-  const [embeddedSession, finishEmbeddedSession] = embedded;
+  const [embeddedSession, finishEmbeddedSession] = embedded.length === 2 ? embedded : [];
+  const registrationTimer = embedded.length === 1 ? embedded[0] : startNativeRegistrationTimer;
   const releaseBackend = createDeferredCore();
   const registered =
     createDeferredCore<
@@ -445,6 +456,23 @@ export async function withParkedNativeTask(
   const runAbortController = new AbortController();
   let activeRun: RunEmbeddedAgentParams | undefined;
   let phase = "waiting for delegation";
+  let cancelRegistrationDeadline: (() => void) | undefined;
+  let observingRegistration = false;
+  const timeoutMs = 1000;
+  const beginRegistration = () => {
+    phase = "publishing embedded registration";
+    cancelRegistrationDeadline ??= registrationTimer(() => {
+      failed.reject(
+        new Error(
+          `registration readiness not observed within ${timeoutMs} ms; last phase: ${phase}`,
+        ),
+      );
+    }, timeoutMs);
+  };
+  const stopRegistrationDeadline = () => {
+    cancelRegistrationDeadline?.();
+    cancelRegistrationDeadline = undefined;
+  };
   let backendAborted = false;
   const abortOwned = vi.fn(() => {
     backendAborted = true;
@@ -490,7 +518,7 @@ export async function withParkedNativeTask(
               if (!model) {
                 throw new Error("Expected an embedded test model");
               }
-              phase = "publishing embedded registration";
+              beginRegistration();
               stream = prepareEmbeddedAttemptStream({
                 attempt: {
                   ...prepared,
@@ -555,7 +583,7 @@ export async function withParkedNativeTask(
                   return await queueMessage(text, options);
                 },
               };
-              phase = "publishing embedded registration";
+              beginRegistration();
               embeddedRuns.setActiveEmbeddedRun(
                 params.sessionId,
                 handle,
@@ -607,24 +635,16 @@ export async function withParkedNativeTask(
     await nextEventLoopTurn();
   };
   await withNativePlugin(async (fixture) => {
-    let deadline: ReturnType<typeof setTimeout> | undefined;
     let stopObservingCompletion: (() => void) | undefined;
-    const timeoutMs = 1000;
     const prepare = embeddedRuns.prepareEmbeddedAgentRunCompletionClaim;
     const observeRegistration = vi
       .spyOn(embeddedRuns, "prepareEmbeddedAgentRunCompletionClaim")
       .mockImplementation((sessionId, runId) => {
         const claim = prepare(sessionId, runId);
-        if (sessionId === SESSION_ID && deadline === undefined) {
-          // Workspace and session preparation precede the registration owner's lifetime.
+        if (sessionId === SESSION_ID && !observingRegistration) {
+          observingRegistration = true;
+          // Admission and tool authority preparation precede the publication deadline.
           phase = "waiting for embedded registration";
-          deadline = setTimeout(() => {
-            failed.reject(
-              new Error(
-                `registration readiness not observed within ${timeoutMs} ms; last phase: ${phase}`,
-              ),
-            );
-          }, timeoutMs);
           registered.resolve(claim.registered);
         }
         return claim;
@@ -649,7 +669,7 @@ export async function withParkedNativeTask(
       const registration = await readiness;
       stopObservingCompletion();
       stopObservingCompletion = undefined;
-      clearTimeout(deadline);
+      stopRegistrationDeadline();
       if (!registration) {
         throw new Error(`registration closed before readiness; last phase: ${phase}`);
       }
@@ -671,7 +691,7 @@ export async function withParkedNativeTask(
       });
     } finally {
       stopObservingCompletion?.();
-      clearTimeout(deadline);
+      stopRegistrationDeadline();
       // Setup can fail before the callback that would otherwise release this stream.
       try {
         finishEmbeddedSession?.();

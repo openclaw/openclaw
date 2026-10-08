@@ -73,6 +73,7 @@ import {
   isPreservedLaunchdTimeoutWarning,
   isServiceDefinitionOnlyRepair,
   isServiceInstallationOnlyRepair,
+  readGatewayServiceCommandForDoctor,
   reportServiceDefinitionDrift,
 } from "./doctor-service-audit.js";
 import {
@@ -257,7 +258,10 @@ export async function maybeRepairGatewayServiceConfig(
   const serviceRepairDeferred = isServiceRepairDeferred(serviceRepairPolicy);
 
   const service = resolveGatewayService();
-  const command = await service.readCommand(process.env).catch(() => null);
+  const command = await readGatewayServiceCommandForDoctor(service);
+  if (command === undefined) {
+    return cfg;
+  }
   if (!command) {
     const audit = await auditGatewayServiceConfig({
       env: process.env,

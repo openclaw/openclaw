@@ -1,4 +1,4 @@
-import { setImmediate as nextEventLoopTurn, setTimeout as delay } from "node:timers/promises";
+import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import { ACTIVE_EMBEDDED_RUNS } from "../../../agents/embedded-agent-runner/run-state.js";
@@ -8,6 +8,7 @@ import {
   setActiveEmbeddedRun,
 } from "../../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../../agents/embedded-agent-runner/runs.test-support.js";
+import * as toolAuthorityRuntime from "../../../agents/harness/tool-authority.runtime.js";
 import * as workspace from "../../../agents/workspace.js";
 import { readSessionTranscriptMessageEvents } from "../../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
@@ -169,15 +170,23 @@ describe("native Talk through the public OpenAI plugin registration", () => {
     ).toBe(true);
   });
 
-  it("waits for session preparation before observing backend registration readiness", async () => {
+  it("waits for tool authority preparation before observing backend registration readiness", async () => {
     const preparing = createDeferredCore();
     const releasePreparation = createDeferredCore();
-    const ensureWorkspace = workspace.ensureAgentWorkspace;
-    vi.spyOn(workspace, "ensureAgentWorkspace").mockImplementationOnce(async (...args) => {
-      const result = await ensureWorkspace(...args);
+    const prepareTools = toolAuthorityRuntime.withPreparedEmbeddedRunToolAuthority;
+    const delayedPreparation: typeof prepareTools = async (...args) => {
       preparing.resolve();
       await releasePreparation.promise;
-      return result;
+      return await prepareTools(...args);
+    };
+    vi.spyOn(toolAuthorityRuntime, "withPreparedEmbeddedRunToolAuthority").mockImplementationOnce(
+      delayedPreparation,
+    );
+    const cancelDeadline = vi.fn();
+    const registrationTimer = vi.fn((_onTimeout: () => void, timeoutMs: number) => {
+      expect(timeoutMs).toBe(1000);
+      expect(ACTIVE_EMBEDDED_RUNS.has(SESSION_ID)).toBe(false);
+      return cancelDeadline;
     });
     const assertions = vi.fn<Parameters<typeof withParkedNativeTask>[0]>(
       async ({ settleBackend }) => {
@@ -185,24 +194,30 @@ describe("native Talk through the public OpenAI plugin registration", () => {
         await settleBackend();
       },
     );
-    const parked = withParkedNativeTask(assertions);
+    const parked = withParkedNativeTask(
+      assertions,
+      "Keep working until I cancel.",
+      registrationTimer,
+    );
     const outcome = parked.then(
       () => ({ error: undefined }),
       (error: unknown) => ({ error }),
     );
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         preparing.promise,
-        parked.then(() => {
-          throw new Error("Native task completed before workspace preparation");
-        }),
-      ]);
-      // Hold a real setup boundary past the separate registration deadline.
-      await delay(1100);
+        parked,
+        "Native task completed before tool authority preparation",
+      );
+      expect(registrationTimer).not.toHaveBeenCalled();
+      expect(assertions).not.toHaveBeenCalled();
+      expect(ACTIVE_EMBEDDED_RUNS.has(SESSION_ID)).toBe(false);
     } finally {
       releasePreparation.resolve();
     }
     expect(await outcome).toEqual({ error: undefined });
+    expect(registrationTimer).toHaveBeenCalledOnce();
+    expect(cancelDeadline).toHaveBeenCalledOnce();
     expect(assertions).toHaveBeenCalledOnce();
     expect(ACTIVE_EMBEDDED_RUNS.has(SESSION_ID)).toBe(false);
   });

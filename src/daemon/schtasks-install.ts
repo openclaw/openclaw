@@ -4,10 +4,8 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { DOMParser } from "linkedom";
 import { hasErrnoCode } from "../infra/errno.js";
-import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS } from "../infra/windows-powershell-spawn.js";
 import { resolveGatewayServiceDescription } from "./constants.js";
-import { resolveGatewayServiceProbeHosts } from "./gateway-service-probe-hosts.js";
 import { formatLine, writeFormattedLines } from "./output.js";
 import {
   readScheduledTaskDefinition,
@@ -32,19 +30,17 @@ import {
   resolveStartupEntryPath,
   resolveTaskLauncherScriptPath,
   resolveTaskName,
+  resolveTaskScriptEnvironment,
   resolveTaskScriptPath,
   shouldFallbackToStartupEntry,
   shouldUseHiddenWindowsTaskLauncher,
 } from "./schtasks-layout.js";
+import { terminateGatewayProcessTree } from "./schtasks-process.js";
 import {
-  findInstalledProcessPid,
-  readWindowsProcessSnapshot,
-} from "./schtasks-process-snapshot.js";
-import {
-  resolveScheduledTaskCommandPort,
-  shouldManageGatewayListenerPort,
-  terminateGatewayProcessTree,
-} from "./schtasks-process.js";
+  assertReplacementPortAvailableForTakeover,
+  captureStartupRegistrationTransition,
+  verifyWindowsRegistrationReadiness,
+} from "./schtasks-registration-transition.js";
 import {
   assertSchtasksAvailable,
   isRegisteredScheduledTask,
@@ -62,6 +58,7 @@ import { preserveServicePolicyXml } from "./service-policy-xml.js";
 import { resolveTaskUser } from "./service-process-env.js";
 import { publishServiceFile } from "./service-stage.js";
 import type {
+  GatewayServiceCommandConfig,
   GatewayServiceEnv,
   GatewayServiceInstallArgs,
   GatewayServiceManageArgs,
@@ -373,16 +370,24 @@ export async function installScheduledTask(
   let restoreTask: Awaited<ReturnType<typeof backupScheduledTaskDefinition>> | undefined;
   let staged: Awaited<ReturnType<typeof writeScheduledTaskScript>> | undefined;
   let recovery: ScheduledTaskFileRecovery | undefined;
+  let startupTransition:
+    | Awaited<ReturnType<typeof captureStartupRegistrationTransition>>
+    | undefined;
   const warn = args.warn ?? ((message: string) => args.stdout.write(`${message}\n`));
   let activationAttempted = false;
   const install = async () => {
-    const installedCommand = await readScheduledTaskCommand(args.env).catch(() => null);
+    const startup = args.definitionTransaction?.windowsRegistration === "startup";
+    const installedCommand = startup
+      ? await readScheduledTaskCommand(args.env, { requireEffective: true, requireLoaded: true })
+      : await readScheduledTaskCommand(args.env).catch(() => null);
     const fallbackEnv = resolveScheduledTaskActivationEnv(args.env, installedCommand?.environment);
     // Capture ownership before repair changes the port/profile that locates the old process.
     const startupEntryInstalled =
-      !args.definitionTransaction && (await isStartupEntryInstalled(fallbackEnv));
+      startup || (!args.definitionTransaction && (await isStartupEntryInstalled(fallbackEnv)));
     let startupRuntime = startupEntryInstalled
-      ? await resolveFallbackRuntime(fallbackEnv, installedCommand, "control").catch(() => null)
+      ? startup
+        ? await resolveFallbackRuntime(fallbackEnv, installedCommand, "control")
+        : await resolveFallbackRuntime(fallbackEnv, installedCommand, "control").catch(() => null)
       : null;
     if (
       startupEntryInstalled &&
@@ -403,6 +408,17 @@ export async function installScheduledTask(
       );
     }
     const activationEnv = resolveScheduledTaskActivationEnv(args.env, args.environment);
+    const renderedCommand: GatewayServiceCommandConfig = {
+      programArguments: args.programArguments,
+      workingDirectory: args.workingDirectory || undefined,
+      environment: resolveTaskScriptEnvironment(
+        resolveScheduledTaskScriptEnvironment(
+          resolveScheduledTaskRenderEnv(args.env, args.environment),
+          args.environment,
+        ),
+      ),
+    };
+    const candidateEnv = resolveScheduledTaskActivationEnv(args.env, renderedCommand.environment);
     if (startupRuntime) {
       const fallbackPid = startupRuntime.status === "running" ? startupRuntime.pid : undefined;
       if (startupRuntime.status === "running" && !fallbackPid) {
@@ -415,6 +431,26 @@ export async function installScheduledTask(
         ...(fallbackPid ? { fallbackPid } : {}),
       });
     }
+    if (startup && args.definitionTransaction) {
+      if (!installedCommand) {
+        throw new Error("Windows Startup definition is unavailable for replacement.");
+      }
+      const transaction = args.definitionTransaction;
+      startupTransition = await captureStartupRegistrationTransition({
+        previous: {
+          env: fallbackEnv,
+          command: installedCommand,
+          transaction,
+          assertCurrent: transaction.assertCurrent,
+        },
+        candidate: {
+          env: candidateEnv,
+          command: renderedCommand,
+          transaction,
+          assertCurrent: transaction.assertCurrent,
+        },
+      });
+    }
     if (!args.definitionTransaction) {
       restoreTask = await backupScheduledTaskDefinition(
         activationEnv,
@@ -422,6 +458,10 @@ export async function installScheduledTask(
       );
     }
     staged = await writeScheduledTaskScript(args, async (files) => {
+      if (startupTransition) {
+        await startupTransition.beforePublish();
+        return;
+      }
       recovery = files;
       const assertOriginal = async () => {
         await files?.assertPublished();
@@ -438,7 +478,7 @@ export async function installScheduledTask(
       if (!registered) {
         return;
       }
-      if (
+      const alreadyStopped =
         isScheduledTaskDefinitelyNotRunning(resolveTaskName(fallbackEnv)) &&
         (
           await resolveFallbackRuntime(
@@ -447,9 +487,36 @@ export async function installScheduledTask(
             "control",
             performance.now() + WINDOWS_POWERSHELL_COLD_SPAWN_TIMEOUT_MS,
           )
-        ).status === "stopped"
-      ) {
-        // An update may already own stopped-state custody. Observation must not reacquire it.
+        ).status === "stopped";
+      if (args.definitionTransaction?.registerNativeRecovery) {
+        const hooks = args.definitionTransaction;
+        const registration = await backupScheduledTaskDefinition(
+          activationEnv,
+          resolveTaskScriptPath(resolveScheduledTaskRenderEnv(args.env, args.environment)),
+        );
+        restoreTask = registration;
+        hooks.registerNativeRecovery?.(async (restoreDefinition) => {
+          const restored = await registration.restore(
+            {
+              assertPublished: hooks.beforeWrite,
+              restore: restoreDefinition,
+              restoresRegistration: true,
+            },
+            activationAttempted,
+          );
+          if (!alreadyStopped && installedCommand) {
+            await verifyWindowsRegistrationReadiness({
+              env: fallbackEnv,
+              command: installedCommand,
+              transaction: hooks,
+              assertCurrent: hooks.assertCurrent,
+            });
+          }
+          return restored;
+        });
+      }
+      if (alreadyStopped) {
+        // Stopped custody needs no second stop, but activation still needs recovery.
         await assertOriginal();
         return;
       }
@@ -476,21 +543,34 @@ export async function installScheduledTask(
       }
       await assertOriginal();
     });
-    const activation = await activateScheduledTask({
-      env: activationEnv,
-      stdout: args.stdout,
-      warn,
-      scriptPath: staged.scriptPath,
-      taskLaunchPath: staged.taskLaunchPath,
-      description: staged.taskDescription,
-      definitionTransaction: args.definitionTransaction,
-      registration: restoreTask,
-      onActivation: () => {
-        activationAttempted = true;
-      },
-    });
+    let activation: ScheduledTaskActivation | "startup-fallback" = "startup-fallback";
+    if (startupTransition) {
+      await startupTransition.activate();
+    } else {
+      activation = await activateScheduledTask({
+        env: activationEnv,
+        stdout: args.stdout,
+        warn,
+        scriptPath: staged.scriptPath,
+        taskLaunchPath: staged.taskLaunchPath,
+        description: staged.taskDescription,
+        definitionTransaction: args.definitionTransaction,
+        registration: restoreTask,
+        onActivation: () => {
+          activationAttempted = true;
+        },
+      });
+    }
     assertGatewayServiceUpdateCurrent();
-    if (activation !== "scheduled-task") {
+    if (args.definitionTransaction) {
+      await verifyWindowsRegistrationReadiness({
+        env: candidateEnv,
+        command: renderedCommand,
+        transaction: args.definitionTransaction,
+        assertCurrent: args.assertCurrent,
+      });
+    }
+    if (args.definitionTransaction || activation !== "scheduled-task") {
       return { scriptPath: staged.scriptPath };
     }
     // Re-probe the captured command so a config-reload fallback is not hidden by the staged script.
@@ -612,65 +692,4 @@ export async function uninstallScheduledTask({
     }
     stdout.write(`Task script not found at ${scriptPath}\n`);
   }
-}
-
-async function assertReplacementPortAvailableForTakeover(params: {
-  env: GatewayServiceEnv;
-  programArguments: string[];
-  environment?: GatewayServiceEnv;
-  fallbackPid?: number;
-}): Promise<void> {
-  if (!shouldManageGatewayListenerPort(params.env)) {
-    return;
-  }
-  const command = {
-    programArguments: params.programArguments,
-    environment: Object.fromEntries(
-      Object.entries(params.environment ?? {}).filter(
-        (entry): entry is [string, string] => typeof entry[1] === "string",
-      ),
-    ),
-  };
-  const port = resolveScheduledTaskCommandPort(params.env, command);
-  if (!port) {
-    throw new Error("Could not verify the replacement Windows Scheduled Task port.");
-  }
-  const probeHosts = await resolveGatewayServiceProbeHosts({ env: params.env, command });
-  const diagnostics = await inspectPortUsage(port, { probeHosts }).catch(() => null);
-  if (!diagnostics) {
-    throw new Error(`Could not inspect replacement gateway port ${port}.`);
-  }
-  if (diagnostics.status === "free") {
-    return;
-  }
-  if (diagnostics.status !== "busy") {
-    throw new Error(`Could not verify replacement gateway port ${port}.`);
-  }
-
-  const allowedPids = new Set<number>();
-  if (params.fallbackPid) {
-    allowedPids.add(params.fallbackPid);
-  }
-  if (process.platform === "win32") {
-    const snapshot = readWindowsProcessSnapshot();
-    if (snapshot) {
-      const replacementPid = findInstalledProcessPid(
-        snapshot,
-        port,
-        params.programArguments,
-        () => true,
-      );
-      if (replacementPid) {
-        allowedPids.add(replacementPid);
-      }
-    }
-  }
-  const listenerPids = diagnostics.listeners.map((listener) => listener.pid);
-  if (
-    listenerPids.length > 0 &&
-    listenerPids.every((pid) => typeof pid === "number" && pid > 0 && allowedPids.has(pid))
-  ) {
-    return;
-  }
-  throw new Error(`replacement gateway port ${port} is occupied by an unverified process`);
 }

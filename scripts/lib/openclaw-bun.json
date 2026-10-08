@@ -26,6 +26,15 @@
       "sha256": "675e520cca663871ed378ff4530d795c6865e733cfacacc193b6af61d36acff0",
       "executable": "bun-linux-aarch64/bun",
       "executableSha256": "82b1961986e383d8c1103f35e62e5c2d72de5806f8d291559bf6892f2cff11ba"
+    },
+    "windows-x64": {
+      "asset": "bun-windows-x64.zip",
+      "sha256": "e367bd5e19cba59453d488a83f486146a65172bf7df5b23819acdcf98f42b1f3",
+      "executable": "bun-windows-x64/bun.exe",
+      "executableSha256": "506822d3d226da86b3e7f449f3965dc3f6746d543d63cd8b0fd2844afd162955",
+      "tag": "openclaw-v1.4.3-20261004-d2d2a26ef9-webkit-1ee09069fe",
+      "commit": "d2d2a26ef973cdd97b37953f5dba58052acad74f",
+      "authenticodeSigned": false
     }
   }
 }

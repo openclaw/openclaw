@@ -55,7 +55,11 @@ import {
   type ScheduledTaskSettlement,
 } from "./schtasks-state-probe.js";
 import { ScheduledTaskAutoStartRecoveryError } from "./schtasks-update-recovery.js";
-import { writeTaskXmlTempFile } from "./schtasks-xml.js";
+import {
+  parseScheduledTaskXmlEnabled,
+  setScheduledTaskXmlEnabled,
+  writeTaskXmlTempFile,
+} from "./schtasks-xml.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import { fingerprintGatewayServiceDefinition } from "./service-rebind.js";
@@ -213,31 +217,6 @@ export async function runScheduledTaskOrThrow(params: {
   }
   throw new Error(
     `Scheduled Task ${params.taskName} did not start within ${SCHEDULED_TASK_FALLBACK_TIMEOUT_MS / 1000}s after schtasks /Run; refusing a direct fallback because the queued task could still start.`,
-  );
-}
-
-function parseScheduledTaskXmlEnabled(output: string): boolean | null {
-  const normalized = output.replace(/^\uFEFF/u, "").replaceAll(String.fromCharCode(0), "");
-  const settings = /<Settings(?:\s[^>]*)?>([\s\S]*?)<\/Settings>/iu.exec(normalized)?.[1];
-  if (settings === undefined) {
-    return null;
-  }
-  const enabled = /<Enabled>\s*(true|false)\s*<\/Enabled>/iu.exec(settings)?.[1];
-  // Task Scheduler's schema defaults a missing Settings.Enabled value to true.
-  return enabled === undefined ? true : enabled.toLowerCase() === "true";
-}
-
-export function setScheduledTaskXmlEnabled(xml: string, enabled: boolean): string {
-  if (parseScheduledTaskXmlEnabled(xml) === null) {
-    throw new Error("Scheduled Task enabled state could not be inspected.");
-  }
-  return xml.replace(
-    /(<Settings(?:\s[^>]*)?>)([\s\S]*?)(<\/Settings>)/iu,
-    (_match, open: string, body: string, close: string) => {
-      const value = `<Enabled>${enabled}</Enabled>`;
-      const field = /<Enabled>\s*(true|false)\s*<\/Enabled>/iu;
-      return `${open}${field.test(body) ? body.replace(field, value) : `${value}${body}`}${close}`;
-    },
   );
 }
 
@@ -447,7 +426,6 @@ export async function stopRegisteredScheduledTask({
     {
       warn: warn ?? ((message) => stdout.write(`Warning: ${message}\n`)),
       onStopped: onEndMutation,
-      beforeMutation,
       restart,
       onSettlement,
       onRecovery,
@@ -463,6 +441,7 @@ export async function stopRegisteredScheduledTask({
         }
       },
     },
+    beforeMutation,
   );
   if (terminated?.length) {
     onProcessStopped?.();

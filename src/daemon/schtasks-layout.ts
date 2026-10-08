@@ -1,5 +1,6 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { filterStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeProfileName } from "../cli/profile-utils.js";
@@ -582,6 +583,26 @@ async function readWindowsTaskCommand(
   );
 }
 
+export function resolveTaskScriptEnvironment(
+  environment?: GatewayServiceEnv,
+): Record<string, string> {
+  const rendered: Record<string, string> = {};
+  for (const [key, value] of Object.entries(filterStringRecord(environment) ?? {})) {
+    // `set "NODE_OPTIONS="` clears inherited flags before the Node command runs.
+    if (
+      (!value && key.toUpperCase() !== "NODE_OPTIONS") ||
+      key.toUpperCase() === "PATH" ||
+      // This preference chooses the launcher at install time. Persisting it
+      // would overwrite the live WScript marker inherited by the supervisor.
+      key.toUpperCase() === WINDOWS_TASK_LAUNCHER_ENV
+    ) {
+      continue;
+    }
+    rendered[key] = value;
+  }
+  return rendered;
+}
+
 export function buildTaskScript({
   description,
   programArguments,
@@ -597,21 +618,8 @@ export function buildTaskScript({
   if (workingDirectory) {
     lines.push(`cd /d ${quoteCmdScriptArg(workingDirectory)}`);
   }
-  if (environment) {
-    for (const [key, value] of Object.entries(environment)) {
-      // `set "NODE_OPTIONS="` clears inherited flags before the Node command runs.
-      if (
-        value === undefined ||
-        (!value && key.toUpperCase() !== "NODE_OPTIONS") ||
-        key.toUpperCase() === "PATH" ||
-        // This preference chooses the launcher at install time. Persisting it
-        // would overwrite the live WScript marker inherited by the supervisor.
-        key.toUpperCase() === WINDOWS_TASK_LAUNCHER_ENV
-      ) {
-        continue;
-      }
-      lines.push(renderCmdSetAssignment(key, value));
-    }
+  for (const [key, value] of Object.entries(resolveTaskScriptEnvironment(environment))) {
+    lines.push(renderCmdSetAssignment(key, value));
   }
   const commandArguments =
     environment?.OPENCLAW_SERVICE_KIND === "gateway"

@@ -10,6 +10,7 @@ name = "openclaw-desktop"
 path = "src/main.rs"
 
 [build-dependencies]
+serde_json = "1.0.151"
 tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
@@ -74,6 +75,6 @@ tauri-plugin-notifications = { git = "https://github.com/steipete/tauri-plugin-n
 
 [target.'cfg(target_os = "windows")'.dependencies]
 webview2-com = "0.38.2"
-windows = { version = "0.61.3", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows = { version = "0.61.3", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Registry", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 windows-core = "0.61.2"
 tauri-plugin-notifications = { git = "https://github.com/steipete/tauri-plugin-notifications.git", rev = "35d04a6af588a5d5d438da0320c7d95a877cfe14" }

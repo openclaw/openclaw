@@ -1,33 +1,21 @@
-#[cfg(not(target_os = "windows"))]
 use crate::cli::openclaw_home;
 use crate::cli::{OpenClawCli, SpawnCommand};
 use serde::Deserialize;
-#[cfg(not(target_os = "windows"))]
 use serde::Serialize;
-#[cfg(not(target_os = "windows"))]
 use std::collections::VecDeque;
-#[cfg(not(target_os = "windows"))]
 use std::io::{BufRead, BufReader};
-#[cfg(not(target_os = "windows"))]
 use std::process::{Command, Stdio};
-#[cfg(not(target_os = "windows"))]
 use std::sync::mpsc;
-#[cfg(not(target_os = "windows"))]
 use std::thread;
-#[cfg(not(target_os = "windows"))]
 use tauri::path::BaseDirectory;
 use tauri::AppHandle;
-#[cfg(not(target_os = "windows"))]
 use tauri::{Emitter, Manager};
 
-#[cfg(not(target_os = "windows"))]
 const INSTALL_EVENT: &str = "install-progress";
-#[cfg(not(target_os = "windows"))]
 const ERROR_TAIL_LINES: usize = 24;
 
-#[cfg(not(target_os = "windows"))]
 pub(crate) fn managed_launcher_absent(prefix: &std::path::Path) -> Result<bool, String> {
-    match std::fs::symlink_metadata(prefix.join("bin/openclaw")) {
+    match std::fs::symlink_metadata(crate::cli::managed_launcher(prefix)) {
         Ok(_) => Ok(false),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
         Err(error) => Err(format!(
@@ -45,7 +33,6 @@ pub enum InstallChannel {
 }
 
 impl InstallChannel {
-    #[cfg(not(target_os = "windows"))]
     fn version(self) -> &'static str {
         match self {
             Self::Stable => "latest",
@@ -55,17 +42,11 @@ impl InstallChannel {
     }
 }
 
-#[cfg(not(target_os = "windows"))]
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct InstallProgress<'a> {
     stream: &'a str,
     line: &'a str,
-}
-
-#[cfg(target_os = "windows")]
-pub fn install(_app: &AppHandle, _channel: InstallChannel, _fresh: bool) -> Result<(), String> {
-    Err("CLI installation is unavailable in this Windows test build.".to_string())
 }
 
 #[cfg(not(target_os = "windows"))]
@@ -78,8 +59,15 @@ fn configure_installer_environment(command: &mut Command) {
     command.env_remove("LD_LIBRARY_PATH");
 }
 
-#[cfg(not(target_os = "windows"))]
 pub fn install(app: &AppHandle, channel: InstallChannel, fresh: bool) -> Result<(), String> {
+    #[cfg(windows)]
+    if matches!(channel, InstallChannel::Dev) {
+        return Err("Windows fresh setup supports Stable and Beta. Install a development CLI separately, then connect to its Gateway.".into());
+    }
+    #[cfg(windows)]
+    if !fresh || !crate::bundled_runtime::available() {
+        return Err("This Windows build has no admitted bundled runtime for fresh setup.".into());
+    }
     let prefix = openclaw_home().map_err(|error| error.to_string())?;
     let app_version = app.package_info().version.to_string();
     let version = if fresh
@@ -179,7 +167,6 @@ pub(crate) fn browser_runtime(
     Ok(cli)
 }
 
-#[cfg(not(target_os = "windows"))]
 fn install_at(
     app: &AppHandle,
     channel: InstallChannel,
@@ -188,28 +175,64 @@ fn install_at(
     runtime_only: bool,
     spawn: Option<&SpawnCommand<'_>>,
 ) -> Result<(), String> {
-    let script = app
-        .path()
-        .resolve("install-cli.sh", BaseDirectory::Resource)
-        .map_err(|error| format!("Bundled installer is unavailable: {error}"))?;
-    let mut command = Command::new("bash");
-    configure_installer_environment(&mut command);
-    command
-        .arg(script)
-        .args(["--json", "--no-onboard", "--prefix"])
-        .arg(&prefix)
-        .args(["--version", version]);
-    if runtime_only {
-        command.arg("--runtime-only");
-        if !matches!(channel, InstallChannel::Dev) {
-            command.arg("--npm");
+    #[cfg(windows)]
+    let mut command = {
+        if !runtime_only || !crate::bundled_runtime::available() {
+            return Err(
+                "This Windows build has no admitted bundled runtime for fresh setup.".into(),
+            );
         }
-    }
-    if matches!(channel, InstallChannel::Dev) {
+        let script = app
+            .path()
+            .resolve("install.ps1", BaseDirectory::Resource)
+            .map_err(|error| format!("Bundled installer is unavailable: {error}"))?;
+        let system_root =
+            std::env::var_os("SystemRoot").ok_or("Windows system directory is unavailable.")?;
+        let mut command = Command::new(
+            std::path::PathBuf::from(system_root)
+                .join("System32/WindowsPowerShell/v1.0/powershell.exe"),
+        );
         command
-            .args(["--install-method", "git", "--git-dir"])
-            .arg(prefix.join("dev/openclaw"));
-    }
+            .args([
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+            ])
+            .arg(script)
+            .args(["-RuntimeOnly", "-NoOnboard", "-Prefix"])
+            .arg(&prefix)
+            .args(["-Tag", version, "-InstallMethod", "npm"]);
+        command
+    };
+    #[cfg(not(windows))]
+    let mut command = {
+        let script = app
+            .path()
+            .resolve("install-cli.sh", BaseDirectory::Resource)
+            .map_err(|error| format!("Bundled installer is unavailable: {error}"))?;
+        let mut command = Command::new("bash");
+        configure_installer_environment(&mut command);
+        command
+            .arg(script)
+            .args(["--json", "--no-onboard", "--prefix"])
+            .arg(&prefix)
+            .args(["--version", version]);
+        if runtime_only {
+            command.arg("--runtime-only");
+            if !matches!(channel, InstallChannel::Dev) {
+                command.arg("--npm");
+            }
+        }
+        if matches!(channel, InstallChannel::Dev) {
+            command
+                .args(["--install-method", "git", "--git-dir"])
+                .arg(prefix.join("dev/openclaw"));
+        }
+        command
+    };
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -274,7 +297,6 @@ fn install_at(
     }
 }
 
-#[cfg(not(target_os = "windows"))]
 fn stream_lines<R>(
     stream: &'static str,
     reader: R,

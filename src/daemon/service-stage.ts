@@ -8,6 +8,8 @@ import { z } from "zod";
 import { hasErrnoCode } from "../infra/errno.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 
+export type WindowsServiceRegistrationKind = "scheduled-task" | "startup";
+
 const fileState = z.strictObject({
   sha256: z.string().regex(/^[a-f0-9]{64}$/),
   mode: z.number().int().nonnegative(),
@@ -41,6 +43,12 @@ export type GatewayServiceDefinitionBackupReceipt = z.infer<
 >;
 export type GatewayServiceDefinitionTransactionHooks = {
   preservePolicy?: readonly string[];
+  /** Captured native registration kind; the owner revalidates it before each publication. */
+  windowsRegistration?: WindowsServiceRegistrationKind;
+  /** The native owner settles processes around the caller's definition compensation. */
+  registerNativeRecovery?: (
+    recover: (restoreDefinition: () => Promise<boolean>) => Promise<boolean>,
+  ) => void;
   assertCurrent: () => void;
   beforeWrite: () => Promise<void>;
   filePrepared: (sourcePath: string, temporaryPath: string | null) => Promise<void>;

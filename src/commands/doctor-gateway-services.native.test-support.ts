@@ -75,7 +75,8 @@ vi.mock("../daemon/inspect.js", () => ({
   renderGatewayServiceCleanupHints: mocks.renderGatewayServiceCleanupHints,
 }));
 
-vi.mock("../daemon/runtime-paths.js", () => ({
+vi.mock("../daemon/runtime-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/runtime-paths.js")>()),
   renderSystemNodeWarning: mocks.renderSystemNodeWarning,
   resolveSystemNodeInfo: mocks.resolveSystemNodeInfo,
   resolveNodeRuntimeInfo: mocks.resolveNodeRuntimeInfo,

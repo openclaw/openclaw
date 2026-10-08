@@ -5820,7 +5820,6 @@
 ["src/commands/doctor-gateway-services.native.test-support.ts","../../packages/terminal-core/src/note.js","c6d89a1729db8972b8ff3b9dae124554a7712ef7e1ded98f6bf42809f10805a0",1]
 ["src/commands/doctor-gateway-services.native.test-support.ts","../config/paths.js","b252281ce3f82ccb3629f4612247166e1fb3ba87b2a1f7ef27bcb288cff19f4b",1]
 ["src/commands/doctor-gateway-services.native.test-support.ts","../daemon/inspect.js","a7ae32645b9f4d1748a63f5648fb67b7f97b65643e1ed66ea445032d03476054",1]
-["src/commands/doctor-gateway-services.native.test-support.ts","../daemon/runtime-paths.js","4163c7a0efbcc86045b9ea75a886e207692f40d5f01adbf619547ce8df101d48",1]
 ["src/commands/doctor-gateway-services.native.test-support.ts","../daemon/service-audit.js","ef711758b829f585410c169fdffc2686985fcd93f95a1af56ccdbcaa24a8280f",1]
 ["src/commands/doctor-gateway-services.native.test-support.ts","../daemon/service.js","78d6c914d710f60cda67f6d6956cb3bfb9f4b0e9df2cb45f85f70e25573ba15b",1]
 ["src/commands/doctor-gateway-services.native.test-support.ts","../daemon/systemd.js","19d1dfa376cc98c400ea4dee4e1fa944df0912deb50a8ddeed3f1a8c17b707ac",1]

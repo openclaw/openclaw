@@ -25,6 +25,12 @@ import {
   startTestGatewayServer,
 } from "./test-helpers.server.js";
 
+// Automatic metadata repair owns the same lease as this fixture's manual mutation.
+vi.mock("./server-runtime-services.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-runtime-services.js")>()),
+  scheduleGatewayPostReadyMaintenance: () => {},
+}));
+
 vi.doUnmock("../plugins/loader.js");
 installGatewayTestHooks({ scope: "suite" });
 installInstanceBindingConfigIo();

@@ -1817,7 +1817,7 @@ private func pendingHandoffDiagnostic(
         #expect(appModel.activeGatewayConnectConfig?.nodeOptions.deviceAuthGatewayID == stableID)
     }
 
-    @Test @MainActor func `discovered connect preserves exact device auth owner bytes`() async {
+    @Test(.testWaitLimit) @MainActor func `discovered connect preserves exact device auth owner bytes`() async throws {
         let registryIsolation = await GatewayRegistryTestIsolation()
         defer { registryIsolation.restore() }
         let stableID = "\u{0085}gateway-e\u{0301}"
@@ -1855,7 +1855,9 @@ private func pendingHandoffDiagnostic(
         #expect(controller.pendingTrustPrompt?.fingerprintSha256 == "exact-owner-fingerprint")
         await controller.acceptPendingTrustPrompt(controller.pendingTrustPrompt)
         let expectedGeneration = appModel.gatewayConnectGeneration
-        await waitUntil(timeout: .seconds(1)) { appModel.activeGatewayConnectConfig != nil }
+        try await TestWait.observed("exact-owner connection handoff") {
+            !controller.hasPendingConnectionHandoff
+        }
 
         #expect(appModel.activeGatewayConnectConfig?.tls?.expectedFingerprint == "exact-owner-fingerprint")
         #expect(appModel.activeGatewayConnectConfig?.tls?.allowTOFU == false)

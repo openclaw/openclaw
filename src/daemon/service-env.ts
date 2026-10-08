@@ -274,6 +274,7 @@ export function buildServiceEnvironment(
   params: ServiceEnvironmentParams & {
     port: number;
     existingNodeOptions?: string;
+    existingProgramArguments?: readonly string[];
     launchdLabel?: string;
   },
 ): Record<string, string | undefined> {
@@ -293,6 +294,7 @@ export function buildServiceEnvironment(
     NODE_OPTIONS: resolveGatewayHeapNodeOptions(
       params.existingNodeOptions,
       wrapperPath ? undefined : params.runtime,
+      !wrapperPath && params.runtime === "bun" ? params.existingProgramArguments : undefined,
     ),
     OPENCLAW_PROFILE: profile,
     ...(env.OPENCLAW_CONFIG_READONLY !== undefined

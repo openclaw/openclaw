@@ -6,6 +6,7 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
@@ -76,7 +77,8 @@ it("repairs deep owner aliases without losing a large healthy transcript", async
     }
     expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-    closeOpenClawAgentDatabasesForTest();
+    await closeOpenClawAgentDatabasesAsync(stateDir);
+    closeOpenClawAgentDatabasesForTest(stateDir);
     const child = resolveRuntimeWorkerUrl(doctorConfigRuntimeEntrypoints.canonicalSessionRepair);
     // Doctor runs on Node's main thread; Vitest's worker-thread stack masks this overflow.
     const { stdout } = await execFileAsync(

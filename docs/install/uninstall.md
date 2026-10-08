@@ -38,6 +38,13 @@ openclaw uninstall --all --yes --non-interactive
 npx -y openclaw uninstall --all --yes --non-interactive
 ```
 
+On Windows, quit the desktop app before uninstalling. If the managed CLI or its
+private Node runtime is inside the state directory, use the `npx` command above
+from outside that directory, with Node and npm's cache also outside it. Windows
+can keep running executables and loaded native DLLs open, preventing the CLI from
+removing its own installation files. Keep the same Windows account, profile, and
+state/config overrides; the uninstaller reports any incomplete cleanup.
+
 Flags: `--service`, `--state`, `--workspace`, `--app` select individual scopes; `--all` selects all four.
 
 Unlike `openclaw uninstall --state`, manual state deletion does not preserve

@@ -132,6 +132,7 @@
     ],
     "resources": {
       "target/installers/install-cli.sh": "install-cli.sh",
+      "target/installers/install.ps1": "install.ps1",
       "target/desktop-runtime/": "desktop-runtime/"
     },
     "linux": {

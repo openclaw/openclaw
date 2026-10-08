@@ -141,7 +141,14 @@ describe("resolveGatewayService", () => {
     const tempHome = await makeTempWorkspace("openclaw-service-future-config-");
     const stateDir = path.join(tempHome, ".openclaw");
     const configPath = path.join(stateDir, "openclaw.json");
-    const envSnapshot = captureEnv(["HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
+    const envSnapshot = captureEnv([
+      "HOME",
+      "OPENCLAW_STATE_DIR",
+      "OPENCLAW_CONFIG_PATH",
+      "OPENCLAW_LAUNCHD_LABEL",
+      "OPENCLAW_SYSTEMD_UNIT",
+      "OPENCLAW_WINDOWS_TASK_NAME",
+    ]);
     try {
       await fs.mkdir(stateDir, { recursive: true });
       await fs.writeFile(
@@ -159,6 +166,11 @@ describe("resolveGatewayService", () => {
       process.env.HOME = tempHome;
       process.env.OPENCLAW_STATE_DIR = stateDir;
       process.env.OPENCLAW_CONFIG_PATH = configPath;
+      // Native locks follow the service identity, independently of the temporary state directory.
+      const serviceId = path.basename(tempHome);
+      process.env.OPENCLAW_LAUNCHD_LABEL = `ai.openclaw.test.${serviceId}`;
+      process.env.OPENCLAW_SYSTEMD_UNIT = `openclaw-${serviceId}.service`;
+      process.env.OPENCLAW_WINDOWS_TASK_NAME = `OpenClaw Test ${serviceId}`;
       clearConfigCache();
       clearRuntimeConfigSnapshot();
 

@@ -10,9 +10,9 @@ import {
   getWindowsPowerShellExePath,
 } from "../infra/windows-install-roots.js";
 import { decodeXml } from "../shared/xml.js";
-import { setScheduledTaskXmlEnabled } from "./schtasks-control.js";
 import { execSchtasks } from "./schtasks-exec.js";
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
+import { setScheduledTaskXmlEnabled } from "./schtasks-xml.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 
 const WAIT_INTERVAL_MS = 200;

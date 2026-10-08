@@ -580,8 +580,12 @@ type CompatibleDaemonRpcValue<Key extends PropertyKey> = Key extends "server" | 
 export type DaemonStatus = Partial<
   Omit<GatheredDaemonStatus, "service" | "extraServices" | "config" | "rpc">
 > & {
-  service: Pick<GatheredDaemonService, RequiredDaemonServiceField> &
-    Partial<Omit<GatheredDaemonService, RequiredDaemonServiceField>>;
+  service: Pick<GatheredDaemonService, RequiredDaemonServiceField> & {
+    [Key in Exclude<UnionKeys<GatheredDaemonService>, RequiredDaemonServiceField>]?: UnionValue<
+      GatheredDaemonService,
+      Key
+    >;
+  };
   extraServices: GatheredDaemonStatus["extraServices"];
   config?: Pick<NonNullable<GatheredDaemonStatus["config"]>, "cli"> &
     Partial<Omit<NonNullable<GatheredDaemonStatus["config"]>, "cli">>;

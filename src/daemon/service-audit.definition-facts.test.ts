@@ -22,6 +22,7 @@ import { buildScheduledTaskXml } from "./schtasks-xml.js";
 import { auditGatewayInstallPreservation } from "./service-audit-preservation.js";
 import type { ServiceDefinitionDrift } from "./service-audit-types.js";
 import { auditGatewayServiceConfig } from "./service-audit.js";
+import type { GatewayServiceCommandConfig } from "./service-types.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
 import {
   execSystemctlUserMock,
@@ -354,12 +355,10 @@ it.each([{ count: "9", stale: true }])(
             },
       ),
     ]);
-    expect(native.task).toHaveBeenCalledExactlyOnceWith([
-      "/Query",
-      "/TN",
-      "OpenClaw Gateway",
-      "/XML",
-    ]);
+    expect(native.task).toHaveBeenCalledExactlyOnceWith(
+      ["/Query", "/TN", "OpenClaw Gateway", "/XML"],
+      undefined,
+    );
   },
 );
 
@@ -487,6 +486,45 @@ it("accepts retained heap aliases, custom environment and owned environment rege
   });
   expect(result.definitionDrift).toBeUndefined();
 });
+
+it.each(["retained", "changed", "missing", "empty override", "reset override"])(
+  "compares preserved heap settings across runtime representations: %s",
+  (kind) => {
+    const base = {
+      programArguments: ["/node", "--max-old-space-size=6144", "/old/index.js", "gateway"],
+      environment: { NODE_OPTIONS: "--max-old-space-size=1024" },
+    };
+    const command: GatewayServiceCommandConfig = kind.endsWith("override")
+      ? {
+          ...base,
+          environment: kind === "empty override" ? { NODE_OPTIONS: "" } : {},
+          managedDefinition: base,
+          managedOverrides: {
+            environment:
+              kind === "empty override" ? { keys: ["NODE_OPTIONS"] } : { resetInline: true },
+          },
+        }
+      : base;
+    const findings: ServiceDefinitionDrift[] = [];
+    auditGatewayInstallPreservation(
+      command,
+      {
+        programArguments: ["/bun", "--no-install", "/new/index.js", "gateway"],
+        environment:
+          kind === "missing"
+            ? {}
+            : { NODE_OPTIONS: `--max-old-space-size=${kind === "changed" ? 8192 : 6144}` },
+      },
+      "linux",
+      findings,
+    );
+    if (kind === "retained") {
+      expect(findings).toEqual([]);
+    } else {
+      expect(findings).toContainEqual(expect.objectContaining({ key: "ProgramArguments" }));
+    }
+  },
+);
 
 it("bounds environment diffs and redacts nonnumeric timeout values", () => {
   const command = {

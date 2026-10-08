@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   captureUpdateProcesses,
@@ -9,7 +11,7 @@ const sampleIntervalMs = 5_000;
 const sampleLimit = 7;
 const signals = ["SIGTERM", "SIGINT", "SIGHUP"];
 
-async function observeUpdateCommand(command) {
+async function observeUpdateCommand(command, diagnosticsPath) {
   const child = spawn(command[0], command.slice(1), { stdio: "inherit" });
   const samples = [];
   const sampling = new AbortController();
@@ -17,7 +19,15 @@ async function observeUpdateCommand(command) {
   const interrupted = () => {
     if (!reported) {
       reported = true;
-      process.stderr.write(formatUpdateTimeoutDiagnostics(samples));
+      const report = formatUpdateTimeoutDiagnostics(samples);
+      if (diagnosticsPath) {
+        try {
+          writeFileSync(diagnosticsPath, report, { flag: "wx", mode: 0o600 });
+        } catch {
+          // Existing evidence or an unavailable artifact must not change child settlement.
+        }
+      }
+      process.stderr.write(report);
     }
   };
   // The existing timeout owns this process group and its kill-after deadline.
@@ -66,11 +76,22 @@ async function observeUpdateCommand(command) {
 
 if (import.meta.main) {
   const command = process.argv.slice(2);
-  if (command.shift() !== "--" || !command.length) {
-    process.stderr.write("Usage: update-timeout-diagnostics.mjs -- command [args...]\n");
+  let diagnosticsPath;
+  if (command[0] === "--diagnostics-path") {
+    command.shift();
+    diagnosticsPath = command.shift();
+  }
+  if (
+    (diagnosticsPath !== undefined && !path.isAbsolute(diagnosticsPath)) ||
+    command.shift() !== "--" ||
+    !command.length
+  ) {
+    process.stderr.write(
+      "Usage: update-timeout-diagnostics.mjs [--diagnostics-path absolute-file] -- command [args...]\n",
+    );
     process.exitCode = 2;
   } else {
-    const result = await observeUpdateCommand(command);
+    const result = await observeUpdateCommand(command, diagnosticsPath);
     if (result.signal) {
       process.kill(process.pid, result.signal);
     } else {

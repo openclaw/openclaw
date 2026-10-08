@@ -1091,8 +1091,9 @@ foreach ($script:portableFailure in @('throw', 'unsupported')) {
           "    Set-Content -LiteralPath (Join-Path $script:ConcurrentRepo 'user.marker') -Value 'keep'",
           "  }",
           "  if ($script:CloneMode -eq 'retarget-alias') {",
-          "    Remove-Item -LiteralPath $script:AliasPath -Force",
           "    $linkType = if ($IsWindows -or $env:OS -eq 'Windows_NT') { 'Junction' } else { 'SymbolicLink' }",
+          "    # PowerShell 5.1 prompts for populated junctions; unlink this alias without traversing its target.",
+          "    if ($linkType -eq 'Junction') { [IO.Directory]::Delete($script:AliasPath) } else { Remove-Item -LiteralPath $script:AliasPath -Force }",
           "    New-Item -ItemType $linkType -Path $script:AliasPath -Target $script:AliasReplacement | Out-Null",
           "  }",
           "  $global:LASTEXITCODE = 0",
@@ -1436,8 +1437,9 @@ try {
       "    & ([scriptblock]::Create((Get-Content -LiteralPath $case.Path -Raw))) *>&1 | ForEach-Object { $caseOutput.Add([string]$_) }",
       "    [pscustomobject]@{ name = $case.Name; ok = $true; error = '' }",
       "  } catch {",
+      "    $failure = $_",
       '    $details = ($caseOutput | Select-Object -Last 80) -join "`n"',
-      '    [pscustomobject]@{ name = $case.Name; ok = $false; error = "$( $_.Exception.Message )`nNative exit: $LASTEXITCODE`n$details" }',
+      '    [pscustomobject]@{ name = $case.Name; ok = $false; error = "$($failure.Exception.Message)`n$($failure.InvocationInfo.PositionMessage)`n$($failure.ScriptStackTrace)`nNative exit: $LASTEXITCODE`n$details" }',
       "  }",
       "}",
       "$results | ConvertTo-Json -Compress",
@@ -1589,8 +1591,11 @@ try {
   });
 
   runIfPowerShell("shows help without starting the installer", () => {
-    const fileResult = runInstallerFile(["-?"]);
+    // -? is host-generated help; -Help is the installer's documented output contract.
+    const fileResult = runInstallerFile(["-Help"]);
     expect(fileResult.status).toBe(0);
+    expect(fileResult.stdout).toContain("Usage:");
+    expect(fileResult.stdout).toContain("-DryRun");
     expect(`${fileResult.stdout}\n${fileResult.stderr}`).toContain("install.ps1");
     expect(`${fileResult.stdout}\n${fileResult.stderr}`).not.toContain("[OK] Windows detected");
 
@@ -1646,6 +1651,84 @@ try {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("PATH unchanged");
     expect(result.stdout).not.toContain("Install method:");
+  });
+
+  runIfPowerShell("isolates private CLI setup and refuses an existing launcher", () => {
+    const root = harness.createTempDir("openclaw-private-cli-");
+    const script = [
+      source.replace(ENTRYPOINT_RE, ""),
+      `$testRoot = ${toPowerShellSingleQuotedLiteral(root)}`,
+      `$testNode = ${toPowerShellSingleQuotedLiteral(process.execPath)}`,
+      String.raw`
+$RuntimeOnly = $true
+$NoOnboard = $true
+$beforePath = $env:PATH
+$beforePrefix = $env:NPM_CONFIG_PREFIX
+$beforeUserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+$beforeMachinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+$script:PrivateNodeInstalls = 0
+function Check-ExistingOpenClaw { throw 'unexpected existing install probe' }
+function Refresh-GatewayServiceIfLoaded { throw 'unexpected Gateway probe' }
+function Run-Doctor { throw 'unexpected Doctor' }
+function Ensure-OpenClawOnPath { throw 'unexpected PATH mutation' }
+function Add-ToUserPath { throw 'unexpected user PATH mutation' }
+function Install-PrivateNode {
+    param([string]$Prefix)
+    $script:PrivateNodeInstalls++
+    New-Item -ItemType Directory -Path $Prefix | Out-Null
+    Copy-Item -LiteralPath $testNode -Destination (Join-Path $Prefix 'node.exe')
+}
+function Write-TestEntry {
+    param([string]$Entry)
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Entry) | Out-Null
+    [IO.File]::WriteAllText($Entry, "console.log('OpenClaw 2026.10.1');")
+}
+function Install-OpenClaw {
+    if (-not $env:PATH.StartsWith($env:NPM_CONFIG_PREFIX)) { throw 'private Node not selected' }
+    Write-TestEntry -Entry (Join-Path $env:NPM_CONFIG_PREFIX 'node_modules/openclaw/dist/entry.js')
+    return $true
+}
+function Install-OpenClawFromGit {
+    throw 'unexpected private Git installation'
+}
+$InstallMethod = 'git'
+$Prefix = Join-Path $testRoot 'unsupported-git'
+$script:InstallExitCode = 0
+Main
+if ($script:InstallExitCode -ne 2 -or (Test-Path -LiteralPath $Prefix) -or $script:PrivateNodeInstalls -ne 0) { throw 'Git refusal mutated the private install' }
+$InstallMethod = 'npm'
+$Prefix = Join-Path $testRoot 'npm'
+& {
+    $script:InstallExitCode = 0
+    Main
+    if ($script:InstallExitCode -ne 0) { throw 'private install failed' }
+    $wrapper = Join-Path $Prefix 'bin/openclaw.cmd'
+    $before = [IO.File]::ReadAllText($wrapper)
+    $store = Join-Path $Prefix 'tools/desktop-cli'
+    $slots = @(Get-ChildItem -LiteralPath $store)
+    if ($slots.Count -ne 1 -or $before -notmatch [regex]::Escape($slots[0].Name)) { throw 'wrong private slot' }
+    Main
+    if ($script:InstallExitCode -ne 1 -or [IO.File]::ReadAllText($wrapper) -ne $before) { throw 'existing launcher changed' }
+    if (@(Get-ChildItem -LiteralPath $store).Count -ne 1) { throw 'refused install created a slot' }
+    if ($env:PATH -ne $beforePath -or $env:NPM_CONFIG_PREFIX -ne $beforePrefix) { throw 'process environment leaked' }
+}
+if ([Environment]::GetEnvironmentVariable('Path', 'User') -ne $beforeUserPath -or
+    [Environment]::GetEnvironmentVariable('Path', 'Machine') -ne $beforeMachinePath) { throw 'persistent PATH changed' }
+`,
+    ].join("\n");
+    const scriptPath = join(root, "private-cli.ps1");
+    writeFileSync(scriptPath, `\uFEFF${script}`);
+    const result = runPowerShell([
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      scriptPath,
+    ]);
+    expect(result.error).toBeUndefined();
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
   });
 
   runIfPowerShell(

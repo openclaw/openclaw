@@ -1,9 +1,10 @@
 import "./install.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { ServiceStartRefusalError } from "../../daemon/service-inspection-error.js";
+import * as reconciliation from "../../daemon/service-reconciliation.js";
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { nodeProbeOutput } from "./install.test-helpers.js";
@@ -35,6 +36,28 @@ describe("runDaemonInstall", () => {
   setupInstallTests();
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+  it("rejects an invalid desktop receipt before inspecting or mutating service state", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    await runDaemonInstall({
+      json: true,
+      force: true,
+      runtime: "bun",
+      runtimePath: "C:\\runtime\\bun.exe",
+      expectedRuntimePin: JSON.stringify({ revision: "captured", definition: "task" }),
+      desktopRuntimeReceipt: "not-json",
+    });
+    expect(actionState.failed).toEqual([
+      {
+        message: "Desktop runtime result could not be admitted. No service changes were attempted.",
+        hints: undefined,
+      },
+    ]);
+    expect(service.readCommand).not.toHaveBeenCalled();
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+    expect(service.install).not.toHaveBeenCalled();
+  });
+
   it.each([true, false])(
     "attests pre-write service holds only from native refusal facts (%s)",
     async (typed) => {
@@ -54,6 +77,76 @@ describe("runDaemonInstall", () => {
       expect(replaceConfigFileMock).not.toHaveBeenCalled();
       expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
       expect(service.install).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    "requires Windows definition capability only for guarded installs (guarded=%s)",
+    async (guarded) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      service.readDefinitionMutationCapability.mockRejectedValue(
+        new Error("native inspection unavailable"),
+      );
+      installDaemonServiceAndEmitMock.mockImplementationOnce(async (params) => {
+        await (params as { install: () => Promise<void> }).install();
+      });
+      await runDaemonInstall({
+        json: true,
+        force: true,
+        runtime: "node",
+        ...(guarded
+          ? { expectedRuntimePin: JSON.stringify({ revision: "empty", definition: null }) }
+          : {}),
+      });
+      if (guarded) {
+        expect(service.install).not.toHaveBeenCalled();
+        expect(actionState.failed).toContainEqual(
+          expect.objectContaining({
+            message: expect.stringContaining("SERVICE_DEFINITION_UNKNOWN"),
+          }),
+        );
+      } else {
+        expect(service.readDefinitionMutationCapability).not.toHaveBeenCalled();
+        expect(service.install).toHaveBeenCalledOnce();
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "retains native policy admission for guarded Windows installation (existing=%s)",
+    async (existing) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      const revision = "captured-pin";
+      const definition = existing ? "captured-definition" : undefined;
+      pinSnapshotMock.mockReturnValue({ revision, definition, stored: existing });
+      service.isLoaded.mockResolvedValue(existing);
+      service.readCommand.mockResolvedValue(
+        existing
+          ? {
+              programArguments: [process.execPath, "/old/index.js", "gateway"],
+            }
+          : null,
+      );
+      const reconcile = vi
+        .spyOn(reconciliation, "reconcileGatewayServiceDefinition")
+        .mockRejectedValue(new Error("unrecognized native task policy"));
+      installDaemonServiceAndEmitMock.mockImplementationOnce(async (params) => {
+        await (params as { install: () => Promise<void> }).install();
+      });
+      const install = runDaemonInstall({
+        json: true,
+        force: true,
+        runtime: "node",
+        expectedRuntimePin: JSON.stringify({ revision, definition: definition ?? null }),
+      });
+      if (existing) {
+        await expect(install).rejects.toThrow("unrecognized native task policy");
+        expect(service.install).not.toHaveBeenCalled();
+      } else {
+        await install;
+        expect(reconcile).not.toHaveBeenCalled();
+        expect(service.install).toHaveBeenCalledOnce();
+      }
     },
   );
 

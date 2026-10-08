@@ -97,6 +97,28 @@ describe("addGatewayServiceCommands", () => {
     vi.restoreAllMocks();
   });
 
+  it("forwards the private desktop receipt and excludes the update executor", async () => {
+    const program = new Command();
+    createGatewayParentLikeCommand(program);
+    const receipt = JSON.stringify({ path: "C:\\profile\\result.json", nonce: "fixture" });
+    await program.parseAsync(["gateway", "install", "--desktop-runtime-receipt", receipt], {
+      from: "user",
+    });
+    expect(expectSingleDaemonCall(runDaemonInstall)).toMatchObject({
+      desktopRuntimeReceipt: receipt,
+    });
+    const install = program.commands[0]?.commands.find((command) => command.name() === "install");
+    expect(install?.helpInformation()).not.toContain("--desktop-runtime-receipt");
+    runDaemonInstall.mockClear();
+    await expect(
+      program.parseAsync(
+        ["gateway", "install", "--desktop-runtime-receipt", receipt, "--update-executor", "run"],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("cannot be used with the update executor");
+    expect(runDaemonInstall).not.toHaveBeenCalled();
+  });
+
   it.each(["/opt/Runtime Tools/node", "C:\\\\Runtime Tools\\\\node.exe"])(
     "forwards an exact runtime pin through gateway and daemon install: %s",
     async (pin) => {
@@ -146,7 +168,9 @@ describe("addGatewayServiceCommands", () => {
 
   it.each(
     ["gateway", "daemon"].flatMap((parent) =>
-      ["--expected-runtime-pin", "--restore-service-cli"].map((option) => ({ parent, option })),
+      ["--expected-runtime-pin", "--restore-service-cli", "--desktop-runtime-receipt"].map(
+        (option) => ({ parent, option }),
+      ),
     ),
   )("defers $parent install startup until $option is checked", async ({ parent, option }) => {
     const program = new Command().name("openclaw");

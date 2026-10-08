@@ -135,8 +135,9 @@ immediately with "Abort trap 6", see [Troubleshooting](#troubleshooting).
 The JSON schema has top-level `tag`, `commit`, `revision`, and `artifacts`.
 `artifacts` is keyed by `darwin-arm64`, `darwin-x64`, `linux-arm64`, and
 `linux-x64`; each entry contains `asset`, `sha256`, `executable`, and
-`executableSha256`. These are a projection of the published fork release's
-`manifest.json`, not independently maintained app or CI pins. Windows Tauri
+`executableSha256`. Optional Windows entries also carry their own `tag`, `commit`,
+optional `revision`, and `authenticodeSigned` admission flag. These are a projection
+of the fork release's `manifest.json`, not independently maintained app or CI pins. Windows Tauri
 retains its current runtime until a signed fork Windows build is published;
 unsigned dry-run artifacts are not shippable.
 
@@ -159,9 +160,41 @@ jq '{tag, commit: .bun.commit, revision: .bun.revision,
   ) | from_entries)}' manifest.json > scripts/lib/openclaw-bun.json
 ```
 
-Repin one shared owner in one PR and run staging for all four targets; execute
-native proofs on matching hosts (Rosetta can verify Darwin x64). Do not advance
-an individual artifact or copy the pin into an app or workflow.
+Windows artifacts can come from a later fork build while the four admitted Unix
+entries remain unchanged. Project Windows entries from that build's manifest
+with the same field mapping, merging only the Windows targets:
+
+```sh
+jq --slurpfile release windows-release/manifest.json '
+  $release[0] as $manifest |
+  .artifacts += ($manifest.assets | map(
+    select(.target | IN("windows-x64", "windows-arm64")) |
+    {key: .target, value: ({asset: .name, sha256,
+      executable: .executable.path, executableSha256: .executable.sha256,
+      tag: $manifest.tag, commit: $manifest.bun.commit,
+      authenticodeSigned: (.executable.authenticodeSigned // false)} +
+      (if $manifest.bun.revision then {revision: $manifest.bun.revision} else {} end))}
+  ) | from_entries)' scripts/lib/openclaw-bun.json > scripts/lib/openclaw-bun.next.json &&
+mv scripts/lib/openclaw-bun.next.json scripts/lib/openclaw-bun.json
+```
+
+The Windows release owner sets `executable.authenticodeSigned: true` only for
+an Authenticode-signed executable. Missing metadata projects to `false`; normal
+Windows Tauri staging then emits an unavailable sentinel before downloading
+anything. A Windows pin never inherits the Unix release's revision. An absent
+ARM64 artifact remains absent from the pin.
+
+For isolated unsigned proof, run
+`node apps/linux/scripts/stage-runtime.mjs --unsigned-windows-artifact windows-release`
+with a Windows target. The local directory must contain the pinned ZIP,
+`manifest.json`, and `SHA256SUMS`. Staging verifies the same hashes and provenance,
+marks the resource `testOnly`, and uses no release downloads. Only debug Tauri
+builds admit this resource. It is not eligible for publication.
+
+For Unix repins, update the shared owner in one PR and run staging for all four
+Unix targets; execute native proofs on matching hosts (Rosetta can verify Darwin
+x64). Do not advance an individual Unix artifact or copy the pin into an app or
+workflow.
 
 ## 3. Install the CLI and Gateway
 

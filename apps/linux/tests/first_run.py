@@ -7,7 +7,7 @@ libatk-adaptor, xvfb, xauth and dbus-x11 installed:
 
 Use the unbundled 0.1.0 development build: local setup on a release build
 intentionally starts installation instead of showing the channel chooser.
---local-start-failure uses a fixture CLI to exercise failed local startup.
+--local-start-failure verifies passive connection and an explicit, guarded install failure.
 --inline-browser uses a synthetic saved Gateway to exercise native child WebViews
 and requires xdotool for real pointer input.
 --window-chrome checks dragging, resizing, and window controls with xdotool and Openbox.
@@ -19,6 +19,7 @@ and requires a private gnome-keyring-daemon.
 """
 
 import argparse
+import json
 import os
 from pathlib import Path
 import shutil
@@ -182,24 +183,45 @@ def exercise(app, Atspi, GLib, *, remote_only, local_start_failure, inline_fixtu
 
     wait("Welcome to OpenClaw", "heading")
     if local_start_failure:
+        def calls():
+            journal = Path("cli-calls.log")
+            return [json.loads(line) for line in journal.read_text().splitlines()] if journal.exists() else []
+
+        def installs():
+            return [args for args in calls() if args[:2] == ["gateway", "install"]]
+
+        launcher = Path.home() / ".openclaw/bin/openclaw"
+        original_launcher = launcher.read_bytes()
         for attempt in range(2):
             click("Get started")
             wait("Where should your assistant live?", "heading")
             click("On this computer", "toggle button", prefix=True)
+            if len(installs()) != attempt:
+                raise RuntimeError(f"Passive connection attempted a Gateway install: {calls()!r}")
+            # Continue consents to fresh installation only after the service is observed absent.
             click("Continue")
             wait("OpenClaw needs attention", "heading")
-            wait(START_FAILURE)
+            wait(f"Bundled runtime activation failed: Gateway runtime installation failed: {START_FAILURE}", prefix=True)
+            if len(installs()) != attempt + 1:
+                raise RuntimeError(f"Expected one guarded install per explicit choice: {calls()!r}")
             wait("Try again", "push button")
             if attempt == 0:
                 click("Try again")
                 wait("Welcome to OpenClaw", "heading")
-        calls = Path("cli-calls.log").read_text().splitlines()
-        if calls.count("gateway install --json") != 2:
-            raise RuntimeError(f"Expected two failed Gateway installs, observed {calls!r}")
-        setup = "browser extension setup --action install --json --wait-ms 1000"
-        if calls.count(setup) != 1:
-            raise RuntimeError(f"Expected one automatic local Chrome setup, observed {calls!r}")
-        print("PASS: failed local startup reports its error and stays retryable", flush=True)
+        setup = ["browser", "extension", "setup", "--action", "install", "--json", "--wait-ms", "1000"]
+        if calls().count(setup) != 1:
+            raise RuntimeError(f"Expected one automatic local Chrome setup, observed {calls()!r}")
+        allowed = [["--version"], setup, ["config", "file", "--json"],
+                   ["config", "get", "desktop.host.enabled", "--json"],
+                   ["gateway", "status", "--json"],
+                   ["gateway", "status", "--deep", "--json", "--no-probe"]]
+        if any(args not in allowed and args[:2] != ["gateway", "install"] for args in calls()):
+            raise RuntimeError(f"Unexpected CLI action: {calls()!r}")
+        if launcher.read_bytes() != original_launcher:
+            raise RuntimeError("Failed installation changed the existing CLI launcher")
+        if (Path.home() / ".openclaw/openclaw.json").exists():
+            raise RuntimeError("Failed fixture installation unexpectedly created Gateway configuration")
+        print("PASS: passive connection does not install; explicit guarded installation fails visibly and remains retryable", flush=True)
         return
     click("Get started")
     wait("Where should your assistant live?", "heading")
@@ -374,7 +396,7 @@ def main():
     scenarios.add_argument(
         "--local-start-failure",
         action="store_true",
-        help="Verify failed startup with an installed CLI remains visible and retryable",
+        help="Verify passive connection and explicit guarded install failure remain retryable",
     )
     scenarios.add_argument(
         "--inline-browser",
@@ -479,17 +501,36 @@ def main():
             cli.parent.mkdir(mode=0o700, parents=True)
             cli.write_text(
                 "#!/usr/bin/python3\n"
-                "import json, sys\n"
+                "import argparse, json, os, sys\n"
                 "from pathlib import Path\n"
-                "command = ' '.join(sys.argv[1:])\n"
-                "with Path('cli-calls.log').open('a') as log: log.write(command + '\\n')\n"
+                "args = sys.argv[1:]\n"
+                "command = ' '.join(args)\n"
+                "with Path('cli-calls.log').open('a') as log: log.write(json.dumps(args) + '\\n')\n"
                 "if command == '--version':\n"
                 "    print('OpenClaw fixture')\n"
                 "elif command == 'browser extension setup --action install --json --wait-ms 1000':\n"
                 "    print(json.dumps({'action': 'install', 'target': {'kind': 'local-host', 'platform': 'linux', 'hostname': 'fixture', 'profile': 'chrome', 'relayPort': 18799}, 'phase': 'needs_browser_action', 'reason': 'extension_missing', 'installation': {'nativeHostRegistered': True, 'installRequested': False, 'installedProfiles': 0, 'discoveredProfiles': 0, 'awaitingApproval': False, 'automaticBootstrapSupported': True}, 'connection': {'state': 'not_checked'}, 'nextAction': 'install_from_store'}))\n"
+                "elif command == 'config file --json':\n"
+                "    print(json.dumps({'path': str(Path.home() / '.openclaw/openclaw.json')}))\n"
+                "elif command == 'config get desktop.host.enabled --json':\n"
+                "    print(json.dumps({'ok': False, 'error': {'message': 'Config path is valid but unset: desktop.host.enabled.'}}))\n"
+                "    sys.exit(1)\n"
                 "elif command == 'gateway status --json':\n"
                 "    print(json.dumps({'service': {'loaded': False}, 'rpc': {'ok': False}}))\n"
-                "elif command == 'gateway install --json':\n"
+                "elif command == 'gateway status --deep --json --no-probe':\n"
+                "    print(json.dumps({'service': {'loaded': False, 'command': None, 'runtimeIntent': {'status': 'known', 'revision': 'fixture-pin', 'definition': None}, 'revision': 'fixture-service', 'definitionMutation': 'writable', 'launcherOverridden': False}, 'config': {'daemon': {'path': str(Path.home() / '.openclaw/openclaw.json')}, 'mismatch': False}, 'gateway': {'port': 18789}, 'rpc': {'ok': False}}))\n"
+                "elif args[:2] == ['gateway', 'install']:\n"
+                "    parser = argparse.ArgumentParser()\n"
+                "    parser.add_argument('--force', action='store_true', required=True)\n"
+                "    parser.add_argument('--json', action='store_true', required=True)\n"
+                "    parser.add_argument('--runtime', choices=['bun'], required=True)\n"
+                "    parser.add_argument('--runtime-path', type=Path, required=True)\n"
+                "    parser.add_argument('--expected-runtime-pin', type=json.loads, required=True)\n"
+                "    parser.add_argument('--port', type=int, choices=[18789], required=True)\n"
+                "    options = parser.parse_args(args[2:])\n"
+                "    runtime = options.runtime_path\n"
+                "    if options.expected_runtime_pin != {'revision': 'fixture-pin', 'definition': None}: raise RuntimeError('Install did not retain the observed absent-service pin')\n"
+                "    if not runtime.is_absolute() or not runtime.is_relative_to(Path.home() / '.openclaw/tools/desktop-runtime') or runtime.name != 'bun' or not runtime.is_file() or not os.access(runtime, os.X_OK): raise RuntimeError('Install did not select the materialized bundled Bun')\n"
                 f"    print({START_FAILURE!r}, file=sys.stderr)\n"
                 "    sys.exit(1)\n"
                 "else:\n"

@@ -5,6 +5,8 @@ import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-t
 
 const native = vi.hoisted(() => ({
   taskState: 3,
+  taskProbe: vi.fn<typeof import("./schtasks-state-probe.js").probeScheduledTaskState>(),
+  processes: vi.fn<typeof import("./schtasks-process-snapshot.js").readWindowsProcessSnapshot>(),
   command: vi.fn<() => Promise<GatewayServiceCommandConfig>>(),
   task: vi.fn(),
   identity: vi.fn<typeof import("./exec-file.js").execFileUtf8>(),
@@ -71,13 +73,11 @@ vi.mock("./schtasks-exec.js", () => ({ execSchtasks: native.task }));
 vi.mock("./schtasks-state-probe.js", async (original) => ({
   ...(await original<typeof import("./schtasks-state-probe.js")>()),
   probeScheduledTaskExists: () => true,
-  probeScheduledTaskState: () => ({ status: "found", state: native.taskState }),
+  probeScheduledTaskState: native.taskProbe,
 }));
 vi.mock("./schtasks-process-snapshot.js", async (original) => ({
   ...(await original<typeof import("./schtasks-process-snapshot.js")>()),
-  readWindowsProcessSnapshot: () => [
-    { ProcessId: 9999, CommandLine: "powershell.exe", Name: "powershell.exe" },
-  ],
+  readWindowsProcessSnapshot: native.processes,
 }));
 vi.mock("../infra/windows-port-pids.js", async (original) => ({
   ...(await original<typeof import("../infra/windows-port-pids.js")>()),
@@ -101,6 +101,12 @@ vi.mock("../infra/windows-encoding.js", async (original) => ({
   ...(await original<typeof import("../infra/windows-encoding.js")>()),
   resolveWindowsOemCodePage: () => 437,
   resolveWindowsOemEncoding: () => null,
+}));
+vi.mock("../gateway/local-http-probe.js", async (original) => ({
+  ...(await original<typeof import("../gateway/local-http-probe.js")>()),
+  createConfiguredGatewayLocalProbe: () => ({
+    requestHttp: async () => ({ statusCode: 200 }),
+  }),
 }));
 
 export { native };

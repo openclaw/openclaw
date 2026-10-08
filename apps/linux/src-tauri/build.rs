@@ -9,6 +9,11 @@ fn main() {
     );
     std::fs::create_dir_all("target/installers").expect("installer output directory");
     std::fs::write("target/installers/install-cli.sh", installer).expect("standalone installer");
+    std::fs::write(
+        "target/installers/install.ps1",
+        include_bytes!("../../../scripts/install.ps1"),
+    )
+    .expect("canonical Windows installer");
     const COMMANDS: &[&str] = &[
         "bootstrap",
         "build_info",
@@ -37,7 +42,7 @@ fn main() {
 }
 
 fn prepare_runtime_manifest() {
-    // The Tauri hooks fetch verified Linux resources. Plain Cargo tests stay offline and
+    // The Tauri hooks stage verified resources. Plain Cargo tests stay offline and
     // compile a sentinel that makes local installation fail with an actionable error.
     let directory = std::path::Path::new("target/desktop-runtime");
     std::fs::create_dir_all(directory).expect("runtime resource directory");
@@ -47,12 +52,45 @@ fn prepare_runtime_manifest() {
     }
     println!("cargo:rerun-if-changed={}", manifest.display());
     let output = std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo output"));
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux") {
+    let platform = std::env::var("CARGO_CFG_TARGET_OS").expect("Cargo target OS");
+    if !matches!(platform.as_str(), "linux" | "windows") {
         std::fs::write(output.join("desktop-runtime.json"), "{}\n")
-            .expect("non-Linux runtime sentinel");
+            .expect("unsupported runtime sentinel");
         return;
     }
-    std::fs::copy(manifest, output.join("desktop-runtime.json")).expect("compile runtime identity");
+    let bytes = std::fs::read(&manifest).expect("staged runtime manifest");
+    if platform == "windows" {
+        let runtime: serde_json::Value =
+            serde_json::from_slice(&bytes).expect("valid staged runtime manifest");
+        if !runtime.as_object().is_some_and(|value| value.is_empty()) {
+            let test_only = runtime
+                .get("testOnly")
+                .map(|value| value.as_bool().expect("boolean runtime testOnly flag"))
+                .unwrap_or(false);
+            let signed = runtime
+                .get("authenticodeSigned")
+                .and_then(|value| value.as_bool());
+            if test_only {
+                assert_eq!(
+                    signed,
+                    Some(false),
+                    "Unsigned proof must be marked unsigned"
+                );
+                assert_eq!(
+                    std::env::var("PROFILE").as_deref(),
+                    Ok("debug"),
+                    "Unsigned Windows runtime proof is restricted to debug builds"
+                );
+            } else {
+                assert_eq!(
+                    signed,
+                    Some(true),
+                    "Windows runtime requires an Authenticode-signed artifact"
+                );
+            }
+        }
+    }
+    std::fs::write(output.join("desktop-runtime.json"), bytes).expect("compile runtime identity");
 }
 
 /// tauri-plugin-notifications links a Swift static library into us, but nothing

@@ -36,7 +36,8 @@ async function runPowerShell(params: {
       cwd: params.cwd,
       env: params.env,
       logPath: params.logPath,
-      timeoutMs: 10_000,
+      // Cold PowerShell startup is separate from curl's one-second request deadline.
+      timeoutMs: 30_000,
     },
   );
 }
@@ -231,6 +232,6 @@ describe("cross-OS installer fetch", () => {
         });
       }
     },
-    15_000,
+    60_000,
   );
 });

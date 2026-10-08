@@ -10,6 +10,9 @@ const dashboardSource = readFileSync(new URL("../apps/linux/ui/main.js", import.
 function fakeElement() {
   const classes = new Set(["hidden"]);
   const listeners = new Map<string, () => unknown>();
+  const options = new Map(
+    ["stable", "beta", "dev"].map((value) => [`[value="${value}"]`, { disabled: false }]),
+  );
   return {
     className: "",
     classList: {
@@ -33,6 +36,9 @@ function fakeElement() {
       const listener = listeners.get("click");
       assert.ok(listener);
       return listener();
+    },
+    querySelector(selector: string) {
+      return options.get(selector) ?? null;
     },
     append() {},
     removeAttribute() {},
@@ -406,11 +412,18 @@ test.each(
       }
 
       await actions.continueLocalSetup();
+      for (const value of ["stable", "beta", "dev"]) {
+        const option = elements.get("#channel")?.querySelector(`[value="${value}"]`);
+        assert.ok(option);
+        assert.equal(option.disabled, platform === "windows" && value === "dev");
+      }
       assert.equal(
         elements.get("#install-hint")?.textContent,
         externalService
           ? "Installs the CLI in ~/.openclaw using your system Node.js and npm."
-          : "Installs OpenClaw and its managed runtime in ~/.openclaw.",
+          : platform === "windows"
+            ? "Installs Stable or Beta in ~/.openclaw. Development requires an existing source CLI."
+            : "Installs OpenClaw and its managed runtime in ~/.openclaw.",
       );
       if (phase === "unconfigured") {
         assert.deepEqual(

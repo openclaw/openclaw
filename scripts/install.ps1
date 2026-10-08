@@ -12,6 +12,8 @@ param(
     [switch]$NoGitUpdate,
     [switch]$DryRun,
     [switch]$NodeOnly,
+    [switch]$RuntimeOnly,
+    [string]$Prefix,
     [string]$NodePrefix,
     [ValidatePattern("^\d+\.\d+\.\d+$")]
     [string]$NodeVersion,
@@ -39,6 +41,8 @@ Options:
   -NoGitUpdate            Skip git pull
   -DryRun                 Print actions only
   -NodeOnly               Install only a private Node.js runtime; do not change PATH
+  -RuntimeOnly            Install a private CLI without Gateway probes, Doctor, or onboarding
+  -Prefix <path>          Absolute private directory for -RuntimeOnly (required)
   -NodePrefix <path>      Absolute private directory for -NodeOnly (required)
   -NodeVersion <version>  Exact private Node.js version for -NodeOnly
   -Help                   Show this help
@@ -1649,7 +1653,7 @@ function Get-NpmLifecycleAllowArgument {
     $nodeCommand = (Get-Command node -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     $kernel = @'
 const path = require("node:path");
-const [versionOutput, spec, cwd, exactIdentity] = process.argv.slice(2);
+const [versionOutput, spec, cwd, exactIdentity] = JSON.parse(Buffer.from(process.argv[2], "base64").toString("utf8"));
 const version = versionOutput.trim().split(/\r?\n/).at(-1) ?? "";
 const parsed = version.match(/^[vV]?(\d+)\.(\d+)\.(\d+)(?:[-+][0-9A-Za-z.-]+)?$/);
 const fail = (message) => { process.stderr.write(`${message}\n`); process.exit(1); };
@@ -1687,7 +1691,10 @@ if (exactIdentity) identity = exactIdentity;
 if (!identity || identity.includes(",")) fail(`npm cannot allow lifecycle scripts for install target '${spec}'; use a package URL or local path without commas.`);
 process.stdout.write(`--allow-scripts=${identity}\n`);
 '@
-    $kernelOutput = @($kernel | & $nodeCommand - $versionOutput[-1].ToString() $InstallSpec $NpmCwd $ExactIdentity 2>&1)
+    # Windows PowerShell drops empty native arguments; keep optional fields in one payload.
+    $kernelArguments = @($versionOutput[-1].ToString(), $InstallSpec, $NpmCwd, $ExactIdentity) | ConvertTo-Json -Compress
+    $kernelPayload = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($kernelArguments))
+    $kernelOutput = @($kernel | & $nodeCommand - $kernelPayload 2>&1)
     if ($LASTEXITCODE -ne 0) {
         throw $kernelOutput[-1].ToString()
     }
@@ -1753,7 +1760,7 @@ function Install-OpenClaw {
         Write-Host "Use -InstallMethod git -Tag main for the moving main checkout, or use latest, beta, an exact version, or a built .tgz package." -ForegroundColor Yellow
         return $false
     }
-    if (-not (Ensure-Git)) {
+    if (-not $RuntimeOnly -and -not (Ensure-Git)) {
         return $false
     }
 
@@ -2222,8 +2229,88 @@ function Complete-NpmShimBackup {
     }
 }
 
+function Install-PrivateOpenClaw {
+    param([Parameter(Mandatory = $true)][string]$InstallPrefix)
+
+    $wrapper = Join-Path $InstallPrefix 'bin\openclaw.cmd'
+    if (Test-Path -LiteralPath $wrapper) {
+        throw "The managed CLI launcher already exists; repair or update it explicitly."
+    }
+    $slot = [guid]::NewGuid().ToString('N')
+    $store = Join-Path $InstallPrefix 'tools\desktop-cli'
+    $runtime = Join-Path $store $slot
+    $published = $false
+    $oldPath = $env:PATH
+    $oldPrefix = $env:NPM_CONFIG_PREFIX
+    try {
+        # Each attempt owns a new slot; a missing launcher never authorizes replacing old packages.
+        New-Item -ItemType Directory -Force -Path $store | Out-Null
+        Install-PrivateNode -Prefix $runtime
+        $env:PATH = "$runtime;$oldPath"
+        $env:NPM_CONFIG_PREFIX = $runtime
+        $installed = @(Install-OpenClaw)
+        $relativeEntry = 'node_modules\openclaw\dist\entry.js'
+        if (-not (Test-BooleanSuccessResult -Results $installed)) {
+            throw 'Private OpenClaw package installation failed.'
+        }
+        $node = Join-Path $runtime 'node.exe'
+        $entry = Join-Path $runtime $relativeEntry
+        & $node $entry --version
+        if ($LASTEXITCODE -ne 0) { throw 'Private OpenClaw CLI verification failed.' }
+        $contents = "@echo off`r`nsetlocal DisableDelayedExpansion`r`n`"%~dp0..\tools\desktop-cli\$slot\node.exe`" `"%~dp0..\tools\desktop-cli\$slot\$relativeEntry`" %*`r`n"
+        $bin = Split-Path -Parent $wrapper
+        New-Item -ItemType Directory -Force -Path $bin | Out-Null
+        $temporary = Join-Path $bin ('.openclaw-private-' + $slot + '.cmd')
+        try {
+            [IO.File]::WriteAllText($temporary, $contents, (New-Object Text.UTF8Encoding($false)))
+            # File.Move refuses an intervening launcher, including an operator's replacement.
+            [IO.File]::Move($temporary, $wrapper)
+            $published = $true
+        } finally {
+            if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Force }
+        }
+        Write-Host '[OK] Private OpenClaw CLI installed. Gateway and user PATH unchanged.' -ForegroundColor Green
+    } finally {
+        $env:PATH = $oldPath
+        Set-Item -LiteralPath Env:NPM_CONFIG_PREFIX -Value $oldPrefix
+        if (-not $published -and (Test-Path -LiteralPath $runtime)) {
+            Remove-Item -LiteralPath $runtime -Recurse -Force
+        }
+    }
+}
+
 # Main installation flow
 function Main {
+    if ($RuntimeOnly) {
+        if ($InstallMethod -ne 'npm') {
+            Write-Host 'Error: -RuntimeOnly supports npm packages only. Install a development CLI separately.' -ForegroundColor Red
+            Fail-Install -Code 2
+            return
+        }
+        $root = if ($Prefix) { [IO.Path]::GetPathRoot($Prefix) } else { '' }
+        if ($NodeOnly -or $NodePrefix -or $NodeVersion -or -not $root -or $root -eq '\' -or $root.EndsWith(':') -or
+            [string]::Equals([IO.Path]::GetFullPath($Prefix).TrimEnd('\', '/'), $root.TrimEnd('\', '/'), [StringComparison]::OrdinalIgnoreCase)) {
+            Write-Host 'Error: -RuntimeOnly requires -Prefix with an absolute private directory and cannot use Node-only options.' -ForegroundColor Red
+            Fail-Install -Code 2
+            return
+        }
+        if ($DryRun) {
+            Write-Host "[OK] Would install private OpenClaw ($InstallMethod, $Tag) to $Prefix; Gateway and PATH unchanged."
+            return
+        }
+        try {
+            Install-PrivateOpenClaw -InstallPrefix ([IO.Path]::GetFullPath($Prefix))
+        } catch {
+            Write-Host "Error: Private CLI installation failed: $($_.Exception.Message)" -ForegroundColor Red
+            Fail-Install
+        }
+        return
+    }
+    if ($Prefix) {
+        Write-Host 'Error: -Prefix requires -RuntimeOnly.' -ForegroundColor Red
+        Fail-Install -Code 2
+        return
+    }
     if ($NodeOnly) {
         $prefixRoot = if (-not [string]::IsNullOrWhiteSpace($NodePrefix)) { [System.IO.Path]::GetPathRoot($NodePrefix) } else { "" }
         if (
