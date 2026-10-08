@@ -588,10 +588,17 @@ export async function prepareReplyAgentPayloads(state: {
   const statusPayload = guardedReplyPayloads.find(
     (payload) => getReplyPayloadMetadata(payload)?.continuationStatus === true,
   );
+  const mediaSessionKey =
+    implicitContinuation && !continuationOwner
+      ? (sessionKey ?? followupRun.run.sessionKey)
+      : undefined;
   if (statusPayload) {
     await attachWaitingStatusProgressContinuation({
       payload: statusPayload,
       acceptedSessionSpawns: runResult.acceptedSessionSpawns,
+      mediaRequester: mediaSessionKey
+        ? { sessionKey: mediaSessionKey, agentId: followupRun.run.agentId }
+        : undefined,
       operation: replyOperation,
     });
   }

@@ -1,3 +1,4 @@
+import type { ProgressContinuationDraft } from "../channels/progress-continuation.js";
 import { getAgentRunLifecycleGeneration } from "../infra/agent-run-registry.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -28,6 +29,8 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.mediaGenerationOperati
   active: new Map<string, { sessionKey: string; agentId?: string; generation: string }>(),
   owners: new Map<string, string>(),
   admissions: new Map<string, string>(),
+  // Process-local like the channel transport that renders the retained card.
+  drafts: new Map<string, { draft: ProgressContinuationDraft; runIds: Set<string> }>(),
 }));
 const RECENT_COMPLETION_MS = 2 * 60_000;
 
@@ -43,7 +46,7 @@ function pruneCompletedOperations(): void {
           (operation.terminalOutcome === "blocked" ? now - 7 * 24 * 60 * 60_000 : cutoff))
     ) {
       state.operations.delete(id);
-      state.active.delete(id);
+      clearGeneratedMediaTaskActivity(id);
       state.owners.delete(id);
     }
   }
@@ -76,8 +79,46 @@ export function registerGeneratedMediaTaskActivity(
     generation,
   });
 }
+/** Every ending path clears activity after the completion wake, so a retained card outlives the result. */
 export function clearGeneratedMediaTaskActivity(runId: string): void {
   state.active.delete(runId);
+  const live = state.drafts.get(runId);
+  state.drafts.delete(runId);
+  live?.runIds.delete(runId);
+  if (live?.runIds.size === 0) {
+    live.draft.retire();
+  }
+}
+
+/**
+ * Keep a waiting turn's confirmed progress card while the media runs it delegated
+ * to are still owed. The completion wake stays the only result owner.
+ */
+export function adoptMediaGenerationProgressDraft(
+  sessionKey: string,
+  requesterAgentId: string | undefined,
+  draft: ProgressContinuationDraft,
+): boolean {
+  const owed = listMediaGenerationOperations(sessionKey, requesterAgentId).flatMap((operation) =>
+    operation.runId && state.active.has(operation.runId) && !state.drafts.has(operation.runId)
+      ? [{ runId: operation.runId, taskKind: operation.taskKind }]
+      : [],
+  );
+  if (owed.length === 0) {
+    return false;
+  }
+  const live = { draft, runIds: new Set(owed.map(({ runId }) => runId)) };
+  for (const { runId, taskKind } of owed) {
+    state.drafts.set(runId, live);
+    draft.push({
+      itemId: runId,
+      kind: "tool",
+      name: taskKind.replace(/_generation$/, "_generate"),
+      phase: "update",
+      status: "running",
+    });
+  }
+  return true;
 }
 export function createMediaGenerationOperation(
   operation: MediaGenerationOperation,

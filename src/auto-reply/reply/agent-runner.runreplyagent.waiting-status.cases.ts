@@ -3,12 +3,18 @@ import { assert, expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import {
+  admitMediaHandle,
+  resetGeneratedMediaTaskActivityForTests,
+} from "../../agents/media-generation-activity.test-support.js";
 import { createSubagentRunParams } from "../../agents/subagent-test-fixtures.test-helpers.js";
 import {
   markRequesterTurnYielded,
   registerSubagentRun,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import type { MediaGenerationTaskHandle } from "../../agents/tools/media-generate-background-completion.js";
+import { createMediaGenerationTaskLifecycle } from "../../agents/tools/media-generate-background-shared.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
@@ -112,12 +118,22 @@ export function registerWaitingStatusCases({
       ],
     },
   ])(
-    "delivers the waiting status for a media-run continuation with $label",
+    "hands the progress card to a media-run continuation with $label until the run ends",
     async ({ acceptedSessionSpawns }) => {
+      onTestFinished(resetGeneratedMediaTaskActivityForTests);
+      let handle: MediaGenerationTaskHandle | undefined;
       runEmbeddedAgentMock.mockImplementationOnce(
         async (params: RunEmbeddedAgentInternalParams) => {
           assert(params.preparedRunAdmission);
+          assert(params.sessionKey);
           await params.preparedRunAdmission.admit("embedded");
+          handle = admitMediaHandle({
+            taskId: "waiting-image",
+            runId: `tool:image_generate:${randomUUID()}`,
+            requesterSessionKey: params.sessionKey,
+            requesterAgentId: params.agentId,
+            taskLabel: "waiting image",
+          });
           return {
             payloads: [],
             meta: { durationMs: 0, continuationPending: true },
@@ -128,11 +144,32 @@ export function registerWaitingStatusCases({
       const onPendingContinuation = vi.fn();
       const { run } = createMinimalRun({ opts: { onPendingContinuation } });
 
-      await expect(run()).resolves.toMatchObject({
+      const result = await run();
+      expect(result).toMatchObject({
         text: "I’m continuing this work and will send the result when it is ready.",
       });
       // Delivering the status must not require a child that never owns the reply.
       await onPendingContinuation.mock.calls[0]?.[0]?.settle(true);
+      assert(result && !Array.isArray(result) && handle);
+      const draft = { push: vi.fn(), retire: vi.fn() };
+      expect(getReplyPayloadMetadata(result)?.progressContinuation?.adopt(draft)).toBe(true);
+      expect(draft.push.mock.calls).toEqual([
+        [
+          expect.objectContaining({
+            itemId: handle.runId,
+            name: "image_generate",
+            status: "running",
+          }),
+        ],
+      ]);
+      expect(draft.retire).not.toHaveBeenCalled();
+      createMediaGenerationTaskLifecycle("image").completeTaskRun({
+        handle,
+        provider: "fixture",
+        model: "fixture",
+        count: 1,
+      });
+      expect(draft.retire).toHaveBeenCalledOnce();
     },
   );
 
