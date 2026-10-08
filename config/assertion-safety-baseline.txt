@@ -422,9 +422,8 @@ extensions/kimi-coding/provider-policy-api.ts	2
 extensions/line/src/accounts.ts	3
 extensions/line/src/actions.ts	4
 extensions/line/src/auto-reply-delivery.ts	1
-extensions/line/src/flex-templates/basic-cards.ts	12
-extensions/line/src/flex-templates/media-control-cards.ts	12
-extensions/line/src/flex-templates/schedule-cards.ts	27
+extensions/line/src/flex-templates/basic-cards.ts	2
+extensions/line/src/flex-templates/media-control-cards.ts	1
 extensions/line/src/gateway.ts	1
 extensions/line/src/monitor.ts	1
 extensions/line/src/outbound.ts	3

@@ -9,6 +9,7 @@ import { digestClawBytes } from "./digest.js";
 import { readClawOpenClawProfile } from "./openclaw-profile.js";
 import { isCanonicalClawHubPackageName, isExactSemVer } from "./schema-portability.js";
 import { clawManifestWorkspaceConflictsWithPath, parseClawManifest } from "./schema.js";
+import { clawWorkspaceSourceFailure } from "./source-diagnostics.js";
 import {
   MAX_CLAW_MANIFEST_BYTES,
   MAX_MANAGED_FILE_BYTES,
@@ -70,29 +71,8 @@ function updateSnapshotHash(
 }
 
 function workspaceSourceDiagnostic(error: unknown, sourcePath: string): ClawDiagnostic {
-  if (error instanceof FsSafeError && error.code === "too-large") {
-    return fileDiagnostic(
-      "workspace_source_too_large",
-      `Workspace source ${JSON.stringify(sourcePath)} exceeds ${MAX_MANAGED_FILE_BYTES} bytes.`,
-      "$.workspace",
-    );
-  }
-  if (
-    (error instanceof FsSafeError &&
-      (error.code === "symlink" || error.code === "hardlink" || error.code === "path-mismatch")) ||
-    (error instanceof Error && error.message.includes("symlinked directory"))
-  ) {
-    return fileDiagnostic(
-      "workspace_source_unsafe",
-      `Workspace source ${JSON.stringify(sourcePath)} must be a regular, non-symlinked, non-hardlinked file.`,
-      "$.workspace",
-    );
-  }
-  return fileDiagnostic(
-    "workspace_source_invalid",
-    `Workspace source ${JSON.stringify(sourcePath)} must resolve inside the Claw source.`,
-    "$.workspace",
-  );
+  const { code, message } = clawWorkspaceSourceFailure(error, sourcePath, "source");
+  return fileDiagnostic(code, message, "$.workspace");
 }
 
 async function buildDevelopmentSnapshot(params: {
