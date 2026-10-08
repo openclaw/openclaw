@@ -139,7 +139,6 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
         log.debug(`compaction promise rejected (no waiter): ${String(err)}`);
       });
     }
-    return compactionRetry.promise;
   };
 
   const noteCompactionRetry = () => {
@@ -515,7 +514,8 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
         return Promise.reject(createAbortError("Unsubscribed during compaction wait"));
       }
       if (state.compactionInFlight || state.pendingCompactionRetry > 0) {
-        return ensureCompactionPromise();
+        ensureCompactionPromise();
+        return compactionRetry?.promise ?? Promise.resolve();
       }
       return new Promise<void>((resolve, reject) => {
         queueMicrotask(() => {
@@ -524,7 +524,8 @@ export function subscribeEmbeddedAgentSession(input: SubscribeEmbeddedAgentSessi
             return;
           }
           if (state.compactionInFlight || state.pendingCompactionRetry > 0) {
-            void ensureCompactionPromise().then(resolve, reject);
+            ensureCompactionPromise();
+            void (compactionRetry?.promise ?? Promise.resolve()).then(resolve, reject);
           } else {
             resolve();
           }

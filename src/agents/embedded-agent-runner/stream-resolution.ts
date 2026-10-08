@@ -238,15 +238,16 @@ function wrapEmbeddedAgentStreamFn(
       callerSignal && params.runSignal && callerSignal !== params.runSignal
         ? composeRunSignal(callerSignal, params.runSignal)
         : (callerSignal ?? params.runSignal);
-    let merged = embeddedOptions;
-    for (const [key, value] of [
-      ["sessionId", params.sessionId],
-      ["promptCacheKey", params.promptCacheKey?.trim()],
-      ["authProfileId", params.authProfileId],
-    ] as const) {
-      if (value && !merged?.[key]) {
-        merged = { ...merged, [key]: value };
-      }
+    let merged =
+      params.sessionId && !embeddedOptions?.sessionId
+        ? { ...embeddedOptions, sessionId: params.sessionId }
+        : embeddedOptions;
+    const promptCacheKey = params.promptCacheKey?.trim();
+    if (promptCacheKey && !merged?.promptCacheKey) {
+      merged = { ...merged, promptCacheKey };
+    }
+    if (params.authProfileId && !merged?.authProfileId) {
+      merged = { ...merged, authProfileId: params.authProfileId };
     }
     return signal ? { ...merged, signal } : merged;
   };
