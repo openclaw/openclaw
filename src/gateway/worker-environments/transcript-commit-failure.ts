@@ -2,7 +2,10 @@ import { isAbortError } from "../../infra/abort-signal.js";
 import { StateDatabaseAdmissionPendingError } from "../../infra/gateway-state-owner-record.js";
 import { isSqliteLockError } from "../../infra/sqlite-error-diagnostics.js";
 import { isSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
-import { AgentDatabaseExecutionAdmissionClosedError } from "../../state/agent-database-admission-error.js";
+import {
+  AgentDatabaseExecutionAdmissionClosedError,
+  AgentDatabaseSchemaAdmissionChangedError,
+} from "../../state/agent-database-admission-error.js";
 import {
   AgentDatabaseAdmissionError,
   createAgentDatabaseAdmissionErrorShape,
@@ -18,6 +21,7 @@ export function isReplayableWorkerTranscriptCommitError(error: unknown): boolean
   return (
     isSqliteLockError(error) ||
     error instanceof AgentDatabaseExecutionAdmissionClosedError ||
+    error instanceof AgentDatabaseSchemaAdmissionChangedError ||
     error instanceof StateDatabaseAdmissionPendingError ||
     isStateDatabaseReadAdmissionInvalidatedError(error) ||
     isAbortError(error) ||

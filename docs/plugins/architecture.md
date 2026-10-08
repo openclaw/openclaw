@@ -279,7 +279,8 @@ directory preserves every captured companion and the selected host SDK. Otherwis
 that plugin reports a load error asking for file symlink support; the update
 continues with the existing plugin-failure warning behavior.
 Within a capture, admission checks each immutable namespace and companion-directory
-mapping once. Preparing more modules reuses those facts and checks newly admitted
+mapping once, resolving each member once even when parent and child native directories
+overlap at the same placement. Preparing more modules reuses those facts and checks newly admitted
 placements. Replacement captures, host selection, and recovery copies validate again,
 so Doctor and Gateway preparation avoid repeated walks without reusing another
 capture's verdict.
@@ -305,6 +306,16 @@ Published native captures survive ordinary scratch cleanup. Doctor maintenance
 removes unreferenced captures while preserving installed-index references, warm
 generations, and live owners. System-temp fallback captures are scoped to their
 state directory; captures with unknown ownership are preserved.
+
+Gateway idle cleanup checks capture directories and npm retention markers before
+acquiring the plugin lifecycle lease. An empty scan makes no shared-state writes
+and leaves the Gateway's metadata caches intact. When candidates exist, cleanup
+uses a private operation-scoped cache and one fresh installed-index payload for
+install records and native receipt protection. Invalid receipts still preserve
+captures, and every deletion retains its live lease and custody checks. The
+private cache is disposed before the lease is released. These best-effort scans
+do not freeze the filesystem: artifacts created or retired after inspection
+remain for a later cleanup attempt. Scheduling and deletion criteria are unchanged.
 
 Each captured generation links the selected host `openclaw` package so Workers
 and child processes started from its modules can resolve the host SDK. This link
@@ -476,6 +487,16 @@ acquired by that context. The first catalog request prepares registrations for t
 agent's known configured and credential providers together; only the requested
 providers run catalog hooks. Newly observed owners extend that context without
 discarding earlier owners. Replacement releases them after admitted work settles.
+Native admission runs outside the 180-second catalog refresh deadline, so a slow
+filesystem does not repeatedly discard and recapture the same package. Each verified
+native namespace member advances a counter, forwarded through the existing worker
+task channel at most once per second unless the active plugin changes. The parent allows admission
+to continue while that counter advances. After 180 seconds without progress, it
+records a failure naming the plugin and native reference verification stage and
+closes the worker without automatically recapturing that inventory. Reload the
+plugin or restart the Gateway to retry. Parent probes and queued requests remain
+bounded; provider discovery starts its own 180-second deadline after admission.
+Inventory retirement and shutdown still close the worker.
 After successful physical cleanup, retired plugin instances release their registry
 references while preserving revocation. Native module exports no longer retain the
 disposed registry through instance ownership, and stale calls remain rejected. Pending or failed
@@ -491,9 +512,9 @@ merge their results with the latest accepted counterpart before publication.
 Catalog workers use a 512 MiB V8 old-generation limit rather than inheriting the
 Gateway's default heap budget. Explicit process-wide heap flags override this
 limit; native and external allocations are outside it. When a Gateway catalog
-worker fails, the Gateway logs a warning with the reason, republishes the affected
-agent catalogs on a new worker, and counts the failure in `status` as
-`workerPools.modelCatalog.workerFailures`.
+worker fails, the Gateway logs a warning with the reason and counts the failure in
+`status` as `workerPools.modelCatalog.workerFailures`. Other than stalled native
+admission, failures republish the affected agent catalogs on a new worker.
 
 Catalog and authentication refresh tasks carry the host's prepared Claw consent
 provenance. Worker config reconstruction and provider imports consume these facts

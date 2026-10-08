@@ -57,19 +57,21 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
   const suppressAcpChildUserDelivery = isParentOwnedBackgroundAcpSession(sessionEntryWithAcp);
   const effectiveExplicitDeliverRoute =
     ctx.ExplicitDeliverRoute === true || replyRoute.inheritedExternalRoute === true;
+  const resolveRouting = (isRoutableChannel: (channel: string | undefined) => boolean) =>
+    resolveReplyRoutingDecision({
+      provider: ctx.Provider,
+      surface: ctx.Surface,
+      explicitDeliverRoute: effectiveExplicitDeliverRoute,
+      originatingChannel: replyRoute.channel,
+      originatingTo: replyRoute.to,
+      suppressDirectUserDelivery: suppressAcpChildUserDelivery,
+      isRoutableChannel,
+    });
   const {
     currentSurface: normalizedCurrentSurface,
     isInternalWebchatTurn,
     shouldRouteToOriginating: hasRouteReplyCandidate,
-  } = resolveReplyRoutingDecision({
-    provider: ctx.Provider,
-    surface: ctx.Surface,
-    explicitDeliverRoute: effectiveExplicitDeliverRoute,
-    originatingChannel: replyRoute.channel,
-    originatingTo: replyRoute.to,
-    suppressDirectUserDelivery: suppressAcpChildUserDelivery,
-    isRoutableChannel: Boolean,
-  });
+  } = resolveRouting(Boolean);
   const routeReplyRuntime =
     hasRouteReplyCandidate && !state.replyOperationRunState.heartbeat
       ? await loadRouteReplyRuntime()
@@ -79,15 +81,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     currentSurface,
     shouldRouteToOriginating,
     shouldSuppressTyping,
-  } = resolveReplyRoutingDecision({
-    provider: ctx.Provider,
-    surface: ctx.Surface,
-    explicitDeliverRoute: effectiveExplicitDeliverRoute,
-    originatingChannel: replyRoute.channel,
-    originatingTo: replyRoute.to,
-    suppressDirectUserDelivery: suppressAcpChildUserDelivery,
-    isRoutableChannel: routeReplyRuntime?.isRoutableChannel ?? (() => false),
-  });
+  } = resolveRouting(routeReplyRuntime?.isRoutableChannel ?? (() => false));
   const routeReplyTo = replyRoute.to;
   // Durable intent identifies an outbound write; it never authorizes a new
   // destination or bypasses private-webchat and parent-owned-session fences.
@@ -103,9 +97,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     ? resolveReplyDeliveryAccountId(cfg, routeReplyChannel, replyRoute.accountId)
     : undefined;
   let normalizeReplyMediaPaths:
-    | ReturnType<
-        (typeof import("./reply-media-paths.runtime.js"))["createReplyMediaPathNormalizer"]
-      >
+    | ReturnType<(typeof import("./reply-media-paths.js"))["createReplyMediaPathNormalizer"]>
     | undefined;
   const normalizeReplyMediaPayload = async (payload: ReplyPayload): Promise<ReplyPayload> => {
     if (isInternalWebchatTurn || !resolveSendableOutboundReplyParts(payload).hasMedia) {

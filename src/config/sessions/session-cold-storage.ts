@@ -54,7 +54,7 @@ import type {
   SessionColdMutationResult,
   SessionColdPreparationWorkerData,
   SessionColdWorkerData,
-  SessionColdTurnGuard,
+  SessionColdRestorationGuard,
 } from "./session-cold-storage-worker.js";
 import { reclaimSqliteFreePages } from "./session-history-archive-pruning.js";
 import { captureIncognitoSessionBinding } from "./session-incognito-binding.js";
@@ -64,6 +64,10 @@ import {
   withSessionHistoryWorkerReadCandidates,
 } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+import {
+  parseTranscriptAppendRefusal,
+  SessionTranscriptWriterClaimReboundError,
+} from "./session-transcript-writer-claim-error.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import { listConfiguredSessionStoreAgentIds } from "./targets.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
@@ -374,11 +378,18 @@ export class SessionColdTurnReboundError extends Error {
   }
 }
 
+export class SessionColdSourceReboundError extends Error {
+  constructor(readonly refusal: NonNullable<SessionColdMutationResult["refusedSource"]>) {
+    super("Session source changed before cold transcript restoration");
+    this.name = "SessionColdSourceReboundError";
+  }
+}
+
 export async function restoreSessionColdTranscript(
   scope: SessionTranscriptReadScope,
   assertCurrent?: () => void,
   preparation?: SessionColdReadPreparation,
-  turnGuard?: SessionColdTurnGuard,
+  guard?: SessionColdRestorationGuard,
 ): Promise<void> {
   assertCurrent?.();
   const binding = captureIncognitoSessionBinding(scope);
@@ -456,7 +467,7 @@ export async function restoreSessionColdTranscript(
                 return metadata.archive;
               },
             },
-            turnGuard,
+            guard,
           );
         },
         projectionLane,
@@ -496,12 +507,22 @@ export async function restoreSessionColdTranscript(
         databaseOptions: workerDatabaseOptions(options),
         sessionId: resolved.sessionId,
         archive,
-        turnGuard,
+        guard,
       },
       assertCurrent,
     );
     if (result.turnRebound) {
       throw new SessionColdTurnReboundError(result.turnRebound);
+    }
+    if (result.refusedSource) {
+      throw new SessionColdSourceReboundError(result.refusedSource);
+    }
+    if (result.writerRefusal !== undefined) {
+      const refusal = parseTranscriptAppendRefusal(result.writerRefusal);
+      if (!refusal) {
+        throw new Error("Cold transcript writer refusal has an invalid identity");
+      }
+      throw new SessionTranscriptWriterClaimReboundError(refusal);
     }
     assertCurrent?.();
     // Keep viewed history hot without changing canonical transcript timestamps or bytes.

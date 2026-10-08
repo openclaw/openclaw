@@ -213,7 +213,7 @@ export async function dispatchCronDelivery(
     let completedDelivery = false;
     try {
       // Recipient custody is a bounded SQLite receipt, not process-local state.
-      completedDelivery = isCompletedDirectCronDelivery(deliveryIdempotencyKey);
+      completedDelivery = await isCompletedDirectCronDelivery(deliveryIdempotencyKey);
     } catch (err) {
       if (!params.deliveryBestEffort) {
         throw err;
@@ -222,6 +222,10 @@ export async function dispatchCronDelivery(
         `[cron:${params.job.id}] durable delivery receipt unavailable; continuing best-effort delivery: ${formatErrorMessage(err)}`,
       );
     }
+    if (params.isAborted()) {
+      return { kind: "error", error: params.abortReason() };
+    }
+    params.deliveryAttemptFence?.assertCurrent();
     if (completedDelivery) {
       // Transcript and awareness remain best-effort recipient projections;
       // they must not fabricate a second durable conversation-state owner.
@@ -363,6 +367,7 @@ export async function dispatchCronDelivery(
             signal: params.abortSignal,
           }))
         ) {
+          params.deliveryAttemptFence?.assertCurrent();
           // Another process committed the same fenced recipient intent.
           completedByConcurrentDelivery = true;
           return [];

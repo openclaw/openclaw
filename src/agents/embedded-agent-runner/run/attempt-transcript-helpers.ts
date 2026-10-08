@@ -19,6 +19,13 @@ import { isMidTurnPrecheckAssistantError } from "./midturn-precheck.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
+type AttemptSessionEntry = ReturnType<AttemptSessionManager["getEntries"]>[number];
+
+const preserveTrailing = (entry: AttemptSessionEntry) =>
+  entry.type === "custom" ||
+  entry.type === "label" ||
+  entry.type === "session_info" ||
+  (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message));
 
 export async function removeTrailingMidTurnPrecheckAssistantError(params: {
   activeSession: { agent: { state: { messages: AgentMessage[] } } };
@@ -26,11 +33,6 @@ export async function removeTrailingMidTurnPrecheckAssistantError(params: {
 }): Promise<void> {
   const messages = params.activeSession.agent.state.messages;
   const removedActiveError = isMidTurnPrecheckAssistantError(messages.at(-1));
-  const preserveTrailing = (entry: ReturnType<AttemptSessionManager["getEntries"]>[number]) =>
-    entry.type === "custom" ||
-    entry.type === "label" ||
-    entry.type === "session_info" ||
-    (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message));
   const persistedTail = params.sessionManager
     .getEntries()
     .findLast((entry) => !preserveTrailing(entry));
@@ -66,13 +68,7 @@ export async function normalizeCompactionRecoveryTranscriptTail(params: {
   // back to a continuation. AgentCore rejects assistant tails before providers run.
   const removedEntries = await params.sessionManager.removeTrailingEntriesAsync(
     (entry) => entry.type === "message" && !canContinueFromMessage(entry.message),
-    {
-      preserveTrailing: (entry) =>
-        entry.type === "custom" ||
-        entry.type === "label" ||
-        entry.type === "session_info" ||
-        (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message)),
-    },
+    { preserveTrailing },
   );
   params.activeSession.agent.state.messages =
     removedEntries > 0

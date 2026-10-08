@@ -20,7 +20,12 @@ import { isArtifactPreservingStateRead } from "../../state/openclaw-state-db-rea
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { cronStoreKey } from "./key.js";
 import { restoreCronLoadError } from "./load-error.js";
-import type { CronReadOnlyRequest, CronReadOnlyResult } from "./read-only.types.js";
+import type {
+  CronReadOnlyRequest,
+  CronReadOnlyResult,
+  CronRunHistoryBinding,
+  CronRunHistorySelector,
+} from "./read-only.types.js";
 import type { CronRunRecord } from "./run-history.types.js";
 import type { LoadedCronStore } from "./types.js";
 
@@ -59,7 +64,7 @@ async function readCronState({
 }: {
   storeKey?: string;
   env: NodeJS.ProcessEnv;
-  history?: { jobId?: string };
+  history?: CronReadOnlyRequest["history"];
 }): Promise<Extract<CronReadOnlyResult, { ok: true }>> {
   const statePath = resolveOpenClawStateSqlitePath(env);
   if (!fs.existsSync(statePath)) {
@@ -153,6 +158,8 @@ async function readCronState({
             Buffer.byteLength(location) +
             Buffer.byteLength(storeKey ?? "") +
             Buffer.byteLength(history?.jobId ?? "") +
+            Buffer.byteLength(history?.transcript?.runId ?? "") +
+            (history?.transcript?.runAtMs === undefined ? 0 : 8) +
             Buffer.byteLength(stagingRoot ?? "") +
             environmentBytes,
         },
@@ -187,4 +194,18 @@ export async function readCronRunRecords(
       })
     ).history ?? []
   );
+}
+
+export async function readCronRunHistoryBinding(
+  storeKey: string,
+  jobId: string,
+  transcript: CronRunHistorySelector,
+): Promise<CronRunHistoryBinding | undefined> {
+  return (
+    await readCronState({
+      storeKey: cronStoreKey(storeKey),
+      env: process.env,
+      history: { jobId, transcript },
+    })
+  ).binding;
 }

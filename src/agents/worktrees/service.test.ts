@@ -17,13 +17,12 @@ import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.j
 import * as worktreeGit from "./git.js";
 import * as worktreeRegistry from "./registry.js";
 import {
-  getRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
-  listRegistryWorktrees,
   updateRegistryWorktree,
   WorktreeRemovalContentionError,
 } from "./registry.js";
+import { getRegistryWorktree, listRegistryWorktrees } from "./registry.test-support.js";
 import { acquireWorktreeRunLease, claimWorktreeRemoval } from "./run-lease.js";
 import { testing as runLeaseTesting } from "./run-lease.test-support.js";
 import { IDLE_GC_MS, ManagedWorktreeService } from "./service.js";
@@ -986,7 +985,7 @@ describe("ManagedWorktreeService", () => {
       expect(await fs.readFile(path.join(created.path, "draft.txt"), "utf8")).toBe(
         "preserve this task\n",
       );
-      expect(service.findLiveById(created.id)?.path).toBe(created.path);
+      expect(getRegistryWorktree(env, created.id)?.path).toBe(created.path);
     });
   });
 });

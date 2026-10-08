@@ -113,16 +113,17 @@ it("records a native host mismatch while preserving unrelated channel accounts",
   });
 });
 
-it("validates a hardlinked companion placement once per capture, including recovery", async () => {
+it("validates overlapping hardlinked companion placements once per member, including recovery", async () => {
   await withOpenClawTestState({ label: "native-reference-verdict" }, async (state) => {
     const root = state.path("plugin");
     fs.mkdirSync(root);
     fs.writeFileSync(path.join(root, "package.json"), '{"name":"native-reference-fixture"}');
     fs.writeFileSync(path.join(root, "index.cjs"), "exports.value = 1;");
     fs.writeFileSync(path.join(root, "helper.dat"), "original companion");
-    fs.mkdirSync(path.join(root, "companion-sentinel"));
-    for (let index = 0; index < 8; index++) {
-      fs.writeFileSync(path.join(root, `addon-${index}.node`), `native fixture ${index}`);
+    fs.mkdirSync(path.join(root, "nested", "companion-sentinel"), { recursive: true });
+    for (let index = 0; index < 33; index++) {
+      const directory = index % 2 ? path.join(root, "nested") : root;
+      fs.writeFileSync(path.join(directory, `addon-${index}.node`), `native fixture ${index}`);
     }
     const symlink = fs.symlinkSync;
     const denial = vi.spyOn(fs, "symlinkSync").mockImplementation((target, link, type) => {
@@ -134,7 +135,7 @@ it("validates a hardlinked companion placement once per capture, including recov
     const paths = vi.spyOn(fs, "realpathSync");
     const walks = (directory: string) =>
       paths.mock.calls.filter(
-        ([filename]) => filename === path.join(directory, "companion-sentinel"),
+        ([filename]) => filename === path.join(directory, "nested", "companion-sentinel"),
       ).length;
     const cache = createPluginCache();
     const artifacts: ReturnType<typeof capturePluginGenerationArtifact>[] = [];
@@ -164,6 +165,9 @@ it("validates a hardlinked companion placement once per capture, including recov
       expect.soft(walks(first.rootDir)).toBe(1);
       const successor = capture();
       expect.soft(walks(successor.rootDir)).toBe(1);
+      expect(fs.statSync(successor.resolve(path.join(root, "addon-0.node"))).ino).toBe(
+        fs.statSync(first.resolve(path.join(root, "addon-0.node"))).ino,
+      );
       paths.mockClear();
       successor.linkHost(hosts[1]!);
       expect.soft(walks(successor.rootDir)).toBe(1);

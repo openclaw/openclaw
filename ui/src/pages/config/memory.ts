@@ -215,19 +215,7 @@ function renderEngineSection(props: MemoryViewProps) {
     defaultEngine,
     props.engineSelection.kind !== "default",
   );
-  if (props.engineOptions.length === 0) {
-    return renderSettingsSection(
-      { title: t("memoryPage.engine.title"), description: t("memoryPage.engine.description") },
-      renderSettingsRow({
-        title: t("memoryPage.engine.rowTitle"),
-        description: html`
-          ${t("memoryPage.engine.catalogUnavailable")} ${t(engineHintKey(props.engineSelection))}
-          ${defaultDescription}
-        `,
-        control: renderSettingsValue(engineId ?? t("memoryPage.engine.off"), { mono: true }),
-      }),
-    );
-  }
+  const available = props.engineOptions.length > 0;
   const options = [
     ...props.engineOptions.map((option) => ({
       value: option.id,
@@ -242,19 +230,24 @@ function renderEngineSection(props: MemoryViewProps) {
     html`
       ${renderSettingsRow({
         title: t("memoryPage.engine.rowTitle"),
-        description: html`${t(engineHintKey(props.engineSelection))} ${defaultDescription}`,
-        stacked: true,
-        control: renderSettingsSegmented({
-          value: engineId ?? MEMORY_ENGINE_OFF,
-          options,
-          disabled: props.engineBusy,
-          ariaLabel: t("memoryPage.engine.rowTitle"),
-          onChange: (value) => props.onEngineChange(value || null),
-        }),
+        description: available
+          ? html`${t(engineHintKey(props.engineSelection))} ${defaultDescription}`
+          : html`${t("memoryPage.engine.catalogUnavailable")}
+            ${t(engineHintKey(props.engineSelection))} ${defaultDescription}`,
+        stacked: available,
+        control: available
+          ? renderSettingsSegmented({
+              value: engineId ?? MEMORY_ENGINE_OFF,
+              options,
+              disabled: props.engineBusy,
+              ariaLabel: t("memoryPage.engine.rowTitle"),
+              onChange: (value) => props.onEngineChange(value || null),
+            })
+          : renderSettingsValue(engineId ?? t("memoryPage.engine.off"), { mono: true }),
       })}
-      ${renderDisabledEngineRow(props, engineId)}
+      ${available ? renderDisabledEngineRow(props, engineId) : nothing}
       ${
-        props.engineOutcome === null
+        !available || props.engineOutcome === null
           ? nothing
           : renderSettingsRow({
               title: t(

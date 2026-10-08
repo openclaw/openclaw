@@ -1,6 +1,10 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveEmbeddedSessionLane } from "../../../agents/embedded-agent-runner/lanes.js";
-import { clearCommandLane, countQueuedCommandsInLane } from "../../../process/command-queue.js";
+import {
+  clearCommandLane,
+  countQueuedCommandsInLane,
+  prepareCommandLaneClear,
+} from "../../../process/command-queue.js";
 import {
   agentSessionKeysMatchByRequestKey,
   normalizeAgentId,
@@ -208,6 +212,31 @@ export function clearSessionLifecycleQueues(
   })();
   const laneCleared = clearSessionLifecycleLanes(params);
   return { followupCleared, laneCleared, keys };
+}
+
+export function prepareSessionLifecycleQueueCleanup(
+  params: SessionLifecycleQueueTarget & { assertCurrent: () => void },
+): () => ClearSessionQueueResult {
+  params.assertCurrent();
+  const { keys, sessionKeyAliases, matchesLaneEntry } = resolveSessionLifecycleQueueKeys(params);
+  const clearFollowups = prepareSessionFollowupCleanup({
+    ...params,
+    keys,
+    sessionKeyAliases,
+  });
+  const lanes = keys.map((key) =>
+    prepareCommandLaneClear(resolveEmbeddedSessionLane(key), matchesLaneEntry(key)),
+  );
+  return () => {
+    params.assertCurrent();
+    const followupCleared = clearFollowups();
+    let laneCleared = 0;
+    for (const clearLane of lanes) {
+      params.assertCurrent();
+      laneCleared += clearLane();
+    }
+    return { followupCleared, laneCleared, keys };
+  };
 }
 
 export function clearSessionLifecycleLanes(

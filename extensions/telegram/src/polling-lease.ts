@@ -98,16 +98,11 @@ function createLease(params: {
   };
   params.registry.set(params.tokenFingerprint, entry);
 
-  let released = false;
   return {
     tokenFingerprint: params.tokenFingerprint,
     waitedForPrevious: params.waitedForPrevious,
     replacedStoppingPrevious: params.replacedStoppingPrevious,
     release: () => {
-      if (released) {
-        return;
-      }
-      released = true;
       const current = params.registry.get(params.tokenFingerprint);
       if (current === entry) {
         params.registry.delete(params.tokenFingerprint);
@@ -152,11 +147,7 @@ export async function acquireTelegramPollingLease(
       );
     }
 
-    const current = registry.get(fingerprint);
-    if (current !== existing) {
-      continue;
-    }
-    if (waitResult === "released") {
+    if (registry.get(fingerprint) !== existing || waitResult === "released") {
       continue;
     }
 

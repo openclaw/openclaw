@@ -433,45 +433,6 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       expect(result.threadId).toBe(expectedThreadId);
     },
   );
-
-  it.each([
-    {
-      name: "known account",
-      accountId: "work",
-      expected: {
-        channel: "telegram",
-        to: "-100123",
-        chatType: "group",
-        accountId: "work",
-        lastChannel: undefined,
-        lastAccountId: undefined,
-      },
-    },
-    {
-      name: "missing account",
-      accountId: "missing",
-      expected: {
-        channel: "none",
-        reason: "unknown-account",
-        accountId: "missing",
-        lastChannel: undefined,
-        lastAccountId: undefined,
-      },
-    },
-  ] as const)(
-    "handles explicit heartbeat accountId allow/deny: $name",
-    async ({ accountId, expected }) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            heartbeat: { target: "telegram", to: "-100123", accountId },
-          },
-        },
-        channels: { telegram: { accounts: { work: { botToken: "token" } } } },
-      };
-      expect(await resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual(expected);
-    },
-  );
 });
 
 describe("resolveHeartbeatSenderContext", () => {
@@ -525,7 +486,6 @@ describe("runHeartbeatOnce", () => {
     options?: {
       nowMs?: number;
       getReplyFromConfig?: HeartbeatDeps["getReplyFromConfig"];
-      listActiveEmbeddedRunSessionKeys?: HeartbeatDeps["listActiveEmbeddedRunSessionKeys"];
     },
   ): HeartbeatDeps => ({
     whatsapp: sendWhatsApp,
@@ -534,9 +494,6 @@ describe("runHeartbeatOnce", () => {
     webAuthExists: async () => true,
     hasActiveWebListener: () => true,
     ...(options?.getReplyFromConfig ? { getReplyFromConfig: options.getReplyFromConfig } : null),
-    ...(options?.listActiveEmbeddedRunSessionKeys
-      ? { listActiveEmbeddedRunSessionKeys: options.listActiveEmbeddedRunSessionKeys }
-      : null),
   });
 
   it("skips when agent heartbeat is not enabled", async () => {
@@ -595,33 +552,6 @@ describe("runHeartbeatOnce", () => {
     expect(replyBody(replySpy).Body).not.toContain("Please relay the command output to the user");
   });
 
-  it.each([["another session for the same agent", () => "agent:main:telegram:alerts"]])(
-    "retries instead of dispatching while %s has an embedded run",
-    async (_name, activeKey) => {
-      const cfg: OpenClawConfig = {
-        agents: {
-          defaults: {
-            heartbeat: { every: "5m", target: "none" },
-          },
-        },
-      };
-      const replySpy = vi.fn().mockResolvedValue({ text: "heartbeat reply" });
-      const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "m1", toJid: "jid" });
-
-      const res = await runHeartbeatOnce({
-        cfg,
-        deps: createHeartbeatDeps(sendWhatsApp, {
-          getReplyFromConfig: replySpy,
-          listActiveEmbeddedRunSessionKeys: () => [activeKey()],
-        }),
-      });
-
-      expect(res).toEqual({ status: "skipped", reason: "requests-in-flight" });
-      expect(replySpy).not.toHaveBeenCalled();
-      expect(sendWhatsApp).not.toHaveBeenCalled();
-    },
-  );
-
   it("skips a routeless interval poll before the agent run", async () => {
     const tmpDir = await createCaseDir("hb-no-route");
     const storePath = path.join(tmpDir, "sessions.json");
@@ -643,58 +573,6 @@ describe("runHeartbeatOnce", () => {
 
     expect(result).toEqual({ status: "skipped", reason: "no-route" });
     expect(replySpy).not.toHaveBeenCalled();
-  });
-
-  it("runs a routeless interval wake that carries scheduled tasks", async () => {
-    const tmpDir = await createCaseDir("hb-no-route-tasks");
-    const storePath = path.join(tmpDir, "sessions.json");
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { workspace: tmpDir, heartbeat: { every: "5m" } } },
-      session: { store: storePath },
-    };
-    const sessionKey = resolveMainSessionKey(cfg);
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "sid-no-route-tasks",
-      updatedAt: Date.now(),
-    });
-    const replySpy = vi.fn().mockResolvedValue({ text: "HEARTBEAT_OK" });
-
-    const result = await runHeartbeatOnce({
-      cfg,
-      source: "interval",
-      tasks: [{ jobId: "job-inbox", name: "inbox", prompt: "Check inbox" }],
-      deps: createHeartbeatDeps(vi.fn(), { getReplyFromConfig: replySpy }),
-    });
-
-    expect(result.status).toBe("ran");
-    expect(replySpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("runs a routeless interval poll that has queued system events", async () => {
-    const tmpDir = await createCaseDir("hb-no-route-events");
-    const storePath = path.join(tmpDir, "sessions.json");
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { workspace: tmpDir, heartbeat: { every: "5m" } } },
-      session: { store: storePath },
-    };
-    const sessionKey = resolveMainSessionKey(cfg);
-    await seedSessionStore(storePath, sessionKey, {
-      sessionId: "sid-no-route-events",
-      updatedAt: Date.now(),
-    });
-    enqueueSystemEvent("Cron: route this later", {
-      sessionKey,
-      contextKey: "cron:route-later",
-    });
-    const replySpy = vi.fn().mockResolvedValue({ text: "HEARTBEAT_OK" });
-
-    const result = await runHeartbeatOnce({
-      cfg,
-      deps: createHeartbeatDeps(vi.fn(), { getReplyFromConfig: replySpy }),
-    });
-
-    expect(result.status).toBe("ran");
-    expect(replySpy).toHaveBeenCalledTimes(1);
   });
 
   it("runs the agent when an explicit heartbeat target is rejected", async () => {
@@ -980,44 +858,6 @@ describe("runHeartbeatOnce", () => {
     });
   });
 
-  it.each([
-    { name: "empty interval", source: "interval", event: false, expected: "skipped" },
-    { name: "empty hook wake", source: "hook", event: false, expected: "ran" },
-    { name: "empty scratch with cron work", source: "interval", event: true, expected: "ran" },
-  ] as const)("applies scratch gating for $name", async ({ source, event, expected }) => {
-    const tmpDir = await createCaseDir("hb-scratch");
-    const storePath = path.join(tmpDir, "sessions.json");
-    const cfg = heartbeatTestConfig(tmpDir, "whatsapp", "whatsapp", storePath);
-    await seedHeartbeatScratchForTest({ content: "# Scratch\n" });
-    const sessionKey = resolveMainSessionKey(cfg);
-    await seedWhatsAppSession(storePath, sessionKey);
-    if (event) {
-      enqueueSystemEvent("Cron: memory maintenance completed", {
-        sessionKey,
-        contextKey: "cron:memory-maintenance",
-      });
-    }
-    const replySpy = vi.fn().mockResolvedValue({ text: "Checked logs and PRs" });
-    const sendWhatsApp = createWhatsAppSendMock();
-    const result = await runHeartbeatOnce({
-      cfg,
-      source,
-      intent: source === "hook" ? "immediate" : "scheduled",
-      reason: source === "hook" ? "wake" : "interval",
-      deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
-    });
-    expect(result.status).toBe(expected);
-    expect(replySpy).toHaveBeenCalledTimes(expected === "ran" ? 1 : 0);
-    expect(sendWhatsApp).toHaveBeenCalledTimes(expected === "ran" ? 1 : 0);
-    if (expected === "skipped") {
-      expect(result).toEqual({ status: "skipped", reason: "empty-heartbeat-file" });
-    }
-    if (event) {
-      expect(replyBody(replySpy).InternalTurnSource).toBe("cron");
-      expect(replyBody(replySpy).Body).toContain("scheduled reminder has been triggered");
-    }
-  });
-
   it("injects actionable scratch from the configured cron store without workspace file guidance", async () => {
     const tmpDir = await createCaseDir("hb-custom-scratch");
     const storePath = path.join(tmpDir, "sessions.json");
@@ -1045,35 +885,5 @@ describe("runHeartbeatOnce", () => {
     } finally {
       deleteConfigMachineState("cron.store");
     }
-  });
-
-  it("uses an internal-only cron prompt when heartbeat delivery target is none", async () => {
-    const tmpDir = await createCaseDir("hb-cron-target-none");
-    const storePath = path.join(tmpDir, "sessions.json");
-    const cfg: OpenClawConfig = heartbeatTestConfig(tmpDir, "none", "whatsapp", storePath);
-    const sessionKey = resolveMainSessionKey(cfg);
-    await seedWhatsAppSession(storePath, sessionKey);
-    enqueueSystemEvent("Cron: rotate logs", {
-      sessionKey,
-      contextKey: "cron:rotate-logs",
-    });
-
-    const replySpy = vi.fn();
-    replySpy.mockResolvedValue({ text: "Handled internally" });
-    const sendWhatsApp = createWhatsAppSendMock();
-
-    const res = await runHeartbeatOnce({
-      cfg,
-      source: "interval",
-      intent: "scheduled",
-      reason: "interval",
-      deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
-    });
-    expect(res.status).toBe("ran");
-    expect(sendWhatsApp).toHaveBeenCalledTimes(0);
-    const calledCtx = replyBody(replySpy);
-    expect(calledCtx.InternalTurnSource).toBe("cron");
-    expect(calledCtx.Body).toContain("Handle this reminder internally");
-    expect(calledCtx.Body).not.toContain("Please relay this reminder to the user");
   });
 });

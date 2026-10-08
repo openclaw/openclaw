@@ -137,10 +137,7 @@ export function createTypingController(params: {
 
   const ensureStart = async () => {
     // Late callbacks after a run completed should never restart typing.
-    if (sealed || runComplete) {
-      return;
-    }
-    if (active) {
+    if (sealed || runComplete || active) {
       return;
     }
     active = true;

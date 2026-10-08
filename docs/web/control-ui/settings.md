@@ -281,8 +281,8 @@ Copy controls. Reading a bundle requires `operator.read`.
 
 The **Skills** tab keeps the skill status report, enable/disable toggles, API
 key entry, and inline ClawHub skill search, scoped to the selected agent. The
-**Skill workshop** tab shows installed skills and pending
-[skill proposals](/tools/skill-workshop). **Learn from past conversations** opens
+**Skill workshop** tab shows [learned skills](/tools/skill-workshop) with their
+use counts and recent changes with **Undo**. **Learn from past conversations** opens
 a normal session with the selected agent's configured model and permitted tools.
 The agent chooses which history and skills to inspect, following the current
 Workshop mode. Chat shows progress, results, and normal stop and follow-up controls.

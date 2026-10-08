@@ -105,6 +105,7 @@ import {
   readManagedGatewayServiceForUpdate,
   resolveManagedServicePackageUpdatePlan,
 } from "./update-command-service-plan.js";
+import { preflightWindowsUpdateTask } from "./update-command-windows-preflight.js";
 
 // Identity in this map is minted only for a new local preview, never reconstructed
 // from a run ID, process absence, or another invocation's diagnostic history.
@@ -500,26 +501,22 @@ export function completeUpdateCommandRun(
     inspected?.format === "legacy-serving"
       ? inspected.record
       : loadUpdateRecovery(run.runId, { env: run.env });
-  if (
-    recovery?.terminal &&
-    getUpdateRun(run.runId, { env: run.env })?.status === recovery.terminal.status
-  ) {
-    // Read the atomic durable outcome; diagnostics never authorize retention cleanup.
-    return normalizeUpdateFailureResult({
-      ...result,
-      status: recovery.terminal.status === "succeeded" ? "ok" : "error",
-      reason:
-        recovery.terminal.status === "succeeded"
-          ? undefined
-          : (recovery.primaryFailure?.code ?? "update-rolled-back"),
-      runId: run.runId,
-    });
-  }
   if (recovery) {
+    // Read the atomic durable outcome; diagnostics never authorize retention cleanup.
+    const terminal =
+      recovery.terminal &&
+      getUpdateRun(run.runId, { env: run.env })?.status === recovery.terminal.status
+        ? recovery.terminal
+        : undefined;
+    const succeeded = terminal?.status === "succeeded";
     return normalizeUpdateFailureResult({
       ...result,
-      status: "error",
-      reason: result.reason ?? "update-recovery-pending",
+      status: succeeded ? "ok" : "error",
+      reason: succeeded
+        ? undefined
+        : terminal
+          ? (recovery.primaryFailure?.code ?? "update-rolled-back")
+          : (result.reason ?? "update-recovery-pending"),
       runId: run.runId,
     });
   }
@@ -638,6 +635,9 @@ export async function prepareUpdateCommand(opts: UpdateCommandOptions) {
       root: discoveredRoot,
       meta: controlPlaneUpdateSentinelMeta,
     }));
+  if (!postCoreUpdateResume && !foreground && opts.dryRun !== true) {
+    preflightWindowsUpdateTask(opts.tag, timeoutMs);
+  }
   const pkgOwnership = createFreeBsdPkgOwnershipInspection(timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS);
   // Inspect the invoking installation before a service can redirect its root,
   // runtime or state. This also covers package-to-Git and preview requests.

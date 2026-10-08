@@ -12,7 +12,6 @@ import {
 import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
-import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { UPDATE_GLOBAL_PERMISSION_REASON } from "../../shared/update-outcome.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
@@ -23,6 +22,7 @@ import {
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { formatCliCommand } from "../command-format.js";
 import {
+  assertReadableGitMetadata,
   checkTargetDatabaseSchemasForContexts,
   formatSchemaRefusalLines,
   hasSchemaRefusal,
@@ -224,15 +224,10 @@ export async function preflightUpdateCommandSchemas(params: {
             })
           : { schemaVersions: packageTargetSchemaVersions };
       if ("metadataUnreadable" in target && target.metadataUnreadable) {
-        const failure = createUpdatePreflightFailure(
-          "failureCode" in target && target.failureCode
-            ? target.failureCode
-            : "target-git-metadata",
+        assertReadableGitMetadata(
           target.metadataUnreadable,
+          "failureCode" in target && target.failureCode ? target.failureCode : undefined,
         );
-        throw new UpdatePreMutationError("target-metadata-preflight", failure.message, {
-          failureFacts: failure.failureFacts,
-        });
       }
       const installedContexts = candidateAdmissionChecks?.includes("database-schema")
         ? admission.contexts.filter((context) => !isCandidateAdmissionContextCovered(context.env))

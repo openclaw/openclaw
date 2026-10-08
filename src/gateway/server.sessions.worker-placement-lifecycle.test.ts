@@ -818,11 +818,13 @@ test.each(["worker-turn", "remote-exec"] as const)(
         ownerEpoch: active.activeOwnerEpoch,
       },
     });
-    const retireSessionPlacement = vi.fn((retirement: WorkerSessionPlacementRetirement) => {
-      expect(loadSessionEntry(REQUEST.sessionKey).entry).toBeUndefined();
-      expect(harness.environments.destroy).toHaveBeenCalledOnce();
-      placementStore.retireSessionPlacement(retirement);
-    });
+    const retireSessionPlacementAsync = vi.fn(
+      async (retirement: WorkerSessionPlacementRetirement) => {
+        expect(loadSessionEntry(REQUEST.sessionKey).entry).toBeUndefined();
+        expect(harness.environments.destroy).toHaveBeenCalledOnce();
+        await placementStore.retireSessionPlacementAsync(retirement);
+      },
+    );
     const deleted = await directSessionReq(
       "sessions.delete",
       { key: REQUEST.sessionKey },
@@ -837,7 +839,7 @@ test.each(["worker-turn", "remote-exec"] as const)(
             harness.environments,
           ),
           workerPlacementDispatchService: harness.service,
-          workerSessionPlacementService: { ...placementStore, retireSessionPlacement },
+          workerSessionPlacementService: { ...placementStore, retireSessionPlacementAsync },
         },
       },
     );
@@ -847,7 +849,7 @@ test.each(["worker-turn", "remote-exec"] as const)(
     expect(harness.log.indexOf("workspace:reconcile")).toBeLessThan(
       harness.log.indexOf("teardown:destroy"),
     );
-    expect(retireSessionPlacement).toHaveBeenCalledOnce();
+    expect(retireSessionPlacementAsync).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledOnce();
     expect(placementStore.get(REQUEST.sessionId)).toBeUndefined();
     expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);

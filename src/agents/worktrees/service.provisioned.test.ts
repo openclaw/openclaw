@@ -34,11 +34,11 @@ import * as provisionedSnapshots from "./provisioned-snapshot-store.js";
 import { insertRegistryWorktreeProvisionedChunk } from "./provisioned-snapshot.test-support.js";
 import { getRegistryWorktreeProvisionedChunk } from "./registry-read.js";
 import {
-  getRegistryWorktree,
   getRegistryWorktreeProvisionedPaths,
   getRegistryWorktreeProvisionedState,
   insertRegistryWorktree,
 } from "./registry.js";
+import { getRegistryWorktree } from "./registry.test-support.js";
 import { ManagedWorktreeService } from "./service.js";
 import { materializeManagedWorktreeFixture } from "./service.test-support.js";
 import { captureManagedWorktreeSnapshot } from "./snapshot-host.js";

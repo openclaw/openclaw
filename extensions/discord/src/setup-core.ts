@@ -29,6 +29,18 @@ const DISCORD_TOKEN_HELP_LINES = [
   t("wizard.channels.docs", { link: formatDocsLink("/discord", "discord") }),
 ];
 
+export function getDiscordAllowFromHelpLines(): string[] {
+  return [
+    t("wizard.discord.allowlistIntro"),
+    t("wizard.discord.examples"),
+    "- 123456789012345678",
+    "- @alice",
+    "- alice#1234",
+    t("wizard.discord.multipleEntries"),
+    t("wizard.channels.docs", { link: formatDocsLink("/discord", "discord") }),
+  ];
+}
+
 type DiscordGuildChannelAllowlistEntry = {
   guildKey: string;
   channelKey?: string;
@@ -107,7 +119,7 @@ export function createDiscordSetupWizardBase(handlers: {
     NonNullable<ChannelSetupWizard["allowFrom"]>["resolveEntries"]
   >;
   resolveGroupAllowlist: NonNullable<
-    NonNullable<NonNullable<ChannelSetupWizard["groupAccess"]>["resolveAllowlist"]>
+    NonNullable<ChannelSetupWizard["groupAccess"]>["resolveAllowlist"]
   >;
 }) {
   const discordDmPolicy = createChannelDmPolicy({
@@ -151,7 +163,7 @@ export function createDiscordSetupWizardBase(handlers: {
         keepPrompt: t("wizard.discord.tokenKeepPrompt"),
         inputPrompt: t("wizard.discord.tokenInputPrompt"),
         allowEnv: ({ accountId }: { accountId: string }) => accountId === DEFAULT_ACCOUNT_ID,
-        resolveAccount: ({ cfg, accountId }) => inspectDiscordSetupAccount({ cfg, accountId }),
+        resolveAccount: inspectDiscordSetupAccount,
         accountConfigured: (account) => account.configured,
         hasConfiguredValue: (account) => account.tokenStatus !== "missing",
         resolvedValue: (account) => normalizeOptionalString(account.token),
@@ -165,48 +177,30 @@ export function createDiscordSetupWizardBase(handlers: {
       channel,
       label: t("wizard.discord.channelsLabel"),
       placeholder: "My Server/#general, guildId/channelId, #support",
-      currentPolicy: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
+      currentPolicy: ({ cfg, accountId }) =>
         resolveDiscordSetupAccountConfig({ cfg, accountId }).config.groupPolicy ?? "allowlist",
-      currentEntries: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
+      currentEntries: ({ cfg, accountId }) =>
         Object.entries(
           resolveDiscordSetupAccountConfig({ cfg, accountId }).config.guilds ?? {},
         ).flatMap(([guildKey, value]) => {
-          const channels = value?.channels ?? {};
-          const channelKeys = Object.keys(channels);
+          const channelKeys = Object.keys(value?.channels ?? {});
           if (channelKeys.length === 0) {
-            const input = /^\d+$/.test(guildKey) ? `guild:${guildKey}` : guildKey;
-            return [input];
+            return [/^\d+$/.test(guildKey) ? `guild:${guildKey}` : guildKey];
           }
           return channelKeys.map((channelKey) => `${guildKey}/${channelKey}`);
         }),
-      updatePrompt: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId: string }) =>
+      updatePrompt: ({ cfg, accountId }) =>
         Boolean(resolveDiscordSetupAccountConfig({ cfg, accountId }).config.guilds),
       resolveAllowlist: handlers.resolveGroupAllowlist,
       fallbackResolved: (entries) => entries.map((input) => ({ input, resolved: false })),
-      applyAllowlist: ({
-        cfg,
-        accountId,
-        resolved,
-      }: {
-        cfg: OpenClawConfig;
-        accountId: string;
-        resolved: unknown;
-      }) =>
+      applyAllowlist: ({ cfg, accountId, resolved }) =>
         setDiscordGuildChannelAllowlist(cfg, accountId, mapDiscordSetupAllowlistEntries(resolved)),
     }),
     allowFrom: createAccountScopedAllowFromSection({
       channel,
       credentialInputKey: "token",
       helpTitle: "Discord allowlist",
-      helpLines: [
-        t("wizard.discord.allowlistIntro"),
-        t("wizard.discord.examples"),
-        "- 123456789012345678",
-        "- @alice",
-        "- alice#1234",
-        t("wizard.discord.multipleEntries"),
-        t("wizard.channels.docs", { link: formatDocsLink("/discord", "discord") }),
-      ],
+      helpLines: getDiscordAllowFromHelpLines(),
       message: t("wizard.discord.allowFromPrompt"),
       placeholder: "@alice, 123456789012345678",
       invalidWithoutCredentialNote: t("wizard.discord.allowFromInvalidWithoutToken"),

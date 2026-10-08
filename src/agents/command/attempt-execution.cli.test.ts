@@ -1536,7 +1536,6 @@ describe("CLI attempt execution", () => {
     const sessionId = `internal-${visibleSessionId}`;
     const sessionKey = `agent:main:internal-session-effects:${visibleSessionId}`;
     setTestEnvValue("HOME", tmpDir);
-    setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tmpDir, "state"));
     const internalSessionFile = formatSqliteSessionFileMarker({
       agentId: "main",
       sessionId,

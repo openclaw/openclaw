@@ -191,23 +191,18 @@ export async function stageQueuePayloadMedia(
   };
 }
 
-async function removeArtifact(absolutePath: string, stateDir: string | undefined): Promise<void> {
-  const relative = spoolRelativePath(absolutePath, stateDir);
-  if (!relative) {
-    return;
-  }
-  try {
-    await openSpoolStore(stateDir).remove(relative);
-  } catch {}
-}
-
 /** Discards spool artifacts whose durable row is already gone. Never throws. */
 export async function releaseSpoolArtifacts(
   artifacts: readonly string[],
   stateDir?: string,
 ): Promise<void> {
   for (const artifact of artifacts) {
-    await removeArtifact(artifact, stateDir);
+    const relative = spoolRelativePath(artifact, stateDir);
+    if (relative) {
+      try {
+        await openSpoolStore(stateDir).remove(relative);
+      } catch {}
+    }
   }
 }
 
@@ -261,7 +256,7 @@ export async function pruneOrphanedDeliveryQueueMedia(
     if (!stats || stats.mtimeMs > cutoffMs) {
       continue;
     }
-    await removeArtifact(artifactPath, stateDir);
+    await releaseSpoolArtifacts([artifactPath], stateDir);
   }
 }
 

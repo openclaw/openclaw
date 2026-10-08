@@ -18,16 +18,7 @@ import type { DiscordRealtimePlayer } from "./realtime-player.js";
 
 /** Main retains provider item identity; physical output state belongs to the worker. */
 export class DiscordRealtimeOutput {
-  private readonly activityTracker = createRealtimeVoiceOutputActivityTracker();
-  get activity() {
-    if (
-      Atomics.load(this.clock, DISCORD_AUDIO_STARTED) !== 0n &&
-      !this.activityTracker.snapshot().playbackStarted
-    ) {
-      this.activityTracker.markPlaybackStarted();
-    }
-    return this.activityTracker;
-  }
+  private readonly activity = createRealtimeVoiceOutputActivityTracker();
   private readonly clock = new BigInt64Array(new SharedArrayBuffer(DISCORD_AUDIO_CLOCK_BYTES));
   private readonly id: number;
   private readonly unregister: () => void;
@@ -110,6 +101,12 @@ export class DiscordRealtimeOutput {
 
   private playedBytes(): number {
     return Number(Atomics.load(this.clock, DISCORD_AUDIO_PLAYED_BYTES));
+  }
+  hasStarted(): boolean {
+    return (
+      Atomics.load(this.clock, DISCORD_AUDIO_STARTED) !== 0n ||
+      this.activity.snapshot().playbackStarted
+    );
   }
   pendingBytes(): number {
     return this.closed

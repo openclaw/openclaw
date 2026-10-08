@@ -24,11 +24,6 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { updatePairedDevicePresence, type NodePairingGeneration } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  resolveEventSessionKeyForPolicy,
-  resolveEventSessionRoutingPolicy,
-  scopedHeartbeatWakeOptionsForPolicy,
-} from "../infra/event-session-routing.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
@@ -38,7 +33,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { deleteMediaBuffer } from "../media/store.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
-import { isUnscopedSessionKeySentinel, normalizeMainKey } from "../routing/session-key.js";
+import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveAgentHarnessSessionContextError } from "../sessions/agent-harness-session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -58,6 +53,7 @@ import {
 } from "./chat-attachments.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 import { registerNodeApnsEvent } from "./server-node-events-apns.js";
+import { enqueueNodeExecNotice } from "./server-node-events-exec-notice.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   loadSessionEntry,
@@ -904,19 +900,16 @@ export const handleNodeEvent = async (
       }
       const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? `node-${nodeId}`;
       const { canonicalKey: sessionKey, agentId } = loadSessionEntry(sessionKeyRaw);
-
       const cfg = getRuntimeConfig();
       const runId = normalizeOptionalString(obj.runId) ?? "";
-      if (
-        !ctx.authorizeNodeSystemRunEvent({
-          nodeId,
-          connId: opts?.connId,
-          ...(runId ? { runId } : {}),
-          // Match the key sent in system.run params; canonicalization below is for routing.
-          sessionKey: sessionKeyRaw,
-          terminal: evt.event === "exec.finished" || evt.event === "exec.denied",
-        })
-      ) {
+      const auth = ctx.authorizeNodeSystemRunEvent({
+        nodeId,
+        connId: opts?.connId,
+        ...(runId ? { runId } : {}),
+        sessionKey: sessionKeyRaw,
+        event: evt.event,
+      });
+      if (!auth) {
         return {
           ok: true,
           event: evt.event,
@@ -924,11 +917,10 @@ export const handleNodeEvent = async (
           reason: "unmatched_exec_event",
         };
       }
-      if (
-        cfg.tools?.exec?.notifyOnExit === false ||
-        obj.suppressNotifyOnExit === true ||
-        evt.event === "exec.denied"
-      ) {
+      if (cfg.tools?.exec?.notifyOnExit === false || obj.suppressNotifyOnExit === true) {
+        return undefined;
+      }
+      if (evt.event === "exec.denied") {
         return undefined;
       }
       const command = normalizeOptionalString(obj.command) ?? "";
@@ -968,33 +960,14 @@ export const handleNodeEvent = async (
         }
       }
 
-      const eventRouting = resolveEventSessionRoutingPolicy({ cfg, sessionKey });
-      const queued = enqueueSystemEvent(
+      enqueueNodeExecNotice({
+        cfg,
+        sessionKey,
+        agentId,
+        authorization: auth,
+        runId,
         text,
-        withSystemEventOwner(
-          {
-            sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
-            contextKey: runId ? `exec:${runId}` : "exec",
-          },
-          agentId,
-        ),
-      );
-      if (queued) {
-        // Global keys retain the loaded owner; synthetic node-* keys keep unscoped wakes.
-        requestHeartbeat(
-          scopedHeartbeatWakeOptionsForPolicy(
-            sessionKey,
-            {
-              source: "exec-event",
-              intent: "event",
-              reason: "exec-event",
-              coalesceMs: 0,
-              ...(isUnscopedSessionKeySentinel(sessionKey) ? { agentId } : {}),
-            },
-            eventRouting,
-          ),
-        );
-      }
+      });
       return undefined;
     }
     case "push.apns.register": {

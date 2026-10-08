@@ -146,6 +146,8 @@ For traces, logs, OTLP push, and OpenTelemetry GenAI semantic attributes, see [O
 | `openclaw_queue_lane_size`                                | gauge     | `lane`                                                                                    |
 | `openclaw_queue_lane_wait_seconds`                        | histogram | `lane`                                                                                    |
 | `openclaw_session_state_total`                            | counter   | `reason`, `state`                                                                         |
+| `openclaw_sessions_active`                                | gauge     | `state` (`running`, `queued`)                                                             |
+| `openclaw_gateway_active_work`                            | gauge     | `kind` (`agentRuns`, `chatRuns`, `queuedTurns`)                                           |
 | `openclaw_session_queue_depth`                            | gauge     | `state`                                                                                   |
 | `openclaw_session_turn_created_total`                     | counter   | `agent`, `channel`, `trigger`                                                             |
 | `openclaw_session_stuck_total`                            | counter   | `reason`, `state`                                                                         |
@@ -269,6 +271,46 @@ unchanged.
 An OpenTelemetry exporter with traces disabled does not request phase events.
 A configured Prometheus exporter records these observations as metrics without
 requiring OpenTelemetry traces.
+
+### Current sessions and work
+
+Use `openclaw_sessions_active` for current session load. Its two series count
+running and queued sessions using the same live-run projection as
+`sessions.list` with `activeOnly: true`. The count covers the full operator
+roster, including global and unknown sessions, before pagination; archived
+sessions and cron-run history use the list's default exclusions. Compare with an
+unfiltered operator list using `includeGlobal: true` and `includeUnknown: true`,
+not a list restricted to one agent or viewer.
+
+`openclaw_gateway_active_work` exposes three counts from the Gateway's existing
+active-work snapshot:
+
+| `kind`        | Meaning                                                                                |
+| ------------- | -------------------------------------------------------------------------------------- |
+| `agentRuns`   | Admitted agent run contexts, including work that is not visible in the session roster. |
+| `chatRuns`    | Registered chat runs that have not been aborted or requested registration cleanup.     |
+| `queuedTurns` | Queued chat turns that have not been aborted.                                          |
+
+These categories overlap. Do not sum them to obtain a total run or session
+count. They cover session and run activity, not the complete suspension-blocker
+inventory; zero alone does not establish that the Gateway can suspend.
+Both gauges refresh on owner changes while the exporter is active,
+without polling or reading transcripts. They return to zero when the relevant
+work drains. Before the Gateway projection is ready, and after it stops, the
+series are absent rather than reporting an assumed idle state.
+
+`openclaw_session_state_total` is a **cumulative counter of state observations
+since exporter start**, not a current session count or a count of unique
+sessions. Repeated observations of `processing` keep increasing it; completion
+does not decrement it. For example, `processing=60` can coexist with zero live
+sessions. Use `rate(openclaw_session_state_total[5m])` to measure observation
+frequency. `openclaw_session_queue_depth` is likewise only the latest observed
+individual session queue depth per diagnostic state, not total queued work.
+
+```promql
+sum(openclaw_sessions_active)
+openclaw_gateway_active_work{kind="queuedTurns"}
+```
 
 ### Runtime identity
 

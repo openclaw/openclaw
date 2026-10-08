@@ -54,10 +54,7 @@ class GitHubReadRequestInactiveError extends Error {
 async function prepareControlUiGitHubIdentity(
   { context, client, signal, hasCurrentClientAuthority }: GatewayRequestHandlerOptions,
   agentId: string,
-): Promise<{
-  identity: ControlUiGitHubPreviewIdentity | undefined;
-  assertSelected: () => void;
-}> {
+) {
   const config = context.getRuntimeConfig();
   const configuredIdentity = () => {
     const current = context.getRuntimeConfig();
@@ -571,7 +568,7 @@ export function createControlUiHandlers(
         );
         return;
       }
-      const admitted = new Promise<void>((resolve) => {
+      await new Promise<void>((resolve) => {
         const replacement = subscriptions.replace(
           connId,
           parsed.sessionKeys,
@@ -580,7 +577,6 @@ export function createControlUiHandlers(
         );
         void replacement.catch(() => {});
       });
-      await admitted;
       respond(true, { subscribed: parsed.sessionKeys.length > 0 }, undefined);
     },
   };

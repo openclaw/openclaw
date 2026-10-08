@@ -17,7 +17,7 @@ import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/s
 import { readSubagentRun } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { getSubagentRunRuntimeKey } from "../agents/subagents/registry/subagent-run-generation.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
-import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.test-support.js";
 import {
   enqueueClaimedSessionDelivery,
   loadPendingSessionDelivery,

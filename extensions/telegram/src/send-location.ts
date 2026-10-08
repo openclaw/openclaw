@@ -47,7 +47,6 @@ export async function sendLocationTelegram(
         replyQuoteText: opts.quoteText,
         useReplyIdAsQuoteSource: true,
       },
-      request: { kind: "nonIdempotent" },
     });
     const replyMarkup = buildInlineKeyboard(opts.buttons);
     const commonParams = {

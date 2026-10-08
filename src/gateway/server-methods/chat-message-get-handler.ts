@@ -59,10 +59,9 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
           signal?.throwIfAborted();
           return readCurrentSharing(read) ? consume() : undefined;
         });
+      const respondNotFound = () => respond(true, { ok: false, unavailableReason: "not_found" });
       if (!sessionId) {
-        await withCurrentSession(() =>
-          respond(true, { ok: false, unavailableReason: "not_found" }),
-        );
+        await withCurrentSession(respondNotFound);
         return;
       }
       const effectiveMaxChars = maxChars ?? Math.min(MAX_PAYLOAD_BYTES, 1_000_000);
@@ -70,9 +69,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
         // Pending IDs have their own owner. A transcript miss must never widen
         // into pending custody or an archived physical session.
         if (sessionId !== entry?.sessionId) {
-          await withCurrentSession(() =>
-            respond(true, { ok: false, unavailableReason: "not_found" }),
-          );
+          await withCurrentSession(respondNotFound);
           return;
         }
         const pending = await readSessionPendingInput(
@@ -88,9 +85,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
           return;
         }
         if (!pending) {
-          await withCurrentSession(() =>
-            respond(true, { ok: false, unavailableReason: "not_found" }),
-          );
+          await withCurrentSession(respondNotFound);
           return;
         }
         const resolveCronJobName = await prepareForwardedMessageCronJobNameResolver(
@@ -140,9 +135,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
         return;
       }
       if (!resolved.found) {
-        await withCurrentSession(() =>
-          respond(true, { ok: false, unavailableReason: "not_found" }),
-        );
+        await withCurrentSession(respondNotFound);
         return;
       }
       if (resolved.oversized) {

@@ -1329,7 +1329,7 @@ async function runCliWithPreparedOutputMode(
         { defaultRuntime, restoreRuntimeTerminalState },
       ] = await startupTrace.measure("core-imports", () =>
         Promise.all([
-          import("./program.js"),
+          import("./program/build-program.js"),
           import("../infra/errors.js"),
           import("./failure-output.js"),
           import("../infra/fatal-error-hooks.js"),

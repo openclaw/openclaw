@@ -169,17 +169,14 @@ function sanitizePresentationTextFields(
           return sanitizedButton;
         });
       }
-      if (Array.isArray(sanitizedBlock.options)) {
-        sanitizedBlock.options = sanitizeRecordArray(sanitizedBlock.options, "label");
-      }
-      if (Array.isArray(sanitizedBlock.categories)) {
-        sanitizedBlock.categories = sanitizeStrings(sanitizedBlock.categories);
-      }
-      if (Array.isArray(sanitizedBlock.segments)) {
-        sanitizedBlock.segments = sanitizeRecordArray(sanitizedBlock.segments, "label");
-      }
-      if (Array.isArray(sanitizedBlock.series)) {
-        sanitizedBlock.series = sanitizeRecordArray(sanitizedBlock.series, "name");
+      for (const field of ["options", "categories", "segments", "series"]) {
+        const entries = sanitizedBlock[field];
+        if (Array.isArray(entries)) {
+          sanitizedBlock[field] =
+            field === "categories"
+              ? sanitizeStrings(entries)
+              : sanitizeRecordArray(entries, field === "series" ? "name" : "label");
+        }
       }
       return sanitizedBlock;
     });

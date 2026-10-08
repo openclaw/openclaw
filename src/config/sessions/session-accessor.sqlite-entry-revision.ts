@@ -8,6 +8,7 @@ import { runSqlitePinnedReadSnapshotSync } from "../../infra/sqlite-pinned-read-
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import {
   getAdmittedSqliteSchemaFacts,
+  installSqliteTempTrackingSchema,
   readSqliteCacheDataVersion,
 } from "../../infra/sqlite-schema-facts.js";
 
@@ -44,30 +45,20 @@ function ensureSessionNodesGenerationTracker(database: DatabaseSync): void {
     return;
   }
   const hasParticipants = schema.tables.has("session_participants");
-  // sqlite-allow-raw -- TEMP triggers are the connection-local ownership boundary: they
-  // observe unpublished raw DML. A main-schema change bumps the generation before reinstalling
-  // them, so dropping/recreating session_nodes cannot make an old snapshot look current.
-  database.exec(`
-    CREATE TEMP TABLE IF NOT EXISTS openclaw_session_nodes_cache_generation (id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1), generation INTEGER NOT NULL) STRICT;
-    INSERT OR IGNORE INTO openclaw_session_nodes_cache_generation (id, generation) VALUES (1, 0);
-    ${trackedSchemaVersion === undefined ? "" : "UPDATE openclaw_session_nodes_cache_generation SET generation = generation + 1 WHERE id = 1;"}
-    ${["session_nodes", "session_participants"]
-      .map((table) => {
-        const operations = ["insert", "update", "delete"];
-        const drop = operations.map(
-          (operation) => `DROP TRIGGER IF EXISTS openclaw_${table}_cache_generation_${operation};`,
-        );
-        const create =
-          table === "session_nodes" || hasParticipants
-            ? operations.map(
-                (operation) => `CREATE TEMP TRIGGER openclaw_${table}_cache_generation_${operation}
-              AFTER ${operation.toUpperCase()} ON main.${table} BEGIN UPDATE openclaw_session_nodes_cache_generation SET generation = generation + 1 WHERE id = 1; END;`,
-              )
-            : [];
-        return [...drop, ...create].join("\n");
-      })
-      .join("\n")}
-  `);
+  // A main-schema change advances the counter before reinstalling its raw-DML observers.
+  installSqliteTempTrackingSchema(database, {
+    kind: "generation",
+    table: "openclaw_session_nodes_cache_generation",
+    triggers: ["session_nodes", "session_participants"].flatMap((table) =>
+      (["INSERT", "UPDATE", "DELETE"] as const).map((operation) => ({
+        name: `openclaw_${table}_cache_generation_${operation.toLowerCase()}`,
+        table,
+        operation,
+        enabled: table === "session_nodes" || hasParticipants,
+      })),
+    ),
+    advance: trackedSchemaVersion !== undefined,
+  });
   // A rolled-back schema change can reuse its version on retry after SQLite removes the triggers.
   if (!database.isTransaction) {
     sessionNodesGenerationTrackerSchemaVersions.set(database, schemaVersion);

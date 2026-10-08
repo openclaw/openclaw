@@ -8,7 +8,6 @@ import {
   type UpdateRecoveryBackupManifest,
 } from "../commands/backup-verify-manifest.js";
 import { createDoctorRehearsalDatabaseCoverage } from "../commands/doctor-rehearsal-databases.js";
-import { collectDoctorSkillWorkshopBackupResources } from "../commands/doctor-update-rehearsal-workshop.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { PluginDoctorMigrationBackupWarning } from "../plugins/doctor-contract-module.js";
@@ -245,12 +244,8 @@ export function captureUpdateRecoveryBaseline(params: {
             warnings,
             requireLocalResources: true,
           });
-          const workshop = await collectDoctorSkillWorkshopBackupResources({
-            config: snapshot.sourceConfig,
-            env,
-          });
           plugins.assertCurrent();
-          return [...plugins.resources, ...workshop];
+          return plugins.resources;
         },
         { env },
       );

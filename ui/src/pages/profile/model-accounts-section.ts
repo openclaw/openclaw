@@ -293,20 +293,16 @@ function renderModelAccountRows(props: ModelAccountsSectionProps) {
         : ""
     }
     ${renderSignIn(props)} ${props.showManualLink ? renderManualLinkRow(props) : ""}
-    ${
-      props.notice
-        ? html`<div class="settings-row model-accounts-notice" role="status">
-            <span class="settings-row__desc">${props.notice}</span>
+    ${(["notice", "error"] as const).map((kind) =>
+      props[kind]
+        ? html`<div
+            class="settings-row model-accounts-${kind}"
+            role=${kind === "notice" ? "status" : "alert"}
+          >
+            <span class="settings-row__desc">${props[kind]}</span>
           </div>`
-        : ""
-    }
-    ${
-      props.error
-        ? html`<div class="settings-row model-accounts-error" role="alert">
-            <span class="settings-row__desc">${props.error}</span>
-          </div>`
-        : ""
-    }
+        : "",
+    )}
     ${
       props.inventoryError
         ? html`<div class="settings-row model-accounts-error" role="alert">

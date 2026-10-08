@@ -16,6 +16,7 @@ import type { PaneSessionChangeOptions } from "../chat-pane-shared.ts";
 import { isUnfinishedSubagent } from "../chat-spawned-subagent.ts";
 import { SubagentsPanelData, type SubagentsPanelRow } from "../subagents-panel-data.ts";
 import "../../../components/elapsed-time.ts";
+import "./chat-session-panels.css";
 import "./chat-subagents-panel.css";
 
 let panelSequence = 0;
@@ -239,6 +240,12 @@ class ChatSubagentsPanel extends OpenClawLightDomElement {
     const finished = rows.filter((row) => !unfinished(row));
     const loading = this.data?.loading ?? false;
     const empty = this.data?.hasResult && !this.data.hasMore && !this.data.error;
+    const renderRows = (groupRows: SubagentsPanelRow[]) =>
+      repeat(
+        groupRows,
+        (row) => row.session.key,
+        (row) => this.renderRow(row),
+      );
     return html`<div class="chat-subagents__list" aria-busy=${loading}>
       ${
         this.data?.error
@@ -262,13 +269,7 @@ class ChatSubagentsPanel extends OpenClawLightDomElement {
                 <h3 class="chat-subagents__section-title">
                   ${t("chat.subagentsPanel.running", { count: String(running.length) })}
                 </h3>
-                <div role="list">
-                  ${repeat(
-                    running,
-                    (row) => row.session.key,
-                    (row) => this.renderRow(row),
-                  )}
-                </div>
+                <div role="list">${renderRows(running)}</div>
                 ${running.length ? nothing : html`<div class="chat-subagents__empty">${t("chat.subagentsPanel.noRunning")}</div>`}
               </section>
               <section class="chat-subagents__finished">
@@ -287,15 +288,7 @@ class ChatSubagentsPanel extends OpenClawLightDomElement {
                   ${this.finishedOpen ? icons.chevronDown : icons.chevronRight}
                 </button>
                 <div id=${this.finishedId} role="list" ?hidden=${!this.finishedOpen}>
-                  ${
-                    this.finishedOpen
-                      ? repeat(
-                          finished,
-                          (row) => row.session.key,
-                          (row) => this.renderRow(row),
-                        )
-                      : nothing
-                  }
+                  ${this.finishedOpen ? renderRows(finished) : nothing}
                 </div>
               </section>
             `

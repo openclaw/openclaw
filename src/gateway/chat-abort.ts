@@ -7,7 +7,10 @@ import {
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
-import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
+import {
+  createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
+} from "../agents/run-termination.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -20,6 +23,7 @@ import {
   releaseAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
+import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import type { ChatAbortDiagnosticReason } from "./chat-abort-diagnostics.js";
 import { removeChatAbortControllerEntry } from "./chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.types.js";
@@ -100,12 +104,12 @@ type RegisteredChatAbortController = {
   | { registered: false; entry?: undefined }
 );
 
-function createChatAbortSignalReason(stopReason: string | undefined): Error | undefined {
+function createChatAbortSignalReason(stopReason: string | undefined): Error {
   if (stopReason === "restart") {
     return createAgentRunRestartAbortError();
   }
   if (stopReason !== "timeout") {
-    return undefined;
+    return createAgentRunDirectAbortError();
   }
   const reason = new Error("chat run timed out");
   reason.name = "TimeoutError";
@@ -231,6 +235,7 @@ export function registerChatAbortController(params: {
       entry.registrationCleanupRequested = true;
       entry.projectSessionActive = false;
       entry.pendingTimeoutCompletion = undefined;
+      notifyGatewayWorkMetricsChanged();
       // Terminal event handling owns final removal once the event has been
       // observed. Runs that never emitted a terminal event still clean up here.
       if (entry.projectSessionTerminalPending === true) {
@@ -300,12 +305,18 @@ export function registerChatAbortController(params: {
     resolveTerminalProducer: params.resolveTerminalProducer
       ? () => params.resolveTerminalProducer?.(entry)
       : undefined,
-    onRemoved: params.onRemoved,
+    onRemoved: () => {
+      controller.signal.removeEventListener("abort", notifyGatewayWorkMetricsChanged);
+      notifyGatewayWorkMetricsChanged();
+      params.onRemoved?.();
+    },
     projectSessionActive: params.projectSessionActive ?? true,
     kind: params.kind,
     turnKind: params.turnKind,
   };
   params.chatAbortControllers.set(params.runId, entry);
+  controller.signal.addEventListener("abort", notifyGatewayWorkMetricsChanged, { once: true });
+  notifyGatewayWorkMetricsChanged();
   return {
     controller,
     registered: true,

@@ -53,12 +53,9 @@ import {
 import { loadSessionEntry } from "../session-utils.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import { resolveChatAbortRequester } from "./chat-abort-authorization.js";
+import { abortControlledSubagents, descendantAbortError } from "./chat-abort-descendants.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
-import {
-  abortControlledSubagents,
-  abortQueuedCollectorSession,
-  descendantAbortError,
-} from "./chat-abort-runtime.js";
+import { abortQueuedCollectorSession } from "./chat-abort-runtime.js";
 import { abortedPartialPersistenceError } from "./chat-aborted-partial.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import {
@@ -449,7 +446,6 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       [...preAbortRuns].map(([runId, entry]) => [runId, captureAgentJobSession(entry)]),
     );
     let abortedRunIds: string[] = [];
-    let abortedRunId: string | null = null;
     let aborted = false;
     let chatAbortSucceeded = false;
     let failedResponse: Parameters<typeof respond> | undefined;
@@ -635,7 +631,6 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
               : [];
             const firstAbortedRunId = runIds[0] ?? null;
             abortedRunIds = runIds;
-            abortedRunId = firstAbortedRunId;
             aborted = firstAbortedRunId !== null || result?.aborted === true;
             const workerOnly = Boolean(workerRunTarget && !activeRun);
             if (firstAbortedRunId && !workerOnly) {
@@ -688,7 +683,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
       true,
       {
         ok: true,
-        abortedRunId,
+        abortedRunId: abortedRunIds[0] ?? null,
         status: aborted ? "aborted" : "no-active-run",
         ...(abortWarning ? { warning: abortWarning } : {}),
       },

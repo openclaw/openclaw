@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import {
   appendTranscriptEvent,
   listSessionEntriesCore,
@@ -8,7 +9,7 @@ import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
 } from "../config/sessions/session-accessor.js";
-import * as sqliteSessionScope from "../config/sessions/session-accessor.sqlite-scope.js";
+import * as sessionEntryWriter from "../config/sessions/session-entry-patch.js";
 import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
 import { reconcileSessionTranscriptIndexes } from "../config/sessions/session-transcript-reconcile.js";
 import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
@@ -214,7 +215,7 @@ describe("session transcript runtime SDK", () => {
     ]);
   });
 
-  it("serializes caller-checked idempotency inside scoped locked appends", async () => {
+  it("serializes caller-checked idempotency inside scoped locked appends", async ({ signal }) => {
     const scope = await createScope("caller-checked-lock-session");
     const steps: string[] = [];
     const firstRead = createDeferredCore();
@@ -240,12 +241,12 @@ describe("session transcript runtime SDK", () => {
       }
       return reply;
     });
-    const enqueueWrite = sqliteSessionScope.runExclusiveSqliteSessionWrite;
+    const enqueueWrite = sessionEntryWriter.runSessionEntryWorkerOperation;
     let queuedWrites = 0;
-    vi.spyOn(sqliteSessionScope, "runExclusiveSqliteSessionWrite").mockImplementation((...args) => {
-      const pending = enqueueWrite(...args);
-      // This owner enqueues synchronously; observe contention after delegating to the real queue.
-      if (args[2] === "session.transcript.locked-write" && ++queuedWrites === 2) {
+    vi.spyOn(sessionEntryWriter, "runSessionEntryWorkerOperation").mockImplementation((params) => {
+      const pending = enqueueWrite(params);
+      // Preparation reserves the existing FIFO before this worker owner first yields.
+      if (params.candidateKind === "session-transcript-locked" && ++queuedWrites === 2) {
         secondQueued.resolve();
       }
       return pending;
@@ -283,7 +284,10 @@ describe("session transcript runtime SDK", () => {
     const second = appendIfMissing();
     const writes = Promise.all([first, second]);
     try {
-      await Promise.race([Promise.all([firstRead.promise, secondQueued.promise]), writes]);
+      await withinTest(
+        Promise.race([Promise.all([firstRead.promise, secondQueued.promise]), writes]),
+        signal,
+      );
       expect(steps).toEqual(["first:read"]);
     } finally {
       secondTargetRead.resolve();

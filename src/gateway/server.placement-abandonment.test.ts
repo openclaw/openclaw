@@ -291,7 +291,7 @@ it.for(cases)(
       await placements.markWorkspaceResultPending(claim);
       expect(await placements.listPendingWorkspaceResultsAsync()).toHaveLength(1);
       if (persisted) {
-        placements.beginPlacementMove({
+        await placements.beginPlacementMove({
           sessionId,
           source,
           target: { kind: "gateway" },

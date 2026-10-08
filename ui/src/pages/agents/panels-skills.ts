@@ -15,6 +15,7 @@ import { groupSkills } from "../../lib/skills-grouping.ts";
 import {
   computeSkillMissing,
   computeSkillReasons,
+  isWorkshopSkill,
   renderSkillStatusChips,
 } from "../../lib/skills-shared.ts";
 import { renderAgentConfigActions, type AgentConfigActions } from "./config-actions.ts";
@@ -69,7 +70,7 @@ export function renderAgentSkills(
     : rawSkills;
   const groups = groupSkills(filtered);
   const enabledCount = usingAllowlist
-    ? rawSkills.filter((skill) => allowSet.has(skill.name)).length
+    ? rawSkills.filter((skill) => isWorkshopSkill(skill) || allowSet.has(skill.name)).length
     : rawSkills.length;
   const totalCount = rawSkills.length;
 
@@ -164,7 +165,8 @@ export function renderAgentSkills(
                         </summary>
                         <div class="list skills-grid">
                           ${group.skills.map((skill) => {
-                            const enabled = !usingAllowlist || allowSet.has(skill.name);
+                            const learned = isWorkshopSkill(skill);
+                            const enabled = learned || !usingAllowlist || allowSet.has(skill.name);
                             const missing = computeSkillMissing(skill);
                             const reasons = computeSkillReasons(skill);
                             return html`
@@ -189,11 +191,18 @@ export function renderAgentSkills(
                                         </span>`
                                       : nothing
                                   }
+                                  ${
+                                    learned
+                                      ? html`<span class="settings-row__desc">
+                                          ${t("agents.skillsPanel.learnedAlwaysOn")}
+                                        </span>`
+                                      : nothing
+                                  }
                                 </div>
                                 <div class="settings-row__control">
                                   ${renderSettingsToggle({
                                     checked: enabled,
-                                    disabled: !editable,
+                                    disabled: learned || !editable,
                                     ariaLabel: skill.name,
                                     onChange: (checked) =>
                                       params.onToggle(params.agentId, skill.name, checked),

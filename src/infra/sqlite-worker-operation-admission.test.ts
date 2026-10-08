@@ -27,84 +27,100 @@ import {
 afterEach(() => vi.restoreAllMocks());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.each(["revoke", "close", "self-fence", "request-revoke", "late-revoke"] as const)(
-  "waits for the live owner's %s decision when host scheduling is delayed",
-  (outcome) => {
-    const revoked = new Error("Synthetic owner authority revoked");
-    const observed: SqliteWorkerAdmissionRequest[] = [];
-    let requestCurrent = outcome !== "request-revoke";
-    let databaseCurrent = true;
-    const admission = createSqliteWorkerOperationAdmission((_request, grant) => {
-      if (outcome === "revoke") {
-        throw revoked;
-      }
-      if (outcome === "self-fence") {
-        requestCurrent = false;
-      }
-      if (outcome === "late-revoke") {
-        databaseCurrent = false;
-      }
-      grant();
-    });
-    admission.observeRequests((request) => {
-      observed.push(request);
-    });
-    admission.bindDatabaseAuthority({
-      databasePath: path.resolve("synthetic-delayed-writer.sqlite"),
-      assertRequest() {
-        if (!requestCurrent) {
-          throw revoked;
-        }
-      },
-      assertAccess() {
-        if (!databaseCurrent) {
-          throw revoked;
-        }
-      },
-      acquireSchema() {
-        throw new Error("Ordinary admission must not acquire schema authority");
-      },
-    });
-    const mutate = vi.fn();
-    // Advance a delayed native wait without sleeping or blocking the test host.
-    // The host has not run yet: elapsed time is not an authority decision.
-    vi.spyOn(Atomics, "wait")
-      .mockImplementationOnce(() => "timed-out")
-      .mockImplementationOnce(() => {
-        if (outcome === "close") {
-          admission.finish();
-        } else {
-          admission.service();
-        }
-        return "ok";
-      });
-    const write = () =>
-      withSqliteWorkerOperationAdmission({ port: admission.port }, () => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-        mutate();
-      });
-    try {
-      if (outcome === "self-fence") {
-        expect(write).not.toThrow();
-        expect(mutate).toHaveBeenCalledOnce();
-        expect(admission.failure).toBeUndefined();
-        expect(admission.failureSource).toBeUndefined();
-      } else {
-        expect(write).toThrow("SQLite transaction admission was refused");
-        expect(mutate).not.toHaveBeenCalled();
-        expect(admission.failure).toMatchObject({
-          message: outcome === "close" ? "SQLite worker admission is closed" : revoked.message,
-        });
-        expect(admission.failureSource).toBe(outcome === "revoke" ? "domain" : "authority");
-      }
-      expect(observed).toEqual([{ stage: "transaction", facts: undefined }]);
-      expect(admission.committed).toBeUndefined();
-      expect(admission.settlement).toBeUndefined();
-    } finally {
+it.each([
+  "revoke",
+  "close",
+  "late-close",
+  "access-close",
+  "self-fence",
+  "request-revoke",
+  "late-revoke",
+] as const)("waits for the live owner's %s decision when host scheduling is delayed", (outcome) => {
+  const revoked = new Error("Synthetic owner authority revoked");
+  const observed: SqliteWorkerAdmissionRequest[] = [];
+  let requestCurrent = outcome !== "request-revoke";
+  let databaseCurrent = true;
+  let inGrant = false;
+  const beforeRelease = vi.fn();
+  const admission = createSqliteWorkerOperationAdmission((_request, grant) => {
+    if (outcome === "revoke") {
+      throw revoked;
+    }
+    if (outcome === "self-fence") {
+      requestCurrent = false;
+    }
+    if (outcome === "late-revoke") {
+      databaseCurrent = false;
+    }
+    if (outcome === "late-close") {
       admission.finish();
     }
-  },
-);
+    inGrant = true;
+    grant(beforeRelease);
+  });
+  admission.observeRequests((request) => {
+    observed.push(request);
+  });
+  admission.bindDatabaseAuthority({
+    databasePath: path.resolve("synthetic-delayed-writer.sqlite"),
+    assertRequest() {
+      if (!requestCurrent) {
+        throw revoked;
+      }
+    },
+    assertAccess() {
+      if (outcome === "access-close" && inGrant) {
+        admission.finish();
+      }
+      if (!databaseCurrent) {
+        throw revoked;
+      }
+    },
+    acquireSchema() {
+      throw new Error("Ordinary admission must not acquire schema authority");
+    },
+  });
+  const mutate = vi.fn();
+  // Advance a delayed native wait without sleeping or blocking the test host.
+  // The host has not run yet: elapsed time is not an authority decision.
+  vi.spyOn(Atomics, "wait")
+    .mockImplementationOnce(() => "timed-out")
+    .mockImplementationOnce(() => {
+      if (outcome === "close") {
+        admission.finish();
+      } else {
+        admission.service();
+      }
+      return "ok";
+    });
+  const write = () =>
+    withSqliteWorkerOperationAdmission({ port: admission.port }, () => {
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      mutate();
+    });
+  try {
+    if (outcome === "self-fence") {
+      expect(write).not.toThrow();
+      expect(beforeRelease).toHaveBeenCalledOnce();
+      expect(mutate).toHaveBeenCalledOnce();
+      expect(admission.failure).toBeUndefined();
+      expect(admission.failureSource).toBeUndefined();
+    } else {
+      expect(write).toThrow("SQLite transaction admission was refused");
+      expect(beforeRelease).not.toHaveBeenCalled();
+      expect(mutate).not.toHaveBeenCalled();
+      expect(admission.failure).toMatchObject({
+        message: outcome.endsWith("close") ? "SQLite worker admission is closed" : revoked.message,
+      });
+      expect(admission.failureSource).toBe(outcome === "revoke" ? "domain" : "authority");
+    }
+    expect(observed).toEqual([{ stage: "transaction", facts: undefined }]);
+    expect(admission.committed).toBeUndefined();
+    expect(admission.settlement).toBeUndefined();
+  } finally {
+    admission.finish();
+  }
+});
 
 it("rechecks database ownership after a worker request crosses the message port", () => {
   const root = tempDirs.make("openclaw-worker-admission-maintenance-");

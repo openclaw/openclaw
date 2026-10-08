@@ -394,12 +394,20 @@ serveOwnedWorkerTasks(
       if (request.kind === "session-members") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
-        const { listSessionMembersInDatabase } = await import("./session-sharing-store.kernel.js");
+        const { readSessionMembersInDatabase } = await import("./session-sharing-store.kernel.js");
+        const { readWithCanonicalSessionReaderContinuation } =
+          await import("./session-canonical-key.js");
         const result = withOpenClawAgentDatabaseReadOnly(
-          (database) => listSessionMembersInDatabase(database, request.sessionKey),
+          (database) =>
+            readWithCanonicalSessionReaderContinuation(database, request.continuation, () =>
+              readSessionMembersInDatabase(database, request.sessionKey),
+            ),
           { ...request.database, env: request.env },
         );
-        return result.found ? result.value : [];
+        return {
+          kind: "session-members" as const,
+          ...(result.found ? result.value : { entry: undefined, members: [] }),
+        };
       }
       if (request.kind === "session-suggestions") {
         const { withOpenClawAgentDatabaseReadOnly } =
@@ -591,7 +599,10 @@ serveOwnedWorkerTasks(
       if (request?.kind !== "close") {
         throw new Error("Session reader cleanup requires captured physical paths");
       }
-      releaseReadValidation?.(request.candidates);
+      releaseReadValidation?.(
+        request.candidates,
+        request.deleted ? undefined : request.retainedPaths,
+      );
       pruneClosedHistoryDatabaseScopes();
     },
   },

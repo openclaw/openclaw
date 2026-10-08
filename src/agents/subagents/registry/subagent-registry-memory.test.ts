@@ -3,6 +3,7 @@ import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import {
   getSubagentRunsForChildSession,
   getSubagentRunsForCollectorGroup,
+  getSubagentSessionReadLookup,
   subagentRuns,
 } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -25,6 +26,34 @@ afterEach(() => {
 });
 
 describe("subagent run memory indexes", () => {
+  it("tracks distinct scheduler slot aliases across replacement and deletion", () => {
+    const first = {
+      ...createRun("run-first", "agent:main:subagent:first"),
+      swarmRunId: "collector-first",
+      schedulerSlotId: "slot-first",
+    };
+    subagentRuns.set(first.runId, first);
+    const lookup = getSubagentSessionReadLookup(subagentRuns);
+    expect(lookup.selectRunIds(new Set([first.schedulerSlotId]))).toEqual([first.runId]);
+    expect(
+      lookup.selectRunIds(new Set([first.runId, first.swarmRunId, first.schedulerSlotId])),
+    ).toEqual([first.runId]);
+
+    const replacement = { ...first, schedulerSlotId: "slot-replacement" };
+    subagentRuns.set(replacement.runId, replacement);
+    expect(lookup.selectRunIds(new Set([first.schedulerSlotId]))).toEqual([]);
+    expect(lookup.selectRunIds(new Set([replacement.schedulerSlotId]))).toEqual([
+      replacement.runId,
+    ]);
+
+    subagentRuns.delete(replacement.runId);
+    expect(
+      lookup.selectRunIds(
+        new Set([replacement.runId, replacement.swarmRunId, replacement.schedulerSlotId]),
+      ),
+    ).toEqual([]);
+  });
+
   it("retains a selected registration through its own ACK but rejects a committed replacement ABA", () => {
     const entry = createRun("selected", "agent:main:subagent:selected");
     subagentRuns.set(entry.runId, entry);

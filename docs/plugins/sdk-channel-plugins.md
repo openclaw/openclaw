@@ -166,6 +166,12 @@ a canonical URL alone is not proof of anonymous access.
     runtime, including duplicate-account suppression. If `configured` is omitted,
     diagnostics use a recorded Gateway value when available; otherwise they report
     that configuration status is unavailable.
+    Ordinary `channels.status` reads combine this metadata with the lifecycle's
+    recorded account status. Publish changing health and provider details through
+    `setStatus`; account snapshot and channel summary hooks run only for explicit
+    live checks on this RPC. All live hooks share a per-channel deadline. They
+    should also honor their supplied timeout because timing out the RPC cannot
+    cancel an already-running plugin operation.
     Selection before secret redemption also reads this metadata directly. Directory
     auto-selection requires `configured: true`; callers can still select the channel
     explicitly when configuration status is unknown.

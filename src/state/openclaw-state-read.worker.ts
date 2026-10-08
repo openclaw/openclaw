@@ -33,6 +33,7 @@ import {
   readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase,
   readRepositoryGitHubPublicationInDatabase,
 } from "../gateway/github-repository-publication-store.js";
+import { readPlacementGrantRows } from "../gateway/operator-approval-placement-grants.read.js";
 import {
   listCronStandingGrantsInDatabase,
   lookupCronStandingGrantInDatabase,
@@ -124,7 +125,8 @@ import { listUserProfileAuthLinksInDatabase } from "./user-model-accounts.js";
 import { selectUserPreferenceValues } from "./user-preferences.store.js";
 import { readUserProfileGitHubCommand } from "./user-profile-github-identity.js";
 import {
-  readUserProfileAuthorityInDatabase,
+  readUserProfileAuthorityCommand,
+  readCurrentUserProfileAliasesInDatabase,
   readUserProfileSnapshotCommand,
   readUserProfileIdForEmail,
 } from "./user-profile-identity.read.js";
@@ -428,6 +430,9 @@ serveOwnedWorkerTasks(
                   : undefined,
               };
             }
+            if (command.type === "operatorApprovals.placementGrant") {
+              return { type: command.type, rows: readPlacementGrantRows(db, command.input) };
+            }
             if (command.type === "operatorApprovals.history") {
               return {
                 type: command.type,
@@ -508,9 +513,12 @@ serveOwnedWorkerTasks(
               };
             }
             if (command.type === "userProfiles.authority.resolve") {
+              return readUserProfileAuthorityCommand(db, command);
+            }
+            if (command.type === "userProfiles.aliases.resolve") {
               return {
                 type: command.type,
-                profile: readUserProfileAuthorityInDatabase(db, command.profileId),
+                ...readCurrentUserProfileAliasesInDatabase(db, command.profileId),
               };
             }
             if (

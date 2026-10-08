@@ -20,16 +20,13 @@ export function collectTelegramUnmentionedGroupIds(
   const groupIds: string[] = [];
   let unresolvedGroups = 0;
   for (const [key, value] of Object.entries(groups)) {
-    if (key === "*") {
-      continue;
-    }
-    if (!value || typeof value !== "object") {
-      continue;
-    }
-    if (value.enabled === false) {
-      continue;
-    }
-    if (value.requireMention !== false) {
+    if (
+      key === "*" ||
+      !value ||
+      typeof value !== "object" ||
+      value.enabled === false ||
+      value.requireMention !== false
+    ) {
       continue;
     }
     const id = normalizeOptionalString(key) ?? "";

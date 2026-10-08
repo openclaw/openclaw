@@ -32,6 +32,11 @@ export function isSkillAvailable(skill: SkillStatusEntry): boolean {
   return skill.eligible && !skill.blockedByAgentFilter;
 }
 
+/** Learned Workshop skills bypass agent allowlists; archiving in the Workshop hides one. */
+export function isWorkshopSkill(skill: Pick<SkillStatusEntry, "source">): boolean {
+  return skill.source === "openclaw-workshop";
+}
+
 export function renderSkillStatusChips(params: {
   skill: SkillStatusEntry;
   showBundledBadge?: boolean;

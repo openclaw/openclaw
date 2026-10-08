@@ -220,6 +220,10 @@ export function isConfigSchemaPath(
   schema: JsonSchemaRecord | undefined,
   path: readonly PathSegment[],
 ): boolean {
+  // Editor metadata is valid at the root but deliberately hidden from the UI schema.
+  if (path.length === 1 && path[0] === "$schema") {
+    return true;
+  }
   return schemasAtPath(schema, path).length > 0;
 }
 

@@ -477,20 +477,16 @@ function resolveTrustedToolsEffectiveContext(params: {
   const workspaceDir =
     normalizeOptionalString(loaded.entry.spawnedWorkspaceDir) ??
     resolveAgentWorkspaceDir(loaded.cfg, sessionAgentId);
-  const runtimeConfigCacheKey = resolveRuntimeConfigCacheKey(loaded.cfg);
-  const pluginRegistryVersion = getActivePluginRegistryVersion();
-  const channelRegistryVersion = getActivePluginChannelRegistryVersion();
-  const nodePluginToolsVersion = getConnectedNodePluginToolsVersion();
   const context = {
     cfg: loaded.cfg,
     agentId: sessionAgentId,
     sessionKey: params.sessionKey,
     sessionId: loaded.entry.sessionId,
     workspaceDir,
-    runtimeConfigCacheKey,
-    pluginRegistryVersion,
-    channelRegistryVersion,
-    nodePluginToolsVersion,
+    runtimeConfigCacheKey: resolveRuntimeConfigCacheKey(loaded.cfg),
+    pluginRegistryVersion: getActivePluginRegistryVersion(),
+    channelRegistryVersion: getActivePluginChannelRegistryVersion(),
+    nodePluginToolsVersion: getConnectedNodePluginToolsVersion(),
     modelProvider: resolvedModel.provider,
     modelId: resolvedModel.model,
     messageProvider: delivery?.channel ?? origin?.provider,

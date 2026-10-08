@@ -18,6 +18,9 @@ fails, the agent returns a concise visible failure instead. If the requester
 session is inactive or its active wake fails, OpenClaw sends an idempotent
 direct fallback with the generated images so the result is not lost.
 
+You can send a follow-up while the completion agent is still working. The new
+turn waits for the completion and its delivery to settle before starting.
+
 In WebChat and the macOS app, generated attachments stay on the completion
 reply instead of appearing again in a separate image-only message. Replaying
 a completed delivery keeps the same message and attachment identities.

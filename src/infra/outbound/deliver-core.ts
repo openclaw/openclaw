@@ -21,7 +21,7 @@ import {
   maybeNotifyAfterDeliveredPayload,
   maybePinDeliveredMessage,
   normalizeEmptyPayloadForDelivery,
-  resolveOutboundMediaAccessForSend,
+  resolveChannelHandlerParams,
   stripInternalRuntimeScaffoldingFromPayload,
 } from "./deliver-payload.js";
 import { createDeliveryResultRecorder } from "./deliver-results.js";
@@ -73,27 +73,14 @@ export async function deliverOutboundPayloadsCore(
   let payloadSendStarted: boolean;
   const createHandler = (mediaSources: readonly string[]) =>
     createChannelHandler({
+      ...resolveChannelHandlerParams(params, reply, mediaSources),
       cfg,
-      agentId: params.session?.agentId,
       channel,
       to,
       deps,
       accountId,
-      replyToId: reply?.replyToId,
-      replyToMode: reply?.source === "implicit" ? reply.mode : undefined,
-      formatting: params.formatting,
-      threadId: params.threadId,
-      identity: params.identity,
-      gifPlayback: params.gifPlayback,
-      forceDocument: params.forceDocument,
-      silent: params.silent,
       abortSignal,
-      mediaAccess: resolveOutboundMediaAccessForSend(params, mediaSources),
-      gatewayClientScopes: params.gatewayClientScopes,
-      conversationReadOrigin: params.conversationReadOrigin,
       deliveryQueueId: params.deliveryQueueId,
-      preparedMessageId: params.preparedMessageId,
-      requiredUnknownSendReconciliation: params.requiredUnknownSendReconciliation,
       onPlatformSendStart: async (route) => {
         // Channel handlers can fan one logical payload into multiple sends.
         // Carry its source index without polluting the persisted platform route.
@@ -101,6 +88,7 @@ export async function deliverOutboundPayloadsCore(
         await params.onPlatformSendStart?.(route, activeSourceIndex);
       },
       onDirectAdapterHandoff: params.onDirectAdapterHandoff,
+      withDirectAdapterHandoff: params.withDirectAdapterHandoff,
       assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
       onPlatformSendDispatch: params.onPlatformSendDispatch,
       onDeliveryResult: reportIdentifiedDeliveryResult,
@@ -251,33 +239,26 @@ export async function deliverOutboundPayloadsCore(
         ...(diagnosticSessionKey ? { sessionKey: diagnosticSessionKey } : {}),
       });
     };
-    const completeDeliveryDiagnostics = (resultCount: number) => {
+    const finishDeliveryDiagnostics = (result: number | { error: unknown }) => {
       if (!deliveryPending) {
         return;
       }
       deliveryPending = false;
-      emitDiagnosticEvent({
-        type: "message.delivery.completed",
+      const delivery = {
         channel,
         deliveryKind,
         durationMs: Date.now() - deliveryStartedAt,
-        resultCount,
         ...(diagnosticSessionKey ? { sessionKey: diagnosticSessionKey } : {}),
-      });
-    };
-    const errorDeliveryDiagnostics = (err: unknown) => {
-      if (!deliveryPending) {
-        return;
-      }
-      deliveryPending = false;
-      emitDiagnosticEvent({
-        type: "message.delivery.error",
-        channel,
-        deliveryKind,
-        durationMs: Date.now() - deliveryStartedAt,
-        errorCategory: diagnosticErrorCategory(err),
-        ...(diagnosticSessionKey ? { sessionKey: diagnosticSessionKey } : {}),
-      });
+      };
+      emitDiagnosticEvent(
+        typeof result === "number"
+          ? { type: "message.delivery.completed", ...delivery, resultCount: result }
+          : {
+              type: "message.delivery.error",
+              ...delivery,
+              errorCategory: diagnosticErrorCategory(result.error),
+            },
+      );
     };
     try {
       throwIfAborted(abortSignal);
@@ -354,7 +335,7 @@ export async function deliverOutboundPayloadsCore(
         adoptSuccessfulResultsSince(beforeCount);
         const deliveredResults = results.slice(beforeCount);
         if (deliveredResults.length === 0) {
-          completeDeliveryDiagnostics(0);
+          finishDeliveryDiagnostics(0);
           recordPayloadOutcome(
             suppressedPayloadOutcome({
               index: payloadIndex,
@@ -436,7 +417,7 @@ export async function deliverOutboundPayloadsCore(
           }),
         );
         if (getSuppressionReason() === "adapter_returned_no_send") {
-          completeDeliveryDiagnostics(0);
+          finishDeliveryDiagnostics(0);
           continue;
         }
       }
@@ -465,7 +446,7 @@ export async function deliverOutboundPayloadsCore(
         target: deliveryTarget(),
         results: deliveredResults,
       });
-      completeDeliveryDiagnostics(deliveredResults.length);
+      finishDeliveryDiagnostics(deliveredResults.length);
     } catch (caughtError) {
       let err = caughtError;
       if (!payloadSendStarted) {
@@ -498,7 +479,7 @@ export async function deliverOutboundPayloadsCore(
         stage: "platform_send",
         results: failedPayloadResults,
       });
-      errorDeliveryDiagnostics(err);
+      finishDeliveryDiagnostics({ error: err });
       // A completed provider send records success before optional pin/notify
       // bookkeeping. Reaching this fallback first means the logical payload's
       // provider fan-out itself was incomplete, even if an earlier part sent.

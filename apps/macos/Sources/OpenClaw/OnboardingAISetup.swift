@@ -1260,22 +1260,20 @@ extension OnboardingAISetupModel {
                     modelActivation: result.modelactivation,
                     activationRejection: result.activationrejection)
             } catch {
-                if self.activationWizardCompletion != nil, Self.setupAdmissionIsBusy(error),
-                   token == self.attemptToken, authAttemptID == self.authAttemptID
-                {
-                    self.finishActivationWizard(.failure(error))
-                    self.clearProviderAuth()
-                    return
-                }
                 if Self.setupAdmissionIsBusy(error) {
                     guard token == self.attemptToken, authAttemptID == self.authAttemptID else { return }
-                    // No session was admitted; cancelling or reconciling could adopt another operation.
-                    self.applyAuthWizardResult(
-                        done: true,
-                        step: nil,
-                        status: "error",
-                        error: error.localizedDescription,
-                        preparedModelRef: nil)
+                    if self.activationWizardCompletion != nil {
+                        self.finishActivationWizard(.failure(error))
+                        self.clearProviderAuth()
+                    } else {
+                        // No session was admitted; cancelling or reconciling could adopt another operation.
+                        self.applyAuthWizardResult(
+                            done: true,
+                            step: nil,
+                            status: "error",
+                            error: error.localizedDescription,
+                            preparedModelRef: nil)
+                    }
                     return
                 }
                 await self.failProviderAuthRequest(
@@ -1642,14 +1640,12 @@ extension OnboardingAISetupModel {
             ifOwnedBy: routeIdentity,
             activationOwner: activationOwner,
             defaults: self.defaults)
-        if activationOwner != nil {
-            guard completedReceipt else {
-                self.pendingActivationVerification = false
-                self.statuses[kind] = .failed(Self.transportFailure(
-                    "Another AI setup attempt replaced this activation. Waiting for its result."))
-                self.phase = .ready
-                return
-            }
+        if activationOwner != nil, !completedReceipt {
+            self.pendingActivationVerification = false
+            self.statuses[kind] = .failed(Self.transportFailure(
+                "Another AI setup attempt replaced this activation. Waiting for its result."))
+            self.phase = .ready
+            return
         }
         self.pendingActivationVerification = false
         self.waitingForPendingActivationDeadline = false

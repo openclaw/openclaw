@@ -165,6 +165,7 @@ type WorkerDoneMessage = Extract<WorkerInferenceTerminalOutcome, { type: "done" 
 type FakeGatewayOptions = {
   admissionFailure?: "gateway-unavailable" | "invalid-credential" | "owner-epoch-mismatch";
   backgroundCommand?: string;
+  backgroundYieldMs?: number;
   execCommand?: string;
   execApprovals?: Parameters<typeof saveExecApprovals>[0];
   inferencePlans?: InferencePlan[];
@@ -773,7 +774,9 @@ class FakeWorkerGateway {
                   "setInterval(() => undefined, 1000)",
                 )}`
               : "exec sleep 60"),
-          background: true,
+          ...(this.options.backgroundYieldMs === undefined
+            ? { background: true }
+            : { yieldMs: this.options.backgroundYieldMs }),
         }
       : {
           command:
@@ -1667,9 +1670,10 @@ describe("worker runtime", () => {
     });
   });
 
-  it.each(["running", "completed", "cancelled"] as const)(
-    "keeps completed-turn background processes controllable in the managed environment (%s)",
-    async (processState) => {
+  it.each(["running", "completed", "cancelled", "ordinary-yield"] as const)(
+    "keeps completed-turn commands controllable in the managed environment (%s)",
+    async (scenario) => {
+      const processState = scenario === "ordinary-yield" ? "running" : scenario;
       const { gateway, launch, workspaceDir } = await setup({
         inferencePlans: [
           "background-tool",
@@ -1682,6 +1686,7 @@ describe("worker runtime", () => {
         ...(processState === "completed"
           ? { backgroundCommand: `${JSON.stringify(process.execPath)} finish-on-release.cjs` }
           : {}),
+        ...(scenario === "ordinary-yield" ? { backgroundYieldMs: 10 } : {}),
       });
       const releaseBackground = createDeferred();
       let completionServer: Server | undefined;

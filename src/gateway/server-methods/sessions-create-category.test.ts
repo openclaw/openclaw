@@ -11,6 +11,7 @@ import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-a
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { readSessionGroupCatalog } from "../session-group-catalog.js";
 import * as groups from "../session-groups.js";
+import { disposeSessionReadContexts } from "../session-read-contexts.test-support.js";
 import { testState } from "../test-helpers.runtime-state.js";
 import {
   directSessionReq,
@@ -89,6 +90,7 @@ test.each(["create", "patch"] as const)(
   },
 );
 afterEach(async () => {
+  await disposeSessionReadContexts();
   await closeOpenClawStateDatabaseAsync();
   vi.restoreAllMocks();
 });

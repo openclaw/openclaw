@@ -336,11 +336,8 @@ export async function createFullModelCatalogAccess(
         runtimeModels,
         providerExpiries,
         hookRows,
-      } = await worker.loadCatalog(
-        providerIds,
-        (providerIds ?? providers).some((provider) => published.inventory?.providers.has(provider))
-          ? (error) => attempt.failed(error, providerIds ?? providers, "provider")
-          : undefined,
+      } = await worker.loadCatalog(providerIds, (error) =>
+        attempt.failed(error, providerIds ?? providers, "provider"),
       );
       assertCurrent();
       const scope = new Set(

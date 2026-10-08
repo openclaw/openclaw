@@ -167,8 +167,8 @@ export function createDiscordPluginBase(params: {
       ...discordConfigAdapter,
       hasConfiguredState: ({ env }) =>
         typeof env?.DISCORD_BOT_TOKEN === "string" && env.DISCORD_BOT_TOKEN.trim().length > 0,
-      isEnabled: (account, cfg) => isDiscordAccountEnabledForRuntime(account, cfg),
-      disabledReason: (account, cfg) => resolveDiscordAccountDisabledReason(account, cfg),
+      isEnabled: isDiscordAccountEnabledForRuntime,
+      disabledReason: resolveDiscordAccountDisabledReason,
       isConfigured: (account) =>
         resolveConfiguredFromCredentialStatuses(account) ?? Boolean(account.token?.trim()),
       describeAccount: (account) =>

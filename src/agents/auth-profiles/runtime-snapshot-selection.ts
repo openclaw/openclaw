@@ -83,19 +83,18 @@ export function createRuntimeAuthProfileSnapshotSelection(
     mutation?: SharedAuthProfileStoreMutation,
   ): Array<{ databasePath: string; agentDir: string; runtimeRevision: number }> {
     const affected = sharedMutationAffectsSnapshot(mutation);
-    return Array.from(snapshots).flatMap(([databasePath, entry]) =>
-      databasePath !== owner.sharedDatabasePath &&
-      runtimeAuthProfileSnapshotSharesOwner(entry.owner, owner) &&
-      affected(entry.store)
-        ? [
-            {
-              databasePath,
-              agentDir: path.dirname(databasePath),
-              runtimeRevision: revision(databasePath),
-            },
-          ]
-        : [],
-    );
+    return Array.from(snapshots)
+      .filter(
+        ([databasePath, entry]) =>
+          databasePath !== owner.sharedDatabasePath &&
+          runtimeAuthProfileSnapshotSharesOwner(entry.owner, owner) &&
+          affected(entry.store),
+      )
+      .map(([databasePath]) => ({
+        databasePath,
+        agentDir: path.dirname(databasePath),
+        runtimeRevision: revision(databasePath),
+      }));
   }
   /** Captures the published owners once; catalog reads refresh usage without opening storage. */
   function createPreparedRuntimeAuthProfileUsageReader(
@@ -199,20 +198,18 @@ export function createRuntimeAuthProfileSnapshotSelection(
       }
       return entry && cloneOwnedRuntimeAuthProfileStoreSnapshot(databasePath, entry);
     },
-    listOwnedRuntimeAuthProfileStoreSnapshots: () => {
-      return Array.from(snapshots, ([databasePath, entry]) =>
+    listOwnedRuntimeAuthProfileStoreSnapshots: () =>
+      Array.from(snapshots, ([databasePath, entry]) =>
         cloneOwnedRuntimeAuthProfileStoreSnapshot(databasePath, entry),
-      );
-    },
+      ),
     listRuntimeAuthProfileStoreSnapshotsForSharedOwner: (
       owner: AuthProfileStoreOwner,
       mutation?: SharedAuthProfileStoreMutation,
-    ) => {
-      return listRuntimeAuthProfileStoreSnapshotTargetsForSharedOwner(owner, mutation).map(
+    ) =>
+      listRuntimeAuthProfileStoreSnapshotTargetsForSharedOwner(owner, mutation).map(
         ({ databasePath }) =>
           cloneOwnedRuntimeAuthProfileStoreSnapshot(databasePath, snapshots.get(databasePath)!),
-      );
-    },
+      ),
   };
 }
 

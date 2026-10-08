@@ -65,6 +65,7 @@ export async function appendSessionTurnInWorker(
   };
   const {
     onMessageCommitted: _onMessageCommitted,
+    onCommittedSource: _onCommittedSource,
     assertCurrent: _assertCurrent,
     sessionTurnMutation,
     messages,
@@ -110,6 +111,7 @@ export async function appendSessionTurnInWorker(
         undefined,
         options.keyFormat === "agent-qualified"
           ? {
+              kind: "turn",
               agentId: scope.agentId,
               sessionKey: scope.sessionKey,
               options: {
@@ -175,10 +177,13 @@ export async function appendSessionTurnInWorker(
         }
       },
       async run(worker, commit) {
-        const selected = await worker.execute({ type: "session.turn.prepare", input: plan });
-        assertCurrent();
-        if (selected.result) {
-          return selected.result;
+        // Selection must precede observable callbacks; ordinary turns validate in COMMIT.
+        if (messages.some((append) => append.shouldAppend)) {
+          const selected = await worker.execute({ type: "session.turn.prepare", input: plan });
+          assertCurrent();
+          if (selected.result) {
+            return selected.result;
+          }
         }
         const accepted: SessionTranscriptTurnMessageAppend[] = [];
         for (const append of messages) {
@@ -198,16 +203,28 @@ export async function appendSessionTurnInWorker(
             ...append
           }) => append,
         );
-        const preparation = await worker.execute({ type: "session.turn.prepare", input: plan });
+        // Keyed user messages may already own accepted bytes and skip host preparation.
+        const needsPreparation =
+          sessionTurnMutation ||
+          accepted.some(
+            (append) =>
+              append.workerPreparation ||
+              (isRecord(append.message) &&
+                append.message.role === "user" &&
+                typeof append.message.idempotencyKey === "string"),
+          );
+        const preparation = needsPreparation
+          ? await worker.execute({ type: "session.turn.prepare", input: plan })
+          : undefined;
         assertCurrent();
-        if (preparation.result) {
+        if (preparation?.result) {
           return preparation.result;
         }
         // Select one adapter for the whole turn before any message preparer can have effects.
         for (const [index, append] of accepted.entries()) {
           const hooks = append.workerPreparation;
-          const facts = preparation.messages[index]!;
-          if (!facts.pending && !facts.existing && hooks?.beforeFreshMessageCommit) {
+          const facts = preparation?.messages[index];
+          if (!facts?.pending && !facts?.existing && hooks?.beforeFreshMessageCommit) {
             const source = await prepareSessionSourceAuthority(hooks.beforeFreshMessageCommit);
             sources[index] = source;
             if (
@@ -219,10 +236,10 @@ export async function appendSessionTurnInWorker(
             }
           }
         }
-        plan.options.preparedGoalId = preparation.goalId;
+        plan.options.preparedGoalId = preparation?.goalId;
         for (const [index, append] of plan.options.messages.entries()) {
           const hooks = accepted[index]!.workerPreparation;
-          const facts = preparation.messages[index]!;
+          const facts = preparation?.messages[index];
           const config = accepted[index]!.config ?? options.config;
           const prepare =
             hooks?.prepareMessageAfterIdempotencyCheckAsync ??
@@ -230,27 +247,27 @@ export async function appendSessionTurnInWorker(
           let message = prepareSessionTurnGoalMessage(
             append.message,
             sessionTurnMutation,
-            preparation.goalId,
+            preparation?.goalId,
           );
-          if (!facts.pending && !facts.existing && prepare) {
+          if (!facts?.pending && !facts?.existing && prepare) {
             if (hooks?.prepareMessageAfterIdempotencyCheckAsync) {
-              append.preparationVersion = preparation.version;
+              append.preparationVersion = preparation?.version;
             }
             message = await prepare(message);
             assertCurrent();
           }
-          if (!facts.pending && message !== undefined && hooks?.beforeFreshMessageCommit) {
+          if (!facts?.pending && message !== undefined && hooks?.beforeFreshMessageCommit) {
             append.sources = sources[index]?.checks.map((check) => check.predicate);
             append.freshGuard = true;
           }
-          if (!facts.pending && message !== undefined && options.atomicGroup !== true) {
+          if (!facts?.pending && message !== undefined && options.atomicGroup !== true) {
             message = redactTranscriptMessageForStorage(message, { config });
           }
           plan.options.messages[index] = {
             ...append,
             message: prepare ? append.message : message,
-            ...(prepare && !facts.pending
-              ? { preparation: { prepared: !facts.existing, expected: facts.existing, message } }
+            ...(prepare && !facts?.pending
+              ? { preparation: { prepared: !facts?.existing, expected: facts?.existing, message } }
               : {}),
           };
         }
@@ -258,18 +275,40 @@ export async function appendSessionTurnInWorker(
         return commit(() => worker.execute({ type: "session.turn.commit", input: plan }));
       },
       onAcknowledged(candidate) {
-        if (candidate.custody) {
-          custody?.publish(candidate.custody);
-        }
-        installCommittedTranscriptMessageSequences(
-          candidate.result.appendedMessages,
-          candidate.sequences,
-        );
-        if (candidate.projectionNeedsReconcile) {
-          startSessionTranscriptIndexReconcile({
-            ...database,
-            preferredSessionId: scope.sessionId,
-          });
+        try {
+          if (
+            options.onCommittedSource &&
+            !candidate.result.rejectedReason &&
+            candidate.result.sessionEntry
+          ) {
+            const identity = execution.fileIdentity;
+            if (!identity) {
+              throw new Error("Committed transcript turn omitted its admitted database identity");
+            }
+            options.onCommittedSource(
+              {
+                agentId: execution.agentId,
+                path: database.path,
+                databaseIdentity: identity.physicalIdentity,
+                databaseBirthtime: identity.birthtime,
+              },
+              candidate.result.sessionEntry,
+            );
+          }
+        } finally {
+          if (candidate.custody) {
+            custody?.publish(candidate.custody);
+          }
+          installCommittedTranscriptMessageSequences(
+            candidate.result.appendedMessages,
+            candidate.sequences,
+          );
+          if (candidate.projectionNeedsReconcile) {
+            startSessionTranscriptIndexReconcile({
+              ...database,
+              preferredSessionId: scope.sessionId,
+            });
+          }
         }
       },
       async onCommitted(candidate, published, identity) {

@@ -1571,7 +1571,10 @@ const canUseStampedGatewayClientDist = (deps: RunNodeDeps) => {
   }
   // Remote clients intentionally use existing dist. Retain metadata/output checks
   // without treating producer source cleanliness as a client rebuild requirement.
-  return !resolveRuntimePostBuildRequirement(deps, { requireCleanInputs: false }).shouldSync;
+  return !resolveRuntimePostBuildRequirement(deps, {
+    requireCleanInputs: false,
+    allowEquivalentInputs: true,
+  }).shouldSync;
 };
 
 type QaReportScript = "qa-parity-report.ts" | "qa-coverage-report.ts";

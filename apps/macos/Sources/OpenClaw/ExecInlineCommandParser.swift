@@ -144,15 +144,9 @@ enum ExecInlineCommandParser {
     }
 
     private static func parseCombinedCommandFlag(_ token: String) -> CombinedCommandFlag? {
-        let chars = Array(token)
-        guard chars.count >= 2, chars[0] == "-", chars[1] != "-" else {
-            return nil
-        }
-        let optionChars = Array(chars.dropFirst())
-        guard let commandFlagIndex = optionChars.firstIndex(of: "c") else {
-            return nil
-        }
-        if optionChars.contains("-") {
+        guard let optionChars = self.posixShortOptions(token),
+              let commandFlagIndex = optionChars.firstIndex(of: "c")
+        else {
             return nil
         }
         let suffix = String(optionChars.dropFirst(commandFlagIndex + 1))
@@ -168,26 +162,19 @@ enum ExecInlineCommandParser {
     }
 
     private static func combinedSeparateValueOptionCount(_ token: String) -> Int {
-        let chars = Array(token)
-        guard chars.count >= 2, chars[0] == "-" || chars[0] == "+", chars[1] != "-" else {
-            return 0
-        }
-        if chars.dropFirst().contains("-") {
-            return 0
-        }
-        return chars.dropFirst().reduce(0) { count, char in
+        self.posixShortOptions(token, allowPlus: true)?.reduce(0) { count, char in
             count + ((char == "o" || char == "O") ? 1 : 0)
-        }
+        } ?? 0
     }
 
     private static func isPosixShortOption(_ token: String, containing option: Character) -> Bool {
+        self.posixShortOptions(token)?.contains(option) == true
+    }
+
+    private static func posixShortOptions(_ token: String, allowPlus: Bool = false) -> [Character]? {
         let chars = Array(token)
-        guard chars.count >= 2, chars[0] == "-", chars[1] != "-" else {
-            return false
-        }
-        if chars.dropFirst().contains("-") {
-            return false
-        }
-        return chars.dropFirst().contains(option)
+        guard chars.count >= 2, chars[0] == "-" || (allowPlus && chars[0] == "+"),
+              !chars.dropFirst().contains("-") else { return nil }
+        return Array(chars.dropFirst())
     }
 }

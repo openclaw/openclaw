@@ -16,6 +16,7 @@ export function captureCommand(command: OpenClawStateReadCommand): OpenClawState
     command.type === "sessionState.versions" ||
     command.type === "sessionState.ambientTargets" ||
     command.type === "sessionState.events" ||
+    command.type === "operatorApprovals.placementGrant" ||
     command.type === "operatorApprovals.history" ||
     command.type === "diagnostic.latest" ||
     command.type === "diagnostic.configAuditFacts" ||
@@ -384,7 +385,10 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       16
     );
   }
-  if (command.type === "operatorApprovals.validateCronGrant") {
+  if (
+    command.type === "operatorApprovals.validateCronGrant" ||
+    command.type === "operatorApprovals.placementGrant"
+  ) {
     return bytes + Buffer.byteLength(JSON.stringify(command.input), "utf8");
   }
   if (command.type === "operatorApprovals.listCronGrants") {
@@ -461,9 +465,6 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       (total, pin) => total + stringBytes([pin.skillId, pin.revision]),
       bytes,
     );
-  }
-  if (command.type === "fleet.get") {
-    return bytes + Buffer.byteLength(command.tenantId, "utf8");
   }
   if (command.type === "onboardingRecommendations.read") {
     return bytes + Buffer.byteLength(command.configKey, "utf8");

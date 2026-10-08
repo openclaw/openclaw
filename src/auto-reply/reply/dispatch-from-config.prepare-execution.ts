@@ -160,6 +160,12 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
     requiresToolSummaryVisibility?: boolean;
   }) => {
     if (
+      params.replyOptions?.progressRequiresReply === true &&
+      state.replyOperationRunState.replyCompletion?.expectation !== "required"
+    ) {
+      return false;
+    }
+    if (
       options?.requiresToolSummaryVisibility === true &&
       !(await shouldSendToolSummariesAsync()) &&
       params.replyOptions?.suppressDefaultToolProgressMessages !== true &&
@@ -213,10 +219,8 @@ export async function prepareDispatchExecution(state: ChooseDispatchRouteReadySt
           }
         }
         if ((await shouldForwardProgressCallback(options)) && !isDispatchOperationAborted()) {
-          if (preserveProgressCallbackStartOrder && options?.onForward) {
-            await options.onForward(...args);
-          } else if (!preserveProgressCallbackStartOrder) {
-            // Preserve the historical microtask boundary for unflagged channels.
+          // Preserve the historical microtask boundary for unflagged channels.
+          if (!preserveProgressCallbackStartOrder || options?.onForward) {
             await options?.onForward?.(...args);
           }
           if (isDispatchOperationAborted()) {

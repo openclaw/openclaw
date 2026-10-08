@@ -89,17 +89,6 @@ function resolveTargetNormalizer(
   return normalizer;
 }
 
-function resolvePreparedPluginSignatureId(plugin: ChannelPlugin): number {
-  const existing = preparedPluginSignatureIds.get(plugin);
-  if (existing) {
-    return existing;
-  }
-  const id = nextPreparedPluginSignatureId;
-  nextPreparedPluginSignatureId += 1;
-  preparedPluginSignatureIds.set(plugin, id);
-  return id;
-}
-
 export function normalizeTargetForProvider(
   provider: string,
   raw = "",
@@ -114,11 +103,9 @@ export function normalizeTargetForProvider(
   return normalizeOptionalString(normalizer?.(raw) ?? fallback);
 }
 
-type TargetResolveKindLike = ChannelDirectoryEntryKind | "channel";
-
 export type ResolvedPluginMessagingTarget = {
   to: string;
-  kind: TargetResolveKindLike;
+  kind: ChannelDirectoryEntryKind;
   display?: string;
   source: "normalized" | "directory";
   resolutionSource: "plugin";
@@ -167,7 +154,7 @@ export async function maybeResolvePluginMessagingTarget(params: {
   channel: ChannelId;
   input: string;
   accountId?: string | null;
-  preferredKind?: TargetResolveKindLike;
+  preferredKind?: ChannelDirectoryEntryKind;
   requireIdLike?: boolean;
   plugin?: ChannelPlugin;
 }): Promise<ResolvedPluginMessagingTarget | undefined> {
@@ -216,9 +203,15 @@ export function buildTargetResolverSignature(
   preparedPlugin?: ChannelPlugin,
 ): string {
   const plugin = preparedPlugin ?? resolveChannelPluginForTargetRead(channel);
-  const registryScope = preparedPlugin
-    ? `prepared:${resolvePreparedPluginSignatureId(preparedPlugin)}`
-    : "pinned";
+  let registryScope = "pinned";
+  if (preparedPlugin) {
+    let id = preparedPluginSignatureIds.get(preparedPlugin);
+    if (!id) {
+      id = nextPreparedPluginSignatureId++;
+      preparedPluginSignatureIds.set(preparedPlugin, id);
+    }
+    registryScope = `prepared:${id}`;
+  }
   const resolver = plugin?.messaging?.targetResolver;
   const hint = resolver?.hint ?? "";
   const reserved = (resolver?.reservedLiterals ?? [])
@@ -229,10 +222,7 @@ export function buildTargetResolverSignature(
   const looksLike = resolver?.looksLikeId;
   // Function source is only a cheap invalidation hint; resolver behavior still belongs to the plugin.
   const source = looksLike ? looksLike.toString() : "";
-  return hashSignature(`${registryScope}|${hint}|${reserved}|${source}`);
-}
-
-function hashSignature(value: string): string {
+  const value = `${registryScope}|${hint}|${reserved}|${source}`;
   let hash = 5381;
   for (let i = 0; i < value.length; i += 1) {
     hash = ((hash << 5) + hash) ^ value.charCodeAt(i);

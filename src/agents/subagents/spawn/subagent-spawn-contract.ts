@@ -94,3 +94,7 @@ export type SpawnSubagentResult = {
   | { status: "accepted"; context: SpawnSubagentContextMode }
   | { status: "forbidden" | "error"; context?: never }
 );
+
+export function rejectSubagentSpawnRequest(status: "error" | "forbidden", error: string) {
+  return { ok: false as const, result: { status, error } satisfies SpawnSubagentResult };
+}

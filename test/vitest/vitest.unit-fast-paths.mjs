@@ -86,8 +86,6 @@ export const forcedUnitFastTestFiles = [
   "src/acp/persistent-bindings.test.ts",
   "src/acp/server.startup.test.ts",
   "src/acp/translator.final-snapshots.test.ts",
-  "src/acp/translator.prompt-size.test.ts",
-  "src/acp/translator.session-config.test.ts",
   "src/acp/translator.session-setup.test.ts",
   "src/browser-lifecycle-cleanup.test.ts",
   "src/system-agent/assistant.configured.test.ts",

@@ -1,4 +1,4 @@
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { claimAgentSessionWriter } from "../agents/embedded-agent-runner/run/session-bootstrap.js";
 import { commitMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-store.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -12,7 +12,6 @@ import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as storeWrites from "../shared/store-writer-queue.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
@@ -26,10 +25,6 @@ import type { WorkerPlacementDispatchService } from "./worker-environments/place
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
-
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
 
 test.each([false, true])(
   "concurrent cloud recovery waits for its canonical successor and rechecks queued authority (revoked: %s)",

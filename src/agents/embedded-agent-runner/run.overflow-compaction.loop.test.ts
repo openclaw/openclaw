@@ -393,7 +393,17 @@ describe("embedded run retry dispatch", () => {
     bindGatewayContextResolver(admittedRunContext, () => gateway);
     const input = makeDispatchInput({}, createEmbeddedRunReplayState());
     await prepareAndDispatchEmbeddedRunAttempt(input);
-    input.sessionPromptState = { ...input.sessionPromptState, sessionId: "rotated-session" };
+    const sessionTarget = {
+      agentId: "main",
+      sessionId: "rotated-session",
+      sessionKey: "agent:main:session-1",
+      storePath: `${tempDirs.make("publication-adopted-")}/openclaw-agent.sqlite`,
+    };
+    input.sessionPromptState = {
+      ...input.sessionPromptState,
+      sessionId: "rotated-session",
+      sessionTarget,
+    };
     mocks.prepareGitHubPublicationAvailability.mockResolvedValue(false);
 
     const { dispatchedAttempt } = await prepareAndDispatchEmbeddedRunAttempt(input);
@@ -407,6 +417,7 @@ describe("embedded run retry dispatch", () => {
       agentId: "main",
       sessionId: "rotated-session",
       sessionKey: "agent:main:session-1",
+      sessionTarget,
       assertCurrent: expect.any(Function),
     });
   });

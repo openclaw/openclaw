@@ -250,34 +250,29 @@ async function handleBroadcastAction(
         }
         const interruption =
           err instanceof OutboundHandoffRejectedError ? err : captureInterruption();
+        let sentBeforeError: boolean | undefined;
         if (interruption) {
-          const sentBeforeError = errorSentBefore(err);
+          sentBeforeError = errorSentBefore(err);
           if (!hadAcceptedResult && !sentBeforeError) {
             throw err;
           }
           interrupted = true;
-          results.push({
-            channel: targetChannel,
-            to: target,
-            ok: false,
-            ...(!sentBeforeError && err instanceof OutboundHandoffRejectedError
-              ? {
-                  attempted: false as const,
-                  error: "Broadcast canceled before this target was attempted.",
-                }
-              : {
-                  error: formatErrorMessage(err),
-                  ...(sentBeforeError ? { sentBeforeError: true as const } : {}),
-                }),
-          });
-          continue;
         }
         results.push({
           channel: targetChannel,
           to: target,
           ok: false,
-          error: formatErrorMessage(err),
-          ...(errorSentBefore(err) ? { sentBeforeError: true as const } : {}),
+          ...(interruption && !sentBeforeError && err instanceof OutboundHandoffRejectedError
+            ? {
+                attempted: false as const,
+                error: "Broadcast canceled before this target was attempted.",
+              }
+            : {
+                error: formatErrorMessage(err),
+                ...((sentBeforeError ?? errorSentBefore(err))
+                  ? { sentBeforeError: true as const }
+                  : {}),
+              }),
         });
       }
     }
@@ -299,11 +294,7 @@ async function handleInternalSourceReplySendAction(
 ): Promise<MessageActionResult> {
   throwIfAborted(input.abortSignal);
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
-  const agentId =
-    input.agentId ??
-    (input.sessionKey
-      ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
-      : undefined);
+  const agentId = input.agentId;
   let recommendations:
     | Awaited<
         ReturnType<typeof import("./clawhub-recommendations.js").resolveClawHubRecommendations>
@@ -387,7 +378,7 @@ async function handleInternalSourceReplySendAction(
       throw new Error("Current-source media requires an agent workspace.");
     }
     const { createReplyMediaPathNormalizer } =
-      await import("../../auto-reply/reply/reply-media-paths.runtime.js");
+      await import("../../auto-reply/reply/reply-media-paths.js");
     sourceReplyPayload = await createReplyMediaPathNormalizer({
       cfg: input.cfg,
       sessionKey: input.sessionKey,

@@ -70,7 +70,13 @@ const proxyHeaders = {
 
 type HttpResult = { status: number; headers: IncomingHttpHeaders; body: string };
 
-function readHttp(port: number, route: string, email?: string, signal?: AbortSignal) {
+function readHttp(
+  port: number,
+  route: string,
+  email?: string,
+  signal?: AbortSignal,
+  ingressHeaders: Record<string, string> = proxyHeaders,
+) {
   return new Promise<HttpResult>((resolve, reject) => {
     get(
       {
@@ -80,7 +86,7 @@ function readHttp(port: number, route: string, email?: string, signal?: AbortSig
         signal,
         agent: false,
         headers: {
-          ...proxyHeaders,
+          ...ingressHeaders,
           "accept-encoding": "gzip",
           ...(email ? { "x-forwarded-user": email } : {}),
         },
@@ -140,6 +146,7 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
   let ownerId: string;
   let index: string;
   let port: number;
+  let auth: ResolvedGatewayAuth;
 
   beforeAll(async () => {
     // qaRuntime snapshots omit UI assets. The existing owner builds the real bundle
@@ -176,7 +183,7 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
       label: "session-entry-real-auth",
     });
     const trustedProxy = { userHeader: "x-forwarded-user", allowLoopback: true };
-    const auth: ResolvedGatewayAuth = {
+    auth = {
       mode: "trusted-proxy",
       trustedProxy,
       allowTailscale: false,
@@ -280,6 +287,45 @@ describe("real HTTP authentication to canonical thread app delivery", () => {
       }
     }
   });
+
+  for (const mode of ["token", "password"] as const) {
+    it(`reopens private ${mode} chat links through the real HTTP entry`, async ({ signal }) => {
+      const previousAuth = auth;
+      auth = {
+        mode,
+        token: "synthetic-token",
+        password: "synthetic-password",
+        allowTailscale: false,
+      };
+      try {
+        const entry = buildControlUiSessionEntryUrl(privatePath, basePath);
+        for (const headers of [{ host: "localhost" }, proxyHeaders]) {
+          const response = await readHttp(port, privatePath, undefined, signal, headers);
+          expect(response.status).toBe(404);
+          expectNoApp(response);
+          expect(response.body).toContain('data-gateway-path="/control"');
+          expect(
+            (await readHttp(port, entry + "&probe=1", undefined, signal, headers)).status,
+          ).toBe(401);
+          const app = await readHttp(port, entry, undefined, signal, headers);
+          expect(app.status).toBe(200);
+          expect(app.body).toContain("<openclaw-app");
+        }
+        const nonSecure = await readHttp(port, privatePath, undefined, signal, {
+          host: "gateway.lan",
+        });
+        expect(nonSecure.status).toBe(200);
+        expect(nonSecure.body).toContain("<openclaw-app");
+        expect(nonSecure.body).not.toContain(privateMessage);
+        const published = await readHttp(port, publicPath, undefined, signal);
+        expect(published.status).toBe(200);
+        expect(published.body).toContain(publishedMessage);
+        expectNoApp(published);
+      } finally {
+        auth = previousAuth;
+      }
+    });
+  }
 
   it("delivers the real app for both the owner and an allowed authenticated reader", async ({
     signal,

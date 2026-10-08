@@ -501,6 +501,7 @@ describe("scripts/test-extension.mts", () => {
           "msteams",
           "openai",
           "qa-lab",
+          "slack",
           "telegram",
           "voice-call",
           "whatsapp",

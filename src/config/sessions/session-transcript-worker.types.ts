@@ -98,7 +98,7 @@ import type {
   SessionMembershipFactsWorkerInput,
   SessionSuggestionsWorkerInput,
 } from "./session-sharing-read.types.js";
-import type { SessionMember } from "./session-sharing-store.kernel.js";
+import type { SessionMembersSnapshot } from "./session-sharing-store.kernel.js";
 import type { StoredSessionSuggestion } from "./session-sharing-store.types.js";
 import type { ResolvedSqliteStoreTarget } from "./session-sqlite-target.js";
 import type {
@@ -463,7 +463,7 @@ export type SessionTranscriptWorkerValues = SessionTranscriptInventoryWorkerValu
   "session-row-backfill": { kind: "session-row-backfill"; fields: SessionRowTranscriptFields };
   "session-row-presence": boolean;
   "projection-status": boolean;
-  "session-members": SessionMember[];
+  "session-members": { kind: "session-members" } & SessionMembersSnapshot;
   "session-suggestions": { kind: "session-suggestions"; suggestions: StoredSessionSuggestion[] };
   "session-membership-facts": SessionMembershipFacts;
   "session-progress-card": { kind: "session-progress-card"; card: ProgressCard | null };

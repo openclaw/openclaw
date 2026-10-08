@@ -20,13 +20,9 @@ export function resolveConversationIdFromTargets(params: {
     if (!target) {
       continue;
     }
-    const lowered = target.toLowerCase();
-    const prefix = ["channel:", "conversation:", "group:", "room:", "dm:"].find((candidate) =>
-      lowered.startsWith(candidate),
+    const explicitConversationId = normalizeOptionalString(
+      /^(?:channel|conversation|group|room|dm):(.*)$/is.exec(target)?.[1],
     );
-    const explicitConversationId = prefix
-      ? normalizeOptionalString(target.slice(prefix.length))
-      : undefined;
     if (explicitConversationId) {
       return explicitConversationId;
     }

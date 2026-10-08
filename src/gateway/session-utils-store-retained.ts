@@ -109,6 +109,7 @@ export async function withQualifiedGatewaySessionStoreTarget<T>(params: {
               selected.result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
             ),
             readSource: selected.database,
+            lifecycleTimestamps: selected.result.lifecycleTimestamps,
             ...(capturedReadSource ? { capturedReadSource } : {}),
             capturedReadSources: capturedReadSource ? [capturedReadSource] : [],
           },
@@ -155,10 +156,12 @@ export function withIncognitoGatewaySessionStoreTarget<T>(params: {
       .withSharedState(async () => {
         const read = await actor.sessions.read(authority, { sessionKey });
         const members = params.includeMembership
-          ? await actor.sessions.sideData(authority, {
-              type: "session.members.read",
-              input: { sessionKey },
-            })
+          ? (
+              await actor.sessions.sideData(authority, {
+                type: "session.members.read",
+                input: { sessionKey },
+              })
+            ).members
           : [];
         let consuming = true;
         const assertCurrent = () => {

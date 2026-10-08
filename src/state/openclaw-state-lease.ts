@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
+import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   type OpenClawDatabaseMaintenanceScope,
@@ -131,6 +132,9 @@ async function runStateLeaseOwnerInScope<T>(
   let workerOperations: ReturnType<typeof createOpenClawStateLeaseWorkerOwner> | undefined;
   let assertAcquisitionCurrent: (() => void) | undefined;
   let confirmedExpiresAt: number | undefined;
+  let nativeLeaseSource:
+    | { context: OpenClawStateWorkerContext; identity: DatabasePathIdentity }
+    | undefined;
   const leaseLost = new AbortController();
   const operationSignal = validated.signal
     ? AbortSignal.any([validated.signal, leaseLost.signal])
@@ -155,7 +159,13 @@ async function runStateLeaseOwnerInScope<T>(
     if (validated.signal?.aborted) {
       throw abortError(validated.signal, "operation", validated.leaseLabel);
     }
-    if (closed || timerHeartbeat?.isExpired()) {
+    if (
+      closed ||
+      timerHeartbeat?.isExpired() ||
+      (phase === "owned" &&
+        expiryObservation !== undefined &&
+        Number(Atomics.load(expiryObservation, leaseHeartbeatState.expiresAt)) <= Date.now())
+    ) {
       abortLost();
       throw leaseLost.signal.reason;
     }
@@ -301,6 +311,9 @@ async function runStateLeaseOwnerInScope<T>(
                 },
                 assertCurrent,
                 signal,
+                (context, sourceIdentity) => {
+                  nativeLeaseSource = { context, identity: sourceIdentity };
+                },
               );
         },
         acquired(expiresAt) {
@@ -573,6 +586,8 @@ async function runStateLeaseOwnerInScope<T>(
           lease,
           identity: { scope: identity.scope, key: identity.key, owner: identity.owner },
           databasePath: resolveLeaseDatabasePath(validated.database),
+          sourceContext: nativeLeaseSource?.context,
+          sourceIdentity: nativeLeaseSource?.identity,
           assertCurrent: () => {
             assertActive();
             if (validated.database.schemaPolicy === "existing") {

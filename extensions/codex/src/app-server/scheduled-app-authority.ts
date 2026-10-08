@@ -514,11 +514,8 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
   const appsPatch = asOptionalRecord(configPatch.apps);
   for (const [appId, captured] of capturedById) {
     const appPatch = asOptionalRecord(appsPatch?.[appId]);
-    if (!appPatch || !Object.hasOwn(apps, appId)) {
-      continue;
-    }
-    const currentApp = apps[appId];
-    if (!currentApp) {
+    const currentApp = Object.hasOwn(apps, appId) ? apps[appId] : undefined;
+    if (!appPatch || !currentApp) {
       continue;
     }
     if (currentApp.destructiveApprovalMode === "ask") {

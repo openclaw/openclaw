@@ -234,14 +234,16 @@ export async function prepareGatewayKernelState(params: {
     ? { ...workerPlacement, runtimeInstall }
     : undefined;
   if (workerPlacementRuntime && workerEnvironmentService) {
-    const { createDevicePlacementDemandReader } =
+    const { createDevicePlacementDemandReader, createDevicePlacementDemandReaderAsync } =
       await import("./worker-environments/device-placement-demand.js");
+    const demandSources = {
+      resolveGatewayContext: resolvePluginGatewayContext,
+      placements: workerPlacementRuntime.placements,
+      environments: workerEnvironmentService,
+    };
     Object.assign(workerPlacementRuntime.dispatchService, {
-      getAdmittedDeviceSessionCounts: createDevicePlacementDemandReader({
-        resolveGatewayContext: resolvePluginGatewayContext,
-        placements: workerPlacementRuntime.placements,
-        environments: workerEnvironmentService,
-      }),
+      getAdmittedDeviceSessionCounts: createDevicePlacementDemandReader(demandSources),
+      getAdmittedDeviceSessionCountsAsync: createDevicePlacementDemandReaderAsync(demandSources),
     });
     bindNodeWorkspaceBindingResolver?.(workerPlacementRuntime.resolveNodeWorkspaceBinding);
     workerEnvironmentRuntime.bindWorkerSessionDispatch?.(
