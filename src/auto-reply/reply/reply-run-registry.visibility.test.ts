@@ -8,6 +8,7 @@ import {
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
+  MessageInjectionAcceptedUnconfirmedError,
   MessageInjectionAuthorityError,
   MessageInjectionTargetUnavailableError,
   MessageInjectionWithdrawnError,
@@ -70,14 +71,14 @@ it("keeps cross-profile question answers out of a backend restricted to its turn
           })
         ).outcome;
       await expect(answer(other)).resolves.toMatchObject(
-        supportsCrossProfileSteering === false
-          ? { status: "rejected", reason: "tool_authority_mismatch" }
-          : { status: "accepted" },
+        supportsCrossProfileSteering
+          ? { status: "accepted" }
+          : { status: "rejected", reason: "tool_authority_mismatch" },
       );
       expect(claimPendingUserInputAnswer).toHaveBeenCalledTimes(
-        supportsCrossProfileSteering === false ? 0 : 1,
+        supportsCrossProfileSteering ? 1 : 0,
       );
-      if (supportsCrossProfileSteering === false) {
+      if (!supportsCrossProfileSteering) {
         expect(operation.personalToolParticipants?.resolve()?.profileId).toBe("alice");
         expect(() => operation.personalToolParticipants?.resolve("bob")).toThrow(
           "User is not a participant",
@@ -87,7 +88,7 @@ it("keeps cross-profile question answers out of a backend restricted to its turn
       }
       await expect(answer(owner)).resolves.toMatchObject({ status: "accepted" });
       expect(claimPendingUserInputAnswer).toHaveBeenCalledTimes(
-        supportsCrossProfileSteering === false ? 1 : 2,
+        supportsCrossProfileSteering ? 2 : 1,
       );
       expect(queueMessage).not.toHaveBeenCalled();
     } finally {
