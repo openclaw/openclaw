@@ -26,7 +26,6 @@ import {
 } from "../infra/agent-run-registry.js";
 import { captureAgentRunTerminalWriteContext } from "../infra/agent-run-terminal-writes.js";
 import { onTrustedToolExecutionEvent } from "../infra/diagnostic-events.js";
-import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { notifyGatewayWorkMetricsChanged } from "../infra/gateway-work-metrics-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
@@ -57,20 +56,10 @@ import {
   markChatAbortTerminalOutcome,
   type ChatAbortTerminalDispatch,
 } from "./chat-abort-lifecycle-internal.js";
-import {
-  type ChatAbortControllerEntry,
-  removeChatAbortControllerEntry,
-  type RestartRecoveryCandidate,
-} from "./chat-abort.js";
+import { type ChatAbortControllerEntry, removeChatAbortControllerEntry } from "./chat-abort.js";
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
-import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
-import type {
-  ChatRunState,
-  SessionEventSubscriberRegistry,
-  SessionMessageSubscriberRegistry,
-} from "./server-chat-state.js";
-import type { ToolEventRecipientRegistry } from "./server-chat-tool-recipients.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
+import type { GatewayEventSubscriptionParams } from "./server-runtime-subscriptions.types.js";
 import { createSessionActivitySummaries } from "./session-activity-summaries.js";
 import { broadcastSessionActivitySummary } from "./session-activity-summary-events.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
@@ -105,24 +94,7 @@ function dispatchEventHandler<TEvent>(params: {
 }
 
 /** Register gateway runtime event subscriptions and return unsubscribe handles. */
-export function startGatewayEventSubscriptions(params: {
-  scheduler: GatewayScheduler;
-  signal: AbortSignal;
-  log: SubsystemLogger;
-  broadcast: GatewayBroadcastFn;
-  broadcastToConnIds: GatewayBroadcastToConnIdsFn;
-  nodeHasSessionSubscribers: (sessionKey: string) => boolean;
-  nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
-  agentRunSeq: Map<string, number>;
-  chatRunState: ChatRunState;
-  toolEventRecipients: ToolEventRecipientRegistry;
-  sessionEventSubscribers: SessionEventSubscriberRegistry;
-  sessionMessageSubscribers: SessionMessageSubscriberRegistry;
-  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
-  refreshConnectedUserProfiles: () => void;
-  getSessionRowProjection?: () => SessionRowProjection | undefined;
-}) {
+export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionParams) {
   // Collection changes gate new work; the writer retains accepted work and maintenance.
   const auditRecorder = createAuditEventRecorder({
     getConfig: getRuntimeConfig,
