@@ -399,26 +399,25 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
   /** Resolve the AWS region for Bedrock API calls from provider-specific baseUrl. */
   function resolveBedrockRegion(
     config: { models?: { providers?: Record<string, unknown> } } | undefined,
+    selectedProvider: string,
   ): string | undefined {
-    // Try provider-specific baseUrl first.
-    const providers = config?.models?.providers;
-    if (providers) {
-      const exact = (providers[providerId] as { baseUrl?: string } | undefined)?.baseUrl;
-      if (exact) {
-        const region = extractRegionFromBaseUrl(exact);
-        if (region) {
-          return region;
-        }
+    const providers = config?.models?.providers ?? {};
+    const exact = (providers[selectedProvider] as { baseUrl?: string } | undefined)?.baseUrl;
+    const exactRegion = extractRegionFromBaseUrl(exact);
+    if (exactRegion) {
+      return exactRegion;
+    }
+    // Exact provider configuration takes precedence over aliases such as "bedrock".
+    for (const [key, value] of Object.entries(providers)) {
+      if (
+        key === selectedProvider ||
+        normalizeProviderId(key) !== normalizeProviderId(selectedProvider)
+      ) {
+        continue;
       }
-      // Fall back to alias matches (e.g. "bedrock" instead of "amazon-bedrock").
-      for (const [key, value] of Object.entries(providers)) {
-        if (key === providerId || normalizeProviderId(key) !== providerId) {
-          continue;
-        }
-        const region = extractRegionFromBaseUrl((value as { baseUrl?: string }).baseUrl);
-        if (region) {
-          return region;
-        }
+      const region = extractRegionFromBaseUrl((value as { baseUrl?: string }).baseUrl);
+      if (region) {
+        return region;
       }
     }
     return undefined;
@@ -426,6 +425,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
 
   api.registerProvider({
     id: providerId,
+    hookAliases: ["bedrock-converse-stream"],
     label: "Amazon Bedrock",
     docsPath: "/providers/models",
     auth: [],
@@ -452,7 +452,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
     createStreamFn: ({ model }) =>
       model.api === "bedrock-converse-stream" ? bedrockStreamFn : undefined,
     ...anthropicByModelReplayHooks,
-    wrapStreamFn: ({ modelId, config, model, streamFn, thinkingLevel, extraParams }) => {
+    wrapStreamFn: ({ provider, modelId, config, model, streamFn, thinkingLevel, extraParams }) => {
       const currentPluginConfig = resolveCurrentPluginConfig(config);
       const currentGuardrail = currentPluginConfig?.guardrail;
       const modelRef = { id: modelId, params: model?.params };
@@ -483,7 +483,7 @@ export function registerAmazonBedrockPlugin(api: OpenClawPluginApi): void {
       }
 
       const region =
-        resolveBedrockRegion(config) ??
+        resolveBedrockRegion(config, provider) ??
         extractRegionFromBaseUrl(model?.baseUrl) ??
         currentPluginConfig?.discovery?.region;
       const mayNeedCacheInjection =

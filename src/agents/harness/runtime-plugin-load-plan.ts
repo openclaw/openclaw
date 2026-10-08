@@ -18,6 +18,7 @@ import type {
   PluginMetadataSnapshot,
   PluginMetadataSnapshotPluginIdScope,
 } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { resolveProviderConfigApiOwnerHint } from "../../plugins/provider-config-owner.js";
 import {
   resolveActivatableProviderOwnerPluginIds,
   resolveBundledProviderCompatPluginIds,
@@ -192,9 +193,17 @@ function resolveSelectedProviderOwnerPluginIds(params: {
   workspaceDir: string;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): string[] {
-  const providerOwnerPluginIds = normalizeUniqueStringEntries(
+  let providerOwnerPluginIds = normalizeUniqueStringEntries(
     resolveOwningPluginIdsForProviderRef(params) ?? [],
   );
+  if (providerOwnerPluginIds.length === 0) {
+    const apiOwnerHint = resolveProviderConfigApiOwnerHint(params);
+    if (apiOwnerHint) {
+      providerOwnerPluginIds = normalizeUniqueStringEntries(
+        resolveOwningPluginIdsForProviderRef({ ...params, provider: apiOwnerHint }) ?? [],
+      );
+    }
+  }
   if (providerOwnerPluginIds.length === 0) {
     return [];
   }
