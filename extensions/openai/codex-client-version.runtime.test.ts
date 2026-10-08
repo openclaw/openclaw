@@ -90,4 +90,17 @@ describe("resolveOpenAICodexModelsEndpoint", () => {
     await expect(resolveClientVersion({ fetchGuard, now: () => now })).resolves.toBe("999.1.0");
     expect(fetchGuard).toHaveBeenCalledTimes(2);
   });
+
+  it("keeps the last npm version when a later refresh fails", async () => {
+    let now = 1_000;
+    const fetchGuard = npmGuard([
+      Response.json({ version: "999.1.0" }),
+      new Response("down", { status: 503 }),
+    ]);
+
+    await expect(resolveClientVersion({ fetchGuard, now: () => now })).resolves.toBe("999.1.0");
+    now += 6 * 60 * 60 * 1000 + 1;
+    await expect(resolveClientVersion({ fetchGuard, now: () => now })).resolves.toBe("999.1.0");
+    expect(fetchGuard).toHaveBeenCalledTimes(2);
+  });
 });

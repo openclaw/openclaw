@@ -98,11 +98,10 @@ async function resolveClientVersion(
         return version;
       },
       () => {
-        cached = {
-          version: OPENAI_CODEX_CLIENT_VERSION,
-          expiresAt: now() + CODEX_VERSION_FAILURE_TTL_MS,
-        };
-        return OPENAI_CODEX_CLIENT_VERSION;
+        // Keep the last npm answer; the bundled pin may hide models it already exposed.
+        const version = cached?.version ?? OPENAI_CODEX_CLIENT_VERSION;
+        cached = { version, expiresAt: now() + CODEX_VERSION_FAILURE_TTL_MS };
+        return version;
       },
     )
     .finally(() => {
