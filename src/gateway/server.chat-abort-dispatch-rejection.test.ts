@@ -16,8 +16,10 @@ import {
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import * as staging from "../auto-reply/reply/stage-sandbox-media.js";
+import { recordAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { clearConfigCache } from "../config/config.js";
-import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
+import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
+import { appendTranscriptMessage } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { emitAgentEventIfCurrent } from "../infra/agent-events.js";
 import {
@@ -522,6 +524,133 @@ describe("gateway WebSocket chat abort ownership", () => {
       }
     },
   );
+
+  test("publishes one runtime-loss terminal and retains its failure after commentary for another client", async () => {
+    const sessionDirectory = temporaryDirectories.make("openclaw-chat-runtime-loss-");
+    const storePath = path.join(sessionDirectory, "sessions.json");
+    testState.sessionStorePath = storePath;
+    const scope = {
+      storePath,
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      sessionId: "runtime-loss-session",
+    };
+    await writeMainSession(scope.sessionId);
+    const socket = await gateway.openWs();
+    const reader = await gateway.openWs();
+    const runId = "runtime-loss-after-commentary";
+    const error = "codex app-server client closed before turn completed";
+    const warning = "Lost the connection to Codex before it confirmed the task was finished.";
+    const terminalStates = trackChatTerminalStates(socket, runId);
+    const commentaryPersisted = createDeferred();
+    const dispatchRelease = createDeferred();
+    let admissionRelease: Promise<void> | undefined;
+    let startedAt = Date.now();
+    dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+      const { dispatcher, replyOptions } = args as Parameters<typeof dispatchInboundMessage>[0];
+      await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
+      replyOptions?.onAgentRunStart?.(runId);
+      startedAt = Date.now();
+      emitAgentEventIfCurrent({
+        ...scope,
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt },
+      });
+      await appendTranscriptMessage(scope, {
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "Running it now.",
+              textSignature: JSON.stringify({
+                v: 1,
+                id: "runtime-loss-commentary",
+                phase: "commentary",
+              }),
+            },
+          ],
+          timestamp: Date.now(),
+          stopReason: "stop",
+          __openclaw: { runId },
+        },
+      });
+      commentaryPersisted.resolve();
+      await dispatchRelease.promise;
+      dispatcher.sendFinalReply({ text: warning, isError: true });
+      await dispatcher.waitForIdle();
+      return recordAgentRunTerminalOutcome(
+        { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } },
+        "failed",
+      );
+    });
+    try {
+      await connectOk(socket);
+      await connectOk(reader);
+      const sendParameters = {
+        sessionKey: scope.sessionKey,
+        message: "Run the command, then report completion.",
+        idempotencyKey: runId,
+      };
+      const started = await rpcReq(socket, "chat.send", sendParameters);
+      expect(started.payload).toMatchObject({ runId, status: "started" });
+      await commentaryPersisted.promise;
+      admissionRelease = getSessionWorkAdmissionRelease({
+        scope: storePath,
+        identities: [scope.sessionKey, scope.sessionId],
+      });
+      expect(admissionRelease).toBeDefined();
+      const terminal = onceMessage(
+        socket,
+        (frame) =>
+          frame.event === "chat" &&
+          frame.payload?.runId === runId &&
+          frame.payload?.state === "error",
+      );
+      expect(
+        emitAgentEventIfCurrent({
+          ...scope,
+          runId,
+          stream: "lifecycle",
+          data: { phase: "error", startedAt, endedAt: Date.now(), error, executionSettled: true },
+        }),
+      ).toBe(true);
+      await terminal;
+      dispatchRelease.resolve();
+      await admissionRelease;
+      const replay = await rpcReq(socket, "chat.send", sendParameters);
+      expect(replay.ok).toBe(false);
+      expect(replay.payload).toMatchObject({ runId, status: "error", summary: warning });
+      expect.soft(terminalStates).toEqual(["error"]);
+      expect(loadSessionEntry(scope)).toMatchObject({ status: "failed", lastRunId: runId });
+      const history = await rpcReq<{ messages: unknown[] }>(reader, "chat.history", {
+        sessionKey: scope.sessionKey,
+      });
+      expect(history.ok).toBe(true);
+      expect(history.payload?.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "assistant",
+            content: expect.arrayContaining([
+              expect.objectContaining({ type: "text", text: "Running it now." }),
+            ]),
+          }),
+          expect.objectContaining({
+            role: "custom",
+            customType: "run-failed-before-reply",
+            content: expect.stringContaining(error),
+          }),
+        ]),
+      );
+      expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+    } finally {
+      dispatchRelease.resolve();
+      await admissionRelease;
+      socket.close();
+      reader.close();
+    }
+  });
 
   test("returns pre-ACK attachment cancellation only after inbound cleanup", async () => {
     const sessionDirectory = temporaryDirectories.make("openclaw-chat-attachment-abort-");
