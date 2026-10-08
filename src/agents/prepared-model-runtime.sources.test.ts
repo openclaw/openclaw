@@ -262,6 +262,8 @@ describe("prepared catalog source composition", () => {
     const providerStaticModels = [providerId, aliasId].flatMap((provider) =>
       staticConfig.models.map((row) => ({
         ...row,
+        input: ["text" as const],
+        contextWindow: 32000,
         provider,
         api: "openai-completions" as const,
         baseUrl: endpoint,
