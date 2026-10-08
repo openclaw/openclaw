@@ -415,6 +415,7 @@ export async function detectAndLoadPromptImages(
   const imageSanitization = {
     maxBytes: params.maxBytes,
     maxDimensionPx: params.maxDimensionPx,
+    verifyDecodability: true,
   };
   const sanitized: PromptImageEntry[] = [];
   let dropped = 0;
