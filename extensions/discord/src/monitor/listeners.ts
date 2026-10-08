@@ -491,7 +491,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
     );
   }
 
-  private recordPresenceBaseline(guildId: string, key: string, status: string): void {
+  private recordPresenceBaseline(guildId: string, key: string, status: string | undefined): void {
     const evictedGuildId = isDiscordOfflineStatus(status)
       ? this.presenceBaseline.observeOffline(guildId, key)
       : isDiscordOnlineStatus(status)

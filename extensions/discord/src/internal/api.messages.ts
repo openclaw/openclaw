@@ -24,6 +24,7 @@ export async function createChannelMessage(
   channelId: string,
   data: RequestData,
 ): Promise<APIMessage> {
+  // SAFETY: Discord's Create Message endpoint returns APIMessage on success.
   return (await rest.post(Routes.channelMessages(channelId), data)) as APIMessage;
 }
 
