@@ -108,6 +108,15 @@ Each target is validated with all of the following:
 - SQLite auth-profile targets require `agentId`.
 - When creating a new auth-profile mapping, include `authProfileProvider`.
 
+## Auth-profile store ownership and protocol revision
+
+Auth-profile targets accept an optional `authProfileStore` field:
+
+- `"agent"` (or the field omitted) writes the selected agent's database, which is the released behavior.
+- `"shared"` writes the canonical shared state database so apply and `secrets audit` agree on the owner.
+
+Plans that contain at least one `"shared"` target are emitted with `protocolVersion: 2`. Released readers accept only `protocolVersion: 1` and ignore `authProfileStore`, so they applied such a plan to the agent database and reported success while the shared plaintext stayed in place. The revision bump makes those readers reject the file instead. Plans without shared-store targets keep `protocolVersion: 1`, and validation rejects both mismatches: a shared target under revision 1, and revision 2 without a shared target.
+
 ## Failure behavior
 
 If a target fails validation, apply exits with an error like:

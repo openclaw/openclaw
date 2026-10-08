@@ -9634,7 +9634,6 @@
 ["src/secrets/channel-contract-api.external.test.ts","../plugins/public-surface-loader.js","326bbd0e2dc6629cd8ee026b42132246fbc1dadddc80de07eb933e8e4980ead7",1]
 ["src/secrets/channel-contract-api.fast-path.test.ts","../plugins/public-surface-loader.js","326bbd0e2dc6629cd8ee026b42132246fbc1dadddc80de07eb933e8e4980ead7",1]
 ["src/secrets/channel-env-vars.dynamic.test.ts","../plugins/plugin-metadata-snapshot.js","db0d18b7b9c4c51b7fffe7331f90c2f90675a7f9b2e718a425f2277f322aa52d",1]
-["src/secrets/configure.test.ts","../agents/auth-profiles/persisted.js","564b27ae3eea172a9a6131a725d6badcdeb9c15aee1816289eaaeeabf858a121",1]
 ["src/secrets/configure.test.ts","../plugins/manifest-registry.js","8ece9e3dbe7d0125c1481e38ee8895ddc5f454e0bb4b4b8472fe2110be393bab",1]
 ["src/secrets/configure.test.ts","./apply.js","8312fa1133877554e0ba39a16f59d6a6edde43e95a218901071d1eb99f40d426",1]
 ["src/secrets/configure.test.ts","./config-io.js","2b64d2c02da6ce51513d2e5483f58b25bb81b0fe701fc2a0ee96292d74e86896",1]

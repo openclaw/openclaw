@@ -11,6 +11,24 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runSecretsConfigureInteractive } from "./configure.js";
+import { SECRETS_PLAN_SHARED_PROTOCOL_VERSION } from "./plan.js";
+
+const confirmMock = vi.hoisted(() => vi.fn());
+const selectMock = vi.hoisted(() => vi.fn());
+const textMock = vi.hoisted(() => vi.fn());
+
+// Keep the real `log` so this regression exercises the production warning
+// logger (including its `{ output: process.stderr }` routing); only the
+// interactive prompts are stubbed.
+vi.mock("@clack/prompts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@clack/prompts")>();
+  return {
+    ...actual,
+    confirm: (...args: unknown[]) => confirmMock(...args),
+    select: (...args: unknown[]) => selectMock(...args),
+    text: (...args: unknown[]) => textMock(...args),
+  };
+});
 
 it.each([true, false])(
   "keeps configure JSON output parseable without changing shared credentials (store present: %s)",
@@ -50,6 +68,30 @@ it.each([true, false])(
       const stdinTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
       let stdout = "";
       let stderr = "";
+      let rawStdout = "";
+      confirmMock.mockReset();
+      selectMock.mockReset();
+      textMock.mockReset();
+      state.env.OPENAI_API_KEY = "fake-output-env-value"; // pragma: allowlist secret
+      if (storePresent) {
+        selectMock
+          .mockImplementationOnce(({ options }) => {
+            const wanted = options.find(
+              (option: { value: { path?: string } | string }) =>
+                typeof option.value !== "string" &&
+                option.value.path === "profiles.openai:plaintext.key",
+            );
+            if (!wanted) {
+              throw new Error(
+                "expected a shared-store candidate for profiles.openai:plaintext.key",
+              );
+            }
+            return wanted.value;
+          })
+          .mockResolvedValueOnce("env");
+        textMock.mockResolvedValueOnce("default").mockResolvedValueOnce("OPENAI_API_KEY");
+        confirmMock.mockResolvedValueOnce(false);
+      }
       const stdoutWrite = vi
         .spyOn(defaultRuntime, "writeJson")
         .mockImplementation((value, space) => {
@@ -59,21 +101,39 @@ it.each([true, false])(
         stderr += String(chunk);
         return true;
       });
+      // Capture the real stdout stream too: a warning that loses its
+      // `{ output: process.stderr }` routing lands here and corrupts JSON.
+      const rawStdoutWrite = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+        rawStdout += String(chunk);
+        return true;
+      });
       try {
         Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
-        await expect(
-          runSecretsCommand(
+        if (storePresent) {
+          await runSecretsCommand(
             true,
             () => runSecretsConfigureInteractive({ env: state.env, skipProviderSetup: true }),
             () => {
               throw new Error("JSON failures must not use the human renderer.");
             },
             1,
-          ),
-        ).rejects.toMatchObject({ code: 1 });
+          );
+        } else {
+          await expect(
+            runSecretsCommand(
+              true,
+              () => runSecretsConfigureInteractive({ env: state.env, skipProviderSetup: true }),
+              () => {
+                throw new Error("JSON failures must not use the human renderer.");
+              },
+              1,
+            ),
+          ).rejects.toMatchObject({ code: 1 });
+        }
       } finally {
         stdoutWrite.mockRestore();
         stderrWrite.mockRestore();
+        rawStdoutWrite.mockRestore();
         if (stdinTTY) {
           Object.defineProperty(process.stdin, "isTTY", stdinTTY);
         } else {
@@ -81,18 +141,32 @@ it.each([true, false])(
         }
       }
 
-      expect(JSON.parse(stdout)).toEqual({
-        ok: false,
-        error: {
-          type: "cli_error",
-          message: "No configurable secret-bearing fields found for this agent scope.",
-        },
-      });
       if (storePresent) {
+        const parsed = JSON.parse(stdout) as {
+          plan: { protocolVersion: number; targets: Array<Record<string, unknown>> };
+        };
+        // Shared ownership must travel under the revision released readers reject.
+        expect(parsed.plan.protocolVersion).toBe(SECRETS_PLAN_SHARED_PROTOCOL_VERSION);
+        expect(parsed.plan.targets).toEqual([
+          expect.objectContaining({
+            type: "auth-profiles.api_key.key",
+            path: "profiles.openai:plaintext.key",
+            authProfileStore: "shared",
+            ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          }),
+        ]);
         expect(stderr).toContain("2 plaintext credential(s)");
-        expect(stderr).toContain("cannot migrate shared credentials");
+        expect(stderr).toContain("explicit shared owner");
+        expect(rawStdout).not.toContain("plaintext credential(s)");
         expect(readPersistedSharedAuthProfileStoreRaw(state.env)).toEqual(sharedStore);
       } else {
+        expect(JSON.parse(stdout)).toEqual({
+          ok: false,
+          error: {
+            type: "cli_error",
+            message: "No configurable secret-bearing fields found for this agent scope.",
+          },
+        });
         expect(stderr).not.toContain("Shared auth-profile store");
         expect(readPersistedSharedAuthProfileStoreRaw(state.env)).toBeNull();
       }

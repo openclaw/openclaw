@@ -8,9 +8,15 @@ import {
   type SecretRef,
 } from "../config/types.secrets.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
-import type { SecretsApplyPlan, SecretsPlanTarget } from "./plan.js";
+import {
+  SECRETS_PLAN_PROTOCOL_VERSION,
+  SECRETS_PLAN_SHARED_PROTOCOL_VERSION,
+  type SecretsApplyPlan,
+  type SecretsPlanTarget,
+} from "./plan.js";
 import { isRecord } from "./shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
+import type { DiscoveredConfigSecretTarget } from "./target-registry.js";
 import {
   discoverAuthProfileSecretTargets,
   discoverConfigSecretTargets,
@@ -33,12 +39,27 @@ type ConfigureSelectedTarget = ConfigureCandidate & {
 /** Provider config mutations collected while building a secrets configure plan. */
 type ConfigureProviderChanges = ReturnType<typeof collectConfigureProviderChanges>;
 
-function configureCandidateSortKey(candidate: ConfigureCandidate): string {
-  if (candidate.configFile === "auth-profile-store") {
-    const agentId = candidate.agentId ?? "";
-    return `auth-profiles:${agentId}:${candidate.path}`;
+/**
+ * Stable key for one configure candidate, shared by the picker options, the
+ * selected-target map, and candidate ordering. Auth-profile keys carry an
+ * explicit owner discriminator: without it an agent literally named `shared`
+ * produces the same key as the shared store, and selecting one of them resolves
+ * to whichever candidate happens to come first (and the selection map can only
+ * retain one).
+ */
+export function configureCandidateKey(candidate: {
+  configFile: "openclaw.json" | "auth-profile-store";
+  path: string;
+  agentId?: string;
+  authProfileStore?: string;
+}): string {
+  if (candidate.configFile !== "auth-profile-store") {
+    return `openclaw:${candidate.path}`;
   }
-  return `openclaw:${candidate.path}`;
+  if (candidate.authProfileStore === "shared") {
+    return `auth-profiles:shared:${candidate.path}`;
+  }
+  return `auth-profiles:agent:${candidate.agentId ?? ""}:${candidate.path}`;
 }
 
 function resolveAuthProfileProvider(
@@ -52,11 +73,46 @@ function resolveAuthProfileProvider(
   return store.profiles[profileId]?.provider.trim() || undefined;
 }
 
-/** Builds configure candidates for OpenClaw config plus an optional auth-profile scope. */
+function buildAuthProfileCandidate(params: {
+  config: OpenClawConfig;
+  agentId: string;
+  ownerLabel: string;
+  authProfileStore?: string;
+  store: AuthProfileStore;
+  entry: DiscoveredConfigSecretTarget;
+}): ConfigureCandidate {
+  const authProfileProvider = resolveAuthProfileProvider(params.store, params.entry.pathSegments);
+  // Auth-profile apply can create missing profiles only when the provider is known.
+  const resolved = resolveSecretInputRef({
+    value: params.entry.value,
+    refValue: params.entry.refValue,
+    defaults: params.config.secrets?.defaults,
+  });
+  return Object.assign(
+    {
+      type: params.entry.entry.targetType,
+      path: params.entry.path,
+      pathSegments: [...params.entry.pathSegments],
+      label: `${params.entry.path} (auth profile, ${params.ownerLabel})`,
+      configFile: `auth-profile-store` as const,
+      expectedResolvedValue: params.entry.entry.expectedResolvedValue,
+    },
+    resolved.ref ? { existingRef: resolved.ref } : {},
+    { agentId: params.agentId },
+    params.authProfileStore ? { authProfileStore: params.authProfileStore } : {},
+    authProfileProvider ? { authProfileProvider } : {},
+  );
+}
+
+/** Builds configure candidates for OpenClaw config plus optional auth-profile scopes. */
 export function buildConfigureCandidatesForScope(params: {
   config: OpenClawConfig;
   authoredOpenClawConfig?: OpenClawConfig;
   authProfiles?: {
+    agentId: string;
+    store: AuthProfileStore;
+  };
+  sharedAuthProfiles?: {
     agentId: string;
     store: AuthProfileStore;
   };
@@ -99,34 +155,40 @@ export function buildConfigureCandidatesForScope(params: {
       ? []
       : discoverAuthProfileSecretTargets(authProfiles.store)
           .filter((entry) => entry.entry.includeInConfigure)
+          .map((entry) =>
+            buildAuthProfileCandidate({
+              config: params.config,
+              agentId: authProfiles.agentId,
+              ownerLabel: `agent ${authProfiles.agentId}`,
+              store: authProfiles.store,
+              entry,
+            }),
+          );
+
+  const sharedAuthCandidates =
+    params.sharedAuthProfiles === undefined
+      ? []
+      : discoverAuthProfileSecretTargets(params.sharedAuthProfiles.store)
+          .filter((entry) => entry.entry.includeInConfigure)
           .map((entry) => {
-            const authProfileProvider = resolveAuthProfileProvider(
-              authProfiles.store,
-              entry.pathSegments,
-            );
-            // Auth-profile apply can create missing profiles only when the provider is known.
-            const resolved = resolveSecretInputRef({
-              value: entry.value,
-              refValue: entry.refValue,
-              defaults: params.config.secrets?.defaults,
+            const sharedAuthProfiles = params.sharedAuthProfiles;
+            if (!sharedAuthProfiles) {
+              throw new Error(
+                "Missing shared auth profile scope for configure candidate discovery.",
+              );
+            }
+            return buildAuthProfileCandidate({
+              config: params.config,
+              agentId: sharedAuthProfiles.agentId,
+              ownerLabel: "shared store",
+              authProfileStore: "shared",
+              store: sharedAuthProfiles.store,
+              entry,
             });
-            return Object.assign(
-              {
-                type: entry.entry.targetType,
-                path: entry.path,
-                pathSegments: [...entry.pathSegments],
-                label: `${entry.path} (auth profile, agent ${authProfiles.agentId})`,
-                configFile: `auth-profile-store` as const,
-                expectedResolvedValue: entry.entry.expectedResolvedValue,
-              },
-              resolved.ref ? { existingRef: resolved.ref } : {},
-              { agentId: authProfiles.agentId },
-              authProfileProvider ? { authProfileProvider } : {},
-            );
           });
 
-  return [...openclawCandidates, ...authCandidates].toSorted((a, b) =>
-    configureCandidateSortKey(a).localeCompare(configureCandidateSortKey(b)),
+  return [...openclawCandidates, ...authCandidates, ...sharedAuthCandidates].toSorted((a, b) =>
+    configureCandidateKey(a).localeCompare(configureCandidateKey(b)),
   );
 }
 
@@ -211,25 +273,33 @@ export function buildSecretsConfigurePlan(params: {
   providerChanges: ConfigureProviderChanges;
   generatedAt?: string;
 }): SecretsApplyPlan {
+  const targets = [...params.selectedTargets.values()].map((entry) =>
+    Object.assign(
+      {
+        type: entry.type,
+        path: entry.path,
+        pathSegments: [...entry.pathSegments],
+        ref: entry.ref,
+      },
+      entry.agentId ? { agentId: entry.agentId } : {},
+      entry.authProfileStore ? { authProfileStore: entry.authProfileStore } : {},
+      entry.providerId ? { providerId: entry.providerId } : {},
+      entry.accountId ? { accountId: entry.accountId } : {},
+      entry.authProfileProvider ? { authProfileProvider: entry.authProfileProvider } : {},
+    ),
+  );
+  // Released readers only accept protocol revision 1 and ignore `authProfileStore`,
+  // so a shared-store target must travel under revision 2 to make them reject the
+  // plan instead of applying it to the agent database.
+  const protocolVersion = targets.some((target) => target.authProfileStore === "shared")
+    ? SECRETS_PLAN_SHARED_PROTOCOL_VERSION
+    : SECRETS_PLAN_PROTOCOL_VERSION;
   return {
     version: 1,
-    protocolVersion: 1,
+    protocolVersion,
     generatedAt: params.generatedAt ?? new Date().toISOString(),
     generatedBy: "openclaw secrets configure",
-    targets: [...params.selectedTargets.values()].map((entry) =>
-      Object.assign(
-        {
-          type: entry.type,
-          path: entry.path,
-          pathSegments: [...entry.pathSegments],
-          ref: entry.ref,
-        },
-        entry.agentId ? { agentId: entry.agentId } : {},
-        entry.providerId ? { providerId: entry.providerId } : {},
-        entry.accountId ? { accountId: entry.accountId } : {},
-        entry.authProfileProvider ? { authProfileProvider: entry.authProfileProvider } : {},
-      ),
-    ),
+    targets,
     ...(Object.keys(params.providerChanges.upserts).length > 0
       ? { providerUpserts: params.providerChanges.upserts }
       : {}),

@@ -10,8 +10,10 @@ import {
   buildConfigureCandidatesForScope,
   buildSecretsConfigurePlan,
   collectConfigureProviderChanges,
+  configureCandidateKey,
   hasConfigurePlanChanges,
 } from "./configure-plan.js";
+import { SECRETS_PLAN_PROTOCOL_VERSION, SECRETS_PLAN_SHARED_PROTOCOL_VERSION } from "./plan.js";
 import { resolveConfigSecretTargetByPath } from "./target-registry.js";
 
 describe("secrets configure plan helpers", () => {
@@ -98,6 +100,137 @@ describe("secrets configure plan helpers", () => {
     expect(openaiCandidate?.agentId).toBe("main");
     expect(openaiCandidate?.configFile).toBe("auth-profile-store");
     expect(openaiCandidate?.authProfileProvider).toBe("openai");
+  });
+
+  it("marks shared-scope candidates with the shared owner and threads it into plans", () => {
+    const candidates = buildConfigureCandidatesForScope({
+      config: {} as OpenClawConfig,
+      authProfiles: {
+        agentId: "main",
+        store: {
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk",
+            },
+          },
+        },
+      },
+      sharedAuthProfiles: {
+        agentId: "main",
+        store: {
+          version: 1,
+          profiles: {
+            "openai:shared": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk",
+            },
+          },
+        },
+      },
+    });
+    const agentCandidate = candidates.find((entry) => entry.path === "profiles.openai:default.key");
+    const sharedCandidate = candidates.find((entry) => entry.path === "profiles.openai:shared.key");
+    expect(agentCandidate?.authProfileStore).toBeUndefined();
+    expect(sharedCandidate?.authProfileStore).toBe("shared");
+    expect(sharedCandidate?.agentId).toBe("main");
+    expect(sharedCandidate?.label).toContain("shared store");
+    if (!sharedCandidate) {
+      throw new Error("Expected a shared auth-profile candidate.");
+    }
+
+    const plan = buildSecretsConfigurePlan({
+      selectedTargets: new Map([
+        [
+          "shared",
+          {
+            ...sharedCandidate,
+            ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          },
+        ],
+      ]),
+      providerChanges: { upserts: {}, deletes: [] },
+    });
+    expect(plan.targets).toHaveLength(1);
+    expect(plan.targets[0]).toMatchObject({
+      path: "profiles.openai:shared.key",
+      agentId: "main",
+      authProfileStore: "shared",
+    });
+    // Shared ownership requires the revision released readers reject.
+    expect(plan.protocolVersion).toBe(SECRETS_PLAN_SHARED_PROTOCOL_VERSION);
+  });
+
+  it("keys an agent named shared apart from the shared store", () => {
+    // Regression: without an owner discriminator an agent literally named `shared` and
+    // the shared store produced the same key for the same profile path, so picking the
+    // shared row resolved to the agent candidate and both could not be selected at once.
+    const profile = {
+      "openai:default": {
+        type: "api_key" as const,
+        provider: "openai",
+        key: "sk",
+      },
+    };
+    const candidates = buildConfigureCandidatesForScope({
+      config: {} as OpenClawConfig,
+      authProfiles: { agentId: "shared", store: createAuthProfileStoreFixture(profile) },
+      sharedAuthProfiles: { agentId: "shared", store: createAuthProfileStoreFixture(profile) },
+    });
+    const matching = candidates.filter((entry) => entry.path === "profiles.openai:default.key");
+    expect(matching).toHaveLength(2);
+    expect(matching.map((entry) => configureCandidateKey(entry))).toEqual([
+      "auth-profiles:agent:shared:profiles.openai:default.key",
+      "auth-profiles:shared:profiles.openai:default.key",
+    ]);
+
+    const plan = buildSecretsConfigurePlan({
+      selectedTargets: new Map(
+        matching.map((entry) => [
+          configureCandidateKey(entry),
+          { ...entry, ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" } },
+        ]),
+      ),
+      providerChanges: { upserts: {}, deletes: [] },
+    });
+    expect(plan.targets.map((target) => target.authProfileStore)).toEqual([undefined, "shared"]);
+    expect(plan.targets.every((target) => target.agentId === "shared")).toBe(true);
+    expect(plan.protocolVersion).toBe(SECRETS_PLAN_SHARED_PROTOCOL_VERSION);
+  });
+
+  it("keeps agent-local plans at the released protocol revision", () => {
+    const candidates = buildConfigureCandidatesForScope({
+      config: {} as OpenClawConfig,
+      authProfiles: {
+        agentId: "main",
+        store: createAuthProfileStoreFixture({
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk",
+          },
+        }),
+      },
+    });
+    const agentCandidate = candidates.find((entry) => entry.path === "profiles.openai:default.key");
+    if (!agentCandidate) {
+      throw new Error("Expected an agent auth-profile candidate.");
+    }
+
+    const plan = buildSecretsConfigurePlan({
+      selectedTargets: new Map([
+        [
+          configureCandidateKey(agentCandidate),
+          { ...agentCandidate, ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" } },
+        ],
+      ]),
+      providerChanges: { upserts: {}, deletes: [] },
+    });
+    expect(plan.protocolVersion).toBe(SECRETS_PLAN_PROTOCOL_VERSION);
+    expect(plan.targets[0]?.authProfileStore).toBeUndefined();
   });
 
   it("captures existing refs for prefilled configure prompts", () => {

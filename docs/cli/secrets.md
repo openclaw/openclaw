@@ -216,7 +216,7 @@ Flags:
 
 - `--providers-only`: configure `secrets.providers` only, skip credential mapping
 - `--skip-provider-setup`: skip provider setup, map credentials to existing providers
-- `--agent <id>`: scope auth profile target discovery and writes to one agent store
+- `--agent <id>`: select the agent whose auth profile store is scanned for candidates and receives agent-local writes. Shared-store candidates are discovered regardless, and newly created profiles stay agent-local.
 - `--allow-exec`: allow exec SecretRef checks during preflight/apply (may execute provider commands)
 
 `--providers-only` and `--skip-provider-setup` cannot be combined.
@@ -224,11 +224,12 @@ Flags:
 Notes:
 
 - Requires an interactive TTY.
-- Targets secret-bearing fields in `openclaw.json` plus the selected agent's auth profile store. The canonical supported surface is [SecretRef Credential Surface](/reference/secretref-credential-surface).
-- Supports creating new auth profile mappings directly in the picker flow.
+- Targets secret-bearing fields in `openclaw.json` plus the selected agent's auth profile store. When the canonical shared auth-profile store lives in its own state database, its plaintext credentials also surface as shared-store candidates. The canonical supported surface is [SecretRef Credential Surface](/reference/secretref-credential-surface).
+- Supports creating new auth profile mappings directly in the picker flow. New profiles are created in the selected agent's store, not the shared store.
 - Runs preflight resolution before apply.
 - Generated plans enable `scrubEnv` and `scrubAuthProfilesForProviderTargets`. `scrubLegacyAuthJson` stays disabled, because Doctor owns legacy `auth.json` migration. Apply is one-way for scrubbed plaintext values.
 - `--plan-out` refuses to create a plan whose UTF-8 serialized form exceeds 16 MiB (16,777,216 bytes), matching the `apply --from` input limit.
+- Shared-store candidates migrate with an explicit shared owner. A plan with at least one such target is written as `protocolVersion: 2`; released revision-1 readers reject the file instead of applying it to the agent database, so a shared plan needs a revision-2-capable CLI to apply. Agent-only plans keep `protocolVersion: 1`.
 - Without `--apply`, the CLI still prompts `Apply this plan now?` after preflight.
 - With `--apply` (and no `--yes`), the CLI prompts an extra irreversible-migration confirmation.
 - `--json` prints the plan + preflight report, but still requires an interactive TTY.
@@ -251,10 +252,12 @@ openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --json
 
 `--from` must point to a regular file no larger than 16 MiB (16,777,216 bytes). The byte limit applies to the complete serialized file, including whitespace.
 
+Plans that target the shared auth-profile store (`authProfileStore: "shared"`) carry `protocolVersion: 2`. Only a CLI that understands revision 2 applies them; older installs reject the file rather than misroute the write to the agent database.
+
 What `apply` may update:
 
 - `openclaw.json` (SecretRef targets + provider upserts/deletes)
-- auth profile store (provider-target scrubbing)
+- auth profile store, agent-local or the canonical shared state database, for provider-target scrubbing
 - legacy `auth.json` residues
 - `.env` files in the effective state and active-config directories, for known secret keys whose values were migrated
 
