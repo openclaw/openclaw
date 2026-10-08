@@ -262,6 +262,31 @@ describe("retained npm package integrity", () => {
     });
   });
 
+  it("restores the owned npm link with verified Git recovery evidence", async () => {
+    await withTestDir({ prefix: "openclaw-linked-git-recovery-" }, async (base) => {
+      const fixture = await createLinkedGitSwapFixture(base, true);
+      const transaction = await retain(fixture.params);
+      await fs.writeFile(path.join(fixture.checkout, "operator.txt"), "local edit\n");
+      expect(transaction.assertRollbackSafe).toBeTypeOf("function");
+      await transaction.assertRollbackSafe?.();
+      const rollback = await transaction.rollback(() => {});
+      expect(rollback).toMatchObject({ exitCode: 0, activePackageRoot: fixture.packageRoot });
+      expect(await fs.realpath(fixture.packageRoot)).toBe(fixture.checkout);
+      expect((await fs.lstat(fixture.packageRoot)).ino).toBe(fixture.linkIdentity);
+      expect(await fs.readlink(fixture.packageRoot)).toBe(fixture.target);
+      expect((await fs.stat(fixture.checkout)).ino).toBe(fixture.checkoutIdentity);
+      expect(await fs.readFile(fixture.launcher, "utf8")).toBe("old launcher\n");
+      expect(await transaction.complete({ activationVerified: false }, () => {})).toBeUndefined();
+      expect(await transaction.complete({ activationVerified: false }, () => {})).toBeUndefined();
+      expect((await fs.readdir(fixture.globalRoot)).filter((name) => name.startsWith("."))).toEqual(
+        [],
+      );
+      expect(await fs.readFile(path.join(fixture.checkout, "operator.txt"), "utf8")).toBe(
+        "local edit\n",
+      );
+    });
+  });
+
   it("refuses a changed canonical Git target before rollback mutation", async () => {
     await withTestDir({ prefix: "openclaw-linked-git-changed-" }, async (base) => {
       const fixture = await createLinkedGitSwapFixture(base);

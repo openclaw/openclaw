@@ -196,6 +196,31 @@ it("Doctor recovers list roster ownership and the legacy default after runtime r
   });
 });
 
+it("refuses retired cron files before repairing their custom locator or recovering config", async () => {
+  await withDoctorConfigPreflightHome(async (home) => {
+    const stateDir = path.join(home, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const storePath = path.join(home, "custom-cron", "jobs.json");
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    const original = JSON.stringify({ cron: { store: storePath }, update: { channel: "stable" } });
+    const backup = '{"gateway":{"mode":"local"},"plugins":{"enabled":false}}\n';
+    const retired = '{"version":1,"jobs":[{"id":"retained"}]}\n';
+    await fs.writeFile(configPath, original);
+    await fs.writeFile(`${configPath}.bak`, backup);
+    await fs.writeFile(storePath, retired);
+
+    await expect(runDoctorConfigPreflight(repairOptions)).rejects.toThrow(
+      /Upgrade through OpenClaw 2026\.9\.7/,
+    );
+
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
+    expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(backup);
+    expect(await fs.readFile(storePath, "utf8")).toBe(retired);
+    expect((await fs.readdir(stateDir)).filter((name) => name.includes(".clobbered."))).toEqual([]);
+  });
+});
+
 const envKeys = ["HOME", "OPENCLAW_HOME", "OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"] as const;
 function setEnv(values: Partial<Record<(typeof envKeys)[number], string>>) {
   for (const key of envKeys) {
@@ -229,7 +254,7 @@ describe("Doctor legacy config rename", () => {
     });
   });
 
-  it.each(["OPENCLAW_HOME", "OPENCLAW_CONFIG_PATH"] as const)(
+  it.each(["both-roots", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"] as const)(
     "leaves legacy config untouched with %s",
     async (selector) => {
       await withTempDir("openclaw-doctor-legacy-control-", async (home) => {
@@ -238,9 +263,21 @@ describe("Doctor legacy config rename", () => {
         const target = path.join(stateDir, "openclaw.json");
         await fs.mkdir(stateDir);
         await fs.writeFile(source, "{}\n");
+        if (selector === "both-roots") {
+          await fs.mkdir(path.join(home, ".clawdbot"));
+        }
         setEnv({
           HOME: home,
-          [selector]: selector === "OPENCLAW_HOME" ? home : target,
+          ...(selector === "both-roots"
+            ? {}
+            : {
+                [selector]:
+                  selector === "OPENCLAW_HOME"
+                    ? home
+                    : selector === "OPENCLAW_STATE_DIR"
+                      ? stateDir
+                      : target,
+              }),
         });
         await runDoctorConfigPreflight({ migrateState: false, invalidConfigNote: false });
         await expect(fs.readFile(source, "utf8")).resolves.toBe("{}\n");

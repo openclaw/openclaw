@@ -439,6 +439,25 @@ describe("local SQLite snapshot repository", () => {
     await expect(provider.list()).rejects.toThrow();
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects snapshot repositories beneath a replaceable ancestor",
+    async () => {
+      const tempDir = await createTempDir();
+      const sourcePath = path.join(tempDir, "source.sqlite");
+      const sharedPath = path.join(tempDir, "shared");
+      const repositoryPath = path.join(sharedPath, "snapshots");
+      createGenericDatabase(sourcePath);
+      await fs.mkdir(sharedPath, { mode: 0o777 });
+      await fs.chmod(sharedPath, 0o777);
+      const provider = createLocalSqliteSnapshotProvider({ repositoryPath });
+
+      await expect(
+        createGenericSnapshot(provider, sourcePath, "replaceable-repository-ancestor"),
+      ).rejects.toThrow(/ancestor must not allow another user/u);
+      await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
+    },
+  );
+
   it.runIf(process.platform === "win32")(
     "rejects snapshot repositories with inheritable Everyone access",
     async () => {

@@ -2168,7 +2168,7 @@ it.each<{
   name: string;
   policy?: Policy;
   browser?: OpenClawPluginToolContext["browser"];
-  route: "host" | "node" | "sandbox";
+  route: "host" | "node" | "sandbox" | "blocked";
   guidance: string;
 }>([
   {
@@ -2190,6 +2190,13 @@ it.each<{
     route: "sandbox",
     guidance: "Default: sandbox.",
   },
+  {
+    name: "denied host control without sandbox",
+    policy: pin,
+    browser: { allowHostControl: false },
+    route: "blocked",
+    guidance: "Host target blocked by policy.",
+  },
 ])("aligns registered guidance with dispatch for $name", async (scenario) => {
   const runtimeConfig = { browser: {}, gateway: { nodes: { browser: scenario.policy } } };
   config.loadConfig.mockReturnValue(runtimeConfig);
@@ -2202,7 +2209,12 @@ it.each<{
     config: { gateway: { nodes: { browser: { mode: "off" } } } },
     getRuntimeConfig: () => runtimeConfig,
   });
-  await tool.execute("routing-proof", { action: "status" });
+  const execution = tool.execute("routing-proof", { action: "status" });
+  if (scenario.route === "blocked") {
+    await expect(execution).rejects.toThrow("Host browser control is disabled");
+  } else {
+    await execution;
+  }
   if (scenario.route === "node") {
     expect(gateway.callGatewayTool).toHaveBeenCalledWith(
       "node.invoke",
@@ -2213,10 +2225,14 @@ it.each<{
     expect(client.browserStatus).not.toHaveBeenCalled();
   } else {
     expect(gateway.callGatewayTool).not.toHaveBeenCalled();
-    expect(client.browserStatus).toHaveBeenCalledWith(
-      scenario.route === "sandbox" ? bridge : undefined,
-      { profile: undefined },
-    );
+    if (scenario.route === "blocked") {
+      expect(client.browserStatus).not.toHaveBeenCalled();
+    } else {
+      expect(client.browserStatus).toHaveBeenCalledWith(
+        scenario.route === "sandbox" ? bridge : undefined,
+        { profile: undefined },
+      );
+    }
   }
   expect(tool.description).toContain(scenario.guidance);
   if (scenario.route === "host") {

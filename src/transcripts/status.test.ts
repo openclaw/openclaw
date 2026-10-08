@@ -218,6 +218,43 @@ describe("transcript library capture health", () => {
       }
     });
   });
+
+  it.each([false, true])(
+    "bounds settings rows and treats scoped omissions as unknown (immutable=%s)",
+    async (immutable) => {
+      const store = createStore();
+      const cfg: OpenClawConfig = {
+        transcripts: {
+          autoStart: Array.from({ length: 102 }, (_, index) => ({
+            providerId: `missing-${index}`,
+          })),
+        },
+      };
+      const metadata = createPluginMetadataSnapshot({
+        config: cfg,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      });
+      const scoped = { ...metadata, pluginIds: ["limited-scope"] };
+      // An agent-scoped metadata generation cannot establish Gateway-wide absence.
+      const result = await withPluginMetadataSnapshotScope(
+        scoped,
+        () => readTranscriptLibraryStatus(store, cfg),
+        { config: cfg, trustConfigIdentity: immutable },
+      );
+      expect(result.configuredSources).toHaveLength(100);
+      expect(result.providers).toHaveLength(100);
+      expect(result.omitted).toMatchObject({
+        configuredSources: 2,
+        providers: expect.any(Number),
+      });
+      expect(
+        result.providers
+          .filter((provider) => provider.providerId.startsWith("missing-"))
+          .every((provider) => provider.availability === "unknown"),
+      ).toBe(true);
+      expect(result.latestTranscript).toBeNull();
+    },
+  );
 });
 
 it("keeps transcript provider health bound to its live Gateway registry", async () => {

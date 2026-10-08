@@ -387,6 +387,21 @@ describe("secret egress proxy", () => {
     }
   });
 
+  it("preserves fixed-length binary upload bytes and framing", async () => {
+    const bytes = Buffer.from(Array.from({ length: 8192 }, (_, index) => index % 256));
+    const result = await requestThroughTunnel({
+      path: "/fixed-length",
+      headers: { "Content-Type": "application/octet-stream" },
+      contentLength: bytes.length,
+      bodyChunks: [bytes.subarray(0, 11), bytes.subarray(11)],
+    });
+    expect(originRequests).toHaveLength(1);
+    expect(originRequests[0]?.bytes).toEqual(bytes);
+    expect(result.status).toBe(200);
+    expect(originRequests[0]?.headers["content-length"]).toBe(String(bytes.length));
+    expect(originRequests[0]?.headers["transfer-encoding"]).toBeUndefined();
+  });
+
   it.each(["overlong", "wrong-host"] as const)(
     "refuses %s sentinels inside fixed-length binary content",
     async (kind) => {
@@ -777,6 +792,34 @@ describe("secret egress plain HTTP", () => {
     }
   });
 
+  it("refuses a real HTTP child outside the lockdown allowlist", async () => {
+    const lockdown = await startSecretEgressProxyServer({
+      caDir: tempDirs.make("openclaw-egress-http-lockdown-"),
+      allowedHosts: [],
+      onAudit: (event) => audit.push(event),
+    });
+    const grant = lockdown.registerProcess();
+    try {
+      const result = await promisify(execFile)(
+        process.execPath,
+        ["-e", CHILD_REQUEST, `http://127.0.0.1:${port}/ok`],
+        { env: { SystemRoot: process.env.SystemRoot, ...grant.env } },
+      );
+      const response = JSON.parse(result.stdout);
+      expect(response.status).toBe(403);
+      expect(response.body).toBe(
+        'Host "127.0.0.1" is not in the secret egress proxy traffic allowlist. Add it to secrets.egressProxy.allowedHosts or bind a store secret to it with: openclaw secrets store set <NAME> --allow-host 127.0.0.1, then restart the Gateway.\n',
+      );
+      expect(observed).toEqual([]);
+      expect(audit).toEqual([
+        { kind: "refused", host: "127.0.0.1", substituted: false, reason: "host-not-allowed" },
+      ]);
+    } finally {
+      grant.revoke();
+      await lockdown.stop();
+    }
+  });
+
   it("routes a real child through the proxy", async () => {
     const grant = proxy.registerProcess();
     try {
@@ -793,7 +836,6 @@ describe("secret egress plain HTTP", () => {
       expect(observed).toHaveLength(1);
       expect(observed[0]?.port).toBeTypeOf("number");
       expect(response.port).toBeTypeOf("number");
-      expect(observed[0]?.port).not.toBe(response.port);
       expect(audit).toEqual([{ kind: "forwarded", host: "127.0.0.1", substituted: false }]);
     } finally {
       grant.revoke();

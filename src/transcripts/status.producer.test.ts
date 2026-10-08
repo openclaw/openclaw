@@ -643,6 +643,33 @@ describe("configured transcript source provenance", () => {
     expect(result.configuredSources[0]).toMatchObject({ state: "unknown", activeSelectors: [] });
   });
 
+  it("reports only its exact configured URL attempt and keeps changed invitations uncertain", async () => {
+    const source = {
+      ...room,
+      meetingUrl: "https://example.test/room?invitation=synthetic-private",
+    };
+    const f = fixture({ transcripts: { autoStart: [source] } });
+    const service = createTranscriptsAutoStartService(f.ctx);
+    try {
+      await service.start().settled;
+      expect((await f.read()).configuredSources[0]?.state).toBe("armed");
+      const changed = await readTranscriptLibraryStatus(f.store, {
+        transcripts: {
+          autoStart: [
+            { ...source, meetingUrl: "https://example.test/room?invitation=other-private" },
+          ],
+        },
+      });
+      expect(changed.configuredSources[0]).toMatchObject({ state: "unknown", activeSelectors: [] });
+      expect(changed.configuredSources[0]).not.toHaveProperty("startDiagnostic");
+      expect(JSON.stringify([await f.read(), changed])).not.toMatch(
+        /synthetic-private|other-private/,
+      );
+    } finally {
+      await service.stop();
+    }
+  });
+
   it("retains only configured URL presence and never claims exact invitation identity", async () => {
     const url = new URL("https://example.test/room?invitation=synthetic-invite#synthetic-fragment");
     url.username = "synthetic-user";
@@ -880,34 +907,45 @@ describe("configured transcript occupancy diagnostics", () => {
   );
 });
 
-it("reconciles a fixed ID on the same date after provider-selective stop", async () => {
-  vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-  const startedAt = Date.parse("2026-09-05T10:00:00.000Z");
-  vi.setSystemTime(startedAt);
-  const f = fixture({ transcripts: { autoStart: [{ ...room, sessionId: "daily" }] } });
-  const start = vi.fn(f.provider.start!);
-  f.provider.start = start;
-  const service = createTranscriptsAutoStartService(f.ctx);
-  try {
-    await service.start().settled;
-    expect((await f.read()).active).toHaveLength(1);
-    const original = start.mock.calls[0]![0].session;
-    await service.stop(new Set([room.providerId]));
-    const selector = transcriptSessionSelector(original);
-    const saved = await f.store.readSession(selector);
-    f.ctx.logger.warn.mockClear();
-    const write = vi.spyOn(TranscriptsStore.prototype, "writeSession");
-    // A new admission has a new tuple even on the same date.
-    vi.setSystemTime(startedAt + 60_000);
-    await service.start().settled;
-    expect.soft((await f.read()).configuredSources[0]?.startDiagnostic).toBe("id-conflict");
-    await vi.advanceTimersByTimeAsync(65_000);
-    expect(write).toHaveBeenCalledOnce();
-    expect(start).toHaveBeenCalledOnce();
-    expect(f.ctx.logger.warn).toHaveBeenCalledOnce();
-    expect(f.ctx.logger.warn).toHaveBeenCalledWith(expect.stringContaining("id-conflict"));
-    await expect(f.store.readSession(selector)).resolves.toEqual(saved);
-  } finally {
-    await service.stop();
-  }
-});
+it.each(["same date", "next date"] as const)(
+  "reconciles a fixed ID on the %s after provider-selective stop",
+  async (date) => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const startedAt = Date.parse("2026-09-05T10:00:00.000Z");
+    vi.setSystemTime(startedAt);
+    const f = fixture({ transcripts: { autoStart: [{ ...room, sessionId: "daily" }] } });
+    const start = vi.fn(f.provider.start!);
+    f.provider.start = start;
+    const service = createTranscriptsAutoStartService(f.ctx);
+    try {
+      await service.start().settled;
+      expect((await f.read()).active).toHaveLength(1);
+      const original = start.mock.calls[0]![0].session;
+      await service.stop(new Set([room.providerId]));
+      const selector = transcriptSessionSelector(original);
+      const saved = await f.store.readSession(selector);
+      f.ctx.logger.warn.mockClear();
+      const write = vi.spyOn(TranscriptsStore.prototype, "writeSession");
+      // A new admission has a new tuple even on the same date.
+      vi.setSystemTime(startedAt + 60_000 + (date === "next date" ? 86_400_000 : 0));
+      await service.start().settled;
+      if (date === "same date") {
+        expect.soft((await f.read()).configuredSources[0]?.startDiagnostic).toBe("id-conflict");
+        await vi.advanceTimersByTimeAsync(65_000);
+        expect(write).toHaveBeenCalledOnce();
+        expect(start).toHaveBeenCalledOnce();
+        expect(f.ctx.logger.warn).toHaveBeenCalledOnce();
+        expect(f.ctx.logger.warn).toHaveBeenCalledWith(expect.stringContaining("id-conflict"));
+      } else {
+        expect((await f.read()).active).toHaveLength(1);
+        expect(start).toHaveBeenCalledTimes(2);
+        expect(write).toHaveBeenCalledOnce();
+        expect(start.mock.calls[1]![0].session.startedAt).not.toBe(original.startedAt);
+        expect(f.ctx.logger.warn).not.toHaveBeenCalled();
+      }
+      await expect(f.store.readSession(selector)).resolves.toEqual(saved);
+    } finally {
+      await service.stop();
+    }
+  },
+);
