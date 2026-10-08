@@ -241,10 +241,6 @@ function normalizeSidebarPreTeamScope(value: unknown): string | null | undefined
   return value === null ? null : agentId ? normalizeAgentId(agentId) : undefined;
 }
 
-function normalizeBooleanSetting<T extends boolean | undefined>(value: unknown, fallback: T) {
-  return typeof value === "boolean" ? value : fallback;
-}
-
 function isViteDevPage(): boolean {
   if (typeof document === "undefined") {
     return false;
@@ -474,6 +470,10 @@ export function loadUiPreferences(
       return defaults;
     }
     const parsed = source.parsed;
+    const readBoolean = <K extends keyof PersistedUiSettings & keyof UiPreferences>(
+      key: K,
+    ): boolean | UiPreferences[K] =>
+      typeof parsed[key] === "boolean" ? parsed[key] : defaults[key];
     const parsedGatewayUrl = source.gatewayUrl;
     const gatewayUrl =
       targetGatewayUrl ?? (parsedGatewayUrl === pageDerivedUrl ? defaultUrl : parsedGatewayUrl);
@@ -504,32 +504,17 @@ export function loadUiPreferences(
       fontUi: normalizeTypefaceOverride(parsed.fontUi),
       fontChat: normalizeTypefaceOverride(parsed.fontChat),
       terminalFontFamily: normalizeTerminalFontFamily(parsed.terminalFontFamily),
-      chatShowThinking: normalizeBooleanSetting(parsed.chatShowThinking, defaults.chatShowThinking),
-      chatShowToolCalls: normalizeBooleanSetting(
-        parsed.chatShowToolCalls,
-        defaults.chatShowToolCalls,
-      ),
-      chatPersistCommentary: normalizeBooleanSetting(
-        parsed.chatPersistCommentary,
-        defaults.chatPersistCommentary,
-      ),
-      chatShowTaskProgress: normalizeBooleanSetting(
-        parsed.chatShowTaskProgress,
-        defaults.chatShowTaskProgress,
-      ),
-      chatCollapseTaskProgress: normalizeBooleanSetting(
-        parsed.chatCollapseTaskProgress,
-        defaults.chatCollapseTaskProgress,
-      ),
+      chatShowThinking: readBoolean("chatShowThinking"),
+      chatShowToolCalls: readBoolean("chatShowToolCalls"),
+      chatPersistCommentary: readBoolean("chatPersistCommentary"),
+      chatShowTaskProgress: readBoolean("chatShowTaskProgress"),
+      chatCollapseTaskProgress: readBoolean("chatCollapseTaskProgress"),
       chatSendShortcut: normalizeChatSendShortcut(parsed.chatSendShortcut),
       chatFollowUpMode: normalizeChatFollowUpModeOverride(parsed.chatFollowUpMode),
       catalogOpenTarget: normalizeCatalogOpenTarget(parsed.catalogOpenTarget),
       realtimeTalkInputDeviceId: normalizeOptionalString(parsed.realtimeTalkInputDeviceId),
       realtimeTalkVideoDeviceId: normalizeOptionalString(parsed.realtimeTalkVideoDeviceId),
-      composerHoldToRecord: normalizeBooleanSetting(
-        parsed.composerHoldToRecord,
-        defaults.composerHoldToRecord,
-      ),
+      composerHoldToRecord: readBoolean("composerHoldToRecord"),
       talkCameraAutoEnable:
         typeof parsed.talkCameraAutoEnable === "boolean" ? parsed.talkCameraAutoEnable : undefined,
       chatSplitLayout: normalizeChatSplitLayout(parsed.chatSplitLayout),
@@ -553,15 +538,9 @@ export function loadUiPreferences(
         normalizeSidebarEntries(parsedRecord.sidebarEntries) ??
         migratedSidebarEntries ??
         defaults.sidebarEntries,
-      sidebarLiveActivity: normalizeBooleanSetting(
-        parsed.sidebarLiveActivity,
-        defaults.sidebarLiveActivity,
-      ),
+      sidebarLiveActivity: readBoolean("sidebarLiveActivity"),
       chatMessageMaxWidth: normalizeChatMessageMaxWidth(parsed.chatMessageMaxWidth),
-      showAdvancedSettings: normalizeBooleanSetting(
-        parsed.showAdvancedSettings,
-        defaults.showAdvancedSettings,
-      ),
+      showAdvancedSettings: readBoolean("showAdvancedSettings"),
       pinnedAgentIds: normalizeUniqueTrimmedStringList(parsed.pinnedAgentIds),
       textScale: textScale !== UI_APPEARANCE_DEFAULTS.textScale ? textScale : undefined,
       customTheme: customTheme ?? undefined,
