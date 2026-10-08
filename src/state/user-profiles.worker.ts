@@ -16,8 +16,6 @@ import {
   clearUserProfileAuthLink,
   setUserProfileAuthLink,
   listUserModelAccounts,
-  readUserModelAccountSummary,
-  readUserModelAccountSelection,
   readSelectedUserModelAccount,
 } from "./user-model-accounts.js";
 import {
@@ -182,14 +180,6 @@ export const userProfileOperations = {
     input: Parameters<typeof listUserModelAccounts>[0],
     { stateOptions },
   ) => listUserModelAccounts(input, stateOptions()),
-  "userProfiles.modelAccount.summary": (
-    input: Parameters<typeof readUserModelAccountSummary>[0],
-    { stateOptions },
-  ) => readUserModelAccountSummary(input, stateOptions()),
-  "userProfiles.modelAccount.selection": (
-    input: Parameters<typeof readUserModelAccountSelection>[0],
-    { stateOptions },
-  ) => readUserModelAccountSelection(input, stateOptions()),
   "userProfiles.modelAccount.selected": (
     input: { profileId: string; provider: string },
     { stateOptions },

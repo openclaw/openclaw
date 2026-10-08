@@ -16,6 +16,7 @@ import {
   inspectNpmPackageTarball,
   validatePrepublishPluginRegistryArtifact,
 } from "../../../prepublish-plugin-registry-artifact.mjs";
+import { readPositiveIntEnvWithEmptyFallback } from "../env-limits.mjs";
 import { assert, readJson, write, writeJson } from "../fixtures/common.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
 import { recordSuccessfulUpdateCheck } from "./diagnostics.mjs";
@@ -24,7 +25,11 @@ import {
   seedLegacyExecApprovalPolicy,
 } from "./exec-approval-fixture.mjs";
 import * as sessionSourceFixture from "./session-source-fixture.mjs";
-import { assertUpgradeVolumeMigrated, seedUpgradeVolume } from "./sqlite-volume.mjs";
+import {
+  assertUpgradeVolumeMigrated,
+  measureVolumeDoctorBudget,
+  seedUpgradeVolume,
+} from "./sqlite-volume.mjs";
 
 const command = process.argv[2];
 // Keep unrelated packaged assertion commands independent of agent-turn helpers.
@@ -2015,6 +2020,16 @@ if (command === "list-scenarios") {
       process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
     );
   }
+} else if (command === "volume-doctor-budget") {
+  const measured = measureVolumeDoctorBudget(requireEnv("OPENCLAW_STATE_DIR"));
+  const budgetSeconds = readPositiveIntEnvWithEmptyFallback(
+    "OPENCLAW_UPGRADE_SURVIVOR_VOLUME_IDEMPOTENCE_BUDGET_SECONDS",
+    measured.computedSeconds,
+  );
+  const budget = { ...measured, budgetSeconds };
+  writeJson(process.argv[3], budget);
+  console.error(`SQLite volume Doctor budget: ${JSON.stringify(budget)}`);
+  process.stdout.write(String(budgetSeconds));
 } else if (command === "seed-volume") {
   assert(getScenario() === "sqlite-volume", "seed-volume requires the sqlite-volume scenario");
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");

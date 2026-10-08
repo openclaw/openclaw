@@ -196,6 +196,8 @@ passing the page's participants and configured owner references. Its synchronous
 login, while source exports use only the person's primary account.
 If multiple hosts prepare concurrently, retain each linker's `assertCurrent` and
 invoke it before publishing a completed host or the aggregate result.
+Recheck each host's snapshot lifecycle at the same publication boundary, including
+hosts that do not link profile identities.
 
 Prepare again for each page after transport work, then project and disclose without another
 await. Profile changes during preparation reject the page; identity claims never grant access.

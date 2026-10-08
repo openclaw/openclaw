@@ -913,82 +913,98 @@ describe("session-share node commands", () => {
 });
 
 describe("session-share receiver identity integration", () => {
-  it("revalidates an earlier host after another host finishes identity preparation", async () => {
-    await withCatalogFixture(async (fixture) => {
-      const first = syncGitHubIdentity({
-        identity: { accountId: 701, login: "first-host", name: "Before" },
-        authenticationAlias: { kind: "email", email: "first-host@example.test" },
-      });
-      syncGitHubIdentity({
-        identity: { accountId: 702, login: "second-host", name: "Second" },
-        authenticationAlias: { kind: "email", email: "second-host@example.test" },
-      });
-      fixture.list.mockResolvedValue({
-        nodes: ["alpha", "beta"].map((nodeId) => ({ nodeId, connected: true, commands })),
-      });
-      fixture.setConfig({
-        plugins: {
-          entries: {
-            "session-share": {
-              config: {
-                nodes: {
-                  alpha: { linkGitHubIdentities: true },
-                  beta: { linkGitHubIdentities: true },
+  it.each(["identity", "snapshot"] as const)(
+    "revalidates an earlier host's %s after another host finishes identity preparation",
+    async (changed) => {
+      await withCatalogFixture(async (fixture) => {
+        const first = syncGitHubIdentity({
+          identity: { accountId: 701, login: "first-host", name: "Before" },
+          authenticationAlias: { kind: "email", email: "first-host@example.test" },
+        });
+        syncGitHubIdentity({
+          identity: { accountId: 702, login: "second-host", name: "Second" },
+          authenticationAlias: { kind: "email", email: "second-host@example.test" },
+        });
+        fixture.list.mockResolvedValue({
+          nodes: ["alpha", "beta"].map((nodeId) => ({ nodeId, connected: true, commands })),
+        });
+        fixture.setConfig({
+          plugins: {
+            entries: {
+              "session-share": {
+                config: {
+                  nodes: {
+                    alpha: { linkGitHubIdentities: changed === "identity" },
+                    beta: { linkGitHubIdentities: true },
+                  },
                 },
               },
             },
           },
-        },
-      });
-      fixture.invoke.mockImplementation(async ({ nodeId }) => ({
-        sessions: [
-          {
-            ...nativeSession,
-            createdActor: {
-              type: "human",
-              identity: { ...remoteIdentity, id: nodeId === "alpha" ? "701" : "702" },
+        });
+        fixture.invoke.mockImplementation(async ({ nodeId }) => ({
+          sessions: [
+            {
+              ...nativeSession,
+              createdActor: {
+                type: "human",
+                identity: { ...remoteIdentity, id: nodeId === "alpha" ? "701" : "702" },
+              },
             },
+          ],
+        }));
+        await fixture.hydrate();
+        const firstPublished = createDeferredCore();
+        const secondPreparing = createDeferredCore();
+        const release = createDeferredCore();
+        const capture = profileEvents.captureUserProfileAuthorityRead;
+        const expectedCohorts = changed === "identity" ? 2 : 1;
+        let cohorts = 0;
+        vi.spyOn(profileEvents, "captureUserProfileAuthorityRead").mockImplementation(
+          async (...args) => {
+            if (++cohorts === expectedCohorts) {
+              secondPreparing.resolve();
+              await release.promise;
+            }
+            return capture(...args);
           },
-        ],
-      }));
-      await fixture.hydrate();
-      const firstPublished = createDeferredCore();
-      const secondPreparing = createDeferredCore();
-      const release = createDeferredCore();
-      const capture = profileEvents.captureUserProfileAuthorityRead;
-      let cohorts = 0;
-      vi.spyOn(profileEvents, "captureUserProfileAuthorityRead").mockImplementation(
-        async (...args) => {
-          if (++cohorts === 2) {
-            secondPreparing.resolve();
-            await release.promise;
+        );
+        const pending = fixture.catalog.list({
+          onHost: (host) => {
+            if (host.hostId === "node:alpha") {
+              expect(host.sessions[0]?.threadId).toBe(nativeSession.threadId);
+              if (changed === "identity") {
+                expect(host.sessions[0]?.createdActor?.label).toBe("Before");
+              }
+              firstPublished.resolve();
+            }
+          },
+        });
+        try {
+          await Promise.race([
+            Promise.all([firstPublished.promise, secondPreparing.promise]),
+            pending.then(() => {
+              throw new Error("Second host was not held");
+            }),
+          ]);
+          if (changed === "identity") {
+            setDisplayName(first.id, "Changed during second host preparation");
+          } else {
+            fixture.list.mockResolvedValue({
+              nodes: [{ nodeId: "beta", connected: true, commands }],
+            });
+            await fixture.catalog.list({ hostIds: [] });
           }
-          return capture(...args);
-        },
-      );
-      const pending = fixture.catalog.list({
-        onHost: (host) => {
-          if (host.hostId === "node:alpha") {
-            expect(host.sessions[0]?.createdActor?.label).toBe("Before");
-            firstPublished.resolve();
-          }
-        },
+        } finally {
+          release.resolve();
+        }
+        await expect(pending).rejects.toThrow(
+          changed === "identity" ? "identities changed" : "Session Share is unavailable",
+        );
+        expect(cohorts).toBe(expectedCohorts);
       });
-      try {
-        await Promise.race([
-          Promise.all([firstPublished.promise, secondPreparing.promise]),
-          pending.then(() => {
-            throw new Error("Second host was not held");
-          }),
-        ]);
-        setDisplayName(first.id, "Changed during second host preparation");
-      } finally {
-        release.resolve();
-      }
-      await expect(pending).rejects.toThrow("identities changed");
-      expect(cohorts).toBe(2);
-    });
-  });
+    },
+  );
 
   it("keeps claims remote by default and applies only explicit owner and numeric GitHub links", async () => {
     const nodeId = "alpha";

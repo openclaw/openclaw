@@ -294,48 +294,54 @@ export function readUserModelAccountSummary(
   params: { profileId: string; authProfileId: string },
   options: OpenClawStateDatabaseOptions = {},
 ): UserModelAccount | undefined {
-  return withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-    const owner = resolveOwner(db, params.profileId);
-    if (!owner || credentialOwner(db, params.authProfileId) !== owner) {
-      return undefined;
-    }
-    const value = readRecord(db, owner, `model-account:${params.authProfileId}`);
-    return value === undefined
-      ? undefined
-      : accountSummary(params.authProfileId, value, readLinks(db, owner));
-  }, options);
+  return withExistingOpenClawStateDatabaseReadOnly(
+    ({ db }) => readUserModelAccountSummaryInDatabase(db, params),
+    options,
+  );
+}
+
+export function readUserModelAccountSummaryInDatabase(
+  db: DatabaseSync,
+  params: { profileId: string; authProfileId: string },
+): UserModelAccount | undefined {
+  const owner = resolveOwner(db, params.profileId);
+  if (!owner || credentialOwner(db, params.authProfileId) !== owner) {
+    return undefined;
+  }
+  const value = readRecord(db, owner, `model-account:${params.authProfileId}`);
+  return value === undefined
+    ? undefined
+    : accountSummary(params.authProfileId, value, readLinks(db, owner));
 }
 
 /** Prepare the private summary and the optional public owner label in one read operation. */
-export function readUserModelAccountSelection(
+export function readUserModelAccountSelectionInDatabase(
+  db: DatabaseSync,
   params: { profileId?: string; authProfileId: string },
-  options: OpenClawStateDatabaseOptions = {},
 ) {
-  return withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-    const locator = parseUserModelAuthProfileId(params.authProfileId);
-    const requester =
-      params.profileId && params.profileId !== locator?.ownerProfileId
-        ? resolveOwner(db, params.profileId)
-        : undefined;
-    const owner =
-      locator && tableExists(db, "user_profiles")
-        ? selectResolvedUserProfileMetadataById(db, locator.ownerProfileId)
-        : undefined;
-    const ownsAccount =
-      owner &&
-      !owner.merged_into &&
-      (params.profileId === locator?.ownerProfileId || requester === owner.id);
-    const value = ownsAccount
-      ? readRecord(db, owner.id, `model-account:${params.authProfileId}`)
+  const locator = parseUserModelAuthProfileId(params.authProfileId);
+  const requester =
+    params.profileId && params.profileId !== locator?.ownerProfileId
+      ? resolveOwner(db, params.profileId)
       : undefined;
-    return {
-      personal:
-        value !== undefined && owner
-          ? accountSummary(params.authProfileId, value, readLinks(db, owner.id))
-          : undefined,
-      owner: owner ? { profileId: owner.id, displayName: owner.display_name } : undefined,
-    };
-  }, options);
+  const owner =
+    locator && tableExists(db, "user_profiles")
+      ? selectResolvedUserProfileMetadataById(db, locator.ownerProfileId)
+      : undefined;
+  const ownsAccount =
+    owner &&
+    !owner.merged_into &&
+    (params.profileId === locator?.ownerProfileId || requester === owner.id);
+  const value = ownsAccount
+    ? readRecord(db, owner.id, `model-account:${params.authProfileId}`)
+    : undefined;
+  return {
+    personal:
+      value !== undefined && owner
+        ? accountSummary(params.authProfileId, value, readLinks(db, owner.id))
+        : undefined,
+    owner: owner ? { profileId: owner.id, displayName: owner.display_name } : undefined,
+  };
 }
 
 /** Only an explicitly selected credential is loaded; no personal account enumeration. */

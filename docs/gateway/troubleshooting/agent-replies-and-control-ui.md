@@ -67,6 +67,18 @@ Related:
 - [Groups](/channels/groups)
 - [Pairing](/channels/pairing)
 
+If a shared model catalog worker exits and its automatic runtime replacement fails,
+opening the model picker, preparing a chat, or sending a new message can check the
+failed runtime again without restarting the Gateway. The picker shows **Loading
+models…** while checking, then returns to **Models unavailable** if preparation
+still fails. Repeated foreground checks have a short cooldown. Cron and Heartbeat
+get one check per failure episode; later scheduled runs do not keep rebuilding a
+runtime that remains unavailable. Existing messages and tasks are not replayed.
+
+This recovery still waits for earlier preparation work to settle. A preparation
+that never finishes, unrelated configuration errors, and Gateway shutdown require
+their own diagnosis; a model check does not bypass those lifecycle boundaries.
+
 ## Dashboard control UI connectivity
 
 When the dashboard/control UI will not connect, validate its URL, authentication, and device identity.

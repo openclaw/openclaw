@@ -99,10 +99,6 @@ function classifyOpenAiFailoverCode(code: string | undefined) {
   }
 }
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
-// Keep synchronized with extensions/codex's exact @openai/codex dependency;
-// the provider contract test fails when that managed-runtime pin changes.
-const OPENAI_CODEX_CLIENT_VERSION = "0.160.0";
-const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`;
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_GPT_56_CONTEXT_WINDOW = 372_000;
@@ -415,10 +411,13 @@ async function buildOpenAICodexLiveProviderConfig(params: {
 }): Promise<OpenAILiveProviderCatalog> {
   const catalogRuntime = await import("openclaw/plugin-sdk/provider-catalog-live-runtime");
   const { getCachedLiveProviderModelRows, LiveModelCatalogHttpError } = catalogRuntime;
+  // Lazy like the catalog runtime: npm lookup code loads only for ChatGPT discovery.
+  const { resolveOpenAICodexModelsEndpoint } = await import("./codex-client-version.runtime.js");
+  const endpoint = await resolveOpenAICodexModelsEndpoint({ fetchGuard: params.fetchGuard });
   try {
     const rows = await getCachedLiveProviderModelRows({
       providerId: PROVIDER_ID,
-      endpoint: OPENAI_CODEX_MODELS_ENDPOINT,
+      endpoint,
       discoveryApiKey: params.discoveryApiKey,
       fetchGuard: params.fetchGuard,
       signal: params.signal,
@@ -433,7 +432,7 @@ async function buildOpenAICodexLiveProviderConfig(params: {
       cacheKeyParts: [
         PROVIDER_ID,
         "codex-model-rows",
-        OPENAI_CODEX_MODELS_ENDPOINT,
+        endpoint,
         params.discoveryApiKey,
         params.accountId ?? "",
       ],

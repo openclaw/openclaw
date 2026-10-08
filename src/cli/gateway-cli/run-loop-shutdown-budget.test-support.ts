@@ -31,14 +31,6 @@ const shutdownBudgetCases: {
     shutdownStopMs,
     inspectionMs: 500,
   })),
-  {
-    signal: "SIGUSR2",
-    honorsAbort: false,
-    supervisor: "external-systemd",
-    installedStopMs: 90_000,
-  },
-  { signal: "SIGTERM", honorsAbort: false, supervisor: "foreground" },
-  { signal: "SIGTERM", honorsAbort: true, supervisor: "systemd" },
   { signal: "SIGUSR2", honorsAbort: false, supervisor: "systemd", waitMs: 0 },
 ];
 

@@ -532,6 +532,8 @@ serveOwnedWorkerTasks(
             }
             if (
               command.type === "userModelAccounts.links" ||
+              command.type === "userModelAccounts.summary" ||
+              command.type === "userModelAccounts.selection" ||
               command.type === "userModelAccounts.catalog"
             ) {
               return readUserModelAccountCommand(db, command);

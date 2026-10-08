@@ -140,6 +140,10 @@ Text output reports worker starts:
 dispatch complete: started=2 failures=0
 ```
 
+When a worker cannot start, text output also prints its card id prefix and the failure reason. JSON output includes the same reason in `startFailures`.
+
+For a card already authorized for full-host workspace access, a refusal because the current caller is limited to configured workspaces includes a `--admin` hint. This requests `operator.admin`; the Gateway must approve that scope. The hint does not apply to cards with restricted, read-only, or unknown persisted workspace authority, and `--admin` does not override those limits.
+
 Fallback output is explicit:
 
 ```text

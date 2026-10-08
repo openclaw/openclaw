@@ -188,6 +188,8 @@ it("reuses native thinking observations across messages and refreshes invalidate
 
 it("reuses published native facts without renewing providers during warm API and native turns", async () => {
   const { input, owner, b, loadA, loadB } = await fixture();
+  // Settle startup's full acquisition so the refresh below discovers the new provider rows.
+  await owner.loadFullModelCatalog!();
   const api = { provider: "provider-c", id: "model", name: "API model" };
   setProviderCatalog([api]);
   await owner.loadFullModelCatalog!({ refresh: true });

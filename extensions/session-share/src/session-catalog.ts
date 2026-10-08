@@ -160,7 +160,7 @@ function bindSession(
 
 export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalogProvider {
   const snapshots = new Map<string, NodeSnapshot>();
-  const identityGuards = new WeakMap<SessionCatalogHost, () => void>();
+  const publicationGuards = new WeakMap<SessionCatalogHost, () => void>();
   let context: OpenClawPluginServiceContextV2 | undefined;
   let nextWarningAt = 0;
   const workers = new Set<number>();
@@ -476,23 +476,26 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
           ? { nextCursor: sessionCatalogPaging.encodeCursor(offset + limit) }
           : {}),
       };
-      if (linker) {
-        identityGuards.set(host, linker.assertCurrent);
-      }
+      publicationGuards.set(host, () => {
+        if (!current(entry) || signal?.aborted) {
+          throw new Error("Session Share is unavailable. Refresh the catalog.");
+        }
+        linker?.assertCurrent();
+      });
       return host;
     };
     const host = await project();
     if ((entry && !current(entry)) || signal?.aborted) {
       return failed("NODE_INVOKE_FAILED", "Session Share is unavailable. Refresh the catalog.");
     }
-    identityGuards.get(host)?.();
+    publicationGuards.get(host)?.();
     if (entry?.pending && allowPartialResults === true && onHost && waitUntil) {
       publishSessionCatalogHost(
         {
           waitUntil,
           onHost: (completedHost) => {
             if (completedHost && current(entry) && !signal?.aborted) {
-              identityGuards.get(completedHost)?.();
+              publicationGuards.get(completedHost)?.();
               onHost(completedHost);
             }
           },
@@ -501,9 +504,9 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
       );
       if (!host.error) {
         const pendingHost = { ...host, pending: true };
-        const guard = identityGuards.get(host);
+        const guard = publicationGuards.get(host);
         if (guard) {
-          identityGuards.set(pendingHost, guard);
+          publicationGuards.set(pendingHost, guard);
         }
         return pendingHost;
       }
@@ -556,7 +559,7 @@ export function createSessionShareCatalog(api: OpenClawPluginApi): SessionCatalo
         return [];
       }
       for (const host of hosts) {
-        identityGuards.get(host)?.();
+        publicationGuards.get(host)?.();
       }
       return hosts;
     },
