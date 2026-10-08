@@ -583,6 +583,14 @@ extension OpenClawChatView {
             hasLiveContent: self.showsWorkingIndicator || self.hasVisibleStreamingAssistantText,
             searchActive: self.isSearchPresented)
         ForEach(groups) { group in
+            let parts = ForEach(group.parts) { part in
+                self.runPart(
+                    part,
+                    metadata: transcript.metadata,
+                    contextWindowTokens: contextWindowTokens,
+                    isGrouped: group.runID != nil,
+                    answerID: group.runID == nil ? nil : group.answerID)
+            }
             if group.runID != nil {
                 ChatAssistantRunFrame(
                     assistantName: self.assistantName,
@@ -591,25 +599,11 @@ extension OpenClawChatView {
                     showsAssistantAvatar: self.showsAssistantAvatars,
                     isClean: self.composerChrome == .clean)
                 {
-                    ForEach(group.parts) { part in
-                        self.runPart(
-                            part,
-                            metadata: transcript.metadata,
-                            contextWindowTokens: contextWindowTokens,
-                            isGrouped: true,
-                            answerID: group.answerID)
-                    }
+                    parts
                     if group.includesLive { self.liveAssistantContent }
                 }
             } else {
-                ForEach(group.parts) { part in
-                    self.runPart(
-                        part,
-                        metadata: transcript.metadata,
-                        contextWindowTokens: contextWindowTokens,
-                        isGrouped: false,
-                        answerID: nil)
-                }
+                parts
                 if group.includesLive { self.liveAssistantContent }
             }
         }

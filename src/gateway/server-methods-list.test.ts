@@ -280,6 +280,10 @@ describe("listGatewayMethods", () => {
       "sessions.processes.stop",
       "catalog.browse",
       "catalog.searchKeywords",
+      "skills.workshop.list",
+      "skills.workshop.changes",
+      "skills.workshop.archive",
+      "skills.workshop.restore",
     ];
     expect(listGatewayMethods().slice(-expectedSuffix.length)).toEqual(expectedSuffix);
     const methods = listGatewayMethods();
@@ -366,6 +370,10 @@ describe("listGatewayMethods", () => {
       "sessions.processes.stop",
       "catalog.browse",
       "catalog.searchKeywords",
+      "skills.workshop.list",
+      "skills.workshop.changes",
+      "skills.workshop.archive",
+      "skills.workshop.restore",
     ]);
   });
 
@@ -587,6 +595,10 @@ describe("listGatewayMethods", () => {
       "sessions.processes.stop",
       "catalog.browse",
       "catalog.searchKeywords",
+      "skills.workshop.list",
+      "skills.workshop.changes",
+      "skills.workshop.archive",
+      "skills.workshop.restore",
     ];
     expect(coreMethods.slice(-expectedCoreSuffix.length)).toEqual(expectedCoreSuffix);
     expect(methods.indexOf("approval.get")).toBeGreaterThan(methods.indexOf("tts.speak"));
@@ -720,17 +732,6 @@ describe("listGatewayMethods", () => {
         controlPlaneWrite: true,
       });
     }
-  });
-
-  it("classifies proposal evaluation as a control-plane write", () => {
-    const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
-
-    expect(
-      descriptors.find((descriptor) => descriptor.name === "skills.proposals.evaluate"),
-    ).toMatchObject({
-      scope: "operator.admin",
-      controlPlaneWrite: true,
-    });
   });
 
   it("classifies project cloning as a described control-plane write", () => {

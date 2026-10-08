@@ -1207,9 +1207,9 @@ describe("scripts/github/find-reusable-release-validation.sh", () => {
     });
     expect(result.status, result.stderr).toBe(0);
     expect(parseOutput(result.stdout).reuse, result.stderr).toBe(
-      delta === "selected" ? "true" : "false",
+      delta === "unrelated" ? "false" : "true",
     );
-    if (delta === "selected") {
+    if (delta !== "unrelated") {
       expect(parseOutput(result.stdout)).toMatchObject({
         changed_paths: JSON.stringify(changedPaths),
         evidence_policy: "split-changelog-release-v1",

@@ -48,20 +48,16 @@ export function resolveDiscordClientAccountContext(
   };
 }
 
-function resolveToken(params: {
-  account: ResolvedDiscordAccount;
-  accountId: string;
-  fallbackToken?: string;
-}) {
-  const fallback = normalizeDiscordToken(params.fallbackToken, "channels.discord.token");
+function resolveToken(account: ResolvedDiscordAccount) {
+  const fallback = normalizeDiscordToken(account.token, "channels.discord.token");
   if (!fallback) {
-    if (params.account.tokenStatus === "configured_unavailable") {
+    if (account.tokenStatus === "configured_unavailable") {
       throw new Error(
-        `Discord bot token configured for account "${params.accountId}" is unavailable; resolve SecretRefs against the active runtime snapshot before using this account.`,
+        `Discord bot token configured for account "${account.accountId}" is unavailable; resolve SecretRefs against the active runtime snapshot before using this account.`,
       );
     }
     throw new Error(
-      `Discord bot token missing for account "${params.accountId}" (set discord.accounts.${params.accountId}.token or DISCORD_BOT_TOKEN for default).`,
+      `Discord bot token missing for account "${account.accountId}" (set discord.accounts.${account.accountId}.token or DISCORD_BOT_TOKEN for default).`,
     );
   }
   return fallback;
@@ -74,13 +70,7 @@ export function createDiscordRestClient(opts: DiscordClientOpts) {
   const account = explicitToken
     ? proxyContext.account
     : resolveDiscordAccount({ cfg: resolvedCfg, accountId: opts.accountId });
-  const token =
-    explicitToken ??
-    resolveToken({
-      account,
-      accountId: account.accountId,
-      fallbackToken: account.token,
-    });
+  const token = explicitToken ?? resolveToken(account);
   const { rest, signal, timeoutMs } = opts;
   if (rest) {
     return { token, rest, account };

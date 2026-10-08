@@ -42,10 +42,7 @@ import type { PluginRuntimeWorkerOperations } from "../plugins/state.worker-cont
 import type { ProjectRegistryWorkerOperations } from "../projects/project-registry.worker-contract.js";
 import type { SkillLibraryWorkerOperations } from "../skills/library/store.worker-contract.js";
 import type { SkillUploadWorkerOperations } from "../skills/lifecycle/upload-store.worker-contract.js";
-import type {
-  SkillWorkshopWorkerOperations,
-  SkillCuratorOperations,
-} from "../skills/workshop/store.worker-contract.js";
+import type { SkillWorkshopWorkerOperations } from "../skills/workshop/changes.worker-contract.js";
 import type { TranscriptWriteOperations } from "../transcripts/store-write.worker-contract.js";
 import type { OnboardingRecommendationWriteOperations } from "./onboarding-recommendations.kernel.js";
 import type { AgentDatabaseRegistryWorkerOperations } from "./openclaw-agent-db-contract.js";
@@ -90,7 +87,6 @@ export type RegisteredStateWorkerOperations = WorkerOperations<typeof gatewayBoo
   SkillUploadWorkerOperations &
   SkillLibraryWorkerOperations &
   SkillWorkshopWorkerOperations &
-  SkillCuratorOperations &
   TranscriptWriteOperations &
   AuthProfileWorkerOperations &
   AgentDatabaseRegistryWorkerOperations &
@@ -160,9 +156,8 @@ export const stateWorkerRegistry = createWorkerOperationRegistry<
     import("../skills/library/store.worker.js").then((m) => m.skillLibraryOperations),
   skillUploads: () =>
     import("../skills/lifecycle/upload-store.worker.js").then((m) => m.skillUploadOperations),
-  workshop: () =>
-    import("../skills/workshop/store.worker.js").then((m) => m.skillWorkshopOperations),
-  skills: () => import("../skills/workshop/store.worker.js").then((m) => m.skillCuratorOperations),
+  skills: () =>
+    import("../skills/workshop/changes.worker.js").then((m) => m.skillWorkshopOperations),
   transcripts: () =>
     import("../transcripts/store-worker-write.js").then((m) => m.transcriptWriteOperations),
   webPush: () => import("../infra/push-web-store.worker.js").then((m) => m.webPushOperations),

@@ -38,11 +38,8 @@ import {
   writePreRegisteredAgentAbort,
   writePreRegisteredChatAbort,
 } from "./chat-abort-authorization.js";
-import {
-  abortChatRunsForSessionKeyWithPartials,
-  abortControlledSubagents,
-  descendantAbortError,
-} from "./chat-abort-runtime.js";
+import { abortControlledSubagents, descendantAbortError } from "./chat-abort-descendants.js";
+import { abortChatRunsForSessionKeyWithPartials } from "./chat-abort-runtime.js";
 import {
   abortedPartialPersistenceError,
   captureAbortedPartial,

@@ -50,13 +50,12 @@ import {
   mergeTrackedMessageHashes,
   resolveAdmissionPolicy,
   resolveSessionAgentsForWorkspace,
+  resolveSessionIngestionFileCap,
   scanSessionIngestionSource,
   sessionExclusionReasons,
   sessionIngestionSourceFromCorpus,
   sessionIngestionStateKeyFromCorpus,
-  SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
   SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP,
-  SESSION_INGESTION_MIN_MESSAGES_PER_FILE,
   trimTrackedSessionScopes,
   type SessionAdmissionPolicy,
   type SessionEntryOrigin,
@@ -569,13 +568,7 @@ async function collectSessionIngestionBatches(params: {
 
   const totalCap = SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP;
   let remaining = totalCap;
-  const perFileCap = Math.min(
-    SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
-    Math.max(
-      SESSION_INGESTION_MIN_MESSAGES_PER_FILE,
-      Math.ceil(totalCap / Math.max(1, sortedSources.length)),
-    ),
-  );
+  const perFileCap = resolveSessionIngestionFileCap(sortedSources.length);
   for (const source of sortedSources) {
     if (remaining <= 0) {
       break;
@@ -1192,27 +1185,32 @@ async function ingestDreamingPhaseSignals(
   });
 }
 
+async function readDreamingPhaseEntries(
+  params: DreamingPhaseRunParams<LightDreamingConfig | RemDreamingConfig>,
+  phase: "light" | "rem",
+): Promise<ShortTermRecallEntry[]> {
+  const { workspaceDir, nowMs } = params;
+  let entries = filterRecallEntriesWithinLookback({
+    entries: await readShortTermRecallEntries({ workspaceDir, nowMs }),
+    nowMs,
+    lookbackDays: params.config.lookbackDays,
+  });
+  if (phase === "light") {
+    entries = await filterFreshLightDreamingEntries({ workspaceDir, nowMs, entries });
+  }
+  return (
+    await filterLiveShortTermRecallEntries({
+      workspaceDir,
+      entries,
+    })
+  ).filter((entry) => !isPromotionOriginBlocked(entry));
+}
+
 async function prepareLightDreaming(
   params: DreamingPhaseRunParams<LightDreamingConfig>,
 ): Promise<NarrativePhaseData | undefined> {
   const { nowMs } = params;
-  const recentEntries = (
-    await filterLiveShortTermRecallEntries({
-      workspaceDir: params.workspaceDir,
-      entries: await filterFreshLightDreamingEntries({
-        workspaceDir: params.workspaceDir,
-        nowMs,
-        entries: filterRecallEntriesWithinLookback({
-          entries: await readShortTermRecallEntries({
-            workspaceDir: params.workspaceDir,
-            nowMs,
-          }),
-          nowMs,
-          lookbackDays: params.config.lookbackDays,
-        }),
-      }),
-    })
-  ).filter((entry) => !isPromotionOriginBlocked(entry));
+  const recentEntries = await readDreamingPhaseEntries(params, "light");
   const rankedEntries = dedupeEntries(
     recentEntries.toSorted((a, b) => {
       const byTime = compareStoreTimestampDesc(a.lastRecalledAt, b.lastRecalledAt);
@@ -1269,16 +1267,7 @@ async function prepareRemDreaming(
   params: DreamingPhaseRunParams<RemDreamingConfig>,
 ): Promise<NarrativePhaseData | undefined> {
   const { nowMs } = params;
-  const allEntries = (
-    await filterLiveShortTermRecallEntries({
-      workspaceDir: params.workspaceDir,
-      entries: filterRecallEntriesWithinLookback({
-        entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
-        nowMs,
-        lookbackDays: params.config.lookbackDays,
-      }),
-    })
-  ).filter((entry) => !isPromotionOriginBlocked(entry));
+  const allEntries = await readDreamingPhaseEntries(params, "rem");
   // Prefer entries staged by light sleep so REM synthesises from the
   // sequential light→REM pipeline instead of rescanning the full store.
   const lightKeys = await readLightStagedKeys({

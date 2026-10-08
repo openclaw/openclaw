@@ -611,10 +611,14 @@ describe("memory_search real manager", () => {
 
     const publicationEntered = createDeferred<void>();
     const releasePublication = createDeferred<void>();
-    const publication = generationLease.withMemoryIndexPublishGeneration(databasePath, async () => {
-      publicationEntered.resolve();
-      await releasePublication.promise;
-    });
+    const publication = generationLease.withMemoryIndexGeneration(
+      databasePath,
+      "write",
+      async () => {
+        publicationEntered.resolve();
+        await releasePublication.promise;
+      },
+    );
     await publicationEntered.promise;
 
     const tool = searchTool(cfg, { oneShotCliRun: true });

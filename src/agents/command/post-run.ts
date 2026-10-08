@@ -277,6 +277,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
           threadId: params.opts.threadId,
           sessionCwd: effectiveCwd,
           config: cfg,
+          runId,
           skipAssistantTurn: assistantTranscriptOwned,
           skipUserTurn:
             suppressUserTurnPersistence ||
@@ -460,6 +461,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
               agentDir,
               provider: agentMeta?.provider ?? provider,
               model: agentMeta?.model ?? model,
+              cliBackendId: result.meta.executionTrace?.winnerProvider,
               skillsSnapshot,
               messageChannel,
               agentAccountId: runContext.accountId,
@@ -605,7 +607,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
                     restartRecoveryTerminalRunIds: entry.restartRecoveryTerminalRunIds,
                   },
                   recordTerminalSource: true,
-                  clearRecoveryState: clearsRecoveryCycle,
+                  clearRecoveryState: clearsRecoveryCycle && entry.abortedLastRun !== true,
                   terminalDeliveryEvidence: buildRestartRecoveryTerminalDeliveryEvidence(
                     deliveryResult ?? result,
                   ),
@@ -614,13 +616,14 @@ export async function finalizeEmbeddedAgentCommand(params: {
               : {}),
           },
           assertCommitAllowed: () => {
+            assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
             if (interruptedForRestart()) {
               throw createAgentRunRestartAbortError();
             }
           },
           shouldPersist: (current) =>
             !interruptedForRestart() &&
-            shouldPersistCurrentRunSessionCleanup(current, runOwnedSessionId) &&
+            shouldPersistCurrentRunSessionCleanup(current, runOwnedSessionId, runId) &&
             (!clearUnclaimedRecoveryContext ||
               (current?.restartRecoveryDeliveryRunId === undefined &&
                 current?.restartRecoveryDeliverySourceRunId === undefined &&

@@ -55,7 +55,6 @@ import {
 } from "./operator-approval-store.js";
 import type { OperatorApprovalStoreGuard } from "./operator-approval-store.types.js";
 
-export { EXEC_APPROVAL_RESOLVED_ENTRY_GRACE_MS } from "./exec-approval-lifecycle.js";
 export type {
   ExecApprovalIdLookupResult,
   ExecApprovalRecord,

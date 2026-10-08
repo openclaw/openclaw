@@ -74,11 +74,10 @@ function bindSession(workspaceDir: string, managed = false) {
   return { entry, record, session };
 }
 
-function run(sessionTarget = `session:${sessionKey}`, key = sessionKey, executionRoot?: string) {
+function run(sessionTarget = `session:${sessionKey}`, key = sessionKey) {
   return runCronIsolatedAgentTurn(
     makeIsolatedAgentParamsFixture({
       sessionKey: key,
-      executionRoot,
       cfg: { tools: { fs: { workspaceOnly: true } }, plugins: { enabled: false } },
       job: makeIsolatedAgentJobFixture({
         sessionTarget,
@@ -296,38 +295,6 @@ describe("session-bound cron workspace", () => {
     expect(worktrees.read).not.toHaveBeenCalled();
     expect(worktrees.acquire).not.toHaveBeenCalled();
     expect(resolveDeliveryTargetMock).not.toHaveBeenCalled();
-  });
-
-  it.each([false, true])(
-    "keeps a host execution root for an unbound custom session (existing=%s)",
-    async (existing) => {
-      if (existing) {
-        const entry = makeCronSessionEntry();
-        loadSessionEntryMock.mockReturnValue(entry);
-        resolveCronSessionMock.mockReturnValue(
-          makeCronSession({
-            initialSessionEntry: entry,
-            sessionEntry: { ...entry },
-            isNewSession: false,
-          }),
-        );
-      }
-      const executionRoot = tempDirs.make("cron-rooted-custom-");
-      expect(await run(undefined, undefined, executionRoot)).toMatchObject({ status: "ok" });
-      expect(runEmbeddedAgentMock).toHaveBeenCalledWith(
-        expect.objectContaining({ workspaceDir: executionRoot, cwd: executionRoot }),
-      );
-    },
-  );
-
-  it("rejects a host execution root that conflicts with a persisted workspace", async () => {
-    bindSession(tempDirs.make("cron-persisted-root-"), true);
-    expect(await run(undefined, undefined, tempDirs.make("cron-conflicting-root-"))).toMatchObject({
-      status: "error",
-      error: "Bound automation workspace conflicts with its execution root.",
-    });
-    expect(ensureAgentWorkspaceMock).not.toHaveBeenCalled();
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
   it("does not recreate a missing existing workspace", async () => {

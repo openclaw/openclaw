@@ -298,7 +298,7 @@ export class GatewayBrowserClient {
   }
 
   get needsWakeReconnect() {
-    if (this.pendingPairing || this.pairingRetryPaused) {
+    if (this.pendingPairing || this.pairingFailure) {
       return false;
     }
     return (
@@ -307,10 +307,6 @@ export class GatewayBrowserClient {
         this.maxInboundSilenceMs !== null &&
         Date.now() - this.lastInboundActivityAtMs >= this.maxInboundSilenceMs)
     );
-  }
-
-  get pairingRetryPaused() {
-    return this.pairingFailure !== null;
   }
 
   /** Changes before a stopped or replaced connection can deliver stale auth work. */

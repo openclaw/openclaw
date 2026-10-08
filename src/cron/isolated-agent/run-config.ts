@@ -24,12 +24,12 @@ export function resolveCronActiveRuntimeConfig(cfg: OpenClawConfig): OpenClawCon
   );
 }
 
-/** Derives isolated cron agent defaults from one immutable config snapshot. */
-export function resolveCronAgentConfigFromSnapshot(params: {
+/** Selects the active runtime snapshot, then derives isolated cron agent defaults from it. */
+export function resolveCronAgentConfig(params: {
   config: OpenClawConfig;
   agentConfigOverride?: ResolvedAgentConfig;
 }) {
-  const runtimeConfig = params.config;
+  const runtimeConfig = resolveCronActiveRuntimeConfig(params.config);
   const {
     model: _agentModelOverride,
     sandbox: _agentSandboxOverride,
@@ -61,15 +61,4 @@ export function resolveCronAgentConfigFromSnapshot(params: {
       agents: Object.assign({}, runtimeConfig.agents, { defaults: agentDefaults }),
     } satisfies OpenClawConfig,
   };
-}
-
-/** Selects the active runtime snapshot before deriving isolated cron agent defaults. */
-export function resolveCronAgentConfig(params: {
-  config: OpenClawConfig;
-  agentConfigOverride?: ResolvedAgentConfig;
-}) {
-  return resolveCronAgentConfigFromSnapshot({
-    ...params,
-    config: resolveCronActiveRuntimeConfig(params.config),
-  });
 }

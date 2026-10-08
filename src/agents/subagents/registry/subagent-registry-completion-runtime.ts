@@ -1,5 +1,11 @@
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
+import {
+  getAgentEventLifecycleGeneration,
+  isAgentEventLifecycleGenerationCurrent,
+} from "../../../infra/agent-events.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../../infra/sqlite-worker-contract.js";
+import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import {
   isGatewayRestartDraining,
   runWithGatewayDetachedWorkContinuation,
@@ -13,7 +19,7 @@ import {
   SUBAGENT_ENDED_REASON_ERROR,
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
-import { getCurrentSubagentRunOwner } from "./subagent-registry-memory.js";
+import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import { createPendingLifecycleScheduler } from "./subagent-registry-pending-lifecycle.js";
 import {
   assertSubagentRegistryWriteSourceCurrent,
@@ -26,6 +32,10 @@ import {
 } from "./subagent-registry-run-pause.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import {
+  resolveSubagentRunOrphanReason,
+  type SubagentRunOrphanReason,
+} from "./subagent-session-reconciliation.js";
 
 const GATEWAY_ADMISSION_RETRY_DELAY_MS = 1_000;
 
@@ -428,5 +438,152 @@ export function createSubagentRegistryCompletionRuntime(config: {
     pendingLifecycle,
     completeSubagentRunWithRecovery,
     finalizeInterruptedSubagentRun,
+  };
+}
+
+export function createSubagentResumeReader(params: {
+  resumedRuns: Set<object>;
+  getGatewayContextResolver: () => GatewayContextResolver | undefined;
+  resume: (
+    runId: string,
+    entry: SubagentRunRecord,
+    source: "live" | "restore",
+    reason: SubagentRunOrphanReason | null,
+    isHostCurrent: () => boolean,
+  ) => void;
+  retryAfterDrain: (
+    runId: string,
+    entry: SubagentRunRecord,
+    context: OpenClawStateWorkerContext,
+  ) => void;
+  warn: (message: string, meta: Record<string, unknown>) => void;
+}) {
+  const pendingResumeChecks = new Map<object, object>();
+  function read(
+    runId: string,
+    entry: SubagentRunRecord,
+    source: "live" | "restore",
+    orphanCheck: Exclude<ReturnType<typeof resolveSubagentRunOrphanReason>, string | null>,
+  ) {
+    const resumeKey = getSubagentRunRuntimeKey(entry);
+    const token = {};
+    pendingResumeChecks.set(resumeKey, token);
+    const release = () => {
+      if (pendingResumeChecks.get(resumeKey) === token) {
+        pendingResumeChecks.delete(resumeKey);
+      }
+    };
+    try {
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const runGeneration = entry.generation;
+      const resolveGatewayContext = params.getGatewayContextResolver();
+      const gatewayContext = resolveGatewayContext?.();
+      const resolveRunGatewayContext = getGatewayContextResolver(entry);
+      const runGatewayContext = resolveRunGatewayContext?.();
+      const stateContext = captureOpenClawStateWorkerContext();
+      const isHostCurrent = () => {
+        try {
+          assertSubagentRegistryWriteSourceCurrent(stateContext);
+          const current = subagentRuns.get(runId);
+          return (
+            isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
+            params.getGatewayContextResolver() === resolveGatewayContext &&
+            (!resolveGatewayContext ||
+              (gatewayContext !== undefined && resolveGatewayContext() === gatewayContext)) &&
+            isSameSubagentRunOwner(current, entry) &&
+            current?.runId === runId &&
+            current.generation === runGeneration &&
+            getSubagentRunRuntimeKey(current) === resumeKey &&
+            getGatewayContextResolver(current) === resolveRunGatewayContext &&
+            (!resolveRunGatewayContext ||
+              (runGatewayContext !== undefined &&
+                resolveRunGatewayContext() === runGatewayContext)) &&
+            !subagentRuns.isCompletionAuthorityRetired(current)
+          );
+        } catch {
+          return false;
+        }
+      };
+      const isReadCurrent = () =>
+        pendingResumeChecks.get(resumeKey) === token &&
+        !params.resumedRuns.has(resumeKey) &&
+        isHostCurrent();
+      const assertCurrent = () => {
+        if (!isReadCurrent()) {
+          throw new Error("Subagent orphan read lost its original resume owner");
+        }
+      };
+      const failed = (error: unknown) => {
+        if (pendingResumeChecks.get(resumeKey) !== token) {
+          return;
+        }
+        params.warn("subagent session read deferred before resume", { runId, error });
+        if (pendingResumeChecks.get(resumeKey) === token && isHostCurrent()) {
+          params.retryAfterDrain(runId, entry, stateContext);
+        }
+      };
+      void runWithGatewayDetachedWorkContinuation(async () => {
+        try {
+          let observed = entry;
+          let check: ReturnType<typeof resolveSubagentRunOrphanReason> = orphanCheck;
+          while (isReadCurrent()) {
+            let reason: SubagentRunOrphanReason | null;
+            if (check === null || typeof check === "string") {
+              reason = check;
+            } else {
+              try {
+                reason = (await check.read(assertCurrent)).orphanReason;
+              } catch {
+                // A failed read cannot establish orphanhood; authority is rechecked below.
+                reason = null;
+              }
+            }
+            if (!isReadCurrent()) {
+              return;
+            }
+            const current = subagentRuns.get(runId)!;
+            const latestCheck = resolveSubagentRunOrphanReason({
+              entry: current,
+              includeStaleUnended: source === "restore",
+            });
+            if (current !== observed) {
+              observed = current;
+              check = latestCheck;
+              continue;
+            }
+            params.resume(
+              runId,
+              current,
+              source,
+              latestCheck === null || typeof latestCheck === "string" ? latestCheck : reason,
+              isHostCurrent,
+            );
+            return;
+          }
+        } catch (error) {
+          failed(error);
+          throw error;
+        } finally {
+          release();
+        }
+      }, "subagents:resume-session-read").catch((error: unknown) => {
+        try {
+          failed(error);
+        } finally {
+          release();
+        }
+      });
+    } catch (error) {
+      release();
+      params.warn("subagent session read deferred before resume", { runId, error });
+    }
+  }
+  return {
+    read,
+    hasPending: (entry: SubagentRunRecord) =>
+      pendingResumeChecks.has(getSubagentRunRuntimeKey(entry)),
+    retirePending: (entry: SubagentRunRecord) =>
+      pendingResumeChecks.delete(getSubagentRunRuntimeKey(entry)),
+    reset: () => pendingResumeChecks.clear(),
   };
 }
