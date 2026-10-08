@@ -99,6 +99,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/status/status-plugin-health.runtime.test.ts",
   "src/status/status-plugin-health.installed.test.ts",
   "src/agents/tool-schema-quarantine.test.ts",
+  "src/agents/embedded-agent-runner/run/attempt-bootstrap-completion-flow.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-bootstrap-prepare.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-bundle-tools.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-transcript-recovery.test.ts",
