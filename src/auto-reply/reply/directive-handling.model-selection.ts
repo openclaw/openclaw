@@ -22,6 +22,7 @@ function validateOperatorSelection(
 ): string | undefined {
   try {
     assertOperatorModelAllowed(authority, selection);
+    return undefined;
   } catch (error) {
     return formatErrorMessage(error);
   }
