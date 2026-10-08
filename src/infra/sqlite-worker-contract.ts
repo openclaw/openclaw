@@ -93,6 +93,8 @@ export type SqliteWorkerReply = {
       transfer?: "start" | "frame";
       input?: "next";
       closeReceipt?: SqliteWorkerCloseReceipt;
+      /** Optional wire fact; the native-runtime owner validates it before sibling inheritance. */
+      nativeRuntimeAdmission?: unknown;
     }
   | {
       ok: false;

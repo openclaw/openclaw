@@ -181,6 +181,22 @@ function currentSweep(database: DatabaseSync): Sweep | undefined {
   return sweep;
 }
 
+function stageRetentionMutation(
+  database: DatabaseSync,
+  sweep: Sweep,
+  receipt?: { sessionId: string; runs: Run[] },
+) {
+  const committedChanges = changes(database, sweep.nativeChanges);
+  deferSqlitePostCommitPublication(database, () => {
+    if (sweeps.get(database) === sweep && Atomics.load(sweep.lease, 0) === 1) {
+      if (receipt) {
+        sweep.receipts.set(receipt.sessionId, receipt.runs);
+      }
+      sweep.changes = committedChanges;
+    }
+  });
+}
+
 /** Capture before mutation; publish only after the enclosing transaction commits. */
 export function captureTrajectoryRuntimeRetentionMutation(database: DatabaseSync) {
   const sweep = currentSweep(database);
@@ -189,15 +205,14 @@ export function captureTrajectoryRuntimeRetentionMutation(database: DatabaseSync
   }
   return (sessionId: string) => {
     // Session trimming has already bounded this summary to the retained session window.
-    const runs = readRuns(database, sessionId);
-    const committedChanges = changes(database, sweep.nativeChanges);
-    deferSqlitePostCommitPublication(database, () => {
-      if (sweeps.get(database) === sweep && Atomics.load(sweep.lease, 0) === 1) {
-        sweep.receipts.set(sessionId, runs);
-        sweep.changes = committedChanges;
-      }
-    });
+    stageRetentionMutation(database, sweep, { sessionId, runs: readRuns(database, sessionId) });
   };
+}
+
+/** Session metadata upserts preserve trajectory rows and need only a committed mutation counter. */
+export function captureTrajectoryRuntimeRetentionMetadataMutation(database: DatabaseSync) {
+  const sweep = currentSweep(database);
+  return sweep ? () => stageRetentionMutation(database, sweep) : undefined;
 }
 
 function account(sweep: Sweep, run: Run, sign: number) {

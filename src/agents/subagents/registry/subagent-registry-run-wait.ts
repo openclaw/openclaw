@@ -132,6 +132,12 @@ export abstract class SubagentWaitManager {
         ) {
           return;
         }
+        try {
+          assertSubagentRegistryWriteSourceCurrent(stateContext);
+        } catch {
+          // Closing the original store retires this retry, even if the run is still resident.
+          return;
+        }
         void this.waitForSubagentCompletion(runId, entry, waitTimeoutMs, true);
       }, RECOVERABLE_WAIT_RETRY_DELAY_MS).unref?.();
       log.info(reason, {

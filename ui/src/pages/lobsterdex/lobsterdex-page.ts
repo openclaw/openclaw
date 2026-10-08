@@ -18,10 +18,8 @@ class LobsterdexPage extends OpenClawLightDomElement {
   override disconnectedCallback(): void {
     this.copyAttempt += 1;
     this.copyFeedback = null;
-    if (this.copyResetTimer !== null) {
-      window.clearTimeout(this.copyResetTimer);
-      this.copyResetTimer = null;
-    }
+    window.clearTimeout(this.copyResetTimer ?? undefined);
+    this.copyResetTimer = null;
     super.disconnectedCallback();
   }
 
@@ -61,10 +59,8 @@ class LobsterdexPage extends OpenClawLightDomElement {
   private readonly copyLink = async (paletteId: LobsterPetPaletteId): Promise<void> => {
     const attempt = ++this.copyAttempt;
     this.copyFeedback = null;
-    if (this.copyResetTimer !== null) {
-      window.clearTimeout(this.copyResetTimer);
-      this.copyResetTimer = null;
-    }
+    window.clearTimeout(this.copyResetTimer ?? undefined);
+    this.copyResetTimer = null;
     const url = `${location.origin}${location.pathname}#lobsterdex-${paletteId}`;
     const copied = await copyToClipboard(
       url,

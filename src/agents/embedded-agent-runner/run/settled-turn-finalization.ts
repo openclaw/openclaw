@@ -112,13 +112,10 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   const replyDeliveryState = await observeSourceDelivery();
   let prepared = prepareEmbeddedRunTerminal({
     ...input.terminalBase,
+    ...initial,
     replyDeliveryState,
     attempt,
-    currentAttemptCompletedAssistant: initial.currentAttemptCompletedAssistant,
-    sessionIdUsed: initial.sessionIdUsed,
-    sessionFileUsed: initial.sessionFileUsed,
     lastRunPromptUsage,
-    terminalState: initial.terminalState,
   });
   const preserveInitial = (finalizationOutcome: "not-attempted" | "failed") => ({
     ...initial,

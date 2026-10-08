@@ -17,6 +17,7 @@ import {
   getTelegramTokenHelpLines,
   getTelegramUserIdHelpLines,
   parseTelegramAllowFromId,
+  resolveTelegramAllowFromEntries,
   telegramSetupAdapter,
 } from "./setup-core.js";
 import {
@@ -83,11 +84,7 @@ export const telegramSetupWizard: ChannelSetupWizard = {
     invalidWithoutCredentialNote: t("wizard.telegram.allowFromInvalid"),
     parseInputs: splitSetupEntries,
     parseId: parseTelegramAllowFromId,
-    resolveEntries: async ({ entries }) =>
-      entries.map((entry) => {
-        const id = parseTelegramAllowFromId(entry);
-        return { input: entry, resolved: Boolean(id), id };
-      }),
+    resolveEntries: resolveTelegramAllowFromEntries,
     apply: async ({ cfg, accountId, allowFrom }) =>
       patchChannelConfigForAccount({
         cfg,

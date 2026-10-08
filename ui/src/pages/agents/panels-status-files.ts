@@ -25,6 +25,7 @@ import {
   formatCronState,
   formatNextRun,
 } from "../../lib/presenter.ts";
+import { renderAgentPanelAction } from "./panel-ui.ts";
 import { renderAgentContextSection } from "./panels-overview.ts";
 
 function resolveChannelEntries(snapshot: ChannelsStatusSnapshot | null) {
@@ -112,9 +113,7 @@ export function renderAgentChannels(params: {
         description: html`${t("agents.channels.subtitle")}
         ${t("agents.channels.lastRefresh", { time: lastSuccessLabel })}`,
         actions: html`
-          <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
-            ${params.loading ? t("common.refreshing") : t("common.refresh")}
-          </button>
+          ${renderAgentPanelAction(params.loading ? t("common.refreshing") : t("common.refresh"), params.loading, params.onRefresh)}
         `,
       },
       entries.length === 0
@@ -202,9 +201,7 @@ export function renderAgentCron(params: {
         title: t("agents.cronPanel.schedulerTitle"),
         description: t("agents.cronPanel.schedulerSubtitle"),
         actions: html`
-          <button class="btn btn--sm" ?disabled=${params.loading} @click=${params.onRefresh}>
-            ${params.loading ? t("common.refreshing") : t("common.refresh")}
-          </button>
+          ${renderAgentPanelAction(params.loading ? t("common.refreshing") : t("common.refresh"), params.loading, params.onRefresh)}
         `,
       },
       html`
@@ -261,13 +258,7 @@ export function renderAgentCron(params: {
                   >
                     ${t("agents.cronPanel.edit")}
                   </a>
-                  <button
-                    class="btn btn--sm"
-                    ?disabled=${!params.canRunNow}
-                    @click=${() => params.onRunNow(job.id)}
-                  >
-                    ${t("agents.cronPanel.runNow")}
-                  </button>
+                  ${renderAgentPanelAction(t("agents.cronPanel.runNow"), !params.canRunNow, () => params.onRunNow(job.id))}
                 `,
               });
             })}

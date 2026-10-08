@@ -12,7 +12,7 @@ import {
 import { resolveAllowedSkillSymlinkTargetRealPaths } from "../loading/symlink-targets.js";
 import { resolveWorkspaceSkillDirectories } from "../loading/workspace-skill-roots.js";
 import type { WorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.types.js";
-import { resolveWorkshopWatchRoots } from "../workshop/skills-root.js";
+import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 
 export function resolveSkillsWatchSourceRoots(
   workspaceDir: string,
@@ -45,7 +45,12 @@ export function resolveSkillsWatchSourceRoots(
       path: dir,
       source,
     }));
-    baseRoots.push(...resolveWorkshopWatchRoots(config, agentId));
+    if (config && agentId) {
+      baseRoots.push({
+        path: resolveWorkshopSkillsDir(config, agentId),
+        source: "openclaw-workshop",
+      });
+    }
     baseRoots.push({ path: path.join(CONFIG_DIR, "skills"), source: "openclaw-managed" });
     if (isDefaultStateDir()) {
       baseRoots.push({

@@ -39,10 +39,8 @@ export type AgentDatabaseGenerationClaim = {
   assertCurrent(): void;
 };
 
-export type AgentDatabaseExecutionScope = Pick<
-  SqliteWorkerStore<AgentDatabaseOperations>,
-  "execute"
->;
+export type AgentDatabaseNativeStore = SqliteWorkerStore<AgentDatabaseOperations>;
+export type AgentDatabaseExecutionScope = Pick<AgentDatabaseNativeStore, "execute">;
 
 export type OpenClawAgentDatabaseExecution = {
   readonly agentId: string;

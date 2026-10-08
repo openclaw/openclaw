@@ -13,6 +13,7 @@ import {
   captureRetainedNativeWorkerSource,
   createRetainedNativeWorker,
 } from "./worker-native-lifecycle.js";
+import { resolveWorkerPoolSize, type WorkerPoolClass } from "./worker-pool-sizing.js";
 import { classifyWorkerRequest, trackWorkerRequest } from "./worker-request-diagnostics.js";
 import { workerRequestKind } from "./worker-request-kind.js";
 import { getWorkerComputeCapacity } from "./worker-task-capacity.js";
@@ -21,14 +22,28 @@ import type { WorkerTaskPoolOwnerOptions } from "./worker-task-pool.types.js";
 
 const prepareResources = createLazyRuntimeModule(() => import("./temp-artifact-cleanup.js"));
 
-export function createWorkerTaskHost(owner: WorkerTaskPoolOwnerOptions = {}): WorkerTaskHost {
+export function createWorkerTaskHost(
+  owner: WorkerTaskPoolOwnerOptions = {},
+  workerClass?: WorkerPoolClass,
+): WorkerTaskHost {
+  const boundedHeap = workerClass && workerClass !== "writer" && workerClass !== "singleton";
   const source = owner.retainedTransport
     ? (owner.nativeSource ?? captureRetainedNativeWorkerSource({ runtimeGeneration: undefined }))
     : undefined;
   return {
+    maxWorkers: workerClass ? resolveWorkerPoolSize(workerClass) : undefined,
     requiresReady: owner.retainedTransport,
     createWorker(url, options) {
       const workerOptions = { execArgv: resolveRuntimeWorkerThreadExecArgv(url), ...options };
+      if (boundedHeap) {
+        const limits = workerOptions.resourceLimits;
+        workerOptions.resourceLimits = {
+          maxOldGenerationSizeMb: limits?.maxOldGenerationSizeMb ?? 512,
+          maxYoungGenerationSizeMb: limits?.maxYoungGenerationSizeMb,
+          codeRangeSizeMb: limits?.codeRangeSizeMb,
+          stackSizeMb: limits?.stackSizeMb,
+        };
+      }
       if (owner.retainedTransport) {
         const { port1, port2 } = new MessageChannel();
         try {

@@ -246,6 +246,11 @@ async function runOutboundDeliveryWithQueue(
 ): Promise<OutboundDeliveryResult[]> {
   const auditStartedAt = Date.now();
   const { channel, to, payloads } = params;
+  const assertDeliveryCurrent = (): void => {
+    throwIfAborted(params.abortSignal);
+    params.deliveryQueueOwner?.signal?.throwIfAborted();
+    params.deliveryQueueStateContext?.workerContext.admission.assertCurrent();
+  };
   const emitPreQueueFailure = (): void => {
     // Recovery owns the stable queue terminal for replayed intents.
     if (params.deliveryQueueId !== undefined) {
@@ -307,11 +312,7 @@ async function runOutboundDeliveryWithQueue(
         },
         {
           agentId: params.session?.agentId,
-          assertCurrent: () => {
-            throwIfAborted(params.abortSignal);
-            params.deliveryQueueOwner?.signal?.throwIfAborted();
-            params.deliveryQueueStateContext?.workerContext.admission.assertCurrent();
-          },
+          assertCurrent: assertDeliveryCurrent,
         },
       );
       admission = resolveAdmission();
@@ -338,9 +339,7 @@ async function runOutboundDeliveryWithQueue(
       params.deliveryQueueStateDir,
       params.deliveryQueueStateContext,
     );
-    throwIfAborted(params.abortSignal);
-    params.deliveryQueueOwner?.signal?.throwIfAborted();
-    params.deliveryQueueStateContext?.workerContext.admission.assertCurrent();
+    assertDeliveryCurrent();
     if (owner) {
       if (params.reusePendingDeliveryIntent && isReusablePreparedDeliveryOwner(owner)) {
         return [];

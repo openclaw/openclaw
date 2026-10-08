@@ -291,7 +291,7 @@ export function createGatewayWorkerPlacementReclaimBarriers(
         resolved.assertCurrent(getRuntimeConfig());
         const assertDrainCurrent = () => {
           assertBindingCurrent?.();
-          resolved.assertCurrent(getRuntimeConfig());
+          resolved.assertBindingCurrent(getRuntimeConfig());
         };
         const placement = await begin(assertDrainCurrent);
         assertDrainCurrent();

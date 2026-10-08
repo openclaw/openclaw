@@ -26,12 +26,6 @@ import {
 } from "../../agents/worktrees/run-end-lifecycle.js";
 import { managedWorktrees, type ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
-import { loadCombinedSessionStoreForGatewayCoreAsync } from "../../config/sessions/combined-store-gateway-read.js";
-import {
-  mergeCombinedSessionStore,
-  prepareCombinedSessionStore,
-  type GatewaySessionStoreOptions,
-} from "../../config/sessions/combined-store-gateway.js";
 import {
   captureIncognitoSessionBinding,
   withIncognitoSessionStoreEntries,
@@ -52,7 +46,7 @@ import {
   resolveProjectRegistry,
 } from "../../projects/project-registry.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
-import { readCurrentUserProfileAliases } from "../../state/user-profile-list.js";
+import { prepareCurrentUserProfileAliases } from "../../state/user-profile-reads.js";
 import { configuredDefaultRepository } from "../configured-default-repository.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import {
@@ -74,6 +68,7 @@ import { createSessionListEntryFilter } from "../session-sharing.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../session-utils.js";
 import { startProjectsListDiagnostics } from "./projects-list-diagnostics.js";
 import { listProjectRecents } from "./projects-recents.js";
+import { loadProjectSessionStore, type IncognitoStores } from "./projects-session-store.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
@@ -81,29 +76,6 @@ type ProjectWorktreeService = Pick<
   ManagedWorktreeService,
   "listRegistryRecords" | "resolveRepositoryIdentities"
 >;
-
-type IncognitoStores = Parameters<Parameters<typeof withIncognitoSessionStoreEntries>[0]>[0];
-
-function loadProjectSessionStore(
-  cfg: Parameters<typeof loadCombinedSessionStoreForGatewayCore>[0],
-  options: GatewaySessionStoreOptions & {
-    loadEntries: NonNullable<GatewaySessionStoreOptions["loadEntries"]>;
-  },
-  incognitoStores?: IncognitoStores,
-) {
-  if (!incognitoStores) {
-    return loadCombinedSessionStoreForGatewayCore(cfg, options);
-  }
-  const prepared = prepareCombinedSessionStore(cfg, { ...options, includeIncognito: false });
-  prepared.targets = { ...prepared.targets, incognitoTargets: incognitoStores };
-  return mergeCombinedSessionStore(
-    cfg,
-    options,
-    prepared,
-    (target) => options.loadEntries(target, prepared.projection),
-    (target) => incognitoStores.find((store) => store.storePath === target.storePath)!.entries,
-  );
-}
 
 type ProjectCandidate = {
   checkoutPath: string;
@@ -434,39 +406,17 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         let store: ReturnType<typeof loadCombinedSessionStoreForGatewayCore>["store"] = {};
         let observedProjects: ProjectSummary[] | undefined;
         if (client?.authenticatedUserProfile?.profileId || (params.includeObserved && canWrite())) {
-          if (params.includeObserved) {
-            store = (await loadCombinedSessionStoreForGatewayCoreAsync(cfg, { projection: "list" }))
-              .store;
-          } else {
-            const projection = requireSessionRowProjection(context);
-            do {
-              await projection.ensureMaterialized();
-            } while (projection.needsMaterialization);
-            assertCurrent();
-            if (getSessionRowProjection(context) !== projection || projection.state.cfg !== cfg) {
-              throw new Error(
-                "Session projection changed while preparing the listing. Retry the request.",
-              );
-            }
-            store = loadProjectSessionStore(
-              cfg,
-              {
-                projection: "list",
-                // Federation and process-local incognito stores retain the existing loader.
-                loadEntries: (target) =>
-                  projection
-                    .selectEntries({ storePath: target.storePath, sortBy: null })
-                    .map((row) => ({
-                      sessionKey: row.key,
-                      entry: row.storedEntry ?? row.entry,
-                      keyBytes: Buffer.from(row.key),
-                    }))
-                    // SQLite's binary key order breaks locale-equal recency ties.
-                    .toSorted((left, right) => Buffer.compare(left.keyBytes, right.keyBytes)),
-              },
-              incognitoStores,
-            ).store;
+          const projection = requireSessionRowProjection(context);
+          do {
+            await projection.prepareSelection();
+          } while (projection.needsSelectionPreparation());
+          assertCurrent();
+          if (getSessionRowProjection(context) !== projection || projection.state.cfg !== cfg) {
+            throw new Error(
+              "Session projection changed while preparing the listing. Retry the request.",
+            );
           }
+          store = loadProjectSessionStore(projection, incognitoStores);
           assertCurrent();
         }
         if (params.includeObserved && canWrite()) {
@@ -481,11 +431,14 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         }
         diagnostics?.mark("recents");
         const profileId = client?.authenticatedUserProfile?.profileId;
-        const recentProfileIds = profileId ? readCurrentUserProfileAliases(profileId) : undefined;
-        const recents = recentProfileIds
-          ? await listProjectRecents(store, recentProfileIds, registryProjects)
+        const recentProfile = profileId
+          ? await prepareCurrentUserProfileAliases(profileId)
           : undefined;
         assertCurrent();
+        const recents = recentProfile
+          ? await listProjectRecents(store, recentProfile.aliases, registryProjects)
+          : undefined;
+        recentProfile?.assertCurrent();
         diagnostics?.mark("response");
         assertCurrent();
         const writable = canWrite();
@@ -541,11 +494,10 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
       },
       projectCheckoutError,
     ),
-    "projects.add": async ({ params, respond, context, signal }) => {
-      if (!assertValidParams(params, validateProjectsAddParams, "projects.add", respond)) {
-        return;
-      }
-      try {
+    "projects.add": defineValidatedGatewayHandler(
+      "projects.add",
+      validateProjectsAddParams,
+      async ({ params, respond, context, signal }) => {
         const cfg = context.getRuntimeConfig();
         respond(
           true,
@@ -555,42 +507,28 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           ),
           undefined,
         );
-      } catch (error) {
-        if (isTrustedSecretSurfaceUnavailableError(error)) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE, {
-              details: {
-                code: GatewayErrorDetailCodes.PROJECT_CLONE_FAILED,
-                cause: "auth_required",
-              },
-              retryable: false,
-            }),
-          );
-          return;
-        }
-        if (error instanceof ProjectCloneError) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              error.failure === "invalid_url" ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
-              error.message,
+      },
+      (error) => {
+        const failure = isTrustedSecretSurfaceUnavailableError(error)
+          ? { cause: "auth_required", message: CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE }
+          : error instanceof ProjectCloneError
+            ? { cause: error.failure, message: error.message }
+            : undefined;
+        return failure
+          ? errorShape(
+              failure.cause === "invalid_url" ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+              failure.message,
               {
                 details: {
                   code: GatewayErrorDetailCodes.PROJECT_CLONE_FAILED,
-                  cause: error.failure,
+                  cause: failure.cause,
                 },
-                retryable: error.failure === "network" || error.failure === "clone_failed",
+                retryable: failure.cause === "network" || failure.cause === "clone_failed",
               },
-            ),
-          );
-          return;
-        }
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-      }
-    },
+            )
+          : errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
+      },
+    ),
     "projects.searchRemote": defineValidatedGatewayHandler(
       "projects.searchRemote",
       validateProjectsSearchRemoteParams,

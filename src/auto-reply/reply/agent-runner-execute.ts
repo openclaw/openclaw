@@ -179,6 +179,7 @@ export async function executePreparedReplyAgentRun(
   activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
     runSessionCompactionIfNeeded({
       ...context,
+      replyOperation,
       pendingUserEntryId: preflightAdmission?.entryId,
       promptForEstimate: followupRun.prompt,
       sessionEntry: activeSessionEntry,
@@ -385,6 +386,8 @@ export function createReplyAgentRestartRecoveryController(
     normalizeOptionalString(sessionCtx.MessageSidFull);
   const recovery = createReplyRestartRecoveryClaimController({
     agentId: followupRun.run.agentId,
+    operatorAuthority: followupRun.operatorAuthority,
+    inputProvenance: followupRun.run.inputProvenance,
     lifecycleGeneration: replyOperation.lifecycleGeneration,
     admissionRunId,
     executionRunId: opts?.runId,

@@ -25,6 +25,7 @@ import { formatPortDiagnostics } from "../../infra/ports-format.js";
 import { inspectPortConnections } from "../../infra/ports-inspect.js";
 import type { PortConnection } from "../../infra/ports-types.js";
 import { readGatewayRestartHandoffSync } from "../../infra/restart-handoff.js";
+import { describeUnreadableStateDatabase } from "../../infra/state-repair-message.js";
 import { inspectWindowsGatewayFirewall } from "../../infra/windows-gateway-firewall-diagnostics.js";
 import { resolveConfiguredLogFilePath } from "../../logging/log-file-path.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-record-reader.js";
@@ -186,6 +187,17 @@ async function gatherDaemonStatusImpl(
     });
     if (schemas.incompatible.length > 0) {
       throw new OpenClawDatabaseSchemaPreflightError(schemas.incompatible);
+    }
+    // Config readers would otherwise report this database failure as a config read failure.
+    const unreadableStateDatabase = schemas.indeterminate.find(
+      (database) => database.kind === "state",
+    );
+    if (unreadableStateDatabase) {
+      const { problem, recovery } = describeUnreadableStateDatabase(
+        unreadableStateDatabase.path,
+        unreadableStateDatabase.reason,
+      );
+      throw new Error(`${problem}. ${recovery}`);
     }
   }
   const restartHandoff = opts.deep ? readGatewayRestartHandoffSync(serviceEnv) : null;

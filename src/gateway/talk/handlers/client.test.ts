@@ -459,16 +459,22 @@ describe("talk.client.transcript", () => {
     const resource = await completeOffer();
     expect(getActiveGatewayRootWorkCount()).toBe(0);
     expect(isGatewayWorkAdmissionClosed()).toBe(false);
+    const enqueue = voiceMocks.runEmbeddedAgent.getMockImplementation()!;
+    voiceMocks.runEmbeddedAgent.mockImplementationOnce(async (params) => {
+      expect(resolveClientVoiceRunBinding(params.runId)).toMatchObject({
+        agentId: "main",
+        sessionKey,
+        voiceSessionId: ownedVoiceSessionId,
+      });
+      return await enqueue(params);
+    });
 
     await expect(
       resource.runInAsyncScope(() => consult({ prompt: "Return the fixture status" })),
     ).resolves.toEqual({ text: "fixture status" });
     const [run] = voiceMocks.runEmbeddedAgent.mock.calls[0]!;
-    expect(resolveClientVoiceRunBinding(run.runId)).toMatchObject({
-      agentId: "main",
-      sessionKey,
-      voiceSessionId: ownedVoiceSessionId,
-    });
+    expect(resolveClientVoiceRunBinding(run.runId)).toBeUndefined();
+    expect(getActiveGatewayRootWorkCount()).toBe(0);
     expect(getActiveSessionWorkAdmissionCount()).toBe(0);
   });
 

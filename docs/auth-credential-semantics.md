@@ -148,6 +148,9 @@ and personal-account selection still run on each request. Isolated agent scopes
 and private database snapshots do not share this cache. Gateway cache misses reuse
 a read-only child whose lifetime ends at shutdown; each read reacquires its source
 admission and closes its SQLite handles before returning.
+Reader launches normalize the effective state directory, so an implicit default
+and the same explicitly pinned directory reuse that child. A different state
+directory, environment, or source still replaces it.
 Detached connection, cron, heartbeat, and hook callbacks retain that Gateway's
 read-only worker scope without inheriting startup or request authority. Shutdown
 refuses late callbacks before they can create another reader.

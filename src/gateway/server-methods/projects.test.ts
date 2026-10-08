@@ -10,15 +10,16 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
+import * as combinedStoreRead from "../../config/sessions/combined-store-gateway-read.js";
 import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
-import * as transcriptWorker from "../../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import * as spawnDiagnostics from "../../process/spawn-diagnostics.js";
 import { registerProjectRegistry } from "../../projects/project-registry.js";
 import { registerClonedProjectRegistry } from "../../projects/project-registry.test-support.js";
 import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -26,6 +27,11 @@ import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { gitHubPublicApi } from "../github-public-api.js";
 import * as projectGitHubSearch from "../project-github-search.js";
+import {
+  createSessionRowProjection,
+  type SessionRowProjection,
+} from "../session-row-projection.js";
+import * as rowInputs from "../session-utils-row.js";
 import { projectsHandlers as registeredProjectsHandlers } from "./projects.js";
 import {
   execFileAsync,
@@ -408,6 +414,8 @@ test("projects.list coalesces concurrent observed Git discovery and refreshes la
       { sessionId: "observed", updatedAt: 1, execCwd: repo },
     );
     const cfg = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    using _ = { [Symbol.dispose]: () => projection.dispose() };
     const list = () =>
       invokeProjectMethod(
         "projects.list",
@@ -416,6 +424,7 @@ test("projects.list coalesces concurrent observed Git discovery and refreshes la
         ["operator.write"],
         undefined,
         registeredProjectsHandlers,
+        projection,
       );
     using spawns = vi.spyOn(spawnDiagnostics, "recordChildProcessSpawn");
     const single = await list();
@@ -648,8 +657,9 @@ test("project responses redact credentials and URL suffixes from registered orig
   });
 });
 
-test("registered projects.list reads recents and observed session rows off the caller thread", async () => {
+test("registered projects.list serves fresh observed metadata without broad reads or display refresh", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-worker-" });
+  let projection: SessionRowProjection | undefined;
   try {
     const repo = await initializeRepository(state.root);
     const profile = ensureProfileForEmail("projects-worker@example.test");
@@ -673,8 +683,33 @@ test("registered projects.list reads recents and observed session rows off the c
     try {
       loadCombinedSessionStoreForGatewayCore(cfg);
       expect(rowQueries().length).toBeGreaterThan(0);
+      projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      do {
+        await projection.ensureMaterialized();
+      } while (projection.needsMaterialization);
       observer.queries.length = 0;
+      using broadRead = vi
+        .spyOn(combinedStoreRead, "loadCombinedSessionStoreForGatewayCoreAsync")
+        .mockRejectedValue(new Error("Broad session discovery is unavailable"));
+      using _ = vi.spyOn(rowInputs, "readSessionRowInputs").mockImplementation(() => {
+        throw new Error("Session display refresh is unavailable");
+      });
+      sessionChanges.emit({ all: true, scope: "catalog" });
       for (let round = 0; round < 2; round++) {
+        if (round === 1) {
+          replaceSessionEntrySync(
+            { agentId: "main", sessionKey: "agent:main:project-worker" },
+            {
+              sessionId: "project-worker",
+              updatedAt: 40,
+              archivedAt: 1,
+              spawnedCwd: repo,
+              execCwd: repo,
+              createdActor: { type: "human", source: "profile", id: profile.id },
+            },
+          );
+          observer.queries.length = 0;
+        }
         expect(
           await invokeProjectMethod(
             "projects.list",
@@ -683,22 +718,25 @@ test("registered projects.list reads recents and observed session rows off the c
             ["operator.write"],
             profile.id,
             registeredProjectsHandlers,
+            projection,
           ),
         ).toMatchObject({
           ok: true,
           payload: {
             recents: [{ kind: "folder", folder: repo, displayName: "registered" }],
             observedProjects: [
-              { checkouts: [{ runnerId: "gateway", path: repo }], lastUsedAt: 20 },
+              { checkouts: [{ runnerId: "gateway", path: repo }], lastUsedAt: round ? 40 : 20 },
             ],
           },
         });
+        expect(rowQueries()).toEqual([]);
       }
-      expect(rowQueries()).toEqual([]);
+      expect(broadRead).not.toHaveBeenCalled();
     } finally {
       observer.restore();
     }
   } finally {
+    projection?.dispose();
     await state.cleanup();
   }
 });
@@ -710,7 +748,7 @@ test.each(["write scope", "session access", "registry access", "probe access"])(
       layout: "state-only",
       prefix: "projects-worker-scope-",
     });
-    const read = transcriptWorker.withSessionHistoryWorkerDatabases;
+    let projection: SessionRowProjection | undefined;
     let restoreRead = () => {};
     try {
       const profile = ensureProfileForEmail("projects-scope@example.test");
@@ -728,10 +766,12 @@ test.each(["write scope", "session access", "registry access", "probe access"])(
         },
       );
       const scopes = ["operator.write"];
+      projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+      const read = projection.prepareSelection;
       const observer = vi
-        .spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases")
-        .mockImplementation(async (options, operation) => {
-          const result = await read(options, operation);
+        .spyOn(projection, "prepareSelection")
+        .mockImplementation(async (...args) => {
+          const result = await read(...args);
           if (change === "write scope") {
             scopes.splice(0, scopes.length, "operator.read");
           } else if (change === "session access") {
@@ -766,6 +806,7 @@ test.each(["write scope", "session access", "registry access", "probe access"])(
         change === "probe access" || change === "registry access"
           ? projectsHandlers
           : registeredProjectsHandlers,
+        projection,
       );
       if (change !== "write scope") {
         expect(result).toMatchObject({
@@ -796,6 +837,7 @@ test.each(["write scope", "session access", "registry access", "probe access"])(
       expect(observer).toHaveBeenCalled();
     } finally {
       restoreRead();
+      projection?.dispose();
       await state.cleanup();
     }
   },

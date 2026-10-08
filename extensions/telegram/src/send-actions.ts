@@ -6,9 +6,7 @@ import { buildTypingThreadParams } from "./bot/helpers.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { resolveTelegramSendThreadSpec } from "./reply-parameters.js";
 import {
-  createTelegramRequestWithDiag,
   isTelegramMessageDeleteNoopError,
-  resolveAndPersistChatId,
   withTelegramApiContext,
   type TelegramApi,
 } from "./send-context.js";
@@ -74,37 +72,30 @@ export async function sendTypingTelegram(
     opts.signal?.addEventListener("abort", abort, { once: true });
   }
   try {
-    return await withTelegramApiContext(opts, async (context): Promise<{ ok: true }> => {
-      const { cfg, api } = context;
-      const chatId = await resolveAndPersistChatId({
-        cfg,
-        api,
-        lookupTarget: target.chatId,
-        persistTarget: to,
-        verbose: opts.verbose,
-      });
-      const requestWithDiag = createTelegramRequestWithDiag({
-        cfg,
-        retry: opts.retry,
-        verbose: opts.verbose,
-        shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "action" }),
-      });
-      const threadParams = buildTypingThreadParams(threadSpec?.id);
-      const signalArgs: [Parameters<TelegramApi["sendChatAction"]>[3]?] = apiAbort
-        ? [apiAbort.signal]
-        : [];
-      await requestWithDiag(
-        () =>
-          api.sendChatAction(
-            chatId,
-            "typing",
-            threadParams as Parameters<TelegramApi["sendChatAction"]>[2],
-            ...signalArgs,
-          ),
-        "typing",
-      );
-      return { ok: true };
-    });
+    return await withTelegramMessageAction(
+      to,
+      undefined,
+      opts,
+      async ({ api, chatId, request }): Promise<{ ok: true }> => {
+        const threadParams = buildTypingThreadParams(threadSpec?.id);
+        const signalArgs: [Parameters<TelegramApi["sendChatAction"]>[3]?] = apiAbort
+          ? [apiAbort.signal]
+          : [];
+        await request(
+          () =>
+            api.sendChatAction(
+              chatId,
+              "typing",
+              threadParams as Parameters<TelegramApi["sendChatAction"]>[2],
+              ...signalArgs,
+            ),
+          "typing",
+        );
+        return { ok: true };
+      },
+      (err) => isRecoverableTelegramNetworkError(err, { context: "action" }),
+      "internal",
+    );
   } finally {
     opts.signal?.removeEventListener("abort", abort);
   }

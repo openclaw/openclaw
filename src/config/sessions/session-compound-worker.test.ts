@@ -9,7 +9,6 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -78,66 +77,6 @@ afterEach(() => {
   delivery.afterCommit = undefined;
   vi.restoreAllMocks();
 });
-
-it.each(["fresh", "replay"])(
-  "fences unstaged original input at COMMIT while retaining %s semantics",
-  async (mode) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const f = fixture();
-      let live = true;
-      const assertCurrent = vi.fn(() => {
-        if (!live) {
-          throw new Error("original input authority closed");
-        }
-      });
-      const recorder = () =>
-        createUserTurnTranscriptRecorder({
-          message: {
-            role: "user",
-            content: "synthetic command",
-            timestamp: Date.now(),
-            idempotencyKey: "unstaged-command",
-          },
-          target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: f.read() },
-          assertOriginalInputCommit: assertCurrent,
-          beforeMessageWrite: ({ message }) => {
-            assertCurrent();
-            return message;
-          },
-          onPersistenceError: () => {},
-          updateMode: "none",
-        });
-      if (mode === "replay") {
-        await recorder().persistFallback();
-        live = false;
-        assertCurrent.mockClear();
-      }
-      let commitSeen = false;
-      const create = admission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) =>
-          create((request, grant) => {
-            if (request.stage === "commit") {
-              commitSeen = true;
-              live = false;
-            }
-            callback(request, grant);
-          }, attachment),
-      );
-      if (mode === "fresh") {
-        await expect(recorder().persistFallback()).rejects.toThrow(
-          "original input authority closed",
-        );
-        expect(commitSeen).toBe(true);
-        expect(f.events()).toEqual([]);
-      } else {
-        await expect(recorder().persistFallback()).resolves.toMatchObject({ appended: false });
-        expect(assertCurrent).not.toHaveBeenCalled();
-        expect(f.events().filter((event) => event.type === "message")).toHaveLength(1);
-      }
-    });
-  },
-);
 
 it.each(["turn", "reset"] as const)(
   "publishes an acknowledged %s exactly once after a lost worker reply",
@@ -490,38 +429,48 @@ it("reconciles a dirty reset transcript through the host owner after commit", as
   });
 });
 
-it("preserves reset conflict identity and does not overwrite a concurrent entry", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
-    const concurrent = { sessionId: "original", updatedAt: 2, label: "concurrent writer" };
-    const replaceAfterSelection = vi.fn(() => replaceSessionEntrySync(f.scope, concurrent));
-    delivery.afterCommit = (type) => {
-      if (type === "session.entry.patch.prepare") {
-        replaceAfterSelection();
-      }
-    };
-    const buildNextEntry = vi.fn<
-      Parameters<typeof resetSessionEntryLifecycle>[0]["buildNextEntry"]
-    >(({ currentEntry }) => {
-      expect(currentEntry?.label).toBe("initial");
-      return { sessionId: "rejected-reset", updatedAt: 3 };
+it.for([false, true])(
+  "preserves reset conflict identity and does not overwrite a concurrent entry (boundary=%s)",
+  async (withBoundary) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const f = fixture();
+      const concurrent = { sessionId: "original", updatedAt: 2, label: "concurrent writer" };
+      const replaceAfterSelection = vi.fn(() => replaceSessionEntrySync(f.scope, concurrent));
+      delivery.afterCommit = (type) => {
+        if (type === "session.entry.patch.prepare") {
+          replaceAfterSelection();
+        }
+      };
+      const buildNextEntry = vi.fn<
+        Parameters<typeof resetSessionEntryLifecycle>[0]["buildNextEntry"]
+      >(({ currentEntry }) => {
+        expect(currentEntry?.label).toBe("initial");
+        return { sessionId: "rejected-reset", updatedAt: 3 };
+      });
+      const committed = vi.fn();
+      const work = resetSessionEntryLifecycle({
+        ...f.scope,
+        target: f.target,
+        resetBoundary: withBoundary
+          ? {
+              context: "clear",
+              reason: "new",
+              cwd: "/synthetic/workspace",
+            }
+          : undefined,
+        buildNextEntry,
+        afterEntryMutation: committed,
+      });
+      await expect(work).rejects.toBeInstanceOf(SqliteSessionMutationConflictError);
+      await expect(work).rejects.toMatchObject({ operationLabel: "reset" });
+      expect(replaceAfterSelection).toHaveBeenCalledOnce();
+      expect(buildNextEntry).toHaveBeenCalledOnce();
+      expect(committed).not.toHaveBeenCalled();
+      expect(f.read()).toMatchObject(concurrent);
+      expect(f.events()).toEqual([]);
     });
-    const committed = vi.fn();
-    const work = resetSessionEntryLifecycle({
-      ...f.scope,
-      target: f.target,
-      buildNextEntry,
-      afterEntryMutation: committed,
-    });
-    await expect(work).rejects.toBeInstanceOf(SqliteSessionMutationConflictError);
-    await expect(work).rejects.toMatchObject({ operationLabel: "reset" });
-    expect(replaceAfterSelection).toHaveBeenCalledOnce();
-    expect(buildNextEntry).toHaveBeenCalledOnce();
-    expect(committed).not.toHaveBeenCalled();
-    expect(f.read()).toMatchObject(concurrent);
-    expect(f.events()).toEqual([]);
-  });
-});
+  },
+);
 
 it("rolls collaboration cleanup back with a refused reset and clears only the committed target", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

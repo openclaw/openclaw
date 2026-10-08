@@ -102,13 +102,16 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       attempt.abortSignal,
     ),
   };
+  const assertPreparationCurrent = () => {
+    policyPreparation.signal?.throwIfAborted();
+    policyPreparation.assertCurrent?.();
+  };
   const resolveSandboxInfo = async () => {
     if (!params.setup.sandbox?.enabled) {
       return undefined;
     }
     // Keep the original lifetime check when no elevation policy is needed.
-    policyPreparation.signal?.throwIfAborted();
-    policyPreparation.assertCurrent?.();
+    assertPreparationCurrent();
     const sandboxInfoExecPolicy =
       attempt.bashElevated?.enabled === true
         ? await resolveEmbeddedSandboxInfoExecPolicy(
@@ -239,10 +242,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         enabled: effectivePromptMode === "full",
         config: attempt.config,
         sessionKey: attempt.sessionKey,
-        assertCurrent: () => {
-          policyPreparation.signal?.throwIfAborted();
-          policyPreparation.assertCurrent?.();
-        },
+        assertCurrent: assertPreparationCurrent,
       }),
     };
   };
@@ -345,8 +345,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     },
   };
   const attemptSystemPrompt = await buildAttemptSystemPrompt(promptInputs);
-  policyPreparation.signal?.throwIfAborted();
-  policyPreparation.assertCurrent?.();
+  assertPreparationCurrent();
   const reportInputs: Parameters<typeof buildSystemPromptReport>[0] = {
     source: "run",
     generatedAt: Date.now(),
@@ -419,15 +418,12 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
           capabilityToolNames: capabilities,
           toolSchemaDirectoryPrompt: refreshedToolSchemaDirectoryPrompt,
           sandboxInfo: refreshedSandboxInfo,
-        };
-        Object.assign(
-          embeddedSystemPrompt,
-          await prepareToolContextSections(
+          ...(await prepareToolContextSections(
             tools,
             capabilities,
             refreshedSandboxInfo?.enabled === true,
-          ),
-        );
+          )),
+        };
         const nextSystemPrompt = await buildAttemptSystemPrompt({
           ...promptInputs,
           embeddedSystemPrompt,
@@ -439,8 +435,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
           if (params.isRawModelRun) {
             return currentSystemPrompt;
           }
-          policyPreparation.signal?.throwIfAborted();
-          policyPreparation.assertCurrent?.();
+          assertPreparationCurrent();
           const systemPrompt = nextSystemPrompt.refreshSystemPrompt(
             currentSystemPrompt,
             permissionNotice,

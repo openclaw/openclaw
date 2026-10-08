@@ -24,6 +24,10 @@ import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-trans
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import {
+  appendSessionTranscriptNote,
+  withSessionManagerWrite,
+} from "../../sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import {
@@ -126,6 +130,51 @@ async function withPersistedOrphanBoundary(
 }
 
 describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
+  it("preserves speech finalized while orphan repair waits for write admission", async () => {
+    await withPersistedOrphanBoundary(
+      { parent: true, metadata: false },
+      async ({ input, manager, target }) => {
+        const admitted = createDeferred();
+        const release = createDeferred();
+        const speech = {
+          ...makeAssistantMessageFixture({
+            content: [{ type: "text", text: "voice reply" }],
+            stopReason: "stop",
+            timestamp: 2,
+          }),
+          provenance: { kind: "realtime_voice" as const, sourceChannel: "talk" },
+        };
+        const writing = withSessionManagerWrite(manager, async () => {
+          admitted.resolve();
+          await release.promise;
+          await appendSessionTranscriptNote(target, speech);
+        });
+        await admitted.promise;
+        const preparing = prepareEmbeddedAttemptSessionBoundary(input);
+        release.resolve();
+        const [, boundary] = await Promise.all([writing, preparing]);
+
+        expect(boundary.orphanRepair).toBeUndefined();
+        const consult: PersistedUserTurnMessage = {
+          role: "user",
+          content: "consult request",
+          idempotencyKey: "consult:user",
+          timestamp: 3,
+        };
+        const appended = await manager.appendMessageWithTranscriptAnchorAsync(consult);
+        expect(appended.anchor).toBeDefined();
+        expect(manager.buildSessionContext().messages).toMatchObject([
+          { role: "user", content: "orphan wake" },
+          speech,
+          consult,
+        ]);
+        expect(loadTranscriptEventsSync(target)).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ type: "leaf" })]),
+        );
+      },
+    );
+  });
+
   it.each(["aborted", "rebound-writer"] as const)(
     "does not persist orphan repair for an unavailable owner: %s",
     async (reason) => {

@@ -40,7 +40,7 @@ export type ChatHistoryResponsePage<Messages extends unknown[] | Uint8Array = un
   activity?: AgentHistoryActivity[];
   messagesBytes: number;
   responseHistoryBytes: number;
-  omission?: { omittedCount: number; normalizedBytes: number };
+  omission?: { omittedCount: number; normalizedBytes: number; byteLimited?: true };
   nextOffset?: number;
   olderCursor?: string;
   newerCursor?: string;

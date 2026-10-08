@@ -745,23 +745,19 @@ describe("agent runtime identity token", () => {
       });
       const nowSpy = vi.spyOn(Date, "now").mockReturnValue(4000);
       const count = expires ? 1 : 8;
-      let verifications: Array<ReturnType<typeof runtimeToken.verifyAgentRuntimeIdentityToken>> =
-        [];
-
-      await updateExecApprovals({
-        update: () => {
-          // Verification can begin while another parallel agent call still owns
-          // the process-local approvals lock. It must queue behind that owner.
-          verifications = Array.from({ length: count }, () =>
-            runtimeToken.verifyAgentRuntimeIdentityToken(token),
-          );
-          if (expires) {
-            nowSpy.mockReturnValue(5000);
-          }
-          return null;
-        },
+      const write = updateExecApprovals({
+        update: { kind: "replace", file: readExecApprovalsSnapshot().file },
       });
+      // Parallel identity reads retain their own expiry check while the shared
+      // writer settles an earlier approvals command.
+      const verifications = Array.from({ length: count }, () =>
+        runtimeToken.verifyAgentRuntimeIdentityToken(token),
+      );
+      if (expires) {
+        nowSpy.mockReturnValue(5000);
+      }
 
+      await write;
       const verified = await Promise.all(verifications);
       expect(verified).toHaveLength(count);
       for (const identity of verified) {

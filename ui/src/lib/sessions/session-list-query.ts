@@ -402,6 +402,8 @@ export type ManagedSessionList = ObservedSessionList & {
   key: string;
   query: ReturnType<typeof normalizeManagedSessionListQuery>;
   retainedLimit: number;
+  /** Raw page identities, scoped to this window, for completeness despite hidden rows. */
+  receivedKeys: Set<string>;
   startupRetryAttempt: number;
   /** Invalidation retires remaining pages without cancelling the correlated RPC. */
   readGeneration: number;

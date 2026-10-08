@@ -11,10 +11,7 @@ export function shouldRotateCodexAppServerBindingForRuntime(params: {
   current?: string;
   binding?: string;
 }): boolean {
-  if (!params.current) {
-    return false;
-  }
-  if (params.binding === params.current) {
+  if (!params.current || params.binding === params.current) {
     return false;
   }
   return params.connectionClass === "remote" || Boolean(params.binding);

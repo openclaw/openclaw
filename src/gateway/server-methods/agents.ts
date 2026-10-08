@@ -777,7 +777,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
               }
             }
             await context.cron.removeAgentJobsTransactional(agentId, () =>
-              withAgentExecApprovalsRemoved(agentId, async () => {
+              withAgentExecApprovalsRemoved(deletion.entry, async () => {
                 deletion.assertCurrent();
                 if (!rosterCommitted) {
                   try {

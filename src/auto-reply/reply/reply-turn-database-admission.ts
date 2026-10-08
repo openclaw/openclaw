@@ -7,7 +7,7 @@ import {
   type ReplyOperationAdmission,
 } from "./reply-run-registry.state.js";
 
-/** Bind the original database borrow to the operation and join initialization handoffs on release. */
+/** Bind the original database borrow to the operation and join lifecycle handoffs on release. */
 export function bindReplyOperationDatabaseAdmission(
   readerOperation: ReplyOperation,
   params: { sessionKey: string },
@@ -49,27 +49,31 @@ export function bindReplyOperationDatabaseAdmission(
     databaseIdentity: databaseClaim?.identity,
     databaseClaim,
     reader: bindReader(databaseClaim && "kind" in databaseClaim ? databaseClaim.reader : undefined),
-    async afterInitialization(initialized) {
-      const assertInitializing = () => {
+    resolveReader() {
+      assertReaderOperation();
+      return operationAdmission.reader;
+    },
+    async afterTransition(transition) {
+      const assertTransitionActive = () => {
         assertReaderOperation();
         if (readerOperation.result !== null) {
-          throw new SessionWorkStartChangedError("Reply initialization is no longer active");
+          throw new SessionWorkStartChangedError("Reply transition is no longer active");
         }
       };
-      assertInitializing();
+      assertTransitionActive();
       const current = operationAdmission.databaseClaim;
       const prepare =
-        current && "kind" in current ? current.afterInitialization?.bind(current) : undefined;
+        current && "kind" in current ? current.afterTransition?.bind(current) : undefined;
       if (!current || !prepare) {
         return;
       }
       if (handoff) {
-        throw new Error("Session initialization admission handoff is already pending");
+        throw new Error("Session transition admission handoff is already pending");
       }
       handoff = (async () => {
-        const next = await prepare(initialized, assertInitializing);
+        const next = await prepare(transition, assertTransitionActive);
         try {
-          assertInitializing();
+          assertTransitionActive();
           current.assertCurrent();
           next.assertCurrent();
         } catch (error) {
@@ -80,7 +84,7 @@ export function bindReplyOperationDatabaseAdmission(
         operationAdmission.reader = bindReader(next.reader);
         // Revoke the old view synchronously, then join its accepted work before returning.
         await current.release();
-        assertInitializing();
+        assertTransitionActive();
         next.assertCurrent();
       })();
       try {

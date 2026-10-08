@@ -1,6 +1,10 @@
 import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  getNodeSqliteKysely,
+  sqliteStringSet,
+} from "../infra/kysely-sync.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
@@ -27,11 +31,16 @@ export function readPluginModelCatalogEntries(
   }
   const allowed = pluginIds && new Set(pluginIds);
   const result = withOpenClawAgentDatabaseReadOnly(({ db }) => {
-    const query = getNodeSqliteKysely<PluginModelCatalogDatabase>(db)
+    let query = getNodeSqliteKysely<PluginModelCatalogDatabase>(db)
       .selectFrom("cache_entries")
       .select(["key", "value_json"])
       .where("scope", "=", scope)
       .orderBy("key");
+    if (pluginIds) {
+      query = query.where("key", "in", sqliteStringSet(pluginIds));
+    }
+    // SQLite binding normalizes lone surrogates; retain exact JS membership so
+    // such a selector cannot return a replacement-character catalog.
     return executeSqliteQuerySync(db, query).rows.flatMap((row) =>
       row.value_json === null || (allowed && !allowed.has(row.key))
         ? []

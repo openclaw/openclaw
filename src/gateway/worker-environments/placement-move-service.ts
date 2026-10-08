@@ -1,3 +1,5 @@
+import { getRuntimeConfig } from "../../config/config.js";
+import { assertRequiredWorkerMove } from "../../config/required-worker-profile.js";
 import { composePlacementAuthorization } from "./placement-authorization.js";
 import type {
   WorkerActiveDispatchPlacement,
@@ -99,11 +101,12 @@ export function createWorkerPlacementMoveService(options: {
   ): Promise<WorkerMovePlacement> => {
     const assertCurrent = composePlacementAuthorization(authorize, () => {
       signal?.throwIfAborted();
+      assertRequiredWorkerMove(getRuntimeConfig(), request.target);
     });
     let intent: WorkerPlacementMoveIntent | undefined;
     let local: WorkerReclaimPlacement | undefined;
     try {
-      signal?.throwIfAborted();
+      assertCurrent();
       if (request.abandonSource && request.target.kind !== "gateway") {
         throw new Error("Source abandonment is available only when continuing on the Gateway");
       }
@@ -114,6 +117,7 @@ export function createWorkerPlacementMoveService(options: {
       if (request.target.kind !== "gateway" && !destination) {
         throw new Error(`Session ${request.sessionKey} worker move target is unavailable`);
       }
+      assertCurrent();
       const begun = await options.runMoveBarrier({
         sessionId: request.sessionId,
         sessionKey: request.sessionKey,
@@ -149,6 +153,7 @@ export function createWorkerPlacementMoveService(options: {
               }
             }
           }
+          assertCurrent();
           const started = await options.placements.beginPlacementMove(moveRequest, {
             assertCurrent,
             ...(request.abandonSource
@@ -175,6 +180,9 @@ export function createWorkerPlacementMoveService(options: {
         : await options.reclaimSource(request, intent, assertCurrent, onTransition);
       if (request.abandonSource) {
         reportPlacementTransition(onTransition, local);
+      }
+      if (local.state === "reclaimed") {
+        assertRequiredWorkerMove(getRuntimeConfig(), intent.target);
       }
       if (local.state !== "local") {
         throw new Error(`Session ${request.sessionKey} move did not return to local placement`);
@@ -244,6 +252,7 @@ export function createWorkerPlacementMoveService(options: {
         sessionKey: placement.sessionKey,
         agentId: placement.agentId,
       };
+      const assertDestination = () => assertRequiredWorkerMove(getRuntimeConfig(), intent.target);
       if (intent.abandonSource) {
         if (intent.target.kind !== "gateway") {
           throw new Error(
@@ -254,7 +263,8 @@ export function createWorkerPlacementMoveService(options: {
           await options.placements.cancelPlacementMove(intent);
           return;
         }
-        await options.abandonSource(identity, intent);
+        assertDestination();
+        await options.abandonSource(identity, intent, assertDestination);
         return;
       }
       if (placement.state === "failed") {
@@ -271,7 +281,11 @@ export function createWorkerPlacementMoveService(options: {
         await options.placements.cancelPlacementMove(intent);
         return;
       } else if (placement.state === "draining") {
-        const local = await options.reclaimSource(identity, intent);
+        assertDestination();
+        const local = await options.reclaimSource(identity, intent, assertDestination);
+        if (local.state === "reclaimed") {
+          return;
+        }
         if (local.state !== "local") {
           throw new Error(`Session ${identity.sessionKey} move recovery did not return local`);
         }
@@ -283,6 +297,7 @@ export function createWorkerPlacementMoveService(options: {
         }
         const source = placement;
         const assertCurrent = () => {
+          assertDestination();
           const current = options.placements.get(intent.sessionId);
           if (
             !matchesWorkerPlacementTarget(current, source) ||
@@ -292,17 +307,21 @@ export function createWorkerPlacementMoveService(options: {
             throw new Error(`Session ${identity.sessionKey} move recovery lost its source owner`);
           }
         };
+        assertCurrent();
         if (intent.target.kind === "gateway") {
           // Teardown can survive a restart before the source checkout is materialized.
           // Publish local placement only after its accepted repository state exists locally.
           await options.prepareGatewayMove?.({ ...identity, assertCurrent });
           assertCurrent();
         }
-        placement = await options.placements.completePlacementMoveSourceToLocal({
-          operationId: intent.operationId,
-          sessionId: intent.sessionId,
-          expectedGeneration: placement.generation,
-        });
+        placement = await options.placements.completePlacementMoveSourceToLocal(
+          {
+            operationId: intent.operationId,
+            sessionId: intent.sessionId,
+            expectedGeneration: placement.generation,
+          },
+          { assertCurrent },
+        );
       } else if (placement.state === "active") {
         const stillSource =
           placement.environmentId === intent.source.environmentId &&

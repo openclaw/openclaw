@@ -148,6 +148,30 @@ const codexPluginConfigSchema = z.strictObject({
       headers: z.record(z.string(), SecretInputSchema).optional(),
       clearEnv: z.array(z.string()).optional(),
       remoteWorkspaceRoot: z.string().trim().min(1).optional(),
+      nativeHookRelay: z
+        .strictObject({
+          url: z
+            .string()
+            .url()
+            .refine((value) => {
+              const url = new URL(value);
+              return (
+                url.protocol === "https:" &&
+                !url.username &&
+                !url.password &&
+                !url.search &&
+                !url.hash
+              );
+            }, "Native hook relay URL must use HTTPS without credentials, query, or fragment"),
+          credentialDirectory: z
+            .string()
+            .trim()
+            .refine(
+              (value) => value.startsWith("/") && value !== "/" && !value.split("/").includes(".."),
+              "Native hook relay credentials require an absolute private directory",
+            ),
+        })
+        .optional(),
       codeModeOnly: z.boolean().optional(),
       loopDetectionPreToolUseRelay: z.boolean().optional(),
       requestTimeoutMs: z.number().positive().optional(),
@@ -181,6 +205,11 @@ export function readCodexPluginConfig(value: unknown): ParsedCodexPluginConfig {
   }
   const parsed = codexPluginConfigSchema.safeParse(value);
   if (!parsed.success) {
+    if (appServer?.nativeHookRelay !== undefined) {
+      throw new Error(
+        "Invalid plugins.entries.codex.config.appServer.nativeHookRelay configuration; remote hooks require an HTTPS URL and an absolute private credential directory.",
+      );
+    }
     if (asNullableRecord(appServer?.networkProxy)?.enabled === true) {
       const issuePath = parsed.error.issues[0]?.path ?? [];
       // Record keys (domains, headers, etc.) are values, not safe diagnostic field names.
@@ -287,11 +316,8 @@ function resolveCodexPluginDestructivePolicy(policy: CodexPluginDestructivePolic
   allowDestructiveActions: boolean;
   destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
 } {
-  if (policy === "auto" || policy === "ask") {
-    return { allowDestructiveActions: true, destructiveApprovalMode: policy };
-  }
   return {
-    allowDestructiveActions: policy,
-    destructiveApprovalMode: policy ? "allow" : "deny",
+    allowDestructiveActions: policy !== false,
+    destructiveApprovalMode: typeof policy === "string" ? policy : policy ? "allow" : "deny",
   };
 }
