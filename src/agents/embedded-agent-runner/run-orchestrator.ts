@@ -300,15 +300,16 @@ async function runEmbeddedAgentForSession(
           model: requestedRuntimeSelection.modelId,
           requestedRouteResolution: params.requestedRouteResolution,
           fallbacksOverride: runtimePluginFallbacksOverride,
-        }).map((candidate, index): AgentHarnessPluginSelection => ({
-          provider: candidate.provider,
-          modelId: candidate.model,
-          // Preparation hints apply only to the requested route; fallbacks resolve their own policy.
-          ...(requestedHarnessRuntime && (index === 0 || explicitHarnessRuntime)
-            ? { runtime: requestedHarnessRuntime }
-            : {}),
-          agentId: requestedWorkspaceResolution.agentId,
-        }));
+        }).map((candidate, index): AgentHarnessPluginSelection =>
+          Object.assign(
+            { provider: candidate.provider, modelId: candidate.model },
+            // Preparation hints apply only to the requested route; fallbacks resolve their own policy.
+            requestedHarnessRuntime && (index === 0 || explicitHarnessRuntime)
+              ? { runtime: requestedHarnessRuntime }
+              : {},
+            { agentId: requestedWorkspaceResolution.agentId },
+          ),
+        );
         const preparedInput = {
           config,
           agentId: requestedWorkspaceResolution.agentId,

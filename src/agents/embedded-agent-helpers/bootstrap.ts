@@ -275,8 +275,8 @@ function trimBootstrapContent(
   maxChars: number,
 ): TrimBootstrapResult {
   const trimmed = content.trimEnd();
-  const finish = (content: string, truncated = true): TrimBootstrapResult => ({
-    content,
+  const finish = (value: string, truncated = true): TrimBootstrapResult => ({
+    content: value,
     truncated,
     maxChars,
     originalLength: trimmed.length,

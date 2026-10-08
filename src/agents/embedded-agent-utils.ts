@@ -304,9 +304,9 @@ function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
   const blocks: ThinkTaggedSplitBlock[] = [];
 
   const pushBlock = (type: ThinkTaggedSplitBlock["type"], value: string) => {
-    const text = type === "thinking" ? value.trim() : value;
-    if (text) {
-      blocks.push(type === "thinking" ? { type, thinking: text } : { type, text });
+    const content = type === "thinking" ? value.trim() : value;
+    if (content) {
+      blocks.push(type === "thinking" ? { type, thinking: content } : { type, text: content });
     }
   };
 

@@ -34,7 +34,7 @@ export function extractObservedOverflowTokenCount(errorMessage?: string): number
       ?.slice(1)
       .map((capture) => {
         const raw = capture.replaceAll(",", "");
-        return raw ? Number(raw) : NaN;
+        return raw ? Number(raw) : Number.NaN;
       });
     if (
       counts?.every(
