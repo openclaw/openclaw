@@ -265,6 +265,7 @@ export async function noteSessionTranscriptHealth(options?: {
         params.shouldRepair && (!legacyMainSessionResult.armed || legacyMainSessionResult.complete),
     });
     const results = {
+      entryStateReport: undefined,
       report,
       legacyMainSessionResult,
       canonicalKeyReport,

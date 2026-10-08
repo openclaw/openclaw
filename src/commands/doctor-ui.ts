@@ -191,7 +191,7 @@ export async function maybeRepairUiProtocolFreshness(
       force: stale,
       onBuildStart: () =>
         note(
-          `${stale ? "Rebuilding stale" : "Building"} UI assets... (this may take a moment)`,
+          `${stale ? "Rebuilding stale" : "Building Control"} UI assets... (this may take a moment)`,
           "UI",
         ),
     });
