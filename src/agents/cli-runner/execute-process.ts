@@ -1,16 +1,18 @@
 import crypto from "node:crypto";
+import type { SessionEventTarget } from "../../auto-reply/reply/session-event-contract.js";
 import { shouldLogVerbose } from "../../globals.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   resolveEventSessionKeyForPolicy,
   resolveEventSessionRoutingPolicy,
-  scopedHeartbeatWakeOptionsForPolicy,
 } from "../../infra/event-session-routing.js";
-import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { createModelCallStreamProgressReporter } from "../../logging/diagnostic-model-stream-progress.js";
 import { beginDiagnosticBackendActivity } from "../../logging/diagnostic-run-activity.js";
 import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { appendCapturedOutput, createCapturedOutputBuffers } from "../../process/exec-output.js";
 import type { RunExit } from "../../process/supervisor/types.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts.js";
 import { transformCliResultText } from "../cli-output-results.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
@@ -90,6 +92,41 @@ export async function executeCliProcess(params: {
   const resumeAtArg =
     params.useResume && runParams.cliSessionResumeAt ? params.backend.resumeAtArg : undefined;
   const hasJsonlOutput = params.outputMode === "jsonl";
+  const eventDelivery =
+    runParams.sourceReplyDeliveryMode === "message_tool_only" ||
+    getAgentRunContext(runParams.runId)?.sessionEventDelivery === false
+      ? false
+      : undefined;
+  const eventSessionKey = runParams.sessionKey
+    ? resolveEventSessionKeyForPolicy(
+        runParams.sessionKey,
+        resolveEventSessionRoutingPolicy({
+          cfg: runParams.config,
+          sessionKey: runParams.sessionKey,
+          channel: runParams.messageProvider,
+          accountId: runParams.agentAccountId,
+        }),
+      )
+    : undefined;
+  const eventAgentId = eventSessionKey
+    ? resolveSessionAgentId({
+        config: runParams.config ?? {},
+        sessionKey: eventSessionKey,
+        agentId: runParams.agentId,
+      })
+    : undefined;
+  let eventTarget: SessionEventTarget | undefined;
+  if (eventSessionKey && eventAgentId && params.events.emitLiveEvents) {
+    try {
+      eventTarget = await params.deps.captureSessionEventTarget(eventAgentId, eventSessionKey, {
+        producerPolicy: context.sessionEventSourcePolicy,
+        assertCaptureCurrent: params.assertCurrent,
+      });
+    } catch (error) {
+      cliBackendLog.warn(`CLI watchdog follow-up unavailable: ${formatErrorMessage(error)}`);
+    }
+    params.assertCurrent();
+  }
 
   const streamingParser = hasJsonlOutput
     ? createCliJsonlStreamingParser({
@@ -466,25 +503,24 @@ export async function executeCliProcess(params: {
           "It may have been waiting for interactive input or an approval prompt.",
           "Check CLI permission settings and OpenClaw approval prompts.",
         ].join(" ");
-        const routing = resolveEventSessionRoutingPolicy({
-          cfg: runParams.config,
-          sessionKey: runParams.sessionKey,
-          channel: runParams.messageProvider,
-          accountId: runParams.agentAccountId,
-        });
-        params.deps.enqueueSystemEvent(stallNotice, {
-          sessionKey: resolveSystemEventQueueKey(
-            resolveEventSessionKeyForPolicy(runParams.sessionKey, routing),
-            runParams.agentId,
-          ),
-        });
-        params.deps.requestHeartbeat(
-          scopedHeartbeatWakeOptionsForPolicy(
-            runParams.sessionKey,
-            { source: "cli-watchdog", intent: "event", reason: "cli:watchdog:stall" },
-            routing,
-          ),
-        );
+        if (eventSessionKey && eventAgentId && eventTarget) {
+          try {
+            const receipt = params.deps.enqueueSessionEvent(stallNotice, {
+              agentId: eventAgentId,
+              sessionKey: eventSessionKey,
+              source: "exec",
+              expectedTarget: eventTarget,
+              deliver: eventDelivery,
+            });
+            void receipt.settled.then((outcome) => {
+              if (outcome.status === "failed") {
+                cliBackendLog.warn(`CLI watchdog follow-up failed: ${outcome.error}`);
+              }
+            });
+          } catch (error) {
+            cliBackendLog.warn(`CLI watchdog follow-up rejected: ${formatErrorMessage(error)}`);
+          }
+        }
       }
       throw timeoutDecision.error;
     }

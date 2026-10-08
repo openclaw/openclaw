@@ -21,6 +21,7 @@ import { createAgentPatchedSessionModelRunGuard } from "../../agents/session-mod
 import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { logVerbose } from "../../globals.js";
 import {
   captureAgentRunLifecycleGeneration,
@@ -31,7 +32,6 @@ import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js"
 import { drainAgentRunTerminalWrites } from "../../infra/agent-run-terminal-writes.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
 import {
   bindGatewayContextResolver,
@@ -51,7 +51,7 @@ import {
   applyMcpAppModelContext,
   type AppContextTurnParams,
 } from "./agent-runner-execution-mcp-context.js";
-import { recordAgentTurnExecutionOutcome } from "./agent-runner-execution-outcome.js";
+import { runAgentTurnWithOutcome } from "./agent-runner-execution-outcome.js";
 import type {
   AgentTurnCompaction,
   AgentTurnExecutionResult,
@@ -83,12 +83,13 @@ import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { resolveReplyFailureVisibility, type DirectBlockDelivery } from "./reply-delivery.js";
 import { createReplyMediaContext, type ReplyMediaContext } from "./reply-media-paths.js";
 import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
+import { resolveReplySessionEventDelivery } from "./reply-operation-run-state.js";
 import {
   markReplyOperationExecutionStarted,
   retainReplyOperationUntilComplete,
 } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
-import { getReplySystemEventContext } from "./system-event-session-key.js";
+import { resolveReplyRunTrigger } from "./reply-turn-kind.js";
 
 async function executeAgentTurnInternalLoop(
   inputParams: AppContextTurnParams,
@@ -160,6 +161,7 @@ async function executeAgentTurnInternalLoop(
       isControlUiVisible: shouldSurfaceToControlUi,
       ...progressCardRefreshRunProjection(params.followupRun.run.inputProvenance),
       completionSource: params.completionSource,
+      sessionEventDelivery: resolveReplySessionEventDelivery(params.opts, params.followupRun.run),
     });
   }
   if (isDiagnosticsEnabled(runtimeConfig)) {
@@ -169,7 +171,7 @@ async function executeAgentTurnInternalLoop(
       sessionId: params.followupRun.run.sessionId,
       agentId: params.followupRun.run.agentId,
       channel: messageProvider,
-      trigger: params.isHeartbeat ? "heartbeat" : "user",
+      trigger: resolveReplyRunTrigger(params),
     });
   }
   let replyMediaContext: ReplyMediaContext;
@@ -278,6 +280,7 @@ async function executeAgentTurnInternalLoop(
       if (params.replyOperation) {
         markReplyOperationExecutionStarted(params.replyOperation);
       }
+      params.followupRun.run.internalEventExecution?.onStarted(runId);
       params.opts?.onAgentRunStart?.(
         runId,
         admittedRunContext.current?.executionIdentityToken,
@@ -534,10 +537,12 @@ async function executeAgentTurnInternal(
     operatorAuthority: params.followupRun.operatorAuthority,
     evidence: params.followupRun.channelAdmissionEvidence,
     gatewayLocalUserIngress: params.followupRun.gatewayLocalUserIngress,
-    assertSourceCurrent:
+    assertSourceCurrent: composeSessionSourceAssertion([
       params.followupRun.run.senderIsOwner === true
         ? captureCommandOwnerAssertion(params.followupRun.run)
         : undefined,
+      params.followupRun.run.internalEventExecution?.assertCurrent,
+    ]),
     onAdmitted: (context) => {
       bindGatewayContextResolver(context, gatewayContextResolver);
       admittedRunContext.current = context;
@@ -673,24 +678,7 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
   const runId = params.opts?.runId ?? crypto.randomUUID();
   const executionParams =
     params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
-  try {
-    const result = await withExecRequestTurn(
-      {
-        identity: {
-          runId,
-          sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
-          sessionId: params.followupRun.run.sessionId,
-          agentId: params.followupRun.run.agentId,
-        },
-        owners: getReplySystemEventContext(params.opts)?.execRequestOwners,
-        abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
-      },
-      () => executeAgentTurnOutcome(executionParams, runId),
-    );
-    await recordAgentTurnExecutionOutcome(executionParams, result);
-    return result;
-  } catch (error) {
-    await recordAgentTurnExecutionOutcome(executionParams, undefined);
-    throw error;
-  }
+  return await runAgentTurnWithOutcome(executionParams, runId, () =>
+    executeAgentTurnOutcome(executionParams, runId),
+  );
 }

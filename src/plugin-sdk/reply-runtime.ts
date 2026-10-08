@@ -1,6 +1,15 @@
 // Shared agent/reply runtime helpers for channel plugins. Keep channel plugins
 // off direct src/auto-reply imports by routing common reply primitives here.
 
+import {
+  dispatchInboundMessage as dispatchInboundMessageInternal,
+  dispatchInboundMessageWithBufferedDispatcher as dispatchInboundMessageWithBufferedDispatcherInternal,
+  dispatchInboundMessageWithDispatcher as dispatchInboundMessageWithDispatcherInternal,
+} from "../auto-reply/dispatch.js";
+import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
+import { getReplyFromConfig as getReplyFromConfigInternal } from "../auto-reply/reply/get-reply.js";
+import { publicChannelTurn, publicReplyOptions, type PublicReplyParams } from "./reply-options.js";
+
 export {
   chunkMarkdownText,
   chunkMarkdownTextWithMode,
@@ -10,12 +19,24 @@ export {
   resolveTextChunkLimit,
 } from "../auto-reply/chunk.js";
 export type { ChunkMode } from "../auto-reply/chunk.js";
-export {
-  dispatchInboundMessage,
-  dispatchInboundMessageWithBufferedDispatcher,
-  dispatchInboundMessageWithDispatcher,
-  settleReplyDispatcher,
-} from "../auto-reply/dispatch.js";
+export { settleReplyDispatcher } from "../auto-reply/dispatch.js";
+export function dispatchInboundMessage(
+  params: PublicReplyParams<Parameters<typeof dispatchInboundMessageInternal>[0]>,
+) {
+  return dispatchInboundMessageInternal(publicChannelTurn(params));
+}
+export function dispatchInboundMessageWithBufferedDispatcher(
+  params: PublicReplyParams<
+    Parameters<typeof dispatchInboundMessageWithBufferedDispatcherInternal>[0]
+  >,
+) {
+  return dispatchInboundMessageWithBufferedDispatcherInternal(publicChannelTurn(params));
+}
+export function dispatchInboundMessageWithDispatcher(
+  params: PublicReplyParams<Parameters<typeof dispatchInboundMessageWithDispatcherInternal>[0]>,
+) {
+  return dispatchInboundMessageWithDispatcherInternal(publicChannelTurn(params));
+}
 export {
   normalizeGroupActivation,
   parseActivationCommand,
@@ -27,7 +48,13 @@ export {
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
 export { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
-export { getReplyFromConfig } from "../auto-reply/reply/get-reply.js";
+export function getReplyFromConfig(
+  ctx: Parameters<typeof getReplyFromConfigInternal>[0],
+  opts?: GetReplyOptions,
+  config?: Parameters<typeof getReplyFromConfigInternal>[2],
+) {
+  return getReplyFromConfigInternal(ctx, publicReplyOptions(opts), config);
+}
 export { HEARTBEAT_TOKEN, isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 export { isAbortRequestText } from "../auto-reply/reply/abort-primitives.js";
 export { isBtwRequestText } from "../auto-reply/reply/btw-command.js";
@@ -38,9 +65,9 @@ export {
   resolveInboundDebounceMs,
 } from "../auto-reply/inbound-debounce.js";
 export {
-  dispatchReplyWithBufferedBlockDispatcherCore as dispatchReplyWithBufferedBlockDispatcher,
-  dispatchReplyWithDispatcherCore as dispatchReplyWithDispatcher,
-} from "../auto-reply/reply/provider-dispatcher.js";
+  dispatchReplyWithBufferedBlockDispatcher,
+  dispatchReplyWithDispatcher,
+} from "./reply-dispatch-runtime.js";
 export {
   createReplyDispatcher,
   createReplyDispatcherWithTyping,

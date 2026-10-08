@@ -175,7 +175,7 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
     notifySessionKey,
     resolveSubagentSession,
     notifyDeliveryContext,
-    // Periodic heartbeat and automation turns keep heartbeat delivery for their commands.
+    // Preserve conversation provenance for passive subagent completion notices.
     notifyFromConversationTurn:
       defaults?.trigger === "user" || defaults?.continuesConversation === true,
   };

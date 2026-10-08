@@ -14,7 +14,6 @@ import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveModelRefFromString } from "../../agents/model-selection.js";
 import { publishedModelCatalogOwnerMatchesAgent } from "../../agents/prepared-model-catalog-owner.js";
-import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
@@ -49,7 +48,6 @@ import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.read.js";
-import { resolveCommandAuthorization } from "../command-auth.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../heartbeat.js";
 import {
@@ -59,6 +57,7 @@ import {
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import { finishCommandTurn } from "./command-turn-completion.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
 import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
@@ -240,6 +239,7 @@ export async function getReplyFromConfig(
   );
   assertReplyPreprocessingActive(opts?.abortSignal);
   opts?.operatorAuthority?.assertCurrent();
+  opts?.internalEventExecution?.assertCurrent?.();
   const refusal = readAgentDatabaseAdmissionRefusal(initialAgentScope.agentId);
   if (refusal) {
     return { text: `${refusal.reason}\n${refusal.repairHint}`, isError: true };

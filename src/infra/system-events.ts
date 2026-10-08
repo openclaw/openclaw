@@ -9,7 +9,7 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { resolveGlobalMap } from "../shared/global-singleton.js";
+import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -66,9 +66,47 @@ type SessionQueue = {
 
 const SYSTEM_EVENT_QUEUES_KEY = Symbol.for("openclaw.systemEvents.queues");
 
-const queues = resolveGlobalMap<string, SessionQueue>(SYSTEM_EVENT_QUEUES_KEY, "close-only");
+const turnOwners = resolveGlobalSingleton(
+  Symbol.for("openclaw.systemEvents.turnOwners"),
+  () => new WeakMap<SystemEvent, { cancel: () => void; started: boolean }>(),
+  (owners) => {
+    // Soft restart retires admitted turns; unmigrated passive notices retain their queue.
+    for (const [key, entry] of queues) {
+      const removed = entry.queue.filter((event) => owners.has(event));
+      entry.queue = entry.queue.filter((event) => !owners.has(event));
+      resetQueueState(key, entry);
+      for (const event of removed) {
+        retireSystemEvent(event);
+      }
+    }
+  },
+);
+
+function retireSystemEvent(event: SystemEvent): void {
+  const owner = turnOwners.get(event);
+  if (owner && !owner.started) {
+    owner.cancel();
+  }
+}
+
+function clearSystemEventQueues(value: Map<string, SessionQueue>) {
+  const removed = [...value.values()].flatMap((entry) => entry.queue.splice(0));
+  value.clear();
+  for (const event of removed) {
+    retireSystemEvent(event);
+  }
+}
+
+const queues = resolveGlobalMap<string, SessionQueue>(
+  SYSTEM_EVENT_QUEUES_KEY,
+  clearSystemEventQueues,
+  "close-only",
+);
 registerSystemEventStoreOwner(SYSTEM_EVENT_QUEUES_KEY, () => {
   for (const [key, entry] of queues) {
+    const removed = entry.queue.filter(
+      (event) => !isSystemEventStoreCurrent(key, event.sessionStorePath),
+    );
     const retained = entry.queue.filter((event) =>
       isSystemEventStoreCurrent(key, event.sessionStorePath),
     );
@@ -77,6 +115,9 @@ registerSystemEventStoreOwner(SYSTEM_EVENT_QUEUES_KEY, () => {
     }
     entry.queue = retained;
     resetQueueState(key, entry);
+    for (const event of removed) {
+      retireSystemEvent(event);
+    }
     recordSystemEventStoreReplaced();
   }
 });
@@ -110,12 +151,15 @@ function getSessionQueue(sessionKey: string): SessionQueue | undefined {
   const key = requireSessionKey(sessionKey);
   const entry = queues.get(key);
   if (entry) {
-    const live = entry.queue.filter(
-      (event) => !readExecRequestOwners(event)?.some((owner) => owner.signal.aborted),
+    const cancelled = entry.queue.filter((event) =>
+      readExecRequestOwners(event)?.some((owner) => owner.signal.aborted),
     );
-    if (live.length !== entry.queue.length) {
-      entry.queue = live;
+    if (cancelled.length > 0) {
+      entry.queue = entry.queue.filter((event) => !cancelled.includes(event));
       resetQueueState(key, entry);
+      for (const event of cancelled) {
+        retireSystemEvent(event);
+      }
     }
   }
   return queues.get(key);
@@ -153,8 +197,22 @@ export function isSystemEventContextChanged(
 export function enqueueSystemEventEntry(
   text: string,
   options: SystemEventOptions,
+  receiptOptions?: ReceiptOptions,
 ): SystemEvent | null {
-  const event = enqueueOwnedSystemEventEntry(text, options);
+  const event = enqueueOwnedSystemEventEntry(text, options, receiptOptions);
+  return event ? cloneSystemEvent(event) : null;
+}
+
+/** Host-owned admission must report capacity refusal before claiming the occurrence. */
+export function enqueueRequiredSystemEventEntry(
+  text: string,
+  options: SystemEventOptions,
+  receiptOptions?: ReceiptOptions,
+): SystemEvent | null {
+  const event = enqueueOwnedSystemEventEntry(text, options, {
+    ...receiptOptions,
+    throwOnFull: true,
+  });
   return event ? cloneSystemEvent(event) : null;
 }
 
@@ -210,7 +268,8 @@ function enqueueOwnedSystemEventEntry(
     }
     return null;
   }
-  if (options.replace) {
+  const replaced = options.replace ? entry.queue.filter(matches) : [];
+  if (replaced.length > 0) {
     entry.queue = entry.queue.filter((event) => !matches(event));
   }
   if (normalizedContextKey !== null) {
@@ -229,11 +288,57 @@ function enqueueOwnedSystemEventEntry(
     readExecRequestOwners(options),
   );
   entry.queue.push(event);
+  // Install the replacement before cancellation callbacks can enqueue more work.
+  for (const previous of replaced) {
+    retireSystemEvent(previous);
+  }
   return event;
 }
 
 export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   return enqueueOwnedSystemEventEntry(text, options) !== null;
+}
+
+/** Transfer one exact occurrence to ordinary session admission. */
+export function claimSystemEventTurn(
+  sessionKey: string,
+  occurrence: SystemEvent,
+  cancel: () => void,
+  agentId?: string,
+) {
+  const key = requireSessionKey(sessionKey);
+  if (agentId && parseAgentSessionKey(key)?.agentId !== agentId) {
+    return undefined;
+  }
+  const event = getSessionQueue(key)?.queue.find((entry) => entry.id === occurrence.id);
+  if (!event || turnOwners.has(event)) {
+    return undefined;
+  }
+  const owner = { cancel, started: false };
+  turnOwners.set(event, owner);
+  const isCurrent = () =>
+    !owner.started &&
+    turnOwners.get(event) === owner &&
+    getSessionQueue(key)?.queue.includes(event) === true;
+  return {
+    start() {
+      if (!isCurrent()) {
+        throw new Error("Session event occurrence was cancelled before admission");
+      }
+      owner.started = true;
+      consumeSelectedSystemEventEntries(key, [event]);
+    },
+    cancel: () => isCurrent() && consumeSelectedSystemEventEntries(key, [event]).length > 0,
+    /** Rejected adoption returns the original passive occurrence; it never recreates one. */
+    release() {
+      return isCurrent() && turnOwners.delete(event);
+    },
+  };
+}
+
+export function isSystemEventTurnOwned(sessionKey: string, occurrence: SystemEvent): boolean {
+  const event = getSessionQueue(sessionKey)?.queue.find((entry) => entry.id === occurrence.id);
+  return event !== undefined && turnOwners.has(event);
 }
 
 /** Enqueues one occurrence and returns one-use removal ownership for its UUID. */
@@ -263,12 +368,13 @@ function drainSystemEventsWith<T>(sessionKey: string, project: (event: SystemEve
   if (!entry || entry.queue.length === 0) {
     return [];
   }
-  const out = entry.queue.map(project);
-  // Reentrant consumers may hold this array; clear it in place before removing the queue.
-  entry.queue.length = 0;
+  const removed = entry.queue.splice(0);
   entry.lastContextKey = null;
   queues.delete(key);
-  return out;
+  for (const event of removed) {
+    retireSystemEvent(event);
+  }
+  return removed.map(project);
 }
 
 function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContext): boolean {
@@ -318,6 +424,7 @@ export function consumeSelectedSystemEventEntries(
   // still resolves against the live queue, in captured order, never late arrivals.
   const deferredIds = new Set(options?.deferredEventIds);
   const selected: SystemEvent[] = [];
+  const retired: SystemEvent[] = [];
   for (const consumed of consumedEntries) {
     const index = entry.queue.findIndex((event) => matchesConsumedSystemEvent(event, consumed));
     if (index === -1) {
@@ -327,11 +434,15 @@ export function consumeSelectedSystemEventEntries(
     if (event) {
       if (!event.id || !deferredIds.has(event.id)) {
         entry.queue.splice(index, 1);
+        retired.push(event);
       }
       selected.push(cloneSystemEvent(event));
     }
   }
   resetQueueState(key, entry);
+  for (const event of retired) {
+    retireSystemEvent(event);
+  }
   return selected;
 }
 
@@ -378,11 +489,13 @@ export function resolveSystemEventDeliveryContext(
 }
 
 export function resetSystemEventsForTest() {
-  queues.clear();
+  clearSystemEventQueues(queues);
 }
 
 export function peekDeliverableSystemEventEntries(sessionKey: string): SystemEvent[] {
-  return peekSystemEventEntries(sessionKey).filter((event) => !event.deliveryHeld);
+  return peekSystemEventEntries(sessionKey).filter(
+    (event) => !event.deliveryHeld && !isSystemEventTurnOwned(sessionKey, event),
+  );
 }
 export function holdSystemEventDelivery(
   sessionKey: string,

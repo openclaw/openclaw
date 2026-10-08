@@ -1,21 +1,50 @@
-// Session-state notice context key decoding: strict UTF-8 after hex validation.
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { requestHeartbeat } from "../infra/heartbeat-wake.js";
+// Session-state notice parsing and coalesced producer handoff.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { enqueueSessionEventForHost } from "../auto-reply/reply/session-event-handoff.js";
+import type { SystemEvent } from "../infra/system-events.js";
 import {
   decodeSessionStateNoticeContextKey,
   enqueueSessionStateNotice,
 } from "./session-state-notices.js";
 
-vi.mock("../infra/heartbeat-wake.js", () => ({
-  requestHeartbeat: vi.fn(),
+const mocks = vi.hoisted(() => ({
+  pending: [] as SystemEvent[],
+  capture: vi.fn(async () => ({ sessionId: "original", generation: "current" })),
+  enqueue: vi.fn<typeof enqueueSessionEventForHost>(() => ({
+    id: "notice-turn",
+    accepted: Promise.resolve({ ok: true }),
+    cancel: () => true,
+    settled: Promise.resolve({ status: "completed", executionStarted: true, delivered: false }),
+  })),
+  acknowledge: vi.fn(async () => {}),
 }));
-
+// mock-isolation: Exercise the real notice debouncer without starting model or SQLite work.
+vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
+  captureSessionEventTargetForHost: mocks.capture,
+  enqueueSessionEventForHost: mocks.enqueue,
+  assertSessionEventTargetCurrent: vi.fn(),
+}));
+vi.mock("../infra/system-event-ownership.js", () => ({ isSystemEventStoreCurrent: () => true }));
 vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEvent: vi.fn(),
+  enqueueSystemEventEntry: (text: string, options: Partial<SystemEvent>) => {
+    const occurrence: SystemEvent = { text, ...options, id: String(mocks.pending.length), ts: 1 };
+    mocks.pending.push(occurrence);
+    return occurrence;
+  },
+  peekSystemEventEntries: () => [...mocks.pending],
+}));
+vi.mock("./session-state-notice-acknowledgment.js", () => ({
+  acknowledgeSessionStateNoticesInWorker: mocks.acknowledge,
 }));
 
 beforeEach(() => {
-  vi.mocked(requestHeartbeat).mockClear();
+  vi.useFakeTimers();
+  vi.clearAllMocks();
+  mocks.pending.length = 0;
+});
+afterEach(async () => {
+  await vi.runAllTimersAsync();
+  vi.useRealTimers();
 });
 
 function encodeTarget(sessionKey: string): string {
@@ -49,28 +78,64 @@ describe("decodeSessionStateNoticeContextKey", () => {
 
 describe("enqueueSessionStateNotice", () => {
   it.each([undefined, null, "/synthetic/store.sqlite"])(
-    "carries store provenance %s and preserves the 20-second coalescing policy",
-    (watcherStorePath) => {
+    "coalesces for 20 seconds and acknowledges store %s only upon adoption",
+    async (watcherStorePath) => {
       const notice = {
         watcherSessionKey: "agent:main:main",
         watcherStorePath,
         targetSessionKey: "agent:main:slack:channel:C01234567",
         lastSeenSequence: 42,
       };
-
       enqueueSessionStateNotice(notice);
-      expect(requestHeartbeat).toHaveBeenCalledWith({
-        source: "session-state",
-        intent: "immediate",
-        reason: `session-state:${notice.targetSessionKey}`,
+      await vi.advanceTimersByTimeAsync(19_999);
+      expect(mocks.enqueue).not.toHaveBeenCalled();
+      expect(mocks.acknowledge).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mocks.enqueue).toHaveBeenCalledTimes(1);
+      const options = mocks.enqueue.mock.calls[0]![1];
+      expect(options).toMatchObject({
+        source: "session",
         sessionKey: notice.watcherSessionKey,
-        sessionStorePath: watcherStorePath ?? null,
-        coalesceMs: 20_000,
+        expectedTarget: { sessionId: "original", generation: "current" },
+        occurrence: { sessionStorePath: watcherStorePath ?? null },
       });
-
-      vi.mocked(requestHeartbeat).mockClear();
-      enqueueSessionStateNotice({ ...notice, queueOnly: true });
-      expect(requestHeartbeat).not.toHaveBeenCalled();
+      expect(mocks.acknowledge).not.toHaveBeenCalled();
+      await options.onAdopted?.();
+      expect(mocks.acknowledge).toHaveBeenCalledWith(
+        notice.watcherSessionKey,
+        [{ targetSessionKey: notice.targetSessionKey, watcherStorePath: watcherStorePath ?? null }],
+        expect.any(Function),
+        expect.objectContaining({ assertCurrent: expect.any(Function) }),
+      );
     },
   );
+
+  it.each([
+    { watcherSessionKey: "agent:main:main", queueOnly: true },
+    { watcherSessionKey: "agent:main:subagent:child", queueOnly: false },
+  ])("keeps ambient notices passive for $watcherSessionKey", async (options) => {
+    enqueueSessionStateNotice({
+      ...options,
+      targetSessionKey: "agent:main:group:watched",
+      lastSeenSequence: 42,
+    });
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(mocks.pending).toHaveLength(1);
+    expect(mocks.capture).not.toHaveBeenCalled();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(mocks.acknowledge).not.toHaveBeenCalled();
+  });
+
+  it("does not adopt a notice consumed during coalescing", async () => {
+    enqueueSessionStateNotice({
+      watcherSessionKey: "agent:main:main",
+      targetSessionKey: "agent:main:group:watched",
+      lastSeenSequence: 42,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    mocks.pending.length = 0;
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    expect(mocks.acknowledge).not.toHaveBeenCalled();
+  });
 });
