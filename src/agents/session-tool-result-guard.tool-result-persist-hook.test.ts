@@ -400,7 +400,7 @@ describe("session persistence hooks", () => {
       .flatMap((entry) => (entry.type === "message" ? [entry.message] : []));
     expect(messages).toHaveLength(1);
     expect(messages[0]?.role).toBe("user");
-    expect(messages[0]?.content).toBe("hello");
+    expect(messages.find((item) => item.role === "user")?.content).toBe("hello");
   });
 });
 
