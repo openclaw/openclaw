@@ -2469,7 +2469,8 @@ jobs:
     needs: [resolve_release_target, finalize_github_release]
     if: ${{ !cancelled() && needs.finalize_github_release.result == 'success' && inputs.npm_dist_tag != 'extended-stable' && !contains(inputs.tag, '-beta.') }}
     continue-on-error: true
-    runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-latest'))) || ('ubuntu-latest') }}
+    # App-token minting stays on GitHub-hosted runners.
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
       actions: write
