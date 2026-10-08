@@ -58,6 +58,7 @@ export async function waitForGatewayUpdateRecovery(
   const service = resolveGatewayService();
   const { port, env } = await resolveGatewayLifecycleContext(service, true);
   return await waitForGatewayHealthyRestart({
+    purpose: "verification",
     service,
     port,
     env,

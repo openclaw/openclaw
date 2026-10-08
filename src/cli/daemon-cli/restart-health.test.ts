@@ -211,7 +211,8 @@ describe("restart health", () => {
     },
   );
 
-  it("treats a gateway listener child pid as healthy ownership", async () => {
+  it("verifies health for a gateway listener child pid", async () => {
+    callGateway.mockImplementation(gatewayHealthResponse());
     const snapshot = await inspectGatewayRestartWithSnapshot({
       runtime: { status: "running", pid: 7000 },
       portUsage: {
@@ -324,11 +325,12 @@ describe("restart health", () => {
     "unauthorized: gateway password mismatch (set gateway.remote.password to match gateway.auth.password)",
     "unauthorized: device token rejected (pair/repair this device, or provide gateway token)",
   ])(
-    "treats a correlated Gateway rejection with reason %s as healthy gateway reachability",
+    "does not confuse correlated Gateway rejection %s with operational readiness",
     async (reason) => {
       const snapshot = await inspectAmbiguousOwnershipWithProbe(gatewayResponseError(reason));
 
-      expect(snapshot.healthy).toBe(true);
+      expect(snapshot.healthy).toBe(false);
+      expect(snapshot.readiness?.state).toBe("reachable");
       expect(snapshot.probeError).toBeUndefined();
     },
   );
@@ -436,7 +438,7 @@ describe("restart health", () => {
     });
   });
 
-  it("treats busy ports with unavailable listener details as healthy when runtime is running", async () => {
+  it("does not accept an owned busy port without a health response", async () => {
     const service = {
       readRuntime: vi.fn(async () => ({ status: "running", pid: 8000 })),
     } as unknown as GatewayService;
@@ -454,8 +456,8 @@ describe("restart health", () => {
     const { inspectGatewayRestart } = await import("./restart-health.js");
     const snapshot = await inspectGatewayRestart({ service, port: 18789 });
 
-    expect(snapshot.healthy).toBe(true);
-    expect(callGateway).not.toHaveBeenCalled();
+    expect(snapshot.healthy).toBe(false);
+    expect(callGateway).toHaveBeenCalledOnce();
     expect(resolveGatewayServiceProbeHosts).toHaveBeenCalledWith({
       env: process.env,
       command: null,

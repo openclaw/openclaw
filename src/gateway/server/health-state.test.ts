@@ -423,6 +423,8 @@ describe("refreshGatewayHealthSnapshot", () => {
       release.resolve();
       const result = await pending;
       expect(result.eventLoop).toBe(current);
+      expect(result).not.toHaveProperty("childRuntime");
+      expect(result).not.toHaveProperty("modelRuntime");
       if (includeSensitive) {
         expect(broadcast).not.toHaveBeenCalled();
       } else {

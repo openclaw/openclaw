@@ -1,9 +1,11 @@
 import type { Snapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentEffectiveModelPrimary } from "../../agents/agent-scope.js";
+import { getPreparedModelRuntimeStartupStatus } from "../../agents/prepared-model-runtime.startup-status.js";
 import { createConfigIO, getRuntimeConfig } from "../../config/io.js";
 import { STATE_DIR } from "../../config/paths.js";
 import { getRuntimeConfigAppliedHash } from "../../config/runtime-snapshot.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions.js";
+import { readChildRuntimeViability } from "../../infra/child-runtime-viability.js";
 import { listSystemPresence } from "../../infra/system-presence.js";
 import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-status-state.js";
 import { getGatewaySuspendAdmissionPhase } from "../../process/gateway-work-admission.js";
@@ -13,12 +15,17 @@ import { resolveGatewayAuth } from "../auth.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { GatewayConfigRevisionProjector } from "../config-revision-token.js";
 import { projectUpdateAvailable } from "../events.js";
+import { projectGatewayHealthReadiness } from "../health/readiness.js";
 import type { HealthSummary } from "../health/types.js";
 import { createPresenceRecipientProjection } from "../presence-projection.js";
-import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
+import type {
+  ChannelRuntimeSnapshot,
+  ChannelRuntimeSnapshotOptions,
+} from "../server-channel-runtime.types.js";
 import type { GatewayClient } from "../server-methods/types.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
+import type { ReadinessChecker, StartupChecker } from "./readiness.js";
 
 let presenceVersion = 1;
 let healthVersion = 1;
@@ -131,8 +138,10 @@ export function setBroadcastHealthUpdate(fn: ((snap: HealthSummary) => void) | n
 export async function refreshGatewayHealthSnapshot(opts?: {
   probe?: boolean;
   includeSensitive?: boolean;
-  getRuntimeSnapshot?: () => ChannelRuntimeSnapshot;
+  getRuntimeSnapshot?: (options?: ChannelRuntimeSnapshotOptions) => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
+  getGatewayReadiness?: ReadinessChecker;
+  getGatewayStartup?: StartupChecker;
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
   getSessionRowProjection?: () => SessionRowProjection | undefined;
 }) {
@@ -154,12 +163,14 @@ export async function refreshGatewayHealthSnapshot(opts?: {
   state.nextGeneration = generation;
   const promise = (async () => {
     const { collectGatewayHealthSnapshot } = await import("../health/collector.js");
-    let runtimeSnapshot: ChannelRuntimeSnapshot | undefined;
-    try {
-      runtimeSnapshot = opts?.getRuntimeSnapshot?.();
-    } catch {
-      runtimeSnapshot = undefined;
-    }
+    const readRuntimeSnapshot = (options?: ChannelRuntimeSnapshotOptions) => {
+      try {
+        return opts?.getRuntimeSnapshot?.(options);
+      } catch {
+        return undefined;
+      }
+    };
+    const runtimeSnapshot = readRuntimeSnapshot();
     const configReloadHotReloadStatus = opts?.getConfigReloaderHotReloadStatus?.();
     const snap = await collectGatewayHealthSnapshot({
       audience,
@@ -175,7 +186,22 @@ export async function refreshGatewayHealthSnapshot(opts?: {
     const eventLoop = opts?.getEventLoopHealth?.();
     if (eventLoop) {
       snap.eventLoop = eventLoop;
+    } else {
+      delete snap.eventLoop;
     }
+    // Project live diagnostics without widening the cached/broadcast payload.
+    snap.readiness = projectGatewayHealthReadiness(
+      {
+        ...snap,
+        modelRuntime: getPreparedModelRuntimeStartupStatus(),
+        childRuntime: readChildRuntimeViability(),
+      },
+      {
+        readiness: opts?.getGatewayReadiness?.(),
+        startup: opts?.getGatewayStartup?.(),
+        runtime: readRuntimeSnapshot({ inspectAccounts: false }),
+      },
+    );
     if (
       strength === "probe" &&
       state.inFlight.passive &&

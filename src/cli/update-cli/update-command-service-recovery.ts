@@ -128,6 +128,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   }
 
   const health = await waitForGatewayHealthyRestart({
+    purpose: "verification",
     service: params.service,
     port: params.port,
     timeoutMs: params.timeoutMs,
@@ -492,6 +493,7 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     }
     assertCurrent();
     const health = await waitForGatewayHealthyRestart({
+      purpose: "verification",
       service,
       port,
       env: current.env,

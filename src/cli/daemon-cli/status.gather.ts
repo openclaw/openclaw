@@ -351,6 +351,7 @@ async function gatherDaemonStatusImpl(
       ? await import("./restart-health.js")
           .then(({ inspectGatewayRestart }) =>
             inspectGatewayRestart({
+              purpose: "diagnostic",
               service,
               port: daemonPort,
               env: serviceEnv,

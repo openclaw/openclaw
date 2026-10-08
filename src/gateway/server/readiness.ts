@@ -16,6 +16,7 @@ type ReadinessResult = {
   ready: boolean;
   failing: string[];
   suppressed?: string[];
+  channelsSkipped?: true;
   uptimeMs: number;
   eventLoop?: GatewayEventLoopHealth;
   pluginReload?: GatewayPluginReloadStatus;
@@ -159,7 +160,12 @@ export function createReadinessChecker(
       return { ...cachedState, uptimeMs };
     }
     if (deps.shouldSkipChannelReadiness?.()) {
-      return { ready: true, failing: [], uptimeMs };
+      return {
+        ready: true,
+        failing: [],
+        channelsSkipped: true,
+        uptimeMs,
+      };
     }
 
     const snapshot = channelManager.getRuntimeSnapshot();

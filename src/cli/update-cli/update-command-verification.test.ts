@@ -109,6 +109,7 @@ describe("update readiness generation", () => {
         gatewayHealthResponse({
           server: { version: "2026.9.8", buildId: "candidate", bootId: "candidate-boot" },
           health: {
+            ok: true,
             channels: {
               telegram: {
                 probe:

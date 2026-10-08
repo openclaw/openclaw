@@ -26,7 +26,12 @@ import {
 } from "./published-driver-sqlite.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
-const [candidateArg, artifactsArg, driverTag = "latest"] = process.argv.slice(2);
+const [candidateArg, artifactsArg, driverTag = "latest", scenario = "base"] = process.argv.slice(2);
+assert(["base", "repair-readiness"].includes(scenario));
+const repairReadiness = scenario === "repair-readiness";
+if (repairReadiness) {
+  assert(["2026.9.7", "2026.9.8"].includes(driverTag));
+}
 const legacySqlite = process.env.OPENCLAW_PUBLISHED_DRIVER_LEGACY_SQLITE === "1";
 assert.equal(process.platform, "linux", "The managed-service fixture requires Linux");
 assert(fs.existsSync("/.dockerenv"), "Run through the bare Docker E2E runner");
@@ -41,8 +46,8 @@ assert(
 const candidate = fs.realpathSync(candidateArg);
 const artifacts = path.resolve(artifactsArg);
 fs.mkdirSync(artifacts, { recursive: true });
-// The caller's absolute deadline includes image preparation. Keep diagnostics
-// inside it so the outer Docker owner cannot remove the fixture during capture.
+// The caller owns the absolute deadline. Keep diagnostics inside it so the
+// outer Docker owner cannot remove the fixture during capture.
 const cellDeadline = Number(process.env.CELL_DEADLINE_EPOCH_SECONDS) * 1000;
 assert(
   Number.isSafeInteger(cellDeadline) && cellDeadline > 0,
@@ -90,9 +95,10 @@ function writeJson(name, value) {
 
 async function run(name, command, args, allowFailure = false) {
   const started = Date.now();
-  const diagnostic = name === "recorded-run" || name === "stop-service";
+  const diagnostic =
+    name === "recorded-run" || name === "stop-service" || name === "capture-diagnostics";
   const deadline = diagnostic ? cellDeadline - 5_000 : workDeadline;
-  const cap = name === "recorded-run" ? 20_000 : name === "stop-service" ? 5_000 : Infinity;
+  const cap = name === "stop-service" ? 5_000 : diagnostic ? 20_000 : Infinity;
   // Each managed command can spend another 5s terminating and 5s draining.
   const timeoutMs = Math.min(cap, deadline - started - (diagnostic ? 10_000 : 0));
   fs.writeFileSync(path.join(artifacts, "phase.txt"), `${name}\n`);
@@ -117,11 +123,15 @@ async function run(name, command, args, allowFailure = false) {
       abortKillGraceMs: 5_000,
       cleanupDrainTimeoutMs: 5_000,
       requireProcessTreeExit: true,
-      onReady: (child) =>
+      onReady: (child) => {
+        if (repairReadiness && name === "update") {
+          result.pid = child.pid;
+        }
         child.once("exit", (status, signal) => {
           result.status = status;
           result.signal = signal;
-        }),
+        });
+      },
       onSignal: (signal) => {
         result.receivedSignal = signal;
       },
@@ -243,14 +253,23 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     // Between a release and its forward-port, main lags npm latest. The cell proves
     // the update mechanics, not the version label: relabel the candidate to the
     // driver version so the future-version guard sees an upgrade, not a downgrade.
+    if (repairReadiness) {
+      const comparison = compareReleaseVersions(build.version, driverVersion);
+      assert(
+        comparison !== null && comparison >= 0,
+        "Readiness proof requires the unchanged frozen candidate",
+      );
+      assert.equal(typeof build.commit, "string");
+    }
     if (compareReleaseVersions(build.version, driverVersion) < 0) {
       candidatePackage = await relabelCandidate(build.version, driverVersion);
       // Match the relabeled dist/build-info.json exactly; the installed bytes carry no source label.
       build = { ...build, version: driverVersion };
     }
-    const driverBuild = legacySqlite
-      ? readJson(path.join(packageRoot, "dist/build-info.json"))
-      : undefined;
+    const driverBuild =
+      legacySqlite || repairReadiness
+        ? readJson(path.join(packageRoot, "dist/build-info.json"))
+        : undefined;
     writeJson("inputs", {
       driverVersion,
       candidate: build,
@@ -320,7 +339,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     }
     await run("install-service", "openclaw", ["gateway", "install", "--force", "--json"]);
     await ready("before-ready", port);
-    if (legacySqlite) {
+    if (legacySqlite || repairReadiness) {
       await run("running-before", "openclaw", [
         "gateway",
         "probe",
@@ -353,7 +372,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE,
       "utf8",
     );
-    const gateway = async (name, method, params) => {
+    const gateway = async (name, method, params, credential = token) => {
       await run(name, "openclaw", [
         "gateway",
         "call",
@@ -361,7 +380,7 @@ process.exitCode = await runCancelableCommand(async (signal) => {
         "--url",
         `ws://127.0.0.1:${port}`,
         "--token",
-        token,
+        credential,
         "--timeout",
         "30000",
         "--json",
@@ -405,6 +424,29 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       writeJson(name, assertNoIncognitoArtifacts([state, ...backups], sessions[1].marker));
     };
     inspectIncognito("incognito-artifacts-before");
+    let handoffCandidate;
+    if (repairReadiness) {
+      const { prepareReadinessHandoffPackages } = await import("./repair-readiness-handoff.mjs");
+      handoffCandidate = await prepareReadinessHandoffPackages({
+        run,
+        artifacts,
+        runtime,
+        packageRoot,
+        driverVersion,
+        candidate,
+        build,
+        writeJson,
+      });
+      assert.equal(
+        env.OPENCLAW_UPDATE_IN_PROGRESS,
+        undefined,
+        "Harness cannot supply the real handoff marker",
+      );
+      assert.equal(env.NODE_OPTIONS, undefined, "Unexpected existing preload");
+      env.OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT = artifacts;
+      env.NODE_OPTIONS =
+        "--import=" + fileURLToPath(new URL("./repair-readiness-handoff.mjs", import.meta.url));
+    }
     let update;
     let updateFailure;
     const sqliteBefore = legacySqlite ? inspectPublishedDriverSqlite(state, 0) : undefined;
@@ -426,6 +468,10 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       }
     } catch (error) {
       updateFailure = toErrorObject(error, "Published updater failed");
+    } finally {
+      if (repairReadiness) {
+        delete env.NODE_OPTIONS;
+      }
     }
     // Public status belongs after updater settlement and before fixture teardown.
     // A failed query is secondary to the original update outcome.
@@ -438,6 +484,16 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     await run("recorded-run", "openclaw", ["update", "status", "--json"]);
     if (updateFailure) {
       throw updateFailure;
+    }
+    if (repairReadiness) {
+      const { inspectReadinessHandoff } = await import("./repair-readiness-handoff.mjs");
+      const { readWorkerCellPackageIdentity, assertWorkerCellPackageIdentity } =
+        await import("./worker-cell-package.mjs");
+      assertWorkerCellPackageIdentity(readWorkerCellPackageIdentity(packageRoot), handoffCandidate);
+      writeJson(
+        "readiness-handoff-proof",
+        inspectReadinessHandoff({ artifacts, driverPid: update.pid }),
+      );
     }
     const result = output("update");
     const recorded = output("recorded-run").lastRun;
@@ -527,14 +583,46 @@ process.exitCode = await runCancelableCommand(async (signal) => {
         "Second maintenance repeated conversion",
       );
     }
-    writeJson("summary", {
-      driverVersion,
-      candidate: build,
-      runId: recorded.runId,
-      phase: recorded.phase,
-      readyz: 200,
-      runningVersion: target.server.version,
-    });
+    if (repairReadiness) {
+      const { proveRepairReadiness } = await import("./repair-readiness.mjs");
+      writeJson(
+        "repair-readiness-proof",
+        await proveRepairReadiness({
+          run,
+          output,
+          env,
+          build,
+          port,
+          token,
+          gateway,
+          sessions,
+          orphanSidecar,
+        }),
+      );
+    }
+    writeJson(
+      "summary",
+      repairReadiness
+        ? {
+            baseline: { spec: `openclaw@${driverVersion}`, version: driverVersion },
+            candidate: { kind: "tarball", version: build.version },
+            scenario,
+            status: "passed",
+            installedVersion: build.version,
+            candidateInstallMode: "npm",
+            updateRestartMode: "manual",
+            updateOutcome: "published-update-and-readiness-verified",
+            phases: [{ phase: scenario, status: "passed", at: new Date().toISOString() }],
+          }
+        : {
+            driverVersion,
+            candidate: build,
+            runId: recorded.runId,
+            phase: recorded.phase,
+            readyz: 200,
+            runningVersion: target.server.version,
+          },
+    );
     console.log(
       `PASS published ${driverVersion} → candidate ${build.version} (${build.commit}): finished, readyz=200, running version verified`,
     );
@@ -562,6 +650,29 @@ process.exitCode = await runCancelableCommand(async (signal) => {
   } else {
     try {
       fs.rmSync(runtime, { recursive: true, force: true });
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (repairReadiness && !failures.some(hasUnjoinedWork)) {
+    try {
+      writeJson("repair-readiness-outcome", {
+        phase:
+          failures[0]?.command ?? fs.readFileSync(path.join(artifacts, "phase.txt"), "utf8").trim(),
+        failures: failures.map((error) => ({
+          command: error.command,
+          message: String(error),
+          causes: error instanceof AggregateError ? error.errors.map(String) : undefined,
+          exitCode: error.exitCode,
+        })),
+      });
+      await run("capture-diagnostics", process.execPath, [
+        fileURLToPath(new URL("./diagnostics.mjs", import.meta.url)),
+        "capture",
+        artifacts,
+        failures[0]?.command ?? scenario,
+        String(failures.length ? failures[0].exitCode || 1 : 0),
+      ]);
     } catch (error) {
       failures.push(error);
     }

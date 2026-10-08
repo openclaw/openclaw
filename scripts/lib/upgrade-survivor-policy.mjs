@@ -38,6 +38,7 @@ const TRUSTED_HARNESS_OWNED_SCENARIOS = new Set([
   "update-report-recovery",
   "dreaming-cron-doctor",
   "cron-owner-doctor",
+  "repair-readiness",
 ]);
 
 export function isTrustedHarnessOwnedUpgradeSurvivorScenario(scenario) {
@@ -65,7 +66,8 @@ const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
     scenario !== "watchos-direct-node" &&
     scenario !== "prerelease-plugin-registry" &&
     scenario !== "auth-profile-v2026-7-2-beta-5" &&
-    scenario !== "recovery-cleanup",
+    scenario !== "recovery-cleanup" &&
+    scenario !== "repair-readiness",
 );
 const scenarioAliases = new Map([
   ["reported-issues", aggregateScenarios.filter((scenario) => scenario !== "sqlite-volume")],
@@ -217,6 +219,9 @@ function comparePublishedReleaseVersion(a, b) {
 }
 
 export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec) {
+  if (scenario === "repair-readiness") {
+    return baselineSpec === "openclaw@2026.9.7" || baselineSpec === "openclaw@2026.9.8";
+  }
   if (scenario === "backup-schedule") {
     return baselineSpec === "openclaw@2026.9.7";
   }
@@ -262,3 +267,12 @@ export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec
     comparePublishedReleaseVersion(version, parsePublishedReleaseVersion(minimumBaseline)) >= 0
   );
 }
+
+// Published 9.7 sibling: 638.177s update + ~185s setup. Double that base,
+// reserve three unchanged 300s restart windows and 360s for added probes/identity
+// checks: ~2907s. 3285s work + existing 60s finalization + 75s container margin
+// = 3420s Docker; the scheduler retains another 300s for host preparation/upload.
+export const REPAIR_READINESS_BUDGET = Object.freeze({
+  dockerSeconds: 3420,
+  laneSeconds: 3720,
+});

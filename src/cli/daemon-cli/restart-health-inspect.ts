@@ -18,7 +18,10 @@ import {
   type GatewayRestartProbeContext,
 } from "./restart-health-probe.js";
 import { finalizeGatewayRestartSnapshot } from "./restart-health-snapshot.js";
-import type { GatewayRestartSnapshot } from "./restart-health.types.js";
+import type {
+  GatewayRestartHealthPurpose,
+  GatewayRestartSnapshot,
+} from "./restart-health.types.js";
 import { hasListenerAttributionGap, listenerOwnedByRuntimePid } from "./restart-port-ownership.js";
 
 export async function inspectGatewayRestart(params: {
@@ -29,6 +32,7 @@ export async function inspectGatewayRestart(params: {
   expectedBuildId?: string | null;
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
   requirePluginHealth?: boolean;
+  purpose?: GatewayRestartHealthPurpose;
   probeContext?: GatewayRestartProbeContext;
   configuredProbe?: ConfiguredGatewayLocalProbe;
   probeHosts?: readonly string[];
@@ -77,9 +81,6 @@ export async function inspectGatewayRestart(params: {
     }));
   const expectedVersion = normalizeOptionalString(params.expectedVersion);
   const expectedBuildId = normalizeOptionalString(params.expectedBuildId);
-  const requiresGatewayProbe = Boolean(
-    expectedVersion || expectedBuildId || params.requirePluginHealth === false,
-  );
   let reachability: GatewayReachability | null = null;
   const loadReachability = () =>
     read("gateway-health", () =>
@@ -155,6 +156,7 @@ export async function inspectGatewayRestart(params: {
           runtime,
           portUsage,
           healthy: true,
+          ...(reachable.readiness ? { readiness: reachable.readiness } : {}),
           staleGatewayPids: [],
           gatewayVersion: reachable.gatewayVersion,
           ...(reachable.gatewayBootId ? { gatewayBootId: reachable.gatewayBootId } : {}),
@@ -172,9 +174,13 @@ export async function inspectGatewayRestart(params: {
             ? { channelProbeTimeouts: reachable.channelProbeTimeouts }
             : {}),
         },
-        expectedVersion,
-        expectedBuildId,
-        params.requirePluginHealth !== false,
+        {
+          expectedVersion,
+          expectedBuildId,
+          requirePluginHealth: params.requirePluginHealth !== false,
+          purpose: params.purpose,
+          env,
+        },
       );
     }
   }
@@ -193,12 +199,7 @@ export async function inspectGatewayRestart(params: {
         ) || listenerAttributionGap
       : gatewayListeners.length > 0 || listenerAttributionGap;
   let healthy = running && ownsPort && !startupPhase;
-  if (
-    !startupPhase &&
-    running &&
-    portUsage.status === "busy" &&
-    (requiresGatewayProbe ? healthy : !healthy)
-  ) {
+  if (!startupPhase && running && portUsage.status === "busy") {
     const reachable = (reachability ??= await loadReachability());
     healthy = reachable.reachable;
   }
@@ -231,6 +232,7 @@ export async function inspectGatewayRestart(params: {
       );
 
   const {
+    readiness,
     gatewayBootId,
     gatewayVersion,
     gatewayBuildId,
@@ -246,6 +248,7 @@ export async function inspectGatewayRestart(params: {
       runtime,
       portUsage,
       healthy,
+      ...(readiness ? { readiness } : {}),
       staleGatewayPids,
       ...(gatewayBootId ? { gatewayBootId } : {}),
       ...(gatewayVersion !== undefined ? { gatewayVersion } : {}),
@@ -258,8 +261,12 @@ export async function inspectGatewayRestart(params: {
       ...(channelProbeErrors?.length ? { channelProbeErrors } : {}),
       ...(channelProbeTimeouts?.length ? { channelProbeTimeouts } : {}),
     },
-    expectedVersion,
-    expectedBuildId,
-    params.requirePluginHealth !== false,
+    {
+      expectedVersion,
+      expectedBuildId,
+      requirePluginHealth: params.requirePluginHealth !== false,
+      purpose: params.purpose,
+      env,
+    },
   );
 }

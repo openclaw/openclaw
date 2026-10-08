@@ -477,6 +477,8 @@ export async function prepareGatewayLifecycle(params: {
       refreshGatewayHealthSnapshot({
         ...optsResult,
         getRuntimeSnapshot,
+        getGatewayReadiness: runtime.createHttpTransportOptions().getReadiness,
+        getGatewayStartup: runtime.createHttpTransportOptions().getStartup,
         getEventLoopHealth: readinessEventLoopHealth.snapshot,
         getConfigReloaderHotReloadStatus: kernel.getConfigReloaderHotReloadStatus,
         getSessionRowProjection: runtime.getSessionRowProjection,

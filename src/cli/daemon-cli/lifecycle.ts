@@ -1,6 +1,7 @@
 // Gateway service lifecycle runners, including unmanaged-process fallbacks and restart health checks.
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
+import { formatGatewayHealthReadinessLine } from "../../commands/health-format.js";
 import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-probe-hosts.js";
 import { mergeGatewayServiceEnv } from "../../daemon/service-env-merge.js";
 import {
@@ -187,7 +188,7 @@ function isGatewaySignalRestartResult(
 }
 
 async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promise<boolean> {
-  const { emitMessage, fail } = createDaemonActionContext({
+  const { emitMessage, fail, warnings } = createDaemonActionContext({
     action: "restart",
     json: Boolean(opts.json),
   });
@@ -226,6 +227,7 @@ async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promi
 
   const healthWait = resolveRestartListenerHealthWait(restartIntent);
   const health = await waitForGatewayHealthyListener({
+    purpose: "lifecycle",
     port: lockIdentity.port,
     attempts: healthWait.attempts,
     delayMs: DEFAULT_RESTART_HEALTH_DELAY_MS,
@@ -238,6 +240,14 @@ async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promi
     return false;
   }
 
+  const readinessWarning =
+    health.readiness?.state !== "ready" ? formatGatewayHealthReadinessLine(health) : null;
+  if (readinessWarning) {
+    warnings.push(readinessWarning);
+    if (!opts.json) {
+      defaultRuntime.log(theme.warn(readinessWarning));
+    }
+  }
   emitMessage({
     ok: true,
     result: signaled.result,
@@ -292,6 +302,7 @@ export async function runDaemonStart(opts: DaemonLifecycleOptions = {}) {
       }),
     postStartCheck: ({ fail, warnings }) =>
       verifyGatewayStartReadiness({
+        json: Boolean(opts.json),
         service,
         expectedPort,
         resolveContext: () => resolveGatewayLifecycleContext(service),
@@ -433,6 +444,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
           }
           unmanagedPort = owner.port;
           const ready = await waitForGatewayHealthyListener({
+            purpose: "diagnostic",
             port: owner.port,
             env: process.env,
             attempts: restartHealthAttempts,
@@ -523,7 +535,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         managedRestartPort = managedRestartContext.port;
       }
       let activationAccepted = accepted;
-      const reportHealthFailure = (statusLines: string[], diagnostics: string[]) => {
+      const reportHealthStatus = (statusLines: string[], diagnostics: string[]) => {
         if (jsonOutput) {
           warnings.push(...statusLines, ...diagnostics);
           return;
@@ -539,6 +551,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         // Unmanaged restarts have no service-manager state to watch; prove
         // listener health and replacement of the previous lock owner.
         const health = await waitForGatewayHealthyListener({
+          purpose: "lifecycle",
           port: unmanagedPort,
           env: process.env,
           attempts: unmanagedRestartWait?.attempts ?? restartHealthAttempts,
@@ -552,13 +565,18 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
             : {}),
         });
         if (health.healthy) {
+          const warning =
+            health.readiness?.state !== "ready" ? formatGatewayHealthReadinessLine(health) : null;
+          if (warning) {
+            reportHealthStatus([warning], []);
+          }
           return undefined;
         }
 
         const diagnostics = renderGatewayPortHealthDiagnostics(health);
         const waitSeconds = unmanagedRestartWait?.timeoutSeconds ?? restartWaitSeconds;
         const timeoutLine = `Timed out after ${waitSeconds}s waiting for gateway port ${unmanagedPort} to become healthy.`;
-        reportHealthFailure([timeoutLine], diagnostics);
+        reportHealthStatus([timeoutLine], diagnostics);
 
         fail(
           `Gateway restart timed out after ${waitSeconds}s waiting for health checks.`,
@@ -570,6 +588,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
 
       const waitForHealthy = async () =>
         await waitForGatewayHealthyRestart({
+          purpose: "lifecycle",
           service,
           port: managedRestartPort,
           attempts: restartHealthAttempts,
@@ -615,6 +634,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
       }
 
       if (health.healthy) {
+        const warning =
+          health.readiness?.state !== "ready" ? formatGatewayHealthReadinessLine(health) : null;
+        if (warning) {
+          reportHealthStatus([warning], []);
+        }
         return undefined;
       }
 
@@ -630,7 +654,7 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         health.portUsage.status === "free"
           ? `Gateway process is running but port ${managedRestartPort} is still free (startup hang/crash loop or very slow VM startup).`
           : null;
-      reportHealthFailure(
+      reportHealthStatus(
         [failure.statusLine, ...(runningNoPortLine ? [runningNoPortLine] : [])],
         diagnostics,
       );

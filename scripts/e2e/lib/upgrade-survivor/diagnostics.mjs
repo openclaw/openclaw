@@ -69,7 +69,31 @@ const pluginPolicyLogs = [
   "webhooks-only-policy/baseline-runtime.out",
   "webhooks-only-policy/candidate-runtime.out",
 ];
+const repairReadinessLogs = [
+  "readiness-package-inputs.json",
+  "readiness-handoff-proof.json",
+  "readiness-handoff-observations.json",
+  "inputs.json",
+  "baseline-serving-identity.json",
+  "running-version.stdout",
+  "update.stdout",
+  "update.stderr",
+  "recorded-run.stdout",
+  "repair-readiness-proof.json",
+  "repair-readiness-outcome.json",
+  "readiness-lifecycle.stdout",
+  "readiness-lifecycle.stderr",
+  "readiness-lifecycle-exit.json",
+  "readiness-strict.stdout",
+  "readiness-strict.stderr",
+  "readiness-strict-exit.json",
+  "readiness-recovered.stdout",
+  "readiness-recovered-exit.json",
+  "readiness-stopped-status.stdout",
+  "readiness-stop-exit.json",
+];
 const logNames = [
+  ...repairReadinessLogs,
   "baseline-install.log",
   "baseline-companion.json",
   "install.log",
@@ -1824,6 +1848,7 @@ function publishedSuccessSummary(artifactRoot, sanitize) {
           : []),
         ...(snapshot.scenario === "dreaming-cron-doctor" ? ["dreaming-cron-proof.json"] : []),
         ...(snapshot.scenario === "cron-owner-doctor" ? ["cron-owner-proof.json"] : []),
+        ...(snapshot.scenario === "repair-readiness" ? repairReadinessLogs : []),
         ...(snapshot.scenario === "legacy-operator-state" &&
         snapshot.updateRestartMode === "manual" &&
         ["2026.9.3", "2026.9.4"].includes(snapshot.baseline.version)

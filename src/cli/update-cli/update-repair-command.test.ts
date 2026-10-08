@@ -724,6 +724,7 @@ describe("update repair ledger recovery", () => {
     "plugin",
     "channel",
     "readiness",
+    "operational-degraded",
     "handshake",
   ])("retains full repair when the serving generation is unverified: %s", async (problem) => {
     const run = seedRun();
@@ -748,6 +749,9 @@ describe("update repair ledger recovery", () => {
           : problem === "missing running build"
             ? null
             : "installed-build",
+      ...(problem === "operational-degraded"
+        ? { readiness: { state: "degraded" as const, reasons: ["event-loop"], warnings: [] } }
+        : {}),
       activatedPluginErrors: problem === "plugin" ? [{ id: "test", error: "failed" }] : [],
       channelProbeErrors: problem === "channel" ? [{ id: "test", error: "failed" }] : [],
     });

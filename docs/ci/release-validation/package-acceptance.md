@@ -169,6 +169,42 @@ older `workflow_ref` tooling retains that revision's historical matrix.
 
 The Windows packaged and installer fresh lanes also verify that an installed package can import a browser-control override from a raw absolute Windows path. The OpenAI cross-OS agent-turn smoke defaults to `OPENCLAW_CROSS_OS_OPENAI_MODEL` when set, otherwise `openai/gpt-5.6-luna`, so the install and gateway proof uses the lower-cost GPT-5.6 test tier.
 
+### Opt-in repair readiness cell
+
+Select `repair-readiness` explicitly with `published-upgrade-survivor`, the exact
+`openclaw@2026.9.7` and `openclaw@2026.9.8` baselines, one shared frozen candidate
+tarball, manual restart, and live providers disabled. It is excluded from `reported-issues` and `far-reaching`.
+The existing published-driver runner performs a real installed-package update,
+then checks the installed candidate through its public restart, probe, health,
+and stop commands. A passive preload records the actual released-driver to
+candidate post-core handoff, including the observed updater marker, frozen
+entry/manifest/build digests, and PID/start-time ancestry. It never supplies the
+marker. npm lifecycle scripts and capability probes do not qualify as handoffs;
+missing or mismatched runtime evidence fails the cell. A temporary generated-service command credential override
+proves that ordinary restart retains correlated auth-rejection liveness while
+the shipped updater marker requires operational verification. Healthy controls
+bind the serving version/build; configuration, credential-sidecar bytes, durable
+history, and the final explicit stop are checked.
+
+The fault phase replays the candidate restart CLI with the shipped updater
+marker **after** the healthy published update and passive handoff witness; it is not a claim that a faulted
+published updater completed recovery. The service-manager fixture launches real
+Gateway processes but is not an operator systemd installation. No health RPC is
+replaced, no production watchdog is shortened, and a harness timeout cannot
+count as the expected CLI refusal. The existing host-owned diagnostics publisher
+redacts both first-failure evidence and successful summaries. Keep the reviewed
+harness commit separate from the frozen product commit when dispatching.
+
+The readiness scenario has a 3,420-second Docker allowance inside a 3,720-second
+scheduler lane; each targeted GitHub job retains its existing 90-minute limit.
+The Docker caller establishes the absolute cell deadline after image preparation,
+75 seconds before its timeout. The driver keeps its existing 60-second
+finalization reserve, leaving 3,285 seconds for work. Earlier inherited deadlines
+are never renewed. This covers twice the measured sibling update/setup time
+(638.177 + approximately 185 seconds), three unchanged 300-second restart windows,
+and 360 seconds for added probes and identity checks, with work-time margin.
+Default sibling budgets and the product watchdogs are unchanged.
+
 ### Legacy compatibility windows
 
 Current upgrade-survivor execution requires a published baseline of `2026.6.1`

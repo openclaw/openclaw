@@ -18,3 +18,7 @@ export function supportsUpgradeSurvivorScenarioAtBaseline(
 export const OLDEST_SUPPORTED_UPGRADE_SURVIVOR_BASELINE: string;
 export const MINIMUM_UPGRADE_SURVIVOR_BASELINE: string;
 export const CUSTOM_PLUGIN_SIBLINGS_BASELINE: string;
+export const REPAIR_READINESS_BUDGET: Readonly<{
+  dockerSeconds: number;
+  laneSeconds: number;
+}>;

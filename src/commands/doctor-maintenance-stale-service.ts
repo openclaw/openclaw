@@ -78,6 +78,7 @@ export async function inspectStaleDoctorGateway(params: {
   const health = legacy
     ? undefined
     : await inspectGatewayRestart({
+        purpose: "diagnostic",
         service,
         port,
         env: serviceEnv,

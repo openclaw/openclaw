@@ -4,6 +4,7 @@ import path from "node:path";
 import { vi } from "vitest";
 import { withReplyDispatcher } from "../auto-reply/dispatch-dispatcher.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
+import type { HealthSummary } from "./health/types.js";
 import { getTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   agentCommandMock,
@@ -272,8 +273,19 @@ vi.mock("/src/agents/embedded-agent-runner/active-run-projections.js", async (im
   getActiveEmbeddedRunCount: () => embeddedRunMock.activeIds.size,
 }));
 
-vi.mock("./health/collector.js", () => ({
-  collectGatewayHealthSnapshot: vi.fn().mockResolvedValue({ ok: true, stub: true }),
+vi.mock("./health/collector.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./health/collector.js")>()),
+  collectGatewayHealthSnapshot: vi.fn(async (): Promise<HealthSummary> => ({
+    ok: true,
+    ts: Date.now(),
+    durationMs: 0,
+    channels: {},
+    channelOrder: [],
+    channelLabels: {},
+    heartbeatSeconds: 0,
+    agents: [],
+    sessions: { path: "/fixture/sessions", count: 0, recent: [] },
+  })),
 }));
 vi.mock("../status/summary.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),

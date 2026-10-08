@@ -2645,7 +2645,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
     expect(respond).toHaveBeenCalledWith(
       true,
-      { ...fresh, childRuntime: healthyChildRuntime },
+      expect.objectContaining({ ...fresh, childRuntime: healthyChildRuntime }),
       undefined,
     );
   });
@@ -2681,7 +2681,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
     });
     expect(respond).toHaveBeenCalledWith(
       true,
-      { ...fresh, childRuntime: healthyChildRuntime },
+      expect.objectContaining({ ...fresh, childRuntime: healthyChildRuntime }),
       undefined,
     );
   });
@@ -3010,7 +3010,7 @@ describe("gateway healthHandlers.health cache freshness", () => {
       });
       expect(respond).toHaveBeenCalledWith(
         true,
-        { ...fresh, childRuntime: healthyChildRuntime },
+        expect.objectContaining({ ...fresh, childRuntime: healthyChildRuntime }),
         undefined,
       );
     },

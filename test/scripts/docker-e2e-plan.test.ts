@@ -120,7 +120,7 @@ function publishedUpgradeSurvivorLane(
   return {
     command: `OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR="$PWD/.artifacts/upgrade-survivor/${name}" OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC='${baselineSpec}' ${
       scenario ? `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO='${scenario}' ` : ""
-    }${trustedUpgradeSurvivorCommand(
+    }${scenario === "repair-readiness" ? 'OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-3420s}" ' : ""}${trustedUpgradeSurvivorCommand(
       "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1 OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s",
       'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-2280s}"',
     )}`,
@@ -129,7 +129,7 @@ function publishedUpgradeSurvivorLane(
     name,
     resources: ["docker", "npm"],
     stateScenario: "upgrade-survivor",
-    timeoutMs: 2_580_000,
+    timeoutMs: scenario === "repair-readiness" ? 3_720_000 : 2_580_000,
     weight: 3,
   };
 }
@@ -662,6 +662,38 @@ describe("scripts/lib/docker-e2e-plan", () => {
     ]);
   });
 
+  it("carries the readiness budget through the catalog command without widening siblings or caller ceilings", () => {
+    const root = tempDirs.make("readiness-plan-budget-");
+    const script = join(root, "scripts/e2e/upgrade-survivor-docker.sh");
+    mkdirSync(dirname(script), { recursive: true });
+    writeFileSync(script, 'printf "%s" "$OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT"');
+    const lane = requireFirstLane(
+      planFor({
+        selectedLaneNames: ["published-upgrade-survivor"],
+        upgradeSurvivorBaselines: "openclaw@2026.9.7",
+        upgradeSurvivorScenarios: "repair-readiness",
+      }),
+    );
+    expect(lane.timeoutMs).toBe(3_720_000);
+    for (const override of [undefined, "1800s"]) {
+      const stdout = execFileSync("bash", ["-c", lane.command], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_DOCKER_E2E_TRUSTED_HARNESS_DIR: root,
+          OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT: override,
+        },
+      });
+      expect(stdout).toBe(override ?? "3420s");
+    }
+    const ordinary = requireFirstLane(
+      planFor({ selectedLaneNames: ["published-upgrade-survivor"] }),
+    );
+    expect(ordinary.timeoutMs).toBe(2_580_000);
+    expect(ordinary.command).toContain("DOCKER_RUN_TIMEOUT:-2280s");
+  });
+
   it("retains the measured restart-auth update budgets", () => {
     const lane = requireFirstLane(planFor({ selectedLaneNames: ["update-restart-auth"] }));
     expect(lane.timeoutMs).toBe(3_720_000);
@@ -683,6 +715,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
     { baseline: "2026.9.4", scenario: "abandoned-update" },
     { baseline: "2026.7.1-2", scenario: "prerelease-plugin-registry" },
     { baseline: "2026.7.1-2", scenario: "recovery-cleanup" },
+    { baseline: "2026.9.7", scenario: "repair-readiness" },
+    { baseline: "2026.9.8", scenario: "repair-readiness" },
   ])("plans $scenario only when explicitly requested", ({ baseline, scenario }) => {
     const laneName = `published-upgrade-survivor-${baseline}-${scenario}`;
     const explicitPlan = planFor({

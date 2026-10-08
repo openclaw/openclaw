@@ -1,3 +1,4 @@
+import { formatGatewayHealthReadinessLine } from "../../commands/health-format.js";
 import { formatPortDiagnostics } from "../../infra/ports-format.js";
 import type {
   GatewayPortHealthSnapshot,
@@ -8,6 +9,7 @@ import type {
 const restartFailureReasons: Partial<Record<GatewayRestartWaitOutcome, string>> = {
   "plugin-errors": "activated plugins reported load errors",
   "channel-errors": "channel health checks failed",
+  "gateway-not-ready": "the Gateway did not report operational readiness",
   "version-mismatch": "the running Gateway version did not match the expected version",
   "build-id-mismatch": "the running Gateway build did not match the expected build",
   "stale-pids": "stale Gateway processes remained",
@@ -21,6 +23,10 @@ function formatGatewayStillStarting(snapshot: GatewayRestartSnapshot): string {
 
 export function renderGatewayPortHealthDiagnostics(snapshot: GatewayPortHealthSnapshot): string[] {
   const lines: string[] = [];
+  const readiness = formatGatewayHealthReadinessLine(snapshot);
+  if (readiness) {
+    lines.push(readiness);
+  }
   if (snapshot.portUsage.status === "busy") {
     lines.push(...formatPortDiagnostics(snapshot.portUsage));
   } else {

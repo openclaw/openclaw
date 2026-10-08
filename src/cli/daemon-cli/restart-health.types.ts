@@ -1,12 +1,19 @@
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
-import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
+import type {
+  GatewayHealthReadiness,
+  PluginHealthErrorSummary,
+} from "../../gateway/health/types.js";
 import type { GatewayStaleConnectionReason } from "../../gateway/stale-install.js";
 import type { PortUsage } from "../../infra/ports.js";
+
+/** Lifecycle acknowledgments are not update/repair recovery certificates. */
+export type GatewayRestartHealthPurpose = "lifecycle" | "verification" | "diagnostic";
 
 export const GATEWAY_RESTART_WAIT_OUTCOMES = [
   "healthy",
   "plugin-errors",
   "channel-errors",
+  "gateway-not-ready",
   "version-mismatch",
   "build-id-mismatch",
   "stale-pids",
@@ -33,6 +40,7 @@ export type GatewayRestartSnapshot = {
   runtime: GatewayServiceRuntime;
   portUsage: PortUsage;
   healthy: boolean;
+  readiness?: GatewayHealthReadiness;
   staleGatewayPids: number[];
   gatewayVersion?: string | null;
   gatewayBootId?: string;
@@ -59,6 +67,7 @@ export type GatewayRestartSnapshot = {
 };
 
 export type GatewayPortHealthSnapshot = {
+  readiness?: GatewayHealthReadiness;
   portUsage: PortUsage;
   healthy: boolean;
   probeError?: string;

@@ -9,12 +9,16 @@ import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
 } from "./restart-health.constants.js";
-import type { GatewayPortHealthSnapshot } from "./restart-health.types.js";
+import type {
+  GatewayPortHealthSnapshot,
+  GatewayRestartHealthPurpose,
+} from "./restart-health.types.js";
 import { waitForGatewayLockReplacement } from "./restart-lock-replacement.js";
 
 export async function waitForGatewayHealthyListener(params: {
   port: number;
   env?: NodeJS.ProcessEnv;
+  purpose?: GatewayRestartHealthPurpose;
   attempts?: number;
   delayMs?: number;
   previousLockIdentity?: GatewayLockIdentity;
@@ -65,6 +69,8 @@ export async function waitForGatewayHealthyListener(params: {
       config: probeContext.config,
       configuredProbe,
       expectedListenerPid,
+      purpose: params.purpose,
+      env: params.env,
     });
     if (!snapshot.healthy && attempt < attempts) {
       attempt += 1;

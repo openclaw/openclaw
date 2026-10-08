@@ -85,6 +85,10 @@ export function makeContextParams(
       })),
       readPreparedGatewayModelCatalog: undefined,
       refreshGatewayHealthSnapshotWithRuntime: vi.fn(async () => ({}) as never),
+      createHttpTransportOptions: vi.fn(() => ({
+        getReadiness: () => ({ ready: true, failing: [], uptimeMs: 0 }),
+        getStartup: () => ({ ok: true as const, status: "started" as const, uptimeMs: 0 }),
+      })),
       broadcast: vi.fn(),
       publishPresence: vi.fn(),
       broadcastToConnIds: vi.fn(),

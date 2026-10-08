@@ -79,6 +79,7 @@ export class GatewayUpdateSuccessor {
     const health =
       typeof params.port === "number"
         ? await this.lifecycle.waitForGatewayHealthyRestart({
+            purpose: "verification",
             port: params.port,
             child,
             probeHosts: [params.host ?? "127.0.0.1"],

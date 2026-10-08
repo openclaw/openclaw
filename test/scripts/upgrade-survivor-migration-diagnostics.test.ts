@@ -1140,3 +1140,61 @@ it.each([false, true])(
     }
   },
 );
+
+it("publishes first-attempt repair readiness failures and passing summaries through the host redactor", () => {
+  const f = fixture();
+  write(path.join(f.artifacts, "summary.json"), {
+    status: "passed",
+    baseline: { spec: "openclaw@2026.9.7", version: "2026.9.7" },
+    candidate: { kind: "tarball", version: "2026.10.1" },
+    scenario: "repair-readiness",
+    installedVersion: "2026.10.1",
+    candidateInstallMode: "npm",
+    updateRestartMode: "manual",
+    updateOutcome: "published-update-and-readiness-verified",
+    phases: [],
+  });
+  write(path.join(f.artifacts, "readiness-strict.stdout"), {
+    ok: false,
+    result: "restart-health-failed",
+    token: secret,
+  });
+  write(path.join(f.artifacts, "readiness-strict-exit.json"), { status: 1, signal: null });
+  write(path.join(f.artifacts, "repair-readiness-proof.json"), {
+    preserved: true,
+    stopped: true,
+    password: secret,
+  });
+  write(path.join(f.artifacts, "readiness-handoff-proof.json"), {
+    passive: true,
+    marker: true,
+    token: secret,
+  });
+  write(path.join(f.artifacts, "readiness-handoff-observations.json"), {
+    error: "Unverified released-driver handoff",
+    password: secret,
+  });
+  const result = runNode(f, [observer, "capture", f.artifacts, "repair-readiness", "1"]);
+  expect(result.status, result.stderr).toBe(0);
+  for (const outcome of ["failed", "passed"] as const) {
+    const destination = path.join(f.root, outcome);
+    publishDiagnostics(f.artifacts, destination, redactSensitiveText, outcome);
+    const text = fs.readFileSync(
+      path.join(destination, outcome === "passed" ? "summary.json" : "failure.json"),
+      "utf8",
+    );
+    expect(text).not.toContain(secret);
+    const report = JSON.parse(text);
+    expect(report.logs["readiness-strict.stdout"]).toContain("restart-health-failed");
+    expect(report.logs["readiness-handoff-proof.json"]).toContain("passive");
+    expect(report.logs["readiness-handoff-observations.json"]).toContain(
+      "Unverified released-driver handoff",
+    );
+    expect(report.logs["readiness-strict-exit.json"]).toContain('"status":1');
+    if (outcome === "failed") {
+      expect(report.exitStatus).toBe(1);
+    } else {
+      expect(report.status).toBe("passed");
+    }
+  }
+});

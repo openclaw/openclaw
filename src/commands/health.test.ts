@@ -220,6 +220,8 @@ describe("healthCommand", () => {
         },
       ],
     };
+    snapshot.readiness = { state: "degraded", reasons: ["plugin:calendar"], warnings: [] };
+    vi.mocked(waitForGatewayDiagnosticReadiness).mockResolvedValueOnce(undefined);
     const original = structuredClone(snapshot);
     callGatewayMock.mockResolvedValueOnce(snapshot);
 
@@ -235,12 +237,15 @@ describe("healthCommand", () => {
     expect(parsed.channels.telegram?.configured).toBe(true);
     expect(parsed.sessions.count).toBe(1);
     expect(parsed.plugins).toEqual(original.plugins);
+    expect(parsed.readiness).toEqual(original.readiness);
 
     runtime.log.mockClear();
     callGatewayMock.mockResolvedValueOnce(snapshot);
     await healthCommand({ json: false, timeoutMs: 5000, config: {} }, runtime);
 
     const output = stripAnsi(runtime.log.mock.calls.map((call) => String(call[0])).join("\n"));
+    expect(output).toContain("Gateway readiness: degraded (plugin:calendar)");
+    expect(runtime.exit).not.toHaveBeenCalled();
     expect(output).toContain("Gateway check duration: 5ms");
     expect(output).toContain(`Session store (main): ${parsed.sessions.path}`);
     expect(output).toContain(
@@ -252,6 +257,23 @@ describe("healthCommand", () => {
     expect(output).toContain(
       "Plugin memory-owner: unavailable - unreadable-package-json: manifest unreadable",
     );
+  });
+
+  it("prints a connecting channel snapshot without failing the health command", async () => {
+    const snapshot = createHealthSummary();
+    snapshot.readiness = {
+      state: "starting",
+      reasons: ["channel:telegram:default:startup-connect-grace"],
+      warnings: [],
+    };
+    vi.mocked(waitForGatewayDiagnosticReadiness).mockResolvedValueOnce(undefined);
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+    await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime);
+    expect(JSON.parse(requireFirstRuntimeLog())).toMatchObject({
+      ok: true,
+      readiness: snapshot.readiness,
+    });
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it.each([{ everyMs: 691_265_001, expected: "1w 1d 1m 5s 1ms" }])(

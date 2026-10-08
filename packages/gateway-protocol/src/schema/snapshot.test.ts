@@ -70,6 +70,8 @@ describe("SnapshotSchema", () => {
     const snapshot = {
       ...snapshotWithPresence({ ts: 1 }),
       health: {
+        ok: true,
+        readiness: { state: "degraded", reasons: ["event-loop"], warnings: [] },
         eventLoop: {
           degraded: true,
           degradedSinceMs: 61_000,

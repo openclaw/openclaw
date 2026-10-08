@@ -106,6 +106,32 @@ describe("diagnostic Gateway readiness", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
+  it.each(["starting", "degraded", "failed", "reachable"] as const)(
+    "leaves diagnostic RPC success to its caller when operational state is %s",
+    async (state) => {
+      readGatewayOwnerLease.mockReturnValue(foregroundOwner());
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 8000 }],
+        hints: [],
+      });
+      callGateway.mockImplementation(
+        gatewayHealthResponse({
+          health: {
+            ok: true,
+            readiness: { state, reasons: ["fixture-observation"], warnings: [] },
+          },
+        }),
+      );
+      await expect(
+        waitForGatewayDiagnosticReadiness({ config: noAuthConfig, timeoutMs: 5_000 }),
+      ).resolves.toBeUndefined();
+      expect(monotonicClock.nowMs).toBe(0);
+      expect(callGateway).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each([22_000, 61_000])(
     "charges %d ms of authentication preparation to the caller's absolute deadline",
     async (authElapsedMs) => {

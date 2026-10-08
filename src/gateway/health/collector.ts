@@ -51,6 +51,7 @@ import {
   buildDeliveryQueueHealthSummary,
   captureDeliveryQueueHealthContext,
 } from "./delivery-queue.js";
+import { projectGatewayHealthReadiness } from "./readiness.js";
 import type {
   AgentHealthSummary,
   ChannelAccountHealthSummary,
@@ -643,7 +644,7 @@ export async function collectGatewayHealthSnapshot(params: {
   const pluginHealth = buildPluginHealthSummary(cfg);
   const contextEngineHealth = await buildContextEngineHealthSummary();
   const deliveryQueueHealth = await buildDeliveryQueueHealthSummary(undefined, stateContext);
-  return {
+  const snapshot: HealthSummary = {
     ok: true,
     ts: Date.now(),
     durationMs: Date.now() - start,
@@ -666,6 +667,8 @@ export async function collectGatewayHealthSnapshot(params: {
       recent: sessions.recent,
     },
   };
+  snapshot.readiness = projectGatewayHealthReadiness(snapshot, { runtime: params.runtimeSnapshot });
+  return snapshot;
 }
 
 async function readRuntimeHealthConfig(): Promise<OpenClawConfig> {

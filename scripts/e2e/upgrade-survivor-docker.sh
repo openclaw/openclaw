@@ -214,7 +214,7 @@ if [ -n "$LIVE_MODEL_ROWS" ]; then
   done <<<"$LIVE_MODEL_ROWS"
 fi
 
-if { [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "recovery-cleanup" ] || [ "$SCENARIO" = "legacy-operator-state" ]; } && [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
+if { [ "$SCENARIO" = "sqlite-volume" ] || [ "$SCENARIO" = "recovery-cleanup" ] || [ "$SCENARIO" = "legacy-operator-state" ] || [ "$SCENARIO" = "repair-readiness" ]; } && [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" != "1" ]; then
   echo "$SCENARIO requires OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1" >&2
   exit 1
 fi
@@ -457,10 +457,45 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     SURVIVOR_RUNTIME_ROOT="$SURVIVOR_RUNTIME_ROOT/runtime"
   fi
 
+  if [ "$SCENARIO" = "repair-readiness" ]; then
+    if { [ "$BASELINE_SPEC" != "openclaw@2026.9.7" ] && [ "$BASELINE_SPEC" != "openclaw@2026.9.8" ]; } || [ "$CANDIDATE_KIND" != "tarball" ] ||
+      [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
+      echo "repair-readiness requires published 2026.9.7 or 2026.9.8, a frozen candidate, manual restart, and no live provider" >&2
+      exit 2
+    fi
+    if [ -z "${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-}" ]; then
+      DOCKER_RUN_TIMEOUT="$(node --input-type=module - "$HARNESS_ROOT_DIR/scripts/lib/upgrade-survivor-policy.mjs" <<'READINESS_DEFAULT'
+import { pathToFileURL } from "node:url";
+const { REPAIR_READINESS_BUDGET } = await import(pathToFileURL(process.argv[2]).href);
+console.log(REPAIR_READINESS_BUDGET.dockerSeconds + "s");
+READINESS_DEFAULT
+      )"
+    fi
+    UPGRADE_RUNNER="$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/repair-readiness.sh"
+  fi
+
   docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
   if [ "$UPDATE_RESTART_MODE" = auto-auth ]; then
     # Have Docker load its default AppArmor profile before the setup process reattaches it.
     docker_e2e_docker_cmd run --rm --network none --entrypoint true "$IMAGE_NAME"
+  fi
+
+  if [ "$SCENARIO" = "repair-readiness" ]; then
+    # Establish the absolute cell deadline once, after image preparation and
+    # before container launch. The entrypoint must not restart this allowance.
+    cell_deadline="$(node --input-type=module - "$HARNESS_ROOT_DIR" "$DOCKER_RUN_TIMEOUT" "${CELL_DEADLINE_EPOCH_SECONDS:-}" "$(date +%s)" <<'NODE'
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+const [root, timeout, inherited, now] = process.argv.slice(2);
+const { parseTimeoutMs } = await import(pathToFileURL(root + "/scripts/lib/docker-e2e-watchdog.mjs").href);
+const allocatedSeconds = Math.floor(parseTimeoutMs(timeout) / 1000);
+assert(Number.isSafeInteger(allocatedSeconds) && allocatedSeconds > 135, "Docker budget must leave 75s outer settlement and 60s cell cleanup reserves");
+const deadline = Number(now) + allocatedSeconds - 75;
+assert(!inherited || (Number.isSafeInteger(Number(inherited)) && Number(inherited) > 0), "Invalid inherited cell deadline");
+process.stdout.write(String(inherited ? Math.min(Number(inherited), deadline) : deadline));
+NODE
+)"
+    UPGRADE_SCENARIO_ARGS+=(-e CELL_DEADLINE_EPOCH_SECONDS="$cell_deadline")
   fi
 
   echo "Running published upgrade survivor Docker E2E..."

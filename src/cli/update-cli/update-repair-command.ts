@@ -229,6 +229,7 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
   // the interrupted updater recorded any post-core work.
   if (
     !gateway.reachable ||
+    (gateway.readiness !== undefined && gateway.readiness.state !== "ready") ||
     !expectedVersion ||
     !expectedBuildId ||
     gateway.gatewayVersion !== expectedVersion ||

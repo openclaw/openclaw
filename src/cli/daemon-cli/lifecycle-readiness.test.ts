@@ -144,6 +144,41 @@ describe("Gateway service readiness", () => {
     },
   );
 
+  it.each([true, false])(
+    "retains non-ready observations on successful lifecycle output (json=%s)",
+    async (json) => {
+      const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
+      const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      runServiceRestart.mockImplementation(async (params: RestartParams) => {
+        const context = createDaemonActionContext({ action: "restart", json });
+        await params.postRestartCheck?.({ ...context, json, activationAccepted: true });
+        context.emitMessage({ ok: true, result: "restarted" });
+        return true;
+      });
+      waitForGatewayHealthyRestart.mockResolvedValue({
+        healthy: true,
+        readiness: { state: "reachable", reasons: ["health-unavailable"], warnings: [] },
+      });
+      await expect(runDaemonRestart({ json })).resolves.toBe(true);
+      expect(requireMockCallArg(waitForGatewayHealthyRestart, "restart observation").purpose).toBe(
+        "lifecycle",
+      );
+      if (json) {
+        expect(writeJson).toHaveBeenCalledWith(
+          expect.objectContaining({
+            ok: true,
+            result: "restarted",
+            warnings: ["Gateway readiness: reachable (health-unavailable)"],
+          }),
+        );
+        expect(log).not.toHaveBeenCalled();
+      } else {
+        expect(log).toHaveBeenCalledWith(expect.stringContaining("Gateway readiness: reachable"));
+        expect(writeJson).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it.each([
     { outcome: "still-starting", runtime: "running", code: 2 },
     { outcome: "stopped-free", runtime: "stopped", code: 1 },

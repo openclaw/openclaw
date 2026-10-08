@@ -83,8 +83,15 @@ Gateway state without starting a schema migration while the old Gateway is still
 running. If no state database exists, it logs that intent recording was skipped
 and continues the restart.
 
+Ordinary standalone restart success acknowledges service and Gateway liveness,
+not full operational recovery. A correlated authentication or pairing rejection
+retains that liveness meaning; an observed `readiness` state other than `ready` is
+reported as a warning in text and JSON output. Foreign listeners, uncorrelated
+connection errors, and replacement-ownership failures still fail verification.
+Update and repair callers require operational readiness instead.
+
 When an updater invokes the installed `gateway restart` command, its existing
-update marker enables the five-minute startup watchdog after the managed process
+update marker selects operational verification and enables the five-minute startup watchdog after the managed process
 is observed running. This lets an older updater complete a slow first-hop startup
 without passing a new option. The watchdog includes migration, listener, and health
 phases; phase changes cannot extend its cap. Explicit readiness budgets supplied

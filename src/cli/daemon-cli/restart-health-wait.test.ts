@@ -270,6 +270,12 @@ describe("restart health", () => {
         listeners: monotonicClock.nowMs < (boundAtMs ?? readyAtMs) ? [] : [{ pid: 8000 }],
         hints: [],
       }));
+      callGateway.mockImplementation(async (opts) => {
+        if (monotonicClock.nowMs < readyAtMs) {
+          throw new Error("Gateway is still starting");
+        }
+        return gatewayHealthResponse()(opts);
+      });
       const service = makeGatewayService({ status: "running", pid: 8000 });
       if (running === false) {
         vi.mocked(service.readRuntime).mockResolvedValue({ status: "unknown" });
@@ -301,6 +307,15 @@ describe("restart health", () => {
       attempts: 6,
       outcome: "healthy",
       elapsedMs: 1_000,
+    },
+    {
+      name: "waits for transient operational degradation before settling",
+      pids: [8000, 8000, 8000, 8000],
+      reachable: [true, true, true, true],
+      readinessStates: ["degraded", "ready", "ready", "ready"],
+      attempts: 6,
+      outcome: "healthy",
+      elapsedMs: 1_500,
     },
     {
       name: "restarts settling after an unhealthy probe",
@@ -362,48 +377,72 @@ describe("restart health", () => {
       outcome: "healthy",
       elapsedMs: 1_000,
     },
-  ])("$name", async ({ platform, pids, bootIds, reachable, attempts, outcome, elapsedMs }) => {
-    if (platform) {
-      Object.defineProperty(process, "platform", { value: platform, configurable: true });
-    }
-    const service = makeGatewayService({ status: "running", pid: 8000 });
-    for (const pid of pids) {
-      vi.mocked(service.readRuntime).mockResolvedValueOnce({ status: "running", pid });
-    }
-    for (const [index, ok] of reachable.entries()) {
-      if (ok) {
-        callGateway.mockImplementationOnce(
-          gatewayHealthResponse({
-            server: { version: "2026.8.1", ...(bootIds ? { bootId: bootIds[index] } : {}) },
-          }),
-        );
-      } else {
-        callGateway.mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
-      }
-    }
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "busy",
-      listeners: [{ pid: 8000 }, { pid: 9000 }],
-      hints: [],
-    });
-
-    const snapshot = await waitForGatewayHealthyRestart({
-      service,
-      port: 18789,
-      expectedVersion: "2026.8.1",
-      requireRunningService: true,
+  ])(
+    "$name",
+    async ({
+      platform,
+      pids,
+      bootIds,
+      reachable,
+      readinessStates,
       attempts,
-      delayMs: 500,
-      settle: { probes: 3 },
-    });
+      outcome,
+      elapsedMs,
+    }) => {
+      if (platform) {
+        Object.defineProperty(process, "platform", { value: platform, configurable: true });
+      }
+      const service = makeGatewayService({ status: "running", pid: 8000 });
+      for (const pid of pids) {
+        vi.mocked(service.readRuntime).mockResolvedValueOnce({ status: "running", pid });
+      }
+      for (const [index, ok] of reachable.entries()) {
+        if (ok) {
+          callGateway.mockImplementationOnce(
+            gatewayHealthResponse({
+              server: { version: "2026.8.1", ...(bootIds ? { bootId: bootIds[index] } : {}) },
+              ...(readinessStates
+                ? {
+                    health: {
+                      ok: true,
+                      readiness: {
+                        state: readinessStates[index],
+                        reasons: index === 0 ? ["event-loop"] : [],
+                        warnings: [],
+                      },
+                    },
+                  }
+                : {}),
+            }),
+          );
+        } else {
+          callGateway.mockRejectedValueOnce(new Error("connect ECONNREFUSED"));
+        }
+      }
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 8000 }, { pid: 9000 }],
+        hints: [],
+      });
 
-    expect(snapshot.waitOutcome).toBe(outcome);
-    expect(snapshot.healthy).toBe(outcome === "healthy");
-    expect(snapshot.runtime.pid).toBe(pids.at(-1));
-    expect(snapshot.elapsedMs).toBe(elapsedMs);
-    expect(callGateway).toHaveBeenCalledTimes(reachable.length);
-  });
+      const snapshot = await waitForGatewayHealthyRestart({
+        service,
+        port: 18789,
+        expectedVersion: "2026.8.1",
+        requireRunningService: true,
+        attempts,
+        delayMs: 500,
+        settle: { probes: 3 },
+      });
+
+      expect(snapshot.waitOutcome).toBe(outcome);
+      expect(snapshot.healthy).toBe(outcome === "healthy");
+      expect(snapshot.runtime.pid).toBe(pids.at(-1));
+      expect(snapshot.elapsedMs).toBe(elapsedMs);
+      expect(callGateway).toHaveBeenCalledTimes(reachable.length);
+    },
+  );
 
   it("settles the selected LaunchAgent after its temporarily unloaded job returns", async () => {
     Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
@@ -499,6 +538,7 @@ describe("restart health", () => {
   });
 
   it("waits through a healthy long-running startup migration", async () => {
+    callGateway.mockImplementation(gatewayHealthResponse());
     let inspections = 0;
     inspectPortUsage.mockImplementation(async () => {
       inspections += 1;
@@ -535,6 +575,7 @@ describe("restart health", () => {
   });
 
   it("keeps the readiness window after an observed migration ends near the standard deadline", async () => {
+    callGateway.mockImplementation(gatewayHealthResponse());
     let inspections = 0;
     inspectPortUsage.mockImplementation(async () => {
       inspections += 1;

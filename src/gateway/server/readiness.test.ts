@@ -289,7 +289,9 @@ describe("createReadinessChecker", () => {
           allowPendingAgentDatabases: allowPending,
           getAgentDatabaseAdmissionRefusals: () => refusals,
         });
-        const channelReadiness = channelFailed ? failingSnapshot(["discord"]) : readySnapshot();
+        const channelReadiness = channelFailed
+          ? failingSnapshot(["discord"])
+          : readySnapshot(FIVE_MIN_MS, skipChannels ? { channelsSkipped: true } : {});
         expect(readiness()).toEqual(channelReadiness);
 
         refusals = [pending];
@@ -432,7 +434,7 @@ describe("createReadinessChecker", () => {
         shouldSkipChannelReadiness: () => true,
       });
 
-      expect(readiness()).toEqual(readySnapshot());
+      expect(readiness()).toEqual(readySnapshot(FIVE_MIN_MS, { channelsSkipped: true }));
       expect(manager.getRuntimeSnapshot).not.toHaveBeenCalled();
     });
   });

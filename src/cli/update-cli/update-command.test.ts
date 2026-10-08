@@ -795,6 +795,7 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
 
       if (outcome === "recovered") {
         expect(waitForHealthy).toHaveBeenCalledWith({
+          purpose: "verification",
           service,
           port: 18790,
           expectedVersion: "2026.5.3",

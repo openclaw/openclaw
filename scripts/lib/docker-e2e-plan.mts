@@ -31,6 +31,7 @@ import {
 } from "./update-first-hop-lanes.mjs";
 import {
   assertSupportedUpgradeSurvivorBaselineSpec,
+  REPAIR_READINESS_BUDGET,
   isTrustedHarnessOwnedUpgradeSurvivorScenario,
   parseUpgradeSurvivorBaselineSpecs,
   parseUpgradeSurvivorScenarios,
@@ -558,6 +559,11 @@ function expandUpgradeSurvivorBaselineLanes(
                 ? `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC=${shellQuote(baselineSpec)}`
                 : "",
               scenario ? `OPENCLAW_UPGRADE_SURVIVOR_SCENARIO=${shellQuote(scenario)}` : "",
+              scenario === "repair-readiness"
+                ? 'OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT="${OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-' +
+                  REPAIR_READINESS_BUDGET.dockerSeconds +
+                  's}"'
+                : "",
             ]
               .filter(Boolean)
               .join(" ");
@@ -568,6 +574,9 @@ function expandUpgradeSurvivorBaselineLanes(
                   : poolLane.cacheKey
                 : name,
               command: `${commandPrefix} ${poolLane.command}`,
+              ...(scenario === "repair-readiness"
+                ? { timeoutMs: REPAIR_READINESS_BUDGET.laneSeconds * 1000 }
+                : {}),
               name,
             });
           }),

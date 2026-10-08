@@ -428,6 +428,8 @@ type GatewayResidentBridgeContext = {
   >;
   getRuntimeSnapshot: (options?: ChannelRuntimeSnapshotOptions) => ChannelRuntimeSnapshot;
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
+  getGatewayReadiness?: import("../server/readiness.js").ReadinessChecker;
+  getGatewayStartup?: import("../server/readiness.js").StartupChecker;
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
   getDeferredChannelReloads?: () => readonly GatewayDeferredChannelReload[];
   startChannel: (

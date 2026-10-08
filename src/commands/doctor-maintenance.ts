@@ -232,6 +232,7 @@ export async function beginDoctorMaintenance(params: DoctorMaintenanceParams) {
       });
       const health = await settle(() =>
         waitForGatewayHealthyRestart({
+          purpose: "verification",
           service,
           port,
           env: state.env,

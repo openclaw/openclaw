@@ -101,6 +101,10 @@ type GatewayRequestContextRuntime = Pick<
     | "workerPlacementControlAvailable"
     | "getAttachedGatewayMethodRegistry"
   > & {
+    createHttpTransportOptions: () => Pick<
+      ReturnType<GatewayCoreRuntime["createHttpTransportOptions"]>,
+      "getReadiness" | "getStartup"
+    >;
     sessionObserver: NonNullable<GatewayRequestContext["sessionObserver"]>;
     sessionActivitySummaries?: GatewayRequestContext["sessionActivitySummaries"];
     channelAdmissionAudit?: GatewayRequestContext["channelAdmissionAudit"];
@@ -325,6 +329,8 @@ export function createGatewayRequestContext(
       ? { readChatStartupProjection: params.chatMetadataLifecycle.readStartup }
       : {}),
     getHealthCache,
+    getGatewayReadiness: runtime.createHttpTransportOptions().getReadiness,
+    getGatewayStartup: runtime.createHttpTransportOptions().getStartup,
     refreshHealthSnapshot: runtime.refreshGatewayHealthSnapshotWithRuntime,
     logHealth: params.logHealth,
     logGateway: params.log,

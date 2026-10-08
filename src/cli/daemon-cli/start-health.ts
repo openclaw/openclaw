@@ -1,7 +1,9 @@
 import { resolveGatewayStartupTiming } from "../../commands/gateway-startup-timing.js";
+import { formatGatewayHealthReadinessLine } from "../../commands/health-format.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
+import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { createGatewayRestartDeadline } from "./restart-health-deadline.js";
 import {
@@ -14,6 +16,7 @@ import {
 
 export async function verifyGatewayStartReadiness(params: {
   expectedPort?: number;
+  json?: boolean;
   fail: (message: string, hints?: string[], result?: "still-starting") => void;
   resolveContext: () => Promise<{ config?: OpenClawConfig; env: NodeJS.ProcessEnv; port: number }>;
   service: GatewayService;
@@ -29,6 +32,7 @@ export async function verifyGatewayStartReadiness(params: {
     withCommandProcessScope(
       () =>
         waitForGatewayHealthyRestart({
+          purpose: "lifecycle",
           service: params.service,
           port,
           attempts,
@@ -50,6 +54,14 @@ export async function verifyGatewayStartReadiness(params: {
     }),
   ]);
   if (health.healthy && readiness.healthz === 200 && readiness.readyz === 200) {
+    const warning =
+      health.readiness?.state !== "ready" ? formatGatewayHealthReadinessLine(health) : null;
+    if (warning) {
+      params.warnings.push(warning);
+      if (!params.json) {
+        defaultRuntime.log(warning);
+      }
+    }
     return;
   }
   params.warnings.push(...renderRestartDiagnostics(health));

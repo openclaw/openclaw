@@ -77,6 +77,7 @@ export async function waitForGatewayDiagnosticReadiness(opts: {
           probeContext,
           probeHosts: LOOPBACK_PORT_PROBE_HOSTS,
           requirePluginHealth: false,
+          purpose: "diagnostic",
           waitForMissingService: false,
           onProgress: opts.onProgress,
           service: {
@@ -160,7 +161,10 @@ export async function waitForGatewayDiagnosticReadiness(opts: {
         }),
       deadline.signal,
     );
-    return snapshot.waitOutcome === "stopped-free" && snapshot.runtime.missingUnit
+    // Operational degradation does not decide diagnostic RPC success. Health and
+    // status (including --require-rpc) must still run their own read-scope probe.
+    return snapshot.waitOutcome === "gateway-not-ready" ||
+      (snapshot.waitOutcome === "stopped-free" && snapshot.runtime.missingUnit)
       ? undefined
       : snapshot;
   } finally {

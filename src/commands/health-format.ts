@@ -3,10 +3,26 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatChannelStatusState } from "../channels/plugins/status-state.js";
+import { isRequiredPluginHealthError } from "../gateway/health/readiness.js";
 import type { ChannelAccountHealthSummary, HealthSummary } from "../gateway/health/types.js";
 import { isGatewayTransportError } from "../gateway/transport-error.js";
 import { formatDurationHuman } from "../infra/format-time/format-duration.js";
 import { redactToolPayloadText } from "../logging/redact.js";
+
+export function formatGatewayHealthReadinessLine(
+  summary: Pick<HealthSummary, "readiness">,
+): string | null {
+  const readiness = summary.readiness;
+  if (!readiness) {
+    return null;
+  }
+  const details = [
+    ...readiness.reasons,
+    ...readiness.warnings.map((warning) => "warning: " + warning),
+  ].map((reason) => formatPluginDiagnostic(reason, 200));
+  const suffix = details.length ? " (" + details.slice(0, 20).join("; ") + ")" : "";
+  return "Gateway readiness: " + readiness.state + suffix;
+}
 
 export function formatContextEngineHealthLine(summary: HealthSummary): string | null {
   const quarantined = summary.contextEngines?.quarantined ?? [];
@@ -290,13 +306,7 @@ export const formatHealthChannelLines = (
   }
   const pluginWarnings = [
     ...(summary.plugins?.errors ?? [])
-      .filter(
-        (plugin) =>
-          plugin.activated ||
-          plugin.activationSource === "explicit" ||
-          plugin.activationSource === "auto" ||
-          plugin.activationSource === "default",
-      )
+      .filter(isRequiredPluginHealthError)
       .map(({ id, error }) => ({ id, state: "failed", detail: error })),
     ...(summary.plugins?.unavailable ?? []).map(({ id, diagnostic }) => ({
       id,

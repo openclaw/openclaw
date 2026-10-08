@@ -201,6 +201,7 @@ function expectListenerHealth(
   env?: NodeJS.ProcessEnv,
 ) {
   expect(waitForGatewayHealthyListener).toHaveBeenCalledWith({
+    purpose: "lifecycle",
     port: lock.port,
     attempts,
     delayMs: 500,

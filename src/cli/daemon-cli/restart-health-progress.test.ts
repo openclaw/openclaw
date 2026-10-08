@@ -284,7 +284,7 @@ describe("restart startup progress", () => {
       if (monotonicClock.nowMs < 180_000) {
         throw new Error("Gateway health is not ready");
       }
-      return {};
+      return { ok: true };
     });
     const health = await waitForGatewayHealthyRestart({
       service,

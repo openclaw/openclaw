@@ -17,6 +17,7 @@ import type { HealthSummary } from "../health/types.js";
 import type { GatewayHostLifecycle } from "../server-public.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { healthHandlers } from "./health.js";
+import type { GatewayRequestContext } from "./types.js";
 
 afterEach(() => {
   setPreparedModelRuntimeStartupStatus(undefined);
@@ -66,6 +67,7 @@ function healthSnapshot(stateDir: string, overrides: Partial<HealthSummary> = {}
 function createHealthReader(
   snapshot: HealthSummary,
   getEventLoopHealth?: () => HealthSummary["eventLoop"],
+  overrides: Partial<GatewayRequestContext> = {},
 ) {
   const context = {
     getHealthCache: () => snapshot,
@@ -73,6 +75,7 @@ function createHealthReader(
     getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
     getEventLoopHealth,
     logHealth: { error: vi.fn() },
+    ...overrides,
   };
   return async (probe = false) => {
     const respond = vi.fn();
@@ -89,6 +92,68 @@ function createHealthReader(
 }
 
 describe("Gateway status owner routing", () => {
+  it.each([false, true])(
+    "distinguishes overall health from RPC success (probe=%s)",
+    async (probe) => {
+      await withStateDirEnv("openclaw-gateway-overall-health-", async ({ stateDir }) => {
+        const snapshot = healthSnapshot(stateDir);
+        let eventLoop: HealthSummary["eventLoop"];
+        const child = vi.spyOn(childRuntime, "readChildRuntimeViability").mockReturnValue({
+          execPath: "/synthetic/node",
+          available: true,
+        });
+        const read = createHealthReader(snapshot, () => eventLoop);
+        const expectState = async (state: string, reason?: string) => {
+          if (probe) {
+            snapshot.eventLoop = eventLoop;
+          }
+          const response = await read(probe);
+          expect(response.mock.calls[0]?.[0]).toBe(true);
+          expect(response.mock.calls[0]?.[1]).toMatchObject({
+            ok: true,
+            readiness: {
+              state,
+              ...(reason ? { reasons: expect.arrayContaining([reason]) } : {}),
+            },
+          });
+        };
+        // A snapshot without startup/admission facts proves only reachability.
+        await expectState("reachable");
+        snapshot.channels.telegram = {
+          accountId: "default",
+          configured: true,
+          enabled: true,
+          running: true,
+          connected: false,
+          lifecycle: "starting",
+          lastStartAt: Date.now(),
+        };
+        await expectState("starting", "channel:telegram:default:startup-connect-grace");
+        snapshot.channels.telegram.lifecycle = "ready";
+        snapshot.channels.telegram.lastStartAt = Date.now() - 180_000;
+        await expectState("degraded", "channel:telegram:default:disconnected");
+        snapshot.channels = {};
+        eventLoop = {
+          degraded: true,
+          degradedSinceMs: 1_000,
+          reasons: ["event_loop_delay"],
+          intervalMs: 1_000,
+          delayP99Ms: 500,
+          delayMaxMs: 500,
+          utilization: 0.9,
+          cpuCoreRatio: 0.8,
+        };
+        await expectState("degraded", "event-loop");
+        eventLoop = undefined;
+        child.mockReturnValue({ execPath: "/synthetic/node", available: false });
+        await expectState("failed", "child-runtime-unavailable");
+        child.mockReturnValue({ execPath: "/synthetic/node", available: true });
+        await expectState("reachable");
+        expect(snapshot).not.toHaveProperty("readiness");
+      });
+    },
+  );
+
   it("reports only the current host's recorded shutdown budget and resident PID", async () => {
     await withStateDirEnv("openclaw-gateway-budget-status-", async ({ stateDir }) => {
       const config = {

@@ -134,6 +134,7 @@ export async function waitForImmutableGateway(params: {
         },
       };
       const probe = {
+        purpose: "verification" as const,
         service,
         port,
         env,

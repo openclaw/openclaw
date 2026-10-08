@@ -8374,7 +8374,6 @@
 ["src/gateway/test-helpers.mocks.ts","../cron/isolated-agent.js","6313c4fdf9cbe6408af572032b85738334958f57879ac425be8f604eb89ef9e0",1]
 ["src/gateway/test-helpers.mocks.ts","../infra/tailnet.js","c94b579f6d66a49cbee1836baeae71209235908f610dc31118d47bed888a91cf",1]
 ["src/gateway/test-helpers.mocks.ts","../status/summary.js","80928d8df492aab39e0b5702cd54a3673063cb092e211fcad8620f6e7cbe2c1e",1]
-["src/gateway/test-helpers.mocks.ts","./health/collector.js","49ab2e1e48b06742caa74e616fbdbc41f0de9d7e9a87c3317596f99b71d16b2e",1]
 ["src/gateway/test/server-sessions.test-helpers.ts","../../acp/control-plane/manager.js","5e7fa7dd60da60525fc04ec09d448e0654cac634caf5e362e63f4f3c34a92152",1]
 ["src/gateway/test/server-sessions.test-helpers.ts","../../plugin-sdk/browser-maintenance.js","d7427ec9030cf6d9b76ccdd0cd5fad828def4eccf5f91165064596bda10130fc",1]
 ["src/gateway/test/talk-client-agent-consult.requester-final.test.ts","../../agents/admitted-run-context.js","3041c9a0e2f61adabf32ae6c9c7766bf2ef9607f9f21af36d8bed1ef95a1c198",1]

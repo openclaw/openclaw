@@ -263,6 +263,7 @@ export async function observeUpdateGatewayReadiness(params: UpdateGatewayReadine
   };
   const service = resolveGatewayService();
   const probeParams = {
+    purpose: "verification" as const,
     service,
     port: params.gatewayPort,
     expectedVersion: params.expectedVersion,

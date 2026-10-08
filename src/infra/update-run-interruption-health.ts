@@ -68,6 +68,7 @@ export async function observeInterruptedUpdateGateway(
     );
     const port = resolveGatewayPort(context.config, env);
     const probe = {
+      purpose: "verification" as const,
       service: resolveGatewayService(),
       port,
       env,

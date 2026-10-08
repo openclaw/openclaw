@@ -5,6 +5,8 @@ type ProtocolHealth = Snapshot["health"];
 type ProtocolPlugin = NonNullable<ProtocolHealth["plugins"]>;
 type UnavailablePlugin = NonNullable<ProtocolPlugin["unavailable"]>[number];
 
+export type GatewayHealthReadiness = NonNullable<ProtocolHealth["readiness"]>;
+
 export type ChannelAccountHealthSummary = ChannelAccountSnapshot & {
   authAgeMs?: number | null;
   [key: string]: unknown;

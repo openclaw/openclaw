@@ -214,6 +214,53 @@ and a Gateway-owned deadline, so one slow account returns a structured timeout w
 completed sibling results remain available. The command exits non-zero if the gateway is
 unreachable or the Gateway call itself times out.
 
+### Overall operational readiness
+
+The optional `readiness` projection distinguishes a returned health snapshot from a
+fully operational Gateway. Top-level `ok: true` continues to mean that the RPC
+succeeded; the health command's exit status and the HTTP liveness/startup/admission
+contracts are unchanged.
+
+- `reachable`: the RPC succeeded, but current startup, admission, or required-channel
+  observations are unavailable. A cached healthy account is not a live observation
+  when that account is missing from the runtime owner.
+- `starting`: startup or a managed channel connection/reconnection is pending.
+- `ready`: startup and admission owners report ready, with no observed operational
+  failure. Optional checks can still have warnings.
+- `degraded`: the Gateway responds, but a configured plugin, channel, model runtime,
+  event-loop sampler, or admission owner reports an operational problem.
+- `failed`: shared-state admission, terminal plugin recovery, or the retained child
+  runtime reports a failure preventing normal operation.
+
+`reasons` identifies pending or failed components. `warnings` records optional probe
+uncertainty and intentionally suppressed channel starts. Disabled, unconfigured,
+and unlinked accounts do not become readiness requirements. An optional channel
+probe deadline is a warning, never evidence that the channel failed. A confirmed
+runtime failure is not erased by that warning. Configured-unavailable plugin
+warnings retain the existing update policy.
+
+The health owner projects existing recorded facts; it does not scan databases,
+change channel restart grace, start plugins, or change operator activation intent.
+The Gateway refreshes live startup, admission, event-loop and child-runtime facts
+when returning health. In particular, HTTP `/readyz` can tolerate a connecting
+channel or report admission ready during CPU degradation while the more detailed
+operational projection reports `starting` or `degraded`.
+
+Update and repair verification consume this projection separately from transport
+reachability. A PID, open port, successful RPC, or HTTP liveness response alone
+cannot establish operational recovery. Older Gateways without the projection
+retain their existing separate identity, plugin, channel and HTTP checks. Internal
+maintenance callers that explicitly defer plugin verification retain only that
+narrower exception; other operational problems remain unverified.
+
+Ordinary standalone start/restart commands retain their lifecycle acceptance
+contract. A correlated authentication or pairing rejection can prove that the
+Gateway is responding without proving operational readiness. The command retains
+its action result and reports an observed non-ready state as a warning, not a full
+recovery certificate. An updater invoking the candidate CLI is different: the
+existing `OPENCLAW_UPDATE_IN_PROGRESS` marker selects operational verification,
+including for published updaters that cannot pass a new option.
+
 ### Queue warnings
 
 A successful health RPC reports top-level `ok: true`. That value means the Gateway

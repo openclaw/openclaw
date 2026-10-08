@@ -7,6 +7,7 @@ import { readGatewayMaintenanceWork } from "../../infra/gateway-active-work.js";
 import { getStatusSummary } from "../../status/summary.js";
 import { buildContextEngineHealthSummary } from "../health/context-engine.js";
 import { buildDeliveryQueueHealthSummary } from "../health/delivery-queue.js";
+import { projectGatewayHealthReadiness } from "../health/readiness.js";
 import type { ChannelHealthSummary, HealthSummary } from "../health/types.js";
 import { createGatewayServerActiveWorkInspectors } from "../server-active-work.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
@@ -26,9 +27,21 @@ function cachedLifecycleDiffersFromRuntime(
 ): boolean {
   return (
     cached === undefined ||
-    (["running", "connected", "lifecycle"] as const).some(
-      (key) => runtime[key] !== undefined && cached[key] !== runtime[key],
-    )
+    (
+      [
+        "running",
+        "connected",
+        "lifecycle",
+        "enabled",
+        "configured",
+        "linked",
+        "ingressUnavailable",
+        "terminalDisconnect",
+        "restartPending",
+        "healthState",
+        "statusState",
+      ] as const
+    ).some((key) => cached[key] !== runtime[key])
   );
 }
 
@@ -68,6 +81,29 @@ function cachedHealthDiffersFromRuntime(
 export const healthHandlers: GatewayRequestHandlers = {
   health: async ({ respond, context, params, client }) => {
     const { getHealthCache, refreshHealthSnapshot, logHealth } = context;
+    const respondHealth = (summary: HealthSummary, cached?: true) => {
+      const current = {
+        ...summary,
+        modelRuntime: getPreparedModelRuntimeStartupStatus(),
+        childRuntime: readChildRuntimeViability(),
+      };
+      let runtime: ChannelRuntimeSnapshot | undefined;
+      try {
+        runtime = context.getRuntimeSnapshot({ inspectAccounts: false });
+      } catch {
+        // A successful snapshot may still lack a current lifecycle observation.
+      }
+      current.readiness = projectGatewayHealthReadiness(current, {
+        readiness: context.getGatewayReadiness?.(),
+        startup: context.getGatewayStartup?.(),
+        runtime,
+      });
+      if (cached) {
+        respond(true, current, undefined, { cached });
+      } else {
+        respond(true, current, undefined);
+      }
+    };
     const wantsProbe = params?.probe === true;
     const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     const includeSensitive = scopes.includes(ADMIN_SCOPE);
@@ -107,22 +143,17 @@ export const healthHandlers: GatewayRequestHandlers = {
       const contextEngines = await buildContextEngineHealthSummary();
       // A reset sampler has no current window; never revive the cached reading.
       const eventLoop = getEventLoopHealth?.();
-      respond(
-        true,
+      respondHealth(
         {
           ...cachedState,
-          modelRuntime: getPreparedModelRuntimeStartupStatus(),
           ...(eventLoop ? { eventLoop } : {}),
           ...(contextEngines ? { contextEngines } : {}),
           ...(deliveryQueues ? { deliveryQueues } : {}),
           ...(configReloadHotReloadStatus
             ? { configReload: { hotReloadStatus: configReloadHotReloadStatus } }
             : {}),
-          // Live check. The cache must not keep a path that disappeared after it was stored.
-          childRuntime: readChildRuntimeViability(),
         },
-        undefined,
-        { cached: true },
+        true,
       );
       if (shouldScheduleBackgroundHealthRefresh(refreshHealthSnapshot, now)) {
         void refreshHealthSnapshot({ probe: false, includeSensitive }).catch((err: unknown) =>
@@ -133,15 +164,7 @@ export const healthHandlers: GatewayRequestHandlers = {
     }
     await respondUnavailableOnThrow(respond, async () => {
       const snap = await refreshHealthSnapshot({ probe: wantsProbe, includeSensitive });
-      respond(
-        true,
-        {
-          ...snap,
-          modelRuntime: getPreparedModelRuntimeStartupStatus(),
-          childRuntime: readChildRuntimeViability(),
-        },
-        undefined,
-      );
+      respondHealth(snap);
     });
   },
   status: async ({ respond, client, params, context }) => {

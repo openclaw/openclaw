@@ -139,11 +139,13 @@ describe("restart health", () => {
   });
 
   it.each([
-    { listenerPid: 4300, healthy: true },
-    { listenerPid: 4400, healthy: false },
-  ])(
-    "accepts a correlated device identity rejection only for the verified replacement listener",
-    async ({ listenerPid, healthy }) => {
+    { listenerPid: 4300, purpose: "lifecycle", updateMarker: undefined, healthy: true },
+    { listenerPid: 4300, purpose: "verification", updateMarker: undefined, healthy: false },
+    { listenerPid: 4300, purpose: "lifecycle", updateMarker: "1", healthy: false },
+    { listenerPid: 4400, purpose: "lifecycle", updateMarker: undefined, healthy: false },
+  ] as const)(
+    "keeps device identity rejection separate from recovery (listener $listenerPid, $purpose, update=$updateMarker)",
+    async ({ listenerPid, purpose, updateMarker, healthy }) => {
       inspectPortUsage.mockResolvedValue({
         port: 18789,
         status: "busy",
@@ -155,6 +157,8 @@ describe("restart health", () => {
 
       const { waitForGatewayHealthyListener } = await import("./restart-health.js");
       const snapshot = await waitForGatewayHealthyListener({
+        purpose,
+        env: { ...process.env, OPENCLAW_UPDATE_IN_PROGRESS: updateMarker },
         port: 18789,
         previousLockIdentity,
         attempts: 1,
@@ -162,9 +166,7 @@ describe("restart health", () => {
       });
 
       expect(snapshot.healthy).toBe(healthy);
-      if (healthy) {
-        expect(snapshot.probeError).toBeUndefined();
-      }
+      expect(snapshot.readiness?.state).toBe(listenerPid === 4300 ? "reachable" : undefined);
       expect(inspectPortUsage).toHaveBeenCalledTimes(1);
       expect(callGateway).toHaveBeenCalledTimes(1);
     },

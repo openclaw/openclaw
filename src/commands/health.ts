@@ -42,6 +42,7 @@ import {
   formatContextEngineHealthLine,
   formatDeliveryQueueHealthLine,
   formatHealthChannelLines,
+  formatGatewayHealthReadinessLine,
 } from "./health-format.js";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
 export { formatHealthChannelLines } from "./health-format.js";
@@ -278,6 +279,10 @@ export async function healthCommand(
       }
       return Object.keys(byChannel).length > 0 ? byChannel : undefined;
     })();
+    const readinessLine = formatGatewayHealthReadinessLine(summary);
+    if (readinessLine) {
+      runtime.log(styleHealthChannelLine(readinessLine, rich));
+    }
     const channelLines = formatHealthChannelLines(summary, {
       accountMode: opts.verbose ? "all" : "default",
       accountIdsByChannel,
