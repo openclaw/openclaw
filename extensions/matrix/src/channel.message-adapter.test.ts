@@ -130,6 +130,12 @@ describe("matrix channel message adapter", () => {
       expectedThreadId: "$thread",
     },
     {
+      name: "a different room",
+      to: "room:!another:example",
+      replyToMode: "all" as const,
+      expectedThreadId: undefined,
+    },
+    {
       name: "a direct user target without proven room identity",
       to: "user:@alice:example",
       replyToMode: "all" as const,

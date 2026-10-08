@@ -245,6 +245,10 @@ describe("iMessage bot-owned thread mention policy", () => {
     { name: "human root", message: { thread_originator_guid: "imessage-human-thread-root" } },
     { name: "another account", accountId: "other" },
     { name: "another group", message: { chat_id: 456 } },
+    {
+      name: "reply to the bot without a native thread root",
+      message: { thread_originator_guid: undefined, reply_to_guid: rootGuid },
+    },
   ])("retains the mention requirement for $name", async ({ name: _name, ...overrides }) => {
     expect(await resolveThreadReply(overrides)).toEqual({ kind: "drop", reason: "no mention" });
   });
