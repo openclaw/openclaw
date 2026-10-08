@@ -137,15 +137,16 @@ export function createOpenAIProvider(): ProviderPlugin {
           },
         },
       ] satisfies Omit<ProviderPlugin["auth"][number], "run">[]
-    ).map((method) => ({
-      ...method,
-      run: noopAuth,
-      wizard: {
-        ...method.wizard,
-        choiceLabel: method.label,
-        choiceHint: method.hint,
-        ...OPENAI_ACCOUNT_WIZARD_GROUP,
-      },
-    })),
+    ).map((method) =>
+      Object.assign({}, method, {
+        run: noopAuth,
+        wizard: {
+          ...method.wizard,
+          choiceLabel: method.label,
+          choiceHint: method.hint,
+          ...OPENAI_ACCOUNT_WIZARD_GROUP,
+        },
+      }),
+    ),
   };
 }

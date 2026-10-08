@@ -500,11 +500,11 @@ async function generateOpenAICodexImage(params: {
 }): Promise<ImageGenerationResult> {
   const { req, apiKey } = params;
   const timeoutMs = resolveOpenAIImageTimeoutMs(req.timeoutMs);
-  const { createSubsystemLogger } = await import("openclaw/plugin-sdk/logging-core");
+  const { createSubsystemLogger: createLogger } = await import("openclaw/plugin-sdk/logging-core");
   const model = resolveOpenAIImageRequestModel(req, {
     allowTransparentDefaultReroute: true,
   });
-  createSubsystemLogger("image-generation/openai").info(
+  createLogger("image-generation/openai").info(
     `image auth selected: provider=openai mode=${sanitizeLogValue(
       params.authMode,
     )} transport=codex-responses requestedModel=${sanitizeLogValue(
