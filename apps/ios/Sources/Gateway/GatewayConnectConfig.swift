@@ -82,6 +82,17 @@ struct GatewayConnectConfig: Sendable {
             Self.sameOptions(self.nodeOptions, other.nodeOptions)
     }
 
+    func webSocketSessionBox() -> WebSocketSessionBox? {
+        let params = self.tls ?? (self.ingressAuthorization == nil ? nil : GatewayTLSParams(
+            required: true, expectedFingerprint: nil, allowTOFU: false, storeKey: nil))
+        return params.map {
+            WebSocketSessionBox(session: GatewayTLSPinningSession(
+                params: $0,
+                allowsRedirects: self.ingressAuthorization == nil,
+                allowsStoredCredentials: self.ingressAuthorization == nil))
+        }
+    }
+
     private static func sameOptions(_ lhs: GatewayConnectOptions, _ rhs: GatewayConnectOptions) -> Bool {
         lhs.role == rhs.role &&
             lhs.scopesAreExplicit == rhs.scopesAreExplicit &&

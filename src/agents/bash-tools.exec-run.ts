@@ -25,6 +25,7 @@ import { isSecretEgressProxyActive } from "../secrets/egress-proxy/registry.js";
 import type { SecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
+import { bindAgentToolAvailability } from "./agent-tool-availability.js";
 import { captureAgentToolSourceExecutionGuard } from "./agent-tool-source-execution-guard.js";
 import { markBackgrounded } from "./bash-process-registry.js";
 import { describeExecTool } from "./bash-tools.descriptions.js";
@@ -45,7 +46,6 @@ import {
   DEFAULT_MAX_OUTPUT,
   DEFAULT_PENDING_MAX_OUTPUT,
   type ExecProcessHandle,
-  execSchema,
   normalizePathPrepend,
   resolveApprovalRunningNoticeMs,
   resolveExecTarget,
@@ -68,6 +68,7 @@ import type {
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
 import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
+import { createExecSchema, execSchema } from "./bash-tools.schemas.js";
 import { clampWithDefault, readEnvInt, truncateMiddle } from "./bash-tools.shared.js";
 import {
   createExecToolExecutionTimeoutResolver,
@@ -84,9 +85,7 @@ const BACKGROUND_EXEC_FOLLOW_UP =
   "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
 
 /** Creates an exec tool instance with runtime defaults and approval policy wiring. */
-export function createExecTool(
-  defaults?: ExecToolDefaults,
-): AgentToolWithMeta<typeof execSchema, ExecToolDetails> {
+export function createExecTool(defaults?: ExecToolDefaults) {
   const secretEgressEnabled = isSecretEgressProxyActive();
   const cleanupMs = defaults?.cleanupMs;
   const preparedRunEnvironment = resolveExecPreparedRunEnvironment(defaults);
@@ -187,7 +186,7 @@ export function createExecTool(
     agentId,
     resolveHostForParams,
   });
-  return {
+  const tool: AgentToolWithMeta<typeof execSchema, ExecToolDetails> = {
     name: "exec",
     label: "exec",
     displaySummary: EXEC_TOOL_DISPLAY_SUMMARY,
@@ -197,7 +196,7 @@ export function createExecTool(
         autoReview: defaults?.mode === "auto",
       });
     },
-    parameters: execSchema,
+    parameters: createExecSchema(defaults),
     getExecutionTimeoutMs: createExecToolExecutionTimeoutResolver(defaults),
     prepareBeforeToolCallParams: requestPreparation.prepareBeforeToolCallParams,
     finalizeBeforeToolCallParams: requestPreparation.finalizeBeforeToolCallParams,
@@ -295,10 +294,9 @@ export function createExecTool(
             .join("\n"),
         );
       }
-      const requestedTarget = requireValidExecTarget(params.host);
       const target = resolveExecTarget({
         configuredTarget: defaults?.host,
-        requestedTarget,
+        requestedTarget: requireValidExecTarget(params.host),
         elevatedRequested,
         sandboxAvailable: Boolean(defaults?.sandbox),
         sandboxRequired: defaults?.sandboxRequired,
@@ -746,6 +744,11 @@ export function createExecTool(
       }
     },
   };
+  return bindAgentToolAvailability(tool, {
+    prepare: () => undefined,
+    // Explicit host requests still reach the runtime's authoritative rejection.
+    executionSchema: () => execSchema,
+  });
 }
 
 /** Default exec tool instance used by agent tool registries. */

@@ -62,6 +62,7 @@ import {
   renderExecUpdateText,
 } from "./bash-tools.exec-output.js";
 import { settleExecProcessExit } from "./bash-tools.exec-settlement.js";
+import { isRequestedExecTargetAllowed } from "./bash-tools.exec-target.js";
 import type {
   ExecExitFailureKind,
   ExecProcessOutcome,
@@ -79,8 +80,6 @@ import {
   withoutGatewayToolCallerIdentity,
 } from "./tools/gateway-caller-context.js";
 export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
-
-export { execSchema } from "./bash-tools.schemas.js";
 
 function resolveExecTimeoutMs(timeoutSec: number | null | undefined): number | undefined {
   if (typeof timeoutSec !== "number" || !Number.isFinite(timeoutSec) || timeoutSec <= 0) {
@@ -129,27 +128,6 @@ export type ExecProcessHandle = {
 /** Renders an exec target label, preserving `auto`. */
 export function renderExecTargetLabel(target: ExecTarget) {
   return target;
-}
-
-/** Returns true when a per-call target override is allowed by configured policy. */
-export function isRequestedExecTargetAllowed(params: {
-  configuredTarget: ExecTarget;
-  requestedTarget: ExecTarget;
-  sandboxAvailable?: boolean;
-}) {
-  if (params.requestedTarget === params.configuredTarget) {
-    return true;
-  }
-  if (params.configuredTarget === "auto") {
-    if (
-      params.sandboxAvailable &&
-      (params.requestedTarget === "gateway" || params.requestedTarget === "node")
-    ) {
-      return false;
-    }
-    return true;
-  }
-  return false;
 }
 
 /** Resolves configured/requested/elevated exec target into an effective host. */

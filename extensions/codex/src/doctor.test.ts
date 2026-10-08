@@ -338,7 +338,7 @@ setInterval(() => {}, 1000);
             checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
             path: command,
             message:
-              "Managed Codex app-server version check failed: Version probe timed out after 5000 ms",
+              "Managed Codex app-server version check failed: Version check timed out after 5000 ms",
             requirement: `Codex ${CODEX_APP_SERVER_VERSION} must report its version within 5000 ms`,
           }),
         ]);
