@@ -43,6 +43,32 @@ commit guard still reaches the shared MCP grant kernels, so their policy write
 and deletion-fence query remain T1. These changes introduce no schema, stored
 data, retention, durability, permission, or update migration.
 
+Gateway deleted-agent checks batch ACP metadata candidates through the shared-state
+reader only for free ACP keys whose agent is absent. When a foreign commit requires
+the content-version marker to be refreshed, the reader fetches that marker and the
+first metadata cohort in one statement. Admission validates the marker before
+consuming metadata; the existing read revision owns subsequent row reuse.
+Reset rebinding uses the ACP
+writer after the session entry commits, retaining that entry writer's physical
+custody and accepted cleanup authority until the metadata settles. If the session
+owner already has an admitted native handle, transaction and commit grants retain
+a synchronous final-authority guard: one indexed lifecycle
+predicate on the original admitted agent handle. Foreign and native SDK writers
+can change that row without publishing revocation, so prepared facts cannot grant
+the mutation. Retire this guard when the next Plugin SDK major removes raw
+synchronous writers and the lifecycle owner has complete revocation publications.
+Cold callers use the existing worker source reader; they never open a native handle
+on the Gateway thread for this guard.
+ACP writes publish the row returned by their upsert,
+and clearing the exact metadata keys publishes absence without a readback. Native
+Doctor writes and the released synchronous SDK reader retain their contracts.
+Schemas, stored bytes, retention, permissions, and update behavior are unchanged.
+
+Reset reuses its prepared entry snapshot across transcript-only cold restoration;
+the committing worker still compares the complete current target before changing
+it. ACP transactions use the shared writer's retained handle and validate ownership
+after `BEGIN`, without a duplicate ownership read before the transaction.
+
 Conversation directory registration and outbound binding predicates use the existing
 agent writer. Registration retains the selected physical store across directory
 discovery; transaction and commit grants recheck live routing authority. Delivery
