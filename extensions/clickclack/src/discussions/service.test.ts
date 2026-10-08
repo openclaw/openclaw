@@ -4,7 +4,9 @@ import type { PluginStateEntry } from "openclaw/plugin-sdk/plugin-state-runtime"
 import { describe, expect, it, vi } from "vitest";
 import { ClickClackHttpError, type ClickClackClient } from "../http-client.js";
 import type { ClickClackChannel } from "../types.js";
+import { getClickClackDiscussionBindingStore } from "./binding-store.js";
 import { fallbackDiscussionLabel } from "./naming.js";
+import { markClickClackDiscussionChannelRevoked } from "./revoked-channel-store.js";
 import {
   discussionChannel,
   MANAGED_CONTRACT_FIELDS,
@@ -65,6 +67,93 @@ describe("ClickClack discussion service", () => {
       await harness.service.cleanup();
     }
   });
+
+  it.each(["disabled", "retargeted", "revoked", "replaced"] as const)(
+    "does not update or resurrect a discussion after %s during binding preparation",
+    async (change) => {
+      const harness = createHarness({ label: "Prepared metadata", category: "Projects" });
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const openStore = harness.runtime.state.openKeyedStore;
+      let holdEntries = false;
+      harness.runtime.state.openKeyedStore = <T>(
+        options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
+      ) => {
+        const store = openStore<T>(options);
+        if (options.namespace !== "discussion-bindings") {
+          return store;
+        }
+        return {
+          ...store,
+          entries: async () => {
+            const entries = await store.entries();
+            if (holdEntries) {
+              entered.resolve();
+              await release.promise;
+            }
+            return entries;
+          },
+        };
+      };
+      const sessionKey = "agent:main:prepared-metadata-authority";
+      await harness.service.open(sessionKey);
+      const originalBinding = getClickClackDiscussionBindingStore(harness.runtime).get(sessionKey);
+      if (!originalBinding) {
+        throw new Error("Expected the opened discussion binding fixture");
+      }
+      const { displayTitle: _displayTitle, ...legacyBinding } = originalBinding;
+      harness.store.register(sessionKey, legacyBinding);
+      // This unchanged legacy title needs the sibling-support scan even if ordinary scans are removed.
+      harness.store.register("agent:main:prepared-metadata-sibling", {
+        ...originalBinding,
+        channelId: "chn_supporting_sibling",
+        externalRef: "supporting-sibling-room",
+        displayTitle: "Confirmed title support",
+      });
+      const replacement = {
+        ...originalBinding,
+        sessionId: "replacement-session",
+        channelId: "chn_replacement",
+        channelRouteId: "replacement-route",
+        externalRef: "replacement-room",
+        section: "Replacement section",
+      };
+      harness.updateChannel.mockClear();
+      harness.setSessionEntry({ label: "Prepared metadata", category: "Changed section" });
+      holdEntries = true;
+      // info passes resolved.account: there is no older network await between these guards and the scan.
+      const operation = harness.service.info(sessionKey);
+      try {
+        await entered.promise;
+        if (change === "disabled") {
+          harness.config.channels!.clickclack!.enabled = false;
+        } else if (change === "retargeted") {
+          harness.config.channels!.clickclack!.discussions!.workspace = "other-team";
+        } else if (change === "revoked") {
+          markClickClackDiscussionChannelRevoked(harness.runtime, legacyBinding);
+        } else {
+          // Bypass local routing indexes, as another native writer can, then reset the session.
+          harness.store.register(sessionKey, replacement);
+          harness.setSessionEntry({
+            sessionId: replacement.sessionId,
+            label: "Prepared metadata",
+            category: "Changed section",
+          });
+        }
+        release.resolve();
+        await operation;
+
+        if (change === "replaced") {
+          expect(harness.store.lookup(sessionKey)).toEqual(replacement);
+        }
+        expect(harness.updateChannel).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await operation.catch(() => undefined);
+        await harness.service.cleanup();
+      }
+    },
+  );
 
   it("opens a managed channel once and returns stable info URLs", async () => {
     const harness = createHarness({ label: "Release Planning", category: "Projects" });

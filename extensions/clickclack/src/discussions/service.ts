@@ -403,8 +403,7 @@ export class ClickClackDiscussionService {
     if (resolved.state !== "active") {
       return;
     }
-    const account = resolved.account;
-    if (!account.baseUrl || !account.token) {
+    if (!resolved.account.baseUrl || !resolved.account.token) {
       throw new Error(
         `ClickClack discussion account is no longer configured: ${activeBinding.accountId}`,
       );
@@ -412,8 +411,52 @@ export class ClickClackDiscussionService {
     if (entry.archivedAt !== undefined) {
       return;
     }
-    const bindings = await this.#store.entries();
-    const attached = this.#refreshSessionAttachment(sessionKey, activeBinding);
+    const labelForBackfill = resolveDiscussionLabel(entry, sessionKey, activeBinding.agentId);
+    const desiredBackfillTitle =
+      labelForBackfill === fallbackDiscussionLabel(sessionKey, activeBinding.agentId)
+        ? ""
+        : truncateDiscussionDisplayTitle(labelForBackfill);
+    let bindingForAttachment = activeBinding;
+    let observedSiblingTitleSupport = false;
+    if (
+      labelForBackfill === activeBinding.label &&
+      desiredBackfillTitle !== "" &&
+      activeBinding.displayTitle === undefined
+    ) {
+      const bindings = await this.#store.entries();
+      const freshBinding = this.#store.get(sessionKey);
+      if (
+        !freshBinding ||
+        freshBinding.serverBaseUrl !== activeBinding.serverBaseUrl ||
+        freshBinding.channelId !== activeBinding.channelId ||
+        freshBinding.externalRef !== activeBinding.externalRef
+      ) {
+        return;
+      }
+      if (
+        isClickClackDiscussionChannelRevoked({
+          runtime: this.#runtime,
+          serverBaseUrl: freshBinding.serverBaseUrl,
+          channelId: freshBinding.channelId,
+        })
+      ) {
+        this.#store.delete(sessionKey);
+        return;
+      }
+      bindingForAttachment = freshBinding;
+      observedSiblingTitleSupport = bindings.some(
+        ({ binding: candidate }) =>
+          candidate.displayTitle !== undefined &&
+          candidate.serverBaseUrl === freshBinding.serverBaseUrl &&
+          candidate.accountId === freshBinding.accountId,
+      );
+    }
+    const current = resolveDiscussionBindingAccount(this.#currentConfig(), bindingForAttachment);
+    if (current.state !== "active") {
+      return;
+    }
+    const account = current.account;
+    const attached = this.#refreshSessionAttachment(sessionKey, bindingForAttachment);
     if (!attached) {
       return;
     }
@@ -437,12 +480,8 @@ export class ClickClackDiscussionService {
     } = {};
     const labelChanged = label !== currentBinding.label;
     const desiredDisplayTitle = label === fallback ? "" : truncateDiscussionDisplayTitle(label);
-    const serverSupportsDisplayTitle = bindings.some(
-      ({ binding: candidate }) =>
-        candidate.displayTitle !== undefined &&
-        candidate.serverBaseUrl === currentBinding.serverBaseUrl &&
-        candidate.accountId === currentBinding.accountId,
-    );
+    const serverSupportsDisplayTitle =
+      currentBinding.displayTitle !== undefined || observedSiblingTitleSupport;
     const shouldBackfillDisplayTitle =
       desiredDisplayTitle !== "" &&
       currentBinding.displayTitle !== desiredDisplayTitle &&

@@ -31,19 +31,15 @@ import {
   resolveSqliteTranscriptReadScope,
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
-import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import {
-  createTranscriptEntryAnchor,
-  readActiveTranscriptEntryAnchorInTransaction,
-  selectActiveTranscriptEntryAnchor,
+  assertSessionTranscriptContextAnchorInDatabase,
+  type TranscriptSourceAuthority,
 } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
-  canonicalSessionValidationQuery,
   readWithCanonicalSessionAdmission,
 } from "./session-canonical-key.js";
-import { validateCanonicalSessionRowEntry } from "./session-canonical-row.js";
 import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
 import type {
   SessionModelContextLimits,
@@ -66,10 +62,8 @@ import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
-import type { InternalSessionEntry } from "./types.js";
 
 type ContextEntry = SessionTreeEntry & { seq: number };
-type TranscriptSourceAuthority = Pick<InternalSessionEntry, "permissionMode" | "lifecycleRevision">;
 export type { SessionModelContextLimits } from "./session-history-read.types.js";
 type ModelContextRequest = {
   entry: ContextEntry;
@@ -88,66 +82,6 @@ type TranscriptContextSnapshot = {
 };
 
 const MODEL_CONTEXT_PAYLOAD_BATCH_SIZE = 400;
-
-function assertContextAnchor(
-  database: Pick<OpenClawAgentDatabase, "db" | "path">,
-  resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>,
-  through: TranscriptEntryAnchor,
-  expectedAuthority?: TranscriptSourceAuthority,
-): void {
-  if (
-    resolved.agentId !== through.agentId ||
-    resolved.sessionId !== through.sessionId ||
-    resolved.sessionKey !== through.sessionKey ||
-    database.path !== through.storePath
-  ) {
-    throw new SessionTranscriptReadFenceError(
-      "Completed-turn anchor belongs to another transcript",
-    );
-  }
-  const params = {
-    database,
-    resolved: { ...resolved, sessionKey: through.sessionKey },
-    entryId: through.entryId,
-  };
-  let current: TranscriptEntryAnchor | undefined;
-  if (expectedAuthority) {
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      selectActiveTranscriptEntryAnchor(params)
-        .innerJoin(
-          canonicalSessionValidationQuery(database, { metadata: true })
-            .where("session_nodes.session_key", "=", through.sessionKey)
-            .as("authority"),
-          "authority.current_session_id",
-          "identity.session_id",
-        )
-        .selectAll("authority"),
-    );
-    const entry =
-      row && validateCanonicalSessionRowEntry(row, parseSessionEntryJson(row, "list"), "read");
-    if (
-      !entry ||
-      entry.permissionMode !== expectedAuthority.permissionMode ||
-      (entry.lifecycleRevision ?? null) !== (expectedAuthority.lifecycleRevision ?? null)
-    ) {
-      throw new SessionTranscriptReadFenceError(
-        "Session transcript source was deleted, replaced, or changed lifecycle or permissions.",
-      );
-    }
-    current = createTranscriptEntryAnchor({ ...params, row });
-  } else {
-    current = readActiveTranscriptEntryAnchorInTransaction(params);
-  }
-  if (
-    !current ||
-    (["generation", "rawSeq", "effectiveParentId", "activeMessagePosition"] as const).some(
-      (field) => current[field] !== through[field],
-    )
-  ) {
-    throw new SessionTranscriptReadFenceError("Completed-turn transcript anchor changed");
-  }
-}
 
 /** Later appends are allowed; rewriting or removing the accepted turn is not. */
 export function validateSessionTranscriptContextAnchor(
@@ -295,7 +229,12 @@ export function validateSessionTranscriptContextInDatabase(
     validateContextVersion(database, resolved.sessionId, version, consistency);
   }
   if (through) {
-    assertContextAnchor(database, resolved, through, validation.expectedAuthority);
+    assertSessionTranscriptContextAnchorInDatabase(
+      database,
+      resolved,
+      through,
+      validation.expectedAuthority,
+    );
   }
 }
 
@@ -590,7 +529,7 @@ function withTranscriptContextSnapshot<T>(
           const fence = resolveSqliteSessionTranscriptReadFence({ database, ...resolved });
           const version = readTranscriptContextVersionInTransaction(database, resolved.sessionId);
           if (through) {
-            assertContextAnchor(database, resolved, through);
+            assertSessionTranscriptContextAnchorInDatabase(database, resolved, through);
           }
           const base = db
             .selectFrom("transcript_events")

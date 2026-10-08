@@ -128,7 +128,7 @@ function insertSandboxRegistryRowInDatabase(db: DatabaseSync, row: SandboxRegist
   );
 }
 
-export function assertSandboxRegistryReservationCurrent(
+function assertSandboxRegistryReservationCurrent(
   current: SandboxRegistryEntry | null,
   expected: Pick<SandboxRegistryEntry, "backendId" | "sessionKey">,
 ): asserts current is SandboxRegistryEntry {
