@@ -682,6 +682,41 @@ function observeSchemaLifetime(
   return scopeChanged;
 }
 
+function readSchemaCatalog(database: DatabaseSync) {
+  try {
+    // A separate version row covers empty catalogs and avoids SQLite 3.53.4's joined-metadata crash.
+    const objects = executeWithCachedStatement(
+      database,
+      `SELECT type, name, tbl_name, sql, NULL AS user_version FROM main.sqlite_schema
+       WHERE type IN ('table', 'index', 'trigger')
+       UNION ALL SELECT 'user_version', NULL, NULL, NULL, user_version
+       FROM pragma_user_version()`,
+      [],
+      (statement) => statement.all(),
+    );
+    const userVersion = objects.find((row) => row.type === "user_version")?.user_version;
+    if (typeof userVersion !== "number") {
+      throw new Error("SQLite schema admission did not return a numeric user version");
+    }
+    return { objects, userVersion };
+  } catch (error) {
+    if (!(error instanceof Error) || error.message !== "'pragma_user_version' is not a function") {
+      throw error;
+    }
+    // Operator tables and views can shadow table-valued PRAGMAs; retain native admission.
+    const version = executeWithCachedStatement(database, "PRAGMA user_version", [], (statement) =>
+      statement.get(),
+    );
+    const objects = executeWithCachedStatement(
+      database,
+      "SELECT type, name, tbl_name, sql FROM main.sqlite_schema WHERE type IN ('table', 'index', 'trigger')",
+      [],
+      (statement) => statement.all(),
+    );
+    return { objects, userVersion: Number(version?.user_version ?? 0) };
+  }
+}
+
 /** Consume admitted facts; operation admission owns foreign-commit freshness. */
 export function getAdmittedSqliteSchemaFacts(
   database: DatabaseSync,
@@ -699,19 +734,11 @@ export function getAdmittedSqliteSchemaFacts(
     // sibling publications observed inside a transaction cannot outlive that snapshot.
     owner.transactionalFacts ||= database.isTransaction && (owner.readDepth === 0 || scopeChanged);
     owner.facts = runSqlitePinnedReadSnapshotSync(database, (schemaVersion) => {
-      const userVersion = executeWithCachedStatement(database, "PRAGMA user_version", [], (s) =>
-        s.get(),
-      );
-      const objects = executeWithCachedStatement(
-        database,
-        "SELECT type, name, tbl_name, sql FROM main.sqlite_schema WHERE type IN ('table', 'index', 'trigger')",
-        [],
-        (s) => s.all(),
-      );
+      const { objects, userVersion } = readSchemaCatalog(database);
       const tables = objects.filter((row) => row.type === "table");
       return {
         revision: owner.revision,
-        userVersion: Number(userVersion?.user_version ?? 0),
+        userVersion,
         schemaVersion,
         tables: new Set(tables.flatMap((row) => (typeof row.name === "string" ? [row.name] : []))),
         tableSql: new Map(

@@ -126,7 +126,8 @@ describe("ordinary shared-state reader admission", () => {
     const reads = observeSqliteReadSql(StatementSync.prototype);
     try {
       expect(read()).toEqual({ app_version: previousAppVersion });
-      const coldVersionReads = reads.queries.filter((sql) => /^PRAGMA user_version\b/iu.test(sql));
+      const versionRead = /(?:^PRAGMA user_version\b|\bpragma_user_version\s*\()/iu;
+      const coldVersionReads = reads.queries.filter((sql) => versionRead.test(sql));
       const coldContentReads = reads.queries.filter((sql) =>
         /\bconfig_machine_state\b/iu.test(sql),
       );
@@ -135,8 +136,7 @@ describe("ordinary shared-state reader admission", () => {
       expect({
         coldPublishedVersion: coldVersionReads.length,
         coldContentVersion: coldContentReads.length,
-        warmPublishedVersion: reads.queries.filter((sql) => /^PRAGMA user_version\b/iu.test(sql))
-          .length,
+        warmPublishedVersion: reads.queries.filter((sql) => versionRead.test(sql)).length,
         warmContentVersion: reads.queries.filter((sql) => /\bconfig_machine_state\b/iu.test(sql))
           .length,
         warmFreshness: reads.queries.filter((sql) => /^PRAGMA data_version\b/iu.test(sql)).length,
@@ -161,11 +161,11 @@ describe("ordinary shared-state reader admission", () => {
       peer.exec("PRAGMA journal_mode = WAL");
       let upgraded = false;
       // oxlint-disable-next-line typescript/unbound-method -- The proxy retains the native statement receiver.
-      const nativeGet = StatementSync.prototype.get;
-      const observer = vi.spyOn(StatementSync.prototype, "get").mockImplementation(
-        new Proxy(nativeGet, {
+      const nativeAll = StatementSync.prototype.all;
+      const observer = vi.spyOn(StatementSync.prototype, "all").mockImplementation(
+        new Proxy(nativeAll, {
           apply(target, receiver: StatementSync, args) {
-            const publishedVersion = /^PRAGMA user_version\b/iu.test(receiver.sourceSQL);
+            const publishedVersion = /\bpragma_user_version\s*\(/iu.test(receiver.sourceSQL);
             const result = Reflect.apply(target, receiver, args);
             if (publishedVersion && !upgraded) {
               upgraded = true;

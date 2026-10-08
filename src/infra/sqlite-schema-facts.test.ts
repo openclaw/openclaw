@@ -54,6 +54,53 @@ describe("admitted SQLite schema facts", () => {
     }
   });
 
+  it.each(["empty", "populated"] as const)(
+    "captures the %s catalog and version in one metadata read",
+    (catalog) => {
+      const populated = catalog === "populated";
+      const database = openDatabase(
+        `PRAGMA user_version = 42;${
+          populated ? "CREATE TABLE sample(value); CREATE INDEX sample_value ON sample(value);" : ""
+        }`,
+        false,
+      );
+      const reads = observeSqliteReadSql(StatementSync.prototype);
+      try {
+        admitSqliteSchema(database);
+        const facts = getAdmittedSqliteSchemaFacts(database);
+        expect(facts?.userVersion).toBe(42);
+        expect(facts?.tables).toEqual(new Set(populated ? ["sample"] : []));
+        expect(facts?.indexes).toEqual(new Set(populated ? ["sample_value"] : []));
+        expect(
+          reads.queries.filter((sql) =>
+            /\b(?:sqlite_schema|pragma_user_version)\b|^PRAGMA user_version\b/iu.test(sql),
+          ),
+        ).toHaveLength(1);
+      } finally {
+        reads.restore();
+      }
+    },
+  );
+
+  it.each([
+    ["main", "TABLE"],
+    ["main", "VIEW"],
+    ["temp", "TABLE"],
+    ["temp", "VIEW"],
+  ] as const)("retains the native version when %s %s shadows its PRAGMA", (schema, kind) => {
+    const shadow = `${schema}.pragma_user_version`;
+    const database = openDatabase(
+      `PRAGMA user_version = 42; ${
+        kind === "TABLE"
+          ? `CREATE TABLE ${shadow}(user_version); INSERT INTO ${shadow} VALUES (0);`
+          : `CREATE VIEW ${shadow} AS SELECT 0 AS user_version;`
+      }`,
+      false,
+    );
+    admitSqliteSchema(database);
+    expect(getAdmittedSqliteSchemaFacts(database)?.userVersion).toBe(42);
+  });
+
   it("serves admitted runtime schema checks without executing SQL", () => {
     const database = openDatabase(
       `${OPENCLAW_AGENT_SCHEMA_SQL}\nPRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`,
@@ -192,7 +239,7 @@ describe("admitted SQLite schema facts", () => {
           }
         }
         expect(
-          observation.queries.filter((sql) => /FROM main\.sqlite_schema/iu.test(sql)),
+          observation.queries.filter((sql) => /\b(?:FROM|JOIN) main\.sqlite_schema\b/iu.test(sql)),
         ).toHaveLength(0);
       } finally {
         observation.restore();
