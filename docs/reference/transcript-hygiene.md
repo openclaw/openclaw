@@ -85,7 +85,12 @@ embedded runner does not repair or reopen file-backed runtime transcripts.
 ## Global rule: image sanitization
 
 Image payloads are always sanitized to prevent provider-side rejection due to
-size limits (downscale/recompress oversized base64 images). This also helps
+size limits (downscale/recompress oversized base64 images). When an image backend
+is available, replay also checks that each retained image can be decoded. A
+corrupt image becomes an `omitted image payload` note; valid images, surrounding
+text, and tool errors remain intact. This check repeats after session reload,
+because a successful reply does not repair the original stored image bytes.
+This also helps
 control image-driven token pressure for vision-capable models: lower max
 dimensions reduce token usage, higher dimensions preserve detail.
 

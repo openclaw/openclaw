@@ -124,8 +124,10 @@ it("reuses one reader in registered worker commands, refreshes idle, and reopens
   const observation = observeSqliteReadSql(native.StatementSync.prototype);
   const configSelect = /^select "value_json", "updated_at_ms" from "config_machine_state"/iu;
   const contentVersionSelect = /^select "value_json" from "config_machine_state"/iu;
-  const dataVersion = /^PRAGMA data_version$/iu;
+  const dataVersion = /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu;
   expect(await value()).toBe(1);
+  expect(await value()).toBe(1);
+  // First admission uses its native pragma; the retained observation caches on its second use.
   expect(await value()).toBe(1);
   prepare.mockClear();
   observation.queries.length = 0;
@@ -297,9 +299,11 @@ it("observes peer commits and closes only the invalidated physical identity", ()
         return [select(), select()];
       }),
     ).toEqual([2, 2]);
-    expect(observation.queries.filter((sql) => /^PRAGMA data_version$/iu.test(sql))).toHaveLength(
-      1,
-    );
+    expect(
+      observation.queries.filter((sql) =>
+        /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql),
+      ),
+    ).toHaveLength(1);
     expect(first.read(({ db }) => db)).toBe(reader);
     expect(peer.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get()?.busy).toBe(0);
   } finally {

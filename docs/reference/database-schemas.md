@@ -66,9 +66,9 @@ Retaining an already-open agent handle holds its lifetime without querying SQLit
 
 Agent ownership metadata follows that admitted read revision as well. Unchanged
 reads reuse the handle's metadata; foreign commits, local mutations, and schema
-changes require a new ownership read. Transactions, pinned snapshots, and dynamic
-authorizers keep querying the metadata. This changes no schema, stored bytes, or
-update behavior.
+changes require a new ownership read. Managed transactions reuse metadata at
+their admitted revision; changed pinned snapshots and dynamic authorizers still
+query it. This changes no schema, stored bytes, or update behavior.
 
 The shared-state content-version marker uses the same admitted read revision.
 Unchanged reads reuse its successful result; foreign commits, local writes,

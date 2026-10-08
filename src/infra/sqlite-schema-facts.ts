@@ -6,6 +6,7 @@ import {
 } from "./kysely-sync-cache-state.js";
 import {
   getSqlitePinnedReadSnapshot,
+  readSqliteVersionObservation,
   runSqlitePinnedReadSnapshotSync,
 } from "./sqlite-pinned-read-snapshot.js";
 import { findSqlCharacter } from "./sqlite-schema-sql.js";
@@ -557,7 +558,19 @@ export function readSqliteDataVersion(database: DatabaseSync): number {
 function readChangedSqliteSchemaMarkers(
   database: DatabaseSync,
   facts: SqliteSchemaFacts,
+  observation?: ReturnType<typeof readSqliteVersionObservation>,
 ): SqliteSchemaMarkers | undefined {
+  if (observation) {
+    const matches =
+      facts.schemaVersion === observation.schemaVersion &&
+      facts.userVersion === observation.userVersion;
+    return matches
+      ? undefined
+      : {
+          schemaVersion: Number(observation.schemaVersion),
+          userVersion: Number(observation.userVersion),
+        };
+  }
   return runSqlitePinnedReadSnapshotSync(database, (schemaVersion) => {
     const userVersion = executeWithCachedStatement(database, "PRAGMA user_version", [], (s) =>
       s.get(),
@@ -586,12 +599,17 @@ export function readSqliteCacheDataVersion(
   ) {
     return owner.readDataVersion;
   }
-  const dataVersion = readSqliteDataVersion(database);
+  const observation =
+    owner?.facts && owner.dataVersion !== undefined && !owner.authorizerActive
+      ? readSqliteVersionObservation(database, owner.dataVersion)
+      : undefined;
+  const dataVersion = observation?.dataVersion ?? readSqliteDataVersion(database);
   if (owner) {
+    owner.observedDataVersion = dataVersion;
     if (owner.dataVersion !== dataVersion) {
       const facts = owner.facts;
       // Data commits preserve schema-derived caches; compare both markers in one snapshot.
-      const changed = facts && readChangedSqliteSchemaMarkers(database, facts);
+      const changed = facts && readChangedSqliteSchemaMarkers(database, facts, observation);
       if (!facts || changed) {
         if (changed) {
           notifySchemaMutation(owner, changed);

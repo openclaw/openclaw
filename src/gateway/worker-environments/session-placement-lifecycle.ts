@@ -31,6 +31,7 @@ export type SessionWorkerPlacementContext = {
         | "getManyAsync"
         | "retireSessionPlacement"
         | "listForReconcile"
+        | "listAsync"
         | "retireSessionPlacementAsync"
         | "prepareRuntimeRefresh"
       >

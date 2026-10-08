@@ -546,40 +546,36 @@ export async function repairCanonicalSessionKeys(params: {
         cfg: params.cfg,
         env,
       });
-      if (!singleDatabaseGroup) {
-        for (const directory of await repairCanonicalSessionGroup(candidates, {
-          cfg: params.cfg,
-          env,
-        })) {
-          archivedTranscriptDirectories.add(directory);
+      const batch = singleDatabaseGroup ? [singleDatabaseGroup] : [];
+      if (singleDatabaseGroup) {
+        // Keep commits bounded and preserve the original order around cross-store moves, while
+        // collapsing the repeated whole-store projections for the common same-database path.
+        for (const nextCandidates of hydratedGroups.slice(1)) {
+          const nextSingleDatabaseGroup = resolveSingleDatabaseCanonicalRepairGroup(
+            nextCandidates,
+            {
+              cfg: params.cfg,
+              env,
+            },
+          );
+          if (
+            !nextSingleDatabaseGroup ||
+            nextSingleDatabaseGroup.selected.destination.sqlitePath !==
+              singleDatabaseGroup.selected.destination.sqlitePath
+          ) {
+            break;
+          }
+          batch.push(nextSingleDatabaseGroup);
         }
-        repairBatches += 1;
-        repairedGroups += 1;
-        repairGroups = collectCanonicalSessionRepairGroups({ cfg: params.cfg, env }, stores);
-        continue;
       }
-      const batch = [singleDatabaseGroup];
-      // Keep commits bounded and preserve the original order around cross-store moves, while
-      // collapsing the repeated whole-store projections for the common same-database path.
-      for (const nextCandidates of hydratedGroups.slice(1)) {
-        const nextSingleDatabaseGroup = resolveSingleDatabaseCanonicalRepairGroup(nextCandidates, {
-          cfg: params.cfg,
-          env,
-        });
-        if (
-          !nextSingleDatabaseGroup ||
-          nextSingleDatabaseGroup.selected.destination.sqlitePath !==
-            singleDatabaseGroup.selected.destination.sqlitePath
-        ) {
-          break;
-        }
-        batch.push(nextSingleDatabaseGroup);
-      }
-      for (const directory of await repairCanonicalSessionGroupsInSingleDatabase(batch)) {
+      const directories = singleDatabaseGroup
+        ? await repairCanonicalSessionGroupsInSingleDatabase(batch)
+        : await repairCanonicalSessionGroup(candidates, { cfg: params.cfg, env });
+      for (const directory of directories) {
         archivedTranscriptDirectories.add(directory);
       }
       repairBatches += 1;
-      repairedGroups += batch.length;
+      repairedGroups += singleDatabaseGroup ? batch.length : 1;
       repairGroups = collectCanonicalSessionRepairGroups({ cfg: params.cfg, env }, stores);
     }
   }

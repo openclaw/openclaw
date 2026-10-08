@@ -30,8 +30,6 @@ type ToolImageSanitizationOptions = ImageSanitizationLimits & {
 
 // Anthropic Messages API rejects oversized images; sanitize here so replayed
 // tool outputs do not break later turns or silent channel replies.
-const MAX_IMAGE_DIMENSION_PX = DEFAULT_IMAGE_MAX_DIMENSION_PX;
-const MAX_IMAGE_BYTES = DEFAULT_IMAGE_MAX_BYTES;
 // Hard cap on decoded input bytes before Buffer.from/resizer allocation. A
 // conservative limit well below demonstrated OOM thresholds, leaving headroom
 // for canonicalization, decode, and image-processing allocations while still
@@ -260,10 +258,10 @@ export async function sanitizeContentBlocksImages(
   label: string,
   opts: ToolImageSanitizationOptions = {},
 ): Promise<ToolContentBlock[]> {
-  const maxDimensionPx = resolveIntegerOption(opts.maxDimensionPx, MAX_IMAGE_DIMENSION_PX, {
+  const maxDimensionPx = resolveIntegerOption(opts.maxDimensionPx, DEFAULT_IMAGE_MAX_DIMENSION_PX, {
     min: 1,
   });
-  const maxBytes = resolveIntegerOption(opts.maxBytes, MAX_IMAGE_BYTES, { min: 1 });
+  const maxBytes = resolveIntegerOption(opts.maxBytes, DEFAULT_IMAGE_MAX_BYTES, { min: 1 });
   const out: ToolContentBlock[] = [];
   const omit = (reason: string) => out.push({ type: "text", text: `[${label}] ${reason}` });
   for (const block of blocks) {
@@ -328,7 +326,7 @@ export async function sanitizeContentBlocksImages(
 export async function sanitizeImageBlocks(
   images: ImageContent[],
   label: string,
-  opts: ImageSanitizationLimits = {},
+  opts: ToolImageSanitizationOptions = {},
 ): Promise<{ images: ImageContent[]; dropped: number }> {
   if (images.length === 0) {
     return { images, dropped: 0 };
