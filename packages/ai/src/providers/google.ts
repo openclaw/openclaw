@@ -6,7 +6,7 @@ import { resolveOpencodeSessionHeaders } from "../transports/session-affinity.js
 import { mergeTransportHeaders } from "../transports/transport-stream-shared.js";
 import type { Model } from "../types.js";
 import { requireApiKey } from "../utils/required-api-key.js";
-import { createGoogleGenerateContentStreams } from "./google-shared.js";
+import { createGoogleGenerateContentStreams } from "./google-provider-stream.js";
 
 export const { stream: streamGoogle, streamSimple: streamSimpleGoogle } =
   createGoogleGenerateContentStreams(

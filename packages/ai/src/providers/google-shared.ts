@@ -9,7 +9,6 @@ import {
 } from "@google/genai";
 import { clampThinkingLevel } from "../model-utils.js";
 import { transformProviderMessages as transformMessages } from "../provider-transcript-transform.js";
-import { createAssistantOutput } from "../transports/assistant-output.js";
 import { googleFlashSupportsMinimalThinking } from "../transports/google-thinking-level.js";
 import {
   failTransportStream,
@@ -24,9 +23,8 @@ import type {
   ThinkingBudgets,
   ThinkingLevel as AgentThinkingLevel,
   StreamOptions,
-  StreamFunction,
 } from "../types.js";
-import { AssistantMessageEventStream } from "../utils/event-stream.js";
+import type { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
 import {
@@ -35,7 +33,6 @@ import {
   convertGoogleTools,
 } from "./google-messages.js";
 import { consumeGoogleGenerateContentStream } from "./google-stream.js";
-import { buildBaseOptions } from "./simple-options.js";
 
 export type GoogleApiType = "google-generative-ai" | "google-vertex" | "google-interactions";
 
@@ -54,7 +51,7 @@ export type GoogleProviderOptions = StreamOptions & {
   thinking?: GoogleThinkingOptions;
 };
 
-type GoogleGenerateContentClient = {
+export type GoogleGenerateContentClient = {
   models: {
     generateContentStream(
       params: GenerateContentParameters,
@@ -63,40 +60,6 @@ type GoogleGenerateContentClient = {
 };
 
 type ClampedGoogleThinkingLevel = Exclude<AgentThinkingLevel, "xhigh" | "max">;
-
-export function createGoogleGenerateContentStreams<
-  T extends "google-generative-ai" | "google-vertex",
->(
-  api: T,
-  createClient: (model: Model<T>, options?: GoogleProviderOptions) => GoogleGenerateContentClient,
-  resolveSimpleApiKey?: (model: Model<T>, options?: SimpleStreamOptions) => string,
-): {
-  stream: StreamFunction<T, GoogleProviderOptions>;
-  streamSimple: StreamFunction<T, SimpleStreamOptions>;
-} {
-  let toolCallCounter = 0;
-  const stream: StreamFunction<T, GoogleProviderOptions> = (model, context, options) => {
-    const events = new AssistantMessageEventStream();
-    void runGoogleGenerateContentLifecycle({
-      stream: events,
-      model,
-      output: createAssistantOutput(model, api),
-      options,
-      createClient: () => createClient(model, options),
-      buildParams: () => buildGoogleGenerateContentParams(model, context, options),
-      nextToolCallId: (name) => `${name}_${Date.now()}_${++toolCallCounter}`,
-    });
-    return events;
-  };
-  return {
-    stream,
-    streamSimple: (model, context, options) =>
-      stream(model, context, {
-        ...buildBaseOptions(model, options, resolveSimpleApiKey?.(model, options)),
-        thinking: buildGoogleSimpleThinking(model, options),
-      }),
-  };
-}
 
 function convertMessages<T extends GoogleApiType>(model: Model<T>, context: Context): Content[] {
   return projectGoogleMessages({

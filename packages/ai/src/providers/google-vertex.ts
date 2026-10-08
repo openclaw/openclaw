@@ -3,7 +3,8 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { getAiTransportHost, resolveAiTransportHeaderSentinels } from "../host.js";
 import { buildManagedModelFetch } from "../transports/host-policy.js";
 import type { Model, StreamFunction } from "../types.js";
-import { createGoogleGenerateContentStreams, type GoogleProviderOptions } from "./google-shared.js";
+import { createGoogleGenerateContentStreams } from "./google-provider-stream.js";
+import type { GoogleProviderOptions } from "./google-shared.js";
 
 interface GoogleVertexOptions extends GoogleProviderOptions {
   project?: string;
