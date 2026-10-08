@@ -11,8 +11,8 @@ import type { TtsAutoMode } from "../../config/types.tts.js";
 import { isSuppressedControlReplyText } from "../../gateway/control-reply-text.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import {
-  getDeliveryQueueEntryStatus,
-  loadDeliveryQueueEntry,
+  captureDeliveryQueueStateContext,
+  inspectDeliveryQueueReceipt,
   type DeliveryQueueCompletionRetention,
 } from "../../infra/delivery-queue-sqlite.js";
 import * as deliveryRecovery from "../../infra/delivery-recovery.shared.js";
@@ -23,6 +23,7 @@ import { retryAsync } from "../../infra/retry.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
+import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import { createCronExecutionId } from "../run-id.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs-scheduling.js";
 import type { CronJob } from "../types.js";
@@ -87,9 +88,7 @@ const PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
 
 const STALE_CRON_DELIVERY_MAX_START_DELAY_MS = 3 * 60 * 60_000;
 
-const deliveryLoggerRuntimeLoader = createLazyImportLoader(
-  () => import("./delivery-logger.runtime.js"),
-);
+const deliveryLoggerRuntimeLoader = createLazyImportLoader(() => import("../../logger.js"));
 const ttsRuntimeLoader = createLazyImportLoader(() => import("../../tts/tts.runtime.js"));
 const deliverySubagentRegistryRuntimeLoader = createLazyImportLoader(
   () => import("./delivery-subagent-registry.runtime.js"),
@@ -207,9 +206,11 @@ export async function maybeApplyTtsToCronPayloads(params: {
   agentId: string;
   ttsAuto?: TtsAutoMode;
 }): Promise<ReplyPayload[]> {
+  const preparedTtsPreferences = await prepareTtsPreferences();
   if (
     !shouldAttemptTtsPayload({
       cfg: params.cfg,
+      preparedTtsPreferences,
       ttsAuto: params.ttsAuto,
       agentId: params.agentId,
       channelId: params.delivery.channel,
@@ -223,6 +224,7 @@ export async function maybeApplyTtsToCronPayloads(params: {
     params.payloads.map((payload) =>
       maybeApplyTtsToPayload({
         payload,
+        preparedTtsPreferences,
         cfg: params.cfg,
         channel: params.delivery.channel,
         kind: "final",
@@ -257,8 +259,15 @@ export function buildDirectCronDeliveryIdempotencyKey(params: {
 }
 
 /** Receipts own recipient delivery; projections never stand in for custody. */
-export function isCompletedDirectCronDelivery(id: string): boolean {
-  return getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, id) === "completed";
+export async function isCompletedDirectCronDelivery(id: string): Promise<boolean> {
+  const context = captureDeliveryQueueStateContext();
+  const receipt = await inspectDeliveryQueueReceipt(
+    OUTBOUND_DELIVERY_QUEUE_NAME,
+    id,
+    false,
+    context,
+  );
+  return receipt.status === "completed";
 }
 
 /** Wait only for an active recipient owner, never for crashed ambiguous sends. */
@@ -266,17 +275,19 @@ export async function waitForCompletedDirectCronDelivery(params: {
   id: string;
   signal?: AbortSignal;
 }): Promise<boolean> {
+  const context = captureDeliveryQueueStateContext();
   // SQLite producer leases fence cross-process sends for at most 30 seconds.
   for (let attempt = 0; attempt < 120; attempt += 1) {
-    const status = getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, params.id);
+    params.signal?.throwIfAborted();
+    const { status, pendingEntry: owner } = await inspectDeliveryQueueReceipt(
+      OUTBOUND_DELIVERY_QUEUE_NAME,
+      params.id,
+      true,
+      context,
+    );
+    params.signal?.throwIfAborted();
     if (status === "completed") {
       return true;
-    }
-    const owner =
-      status === "pending" ? loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, params.id) : null;
-    if (!owner && status === "pending") {
-      // Completion can replace a pending row between the two indexed reads.
-      return isCompletedDirectCronDelivery(params.id);
     }
     if (
       !owner ||

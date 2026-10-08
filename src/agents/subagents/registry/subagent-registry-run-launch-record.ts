@@ -1,6 +1,29 @@
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { normalizeSubagentRunState } from "./subagent-delivery-state.js";
+import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+export function createFailedQueuedRun(
+  current: SubagentRunRecord,
+  error: string,
+  endedAt?: number,
+  ownedSession = true,
+): SubagentRunRecord {
+  const entry = structuredClone(current);
+  const finishedAt = endedAt ?? Date.now();
+  entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
+  entry.execution = {
+    ...entry.execution,
+    status: "terminal",
+    endedAt: finishedAt,
+    outcome: { status: "error", error, endedAt: finishedAt },
+    ...(!ownedSession ? { suppressSessionEffects: true } : {}),
+  };
+  entry.queuedLaunch = undefined;
+  entry.collectorLaunchCleanupPending = true;
+  entry.completion = { required: false, resultText: error, capturedAt: finishedAt };
+  return entry;
+}
 
 export type RegisterSubagentRunParams = {
   runId: string;

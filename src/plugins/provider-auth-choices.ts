@@ -72,10 +72,7 @@ const DESCRIPTOR_LABEL_ACRONYMS: ReadonlyMap<string, string> = new Map([
   ["sso", "SSO"],
 ] as const);
 
-function resolveProviderAuthChoiceOriginPriority(origin: PluginOrigin | undefined): number {
-  if (!origin) {
-    return Number.MAX_SAFE_INTEGER;
-  }
+function resolveProviderAuthChoiceOriginPriority(origin: PluginOrigin): number {
   return PROVIDER_AUTH_CHOICE_ORIGIN_PRIORITY[origin] ?? Number.MAX_SAFE_INTEGER;
 }
 
@@ -321,7 +318,8 @@ export function resolveManifestDeprecatedProviderAuthChoice(
   });
 }
 
-function resolveManifestProviderOnboardAuthFlags(
+/** Resolves onboard auth flags from installed manifests and official cold-install metadata. */
+export function resolveProviderOnboardAuthFlags(
   params?: ManifestProviderAuthChoiceParams,
 ): ProviderOnboardAuthFlag[] {
   const preferredByFlag = new Map<
@@ -354,11 +352,8 @@ function resolveManifestProviderOnboardAuthFlags(
       },
     });
   }
-  return [...preferredByFlag.values()].map(({ flag }) => flag);
-}
-
-function resolveOfficialExternalProviderOnboardAuthFlags(): ProviderOnboardAuthFlag[] {
-  const flags: ProviderOnboardAuthFlag[] = [];
+  const flags = [...preferredByFlag.values()].map(({ flag }) => flag);
+  const seen = new Set(flags.map((flag) => `${flag.optionKey}::${flag.cliFlag}`));
   for (const entry of listOfficialExternalProviderCatalogEntries()) {
     const manifest = getOfficialExternalPluginCatalogManifest(entry);
     for (const provider of manifest?.providers ?? []) {
@@ -373,6 +368,11 @@ function resolveOfficialExternalProviderOnboardAuthFlags(): ProviderOnboardAuthF
         if (!optionKey || !authChoice || !cliFlag || !cliOption) {
           continue;
         }
+        const dedupeKey = `${optionKey}::${cliFlag}`;
+        if (seen.has(dedupeKey)) {
+          continue;
+        }
+        seen.add(dedupeKey);
         flags.push({
           optionKey,
           authChoice,
@@ -382,23 +382,6 @@ function resolveOfficialExternalProviderOnboardAuthFlags(): ProviderOnboardAuthF
         });
       }
     }
-  }
-  return flags;
-}
-
-/** Resolves onboard auth flags from installed manifests and official cold-install metadata. */
-export function resolveProviderOnboardAuthFlags(
-  params?: ManifestProviderAuthChoiceParams,
-): ProviderOnboardAuthFlag[] {
-  const flags = resolveManifestProviderOnboardAuthFlags(params);
-  const seen = new Set(flags.map((flag) => `${flag.optionKey}::${flag.cliFlag}`));
-  for (const flag of resolveOfficialExternalProviderOnboardAuthFlags()) {
-    const dedupeKey = `${flag.optionKey}::${flag.cliFlag}`;
-    if (seen.has(dedupeKey)) {
-      continue;
-    }
-    seen.add(dedupeKey);
-    flags.push(flag);
   }
   return flags;
 }

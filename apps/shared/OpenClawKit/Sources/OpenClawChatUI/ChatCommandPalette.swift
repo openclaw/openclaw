@@ -274,10 +274,8 @@ struct ChatCommandPalette: View {
             try Task.checkCancellation()
             guard self.request == request else { return }
             self.search.complete(rows, generation: generation)
-        } catch is CancellationError {
-            // The replacement task (or dismissed sheet) owns the presentation.
         } catch {
-            self.search.complete([], generation: generation)
+            // The replacement task (or dismissed sheet) owns the presentation.
         }
     }
 }

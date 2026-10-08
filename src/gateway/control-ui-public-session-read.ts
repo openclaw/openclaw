@@ -1,12 +1,12 @@
 import { listAgentIds } from "../agents/agent-scope-config.js";
-import { loadExactSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { resolveSessionPublicShare } from "../config/sessions/session-public-share.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
-import { resolveSessionStorePathForScope } from "../config/sessions/session-store-path.js";
-import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import type { PublicSessionShareLocator } from "./control-ui-public-session-token.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
 import { readSessionMessagesPageWithStatsAsync } from "./session-transcript-readers.js";
 
 type PublicSessionShareReadResult = {
@@ -17,17 +17,11 @@ type PublicSessionShareReadResult = {
   olderOffset?: number;
 };
 
-type PublicSessionShareScope = {
-  agentId: string;
-  sessionKey: string;
-  storePath: string;
-  projection: "list";
-};
-
-function resolvePublicSessionShareScope(
+function readAuthorizedTarget(
   cfg: OpenClawConfig,
   locator: PublicSessionShareLocator,
-): PublicSessionShareScope | null {
+  projection: SessionRowProjection,
+) {
   const parsed = parseAgentSessionKey(locator.sessionKey);
   const fixedOwner = resolvePersistedSessionStoreOwnerForKey(cfg, locator.sessionKey);
   if (
@@ -38,51 +32,73 @@ function resolvePublicSessionShareScope(
     fixedOwner.kind === "retired" ||
     (fixedOwner.kind === "configured" && fixedOwner.agentId !== locator.agentId) ||
     !listAgentIds(cfg).includes(locator.agentId) ||
-    isIncognitoSessionKey(locator.sessionKey)
+    isIncognitoSessionKey(locator.sessionKey) ||
+    projection.sharingRevision === undefined ||
+    projection.state.cfg !== cfg
   ) {
-    return null;
+    return undefined;
   }
-  return {
-    agentId: locator.agentId,
-    sessionKey: locator.sessionKey,
-    storePath: resolveSessionStorePathForScope(locator, cfg),
-    projection: "list",
-  };
+  const query = { key: locator.sessionKey, agentId: locator.agentId };
+  const state = projection.sharingTargetState(query);
+  if (state.status !== "ready") {
+    return undefined;
+  }
+  const target = state.target;
+  const share = resolveSessionPublicShare(target.entry);
+  if (
+    target.canonicalKey !== locator.sessionKey ||
+    target.agentId !== locator.agentId ||
+    share?.id !== locator.shareId ||
+    share.sessionId !== locator.sessionId
+  ) {
+    return undefined;
+  }
+  const source = projection.readSource({ ...query, storePath: target.storePath });
+  if (!source || typeof source.databaseIdentity !== "string") {
+    return undefined;
+  }
+  assertExistingDatabaseIdentity(
+    source.path,
+    `file:${source.databaseIdentity}`,
+    source.databaseBirthtime,
+  );
+  return { target, source };
 }
 
-function readAuthorizedEntry(
-  scope: PublicSessionShareScope,
-  locator: PublicSessionShareLocator,
-): InternalSessionEntry | undefined {
-  const entry = loadExactSessionEntryReadOnly(scope)?.entry;
-  const share = resolveSessionPublicShare(entry);
-  return share?.id === locator.shareId && share.sessionId === locator.sessionId ? entry : undefined;
-}
-
+/** The resident owner installs committed sharing facts before a response can consume them. */
 export function isPublicSessionShareActive(
   cfg: OpenClawConfig,
   locator: PublicSessionShareLocator,
+  projection: SessionRowProjection,
 ): boolean {
-  const scope = resolvePublicSessionShareScope(cfg, locator);
-  return Boolean(scope && readAuthorizedEntry(scope, locator));
+  return Boolean(readAuthorizedTarget(cfg, locator, projection));
 }
 
 /** Only the exact published generation is readable; this grants no Gateway session authority. */
 export async function readPublicSessionShare(
   cfg: OpenClawConfig,
   locator: PublicSessionShareLocator,
-  options: { offset?: number } = {},
+  options: { offset?: number; projection: SessionRowProjection },
 ): Promise<PublicSessionShareReadResult | null> {
-  const scope = resolvePublicSessionShareScope(cfg, locator);
-  if (!scope) {
+  const { projection } = options;
+  if (isIncognitoSessionKey(locator.sessionKey) || !listAgentIds(cfg).includes(locator.agentId)) {
     return null;
   }
-  const entry = readAuthorizedEntry(scope, locator);
-  if (!entry) {
+  const queries = () => [{ key: locator.sessionKey, agentId: locator.agentId }];
+  const initial = await withReadySessionRows(projection, queries, () =>
+    readAuthorizedTarget(cfg, locator, projection),
+  );
+  if (!initial) {
     return null;
   }
   const history = await readSessionMessagesPageWithStatsAsync(
-    { ...scope, sessionId: locator.sessionId, sessionEntry: entry },
+    {
+      agentId: initial.source.agentId,
+      sessionKey: locator.sessionKey,
+      sessionId: locator.sessionId,
+      storePath: initial.source.path,
+      sessionEntry: initial.target.entry,
+    },
     {
       offset: options.offset ?? 0,
       maxMessages: 100,
@@ -90,18 +106,27 @@ export async function readPublicSessionShare(
       allowResetArchiveFallback: false,
     },
   );
-  // Revocation, replacement, or reset during history work closes this publication.
-  // Never return a previously authorized payload after an awaited read without rechecking.
-  const current = readAuthorizedEntry(scope, locator);
-  if (!current) {
-    return null;
-  }
-  const title = (current.label || current.displayName || "Shared session").trim();
-  return {
-    title: title || "Shared session",
-    messages: history.messages,
-    totalMessages: history.totalMessages,
-    truncated: history.omittedOversized === true,
-    ...(history.olderOffset !== undefined ? { olderOffset: history.olderOffset } : {}),
-  };
+  return withReadySessionRows(projection, queries, () => {
+    const current = readAuthorizedTarget(cfg, locator, projection);
+    if (
+      !current ||
+      current.source.path !== initial.source.path ||
+      current.source.databaseIdentity !== initial.source.databaseIdentity ||
+      current.source.databaseBirthtime !== initial.source.databaseBirthtime
+    ) {
+      return null;
+    }
+    const title = (
+      current.target.entry.label ||
+      current.target.entry.displayName ||
+      "Shared session"
+    ).trim();
+    return {
+      title: title || "Shared session",
+      messages: history.messages,
+      totalMessages: history.totalMessages,
+      truncated: history.omittedOversized === true,
+      ...(history.olderOffset !== undefined ? { olderOffset: history.olderOffset } : {}),
+    };
+  });
 }

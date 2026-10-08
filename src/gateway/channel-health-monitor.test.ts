@@ -278,7 +278,7 @@ describe("channel-health-monitor", () => {
     const suppression = { reason: "crash-loop-breaker" as const, message: "safe mode" };
     const recoverAutostartSuppression = vi.fn(async () => {
       suppressed = !allowRecovery;
-      return allowRecovery;
+      return allowRecovery ? undefined : Date.now() + 300_000;
     });
     const manager = createSnapshotManager(
       {

@@ -44,31 +44,21 @@ const schema = extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "gateway_rest
 const restartLog = createSubsystemLogger("restart");
 type GatewayRestartIntentDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_intent">;
 
-type GatewayRestartIntentPayload = {
+type GatewayRestartIntentPayload = Pick<GatewayRestartIntent, "reason" | "force" | "waitMs"> & {
   kind: "gateway-restart";
   pid: number;
   createdAt: number;
-  reason?: string;
-  force?: boolean;
-  waitMs?: number;
 };
 
-type GatewayRestartIntentWriteReceipt = {
-  kind: string;
-  pid: number;
-  created_at: number;
-  reason: string | null;
-  force: number | null;
-  wait_ms: number | null;
-  updated_at_ms: number;
-};
+type GatewayRestartIntentWriteReceipt = Omit<
+  OpenClawStateKyselyDatabase["gateway_restart_intent"],
+  "intent_key"
+>;
 
 export type GatewayRestartIntent = {
   reason?: string;
   force?: boolean;
   waitMs?: number;
-  // Only the in-process deferral owner can attest that the drain budget was spent.
-  drainBudgetExhausted?: true;
   // Process-local only: persisted restart requests cannot delegate successor ownership.
   successorOwner?: {
     kind: "managed-update-handoff";
@@ -343,12 +333,7 @@ export function writeGatewayServiceRestartIntentSync(opts: {
 }
 
 function writeGatewayRestartIntentForTargetSync(
-  opts: {
-    env?: NodeJS.ProcessEnv;
-    intent?: GatewayRestartIntent;
-    reason?: string;
-    onRecorded?: (clear: () => void) => void;
-  },
+  opts: Omit<Parameters<typeof writeGatewayRestartIntentSync>[0], "targetPid">,
   resolveTargetPid: (db: DatabaseSync) => number | undefined,
   assertCurrent?: () => void,
 ): boolean {

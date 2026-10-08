@@ -5,6 +5,7 @@ import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import * as tar from "tar";
@@ -40,7 +41,7 @@ import { resolveInstalledPluginIndexStorePath } from "../../../../src/plugins/in
 import { writePersistedInstalledPluginIndex } from "../../../../src/plugins/installed-plugin-index-store-write.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../../../../src/state/openclaw-state-db.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
-import { createDeferred } from "../../../helpers/promise.js";
+import { createDeferred, withinTest } from "../../../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 
 const skipBundledAiRuntime = async (): Promise<() => Promise<void>> => async () => {};
@@ -222,7 +223,22 @@ async function expectCommandTimeoutAfterReady(
   }
 }
 
-async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
+// Product termination joins its direct child and gives the group a bounded reap allowance,
+// but descendants have no retained handle here. Observe extinction until the test is aborted.
+async function waitForDead(pid: number, signal: AbortSignal): Promise<void> {
+  await withinTest(
+    (async () => {
+      while (isProcessAlive(pid)) {
+        await waitForProcessTick(5, undefined, { signal });
+      }
+    })(),
+    signal,
+  ).catch((cause: unknown) => {
+    throw new Error(`process still alive: ${pid}`, { cause });
+  });
+}
+
+async function waitForWindowsChildDeath(pid: number, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (!isProcessAlive(pid)) {
@@ -512,7 +528,7 @@ describe("package-openclaw-for-docker", () => {
             expect(Number.isSafeInteger(childPid) && childPid > 0).toBe(true);
           },
         );
-        await waitForDead(childPid, 2_000);
+        await waitForWindowsChildDeath(childPid, 2_000);
       } finally {
         readiness.close();
         if (childPid && isProcessAlive(childPid)) {
@@ -812,6 +828,8 @@ describe("package-openclaw-for-docker", () => {
   it("loads from a trusted harness checkout without installed dependencies", async () => {
     const tempRoot = tempDirs.make("openclaw-package-harness-");
     const copiedFiles = [
+      "packages/normalization-core/src/number-coercion.ts",
+      "packages/normalization-core/src/string-coerce.ts",
       "scripts/package-openclaw-for-docker.mts",
       "scripts/package-changelog.mjs",
       "scripts/package-docs-map.mjs",
@@ -837,6 +855,7 @@ describe("package-openclaw-for-docker", () => {
       "scripts/lib/release-notes-compaction.mjs",
       "scripts/lib/root-package-bundled-plugin-excludes.mjs",
       "scripts/lib/windows-taskkill.mjs",
+      "src/infra/npm-command.ts",
       "src/shared/non-packaged-plugin-dirs.ts",
     ];
     try {
@@ -1521,26 +1540,32 @@ describe("package-openclaw-for-docker", () => {
     const outputDir = tempDirs.make("openclaw-package-output-");
     const sourceDir = createPackageSourceFixture("openclaw-package-source-");
     const calls: string[] = [];
-    const tarball = await packOpenClawPackageForDocker(sourceDir, outputDir, {
-      ...skipTarballModeNormalization,
-      prepareBundledAiRuntime: skipBundledAiRuntime,
-      prepareChangelog: async (cwd: string) => {
-        calls.push(`prepare:${cwd}`);
-      },
-      restoreChangelog: async (cwd: string) => {
-        calls.push(`restore-changelog:${cwd}`);
-      },
-      prepareDocsMap: async (cwd: string) => {
-        calls.push(`prepare-docs:${cwd}`);
-      },
-      restoreDocsMap: async (cwd: string) => {
-        calls.push(`restore-docs:${cwd}`);
-      },
-      runCaptureImpl: async (command: string, args: string[], cwd: string) => {
-        calls.push(`${command}:${args.join(" ")}:${cwd}`);
-        return "openclaw-2026.5.28.tgz\n";
-      },
-    });
+    const packTimeouts: unknown[] = [];
+    const tarball = await withEnvAsync(
+      { OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS: undefined },
+      async () =>
+        await packOpenClawPackageForDocker(sourceDir, outputDir, {
+          ...skipTarballModeNormalization,
+          prepareBundledAiRuntime: skipBundledAiRuntime,
+          prepareChangelog: async (cwd: string) => {
+            calls.push(`prepare:${cwd}`);
+          },
+          restoreChangelog: async (cwd: string) => {
+            calls.push(`restore-changelog:${cwd}`);
+          },
+          prepareDocsMap: async (cwd: string) => {
+            calls.push(`prepare-docs:${cwd}`);
+          },
+          restoreDocsMap: async (cwd: string) => {
+            calls.push(`restore-docs:${cwd}`);
+          },
+          runCaptureImpl: async (command: string, args: string[], cwd: string, options) => {
+            calls.push(`${command}:${args.join(" ")}:${cwd}`);
+            packTimeouts.push(options.timeoutMs);
+            return "openclaw-2026.5.28.tgz\n";
+          },
+        }),
+    );
 
     expect(tarball).toBe(path.join(outputDir, "openclaw-2026.5.28.tgz"));
     expect(calls).toEqual([
@@ -1550,6 +1575,7 @@ describe("package-openclaw-for-docker", () => {
       `restore-changelog:${sourceDir}`,
       `restore-docs:${sourceDir}`,
     ]);
+    expect(packTimeouts).toEqual([15 * 60 * 1000]);
   });
 
   it("does not touch other source artifacts when the docs-map lock fails", async () => {
@@ -2142,7 +2168,7 @@ describe("package-openclaw-for-docker", () => {
     ).resolves.toBe("");
   });
 
-  it("kills timed-out child process groups", async () => {
+  it("kills timed-out child process groups", async ({ signal }) => {
     if (process.platform === "win32") {
       return;
     }
@@ -2175,7 +2201,7 @@ describe("package-openclaw-for-docker", () => {
           childPid = await readPid(childPidPath, 2000);
         },
       );
-      await waitForDead(childPid, 2000);
+      await waitForDead(childPid, signal);
     } finally {
       if (childPid && isProcessAlive(childPid)) {
         process.kill(childPid, "SIGKILL");
@@ -2222,7 +2248,9 @@ describe("package-openclaw-for-docker", () => {
     }
   });
 
-  it("keeps fallback SIGKILL armed for descendants after the direct child exits", async () => {
+  it("keeps fallback SIGKILL armed for descendants after the direct child exits", async ({
+    signal,
+  }) => {
     if (process.platform === "win32") {
       return;
     }
@@ -2254,7 +2282,7 @@ describe("package-openclaw-for-docker", () => {
           childPid = await readPid(childPidPath, 2000);
         },
       );
-      await waitForDead(childPid, 2000);
+      await waitForDead(childPid, signal);
     } finally {
       if (childPid && isProcessAlive(childPid)) {
         process.kill(childPid, "SIGKILL");
@@ -2369,7 +2397,7 @@ try {
     expect(fs.readFileSync(markerPath, "utf8")).toBe("done");
   });
 
-  it("forwards external termination to active child process groups", async () => {
+  it("forwards external termination to active child process groups", async ({ signal }) => {
     if (process.platform === "win32") {
       return;
     }
@@ -2404,7 +2432,7 @@ try {
       const result = await waitForExit(runner, 5000);
 
       expect(result).toEqual({ signal: null, status: 143 });
-      await waitForDead(childPid, 2000);
+      await waitForDead(childPid, signal);
     } finally {
       if (runnerPid && isProcessAlive(runnerPid)) {
         process.kill(runnerPid, "SIGKILL");

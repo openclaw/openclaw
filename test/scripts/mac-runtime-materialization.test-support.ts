@@ -325,12 +325,13 @@ install_openclaw() {
 `,
   );
   await write(
-    path.join(scripts, "stage-openclaw-bun-macos.sh"),
+    path.join(scripts, "stage-openclaw-bun.sh"),
     `#!/bin/bash
 set -euo pipefail
 destination="$1"
-shift
-[[ "$*" == ${quote(architectures.join(" "))} ]]
+[[ "$2" == darwin ]]
+shift 2
+[[ "$*" == ${quote(architectures.map((arch) => (arch === "x86_64" ? "x64" : arch)).join(" "))} ]]
 mkdir -p "$destination/bin"
 cp -p ${quote(path.join(canonical, "bin/bun"))} "$destination/bin/bun"
 `,

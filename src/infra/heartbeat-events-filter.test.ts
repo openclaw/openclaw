@@ -1,14 +1,34 @@
 // Covers heartbeat event prompt filtering.
 import { describe, expect, it } from "vitest";
+import { appendExecTimeoutRetryGuidance } from "../agents/bash-tools.exec-output.js";
 import {
   buildCronEventPrompt,
   buildExecEventPrompt,
+  isConversationExecCompletion,
   isCronSystemEvent,
   isExecCompletionEvent,
   isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 
 describe("heartbeat event prompts", () => {
+  it.each([
+    { contextKey: "exec:command", fromConversationTurn: true, expected: true },
+    { contextKey: "notice:ordinary", fromConversationTurn: true, expected: false },
+    { contextKey: "exec:command", fromConversationTurn: false, expected: false },
+    { contextKey: undefined, fromConversationTurn: true, expected: true },
+  ])(
+    "keeps conversation completion bound to its producer: $contextKey/$fromConversationTurn",
+    ({ contextKey, fromConversationTurn, expected }) => {
+      expect(
+        isConversationExecCompletion({
+          text: "Exec completed (command, code 0) :: result",
+          contextKey,
+          fromConversationTurn,
+        }),
+      ).toBe(expected);
+    },
+  );
+
   it.each([
     {
       name: "builds user-relay cron prompt by default",
@@ -74,18 +94,16 @@ describe("heartbeat event prompts", () => {
       ],
     },
     {
-      name: "suppresses empty exec completion prompts",
-      events: ["", "   "],
-      opts: undefined,
-      expected: ["no command output was found", "Reply NO_REPLY only"],
-      unexpected: ["Please relay the command output to the user", "system messages above"],
-    },
-    {
-      name: "suppresses metadata-only successful exec completions",
+      name: "keeps metadata-only successful exec completions as continuations",
       events: ["Exec completed (abc12345, code 0)"],
       opts: undefined,
-      expected: ["no command output was found", "Reply NO_REPLY only"],
-      unexpected: ["Please relay the command output to the user", "abc12345"],
+      expected: [
+        "Exec completed (abc12345, code 0) without captured stdout/stderr.",
+        "continue any outstanding authorized work",
+        "Do not ask the user to provide missing logs",
+        "reply NO_REPLY only",
+      ],
+      unexpected: ["Please relay the command output to the user"],
     },
     {
       name: "applies relevance guidance to failures without captured logs",
@@ -100,6 +118,31 @@ describe("heartbeat event prompts", () => {
         "reply NO_REPLY only",
       ],
       unexpected: ["Please relay the command output to the user"],
+    },
+    {
+      name: "keeps timeout retry guidance when the command printed nothing",
+      events: [
+        appendExecTimeoutRetryGuidance("Exec failed (abc12345, signal SIGTERM)", "overall-timeout"),
+      ],
+      opts: undefined,
+      expected: [
+        "Exec failed (abc12345, signal SIGTERM) without captured stdout/stderr.",
+        "Verify the resulting state before retrying",
+        "include the exit status or signal",
+      ],
+      unexpected: ["no command output was found"],
+    },
+    {
+      name: "keeps timeout retry guidance after captured output",
+      events: [
+        appendExecTimeoutRetryGuidance(
+          "Exec failed (abc12345, signal SIGTERM) :: partial output",
+          "overall-timeout",
+        ),
+      ],
+      opts: undefined,
+      expected: ["partial output", "Verify the resulting state before retrying"],
+      unexpected: ["without captured stdout/stderr"],
     },
   ])("$name", ({ events, opts, expected, unexpected }) => {
     const prompt = buildExecEventPrompt(events, opts);
@@ -132,14 +175,6 @@ describe("heartbeat event prompts", () => {
     expect(prompt).toContain("notify=false");
     expect(prompt).not.toContain("HEARTBEAT_OK");
   });
-
-  it("uses heartbeat_respond for quiet exec completion events in response-tool mode", () => {
-    const prompt = buildExecEventPrompt([""], { useHeartbeatResponseTool: true });
-
-    expect(prompt).toContain("heartbeat_respond");
-    expect(prompt).toContain("notify=false");
-    expect(prompt).not.toContain("HEARTBEAT_OK");
-  });
 });
 
 describe("heartbeat event classification", () => {
@@ -148,6 +183,18 @@ describe("heartbeat event classification", () => {
     { value: "Exec Finished (node=abc, code 1)", expected: true },
     { value: "Exec completed (rotate api keys)", expected: false },
     { value: "Exec failed: notify me if this happens", expected: false },
+    {
+      value: "Exec failed (abc12345, signal SIGTERM)\n\nRemind me to retry tomorrow.",
+      expected: false,
+    },
+    {
+      value:
+        appendExecTimeoutRetryGuidance(
+          "Exec failed (abc12345, signal SIGTERM)",
+          "overall-timeout",
+        ) + "\n\nRemind me to retry tomorrow.",
+      expected: false,
+    },
   ])("classifies exec completion events for %j", ({ value, expected }) => {
     expect(isExecCompletionEvent(value)).toBe(expected);
   });
@@ -165,7 +212,7 @@ describe("heartbeat event classification", () => {
     { value: "Exec completed (abc12345, code 0)", expected: false },
     { value: "Exec completed (rotate api keys)", expected: true },
   ])("classifies cron system events for %j", ({ value, expected }) => {
-    expect(isCronSystemEvent(value)).toBe(expected);
+    expect(isCronSystemEvent({ text: value })).toBe(expected);
   });
 
   it.each([
@@ -189,6 +236,18 @@ describe("isExecCompletionEvent", () => {
     // Hex-style IDs also accepted
     expect(isExecCompletionEvent("Exec completed (abc12345, code 0)")).toBe(true);
   });
+
+  it.each(["overall-timeout", "no-output-timeout"] as const)(
+    "matches %s completions that carry retry guidance without output",
+    (reason) => {
+      const event = appendExecTimeoutRetryGuidance(
+        "Exec failed (calm-del, signal SIGKILL)",
+        reason,
+      );
+      expect(isExecCompletionEvent(event)).toBe(true);
+      expect(isRelayableExecCompletionEvent(event)).toBe(true);
+    },
+  );
 
   it("is case-insensitive", () => {
     expect(isExecCompletionEvent("EXEC COMPLETED (abc12345, code 0)")).toBe(true);

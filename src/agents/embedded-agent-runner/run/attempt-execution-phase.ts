@@ -12,6 +12,7 @@ import {
 } from "../../agent-run-terminal-outcome.js";
 import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import { log } from "../logger.js";
+import { declarePromptHistoryRewrite } from "../prompt-cache-observability.js";
 import type { EmbeddedAgentQueueHandle } from "../runs.js";
 import { flushPendingToolResultsAfterIdle } from "../wait-for-idle-before-flush.js";
 import { abortable as abortableWithSignal } from "./abortable.js";
@@ -44,6 +45,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     throw new Error("embedded attempt requires an active admitted run");
   }
   activeSession[agentSessionSetContextReplacementHook]((tokensAfter) => {
+    declarePromptHistoryRewrite({ ...attempt, reason: "compaction" });
     toolBase.skillInstructionDeliveryCache.clear();
     attempt.onContextAccountingEvent?.({ kind: "compaction", tokensAfter });
   }, assertActive);
@@ -71,7 +73,7 @@ export async function runEmbeddedAttemptExecutionPhase(
 
   let preparedHistory: Awaited<ReturnType<typeof prepareEmbeddedAttemptHistory>>;
   try {
-    preparedHistory = await prepareEmbeddedAttemptHistory(input);
+    preparedHistory = await prepareEmbeddedAttemptHistory(input, assertActive);
   } catch (error) {
     await cleanupEmbeddedAttemptResources({
       flushPendingToolResultsAfterIdle,
@@ -129,18 +131,14 @@ export async function runEmbeddedAttemptExecutionPhase(
         ),
       );
     });
-  const onBlockReply = attempt.onBlockReply
-    ? bindOwnedSessionTranscriptWrites(
-        input.sessionLock.ownedTranscriptWriteContext,
-        attempt.onBlockReply,
-      )
-    : undefined;
-  const onBlockReplyFlush = attempt.onBlockReplyFlush
-    ? bindOwnedSessionTranscriptWrites(
-        input.sessionLock.ownedTranscriptWriteContext,
-        attempt.onBlockReplyFlush,
-      )
-    : undefined;
+  const bindTranscriptCallback = <TArgs extends unknown[], TResult>(
+    callback: ((...args: TArgs) => TResult) | undefined,
+  ) =>
+    callback
+      ? bindOwnedSessionTranscriptWrites(input.sessionLock.ownedTranscriptWriteContext, callback)
+      : undefined;
+  const onBlockReply = bindTranscriptCallback(attempt.onBlockReply);
+  const onBlockReplyFlush = bindTranscriptCallback(attempt.onBlockReplyFlush);
   const preparedStream = prepareEmbeddedAttemptStream({
     attempt,
     agentSession: sessionRuntime.agentSession,
@@ -163,7 +161,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     runtimeChannel: systemPrompt.runtimeChannel,
     hookAgentId: input.setup.sessionAgentId,
     diagnosticTrace: input.diagnostics.diagnosticTrace,
-    nestedToolActivities: toolBase.nestedToolActivities,
+    nestedToolActivityState: toolBase.nestedToolActivityState,
     isReplaySafeTool: (tool) => replaySafeTools.has(tool as never),
     diagnosticOwner,
     trajectoryRecorder: sessionRuntime.trajectoryRecorder,

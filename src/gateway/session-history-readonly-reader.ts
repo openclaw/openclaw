@@ -1,4 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readSessionTranscriptBoundedMessageTailPageFromProjection } from "../config/sessions/session-accessor.sqlite-active-events-read.js";
 import { resolveConversationInDatabase } from "../config/sessions/session-accessor.sqlite-conversation-read.js";
 import { readSessionEntryRow } from "../config/sessions/session-accessor.sqlite-entry-read.js";
 import { readSessionTranscriptRunInputVisibilityFromProjection } from "../config/sessions/session-accessor.sqlite-history-input-visibility.js";
@@ -6,12 +7,15 @@ import { readTranscriptDisplayDeltaFromProjection } from "../config/sessions/ses
 import {
   readCurrentProjectionSnapshot,
   type CurrentTranscriptProjection,
+  type SessionTranscriptBoundedMessageTailOptions,
 } from "../config/sessions/session-accessor.sqlite-projection-read.js";
 import { readSessionTranscriptBindingFromProjection } from "../config/sessions/session-accessor.sqlite-transcript-binding.js";
 import type { SessionTranscriptRawDeltaLimits } from "../config/sessions/session-accessor.types.js";
 import { readWithCanonicalSessionAdmission } from "../config/sessions/session-canonical-key.js";
 import type { SessionConversationBinding } from "../config/sessions/session-history-types.js";
 import { listSessionReactionsInDatabase } from "../config/sessions/session-reaction-store.read.js";
+import { readSessionTranscriptAccountingFromProjection } from "../config/sessions/session-transcript-accounting.js";
+import type { SessionTranscriptAccountingOptions } from "../config/sessions/session-transcript-accounting.types.js";
 import {
   SessionTranscriptProjectionUnavailableError,
   SessionTranscriptStorageUnavailableError,
@@ -19,14 +23,12 @@ import {
 import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.metadata.js";
 import { withScopedOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-scope.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../state/openclaw-agent-db-readonly.js";
-import {
-  isSubagentCoordinationHistoryInput,
-  type SubagentCoordinationDisplayResolver,
-} from "./chat-display-projection.history.js";
+import { isSubagentCoordinationHistoryInput } from "./chat-display-projection.history.js";
 import type { SessionArtifactReadQuery } from "./session-artifact-read.js";
 import type { PreparedSessionHistoryReadTarget } from "./session-history-read.types.js";
 import { createBoundSessionHistorySubagentSource } from "./session-history-subagent-sources.js";
 import { createSessionTranscriptReader } from "./session-transcript-read-kernel.js";
+import type { SubagentCoordinationDisplayResolver } from "./session-transcript-read.types.js";
 import type { GatewaySessionStoreReadSources } from "./session-utils-store.types.js";
 
 /** Source and run facts live only for one history operation, on its admitted database. */
@@ -34,16 +36,19 @@ export function createBoundSessionHistorySubagentProjection(
   readSnapshot: <T>(read: (projection: CurrentTranscriptProjection) => T) => T,
   stateDatabase: PreparedSessionHistoryReadTarget["stateDatabase"],
   readSourceDatabases: () => GatewaySessionStoreReadSources | undefined,
+  preparedSource?: (sessionKey: string) => boolean | undefined,
 ): SubagentCoordinationDisplayResolver {
   const runs = new Map<
     string,
     ReturnType<typeof readSessionTranscriptRunInputVisibilityFromProjection>
   >();
-  const readSource = createBoundSessionHistorySubagentSource(
+  const readBoundSource = createBoundSessionHistorySubagentSource(
     readSnapshot,
     stateDatabase,
     readSourceDatabases,
   );
+  const readSource = (sessionKey: string) =>
+    preparedSource?.(sessionKey) ?? readBoundSource(sessionKey);
   return {
     isSubagentSession: readSource,
     isSubagentRunMessage(runId, messageSeq) {
@@ -123,7 +128,27 @@ export function createReadonlySessionHistoryReader(
     }
     return result.value;
   };
+  const subagentCoordination = createBoundSessionHistorySubagentProjection(
+    readSnapshot,
+    target.stateDatabase,
+    () => (sourceDatabases ??= resolveSourceDatabases?.()),
+  );
   return {
+    readHistoryRevision: () =>
+      readSnapshot((projection) => ({
+        database: projection.database.db,
+        generation: projection.generation,
+        indexedSeq: projection.state.indexedSeq,
+        leafEventId: projection.state.leafEventId,
+      })),
+    readTranscriptAccounting: (options: SessionTranscriptAccountingOptions) =>
+      readSnapshot((projection) =>
+        readSessionTranscriptAccountingFromProjection(projection, options),
+      ),
+    readBoundedMessageTail: (options: SessionTranscriptBoundedMessageTailOptions) =>
+      readSnapshot((projection) =>
+        readSessionTranscriptBoundedMessageTailPageFromProjection(projection, options),
+      ),
     readArtifactSummaries: async (query: Extract<SessionArtifactReadQuery, { kind: "list" }>) => {
       const { readArtifactSummariesFromProjection } = await import("./session-artifact-read.js");
       return readSnapshot((projection) => readArtifactSummariesFromProjection(projection, query));
@@ -151,13 +176,10 @@ export function createReadonlySessionHistoryReader(
     readTranscriptDisplayDelta: (limits: SessionTranscriptRawDeltaLimits) =>
       readSnapshot((projection) => readTranscriptDisplayDeltaFromProjection(projection, limits)),
     ...createSessionTranscriptReader({
+      subagentCoordination,
       resolveTarget: async () => target.transcript,
       readSnapshot: async (_transcript, read) => readSnapshot(read),
     }),
-    subagentCoordination: createBoundSessionHistorySubagentProjection(
-      readSnapshot,
-      target.stateDatabase,
-      () => (sourceDatabases ??= resolveSourceDatabases?.()),
-    ),
+    subagentCoordination,
   };
 }

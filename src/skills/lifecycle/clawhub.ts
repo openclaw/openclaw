@@ -1,4 +1,3 @@
-// ClawHub lifecycle facade: public API plus install/update coordination.
 import { err as resultError, ok, type Result } from "@openclaw/normalization-core/result";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { downloadClawHubSkillArchive } from "../../infra/clawhub-artifacts.js";
@@ -86,10 +85,7 @@ async function installRequestedSkillFromClawHub(
     }
     return await performClawHubSkillInstall({
       ...params,
-      slug: ref.slug,
-      ...(ref.ownerHandle ? { ownerHandle: ref.ownerHandle } : {}),
-      ...(ref.requestedReference ? { requestedReference: ref.requestedReference } : {}),
-      ...(ref.trustState ? { trustState: ref.trustState } : {}),
+      ...ref,
     });
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };
@@ -288,7 +284,6 @@ export async function updateSkillsFromClawHub(params: {
         }
         return installed;
       },
-      { required: true },
     );
     results.push(
       install.ok

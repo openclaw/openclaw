@@ -11,9 +11,13 @@ import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as workerCpu from "../../infra/worker-cpu.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { withEnv } from "../../test-utils/env.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles/runtime-snapshots.js";
+import { closeAuthProfileReadPool } from "../auth-profiles/sqlite-read-pool.js";
 import type { ModelCatalogSnapshot } from "../model-catalog.types.js";
 import {
   encodePluginModelCatalogRelativePath,
@@ -104,12 +108,17 @@ export function usePreparedCatalogWorkerFixtures(
         restoreCatalogWorkerFactory = undefined;
         catalogSettlements.clear();
         clearRuntimeAuthProfileStoreSnapshots();
+        closeAuthProfileReadPool();
+        await closeOpenClawAgentDatabasesAsync();
         closeOpenClawAgentDatabasesForTest();
+        // Agent lease retirement can retain shared actors; retire them before roots can reuse inodes.
+        await closeStateDatabaseForTest();
         cleanup();
       }
     });
   });
   return {
+    readCatalogWorkers: (): readonly Worker[] => [...workers],
     makeTempDir: (prefix: string) => tempDirs.make(prefix),
     observeCatalogEntry: (
       receipts: FixtureReceiptChannel,
@@ -342,30 +351,29 @@ export async function loadCompletedFullCatalog(
   return completed!;
 }
 
-export function seedFixturePluginModelCatalog(
+export async function seedFixturePluginModelCatalog(
   agentDir: string,
   env: NodeJS.ProcessEnv,
   pluginId: string,
   providerId: string,
-): void {
-  withEnv(env, () =>
-    replacePersistedPluginModelCatalogs({
-      agentDir,
-      pluginCatalogWrites: {
-        [encodePluginModelCatalogRelativePath(pluginId)]: JSON.stringify({
-          generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-          providers: {
-            [providerId]: {
-              baseUrl: "https://worker-catalog.invalid/v1",
-              api: "openai-completions",
-              apiKey: "WORKER_CATALOG_API_KEY",
-              models: [{ id: "sqlite-model", name: "SQLite model" }],
-            },
+): Promise<void> {
+  await replacePersistedPluginModelCatalogs({
+    agentDir,
+    env,
+    pluginCatalogWrites: {
+      [encodePluginModelCatalogRelativePath(pluginId)]: JSON.stringify({
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          [providerId]: {
+            baseUrl: "https://worker-catalog.invalid/v1",
+            api: "openai-completions",
+            apiKey: "WORKER_CATALOG_API_KEY",
+            models: [{ id: "sqlite-model", name: "SQLite model" }],
           },
-        }),
-      },
-    }),
-  );
+        },
+      }),
+    },
+  });
 }
 
 export function writeCatalogFailureControl(

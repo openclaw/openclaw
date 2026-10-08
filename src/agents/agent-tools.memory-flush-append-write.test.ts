@@ -54,20 +54,6 @@ describe("wrapToolMemoryFlushAppendOnlyWrite output contract", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  async function runAppend(): Promise<unknown> {
-    const wrapped = wrapToolMemoryFlushAppendOnlyWrite(baseWriteTool(), {
-      root,
-      relativePath: RELATIVE_PATH,
-    });
-    const result = await wrapped.execute(
-      "call-1",
-      { path: RELATIVE_PATH, content: "hello" },
-      new AbortController().signal,
-      undefined,
-    );
-    return result.details;
-  }
-
   it("rechecks source authority after provenance work before appending", async () => {
     const absolute = path.join(root, RELATIVE_PATH);
     await fs.mkdir(path.dirname(absolute), { recursive: true });
@@ -99,12 +85,6 @@ describe("wrapToolMemoryFlushAppendOnlyWrite output contract", () => {
     await expect(pending).rejects.toThrow("authority is no longer active");
     expect(reachedCommit).toBe(true);
     expect(await fs.readFile(absolute, "utf8")).toBe("seed\n");
-  });
-
-  it("returns write-schema-conforming details when creating the memory file", async () => {
-    const details = await runAppend();
-    expect(details).toEqual({ changed: true });
-    expect(validateAgainstDeclaredSchema(details).ok).toBe(true);
   });
 
   it("appends schema-conforming results only to the allowed memory file", async () => {

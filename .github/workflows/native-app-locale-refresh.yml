@@ -23,6 +23,7 @@ on:
       - scripts/android-app-i18n.ts
       - scripts/apple-app-i18n.ts
       - scripts/native-app-i18n.ts
+      - scripts/native-i18n-inventory.ts
       - scripts/native-i18n-locales.ts
       - ui/src/i18n/.i18n/glossary.*.json
       - .github/actions/create-generated-pr-tokens/action.yml
@@ -293,6 +294,7 @@ jobs:
             scripts/android-app-i18n.ts
             scripts/apple-app-i18n.ts
             scripts/native-app-i18n.ts
+            scripts/native-i18n-inventory.ts
             scripts/native-i18n-locales.ts
             ui/src/i18n/.i18n/glossary.*.json
             .github/actions/create-generated-pr-tokens/action.yml

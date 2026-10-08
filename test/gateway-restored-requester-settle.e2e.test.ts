@@ -2,10 +2,13 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  loadSubagentRegistryFromSqlite,
+  saveSubagentRegistryToSqlite,
+} from "../src/agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { writeSubagentSessionEntry } from "../src/agents/subagents/registry/subagent-registry.persistence.test-support.js";
-import { loadSubagentRegistryFromSqlite } from "../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
-import { saveSubagentRegistryToSqlite } from "../src/agents/subagents/registry/subagent-registry.store.test-support.js";
 import type { SubagentRunRecord } from "../src/agents/subagents/registry/subagent-registry.types.js";
+import { replaceSessionEntry } from "../src/config/sessions/session-accessor.js";
 import { resolvePhysicalSessionStorePath } from "../src/config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
@@ -87,7 +90,8 @@ describe("Gateway restored requester settlement", () => {
         env: { OPENCLAW_SKIP_PROVIDERS: undefined, OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
       });
       instances.push(instance);
-      await seedRestoredRequesters(instance, 1, cfg);
+      // The final case also resumes a retained yielded fence and then admits a user follow-up.
+      await seedRestoredRequesters(instance, 1, cfg, { yieldedFence: outcome === "final" });
       await instance.startGateway();
       const client = await connectGatewayClient({
         url: instance.url,
@@ -255,6 +259,7 @@ async function seedRestoredRequesters(
   instance: OpenClawTestInstance,
   count: number,
   cfg: OpenClawConfig,
+  options: { yieldedFence?: boolean } = {},
 ) {
   instance.state.applyEnv();
   try {
@@ -323,6 +328,27 @@ async function seedRestoredRequesters(
         requesterStorePath: storePath,
         controllerStorePath: storePath,
       });
+      if (options.yieldedFence) {
+        // Persist under the seeding lease; another pass would invalidate read admission.
+        const sessionKey = entry.requesterSessionKey;
+        await replaceSessionEntry(
+          { storePath, sessionKey },
+          {
+            sessionId: sessionKey.slice("agent:main:".length),
+            updatedAt: endedAt,
+            endedAt,
+            abortedLastRun: false,
+            activeWriterRunId: `yielded-${entry.runId}`,
+            lifecycleRunId: `yielded-${entry.runId}`,
+            restartRecoveryRuns: [
+              {
+                runId: `yielded-${entry.runId}`,
+                lifecycleGeneration: "generation-before-restart",
+              },
+            ],
+          },
+        );
+      }
     }
   } finally {
     // Keep this one state lease through the Gateway run and retained-result reads;

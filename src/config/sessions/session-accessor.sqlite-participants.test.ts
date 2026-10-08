@@ -1,10 +1,14 @@
 import { existsSync } from "node:fs";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeSqliteReadSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { onSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import {
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   deferOpenClawAgentPostCommitPublication,
   openOpenClawAgentDatabase,
@@ -29,6 +33,7 @@ import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { copySessionNodeArtifactsForRepair } from "./session-accessor.sqlite-node-artifacts.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import type { SessionParticipantIdentity } from "./session-participant-identity.js";
+import { bindSqliteWorkerBackend } from "./session-sharing-store.worker.js";
 
 const profile = (id: string): SessionParticipantIdentity => ({ type: "profile", id });
 const remote = (id: string, domain = "workspace"): SessionParticipantIdentity => ({
@@ -90,7 +95,9 @@ describe("SQLite session participants", () => {
       read();
       const database = openOpenClawAgentDatabase(scope);
       const reads = trackSqliteStatementExecutions(database.db, ["participants"], (sql) =>
-        sql.startsWith('select * from "session_participants"') ? "participants" : null,
+        sql.startsWith('select "session_key", "identity_namespace", "actor_id"')
+          ? "participants"
+          : null,
       );
       try {
         for (let index = 0; index < 100; index++) {
@@ -624,6 +631,7 @@ describe("SQLite session participants", () => {
         identity: remote("same-id", "other-workspace"),
         promptedAt: 40,
       });
+      await closeOpenClawAgentDatabasesAsync();
       closeOpenClawAgentDatabasesForTest();
       const records = listSessionParticipantsReadOnly(scope).get(scope.sessionKey) ?? [];
       expect(records).toHaveLength(4);
@@ -677,18 +685,51 @@ describe("SQLite session participants", () => {
         }
         linkEmail("old@example.test", current.id, { env: state.env });
         linkEmail("other@example.test", current.id, { env: state.env });
-        expect(
-          recordSessionParticipant(scope, { identity: profile(current.id), promptedAt: 40 }),
-        ).toBe("updated");
+        const database = openOpenClawAgentDatabase(scope);
+        const backend = bindSqliteWorkerBackend(undefined, {
+          database: database.db,
+          databasePath: database.path,
+          admit() {},
+        });
+        try {
+          const params = { identity: profile(current.id), promptedAt: 40 };
+          for (const writer of ["native", "worker"] as const) {
+            const profileReads = observeSqliteReadSql(StatementSync.prototype);
+            try {
+              if (writer === "native") {
+                expect(recordSessionParticipant(scope, params)).toBe("updated");
+              } else {
+                expect(
+                  backend.execute({ type: "participant", input: { scope, params } }),
+                ).toMatchObject({
+                  value: "updated",
+                });
+              }
+              const aliases = profileReads.queries.filter((sql) =>
+                sql.includes('from "user_profiles"'),
+              );
+              if (writer === "worker" && hasCanonicalRow) {
+                expect(aliases).toHaveLength(0);
+              } else {
+                expect(aliases.length).toBeGreaterThan(0);
+              }
+            } finally {
+              profileReads.restore();
+            }
+          }
+          backend.assertSettled?.();
+        } finally {
+          await backend.close();
+        }
         const records = listSessionParticipantsReadOnly(scope).get(scope.sessionKey) ?? [];
         expect(records).toHaveLength(MAX_SESSION_PARTICIPANTS);
         const profiles = records.filter((record) => record.identity.type === "profile");
         expect(profiles.reduce((count, record) => count + record.contributionCount, 0)).toBe(
-          hasCanonicalRow ? 4 : 3,
+          hasCanonicalRow ? 5 : 4,
         );
         const updatedId = hasCanonicalRow ? current.id : [old.id, other.id].toSorted()[0];
         expect(profiles.find((record) => record.identity.id === updatedId)).toMatchObject({
-          contributionCount: 2,
+          contributionCount: 3,
           lastPromptedAt: 40,
         });
       });

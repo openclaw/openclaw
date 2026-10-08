@@ -52,7 +52,7 @@ function updateNodeSurface(
   matches: (surface: NodeSurface) => boolean = () => true,
 ): boolean {
   const { nodeId, expectedPairingGeneration } = input;
-  return updatePairedDeviceInTransaction(nodeId, undefined, (device) => {
+  return updatePairedDeviceInTransaction(nodeId, (device) => {
     const surface = device?.nodeSurface;
     if (
       !device ||
@@ -86,28 +86,23 @@ export const nodePairingOperations = {
           throw new Error("node pairing requires a paired device");
         }
         requestDevicePairingMutationAdmission({ kind: "node-surface", nodeId });
+        // A connect snapshot can become stale before this transaction: upgrades
+        // remain interactive even when that connect thought this was the first surface.
+        const request = { ...req, nodeId, silent: req.silent && !device.nodeSurface };
         const existing = device.pendingNodeSurface;
-        if (existing && samePendingApprovalSurface(existing, { ...req, nodeId })) {
-          const refreshed = refreshPendingNodeSurface(existing, req, nowMs);
-          device.pendingNodeSurface = refreshed;
-          return {
-            value: {
-              status: "pending",
-              request: toPublicPendingRequest(device, refreshed),
-              created: false,
-            },
-            persist: true,
-          };
-        }
-        const replacement = buildPendingNodeSurface({ req: { ...req, nodeId }, nowMs });
-        device.pendingNodeSurface = replacement;
-        const superseded = existing ? [{ requestId: existing.requestId, nodeId }] : [];
+        const created = !existing || !samePendingApprovalSurface(existing, request);
+        const pending = created
+          ? buildPendingNodeSurface({ req: request, nowMs })
+          : refreshPendingNodeSurface(existing, request, nowMs);
+        device.pendingNodeSurface = pending;
         return {
           value: {
             status: "pending",
-            request: toPublicPendingRequest(device, replacement),
-            created: true,
-            ...(superseded.length > 0 ? { superseded } : {}),
+            request: toPublicPendingRequest(device, pending),
+            created,
+            ...(created && existing
+              ? { superseded: [{ requestId: existing.requestId, nodeId }] }
+              : {}),
           },
           persist: true,
         };
@@ -142,7 +137,12 @@ export const nodePairingOperations = {
   ),
   "node.approve": devicePairingMutation(
     (
-      input: { requestId: string; callerScopes?: readonly string[]; nowMs: number },
+      input: {
+        requestId: string;
+        callerScopes?: readonly string[];
+        initialOnly?: boolean;
+        nowMs: number;
+      },
       { database },
     ) => {
       const { requestId, callerScopes, nowMs } = input;
@@ -151,7 +151,8 @@ export const nodePairingOperations = {
           (entry) => entry.pendingNodeSurface?.requestId === requestId,
         );
         const pending = device?.pendingNodeSurface;
-        if (!device || !pending) {
+        // Initial auto-approval cannot widen a surface approved by a concurrent connect.
+        if (!device || !pending || (input.initialOnly && device.nodeSurface)) {
           return { value: null, persist: false };
         }
         requestDevicePairingMutationAdmission({
@@ -254,43 +255,39 @@ export const nodePairingOperations = {
       expectedPairingGeneration?: NodePairingGeneration;
     }) => {
       const { nodeId, connectedAtMs, expectedPairingGeneration } = input;
-      return updatePairedDeviceInTransaction<RecordPairedNodeConnectionResult>(
-        nodeId,
-        undefined,
-        (device) => {
-          if (
-            !device?.nodeSurface ||
-            (expectedPairingGeneration &&
-              (expectedPairingGeneration.nodeId !== device.deviceId ||
-                resolveNodePairingGeneration(device)?.key !== expectedPairingGeneration.key))
-          ) {
-            return { value: { recorded: false } };
-          }
-          requestDevicePairingMutationAdmission({
-            kind: "node-surface",
-            nodeId: device.deviceId,
-            pairingGeneration: resolveNodePairingGeneration(device)?.key,
-          });
-          const firstConnection = device.nodeSurface.lastConnectedAtMs === undefined;
-          const lastConnectedAtMs = Math.max(
-            device.nodeSurface.lastConnectedAtMs ?? connectedAtMs,
-            connectedAtMs,
-          );
-          const clearsDisconnect =
-            device.nodeSurface.lastDisconnectedAtMs !== undefined &&
-            connectedAtMs > device.nodeSurface.lastDisconnectedAtMs;
-          return {
-            value: { recorded: true, firstConnection },
-            patch: {
-              nodeSurface: {
-                ...device.nodeSurface,
-                lastConnectedAtMs,
-                ...(clearsDisconnect ? { lastDisconnectedAtMs: undefined } : {}),
-              },
+      return updatePairedDeviceInTransaction<RecordPairedNodeConnectionResult>(nodeId, (device) => {
+        if (
+          !device?.nodeSurface ||
+          (expectedPairingGeneration &&
+            (expectedPairingGeneration.nodeId !== device.deviceId ||
+              resolveNodePairingGeneration(device)?.key !== expectedPairingGeneration.key))
+        ) {
+          return { value: { recorded: false } };
+        }
+        requestDevicePairingMutationAdmission({
+          kind: "node-surface",
+          nodeId: device.deviceId,
+          pairingGeneration: resolveNodePairingGeneration(device)?.key,
+        });
+        const firstConnection = device.nodeSurface.lastConnectedAtMs === undefined;
+        const lastConnectedAtMs = Math.max(
+          device.nodeSurface.lastConnectedAtMs ?? connectedAtMs,
+          connectedAtMs,
+        );
+        const clearsDisconnect =
+          device.nodeSurface.lastDisconnectedAtMs !== undefined &&
+          connectedAtMs > device.nodeSurface.lastDisconnectedAtMs;
+        return {
+          value: { recorded: true, firstConnection },
+          patch: {
+            nodeSurface: {
+              ...device.nodeSurface,
+              lastConnectedAtMs,
+              ...(clearsDisconnect ? { lastDisconnectedAtMs: undefined } : {}),
             },
-          };
-        },
-      );
+          },
+        };
+      });
     },
   ),
   "node.recordDisconnection": devicePairingMutation(

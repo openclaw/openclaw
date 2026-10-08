@@ -33,6 +33,7 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../src/infra/runtime-worker-url.js";
+import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../src/shared/worker-bundle-hash.js";
 import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 import { toolingTsEntrypoints } from "./scripts/tooling-ts-runtime.test-support.js";
@@ -152,6 +153,12 @@ function createPreparedPrepackFixture(entrySource: string) {
   );
   mkdirSync(path.join(rootDir, "docs"));
   mkdirSync(path.join(rootDir, "dist/control-ui/assets"), { recursive: true });
+  const workerSourceFiles = Object.fromEntries(
+    WORKER_BUNDLE_ARTIFACT_PATHS.map((artifactPath) => [
+      `dist/worker/${artifactPath}`,
+      "export {};\n",
+    ]),
+  ) as Record<string, string>;
   const sourceFiles = {
     "package.json": '{"name":"openclaw","version":"2026.8.1","type":"module","files":["dist"]}\n',
     "CHANGELOG.md": "# Changelog\n\n## 2026.8.1\n- Current release notes with enough detail.\n",
@@ -160,8 +167,10 @@ function createPreparedPrepackFixture(entrySource: string) {
     "dist/control-ui/index.html": "<!doctype html>\n",
     "dist/control-ui/assets/fixture.js.br": "prepared asset fixture\n",
     "dist/control-ui/assets/fixture.js.gz": "prepared asset fixture\n",
+    ...workerSourceFiles,
   };
   for (const [name, contents] of Object.entries(sourceFiles)) {
+    mkdirSync(path.dirname(path.join(rootDir, name)), { recursive: true });
     writeFileSync(path.join(rootDir, name), contents);
   }
   return { rootDir, sourceFiles };
@@ -174,7 +183,14 @@ function createPrepackLifecycleFixture() {
   const packageJson = JSON.parse(sourceFiles["package.json"]);
   Object.assign(packageJson, {
     packageManager: rootPackageManager,
-    files: ["dist", "docs/docs_map.md", "CHANGELOG.md", ".openclaw-lifecycle-pending"],
+    files: [
+      "dist",
+      "!dist/worker/**",
+      "dist/worker-artifacts/*.tar.gz",
+      "docs/docs_map.md",
+      "CHANGELOG.md",
+      ".openclaw-lifecycle-pending",
+    ],
     devDependencies: { "@openclaw/session-url-contract": "workspace:*" },
     scripts: {
       "build:package": "node rebuild.mjs",

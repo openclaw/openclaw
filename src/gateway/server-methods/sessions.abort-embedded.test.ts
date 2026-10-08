@@ -275,7 +275,7 @@ it("exact embedded Stop cancels running and queued collectors without dispatchin
     expect(parentAbort).toHaveBeenCalledOnce();
     await fixture.settle();
     for (const id of ["running", "queued"]) {
-      expect(getSubagentRunByChildSessionKey(childKey(id)), id).toMatchObject({
+      expect(await getSubagentRunByChildSessionKey(childKey(id)), id).toMatchObject({
         endedReason: "subagent-killed",
       });
     }
@@ -284,7 +284,7 @@ it("exact embedded Stop cancels running and queued collectors without dispatchin
     expect(isSwarmRunActive("running")).toBe(false);
     await vi.waitFor(() => expect(otherTurnDispatch).toHaveBeenCalledOnce());
     for (const id of ["other-turn", "other-session"]) {
-      expect(getSubagentRunByChildSessionKey(childKey(id))?.endedReason).toBeUndefined();
+      expect((await getSubagentRunByChildSessionKey(childKey(id)))?.endedReason).toBeUndefined();
     }
     expect(otherSessionDispatch).not.toHaveBeenCalled();
     expect(releaseSwarmRun("unrelated-capacity")).toBe(true);
@@ -350,10 +350,12 @@ it.each(["replaced", "throwing", "unreadable child"])(
       ]);
       expect(abort).toHaveBeenCalledTimes(state === "throwing" ? 1 : 0);
       expect(replacementAbort).not.toHaveBeenCalled();
-      expect(getSubagentRunByChildSessionKey(childKey("queued"))).toMatchObject({
+      expect(await getSubagentRunByChildSessionKey(childKey("queued"))).toMatchObject({
         execution: { status: "queued" },
       });
-      expect(getSubagentRunByChildSessionKey(childKey("queued"))?.killIntent).toBeUndefined();
+      expect(
+        (await getSubagentRunByChildSessionKey(childKey("queued")))?.killIntent,
+      ).toBeUndefined();
       expect(dispatch).not.toHaveBeenCalled();
       expect(releaseSwarmRun("capacity")).toBe(true);
       await vi.waitFor(() => expect(dispatch).toHaveBeenCalledOnce());
@@ -458,7 +460,7 @@ it.each([true, false])(
       expect.soft(childAbort).toHaveBeenCalledTimes(finalizing ? 0 : 1);
       expect(dispatch).not.toHaveBeenCalled();
       for (const id of ["running", "queued"]) {
-        const run = getSubagentRunByChildSessionKey(childKey(id));
+        const run = await getSubagentRunByChildSessionKey(childKey(id));
         if (finalizing) {
           expect.soft(run?.endedReason, id).toBeUndefined();
           expect.soft(run?.killIntent, id).toBeUndefined();
@@ -467,7 +469,7 @@ it.each([true, false])(
         }
       }
       if (finalizing) {
-        expect.soft(getSubagentRunByChildSessionKey(childKey("queued"))).toMatchObject({
+        expect.soft(await getSubagentRunByChildSessionKey(childKey("queued"))).toMatchObject({
           execution: { status: "queued" },
         });
         releaseSwarmRun("running");

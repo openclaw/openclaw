@@ -4,21 +4,19 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const {
   listTeamsByNameWithPageInfo,
   listChannelsForTeamWithPageInfo,
-  normalizeQuery,
   resolveGraphToken,
   findGraphUsersByExactIdentity,
 } = vi.hoisted(() => ({
   listTeamsByNameWithPageInfo: vi.fn(),
   listChannelsForTeamWithPageInfo: vi.fn(),
-  normalizeQuery: vi.fn((value: string) => value.trim().toLowerCase()),
   resolveGraphToken: vi.fn(async () => "graph-token"),
   findGraphUsersByExactIdentity: vi.fn(),
 }));
 
-vi.mock("./graph.js", () => ({
+vi.mock("./graph.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./graph.js")>()),
   listTeamsByNameWithPageInfo,
   listChannelsForTeamWithPageInfo,
-  normalizeQuery,
   resolveGraphToken,
 }));
 
@@ -38,7 +36,6 @@ import {
 beforeEach(() => {
   listTeamsByNameWithPageInfo.mockReset();
   listChannelsForTeamWithPageInfo.mockReset();
-  normalizeQuery.mockImplementation((value: string) => value.trim().toLowerCase());
   resolveGraphToken.mockReset().mockResolvedValue("graph-token");
   findGraphUsersByExactIdentity.mockReset();
 });

@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   ARTIFACT_CACHE_VERSION,
   acquireBuildArtifactLock,
@@ -550,16 +550,25 @@ describe("native owner content records", () => {
       expect(matches()).toBe(true);
       const relocated = fs.realpathSync.native(roots.make("native-boundary-relocated-"));
       fs.cpSync(f.root, relocated, { recursive: true, mode: fs.constants.COPYFILE_FICLONE });
-      expect(
-        new BoundaryInputSnapshot(relocated).matchesReceipt(
-          record,
-          f.config,
-          f.args,
-          Object.keys(record.outputs),
-          f.inputReceipt,
-          noEmit ? undefined : "dist",
-        ),
-      ).toBe(true);
+      // Relocation may change enumeration order without changing membership.
+      const readdir = fs.readdirSync;
+      const reordered = vi
+        .spyOn(fs, "readdirSync")
+        .mockImplementation((target, options) => readdir(target, options).toReversed());
+      try {
+        expect(
+          new BoundaryInputSnapshot(relocated).matchesReceipt(
+            record,
+            f.config,
+            f.args,
+            Object.keys(record.outputs),
+            f.inputReceipt,
+            noEmit ? undefined : "dist",
+          ),
+        ).toBe(true);
+      } finally {
+        reordered.mockRestore();
+      }
       f.write("unrelated/source.ts", "export const unrelated = 2;");
       f.write("src/api.test.ts", "export const test = 2;");
       expect(matches()).toBe(true);

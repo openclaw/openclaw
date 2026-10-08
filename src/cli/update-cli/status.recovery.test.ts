@@ -185,15 +185,6 @@ it("reports an absent inventory explicitly without creating it", async () => {
   expect(result()).not.toHaveProperty("recoverySetsError");
   await expect(fs.stat(`${stateDir}.update-captures`)).rejects.toMatchObject({ code: "ENOENT" });
 });
-it("distinguishes missing durable ownership from a safe recovery choice", async () => {
-  const c = await capture();
-  await updateStatusCommand({ json: true });
-  expect(result().recoverySets[0]).toMatchObject({
-    status: "ambiguous",
-    message: expect.stringContaining("no matching update run"),
-  });
-  expect(await fs.readdir(c.directory)).toEqual(["manifest.json"]);
-});
 it.each([true, false])(
   "reports standalone Doctor captures as manual evidence (JSON: %s)",
   async (json) => {
@@ -220,15 +211,50 @@ it.each([true, false])(
     expect(await fs.readdir(c.directory)).toEqual(["manifest.json"]);
   },
 );
-it.each([true, false])(
-  "keeps valid recovery sets visible beside an unfinished capture (JSON: %s)",
-  async (json) => {
+it.each([
+  ["partial", false],
+  ["partial", true],
+  ["linked-manifest", true],
+  ["copied-manifest", true],
+  ["conflicting-manifest", true],
+  ["linked-payload", true],
+] as const)(
+  "keeps valid recovery sets visible beside an interrupted %s publication (JSON: %s)",
+  async (publication, json) => {
     const c = await capture();
     await terminal(c, "committed");
     const directory = path.join(path.dirname(c.directory), "22222222-2222-4222-8222-222222222222");
     await fs.mkdir(directory);
     const partialPath = path.join(directory, "manifest.json.partial");
-    await fs.writeFile(partialPath, '{"schemaVersion":2');
+    if (publication === "linked-payload") {
+      await fs.mkdir(path.join(directory, "database.databases"));
+      await fs.mkdir(path.join(directory, "payload"));
+      const snapshot = path.join(directory, "database.databases", "snapshot.sqlite");
+      await fs.writeFile(snapshot, "retained snapshot bytes");
+      await fs.link(snapshot, path.join(directory, "payload", "0"));
+    } else {
+      await fs.writeFile(
+        partialPath,
+        publication === "partial"
+          ? '{"schemaVersion":2'
+          : JSON.stringify({ ...c.manifest, runId: path.basename(directory) }),
+      );
+      const finalPath = path.join(directory, "manifest.json");
+      if (publication === "linked-manifest") {
+        await fs.link(partialPath, finalPath);
+      } else if (publication === "copied-manifest") {
+        await fs.copyFile(partialPath, finalPath);
+      } else if (publication === "conflicting-manifest") {
+        await fs.writeFile(finalPath, "different, unverified bytes");
+      }
+    }
+    const retained = new Map<string, Buffer>();
+    for (const name of await fs.readdir(directory, { recursive: true })) {
+      const pathname = path.join(directory, name);
+      if ((await fs.lstat(pathname)).isFile()) {
+        retained.set(name, await fs.readFile(pathname));
+      }
+    }
     await updateStatusCommand({ json });
     if (json) {
       expect(result()).not.toHaveProperty("recoverySetsError");
@@ -257,26 +283,52 @@ it.each([true, false])(
       expect(output).not.toContain("Update recovery sets unavailable");
     }
     expect(await fs.readFile(c.manifestPath, "utf8")).toBe(c.raw);
-    expect(await fs.readFile(partialPath, "utf8")).toBe('{"schemaVersion":2');
-    expect(await fs.readdir(directory)).toEqual(["manifest.json.partial"]);
-  },
-);
-it.each([true, false])(
-  "reports malformed manifests distinctly without hiding normal status (JSON: %s)",
-  async (json) => {
-    const c = await capture();
-    await fs.writeFile(c.manifestPath, "{");
-    await expect(updateStatusCommand({ json })).resolves.toBeUndefined();
-    if (json) {
-      expect(result()).toHaveProperty("availability");
-      expect(result().recoverySetsError).toBeTypeOf("string");
-      expect(result()).not.toHaveProperty("recoverySets");
-    } else {
-      expect(mocks.log.mock.calls.flat().join("\n")).toContain("Update recovery sets unavailable:");
+    for (const [name, bytes] of retained) {
+      expect(await fs.readFile(path.join(directory, name))).toEqual(bytes);
     }
-    expect(await fs.readFile(c.manifestPath, "utf8")).toBe("{");
+    if (publication === "linked-manifest") {
+      const partial = await fs.lstat(partialPath, { bigint: true });
+      expect(await fs.lstat(path.join(directory, "manifest.json"), { bigint: true })).toMatchObject(
+        {
+          dev: partial.dev,
+          ino: partial.ino,
+          nlink: 2n,
+        },
+      );
+    }
   },
 );
+it.each(["linked", "copied"])(
+  "refuses baseline reuse after an interrupted %s seal",
+  async (kind) => {
+    const c = await capture();
+    const partial = `${c.manifestPath}.partial`;
+    if (kind === "linked") {
+      await fs.link(c.manifestPath, partial);
+    } else {
+      await fs.copyFile(c.manifestPath, partial);
+    }
+    const { readUpdateRecoveryBaselineIdentity } =
+      await import("../../infra/update-recovery-backup-reader.js");
+    await expect(
+      readUpdateRecoveryBaselineIdentity({
+        runId: c.manifest.runId,
+        env: process.env,
+        ref: {
+          directory: c.directory,
+          manifestPath: c.manifestPath,
+          manifestSha256: c.manifestSha256,
+        },
+        installRoot: c.manifest.installRoot,
+        readContinuation: () => undefined,
+        assertCurrent: () => {},
+      }),
+    ).rejects.toThrow("incomplete publication");
+    expect(await fs.readFile(partial, "utf8")).toBe(c.raw);
+    expect(await fs.readFile(c.manifestPath, "utf8")).toBe(c.raw);
+  },
+);
+
 it.each([
   "foreign-state",
   "wrong-run-directory",
@@ -285,8 +337,24 @@ it.each([
   "manifest-hardlink",
   "canary-file",
   "archive-directory",
-])("refuses %s through the production status reader", async (fault) => {
-  const c = await capture();
+  "malformed-json",
+  "malformed-text",
+  "canary-manifest",
+  "durable-binding",
+])("refuses %s without hiding normal status", async (fault) => {
+  const c = await capture(
+    fault === "canary-manifest" ? "openclaw-update-canary-aB12cD" : undefined,
+  );
+  const malformed = fault.startsWith("malformed-") || fault === "canary-manifest";
+  if (malformed) {
+    await fs.writeFile(c.manifestPath, "{");
+  }
+  if (fault === "durable-binding") {
+    await terminal(c, "committed");
+    const row = await run(c);
+    row.origin.updateRecoveryCapture!.manifestSha256 = "b".repeat(64);
+    mocks.readRun.mockResolvedValue(row);
+  }
   if (fault === "foreign-state") {
     await fs.writeFile(
       c.manifestPath,
@@ -317,10 +385,21 @@ it.each([
   if (fault === "archive-directory") {
     await fs.mkdir(path.join(path.dirname(c.directory), "agent-schema-run-id.tar.gz"));
   }
-  await updateStatusCommand({ json: true });
-  expect(result()).not.toHaveProperty("recoverySets");
-  expect(result().recoverySetsError).toBeTypeOf("string");
-  expect(result().recoverySetsError.length).toBeGreaterThan(0);
+  await expect(updateStatusCommand({ json: fault !== "malformed-text" })).resolves.toBeUndefined();
+  if (fault === "malformed-text") {
+    expect(mocks.log.mock.calls.flat().join("\n")).toContain("Update recovery sets unavailable:");
+  } else {
+    expect(result()).toHaveProperty("availability");
+    expect(result()).not.toHaveProperty("recoverySets");
+    expect(result().recoverySetsError).toBeTypeOf("string");
+    expect(result().recoverySetsError.length).toBeGreaterThan(0);
+    if (fault === "durable-binding") {
+      expect(result().recoverySetsError).toContain("identity changed");
+    }
+  }
+  if (malformed) {
+    expect(await fs.readFile(c.manifestPath, "utf8")).toBe("{");
+  }
 });
 it.each(["privacy-marker", "doctor-archive", "canary-directory"])(
   "keeps recovery sets visible beside a known %s without changing either artifact",
@@ -365,13 +444,6 @@ it.each(["privacy-marker", "doctor-archive", "canary-directory"])(
     ]);
   },
 );
-it("still validates a manifest in a canary-named directory", async () => {
-  const c = await capture("openclaw-update-canary-aB12cD");
-  await fs.writeFile(c.manifestPath, "{");
-  await updateStatusCommand({ json: true });
-  expect(result()).not.toHaveProperty("recoverySets");
-  expect(result().recoverySetsError).toBeTypeOf("string");
-});
 
 it("reports one failed set as unresolved and multiple failed sets as ambiguous", async () => {
   const c = await capture();
@@ -402,45 +474,32 @@ it("reports one failed set as unresolved and multiple failed sets as ambiguous",
   ]);
 });
 it.each([
-  "package rollback",
-  "state rollback",
-  "previous generation restoration",
-  "restored capture",
-])("reports a rolled-back capture using %s evidence", async (evidence) => {
+  { evidence: "missing run", status: "ambiguous", message: "no matching update run" },
+  { evidence: "package rollback", status: "ambiguous", message: "update run is rolled-back" },
+  { evidence: "restored capture", status: "stale", message: "restored state" },
+  { evidence: "contradictory outcome", status: "ambiguous", message: "outcomes disagree" },
+])("classifies retained capture with $evidence", async ({ evidence, status, message }) => {
   const c = await capture();
-  const row = await run(c, "rolled-back");
-  if (evidence === "restored capture") {
-    row.origin.updateRecoveryCapture!.restored = true;
-  } else {
-    row.steps.push({ step: evidence, status: "completed", exitCode: 0 });
+  if (evidence !== "missing run") {
+    const row = await run(c, evidence === "contradictory outcome" ? "succeeded" : "rolled-back");
+    if (evidence === "restored capture") {
+      row.origin.updateRecoveryCapture!.restored = true;
+    } else if (evidence === "contradictory outcome") {
+      await terminal(c, "restored");
+    } else {
+      row.steps.push({ step: evidence, status: "completed", exitCode: 0 });
+    }
+    mocks.readRun.mockResolvedValue(row);
   }
-  mocks.readRun.mockResolvedValue(row);
   await updateStatusCommand({ json: true });
-  const restored = evidence === "restored capture";
   expect(result().recoverySets[0]).toMatchObject({
-    status: restored ? "stale" : "ambiguous",
+    status,
     nextAction: "openclaw update status --json",
-    message: expect.stringContaining(restored ? "restored state" : "update run is rolled-back"),
+    message: expect.stringContaining(message),
   });
-});
-it("rejects a changed durable manifest binding even with a terminal outcome", async () => {
-  const c = await capture();
-  await terminal(c, "committed");
-  const row = await run(c);
-  row.origin.updateRecoveryCapture!.manifestSha256 = "b".repeat(64);
-  mocks.readRun.mockResolvedValue(row);
-  await updateStatusCommand({ json: true });
-  expect(result().recoverySetsError).toContain("identity changed");
-});
-it("keeps contradictory terminal outcomes ambiguous", async () => {
-  const c = await capture();
-  await terminal(c, "restored");
-  mocks.readRun.mockResolvedValue(await run(c, "succeeded"));
-  await updateStatusCommand({ json: true });
-  expect(result().recoverySets[0]).toMatchObject({
-    status: "ambiguous",
-    message: expect.stringContaining("outcomes disagree"),
-  });
+  if (evidence === "missing run") {
+    expect(await fs.readdir(c.directory)).toEqual(["manifest.json"]);
+  }
 });
 it("validates forward resolution against retained generations without writing", async () => {
   const c = await capture();
@@ -490,6 +549,12 @@ it("validates forward resolution against retained generations without writing", 
   row.origin.updateRecoveryCapture!.forwardResolution.binding.candidateSha256 = digest(raw);
   await updateStatusCommand({ json: true });
   expect(result().recoverySets[0].status).toBe("forward-resolved");
+  const partial = path.join(c.directory, "candidate", "manifest.json.partial");
+  await fs.copyFile(path.join(c.directory, "candidate", "manifest.json"), partial);
+  await updateStatusCommand({ json: true });
+  expect(result().recoverySetsError).toContain("incomplete publication");
+  expect(await fs.readFile(partial, "utf8")).toBe(raw);
+  await fs.unlink(partial);
   await fs.writeFile(
     path.join(c.directory, "candidate", "manifest.json"),
     JSON.stringify({

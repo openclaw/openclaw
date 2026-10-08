@@ -1,48 +1,48 @@
 /** Scans config-like values for SecretRefs and credential-looking fields. */
-import { coerceSecretRef } from "../config/types.secrets.js";
+import { isLegacySecretRefWithoutProvider, parseSecretRef } from "../config/types.secrets.js";
 import type { SecretDefaults } from "./runtime-shared.js";
 
 /** Field names treated as credential-bearing even before a value is converted to SecretRef. */
 const CREDENTIAL_FIELD_NAMES = new Set(["apikey", "key", "token", "secret", "password"]);
 
-function hasRecursiveSecretValue(params: {
-  value: unknown;
-  defaults: SecretDefaults | undefined;
-  seen: WeakSet<object>;
-  matchesEntry?: (key: string, value: unknown) => boolean;
-}): boolean {
-  if (coerceSecretRef(params.value, params.defaults)) {
+function hasRecursiveSecretValue(
+  value: unknown,
+  defaults: SecretDefaults | undefined,
+  seen: WeakSet<object>,
+  includeCredentialFields = false,
+): boolean {
+  if (isLegacySecretRefWithoutProvider(value) || parseSecretRef(value, defaults)) {
     return true;
   }
-  if (!params.value || typeof params.value !== "object") {
+  if (!value || typeof value !== "object") {
     return false;
   }
-  if (params.seen.has(params.value)) {
+  if (seen.has(value)) {
     // Config-like objects can be caller-constructed; avoid cycles while scanning recursively.
     return false;
   }
-  params.seen.add(params.value);
-  if (Array.isArray(params.value)) {
-    return params.value.some((entry) => hasRecursiveSecretValue({ ...params, value: entry }));
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.some((entry) =>
+      hasRecursiveSecretValue(entry, defaults, seen, includeCredentialFields),
+    );
   }
-  return Object.entries(params.value as Record<string, unknown>).some(([key, entry]) => {
-    if (params.matchesEntry?.(key, entry)) {
-      return true;
-    }
-    return hasRecursiveSecretValue({ ...params, value: entry });
-  });
+  return Object.entries(value as Record<string, unknown>).some(
+    ([key, entry]) =>
+      (includeCredentialFields &&
+        CREDENTIAL_FIELD_NAMES.has(key.toLowerCase()) &&
+        entry != null &&
+        entry !== "") ||
+      hasRecursiveSecretValue(entry, defaults, seen, includeCredentialFields),
+  );
 }
 
-/**
- * Returns whether a value tree contains anything coercible to a SecretRef.
- * `seen` may be shared across sibling probes to preserve cycle safety.
- */
+/** Returns whether a value tree contains anything coercible to a SecretRef. */
 export function hasSecretRefCandidate(
   value: unknown,
   defaults: SecretDefaults | undefined,
-  seen = new WeakSet<object>(),
 ): boolean {
-  return hasRecursiveSecretValue({ value, defaults, seen });
+  return hasRecursiveSecretValue(value, defaults, new WeakSet());
 }
 
 /**
@@ -52,15 +52,6 @@ export function hasSecretRefCandidate(
 export function hasCredentialBearingObjectValue(
   value: unknown,
   defaults: SecretDefaults | undefined,
-  seen = new WeakSet<object>(),
 ): boolean {
-  return hasRecursiveSecretValue({
-    value,
-    defaults,
-    seen,
-    matchesEntry: (rawKey, entry) => {
-      const key = rawKey.toLowerCase();
-      return CREDENTIAL_FIELD_NAMES.has(key) && entry != null && entry !== "";
-    },
-  });
+  return hasRecursiveSecretValue(value, defaults, new WeakSet(), true);
 }

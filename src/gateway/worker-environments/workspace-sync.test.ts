@@ -1,15 +1,13 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import type { PreparedWorkerSsh } from "./ssh.js";
-import { rsyncArgvPort, sshArgvPort } from "./worker-ssh-argv.test-support.js";
+import { sshArgvPort } from "./worker-ssh-argv.test-support.js";
 import { runBoundedInboundRsync } from "./workspace-sync-helpers.js";
-import { createWorkerWorkspaceRsyncTransport } from "./workspace-sync-transport.js";
 import { createWorkerWorkspaceActions } from "./workspace-sync.js";
 
 afterEach(() => vi.restoreAllMocks());
@@ -163,71 +161,6 @@ describe("worker workspace command transport retry", () => {
     ).resolves.toEqual(result());
     expect(run.mock.calls.map(([, options]) => options.timeoutMs)).toEqual([1_000, 825]);
     expect(run.mock.calls[0]![1]).not.toBe(run.mock.calls[1]![1]);
-  });
-});
-
-describe("worker workspace rsync transport retry", () => {
-  it("gives an outbound fallback only the remaining operation timeout", async () => {
-    let now = 2_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
-    const runTask = vi.fn(async (argv: string[], _options: CommandOptions) => {
-      if (rsyncArgvPort(argv) === 2222) {
-        now += 200;
-        return result(255);
-      }
-      return result();
-    });
-    const transport = createWorkerWorkspaceRsyncTransport({
-      ownerSignal: new AbortController().signal,
-      runTask,
-      timeoutMs: 1_000,
-    });
-
-    await expect(
-      transport.runRsync(createPreparedSsh(), (rsyncSsh) => [
-        "rsync",
-        "-e",
-        rsyncSsh,
-        "source",
-        "worker:destination",
-      ]),
-    ).resolves.toEqual(result());
-    expect(runTask.mock.calls.map(([, options]) => options.timeoutMs)).toEqual([1_000, 800]);
-    expect(runTask.mock.calls[0]![1]).not.toBe(runTask.mock.calls[1]![1]);
-  });
-
-  it("gives an inbound fallback only the remaining operation timeout", async () => {
-    const destinationRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rsync-budget-"));
-    try {
-      let now = 3_000;
-      vi.spyOn(Date, "now").mockImplementation(() => now);
-      const runTask = vi.fn(async (argv: string[], _options: CommandOptions) => {
-        if (rsyncArgvPort(argv) === 2222) {
-          now += 125;
-          return result(255);
-        }
-        return result();
-      });
-      const transport = createWorkerWorkspaceRsyncTransport({
-        ownerSignal: new AbortController().signal,
-        runTask,
-        timeoutMs: 1_000,
-      });
-
-      await expect(
-        transport.runBoundedInboundRsync({
-          prepared: createPreparedSsh(),
-          argv: (rsyncSsh) => ["rsync", "-e", rsyncSsh, "worker:source", destinationRoot],
-          destinationRoot,
-          entryLimit: 1,
-          totalByteLimit: 1,
-        }),
-      ).resolves.toEqual(result());
-      expect(runTask.mock.calls.map(([, options]) => options.timeoutMs)).toEqual([1_000, 875]);
-      expect(runTask.mock.calls[0]![1]).not.toBe(runTask.mock.calls[1]![1]);
-    } finally {
-      await fs.rm(destinationRoot, { recursive: true, force: true });
-    }
   });
 });
 

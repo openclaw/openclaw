@@ -2,6 +2,7 @@ import type { Component, OverlayHandle, SelectItem } from "@earendil-works/pi-tu
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
+import { createDeferred as deferred } from "../../test/helpers/promise.js";
 import { createTuiPluginApprovalController } from "./tui-plugin-approvals.js";
 
 type TestSelector = Component & {
@@ -29,14 +30,6 @@ function approvalPayload(overrides: Record<string, unknown> = {}) {
     expiresAtMs: 6_000,
     ...overrides,
   };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((resolvePromise) => {
-    resolve = resolvePromise;
-  });
-  return { promise, resolve };
 }
 
 function createHarness() {
@@ -127,7 +120,7 @@ describe("TUI plugin approvals", () => {
     expect(harness.openOverlay).not.toHaveBeenCalled();
   });
 
-  it("shows workspace skill approvals for the active session and resolves the selection", async () => {
+  it("shows plugin approvals for the active session and resolves the selection", async () => {
     const harness = createHarness();
 
     harness.controller.handleEvent("plugin.approval.requested", approvalPayload());
@@ -137,7 +130,7 @@ describe("TUI plugin approvals", () => {
     const renderedPrompt = stripAnsi(
       expectDefined(prompt, "prompt test invariant").render(80).join("\n"),
     );
-    expect(renderedPrompt).toContain("workspace skill approval: Apply workspace skill proposal");
+    expect(renderedPrompt).toContain("plugin approval: Apply workspace skill proposal");
     expect(renderedPrompt).toContain("Severity: Warning");
     expect(renderedPrompt).toContain("Tool: skill_workshop");
     expect(renderedPrompt).toContain("Plugin: workspace-skills");
@@ -155,7 +148,7 @@ describe("TUI plugin approvals", () => {
       expect(harness.resolvePluginApproval).toHaveBeenCalledWith("plugin:skill-1", "allow-once");
     });
     expect(harness.closeOverlay).toHaveBeenCalledTimes(1);
-    expect(harness.addSystem).toHaveBeenLastCalledWith("workspace skill approval: allowed once");
+    expect(harness.addSystem).toHaveBeenLastCalledWith("plugin approval: allowed once");
   });
 
   it("ignores other sessions and restores matching pending approvals after connect", async () => {
@@ -398,7 +391,7 @@ describe("TUI plugin approvals", () => {
     expect(harness.closeOverlay).toHaveBeenCalledTimes(1);
     expect(harness.resolvePluginApproval).not.toHaveBeenCalled();
     expect(harness.addSystem).toHaveBeenCalledWith(
-      "workspace skill approval: dismissed; request remains pending",
+      "plugin approval: dismissed; request remains pending",
     );
 
     harness.controller.sessionChanged();
@@ -445,7 +438,7 @@ describe("TUI plugin approvals", () => {
       expect(harness.openOverlay).toHaveBeenCalledTimes(2);
     });
     expect(harness.addSystem).toHaveBeenLastCalledWith(
-      "workspace skill approval failed: gateway unavailable",
+      "plugin approval failed: gateway unavailable",
     );
 
     harness.selectors[1]?.onSelectionChange?.({ value: "allow-once", label: "Allow once" });
@@ -453,7 +446,7 @@ describe("TUI plugin approvals", () => {
     await vi.waitFor(() => {
       expect(harness.resolvePluginApproval).toHaveBeenCalledTimes(2);
     });
-    expect(harness.addSystem).toHaveBeenLastCalledWith("workspace skill approval: allowed once");
+    expect(harness.addSystem).toHaveBeenLastCalledWith("plugin approval: allowed once");
   });
 
   it("does not reopen an approval while its decision is in flight", async () => {
@@ -475,7 +468,7 @@ describe("TUI plugin approvals", () => {
 
     pendingResolution.resolve({ ok: true });
     await vi.waitFor(() => {
-      expect(harness.addSystem).toHaveBeenLastCalledWith("workspace skill approval: allowed once");
+      expect(harness.addSystem).toHaveBeenLastCalledWith("plugin approval: allowed once");
     });
   });
 
@@ -495,9 +488,7 @@ describe("TUI plugin approvals", () => {
       expect(harness.listPluginApprovals).toHaveBeenCalledTimes(1);
     });
     expect(harness.openOverlay).toHaveBeenCalledTimes(1);
-    expect(harness.addSystem).toHaveBeenLastCalledWith(
-      "workspace skill approval: no longer pending",
-    );
+    expect(harness.addSystem).toHaveBeenLastCalledWith("plugin approval: no longer pending");
   });
 
   it("flattens and sanitizes untrusted approval text", () => {
@@ -520,7 +511,7 @@ describe("TUI plugin approvals", () => {
     expect(renderedPrompt).not.toContain("\u0000");
     expect(renderedPrompt).not.toContain("\u202E");
     expect(renderedPrompt).not.toContain("\u2066");
-    expect(stripAnsi(renderedPrompt)).toContain("workspace skill approval: Apply Allow once skill");
+    expect(stripAnsi(renderedPrompt)).toContain("plugin approval: Apply Allow once skill");
     expect(stripAnsi(renderedPrompt)).toContain("Request: Review Press Enter again this change");
   });
 
@@ -536,5 +527,57 @@ describe("TUI plugin approvals", () => {
     expect(harness.clearTimeoutFn).toHaveBeenCalledTimes(1);
     expect(harness.clearTimeoutFn).toHaveBeenCalledWith(harness.timers[0]);
     expect(harness.closeOverlay).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["success", "stale", "failure"])(
+    "ignores an in-flight resolution's %s after disposal",
+    async (outcome) => {
+      const harness = createHarness();
+      const pending = deferred<{ ok: boolean }>();
+      harness.resolvePluginApproval.mockReturnValueOnce(pending.promise);
+      harness.controller.handleEvent("plugin.approval.requested", approvalPayload());
+      harness.selectors[0]?.onSelect?.({ value: "deny", label: "Deny" });
+      expect(harness.resolvePluginApproval).toHaveBeenCalledExactlyOnceWith(
+        "plugin:skill-1",
+        "deny",
+      );
+      harness.controller.dispose();
+      harness.requestRender.mockClear();
+
+      if (outcome === "failure") {
+        pending.reject(new Error("gateway unavailable"));
+      } else {
+        pending.resolve({ ok: outcome === "success" });
+      }
+      await pending.promise.catch(() => undefined);
+
+      expect(harness.addSystem).not.toHaveBeenCalled();
+      expect(harness.listPluginApprovals).not.toHaveBeenCalled();
+      expect(harness.requestRender).not.toHaveBeenCalled();
+    },
+  );
+
+  it("ignores a stale approval's refresh failure after disposal", async () => {
+    const harness = createHarness();
+    const pending = deferred<unknown[]>();
+    const started = deferred();
+    harness.resolvePluginApproval.mockResolvedValueOnce({ ok: false });
+    harness.listPluginApprovals.mockImplementationOnce(() => {
+      started.resolve();
+      return pending.promise;
+    });
+    harness.controller.handleEvent("plugin.approval.requested", approvalPayload());
+    harness.selectors[0]?.onSelect?.({ value: "deny", label: "Deny" });
+    await started.promise;
+    const refresh = harness.controller.refresh();
+    harness.controller.dispose();
+    harness.addSystem.mockClear();
+    harness.requestRender.mockClear();
+
+    pending.reject(new Error("refresh unavailable"));
+    await refresh.catch(() => undefined);
+
+    expect(harness.addSystem).not.toHaveBeenCalled();
+    expect(harness.requestRender).not.toHaveBeenCalled();
   });
 });

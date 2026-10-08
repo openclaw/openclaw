@@ -20,9 +20,14 @@ import {
 } from "../../infra/update-doctor-result.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import {
+  renderUpdateRunReport,
+  updateRunReportInputFromResult,
+} from "../../infra/update-run-report.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import * as gitRunner from "../../infra/update-runner-git.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
@@ -35,6 +40,7 @@ import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { quoteCliArg } from "../quote-cli-arg.js";
 import * as shared from "./shared.js";
+import * as doctorChild from "./update-command-doctor-child.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { updateGitInstall } from "./update-command-git.js";
 import { createPackageUpdateActivationOptions } from "./update-command-package-activation.js";
@@ -163,7 +169,12 @@ it.each(["guidance", "staging"])(
           "npm error syscall rename",
           "npm error path [redacted-path]",
           "npm error EACCES: permission denied, rename [redacted-path]",
-        ].map((message) => ({ check: "npm", code: "EACCES", message })),
+        ].map((message, index) =>
+          Object.assign(
+            { check: "npm", code: "EACCES", message },
+            index === 0 ? { npmErrorCode: "EACCES" as const } : {},
+          ),
+        ),
       ];
       if (consumer === "staging") {
         const error = await stagePackageInstallUpdate(params).then(
@@ -260,23 +271,29 @@ it.each(["guidance", "staging"])(
 );
 
 it.each([
-  "1.0.0",
-  "https://example.invalid/candidate.tgz",
-  "openclaw@file:/owned/candidate",
-  "openclaw@file:../candidate",
-])(
-  "honors the explicit package artifact without changing registry no-op semantics: %s",
-  async (tag) => {
+  ["1.0.0", "package"],
+  ["https://example.invalid/candidate.tgz", "package"],
+  ["openclaw@file:../candidate", "package"],
+  ["https://example.invalid/candidate.tgz", "git"],
+] as const)(
+  "honors artifact %s from %s without skipping method-switch validation",
+  async (tag, installKind) => {
     // Swap bounds tests own deadline progression; artifact selection keeps real filesystem work.
     vi.spyOn(Date, "now").mockReturnValue(Date.now());
     await withTestDir({ prefix: "update-exact-artifact-" }, async (base) => {
       const { params, root, launcher, expectOriginalInstallation } =
-        await createPackageInstallFixture(base);
+        await createPackageInstallFixture(
+          base,
+          "1.0.0",
+          installKind === "git" ? "same-build" : undefined,
+        );
       const stopped = new Error("pause at owned pre-activation boundary");
       const validateCandidate = vi.fn(async (candidate: string) => {
         expect(candidate).not.toBe(root);
         expect(await fs.readFile(launcher, "utf8")).toBe("previous launcher\n");
-        return [];
+        return installKind === "git"
+          ? [{ name: "canary", command: "canary", cwd: base, durationMs: 0, exitCode: 1 }]
+          : [];
       });
       const beforeActivate = vi.fn(async () => {
         throw stopped;
@@ -284,6 +301,7 @@ it.each([
       const onTransaction = vi.fn();
       const update = runPackageInstallUpdate({
         ...params,
+        installKind,
         tag: tag.startsWith("openclaw@") ? "latest" : tag,
         installEnv: tag.startsWith("openclaw@") ? { OPENCLAW_UPDATE_PACKAGE_SPEC: tag } : {},
         invocationCwd: base,
@@ -291,7 +309,15 @@ it.each([
         beforeActivate,
         onTransaction,
       });
-      if (tag === "1.0.0") {
+      if (installKind === "git") {
+        const result = await update;
+        expect(result).toMatchObject({ status: "error", reason: "unexpected-error" });
+        expect(result.steps).toContainEqual(
+          expect.objectContaining({ name: "canary", exitCode: 1 }),
+        );
+        expect(validateCandidate).toHaveBeenCalledOnce();
+        expect(beforeActivate).not.toHaveBeenCalled();
+      } else if (tag === "1.0.0") {
         expect(await update).toMatchObject({ status: "skipped", reason: "already-current" });
         expect(validateCandidate).not.toHaveBeenCalled();
         expect(beforeActivate).not.toHaveBeenCalled();
@@ -311,75 +337,6 @@ it.each([
     });
   },
 );
-
-it("validates a matching explicit artifact when switching from Git to a package install", async () => {
-  await withTestDir({ prefix: "update-matching-artifact-" }, async (base) => {
-    const { params, expectOriginalInstallation } = await createPackageInstallFixture(
-      base,
-      "1.0.0",
-      "same-build",
-    );
-    const validateCandidate = vi.fn(async () => [
-      { name: "canary", command: "canary", cwd: base, durationMs: 0, exitCode: 1 },
-    ]);
-    const beforeActivate = vi.fn(async () => {});
-
-    const result = await runPackageInstallUpdate({
-      ...params,
-      installKind: "git",
-      tag: "https://example.invalid/candidate.tgz",
-      validateCandidate,
-      beforeActivate,
-      onTransaction: vi.fn(),
-    });
-    expect(result).toMatchObject({ status: "error", reason: "unexpected-error" });
-    expect(result.steps).toContainEqual(expect.objectContaining({ name: "canary", exitCode: 1 }));
-    expect(validateCandidate).toHaveBeenCalledOnce();
-    expect(beforeActivate).not.toHaveBeenCalled();
-    await expectOriginalInstallation();
-  });
-});
-
-it("admits a matching staged artifact without retaining or replacing the running package", async () => {
-  await withTestDir({ prefix: "update-admitted-noop-" }, async (base) => {
-    const {
-      params: defaults,
-      installedPrefixes,
-      expectOriginalInstallation,
-    } = await createPackageInstallFixture(base, "1.0.0", "same-build");
-    const params = {
-      ...defaults,
-      tag: "https://example.invalid/candidate.tgz",
-    };
-    const staged = await stagePackageInstallUpdate({ ...params, pauseBeforeVerification: true });
-    const validateCandidate = vi.fn(async () => []);
-    const beforeActivate = vi.fn(async () => {});
-    const onTransaction = vi.fn();
-    try {
-      const result = await staged.run({
-        ...params,
-        validateCandidate,
-        beforeActivate,
-        onTransaction,
-      });
-      expect(result).toMatchObject({
-        status: "skipped",
-        reason: "already-current",
-        after: { version: "1.0.0" },
-      });
-      expect(validateCandidate).not.toHaveBeenCalled();
-      expect(beforeActivate).not.toHaveBeenCalled();
-      expect(onTransaction).not.toHaveBeenCalled();
-      await expectOriginalInstallation();
-      expect(installedPrefixes).toHaveLength(1);
-      for (const prefix of installedPrefixes) {
-        await expect(fs.stat(prefix)).rejects.toMatchObject({ code: "ENOENT" });
-      }
-    } finally {
-      await staged.close();
-    }
-  });
-});
 
 it.skipIf(process.platform === "win32" || process.platform === "freebsd").each([
   { admission: "candidate", pauseBeforeVerification: true, runtime: "PATH" },
@@ -493,7 +450,7 @@ it.skipIf(process.platform === "win32" || process.platform === "freebsd").each([
   },
 );
 
-it.each(["run", "close"] as const)(
+it.each(["run", "close", "admitted"] as const)(
   "retains the matching staged artifact without replacing the active installation before %s",
   async (action) => {
     await withTestDir({ prefix: "update-retained-stage-" }, async (base) => {
@@ -507,42 +464,63 @@ it.each(["run", "close"] as const)(
         ...defaults,
         tag: "https://example.invalid/candidate.tgz",
       };
-      const staged = await stagePackageInstallUpdate(params);
-      expect(installedPrefixes).toHaveLength(1);
-      expect(staged.root).not.toBe(root);
-      expect(
-        JSON.parse(await fs.readFile(path.join(staged.root, "package.json"), "utf8")).version,
-      ).toBe("1.0.0");
-      await expectOriginalInstallation();
-      if (action === "run") {
-        const runtimeIdentity = await fs.stat(path.join(staged.root, "dist", "index.js"));
-        const stopped = new Error("stop before activating the initialized runtime");
-        const validateCandidate = vi.fn(async (candidate: string) => {
-          expect(candidate).toBe(staged.root);
-          expect(await fs.stat(path.join(candidate, "dist", "index.js"))).toMatchObject({
-            ino: runtimeIdentity.ino,
-            dev: runtimeIdentity.dev,
+      const staged = await stagePackageInstallUpdate({
+        ...params,
+        pauseBeforeVerification: action === "admitted",
+      });
+      try {
+        expect(installedPrefixes).toHaveLength(1);
+        expect(staged.root).not.toBe(root);
+        expect(
+          JSON.parse(await fs.readFile(path.join(staged.root, "package.json"), "utf8")).version,
+        ).toBe("1.0.0");
+        await expectOriginalInstallation();
+        if (action !== "close") {
+          const runtimeIdentity = await fs.stat(path.join(staged.root, "dist", "index.js"));
+          const stopped = new Error("stop before activating the initialized runtime");
+          const validateCandidate = vi.fn(async (candidate: string) => {
+            expect(candidate).toBe(staged.root);
+            expect(await fs.stat(path.join(candidate, "dist", "index.js"))).toMatchObject({
+              ino: runtimeIdentity.ino,
+              dev: runtimeIdentity.dev,
+            });
+            await expectOriginalInstallation();
+            return [];
           });
-          await expectOriginalInstallation();
-          return [];
-        });
-        const beforeActivate = vi.fn(async () => {
-          throw stopped;
-        });
-        const onTransaction = vi.fn();
-        await expect(
-          staged.run({ ...params, validateCandidate, beforeActivate, onTransaction }),
-        ).rejects.toBe(stopped);
-        expect(validateCandidate).toHaveBeenCalledOnce();
-        expect(beforeActivate).toHaveBeenCalledOnce();
-        expect(onTransaction).not.toHaveBeenCalled();
-      } else {
-        await expect(staged.close()).resolves.toBeUndefined();
-      }
-      expect(installedPrefixes).toHaveLength(1);
-      await expectOriginalInstallation();
-      for (const prefix of installedPrefixes) {
-        await expect(fs.stat(prefix)).rejects.toMatchObject({ code: "ENOENT" });
+          const beforeActivate = vi.fn(async () => {
+            throw stopped;
+          });
+          const onTransaction = vi.fn();
+          const running = staged.run({
+            ...params,
+            validateCandidate,
+            beforeActivate,
+            onTransaction,
+          });
+          if (action === "admitted") {
+            expect(await running).toMatchObject({
+              status: "skipped",
+              reason: "already-current",
+              after: { version: "1.0.0" },
+            });
+            expect(validateCandidate).not.toHaveBeenCalled();
+            expect(beforeActivate).not.toHaveBeenCalled();
+          } else {
+            await expect(running).rejects.toBe(stopped);
+            expect(validateCandidate).toHaveBeenCalledOnce();
+            expect(beforeActivate).toHaveBeenCalledOnce();
+          }
+          expect(onTransaction).not.toHaveBeenCalled();
+        } else {
+          await expect(staged.close()).resolves.toBeUndefined();
+        }
+        expect(installedPrefixes).toHaveLength(1);
+        await expectOriginalInstallation();
+        for (const prefix of installedPrefixes) {
+          await expect(fs.stat(prefix)).rejects.toMatchObject({ code: "ENOENT" });
+        }
+      } finally {
+        await staged.close();
       }
     });
   },
@@ -705,6 +683,86 @@ it.each([
     });
   },
 );
+
+it("retains Doctor settlement warnings through the package activation result", async () => {
+  await withTestDir({ prefix: "update-package-doctor-settlement-" }, async (base) => {
+    const { params, root, expectOriginalInstallation } = await createPackageInstallFixture(
+      base,
+      "2.0.0",
+    );
+    vi.spyOn(tempRoot, "resolvePreferredOpenClawTmpDir").mockReturnValue(base);
+    const env = {
+      OPENCLAW_STATE_DIR: path.join(base, "state"),
+      OPENCLAW_CONFIG_PATH: path.join(base, "openclaw.json"),
+    };
+    await fs.writeFile(env.OPENCLAW_CONFIG_PATH, "{}\n");
+    const warning =
+      "Doctor timed out, but every tracked process group stopped. Run `openclaw update repair`.";
+    const settlement: UpdateStepResult = {
+      name: "doctor process settlement",
+      command: "settle doctor process groups",
+      cwd: root,
+      durationMs: 1,
+      exitCode: 0,
+      advisory: { kind: "recoverable-maintenance", message: warning },
+    };
+    // Native settlement has process-boundary coverage; this test owns the package
+    // verifier's auxiliary-step transport and its public warning consumer.
+    vi.spyOn(doctorChild, "withUpdateDoctorChild").mockImplementation(
+      async ({ context }, operation) => {
+        const value = await operation(async () => ({
+          stdout: "Doctor busy",
+          stderr: "",
+          code: null,
+          signal: "SIGKILL",
+          killed: true,
+          cleanup: "forced",
+          termination: "timeout",
+        }));
+        context.onProcessSettlement?.(settlement);
+        return value;
+      },
+    );
+    let transaction: PackageUpdateTransaction | undefined;
+    try {
+      const result = await runPackageInstallUpdate({
+        ...params,
+        installEnv: env,
+        managedServiceEnv: env,
+        validateCandidate: async () => [],
+        beforeActivate: async () => {},
+        getDoctorContext: () => ({
+          runId: "doctor-settlement-transport",
+          executorFence: { assertCurrent: () => {} },
+          inputHash: "fixture-input",
+          changes: [],
+          assertCurrent: () => {},
+          assertBoundChildCurrent: () => {},
+        }),
+        onTransaction: (retained) => {
+          transaction = retained;
+        },
+      });
+      expect(result).toMatchObject({
+        status: "error",
+        root,
+        failedStep: { termination: "timeout" },
+      });
+      expect(result.steps.filter((step) => step.name === "doctor process settlement")).toEqual([
+        settlement,
+      ]);
+      expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
+        warning,
+      );
+    } finally {
+      if (transaction) {
+        expect((await transaction.rollback(() => {})).exitCode).toBe(0);
+        await transaction.complete({ activationVerified: false }, () => {});
+      }
+    }
+    await expectOriginalInstallation();
+  });
+});
 
 it.each([
   { method: "package", reason: "requester-revoked" },

@@ -2,6 +2,7 @@ import "@awesome.me/webawesome/dist/components/dropdown/dropdown.js";
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/tooltip.ts";
 import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import {
@@ -115,7 +116,11 @@ function renderPublicationButton(publication: GitHubPublicationView) {
   if (result?.status === "failed") {
     action = {
       click: publication.onNewAction,
-      label: t(publication.canWrite ? "githubPublication.newAction" : "common.dismiss"),
+      label: t(
+        publication.canPublishShared || publication.canPublishPersonal
+          ? "githubPublication.newAction"
+          : "common.dismiss",
+      ),
       disabled: busy,
     };
   } else if (result?.status === "needs_confirmation") {
@@ -169,12 +174,77 @@ function renderPublicationAccount(publication: GitHubPublicationView) {
 }
 
 function renderPublicationRefresh(publication: GitHubPublicationView) {
-  return html`<button class="btn btn--sm" type="button" @click=${publication.onRefresh}>
-    ${t("githubPublication.refresh")}
-  </button>`;
+  const label = t("githubPublication.refresh");
+  return html`<openclaw-tooltip content=${label}>
+    <button
+      class="btn btn--ghost btn--icon chat-icon-btn chat-pr__publication-refresh"
+      type="button"
+      aria-label=${label}
+      @click=${publication.onRefresh}
+    >
+      ${icons.refresh}
+    </button>
+  </openclaw-tooltip>`;
 }
 
-export function renderGitHubPublicationDetails(publication: GitHubPublicationView) {
+function renderPublicationEffect(effect: NonNullable<GitHubPublicationView["result"]>["effect"]) {
+  if (!effect) {
+    return nothing;
+  }
+  return html`<span
+    >${t(
+      effect.status === "dispatched"
+        ? "githubPublication.dispatched"
+        : "githubPublication.observed",
+      {
+        kind: t(
+          effect.kind === "push"
+            ? "githubPublication.effectPush"
+            : "githubPublication.effectPullRequest",
+        ),
+      },
+    )}
+    ${effect.headCommit ? html`<code>${effect.headCommit}</code>` : nothing}
+    ${
+      effect.url
+        ? html`<a href=${effect.url} target="_blank" rel="noopener noreferrer"
+            >${t("githubPublication.effectLink")}</a
+          >`
+        : nothing
+    }
+  </span>`;
+}
+
+// One short status line; server prose, account, and effects stay one click away.
+function publicationHeadline(publication: GitHubPublicationView, busy: boolean) {
+  const { result, error, locked } = publication;
+  if (error) {
+    return { text: t("githubPublication.statusUnavailable"), alert: true };
+  }
+  switch (result?.status) {
+    case "failed":
+      return { text: t("githubPublication.statusFailed"), alert: true };
+    case "needs_confirmation":
+      return { text: t("githubPublication.statusConfirm"), alert: false };
+    case "publishing":
+      return { text: t("githubPublication.statusPublishing"), alert: false };
+    case "requested":
+      return { text: t("githubPublication.statusRequested"), alert: false };
+    default:
+      if (!locked) {
+        return null;
+      }
+      return busy
+        ? { text: t("githubPublication.statusPublishing"), alert: false }
+        : { text: t("githubPublication.statusUnknown"), alert: true };
+  }
+}
+
+/** `inline` renders details without their own disclosure when the caller already owns one. */
+export function renderGitHubPublicationDetails(
+  publication: GitHubPublicationView,
+  { inline = false } = {},
+) {
   const { result, confirmation, activity, locked, error, options } = publication;
   const selection = publicationButtonSelection(publication);
   if (result?.status === "published" && !error) {
@@ -190,24 +260,53 @@ export function renderGitHubPublicationDetails(publication: GitHubPublicationVie
     !result &&
     !locked &&
     !busy &&
-    publication.canWrite;
+    (publication.canPublishShared || publication.canPublishPersonal);
   if (!result && !confirmation && !error && !locked && !personalUnavailable && !noAccount) {
     return nothing;
   }
+  const headline = publicationHeadline(publication, busy);
+  // Accepted requests already offer "Check publication" as their primary action.
+  const refresh =
+    !busy &&
+    (error ||
+      result?.status === "failed" ||
+      (result?.status === "needs_confirmation" && !publication.onConfirm));
+  const more =
+    result || locked || error
+      ? html`<div class="chat-pr__publication-more">
+          ${renderPublicationAccount(publication)}
+          ${result && result.status !== "published" && result.status !== "failed" ? html`<span>${result.message}</span>` : nothing}
+          ${result?.status === "failed" ? html`<span>${result.nextAction}</span>` : nothing}
+          ${error ? html`<span>${error}</span>` : nothing}
+          ${locked && !result && !busy ? html`<span>${t("githubPublication.unknown")}</span>` : nothing}
+          ${renderPublicationEffect(result?.effect)}
+        </div>`
+      : nothing;
   return html`<div class="chat-pr__publication-outcome" data-state=${result?.status ?? "selection"}>
-    ${result || locked || error ? renderPublicationAccount(publication) : nothing}
-    ${noAccount ? html`<span>${t(options.personal === null ? "githubPublication.unidentified" : "githubPublication.connectHelp")}</span>` : nothing}
     ${
-      result && result.status !== "published"
-        ? html`<span role="status">${result.message}</span>`
-        : nothing
+      inline
+        ? more
+        : headline
+          ? html`<details class="chat-pr__publication-status">
+              <summary>
+                <span
+                  class="chat-pr__publication-headline"
+                  role=${headline.alert ? "alert" : "status"}
+                  >${headline.text}</span
+                >
+                <span class="chat-pr__publication-chevron" aria-hidden="true"
+                  >${icons.chevronDown}</span
+                >
+              </summary>
+              ${more}
+            </details>`
+          : nothing
     }
-    ${result?.status === "failed" ? html`<span>${result.nextAction}</span>` : nothing}
-    ${error ? html`<span role="alert">${error}</span>` : nothing}
-    ${locked && !result && !busy ? html`<span>${t("githubPublication.unknown")}</span>` : nothing}
+    ${refresh ? renderPublicationRefresh(publication) : nothing}
+    ${noAccount ? html`<span class="chat-pr__publication-note">${t(options.personal === null ? "githubPublication.unidentified" : "githubPublication.connectHelp")}</span>` : nothing}
     ${
       confirmation
-        ? html`<div>
+        ? html`<div class="chat-pr__publication-note">
             <div>
               ${t("githubPublication.target", {
                 repository: confirmation.repository,
@@ -236,37 +335,10 @@ export function renderGitHubPublicationDetails(publication: GitHubPublicationVie
         : nothing
     }
     ${
-      result?.effect
-        ? html`<span
-            >${t(
-              result.effect.status === "dispatched"
-                ? "githubPublication.dispatched"
-                : "githubPublication.observed",
-              {
-                kind: t(
-                  result.effect.kind === "push"
-                    ? "githubPublication.effectPush"
-                    : "githubPublication.effectPullRequest",
-                ),
-              },
-            )}
-            ${result.effect.headCommit ? html`<code>${result.effect.headCommit}</code>` : nothing}
-            ${
-              result.effect.url
-                ? html`<a href=${result.effect.url} target="_blank" rel="noopener noreferrer"
-                    >${t("githubPublication.effectLink")}</a
-                  >`
-                : nothing
-            }
-          </span>`
-        : nothing
-    }
-    ${
-      personalUnavailable ? html`<span>${t("githubPublication.personalWorkspace")}</span>` : nothing
-    }
-    ${
-      !busy && (error || (result && !publication.onConfirm && result.status !== "published"))
-        ? renderPublicationRefresh(publication)
+      personalUnavailable
+        ? html`<span class="chat-pr__publication-note"
+            >${t("githubPublication.personalWorkspace")}</span
+          >`
         : nothing
     }
   </div>`;

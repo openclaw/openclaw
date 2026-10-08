@@ -1,3 +1,4 @@
+import { readBlobAsDataUrl } from "../../lib/blob-data-url.ts";
 import type {
   ChatAttachment,
   ChatGoalDraftMode,
@@ -39,10 +40,6 @@ const reportedStorageOwners = new Set<string>();
 
 const durableComposerStore = import("../../lib/chat/composer-draft-store.runtime.ts");
 
-function durableComposerOwnerKey(scope: DurableComposerDraftScope): string {
-  return JSON.stringify([scope.gatewayOwner, scope.recoveryScope]);
-}
-
 export function durableComposerScopeIdentity(scope: DurableComposerDraftScope): string {
   return JSON.stringify([scope.gatewayOwner, scope.recoveryScope, scope.scopeKey]);
 }
@@ -51,7 +48,7 @@ export function reportDurableComposerStorageError(
   scope: DurableComposerDraftScope,
   onStorageError: () => void,
 ) {
-  const owner = durableComposerOwnerKey(scope);
+  const owner = JSON.stringify([scope.gatewayOwner, scope.recoveryScope]);
   if (reportedStorageOwners.has(owner)) {
     return;
   }
@@ -90,24 +87,6 @@ export function chatAttachmentDraftSignature(
       attachment.selectionAnnotation ?? null,
     ]),
   ]);
-}
-
-export function readBlobAsDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.addEventListener("error", () => reject(reader.error ?? new Error("Blob read failed")), {
-      once: true,
-    });
-    reader.addEventListener(
-      "load",
-      () =>
-        typeof reader.result === "string"
-          ? resolve(reader.result)
-          : reject(new Error("Blob read returned no data")),
-      { once: true },
-    );
-    reader.readAsDataURL(blob);
-  });
 }
 
 export function captureDurableChatAttachments(

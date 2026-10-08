@@ -66,17 +66,6 @@ export async function withFileMutationQueueKeysResolution<T>(
   return await operation;
 }
 
-/**
- * Serialize file mutation operations targeting the same file.
- * Operations for different files still run in parallel.
- */
-export async function withFileMutationQueue<T>(filePath: string, fn: () => Promise<T>): Promise<T> {
-  return await enqueueFileMutationQueueKeys(
-    [resolveIdentityPathViaExistingAncestorSync(filePath)],
-    fn,
-  );
-}
-
 function enqueueFileMutationQueueKeys<T>(
   queueKeys: readonly string[],
   fn: () => Promise<T>,

@@ -18,7 +18,6 @@ import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.
 import type { AcpSessionControlBinding } from "./session-meta-control.types.js";
 import { assertAcpSessionMutationEntry } from "./session-meta-entry.kernel.js";
 import { selectAcpSessionRowForStoreEntry } from "./session-meta-keys.js";
-import { clearLegacyEmbeddedAcpMetadata } from "./session-meta-legacy-cleanup.js";
 import { rowToAcpSessionMeta } from "./session-meta-readonly.js";
 import { readSessionEntryFromStore } from "./session-meta-store.js";
 import { applyAcpSessionMutation } from "./session-meta-write.kernel.js";
@@ -87,9 +86,6 @@ export async function upsertAcpSessionMetaNative(params: {
     env: params.env,
     clone: false,
   });
-  if (!storeEntry.storePath) {
-    return null;
-  }
   const { entry, storePath } = storeEntry;
   const storageSessionKey = storeEntry.storeSessionKey;
   let current: SessionAcpMeta | undefined;
@@ -116,7 +112,6 @@ export async function upsertAcpSessionMetaNative(params: {
         database.db,
         storageSessionKey,
         storeEntry.agentId,
-        storeEntry.cfg,
         entry,
       );
       currentRowKey = currentRow?.session_key;
@@ -150,7 +145,7 @@ export async function upsertAcpSessionMetaNative(params: {
           env: params.env,
           now: updatedAt,
         });
-        applyAcpSessionMutation(database.db, {
+        const facts = applyAcpSessionMutation(database.db, {
           agentId: storeEntry.agentId,
           storageSessionKey,
           sessionKey: publishedSessionKey,
@@ -159,7 +154,13 @@ export async function upsertAcpSessionMetaNative(params: {
           decision,
         });
         sessionChanges.emit(
-          { agentId: storeEntry.agentId, sessionKey: publishedSessionKey },
+          {
+            agentId: storeEntry.agentId,
+            sessionKey: publishedSessionKey,
+            storePath,
+            scope: "acp",
+            facts,
+          },
           database.db,
         );
       },
@@ -174,7 +175,7 @@ export async function upsertAcpSessionMetaNative(params: {
     const patched = entry
       ? await patchSessionEntryWithKey(
           {
-            ...(storeEntry.agentId ? { agentId: storeEntry.agentId } : {}),
+            agentId: storeEntry.agentId,
             storePath: storeEntry.storePath,
             sessionKey: storageSessionKey,
           },
@@ -197,19 +198,11 @@ export async function upsertAcpSessionMetaNative(params: {
         )
       : null;
     publish(patched?.sessionKey ?? storageSessionKey, patched?.entry ?? entry, { kind: "clear" });
-    await clearLegacyEmbeddedAcpMetadata({
-      agentId: storeEntry.agentId,
-      storePath: storeEntry.storePath,
-      sessionKeys: [storageSessionKey, patched?.sessionKey],
-      expectedEntry: patched?.entry ?? entry ?? null,
-      expectedControlBinding: params.expectedControlBinding,
-      assertCommitAllowed: params.assertCommitAllowed,
-    });
     return patched?.entry ?? null;
   }
   const persisted = await patchSessionEntryWithKey(
     {
-      ...(storeEntry.agentId ? { agentId: storeEntry.agentId } : {}),
+      agentId: storeEntry.agentId,
       storePath: storeEntry.storePath,
       sessionKey: storageSessionKey,
     },
@@ -236,15 +229,7 @@ export async function upsertAcpSessionMetaNative(params: {
   if (!persisted) {
     return null;
   }
-  await clearLegacyEmbeddedAcpMetadata({
-    agentId: storeEntry.agentId,
-    storePath: storeEntry.storePath,
-    sessionKeys: [storageSessionKey, persisted.sessionKey],
-    expectedEntry: persisted.entry,
-    expectedControlBinding: params.expectedControlBinding,
-    assertCommitAllowed: params.assertCommitAllowed,
-  });
-  // The entry patch and legacy cleanup settle before this authoritative publication.
+  // The entry patch settles before this authoritative publication.
   publish(persisted.sessionKey, persisted.entry, { kind: "set", meta: metaToPersist });
   return mergeSessionEntry(persisted.entry, { acp: metaToPersist });
 }

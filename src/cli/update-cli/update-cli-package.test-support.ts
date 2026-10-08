@@ -116,14 +116,12 @@ export const writeNpmPackageInstall = async (
 
 export const packageTargetStatus = (
   overrides: Partial<{
-    target: string;
     version: string | null;
     nodeEngine: string | null;
     schemaVersions: { state: number; agent: number };
     error: string;
   }> = {},
 ) => ({
-  target: "9999.0.0",
   version: "9999.0.0",
   nodeEngine: ">=22.19.0",
   ...overrides,

@@ -1,4 +1,6 @@
 import type {
+  AgentsListResult,
+  ApprovalDecision,
   CommandEntry,
   CommandsListParams,
   ModelChoice,
@@ -13,7 +15,7 @@ import type {
   TaskSuggestionsAcceptResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { SessionInfoDefaults } from "./tui-session-info.js";
-import type { AgentSummary, SessionInfo, SessionScope } from "./tui-types.js";
+import type { SessionInfo } from "./tui-types.js";
 
 export type ChatSendOptions = {
   sessionKey: string;
@@ -44,7 +46,7 @@ export type TuiImageData = {
   mimeType: string;
 };
 
-export type TuiApprovalDecision = "allow-once" | "allow-always" | "deny";
+export type TuiApprovalDecision = ApprovalDecision;
 
 type TuiTaskSuggestionActionCapabilities = {
   canAccept: boolean;
@@ -122,12 +124,7 @@ export type TuiSessionDescription = {
   defaults?: TuiSessionList["defaults"];
 };
 
-export type TuiAgentsList = {
-  defaultId: string;
-  mainKey: string;
-  scope: SessionScope;
-  agents: AgentSummary[];
-};
+export type TuiAgentsList = AgentsListResult;
 
 export type TuiModelChoice = Pick<
   ModelChoice,
@@ -154,6 +151,11 @@ export type TuiSessionCreateOptions = {
   agentId?: string;
   parentSessionKey?: string;
   succeedsParent?: boolean;
+};
+
+export type TuiModelCatalogScope = {
+  agentId?: string;
+  sessionKey?: string;
 };
 
 /** Minimal backend interface shared by Gateway and embedded local TUI modes. */
@@ -193,9 +195,9 @@ export type TuiBackend = {
     opts?: { agentId?: string },
   ) => Promise<TuiSessionMutationResult>;
   getGatewayStatus: () => Promise<unknown>;
-  listModels: (opts?: { agentId?: string }) => Promise<TuiModelChoice[]>;
-  getKnownModels?: (opts?: { agentId?: string }) => TuiModelChoice[] | undefined;
-  onModelsChanged?: (agentId?: string) => void;
+  listModels: (opts?: TuiModelCatalogScope) => Promise<TuiModelChoice[]>;
+  getKnownModels?: (opts?: TuiModelCatalogScope) => TuiModelChoice[] | undefined;
+  onModelsChanged?: (scope: TuiModelCatalogScope) => void;
   listCommands?: (opts?: CommandsListParams) => Promise<CommandEntry[]>;
   listPluginApprovals?: () => Promise<unknown>;
   resolvePluginApproval?: (id: string, decision: TuiApprovalDecision) => Promise<{ ok?: boolean }>;

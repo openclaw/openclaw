@@ -50,6 +50,12 @@ suite.define(() => {
         expect(await activity.locator(".chat-bubble").count()).toBe(0);
         await summary.click();
         await activity.getByText(/End of receipt 3$/).waitFor();
+        expect(await activity.locator(".chat-reply-attribution").count()).toBe(1);
+        expect(await summary.getByText("From", { exact: true }).count()).toBe(1);
+        expect(await summary.getByText("3 updates from", { exact: true }).count()).toBe(0);
+        expect(
+          await activity.locator(".chat-session-activity__body .chat-reply-attribution").count(),
+        ).toBe(0);
         expect(await activity.locator(".chat-message-disclosure__toggle").count()).toBe(0);
         await summary.focus();
         await summary.press("Enter");

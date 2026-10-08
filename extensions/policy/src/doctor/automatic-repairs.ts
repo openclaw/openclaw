@@ -9,6 +9,7 @@ import type {
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CHECK_IDS, type POLICY_CHECK_IDS } from "./check-ids.js";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./fix-metadata.js";
+import { workspaceRepairsEnabled } from "./policy-runtime.js";
 
 type PolicyCheckId = (typeof POLICY_CHECK_IDS)[number];
 type ConfigRecord = Record<string, unknown>;
@@ -259,31 +260,8 @@ function mergeStringArrayAtOcPath(cfg: ConfigRecord, ocPath: string, entry: stri
   if (segments.length === 0 || segments.at(-1) !== "deny") {
     return false;
   }
-  let current: unknown = cfg;
-  for (let index = 0; index < segments.length - 1; index += 1) {
-    const segment = segments[index];
-    if (segment === undefined) {
-      return false;
-    }
-    if (segment.startsWith("#")) {
-      const arrayIndex = Number.parseInt(segment.slice(1), 10);
-      if (!Array.isArray(current) || !Number.isInteger(arrayIndex) || arrayIndex < 0) {
-        return false;
-      }
-      current = current[arrayIndex];
-      continue;
-    }
-    if (!isRecord(current)) {
-      return false;
-    }
-    const nextSegment = segments[index + 1];
-    const existing = current[segment];
-    if (existing === undefined) {
-      current[segment] = nextSegment?.startsWith("#") ? [] : {};
-    }
-    current = current[segment];
-  }
-  if (!isRecord(current)) {
+  const current = configPathParent(cfg, segments, true);
+  if (current === undefined) {
     return false;
   }
   const existing = current.deny;
@@ -361,25 +339,8 @@ function setValueAtOcPath(cfg: ConfigRecord, ocPath: string, value: unknown): bo
   if (segments.length === 0) {
     return false;
   }
-  let current: unknown = cfg;
-  for (let index = 0; index < segments.length - 1; index += 1) {
-    const segment = segments[index];
-    if (segment === undefined || segment.startsWith("#")) {
-      return false;
-    }
-    if (!isRecord(current)) {
-      return false;
-    }
-    const existing = current[segment];
-    if (existing !== undefined && !isRecord(existing)) {
-      return false;
-    }
-    if (existing === undefined) {
-      current[segment] = {};
-    }
-    current = current[segment];
-  }
-  if (!isRecord(current)) {
+  const current = configPathParent(cfg, segments, false);
+  if (current === undefined) {
     return false;
   }
   const last = segments.at(-1);
@@ -390,12 +351,43 @@ function setValueAtOcPath(cfg: ConfigRecord, ocPath: string, value: unknown): bo
   return true;
 }
 
-function workspaceRepairsEnabled(ctx: HealthRepairContext): boolean {
-  const plugins = isRecord(ctx.cfg.plugins) ? ctx.cfg.plugins : {};
-  const entries = isRecord(plugins.entries) ? plugins.entries : {};
-  const policy = isRecord(entries.policy) ? entries.policy : {};
-  const config = isRecord(policy.config) ? policy.config : {};
-  return config.workspaceRepairs === true;
+function configPathParent(
+  cfg: ConfigRecord,
+  segments: readonly string[],
+  allowArrays: boolean,
+): ConfigRecord | undefined {
+  let current: unknown = cfg;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const segment = segments[index];
+    if (segment === undefined) {
+      return undefined;
+    }
+    if (segment.startsWith("#")) {
+      const arrayIndex = Number.parseInt(segment.slice(1), 10);
+      if (
+        !allowArrays ||
+        !Array.isArray(current) ||
+        !Number.isInteger(arrayIndex) ||
+        arrayIndex < 0
+      ) {
+        return undefined;
+      }
+      current = current[arrayIndex];
+      continue;
+    }
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    const existing = current[segment];
+    if (!allowArrays && existing !== undefined && !isRecord(existing)) {
+      return undefined;
+    }
+    if (existing === undefined) {
+      current[segment] = allowArrays && segments[index + 1]?.startsWith("#") ? [] : {};
+    }
+    current = current[segment];
+  }
+  return isRecord(current) ? current : undefined;
 }
 
 function workspaceRepairsDisabledResult(): HealthRepairResult {

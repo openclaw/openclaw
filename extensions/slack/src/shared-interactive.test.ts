@@ -297,6 +297,30 @@ describe("buildSlackInteractiveBlocks", () => {
 });
 
 describe("buildSlackPresentationBlocks", () => {
+  it.each(["👨‍👩‍👧‍👦", "🇦🇹", "👍🏽", "e\u0301", "\r\n"])(
+    "keeps the complete %s grapheme across native mrkdwn section boundaries",
+    (grapheme) => {
+      for (const marker of ["&amp;", "`", "```"] as const) {
+        const closing = marker === "&amp;" ? "" : marker;
+        const first = Array.from(grapheme)[0]!;
+        const prefix = "x".repeat(3_000 - marker.length - closing.length - first.length);
+        const blocks = buildSlackPresentationBlocks({
+          blocks: [{ type: "text", text: `${marker}${prefix}${grapheme}tail${closing}` }],
+        });
+        const chunks = blocks.flatMap((block) =>
+          block.type === "section" && "text" in block && block.text?.type === "mrkdwn"
+            ? [block.text.text]
+            : [],
+        );
+
+        expect(chunks, marker).toEqual([
+          `${marker}${prefix}${closing}`,
+          `${closing}${grapheme}tail${closing}`,
+        ]);
+      }
+    },
+  );
+
   it.each(["text", "context"] as const)(
     "preserves long %s presentation blocks without truncating their mrkdwn",
     (type) => {

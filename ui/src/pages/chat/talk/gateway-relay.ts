@@ -13,7 +13,6 @@ import {
   RealtimeTalkMediaStreamMeter,
   RealtimeTalkPcmInputPump,
   RealtimeTalkPcmOutputQueue,
-  type RealtimeTalkAudioFrame,
 } from "./audio.ts";
 import type { DelayedToolResult, GatewayRelayEvent } from "./gateway-relay-types.ts";
 import {
@@ -273,6 +272,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     }
   }
 
+  // Keep callback-written errors outside start()'s field narrowing.
   private currentStartupError(): Error | null {
     return this.startupError;
   }
@@ -383,7 +383,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
           });
           return;
         case "toolCallCancelled":
-          this.cancelToolCall(event.callId);
+          this.completeToolCall(event.callId, true);
           return;
         case "toolResult":
           if (this.isFinalToolResult(event)) {
@@ -632,7 +632,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     this.ctx.callbacks.onStatus?.("error", message);
   }
 
-  private completeToolCall(callIdRaw: string | undefined): void {
+  private completeToolCall(callIdRaw: string | undefined, cancelled = false): void {
     const callId = callIdRaw?.trim();
     if (!callId) {
       return;
@@ -640,21 +640,14 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     this.completedToolCalls.add(callId);
     // The Gateway broadcasts acceptance before resolving the matching RPC.
     // Do not turn our own accepted result into a late consult cancellation.
-    if (this.submittingToolCalls.has(callId)) {
+    if (!cancelled && this.submittingToolCalls.has(callId)) {
       return;
     }
     this.toolAbortControllers.get(callId)?.abort();
     this.toolAbortControllers.delete(callId);
-  }
-
-  private cancelToolCall(callIdRaw: string | undefined): void {
-    const callId = callIdRaw?.trim();
-    if (!callId) {
+    if (!cancelled) {
       return;
     }
-    this.completedToolCalls.add(callId);
-    this.toolAbortControllers.get(callId)?.abort();
-    this.toolAbortControllers.delete(callId);
     for (const pending of this.delayedToolResults) {
       if (pending.callId === callId) {
         this.discardDelayedToolResult(pending);
@@ -664,13 +657,10 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
 
   private isFinalToolResult(event: GatewayRelayEvent): boolean {
     const talkEvent = event.talkEvent;
-    if (talkEvent?.type === "tool.progress") {
-      return false;
-    }
-    if (talkEvent?.type === "tool.result" && talkEvent.final === false) {
-      return false;
-    }
-    return true;
+    return (
+      talkEvent?.type !== "tool.progress" &&
+      !(talkEvent?.type === "tool.result" && talkEvent.final === false)
+    );
   }
 
   private cancelOutput(reason: string, requirePlayback = true): void {
@@ -727,7 +717,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
       this.speechFramesDuringPlayback = 0;
       return false;
     }
-    const frame: RealtimeTalkAudioFrame = measureRealtimeTalkAudioFrame(samples);
+    const frame = measureRealtimeTalkAudioFrame(samples);
     if (frame.rms >= BARGE_IN_RMS_THRESHOLD && frame.peak >= BARGE_IN_PEAK_THRESHOLD) {
       this.speechFramesDuringPlayback += 1;
     } else {

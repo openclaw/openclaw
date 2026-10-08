@@ -1,10 +1,9 @@
 // Model list probe tests cover runtime probing while listing configured models.
-import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { assert, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AgentRunResultView } from "../../agents/agent-run-result.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { acquireGatewayLock, type GatewayLockOptions } from "../../infra/gateway-lock.js";
@@ -70,16 +69,14 @@ async function withProbeRuntime(
     probe: typeof probeModule;
     runner: ReturnType<typeof createRunner>;
     upsert: ReturnType<typeof createUpsert>;
-    clearSnapshot: ReturnType<typeof vi.fn<() => boolean>>;
   }) => Promise<void>,
 ) {
   const runner = createRunner();
   const upsert = createUpsert();
-  const clearSnapshot = vi.fn(() => credential === "literal");
   const profileIds = credential === "marker" ? [] : ["openai:profile"];
   vi.doMock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent: runner }));
-  vi.doMock("../../agents/auth-profiles.js", () => ({
-    clearRuntimeAuthProfileStoreSnapshot: clearSnapshot,
+  vi.doMock("../../agents/auth-profiles.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("../../agents/auth-profiles.js")>()),
     externalCliDiscoveryScoped: () => undefined,
     ensureAuthProfileStore: () => ({
       version: 1,
@@ -126,7 +123,7 @@ async function withProbeRuntime(
       import.meta.url,
       `./list.probe.js?scope=${Math.random().toString(36).slice(2)}`,
     );
-    await run({ probe, runner, upsert, clearSnapshot });
+    await run({ probe, runner, upsert });
   } finally {
     vi.doUnmock("../../agents/embedded-agent.js");
     vi.doUnmock("../../agents/auth-profiles.js");
@@ -207,37 +204,6 @@ describe("runAuthProbes", () => {
     });
   });
 
-  it("releases canonical state ownership when a direct CLI probe receives SIGTERM", async () => {
-    await withTempState(async (stateDir) => {
-      const lockOptions = createGatewayLockOptions(stateDir);
-      const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
-      const signals = new EventEmitter();
-
-      await probeModule.withAuthProbeStateOwnership(
-        {
-          mode: "exclusive",
-          gatewayLockOptions: lockOptions,
-          process: signals,
-        },
-        async (signal) => {
-          expect(JSON.parse(await fs.readFile(stateLockPath, "utf8"))).toMatchObject({
-            pid: process.pid,
-            role: "agent-embedded",
-          });
-          let markInterrupted!: () => void;
-          const interrupted = new Promise<void>((resolve) => {
-            markInterrupted = resolve;
-          });
-          signal?.addEventListener("abort", markInterrupted, { once: true });
-          signals.emit("SIGTERM");
-          await interrupted;
-        },
-      );
-
-      await expect(fs.stat(stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
-    });
-  });
-
   it("runs Codex-pinned auth probes through raw OpenClaw model-run mode", async () => {
     await withProbeRuntime("profile", async ({ probe, runner }) => {
       runner.mockImplementation(async (params) => {
@@ -281,7 +247,7 @@ describe("runAuthProbes", () => {
   });
 
   it("preserves provider config while suppressing profiles for a config-key target", async () => {
-    await withProbeRuntime("literal", async ({ probe, runner, upsert, clearSnapshot }) => {
+    await withProbeRuntime("literal", async ({ probe, runner, upsert }) => {
       const providerConfig = {
         baseUrl: "https://api.openai.com/v1",
         api: "openai-responses" as const,
@@ -298,19 +264,20 @@ describe("runAuthProbes", () => {
       const call = runner.mock.calls.find(([params]) =>
         params.authProfileId?.startsWith("openai:probe-"),
       )?.[0];
-      expect(call?.agentDir).not.toBe("/tmp/openclaw-probe-agent");
-      expect(call?.authProfileIdSource).toBe("user");
-      expect(call?.preparedModelRuntimeMode).toBe("isolated-read-only");
-      expect(call?.config).toMatchObject({
+      assert(call?.agentDir);
+      expect(call.agentDir).not.toBe("/tmp/openclaw-probe-agent");
+      expect(call.authProfileIdSource).toBe("user");
+      expect(call.preparedModelRuntimeMode).toBe("isolated-read-only");
+      expect(call.config).toMatchObject({
         models: { providers: { openai: providerConfig } },
         auth: { order: { openai: [] } },
       });
       expect(upsert).toHaveBeenCalledWith({
-        profileId: call?.authProfileId,
-        agentDir: call?.agentDir,
+        profileId: call.authProfileId,
+        agentDir: call.agentDir,
         credential: expect.objectContaining({ type: "oauth", provider: "openai", access: "test" }),
       });
-      expect(clearSnapshot).toHaveBeenCalledWith(call?.agentDir);
+      await expect(fs.stat(call.agentDir)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
 

@@ -58,10 +58,6 @@ export function formatGatewayCandidateUrl(gateway: NodeHostGatewayConfig): strin
   return `${scheme}://${urlHost}:${port}${contextPath}`;
 }
 
-function canTryNextGatewayCandidate(info: GatewayClientCloseInfo | undefined): boolean {
-  return info?.phase === "pre-hello" && info.connectRequestSent === false;
-}
-
 export function createNodeHostGatewayCandidateConnection(params: GatewayCandidateConnectionParams) {
   if (params.candidates.length === 0) {
     throw new Error("node host gateway candidate list cannot be empty");
@@ -128,7 +124,8 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
           // endpoint. Its own reconnect path owns durable device auth from here.
           winnerSelected ||
           nextCandidateIndex >= params.candidates.length ||
-          !canTryNextGatewayCandidate(info)
+          info?.phase !== "pre-hello" ||
+          info.connectRequestSent !== false
         ) {
           return;
         }

@@ -44,8 +44,13 @@ export type WorkerSessionPlacementGate = {
     claim: WorkerSessionTurnClaim;
     transcriptSeq?: number;
     liveSeq?: number;
-  }): void;
-  prepareWorkspaceResultOwnerRevocation(binding: WorkerPlacementBinding, error: Error): void;
+    assertCurrent?: () => void;
+  }): Promise<void>;
+  prepareWorkspaceResultOwnerRevocation(
+    binding: WorkerPlacementBinding,
+    error: Error,
+    assertCurrent?: () => void,
+  ): Promise<void>;
   registerTurnClaimClosedHandler(handler: (claim: WorkerSessionTurnClaim) => void): () => void;
 };
 
@@ -229,23 +234,31 @@ export function createWorkerSessionPlacementGate(
       return validateWorkerTurn(claim) && store.isWorkerTurnToolAuthorized(claim, toolName);
     },
 
-    updateAckCursors(input): void {
-      if (!validateWorkerTurn(input.claim)) {
-        throw new Error(`Cannot ACK stale worker turn for session ${input.claim.sessionId}`);
-      }
-      store.updateAckCursors({
-        claim: input.claim,
-        ...(input.transcriptSeq === undefined ? {} : { transcript: input.transcriptSeq }),
-        ...(input.liveSeq === undefined ? {} : { liveEvent: input.liveSeq }),
-      });
+    async updateAckCursors(input) {
+      const assertCurrent = () => {
+        if (recoveryOnlyClaims.has(serializeWorkerSessionTurnClaim(input.claim))) {
+          throw new Error(`Cannot ACK stale worker turn for session ${input.claim.sessionId}`);
+        }
+        input.assertCurrent?.();
+      };
+      await store.updateAckCursors(
+        {
+          claim: input.claim,
+          ...(input.transcriptSeq === undefined ? {} : { transcript: input.transcriptSeq }),
+          ...(input.liveSeq === undefined ? {} : { liveEvent: input.liveSeq }),
+        },
+        assertCurrent,
+      );
+      assertCurrent();
     },
 
-    prepareWorkspaceResultOwnerRevocation(binding, error): void {
+    async prepareWorkspaceResultOwnerRevocation(binding, error, assertCurrent): Promise<void> {
       const claim = claimForOwnerRevocation(store.get(binding.sessionId), binding);
       if (!claim) {
         return;
       }
-      const pending = findPendingWorkerWorkspaceResult(store, claim);
+      const pending = await findPendingWorkerWorkspaceResult(store, claim);
+      assertCurrent?.();
       if (!pending || pending.gatewayInstanceId !== store.workspaceResultInstanceId()) {
         return;
       }
@@ -254,10 +267,10 @@ export function createWorkerSessionPlacementGate(
         pending.stagedResultRef === null &&
         pending.workspaceAcceptedAtMs === null
       ) {
-        store.failWorkspaceResultAndReleaseTurn(pending, error);
+        await store.failWorkspaceResultAndReleaseTurn(pending, error, assertCurrent);
         return;
       }
-      store.handoffWorkspaceResultRecovery(claim);
+      await store.handoffWorkspaceResultRecovery(claim, assertCurrent);
     },
 
     registerTurnClaimClosedHandler: (handler) => store.registerTurnClaimClosedHandler(handler),

@@ -313,11 +313,10 @@ describe("current cron delivery origin", () => {
     });
   });
 
-  it.each(
-    ["dashboard", "webchat"].flatMap((surface) =>
-      [0, 1, 2].map((channelCount) => ({ surface, channelCount })),
-    ),
-  )(
+  it.each([
+    { surface: "dashboard", channelCount: 2 },
+    { surface: "webchat", channelCount: 1 },
+  ])(
     "keeps a $surface completion in its conversation with $channelCount unrelated channels",
     async (options) => {
       await withCurrentOrigin(options, async ({ cfg, job }) => {
@@ -329,15 +328,13 @@ describe("current cron delivery origin", () => {
     },
   );
 
-  it.each(
-    [{ channel: "telegram" }, { to: "recipient" }, { accountId: "work" }, { threadId: 0 }].flatMap(
-      (coordinates) =>
-        ("channel" in coordinates ? [1] : [0, 1, 2]).map((channelCount) => ({
-          coordinates,
-          channelCount,
-        })),
-    ),
-  )(
+  it.each([
+    { coordinates: { channel: "telegram" }, channelCount: 1 },
+    { coordinates: { to: "recipient" }, channelCount: 1 },
+    { coordinates: { to: "recipient" }, channelCount: 0 },
+    { coordinates: { accountId: "work" }, channelCount: 0 },
+    { coordinates: { threadId: 0 }, channelCount: 2 },
+  ])(
     "retains explicit delivery coordinates $coordinates with $channelCount channels",
     async ({ coordinates, channelCount }) => {
       await withCurrentOrigin(

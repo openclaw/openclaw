@@ -7,6 +7,11 @@ import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
+import {
+  clearCompositionEnd,
+  isComposingKeyboardEvent,
+  recordCompositionEnd,
+} from "../../lib/ime.ts";
 import "../../components/tooltip.ts";
 import { renderChatAttachmentInputs } from "../chat/components/chat-attachment-inputs.ts";
 import {
@@ -85,8 +90,7 @@ function handleComposerKeydown(
     options.submitting ||
     options.messageLocked ||
     options.textareaController.composing ||
-    event.isComposing ||
-    event.keyCode === 229
+    isComposingKeyboardEvent(event)
   ) {
     return;
   }
@@ -120,24 +124,9 @@ function handleComposerKeydown(
     return;
   }
   const hasSubmitModifier = event.metaKey || event.ctrlKey;
-  const isBackgroundShortcut = options.requiresModifier
-    ? hasSubmitModifier && event.shiftKey
-    : hasSubmitModifier && !event.shiftKey;
-  if (!event.altKey && isBackgroundShortcut && options.onBackgroundSubmit) {
-    if (event.repeat) {
-      event.preventDefault();
-      return;
-    }
-    if (options.canSubmit || options.submitDisabledReason !== undefined) {
-      event.preventDefault();
-      resetSkillMenuState(options.textareaController.skillMenuState);
-      resetSlashMenuState(options.textareaController.slashMenuState);
-      options.textareaController.mentionMenu.close();
-      options.onBackgroundSubmit();
-    }
-    return;
-  }
-  if (event.shiftKey || (options.requiresModifier && !hasSubmitModifier)) {
+  const isBackgroundShortcut = hasSubmitModifier && event.shiftKey;
+  const background = Boolean(!event.altKey && isBackgroundShortcut && options.onBackgroundSubmit);
+  if (!background && (event.shiftKey || (options.requiresModifier && !hasSubmitModifier))) {
     return;
   }
   if (event.repeat) {
@@ -149,7 +138,14 @@ function handleComposerKeydown(
   // Only silent gates (busy button, empty draft) keep Enter native.
   if (options.canSubmit || options.submitDisabledReason !== undefined) {
     event.preventDefault();
-    submitNewSession(options);
+    if (background) {
+      resetSkillMenuState(options.textareaController.skillMenuState);
+      resetSlashMenuState(options.textareaController.slashMenuState);
+      options.textareaController.mentionMenu.close();
+      options.onBackgroundSubmit?.();
+    } else {
+      submitNewSession(options);
+    }
   }
 }
 
@@ -289,10 +285,10 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     emojiMenu,
   );
   const menuAnnouncementId = paneDomId(skillMenuHost.paneId, "active-menu-announcement");
-  const ordinaryShortcut = options.requiresModifier ? "Control+Enter Meta+Enter" : "Enter";
-  const backgroundShortcut = options.requiresModifier
-    ? "Control+Shift+Enter Meta+Shift+Enter"
-    : "Control+Enter Meta+Enter";
+  const ordinaryShortcut = options.requiresModifier
+    ? "Control+Enter Meta+Enter"
+    : "Enter Control+Enter Meta+Enter";
+  const backgroundShortcut = "Control+Shift+Enter Meta+Shift+Enter";
   const keyShortcuts = options.onBackgroundSubmit
     ? `${ordinaryShortcut} ${backgroundShortcut}`
     : ordinaryShortcut;
@@ -417,12 +413,14 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
               @focus=${handleSelect}
               @pointerup=${handleSelect}
               @keyup=${(event: KeyboardEvent) => {
+                clearCompositionEnd(event);
                 emojiMenu.handleKeyup(event);
                 if (event.key.startsWith("Arrow") || event.key === "Home" || event.key === "End") {
                   handleSelect(event);
                 }
               }}
-              @blur=${() => {
+              @blur=${(event: FocusEvent) => {
+                clearCompositionEnd(event);
                 const emojiWasOpen = emojiMenu.open;
                 options.textareaController.composing = false;
                 emojiMenu.close();
@@ -431,6 +429,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
                 }
               }}
               @compositionend=${(event: CompositionEvent) => {
+                recordCompositionEnd(event);
                 options.textareaController.composing = false;
                 if (event.target instanceof HTMLTextAreaElement) {
                   updateMenus(event.target);

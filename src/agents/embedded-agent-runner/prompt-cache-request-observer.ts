@@ -24,7 +24,7 @@ export type PromptCacheRequestObservation = {
 export function createPromptCacheRequestObserver(
   params: Omit<
     Parameters<typeof beginPromptCacheObservation>[0],
-    "provider" | "modelId" | "modelApi" | "systemPrompt" | "tools"
+    "provider" | "modelId" | "modelApi" | "systemPrompt" | "tools" | "messages"
   >,
   onObservation: (
     observation: PromptCacheRequestObservation,
@@ -38,7 +38,7 @@ export function createPromptCacheRequestObserver(
   return {
     onModelRequest: (
       model: Pick<Parameters<StreamFn>[0], "provider" | "id" | "api">,
-      context: Pick<Parameters<StreamFn>[1], "systemPrompt" | "tools">,
+      context: Pick<Parameters<StreamFn>[1], "systemPrompt" | "tools" | "messages">,
     ) => {
       requestIndex += 1;
       request = beginPromptCacheObservation({
@@ -48,6 +48,7 @@ export function createPromptCacheRequestObserver(
         modelApi: model.api,
         systemPrompt: context.systemPrompt ?? "",
         tools: collectPromptCacheTools(context.tools ?? []),
+        messages: context.messages,
       });
       onRequest?.({ ...request, requestIndex });
     },

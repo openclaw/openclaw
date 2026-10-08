@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { gitEnvironment } from "../../agents/worktrees/git.js";
 import { executeGitCommand, gitNullConfigPath } from "../../infra/git-exec.js";
-import { parseProjectGitUrl } from "../../projects/project-git-url.js";
+import { parseConfiguredProjectGitUrl } from "../../projects/project-git-url.runtime.js";
 import { workerSshCommandOptions } from "./ssh.js";
 import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
 
@@ -17,7 +17,7 @@ export async function prepareRepositoryWorkerGitPack(params: {
   signal: AbortSignal;
   assertCurrent: () => void;
 }): Promise<string> {
-  if (parseProjectGitUrl(params.url)?.url !== params.url) {
+  if (parseConfiguredProjectGitUrl(params.url)?.url !== params.url) {
     throw new Error("Repository preparation requires a canonical GitHub URL");
   }
   if (!/^[a-f0-9]{40}$/u.test(params.baseCommit)) {

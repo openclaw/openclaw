@@ -38,14 +38,11 @@ private enum VoiceWakeAudioError: LocalizedError {
     case invalidInputFormat
 
     var errorDescription: String? {
-        switch self {
-        case .invalidInputFormat:
-            String(localized: "Microphone input format unavailable")
-        }
+        String(localized: "Microphone input format unavailable")
     }
 }
 
-private enum VoiceWakeSuppressionReason: Hashable {
+enum VoiceWakeSuppressionReason: Hashable {
     case auxiliaryAudio
     case background
     case talk
@@ -55,7 +52,7 @@ private enum VoiceWakeSuppressionReason: Hashable {
 
 @MainActor
 @Observable
-final class VoiceWakeManager: NSObject {
+final class VoiceWakeManager {
     var isEnabled: Bool = false
     var isListening: Bool = false
     var statusText: String = "Off"
@@ -83,7 +80,7 @@ final class VoiceWakeManager: NSObject {
     private let recognitionErrorRestartDelayNs: UInt64
     private let audioSessionDeactivationAction: (@MainActor () throws -> Void)?
 
-    override convenience init() {
+    convenience init() {
         self.init(recognitionErrorRestartDelayNs: 700_000_000, audioSessionDeactivationAction: nil)
     }
 
@@ -93,7 +90,6 @@ final class VoiceWakeManager: NSObject {
     {
         self.recognitionErrorRestartDelayNs = recognitionErrorRestartDelayNs
         self.audioSessionDeactivationAction = audioSessionDeactivationAction
-        super.init()
         self.userDefaultsObserver = NotificationCenter.default.addObserver(
             forName: UserDefaults.didChangeNotification,
             object: UserDefaults.standard,
@@ -135,27 +131,7 @@ final class VoiceWakeManager: NSObject {
         }
     }
 
-    func setSuppressedByTalk(_ suppressed: Bool) {
-        self.setSuppressed(suppressed, reason: .talk)
-    }
-
-    func setSuppressedForBackground(_ suppressed: Bool) {
-        self.setSuppressed(suppressed, reason: .background)
-    }
-
-    func setSuppressedForAuxiliaryAudio(_ suppressed: Bool) {
-        self.setSuppressed(suppressed, reason: .auxiliaryAudio)
-    }
-
-    func setSuppressedByPushToTalk(_ suppressed: Bool) {
-        self.setSuppressed(suppressed, reason: .pushToTalk)
-    }
-
-    func setSuppressedByVoiceNote(_ suppressed: Bool) {
-        self.setSuppressed(suppressed, reason: .voiceNote)
-    }
-
-    private func setSuppressed(_ suppressed: Bool, reason: VoiceWakeSuppressionReason) {
+    func setSuppressed(_ suppressed: Bool, reason: VoiceWakeSuppressionReason) {
         if suppressed {
             self.suppressionReasons.insert(reason)
         } else {
@@ -370,8 +346,10 @@ final class VoiceWakeManager: NSObject {
     {
         { [weak self] result, error in
             let transcript = result?.bestTranscription.formattedString
-            let segments = result.flatMap { result in
-                transcript.map { WakeWordSpeechSegments.from(transcription: result.bestTranscription, transcript: $0) }
+            let segments = result.map { result in
+                WakeWordSpeechSegments.from(
+                    transcription: result.bestTranscription,
+                    transcript: result.bestTranscription.formattedString)
             } ?? []
             let errorText = error?.localizedDescription
 

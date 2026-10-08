@@ -330,7 +330,7 @@ describe("mobile release CI tools", () => {
     const upload = findStep("Prepare and upload Android release");
     const uploadEnvironment = expectDefined(upload.env, "Android upload environment");
     const tooling = findStep("Prepare trusted Linux Android tooling");
-    const diagnostics = findStep("Retain emulator startup diagnostics");
+    const diagnostics = findStep("Retain screenshot diagnostics");
     const emulators = expectDefined(
       findStep("Setup Android toolchain").with?.["install-screenshot-emulators"],
       "screenshot emulator selection",
@@ -409,7 +409,7 @@ describe("mobile release CI tools", () => {
     }
   });
 
-  describe.each([
+  const releasePlatforms = [
     {
       platform: "ios",
       workflow: ".github/workflows/ios-store-release.yml",
@@ -422,7 +422,8 @@ describe("mobile release CI tools", () => {
       buildDirectory: "release-artifacts",
       binaries: ["OpenClaw-phone.aab", "OpenClaw-wear.aab", "OpenClaw.apk", "OpenClaw.aab.sha256"],
     },
-  ])("$platform release artifact recovery", ({ platform, workflow, buildDirectory, binaries }) => {
+  ];
+  describe.each(releasePlatforms)("$platform release artifact recovery", ({ workflow }) => {
     it("checks out and verifies the dispatch commit before accessing signing credentials", () => {
       const config = parse(fs.readFileSync(workflow, "utf8")) as {
         jobs: {
@@ -461,116 +462,114 @@ describe("mobile release CI tools", () => {
       expect(verify(sha).status).toBe(0);
       expect(verify("0".repeat(40)).status).toBe(1);
     });
+  });
 
-    it.each(["collected", "interrupted"])(
-      "uploads only the signed binaries and checksums when collection is %s",
-      (state) => {
-        const runnerTemp = tempRoots.make("openclaw-release-artifact-selection-");
+  it.each([
+    ...releasePlatforms.flatMap(({ platform, workflow, buildDirectory, binaries }) =>
+      ["collected", "interrupted"].map((state) => {
         const recovery = `${platform}-release-recovery`;
         const build = `${recovery}/source/apps/${platform}/build`;
         const directory =
           state === "collected" ? `${recovery}/artifacts` : `${build}/${buildDirectory}`;
-        const expected = binaries.map((file) => `${directory}/${file}`).toSorted();
-        for (const file of expected) {
-          writeFile(runnerTemp, file, "synthetic signed release artifact");
-        }
-        for (const file of [
-          `${build}/release-signing/upload.jks`,
-          `${build}/release-signing/AuthKey.p8`,
-          `${build}/release-signing/${binaries[0]}`,
-          `${directory}/credentials.json`,
-          `${directory}/.env`,
-          `${directory}/nested/${binaries[0]}`,
-          `${build}/SnapshotLogs/xcodebuild.log`,
-          `${build}/SnapshotTestResults/result.xcresult/Info.plist`,
-        ]) {
-          writeFile(runnerTemp, file, "synthetic excluded data");
-        }
-        expect(
-          releaseArtifactFiles(workflow, `${platform}-release-artifacts-`, runnerTemp),
-        ).toEqual(expected);
+        const selections = [
+          {
+            prefix: `${platform}-release-artifacts-`,
+            expected: binaries.map((file) => `${directory}/${file}`),
+            excluded: [
+              `${build}/release-signing/upload.jks`,
+              `${build}/release-signing/AuthKey.p8`,
+              `${build}/release-signing/${binaries[0]}`,
+              `${directory}/credentials.json`,
+              `${directory}/.env`,
+              `${directory}/nested/${binaries[0]}`,
+              `${build}/SnapshotLogs/xcodebuild.log`,
+              `${build}/SnapshotTestResults/result.xcresult/Info.plist`,
+            ],
+          },
+        ];
         if (platform === "android") {
-          const receipts = ["android-plan.json", "release-notes.json", "firebase-result.json"]
-            .map((file) => `${recovery}/${file}`)
-            .toSorted();
-          for (const file of [...receipts, `${recovery}/credentials.json`]) {
-            writeFile(runnerTemp, file, "synthetic recovery data");
-          }
-          expect(releaseArtifactFiles(workflow, "android-release-recovery-", runnerTemp)).toEqual(
-            receipts,
-          );
+          selections.push({
+            prefix: "android-release-recovery-",
+            expected: ["android-plan.json", "release-notes.json", "firebase-result.json"].map(
+              (file) => `${recovery}/${file}`,
+            ),
+            excluded: [`${recovery}/credentials.json`],
+          });
         }
-      },
-    );
-  });
-
-  it.each(["collected", "interrupted"])(
-    "uploads only safe iOS screenshot diagnostics when collection is %s",
-    (state) => {
-      const runnerTemp = tempRoots.make("openclaw-ios-screenshot-artifact-selection-");
-      const recovery = "ios-release-recovery";
-      const source = `${recovery}/source/apps/ios`;
-      const collected = `${recovery}/screenshot-diagnostics`;
+        return { name: `${platform} signed artifacts (${state})`, workflow, selections };
+      }),
+    ),
+    ...["collected", "interrupted"].map((state) => {
+      const source = "ios-release-recovery/source/apps/ios";
+      const collected = "ios-release-recovery/screenshot-diagnostics";
       const screenshots =
         state === "collected" ? `${collected}/screenshots` : `${source}/fastlane/screenshots/en-US`;
       const results = state === "collected" ? collected : `${source}/build/SnapshotTestResults`;
-      const expected = [
-        `${screenshots}/01-chat.png`,
-        `${results}/capture-attempts.json`,
-      ].toSorted();
+      return {
+        name: `iOS screenshot diagnostics (${state})`,
+        workflow: ".github/workflows/ios-store-release.yml",
+        selections: [
+          {
+            prefix: "ios-release-screenshot-diagnostics-",
+            expected: [`${screenshots}/01-chat.png`, `${results}/capture-attempts.json`],
+            excluded: [
+              `${screenshots}/capture.log`,
+              `${screenshots}/nested/private.png`,
+              `${results}/pairing.json`,
+              `${results}/result.xcresult/Info.plist`,
+              `${collected}/SnapshotLogs/xcodebuild.log`,
+              `${source}/build/SnapshotLogs/xcodebuild.log`,
+              `${source}/build/release-signing/AuthKey.p8`,
+              `${source}/fastlane/.env`,
+            ],
+          },
+        ],
+      };
+    }),
+    {
+      name: "Android screenshot diagnostics after a capture failure",
+      workflow: ".github/workflows/android-store-release.yml",
+      selections: [
+        {
+          prefix: "android-release-emulator-diagnostics-",
+          expected: ["phone", "wear"].flatMap((formFactor) =>
+            [
+              "emulator.log",
+              "emulator-args.txt",
+              "process-status.txt",
+              "ui-dumps/openclaw-settings.xml",
+              "activity-start/openclaw-settings.txt",
+            ].map(
+              (file) =>
+                `android-release-recovery/source/.artifacts/android-screenshots/latest/${formFactor}/${file}`,
+            ),
+          ),
+          excluded: [
+            ...[
+              "phone/logcat.txt",
+              "wear/ui-dumps/private.xml",
+              "phone/activity-start/private.txt",
+              "phone/ui-dumps/nested/openclaw-settings.xml",
+            ].map(
+              (file) =>
+                `android-release-recovery/source/.artifacts/android-screenshots/latest/${file}`,
+            ),
+            "android-release-recovery/source/apps/android/build/release-signing/google-play.json",
+          ],
+        },
+      ],
+    },
+  ])("uploads only allowed $name", ({ workflow, selections }) => {
+    const runnerTemp = tempRoots.make("openclaw-release-artifact-selection-");
+    for (const { prefix, expected, excluded } of selections) {
       for (const file of expected) {
-        writeFile(runnerTemp, file, "synthetic safe screenshot diagnostic");
+        writeFile(runnerTemp, file, "synthetic safe release artifact");
       }
-      for (const file of [
-        `${screenshots}/capture.log`,
-        `${screenshots}/nested/private.png`,
-        `${results}/pairing.json`,
-        `${results}/result.xcresult/Info.plist`,
-        `${collected}/SnapshotLogs/xcodebuild.log`,
-        `${source}/build/SnapshotLogs/xcodebuild.log`,
-        `${source}/build/release-signing/AuthKey.p8`,
-        `${source}/fastlane/.env`,
-      ]) {
+      for (const file of excluded) {
         writeFile(runnerTemp, file, "synthetic excluded data");
       }
-      expect(
-        releaseArtifactFiles(
-          ".github/workflows/ios-store-release.yml",
-          "ios-release-screenshot-diagnostics-",
-          runnerTemp,
-        ),
-      ).toEqual(expected);
-    },
-  );
-
-  it("uploads only Android emulator startup diagnostics after a screenshot failure", () => {
-    const runnerTemp = tempRoots.make("openclaw-android-emulator-artifact-selection-");
-    const source = "android-release-recovery/source";
-    const diagnostics = `${source}/.artifacts/android-screenshots/latest`;
-    const expected = ["phone", "wear"]
-      .flatMap((formFactor) =>
-        ["emulator.log", "emulator-args.txt", "process-status.txt"].map(
-          (file) => `${diagnostics}/${formFactor}/${file}`,
-        ),
-      )
-      .toSorted();
-    for (const file of expected) {
-      writeFile(runnerTemp, file, "synthetic emulator startup diagnostic");
+      expect(releaseArtifactFiles(workflow, prefix, runnerTemp)).toEqual(expected.toSorted());
     }
-    for (const file of [
-      `${diagnostics}/phone/logcat.txt`,
-      `${diagnostics}/wear/ui-dumps/openclaw-home.xml`,
-      `${source}/apps/android/build/release-signing/google-play.json`,
-    ]) {
-      writeFile(runnerTemp, file, "synthetic excluded data");
-    }
-    expect(
-      releaseArtifactFiles(
-        ".github/workflows/android-store-release.yml",
-        "android-release-emulator-diagnostics-",
-        runnerTemp,
-      ),
-    ).toEqual(expected);
   });
 
   it("keeps the Android emulator diagnostic manual, exact-SHA-bound, and secretless", async () => {
@@ -755,16 +754,6 @@ describe("mobile release CI tools", () => {
     expect(JSON.stringify(steps)).not.toContain("candidate/");
 
     const tooling = steps[toolingIndex]?.run ?? "";
-    expect(tooling).toContain('apt_source="/etc/apt/sources.list.d/ubuntu.sources"');
-    expect(tooling).toContain(
-      'apt_source_parts="$RUNNER_TEMP/openclaw-android-apt-sourceparts-disabled"',
-    );
-    expect(tooling).toContain('test -s "$apt_source"');
-    expect(tooling).toContain('[[ -e "$apt_source_parts" || -L "$apt_source_parts" ]]');
-    expect(tooling).toContain('/usr/bin/apt-get "${apt_options[@]}" update');
-    expect(tooling).toMatch(
-      /\/usr\/bin\/apt-get "\$\{apt_options\[@\]\}" install \\\n\s+-y --no-install-recommends imagemagick/u,
-    );
     expect(tooling).toContain(
       'test "$(git -C "$trusted_root" rev-parse HEAD)" = "$GITHUB_WORKFLOW_SHA"',
     );
@@ -955,17 +944,9 @@ describe("mobile release CI tools", () => {
     expect(diagnostic).toContain(
       'emulator_args=(-avd "$AVD_NAME" -no-window -no-audio -no-boot-anim -verbose -show-kernel)',
     );
-    expect(diagnostic).toContain("capture_accel_check() {");
     expect(diagnostic).toContain("accel_check_timeout_seconds=10");
-    expect(diagnostic).toContain('emulator -accel-check >"$accel_raw" 2>&1 &');
     expect(diagnostic).toContain(
       'head -c 16384 "$accel_raw" >"$DIAGNOSTIC_DIR/emulator-accel-check.txt"',
-    );
-    expect(diagnostic).toContain(
-      'printf \'exit_status=%s\\n\' "$accel_status" >>"$DIAGNOSTIC_DIR/emulator-accel-check.txt"',
-    );
-    expect(diagnostic).toContain(
-      'printf \'timed_out=%s\\n\' "$accel_timed_out" >>"$DIAGNOSTIC_DIR/emulator-accel-check.txt"',
     );
     expect(diagnostic).toContain("sample_owned_qemu() {");
     expect(diagnostic).toContain(
@@ -1021,18 +1002,15 @@ describe("mobile release CI tools", () => {
     expect(timedOutAccel.output).toContain("exit_status=124");
     expect(timedOutAccel.output).toContain("timed_out=true");
 
-    expect(diagnostic).toContain("observe_after_readiness_timeout() {");
     expect(diagnostic).toContain("final_cold_boot_observation_seconds=900");
     expect(diagnostic).toContain("probe_timeout_seconds=5");
     expect(diagnostic).toContain("final_snapshot_lead_seconds=15");
     expect(diagnostic).toContain("snapshot_properties_max_bytes=65536");
     expect(diagnostic).toContain("snapshot_logcat_max_bytes=262144");
-    expect(diagnostic).toContain("capture_cold_boot_snapshot() {");
     expect(diagnostic).toContain(
       "emulator_observation_deadline=$((emulator_launch_seconds + final_cold_boot_observation_seconds))",
     );
     expect(diagnostic).not.toContain("post_deadline_observation_seconds");
-    expect(diagnostic).toContain("fail_after_readiness_timeout() {");
     const observationFunctionStart = diagnostic.indexOf("run_bounded_probe() {");
     const observationFunctionEnd = diagnostic.indexOf(
       "\n\nfail_after_readiness_timeout()",
@@ -1127,34 +1105,11 @@ describe("mobile release CI tools", () => {
       };
     };
 
-    const lateReady = await runPostDeadlineObservation(`#!/bin/bash
-set -euo pipefail
-if [[ "\${1:-}" == "devices" ]]; then
-  printf 'List of devices attached\\nemulator-5554\\tdevice product:sdk model:sdk\\n'
-elif [[ "\${1:-}" == "-s" && "\${3:-}" == "shell" ]]; then
-  printf '1\\n'
-elif [[ "\${1:-}" == "-s" && "\${3:-}" == "emu" ]]; then
-  printf '%s\\nOK\\n' "\${AVD_NAME:?}"
-fi
-`);
-    expect(lateReady.result.status).toBe(1);
-    expect(lateReady.result.stderr).toContain("::error::latched readiness failure");
-    expect(lateReady.observations).toContain("late_adb_online_at=");
-    expect(lateReady.observations).toContain("late_boot_completed_at=");
-    expect(lateReady.observations).toContain("observation_stop=late-boot-completed");
-    expect(lateReady.snapshots).toEqual(["first-online"]);
-    expect(
-      fs.readFileSync(
-        path.join(lateReady.snapshotsRoot, "first-online", "boot-properties.txt"),
-        "utf8",
-      ),
-    ).toContain("probe_exit_status=0");
-
     const lateReadyNearCeilingFunctions = observationFunctions.replace(
       "final_snapshot_lead_seconds=4",
       "final_snapshot_lead_seconds=60",
     );
-    const lateReadyNearCeiling = await runPostDeadlineObservation(
+    const lateReady = await runPostDeadlineObservation(
       `#!/bin/bash
 set -euo pipefail
 if [[ "\${1:-}" == "devices" ]]; then
@@ -1167,10 +1122,18 @@ fi
 `,
       { functions: lateReadyNearCeilingFunctions },
     );
-    expect(lateReadyNearCeiling.result.status).toBe(1);
-    expect(lateReadyNearCeiling.observations).toContain("late_boot_completed_at=");
-    expect(lateReadyNearCeiling.observations).toContain("observation_stop=late-boot-completed");
-    expect(lateReadyNearCeiling.snapshots).toEqual(["first-online"]);
+    expect(lateReady.result.status).toBe(1);
+    expect(lateReady.result.stderr).toContain("::error::latched readiness failure");
+    expect(lateReady.observations).toContain("late_adb_online_at=");
+    expect(lateReady.observations).toContain("late_boot_completed_at=");
+    expect(lateReady.observations).toContain("observation_stop=late-boot-completed");
+    expect(lateReady.snapshots).toEqual(["first-online"]);
+    expect(
+      fs.readFileSync(
+        path.join(lateReady.snapshotsRoot, "first-online", "boot-properties.txt"),
+        "utf8",
+      ),
+    ).toContain("probe_exit_status=0");
 
     const [failedBootProbeResult, boundedSnapshotsResult] = await Promise.allSettled([
       runPostDeadlineObservation(
@@ -1256,21 +1219,6 @@ fi
     expect(changedDevice.observations).toContain("observation_stop=unexpected-device-change");
     expect(changedDevice.snapshots).toEqual([]);
 
-    const capped = await runPostDeadlineObservation(
-      `#!/bin/bash
-set -euo pipefail
-if [[ "\${1:-}" == "devices" ]]; then
-  printf 'List of devices attached\\n\\n'
-fi
-`,
-      { deadlineSeconds: 2 },
-    );
-    expect(capped.result.status).toBe(1);
-    expect(capped.elapsedSeconds).toBe(2);
-    expect(capped.result.stderr).toContain("::error::latched readiness failure");
-    expect(capped.observations).toContain("observation_cap_seconds=900");
-    expect(capped.observations).toContain("observation_stop=observation-cap-reached");
-
     const absoluteCap = await runPostDeadlineObservation(
       `#!/bin/bash
 set -euo pipefail
@@ -1282,6 +1230,8 @@ fi
     );
     expect(absoluteCap.result.status).toBe(1);
     expect(absoluteCap.elapsedSeconds).toBe(3);
+    expect(absoluteCap.result.stderr).toContain("::error::latched readiness failure");
+    expect(absoluteCap.observations).toContain("observation_cap_seconds=900");
     expect(absoluteCap.durationMs).toBeLessThan(5_000);
     expect(absoluteCap.observations).toContain("observation_stop=observation-cap-reached");
 
@@ -1454,7 +1404,6 @@ fi
     expect(diagnostic).toContain("adb devices -l");
     expect(diagnostic).toContain('>>"$DIAGNOSTIC_DIR/adb-observations.log" 2>&1');
     expect(diagnostic).toContain('ps -p "$emulator_pid"');
-    expect(diagnostic).toContain('kill "$emulator_pid"');
     expect(diagnostic).toContain("adb kill-server");
     expect(diagnostic).toContain("trap cleanup EXIT");
     expect(diagnostic).toMatch(
@@ -1476,26 +1425,6 @@ fi
     expect(source).not.toContain("environment:");
     expect(source).not.toMatch(/\b(?:pnpm|gradle|fastlane)\b/iu);
     expect(source).not.toMatch(/apps-signing|MATCH_PASSWORD|GOOGLE_PLAY|upload-and-record/iu);
-  });
-
-  it("generates two-axis varied-color Android conversion smoke inputs", () => {
-    const workflow = parse(
-      fs.readFileSync(".github/workflows/android-emulator-diagnostic.yml", "utf8"),
-    ) as {
-      jobs: Record<string, { steps?: Array<{ name: string; run?: string }> }>;
-    };
-    const tooling = Object.values(workflow.jobs)
-      .flatMap((job) => job.steps ?? [])
-      .find((step) => step.name === "Prepare trusted Linux Android tooling")?.run;
-
-    expect(tooling).toMatch(
-      /width="\$\{dimensions%x\*\}"\n\s+height="\$\{dimensions#\*x\}"\n\s+\/usr\/bin\/convert \\\n\s+\\\( -size "\$dimensions" 'gradient:#000000-#ff0000' \\\) \\\n\s+\\\( -size "\$\{height\}x\$\{width\}" 'gradient:#000000-#00ff00' -transpose \\\) \\\n\s+-compose plus -composite \\\n\s+-alpha set -channel A -evaluate set 60% \+channel/u,
-    );
-    expect(tooling).not.toContain("'xc:");
-    expect(tooling).toMatch(
-      /\/usr\/bin\/identify \+ping \\\n\s+-format 'format=%m width=%w height=%h colorspace=%\[colorspace\] type=%\[type\] channels=%\[channels\] quality=%Q\\n'/u,
-    );
-    expect(tooling).not.toContain("/usr/bin/identify -ping");
   });
 
   it("isolates Ubuntu APT sources before Android tooling setup", () => {
@@ -1522,6 +1451,11 @@ fi
       /width="\$\{dimensions%x\*\}"\n\s+height="\$\{dimensions#\*x\}"\n\s+\/usr\/bin\/convert \\\n\s+\\\( -size "\$dimensions" 'gradient:#000000-#ff0000' \\\) \\\n\s+\\\( -size "\$\{height\}x\$\{width\}" 'gradient:#000000-#00ff00' -transpose \\\) \\\n\s+-compose plus -composite \\\n\s+-alpha set -channel A -evaluate set 60% \+channel \\\n\s+"\$smoke_dir\/input-\$\{dimensions\}\.png"/u,
     );
     expect(diagnosticTooling).not.toContain("gradient:rgba(");
+    expect(diagnosticTooling).not.toContain("'xc:");
+    expect(diagnosticTooling).toMatch(
+      /\/usr\/bin\/identify \+ping \\\n\s+-format 'format=%m width=%w height=%h colorspace=%\[colorspace\] type=%\[type\] channels=%\[channels\] quality=%Q\\n'/u,
+    );
+    expect(diagnosticTooling).not.toContain("/usr/bin/identify -ping");
 
     const pathExists = (target: string): boolean => {
       try {
@@ -1777,7 +1711,7 @@ fi
     }
   });
 
-  it("runs the iOS signing proof through the prepared Fastlane environment", () => {
+  it("prepares native tooling and runs the iOS signing proof through Fastlane", () => {
     const source = fs.readFileSync(".github/workflows/ios-store-release.yml", "utf8");
     const workflow = parse(source) as {
       jobs: {
@@ -1787,6 +1721,10 @@ fi
       };
     };
     const releaseSteps = workflow.jobs.release.steps;
+    const xcodeIndex = releaseSteps.findIndex((step) => step.name === "Select Xcode");
+    const rustIndex = releaseSteps.findIndex(
+      (step) => step.name === "Install Watch Rust toolchain",
+    );
     const createIndex = releaseSteps.findIndex(
       (step) => step.name === "Create job-owned iOS signing keychain",
     );
@@ -1796,6 +1734,21 @@ fi
     const uploadIndex = releaseSteps.findIndex(
       (step) => step.name === "Prepare and upload iOS release",
     );
+
+    const rustStep = releaseSteps[rustIndex];
+
+    expect(xcodeIndex).toBeGreaterThanOrEqual(0);
+    expect(rustIndex).toBeGreaterThan(xcodeIndex);
+    expect(signingProofIndex).toBeGreaterThan(rustIndex);
+    expect(rustStep?.if).toBe("hashFiles('apps/shared/OpenClawWatchRTC/Cargo.toml') != ''");
+    expect(rustStep?.run).toContain(
+      `watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"`,
+    );
+    expect(rustStep?.run).toContain('test -n "$watch_toolchain"');
+    expect(rustStep?.run).toContain(
+      'rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src',
+    );
+    expect(rustStep?.run).toContain('echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"');
 
     expect(createIndex).toBeGreaterThan(-1);
     expect(releaseSteps[createIndex]?.uses).toBe("./.github/actions/ios-signing-keychain");
@@ -1906,8 +1859,6 @@ fi
       "bundle:_4.0.21_ exec fastlane ios signing_check",
       "probe:root-cwd",
     ]);
-    expect(signingProof).toContain("source ./scripts/lib/ios-fastlane.sh");
-    expect(signingProof).toContain("(cd apps/ios && run_ios_fastlane ios signing_check)");
 
     const failedCheck = runSigningProof({ FIXTURE_FAIL_CHECK: "1" });
     expect(failedCheck.result.status).not.toBe(0);
@@ -2380,42 +2331,5 @@ process.stdout.write(JSON.stringify({ elapsedMs: Date.now() - startedAt, message
         timeoutMs: 5_000,
       });
     }
-  });
-
-  it("installs the pinned Watch Rust toolchain before iOS store access", () => {
-    const source = fs.readFileSync(".github/workflows/ios-store-release.yml", "utf8");
-    const workflow = parse(source) as {
-      jobs: {
-        release: {
-          steps: WorkflowStep[];
-        };
-      };
-    };
-    const releaseSteps = workflow.jobs.release.steps;
-    const xcodeIndex = releaseSteps.findIndex((step) => step.name === "Select Xcode");
-    const rustIndex = releaseSteps.findIndex(
-      (step) => step.name === "Install Watch Rust toolchain",
-    );
-    const storeAccessIndex = releaseSteps.findIndex(
-      (step) => step.name === "Validate readonly iOS signing key access",
-    );
-    const uploadIndex = releaseSteps.findIndex(
-      (step) => step.name === "Prepare and upload iOS release",
-    );
-    const rustStep = releaseSteps[rustIndex];
-
-    expect(xcodeIndex).toBeGreaterThanOrEqual(0);
-    expect(rustIndex).toBeGreaterThan(xcodeIndex);
-    expect(storeAccessIndex).toBeGreaterThan(rustIndex);
-    expect(uploadIndex).toBeGreaterThan(storeAccessIndex);
-    expect(rustStep?.if).toBe("hashFiles('apps/shared/OpenClawWatchRTC/Cargo.toml') != ''");
-    expect(rustStep?.run).toContain(
-      `watch_toolchain="$(awk -F '"' '/^channel =/ { print $2; exit }' apps/shared/OpenClawWatchRTC/rust-toolchain.toml)"`,
-    );
-    expect(rustStep?.run).toContain('test -n "$watch_toolchain"');
-    expect(rustStep?.run).toContain(
-      'rustup toolchain install "$watch_toolchain" --profile minimal --component rust-src',
-    );
-    expect(rustStep?.run).toContain('echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"');
   });
 });

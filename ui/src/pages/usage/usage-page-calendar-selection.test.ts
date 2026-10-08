@@ -29,9 +29,9 @@ it.each([
     focusDocument();
     const snapshot = cacheSnapshot(cache);
     const daily = [
-      dailyEntry("2026-05-02", 100),
-      ...(filtered ? [dailyEntry("2026-05-03", 500)] : []),
       dailyEntry("2026-05-04", 900),
+      ...(filtered ? [dailyEntry("2026-05-03", 500)] : []),
+      dailyEntry("2026-05-02", 100),
     ];
     const totalTokens = daily.reduce((sum, day) => sum + day.totalTokens, 0);
     const result = {
@@ -74,6 +74,18 @@ it.each([
     expect(bars().map((bar) => bar.querySelector(".daily-bar-label")?.textContent)).toEqual(
       selectedLabels,
     );
+    expect(bars().map((bar) => bar.getAttribute("aria-label"))).toEqual(
+      cache === "fresh"
+        ? [
+            "May 1, 2026: 0 tokens, $0.00",
+            "May 2, 2026: 100 tokens, $0.00",
+            "May 3, 2026: 0 tokens, $0.00",
+            "May 4, 2026: 900 tokens, $0.00",
+          ]
+        : ["May 2, 2026: 100 tokens, $0.00", "May 4, 2026: 900 tokens, $0.00"],
+    );
+    expect(page.querySelectorAll(".daily-bar--empty")).toHaveLength(cache === "fresh" ? 2 : 0);
+    expect(page.querySelector(".daily-chart-range")?.textContent).toContain("May 1, 2026");
     bars()[0]!.click();
     await page.updateComplete;
     bars()

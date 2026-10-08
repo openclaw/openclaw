@@ -1,4 +1,3 @@
-/** Shared daemon runtime status types and systemd cgroup hygiene helpers. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
@@ -7,6 +6,7 @@ import {
   assertServiceInspectionFallbackAllowed,
   ServiceInspectionError,
   type ServiceInspectionReason,
+  type SystemdServiceStartRefusal,
 } from "./service-inspection-error.js";
 export type SystemdUserTransport =
   | { kind: "session-bus" | "runtime-bus" | "private"; address: string; runtimeDir: string }
@@ -17,6 +17,7 @@ type GatewayServiceSystemdRuntime = {
   scope?: "user" | "system";
   transport?: SystemdUserTransport;
   unit?: string;
+  startRefusal?: SystemdServiceStartRefusal;
   /** Native D-Bus credential of the observed manager, not the service account or CLI UID. */
   managerUid?: number;
   controlGroup?: string;
@@ -60,6 +61,46 @@ export type GatewayServiceRuntime = {
   };
   systemd?: GatewayServiceSystemdRuntime;
 };
+
+/** Native start policy is diagnostic; it never establishes process or definition ownership. */
+export function resolveSystemdServiceStartRefusal(facts: {
+  unit: string;
+  scope?: "user" | "system";
+  loadState?: string;
+  unitFileState?: string;
+  activeState?: string;
+  refuseManualStart?: boolean;
+  canStart?: boolean;
+}): SystemdServiceStartRefusal | undefined {
+  const command = facts.scope === "system" ? "sudo systemctl --system" : "systemctl --user";
+  const unit = facts.unit;
+  if (
+    facts.loadState === "masked" ||
+    ["masked", "masked-runtime"].includes(facts.unitFileState ?? "")
+  ) {
+    return {
+      reason: "masked",
+      message: `Service ${unit} is masked. Run \`${command} unmask ${unit}\`, then retry.`,
+    };
+  }
+  if (facts.refuseManualStart === true) {
+    return {
+      reason: "refuse-manual-start",
+      message: `Service ${unit} has RefuseManualStart=yes. Inspect \`${command} cat ${unit}\`, remove the maintenance restriction, run \`${command} daemon-reload\`, then retry.`,
+    };
+  }
+  if (
+    facts.unitFileState === "disabled" &&
+    facts.activeState === "inactive" &&
+    facts.canStart === false
+  ) {
+    return {
+      reason: "disabled-no-start",
+      message: `Service ${unit} is disabled and inactive with no start path (CanStart=no). Repair its definition using \`${command} cat ${unit}\`, run \`${command} daemon-reload\`, then retry.`,
+    };
+  }
+  return undefined;
+}
 
 /** Positive process observations protect serving files, but grant no service-control authority. */
 export function isGatewayServiceStateLive(state: {

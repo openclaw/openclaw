@@ -71,10 +71,10 @@ describe("resolveConfigIncludes", () => {
   it("deep-merges overlapping keys from include arrays", () => {
     const files = {
       [configPath("a.json")]: { agents: { defaults: { workspace: "~/a" } } },
-      [configPath("b.json")]: { agents: { list: [{ id: "main" }] } },
+      [configPath("b.json")]: { agents: { entries: { main: {} } } },
     };
     expect(resolve({ $include: ["./a.json", "./b.json"] }, files)).toEqual({
-      agents: { defaults: { workspace: "~/a" }, list: [{ id: "main" }] },
+      agents: { defaults: { workspace: "~/a" }, entries: { main: {} } },
     });
   });
 

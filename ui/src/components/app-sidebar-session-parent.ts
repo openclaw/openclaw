@@ -3,6 +3,7 @@ import {
   isSystemCreatedSessionRow,
 } from "../../../src/shared/session-list-visibility.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { activeSessionAgentStatus } from "../lib/session-attention.ts";
 import {
   sessionMatchesArchivedFilter,
   type SessionArchivedFilter,
@@ -73,6 +74,62 @@ export function collectSidebarSessionChildKeys(
     }
   }
   return children;
+}
+
+/** Hidden runs keep failures on their own notice path; only plain unread state folds into reads. */
+export function isAcknowledgeableHiddenRun(
+  row: Pick<GatewaySessionRow, "key" | "unread" | "status" | "archived" | "agentStatus">,
+): boolean {
+  return (
+    isSubagentSessionKey(row.key) &&
+    row.archived !== true &&
+    row.unread === true &&
+    row.status !== "failed" &&
+    row.status !== "timeout" &&
+    !activeSessionAgentStatus(row)?.attention
+  );
+}
+
+/** Walk the same ancestry used by sidebar folding, preserving each source row. */
+export function collectSessionDescendantRows(
+  rows: readonly GatewaySessionRow[],
+  parentKey: string,
+  subagentsOnly = false,
+): GatewaySessionRow[] {
+  const rowsByKey = new Map(rows.map((row) => [row.key, row]));
+  const childKeysByParent = collectSidebarSessionChildKeys(rowsByKey, new Set());
+  const visited = new Set<string>([parentKey]);
+  const descendants: GatewaySessionRow[] = [];
+  const visit = (key: string) => {
+    if (rowsByKey.get(key)?.archived) {
+      return;
+    }
+    for (const childKey of childKeysByParent.get(normalizeDefaultMainSessionAliasForUi(key)) ??
+      []) {
+      const child = rowsByKey.get(childKey);
+      if (
+        !child ||
+        child.archived ||
+        (subagentsOnly && !isSubagentSessionKey(childKey)) ||
+        visited.has(childKey)
+      ) {
+        continue;
+      }
+      visited.add(childKey);
+      descendants.push(child);
+      visit(childKey);
+    }
+  };
+  visit(parentKey);
+  return descendants;
+}
+
+/** Persistent descendants own sidebar rows and stay unread until opened. */
+export function collectUnreadHiddenRunRows(
+  rows: readonly GatewaySessionRow[],
+  parentKey: string,
+): GatewaySessionRow[] {
+  return collectSessionDescendantRows(rows, parentKey, true).filter(isAcknowledgeableHiddenRun);
 }
 
 /** Promote the first persistent conversations below Home, honoring the active filters. */

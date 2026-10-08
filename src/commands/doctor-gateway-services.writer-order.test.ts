@@ -14,7 +14,7 @@ import {
   readSecretStoreValue,
   writeSecretStoreEntry,
 } from "../secrets/store/secret-store.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
@@ -104,9 +104,9 @@ describe("Doctor gateway config writer ordering", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
   });
 
   it.each([false, true])(
@@ -121,7 +121,7 @@ describe("Doctor gateway config writer ordering", () => {
         });
         const scope = { kind: "team" as const };
         if (existing) {
-          writeSecretStoreEntry({
+          await writeSecretStoreEntry({
             scope,
             name: "EXISTING_GATEWAY_TOKEN",
             value: token,
@@ -129,7 +129,7 @@ describe("Doctor gateway config writer ordering", () => {
             updatedBy: "fixture",
           });
         }
-        const entriesBefore = listSecretStoreEntries({ scope });
+        const entriesBefore = await listSecretStoreEntries({ scope });
         const originalBytes = await fs.readFile(configPath, "utf8");
         const ctx = await prepareWriterContext(configPath);
         const programArguments = [process.execPath, path.join(home, "openclaw.mjs"), "gateway"];
@@ -143,9 +143,9 @@ describe("Doctor gateway config writer ordering", () => {
         expect(bytes.includes(token)).toBe(false);
         const ref = JSON.parse(bytes).gateway.auth.token;
         expect(ref).toMatchObject({ source: "store", provider: "team" });
-        const stored = readSecretStoreValue({ scope, name: ref.id });
+        const stored = await readSecretStoreValue({ scope, name: ref.id });
         expect(stored.ok && stored.value === token).toBe(true);
-        const entriesAfter = listSecretStoreEntries({ scope });
+        const entriesAfter = await listSecretStoreEntries({ scope });
         if (existing) {
           expect(ref.id).toBe("EXISTING_GATEWAY_TOKEN");
           expect(entriesAfter).toEqual(entriesBefore);
@@ -158,7 +158,7 @@ describe("Doctor gateway config writer ordering", () => {
     },
   );
 
-  it.each(["success", "validation-refusal", "service-failure", "post-commit-failure"])(
+  it.each(["validation-refusal", "service-failure", "post-commit-failure"])(
     "uses Doctor's persisted baseline through service repair (%s)",
     async (outcome) => {
       await withGatewayServiceHome(

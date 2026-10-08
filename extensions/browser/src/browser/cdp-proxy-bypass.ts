@@ -23,15 +23,11 @@ const directHttpsAgent = new https.Agent();
  * so callers fall through to their default behaviour.
  */
 export function getDirectAgentForCdp(url: string): http.Agent | https.Agent | undefined {
-  try {
-    const parsed = new URL(url);
-    if (isLoopbackHost(parsed.hostname)) {
-      return parsed.protocol === "https:" || parsed.protocol === "wss:"
-        ? directHttpsAgent
-        : directHttpAgent;
-    }
-  } catch {
-    // not a valid URL — let caller handle it
+  const parsed = URL.parse(url);
+  if (parsed && isLoopbackHost(parsed.hostname)) {
+    return parsed.protocol === "https:" || parsed.protocol === "wss:"
+      ? directHttpsAgent
+      : directHttpAgent;
   }
   return undefined;
 }
@@ -48,94 +44,17 @@ function noProxyValueCoversLocalhost(value: string | undefined): boolean {
   return entries.has("localhost") && entries.has("127.0.0.1") && entries.has("[::1]");
 }
 
-function noProxyAlreadyCoversLocalhost(): boolean {
-  return (
-    noProxyValueCoversLocalhost(process.env.NO_PROXY) &&
-    noProxyValueCoversLocalhost(process.env.no_proxy)
-  );
-}
-
 function appendLoopbackEntries(value: string | undefined): string {
   return value ? `${value},${LOOPBACK_ENTRIES}` : LOOPBACK_ENTRIES;
 }
 
-function isLoopbackCdpUrl(url: string): boolean {
-  try {
-    return isLoopbackHost(new URL(url).hostname);
-  } catch {
-    return false;
-  }
-}
-
-type NoProxySnapshot = {
+let noProxyLeaseCount = 0;
+let noProxySnapshot: {
   noProxy: string | undefined;
   noProxyLower: string | undefined;
   appliedNoProxy: string;
   appliedNoProxyLower: string;
-};
-
-class NoProxyLeaseManager {
-  private leaseCount = 0;
-  private snapshot: NoProxySnapshot | null = null;
-
-  acquire(url: string): (() => void) | null {
-    if (!isLoopbackCdpUrl(url) || !hasProxyEnvConfigured()) {
-      return null;
-    }
-
-    if (this.leaseCount === 0 && !noProxyAlreadyCoversLocalhost()) {
-      const noProxy = process.env.NO_PROXY;
-      const noProxyLower = process.env.no_proxy;
-      const appliedNoProxy = appendLoopbackEntries(noProxy || noProxyLower);
-      const appliedNoProxyLower = appendLoopbackEntries(noProxyLower || noProxy);
-      process.env.NO_PROXY = appliedNoProxy;
-      process.env.no_proxy = appliedNoProxyLower;
-      this.snapshot = { noProxy, noProxyLower, appliedNoProxy, appliedNoProxyLower };
-    }
-
-    this.leaseCount += 1;
-    let released = false;
-    return () => {
-      if (released) {
-        return;
-      }
-      released = true;
-      this.release();
-    };
-  }
-
-  private release() {
-    if (this.leaseCount <= 0) {
-      return;
-    }
-    this.leaseCount -= 1;
-    if (this.leaseCount > 0 || !this.snapshot) {
-      return;
-    }
-
-    const { noProxy, noProxyLower, appliedNoProxy, appliedNoProxyLower } = this.snapshot;
-    const currentNoProxy = process.env.NO_PROXY;
-    const currentNoProxyLower = process.env.no_proxy;
-    if (currentNoProxy === appliedNoProxy) {
-      if (noProxy !== undefined) {
-        process.env.NO_PROXY = noProxy;
-      } else {
-        delete process.env.NO_PROXY;
-      }
-    }
-    if (currentNoProxyLower === appliedNoProxyLower) {
-      if (noProxyLower !== undefined) {
-        process.env.no_proxy = noProxyLower;
-      } else {
-        delete process.env.no_proxy;
-      }
-    }
-
-    this.snapshot = null;
-  }
-}
-
-const noProxyLeaseManager = new NoProxyLeaseManager();
+} | null = null;
 
 /**
  * Scoped NO_PROXY bypass for loopback CDP URLs.
@@ -145,11 +64,49 @@ const noProxyLeaseManager = new NoProxyLeaseManager();
  * were in-flight.
  */
 export async function withNoProxyForCdpUrl<T>(url: string, fn: () => Promise<T>): Promise<T> {
-  const release = noProxyLeaseManager.acquire(url);
+  if (!isLoopbackHost(URL.parse(url)?.hostname ?? "") || !hasProxyEnvConfigured()) {
+    return await fn();
+  }
+  if (
+    noProxyLeaseCount === 0 &&
+    !(
+      noProxyValueCoversLocalhost(process.env.NO_PROXY) &&
+      noProxyValueCoversLocalhost(process.env.no_proxy)
+    )
+  ) {
+    const noProxy = process.env.NO_PROXY;
+    const noProxyLower = process.env.no_proxy;
+    const appliedNoProxy = appendLoopbackEntries(noProxy || noProxyLower);
+    const appliedNoProxyLower = appendLoopbackEntries(noProxyLower || noProxy);
+    process.env.NO_PROXY = appliedNoProxy;
+    process.env.no_proxy = appliedNoProxyLower;
+    noProxySnapshot = { noProxy, noProxyLower, appliedNoProxy, appliedNoProxyLower };
+  }
+  noProxyLeaseCount += 1;
   try {
     return await fn();
   } finally {
-    release?.();
+    noProxyLeaseCount -= 1;
+    if (noProxyLeaseCount === 0 && noProxySnapshot) {
+      const { noProxy, noProxyLower, appliedNoProxy, appliedNoProxyLower } = noProxySnapshot;
+      const currentNoProxy = process.env.NO_PROXY;
+      const currentNoProxyLower = process.env.no_proxy;
+      if (currentNoProxy === appliedNoProxy) {
+        if (noProxy !== undefined) {
+          process.env.NO_PROXY = noProxy;
+        } else {
+          delete process.env.NO_PROXY;
+        }
+      }
+      if (currentNoProxyLower === appliedNoProxyLower) {
+        if (noProxyLower !== undefined) {
+          process.env.no_proxy = noProxyLower;
+        } else {
+          delete process.env.no_proxy;
+        }
+      }
+      noProxySnapshot = null;
+    }
   }
 }
 

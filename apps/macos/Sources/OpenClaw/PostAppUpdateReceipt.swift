@@ -8,31 +8,19 @@ enum PostAppUpdateCoreUpdate: String, Codable, Sendable {
 }
 
 struct PostAppUpdateReceipt: Codable, Equatable {
-    private enum CodingKeys: String, CodingKey {
-        case fromVersion
-        case toVersion
-        case recordedAt
-        case gatewayUpdateIncomplete
-        case coreUpdate
-        case notificationAttempts
-        case notificationInFlight
-        case runtimeBuildID
-        case setupRecovery
-    }
-
     let fromVersion: String
     let toVersion: String
     let recordedAt: Date
-    let gatewayUpdateIncomplete: Bool
-    let coreUpdate: PostAppUpdateCoreUpdate
+    fileprivate(set) var gatewayUpdateIncomplete: Bool
+    fileprivate(set) var coreUpdate: PostAppUpdateCoreUpdate
 
     var coreUpdatePending: Bool {
         self.coreUpdate != .complete
     }
 
-    let notificationAttempts: Int
-    let notificationInFlight: Bool
-    let runtimeBuildID: String?
+    fileprivate(set) var notificationAttempts: Int
+    fileprivate(set) var notificationInFlight: Bool
+    fileprivate(set) var runtimeBuildID: String?
     let setupRecovery: Bool
 
     var hasPendingRuntimeMigration: Bool {
@@ -124,9 +112,9 @@ enum PostAppUpdateReceiptStore {
         currentRuntimeBuildID: String? = nil,
         defaults: UserDefaults = AppDefaults.standard) -> PostAppUpdateReceipt?
     {
-        guard let currentVersion = normalized(currentVersion),
+        guard let currentVersion = currentVersion?.nonEmpty,
               let receipt = self.load(defaults: defaults),
-              normalized(receipt.toVersion) == currentVersion,
+              receipt.toVersion.nonEmpty == currentVersion,
               receipt.runtimeBuildID == nil || currentRuntimeBuildID == nil ||
               receipt.runtimeBuildID == currentRuntimeBuildID
         else { return nil }
@@ -141,10 +129,10 @@ enum PostAppUpdateReceiptStore {
         defaults: UserDefaults = AppDefaults.standard,
         now: Date = Date()) -> PostAppUpdateReceipt?
     {
-        guard let currentVersion = normalized(currentVersion) else { return nil }
-        let previousVersion = self.normalized(defaults.string(forKey: lastLaunchedAppVersionKey))
-        let runtimeBuildID = self.normalized(currentRuntimeBuildID)
-        let previousBuildID = self.normalized(defaults.string(forKey: self.lastLaunchedRuntimeBuildIDKey))
+        guard let currentVersion = currentVersion?.nonEmpty else { return nil }
+        let previousVersion = defaults.string(forKey: lastLaunchedAppVersionKey)?.nonEmpty
+        let runtimeBuildID = currentRuntimeBuildID?.nonEmpty
+        let previousBuildID = defaults.string(forKey: self.lastLaunchedRuntimeBuildIDKey)?.nonEmpty
         let receipt: PostAppUpdateReceipt?
         let previousReceipt = self.load(defaults: defaults)
         if let previousReceipt, previousReceipt.toVersion != currentVersion,
@@ -160,27 +148,16 @@ enum PostAppUpdateReceiptStore {
                 self.clear(defaults: defaults)
             }
             receipt = nil
-        } else if let pending = self.pending(
+        } else if var pending = self.pending(
             currentVersion: currentVersion,
             currentRuntimeBuildID: runtimeBuildID,
             defaults: defaults)
         {
             if pending.runtimeBuildID == nil, let runtimeBuildID {
-                let enriched = PostAppUpdateReceipt(
-                    fromVersion: pending.fromVersion,
-                    toVersion: pending.toVersion,
-                    recordedAt: pending.recordedAt,
-                    gatewayUpdateIncomplete: pending.gatewayUpdateIncomplete,
-                    coreUpdate: pending.coreUpdate,
-                    notificationAttempts: pending.notificationAttempts,
-                    notificationInFlight: pending.notificationInFlight,
-                    runtimeBuildID: runtimeBuildID,
-                    setupRecovery: pending.setupRecovery)
-                self.persist(enriched, defaults: defaults)
-                receipt = enriched
-            } else {
-                receipt = pending
+                pending.runtimeBuildID = runtimeBuildID
+                self.persist(pending, defaults: defaults)
             }
+            receipt = pending
         } else if previousVersion != currentVersion ||
             (runtimeBuildID != nil && runtimeBuildID != previousBuildID) || setupRecovery ||
             previousReceipt?.coreUpdatePending == true
@@ -349,16 +326,9 @@ enum PostAppUpdateReceiptStore {
         receipt: PostAppUpdateReceipt,
         defaults: UserDefaults) -> PostAppUpdateReceipt
     {
-        let updated = PostAppUpdateReceipt(
-            fromVersion: receipt.fromVersion,
-            toVersion: receipt.toVersion,
-            recordedAt: receipt.recordedAt,
-            gatewayUpdateIncomplete: incomplete,
-            coreUpdate: coreUpdate,
-            notificationAttempts: receipt.notificationAttempts,
-            notificationInFlight: receipt.notificationInFlight,
-            runtimeBuildID: receipt.runtimeBuildID,
-            setupRecovery: receipt.setupRecovery)
+        var updated = receipt
+        updated.gatewayUpdateIncomplete = incomplete
+        updated.coreUpdate = coreUpdate
         self.persist(updated, defaults: defaults)
         return updated
     }
@@ -372,17 +342,8 @@ enum PostAppUpdateReceiptStore {
         // permanent auth/schema errors from reopening this window forever.
         let current = self.load(defaults: defaults) ?? receipt
         guard current.toVersion == receipt.toVersion else { return current }
-        let receipt = current
-        let updated = PostAppUpdateReceipt(
-            fromVersion: receipt.fromVersion,
-            toVersion: receipt.toVersion,
-            recordedAt: receipt.recordedAt,
-            gatewayUpdateIncomplete: receipt.gatewayUpdateIncomplete,
-            coreUpdate: receipt.coreUpdate,
-            notificationAttempts: min(receipt.notificationAttempts + 1, self.notificationRetryLimit),
-            notificationInFlight: receipt.notificationInFlight,
-            runtimeBuildID: receipt.runtimeBuildID,
-            setupRecovery: receipt.setupRecovery)
+        var updated = current
+        updated.notificationAttempts = min(current.notificationAttempts, self.notificationRetryLimit - 1) + 1
         self.persist(updated, defaults: defaults)
         return updated
     }
@@ -397,17 +358,8 @@ enum PostAppUpdateReceiptStore {
         guard current.toVersion == receipt.toVersion,
               !inFlight || (!current.coreUpdatePending && !current.hasPendingRuntimeMigration)
         else { return nil }
-        let receipt = current
-        let updated = PostAppUpdateReceipt(
-            fromVersion: receipt.fromVersion,
-            toVersion: receipt.toVersion,
-            recordedAt: receipt.recordedAt,
-            gatewayUpdateIncomplete: receipt.gatewayUpdateIncomplete,
-            coreUpdate: receipt.coreUpdate,
-            notificationAttempts: receipt.notificationAttempts,
-            notificationInFlight: inFlight,
-            runtimeBuildID: receipt.runtimeBuildID,
-            setupRecovery: receipt.setupRecovery)
+        var updated = current
+        updated.notificationInFlight = inFlight
         self.persist(updated, defaults: defaults)
         // Cross the persistence boundary before the Gateway request. A crash
         // after enqueue must not replay this one-time welcome on next launch.
@@ -418,10 +370,5 @@ enum PostAppUpdateReceiptStore {
     private static func persist(_ receipt: PostAppUpdateReceipt, defaults: UserDefaults) {
         guard let data = try? JSONEncoder().encode(receipt) else { return }
         defaults.set(data, forKey: postAppUpdateReceiptKey)
-    }
-
-    private static func normalized(_ value: String?) -> String? {
-        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed?.isEmpty == false ? trimmed : nil
     }
 }

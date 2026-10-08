@@ -48,46 +48,6 @@ export function withPromptFailure(terminal: AttemptTerminal, error: unknown): At
     : { kind: "failed", source: "prompt", error };
 }
 export type CopilotAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
-export type CopilotSessionConfig = Pick<
-  SessionConfig,
-  | "availableTools"
-  | "coauthorEnabled"
-  | "customAgents"
-  | "customAgentsLocalOnly"
-  | "embeddingCacheStorage"
-  | "enableConfigDiscovery"
-  | "enableFileHooks"
-  | "enableHostGitOperations"
-  | "enableOnDemandInstructionDiscovery"
-  | "enableSessionStore"
-  | "enableSkills"
-  | "enableSessionTelemetry"
-  | "excludedTools"
-  | "gitHubToken"
-  | "hooks"
-  | "includeSubAgentStreamingEvents"
-  | "instructionDirectories"
-  | "infiniteSessions"
-  | "manageScheduleEnabled"
-  | "mcpOAuthTokenStorage"
-  | "mcpServers"
-  | "memory"
-  | "model"
-  | "onPermissionRequest"
-  | "onUserInputRequest"
-  | "pluginDirectories"
-  | "provider"
-  | "reasoningEffort"
-  | "remoteSession"
-  | "requestCanvasRenderer"
-  | "requestExtensions"
-  | "skipCustomInstructions"
-  | "skipEmbeddingRetrieval"
-  | "skillDirectories"
-  | "systemMessage"
-  | "tools"
-  | "workingDirectory"
->;
 export type AttemptParamsLike = Omit<AgentHarnessAttemptParamsV2, "hostCapabilities"> & {
   hostCapabilities?: AgentHarnessAttemptParamsV2["hostCapabilities"];
   auth?: {
@@ -150,10 +110,10 @@ export interface CopilotAttemptDeps {
   isHostScopedToolActive?: (toolName: string) => boolean;
   resolveSandboxContextOverride?: ResolveSandboxContextFn;
   onSessionEstablished?: (info: {
-    compactionSessionConfig?: CopilotSessionConfig;
+    compactionSessionConfig?: SessionConfig;
     sdkSessionId: string;
     pooledClient: PooledClient;
-    sessionConfig: CopilotSessionConfig;
+    sessionConfig: SessionConfig;
   }) => void | Promise<void>;
   onDeferredCompaction?: (info: {
     abort: () => void;

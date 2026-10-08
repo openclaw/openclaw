@@ -1,8 +1,3 @@
-/**
- * Session diff panel parsing: turns the per-file unified patches returned by
- * the `sessions.diff` gateway method into renderable DiffLine rows, with
- * hunk-gap markers ("N unmodified lines") instead of bare separators.
- */
 import type { DiffLine } from "./tool-call-diff.ts";
 
 /** Per-file render bound; the panel shows a truncation notice past this. */
@@ -14,7 +9,6 @@ export type ParsedFilePatch = {
 };
 
 /**
- * Parses one file's unified patch (header lines + hunks) into DiffLine rows.
  * Gaps between hunks become "skip" rows whose text carries the formatted
  * unmodified-line count supplied by the caller (kept out of this lib so the
  * parser stays i18n-free).
@@ -22,7 +16,6 @@ export type ParsedFilePatch = {
 export function parseSessionDiffPatch(
   patch: string,
   formatGap: (count: number) => string,
-  maxLines = MAX_SESSION_DIFF_FILE_LINES,
 ): ParsedFilePatch {
   const lines: DiffLine[] = [];
   let truncated = false;
@@ -62,7 +55,7 @@ export function parseSessionDiffPatch(
       // Header lines before the first hunk and "\ No newline at end of file".
       continue;
     }
-    if (lines.length >= maxLines) {
+    if (lines.length >= MAX_SESSION_DIFF_FILE_LINES) {
       truncated = true;
       break;
     }

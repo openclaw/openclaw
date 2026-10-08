@@ -16,14 +16,21 @@ import {
   isTranscriptOnlyOpenClawAssistantMessage,
 } from "../../shared/transcript-only-openclaw-assistant.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import type { TranscriptMessageAppendResult } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow, writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptHeader } from "./session-accessor.sqlite-transcript-header.js";
-import {
-  appendTranscriptMessageInTransaction,
-  type PreparedTranscriptMessageAppend,
-} from "./session-accessor.sqlite-transcript-message-append.js";
+import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
+import type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.types.js";
+import type {
+  AbortedSessionTranscriptPartial,
+  AbortedSessionTranscriptPartialResult,
+  CustomMessageReport,
+  CustomMessageReportAppend,
+  PreparedTranscriptReport,
+  SelectedTranscriptReport,
+  TranscriptReportSelection,
+  TranscriptReport,
+} from "./session-accessor.sqlite-transcript-reports.types.js";
 import { appendTranscriptEventInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import {
@@ -39,41 +46,6 @@ import {
 import { applyAssistantDeliveryDirectives } from "./transcript-assistant-delivery.js";
 import { transcriptEventJsonSql } from "./transcript-payload.js";
 import { SessionTranscriptWriterClaimReboundError } from "./transcript-write-context.js";
-
-export type AbortedSessionTranscriptPartial = {
-  runId: string;
-  message: Record<string, unknown>;
-  now?: number;
-  expectedLifecycleRevision?: string | null;
-};
-
-export type AbortedSessionTranscriptPartialResult =
-  | { skipped: true }
-  | {
-      skipped: false;
-      append: TranscriptMessageAppendResult<Record<string, unknown>>;
-      lifecycleRevision?: string;
-      messageSeq?: number;
-    };
-
-export type CustomMessageReport = { customType: string; content: unknown; details?: unknown };
-export type CustomMessageReportAppend = {
-  customType: string;
-  content: string;
-  display: boolean;
-  details?: unknown;
-};
-export type TranscriptReport =
-  | { kind: "assistant"; message: AssistantMessage & { responseId: string } }
-  | {
-      kind: "custom";
-      customTypes: readonly string[];
-      suppressWhenAssistantRun?: string;
-      /** Pure selection; a definite concurrent transcript change may repeat it. */
-      selectReport: (
-        latest: CustomMessageReport | undefined,
-      ) => CustomMessageReportAppend | undefined;
-    };
 
 type ReportNavigationEntry = SessionNavigationEntry & {
   seq: number;
@@ -197,22 +169,11 @@ function latestCustomReport(
   return undefined;
 }
 
-export type SelectedTranscriptReport =
-  | Extract<TranscriptReport, { kind: "assistant" }>
-  | { kind: "custom"; eventJson: string };
-
-export type TranscriptReportSelection =
-  | { kind: "assistant"; responseId: string }
-  | Pick<
-      Extract<TranscriptReport, { kind: "custom" }>,
-      "kind" | "customTypes" | "suppressWhenAssistantRun"
-    >;
-
 export function prepareTranscriptReportSelection(
   database: OpenClawAgentDatabase,
   resolved: ResolvedTranscriptScope,
   selection: TranscriptReportSelection,
-) {
+): PreparedTranscriptReport {
   const branch = readReportBranch(database, resolved.sessionId);
   const suppressed =
     selection.kind === "assistant"
@@ -227,6 +188,37 @@ export function prepareTranscriptReportSelection(
         ? latestCustomReport(database, resolved.sessionId, branch, selection.customTypes)
         : undefined,
   };
+}
+
+/** Process-held reports select and append without crossing their native transaction boundary. */
+export function appendSessionTranscriptReportInTransaction(
+  database: OpenClawAgentDatabase,
+  resolved: ResolvedTranscriptScope,
+  report: TranscriptReport,
+): void {
+  const facts = prepareTranscriptReportSelection(
+    database,
+    resolved,
+    report.kind === "assistant"
+      ? { kind: "assistant", responseId: report.message.responseId }
+      : report,
+  );
+  if (facts.suppressed) {
+    return;
+  }
+  if (report.kind === "assistant") {
+    appendSelectedTranscriptReportInTransaction(database, resolved, facts.appendParentId, report);
+    return;
+  }
+  const selected = report.selectReport(facts.latest);
+  if (selected) {
+    appendSelectedTranscriptReportInTransaction(
+      database,
+      resolved,
+      facts.appendParentId,
+      prepareCustomTranscriptReport(selected, facts.appendParentId),
+    );
+  }
 }
 
 /** The producer has settled; only its committed answer may replace the buffered fallback. */

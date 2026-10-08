@@ -9,11 +9,8 @@ export function resolveTerminalMessageEntryId(sessionManager: {
   let entryId = sessionManager.getLeafId();
   while (entryId) {
     const entry = sessionManager.getEntry(entryId);
-    if (!entry) {
-      return null;
-    }
-    if (entry.type !== "custom" || entry.customType !== "openclaw.cache-ttl") {
-      return entryId;
+    if (!entry || entry.type !== "custom" || entry.customType !== "openclaw.cache-ttl") {
+      return entry ? entryId : null;
     }
     entryId = entry.parentId;
   }

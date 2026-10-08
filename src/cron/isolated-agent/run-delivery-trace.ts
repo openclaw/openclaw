@@ -219,7 +219,7 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
       lateBindRuntimeConfig: true,
     });
     const { hasUsableWebSearchProvider } = await webSearchRuntimeLoader.load();
-    const hasWebSearchProvider = hasUsableWebSearchProvider({
+    const hasWebSearchProvider = await hasUsableWebSearchProvider({
       config,
       agentDir: params.agentDir,
       runtimeWebSearch,

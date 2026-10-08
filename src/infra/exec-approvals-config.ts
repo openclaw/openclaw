@@ -30,52 +30,67 @@ const persistedExecApprovalPolicySchema = z.looseObject({
 function normalizePersistedAllowlistSource(value: string): "allow-always" | undefined {
   return value === "allow-always" ? value : undefined;
 }
-const persistedExecAllowlistEntrySchema = z
+const persistedExecAllowlistEntrySchema = z.looseObject({
+  pattern: z.string().refine((value) => value.trim().length > 0),
+  id: z.string().min(1),
+  source: z.literal("allow-always").optional(),
+  commandText: z.never().optional(),
+  argPattern: z.string().optional(),
+  lastUsedAt: z.number().finite().optional(),
+  lastUsedCommand: z.string().optional(),
+  lastResolvedPath: z.string().optional(),
+});
+const legacyExecAllowlistEntrySchema = z
   .union([
     z.string().trim().min(1),
-    z.looseObject({
-      pattern: z.string().refine((value) => value.trim().length > 0),
+    persistedExecAllowlistEntrySchema.extend({
       id: z.string().optional(),
       source: z.string().transform(normalizePersistedAllowlistSource).optional(),
       commandText: z.string().optional(),
-      argPattern: z.string().optional(),
-      lastUsedAt: z.number().finite().optional(),
-      lastUsedCommand: z.string().optional(),
-      lastResolvedPath: z.string().optional(),
     }),
   ])
   .transform((value): ExecAllowlistEntry =>
     typeof value === "string" ? { pattern: value } : value,
   );
-const persistedExecApprovalsAgentSchema = persistedExecApprovalPolicySchema.extend({
-  allowlist: z.array(persistedExecAllowlistEntrySchema).optional(),
-  mcpTools: z
-    .array(
-      z.looseObject({
-        server: z.string().refine((value) => value.trim().length > 0),
-        tool: z.string().refine((value) => value.trim().length > 0),
-        source: z.literal("allow-always"),
-        addedAt: z.number().finite().nonnegative(),
-        lastUsedAt: z.number().finite().nonnegative().optional(),
-      }),
-    )
-    .optional(),
-});
-const persistedExecApprovalsAgentsSchema = z
-  .unknown()
-  .refine((value) => !isRecord(value) || !Object.hasOwn(value, "__proto__"))
-  .pipe(z.record(z.string(), persistedExecApprovalsAgentSchema));
-const persistedExecApprovalsSchema = z.looseObject({
-  version: z.literal(1),
-  socket: z
-    .looseObject({
-      path: z.string().optional(),
-      token: z.string().optional(),
-    })
-    .optional(),
-  defaults: persistedExecApprovalPolicySchema.optional(),
-  agents: persistedExecApprovalsAgentsSchema.optional(),
-});
+function createExecApprovalsSchema(allowlistEntry: z.ZodType<ExecAllowlistEntry>, legacy: boolean) {
+  const agentSchema = persistedExecApprovalPolicySchema.extend({
+    allowlist: z.array(allowlistEntry).optional(),
+    mcpTools: z
+      .array(
+        z.looseObject({
+          server: z.string().refine((value) => value.trim().length > 0),
+          tool: z.string().refine((value) => value.trim().length > 0),
+          source: z.literal("allow-always"),
+          addedAt: z.number().finite().nonnegative(),
+          lastUsedAt: z.number().finite().nonnegative().optional(),
+        }),
+      )
+      .optional(),
+  });
+  const agentsSchema = z
+    .unknown()
+    .refine((value) => !isRecord(value) || !Object.hasOwn(value, "__proto__"))
+    .pipe(z.record(z.string(), agentSchema))
+    .refine((value) => legacy || !Object.hasOwn(value, "default"));
+  return z.looseObject({
+    version: z.literal(1),
+    socket: z
+      .looseObject({
+        path: z.string().optional(),
+        token: z.string().optional(),
+      })
+      .optional(),
+    defaults: persistedExecApprovalPolicySchema.optional(),
+    agents: agentsSchema.optional(),
+  });
+}
+const persistedExecApprovalsSchema = createExecApprovalsSchema(
+  persistedExecAllowlistEntrySchema,
+  false,
+);
+const legacyExecApprovalsSchema = createExecApprovalsSchema(legacyExecAllowlistEntrySchema, true);
+export const LEGACY_EXEC_APPROVALS_DIAGNOSTIC =
+  "Legacy exec approval policy requires Doctor repair";
 
 export const DEFAULT_SECURITY: ExecSecurity = "full";
 export const DEFAULT_ASK: ExecAsk = "off";
@@ -227,7 +242,10 @@ function formatPersistedExecApprovalsIssue(issue: z.core.$ZodIssue, parsed: unkn
 }
 
 /** Validate canonical policy and expose only a bounded, value-free failure diagnostic. */
-export function parsePersistedExecApprovals(raw: string): Result<ExecApprovalsFile, string> {
+function parseExecApprovals(
+  raw: string,
+  schema: z.ZodType<ExecApprovalsFile>,
+): Result<ExecApprovalsFile, string> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw) as unknown;
@@ -235,9 +253,15 @@ export function parsePersistedExecApprovals(raw: string): Result<ExecApprovalsFi
     return err("invalid JSON syntax");
   }
   try {
-    const result = persistedExecApprovalsSchema.safeParse(parsed);
+    const result = schema.safeParse(parsed);
     if (result.success) {
-      return ok(normalizeExecApprovalsInternal(result.data));
+      return ok(result.data);
+    }
+    if (
+      schema === persistedExecApprovalsSchema &&
+      legacyExecApprovalsSchema.safeParse(parsed).success
+    ) {
+      return err(LEGACY_EXEC_APPROVALS_DIAGNOSTIC);
     }
     const issue = result.error.issues[0];
     return err(
@@ -246,6 +270,16 @@ export function parsePersistedExecApprovals(raw: string): Result<ExecApprovalsFi
   } catch {
     return err("invalid approvals structure");
   }
+}
+
+export function parsePersistedExecApprovals(raw: string): Result<ExecApprovalsFile, string> {
+  return parseExecApprovals(raw, persistedExecApprovalsSchema);
+}
+
+/** Doctor imports historical documents before ordinary readers accept their canonical shape. */
+export function parseLegacyExecApprovals(raw: string): Result<ExecApprovalsFile, string> {
+  const parsed = parseExecApprovals(raw, legacyExecApprovalsSchema);
+  return parsed.ok ? ok(normalizeExecApprovalsInternal(parsed.value)) : parsed;
 }
 
 /** Parse only structurally valid persisted approvals without inventing fallback policy. */
@@ -338,6 +372,10 @@ function normalizeAllowlistMetadata(
   let changed = false;
   const next = allowlist.map((entry) => {
     let normalized = entry;
+    const source = normalizePersistedAllowlistSource(normalized.source ?? "");
+    if (normalized.source !== source) {
+      normalized = { ...normalized, source };
+    }
     if (!normalized.id) {
       normalized = { ...normalized, id: crypto.randomUUID() };
     }

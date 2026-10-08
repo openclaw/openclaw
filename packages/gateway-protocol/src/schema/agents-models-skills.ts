@@ -10,6 +10,12 @@ import {
 import { NonEmptyString, Sha256String } from "./primitives.js";
 import { GitHubSetupHandleSchema } from "./secrets.js";
 import { SessionPermissionModeSchema } from "./sessions-row.js";
+import { SkillsDetailResultSchema } from "./skill-detail.js";
+
+export { SkillsDetailResultSchema } from "./skill-detail.js";
+
+export { SkillsSearchParamsSchema, SkillsSearchResultSchema } from "./skills-search.js";
+export type { SkillsSearchParams, SkillsSearchResult } from "./skills-search.js";
 
 export {
   ModelChoiceSchema,
@@ -300,9 +306,6 @@ export const SkillsUploadCommitParamsSchema = closedObject({
 const CLAWHUB_SKILL_REF_DESCRIPTION =
   "ClawHub skill reference: `@owner/slug`, `skills-sh:owner/repo/slug`, or a bare `slug` when no publisher is known.";
 
-/** Wire copy of the core trust state; this package intentionally depends on typebox only. */
-const CLAWHUB_SKILLS_SH_TRUST_STATE_VALUE = "not-scanned-by-clawhub";
-
 /** Installs a skill from legacy install id, ClawHub, or uploaded archive. */
 export const SkillsInstallParamsSchema = Type.Union([
   closedObject({
@@ -354,104 +357,15 @@ export const SkillsUpdateParamsSchema = Type.Union([
   }),
 ]);
 
-/** Searches the skill registry. */
-export const SkillsSearchParamsSchema = closedObject({
-  query: Type.Optional(NonEmptyString),
-  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
-});
-
-/** Ranked skill registry search results. */
-export const SkillsSearchResultSchema = closedObject({
-  results: Type.Array(
-    closedObject({
-      score: Type.Number(),
-      slug: NonEmptyString,
-      registry: NonEmptyString,
-      ownerHandle: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-      installRef: Type.String({
-        minLength: 1,
-        description:
-          "Source-qualified reference for this result. Send it as `slug` to skills.install; several publishers can share one slug.",
-      }),
-      installOnly: Type.Optional(
-        Type.Literal(true, {
-          description:
-            "Present when ClawHub serves this result install-only: offer install directly with `installRef`, because skills.detail cannot answer for it. Absence means the ordinary review-then-install flow, so results from servers that predate this field keep their existing behavior.",
-        }),
-      ),
-      trustState: Type.Optional(
-        Type.Literal(CLAWHUB_SKILLS_SH_TRUST_STATE_VALUE, {
-          description:
-            "Present when ClawHub resolves this result from a source it has not scanned.",
-        }),
-      ),
-      displayName: NonEmptyString,
-      summary: Type.Optional(Type.String()),
-      icon: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-      version: Type.Optional(NonEmptyString),
-      updatedAt: Type.Optional(Type.Integer()),
-    }),
-  ),
-});
-
 /** Reads registry detail for one skill. */
 export const SkillsDetailParamsSchema = closedObject({
   slug: Type.String({ minLength: 1, description: CLAWHUB_SKILL_REF_DESCRIPTION }),
+  version: Type.Optional(NonEmptyString),
 });
 
 /** Reads current security verdicts for configured skills. */
 export const SkillsSecurityVerdictsParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
-});
-
-/** Skill registry detail, latest version, metadata, and owner info. */
-export const SkillsDetailResultSchema = closedObject({
-  skill: Type.Union([
-    closedObject({
-      slug: NonEmptyString,
-      displayName: NonEmptyString,
-      summary: Type.Optional(Type.String()),
-      icon: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-      tags: Type.Optional(Type.Record(NonEmptyString, Type.String())),
-      channel: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-      isOfficial: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
-      createdAt: Type.Integer(),
-      updatedAt: Type.Integer(),
-    }),
-    Type.Null(),
-  ]),
-  latestVersion: Type.Optional(
-    Type.Union([
-      closedObject({
-        version: NonEmptyString,
-        createdAt: Type.Integer(),
-        changelog: Type.Optional(Type.String()),
-      }),
-      Type.Null(),
-    ]),
-  ),
-  metadata: Type.Optional(
-    Type.Union([
-      closedObject({
-        os: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
-        systems: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
-      }),
-      Type.Null(),
-    ]),
-  ),
-  owner: Type.Optional(
-    Type.Union([
-      closedObject({
-        handle: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-        displayName: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-        image: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-        official: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
-        channel: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-        isOfficial: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
-      }),
-      Type.Null(),
-    ]),
-  ),
 });
 
 /** Security verdict report for installed/requested skills. */
@@ -502,401 +416,116 @@ export const SkillsSkillCardResultSchema = closedObject({
   content: Type.String(),
 });
 
-const SkillProposalStatusSchema = Type.Union([
-  Type.Literal("pending"),
-  Type.Literal("applied"),
-  Type.Literal("rejected"),
-  Type.Literal("quarantined"),
-  Type.Literal("stale"),
+const SkillWorkshopChangeActionSchema = Type.Union([
+  Type.Literal("create"),
+  Type.Literal("patch"),
+  Type.Literal("write_file"),
+  Type.Literal("remove_file"),
+  Type.Literal("archive"),
+  Type.Literal("restore"),
 ]);
-/** Skill proposal operation type: new skill or update to an existing skill. */
-const SkillProposalKindSchema = Type.Union([Type.Literal("create"), Type.Literal("update")]);
-/** Scan state for proposed skill content before it can be applied. */
-const SkillProposalScanStateSchema = Type.Union([
-  Type.Literal("pending"),
-  Type.Literal("clean"),
-  Type.Literal("failed"),
-  Type.Literal("quarantined"),
+const SkillWorkshopActorSchema = Type.Union([
+  Type.Literal("agent"),
+  Type.Literal("review"),
+  Type.Literal("curator"),
+  Type.Literal("user"),
 ]);
-/** Source that created the skill proposal record. */
-const SkillProposalSourceSchema = Type.Union([
-  Type.Literal("skill-workshop"),
-  Type.Literal("cli"),
-  Type.Literal("gateway"),
-]);
-const SkillProposalContentString = Type.String({ minLength: 1, maxLength: 1_048_576 });
-/** Support file payload accepted from proposal create/revise requests. */
-const SkillProposalSupportFileInputSchema = closedObject({
-  path: NonEmptyString,
-  content: Type.String({ maxLength: 262_144 }),
-});
-/** Stored support file metadata, including target conflict hashes for updates. */
-const SkillProposalSupportFileSchema = closedObject({
-  path: NonEmptyString,
-  sizeBytes: Type.Integer({ minimum: 0, maximum: 262_144 }),
-  hash: Sha256String,
-  targetExisted: Type.Optional(Type.Boolean()),
-  targetContentHash: Type.Optional(Sha256String),
-});
+const TimestampMsSchema = Type.Number({ minimum: 0 });
 
-/** One static-scan finding against proposed skill content. */
-const SkillProposalFindingSchema = closedObject({
-  ruleId: NonEmptyString,
-  severity: Type.Union([Type.Literal("info"), Type.Literal("warn"), Type.Literal("critical")]),
-  file: NonEmptyString,
-  line: Type.Integer({ minimum: 1 }),
-  message: NonEmptyString,
-  evidence: Type.String(),
-});
-
-/** Aggregated scan report attached to a proposal record. */
-const SkillProposalScanSchema = closedObject({
-  state: SkillProposalScanStateSchema,
-  scannedAt: NonEmptyString,
-  critical: Type.Integer({ minimum: 0 }),
-  warn: Type.Integer({ minimum: 0 }),
-  info: Type.Integer({ minimum: 0 }),
-  findings: Type.Array(SkillProposalFindingSchema),
-});
-
-/** Skill file target that a proposal creates or updates. */
-const SkillProposalTargetSchema = closedObject({
+/** One applied Workshop change; `versionId` names the snapshot taken before it, for undo. */
+export const SkillWorkshopChangeSchema = closedObject({
+  id: NonEmptyString,
+  agentId: NonEmptyString,
   skillName: NonEmptyString,
-  skillKey: NonEmptyString,
-  skillDir: NonEmptyString,
-  skillFile: NonEmptyString,
-  source: Type.Optional(NonEmptyString),
-  currentContentHash: Type.Optional(NonEmptyString),
-});
-
-/** Optional runtime origin tying a proposal back to an agent turn. */
-const SkillProposalOriginSchema = closedObject({
-  agentId: Type.Optional(NonEmptyString),
+  action: SkillWorkshopChangeActionSchema,
+  actor: SkillWorkshopActorSchema,
+  summary: Type.String(),
+  versionId: Type.Optional(NonEmptyString),
   sessionKey: Type.Optional(NonEmptyString),
   runId: Type.Optional(NonEmptyString),
-  messageId: Type.Optional(NonEmptyString),
+  createdAtMs: TimestampMsSchema,
 });
 
-const SkillProposalEvaluationFindingSchema = closedObject({
-  ruleId: Type.String({ minLength: 1, maxLength: 256 }),
-  severity: Type.Union([Type.Literal("info"), Type.Literal("warn"), Type.Literal("critical")]),
-  message: Type.String({ minLength: 1, maxLength: 4_000 }),
-  file: Type.Optional(Type.String({ minLength: 1, maxLength: 1_024 })),
-  line: Type.Optional(Type.Integer({ minimum: 1 })),
+/** Live Workshop skill with optional usage counters. */
+export const SkillWorkshopSkillSummarySchema = closedObject({
+  name: NonEmptyString,
+  description: Type.String(),
+  updatedAtMs: TimestampMsSchema,
+  sizeBytes: Type.Integer({ minimum: 0 }),
+  files: Type.Array(NonEmptyString),
+  useCount: Type.Optional(Type.Integer({ minimum: 0 })),
+  lastUsedAtMs: Type.Optional(TimestampMsSchema),
 });
 
-const SkillProposalEvaluationResultSchema = closedObject({
-  summary: Type.Optional(Type.String({ maxLength: 8_000 })),
-  findings: Type.Optional(Type.Array(SkillProposalEvaluationFindingSchema, { maxItems: 200 })),
-  metrics: Type.Optional(
-    Type.Record(
-      Type.String(),
-      Type.Union([Type.String({ maxLength: 4_000 }), Type.Number(), Type.Boolean()]),
-      {
-        maxProperties: 64,
-        propertyNames: Type.String({ minLength: 1, maxLength: 128 }),
-      },
-    ),
+/** Saved versions of one Workshop skill; `live: false` means the skill is archived. */
+export const SkillWorkshopArchivedSkillSchema = closedObject({
+  name: NonEmptyString,
+  live: Type.Boolean(),
+  versions: Type.Array(
+    closedObject({
+      id: NonEmptyString,
+      action: SkillWorkshopChangeActionSchema,
+      createdAtMs: TimestampMsSchema,
+    }),
   ),
-  evaluatorVersion: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
-  mode: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
-  decision: Type.Optional(
-    Type.Union([Type.Literal("pass"), Type.Literal("revise"), Type.Literal("block")]),
-  ),
-  decisionReason: Type.Optional(Type.String({ maxLength: 2_000 })),
 });
 
-const SkillProposalEvaluationOutcomeAttribution = {
-  pluginId: Type.String({ minLength: 1, maxLength: 128 }),
-  pluginVersion: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
-  evaluatorId: Type.String({ minLength: 1, maxLength: 128 }),
-};
-
-const SkillProposalEvaluationOutcomeSchema = Type.Union([
-  closedObject({
-    ...SkillProposalEvaluationOutcomeAttribution,
-    status: Type.Literal("completed"),
-    result: SkillProposalEvaluationResultSchema,
-  }),
-  closedObject({
-    ...SkillProposalEvaluationOutcomeAttribution,
-    status: Type.Literal("skipped"),
-  }),
-  closedObject({
-    ...SkillProposalEvaluationOutcomeAttribution,
-    status: Type.Literal("error"),
-    error: Type.String({ minLength: 1, maxLength: 2_000 }),
-  }),
-]);
-
-/** Latest completed evaluator run attached to a proposal record. */
-export const SkillProposalEvaluationSchema = closedObject({
-  id: NonEmptyString,
-  proposedVersion: NonEmptyString,
-  revisionHash: Sha256String,
-  trigger: Type.Union([Type.Literal("manual"), Type.Literal("apply")]),
-  startedAt: NonEmptyString,
-  completedAt: NonEmptyString,
-  correlationId: Type.Optional(NonEmptyString),
-  targetTreeSha256: Type.Optional(Sha256String),
-  outcomes: Type.Array(SkillProposalEvaluationOutcomeSchema, { maxItems: 64 }),
-});
-
-/** Full persisted skill proposal record. */
-const SkillProposalRecordSchema = closedObject({
-  schema: Type.Literal("openclaw.skill-workshop.proposal.v1"),
-  id: NonEmptyString,
-  kind: SkillProposalKindSchema,
-  status: SkillProposalStatusSchema,
-  title: NonEmptyString,
-  description: NonEmptyString,
-  createdAt: NonEmptyString,
-  updatedAt: NonEmptyString,
-  createdBy: SkillProposalSourceSchema,
-  origin: Type.Optional(SkillProposalOriginSchema),
-  proposedVersion: NonEmptyString,
-  draftFile: Type.Literal("PROPOSAL.md"),
-  draftHash: NonEmptyString,
-  supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileSchema, { maxItems: 64 })),
-  target: SkillProposalTargetSchema,
-  scan: SkillProposalScanSchema,
-  goal: Type.Optional(Type.String()),
-  evidence: Type.Optional(Type.String()),
-  appliedAt: Type.Optional(NonEmptyString),
-  rejectedAt: Type.Optional(NonEmptyString),
-  quarantinedAt: Type.Optional(NonEmptyString),
-  staleAt: Type.Optional(NonEmptyString),
-  statusReason: Type.Optional(Type.String()),
-  evaluation: Type.Optional(SkillProposalEvaluationSchema),
-});
-
-/** Condensed proposal manifest entry for list views. */
-const SkillProposalManifestEntrySchema = closedObject({
-  id: NonEmptyString,
-  kind: SkillProposalKindSchema,
-  status: SkillProposalStatusSchema,
-  title: NonEmptyString,
-  description: NonEmptyString,
-  skillName: NonEmptyString,
-  skillKey: NonEmptyString,
-  createdAt: NonEmptyString,
-  updatedAt: NonEmptyString,
-  scanState: SkillProposalScanStateSchema,
-  revisionHash: Type.Optional(Sha256String),
-  degradedState: Type.Optional(Type.Literal("draft-missing")),
-});
-
-/** Lists skill-workshop proposals for the selected agent scope. */
-export const SkillsProposalsListParamsSchema = closedObject({
+/** Lists the selected agent's Workshop skills and saved versions. */
+export const SkillsWorkshopListParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
 });
 
-/** Proposal manifest response for dashboard/workshop list views. */
-export const SkillsProposalsListResultSchema = closedObject({
-  schema: Type.Literal("openclaw.skill-workshop.proposals-manifest.v1"),
-  updatedAt: NonEmptyString,
-  proposals: Type.Array(SkillProposalManifestEntrySchema),
-  installedSkills: Type.Array(
-    closedObject({ name: NonEmptyString, skillKey: NonEmptyString, description: Type.String() }),
-  ),
+export const SkillsWorkshopListResultSchema = closedObject({
+  agentId: NonEmptyString,
+  mode: Type.Union([Type.Literal("off"), Type.Literal("auto")]),
+  root: NonEmptyString,
+  skills: Type.Array(SkillWorkshopSkillSummarySchema),
+  archived: Type.Array(SkillWorkshopArchivedSkillSchema),
 });
 
-/** Reads the current agent-owned Workshop skill, independently of its proposal history. */
+/** Pages the Workshop change feed newest first. */
+export const SkillsWorkshopChangesParamsSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
+  beforeMs: Type.Optional(TimestampMsSchema),
+});
+
+export const SkillsWorkshopChangesResultSchema = closedObject({
+  changes: Type.Array(SkillWorkshopChangeSchema),
+});
+
+/** Reads one file of a live Workshop skill, or of a saved version when `versionId` is set. */
 export const SkillsWorkshopReadParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   name: NonEmptyString,
+  filePath: Type.Optional(NonEmptyString),
+  versionId: Type.Optional(NonEmptyString),
 });
 
 export const SkillsWorkshopReadResultSchema = closedObject({
   name: NonEmptyString,
-  skillKey: NonEmptyString,
-  description: Type.String(),
+  filePath: NonEmptyString,
   content: Type.String(),
+  files: Type.Array(NonEmptyString),
 });
 
-/** Reads a proposal record plus editable draft/support content. */
-export const SkillsProposalInspectParamsSchema = closedObject({
-  agentId: Type.Optional(NonEmptyString),
-  proposalId: NonEmptyString,
-});
-
-/** Full proposal inspection result used before apply/revise decisions. */
-export const SkillsProposalInspectResultSchema = closedObject({
-  record: SkillProposalRecordSchema,
-  revisionHash: Type.Optional(Sha256String),
-  content: Type.String(),
-  supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileInputSchema, { maxItems: 64 })),
-});
-
-/** Creates a proposal for a new skill. */
-export const SkillsProposalCreateParamsSchema = closedObject({
+/** Archives a live Workshop skill; the snapshot stays restorable. */
+export const SkillsWorkshopArchiveParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
   name: NonEmptyString,
-  description: NonEmptyString,
-  content: SkillProposalContentString,
-  supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileInputSchema, { maxItems: 64 })),
-  goal: Type.Optional(Type.String()),
-  evidence: Type.Optional(Type.String()),
+  reason: Type.Optional(Type.String({ minLength: 1, maxLength: 1_000 })),
 });
 
-/** Creates a proposal to update an existing skill. */
-export const SkillsProposalUpdateParamsSchema = closedObject({
+/** Restores a saved version (newest when omitted); the current live copy is versioned first. */
+export const SkillsWorkshopRestoreParamsSchema = closedObject({
   agentId: Type.Optional(NonEmptyString),
-  skillName: NonEmptyString,
-  description: Type.Optional(NonEmptyString),
-  content: SkillProposalContentString,
-  supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileInputSchema, { maxItems: 64 })),
-  goal: Type.Optional(Type.String()),
-  evidence: Type.Optional(Type.String()),
+  name: NonEmptyString,
+  versionId: Type.Optional(NonEmptyString),
 });
 
-/** Replaces draft content/support files for an existing proposal. */
-export const SkillsProposalReviseParamsSchema = closedObject({
-  agentId: Type.Optional(NonEmptyString),
-  proposalId: NonEmptyString,
-  expectedRevisionHash: Type.Optional(Sha256String),
-  correlationId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
-  content: Type.Optional(SkillProposalContentString),
-  supportFiles: Type.Optional(Type.Array(SkillProposalSupportFileInputSchema, { maxItems: 64 })),
-  description: Type.Optional(NonEmptyString),
-  goal: Type.Optional(Type.String()),
-  evidence: Type.Optional(Type.String()),
+export const SkillsWorkshopChangeResultSchema = closedObject({
+  change: SkillWorkshopChangeSchema,
 });
-
-/** Starts an agent turn that revises a pending proposal from natural-language instructions. */
-export const SkillsProposalRequestRevisionParamsSchema = closedObject({
-  agentId: Type.Optional(NonEmptyString),
-  targetAgentId: Type.Optional(NonEmptyString),
-  proposalId: NonEmptyString,
-  expectedRevisionHash: Sha256String,
-  instructions: Type.String({ minLength: 1, maxLength: 32_768 }),
-  sessionKey: NonEmptyString,
-  sessionId: Type.Optional(NonEmptyString),
-  idempotencyKey: NonEmptyString,
-});
-
-/** Chat-run acknowledgement returned after queueing a Skill Workshop revision request. */
-export const SkillsProposalRequestRevisionResultSchema = Type.Object(
-  {
-    runId: NonEmptyString,
-    status: Type.Union([
-      Type.Literal("started"),
-      Type.Literal("in_flight"),
-      Type.Literal("ok"),
-      Type.Literal("timeout"),
-      Type.Literal("error"),
-    ]),
-  },
-  { additionalProperties: true },
-);
-
-/** Apply/reject payload bound to the exact proposal revision reviewed by the operator. */
-export const SkillsProposalDecisionParamsSchema = closedObject({
-  agentId: Type.Optional(NonEmptyString),
-  proposalId: NonEmptyString,
-  expectedRevisionHash: Sha256String,
-  correlationId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
-  reason: Type.Optional(Type.String()),
-});
-
-/** Quarantine payload with optional optimistic-concurrency evidence. */
-export const SkillsProposalActionParamsSchema = closedObject({
-  agentId: Type.Optional(NonEmptyString),
-  proposalId: NonEmptyString,
-  expectedRevisionHash: Type.Optional(Sha256String),
-  correlationId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
-  reason: Type.Optional(Type.String()),
-});
-
-/** Runs configured proposal evaluators against the current draft. */
-export const SkillsProposalEvaluateParamsSchema = closedObject({
-  agentId: Type.Optional(NonEmptyString),
-  proposalId: NonEmptyString,
-  expectedRevisionHash: Type.Optional(Sha256String),
-  correlationId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
-});
-
-/** Updated proposal record and completed evaluator run returned by manual evaluation. */
-export const SkillsProposalEvaluateResultSchema = closedObject({
-  record: SkillProposalRecordSchema,
-  evaluation: SkillProposalEvaluationSchema,
-});
-
-const SkillProposalLifecycleEventTypeSchema = Type.Union([
-  Type.Literal("created"),
-  Type.Literal("revised"),
-  Type.Literal("evaluation_completed"),
-  Type.Literal("applied"),
-  Type.Literal("rejected"),
-  Type.Literal("quarantined"),
-  Type.Literal("stale"),
-]);
-
-const SkillProposalLifecycleEventActorSchema = closedObject({
-  type: Type.Union([
-    Type.Literal("agent"),
-    Type.Literal("gateway"),
-    Type.Literal("plugin"),
-    Type.Literal("system"),
-  ]),
-  id: Type.Optional(NonEmptyString),
-});
-
-const SkillProposalLifecycleEventPayloadSchema = Type.Record(
-  Type.String(),
-  Type.Union([Type.String({ maxLength: 4_000 }), Type.Number(), Type.Boolean(), Type.Null()]),
-  {
-    maxProperties: 32,
-    propertyNames: Type.String({ minLength: 1, maxLength: 80 }),
-  },
-);
-
-/** Durable Skill Workshop lifecycle event returned for replay. */
-export const SkillProposalLifecycleEventSchema = closedObject({
-  sequence: Type.Integer({ minimum: 1 }),
-  eventId: NonEmptyString,
-  proposalId: NonEmptyString,
-  proposedVersion: NonEmptyString,
-  revisionHash: Sha256String,
-  type: SkillProposalLifecycleEventTypeSchema,
-  occurredAt: NonEmptyString,
-  actor: SkillProposalLifecycleEventActorSchema,
-  correlationId: Type.Optional(NonEmptyString),
-  payload: Type.Optional(SkillProposalLifecycleEventPayloadSchema),
-  evaluation: Type.Optional(SkillProposalEvaluationSchema),
-});
-
-/** Lists durable proposal lifecycle events after an optional sequence cursor. */
-export const SkillsProposalEventsListParamsSchema = closedObject({
-  agentId: Type.Optional(NonEmptyString),
-  proposalId: Type.Optional(NonEmptyString),
-  afterSequence: Type.Optional(Type.Integer({ minimum: 0 })),
-  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
-});
-
-/** Sequence-ordered proposal lifecycle replay page. */
-export const SkillsProposalEventsListResultSchema = closedObject({
-  events: Type.Array(SkillProposalLifecycleEventSchema, { maxItems: 200 }),
-  nextSequence: Type.Optional(Type.Integer({ minimum: 1 })),
-});
-
-/** Result returned after applying a skill proposal to disk. */
-export const SkillsProposalApplyResultSchema = closedObject({
-  record: SkillProposalRecordSchema,
-  targetSkillFile: NonEmptyString,
-});
-
-/** Proposal record result returned after non-apply proposal actions. */
-export const SkillsProposalRecordResultSchema = SkillProposalRecordSchema;
-
-export {
-  SkillsCuratorStatusParamsSchema,
-  SkillsCuratorStatusResultSchema,
-  SkillsCuratorActionParamsSchema,
-  SkillsCuratorActionResultSchema,
-  SkillCuratorLiveEntrySchema,
-  SkillsCuratorLiveStatusResultSchema,
-} from "./skill-curator.js";
 
 export const GitHubIdentityScopeSchema = Type.Union([
   Type.Literal("system"),
@@ -1164,41 +793,20 @@ export type ToolsInvokeParams = Static<typeof ToolsInvokeParamsSchema>;
 export type ToolsInvokeResult = Static<typeof ToolsInvokeResultSchema>;
 export type SkillsBinsParams = Static<typeof SkillsBinsParamsSchema>;
 export type SkillsBinsResult = Static<typeof SkillsBinsResultSchema>;
-export type SkillsSearchParams = Static<typeof SkillsSearchParamsSchema>;
-export type SkillsSearchResult = Static<typeof SkillsSearchResultSchema>;
 export type SkillsDetailParams = Static<typeof SkillsDetailParamsSchema>;
 export type SkillsDetailResult = Static<typeof SkillsDetailResultSchema>;
-export type SkillsProposalsListParams = Static<typeof SkillsProposalsListParamsSchema>;
-export type SkillsProposalsListResult = Static<typeof SkillsProposalsListResultSchema>;
-export type SkillsProposalInspectParams = Static<typeof SkillsProposalInspectParamsSchema>;
-export type SkillsProposalInspectResult = Static<typeof SkillsProposalInspectResultSchema>;
-export type SkillsProposalCreateParams = Static<typeof SkillsProposalCreateParamsSchema>;
-export type SkillsProposalUpdateParams = Static<typeof SkillsProposalUpdateParamsSchema>;
-export type SkillsProposalReviseParams = Static<typeof SkillsProposalReviseParamsSchema>;
-export type SkillsProposalRequestRevisionParams = Static<
-  typeof SkillsProposalRequestRevisionParamsSchema
->;
-export type SkillsProposalRequestRevisionResult = Static<
-  typeof SkillsProposalRequestRevisionResultSchema
->;
-export type SkillsProposalDecisionParams = Static<typeof SkillsProposalDecisionParamsSchema>;
-export type SkillsProposalActionParams = Static<typeof SkillsProposalActionParamsSchema>;
-export type SkillProposalEvaluation = Static<typeof SkillProposalEvaluationSchema>;
-export type SkillsProposalEvaluateParams = Static<typeof SkillsProposalEvaluateParamsSchema>;
-export type SkillsProposalEvaluateResult = Static<typeof SkillsProposalEvaluateResultSchema>;
-export type SkillProposalLifecycleEvent = Static<typeof SkillProposalLifecycleEventSchema>;
-export type SkillsProposalEventsListParams = Static<typeof SkillsProposalEventsListParamsSchema>;
-export type SkillsProposalEventsListResult = Static<typeof SkillsProposalEventsListResultSchema>;
-export type SkillsProposalApplyResult = Static<typeof SkillsProposalApplyResultSchema>;
-export type SkillsProposalRecordResult = Static<typeof SkillsProposalRecordResultSchema>;
-export type {
-  SkillsCuratorStatusParams,
-  SkillsCuratorStatusResult,
-  SkillsCuratorLiveStatusResult,
-  SkillsCuratorCompatibleStatusResult,
-  SkillsCuratorActionParams,
-  SkillsCuratorActionResult,
-} from "./skill-curator.js";
+export type SkillWorkshopChange = Static<typeof SkillWorkshopChangeSchema>;
+export type SkillWorkshopSkillSummary = Static<typeof SkillWorkshopSkillSummarySchema>;
+export type SkillWorkshopArchivedSkill = Static<typeof SkillWorkshopArchivedSkillSchema>;
+export type SkillsWorkshopListParams = Static<typeof SkillsWorkshopListParamsSchema>;
+export type SkillsWorkshopListResult = Static<typeof SkillsWorkshopListResultSchema>;
+export type SkillsWorkshopChangesParams = Static<typeof SkillsWorkshopChangesParamsSchema>;
+export type SkillsWorkshopChangesResult = Static<typeof SkillsWorkshopChangesResultSchema>;
+export type SkillsWorkshopReadParams = Static<typeof SkillsWorkshopReadParamsSchema>;
+export type SkillsWorkshopReadResult = Static<typeof SkillsWorkshopReadResultSchema>;
+export type SkillsWorkshopArchiveParams = Static<typeof SkillsWorkshopArchiveParamsSchema>;
+export type SkillsWorkshopRestoreParams = Static<typeof SkillsWorkshopRestoreParamsSchema>;
+export type SkillsWorkshopChangeResult = Static<typeof SkillsWorkshopChangeResultSchema>;
 export type SkillsSecurityVerdictsParams = Static<typeof SkillsSecurityVerdictsParamsSchema>;
 export type SkillsSecurityVerdictsResult = Static<typeof SkillsSecurityVerdictsResultSchema>;
 export type SkillsSkillCardParams = Static<typeof SkillsSkillCardParamsSchema>;
@@ -1208,4 +816,3 @@ export type SkillsUploadChunkParams = Static<typeof SkillsUploadChunkParamsSchem
 export type SkillsUploadCommitParams = Static<typeof SkillsUploadCommitParamsSchema>;
 export type SkillsInstallParams = Static<typeof SkillsInstallParamsSchema>;
 export type SkillsUpdateParams = Static<typeof SkillsUpdateParamsSchema>;
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

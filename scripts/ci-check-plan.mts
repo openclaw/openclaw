@@ -424,6 +424,11 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     const plan = await createCiCheckPlan(
       parseInput(JSON.parse(process.env.OPENCLAW_CI_CHECK_PLAN_INPUT_JSON ?? "null")),
     );
+    if (plan.extension_lint_selection_json) {
+      console.log(
+        `[ci-check-plan] extension lint selection: ${plan.extension_lint_selection_json}`,
+      );
+    }
     if (plan.extension_lint_selection_json && process.env.GITHUB_STEP_SUMMARY) {
       const selection: Awaited<
         ReturnType<

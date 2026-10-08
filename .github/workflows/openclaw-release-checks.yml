@@ -129,6 +129,11 @@ on:
         required: false
         default: ""
         type: string
+      qualification_baselines_json:
+        description: Captured exact upgrade and survivor baselines from the qualification request
+        required: false
+        default: ""
+        type: string
       dispatch_id:
         description: Optional parent workflow dispatch identifier
         required: false
@@ -735,6 +740,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_SHA: ${{ steps.ref.outputs.sha }}
+          QUALIFICATION_BASELINES_JSON: ${{ inputs.qualification_baselines_json }}
         run: |
           set -euo pipefail
           candidate_version="$(
@@ -742,9 +748,16 @@ jobs:
               base64 --decode |
               jq -er '.version | select(type == "string" and length > 0)'
           )"
-          baseline="$(node workflow/scripts/lib/release-upgrade-baseline.mjs \
-            --candidate-version "$candidate_version" \
-            --target-context-ref "$TARGET_CONTEXT_REF")"
+          if [[ -n "$QUALIFICATION_BASELINES_JSON" ]]; then
+            captured="$(node workflow/scripts/lib/release-upgrade-baseline.mjs \
+              --candidate-version "$candidate_version" --target-context-ref "$TARGET_CONTEXT_REF" \
+              --qualification-baselines-json "$QUALIFICATION_BASELINES_JSON")"
+            baseline="$(jq -er .upgradeBaseline <<< "$captured")"
+          else
+            baseline="$(node workflow/scripts/lib/release-upgrade-baseline.mjs \
+              --candidate-version "$candidate_version" \
+              --target-context-ref "$TARGET_CONTEXT_REF")"
+          fi
           echo "value=${baseline#openclaw@}" >> "$GITHUB_OUTPUT"
 
       - name: Acquire selected admission source
@@ -928,7 +941,7 @@ jobs:
     needs: [resolve_target]
     if: needs.resolve_target.outputs.package_required == 'true'
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON('ubuntu-24.04'))) || ('ubuntu-24.04') }}
-    timeout-minutes: 15
+    timeout-minutes: 35
     permissions:
       actions: read
       contents: read
@@ -1081,15 +1094,23 @@ jobs:
       - name: Resolve package upgrade baseline
         id: upgrade_baseline
         env:
+          QUALIFICATION_BASELINES_JSON: ${{ inputs.qualification_baselines_json }}
           CANDIDATE_PUBLISHED: ${{ needs.resolve_target.outputs.candidate_published }}
           CANDIDATE_VERSION: ${{ steps.package.outputs.package_version || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageVersion }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
         run: |
           set -euo pipefail
-          baseline="$(node scripts/lib/release-upgrade-baseline.mjs \
-            --candidate-version "$CANDIDATE_VERSION" \
-            --candidate-published "$CANDIDATE_PUBLISHED" \
-            --target-context-ref "$TARGET_CONTEXT_REF")"
+          if [[ -n "$QUALIFICATION_BASELINES_JSON" ]]; then
+            captured="$(node scripts/lib/release-upgrade-baseline.mjs \
+              --candidate-version "$CANDIDATE_VERSION" --target-context-ref "$TARGET_CONTEXT_REF" \
+              --qualification-baselines-json "$QUALIFICATION_BASELINES_JSON")"
+            baseline="$(jq -er .upgradeBaseline <<< "$captured")"
+          else
+            baseline="$(node scripts/lib/release-upgrade-baseline.mjs \
+              --candidate-version "$CANDIDATE_VERSION" \
+              --candidate-published "$CANDIDATE_PUBLISHED" \
+              --target-context-ref "$TARGET_CONTEXT_REF")"
+          fi
           echo "value=${baseline#openclaw@}" >> "$GITHUB_OUTPUT"
 
       - name: Upload release package artifact
@@ -1244,6 +1265,7 @@ jobs:
           CANDIDATE_PUBLISHED: ${{ needs.resolve_target.outputs.candidate_published }}
           CANDIDATE_SOURCE_SHA: ${{ steps.package.outputs.source_sha || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageSourceSha }}
           CANDIDATE_VERSION: ${{ steps.package.outputs.package_version || fromJSON(needs.resolve_target.outputs.candidate_artifact_json || '{}').packageVersion }}
+          QUALIFICATION_BASELINES_JSON: ${{ inputs.qualification_baselines_json }}
           PACKAGE_ACCEPTANCE_PACKAGE_SPEC: ${{ needs.resolve_target.outputs.package_acceptance_package_spec }}
           RUN_RELEASE_SOAK: ${{ needs.resolve_target.outputs.run_release_soak }}
           TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
@@ -1282,7 +1304,9 @@ jobs:
             supportsOperatorScenario = names.includes("legacy-operator-state.mjs");
             supportsSiblingScenario = names.includes("custom-plugin-siblings.mjs");
           }
-          const baselines = supportsOperatorScenario ? "supported-lines" : "";
+          const frozenBaselines = process.env.QUALIFICATION_BASELINES_JSON ?
+            JSON.parse(process.env.QUALIFICATION_BASELINES_JSON).upgradeSurvivorBaselines.join(" ") : "";
+          const baselines = frozenBaselines || (supportsOperatorScenario ? "supported-lines" : "");
           // The child prepares/reuses a registry only for unpublished artifacts.
           // Published qualification cannot satisfy this fixture's artifact checks.
           const legacyOperator = supportsOperatorScenario && process.env.CANDIDATE_PUBLISHED === "false";
@@ -1364,6 +1388,7 @@ jobs:
     permissions: read-all
     uses: ./.github/workflows/openclaw-cross-os-release-checks-reusable.yml
     with:
+      workflow_ref: ${{ github.sha }}
       ref: ${{ needs.resolve_target.outputs.revision }}
       target_context_ref: ${{ inputs.target_context_ref }}
       previous_version: ${{ needs.prepare_release_package.outputs.upgrade_baseline }}
@@ -1417,6 +1442,25 @@ jobs:
       shared_image_artifact_namespace: release-live
       shared_image_policy: no-push-artifact
     secrets: &live_e2e_release_secrets
+      AZURE_SPEECH_KEY: ${{ secrets.AZURE_SPEECH_KEY }}
+      AZURE_SPEECH_REGION: ${{ secrets.AZURE_SPEECH_REGION }}
+      BASETEN_API_KEY: ${{ secrets.BASETEN_API_KEY }}
+      OPENCLAW_LIVE_R2_ACCOUNT_ID: ${{ secrets.OPENCLAW_LIVE_R2_ACCOUNT_ID }}
+      OPENCLAW_LIVE_R2_BUCKET: ${{ secrets.OPENCLAW_LIVE_R2_BUCKET }}
+      OPENCLAW_LIVE_R2_ACCESS_KEY_ID: ${{ secrets.OPENCLAW_LIVE_R2_ACCESS_KEY_ID }}
+      OPENCLAW_LIVE_R2_SECRET_ACCESS_KEY: ${{ secrets.OPENCLAW_LIVE_R2_SECRET_ACCESS_KEY }}
+      ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}
+      FEATHERLESS_API_KEY: ${{ secrets.FEATHERLESS_API_KEY }}
+      OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN: ${{ secrets.OPENCLAW_LIVE_GITHUB_COPILOT_TOKEN }}
+      OPENCLAW_GOOGLE_MEET_LIVE_MEETING: ${{ secrets.OPENCLAW_GOOGLE_MEET_LIVE_MEETING }}
+      OPENCLAW_GOOGLE_MEET_CLIENT_ID: ${{ secrets.OPENCLAW_GOOGLE_MEET_CLIENT_ID }}
+      OPENCLAW_GOOGLE_MEET_CLIENT_SECRET: ${{ secrets.OPENCLAW_GOOGLE_MEET_CLIENT_SECRET }}
+      OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN: ${{ secrets.OPENCLAW_GOOGLE_MEET_REFRESH_TOKEN }}
+      GRADIUM_API_KEY: ${{ secrets.GRADIUM_API_KEY }}
+      INWORLD_API_KEY: ${{ secrets.INWORLD_API_KEY }}
+      MODEL_API_KEY: ${{ secrets.MODEL_API_KEY }}
+      VOLCENGINE_TTS_API_KEY: ${{ secrets.VOLCENGINE_TTS_API_KEY }}
+      OPENCLAW_DISCORD_SMOKE_BOT_TOKEN: ${{ secrets.OPENCLAW_DISCORD_SMOKE_BOT_TOKEN }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -1429,11 +1473,13 @@ jobs:
       DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
       DASHSCOPE_API_KEY: ${{ secrets.DASHSCOPE_API_KEY }}
       GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+      KIE_API_KEY: ${{ secrets.KIE_API_KEY }}
       KIMI_API_KEY: ${{ secrets.KIMI_API_KEY }}
       MODELSTUDIO_API_KEY: ${{ secrets.MODELSTUDIO_API_KEY }}
       MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
       MISTRAL_API_KEY: ${{ secrets.MISTRAL_API_KEY }}
       MINIMAX_API_KEY: ${{ secrets.MINIMAX_API_KEY }}
+      NOVITA_API_KEY: ${{ secrets.NOVITA_API_KEY }}
       OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
       OPENCODE_ZEN_API_KEY: ${{ secrets.OPENCODE_ZEN_API_KEY }}
       OPENCLAW_LIVE_BROWSER_CDP_URL: ${{ secrets.OPENCLAW_LIVE_BROWSER_CDP_URL }}
@@ -1444,6 +1490,7 @@ jobs:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      PIXVERSE_API_KEY: ${{ secrets.PIXVERSE_API_KEY }}
       QWEN_API_KEY: ${{ secrets.QWEN_API_KEY }}
       FAL_KEY: ${{ secrets.FAL_KEY }}
       RUNWAY_API_KEY: ${{ secrets.RUNWAY_API_KEY }}
@@ -1503,6 +1550,7 @@ jobs:
       prepublish_plugin_registry_manifest_sha256: ${{ fromJSON(needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryManifestSha256 || '' }}
       codex_plugin_spec: ${{ needs.resolve_target.outputs.codex_plugin_spec }}
       published_upgrade_survivor_baseline: ${{ format('openclaw@{0}', needs.prepare_release_package.outputs.upgrade_baseline) }}
+      published_upgrade_survivor_baselines: ${{ inputs.qualification_baselines_json != '' && join(fromJSON(inputs.qualification_baselines_json).upgradeSurvivorBaselines, ' ') || '' }}
       shared_image_artifact_namespace: release-docker
       shared_image_artifact_name: ${{ fromJSON(needs.prepare_release_package.outputs.candidate_artifact_json).imageArtifactName || '' }}
       shared_image_artifact_id: ${{ fromJSON(needs.prepare_release_package.outputs.candidate_artifact_json).imageArtifactId || '' }}
@@ -1542,7 +1590,7 @@ jobs:
       prepublish_plugin_registry_json: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '' }}
       suite_profile: custom
       docker_lanes: ${{ needs.resolve_target.outputs.package_acceptance_lanes }}
-      published_upgrade_survivor_baseline: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && format('openclaw@{0}', needs.prepare_release_package.outputs.upgrade_baseline) || 'openclaw@latest' }}
+      published_upgrade_survivor_baseline: ${{ inputs.qualification_baselines_json != '' && fromJSON(inputs.qualification_baselines_json).upgradeBaseline || (needs.resolve_target.outputs.package_acceptance_package_spec == '' && format('openclaw@{0}', needs.prepare_release_package.outputs.upgrade_baseline) || 'openclaw@latest') }}
       published_upgrade_survivor_baselines: ${{ needs.prepare_release_package.outputs.upgrade_survivor_baselines }}
       published_upgrade_survivor_scenarios: ${{ needs.prepare_release_package.outputs.upgrade_survivor_scenarios }}
       telegram_mode: ${{ (needs.resolve_target.outputs.telegram_waiver != '' || needs.resolve_target.outputs.skip_package_telegram_e2e == 'true') && 'none' || 'mock-openai' }}

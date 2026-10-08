@@ -1,5 +1,6 @@
 import { expect, it, vi, type Mock } from "vitest";
 import { note } from "../../../packages/terminal-core/src/note.js";
+import { createDoctorMaintenanceFixture } from "../../commands/doctor-maintenance.test-support.js";
 import { noteStaleUpdateRuns } from "../../commands/doctor-update-run.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
 import * as updateCheck from "../../infra/update-check.js";
@@ -125,15 +126,9 @@ export function registerRepairCustodyTests(mocks: {
       });
       const release = vi.fn<Maintenance["release"]>().mockResolvedValue(undefined);
       const releaseState = vi.fn<Maintenance["releaseState"]>().mockResolvedValue(undefined);
-      mocks.maintenance.mockResolvedValue({
-        signal: new AbortController().signal,
-        run: <T>(operation: () => T): T => operation(),
-        finish,
-        release,
-        releaseState,
-        repairSqliteNoCow: vi.fn(async () => {}),
-        cleanupRetainedRuntimes: vi.fn(async () => {}),
-      });
+      mocks.maintenance.mockResolvedValue(
+        createDoctorMaintenanceFixture({ finish, release, releaseState }),
+      );
       vi.spyOn(updateCheck, "resolveUpdateInstallKind").mockResolvedValue("package");
       // Observe reconciliation of the selected old run without inventing a live
       // recovery record; the finalizer's own invocation still uses the real ledger.

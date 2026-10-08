@@ -9,8 +9,10 @@ import { t } from "../../../i18n/index.ts";
 import type { ChatItem, ChatReplyTarget, MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { describeToolGroup, readPreparedActivity } from "../../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached, resolveToolCardOutcome } from "../../../lib/chat/tool-cards.ts";
-import { formatDurationCompact } from "../../../lib/format-duration.ts";
+import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
+import { formatDurationLong } from "../../../lib/format-duration.ts";
 import { renderChatAvatar } from "../chat-avatar.ts";
+import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
 import { renderGroupedMessage } from "./chat-message-bubble.ts";
 import { prepareChatMessageRender, resolveMessageActionDetails } from "./chat-message-markdown.ts";
 import { renderChatTimestamp } from "./chat-message-timestamp.ts";
@@ -21,7 +23,7 @@ import {
   resolveGroupReplyLine,
 } from "./chat-reply-attribution.ts";
 import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
-import type { SidebarContent } from "./chat-sidebar.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { syncToolDisclosureOverflow } from "./chat-tool-cards.ts";
 import { renderToolOutcomeSummary } from "./chat-tool-outcome-summary.ts";
 import { renderChatWorkingIndicator } from "./chat-working-indicator.ts";
@@ -34,7 +36,6 @@ export type StreamGroupPart = Extract<
 
 type StreamMessageOptions = Pick<
   Parameters<typeof renderGroupedMessage>[2],
-  | "onResolveReply"
   | "onOpenReply"
   | "replyNavigationId"
   | "sessionKey"
@@ -73,6 +74,10 @@ export type StreamGroupOptions = StreamMessageOptions & {
   showAssistantAvatar?: boolean;
   startupLabel?: string;
   waitingApproval?: boolean;
+  waitingSubagents?: ChatSubagentWait;
+  runningSubagents?: number;
+  onOpenSubagent?: (key: string) => void;
+  onOpenSubagents?: () => void;
   runOutputTokens?: number | null;
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
 };
@@ -89,6 +94,25 @@ export function renderStreamGroupParts(
   );
 }
 
+/** A wait no loaded handoff can place: the standard working row, after the transcript. */
+export function renderUnplacedSubagentWait(
+  sessionKey: string,
+  wait: ChatSubagentWait,
+  opts: StreamGroupOptions,
+) {
+  return renderStreamGroup(
+    [
+      {
+        kind: "reading-indicator",
+        key: `waiting-subagents:${sessionKey}`,
+        startedAt: wait.startedAt ?? 0,
+        waitingOn: "subagents",
+      },
+    ],
+    opts,
+  );
+}
+
 export function renderStreamGroupPart(
   part: StreamGroupPart,
   opts: StreamGroupOptions,
@@ -99,6 +123,10 @@ export function renderStreamGroupPart(
       mascot: opts.branding?.mascot,
       workingPhrases: opts.branding?.workingPhrases,
       waitingApproval: opts.waitingApproval === true,
+      waitingSubagents: part.waitingOn === "subagents" ? opts.waitingSubagents : undefined,
+      runningSubagents: opts.runningSubagents,
+      onOpenSubagent: opts.onOpenSubagent,
+      onOpenSubagents: opts.onOpenSubagents,
       startupLabel: opts.startupLabel,
       outputTokens: opts.runOutputTokens,
       presentation,
@@ -204,7 +232,7 @@ export function renderWorkGroupSummary(
     browserTabPreviews?: unknown;
   },
 ) {
-  const duration = formatDurationCompact(item.durationMs);
+  const duration = formatDurationLong(item.durationMs);
   const entries = item.groups.flatMap((group) =>
     group.messages.map(({ message }) => ({
       cards: extractToolCardsCached(message),
@@ -236,13 +264,14 @@ export function renderWorkGroupSummary(
   const activity = prepared.flatMap((entry) => entry.activity);
   for (const [index, card] of fallback.entries()) {
     const outcome = resolveToolCardOutcome(card, false);
+    const display = resolveToolDisplay(card);
     activity.push({
       itemId: `work-summary-raw:${index}`,
       toolCallId: card.callId,
       kind: "tool",
       phase: "end",
-      title: card.name,
-      name: card.name,
+      title: display.name,
+      name: display.name,
       status: outcome === "succeeded" ? "completed" : outcome === "unknown" ? undefined : outcome,
     });
   }
@@ -265,14 +294,14 @@ export function renderWorkGroupSummary(
           <span class="chat-activity-group__label">${label}</span>
         </span>
         ${
-          total > 0
+          opts.expanded && total > 0
             ? html`<span class="chat-work-group__total"
                 >·
                 ${t(`chat.workRun.toolCalls${total === 1 ? "One" : "Many"}`, { count: String(total) })}</span
               >`
             : nothing
         }
-        ${outcomes.map((outcome) => html`<span class="muted">· ${outcome.label}</span>`)}
+        ${outcomes.map((outcome) => html`<span class="chat-activity-group__outcome muted">· ${outcome.label}</span>`)}
         ${
           toolOutcomes === nothing
             ? nothing

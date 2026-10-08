@@ -12,12 +12,8 @@ function asConfig(value: unknown): OpenClawConfig {
   return value as OpenClawConfig;
 }
 
-function createAgentListConfig(): OpenClawConfig {
-  return asConfig({
-    agents: {
-      list: [{ id: "a" }],
-    },
-  });
+function createArrayConfig(): Record<string, unknown> {
+  return { accounts: [{ id: "a" }] };
 }
 
 const BLOCKED_PATH_SEGMENTS = ["__proto__", "constructor", "prototype"];
@@ -26,35 +22,31 @@ const POLLUTION_PROBE = "openclawPathPollutionProbe";
 describe("secrets path utils", () => {
   it("deletePathStrict compacts arrays via splice", () => {
     const config = asConfig({});
-    setPathCreateStrict(config, ["agents", "list"], [{ id: "a" }, { id: "b" }, { id: "c" }]);
-    const changed = deletePathStrict(config, ["agents", "list", "1"]);
+    setPathCreateStrict(config, ["accounts"], [{ id: "a" }, { id: "b" }, { id: "c" }]);
+    const changed = deletePathStrict(config, ["accounts", "1"]);
     expect(changed).toBe(true);
-    expect(getPath(config, ["agents", "list"])).toEqual([{ id: "a" }, { id: "c" }]);
+    expect(getPath(config, ["accounts"])).toEqual([{ id: "a" }, { id: "c" }]);
   });
 
   it("getPath returns undefined for invalid array path segment", () => {
-    const config = asConfig({
-      agents: {
-        list: [{ id: "a" }],
-      },
-    });
-    expect(getPath(config, ["agents", "list", "foo"])).toBeUndefined();
-    expect(getPath(config, ["agents", "list", "0abc"])).toBeUndefined();
-    expect(getPath(config, ["agents", "list", "+0"])).toBeUndefined();
-    expect(getPath(config, ["agents", "list", "9007199254740993"])).toBeUndefined();
-    expect(getPath(config, ["agents", "list", "4294967294"])).toBeUndefined();
+    const config = createArrayConfig();
+    expect(getPath(config, ["accounts", "foo"])).toBeUndefined();
+    expect(getPath(config, ["accounts", "0abc"])).toBeUndefined();
+    expect(getPath(config, ["accounts", "+0"])).toBeUndefined();
+    expect(getPath(config, ["accounts", "9007199254740993"])).toBeUndefined();
+    expect(getPath(config, ["accounts", "4294967294"])).toBeUndefined();
   });
 
   it("setPathCreateStrict rejects unsafe array path segments", () => {
-    const config = createAgentListConfig();
+    const config = createArrayConfig();
 
     expect(() =>
-      setPathCreateStrict(config, ["agents", "list", Number.MAX_SAFE_INTEGER + 2, "id"], "b"),
+      setPathCreateStrict(config, ["accounts", Number.MAX_SAFE_INTEGER + 2, "id"], "b"),
     ).toThrow(/Invalid array index segment/);
-    expect(() => setPathCreateStrict(config, ["agents", "list", 4294967294, "id"], "b")).toThrow(
+    expect(() => setPathCreateStrict(config, ["accounts", 4294967294, "id"], "b")).toThrow(
       /Invalid array index segment/,
     );
-    expect(() => setPathCreateStrict(config, ["agents", "list", "+0", "id"], "b")).toThrow(
+    expect(() => setPathCreateStrict(config, ["accounts", "+0", "id"], "b")).toThrow(
       /Invalid path shape/,
     );
   });
@@ -91,13 +83,9 @@ describe("secrets path utils", () => {
   });
 
   it("setPathExistingStrict throws when path does not already exist", () => {
-    const config = createAgentListConfig();
+    const config = createArrayConfig();
     expect(() =>
-      setPathExistingStrict(
-        config,
-        ["agents", "list", "0", "memorySearch", "remote", "apiKey"],
-        "x",
-      ),
+      setPathExistingStrict(config, ["accounts", "0", "credentials", "remote", "apiKey"], "x"),
     ).toThrow(/Path segment does not exist/);
   });
 

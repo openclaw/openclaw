@@ -54,23 +54,13 @@ export function isSelfChatMode(
   selfE164: string | null | undefined,
   allowFrom?: Array<string | number> | null,
 ): boolean {
-  if (!selfE164) {
-    return false;
-  }
-  if (!Array.isArray(allowFrom) || allowFrom.length === 0) {
+  if (!selfE164 || !Array.isArray(allowFrom) || allowFrom.length === 0) {
     return false;
   }
   const normalizedSelf = normalizeE164(selfE164);
-  return allowFrom.some((n) => {
-    if (n === "*") {
-      return false;
-    }
-    try {
-      return normalizeE164(String(n)) === normalizedSelf;
-    } catch {
-      return false;
-    }
-  });
+  return allowFrom.some(
+    (entry) => entry !== "*" && normalizeE164(String(entry)) === normalizedSelf,
+  );
 }
 
 export function toWhatsappJid(number: string): string {

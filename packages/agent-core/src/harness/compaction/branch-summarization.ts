@@ -1,13 +1,8 @@
-import type { Model, StreamFn } from "@openclaw/llm-core";
 import {
   CHARS_PER_TOKEN_ESTIMATE,
   estimateStringChars,
 } from "@openclaw/normalization-core/cjk-chars";
-import {
-  type AgentCoreCompletionRuntimeDeps,
-  consumeAgentCoreStream,
-  resolveAgentCoreCompleteFn,
-} from "../../runtime-deps.js";
+import { consumeAgentCoreStream, resolveAgentCoreCompleteFn } from "../../runtime-deps.js";
 import type { AgentMessage } from "../../types.js";
 import { convertToLlm } from "../messages.js";
 import { projectSessionEntryMessage } from "../session/session.js";
@@ -19,7 +14,11 @@ import {
   ok,
   type Result,
 } from "../types.js";
-import { SUMMARIZATION_SYSTEM_PROMPT } from "./summarization-prompts.js";
+import type { SummarizationCompletionParams } from "./summarization-completion.js";
+import {
+  createSummarizationContext,
+  SUMMARIZATION_SYSTEM_PROMPT,
+} from "./summarization-prompts.js";
 import {
   computeFileLists,
   createFileOps,
@@ -66,26 +65,17 @@ export interface CollectBranchPathEntriesResult<TEntry extends BranchPathEntry> 
 }
 
 /** Options for generating a branch summary. */
-interface GenerateBranchSummaryOptions {
-  /** Model used for summarization. */
-  model: Model;
-  /** API key forwarded to the provider. */
+type GenerateBranchSummaryOptions = Pick<
+  SummarizationCompletionParams,
+  "model" | "headers" | "runtime" | "streamFn" | "customInstructions"
+> & {
   apiKey: string;
-  /** Optional request headers forwarded to the provider. */
-  headers?: Record<string, string>;
-  /** Abort signal for the summarization request. */
   signal: AbortSignal;
-  /** Runtime used to complete the summarization request. */
-  runtime?: AgentCoreCompletionRuntimeDeps;
-  /** Optional stream implementation used instead of the runtime complete function. */
-  streamFn?: StreamFn;
-  /** Optional instructions appended to or replacing the default prompt. */
-  customInstructions?: string;
   /** Replace the default prompt with custom instructions instead of appending them. */
   replaceInstructions?: boolean;
   /** Tokens reserved for prompt and model output. Defaults to 16384. */
   reserveTokens?: number;
-}
+};
 
 /** Collect entries that should be summarized before navigating to a different session tree entry. */
 export function collectEntriesForBranchSummaryFromBranches<TEntry extends BranchPathEntry>(
@@ -188,14 +178,11 @@ export async function generateBranchSummary(
     replaceInstructions,
     reserveTokens = 16384,
   } = options;
-  let instructions: string;
-  if (replaceInstructions && customInstructions) {
-    instructions = customInstructions;
-  } else if (customInstructions) {
-    instructions = `${BRANCH_SUMMARY_PROMPT}\n\nAdditional focus: ${customInstructions}`;
-  } else {
-    instructions = BRANCH_SUMMARY_PROMPT;
-  }
+  const instructions =
+    replaceInstructions && customInstructions
+      ? customInstructions
+      : BRANCH_SUMMARY_PROMPT +
+        (customInstructions ? `\n\nAdditional focus: ${customInstructions}` : "");
   const promptPrefix = "<conversation>\n";
   const promptSuffix = `\n</conversation>\n\n${instructions}`;
   const fixedInputTokens = Math.ceil(
@@ -245,14 +232,7 @@ export async function generateBranchSummary(
   }
   const promptText = `${promptPrefix}${conversationText}${promptSuffix}`;
 
-  const summarizationMessages = [
-    {
-      role: "user" as const,
-      content: [{ type: "text" as const, text: promptText }],
-      timestamp: Date.now(),
-    },
-  ];
-  const context = { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages };
+  const context = createSummarizationContext(promptText);
   const streamOptions = { apiKey, headers, signal, maxTokens: maxSummaryOutputTokens };
   const response = options.streamFn
     ? await consumeAgentCoreStream(options.streamFn(model, context, streamOptions), options.runtime)
@@ -283,12 +263,9 @@ export async function generateBranchSummary(
     );
   }
 
-  let summary = BRANCH_SUMMARY_PREAMBLE + summaryText;
   const { readFiles, modifiedFiles } = computeFileLists(fileOps);
-  summary += formatFileOperations(readFiles, modifiedFiles);
-
   return ok({
-    summary,
+    summary: BRANCH_SUMMARY_PREAMBLE + summaryText + formatFileOperations(readFiles, modifiedFiles),
     readFiles,
     modifiedFiles,
   });

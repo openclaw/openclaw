@@ -146,7 +146,24 @@ describe.each(["node", "bun"] as const)("%s probe failures", (runtime) => {
     const resolve = runtime === "node" ? resolvePreferredNodePath : resolvePreferredBunPath;
     await expect(
       resolve({ env: {}, runtime, platform: "linux", execPath: "/fixture/other", execFile }),
-    ).rejects.toThrow(/probe failed.*EACCES/s);
+    ).rejects.toThrow(/check failed.*EACCES/s);
+  });
+});
+
+it("rejects a Bun node shim even when its emulated Node and SQLite versions are supported", async () => {
+  mockNodePathPresent("/usr/bin/node");
+  const metadata = JSON.parse(nodeRuntime("26.8.1").stdout);
+  const result = await resolveSystemNodeInfo({
+    env: {},
+    platform: "linux",
+    execFile: async () => ({
+      stdout: JSON.stringify({ ...metadata, bunVersion: "1.4.3" }),
+      stderr: "",
+    }),
+  });
+  expect(result).toMatchObject({
+    status: "unsupported",
+    capabilityError: "The executable is Bun, not Node.",
   });
 });
 
@@ -227,7 +244,7 @@ describe("resolvePreferredNodePath", () => {
       });
     };
     await expect(install()).rejects.toThrow(
-      /Node runtime probe failed.*\/usr\/bin\/node.*cwd.*EACCES/s,
+      /Node runtime check failed.*\/usr\/bin\/node.*cwd.*EACCES/s,
     );
   });
 
@@ -432,7 +449,7 @@ describe("resolvePreferredBunPath", () => {
         await expect(result).resolves.toBeUndefined();
         expect(execFile).not.toHaveBeenCalled();
       } else {
-        await expect(result).rejects.toThrow(/Bun runtime probe failed.*EACCES/s);
+        await expect(result).rejects.toThrow(/Bun runtime check failed.*EACCES/s);
       }
     },
   );
@@ -700,7 +717,7 @@ describe("resolveSystemNodeInfo", () => {
       execFile: vi.fn().mockRejectedValue(cause),
     });
     const warning = renderSystemNodeWarning(info, "/selected/node");
-    expect(warning).toContain("probe failed");
+    expect(warning).toContain("check failed");
     expect(warning).toContain("EACCES");
     expect(warning).toContain(darwinNode);
     expect(warning).not.toContain("Install Node");

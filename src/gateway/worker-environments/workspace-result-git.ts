@@ -1,5 +1,5 @@
 import os from "node:os";
-import { enqueueGitRefMutation } from "../../infra/git-exec.js";
+import { enqueueGitRefMutation, gitCommandArgv } from "../../infra/git-exec.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 
 export const WORKSPACE_RESULT_GIT_TIMEOUT_MS = 10 * 60_000;
@@ -9,17 +9,11 @@ export function workspaceResultCheckpointInitArgs(): string[] {
 }
 
 export function workspaceResultGitCommand(cwd: string, args: string[]): string[] {
-  return [
-    "git",
-    "-c",
+  return gitCommandArgv(cwd, args, [
     // The platform null device disables hooks without trusting an unowned path.
     `core.hooksPath=${os.devNull}`,
-    "-c",
     "core.fsmonitor=false",
-    "-C",
-    cwd,
-    ...args,
-  ];
+  ]);
 }
 
 export async function requireWorkspaceResultGit(
