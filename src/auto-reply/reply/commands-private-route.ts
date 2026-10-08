@@ -168,6 +168,12 @@ function readCommandDeliveryTarget(params: HandleCommandsParams): string | undef
   );
 }
 
+/**
+ * Resolves where an exec approval prompt for a command should be delivered:
+ * the private owner-DM target when one was resolved, else the originating
+ * command surface. The originating reviewer device stays separate from a
+ * private delivery target so command handlers cannot drop approval custody.
+ */
 export function buildCommandExecApprovalDefaults(
   commandParams: HandleCommandsParams,
   privateApprovalTarget?: PrivateCommandRouteTarget,
@@ -183,43 +189,19 @@ export function buildCommandExecApprovalDefaults(
       mainKey: commandParams.cfg.session?.mainKey,
       sessionScope: commandParams.cfg.session?.scope,
     },
-    ...resolveCommandExecApprovalRoute({ commandParams, privateApprovalTarget }),
+    messageProvider: privateApprovalTarget?.channel ?? commandParams.command.channel,
+    currentChannelId: privateApprovalTarget?.to ?? readCommandDeliveryTarget(commandParams),
+    currentThreadTs: privateApprovalTarget
+      ? privateApprovalTarget.threadId == null
+        ? undefined
+        : String(privateApprovalTarget.threadId)
+      : readCommandMessageThreadId(commandParams),
+    accountId: privateApprovalTarget
+      ? (privateApprovalTarget.accountId ?? undefined)
+      : (commandParams.ctx.AccountId ?? undefined),
+    approvalReviewerDeviceId: normalizeOptionalString(commandParams.ctx.ApprovalReviewerDeviceId),
     notifyOnExit: commandParams.cfg.tools?.exec?.notifyOnExit,
     notifyOnExitEmptySuccess: commandParams.cfg.tools?.exec?.notifyOnExitEmptySuccess,
-  };
-}
-
-/**
- * Resolves where an exec approval prompt for a command should be delivered:
- * the private owner-DM target when one was resolved, else the originating
- * command surface. The originating reviewer device stays separate from a
- * private delivery target so command handlers cannot drop approval custody.
- */
-export function resolveCommandExecApprovalRoute(params: {
-  commandParams: HandleCommandsParams;
-  privateApprovalTarget?: PrivateCommandRouteTarget;
-}): {
-  messageProvider: string;
-  currentChannelId: string | undefined;
-  currentThreadTs: string | undefined;
-  accountId: string | undefined;
-  approvalReviewerDeviceId: string | undefined;
-} {
-  const target = params.privateApprovalTarget;
-  return {
-    messageProvider: target?.channel ?? params.commandParams.command.channel,
-    currentChannelId: target?.to ?? readCommandDeliveryTarget(params.commandParams),
-    currentThreadTs: target
-      ? target.threadId == null
-        ? undefined
-        : String(target.threadId)
-      : readCommandMessageThreadId(params.commandParams),
-    accountId: target
-      ? (target.accountId ?? undefined)
-      : (params.commandParams.ctx.AccountId ?? undefined),
-    approvalReviewerDeviceId: normalizeOptionalString(
-      params.commandParams.ctx.ApprovalReviewerDeviceId,
-    ),
   };
 }
 
