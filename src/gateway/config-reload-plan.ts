@@ -488,6 +488,15 @@ function extractAccountIdFromPath(
       if (!config) {
         continue;
       }
+      const accounts = config.channels?.[plugin.id]?.accounts;
+      if (
+        isPlainObject(accounts) &&
+        Object.keys(accounts).some(
+          (key) => key.includes(".") && matchesReloadPrefix(path, `${prefix}${key}`),
+        )
+      ) {
+        return null;
+      }
       for (const listed of plugin.config.listAccountIds(config)) {
         if (normalizeOptionalAccountId(listed) === normalized) {
           matches.add(listed);
@@ -500,7 +509,10 @@ function extractAccountIdFromPath(
   if (matches.size > 1) {
     return null;
   }
-  return [...matches][0] ?? (id === normalized ? id : null);
+  return (
+    [...matches][0] ??
+    (!options.previousConfig && !options.candidateConfig && id === normalized ? id : null)
+  );
 }
 
 function canReloadChannelAccountIndividually(params: {

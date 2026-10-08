@@ -1135,7 +1135,9 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           if (!canHandoff) {
             releaseRouteHandoff(store, id);
           }
-          const task = store.tasks.get(id);
+          const task =
+            store.tasks.get(id) ??
+            (optsLocal.strict && retainCleanupOwner ? store.starting.get(id) : undefined);
           // Idle accounts have no captured teardown; managed getters need cleanup admission.
           const fallbackStop =
             !lifetime && plugin

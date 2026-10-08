@@ -153,6 +153,7 @@ export async function restartGatewayChannels(options: {
       const canRestart = () => !removed && !suppressed && !isLifecycleReloadAborted();
       await params.stopChannel(channel, accountId, {
         manual: false,
+        ...(removed ? { strict: true } : {}),
         ...(canRestart() ? { routeHandoff: true } : {}),
       });
       if (canRestart()) {

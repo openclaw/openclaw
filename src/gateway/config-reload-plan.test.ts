@@ -71,6 +71,14 @@ describe("Gateway core reload policy", () => {
     { before: ["Root"], after: ["root"], key: "Root", canonical: false, target: null },
     { before: ["Root", "root"], after: ["root"], key: "Root", canonical: false, target: null },
     { before: ["Default"], after: [], key: "Default", canonical: true, target: null },
+    { before: ["team.ops"], after: [], key: "team.ops", canonical: true, target: null },
+    {
+      before: ["team", "team.ops"],
+      after: ["team"],
+      key: "team.ops",
+      canonical: true,
+      target: null,
+    },
   ])(
     "uses the listed runtime identity for $key: $before -> $after (canonical=$canonical)",
     ({ before, after, key, canonical, target }) => {
