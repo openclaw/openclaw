@@ -2585,7 +2585,6 @@
 ["src/agents/embedded-agent-runner/run.timeout-context-recovery.test.ts","./logger.js","71a35ea96c5bdf41f526b0d00bedc65b62a1035abc7ace31e802e1d297065c07",1]
 ["src/agents/embedded-agent-runner/run/assistant-failure.failover.test.ts","../../../plugins/provider-failover.js","964fef82acbefadbaad66973e230d8105d7ceaf705ead95c9d0266897c5056c9",1]
 ["src/agents/embedded-agent-runner/run/assistant-failure.test.ts","../../../plugins/provider-failover.js","028007f0d77e6f17bc2452888b5d65dddf3d925b9a42d1d3ac5f5c2b63318eba",1]
-["src/agents/embedded-agent-runner/run/attempt-abort.test.ts","../../embedded-agent-subscribe.handlers.tools.js","a3fab90bf5ff647f131ecc631fa862e6e25e2de93a66a8cb01b41656b315cd8d",1]
 ["src/agents/embedded-agent-runner/run/attempt-abort.test.ts","../runs.js","104cc8fe863e5c6ae7ebdb3f13321e026ea4475feb8f2dd6c7fd6cd0ed48fbcc",1]
 ["src/agents/embedded-agent-runner/run/attempt-bundle-tools.test.ts","../../agent-bundle-lsp-runtime.js","fd72b3b7c87429a46303bb4ad50b9364eed90c11777d303fbd6edd929ed69a88",1]
 ["src/agents/embedded-agent-runner/run/attempt-bundle-tools.test.ts","../../agent-bundle-mcp-tools.js","b917ea3e287ef614ed7e15735541aafc581d3d4aca5f927bc6b96dfb844f58fe",1]
