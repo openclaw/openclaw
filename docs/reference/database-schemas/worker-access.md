@@ -2334,6 +2334,18 @@ reads used by immediate native-fork authority checks remain separate migration
 work. Schemas, stored data, retention, and update behavior are unchanged. See
 [await session upstream links](/plugins/sdk-migration/how-to-migrate#await-session-upstream-links).
 
+Gateway branch listing and fork, rewind, and switch preparation read upstream
+links through that worker. Its connection retains one exact row or absence at
+the existing admitted read revision; foreign commits, local writes, schema
+changes, and close invalidate reuse. Transactions, pinned snapshots, and dynamic
+authorizers keep querying. Each result decodes into caller-owned values, and
+callers recheck their original authority after awaiting the read. The final
+synchronous native-fork guard retains its current-source check because released
+synchronous writers and foreign commits prevent complete revocation publication.
+Its retirement path is the next Plugin SDK major: remove the raw synchronous
+writers and make mutation publications complete before replacing this guard with
+prepared facts.
+
 Watched human-turn signals and upstream observations use the shared-state writer,
 including their watcher check and pruning. Producers await settlement and recheck
 current session authority; upstream observations compare the captured source in

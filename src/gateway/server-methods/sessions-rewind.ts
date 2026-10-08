@@ -31,7 +31,7 @@ import {
   isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
-import { readSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
+import { readSessionUpstreamLinkAsync } from "../../sessions/session-upstream-links.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
@@ -151,10 +151,11 @@ async function listBranches(
       agentId: requestedAgent.agentId,
       projection: "list",
     });
-    if (
-      !current.entry?.sessionId ||
-      readSessionUpstreamLink(current.canonicalKey, current.target.agentId)
-    ) {
+    const upstreamLink = current.entry?.sessionId
+      ? await readSessionUpstreamLinkAsync(current.canonicalKey, current.target.agentId)
+      : undefined;
+    read?.assertCurrent();
+    if (!current.entry?.sessionId || upstreamLink) {
       // Fresh and upstream-owned sessions have no local branches. Only the
       // mutating siblings treat those states as errors.
       respond(true, { branches: [] }, undefined);
@@ -244,7 +245,11 @@ async function mutateSessionAtMessage(
   }
   const initialSessionId = initial.entry.sessionId;
   const initialLifecycleRevision = initial.entry.lifecycleRevision;
-  const initialUpstreamLink = readSessionUpstreamLink(initial.canonicalKey, initial.target.agentId);
+  const initialUpstreamLink = await readSessionUpstreamLinkAsync(
+    initial.canonicalKey,
+    initial.target.agentId,
+  );
+  commitGuard();
   // Only fork may cross to an upstream-owned conversation (it creates a new thread).
   // Rewind and switch would mutate the shared upstream history in place; fail closed.
   if (initialUpstreamLink && action !== "fork") {
@@ -316,10 +321,18 @@ async function mutateSessionAtMessage(
         );
         return;
       }
+      const upstreamLink = await readSessionUpstreamLinkAsync(
+        initial.canonicalKey,
+        initial.target.agentId,
+      );
+      commitGuard();
       const current = loadCurrent();
       if (
         current.entry?.sessionId !== initialSessionId ||
-        current.entry.lifecycleRevision !== initialLifecycleRevision
+        current.entry.lifecycleRevision !== initialLifecycleRevision ||
+        current.canonicalKey !== initial.canonicalKey ||
+        current.target.agentId !== initial.target.agentId ||
+        current.storePath !== initial.storePath
       ) {
         reject(`Session ${sessionKey} changed; retry ${action}.`);
         return;
@@ -327,7 +340,6 @@ async function mutateSessionAtMessage(
       if (rejectInitializing(current.entry.initializationPending)) {
         return;
       }
-      const upstreamLink = readSessionUpstreamLink(current.canonicalKey, current.target.agentId);
       const archived = current.entry.archivedAt !== undefined;
       if ((archived || upstreamLink) && action !== "fork") {
         const message = archived

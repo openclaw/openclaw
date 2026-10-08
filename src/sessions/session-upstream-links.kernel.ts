@@ -2,8 +2,18 @@ import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJson } from "@openclaw/normalization-core";
 import type { Selectable } from "kysely";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { registerNodeSqliteDisposeCallback } from "../infra/kysely-sync-cache-state.js";
+import {
+  createSqliteQueryCache,
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
+import {
+  getSqliteReadOperationRevision,
+  type SqliteReadOperationRevision,
+} from "../infra/sqlite-schema-facts.js";
 import type { SessionUpstreamJsonValue, SessionUpstreamKind } from "../plugins/session-catalog.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 
@@ -82,6 +92,50 @@ export type SessionUpstreamLinkInput = Omit<
 
 function getSessionUpstreamKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "session_upstream_links">>(db);
+}
+
+// Retain one exact result, including absence, only at the connection owner's admitted revision.
+const upstreamLinkQuery = createSqliteQueryCache((db) => {
+  type Key = { sessionKey: string; agentId: string };
+  let retained:
+    | (Key & { revision: SqliteReadOperationRevision; row: SessionUpstreamLinkRow | undefined })
+    | undefined;
+  registerNodeSqliteDisposeCallback(db, () => {
+    retained = undefined;
+  });
+  return (key: Key): SessionUpstreamLinkRow | undefined => {
+    const revision = getSqliteReadOperationRevision(db);
+    if (
+      revision &&
+      retained?.revision === revision &&
+      retained.sessionKey === key.sessionKey &&
+      retained.agentId === key.agentId
+    ) {
+      return retained.row;
+    }
+    retained = undefined;
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      getSessionUpstreamKysely(db)
+        .selectFrom("session_upstream_links")
+        .selectAll()
+        .where("session_key", "=", key.sessionKey)
+        .where("agent_id", "=", key.agentId),
+    );
+    if (revision && getSqliteReadOperationRevision(db) === revision) {
+      retained = { ...key, revision, row };
+    }
+    return row;
+  };
+});
+
+export function readSessionUpstreamLinkInDatabase(
+  db: DatabaseSync,
+  sessionKey: string,
+  agentId: string,
+): SessionUpstreamLink | undefined {
+  const row = upstreamLinkQuery(db)({ sessionKey, agentId });
+  return row ? rowToSessionUpstreamLink(row) : undefined;
 }
 
 export function upsertSessionUpstreamLinkInDatabase(

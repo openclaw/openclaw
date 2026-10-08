@@ -15,6 +15,10 @@ export type SessionUpstreamSettlement =
   | { kind: "activity"; marker: SessionUpstreamJsonValue; now: number };
 
 export type SessionUpstreamWorkerOperations = {
+  "sessionUpstream.read": {
+    input: { sessionKey: string; agentId: string };
+    output: SessionUpstreamLink | undefined;
+  };
   "sessionUpstream.upsert": {
     input: {
       link: Omit<SessionUpstreamLink, "lastScannedAt" | "createdAt" | "updatedAt">;

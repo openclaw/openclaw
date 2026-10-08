@@ -130,7 +130,7 @@ export function collectRecentSessionHistoryIds(params: {
 }
 
 export function isRecentHistoricalSessionId(params: {
-  database: OpenClawAgentDatabase;
+  database: Pick<OpenClawAgentDatabase, "db">;
   preserveRecentMs?: number | null;
   sessionId: string;
 }): boolean {

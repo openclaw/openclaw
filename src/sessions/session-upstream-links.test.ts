@@ -1,11 +1,16 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { constants, DatabaseSync, StatementSync } from "node:sqlite";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import { runSqlitePinnedReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
+import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
@@ -16,10 +21,12 @@ import {
   deleteSessionUpstreamLinkAsync,
   listWatchedSessionUpstreamLinks,
   readSessionUpstreamLink,
+  readSessionUpstreamLinkAsync,
   upsertSessionUpstreamLink,
   upsertSessionUpstreamLinkAsync,
   upsertSessionUpstreamLinkWithCurrentSource,
 } from "./session-upstream-links.js";
+import { readSessionUpstreamLinkInDatabase } from "./session-upstream-links.kernel.js";
 
 const tempDirs: string[] = [];
 
@@ -61,6 +68,91 @@ afterAll(() => {
 });
 
 describe("session upstream links", () => {
+  it("reuses only the admitted exact link and observes mutation and snapshot boundaries", () => {
+    const options = createDatabaseOptions();
+    const key = "agent:main:adopted:retained";
+    upsertLink(key, "codex", options);
+    const { db, path: databasePath } = openOpenClawStateDatabase(options);
+    const read = (sessionKey = key, agentId = "main") =>
+      runSqliteReadOperationSync(db, () =>
+        readSessionUpstreamLinkInDatabase(db, sessionKey, agentId),
+      );
+    const reads = observeSqliteReadSql(StatementSync.prototype);
+    const count = () =>
+      reads.queries.filter((sql) => /^select .* from "session_upstream_links"/iu.test(sql)).length;
+    try {
+      const first = read();
+      expect(first?.upstreamRef).toEqual({ source: key });
+      const ref = first?.upstreamRef;
+      if (!ref || typeof ref !== "object" || Array.isArray(ref)) {
+        throw new Error("Expected the fixture's upstream reference");
+      }
+      ref.source = "caller-owned";
+      expect(read()?.upstreamRef).toEqual({ source: key });
+      expect(count()).toBe(1);
+
+      expect(read(key, "other")).toBeUndefined();
+      expect(read(key, "other")).toBeUndefined();
+      expect(count()).toBe(2);
+      const absent = `${key}:absent`;
+      expect(read(absent)).toBeUndefined();
+      expect(read(absent)).toBeUndefined();
+      expect(count()).toBe(3);
+      upsertLink(absent, "codex", options);
+      expect(read(absent)?.sessionKey).toBe(absent);
+
+      const update = db.prepare(
+        "UPDATE session_upstream_links SET thread_id = ? WHERE session_key = ?",
+      );
+      expect(read()?.threadId).toBe(`thread-${key}`);
+      update.run("local-replacement", key);
+      expect(read()?.threadId).toBe("local-replacement");
+      const foreign = new DatabaseSync(databasePath);
+      try {
+        foreign
+          .prepare("UPDATE session_upstream_links SET thread_id = ? WHERE session_key = ?")
+          .run("foreign-replacement", key);
+      } finally {
+        foreign.close();
+      }
+      expect(read()?.threadId).toBe("foreign-replacement");
+      const afterForeign = count();
+      expect(read()?.threadId).toBe("foreign-replacement");
+      expect(count()).toBe(afterForeign);
+
+      db.exec("BEGIN IMMEDIATE");
+      try {
+        update.run("rolled-back", key);
+        const before = count();
+        expect(read()?.threadId).toBe("rolled-back");
+        expect(read()?.threadId).toBe("rolled-back");
+        expect(count() - before).toBe(2);
+      } finally {
+        db.exec("ROLLBACK");
+      }
+      expect(read()?.threadId).toBe("foreign-replacement");
+      runSqlitePinnedReadSnapshotSync(db, () => {
+        const before = count();
+        expect(read()?.threadId).toBe("foreign-replacement");
+        expect(read()?.threadId).toBe("foreign-replacement");
+        expect(count() - before).toBe(2);
+      });
+
+      let allowed = true;
+      db.setAuthorizer((action, table) =>
+        !allowed && action === constants.SQLITE_READ && table === "session_upstream_links"
+          ? constants.SQLITE_DENY
+          : constants.SQLITE_OK,
+      );
+      expect(read()?.threadId).toBe("foreign-replacement");
+      allowed = false;
+      expect(read).toThrow(expect.objectContaining({ code: "ERR_SQLITE_ERROR", errcode: 23 }));
+    } finally {
+      db.setAuthorizer(null);
+      reads.restore();
+    }
+  });
+
   it("orders asynchronous writes and exact deletion without caller-thread SQL", async () => {
     const database = createDatabaseOptions();
     const input = {
@@ -86,6 +178,9 @@ describe("session upstream links", () => {
         { ...database, ifAbsent: true },
       );
       expect(await Promise.all([first, second])).toEqual([true, false]);
+      expect(await readSessionUpstreamLinkAsync(input.sessionKey, input.agentId, database)).toEqual(
+        expected,
+      );
       expect(
         await deleteSessionUpstreamLinkAsync(input.sessionKey, input.agentId, {
           ...database,
@@ -104,6 +199,9 @@ describe("session upstream links", () => {
           expected,
         }),
       ).toBe("absent");
+      expect(
+        await readSessionUpstreamLinkAsync(input.sessionKey, input.agentId, database),
+      ).toBeUndefined();
       sql.expectIdle();
     } finally {
       sql.restore();
@@ -115,7 +213,7 @@ describe("session upstream links", () => {
     const database = createDatabaseOptions();
     const sourceKey = "agent:main:adopted:source";
     upsertLink(sourceKey, "claude", database);
-    const source = readSessionUpstreamLink(sourceKey, "main", database)!;
+    const source = (await readSessionUpstreamLinkAsync(sourceKey, "main", database))!;
     const child = { ...source, sessionKey: "agent:main:adopted:child" };
     const sourceCurrent = {
       context: captureOpenClawStateWorkerContext(database),
@@ -131,6 +229,15 @@ describe("session upstream links", () => {
     ).toBe(true);
     // The retained worker must see a commit from the released synchronous owner.
     upsertSessionUpstreamLink({ ...source, threadId: "replacement" }, database);
+    const sql = observeMainThreadSql();
+    try {
+      expect(await readSessionUpstreamLinkAsync(sourceKey, "main", database)).toMatchObject({
+        threadId: "replacement",
+      });
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
     await expect(
       upsertSessionUpstreamLinkWithCurrentSource(
         { ...child, sessionKey: "agent:main:adopted:stale" },

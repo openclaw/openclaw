@@ -11,16 +11,25 @@ import {
 import { isSessionStateUpstreamCurrentInDatabase } from "./session-state-events.kernel.js";
 import {
   deleteSessionUpstreamLinkInDatabase,
+  readSessionUpstreamLinkInDatabase,
   rowToSessionUpstreamLink,
   sessionUpstreamLinkSourceMatches,
   upsertSessionUpstreamLinkInDatabase,
+  type SessionUpstreamLink,
 } from "./session-upstream-links.kernel.js";
 import type { SessionUpstreamWorkerOperations } from "./session-upstream-links.worker-contract.js";
 
 export function executeSessionUpstreamCommand(
   command: SqliteWorkerCommand<SessionUpstreamWorkerOperations>,
   options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
-): boolean | "deleted" | "absent" | "changed" {
+): boolean | "deleted" | "absent" | "changed" | SessionUpstreamLink | undefined {
+  if (command.type === "sessionUpstream.read") {
+    return readSessionUpstreamLinkInDatabase(
+      options.database.db,
+      command.input.sessionKey,
+      command.input.agentId,
+    );
+  }
   if (command.type === "sessionUpstream.current") {
     return isSessionStateUpstreamCurrentInDatabase(options.database.db, command.input);
   }
