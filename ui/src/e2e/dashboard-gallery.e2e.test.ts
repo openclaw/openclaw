@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { SessionsResolveResult } from "../../../packages/gateway-protocol/src/index.js";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
@@ -81,6 +82,21 @@ const boardSnapshots = dashboardRows.map((row) => ({
       : []),
   ],
 }));
+async function clippedToolbarControls(page: Page) {
+  return page.locator(".dashboards-toolbar").evaluate((toolbar) => {
+    const clip = toolbar.closest(".content")?.getBoundingClientRect();
+    const bounds = toolbar.getBoundingClientRect();
+    const right = Math.min(bounds.right, clip?.right ?? bounds.right);
+    const left = Math.max(bounds.left, clip?.left ?? bounds.left);
+    return Array.from(toolbar.querySelectorAll("input, select"))
+      .filter((control) => {
+        const rect = control.getBoundingClientRect();
+        return rect.right > right + 0.5 || rect.left < left - 0.5;
+      })
+      .map((control) => control.closest("label")?.textContent?.trim() ?? control.tagName);
+  });
+}
+
 suite.define(() => {
   it("opens a responsive gallery card without restarting its retained dashboard widgets", async () => {
     const proofDir = process.env.OPENCLAW_UI_E2E_RECORD === "1" ? suite.artifactDir : null;
@@ -175,6 +191,24 @@ suite.define(() => {
         if (proofDir) {
           await page.screenshot({ path: path.join(proofDir, "01-gallery.png") });
         }
+        // Four toolbar controls must wrap, not clip, beside the expanded sidebar.
+        await gallery.locator(".dashboards-toolbar").scrollIntoViewIfNeeded();
+        for (const width of [1000, 1280]) {
+          await page.setViewportSize({ width, height: 900 });
+          if (width === 1000) {
+            // The expanded sidebar leaves less than the toolbar's one-row minimum.
+            expect(
+              await gallery
+                .locator(".dashboards-toolbar")
+                .evaluate((element) => element.clientWidth),
+            ).toBeLessThan(744);
+          }
+          expect(await clippedToolbarControls(page)).toEqual([]);
+          if (proofDir) {
+            await page.screenshot({ path: path.join(proofDir, `01-toolbar-${width}.png`) });
+          }
+        }
+        await page.setViewportSize({ width: 1440, height: 900 });
 
         await releaseCard.locator("a").click();
         await page.waitForURL(
@@ -251,6 +285,7 @@ suite.define(() => {
                 getComputedStyle(element).gridTemplateColumns.split(" ").filter(Boolean).length,
             ),
         ).toBe(1);
+        expect(await clippedToolbarControls(page)).toEqual([]);
         if (proofDir) {
           await page.screenshot({ path: path.join(proofDir, "05-gallery-mobile.png") });
         }

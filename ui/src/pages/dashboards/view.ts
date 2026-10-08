@@ -10,8 +10,13 @@ import { renderPanelRefreshStatus } from "../../components/panel-refresh-status.
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
+import { handleContextMenuEvent } from "../../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
+import {
+  sessionMatchesArchivedFilter,
+  type SessionArchivedFilter,
+} from "../../lib/sessions/index.ts";
 import {
   isSessionKeyAddressable,
   sessionNavigationTarget,
@@ -32,16 +37,26 @@ export type DashboardGalleryFilters = {
   query: string;
   ownerId: string;
   sort: "updated" | "title";
+  /** Archived sessions keep their boards, so the gallery can still reach them on request. */
+  status: SessionArchivedFilter;
 };
 
 export type DashboardGalleryHandlers = {
   onQueryChange: (value: string) => void;
   onOwnerChange: (value: string) => void;
   onSortChange: (value: DashboardGalleryFilters["sort"]) => void;
+  onStatusChange: (value: SessionArchivedFilter) => void;
   onNavigate?: ApplicationContext["navigate"];
+  /** Present only when the host can run session lifecycle actions for a card. */
+  onOpenCardMenu?: (
+    row: DashboardRow,
+    position: { x: number; y: number },
+    trigger: HTMLElement | null,
+  ) => void;
+  openCardMenuKey?: string | null;
 };
 
-type DashboardRow = SessionsListResult["sessions"][number];
+export type DashboardRow = SessionsListResult["sessions"][number];
 
 function dashboardAuthor(row: DashboardRow, fallbackAgentId: string) {
   const actor = row.createdActor ?? row.owner?.actor;
@@ -53,6 +68,9 @@ function visibleDashboardRows(data: DashboardsRouteData, filters: DashboardGalle
   const query = filters.query.trim().toLocaleLowerCase();
   return (data.result?.sessions ?? [])
     .filter((row) => {
+      if (!sessionMatchesArchivedFilter(row, filters.status)) {
+        return false;
+      }
       const author = dashboardAuthor(row, data.fallbackAgentId);
       if (filters.ownerId && author.id !== filters.ownerId) {
         return false;
@@ -95,7 +113,23 @@ function renderDashboardCard(
   const author = dashboardAuthor(row, data.fallbackAgentId);
   const title = resolveSessionDisplayName(row.key, row);
   const initial = author.label.trim().charAt(0).toLocaleUpperCase() || "?";
-  return staticHtml`<article class="dashboard-card" data-dashboard-session=${row.key}>
+  const onOpenCardMenu = handlers.onOpenCardMenu;
+  const openMenuFromEvent = onOpenCardMenu
+    ? (event: MouseEvent | KeyboardEvent) =>
+        handleContextMenuEvent(
+          event,
+          event instanceof KeyboardEvent && event.currentTarget instanceof HTMLElement
+            ? event.currentTarget.querySelector<HTMLElement>(".dashboard-card__menu")
+            : null,
+          (trigger, x, y) => onOpenCardMenu(row, { x, y }, trigger),
+        )
+    : null;
+  return staticHtml`<article
+    class=${row.archived === true ? "dashboard-card dashboard-card--archived" : "dashboard-card"}
+    data-dashboard-session=${row.key}
+    @contextmenu=${openMenuFromEvent ?? nothing}
+    @keydown=${openMenuFromEvent ?? nothing}
+  >
     <${tag}
       class="dashboard-card__main"
       href=${target?.href ?? nothing}
@@ -123,6 +157,11 @@ function renderDashboardCard(
               ? html`<span class="dashboard-card__live"><i></i>${t("dashboardsPage.live")}</span>`
               : nothing
           }
+          ${
+            row.archived === true
+              ? html`<span class="dashboard-card__archived">${t("sessionsView.archived")}</span>`
+              : nothing
+          }
         </div>
         <div class="dashboard-card__author">
           <span class="dashboard-card__avatar" aria-hidden="true">${initial}</span>
@@ -140,6 +179,29 @@ function renderDashboardCard(
         ${target ? html`<span class="dashboard-card__open" aria-hidden="true">${icons.arrowUpRight}</span>` : nothing}
       </footer>
     </${tag}>
+    ${
+      onOpenCardMenu
+        ? html`<button
+            class="btn btn--icon btn--ghost dashboard-card__menu"
+            type="button"
+            title=${t("chat.sidebar.openSessionMenu")}
+            aria-label=${`${t("chat.sidebar.openSessionMenu")}: ${title}`}
+            aria-haspopup="menu"
+            aria-expanded=${String(handlers.openCardMenuKey === row.key)}
+            @click=${(event: MouseEvent) => {
+              event.preventDefault();
+              event.stopPropagation();
+              const trigger = event.currentTarget;
+              if (trigger instanceof HTMLElement) {
+                const rect = trigger.getBoundingClientRect();
+                onOpenCardMenu(row, { x: rect.right, y: rect.bottom + 4 }, trigger);
+              }
+            }}
+          >
+            ${icons.moreHorizontal}
+          </button>`
+        : nothing
+    }
   </article>`;
 }
 
@@ -216,6 +278,23 @@ function renderDashboardList(
           <option value="title">${t("dashboardsPage.sortTitle")}</option>
         </select>
       </label>
+      <label class="dashboards-select">
+        <span>${t("dashboardsPage.statusFilter")}</span>
+        <select
+          .value=${filters.status}
+          @change=${(event: Event) => {
+            const value =
+              event.currentTarget instanceof HTMLSelectElement ? event.currentTarget.value : null;
+            if (value === "active" || value === "archived" || value === "all") {
+              handlers.onStatusChange(value);
+            }
+          }}
+        >
+          <option value="all">${t("sessionsView.all")}</option>
+          <option value="active">${t("common.active")}</option>
+          <option value="archived">${t("sessionsView.archived")}</option>
+        </select>
+      </label>
     </div>
     <div class="dashboards-results" role="status">
       ${t("dashboardsPage.resultCount", { count: String(visibleRows.length) })}
@@ -225,7 +304,13 @@ function renderDashboardList(
         ? html`<div class="dashboards-no-results" data-dashboards-no-results>
             <span aria-hidden="true">${icons.search}</span>
             <strong>${t("dashboardsPage.noResultsTitle")}</strong>
-            <span>${t("dashboardsPage.noResultsDescription")}</span>
+            <span
+              >${t(
+                filters.status === "all"
+                  ? "dashboardsPage.noResultsDescription"
+                  : "dashboardsPage.noResultsStatusDescription",
+              )}</span
+            >
           </div>`
         : html`<div class="dashboards-grid">
             ${repeat(
@@ -244,7 +329,7 @@ function renderDashboardGallerySkeleton() {
     <div class="dashboards-loading" aria-hidden="true" inert>
       <div class="dashboards-toolbar">
         <div class="dashboards-search skeleton dashboards-loading__control"></div>
-        ${[0, 1].map(
+        ${[0, 1, 2].map(
           () => html`<div class="dashboards-select dashboards-loading__select">
             <div class="skeleton skeleton-line dashboards-loading__label"></div>
             <div class="skeleton dashboards-loading__control"></div>

@@ -23,6 +23,18 @@ import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import type { DashboardsRouteData } from "./view.ts";
 import "./dashboards-page.ts";
 
+const sessionOperations = vi.hoisted(() => ({
+  archiveSessionWithUndo: vi.fn(async () => undefined),
+  patchSession: vi.fn(async () => "completed" as const),
+  deleteSession: vi.fn(async () => undefined),
+}));
+vi.mock("../../components/session-organizer-operations.runtime.ts", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("../../components/session-organizer-operations.runtime.ts")
+  >()),
+  ...sessionOperations,
+}));
+
 type DashboardsPageElement = HTMLElement & {
   routeData?: DashboardsRouteData;
   updateComplete: Promise<boolean>;
@@ -423,5 +435,182 @@ describe("DashboardsPage", () => {
         heading.textContent?.trim(),
       ),
     ).toEqual(["Alpha signals", "Bravo health", "Zulu monitor"]);
+  });
+
+  it("routes card archive, restore, and delete through the shared session operations", async () => {
+    const live = {
+      ...row("agent:main:dashboard:live", "Live board"),
+      sessionId: "live-id",
+      agentId: "main",
+      updatedAt: 3,
+    };
+    const running = {
+      ...row("agent:main:dashboard:running", "Running board"),
+      sessionId: "running-id",
+      hasActiveRun: true,
+      updatedAt: 2,
+    };
+    // Older Gateway rows may report only status; it still counts as running.
+    const statusRunning = {
+      ...row("agent:main:dashboard:status-running", "Status-running board"),
+      sessionId: "status-running-id",
+      status: "running" as const,
+      updatedAt: 2,
+    };
+    const old = {
+      ...row("agent:main:dashboard:old", "Weekly digest"),
+      sessionId: "old-id",
+      archived: true,
+      updatedAt: 1,
+    };
+    const snapshot: SessionListSnapshot = {
+      result: results([live, running, statusRunning, old]),
+      agentId: null,
+      loading: false,
+      error: null,
+    };
+    const client = createDashboardClient();
+    const context = {
+      basePath: "",
+      gateway: {
+        snapshot: {
+          client,
+          phase: "connected",
+          hello: {
+            auth: { role: "operator", scopes: ["operator.admin"] },
+            features: { methods: ["sessions.patch", "sessions.delete", "board.get"] },
+          },
+        },
+        subscribe: () => () => undefined,
+      },
+      sessions: {
+        listSnapshot: () => snapshot,
+        subscribeList: () => () => undefined,
+        refreshList: vi.fn(async () => undefined),
+        archiveVisibility: () => undefined,
+      },
+      agentSelection: {
+        state: { selectedId: "main", scopeId: null },
+        subscribe: () => () => undefined,
+      },
+      agents: { state: { agentsList: null } },
+    } as unknown as ApplicationContext;
+    const element = document.createElement("openclaw-dashboards-page") as DashboardsPageElement;
+    element.routeData = {
+      ...routeData(live),
+      result: results([live, running, statusRunning, old]),
+    };
+    const provider = createApplicationContextProvider(context);
+    provider.append(element);
+    document.body.append(provider);
+    await element.updateComplete;
+
+    type CardMenu = HTMLElement & {
+      archived: boolean;
+      archiveAllowed: boolean;
+      deleteAllowed: boolean;
+      archiveDisabledReason: string | null;
+      deleteDisabledReason: string | null;
+      onAction: (action: "toggle-archived" | "delete") => void;
+      onClose: () => void;
+    };
+    // Mirrors the menu's select path: dispatch the action, then close.
+    const choose = (menu: CardMenu, action: "toggle-archived" | "delete") => {
+      menu.onAction(action);
+      menu.onClose();
+    };
+    const openMenu = async (key: string) => {
+      element
+        .querySelector(`[data-dashboard-session="${key}"] .dashboard-card__main`)!
+        .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      await element.updateComplete;
+      const menu = element.querySelector<CardMenu>("openclaw-dashboard-card-menu");
+      expect(menu).not.toBeNull();
+      return menu!;
+    };
+
+    // Maintenance archives idle dashboards, so the default gallery still lists them, marked.
+    expect(
+      element.querySelector(
+        '[data-dashboard-session="agent:main:dashboard:old"] .dashboard-card__archived',
+      )?.textContent,
+    ).toBe("Archived");
+
+    let menu = await openMenu(live.key);
+    expect(menu.archived).toBe(false);
+    expect(menu.archiveAllowed).toBe(true);
+    expect(menu.deleteAllowed).toBe(true);
+    expect(menu.archiveDisabledReason).toBeNull();
+    expect(menu.deleteDisabledReason).toBeNull();
+    choose(menu, "toggle-archived");
+    await vi.waitFor(() => expect(sessionOperations.archiveSessionWithUndo).toHaveBeenCalledOnce());
+    const [host, archivedSession, scope] = sessionOperations.archiveSessionWithUndo.mock
+      .calls[0] as unknown as [
+      {
+        sessionData: { isSessionMutationScopeCurrent: (scope: unknown) => boolean };
+        sidebarSessionStatusFilter: () => string;
+      },
+      unknown,
+      { client: unknown; signal: AbortSignal },
+    ];
+    expect(archivedSession).toMatchObject({
+      key: live.key,
+      agentId: "main",
+      sessionId: "live-id",
+      label: "Live board",
+      archived: false,
+    });
+    expect(scope.client).toBe(client);
+    expect(host.sessionData.isSessionMutationScopeCurrent(scope)).toBe(true);
+
+    menu = await openMenu(live.key);
+    choose(menu, "delete");
+    await vi.waitFor(() => expect(sessionOperations.deleteSession).toHaveBeenCalledOnce());
+    expect(sessionOperations.deleteSession).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ key: live.key, sessionId: "live-id" }),
+      expect.objectContaining({ client }),
+    );
+
+    // A running session keeps Archive but, as in the sidebar, offers no Delete.
+    menu = await openMenu(running.key);
+    expect(menu.archiveAllowed).toBe(true);
+    expect(menu.deleteAllowed).toBe(false);
+    // Opening another card's menu replaces the element; the old one's late hide is ignored.
+    const replacedMenu = menu;
+    menu = await openMenu(statusRunning.key);
+    expect(replacedMenu.isConnected).toBe(false);
+    replacedMenu.querySelector("wa-dropdown")?.dispatchEvent(new Event("wa-after-hide"));
+    await element.updateComplete;
+    expect(element.querySelector("openclaw-dashboard-card-menu")).toBe(menu);
+    expect(menu.archiveAllowed).toBe(true);
+    expect(menu.deleteAllowed).toBe(false);
+
+    const statusSelect = element.querySelectorAll<HTMLSelectElement>("select").item(2);
+    statusSelect.value = "archived";
+    statusSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    await element.updateComplete;
+    expect(
+      Array.from(element.querySelectorAll(".dashboard-card__heading h2"), (heading) =>
+        heading.textContent?.trim(),
+      ),
+    ).toEqual(["Weekly digest"]);
+    menu = await openMenu(old.key);
+    expect(menu.archived).toBe(true);
+    expect(menu.deleteAllowed).toBe(true);
+    expect(menu.deleteDisabledReason).toBeNull();
+    choose(menu, "toggle-archived");
+    await vi.waitFor(() => expect(sessionOperations.patchSession).toHaveBeenCalledOnce());
+    expect(sessionOperations.patchSession).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({ key: old.key, sessionId: "old-id", archived: true }),
+      { archived: false },
+      expect.objectContaining({ client }),
+      { sessionScope: true },
+    );
+
+    provider.remove();
+    expect(host.sessionData.isSessionMutationScopeCurrent(scope)).toBe(false);
+    expect(scope.signal.aborted).toBe(true);
   });
 });

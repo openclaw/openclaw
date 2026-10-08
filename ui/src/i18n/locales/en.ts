@@ -772,9 +772,12 @@ export const en: TranslationMap & {
     sortLabel: "Sort",
     sortUpdated: "Recently updated",
     sortTitle: "Title A–Z",
+    statusFilter: "Status",
+    noCardActions: "No actions for this dashboard",
     resultCount: "Dashboards: {count}",
     noResultsTitle: "No matching dashboards",
     noResultsDescription: "Try another search or author.",
+    noResultsStatusDescription: "Try another search, author, or status.",
   },
   dashboardDocument: {
     close: "Close dashboard",

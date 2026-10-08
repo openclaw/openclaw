@@ -25,6 +25,13 @@ core feature, owned by the thread, stored with the agent, and they survive
 
 Open `/dashboards` to browse dashboard-enabled threads as a card gallery. Search
 by thread or author, filter by author, and sort by recent activity or title.
+Dashboards of archived threads, including ones that session maintenance
+archived after inactivity (seven days by default), stay in the gallery with an
+**Archived** badge; use the **Status** filter to show only **Active** or
+**Archived** dashboards.
+Right-click a card, or use its **⋯** button, to archive or restore its thread
+or delete it. Deleting asks for confirmation and removes the thread together
+with its board.
 Stored sessions without a matching task URL remain visible as previews without an open link.
 Select a linked card to open its owning task using your personal presentation override
 or the dashboard’s shared default. Ordinary card clicks stay in the app and preserve
@@ -438,6 +445,7 @@ under `<stateDir>/workspaces`, without importing that content into a dashboard.
   every device you connect from.
 - Dashboard-enabled threads appear in `/dashboards`. Closing the Dashboard tab
   or side panel does not delete the dashboard or remove it from the gallery.
+  Archiving the thread keeps its card in the gallery, marked **Archived**.
 - The security model, storage details, and design rationale live in
   [Dashboard Architecture](/web/dashboard-architecture), including the
   documented sandbox tradeoffs.

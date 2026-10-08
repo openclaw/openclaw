@@ -332,11 +332,12 @@ describe("session activity semantics", () => {
                 mainKey: "main",
                 globalScope,
               },
-              { query: "", ownerId: "", sort: "updated" },
+              { query: "", ownerId: "", sort: "updated", status: "all" },
               {
                 onQueryChange: vi.fn(),
                 onOwnerChange: vi.fn(),
                 onSortChange: vi.fn(),
+                onStatusChange: vi.fn(),
               },
             ),
         surfaceContainer,

@@ -49,17 +49,20 @@
 }
 
 .dashboards-toolbar {
-  display: grid;
-  grid-template-columns: minmax(240px, 1fr) max-content max-content;
+  container-type: inline-size;
+  display: flex;
+  flex-wrap: wrap;
   gap: var(--space-3);
-  align-items: end;
+  align-items: flex-end;
   margin-bottom: var(--space-3);
 }
 
 .dashboards-search {
   position: relative;
   display: flex;
+  flex: 1 1 240px;
   align-items: center;
+  min-width: min(240px, 100%);
 }
 
 .dashboards-search > span[aria-hidden="true"] {
@@ -139,6 +142,7 @@
 }
 
 .dashboard-card {
+  position: relative;
   min-width: 0;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -255,6 +259,41 @@
   box-shadow: 0 0 0 3px var(--ok-subtle);
 }
 
+.dashboard-card__archived {
+  flex: none;
+  padding: 1px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+}
+
+.dashboard-card--archived .dashboard-preview {
+  opacity: 0.6;
+}
+
+/* Sits in the footer row, left of the open arrow; the card link cannot nest a button. */
+.dashboard-card__menu {
+  position: absolute;
+  right: calc(var(--space-4) + 14px + var(--space-1));
+  bottom: 6px;
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  padding: 6px;
+}
+
+.dashboard-card__menu svg {
+  width: 16px;
+  height: 16px;
+}
+
+.dashboard-card__menu[aria-expanded="true"] {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
 .dashboard-card__author {
   display: flex;
   align-items: center;
@@ -323,12 +362,15 @@
   }
 }
 
-@media (max-width: 768px) {
-  .dashboards-toolbar {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
+/* One row needs the 240px search, three selects of at least 156px, and gaps. Below that,
+   give search its own row and keep the selects together; flex-wrap covers longer labels. */
+@container (max-width: 800px) {
   .dashboards-search {
-    grid-column: 1 / -1;
+    flex-basis: 100%;
+  }
+  .dashboards-select {
+    flex: 1 1 0;
+    min-width: 0;
   }
   .dashboards-select select,
   .dashboards-loading__select {
@@ -337,15 +379,17 @@
   }
 }
 
+@container (max-width: 480px) {
+  .dashboards-select {
+    flex-basis: 100%;
+  }
+}
+
 @media (max-width: 560px) {
   .dashboards-header__count {
     display: none;
   }
-  .dashboards-grid,
-  .dashboards-toolbar {
+  .dashboards-grid {
     grid-template-columns: minmax(0, 1fr);
-  }
-  .dashboards-search {
-    grid-column: auto;
   }
 }
