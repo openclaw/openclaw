@@ -229,10 +229,7 @@ export function registerModelsCli(program: Command) {
         });
       });
 
-    for (const [action, handler] of [
-      ["add", "addFallbackCommand"],
-      ["remove", "removeFallbackCommand"],
-    ] as const) {
+    for (const action of ["add", "remove"] as const) {
       group
         .command(action)
         .description(`${action === "add" ? "Add" : "Remove"} ${article} ${noun} model`)
@@ -242,8 +239,9 @@ export function registerModelsCli(program: Command) {
             command,
             `${name} ${action}`,
             async ({ defaultRuntime }) => {
-              const commands = await import("../commands/models/fallbacks-shared.js");
-              await commands[handler](params, model, defaultRuntime);
+              const { changeFallbacksCommand } =
+                await import("../commands/models/fallbacks-shared.js");
+              await changeFallbacksCommand({ ...params, action }, model, defaultRuntime);
             },
           );
         });
@@ -489,8 +487,8 @@ export function registerModelsCli(program: Command) {
     .action(async (profileIds: string[], opts: ModelsAuthOrderOptions, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
         const agent = resolveModelAgentOption(command);
-        const { modelsAuthOrderSetCommand } = await import("../commands/models/auth-order.js");
-        await modelsAuthOrderSetCommand({ ...opts, agent, order: profileIds }, defaultRuntime);
+        const { modelsAuthOrderUpdateCommand } = await import("../commands/models/auth-order.js");
+        await modelsAuthOrderUpdateCommand({ ...opts, agent, order: profileIds }, defaultRuntime);
       });
     });
 
@@ -502,8 +500,8 @@ export function registerModelsCli(program: Command) {
     .action(async (opts: ModelsAuthOrderOptions, command) => {
       await withModelsRuntime(async ({ defaultRuntime, resolveModelAgentOption }) => {
         const agent = resolveModelAgentOption(command);
-        const { modelsAuthOrderClearCommand } = await import("../commands/models/auth-order.js");
-        await modelsAuthOrderClearCommand({ ...opts, agent }, defaultRuntime);
+        const { modelsAuthOrderUpdateCommand } = await import("../commands/models/auth-order.js");
+        await modelsAuthOrderUpdateCommand({ ...opts, agent, order: null }, defaultRuntime);
       });
     });
 }

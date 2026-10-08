@@ -14,8 +14,7 @@ const mocks = vi.hoisted(() => ({
   modelsSetImageCommand: vi.fn().mockResolvedValue(undefined),
   modelsRefreshCommand: vi.fn().mockResolvedValue(undefined),
   noopAsync: vi.fn(async () => undefined),
-  addFallbackCommand: vi.fn().mockResolvedValue(undefined),
-  removeFallbackCommand: vi.fn().mockResolvedValue(undefined),
+  changeFallbacksCommand: vi.fn().mockResolvedValue(undefined),
   clearFallbacksCommand: vi.fn().mockResolvedValue(undefined),
   modelsAliasesAddCommand: vi.fn().mockResolvedValue(undefined),
   modelsAliasesListCommand: vi.fn().mockResolvedValue(undefined),
@@ -26,31 +25,27 @@ const mocks = vi.hoisted(() => ({
   modelsAuthLoginCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthLogoutCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthActivateCommand: vi.fn().mockResolvedValue(undefined),
-  modelsAuthOrderClearCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthOrderGetCommand: vi.fn().mockResolvedValue(undefined),
-  modelsAuthOrderSetCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAuthOrderUpdateCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthPasteApiKeyCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthPasteTokenCommand: vi.fn().mockResolvedValue(undefined),
   modelsAuthSetupTokenCommand: vi.fn().mockResolvedValue(undefined),
   modelsAccountsListCommand: vi.fn().mockResolvedValue(undefined),
   modelsAccountsLoginCommand: vi.fn().mockResolvedValue(undefined),
-  modelsAccountsUseCommand: vi.fn().mockResolvedValue(undefined),
-  modelsAccountsClearDefaultCommand: vi.fn().mockResolvedValue(undefined),
+  modelsAccountsUpdateDefaultCommand: vi.fn().mockResolvedValue(undefined),
 }));
 
 const {
-  addFallbackCommand,
+  changeFallbacksCommand,
   clearFallbacksCommand,
-  removeFallbackCommand,
   modelsAliasesAddCommand,
   modelsAliasesRemoveCommand,
   modelsAuthAddCommand,
   modelsAuthListCommand,
   modelsAuthLoginCommand,
   modelsAuthLogoutCommand,
-  modelsAuthOrderClearCommand,
   modelsAuthOrderGetCommand,
-  modelsAuthOrderSetCommand,
+  modelsAuthOrderUpdateCommand,
   modelsAuthPasteTokenCommand,
   modelsAuthSetupTokenCommand,
   modelsRefreshCommand,
@@ -79,8 +74,7 @@ vi.mock("../commands/models/auth-list.js", () => ({
 vi.mock("../commands/models/accounts.js", () => ({
   modelsAccountsListCommand: mocks.modelsAccountsListCommand,
   modelsAccountsLoginCommand: mocks.modelsAccountsLoginCommand,
-  modelsAccountsUseCommand: mocks.modelsAccountsUseCommand,
-  modelsAccountsClearDefaultCommand: mocks.modelsAccountsClearDefaultCommand,
+  modelsAccountsUpdateDefaultCommand: mocks.modelsAccountsUpdateDefaultCommand,
 }));
 vi.mock("../commands/models/auth-activate.js", () => ({
   modelsAuthActivateCommand: mocks.modelsAuthActivateCommand,
@@ -89,9 +83,8 @@ vi.mock("../commands/models/auth-logout.js", () => ({
   modelsAuthLogoutCommand: mocks.modelsAuthLogoutCommand,
 }));
 vi.mock("../commands/models/auth-order.js", () => ({
-  modelsAuthOrderClearCommand: mocks.modelsAuthOrderClearCommand,
   modelsAuthOrderGetCommand: mocks.modelsAuthOrderGetCommand,
-  modelsAuthOrderSetCommand: mocks.modelsAuthOrderSetCommand,
+  modelsAuthOrderUpdateCommand: mocks.modelsAuthOrderUpdateCommand,
 }));
 vi.mock("../commands/models/aliases.js", () => ({
   modelsAliasesAddCommand: mocks.modelsAliasesAddCommand,
@@ -99,10 +92,9 @@ vi.mock("../commands/models/aliases.js", () => ({
   modelsAliasesRemoveCommand: mocks.modelsAliasesRemoveCommand,
 }));
 vi.mock("../commands/models/fallbacks-shared.js", () => ({
-  addFallbackCommand: mocks.addFallbackCommand,
+  changeFallbacksCommand: mocks.changeFallbacksCommand,
   clearFallbacksCommand: mocks.clearFallbacksCommand,
   listFallbacksCommand: mocks.noopAsync,
-  removeFallbackCommand: mocks.removeFallbackCommand,
 }));
 vi.mock("../commands/models/scan.js", () => ({
   modelsScanCommand: mocks.modelsScanCommand,
@@ -287,7 +279,7 @@ describe("models cli", () => {
         "--agent",
         "poe",
       ],
-      command: modelsAuthOrderSetCommand,
+      command: modelsAuthOrderUpdateCommand,
       expected: {
         agent: "poe",
         provider: "anthropic",
@@ -297,8 +289,8 @@ describe("models cli", () => {
     {
       label: "order clear",
       args: ["models", "auth", "order", "clear", "--provider", "anthropic", "--agent", "poe"],
-      command: modelsAuthOrderClearCommand,
-      expected: { agent: "poe", provider: "anthropic" },
+      command: modelsAuthOrderUpdateCommand,
+      expected: { agent: "poe", provider: "anthropic", order: null },
     },
   ])("passes leaf --agent to models auth $label", async ({ args, command, expected }) => {
     await runModelsCommand(args);
@@ -339,7 +331,7 @@ describe("models cli", () => {
     {
       label: "image-fallbacks remove",
       args: ["image-fallbacks", "remove", "openai/gpt-5.5"],
-      command: removeFallbackCommand,
+      command: changeFallbacksCommand,
     },
     {
       label: "image-fallbacks clear",
@@ -363,7 +355,7 @@ describe("models cli", () => {
     {
       label: "fallbacks add",
       args: ["fallbacks", "add", "openai/gpt-5.5"],
-      command: addFallbackCommand,
+      command: changeFallbacksCommand,
     },
     { label: "fallbacks clear", args: ["fallbacks", "clear"], command: clearFallbacksCommand },
   ])("rejects parent --agent for models $label", async ({ args, command }) => {
@@ -403,13 +395,13 @@ describe("models cli", () => {
   const accountCommands = [
     {
       args: ["use", "personal-account"],
-      command: mocks.modelsAccountsUseCommand,
-      expected: { authProfileId: "personal-account" },
+      command: mocks.modelsAccountsUpdateDefaultCommand,
+      expected: { action: "use", authProfileId: "personal-account" },
     },
     {
       args: ["clear-default", "anthropic"],
-      command: mocks.modelsAccountsClearDefaultCommand,
-      expected: { provider: "anthropic" },
+      command: mocks.modelsAccountsUpdateDefaultCommand,
+      expected: { action: "clear-default", provider: "anthropic" },
     },
   ];
 

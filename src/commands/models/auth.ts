@@ -564,20 +564,30 @@ async function runProviderAuthMethod(
     validateCurrentCredential: resolvedIdentity.validateCurrentCredential,
   });
   if (persistedProfiles.length > 0) {
-    await completeProviderModelAccess({
-      prepared: modelAccess,
-      prompter: params.prompter,
-      onRequested: params.onModelAccessRequested,
-      runtime: params.runtime,
-      assertCurrent: () => {
-        params.signal?.throwIfAborted();
-        params.assertCurrent?.();
-      },
-    }).catch((error: unknown) => {
-      throw new ProviderAuthConfigApplyError(error);
-    });
+    await completeLoginModelAccess(params, modelAccess);
   }
   return { result: connectionResult, profiles: persistedProfiles, authRefresh };
+}
+
+function completeLoginModelAccess(
+  params: Pick<
+    ModelsAuthLoginFlowOptions,
+    "prompter" | "runtime" | "onModelAccessRequested" | "signal" | "assertCurrent"
+  >,
+  prepared: ReturnType<typeof prepareProviderModelAccess>,
+) {
+  return completeProviderModelAccess({
+    prepared,
+    prompter: params.prompter,
+    onRequested: params.onModelAccessRequested,
+    runtime: params.runtime,
+    assertCurrent: () => {
+      params.signal?.throwIfAborted();
+      params.assertCurrent?.();
+    },
+  }).catch((error: unknown) => {
+    throw new ProviderAuthConfigApplyError(error);
+  });
 }
 
 export async function modelsAuthSetupTokenCommand(
@@ -590,12 +600,11 @@ export async function modelsAuthSetupTokenCommand(
     );
   }
 
-  const { config, configSnapshot, agentId, agentDir, workspaceDir, providers } =
-    await resolveModelsAuthContext({
-      requestedProvider: opts.provider,
-      rawAgentId: opts.agent,
-    });
-  const tokenProviders = listProvidersWithTokenMethods(providers);
+  const context = await resolveModelsAuthContext({
+    requestedProvider: opts.provider,
+    rawAgentId: opts.agent,
+  });
+  const tokenProviders = listProvidersWithTokenMethods(context.providers);
   if (tokenProviders.length === 0) {
     throw new Error(
       `No provider token-auth plugins found. Install one via \`${formatCliCommand("openclaw plugins install")}\`.`,
@@ -622,11 +631,7 @@ export async function modelsAuthSetupTokenCommand(
   }
 
   await runProviderAuthMethod({
-    config,
-    configSnapshot,
-    agentId,
-    agentDir,
-    workspaceDir,
+    ...context,
     provider,
     method,
     runtime,
@@ -740,11 +745,8 @@ export async function modelsAuthPasteApiKeyCommand(
 }
 
 export async function modelsAuthAddCommand(opts: { agent?: string }, runtime: RuntimeEnv) {
-  const { config, configSnapshot, agentId, agentDir, workspaceDir, providers } =
-    await resolveModelsAuthContext({
-      rawAgentId: opts.agent,
-    });
-  const tokenProviders = listProvidersWithTokenMethods(providers);
+  const context = await resolveModelsAuthContext({ rawAgentId: opts.agent });
+  const tokenProviders = listProvidersWithTokenMethods(context.providers);
 
   const provider = await select({
     message: "Token provider",
@@ -792,11 +794,7 @@ export async function modelsAuthAddCommand(opts: { agent?: string }, runtime: Ru
         );
       }
       await runProviderAuthMethod({
-        config,
-        configSnapshot,
-        agentId,
-        agentDir,
-        workspaceDir,
+        ...context,
         provider: providerPlugin,
         method,
         runtime,
@@ -1036,18 +1034,7 @@ async function runModelsAuthLoginFlow(
     opts.runtime.log(
       `Auth profile: ${imported.profileId} (${imported.provider}/${imported.mode}, imported)`,
     );
-    await completeProviderModelAccess({
-      prepared: modelAccess,
-      prompter,
-      onRequested: opts.onModelAccessRequested,
-      runtime: opts.runtime,
-      assertCurrent: () => {
-        opts.signal?.throwIfAborted();
-        opts.assertCurrent?.();
-      },
-    }).catch((error: unknown) => {
-      throw new ProviderAuthConfigApplyError(error);
-    });
+    await completeLoginModelAccess(opts, modelAccess);
     return {
       providerId: selectedProvider.id,
       methodId: chosenMethod.id,

@@ -84,31 +84,22 @@ export function resolveChannelSetupEntries(params: {
     workspaceDir,
     env: params.env,
   });
-  const installedCatalogEntries = installedCatalogEntriesSource
-    .filter(
-      (entry) =>
-        !installedPluginIds.has(entry.id) &&
-        manifestInstalledIds.has(entry.id as ChannelChoice) &&
-        shouldShowChannelInSetup(entry.meta),
-    )
-    .map((entry) =>
-      Object.assign({}, entry, {
+  const catalogEntries = (entries: ChannelPluginCatalogEntry[], installed: boolean) =>
+    entries
+      .filter(
+        (entry) =>
+          !installedPluginIds.has(entry.id) &&
+          manifestInstalledIds.has(entry.id as ChannelChoice) === installed &&
+          (installed ||
+            !isStaticallyChannelConfigured(params.cfg, entry.id, params.env ?? process.env)) &&
+          shouldShowChannelInSetup(entry.meta),
+      )
+      .map((entry) => ({
+        ...entry,
         meta: normalizeChannelMeta({ id: entry.id as ChannelChoice, meta: entry.meta }),
-      }),
-    );
-  const installableCatalogEntries = installableCatalogEntriesSource
-    .filter(
-      (entry) =>
-        !installedPluginIds.has(entry.id) &&
-        !manifestInstalledIds.has(entry.id as ChannelChoice) &&
-        !isStaticallyChannelConfigured(params.cfg, entry.id, params.env ?? process.env) &&
-        shouldShowChannelInSetup(entry.meta),
-    )
-    .map((entry) =>
-      Object.assign({}, entry, {
-        meta: normalizeChannelMeta({ id: entry.id as ChannelChoice, meta: entry.meta }),
-      }),
-    );
+      }));
+  const installedCatalogEntries = catalogEntries(installedCatalogEntriesSource, true);
+  const installableCatalogEntries = catalogEntries(installableCatalogEntriesSource, false);
 
   const metaById = new Map<string, ChannelMeta>();
   for (const meta of listChatChannels()) {
