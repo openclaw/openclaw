@@ -14,7 +14,7 @@ const WHATSAPP_QA_SIGNAL_SESSION_FILE_RE = /^session-[^/\\]+\.json$/u;
 export async function waitForWhatsAppChannelStable(gateway: QaGatewayChild, accountId: string) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < WHATSAPP_QA_READY_TIMEOUT_MS) {
-    const status = await waitForLiveQaChannelAccount({
+    const readyStatus = await waitForLiveQaChannelAccount({
       gateway,
       channel: "whatsapp",
       accountId,
@@ -43,8 +43,8 @@ export async function waitForWhatsAppChannelStable(gateway: QaGatewayChild, acco
       },
     });
     const connectedAt =
-      typeof status.lastConnectedAt === "number" && status.lastConnectedAt > 0
-        ? status.lastConnectedAt
+      typeof readyStatus.lastConnectedAt === "number" && readyStatus.lastConnectedAt > 0
+        ? readyStatus.lastConnectedAt
         : Date.now();
     const connectedForMs = Date.now() - connectedAt;
     if (connectedForMs >= WHATSAPP_QA_READY_STABILITY_MS) {

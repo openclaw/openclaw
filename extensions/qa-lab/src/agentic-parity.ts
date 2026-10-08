@@ -24,7 +24,7 @@ export const QA_AGENTIC_PARITY_SCENARIO_TITLES = QA_AGENTIC_PARITY_SCENARIOS.map
   ([, title]) => title,
 );
 export const QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES = QA_AGENTIC_PARITY_SCENARIOS.filter(
-  ([, , countsTowardValidToolCallRate]) => countsTowardValidToolCallRate,
+  (scenario) => scenario[2],
 ).map(([, title]) => title);
 
 export function resolveQaParityPackScenarioIds(params: {

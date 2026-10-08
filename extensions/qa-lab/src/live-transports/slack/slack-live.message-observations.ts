@@ -196,7 +196,7 @@ export async function waitForSlackChannelStable(
   const timeoutMs = resolveSlackQaReadyTimeoutMs();
   let readySince: number | undefined;
   while (Date.now() - startedAt < timeoutMs) {
-    const status = await waitForLiveQaChannelAccount({
+    const readyStatus = await waitForLiveQaChannelAccount({
       gateway,
       channel: "slack",
       accountId,
@@ -225,8 +225,8 @@ export async function waitForSlackChannelStable(
     });
     const observedAt = Date.now();
     readySince =
-      typeof status.lastConnectedAt === "number" && status.lastConnectedAt > 0
-        ? status.lastConnectedAt
+      typeof readyStatus.lastConnectedAt === "number" && readyStatus.lastConnectedAt > 0
+        ? readyStatus.lastConnectedAt
         : (readySince ?? observedAt);
     const readyForMs = observedAt - readySince;
     if (readyForMs >= SLACK_QA_READY_STABILITY_MS) {
