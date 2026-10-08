@@ -92,14 +92,6 @@ export class TerminalSessionManager {
     return this.sessions.size;
   }
 
-  private sessionLimitReached(): TerminalOpenOutcome {
-    return {
-      ok: false,
-      code: "limit",
-      message: `terminal session limit reached (${this.maxSessions})`,
-    };
-  }
-
   async open(request: TerminalOpenRequest): Promise<TerminalOpenOutcome> {
     if (request.signal?.aborted) {
       return { ok: false, code: "closed", message: this.openAbortMessage(request.signal) };
@@ -114,13 +106,18 @@ export class TerminalSessionManager {
         message: `terminal spawn limit reached (${this.maxSessions * 2})`,
       };
     }
+    const sessionLimitReached = (): TerminalOpenOutcome => ({
+      ok: false,
+      code: "limit",
+      message: `terminal session limit reached (${this.maxSessions})`,
+    });
     // Agent shells outlive commands. Under pressure, reserve an idle viewer-free
     // victim, but keep it alive until its replacement backend successfully spawns.
     let evictionCandidate: TerminalSession | undefined;
     if (this.sessions.size + this.opening >= this.maxSessions) {
       evictionCandidate = this.claimLongestIdleAgentSession();
       if (!evictionCandidate) {
-        return this.sessionLimitReached();
+        return sessionLimitReached();
       }
     }
     const releaseEvictionClaim = () => {
@@ -203,7 +200,7 @@ export class TerminalSessionManager {
         const victim = this.claimLongestIdleAgentSession();
         if (!victim) {
           killTerminalBackend(backend);
-          return this.sessionLimitReached();
+          return sessionLimitReached();
         }
         victim.evictionClaimed = false;
         log.info(

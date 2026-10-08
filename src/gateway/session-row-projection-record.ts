@@ -248,7 +248,12 @@ export function createIncognitoSessionRow(params: {
   entry: NonNullable<Row["storedEntry"]>;
   membership?: ReadonlySet<string>;
   source: NonNullable<Row["privateSource"]>;
-  prepared?: Omit<NonNullable<Row["preparedPrivate"]>, "entries">;
+  prepared?: {
+    relatedRows: NonNullable<Row["preparedPrivate"]>["relatedRows"];
+    databaseFacts: PreparedSessionRowDatabaseFacts;
+    titleFields?: SessionTitleFields;
+    terminalModel?: { modelProvider: string; model: string };
+  };
 }): Row {
   const { cfg, key, agentId, storePath, source, entry: storedEntry } = params;
   source.assertCurrent();

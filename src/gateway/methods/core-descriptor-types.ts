@@ -18,7 +18,19 @@ export type CoreGatewayMethodSpec = Partial<GatewayReadSharing> & {
   sessionAccess?: GatewayMethodSessionAccess;
 };
 
-type CoreGatewayMethodPolicy = Omit<CoreGatewayMethodSpec, "name" | "family" | "scope" | "since">;
+type CoreGatewayMethodPolicy = Pick<
+  CoreGatewayMethodSpec,
+  | "shareKey"
+  | "shareInvalidationEvents"
+  | "shareMaxAgeMs"
+  | "advertise"
+  | "startup"
+  | "lifetime"
+  | "controlPlaneWrite"
+  | "compatibilityRestored"
+  | "description"
+  | "sessionAccess"
+>;
 export type CoreGatewayMethodSpecRow = readonly [
   name: string,
   family: string | null,
