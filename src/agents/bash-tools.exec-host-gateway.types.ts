@@ -1,3 +1,4 @@
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecAsk, ExecSecurity } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
@@ -6,6 +7,7 @@ import type { SecretEgressSentinelBinding } from "../secrets/egress-proxy/proxy-
 import type {
   ExecElevatedDefaults,
   ExecApprovalFollowupFactory,
+  ExecSkillScope,
   ExecToolApprovalReview,
   ExecToolDetails,
 } from "./bash-tools.exec-types.js";
@@ -62,6 +64,10 @@ export type ProcessGatewayAllowlistParams = {
   cleanupMs?: number;
   processContinuationAvailable?: boolean;
   trustedSafeBinDirs?: ReadonlySet<string>;
+  /** Runtime config used to resolve the agent's skill bins for autoAllowSkills. */
+  config?: OpenClawConfig;
+  /** Admitted run's skill scope, so autoAllowSkills trusts only its eligible skills' bins. */
+  skillScope?: ExecSkillScope;
 };
 
 /** Gateway allowlist outcome before command execution continues. */

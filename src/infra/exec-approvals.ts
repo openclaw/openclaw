@@ -17,6 +17,10 @@ export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
 export * from "./exec-approvals-core.js";
 export * from "./exec-approvals-generated-migration.js";
+export {
+  isSegmentAuthorizedBySkillBins,
+  type SkillBinTrustEntry,
+} from "./exec-approvals-skill-bins.js";
 export type { ExecApprovalPolicySnapshot } from "./exec-approval-policy-snapshot.js";
 export type { AllowAlwaysPattern, ExecAllowlistEntry } from "./exec-approvals.types.js";
 export type { ExecApprovalsDefaultOverrides } from "./exec-approvals-contracts.js";

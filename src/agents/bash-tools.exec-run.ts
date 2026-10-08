@@ -533,6 +533,8 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             commandHighlighting: defaults?.commandHighlighting,
             trigger: defaults?.trigger,
             agentId,
+            config: defaults?.config,
+            skillScope: defaults?.skillScope,
             sessionKey: defaults?.sessionKey,
             runId: defaults?.runId,
             toolCallId,

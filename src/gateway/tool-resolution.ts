@@ -480,6 +480,8 @@ export async function resolveGatewayScopedTools(
           config: params.cfg,
           sessionConfigSource: "runtime",
           agentId: policyAgentId,
+          // Skill-bin trust follows the executing agent; credentials and hooks stay as above.
+          skillOwnerAgentId: sessionAgentId,
           sessionKey: runtimePolicySessionKey,
           runSessionKey: params.sessionKey,
           sessionId: params.sessionId,

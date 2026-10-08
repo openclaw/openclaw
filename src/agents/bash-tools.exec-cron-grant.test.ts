@@ -33,6 +33,7 @@ import {
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { updateExecApprovals } from "../infra/exec-approvals-store.js";
+import type { ExecSegmentSatisfiedBy } from "../infra/exec-approvals.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
@@ -57,6 +58,9 @@ import { runExecProcess } from "./bash-tools.exec-runtime.js";
 const commitExecAuthorizationMock = vi.hoisted(() =>
   vi.fn<typeof import("../infra/exec-approvals.js").commitExecAuthorizationLocked>(),
 );
+const segmentSatisfiedByRef = vi.hoisted(() => ({
+  current: [] as ExecSegmentSatisfiedBy[],
+}));
 const approvalDecisionMock = vi.hoisted(() => vi.fn<() => Promise<string | undefined>>());
 const callGatewayToolMock = vi.hoisted(() =>
   vi.fn(async (method: string) => {
@@ -82,7 +86,7 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
     allowlistSatisfied: true,
     segments: [{ resolution: null, argv: ["echo", "ok"] }],
     segmentAllowlistEntries: [{ pattern: "/usr/bin/echo", source: "allow-always" }],
-    segmentSatisfiedBy: [],
+    segmentSatisfiedBy: [...segmentSatisfiedByRef.current],
   }),
   hasDurableExecApproval: () => false,
   hasExactCommandDurableExecApproval: () => false,
@@ -161,6 +165,7 @@ describe("cron standing grants", () => {
   });
 
   beforeEach(() => {
+    segmentSatisfiedByRef.current = [];
     hadStateDirBackup = "OPENCLAW_STATE_DIR" in process.env;
     stateDirBackup = process.env.OPENCLAW_STATE_DIR;
     const stateDir = fs.realpathSync(grantTempDirs.make("openclaw-cron-grant-state-"));
@@ -466,6 +471,29 @@ describe("cron standing grants", () => {
       expect(JSON.stringify(security.events)).toContain("standing-grant-invalidated");
     },
   );
+
+  it("rechecks skill authority before spending a standing grant", async () => {
+    await prepareCronRun(true);
+    // The segment was admitted on skill-bin trust, but the committed policy no longer enables
+    // autoAllowSkills, so that trust is withdrawn by the time the occurrence launches.
+    segmentSatisfiedByRef.current = ["skills"];
+    const result = await runCron();
+    expect(result.pendingResult).toBeUndefined();
+    expect(result.deniedResult).toBeUndefined();
+    await expect(runNativeCron(result)).rejects.toMatchObject({
+      message: "exec denied by final preflight",
+      result: {
+        details: { status: "failed" },
+        content: [
+          expect.objectContaining({
+            text: expect.stringContaining("skill bin authorization changed before execution"),
+          }),
+        ],
+      },
+    });
+    expect(fs.existsSync(path.join(workdir, "cron-native-effects.txt"))).toBe(false);
+    expect(readGrantUseCounts()).toEqual([0]);
+  });
 
   it.each([
     "revoke",

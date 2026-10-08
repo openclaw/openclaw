@@ -38,6 +38,8 @@ export type OpenClawCodingToolsOptions = {
   agentId?: string;
   /** Retained policy owner; execution identity remains agentId/runSessionKey. */
   policyAgentId?: string;
+  /** Executing agent whose skills may authorize exec bins when agentId names the policy agent. */
+  skillOwnerAgentId?: string;
   exec?: ExecToolDefaults & ProcessToolDefaults;
   /** Specific ingress provider used only for transport tool availability. */
   toolPolicyMessageProvider?: string;
