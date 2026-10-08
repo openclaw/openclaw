@@ -2352,7 +2352,7 @@
     "minipass": "7.1.3",
     "nostr-tools": "2.25.2",
     "oxfmt": "0.71.0",
-    "oxlint": "1.86.0",
+    "oxlint": "1.85.0",
     "oxlint-tsgolint": "7.0.2003",
     "pako": "3.0.2",
     "playwright": "1.63.0",
@@ -2380,5 +2380,5 @@
   "engines": {
     "node": ">=24.16.0 <25 || >=26.1.0"
   },
-  "packageManager": "pnpm@12.8.2+sha512.a5941679663d952c5f0ecc38ba98af98b4dc01b95780354f6894f2f873973cef2f7e2989d7db3ee5393938ae21f62fe06bcdf685d475ddad829a62095d2b8b11"
+  "packageManager": "pnpm@12.7.0+sha512.9c56477e360068d6e9dca6a92efb4e46b3dc5a52fcebf3d84d78b9736c0ded589a561621a52f68219a7a39facc63cdc079c3226ef9c9d5f02b79f74e69a807b6"
 }
