@@ -9,6 +9,7 @@ import {
   type GatewaySuspendPrepareResult,
   type GatewaySuspendStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { waitForGatewayDrain } from "../../infra/gateway-drain.js";
 import {
   armGatewaySuspendHandoff,
   getGatewaySuspendStatus,
@@ -132,6 +133,23 @@ export const suspendHandlers: GatewayRequestHandlers = {
       return;
     }
     const suspensionId = params.suspensionId.trim();
+    // A policy check must let transient final writes settle, without interrupting
+    // admitted work or treating a drain lease as authority to stop it.
+    const settleDeadline = performance.now() + 15_000;
+    await waitForGatewayDrain(
+      () => {
+        const status = getGatewaySuspendStatus(suspensionId, params.includeLifecycle === true);
+        return {
+          idle:
+            status.status !== "draining" ||
+            !status.writeCustody?.some(({ count }) => count > 0) ||
+            performance.now() >= settleDeadline,
+        };
+      },
+      15_000,
+      { pollMs: 250 },
+    );
+    // Lease expiry, replacement, and new writes can race the awaited observation.
     const result = getGatewaySuspendStatus(suspensionId, params.includeLifecycle === true);
     respondSuspendStatus(result, context, respond, "a different gateway suspension is prepared");
   },
