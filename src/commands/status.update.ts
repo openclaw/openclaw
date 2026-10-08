@@ -68,7 +68,7 @@ export async function getUpdateCheckResult(params: {
     update.error = {
       status: "unknown",
       timeoutMs: gitProbeTimeoutMs,
-      message: `git probe did not finish within ${gitProbeTimeoutMs / 1000} s (slow host)`,
+      message: `git check did not finish within ${gitProbeTimeoutMs / 1000} s (slow host)`,
     };
   } else if (update.git?.error) {
     update.error = { status: "failed", message: sanitizeTerminalText(update.git.error) };
@@ -84,16 +84,8 @@ export async function getUpdateCheckResult(params: {
   return update;
 }
 
-type UpdateAvailability = {
-  available: boolean;
-  hasGitUpdate: boolean;
-  hasRegistryUpdate: boolean;
-  latestVersion: string | null;
-  gitBehind: number | null;
-};
-
-export function resolveUpdateAvailability(update: UpdateCheckResult): UpdateAvailability {
-  if (update.installKind === "host") {
+export function resolveUpdateAvailability(update: UpdateCheckResult) {
+  if (update.installKind === "host" || update.installKind === "immutable") {
     return {
       available: false,
       hasGitUpdate: false,
@@ -145,6 +137,12 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
   }
   if (update.error) {
     return `Update: update status ${update.error.status}: ${update.error.message}; run ${formatCliCommand("openclaw update status")}`;
+  }
+  if (update.installKind === "immutable") {
+    const install = update.immutable;
+    return install
+      ? `Update: immutable ${install.currentSha.slice(0, 12)}${install.prepared ? ` · prepared ${install.prepared.sha.slice(0, 12)}` : ""} · activation unavailable`
+      : "Update: immutable · installation facts unavailable";
   }
   const parts: string[] = [];
 

@@ -122,7 +122,7 @@ export async function prepareModelChoice(params: {
               ? splitTrailingAuthProfile(params.raw).profile
               : undefined;
           const key = modelKey(ref.provider, ref.model);
-          const decide = async (snapshot: typeof owner.modelCatalog) => {
+          const decide = (snapshot: typeof owner.modelCatalog) => {
             const decisions = createModelCatalogDecisions({
               cfg: owner.config,
               agentId: params.agentId,
@@ -149,10 +149,10 @@ export async function prepareModelChoice(params: {
             const variants = decisions.snapshot.routeVariants.filter(
               (row) => modelKey(row.provider, row.id) === key,
             );
-            const host = await decisions.evaluateEntry(entry, variants);
+            const host = decisions.evaluateEntry(entry, variants);
             return { decisions, entry, auth: decisions.evaluateNative(entry, host) };
           };
-          let { decisions, entry, auth } = await decide(owner.modelCatalog);
+          let { decisions, entry, auth } = decide(owner.modelCatalog);
           let renewalError: unknown;
           // A native observation can outlive its runtime client (another agent's turn may
           // replace it). Renew it once through the owner's native load; the gate is unchanged.
@@ -178,7 +178,7 @@ export async function prepareModelChoice(params: {
                   error: `The native runtime no longer offers ${key}. Refresh the model catalog and choose again.`,
                 };
               }
-              ({ decisions, entry, auth } = await decide(renewed));
+              ({ decisions, entry, auth } = decide(renewed));
             }
           }
           if (auth.routeResolution?.kind === "incompatible") {
@@ -361,16 +361,12 @@ export async function preparePublishedModelRuntimeChoice(params: {
     const materializationRuntime =
       params.runtimeId ??
       (params.preferredRuntimeId &&
-      (await decisions.runtimeChoices(requestedEntry, [requestedEntry]))?.includes(
-        params.preferredRuntimeId,
-      )
+      decisions
+        .runtimeChoices(requestedEntry, [requestedEntry])
+        ?.includes(params.preferredRuntimeId)
         ? params.preferredRuntimeId
         : undefined);
-    const selectedAuth = await decisions.evaluateEntry(
-      requestedEntry,
-      undefined,
-      materializationRuntime,
-    );
+    const selectedAuth = decisions.evaluateEntry(requestedEntry, undefined, materializationRuntime);
     const authProfileMode = resolveProviderModelMaterializationAuthMode(
       selectedAuth.selectedAuthMode,
     );
@@ -405,7 +401,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
   const variants = decisions.snapshot.routeVariants.filter(
     (row) => identityKey(row) === selectedIdentity,
   );
-  const choices = await decisions.runtimeChoices(entry, variants.length ? variants : [entry]);
+  const choices = decisions.runtimeChoices(entry, variants.length ? variants : [entry]);
   const runtimeId =
     params.runtimeId ??
     (params.preferredRuntimeId && choices?.includes(params.preferredRuntimeId)
@@ -414,11 +410,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
   if (!runtimeId || !choices?.includes(runtimeId)) {
     return { kind: "unavailable", message: unavailable };
   }
-  const host = await decisions.evaluateEntry(
-    entry,
-    variants.length ? variants : [entry],
-    runtimeId,
-  );
+  const host = decisions.evaluateEntry(entry, variants.length ? variants : [entry], runtimeId);
   const validate = () =>
     decisions.isCurrent() && decisions.evaluateNative(entry, host, runtimeId).availability === true
       ? undefined

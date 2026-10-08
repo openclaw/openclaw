@@ -48,10 +48,9 @@ private actor StubMacNodeHostWorker: MacNodeHostWorking {
 @Suite(.serialized, .testWaitLimit)
 struct MacNodeHostWorkerTests {
     @Test func `worker crash retry budget is bounded and exponentially delayed`() throws {
-        let input = MacNodeHostWorkerRetryPolicy.Input(
-            launch: MacNodeHostWorkerLaunch(
-                command: ["/usr/local/bin/openclaw", "node", "worker"],
-                configurationGeneration: 4))
+        let input = MacNodeHostWorkerLaunch(
+            command: ["/usr/local/bin/openclaw", "node", "worker"],
+            configurationGeneration: 4)
         var policy = MacNodeHostWorkerRetryPolicy(maximumRetryCount: 5)
 
         try policy.prepareForStart(input)
@@ -73,14 +72,12 @@ struct MacNodeHostWorkerTests {
     }
 
     @Test func `new worker input resets an exhausted crash retry budget`() throws {
-        let original = MacNodeHostWorkerRetryPolicy.Input(
-            launch: MacNodeHostWorkerLaunch(
-                command: ["/usr/local/bin/openclaw", "node", "worker"],
-                configurationGeneration: 4))
-        let updated = MacNodeHostWorkerRetryPolicy.Input(
-            launch: MacNodeHostWorkerLaunch(
-                command: original.launch.command,
-                configurationGeneration: 5))
+        let original = MacNodeHostWorkerLaunch(
+            command: ["/usr/local/bin/openclaw", "node", "worker"],
+            configurationGeneration: 4)
+        let updated = MacNodeHostWorkerLaunch(
+            command: original.command,
+            configurationGeneration: 5)
         var policy = MacNodeHostWorkerRetryPolicy(maximumRetryCount: 1)
 
         try policy.prepareForStart(original)
@@ -533,10 +530,13 @@ struct MacNodeHostWorkerTests {
         #expect((object["provider"] as? [String: Any])?["id"] as? String == "peekaboo")
     }
 
-    @Test func `stale route updates cannot replace newer worker authority`() {
-        #expect(MacNodeHostWorker.routeUpdateIsCurrent(candidateGeneration: 4, currentGeneration: 4))
-        #expect(MacNodeHostWorker.routeUpdateIsCurrent(candidateGeneration: 5, currentGeneration: 4))
-        #expect(!MacNodeHostWorker.routeUpdateIsCurrent(candidateGeneration: 3, currentGeneration: 4))
+    @Test func `stale route updates cannot replace newer worker authority`() async {
+        let worker = MacNodeHostWorker(session: GatewayNodeSession())
+        #expect(await worker.setRoute(nil, authorityGeneration: 4))
+        #expect(await worker.setRoute(nil, authorityGeneration: 4))
+        #expect(await worker.setRoute(nil, authorityGeneration: 5))
+        #expect(await worker.setRoute(nil, authorityGeneration: 3) == false)
+        #expect(await worker.setRoute(nil, authorityGeneration: 4) == false)
     }
 
     @Test func `worker forces app exec host without fallback or startup respawn`() async throws {

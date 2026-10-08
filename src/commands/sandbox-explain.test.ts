@@ -46,7 +46,7 @@ describe("sandbox explain command", () => {
     mockCfg = {
       agents: {
         defaults: { sandbox: { mode: "off" } },
-        list: [{ id: "main" }],
+        entries: { main: {} },
       },
     };
 
@@ -64,10 +64,10 @@ describe("sandbox explain command", () => {
       agents: {
         ownership: "explicit",
         defaults: { sandbox: { mode: "off" } },
-        list: [
-          { id: "ops", workspace: "/tmp/openclaw-ops-workspace" },
-          { id: "research", workspace: "/tmp/openclaw-research-workspace" },
-        ],
+        entries: {
+          ops: { workspace: "/tmp/openclaw-ops-workspace" },
+          research: { workspace: "/tmp/openclaw-research-workspace" },
+        },
       },
     };
 
@@ -89,7 +89,7 @@ describe("sandbox explain command", () => {
       mockCfg = {
         agents: {
           defaults: { sandbox: { mode: "off" } },
-          list: [{ id: "readonly", workspace: state.workspaceDir }],
+          entries: { readonly: { workspace: state.workspaceDir } },
         },
         session: { store: agentDatabasePath },
       };
@@ -143,9 +143,8 @@ describe("sandbox explain command", () => {
         defaults: {
           sandbox: { mode: "all", scope: "agent", workspaceAccess: "none" },
         },
-        list: [
-          {
-            id: "tavern",
+        entries: {
+          tavern: {
             tools: {
               sandbox: {
                 tools: {
@@ -154,7 +153,7 @@ describe("sandbox explain command", () => {
               },
             },
           },
-        ],
+        },
       },
       tools: {
         sandbox: {
@@ -189,7 +188,7 @@ describe("sandbox explain command", () => {
               workspaceRoot: "/tmp/openclaw-sandboxes",
             },
           },
-          list: [{ id: "builder", workspace: "/tmp/openclaw-agent-workspace" }],
+          entries: { builder: { workspace: "/tmp/openclaw-agent-workspace" } },
         },
         session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
       };
@@ -224,7 +223,7 @@ describe("sandbox explain command", () => {
             workspaceRoot: "/tmp/openclaw-sandboxes",
           },
         },
-        list: [{ id: "main", default: true }, { id: "builder" }],
+        entries: { main: {}, builder: {} },
       },
       session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
     };
@@ -260,7 +259,7 @@ describe("sandbox explain command", () => {
               workspaceRoot: "/tmp/openclaw-sandboxes",
             },
           },
-          list: [{ id: "builder", workspace: "/tmp/openclaw-agent-workspace" }],
+          entries: { builder: { workspace: "/tmp/openclaw-agent-workspace" } },
         },
         session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
       };
@@ -310,7 +309,7 @@ describe("sandbox explain command", () => {
               workspaceRoot: state.statePath("sandboxes"),
             },
           },
-          list: [{ id: "builder", workspace: agentWorkspace }],
+          entries: { builder: { workspace: agentWorkspace } },
         },
         session: { store: storePath },
       };
@@ -350,7 +349,7 @@ describe("sandbox explain command", () => {
             workspaceRoot: "/tmp/openclaw-sandboxes",
           },
         },
-        list: [{ id: "builder", workspace: "/tmp/openclaw-agent-workspace" }],
+        entries: { builder: { workspace: "/tmp/openclaw-agent-workspace" } },
       },
       session: { store: "/tmp/openclaw-test-sessions-{agentId}.json" },
     };
@@ -378,7 +377,7 @@ describe("sandbox explain command", () => {
     mockCfg = {
       agents: {
         defaults: { sandbox: { mode: "off" } },
-        list: [{ id: "builder", workspace: "/tmp/openclaw-agent-workspace" }],
+        entries: { builder: { workspace: "/tmp/openclaw-agent-workspace" } },
       },
       session: { store: storePath },
     };
@@ -406,7 +405,7 @@ describe("sandbox explain command", () => {
         defaults: {
           sandbox: { mode: "all", scope: "agent", workspaceAccess: "rw" },
         },
-        list: [{ id: "builder", workspace: "/tmp/openclaw-agent-workspace" }],
+        entries: { builder: { workspace: "/tmp/openclaw-agent-workspace" } },
       },
       session: { store: storePath },
     };
@@ -434,7 +433,7 @@ describe("sandbox explain command", () => {
             workspaceRoot: "/tmp/openclaw-sandboxes",
           },
         },
-        list: [{ id: "main", workspace: "/tmp/openclaw-main-workspace" }],
+        entries: { main: { workspace: "/tmp/openclaw-main-workspace" } },
       },
       session: {
         scope: "global",
@@ -451,19 +450,17 @@ describe("sandbox explain command", () => {
     expect(parsed.sandbox.workspaceMounts).toEqual([]);
   });
 
-  it("uses the configured default agent for global sessions", async () => {
+  it("uses the sole configured agent for global sessions", async () => {
     mockCfg = {
       agents: {
         defaults: {
           sandbox: { mode: "non-main" },
         },
-        list: [
-          {
-            id: "ops",
-            default: true,
+        entries: {
+          ops: {
             workspace: "/tmp/openclaw-ops-workspace",
           },
-        ],
+        },
       },
       session: { scope: "global" },
     };
@@ -482,7 +479,7 @@ describe("sandbox explain command", () => {
         defaults: {
           sandbox: { mode: "non-main" },
         },
-        list: [{ id: "main" }, { id: "builder" }],
+        entries: { main: {}, builder: {} },
       },
     };
 

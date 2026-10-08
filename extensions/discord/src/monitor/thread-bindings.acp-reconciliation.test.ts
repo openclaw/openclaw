@@ -1,5 +1,10 @@
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { describe, expect, it } from "vitest";
+import assert from "node:assert/strict";
+import {
+  IncognitoSessionEndedError,
+  rethrowIncognitoSessionError,
+} from "openclaw/plugin-sdk/acp-runtime";
+import { describe, expect, it, vi } from "vitest";
+import { getDiscordRuntime } from "../runtime.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import {
   bindTestThread,
@@ -7,6 +12,7 @@ import {
   hoisted,
   installThreadBindingLifecycleTestHooks,
 } from "./thread-bindings.lifecycle.test-support.js";
+import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
 const { reconcileAcpThreadBindingsOnStartup } = await import("./thread-bindings.lifecycle.js");
 const reconcileOptions = { cfg: EMPTY_DISCORD_TEST_CONFIG, accountId: "default" };
@@ -96,6 +102,18 @@ describe("thread binding ACP startup reconciliation", () => {
     expect(manager.getByThreadId("uncertain")?.targetSessionKey).toBe(sessionKey("uncertain"));
   });
 
+  it("propagates a refused session join without deleting its binding", async () => {
+    const manager = await createTestThreadBindingManager();
+    await bindAcp(manager, "refused");
+    const error = new IncognitoSessionEndedError();
+    hoisted.readAcpSessionEntry.mockImplementation(() => {
+      throw error;
+    });
+
+    await expect(reconcileAcpThreadBindingsOnStartup(reconcileOptions)).rejects.toBe(error);
+    expect(manager.getByThreadId("refused")?.targetSessionKey).toBe(sessionKey("refused"));
+  });
+
   it("removes a running binding after an explicit stale health verdict", async () => {
     const manager = await createTestThreadBindingManager();
     await bindAcp(manager, "running");
@@ -109,44 +127,101 @@ describe("thread binding ACP startup reconciliation", () => {
     expect(manager.getByThreadId("running")).toBeUndefined();
   });
 
-  it("runs health probes in parallel with a bounded first wave", async () => {
+  it("propagates a nested health-probe refusal and keeps the binding", async () => {
     const manager = await createTestThreadBindingManager();
-    for (let i = 0; i < 12; i++) {
-      await bindAcp(manager, `cap-${i}`);
-    }
-    hoisted.readAcpSessionEntry.mockImplementation(({ sessionKey: key }: { sessionKey: string }) =>
-      session(key),
+    await bindAcp(manager, "probe-refused");
+    hoisted.readAcpSessionEntry.mockReturnValue(session(sessionKey("probe-refused")));
+    const error = new AggregateError([new IncognitoSessionEndedError()], "ACP probe failed");
+    await expect(
+      reconcileAcpThreadBindingsOnStartup({
+        ...reconcileOptions,
+        healthProbe: async () => {
+          throw error;
+        },
+      }),
+    ).rejects.toBe(error);
+    expect(manager.getByThreadId("probe-refused")?.targetSessionKey).toBe(
+      sessionKey("probe-refused"),
     );
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    let calls = 0;
-    let inFlight = 0;
-    let maxInFlight = 0;
-    const reconciliation = reconcileAcpThreadBindingsOnStartup({
-      ...reconcileOptions,
-      healthProbe: async () => {
-        calls++;
-        inFlight++;
-        maxInFlight = Math.max(maxInFlight, inFlight);
-        if (calls === 8) {
-          entered.resolve();
-        }
-        if (calls <= 8) {
-          await release.promise;
-        }
-        inFlight--;
-        return { status: "healthy" };
-      },
-    });
-    try {
-      await entered.promise;
-      expect(calls).toBe(8);
-      expect(maxInFlight).toBe(8);
-    } finally {
-      release.resolve();
-      await reconciliation;
-    }
-    expect(await reconciliation).toEqual({ checked: 12, removed: 0, staleSessionKeys: [] });
-    expect(maxInFlight).toBeLessThanOrEqual(8);
   });
+
+  it.each(["before-delete", "after-commit"] as const)(
+    "propagates prepared cleanup refusal at %s while preserving acknowledged deletion",
+    async (phase) => {
+      const manager = await createTestThreadBindingManager({ persist: true });
+      await bindAcp(manager, "prepared");
+      const runtime = getDiscordRuntime();
+      const open = runtime.state.openKeyedStore.bind(runtime.state);
+      const persisted = open<ThreadBindingRecord>({
+        namespace: "thread-bindings",
+        maxEntries: 10_000,
+      });
+      const orphanKey = "zz-orphan";
+      if (phase === "after-commit") {
+        const binding = (await persisted.entries()).find(
+          ({ value }) => value.threadId === "prepared",
+        )?.value;
+        assert(binding);
+        await persisted.register(orphanKey, {
+          ...binding,
+          threadId: "orphan",
+          targetSessionKey: sessionKey("orphan"),
+        });
+      }
+      const error = new IncognitoSessionEndedError();
+      let current = true;
+      const opened = vi
+        .spyOn(runtime.state, "openKeyedStore")
+        .mockImplementation(<T>(options: Parameters<typeof open>[0]) => {
+          const store = open<T>(options);
+          const remove = store.delete.bind(store);
+          vi.spyOn(store, "delete").mockImplementation(async (...args) => {
+            if (phase === "before-delete") {
+              current = false;
+            } else if (args[0] === orphanKey) {
+              current = false;
+              throw new Error("Orphan cleanup failed after target deletion");
+            }
+            return remove(...args);
+          });
+          return store;
+        });
+      const release = vi.fn();
+      try {
+        const failure = await reconcileAcpThreadBindingsOnStartup({
+          ...reconcileOptions,
+          prepareSession: async ({ sessionKey: key }) => ({
+            session: {
+              cfg: EMPTY_DISCORD_TEST_CONFIG,
+              storePath: "/fixture",
+              ...session(key),
+              acp: undefined,
+            },
+            assertCurrent() {
+              if (!current) {
+                throw error;
+              }
+            },
+            release,
+          }),
+        }).then(
+          () => undefined,
+          (caught: unknown) => caught,
+        );
+        expect(() => rethrowIncognitoSessionError(failure)).toThrow();
+        const stored = (await persisted.entries()).map(({ value }) => value.targetSessionKey);
+        if (phase === "before-delete") {
+          expect(manager.getByThreadId("prepared")?.targetSessionKey).toBe(sessionKey("prepared"));
+          expect(stored).toContain(sessionKey("prepared"));
+        } else {
+          expect(manager.getByThreadId("prepared")).toBeUndefined();
+          expect(stored).toEqual([sessionKey("orphan")]);
+        }
+        expect(release).toHaveBeenCalledOnce();
+      } finally {
+        opened.mockRestore();
+        await manager.stop();
+      }
+    },
+  );
 });

@@ -25,11 +25,13 @@ Changing a session between **Shared**, **Read-only**, **Suggest**, and **Draft**
 controls signed-in people. None of those settings creates a public link.
 
 The session creator or a Gateway admin can explicitly enable **Public access**.
-Anyone with the resulting bearer URL can then read existing and future conversation
+Anyone with the normal thread URL can then read existing and future conversation
 text without signing in, while tools, reasoning, files, images, widgets, hidden
-messages, and internal metadata remain excluded. Assigning a different owner does
-not transfer this authority. Disable public access to revoke every URL for that
-publication, remembering that downloaded copies cannot be recalled. See
+messages, and internal metadata remain excluded. **Log in** returns to that same
+thread with the person's existing permissions. Assigning a different owner does
+not transfer publication authority. Disabling public access stops anonymous
+reads; enabling it again makes the same normal URL readable. Previously revoked
+token links remain invalid, and downloaded copies cannot be recalled. See
 [Share a session publicly](/web/control-ui/sessions-and-sidebar#share-a-session-publicly)
 for the user flow and [Public session transcripts](/web/urls#public-session-transcripts)
 for the security and deployment contract.
@@ -51,7 +53,7 @@ In the Control UI, the session context menu (kebab or right-click on a sidebar r
 - **Assign to me**: take responsibility for the session yourself.
 - **Assign to…**: pick any registered person or configured agent, including offline people and people who have not owned a session. Choices refresh when you open the menu and do not depend on session filters or archive status.
 
-Agents can reassign ownership with the [`sessions` tool](/concepts/session-tool#managing-session-settings-and-groups), including non-owner agent turns when tool policy permits it. Those turns receive the assignment action, not session settings, reset/delete, or global group controls. Operators with `operator.write` can archive or restore only sessions they created. They can stop sessions they created or are assigned to, subject to session access checks. Use `action: "assign_owner"` with `ownerType` (`"human"` or `"agent"`) and `ownerId`. It targets the current session by default, or another visible session via `sessionKey`.
+Agents can reassign ownership with the [`sessions` tool](/concepts/session-tool#managing-session-settings-and-groups), including non-owner agent turns when tool policy permits it. Those turns receive the assignment action. An admitted operator with `operator.sessions.write` can also ask the agent to rename a session they created through a label-only patch; other session settings, reset/delete, and global group controls remain restricted. The default sandbox exposes only renaming for these non-owner writers. Explicit sandbox allowlists and denials still apply; explicitly permitting `sessions` retains the actions allowed by the caller’s authority. Operators with `operator.write` can archive or restore only sessions they created. They can stop sessions they created or are assigned to, subject to session access checks. Use `action: "assign_owner"` with `ownerType` (`"human"` or `"agent"`) and `ownerId`. It targets the current session by default, or another visible session via `sessionKey`.
 
 Archive and restore require the creator or a Gateway admin (`operator.admin`), including for existing sessions after an upgrade. Assigned owners who are not the creator no longer receive these permissions. If the creator is unavailable, or the session has no usable profile creator, an admin can archive or restore it from the session menu. Reassigning an owner does not change archive authority.
 
@@ -153,13 +155,15 @@ When the loaded session list contains fewer than two distinct owner identities a
 
 Click or tap a person in the sidebar's **Online** section to open their Activity page. Hover or focus the row to open their information card. **View activity** in the card opens the same page. Unqualified viewers have no profile Activity page, so clicking or tapping their row opens only the card, with connection details and visible watched sessions.
 
+The Activity page shows each distinct app/platform description once, so several matching browser tabs do not repeat the same device metadata. Expand **Connection details** below **Viewing now** for grouped connection counts, reported host/platform, IP address, time zone, and available location or input-recency details. Counts describe connections, not physical devices. Separate tabs keep their own watched-session presence; consolidating the display does not merge those connections.
+
 Under **Group by Person**, the avatar and name in another person's section header open the same card. The chevron still collapses the section. An owner who is not connected gets a card marked **Offline** with only their recent sessions and the Activity link.
 
 The card shows how long the person has been continuously connected, their reported app/device context and time zone, and their last observed activity during that online period. Opening a different session, typing, and sending a new message count as activity. Connection heartbeats and agent responses do not. **Not observed yet** means no qualifying activity has been recorded, not that the person is inactive. These timing facts are ephemeral and reset after the person's final connection closes or the Gateway restarts.
 
 People presence is shared with operators who have read access (`operator.read`, also implied by `operator.write` or `operator.admin`). Those readers may see other people's online and activity timing and reported time zone whether or not the person is watching a session. Node and pairing-only connections receive neither the presence inventory nor its activity-driven events. This does not change cross-reader IP visibility or provide isolation for all Gateway metadata. See [Who can see presence](/concepts/presence#who-can-see-presence).
 
-**Viewing now** and **Recent sessions** link only to sessions available in your loaded session list. Recent sessions require the same recorded profile identity on both the viewer and the owner or creator. Matching raw IDs are not enough. They are not a complete history of the person's contributions. Session update times describe the session, not when that person last acted. Connection descriptions and time zones are client-reported hints, not verified physical locations.
+**Viewing now** and **Recent sessions** use a bounded, access-scoped session list independent of the sidebar's owner, **Involving me**, and status filters. Opening a card refreshes that list across configured agents; it includes active sessions only. Recent sessions require the same recorded profile identity on both the viewer and the owner or creator. Matching raw IDs are not enough. They are not a complete history of the person's contributions. Session update times describe the session, not when that person last acted. Connection descriptions and time zones are client-reported hints, not verified physical locations.
 
 The Gateway also filters watched-session references for each recipient using `sessions.list` visibility rules, across connect snapshots, presence RPC responses, and events. Hidden or missing references are omitted without counts or placeholders. Opening someone's card never borrows that person's session access.
 

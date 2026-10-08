@@ -7,6 +7,7 @@ import { decodeLaunchAgentPlistFixture } from "../../daemon/launchd-plist.test-s
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveNpmGlobalPrefixLayoutFromPrefix } from "../../infra/update-npm-prefix.js";
+import { recordCommandProcessFailure } from "../../process/exec-result.js";
 import type {
   runCommandWithTimeout,
   runExec,
@@ -206,7 +207,7 @@ export async function createUpdateCommandTransportFixture(transport: {
 }
 
 export async function createUpdateUtf8CommandTransportFixture(
-  transport: Parameters<typeof createUpdateCommandTransportFixture>[0],
+  transport: Parameters<typeof createUpdateCommandTransportFixture>[0] & { exec: typeof runExec },
   run: typeof runUtf8CommandWithTimeout,
 ): Promise<typeof runUtf8CommandWithTimeout> {
   const hostPlatform = process.platform;
@@ -214,6 +215,24 @@ export async function createUpdateUtf8CommandTransportFixture(
     await vi.importActual<typeof import("node:child_process")>("node:child_process");
   const runDoctorFixture = await createUpdateCommandTransportFixture(transport);
   return async (argv, options) => {
+    if (argv[2] === "doctor" && argv[3] === "--repair") {
+      // Legacy Doctor now uses the custody runner; keep its effects in the shared fixture.
+      try {
+        const result = await transport.exec(
+          expectDefined(argv[0], "Doctor executable"),
+          argv.slice(1),
+          options,
+        );
+        return commandResult({ ...result, cleanup: "normal" });
+      } catch (error) {
+        // This effect double starts no native child, including on diagnostic failures.
+        throw recordCommandProcessFailure(error, {
+          code: null,
+          cleanup: "normal",
+          termination: "exit",
+        });
+      }
+    }
     if (
       argv.length === 3 &&
       argv[2] === "--check" &&

@@ -39,6 +39,7 @@ import {
   type ClawPackageInspection,
   type PackageRemovalDeps,
 } from "./package-remove.js";
+import { readClawPackageOwnership } from "./provenance-async.js";
 import {
   readClawInstallRecords,
   readClawPackageRefs,
@@ -186,6 +187,41 @@ function inspectMcpServer(
   };
 }
 
+/** Package cleanup needs ownership and artifact inspections, without unrelated state repairs. */
+export async function readClawPackageRemovalStatus(
+  agentId: string,
+  options: OpenClawStateDatabaseOptions & {
+    signal?: AbortSignal;
+    packageDeps?: PackageRemovalDeps;
+  } = {},
+): Promise<Pick<ClawStatusRecord, "install" | "packages" | "orphaned"> | undefined> {
+  const snapshot = await readClawPackageOwnership({ ...options, agentId });
+  if (!snapshot.install && snapshot.packageRefs.length === 0 && !snapshot.orphanWorkspace) {
+    return undefined;
+  }
+  const firstPackage = snapshot.packageRefs[0];
+  const install =
+    snapshot.install ??
+    synthesizeOrphanInstall({
+      agentId,
+      clawName: firstPackage?.clawName,
+      workspace: snapshot.orphanWorkspace?.workspace,
+      updatedAtMs: Math.max(
+        firstPackage?.updatedAtMs ?? 0,
+        snapshot.orphanWorkspace?.updatedAtMs ?? 0,
+      ),
+    });
+  return {
+    install,
+    ...(snapshot.install ? {} : { orphaned: true }),
+    packages: await Promise.all(
+      snapshot.packageRefs.map((packageRef) =>
+        inspectClawPackageCompatibility({ install, packageRef, packageDeps: options.packageDeps }),
+      ),
+    ),
+  };
+}
+
 export async function readClawStatus(
   target?: string,
   options: OpenClawStateDatabaseOptions & {
@@ -299,7 +335,7 @@ export async function readClawStatus(
       ),
       mcpServers: (options.readOnly
         ? readClawMcpServerRefs(install.agentId, options)
-        : reconcileClawMcpServerRefs(install.agentId, configuredMcpServers, options)
+        : await reconcileClawMcpServerRefs(install.agentId, configuredMcpServers, options)
       ).map((ref) => inspectMcpServer(ref, configuredMcpServers)),
       cronJobs: readClawCronRefs(install.agentId, options),
     });

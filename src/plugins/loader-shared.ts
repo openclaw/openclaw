@@ -397,7 +397,7 @@ export function preparePluginLoadRecord(params: {
   record.configJsonSchema = manifestRecord.configSchema;
   // Manifest ownership survives rollback of executable registrations.
   record.commandAliases = manifestRecord.commandAliases;
-  return { pluginId, policyId, isDreamingSidecar, activationState, enableState, entry, record };
+  return { pluginId, isDreamingSidecar, activationState, enableState, entry, record };
 }
 
 export function maybeThrowOnPluginLoadError(

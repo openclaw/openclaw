@@ -81,10 +81,15 @@ export async function prepareGatewaySessionAccessAuthority(request: {
   ownSessionOnly: boolean;
   hasCurrentClientAuthority?: () => boolean;
   assertInvocationCurrent?: () => void;
-}): Promise<GatewaySessionAccessAuthority> {
+  assertPreparationCurrent?: () => void;
+}): Promise<{
+  authority: GatewaySessionAccessAuthority;
+  assertPreparationCurrent: () => void;
+}> {
   const params = { ...request, policy: { ...request.policy } };
   const assertInvocationCurrent = params.assertInvocationCurrent;
-  assertInvocationCurrent?.();
+  const assertPreparationSourceCurrent = params.assertPreparationCurrent ?? assertInvocationCurrent;
+  assertPreparationSourceCurrent?.();
   const input = params.requestParams;
   const sessionKey =
     isRecord(input) && typeof input.sessionKey === "string" ? input.sessionKey : "";
@@ -174,7 +179,7 @@ export async function prepareGatewaySessionAccessAuthority(request: {
     denied("Session access is unavailable during Gateway startup; retry when it is ready.");
   }
   const assertIngress = () => {
-    assertInvocationCurrent?.();
+    assertPreparationSourceCurrent?.();
     assertRun();
     originalGrant?.assertCurrent();
     originalRun?.assertCurrent();
@@ -326,14 +331,16 @@ export async function prepareGatewaySessionAccessAuthority(request: {
         throw error;
       }
     };
-    const assertCurrent = () => {
+    const assertAccessCurrent = (assertRequestCurrent: (() => void) | undefined) => {
       if (invocationClosed) {
         denied();
       }
-      assertInvocationCurrent?.();
+      assertRequestCurrent?.();
       assertRun();
       assertActor();
     };
+    const assertCurrent = () => assertAccessCurrent(assertInvocationCurrent);
+    const assertPreparationCurrent = () => assertAccessCurrent(assertPreparationSourceCurrent);
     const retain = (sessionOnly: boolean): RetainedGatewaySessionAccess => {
       assertCurrent();
       const assert = sessionOnly ? assertSession : assertActor;
@@ -420,16 +427,20 @@ export async function prepareGatewaySessionAccessAuthority(request: {
         release,
       };
     };
-    assertCurrent();
+    assertPreparationCurrent();
+    // Services receive invocation-bound authority; only the router retains the pure preflight.
     return {
-      target,
-      sandboxRequired,
-      assertCurrent,
-      retain: () => retain(false),
-      retainSession: () => retain(true),
-      release: () => {
-        invocationClosed = true;
-        captured?.release();
+      assertPreparationCurrent,
+      authority: {
+        target,
+        sandboxRequired,
+        assertCurrent,
+        retain: () => retain(false),
+        retainSession: () => retain(true),
+        release: () => {
+          invocationClosed = true;
+          captured?.release();
+        },
       },
     };
   } catch (error) {

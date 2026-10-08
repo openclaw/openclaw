@@ -51,7 +51,7 @@ function buildThreadTitleCompletionUserMessage(params: {
   channelName?: string;
   channelDescription?: string;
 }): string {
-  const sourceText = truncateThreadTitleSourceText(params.sourceText);
+  const sourceText = truncateThreadTitleText(params.sourceText, MAX_THREAD_TITLE_SOURCE_CHARS);
   const channelName = normalizeTitleContextField(
     params.channelName,
     MAX_THREAD_TITLE_CHANNEL_NAME_CHARS,
@@ -60,22 +60,20 @@ function buildThreadTitleCompletionUserMessage(params: {
     params.channelDescription,
     MAX_THREAD_TITLE_CHANNEL_DESCRIPTION_CHARS,
   );
-  const messageLines: string[] = [];
-  if (channelName) {
-    messageLines.push(`Channel: ${channelName}`);
-  }
-  if (channelDescription) {
-    messageLines.push(`Channel description: ${channelDescription}`);
-  }
-  messageLines.push(`Message:\n${sourceText}`);
-  return messageLines.join("\n\n");
+  return [
+    channelName ? `Channel: ${channelName}` : undefined,
+    channelDescription ? `Channel description: ${channelDescription}` : undefined,
+    `Message:\n${sourceText}`,
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
-function truncateThreadTitleSourceText(sourceText: string): string {
-  if (sourceText.length <= MAX_THREAD_TITLE_SOURCE_CHARS) {
-    return sourceText;
+function truncateThreadTitleText(text: string, maxChars: number): string {
+  if (text.length <= maxChars) {
+    return text;
   }
-  return `${truncateUtf16Safe(sourceText, MAX_THREAD_TITLE_SOURCE_CHARS)}...`;
+  return `${truncateUtf16Safe(text, maxChars)}...`;
 }
 
 function normalizeGeneratedThreadTitle(raw: string): string {
@@ -93,11 +91,9 @@ function stripThreadTitleWrappers(raw: string): string {
     previous = current;
     current = current.replace(/^["'`]+|["'`]+$/g, "").trim();
     // Preserve separate spans ("*Plan* for *project*") while unwrapping nested emphasis.
-    current = stripBalancedWrapper(current, "**");
-    current = stripBalancedWrapper(current, "__");
-    current = stripBalancedWrapper(current, "*");
-    current = stripBalancedWrapper(current, "_");
-    current = stripBalancedWrapper(current, "~~");
+    for (const marker of ["**", "__", "*", "_", "~~"]) {
+      current = stripBalancedWrapper(current, marker);
+    }
   }
   return current;
 }
@@ -115,9 +111,5 @@ function normalizeTitleContextField(raw: string | undefined, maxChars: number): 
   if (!value) {
     return undefined;
   }
-  const singleLine = value.replace(/\s+/g, " ");
-  if (singleLine.length <= maxChars) {
-    return singleLine;
-  }
-  return `${truncateUtf16Safe(singleLine, maxChars)}...`;
+  return truncateThreadTitleText(value.replace(/\s+/g, " "), maxChars);
 }

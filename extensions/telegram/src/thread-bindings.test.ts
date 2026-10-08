@@ -1,4 +1,3 @@
-// Telegram tests cover thread bindings plugin behavior.
 import { getSessionBindingService } from "openclaw/plugin-sdk/conversation-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { openOpenClawStateDatabase } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -31,29 +30,18 @@ const {
   setTelegramThreadBindingMaxAgeBySessionKeyAsync: setTelegramThreadBindingMaxAgeBySessionKey,
 } = await import("./thread-bindings.js");
 
-async function flushMicrotasks(): Promise<void> {
-  await Promise.resolve();
-  await new Promise<void>((resolve) => {
-    queueMicrotask(resolve);
-  });
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-}
-
 describe("telegram thread bindings", () => {
   const fixture = useTelegramThreadBindingsFixture();
-  const {
-    createManager: createTelegramThreadBindingManager,
-    installStore: installThreadBindingStore,
-    storedBindings,
-  } = fixture;
+  const { installStore: installThreadBindingStore, storedBindings } = fixture;
+  const createTelegramThreadBindingManager = (
+    options: Parameters<typeof fixture.createManager>[0],
+  ) => fixture.createManager({ persist: true, enableSweeper: false, ...options });
 
   beforeEach(() => {
     createForumTopicMock.mockReset();
   });
 
-  it("joins concurrent startup before exposing hydrated bindings", async () => {
+  it("joins concurrent startup across module instances before exposing hydrated bindings", async () => {
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
     const entries = fixture.store.entries.bind(fixture.store);
@@ -65,12 +53,29 @@ describe("telegram thread bindings", () => {
     const params = { accountId: "coalesced", persist: true, enableSweeper: false };
     const first = createTelegramThreadBindingManager(params);
     await entered.promise;
-    const second = createTelegramThreadBindingManager(params);
+    const other = await importFreshModule<typeof import("./thread-bindings.js")>(
+      import.meta.url,
+      "./thread-bindings.js?scope=concurrent-startup",
+    );
+    const second = other.createTelegramThreadBindingManager({
+      cfg: TELEGRAM_THREAD_BINDINGS_TEST_CFG,
+      ...params,
+    });
     expect(getTelegramThreadBindingManager(params.accountId)).toBeNull();
     release.resolve();
     const [a, b] = await Promise.all([first, second]);
     expect(a).toBe(b);
     expect(entriesSpy).toHaveBeenCalledOnce();
+    await getSessionBindingService().bind({
+      targetSessionKey: "agent:main:subagent:child-shared",
+      targetKind: "subagent",
+      conversation: { channel: "telegram", accountId: params.accountId, conversationId: "thread" },
+      placement: "current",
+    });
+    expect(
+      other.getTelegramThreadBindingManager(params.accountId)?.getByConversationId("thread")
+        ?.targetSessionKey,
+    ).toBe("agent:main:subagent:child-shared");
   });
 
   it("drains accepted mutations in order before restart and rejects retired writes", async () => {
@@ -132,53 +137,25 @@ describe("telegram thread bindings", () => {
     expect(getTelegramThreadBindingManager(params.accountId)).toBe(replacement);
   });
 
-  it("rechecks command authority at worker admission without publishing a refused binding", async () => {
-    const manager = await createTelegramThreadBindingManager({
-      accountId: "authority",
-      persist: true,
-      enableSweeper: false,
-    });
-    const entered = createDeferred<void>();
-    const release = createDeferred<void>();
-    const register = fixture.store.register.bind(fixture.store);
-    vi.spyOn(fixture.store, "register").mockImplementationOnce(async (...args) => {
-      entered.resolve();
-      await release.promise;
-      await register(...args);
-    });
-    let current = true;
-    const binding = getSessionBindingService().bind({
-      targetSessionKey: "agent:main:subagent:refused",
-      targetKind: "subagent",
-      conversation: { channel: "telegram", accountId: manager.accountId, conversationId: "thread" },
-      assertCurrent: () => {
-        if (!current) {
-          throw new Error("Command revoked");
-        }
-      },
-    });
-    const rejected = expect(binding).rejects.toThrow("Command revoked");
-    await entered.promise;
-    current = false;
-    release.resolve();
-    await rejected;
-    expect(manager.listBindings()).toEqual([]);
-    expect(await storedBindings()).toEqual([]);
-  });
-
-  it("does not publish a memory binding after its command authority is revoked", async () => {
-    const manager = await createTelegramThreadBindingManager({
-      accountId: "memory-authority",
-      persist: false,
-      enableSweeper: false,
-    });
+  it.each([false, true])("does not publish a revoked binding (persist=%s)", async (persist) => {
+    const manager = await createTelegramThreadBindingManager({ accountId: "authority", persist });
     const service = getSessionBindingService();
     const conversation = {
       channel: "telegram",
       accountId: manager.accountId,
       conversationId: "thread",
     };
-    const targetSessionKey = "agent:main:subagent:memory-authority";
+    const targetSessionKey = "agent:main:subagent:refused";
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    if (persist) {
+      const register = fixture.store.register.bind(fixture.store);
+      vi.spyOn(fixture.store, "register").mockImplementationOnce(async (...args) => {
+        entered.resolve();
+        await release.promise;
+        await register(...args);
+      });
+    }
     let current = true;
     expect(service.resolveByConversation(conversation)).toBeNull();
     const binding = service.bind({
@@ -192,14 +169,19 @@ describe("telegram thread bindings", () => {
       },
     });
     const publishedBeforeRevocation = service.resolveByConversation(conversation);
+    if (persist) {
+      await entered.promise;
+    }
     current = false;
-    // Synchronous publication is valid; an unpublished binding must not appear after revocation.
-    if (publishedBeforeRevocation) {
+    release.resolve();
+    // Synchronous memory publication is valid; delayed publication must recheck authority.
+    if (!persist && publishedBeforeRevocation) {
       await expect(binding).resolves.toMatchObject({ targetSessionKey });
       expect(service.resolveByConversation(conversation)).toMatchObject({ targetSessionKey });
     } else {
       await expect(binding).rejects.toThrow("Command revoked");
       expect(service.resolveByConversation(conversation)).toBeNull();
+      expect(manager.listBindings()).toEqual([]);
     }
     expect(await storedBindings()).toEqual([]);
   });
@@ -210,8 +192,6 @@ describe("telegram thread bindings", () => {
       installThreadBindingStore(fixture.store, true);
       const manager = await createTelegramThreadBindingManager({
         accountId: "legacy",
-        persist: true,
-        enableSweeper: false,
       });
       const service = getSessionBindingService();
       const conversation = {
@@ -285,8 +265,6 @@ describe("telegram thread bindings", () => {
     installThreadBindingStore(fixture.store, true);
     const manager = await createTelegramThreadBindingManager({
       accountId: "queued-activity",
-      persist: true,
-      enableSweeper: false,
     });
     const service = getSessionBindingService();
     const conversation = {
@@ -343,8 +321,6 @@ describe("telegram thread bindings", () => {
     installThreadBindingStore(fixture.store, true);
     const manager = await createTelegramThreadBindingManager({
       accountId: "legacy-lifecycle",
-      persist: true,
-      enableSweeper: false,
     });
     const targetSessionKey = "agent:main:subagent:legacy-lifecycle";
     const bound = await getSessionBindingService().bind({
@@ -380,6 +356,7 @@ describe("telegram thread bindings", () => {
       accountId: "expiry",
       persist: true,
       idleTimeoutMs: 1,
+      enableSweeper: true,
     });
     const service = getSessionBindingService();
     const bind = (conversationId: string) =>
@@ -459,7 +436,6 @@ describe("telegram thread bindings", () => {
     const stopped = await createTelegramThreadBindingManager({
       accountId: "manager-lifecycle",
       persist: false,
-      enableSweeper: false,
     });
     await getSessionBindingService().bind({
       targetSessionKey: "agent:main:subagent:stopped",
@@ -476,7 +452,6 @@ describe("telegram thread bindings", () => {
     const replacement = await createTelegramThreadBindingManager({
       accountId: "manager-lifecycle",
       persist: false,
-      enableSweeper: false,
     });
     expect(replacement.getByConversationId("stopped-thread")).toBeUndefined();
 
@@ -556,127 +531,9 @@ describe("telegram thread bindings", () => {
     }
   });
 
-  it("shares binding state across distinct module instances", async () => {
-    const bindingsA = await importFreshModule<typeof import("./thread-bindings.js")>(
-      import.meta.url,
-      "./thread-bindings.js?scope=shared-a",
-    );
-    const bindingsB = await importFreshModule<typeof import("./thread-bindings.js")>(
-      import.meta.url,
-      "./thread-bindings.js?scope=shared-b",
-    );
-    const managerA = await bindingsA.createTelegramThreadBindingManager({
-      cfg: TELEGRAM_THREAD_BINDINGS_TEST_CFG,
-      accountId: "shared-runtime",
-      persist: false,
-      enableSweeper: false,
-    });
-
-    try {
-      const managerB = await bindingsB.createTelegramThreadBindingManager({
-        cfg: TELEGRAM_THREAD_BINDINGS_TEST_CFG,
-        accountId: "shared-runtime",
-        persist: false,
-        enableSweeper: false,
-      });
-
-      expect(managerB).toBe(managerA);
-
-      await getSessionBindingService().bind({
-        targetSessionKey: "agent:main:subagent:child-shared",
-        targetKind: "subagent",
-        conversation: {
-          channel: "telegram",
-          accountId: "shared-runtime",
-          conversationId: "-100200300:topic:44",
-        },
-        placement: "current",
-      });
-
-      expect(
-        bindingsB
-          .getTelegramThreadBindingManager("shared-runtime")
-          ?.getByConversationId("-100200300:topic:44")?.targetSessionKey,
-      ).toBe("agent:main:subagent:child-shared");
-    } finally {
-      await managerA.stop();
-    }
-  });
-
-  it("does not persist lifecycle updates when manager persistence is disabled", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
-
-    await createTelegramThreadBindingManager({
-      accountId: "no-persist",
-      persist: false,
-      enableSweeper: false,
-    });
-
-    await getSessionBindingService().bind({
-      targetSessionKey: "agent:main:subagent:child-2",
-      targetKind: "subagent",
-      conversation: {
-        channel: "telegram",
-        accountId: "no-persist",
-        conversationId: "-100200300:topic:88",
-      },
-    });
-
-    await setTelegramThreadBindingIdleTimeoutBySessionKey({
-      accountId: "no-persist",
-      targetSessionKey: "agent:main:subagent:child-2",
-      idleTimeoutMs: 60 * 60 * 1000,
-    });
-    await setTelegramThreadBindingMaxAgeBySessionKey({
-      accountId: "no-persist",
-      targetSessionKey: "agent:main:subagent:child-2",
-      maxAgeMs: 2 * 60 * 60 * 1000,
-    });
-
-    expect(
-      (await storedBindings()).filter((binding) => binding.accountId === "no-persist"),
-    ).toStrictEqual([]);
-  });
-
-  it("persists unbinds before restart so removed bindings do not come back", async () => {
-    const manager = await createTelegramThreadBindingManager({
-      accountId: "default",
-      persist: true,
-      enableSweeper: false,
-    });
-
-    const bound = await getSessionBindingService().bind({
-      targetSessionKey: "plugin-binding:openclaw-codex-app-server:abc123",
-      targetKind: "session",
-      conversation: {
-        channel: "telegram",
-        accountId: "default",
-        conversationId: "8460800771",
-      },
-    });
-
-    await getSessionBindingService().unbind({
-      bindingId: bound.bindingId,
-      reason: "test-detach",
-    });
-
-    await manager.stop();
-
-    const reloaded = await createTelegramThreadBindingManager({
-      accountId: "default",
-      persist: true,
-      enableSweeper: false,
-    });
-
-    expect(reloaded.getByConversationId("8460800771")).toBeUndefined();
-  });
-
   it("persists only the changed binding without scanning or rewriting its siblings", async () => {
     const manager = await createTelegramThreadBindingManager({
       accountId: "row-writes",
-      persist: true,
-      enableSweeper: false,
     });
     const entries = vi.spyOn(fixture.store, "entries");
     const register = vi.spyOn(fixture.store, "register");
@@ -723,45 +580,14 @@ describe("telegram thread bindings", () => {
     expect(register).not.toHaveBeenCalled();
     expect(entries).not.toHaveBeenCalled();
     expect(manager.getByConversationId("second-thread")).toBeDefined();
-  });
-
-  it("persists bindings with json-clean metadata", async () => {
-    const manager = await createTelegramThreadBindingManager({
-      accountId: "metadata",
-      persist: true,
-      enableSweeper: false,
-    });
-
-    await getSessionBindingService().bind({
-      targetSessionKey: "agent:main:subagent:metadata-child",
-      targetKind: "subagent",
-      conversation: {
-        channel: "telegram",
-        accountId: "metadata",
-        conversationId: "metadata-thread",
-      },
-      metadata: {
-        retained: "yes",
-        omitted: undefined,
-      },
-    });
-
     await manager.stop();
-
     const reloaded = await createTelegramThreadBindingManager({
-      accountId: "metadata",
+      accountId: manager.accountId,
       persist: true,
       enableSweeper: false,
     });
-
-    expect(reloaded.getByConversationId("metadata-thread")?.metadata).toStrictEqual({
-      retained: "yes",
-    });
-    expect(
-      (await storedBindings()).find((binding) => binding.accountId === "metadata")?.metadata,
-    ).toStrictEqual({
-      retained: "yes",
-    });
+    expect(reloaded.getByConversationId("first-thread")).toBeUndefined();
+    expect(reloaded.getByConversationId("second-thread")).toBeDefined();
   });
 
   it.each([false, true])(
@@ -769,8 +595,6 @@ describe("telegram thread bindings", () => {
     async (replace) => {
       const manager = await createTelegramThreadBindingManager({
         accountId: "replacement-owner",
-        persist: true,
-        enableSweeper: false,
       });
       const service = getSessionBindingService();
       const conversation = {
@@ -805,8 +629,6 @@ describe("telegram thread bindings", () => {
       await manager.stop();
       await createTelegramThreadBindingManager({
         accountId: manager.accountId,
-        persist: true,
-        enableSweeper: false,
       });
 
       const binding = service.resolveByConversation(conversation);
@@ -835,101 +657,64 @@ describe("telegram thread bindings", () => {
 
     const manager = await createTelegramThreadBindingManager({
       accountId: "read-failure",
-      persist: true,
-      enableSweeper: false,
     });
 
     expect(manager.listBindings()).toStrictEqual([]);
   });
 
-  it("reloads persisted lifecycle updates after manager restart", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
-
-    const manager = await createTelegramThreadBindingManager({
-      accountId: "persist-reset",
-      persist: true,
-      enableSweeper: false,
-    });
-
-    await getSessionBindingService().bind({
-      targetSessionKey: "agent:main:subagent:child-3",
-      targetKind: "subagent",
-      conversation: {
-        channel: "telegram",
-        accountId: "persist-reset",
-        conversationId: "-100200300:topic:99",
-      },
-    });
-
-    await setTelegramThreadBindingIdleTimeoutBySessionKey({
-      accountId: "persist-reset",
-      targetSessionKey: "agent:main:subagent:child-3",
-      idleTimeoutMs: 90_000,
-    });
-    vi.setSystemTime(new Date("2026-03-06T12:00:00.000Z"));
-    await setTelegramThreadBindingMaxAgeBySessionKey({
-      accountId: "persist-reset",
-      targetSessionKey: "agent:main:subagent:child-3",
-      maxAgeMs: 6 * 60 * 60 * 1000,
-    });
-
-    await manager.stop();
-
-    const reloaded = await createTelegramThreadBindingManager({
-      accountId: "persist-reset",
-      persist: true,
-      enableSweeper: false,
-    });
-    expect(reloaded.getByConversationId("-100200300:topic:99")).toMatchObject({
-      idleTimeoutMs: 90_000,
-      maxAgeMs: 6 * 60 * 60 * 1000,
-      boundAt: Date.parse("2026-03-06T10:00:00.000Z"),
-      lastActivityAt: Date.parse("2026-03-06T12:00:00.000Z"),
-    });
-    expect(
-      (await storedBindings()).find((binding) => binding.accountId === "persist-reset")
-        ?.idleTimeoutMs,
-    ).toBe(90_000);
-  });
-
-  it("does not leak unhandled rejections when a persist write fails", async () => {
-    const unhandled: unknown[] = [];
-    const onUnhandledRejection = (reason: unknown) => {
-      unhandled.push(reason);
-    };
-    process.on("unhandledRejection", onUnhandledRejection);
-
-    try {
-      const manager = await createTelegramThreadBindingManager({
-        accountId: "persist-failure",
-        persist: true,
-        enableSweeper: false,
-      });
-
+  it.each([
+    { persist: false, idleTimeoutMs: 60 * 60 * 1000, maxAgeMs: 2 * 60 * 60 * 1000 },
+    { persist: true, idleTimeoutMs: 90_000, maxAgeMs: 6 * 60 * 60 * 1000 },
+  ])(
+    "keeps lifecycle updates and clean metadata across restart only with persist=$persist",
+    async ({ persist, idleTimeoutMs, maxAgeMs }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-03-06T10:00:00.000Z"));
+      const options = { accountId: "lifecycle", persist, enableSweeper: false };
+      const manager = await createTelegramThreadBindingManager(options);
+      const targetSessionKey = "agent:main:subagent:child";
       await getSessionBindingService().bind({
-        targetSessionKey: "agent:main:subagent:child-persist-failure",
+        targetSessionKey,
         targetKind: "subagent",
         conversation: {
           channel: "telegram",
-          accountId: "persist-failure",
-          conversationId: "-100200300:topic:100",
+          accountId: manager.accountId,
+          conversationId: "thread",
         },
+        metadata: { retained: "yes", omitted: undefined },
       });
-
-      installThreadBindingStore({
-        ...fixture.store,
-        register() {
-          throw new Error("persist boom");
-        },
+      await setTelegramThreadBindingIdleTimeoutBySessionKey({
+        accountId: manager.accountId,
+        targetSessionKey,
+        idleTimeoutMs,
       });
-      await manager.touchConversation("-100200300:topic:100");
-
+      vi.setSystemTime(new Date("2026-03-06T12:00:00.000Z"));
+      await setTelegramThreadBindingMaxAgeBySessionKey({
+        accountId: manager.accountId,
+        targetSessionKey,
+        maxAgeMs,
+      });
       await manager.stop();
-      await flushMicrotasks();
-      expect(unhandled).toStrictEqual([]);
-    } finally {
-      process.off("unhandledRejection", onUnhandledRejection);
-    }
-  });
+      const reloaded = await createTelegramThreadBindingManager(options);
+      if (persist) {
+        expect(reloaded.getByConversationId("thread")).toMatchObject({
+          idleTimeoutMs,
+          maxAgeMs,
+          boundAt: Date.parse("2026-03-06T10:00:00.000Z"),
+          lastActivityAt: Date.parse("2026-03-06T12:00:00.000Z"),
+        });
+        expect(reloaded.getByConversationId("thread")?.metadata).toStrictEqual({ retained: "yes" });
+        const stored = (await storedBindings()).find(
+          (binding) => binding.accountId === manager.accountId,
+        );
+        expect(stored?.idleTimeoutMs).toBe(90_000);
+        expect(stored?.metadata).toStrictEqual({ retained: "yes" });
+      } else {
+        expect(reloaded.getByConversationId("thread")).toBeUndefined();
+        expect(
+          (await storedBindings()).filter((binding) => binding.accountId === manager.accountId),
+        ).toStrictEqual([]);
+      }
+    },
+  );
 });

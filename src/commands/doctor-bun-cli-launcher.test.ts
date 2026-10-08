@@ -75,6 +75,13 @@ describe("Bun-only Doctor CLI launcher repair", () => {
   it.each(["missing", "stale"] as const)(
     "repairs a %s launcher after consent using this package's owner and absolute Bun",
     async (state) => {
+      if (state === "missing") {
+        vi.stubEnv("PATH", path.join(fixtureRoot, "bun-node-123-abcdef"));
+        vi.mocked(fs.accessSync).mockReturnValue(undefined);
+        vi.mocked(fs.realpathSync).mockImplementation((value) =>
+          path.basename(String(value)) === "node" ? bunPath : String(value),
+        );
+      }
       vi.mocked(inspectBunCliLauncher).mockReturnValue({ path: launcherPath, state });
       const prompt = prompter();
 
@@ -106,14 +113,26 @@ describe("Bun-only Doctor CLI launcher repair", () => {
     },
   );
 
-  it("preserves a declined repair", async () => {
-    await noteBunCliLauncherIssues({ root, prompter: prompter(false) });
-    expect(installBunCliLauncher).not.toHaveBeenCalled();
-    expect(note).toHaveBeenCalledExactlyOnceWith(
-      expect.stringContaining("launcher is missing"),
-      "Bun CLI launcher",
-    );
-  });
+  it.each(["declined", false, true] as const)(
+    "honors Doctor repair consent: %s",
+    async (repair) => {
+      const prompt =
+        repair === "declined"
+          ? prompter(false)
+          : createDoctorPrompter({
+              runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+              options: { nonInteractive: true, repair },
+            });
+      await noteBunCliLauncherIssues({ root, prompter: prompt });
+      expect(installBunCliLauncher).toHaveBeenCalledTimes(repair === true ? 1 : 0);
+      if (repair === "declined") {
+        expect(note).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining("launcher is missing"),
+          "Bun CLI launcher",
+        );
+      }
+    },
+  );
 
   it.each([
     ["\n", "a newline"],
@@ -152,22 +171,38 @@ describe("Bun-only Doctor CLI launcher repair", () => {
     }
   });
 
-  it.each([false, true])("honors noninteractive Doctor fix consent (fix=%s)", async (repair) => {
-    const prompt = createDoctorPrompter({
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      options: { nonInteractive: true, repair },
-    });
-    await noteBunCliLauncherIssues({ root, prompter: prompt });
-    expect(installBunCliLauncher).toHaveBeenCalledTimes(repair ? 1 : 0);
-  });
-
-  it.each(["current", "conflict"] as const)("does not change a %s launcher", async (state) => {
-    vi.mocked(inspectBunCliLauncher).mockReturnValue({ path: launcherPath, state });
+  it.each([
+    "Node runtime",
+    "Windows",
+    "persistent Node",
+    "update",
+    "source checkout",
+    "current",
+    "conflict",
+  ] as const)("leaves %s launchers untouched", async (kind) => {
+    if (kind === "Node runtime") {
+      stubRuntime(false);
+    } else if (kind === "Windows") {
+      stubRuntime(true, "win32");
+    } else if (kind === "persistent Node") {
+      vi.mocked(fs.accessSync).mockReturnValue(undefined);
+    } else if (kind === "update") {
+      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+    } else if (kind === "current" || kind === "conflict") {
+      vi.mocked(inspectBunCliLauncher).mockReturnValue({ path: launcherPath, state: kind });
+    }
     const prompt = prompter();
-    await noteBunCliLauncherIssues({ root, prompter: prompt });
+    await noteBunCliLauncherIssues({
+      root: kind === "source checkout" ? path.join(fixtureRoot, "source", "openclaw") : root,
+      prompter: prompt,
+    });
+    if (kind !== "current" && kind !== "conflict") {
+      expect(resolveBunGlobalBinDir).not.toHaveBeenCalled();
+      expect(inspectBunCliLauncher).not.toHaveBeenCalled();
+    }
     expect(prompt.confirmAutoFix).not.toHaveBeenCalled();
     expect(installBunCliLauncher).not.toHaveBeenCalled();
-    if (state === "conflict") {
+    if (kind === "conflict") {
       expect(note).toHaveBeenCalledExactlyOnceWith(
         expect.stringContaining("belongs to another installation"),
         "Bun CLI launcher",
@@ -175,40 +210,6 @@ describe("Bun-only Doctor CLI launcher repair", () => {
     } else {
       expect(note).not.toHaveBeenCalled();
     }
-  });
-
-  it.each(["Node runtime", "Windows", "persistent Node", "update", "source checkout"])(
-    "leaves %s launchers untouched",
-    async (kind) => {
-      if (kind === "Node runtime") {
-        stubRuntime(false);
-      } else if (kind === "Windows") {
-        stubRuntime(true, "win32");
-      } else if (kind === "persistent Node") {
-        vi.mocked(fs.accessSync).mockReturnValue(undefined);
-      } else if (kind === "update") {
-        vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
-      }
-      const prompt = prompter();
-      await noteBunCliLauncherIssues({
-        root: kind === "source checkout" ? path.join(fixtureRoot, "source", "openclaw") : root,
-        prompter: prompt,
-      });
-      expect(resolveBunGlobalBinDir).not.toHaveBeenCalled();
-      expect(inspectBunCliLauncher).not.toHaveBeenCalled();
-      expect(installBunCliLauncher).not.toHaveBeenCalled();
-      expect(note).not.toHaveBeenCalled();
-    },
-  );
-
-  it("ignores Bun's temporary Node shim when identifying a Bun-only install", async () => {
-    vi.stubEnv("PATH", path.join(fixtureRoot, "bun-node-123-abcdef"));
-    vi.mocked(fs.accessSync).mockReturnValue(undefined);
-    vi.mocked(fs.realpathSync).mockImplementation((value) =>
-      path.basename(String(value)) === "node" ? bunPath : String(value),
-    );
-    await noteBunCliLauncherIssues({ root, prompter: prompter() });
-    expect(installBunCliLauncher).toHaveBeenCalledOnce();
   });
 
   it.each(["discovery", "inspection", "repair"])(

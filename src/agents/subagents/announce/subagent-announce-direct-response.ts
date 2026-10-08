@@ -204,10 +204,8 @@ export function createDirectAnnounceResponseClassifier(context: DirectAnnounceRe
       };
     }
     if (
-      directAnnounceRecord?.status === "ok" &&
+      requesterCompletedSuccessfully &&
       directAnnounceResult?.meta?.yielded === true &&
-      !directAnnounceResult.meta.error &&
-      !directAnnounceResult.meta.aborted &&
       !automaticFinalDelivered
     ) {
       if (

@@ -1,7 +1,7 @@
 import { clampThinkingLevel } from "../model-utils.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { streamOpenAICompletionsRequest } from "../transports/openai-completions-transport.js";
-import type { Context, Model, SimpleStreamOptions, StreamFunction } from "../types.js";
+import type { SimpleStreamOptions, StreamFunction } from "../types.js";
 import { requireApiKey } from "../utils/required-api-key.js";
 import { buildBaseOptions } from "./simple-options.js";
 
@@ -16,7 +16,7 @@ export const streamOpenAICompletions: StreamFunction<
 export const streamSimpleOpenAICompletions: StreamFunction<
   "openai-completions",
   SimpleStreamOptions
-> = (model: Model<"openai-completions">, context: Context, options?: SimpleStreamOptions) => {
+> = (model, context, options) => {
   const apiKey = requireApiKey(model.provider, options?.apiKey);
 
   const base = buildBaseOptions(model, options, apiKey);

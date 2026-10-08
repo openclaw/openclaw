@@ -115,14 +115,14 @@ export function renderChatAttachmentMenuTrigger(
   `;
 }
 
-export function renderChatAttachmentMenuOptions(fileIcon = icons.folder) {
+export function renderChatAttachmentMenuOptions() {
   const options = [
     { value: "camera", icon: icons.camera, label: t("chat.composer.takePhoto") },
     ...(useSingleAttachmentPicker()
-      ? [{ value: "file", icon: fileIcon, label: t("chat.composer.attach") }]
+      ? [{ value: "file", icon: icons.paperclip, label: t("chat.composer.attach") }]
       : [
           { value: "photo", icon: icons.image, label: t("chat.composer.attachPhoto") },
-          { value: "file", icon: fileIcon, label: t("chat.composer.attachFileOption") },
+          { value: "file", icon: icons.paperclip, label: t("chat.composer.attachFileOption") },
         ]),
   ];
   return options.map(

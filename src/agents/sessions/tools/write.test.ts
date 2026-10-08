@@ -10,7 +10,9 @@ import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it } from "vitest";
 import { WriteToolOutputSchema } from "./tool-schemas.js";
-import { createWriteTool, type WriteOperations } from "./write.js";
+import { createWriteTool, type WriteToolOptions } from "./write.js";
+
+type WriteOperations = NonNullable<WriteToolOptions["operations"]>;
 
 const WritePatchReceiptSchema = Type.Extract(
   WriteToolOutputSchema,

@@ -35,6 +35,10 @@ export type CallManagerContext = {
   maxDurationTimers: Map<CallId, NodeJS.Timeout>;
   notifyHangupTimers: Map<CallId, NodeJS.Timeout>;
   initialMessageInFlight: Set<CallId>;
+  onCallUpdated?: (call: CallRecord) => void | Promise<void>;
+  beforeCallEnd?: (call: CallRecord) => Promise<void>;
+  playRealtimeVoicemail?: (callId: CallId, instructions: string) => Promise<void> | undefined;
+  beforeCarrierPlayback?: (callId: CallId) => Promise<void>;
   onCallAnswered?: (call: CallRecord) => void;
   onCallerSpeech?: (call: CallRecord) => void;
   streamSessionIssuer?: StreamSessionIssuer;

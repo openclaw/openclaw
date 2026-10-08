@@ -208,7 +208,7 @@ describe("worker environment service provision replay", () => {
     const placement = await placements.startDispatch(REQUEST);
     const idempotencyKey = `session-dispatch:${REQUEST.sessionId}:${placement.generation}`;
     const intent = deriveEnvironmentIntent(idempotencyKey);
-    placements.transition({
+    await placements.transition({
       sessionId: placement.sessionId,
       from: "requested",
       to: "provisioning",

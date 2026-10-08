@@ -28,7 +28,6 @@ import {
   createCliFailoverError,
   resolveCliResumeAtError,
 } from "./exit-error.js";
-import { buildCliSupervisorScopeKey } from "./helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
 import type { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
 import {
@@ -36,6 +35,7 @@ import {
   resolveCliNoOutputTimeoutDecision,
 } from "./no-output-timeout-policy.js";
 import { createCliOutputFailoverError } from "./output-error.js";
+import { buildCliSupervisorScopeKey } from "./reliability.js";
 import type { NodeClaudePlacement, PreparedCliRunContext } from "./types.js";
 
 const CLI_RUNNER_OUTPUT_PARSE_BYTES = 1024 * 1024;
@@ -352,8 +352,7 @@ export async function executeCliProcess(params: {
   }
   params.options?.onPhase?.("resolve");
   streamingParser?.finish();
-  const streamingParserErrorText =
-    params.outputMode === "jsonl" ? (streamingParser?.getErrorText() ?? null) : null;
+  const streamingParserErrorText = streamingParser?.getErrorText();
   if (streamingParserErrorText) {
     throw createCliFailoverError(streamingParserErrorText, "format", failoverContext);
   }
@@ -390,36 +389,31 @@ export async function executeCliProcess(params: {
     stderrHash: stderrHash.digest("hex").slice(0, 12),
     useResume: params.useResume,
   };
-  if (params.logOutputText) {
-    if (stdoutDiagnostic) {
-      cliBackendLog.info(`cli stdout:\n${stdoutDiagnostic}`);
-    }
-    if (stderrDiagnostic) {
-      cliBackendLog.info(`cli stderr:\n${stderrDiagnostic}`);
-    }
-  }
-  if (shouldLogVerbose()) {
-    if (stdoutDiagnostic) {
-      cliBackendLog.debug(`cli stdout:\n${stdoutDiagnostic}`);
-    }
-    if (stderrDiagnostic) {
-      cliBackendLog.debug(`cli stderr:\n${stderrDiagnostic}`);
+  for (const level of ["info", "debug"] as const) {
+    if (level === "info" ? params.logOutputText : shouldLogVerbose()) {
+      for (const [stream, diagnostic] of [
+        ["stdout", stdoutDiagnostic],
+        ["stderr", stderrDiagnostic],
+      ]) {
+        if (diagnostic) {
+          cliBackendLog[level](`cli ${stream}:\n${diagnostic}`);
+        }
+      }
     }
   }
 
-  const streamedJsonlOutput =
-    params.outputMode === "jsonl" ? (streamingParser?.getOutput() ?? null) : null;
+  const streamedJsonlOutput = streamingParser?.getOutput();
+  const parseOutput = () =>
+    parseCliOutput({
+      raw: readStdout(),
+      backend: params.backend,
+      providerId: context.backendResolved.id,
+      outputMode: params.outputMode,
+      fallbackSessionId: params.resolvedSessionId,
+    });
   const parsedStructuredOutput =
     streamedJsonlOutput ??
-    (params.outputMode === "json" && stdoutCapture.truncatedBytes === 0
-      ? parseCliOutput({
-          raw: readStdout(),
-          backend: params.backend,
-          providerId: context.backendResolved.id,
-          outputMode: params.outputMode,
-          fallbackSessionId: params.resolvedSessionId,
-        })
-      : null);
+    (params.outputMode === "json" && stdoutCapture.truncatedBytes === 0 ? parseOutput() : null);
   // A completed terminal record is authoritative even if the CLI hangs
   // afterward. Reclassifying it as a timeout could replay completed tools.
   if (parsedStructuredOutput?.terminalFailure) {
@@ -544,15 +538,7 @@ export async function executeCliProcess(params: {
       finalPromptText: params.prompt,
     };
   }
-  const parsed =
-    parsedStructuredOutput ??
-    parseCliOutput({
-      raw: readStdout(),
-      backend: params.backend,
-      providerId: context.backendResolved.id,
-      outputMode: params.outputMode,
-      fallbackSessionId: params.resolvedSessionId,
-    });
+  const parsed = parsedStructuredOutput ?? parseOutput();
   const parsedError = createCliOutputFailoverError({
     output: parsed,
     ...outputErrorContext,

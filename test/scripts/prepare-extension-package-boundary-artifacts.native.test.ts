@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { gzipSync, gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import { readArtifactRecord } from "../../scripts/lib/build-artifact-cache.mts";
 import { BOUNDARY_PLUGIN_UNITS } from "../../scripts/lib/extension-boundary-inputs.mts";
@@ -15,6 +16,14 @@ import {
 
 const fixture = createFixtureLifetime();
 afterEach(() => fixture.cleanup());
+
+function copyFixtureFiles(root: string, files: string[]) {
+  for (const file of files) {
+    const target = path.join(root, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.cpSync(path.resolve(file), target, { recursive: true });
+  }
+}
 
 function createPreparationFixture(mode: "package-boundary" | "all", signal: AbortSignal) {
   const ancestor = fs.realpathSync.native(fixture.createTempDir("native-preparer-"));
@@ -32,6 +41,7 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
     JSON.stringify({
       compilerOptions: {
         target: "es2023",
+        lib: ["es5"],
         module: "nodenext",
         skipLibCheck: true,
         types: [],
@@ -44,7 +54,7 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
   );
   write("src/plugin-sdk/core.ts", 'export { value } from "../nested.js";');
   write("src/nested.ts", "export const value = 1;");
-  for (const file of [
+  copyFixtureFiles(root, [
     "scripts/prepare-extension-package-boundary-artifacts.mts",
     "scripts/compile-extension-boundary.mts",
     "scripts/run-tsgo.mjs",
@@ -55,11 +65,7 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
     "scripts/lib",
     "packages/normalization-core/src",
     "packages/normalization-core/package.json",
-  ]) {
-    const target = path.join(root, file);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.cpSync(path.resolve(file), target, { recursive: true });
-  }
+  ]);
   write("scripts/lib/plugin-sdk-entrypoints.json", '["core"]');
   for (const name of ["tsx", "@openclaw/fs-safe"]) {
     const target = path.join(root, "node_modules", name);
@@ -105,7 +111,7 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
       signal.removeEventListener("abort", abort);
     }
   };
-  const run = (declared = root, pwd = declared, extensionIds?: string[]) =>
+  const run = (declared = root, pwd = declared, extensionIds?: string[], env?: NodeJS.ProcessEnv) =>
     step(
       "native-fixture",
       [
@@ -114,21 +120,17 @@ function createPreparationFixture(mode: "package-boundary" | "all", signal: Abor
         ...(extensionIds ? [`--extensions=${JSON.stringify(extensionIds)}`] : []),
       ],
       undefined,
-      { PWD: pwd },
+      { ...env, PWD: pwd },
     );
   return { ancestor, root, native, write, plugins, recordPath, output, step, run };
 }
 
 function writeSelectedConsumer(f: ReturnType<typeof createPreparationFixture>) {
-  for (const file of [
+  copyFixtureFiles(f.root, [
     "scripts/check-file-utils.ts",
     "src/plugins/package-entrypoints.ts",
     "src/shared/non-packaged-plugin-dirs.ts",
-  ]) {
-    const target = path.join(f.root, file);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.copyFileSync(path.resolve(file), target);
-  }
+  ]);
   f.write(
     "packages/plugin-sdk/tsconfig.json",
     JSON.stringify({
@@ -255,13 +257,15 @@ describe("native declaration preparation", () => {
       }),
   );
 
-  it(
-    "prepares transitive producers reached only through emitted SDK declarations",
+  it.for([false, true])(
+    "prepares transitive producers reached only through emitted SDK declarations (shared=%s)",
     { timeout: 30_000 },
-    ({ signal }) =>
+    (sharedSdk, { signal }) =>
       fixture.run(async () => {
         const f = createPreparationFixture("package-boundary", signal);
         writeSelectedConsumer(f);
+        f.write("src/plugin-sdk/unused.ts", "export const unused = 7;");
+        f.write("scripts/lib/plugin-sdk-entrypoints.json", '["core", "unused"]');
         f.write(
           "src/plugin-sdk/core.ts",
           'export type { MemoryValue } from "@openclaw/memory-core/api.js";',
@@ -289,8 +293,14 @@ describe("native declaration preparation", () => {
           'import type { ChannelValue } from "@openclaw/qa-channel/api.js"; export type MemoryValue = { channel: ChannelValue };',
         );
         f.write("extensions/qa-channel/api.ts", "export type ChannelValue = { text: string };");
-        const narrow = () => f.run(f.root, f.root, ["chosen"]);
+        const narrow = () =>
+          f.run(f.root, f.root, ["chosen"], {
+            OPENCLAW_CI_SHARED_SDK: sharedSdk ? "1" : "0",
+          });
         await narrow();
+        expect(fs.existsSync(path.join(f.root, f.output, "src/plugin-sdk/unused.d.ts"))).toBe(
+          sharedSdk,
+        );
         const outputs = ["memory-core", "qa-channel"].map((id) => {
           const record = path.join(f.root, `.artifacts/extension-package-boundary/${id}.json`);
           expect(readArtifactRecord(record)).toBeDefined();
@@ -313,6 +323,223 @@ describe("native declaration preparation", () => {
           expect(fs.readFileSync(output.record)).toEqual(output.bytes);
           expect(fs.statSync(output.record).mtimeMs).toBe(output.mtimeMs);
         }
+      }),
+  );
+
+  it("reuses native receipts across Node minors while retaining major and generic-runtime fences", ({
+    signal,
+  }) =>
+    fixture.run(async () => {
+      const f = createPreparationFixture("package-boundary", signal);
+      const preload = f.write(
+        ".artifacts/advertise-node.cjs",
+        'Object.defineProperty(process.versions, "node", { value: process.env.FIXTURE_NODE_VERSION });',
+      );
+      const genericEntry = f.write(
+        ".artifacts/generic-signature.mts",
+        'import { CompilerInputSnapshot } from "../scripts/lib/compiler-input-snapshot.mts";\n' +
+          "const snapshot = new CompilerInputSnapshot(process.cwd(), { toolchainFiles: [], generatorInputs: [] });\n" +
+          'console.log(snapshot.signature("packages/plugin-sdk/tsconfig.json", [], []));\n',
+      );
+      const major = Number(process.versions.node.split(".")[0]);
+      const envFor = (version: string) => ({
+        NODE_OPTIONS: `--require=${JSON.stringify(preload)}`,
+        FIXTURE_NODE_VERSION: version,
+      });
+      const genericSignature = (version: string) => {
+        const result = spawnSync(process.execPath, [genericEntry], {
+          cwd: f.root,
+          env: { ...process.env, ...envFor(version) },
+          encoding: "utf8",
+          timeout: 20_000,
+        });
+        expect(result.error).toBeUndefined();
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        return result.stdout.trim();
+      };
+      const firstVersion = `${major}.19.0`;
+      const minorVersion = `${major}.21.0`;
+      await f.run(f.root, f.root, undefined, envFor(firstVersion));
+      const receipt = fs.readFileSync(f.recordPath);
+      const stamp = fs.statSync(f.recordPath).mtimeMs;
+      const generic = genericSignature(firstVersion);
+      await f.run(f.root, f.root, undefined, envFor(minorVersion));
+      expect(fs.readFileSync(f.recordPath)).toEqual(receipt);
+      expect(fs.statSync(f.recordPath).mtimeMs).toBe(stamp);
+      expect(genericSignature(minorVersion)).not.toBe(generic);
+
+      await f.run(f.root, f.root, undefined, envFor(`${major + 1}.0.0`));
+      expect(readArtifactRecord(f.recordPath)?.signature).not.toBe(
+        JSON.parse(receipt.toString()).signature,
+      );
+      expect(fs.readFileSync(path.join(f.root, f.output, "src/nested.d.ts"), "utf8")).toContain(
+        "value = 1",
+      );
+    }));
+
+  it("prepares the full shared SDK when the boundary checker selects no packages", ({ signal }) =>
+    fixture.run(async () => {
+      const f = createPreparationFixture("package-boundary", signal);
+      copyFixtureFiles(f.root, [
+        "scripts/check-extension-package-tsc-boundary.mts",
+        "scripts/check-file-utils.ts",
+        "src/plugins/package-entrypoints.ts",
+        "src/shared/non-packaged-plugin-dirs.ts",
+      ]);
+      fs.symlinkSync(path.resolve("node_modules/p-map"), path.join(f.root, "node_modules/p-map"));
+      fs.mkdirSync(path.join(f.root, "extensions"));
+      f.write(
+        "packages/plugin-sdk/tsconfig.json",
+        JSON.stringify({
+          extends: "../../tsconfig.json",
+          include: ["../../src/plugin-sdk/**/*.ts"],
+        }),
+      );
+      await f.step(
+        "empty-boundary-selection",
+        [path.join(f.root, "scripts/check-extension-package-tsc-boundary.mts"), "--mode=compile"],
+        undefined,
+        { OPENCLAW_CI_SHARED_SDK: "1", GITHUB_STEP_SUMMARY: undefined },
+      );
+      expect(readArtifactRecord(f.recordPath)?.inputs).toContain("src/nested.ts");
+      expect(fs.readFileSync(path.join(f.root, f.output, "src/nested.d.ts"), "utf8")).toContain(
+        "value = 1",
+      );
+    }));
+
+  it(
+    "transports only current full SDK receipts and validates restored bytes in another checkout",
+    { timeout: 30_000 },
+    ({ signal }) =>
+      fixture.run(async () => {
+        const setup = () => {
+          const f = createPreparationFixture("package-boundary", signal);
+          writeSelectedConsumer(f);
+          f.write("src/plugin-sdk/unused.ts", "export const unused = 7;");
+          f.write("scripts/lib/plugin-sdk-entrypoints.json", '["core", "unused"]');
+          f.write(
+            "scripts/ci-sdk-declarations.mts",
+            fs.readFileSync("scripts/ci-sdk-declarations.mts", "utf8"),
+          );
+          f.write(".gitignore", "node_modules/\n.artifacts/\npackages/plugin-sdk/dist/\n");
+          for (const args of [
+            ["init", "-q"],
+            ["add", "."],
+          ]) {
+            const git = spawnSync("git", args, { cwd: f.root, encoding: "utf8" });
+            expect(git.status, git.stderr).toBe(0);
+          }
+          return f;
+        };
+        const producer = setup();
+        const consumer = setup();
+        const cli = (f: typeof producer, operation: string, ...args: string[]) => {
+          signal.throwIfAborted();
+          const result = spawnSync(
+            process.execPath,
+            ["scripts/ci-sdk-declarations.mts", operation, ...args],
+            {
+              cwd: f.root,
+              env: { ...process.env, GITHUB_OUTPUT: undefined },
+              encoding: "utf8",
+              timeout: 20_000,
+            },
+          );
+          expect(result.error, result.stderr).toBeUndefined();
+          return result;
+        };
+        const success = (f: typeof producer, operation: string, ...args: string[]) => {
+          const result = cli(f, operation, ...args);
+          expect(result.status, result.stdout + result.stderr).toBe(0);
+          return result;
+        };
+        const identity = (
+          f: typeof producer,
+        ): { "cache-key": string; archive: string; fresh: string } =>
+          JSON.parse(success(f, "key").stdout);
+
+        await producer.run(producer.root, producer.root, ["chosen"]);
+        const narrowReceipt = fs.readFileSync(producer.recordPath, "utf8");
+        const narrowPack = cli(producer, "pack");
+        expect(narrowPack.status, narrowPack.stdout + narrowPack.stderr).toBe(1);
+        expect(narrowPack.stderr).toContain("Only a current full SDK receipt");
+        await producer.run();
+        success(producer, "pack");
+        const published = identity(producer);
+        const empty = identity(consumer);
+        expect(published.fresh).toBe("true");
+        expect(empty.fresh).toBe("false");
+        expect(empty["cache-key"]).toBe(published["cache-key"]);
+        expect(consumer.root).not.toBe(producer.root);
+        const archive = fs.readFileSync(path.join(producer.root, published.archive));
+        const targetArchive = path.join(consumer.root, published.archive);
+        fs.mkdirSync(path.dirname(targetArchive), { recursive: true });
+        fs.writeFileSync(targetArchive, archive);
+        success(consumer, "restore", "--required");
+        success(consumer, "validate");
+        const restoredReceipt = fs.readFileSync(consumer.recordPath);
+        const restoredStamp = fs.statSync(consumer.recordPath).mtimeMs;
+        await consumer.run(consumer.root, consumer.root, ["chosen"], {
+          OPENCLAW_CI_SHARED_SDK: "1",
+        });
+        expect(fs.readFileSync(consumer.recordPath)).toEqual(restoredReceipt);
+        expect(fs.statSync(consumer.recordPath).mtimeMs).toBe(restoredStamp);
+        consumer.write(
+          "extensions/chosen/index.ts",
+          'import { value } from "./excluded/helper.js"; export const wrong: string = value;',
+        );
+        const checked = spawnSync(
+          consumer.native,
+          ["-p", ".artifacts/extension-package-boundary/compile/chosen.tsconfig.json", "--noEmit"],
+          { cwd: consumer.root, encoding: "utf8", timeout: 20_000 },
+        );
+        expect(checked.error).toBeUndefined();
+        expect(checked.status, checked.stdout + checked.stderr).toBe(2);
+        expect(checked.stdout).toContain("Type 'number' is not assignable to type 'string'");
+        consumer.write(
+          "extensions/chosen/index.ts",
+          'export { value } from "./excluded/helper.js";',
+        );
+
+        const payload: { version: number; key: string; files: [string, string][] } = JSON.parse(
+          gunzipSync(archive).toString("utf8"),
+        );
+        const declaration = `${consumer.output}/src/nested.d.ts`;
+        const record = ".artifacts/extension-package-boundary/plugin-sdk.json";
+        const invalidArchives = [
+          payload.files.map(([file, bytes]) => [
+            file,
+            file === declaration ? "export declare const value: string;" : bytes,
+          ]),
+          payload.files.filter(([file]) => file !== declaration),
+          payload.files.filter(([file]) => file !== record),
+          payload.files.map(([file, bytes]) => [file, file === record ? narrowReceipt : bytes]),
+        ];
+        for (const files of invalidArchives) {
+          fs.rmSync(consumer.recordPath, { force: true });
+          fs.rmSync(path.join(consumer.root, consumer.output), { recursive: true, force: true });
+          fs.writeFileSync(targetArchive, gzipSync(JSON.stringify({ ...payload, files })));
+          const rejected = cli(consumer, "restore", "--required");
+          expect(rejected.status, rejected.stdout + rejected.stderr).toBe(1);
+          expect(rejected.stderr).toMatch(/SDK (?:archive|receipt)/u);
+          expect(fs.existsSync(consumer.recordPath)).toBe(false);
+        }
+
+        fs.writeFileSync(targetArchive, archive);
+        success(consumer, "restore", "--required");
+        consumer.write("src/nested.ts", "export const value = 2;");
+        expect(identity(consumer)["cache-key"]).not.toBe(published["cache-key"]);
+        expect(cli(consumer, "validate").status).toBe(1);
+        const stale = cli(consumer, "restore", "--required");
+        expect(stale.status, stale.stdout + stale.stderr).toBe(1);
+        expect(stale.stderr).toContain("different source or toolchain inputs");
+        expect(success(consumer, "restore").stdout).toContain("native preparation will run");
+        expect(fs.existsSync(consumer.recordPath)).toBe(false);
+        await consumer.run();
+        success(consumer, "validate");
+        expect(fs.readFileSync(path.join(consumer.root, declaration), "utf8")).toContain(
+          "value = 2",
+        );
       }),
   );
 
@@ -355,7 +582,6 @@ describe("native declaration preparation", () => {
     { name: "Windows 8.3 short entry", entry: true, workspace: false },
     { name: "Windows 8.3 workspace junction", entry: false, workspace: true },
     { name: "Windows 8.3 short entry and workspace junction", entry: true, workspace: true },
-    { name: "POSIX PWD alias (package-boundary)", mode: "package-boundary" as const },
     { name: "POSIX PWD alias (all)", mode: "all" as const },
   ])(
     "publishes cold native output and reuses warm receipts through $name",
@@ -468,39 +694,37 @@ describe("native declaration preparation", () => {
     },
   );
 
-  it.for(["package-boundary", "all"] as const)(
-    "preserves outputs on compile failure and prunes obsolete declarations after repair (%s)",
+  it(
+    "preserves outputs on compile failure and prunes obsolete declarations after repair",
     { timeout: 30_000 },
-    (mode, { signal }) =>
+    ({ signal }) =>
       fixture.run(async () => {
         const { root, native, write, plugins, recordPath, output, step, run } =
-          createPreparationFixture(mode, signal);
+          createPreparationFixture("all", signal);
         await run();
-        if (mode === "all") {
-          const slackBoundaryEntry = BOUNDARY_PLUGIN_UNITS.find(([id]) => id === "slack")?.[1];
-          if (!slackBoundaryEntry) {
-            throw new Error("Slack extension boundary entry is missing");
-          }
-          write(
-            "consumer.ts",
-            `import { consume } from "./.artifacts/extension-package-boundary/plugins/slack/${slackBoundaryEntry}.js"; consume(value => value.toUpperCase());`,
-          );
-          await step(
-            "isolated-boundary-consumer",
-            [
-              "--ignoreConfig",
-              "--module",
-              "nodenext",
-              "--target",
-              "es2023",
-              "--strict",
-              "--skipLibCheck",
-              "--noEmit",
-              path.join(root, "consumer.ts"),
-            ],
-            native,
-          );
+        const slackBoundaryEntry = BOUNDARY_PLUGIN_UNITS.find(([id]) => id === "slack")?.[1];
+        if (!slackBoundaryEntry) {
+          throw new Error("Slack extension boundary entry is missing");
         }
+        write(
+          "consumer.ts",
+          `import { consume } from "./.artifacts/extension-package-boundary/plugins/slack/${slackBoundaryEntry}.js"; consume(value => value.toUpperCase());`,
+        );
+        await step(
+          "isolated-boundary-consumer",
+          [
+            "--ignoreConfig",
+            "--module",
+            "nodenext",
+            "--target",
+            "es2023",
+            "--strict",
+            "--skipLibCheck",
+            "--noEmit",
+            path.join(root, "consumer.ts"),
+          ],
+          native,
+        );
         const first = readArtifactRecord(recordPath)!;
         expect(first.outputs[`${output}/src/nested.d.ts`]).toBeDefined();
         write("src/plugin-sdk/core.ts", 'export { value } from "../renamed.js";');

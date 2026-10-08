@@ -8,7 +8,12 @@ import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
 import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { ensureAbsoluteDirectory, pathExists, root as openFsSafeRoot } from "../infra/fs-safe.js";
+import {
+  ensureAbsoluteDirectory,
+  pathExists,
+  root as openFsSafeRoot,
+  statRegularFileSync,
+} from "../infra/fs-safe.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import {
   assertMemoryMigrationSourceRevision,
@@ -67,9 +72,6 @@ export function withCachedMigrationConfigRuntime(
     return undefined;
   }
   const configApi = runtime.config;
-  if (!configApi?.current || !configApi.mutateConfigFile) {
-    return runtime;
-  }
   let cachedConfig: MigrationProviderContext["config"] | undefined;
   const current = (): ReturnType<typeof configApi.current> => {
     cachedConfig ??= structuredClone(
@@ -94,15 +96,11 @@ export function withCachedMigrationConfigRuntime(
         cachedConfig = structuredClone(result.nextConfig);
         return result;
       },
-      ...(configApi.replaceConfigFile
-        ? {
-            replaceConfigFile: async (params) => {
-              const result = await configApi.replaceConfigFile(params);
-              cachedConfig = structuredClone(result.nextConfig);
-              return result;
-            },
-          }
-        : {}),
+      replaceConfigFile: async (params) => {
+        const result = await configApi.replaceConfigFile(params);
+        cachedConfig = structuredClone(result.nextConfig);
+        return result;
+      },
     },
   };
 }
@@ -204,6 +202,22 @@ async function openMemoryMigrationRoot(workspaceDir: string) {
     throw ensured.error;
   }
   return await openFsSafeRoot(ensured.path, options);
+}
+
+function moveMemoryMigrationFile(
+  root: Awaited<ReturnType<typeof openMemoryMigrationRoot>>,
+  source: string,
+  target: string,
+) {
+  return root.move(source, target, {
+    overwrite: false,
+    assertBeforeMutation: () => {
+      // Root.move also accepts directories; memory staging and recovery require files.
+      if (statRegularFileSync(path.join(root.rootReal, source)).missing) {
+        throw new Error("Memory migration file no longer exists");
+      }
+    },
+  });
 }
 
 function isFileAlreadyExistsError(err: unknown): boolean {
@@ -373,7 +387,7 @@ export async function copyMemoryMigrationFileItem(
         target: item.target,
       });
       recoveryPath = plannedRecoveryPath;
-      await safeRoot.move(relativeTarget, stagedRelative, { overwrite: false });
+      await moveMemoryMigrationFile(safeRoot, relativeTarget, stagedRelative);
       const staged = await safeRoot.read(stagedRelative);
       if (!staged.buffer.equals(existing.buffer)) {
         backupPath = await backupMemoryMigrationTarget(item.target, staged.buffer, reportDir);
@@ -419,7 +433,7 @@ export async function copyMemoryMigrationFileItem(
         if (!(await safeRoot.exists(stagedRelative))) {
           recoveryPath = undefined;
         } else if (!(await safeRoot.exists(relativeTarget))) {
-          await safeRoot.move(stagedRelative, relativeTarget, { overwrite: false });
+          await moveMemoryMigrationFile(safeRoot, stagedRelative, relativeTarget);
           stagedRelative = undefined;
           recoveryPath = undefined;
         }

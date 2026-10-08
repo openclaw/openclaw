@@ -23,14 +23,7 @@ it("revokes a captured native runner when its service authority scope closes", a
     {
       nativeCommand: async () => {
         effects += 1;
-        return {
-          stdout: "",
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        return result;
       },
     },
   );
@@ -49,45 +42,6 @@ const result = {
   killed: false,
   termination: "exit" as const,
 };
-
-it("serializes parallel native reads before checking a suspended parent", async () => {
-  const entered = createDeferred();
-  const release = createDeferred();
-  const commands: string[] = [];
-  let running = false;
-  await withGatewayServiceUpdateAuthority(
-    () => {
-      if (running) {
-        throw new Error("parent is suspended");
-      }
-    },
-    async () => {
-      const first = execFileUtf8("first", []);
-      await entered.promise;
-      const second = execFileUtf8("second", []);
-      expect(commands).toEqual(["first"]);
-      release.resolve();
-      const completed = await Promise.all([first, second]);
-      expect(completed.map((entry) => entry.code)).toEqual([0, 0]);
-      expect(commands).toEqual(["first", "second"]);
-    },
-    {
-      nativeCommand: async (argv) => {
-        running = true;
-        commands.push(argv[0]!);
-        try {
-          if (argv[0] === "first") {
-            entered.resolve();
-            await release.promise;
-          }
-          return result;
-        } finally {
-          running = false;
-        }
-      },
-    },
-  );
-});
 
 it("expires a queued deadline without invoking it or releasing its predecessor", async () => {
   vi.useFakeTimers();
@@ -172,42 +126,50 @@ it("closes unstarted submissions but joins the already running native call", asy
   expect(commands).toEqual(["first"]);
 });
 
-it.each([false, true])(
-  "inherits one native queue and checks nested custody after admission (revoked=%s)",
-  async (revoked) => {
+it.each(["direct", "nested", "revoked"] as const)(
+  "serializes native reads before checking suspended custody: %s",
+  async (scope) => {
     const entered = createDeferred();
     const release = createDeferred();
     const commands: string[] = [];
     let running = false;
     let current = true;
+    const invoke = async () => {
+      const first = execFileUtf8("first", []);
+      await entered.promise;
+      const second = execFileUtf8("second", []);
+      expect(commands).toEqual(["first"]);
+      const settled = Promise.allSettled([first, second]);
+      current = scope !== "revoked";
+      release.resolve();
+      const outcomes = await settled;
+      expect(outcomes.map((outcome) => outcome.status)).toEqual(
+        scope === "revoked" ? ["rejected", "rejected"] : ["fulfilled", "fulfilled"],
+      );
+      if (scope !== "revoked") {
+        expect(
+          outcomes.map((outcome) => outcome.status === "fulfilled" && outcome.value.code),
+        ).toEqual([0, 0]);
+      }
+    };
     const work = withGatewayServiceUpdateAuthority(
       () => {
         if (running) {
           throw new Error("parent is suspended");
         }
       },
-      async () => {
-        await withGatewayServiceUpdateAuthority(
-          () => {
-            if (!current) {
-              throw new Error("nested custody revoked");
-            }
-          },
-          async () => {
-            const first = execFileUtf8("first", []);
-            await entered.promise;
-            const second = execFileUtf8("second", []);
-            const settled = Promise.allSettled([first, second]);
-            current = !revoked;
-            release.resolve();
-            const outcomes = await settled;
-            expect(outcomes.map((outcome) => outcome.status)).toEqual(
-              revoked ? ["rejected", "rejected"] : ["fulfilled", "fulfilled"],
-            );
-          },
-          { updateOwned: false, nativeCommand: getGatewayServiceUpdateNativeCommand() },
-        );
-      },
+      () =>
+        scope === "direct"
+          ? invoke()
+          : withGatewayServiceUpdateAuthority(
+              () => {
+                if (!current) {
+                  throw new Error("nested custody revoked");
+                }
+              },
+              invoke,
+              { updateOwned: false, nativeCommand: getGatewayServiceUpdateNativeCommand() },
+            ),
       {
         nativeCommand: async (argv) => {
           running = true;
@@ -224,60 +186,17 @@ it.each([false, true])(
         },
       },
     );
-    if (revoked) {
+    if (scope === "revoked") {
       await expect(work).rejects.toThrow("nested custody revoked");
     } else {
       await work;
     }
-    expect(commands).toEqual(revoked ? ["first"] : ["first", "second"]);
+    expect(commands).toEqual(scope === "revoked" ? ["first"] : ["first", "second"]);
   },
 );
 
-it("retains bound native dispatch while compensating revoked nested custody", async () => {
-  const commands: string[] = [];
-  let current = true;
-  const work = withGatewayServiceUpdateAuthority(
-    () => undefined,
-    () =>
-      withGatewayServiceUpdateAuthority(
-        () => {
-          if (!current) {
-            throw new Error("nested custody revoked");
-          }
-        },
-        () =>
-          withGatewayServiceInstallationRecovery(
-            () => execFileUtf8("publish", []),
-            async () => {
-              await execFileUtf8("restore", []);
-              return true;
-            },
-          ),
-        {
-          updateOwned: false,
-          assertRecoveryCurrent: () => undefined,
-          nativeCommand: getGatewayServiceUpdateNativeCommand(),
-        },
-      ),
-    {
-      nativeCommand: async (argv) => {
-        commands.push(argv[0]!);
-        if (argv[0] === "publish") {
-          current = false;
-        }
-        return result;
-      },
-    },
-  );
-  await expect(work).rejects.toMatchObject({
-    code: "service-authority-revoked",
-    outcome: "restored",
-  });
-  expect(commands).toEqual(["publish", "restore"]);
-});
-
-it.each(["thrown", "returned"] as const)(
-  "preserves %s cleanup uncertainty after nested custody loss without compensation",
+it.each(["settled", "thrown", "returned"] as const)(
+  "compensates revoked nested custody only after native settlement: %s",
   async (kind) => {
     const commands: string[] = [];
     let current = true;
@@ -310,14 +229,24 @@ it.each(["thrown", "returned"] as const)(
             if (kind === "thrown") {
               throw failure;
             }
-            return { ...result, cleanup: "uncertain" };
+            if (kind === "returned") {
+              return { ...result, cleanup: "uncertain" };
+            }
           }
           return result;
         },
       },
     );
-    await expect(work).rejects.toSatisfy(hasCommandProcessCleanupError);
-    expect(restore).not.toHaveBeenCalled();
-    expect(commands).toEqual(["publish"]);
+    if (kind === "settled") {
+      await expect(work).rejects.toMatchObject({
+        code: "service-authority-revoked",
+        outcome: "restored",
+      });
+      expect(commands).toEqual(["publish", "restore"]);
+    } else {
+      await expect(work).rejects.toSatisfy(hasCommandProcessCleanupError);
+      expect(restore).not.toHaveBeenCalled();
+      expect(commands).toEqual(["publish"]);
+    }
   },
 );

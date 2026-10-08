@@ -3,35 +3,42 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { recordExplicitSkillSelectionFileHost } from "../../skills/discovery/skill-command-provenance.js";
 import { createSyntheticSourceInfo } from "../../skills/loading/skill-contract.js";
 import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
+import { recordSkillFileHost, resolveSkillFileHost } from "../../skills/skill-file-host.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import {
   mapSandboxSkillEntriesForPrompt,
+  remapExplicitSkillSelectionPath,
+  remapSkillReferencePaths,
   resolveSandboxSkillRuntimeInputs,
 } from "./sandbox-skills.js";
 
 const hostSkillPath = "/usr/lib/node_modules/openclaw/skills/demo/SKILL.md";
 const hostSkillBaseDir = "/usr/lib/node_modules/openclaw/skills/demo";
+const workspaceSkill = recordSkillFileHost(
+  {
+    name: "demo",
+    description: "Demo skill",
+    filePath: hostSkillPath,
+    baseDir: hostSkillBaseDir,
+    source: "openclaw-bundled",
+    sourceInfo: createSyntheticSourceInfo(hostSkillPath, {
+      source: "openclaw-bundled",
+      baseDir: hostSkillBaseDir,
+    }),
+    disableModelInvocation: false,
+  },
+  "workspace",
+);
 const snapshot: SkillSnapshot = {
   prompt:
     "<available_skills><skill><location>/usr/lib/node_modules/openclaw/skills/demo/SKILL.md</location></skill></available_skills>",
   skills: [{ name: "demo" }],
-  resolvedSkills: [
-    {
-      name: "demo",
-      description: "Demo skill",
-      filePath: hostSkillPath,
-      baseDir: hostSkillBaseDir,
-      source: "openclaw-bundled",
-      sourceInfo: createSyntheticSourceInfo(hostSkillPath, {
-        source: "openclaw-bundled",
-        baseDir: hostSkillBaseDir,
-      }),
-      disableModelInvocation: false,
-    },
-  ],
+  resolvedSkills: [workspaceSkill],
+  discoverySkills: [workspaceSkill],
 };
 
 describe("resolveSandboxSkillRuntimeInputs", () => {
@@ -93,6 +100,89 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     ]);
   });
 
+  it("remaps workspace-hosted explicit references to the delivered sandbox copy", () => {
+    const hiddenSkillPath = "/host/skills/hidden/SKILL.md";
+    const gatewaySkill = recordSkillFileHost(
+      { ...workspaceSkill, name: "gateway-demo" },
+      "gateway",
+    );
+    const runtime = resolveSandboxSkillRuntimeInputs({
+      sandbox: {
+        enabled: true,
+        workspaceAccess: "rw",
+        containerWorkdir: "/workspace",
+        skillsWorkspaceDir: "/state/sandbox-skills",
+        skillUsagePaths: [
+          {
+            readPath: "/state/sandbox-skills/skills/demo/SKILL.md",
+            skillFile: hostSkillPath,
+            skillName: "demo",
+            skillSource: "workspace",
+          },
+          {
+            readPath: "/state/sandbox-skills/skills/gateway-demo/SKILL.md",
+            skillFile: hostSkillPath,
+            skillName: "gateway-demo",
+            skillSource: "workspace",
+          },
+          {
+            readPath: "/state/sandbox-skills/skills/hidden/SKILL.md",
+            skillFile: hiddenSkillPath,
+            skillName: "hidden",
+            skillSource: "workspace",
+          },
+        ],
+      },
+      skillsAnchorWorkspace: "/workspace",
+      skillsSnapshot: {
+        ...snapshot,
+        skills: [...snapshot.skills, { name: "hidden" }],
+        resolvedSkills: [workspaceSkill, gatewaySkill],
+      },
+    });
+
+    expect(
+      remapSkillReferencePaths(
+        `Read workspace-skill://workspace/demo/SKILL.md, ${hostSkillPath}, ` +
+          `workspace-skill://workspace/hidden/SKILL.md, ` +
+          "workspace-skill://workspace/hidden/references/setup.md, " +
+          `${hiddenSkillPath}, and /host/skills/hidden/references/setup.md before acting.`,
+        runtime.skillUsagePaths,
+      ),
+    ).toBe(
+      "Read /workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md, " +
+        "/workspace/.openclaw/sandbox-skills/skills/gateway-demo/SKILL.md, " +
+        "/workspace/.openclaw/sandbox-skills/skills/hidden/SKILL.md, " +
+        "/workspace/.openclaw/sandbox-skills/skills/hidden/references/setup.md, " +
+        "/workspace/.openclaw/sandbox-skills/skills/hidden/SKILL.md, and " +
+        "/workspace/.openclaw/sandbox-skills/skills/hidden/references/setup.md before acting.",
+    );
+    expect(
+      remapExplicitSkillSelectionPath(
+        recordExplicitSkillSelectionFileHost({ name: "demo-2", path: hostSkillPath }, "workspace"),
+        runtime.skillUsagePaths,
+      ),
+    ).toBe("/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md");
+    expect(
+      remapExplicitSkillSelectionPath(
+        recordExplicitSkillSelectionFileHost(
+          { name: "gateway-demo", path: hostSkillPath },
+          "gateway",
+        ),
+        runtime.skillUsagePaths,
+      ),
+    ).toBe("/workspace/.openclaw/sandbox-skills/skills/gateway-demo/SKILL.md");
+    expect(
+      remapExplicitSkillSelectionPath(
+        recordExplicitSkillSelectionFileHost(
+          { name: "hidden-2", path: hiddenSkillPath },
+          "workspace",
+        ),
+        runtime.skillUsagePaths,
+      ),
+    ).toBe("/workspace/.openclaw/sandbox-skills/skills/hidden/SKILL.md");
+  });
+
   it.each([
     { label: "rebuilds sandbox prompts from materialized skill paths", skillsSnapshot: snapshot },
     {
@@ -140,6 +230,14 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
           containerWorkdir: "/workspace",
           skillsEligibility,
           skillsWorkspaceDir: materializedWorkspace,
+          skillUsagePaths: [
+            {
+              readPath: path.join(skillDir, "SKILL.md"),
+              skillFile: hostSkillPath,
+              skillName: "demo",
+              skillSource: "workspace",
+            },
+          ],
           workspaceAccess: "rw",
         },
         skillsAnchorWorkspace: effectiveWorkspace,
@@ -165,6 +263,12 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
 
       if (skillsSnapshot === snapshot) {
         expect(prompt).toContain("/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md");
+        const deliveredSkill = skillsSnapshotForRun?.resolvedSkills?.[0];
+        expect(deliveredSkill).toBeDefined();
+        if (!deliveredSkill) {
+          throw new Error("missing delivered sandbox skill");
+        }
+        expect(resolveSkillFileHost(deliveredSkill)).toBeUndefined();
       } else {
         expect(prompt).toBe("");
         expect(skillEntries).toEqual([]);

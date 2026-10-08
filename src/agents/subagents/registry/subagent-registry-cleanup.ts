@@ -114,26 +114,6 @@ export function resolveEffectiveCleanupMode(
   return cleanup ?? entry.cleanup;
 }
 
-/**
- * Whether this cleanup attempt may remove the run's attachments directory.
- *
- * The single owner of that decision: every cleanup path asks here rather than
- * re-deriving `cleanup === "delete" || !retainAttachmentsOnKeep`, and
- * `safeRemoveAttachmentsDir` re-checks the provisional predicate itself so a new
- * call site cannot reintroduce the bypass.
- */
-export function shouldDeleteSubagentAttachments(
-  entry: SubagentRunRecord,
-  cleanup?: "delete" | "keep",
-): boolean {
-  if (shouldDeferTerminalCleanupForUnconfirmedChild(entry)) {
-    // A live child may still be writing here; the directory is removed once an
-    // observed stop promotes the row and the ordinary owner retires it.
-    return false;
-  }
-  return (cleanup ?? entry.cleanup) === "delete" || !entry.retainAttachmentsOnKeep;
-}
-
 /** Required-delivery retries renew their window; optional delivery expires from completion. */
 export function resolveAnnounceDeliveryDeadline(
   entry: SubagentRunRecord,

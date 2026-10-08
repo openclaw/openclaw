@@ -52,6 +52,19 @@ import { renderUsageQueryFilter } from "./view-query-filter.ts";
 
 type ProviderUsageSnapshot = ProviderUsageSummary["providers"][number];
 
+function renderDateInput(value: string, label: string, onChange: (event: Event) => void) {
+  return html`
+    <input
+      class="usage-date-input"
+      type="date"
+      .value=${value}
+      title=${label}
+      aria-label=${label}
+      @change=${onChange}
+    />
+  `;
+}
+
 function renderProviderUsage(
   providers: ProviderUsageSnapshot[],
   unavailable: boolean,
@@ -167,21 +180,20 @@ export function renderUsage(props: UsageProps) {
     return totals;
   };
   // Keep global daily totals when no row scope is active: the visible session page can be capped.
-  const filteredDaily = hasSessionFilters
-    ? (() => {
-        const days = new Map<string, UsageTotals>();
-        for (const session of scopedSessions) {
-          for (const day of session.usage?.dailyBreakdown ?? []) {
-            const totals = days.get(day.date) ?? createEmptyCostUsageTotals();
-            addCostUsageTotals(totals, day);
-            days.set(day.date, totals);
-          }
-        }
-        return Array.from(days, ([date, totals]) => ({ date, ...totals })).toSorted((a, b) =>
-          a.date.localeCompare(b.date),
-        );
-      })()
-    : data.costDaily;
+  let filteredDaily = data.costDaily;
+  if (hasSessionFilters) {
+    const days = new Map<string, UsageTotals>();
+    for (const session of scopedSessions) {
+      for (const day of session.usage?.dailyBreakdown ?? []) {
+        const totals = days.get(day.date) ?? createEmptyCostUsageTotals();
+        addCostUsageTotals(totals, day);
+        days.set(day.date, totals);
+      }
+    }
+    filteredDaily = Array.from(days, ([date, totals]) => ({ date, ...totals })).toSorted((a, b) =>
+      a.date.localeCompare(b.date),
+    );
+  }
   const displayTotals = !hasOverviewData
     ? null
     : selectedDaySet.size
@@ -306,16 +318,7 @@ export function renderUsage(props: UsageProps) {
           >
             <div class="usage-header-row">
               <div class="usage-controls">
-                ${renderFilterChips(
-                  filters.selectedDays,
-                  filters.selectedHours,
-                  filters.selectedSessions,
-                  data.sessions,
-                  filterActions.onClearDays,
-                  filterActions.onClearHours,
-                  filterActions.onClearSessions,
-                  filterActions.onClearFilters,
-                )}
+                ${renderFilterChips(data.sessions, props)}
                 <div class="usage-presets">
                   ${datePresets.map(
                     (preset) => html`
@@ -337,25 +340,9 @@ export function renderUsage(props: UsageProps) {
                   </button>
                 </div>
                 <div class="usage-date-range">
-                  <input
-                    class="usage-date-input"
-                    type="date"
-                    .value=${filters.startDate}
-                    title=${t("usage.filters.startDate")}
-                    aria-label=${t("usage.filters.startDate")}
-                    @change=${(e: Event) =>
-                      filterActions.onStartDateChange((e.target as HTMLInputElement).value)}
-                  />
+                  ${renderDateInput(filters.startDate, t("usage.filters.startDate"), (e: Event) => filterActions.onStartDateChange((e.target as HTMLInputElement).value))}
                   <span class="usage-separator">${t("usage.filters.to")}</span>
-                  <input
-                    class="usage-date-input"
-                    type="date"
-                    .value=${filters.endDate}
-                    title=${t("usage.filters.endDate")}
-                    aria-label=${t("usage.filters.endDate")}
-                    @change=${(e: Event) =>
-                      filterActions.onEndDateChange((e.target as HTMLInputElement).value)}
-                  />
+                  ${renderDateInput(filters.endDate, t("usage.filters.endDate"), (e: Event) => filterActions.onEndDateChange((e.target as HTMLInputElement).value))}
                 </div>
                 <select
                   class="usage-select"
@@ -451,18 +438,15 @@ export function renderUsage(props: UsageProps) {
                   class="usage-export-menu"
                   placement="bottom-end"
                   @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-                    switch (event.detail.item.value) {
+                    const value = event.detail.item.value;
+                    switch (value) {
                       case "sessions-csv":
-                        downloadTextFile(
-                          `openclaw-usage-sessions-${exportStamp}.csv`,
-                          buildSessionsCsv(aggregateSessions),
-                          "text/csv;charset=utf-8",
-                        );
-                        break;
                       case "daily-csv":
                         downloadTextFile(
-                          `openclaw-usage-daily-${exportStamp}.csv`,
-                          buildDailyCsv(filteredDaily),
+                          `openclaw-usage-${value === "sessions-csv" ? "sessions" : "daily"}-${exportStamp}.csv`,
+                          value === "sessions-csv"
+                            ? buildSessionsCsv(aggregateSessions)
+                            : buildDailyCsv(filteredDaily),
                           "text/csv;charset=utf-8",
                         );
                         break;
@@ -721,22 +705,7 @@ export function renderUsage(props: UsageProps) {
 
                   <div class="usage-grid">
                     <div class="usage-grid-column">
-                      ${renderSessionsCard(
-                        filteredSessions,
-                        filters.selectedSessions,
-                        filters.selectedDays,
-                        isTokenMode,
-                        display.sessionSort,
-                        display.sessionSortDir,
-                        display.recentSessions,
-                        display.sessionsTab,
-                        detailActions.onSelectSession,
-                        displayActions.onSessionSortChange,
-                        displayActions.onSessionSortDirChange,
-                        displayActions.onSessionsTabChange,
-                        totalSessions,
-                        filterActions.onClearSessions,
-                      )}
+                      ${renderSessionsCard(filteredSessions, props, totalSessions)}
                     </div>
                     ${
                       primarySelectedEntry

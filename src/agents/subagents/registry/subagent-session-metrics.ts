@@ -27,7 +27,6 @@ export function getSubagentSessionStartedAt(
   return asFiniteNumber(entry?.sessionStartedAt) ?? asFiniteNumber(entry?.execution.startedAt);
 }
 
-/** Computes accumulated runtime including the current live run when still active. */
 export function getSubagentSessionRuntimeMs(
   entry: SubagentSessionRuntimeRecord | null | undefined,
   now = Date.now(),
@@ -131,19 +130,16 @@ export function resolveSubagentDisplayStatus(
     ? "running (wait expired; child stop unconfirmed)"
     : (resolveSubagentSessionStatus(entry) ?? "done");
   const pending = Math.max(0, pendingDescendants);
+  const waiting = `waiting on ${pending} ${pending === 1 ? "child" : "children"}`;
   if (
     entry.pauseReason === "sessions_yield" &&
     status !== "killed" &&
     status !== "failed" &&
     status !== "timeout"
   ) {
-    return pending > 0
-      ? `waiting on ${pending} ${pending === 1 ? "child" : "children"}`
-      : "waiting for external continuation";
+    return pending > 0 ? waiting : "waiting for external continuation";
   }
   if (pending > 0) {
-    const childLabel = pending === 1 ? "child" : "children";
-    const waiting = `waiting on ${pending} ${childLabel}`;
     // Pending descendants keep the row active without hiding a terminal failure,
     // and must not collapse an unconfirmed stop into a plain `active` either.
     return status === "running" || status === "done"

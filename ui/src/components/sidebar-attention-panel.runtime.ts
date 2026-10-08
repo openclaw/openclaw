@@ -46,7 +46,7 @@ type SidebarAttentionPanelParams = {
   mentions: MentionsCapability;
   entries: readonly SidebarInboxEntry[];
   onApprovalDecision: (event: Event, approvalId: string, decision: ExecApprovalDecision) => void;
-  onClose: (restoreFocus: boolean) => void;
+  onClose: () => void;
   onDismiss: (dismissal: SidebarAttentionDismissal) => void;
   onKeydown: (event: KeyboardEvent) => void;
   onNavigate: ApplicationContext["navigate"];
@@ -143,7 +143,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
       type="button"
       class="sidebar-issues-panel__backdrop"
       aria-label=${t("common.close")}
-      @click=${() => params.onClose(true)}
+      @click=${() => params.onClose()}
     ></button>
     <openclaw-menu-surface>
       <section
@@ -200,7 +200,7 @@ export function renderSidebarAttentionPanel(params: SidebarAttentionPanelParams)
               type="button"
               class="sidebar-brand__icon sidebar-issues-panel__mobile-close"
               aria-label=${t("common.close")}
-              @click=${() => params.onClose(true)}
+              @click=${() => params.onClose()}
             >
               ${icons.x}
             </button>

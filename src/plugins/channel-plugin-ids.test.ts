@@ -677,7 +677,7 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
 
         agents: {
           defaults: {},
-          list: [{ id: "researcher", memory: { search: { enabled: true } } }],
+          entries: { researcher: { memory: { search: { enabled: true } } } },
         },
       } as OpenClawConfig,
       ["browser", "openai", "ollama", "memory-core"],
@@ -690,10 +690,10 @@ describe("resolveGatewayStartupPluginPlanFromRegistry", () => {
 
         agents: {
           defaults: {},
-          list: [
-            { id: "muted", memory: { search: { enabled: false } } },
-            { id: "researcher", memory: { search: { provider: "ollama" } } },
-          ],
+          entries: {
+            muted: { memory: { search: { enabled: false } } },
+            researcher: { memory: { search: { provider: "ollama" } } },
+          },
         },
       } as OpenClawConfig,
       ["browser", "openai", "ollama", "memory-core"],

@@ -33,7 +33,7 @@ export const en = {
       compatibilityOpenAiResponses: "OpenAI Responses-compatible",
       compatibilityOpenAiResponsesHint: "Uses /responses",
       compatibilityUnknown: "Unknown (detect automatically)",
-      compatibilityUnknownHint: "Probes OpenAI Chat, OpenAI Responses, then Anthropic endpoints",
+      compatibilityUnknownHint: "Checks OpenAI Chat, OpenAI Responses, then Anthropic endpoints",
       detectionFailed: "Could not detect endpoint type.",
       detectionFailedNote:
         "This endpoint did not respond to OpenAI Chat, OpenAI Responses, or Anthropic style requests.",
@@ -445,6 +445,7 @@ export const en = {
       quickstartOnlyLocal: "QuickStart only supports local gateways. Switching to Manual mode.",
       quickstartTitle: "QuickStart",
       quickstartAuthTokenDefault: "Gateway secret (generated)",
+      quickstartAuthKept: "existing configuration kept",
       quickstartDirectChannels: "Direct to chat channels.",
       quickstartGatewayAuth: "Gateway auth: {auth}",
       quickstartGatewayBind: "Gateway bind: {bind}",
@@ -465,7 +466,7 @@ export const en = {
       riskNotAccepted: "risk not accepted",
       searchTitle: "Search",
       setupMode: "Setup mode",
-      secretRefProbeFailed: "Could not resolve {field} SecretRef for setup probe.",
+      secretRefProbeFailed: "Could not resolve {field} SecretRef for setup check.",
       skillsTitle: "Skills",
       skipChannels: "Skipping channel setup.",
       skipSearch: "Skipping search setup.",
@@ -1184,6 +1185,7 @@ export const en = {
       dashboardCopyPaste: "Copy/paste this URL in a browser on this machine to control OpenClaw.",
       dashboardOpened: "Opened in your browser. Keep that tab to control OpenClaw.",
       dashboardOpenAnytime: "Open the dashboard anytime: {command}",
+      dashboardTitle: "Dashboard",
       dashboardReady: "Dashboard ready",
       dashboardWhenReady: "When you're ready: {command}",
       daemonRuntime: "Gateway service runtime",
@@ -1253,7 +1255,7 @@ export const en = {
       securityReminder:
         "Running agents on your computer is risky — harden your setup: https://docs.openclaw.ai/security",
       secretRefAuthFailed: "Could not resolve {field} SecretRef for setup auth.",
-      skipHealthNextTime: "Or skip this probe next time: {command}",
+      skipHealthNextTime: "Or skip this check next time: {command}",
       skipControlUi: "Skipping Control UI/TUI prompts.",
       startGatewayNow: "Start now: {command}",
       systemdInstallSkipped:

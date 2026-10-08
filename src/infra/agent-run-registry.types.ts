@@ -7,6 +7,8 @@ import type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js"
 
 export type AgentRunModel = { provider: string; model: string };
 
+export type AgentRunEventState = { seq: number; terminalPublication?: symbol };
+
 /** Per-run metadata used to stamp events and gate Control UI visibility. */
 export type AgentRunContext = {
   /** Trusted refusal fact consumed only by this run's existing terminal mutation. */
@@ -22,6 +24,8 @@ export type AgentRunContext = {
   lifecycleGeneration?: string;
   /** Producer-owned start captured from this run's accepted lifecycle event. */
   lifecycleStartedAt?: number;
+  /** Shared with captured routing so terminal publication survives execution cleanup. */
+  eventState?: AgentRunEventState;
   activeModel?: AgentRunModel;
   verboseLevel?: VerboseLevel;
   isHeartbeat?: boolean;

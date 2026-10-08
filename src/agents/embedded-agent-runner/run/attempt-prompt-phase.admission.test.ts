@@ -88,6 +88,7 @@ describe("prompt projection write admission", () => {
             expect.objectContaining({ error: reason }),
           );
         } else {
+          expect(mocks.handlePromptError).not.toHaveBeenCalled();
           expect(markers()).toMatchObject([{ customType: "openclaw.cache-ttl" }]);
           expect(dispatched).toBe(true);
         }

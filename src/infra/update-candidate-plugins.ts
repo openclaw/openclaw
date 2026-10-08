@@ -11,6 +11,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
+  areBundledPluginsDisabled,
   isPluginInPackageBundledRoots,
   resolveBundledDirFromPackageRoot,
   resolveBundledPluginsDir,
@@ -53,17 +54,36 @@ import {
 } from "./update-candidate-plugin-tree.js";
 import { relocateRuntimePath } from "./update-runtime-relocation.js";
 
+/** Discovery captured in the serving updater, before entering the candidate worker. */
+export type UpdateCandidateBundledSource = {
+  packageRoot: string;
+  directory?: string;
+};
+
 function bundledPluginRedirects(
   candidateRoot: string,
   env?: NodeJS.ProcessEnv,
+  sourceBundle?: UpdateCandidateBundledSource,
 ): Map<string, string> {
   const redirects = new Map<string, string>();
-  const sourceDir = resolveBundledPluginsDir(env);
+  if (areBundledPluginsDisabled(env)) {
+    return redirects;
+  }
+  // A candidate worker's argv/module discovery names the candidate itself.
+  // Retain the serving updater's actual selection, including overrides or no bundle.
+  const sourceDir = sourceBundle ? sourceBundle.directory : resolveBundledPluginsDir(env);
   const sourcePackageRoot = sourceDir && resolveOpenClawPackageRootSync({ cwd: sourceDir });
   const candidateDir = resolveBundledDirFromPackageRoot(candidateRoot);
   if (
     !sourceDir ||
     !sourcePackageRoot ||
+    (sourceBundle &&
+      (pluginCacheRealpathSync(sourcePackageRoot, true) !==
+        pluginCacheRealpathSync(sourceBundle.packageRoot, true) ||
+        !isPluginInPackageBundledRoots({
+          rootDir: sourceDir,
+          packageRoot: sourceBundle.packageRoot,
+        }))) ||
     !candidateDir ||
     !isPluginInPackageBundledRoots({ rootDir: candidateDir, packageRoot: candidateRoot })
   ) {
@@ -175,6 +195,7 @@ type UpdateCandidatePluginProjectionParams = {
   stateDir: string;
   targetStateDir: string;
   candidateRoot: string;
+  sourceBundledPlugins?: UpdateCandidateBundledSource;
   env?: NodeJS.ProcessEnv;
 };
 
@@ -313,7 +334,7 @@ export async function prepareUpdateCandidatePlugins(
   }
   const bundledRedirects =
     sources.size > 0
-      ? bundledPluginRedirects(params.candidateRoot, params.env)
+      ? bundledPluginRedirects(params.candidateRoot, params.env, params.sourceBundledPlugins)
       : new Map<string, string>();
   const pluginPaths: Record<string, string> = {};
   for (const source of sources) {
@@ -435,6 +456,7 @@ export async function copyUpdateCandidatePlugins(
   plan: UpdateCandidatePluginPlan,
   params: UpdateCandidatePluginProjectionParams & {
     onCodeLink?: (fact: UpdateCandidatePluginCodeLink) => void;
+    onProgress?: () => void;
   },
 ): Promise<Record<string, string>> {
   const targetStateDir = resolvePathViaExistingAncestorSync(path.resolve(params.targetStateDir));
@@ -496,6 +518,7 @@ export async function copyUpdateCandidatePlugins(
         candidateRoot: plan.trees.candidateRoot,
         hostLinks: new Set(),
         onCodeLink: params.onCodeLink,
+        onProgress: params.onProgress,
       });
     }
   }

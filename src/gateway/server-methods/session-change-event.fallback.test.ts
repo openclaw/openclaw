@@ -9,10 +9,12 @@ import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginRuntimeCapabilityLease } from "../../plugins/capability-lease.js";
 import { createPluginServiceGatewayEvents } from "../../plugins/gateway-events.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { createGatewayConnectionState } from "../server-connection-state.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
@@ -22,9 +24,41 @@ import { createSessionRowProjection } from "../session-row-projection.js";
 import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 import { emitSessionsChanged, flushPendingSessionsChangedEvents } from "./session-change-event.js";
 
-afterEach(() => {
+afterEach(async () => {
+  await flushPendingSessionsChangedEvents();
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+it("coalesces prepared keyless refreshes without repeating prepared facts", async () => {
+  const context = {
+    getRuntimeConfig: () => ({}),
+    chatAbortControllers: new Map(),
+    getSessionEventSubscriberConnIds: () => new Set(["listener"]),
+    broadcastToConnIds: vi.fn(),
+  } satisfies Parameters<typeof emitSessionsChanged>[0];
+  const facts = vi.fn();
+  const unsubscribe = sessionChanges.subscribeFacts(facts);
+  const accessRevision = readGatewayAccessRevision();
+  try {
+    for (let index = 0; index < 3; index += 1) {
+      emitSessionsChanged(context, { reason: "delete" }, { preparedPublication: true });
+    }
+    expect(context.broadcastToConnIds.mock.calls.length).toBeLessThan(3);
+    expect(facts).not.toHaveBeenCalled();
+    expect(readGatewayAccessRevision()).toBe(accessRevision + 3);
+
+    await flushPendingSessionsChangedEvents(context);
+    expect(context.broadcastToConnIds).toHaveBeenCalledTimes(2);
+    expect(context.broadcastToConnIds).toHaveBeenLastCalledWith(
+      "sessions.changed",
+      expect.objectContaining({ reason: "delete" }),
+      new Set(["listener"]),
+      expect.any(Object),
+    );
+  } finally {
+    unsubscribe();
+  }
 });
 
 it.each(["ready", "capture", "preparation", "canonical deferral"] as const)(
@@ -146,6 +180,13 @@ it.each(["ready", "capture", "preparation", "canonical deferral"] as const)(
             database: {
               agentId: "main",
               path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+              initializeCanonicalValidation: false,
+              assertStateCurrent: () => {},
+              source: {
+                key: "synthetic:pending",
+                canonicalPath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+                incarnation: "synthetic-pending",
+              },
             },
           });
         }
@@ -218,7 +259,7 @@ it.each(["ready", "capture", "preparation", "canonical deferral"] as const)(
         sessions.dispose();
         lease.revoke();
         detach();
-        connection.mentionInbox.dispose();
+        await connection.mentionInbox.dispose();
         projection.dispose();
         vi.useRealTimers();
       }

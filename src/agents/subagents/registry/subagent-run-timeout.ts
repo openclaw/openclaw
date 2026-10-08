@@ -3,8 +3,11 @@
  *
  * Separates timer-safe delays from duration/deadline values because setTimeout has stricter bounds.
  */
-import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { asDateTimestampMs, asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { resolveAgentTimeoutMs } from "../../timeout.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentChildStopUnconfirmed } from "./subagent-session-metrics.js";
 
 type SubagentRunDeadlineRecord = Pick<
   SubagentRunRecord,
@@ -34,13 +37,9 @@ export function resolveSubagentRunDeadlineMs(
     return undefined;
   }
   const startedAt =
-    typeof observedStartedAt === "number" && Number.isFinite(observedStartedAt)
-      ? observedStartedAt
-      : typeof entry.execution.startedAt === "number" && Number.isFinite(entry.execution.startedAt)
-        ? entry.execution.startedAt
-        : entry.collect
-          ? undefined
-          : entry.createdAt;
+    asFiniteNumber(observedStartedAt) ??
+    asFiniteNumber(entry.execution.startedAt) ??
+    (entry.collect ? undefined : entry.createdAt);
   const safeStartedAt = asDateTimestampMs(startedAt);
   if (safeStartedAt === undefined) {
     return undefined;
@@ -51,6 +50,27 @@ export function resolveSubagentRunDeadlineMs(
     : undefined;
 }
 
+export function resolveCompletionAfterHardRunDeadline(params: {
+  entry: SubagentRunRecord;
+  observedStartedAt?: number;
+  observedEndedAt?: number;
+  observedSuccess?: boolean;
+  now: number;
+}): number | undefined {
+  // A prior nonterminal observation is not an irrevocable timeout result.
+  // Let the child's subsequent terminal snapshot reach the lifecycle owner;
+  // explicit timeout snapshots still take completeAsRunTimeout below.
+  if (params.observedSuccess && isSubagentChildStopUnconfirmed(params.entry)) {
+    return undefined;
+  }
+  const deadlineMs = resolveSubagentRunDeadlineMs(params.entry, params.observedStartedAt);
+  if (deadlineMs === undefined) {
+    return undefined;
+  }
+  const observedEndedAt = asFiniteNumber(params.observedEndedAt) ?? params.now;
+  return observedEndedAt > deadlineMs ? deadlineMs : undefined;
+}
+
 export function resolveSubagentRunEffectiveEndedAt(
   entry: SubagentRunDeadlineRecord,
   endedAt: number,
@@ -58,4 +78,11 @@ export function resolveSubagentRunEffectiveEndedAt(
 ): number {
   const deadlineMs = resolveSubagentRunDeadlineMs(entry, observedStartedAt);
   return deadlineMs !== undefined && endedAt > deadlineMs ? deadlineMs : endedAt;
+}
+
+export function resolveSubagentWaitTimeoutMs(cfg: OpenClawConfig, runTimeoutSeconds?: number) {
+  return resolveAgentTimeoutMs({
+    cfg,
+    overrideSeconds: runTimeoutSeconds ?? 0,
+  });
 }

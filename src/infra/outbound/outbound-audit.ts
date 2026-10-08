@@ -65,16 +65,6 @@ function outcomesByPayload(
   return indexed;
 }
 
-function sentResults(
-  history: readonly OutboundPayloadDeliveryOutcome[],
-): readonly OutboundDeliveryResult[] {
-  const sent = history.findLast(
-    (outcome): outcome is Extract<OutboundPayloadDeliveryOutcome, { status: "sent" }> =>
-      outcome.status === "sent",
-  );
-  return sent?.results ?? [];
-}
-
 function projectRecordedOutboundAuditTerminal(
   history: readonly OutboundPayloadDeliveryOutcome[],
 ): OutboundAuditTerminal | undefined {
@@ -96,10 +86,7 @@ function projectRecordedOutboundAuditTerminal(
       ...(latest.deliveryKind ? { deliveryKind: latest.deliveryKind } : {}),
     };
   }
-  if (latest?.status === "suppressed") {
-    if (latest.reason === "adapter_returned_no_identity") {
-      return { outcome: "unknown", failureStage: "platform_send" };
-    }
+  if (latest?.status === "suppressed" && latest.reason !== "adapter_returned_no_identity") {
     return {
       outcome: "suppressed",
       reasonCode:
@@ -109,60 +96,60 @@ function projectRecordedOutboundAuditTerminal(
   return undefined;
 }
 
-export function completedOutboundAuditTerminals(params: {
+type OutboundAuditBatch = {
   payloadCount: number;
   results: readonly OutboundDeliveryResult[];
   payloadOutcomes: readonly OutboundPayloadDeliveryOutcome[];
-}): IndexedOutboundAuditTerminal[] {
+};
+
+function projectOutboundAuditTerminals(
+  params: OutboundAuditBatch,
+  fallback: (history: readonly OutboundPayloadDeliveryOutcome[]) => OutboundAuditTerminal,
+): IndexedOutboundAuditTerminal[] {
   const indexed = outcomesByPayload(params.payloadOutcomes);
   return Array.from({ length: params.payloadCount }, (_, payloadIndex) => {
     const history = indexed.get(payloadIndex) ?? [];
-    const recordedTerminal = projectRecordedOutboundAuditTerminal(history);
-    if (recordedTerminal) {
-      return { payloadIndex, terminal: recordedTerminal };
-    }
-    // Core delivery reports every original payload, including normalization
-    // suppressions. The single-payload fallback supports legacy recovery senders.
-    if (params.payloadCount === 1 && params.results.length > 0) {
-      return { payloadIndex, terminal: { outcome: "sent", results: params.results } };
-    }
     return {
       payloadIndex,
-      terminal: { outcome: "suppressed", reasonCode: "no_visible_payload" },
+      terminal: projectRecordedOutboundAuditTerminal(history) ?? fallback(history),
     };
   });
 }
 
-export function failedOutboundAuditTerminals(params: {
-  payloadCount: number;
-  results: readonly OutboundDeliveryResult[];
-  payloadOutcomes: readonly OutboundPayloadDeliveryOutcome[];
-  failureStage: AuditMessageFailureStage;
-}): IndexedOutboundAuditTerminal[] {
-  const indexed = outcomesByPayload(params.payloadOutcomes);
-  return Array.from({ length: params.payloadCount }, (_, payloadIndex) => {
-    const history = indexed.get(payloadIndex) ?? [];
-    const recordedTerminal = projectRecordedOutboundAuditTerminal(history);
-    if (recordedTerminal) {
-      return { payloadIndex, terminal: recordedTerminal };
+export function completedOutboundAuditTerminals(
+  params: OutboundAuditBatch,
+): IndexedOutboundAuditTerminal[] {
+  return projectOutboundAuditTerminals(params, () => {
+    // Core delivery reports every original payload, including normalization
+    // suppressions. The single-payload fallback supports legacy recovery senders.
+    if (params.payloadCount === 1 && params.results.length > 0) {
+      return { outcome: "sent", results: params.results };
     }
+    return { outcome: "suppressed", reasonCode: "no_visible_payload" };
+  });
+}
+
+export function failedOutboundAuditTerminals(
+  params: OutboundAuditBatch & { failureStage: AuditMessageFailureStage },
+): IndexedOutboundAuditTerminal[] {
+  return projectOutboundAuditTerminals(params, (history) => {
     const latest = history.at(-1);
     const failedResults = latest?.status === "failed" ? (latest.results ?? []) : [];
-    const payloadResults = failedResults.length > 0 ? failedResults : sentResults(history);
+    const payloadResults =
+      failedResults.length > 0
+        ? failedResults
+        : (history.findLast((outcome) => outcome.status === "sent")?.results ?? []);
     const fallbackResults = params.payloadCount === 1 ? params.results : [];
     const results = payloadResults.length > 0 ? payloadResults : fallbackResults;
     return {
-      payloadIndex,
-      terminal: {
-        outcome: "failed",
-        failureStage: latest?.status === "failed" ? latest.stage : params.failureStage,
-        results,
-        sentBeforeError:
-          results.length > 0 || (latest?.status === "failed" && latest.sentBeforeError),
-        ...(latest?.status === "failed" && latest.deliveryKind
-          ? { deliveryKind: latest.deliveryKind }
-          : {}),
-      },
+      outcome: "failed",
+      failureStage: latest?.status === "failed" ? latest.stage : params.failureStage,
+      results,
+      sentBeforeError:
+        results.length > 0 || (latest?.status === "failed" && latest.sentBeforeError),
+      ...(latest?.status === "failed" && latest.deliveryKind
+        ? { deliveryKind: latest.deliveryKind }
+        : {}),
     };
   });
 }
@@ -207,7 +194,12 @@ function resolveOutboundTargetFacts(context: OutboundAuditDeliveryContext): {
       : [context.channel];
   const withoutProvider = stripTargetProviderPrefix(context.to, ...providerPrefixes);
   const kindPrefix = TARGET_PREFIX_RE.exec(withoutProvider)?.[1]?.toLowerCase();
-  const allowedRouteKinds = kindPrefix ? TARGET_KIND_TO_ROUTE_KINDS[kindPrefix] : undefined;
+  // kindPrefix is destination-controlled. An inherited key such as "constructor"
+  // must not read through to Object.prototype (Function), or .includes throws.
+  const allowedRouteKinds =
+    kindPrefix && Object.hasOwn(TARGET_KIND_TO_ROUTE_KINDS, kindPrefix)
+      ? TARGET_KIND_TO_ROUTE_KINDS[kindPrefix]
+      : undefined;
   const conversationId = stripOutboundTargetKindPrefix(
     withoutProvider,
     Object.keys(TARGET_KIND_TO_ROUTE_KINDS),
@@ -304,8 +296,12 @@ function resolveResultIdentifiers(
   };
 }
 
-function outboundAuditContext(context: OutboundAuditDeliveryContext) {
+function outboundAuditContext(context: OutboundAuditDeliveryContext, includeReplyHook = false) {
   const agentId = context.session?.agentId ?? context.mirror?.agentId;
+  const runId =
+    context.runId ??
+    context.preparedBatch?.runId ??
+    (includeReplyHook ? context.replyPayloadSendingHook?.runId : undefined);
   return {
     actorType: agentId ? ("agent" as const) : ("system" as const),
     actorId: agentId ?? "gateway",
@@ -318,6 +314,7 @@ function outboundAuditContext(context: OutboundAuditDeliveryContext) {
     conversationKind: resolveConversationKind(context),
     ...(context.accountId ? { accountId: context.accountId } : {}),
     targetId: context.to,
+    ...(runId ? { runId } : {}),
   };
 }
 
@@ -373,15 +370,7 @@ function emitOutboundAuditTerminal(params: {
       action: "message.outbound.finished",
       occurredAt: Date.now(),
       ...terminalFields,
-      ...outboundAuditContext(context),
-      ...((context.runId ?? context.preparedBatch?.runId ?? context.replyPayloadSendingHook?.runId)
-        ? {
-            runId:
-              context.runId ??
-              context.preparedBatch?.runId ??
-              context.replyPayloadSendingHook?.runId,
-          }
-        : {}),
+      ...outboundAuditContext(context, true),
       durationMs: Math.max(0, Date.now() - params.startedAt),
       resultCount: countPhysicalOutboundSends(results),
       ...identifiers,
@@ -409,32 +398,21 @@ export function emitOutboundAuditLifecycle(params: {
       if (!Number.isSafeInteger(payloadIndex) || payloadIndex < 0 || payloadIndex >= payloadCount) {
         continue;
       }
-      const common = {
+      emitTrustedMessageAuditEvent({
         sourceId: outboundQueueAuditSourceId(params.queueId, payloadIndex, params.outcome),
         occurredAt: Date.now(),
         status: "started" as const,
         ...outboundAuditContext(params.context),
-        ...((params.context.runId ?? params.context.preparedBatch?.runId)
-          ? { runId: params.context.runId ?? params.context.preparedBatch?.runId }
-          : {}),
         durationMs: Math.max(0, Date.now() - params.startedAt),
         resultCount: 0,
-      };
-      if (params.outcome === "queued") {
-        emitTrustedMessageAuditEvent({
-          ...common,
-          kind: "message",
-          action: "message.outbound.queued",
-          outcome: "queued",
-        });
-      } else {
-        emitTrustedMessageAuditEvent({
-          ...common,
-          kind: "message",
-          action: "message.outbound.platform-started",
-          outcome: "platform_started",
-        });
-      }
+        kind: "message",
+        ...(params.outcome === "queued"
+          ? { action: "message.outbound.queued" as const, outcome: "queued" as const }
+          : {
+              action: "message.outbound.platform-started" as const,
+              outcome: "platform_started" as const,
+            }),
+      });
     }
   } catch {
     // Audit observers cannot alter delivery or queue semantics.

@@ -93,12 +93,18 @@ export type SubagentRunReadRecord = {
   taskRunId?: string;
   /** Stable public collector id; gateway execution ids can change across dispatch/recovery. */
   swarmRunId?: string;
+  /** Stable scheduler slot identity across Gateway run replacements. */
+  schedulerSlotId?: string;
+  /** Replay identity selects one collector payload before hydration. */
+  swarmLaunchReplayKey?: string;
   /** Collector-mode runs remain waitable and never announce to the requester. */
   collect?: boolean;
   groupId?: string;
   /** Stable spawning-session owner for caps, scheduling, and wait authorization. */
   swarmRequesterSessionKey?: string;
   childSessionKey: string;
+  /** Agent captured at registration for raw child session keys. */
+  childAgentId?: string;
   controllerSessionKey?: string;
   requesterSessionKey: string;
   /** Effective requester agent, including cron/hook overrides not encoded in the session key. */

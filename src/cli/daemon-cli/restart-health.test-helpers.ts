@@ -20,7 +20,7 @@ export const monotonicClock = { nowMs: 0 };
 export const sleep = vi.fn(async (ms: number) => {
   monotonicClock.nowMs += ms;
 });
-export const classifyPortListener = vi.fn<(_listener: unknown, _port: number) => PortListenerKind>(
+export const classifyPortListener = vi.fn<(_listener: unknown) => PortListenerKind>(
   () => "gateway",
 );
 export const callGateway = vi.fn<(opts: CallGatewayOptions) => Promise<unknown>>();
@@ -79,7 +79,7 @@ export const resolveGatewayServiceProbeHosts = vi.fn<
 >(async () => ["127.0.0.1"]);
 
 vi.mock("../../infra/ports-format.js", () => ({
-  classifyPortListener: (listener: unknown, port: number) => classifyPortListener(listener, port),
+  classifyPortListener: (listener: unknown) => classifyPortListener(listener),
   formatPortDiagnostics: vi.fn(() => []),
 }));
 

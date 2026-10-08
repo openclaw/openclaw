@@ -59,7 +59,7 @@ it.each([
   {
     platform: "linux",
     reason: "service-manager-access-denied",
-    message: "service-manager probe could not start (EACCES/EPERM)",
+    message: "service-manager check could not start (EACCES/EPERM)",
     hint: "executable permissions",
   },
   {

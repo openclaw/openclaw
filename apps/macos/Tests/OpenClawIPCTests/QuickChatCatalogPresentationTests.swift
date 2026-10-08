@@ -315,7 +315,7 @@ struct QuickChatCatalogPresentationTests {
                 let routeLease = await transport.acquireSessionSettingsRouteLease()
                 let lease = try #require(routeLease)
                 return try await lease.patchSessionSettings(
-                    sessionKey: target.sessionKey, agentID: target.agentID, patch: settings)
+                    target.sessionKey, target.agentID, settings)
             })
     }
 

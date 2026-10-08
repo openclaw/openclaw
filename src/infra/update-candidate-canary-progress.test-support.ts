@@ -7,10 +7,12 @@ import { expect, it, vi, type Mock } from "vitest";
 import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
 import { validateUpdateCandidateWithProgress } from "../cli/update-cli/update-command-candidate-validation.js";
 import { createUpdateCommandExecutionGuards } from "../cli/update-cli/update-command-execution-guards.js";
+import * as bundledDirectory from "../plugins/bundled-dir.js";
 import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
 } from "../process/exec-result.js";
+import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -41,6 +43,7 @@ export function registerCanaryProgressWorkerTests(
 ) {
   it.each([
     "recorded",
+    "recorded-text",
     "reopened",
     "source-replaced",
     "revoked-at-commit",
@@ -51,6 +54,18 @@ export function registerCanaryProgressWorkerTests(
     async (outcome) => {
       const root = getRoot();
       stubHealthyGateway();
+      const sourcePackageRoot = path.join(root, "serving-runtime");
+      const sourceBundle = path.join(sourcePackageRoot, "dist", "extensions");
+      vi.spyOn(bundledDirectory, "resolveBundledPluginsDir").mockReturnValue(sourceBundle);
+      const json = outcome !== "recorded-text";
+      const stdout = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
+      const stderr = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
+      const announcements: unknown[] = [];
+      const spawn = mocks.spawn.getMockImplementation()!;
+      mocks.spawn.mockImplementation((...args) => {
+        announcements.push((json ? stderr : stdout).mock.calls.at(-1)?.[0]);
+        return spawn(...args);
+      });
       let beforeInventory: Awaited<ReturnType<typeof readSqliteSidecarIdentities>> | undefined;
       let pressurePublished = false;
       const snapshot = mocks.snapshot.getMockImplementation()!;
@@ -63,6 +78,12 @@ export function registerCanaryProgressWorkerTests(
           },
         ) => {
           const request: unknown = JSON.parse(options.input);
+          if (isRecord(request) && request.mode === "inventory") {
+            expect(request.sourceBundledPlugins).toEqual({
+              packageRoot: sourcePackageRoot,
+              directory: sourceBundle,
+            });
+          }
           if (outcome === "reopened" && isRecord(request) && request.mode === "inventory") {
             beforeInventory = await readSqliteSidecarIdentities(
               writeOptions.context.admission.databasePath,
@@ -166,12 +187,13 @@ export function registerCanaryProgressWorkerTests(
         validateUpdateCandidateWithProgress(
           {
             root,
+            sourcePackageRoot,
             config: {},
             env,
             assertCurrent: guards.assertCurrent,
             writeOptions,
           },
-          { opts: { json: true }, progress: { onStepComplete } },
+          { opts: { json }, progress: { onStepComplete } },
           run,
         ),
       );
@@ -244,6 +266,23 @@ export function registerCanaryProgressWorkerTests(
         expect(checkedCommit).toBe(true);
         const saved = await getUpdateRunAsync(run.runId, { env });
         expect(result.status).toBe("ok");
+        const checks = [
+          "candidate-doctor",
+          "candidate-doctor-lint",
+          "candidate-config",
+          "candidate-plugins",
+          "candidate-recovery",
+          "candidate-gateway-startup",
+        ];
+        expect(announcements).toEqual(
+          checks.map((name) => expect.stringMatching(new RegExp(`^${name}: \\S`))),
+        );
+        expect(json ? stdout : stderr).not.toHaveBeenCalled();
+        for (const step of checks) {
+          expect(saved?.steps).toContainEqual(
+            expect.objectContaining({ step, status: "in_progress" }),
+          );
+        }
         expect(saved?.steps).toContainEqual(
           expect.objectContaining({
             step: "candidate-state-snapshot",
@@ -271,6 +310,8 @@ export function registerCanaryProgressWorkerTests(
         prepare.mockRestore();
         exec.mockRestore();
         worker.mockRestore();
+        stdout.mockRestore();
+        stderr.mockRestore();
         // Effect guards still read recovery on the host; only ledger DML and worker admission are fenced here.
         expect(hostWrites).toEqual([]);
         expect(admissionSql).toEqual([]);

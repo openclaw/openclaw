@@ -55,13 +55,7 @@ type QaProviderGatewayModelsInput = {
   liveProviderConfigs?: Record<string, ModelProviderConfig>;
 };
 
-type QaProviderDefaultImageInput = {
-  modelProviderIds: readonly string[];
-};
-
 type QaProviderTurnTimeoutInput = {
-  primaryModel: string;
-  alternateModel: string;
   modelRef: string;
   fallbackMs: number;
 };
@@ -75,8 +69,6 @@ export type QaProviderDefinition = {
     serverLabel: string;
   };
   defaultModel(options?: { alternate?: boolean; preferredLiveModel?: string }): string;
-  defaultImageGenerationProviderIds: readonly string[];
-  defaultImageGenerationModel(input: QaProviderDefaultImageInput): string | null;
   usesFastModeByDefault(modelRef: string): boolean;
   resolveModelParams(input: QaProviderModelParamsInput): Record<string, unknown>;
   resolveTurnTimeoutMs(input: QaProviderTurnTimeoutInput): number;
@@ -85,7 +77,4 @@ export type QaProviderDefinition = {
     providers: Record<string, ModelProviderConfig>;
   } | null;
   mockAuthProviders?: readonly string[];
-  usesModelProviderPlugins: boolean;
-  scrubsLiveProviderEnv: boolean;
-  appliesLiveEnvAliases: boolean;
 };

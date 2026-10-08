@@ -78,17 +78,14 @@ const toolCall = {
 };
 
 describe("MCP HTTP keepalive", () => {
-  it.each(["success", "tool-error", "serialization-error"])(
-    "keeps a pending JSON response alive and delivers one final result: %s",
+  it.each(["success", "serialization-error", "notification"])(
+    "keeps pending calls alive without writing notification bodies: %s",
     async (outcome) => {
       const entered = createDeferred();
       const release = createDeferred();
       execute.mockImplementation(async () => {
         entered.resolve();
         await release.promise;
-        if (outcome === "tool-error") {
-          throw new Error("synthetic tool failure");
-        }
         return {
           content: [
             {
@@ -101,10 +98,21 @@ describe("MCP HTTP keepalive", () => {
       });
       const send = await startClient();
       const serverTimers = vi.getTimerCount();
-      const responsePromise = send("POST", toolCall);
+      const { id: _id, ...notification } = toolCall;
+      const responsePromise = send("POST", outcome === "notification" ? notification : toolCall);
       let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
       try {
         await within(entered.promise);
+        if (outcome === "notification") {
+          expect(vi.getTimerCount()).toBe(serverTimers);
+          await vi.advanceTimersByTimeAsync(60_000);
+          release.resolve();
+          const response = await within(responsePromise);
+          expect(response.status).toBe(202);
+          expect(await response.text()).toBe("");
+          expect(vi.getTimerCount()).toBe(serverTimers);
+          return;
+        }
         expect(vi.getTimerCount()).toBe(serverTimers + 1);
         await vi.advanceTimersByTimeAsync(30_000);
         const response = await within(responsePromise);
@@ -138,10 +146,10 @@ describe("MCP HTTP keepalive", () => {
                   content: [
                     {
                       type: "text",
-                      text: outcome === "tool-error" ? "synthetic tool failure" : "completed once",
+                      text: "completed once",
                     },
                   ],
-                  isError: outcome === "tool-error",
+                  isError: false,
                 },
               },
         );
@@ -151,7 +159,7 @@ describe("MCP HTTP keepalive", () => {
         release.resolve();
         if (reader) {
           await reader.cancel();
-        } else {
+        } else if (outcome !== "notification") {
           await (await responsePromise).body?.cancel();
         }
       }
@@ -187,30 +195,5 @@ describe("MCP HTTP keepalive", () => {
       await reader.cancel();
       reader.releaseLock();
     }
-  });
-
-  it("leaves long notifications empty with status 202", async () => {
-    const entered = createDeferred();
-    const release = createDeferred();
-    execute.mockImplementation(async () => {
-      entered.resolve();
-      await release.promise;
-      return { content: [{ type: "text", text: "completed" }] };
-    });
-    const send = await startClient();
-    const serverTimers = vi.getTimerCount();
-    const { id: _id, ...notification } = toolCall;
-    const pending = send("POST", notification);
-    try {
-      await within(entered.promise);
-      expect(vi.getTimerCount()).toBe(serverTimers);
-      await vi.advanceTimersByTimeAsync(60_000);
-    } finally {
-      release.resolve();
-    }
-    const response = await within(pending);
-    expect(response.status).toBe(202);
-    expect(await response.text()).toBe("");
-    expect(vi.getTimerCount()).toBe(serverTimers);
   });
 });

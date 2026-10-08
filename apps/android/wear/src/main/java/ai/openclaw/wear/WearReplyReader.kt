@@ -92,9 +92,8 @@ internal fun ReplyReader(
           reply.target == null -> WearReplyTextPage(WearReplyTextStatus.Unavailable)
           else -> readReply(reply.target, offset, revision)
         }
-      } catch (err: CancellationException) {
-        throw err
-      } catch (_: Throwable) {
+      } catch (err: Throwable) {
+        if (err is CancellationException) throw err
         WearReplyTextPage(WearReplyTextStatus.Failed)
       }
     if (page?.status == WearReplyTextStatus.Ready) revision = page?.revision

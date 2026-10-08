@@ -3,11 +3,13 @@
 // `plugin-sdk/provider-model-shared`.
 import {
   CLAUDE_FABLE_5_THINKING_PROFILE,
+  CLAUDE_HAIKU_55_THINKING_PROFILE,
   CLAUDE_OPUS_5_THINKING_PROFILE,
   CLAUDE_OPUS_55_THINKING_PROFILE,
   CLAUDE_SONNET_5_THINKING_PROFILE,
   CLAUDE_SONNET_55_THINKING_PROFILE,
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeHaiku55ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
@@ -46,6 +48,9 @@ export function resolveClaudeThinkingProfile(
 ): ProviderThinkingProfile {
   const ref = { id: modelId, params };
   const canonicalModelId = resolveClaudeModelIdentity(ref);
+  if (resolveClaudeHaiku55ModelIdentity(ref)) {
+    return CLAUDE_HAIKU_55_THINKING_PROFILE;
+  }
   if (resolveClaudeOpus55ModelIdentity(ref)) {
     return CLAUDE_OPUS_55_THINKING_PROFILE;
   }

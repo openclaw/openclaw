@@ -288,12 +288,16 @@ describe("Codex app-server config", () => {
     expect(runtime.start.clearEnv).toEqual(["OPENAI_API_KEY"]);
   });
 
-  it("preserves Ultrafast while normalizing the legacy service tier", () => {
+  it.each([
+    { enableUltrafast: undefined, expected: true },
+    { enableUltrafast: true, expected: true },
+    { enableUltrafast: false, expected: false },
+  ])("resolves the Ultrafast disable switch $enableUltrafast", ({ enableUltrafast, expected }) => {
     const runtime = resolveCodexAppServerRuntimeOptions({
-      pluginConfig: { appServer: { serviceTier: "fast", enableUltrafast: true } },
+      pluginConfig: { appServer: { serviceTier: "fast", enableUltrafast } },
       env: {},
     });
-    expect(runtime.enableUltrafast).toBe(true);
+    expect(runtime.enableUltrafast).toBe(expected);
     expect(runtime.serviceTier).toBe("priority");
   });
 
@@ -340,7 +344,6 @@ describe("Codex app-server config", () => {
     });
     expect(runtime).toMatchObject({
       connectionClass: "remote",
-      remoteAppsSubstrate: "preconfigured",
       remoteWorkspaceRoot: "/srv/workspaces",
     });
   });

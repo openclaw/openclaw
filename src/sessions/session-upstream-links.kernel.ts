@@ -1,4 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { safeParseJson } from "@openclaw/normalization-core";
 import type { Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -72,4 +73,135 @@ export function listWatchedSessionUpstreamLinksInDatabase(db: DatabaseSync): Ses
       .orderBy("links.session_key", "asc"),
   ).rows;
   return rows.map(rowToSessionUpstreamLink);
+}
+
+export type SessionUpstreamLinkInput = Omit<
+  SessionUpstreamLink,
+  "lastScannedAt" | "createdAt" | "updatedAt"
+>;
+
+function getSessionUpstreamKysely(db: DatabaseSync) {
+  return getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "session_upstream_links">>(db);
+}
+
+export function upsertSessionUpstreamLinkInDatabase(
+  db: DatabaseSync,
+  input: SessionUpstreamLinkInput,
+  now: number,
+  ifAbsent?: true,
+): boolean {
+  return (
+    executeSqliteQuerySync(
+      db,
+      getSessionUpstreamKysely(db)
+        .insertInto("session_upstream_links")
+        .values({
+          session_key: input.sessionKey,
+          agent_id: input.agentId,
+          catalog_id: input.catalogId,
+          host_id: input.hostId,
+          thread_id: input.threadId,
+          upstream_kind: input.upstreamKind,
+          upstream_ref_json: JSON.stringify(input.upstreamRef),
+          last_marker_json: JSON.stringify(input.marker),
+          last_scanned_at: null,
+          created_at: now,
+          updated_at: now,
+        })
+        .onConflict((conflict) =>
+          ifAbsent
+            ? conflict.columns(["session_key", "agent_id"]).doNothing()
+            : conflict.columns(["session_key", "agent_id"]).doUpdateSet((eb) => {
+                // Same-source refresh preserves scan progress; any identity change
+                // (thread/host/kind or the physical ref: Claude filePath, Codex
+                // connection fingerprint) must rebase the cursor to the new baseline
+                // or the old source's marker would misread the new upstream.
+                const sourceChanged = eb.or([
+                  eb("session_upstream_links.thread_id", "!=", eb.ref("excluded.thread_id")),
+                  eb("session_upstream_links.host_id", "!=", eb.ref("excluded.host_id")),
+                  eb(
+                    "session_upstream_links.upstream_kind",
+                    "!=",
+                    eb.ref("excluded.upstream_kind"),
+                  ),
+                  eb(
+                    "session_upstream_links.upstream_ref_json",
+                    "!=",
+                    eb.ref("excluded.upstream_ref_json"),
+                  ),
+                ]);
+                return {
+                  agent_id: input.agentId,
+                  catalog_id: input.catalogId,
+                  host_id: input.hostId,
+                  thread_id: input.threadId,
+                  upstream_kind: input.upstreamKind,
+                  upstream_ref_json: JSON.stringify(input.upstreamRef),
+                  last_marker_json: eb
+                    .case()
+                    .when(sourceChanged)
+                    .then(JSON.stringify(input.marker))
+                    .else(eb.ref("session_upstream_links.last_marker_json"))
+                    .end(),
+                  last_scanned_at: eb
+                    .case()
+                    .when(sourceChanged)
+                    .then(null)
+                    .else(eb.ref("session_upstream_links.last_scanned_at"))
+                    .end(),
+                  updated_at: now,
+                };
+              }),
+        ),
+    ).numAffectedRows === 1n
+  );
+}
+
+export function deleteSessionUpstreamLinkInDatabase(
+  db: DatabaseSync,
+  sessionKey: string,
+  agentId: string,
+  expected?: SessionUpstreamLink,
+): "deleted" | "absent" | "changed" {
+  const kysely = getSessionUpstreamKysely(db);
+  if (expected) {
+    const row = executeSqliteQuerySync(
+      db,
+      kysely
+        .selectFrom("session_upstream_links")
+        .selectAll()
+        .where("session_key", "=", sessionKey)
+        .where("agent_id", "=", agentId),
+    ).rows[0];
+    if (!row) {
+      return "absent";
+    }
+    if (!isDeepStrictEqual(rowToSessionUpstreamLink(row), expected)) {
+      return "changed";
+    }
+  }
+  executeSqliteQuerySync(
+    db,
+    kysely
+      .deleteFrom("session_upstream_links")
+      .where("session_key", "=", sessionKey)
+      .where("agent_id", "=", agentId),
+  );
+  return "deleted";
+}
+
+export function sessionUpstreamLinkSourceMatches(
+  current: SessionUpstreamLink | undefined,
+  expected: SessionUpstreamLink,
+): boolean {
+  return (
+    current !== undefined &&
+    current.sessionKey === expected.sessionKey &&
+    current.agentId === expected.agentId &&
+    current.catalogId === expected.catalogId &&
+    current.hostId === expected.hostId &&
+    current.threadId === expected.threadId &&
+    current.upstreamKind === expected.upstreamKind &&
+    isDeepStrictEqual(current.upstreamRef, expected.upstreamRef)
+  );
 }

@@ -197,7 +197,6 @@ describe("ClickClack durable room real-behavior proof", () => {
         createClickClackClient({ baseUrl: account.apiEndpoint, token: account.token }),
       installationId: "11111111-2222-4333-8444-555555555555",
       bindingGenerationFactory: () => "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
-      startTimer: false,
     });
     cleanups.push(async () => service.cleanup());
 

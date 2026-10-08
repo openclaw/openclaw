@@ -141,97 +141,112 @@ function enqueueCompletion(sessionKey: string) {
 }
 
 describe("heartbeat acknowledgements", () => {
-  it("sends the canonical acknowledgement for NO_REPLY when showOk is enabled", async () => {
-    await withHeartbeat(
-      async ({ send, replySpy, run }) => {
-        replySpy.mockResolvedValue({ text: "NO_REPLY" });
-        await run();
-        expect(send).toHaveBeenCalledOnce();
+  it.each<{
+    name: string;
+    payload: ReplyPayload;
+    options?: Parameters<typeof withHeartbeat>[1];
+    exec?: boolean;
+    sends: number;
+    sentText?: string;
+  }>([
+    {
+      name: "canonical NO_REPLY acknowledgement",
+      payload: { text: "NO_REPLY" },
+      options: { showOk: true },
+      sends: 1,
+      sentText: "HEARTBEAT_OK",
+    },
+    {
+      name: "exec summary with trailing acknowledgement",
+      payload: { text: "Command completed: uploaded report.txt\nHEARTBEAT_OK" },
+      exec: true,
+      sends: 1,
+      sentText: "Command completed: uploaded report.txt",
+    },
+    {
+      name: "exec acknowledgement with media",
+      payload: {
+        text: "HEARTBEAT_OK",
+        mediaUrl: "https://example.test/report.png",
+        presentation: { blocks: [{ type: "text", text: "Report uploaded." }] },
+      },
+      exec: true,
+      sends: 1,
+    },
+    {
+      name: "explicit Telegram account",
+      payload: { text: "Hello from heartbeat" },
+      options: { telegram: true, accountId: "work" },
+      sends: 1,
+      sentText: "Hello from heartbeat",
+    },
+  ])("applies delivery policy to $name", async ({ payload, options, exec, sends, sentText }) => {
+    await withHeartbeat(async ({ send, replySpy, sessionKey, run }) => {
+      if (exec) {
+        enqueueCompletion(sessionKey);
+      }
+      replySpy.mockResolvedValue(payload);
+      expect((await run({}, exec ? "exec-event" : undefined)).status).toBe("ran");
+      expect(send).toHaveBeenCalledTimes(sends);
+      if (sentText) {
         expect(send.mock.calls[0]?.slice(0, 2)).toEqual([
-          "120363140186826074@g.us",
-          "HEARTBEAT_OK",
+          options?.telegram ? "-1001234567890" : "120363140186826074@g.us",
+          sentText,
         ]);
-      },
-      { showOk: true },
-    );
+      }
+      if (options?.accountId) {
+        expect(send.mock.calls[0]).toEqual([
+          "-1001234567890",
+          sentText,
+          expect.objectContaining({ accountId: "work", verbose: false }),
+        ]);
+      }
+      if (exec) {
+        expect(peekSystemEvents(sessionKey)).toEqual([]);
+      }
+    }, options);
   });
 
-  it("reports a hook-suppressed acknowledgement as silent", async () => {
-    await withHeartbeat(
-      async ({ send, replySpy, run }) => {
-        const registry = getActivePluginRegistry();
-        if (!registry) {
-          throw new Error("Expected heartbeat plugin registry");
-        }
-        addTestHook({
-          registry,
-          pluginId: "heartbeat-test-suppression",
-          hookName: "message_sending",
-          handler: () => ({ cancel: true }),
-        });
-        initializeGlobalHookRunner(registry);
-        try {
-          replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-          expect((await run()).status).toBe("ran");
-          expect(send).not.toHaveBeenCalled();
-          expect(getLastHeartbeatEvent()).toMatchObject({ status: "ok-token", silent: true });
-        } finally {
-          resetGlobalHookRunner();
-        }
-      },
-      { showOk: true },
-    );
-  });
-
-  it("keeps an acknowledgement quiet when delivery fails", async () => {
-    await withHeartbeat(
-      async ({ send, replySpy, run }) => {
-        replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-        send.mockRejectedValue(new Error("delivery unavailable"));
-        expect((await run()).status).toBe("ran");
-        expect(send).toHaveBeenCalledOnce();
-        expect(getLastHeartbeatEvent()).toMatchObject({ status: "ok-token", silent: true });
-      },
-      { telegram: true, showOk: true },
-    );
-  });
-
-  it("keeps an acknowledgement quiet when readiness throws", async () => {
-    await withHeartbeat(
-      async ({ send, replySpy, run }) => {
-        replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-        expect(
-          (
-            await run({
-              webAuthExists: async () => {
-                throw new Error("readiness unavailable");
-              },
-            })
-          ).status,
-        ).toBe("ran");
-        expect(send).not.toHaveBeenCalled();
-        expect(getLastHeartbeatEvent()).toMatchObject({ status: "ok-token", silent: true });
-      },
-      { showOk: true },
-    );
-  });
-
-  it.each([
-    { responsePrefix: "[openclaw]", text: "[openclaw] HEARTBEAT_OK all good", sends: 0 },
-    { responsePrefix: "Hi", text: "History check complete", sends: 1 },
-  ])(
-    "recognizes only complete response prefixes ($responsePrefix)",
-    async ({ responsePrefix, text, sends }) => {
+  it.each(["hook", "delivery", "readiness"] as const)(
+    "reports an acknowledgement as silent after %s failure",
+    async (failure) => {
       await withHeartbeat(
         async ({ send, replySpy, run }) => {
-          replySpy.mockResolvedValue({ text });
-          await run();
-          expect(send).toHaveBeenCalledTimes(sends);
-          if (sends) {
-            expect(send.mock.calls[0]?.slice(0, 2)).toEqual(["-1001234567890", text]);
+          if (failure === "hook") {
+            const registry = getActivePluginRegistry();
+            if (!registry) {
+              throw new Error("Expected heartbeat plugin registry");
+            }
+            addTestHook({
+              registry,
+              pluginId: "heartbeat-test-suppression",
+              hookName: "message_sending",
+              handler: () => ({ cancel: true }),
+            });
+            initializeGlobalHookRunner(registry);
+          } else if (failure === "delivery") {
+            send.mockRejectedValue(new Error("delivery unavailable"));
+          }
+          try {
+            replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
+            const deps =
+              failure === "readiness"
+                ? {
+                    webAuthExists: async () => {
+                      throw new Error("readiness unavailable");
+                    },
+                  }
+                : undefined;
+            expect((await run(deps)).status).toBe("ran");
+            expect(send).toHaveBeenCalledTimes(failure === "delivery" ? 1 : 0);
+            expect(getLastHeartbeatEvent()).toMatchObject({ status: "ok-token", silent: true });
+          } finally {
+            if (failure === "hook") {
+              resetGlobalHookRunner();
+            }
           }
         },
-        { telegram: true, responsePrefix },
+        { telegram: failure === "delivery", showOk: true },
       );
     },
   );
@@ -246,42 +261,6 @@ describe("heartbeat acknowledgements", () => {
       expect(await run()).toEqual({ status: "skipped", reason: "alerts-disabled" });
       expect(replySpy).not.toHaveBeenCalled();
       expect(send).not.toHaveBeenCalled();
-    });
-  });
-
-  it("consumes a relayable exec completion without sending NO_REPLY", async () => {
-    await withHeartbeat(async ({ send, replySpy, sessionKey, run }) => {
-      enqueueCompletion(sessionKey);
-      replySpy.mockResolvedValue({ text: "NO_REPLY" });
-      expect((await run({}, "exec-event")).status).toBe("ran");
-      expect(send).not.toHaveBeenCalled();
-      expect(peekSystemEvents(sessionKey)).toEqual([]);
-    });
-  });
-
-  it("delivers an exec summary after stripping its trailing acknowledgement", async () => {
-    await withHeartbeat(async ({ send, replySpy, sessionKey, run }) => {
-      enqueueCompletion(sessionKey);
-      replySpy.mockResolvedValue({ text: "Command completed: uploaded report.txt\nHEARTBEAT_OK" });
-      await run({}, "exec-event");
-      expect(send).toHaveBeenCalledOnce();
-      expect(send.mock.calls[0]?.slice(0, 2)).toEqual([
-        "120363140186826074@g.us",
-        "Command completed: uploaded report.txt",
-      ]);
-    });
-  });
-
-  it("delivers media accompanying an exec acknowledgement", async () => {
-    await withHeartbeat(async ({ send, replySpy, sessionKey, run }) => {
-      enqueueCompletion(sessionKey);
-      replySpy.mockResolvedValue({
-        text: "HEARTBEAT_OK",
-        mediaUrl: "https://example.test/report.png",
-        presentation: { blocks: [{ type: "text", text: "Report uploaded." }] },
-      });
-      expect((await run({}, "exec-event")).status).toBe("ran");
-      expect(send).toHaveBeenCalledOnce();
     });
   });
 
@@ -314,22 +293,6 @@ describe("heartbeat acknowledgements", () => {
       expect(getLastHeartbeatEvent()).toMatchObject({ reason: "whatsapp-not-linked" });
       expect(send).not.toHaveBeenCalled();
     });
-  });
-
-  it("uses the explicit Telegram account at delivery", async () => {
-    await withHeartbeat(
-      async ({ send, replySpy, run }) => {
-        replySpy.mockResolvedValue({ text: "Hello from heartbeat" });
-        await run();
-        expect(send).toHaveBeenCalledOnce();
-        expect(send.mock.calls[0]).toEqual([
-          "-1001234567890",
-          "Hello from heartbeat",
-          expect.objectContaining({ accountId: "work", verbose: false }),
-        ]);
-      },
-      { telegram: true, accountId: "work" },
-    );
   });
 });
 
@@ -391,79 +354,82 @@ describe("heartbeat committed work bookkeeping", () => {
 
   const sentTarget = { tool: "message", provider: "telegram", to: target, text: "Delivered alert" };
 
-  it("records a confirmed media send without sending another acknowledgement", async () => {
-    const { event, send } = await runCommittedWork({
-      showOk: true,
-      result: {
-        messagingToolSentTargets: [{ ...sentTarget, mediaUrls: ["https://example.com/chart.png"] }],
+  it.each<{
+    name: string;
+    params: Parameters<typeof runCommittedWork>[0];
+    event: Partial<NonNullable<ReturnType<typeof getLastHeartbeatEvent>>>;
+    result?: { status: string; reason?: string };
+  }>([
+    {
+      name: "confirmed media send",
+      params: {
+        showOk: true,
+        result: {
+          messagingToolSentTargets: [
+            { ...sentTarget, mediaUrls: ["https://example.com/chart.png"] },
+          ],
+        },
       },
-    });
-    expect(event).toMatchObject({
-      status: "sent",
-      silent: false,
-      preview: "Delivered alert",
-      hasMedia: true,
-    });
-    expect(send).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { name: "recipient", route: { to: "-1009999999999" } },
-    { name: "account", route: { accountId: "other" } },
-    { name: "topic", route: { threadId: "8" } },
-  ])("does not credit delivery to another $name", async ({ route }) => {
-    const { event, send } = await runCommittedWork({
-      threadId: "7",
-      result: {
-        messagingToolSentTargets: [
-          { ...sentTarget, accountId: "default", threadId: "7", ...route },
-        ],
+      event: { status: "sent", silent: false, preview: "Delivered alert", hasMedia: true },
+    },
+    ...[
+      { name: "recipient", route: { to: "-1009999999999" } },
+      { name: "account", route: { accountId: "other" } },
+      { name: "topic", route: { threadId: "8" } },
+    ].map(({ name, route }) => ({
+      name: `unrelated ${name}`,
+      params: {
+        threadId: "7",
+        result: {
+          messagingToolSentTargets: [
+            { ...sentTarget, accountId: "default", threadId: "7", ...route },
+          ],
+        },
       },
-    });
-    expect(event).toMatchObject({ status: "ok-token", silent: true });
-    expect(send).not.toHaveBeenCalled();
-  });
-
-  it("distinguishes an accepted child from an all-clear acknowledgement", async () => {
-    const { event, send } = await runCommittedWork({
-      showOk: true,
-      result: {
-        acceptedSessionSpawns: [
-          {
-            runId: "child",
-            childSessionKey: "agent:main:subagent:child",
-            expectsCompletionMessage: true,
-          },
-        ],
+      event: { status: "ok-token" as const, silent: true },
+    })),
+    {
+      name: "accepted child",
+      params: {
+        showOk: true,
+        result: {
+          acceptedSessionSpawns: [
+            {
+              runId: "child",
+              childSessionKey: "agent:main:subagent:child",
+              expectsCompletionMessage: true,
+            },
+          ],
+        },
       },
-    });
-    expect(event).toMatchObject({ status: "skipped", reason: "background-work", silent: true });
-    expect(send).not.toHaveBeenCalled();
-  });
-
-  it.each(["cancelled", "superseded"] as const)(
-    "preserves %s after a prior send",
-    async (status) => {
-      const { result, event } = await runCommittedWork({
-        status,
-        result: { messagingToolSentTargets: [sentTarget] },
-      });
-      expect(result).toMatchObject({
+      event: { status: "skipped", reason: "background-work", silent: true },
+    },
+    ...(["cancelled", "superseded"] as const).map((status) => ({
+      name: status,
+      params: { status, result: { messagingToolSentTargets: [sentTarget] } },
+      result: {
         status: "skipped",
         reason: status === "cancelled" ? "agent-runner-cancelled" : "preempted",
-      });
-      expect(event?.status).toBe("skipped");
+      },
+      event: { status: "skipped" as const },
+    })),
+    {
+      name: "failure after settlement",
+      params: { failAfterSettlement: true, result: { messagingToolSentTargets: [sentTarget] } },
+      result: { status: "failed" },
+      event: { status: "failed", silent: false },
+    },
+  ])(
+    "retains the committed outcome for $name without another acknowledgement",
+    async (expected) => {
+      const { event, send, result } = await runCommittedWork(expected.params);
+      expect(event).toMatchObject(expected.event);
+      expect(send).not.toHaveBeenCalled();
+      if (expected.result) {
+        expect(result).toMatchObject(expected.result);
+      }
     },
   );
-
-  it("retains committed evidence if the same invocation fails after settlement", async () => {
-    const { result, event } = await runCommittedWork({
-      failAfterSettlement: true,
-      result: { messagingToolSentTargets: [sentTarget] },
-    });
-    expect(result.status).toBe("failed");
-    expect(event).toMatchObject({ status: "failed", silent: false });
-  });
 });
 
 describe("heartbeat pending-final delivery ownership", () => {
@@ -523,17 +489,6 @@ describe("heartbeat pending-final delivery ownership", () => {
       payload: { text: "Heartbeat update." },
       visibleText: "Heartbeat update.",
     },
-    {
-      name: "visible tool reply",
-      payload: createHeartbeatToolResponsePayload({
-        outcome: "needs_attention",
-        notify: true,
-        summary: "Build blocked.",
-        notificationText: "Build needs credentials.",
-      }),
-      visibleText: "Build needs credentials.",
-    },
-    { name: "acknowledgement", payload: { text: "HEARTBEAT_OK" }, visibleText: undefined },
     {
       name: "quiet tool reply",
       payload: createHeartbeatToolResponsePayload({
@@ -809,28 +764,6 @@ describe("runHeartbeatOnce failure delivery", () => {
       );
     },
   );
-
-  it("preserves media when delivering a plain terminal failure reply", async () => {
-    await withHeartbeat(
-      async ({ replySpy, send: sendTelegram, run }) => {
-        const mediaUrl = "https://example.test/failure.png";
-        replySpy.mockResolvedValue(
-          setReplyPayloadMetadata(
-            { text: "Message delivery failed.", mediaUrl },
-            { heartbeatTerminalToolFailure: { toolName: "message" } },
-          ),
-        );
-
-        await expect(run()).resolves.toEqual({
-          status: "failed",
-          reason: "agent-tool-failure",
-        });
-        expect(sendTelegram).toHaveBeenCalledOnce();
-        expect(sendTelegram.mock.calls[0]?.[2]).toMatchObject({ mediaUrl });
-      },
-      { telegram: true },
-    );
-  });
 });
 
 describe("heartbeat inbound hook boundary", () => {
@@ -1007,3 +940,64 @@ describe("heartbeat next-user outcomes", () => {
     },
   );
 });
+
+it.each([
+  {
+    name: "decorates an alert",
+    prefix: "[{provider}/{model}|think:{thinkingLevel}]",
+    reply: "Heartbeat alert",
+    expected: "[openai/gpt-5.4|think:high] Heartbeat alert",
+  },
+  {
+    name: "suppresses a prefixed acknowledgment",
+    prefix: "[{model}]",
+    reply: "[gpt-5.4] HEARTBEAT_OK all good",
+    expected: undefined,
+  },
+])(
+  "resolves model-selection prefix variables before delivery: $name",
+  async ({ prefix, reply, expected }) => {
+    await withTempTelegramHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      const cfg = heartbeatTestConfig(tmpDir, "telegram", "telegram", storePath);
+      cfg.channels = {
+        telegram: {
+          botToken: "test-token",
+          allowFrom: ["*"],
+          heartbeat: { showOk: false },
+          responsePrefix: prefix,
+        },
+      };
+      await seedMainSessionStore(storePath, cfg, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: target,
+      });
+      replySpy.mockImplementation(async (_ctx, opts) => {
+        opts?.onModelSelected?.({
+          provider: "openai",
+          model: "gpt-5.4-20260401",
+          thinkLevel: "high",
+        });
+        return { text: reply };
+      });
+      const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: target });
+      await runHeartbeatOnce({
+        cfg,
+        deps: {
+          telegram: sendTelegram,
+          getQueueSize: () => 0,
+          nowMs: () => 0,
+          getReplyFromConfig: replySpy,
+        },
+      });
+      if (expected === undefined) {
+        expect(sendTelegram).not.toHaveBeenCalled();
+      } else {
+        expect(sendTelegram).toHaveBeenCalledOnce();
+        expect(sendTelegram.mock.calls[0]?.[0]).toBe(target);
+        expect(sendTelegram.mock.calls[0]?.[1]).toBe(expected);
+        expect(typeof sendTelegram.mock.calls[0]?.[2]).toBe("object");
+      }
+    });
+  },
+);

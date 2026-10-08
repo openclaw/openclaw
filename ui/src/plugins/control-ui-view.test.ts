@@ -8,6 +8,10 @@ import type {
 } from "../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../app/context.ts";
+import {
+  PRESENTATION_CHANGED_EVENT,
+  type PresentationBinding,
+} from "../lit/presentation-binding.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { renderPluginSurface } from "./control-ui-view.ts";
 import "./control-ui-view.runtime.ts";
@@ -22,6 +26,7 @@ class SurfaceTestHost extends LitElement {
   agentId = "main";
   surface: "workspace" | "composer" = "workspace";
   draft = "";
+  presentation?: PresentationBinding;
   readonly setDraft = vi.fn((draft: string) => {
     this.draft = draft;
   });
@@ -51,11 +56,16 @@ class SurfaceTestHost extends LitElement {
           abort: this.abort,
         },
         defaultView,
-        true,
+        this.presentation ?? true,
         html`<button class="companion-action">Retained attachment controls</button>`,
       );
     }
-    return renderPluginSurface("workspace", { ...identity, routeId: "chat" }, defaultView);
+    return renderPluginSurface(
+      "workspace",
+      { ...identity, routeId: "chat" },
+      defaultView,
+      this.presentation ?? true,
+    );
   }
 }
 customElements.define("control-ui-surface-test-host", SurfaceTestHost);
@@ -70,7 +80,13 @@ function mountSurface(initial?: ControlUiReplacement<"workspace" | "composer">) 
     sessions: {},
     agents: {},
     navigation: {},
-    ui: {},
+    ui: {
+      invalidate: () => {
+        for (const listener of listeners) {
+          listener();
+        }
+      },
+    },
     components: {},
   } as unknown as ControlUiHost;
   const reportError = vi.fn();
@@ -240,9 +256,14 @@ describe("native UI built-in delegation", () => {
     expect(host.draft).toBe("Successor draft");
   });
 
-  it.each([false, true])(
-    "retires hidden composer operations while retaining the view (same-turn return: %s)",
-    async (sameTurnReturn) => {
+  it.each([
+    { sameTurnReturn: false, retainedParent: false },
+    { sameTurnReturn: true, retainedParent: false },
+    { sameTurnReturn: false, retainedParent: true },
+    { sameTurnReturn: true, retainedParent: true },
+  ])(
+    "retires hidden composer operations (same-turn return: $sameTurnReturn, parked parent: $retainedParent)",
+    async ({ sameTurnReturn, retainedParent }) => {
       const contexts: ControlUiViewContext<ControlUiSurfaceProps["composer"]>[] = [];
       const roots: HTMLElement[] = [];
       const dispose = vi.fn();
@@ -258,6 +279,10 @@ describe("native UI built-in delegation", () => {
         },
       };
       const { host, request } = mountSurface(replacement);
+      let presented = true;
+      if (retainedParent) {
+        host.presentation = { owner: host, isPresented: () => presented };
+      }
       await vi.waitFor(() => expect(roots).toHaveLength(1));
       const current = contexts.at(-1);
       const view = host.querySelector<LitElement & { presented: boolean }>("openclaw-plugin-view");
@@ -268,8 +293,19 @@ describe("native UI built-in delegation", () => {
       const send = createDeferred<boolean>();
       host.send.mockReturnValueOnce(send.promise);
       const pending = expect(current.props.send()).rejects.toThrow("view has ended");
+      const setPresented = (value: boolean) => {
+        if (retainedParent) {
+          presented = value;
+          host.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+          if (value) {
+            host.requestUpdate();
+          }
+        } else {
+          view.presented = value;
+        }
+      };
 
-      view.presented = false;
+      setPresented(false);
       // Presentation retires operations synchronously without retiring the mounted host.
       expect(() => current.props.setDraft("Stale draft")).toThrow("view has ended");
       expect(() => current.props.abort?.()).toThrow("view has ended");
@@ -280,7 +316,7 @@ describe("native UI built-in delegation", () => {
       expect(host.draft).toBe("Current draft");
 
       if (sameTurnReturn) {
-        view.presented = true;
+        setPresented(true);
       }
       await hiddenSend;
       if (!sameTurnReturn) {
@@ -289,10 +325,11 @@ describe("native UI built-in delegation", () => {
         expect(hidden?.presented).toBe(false);
         expect(() => hidden?.props.setDraft("Hidden draft")).toThrow("view has ended");
       }
-      view.presented = true;
+      setPresented(true);
       expect(() => current.props.setDraft("Revived draft")).toThrow("view has ended");
       send.resolve(true);
       await pending;
+      await host.updateComplete;
       await view.updateComplete;
 
       expect(roots).toHaveLength(1);
@@ -399,6 +436,52 @@ describe("native UI built-in delegation", () => {
     expect(listeners.size).toBe(0);
   });
 
+  it("aborts an invalidated view that fails during update and remounts it on retry", async () => {
+    const roots: HTMLElement[] = [];
+    const signals: AbortSignal[] = [];
+    const dispose = vi.fn();
+    const failure = new Error("Deferred page unavailable");
+    let failUpdate = false;
+    let invalidate = () => {};
+    const { host, reportError } = mountSurface({
+      id: "deferred",
+      label: "Deferred workspace",
+      surface: "workspace",
+      mount(container, context) {
+        roots.push(container);
+        signals.push(context.signal);
+        invalidate = context.host.ui.invalidate;
+        container.textContent = "Page content";
+        return {
+          update() {
+            if (failUpdate) {
+              throw failure;
+            }
+          },
+          dispose,
+        };
+      },
+    });
+    await host.updateComplete;
+    const view = host.querySelector<LitElement>("openclaw-plugin-view")!;
+    await view.updateComplete;
+    failUpdate = true;
+    invalidate();
+    await view.updateComplete;
+    await view.updateComplete;
+    expect(signals[0]?.aborted).toBe(true);
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(reportError).toHaveBeenCalledExactlyOnceWith("review", failure);
+    expect(view.querySelector("[role=alert]")?.textContent).toContain(failure.message);
+    failUpdate = false;
+    view.querySelector<HTMLButtonElement>("[role=alert] button")!.click();
+    await view.updateComplete;
+    expect(roots).toHaveLength(2);
+    expect(roots[1]).not.toBe(roots[0]);
+    expect(signals[1]?.aborted).toBe(false);
+    expect(view.textContent).toBe("Page content");
+  });
+
   it("gives append-only views fresh roots across replacement, session changes, and reconnection", async () => {
     const roots: HTMLElement[] = [];
     const signals: AbortSignal[] = [];
@@ -413,6 +496,8 @@ describe("native UI built-in delegation", () => {
       },
     };
     const { host, provider, listeners, select } = mountSurface(replacement);
+    let presented = true;
+    host.presentation = { owner: host, isPresented: () => presented };
     await vi.waitFor(() => expect(roots).toHaveLength(1));
     select({ ...replacement });
     await vi.waitFor(() => expect(roots).toHaveLength(2));
@@ -430,7 +515,10 @@ describe("native UI built-in delegation", () => {
     host.remove();
     expect(signals[2]?.aborted).toBe(true);
     expect(listeners.size).toBe(0);
-    const view = host.querySelector<LitElement>("openclaw-plugin-view")!;
+    const view = host.querySelector<LitElement & { presented: boolean }>("openclaw-plugin-view")!;
+    presented = false;
+    host.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    expect(view.presented).toBe(true);
     view.requestUpdate();
     await view.updateComplete;
     expect(roots).toHaveLength(3);
@@ -439,5 +527,6 @@ describe("native UI built-in delegation", () => {
     expect(roots[3]).not.toBe(roots[2]);
     expect(signals[3]?.aborted).toBe(false);
     expect(host.textContent).toBe("Plugin content");
+    expect(view.presented).toBe(false);
   });
 });

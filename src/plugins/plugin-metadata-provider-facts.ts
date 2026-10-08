@@ -6,6 +6,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type {
   PluginManifestProviderEndpoint,
@@ -27,12 +28,7 @@ const PROVIDER_ENDPOINT_CLASSES = new Set(
 );
 
 function normalizeProviderHosts(value: unknown): string[] {
-  return Array.isArray(value)
-    ? value
-        .filter((entry): entry is string => typeof entry === "string")
-        .map((entry) => entry.trim().toLowerCase())
-        .filter(Boolean)
-    : [];
+  return normalizeTrimmedStringList(value).map((entry) => entry.toLowerCase());
 }
 
 export function normalizePluginProviderBaseUrl(value: string): string | undefined {

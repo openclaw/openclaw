@@ -16,11 +16,11 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
 import { withGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import { prepareSessionControlTarget } from "./sessions-control-authority.js";
 import {
+  captureSessionControlAuthority,
   hasSessionControlAuthority,
-  prepareSessionControlTarget,
-  readSessionControlAuthority,
-} from "./sessions-control-authority.js";
+} from "./sessions-operator-authority.js";
 import { createSessionsTool } from "./sessions-tool.js";
 
 function issueAuthority(profileId: string, scopes: readonly string[] = ["operator.write"]) {
@@ -47,12 +47,12 @@ describe("session control source capability", () => {
     { scopes: ["operator.admin"], allowed: true },
   ])("requires broad write authority for $scopes", ({ scopes, allowed }) => {
     const { authority } = issueAuthority("control-profile", scopes);
-    expect(readSessionControlAuthority(authority)).toBe(authority);
+    expect(captureSessionControlAuthority(authority)?.authority).toBe(authority);
     expect(hasSessionControlAuthority(authority)).toBe(allowed);
   });
 
   it("never mints authority from absence, matching fields, a copy, or a revoked source", () => {
-    expect(readSessionControlAuthority()).toBeUndefined();
+    expect(captureSessionControlAuthority()?.authority).toBeUndefined();
     expect(hasSessionControlAuthority()).toBe(false);
     const { authority, revoke } = issueAuthority("control-profile");
     const forged: AdmittedRunOperatorAuthority = {
@@ -61,11 +61,13 @@ describe("session control source capability", () => {
       assertCurrent: () => {},
     };
     for (const unissued of [forged, { ...authority }]) {
-      expect(() => readSessionControlAuthority(unissued)).toThrow(/issued by the host/i);
+      expect(() => captureSessionControlAuthority(unissued)).toThrow(/issued by the host/i);
       expect(() => hasSessionControlAuthority(unissued)).toThrow(/issued by the host/i);
     }
     revoke();
-    expect(() => readSessionControlAuthority(authority)).toThrow("session control source revoked");
+    expect(() => captureSessionControlAuthority(authority)).toThrow(
+      "session control source revoked",
+    );
     expect(() => hasSessionControlAuthority(authority)).toThrow("session control source revoked");
   });
 
@@ -75,7 +77,7 @@ describe("session control source capability", () => {
     await withGatewayToolCallerIdentity(
       { agentId: "main", sessionKey: "agent:main:dashboard:caller", operatorAuthority: authority },
       () => {
-        expect(readSessionControlAuthority()).toBe(authority);
+        expect(captureSessionControlAuthority()?.authority).toBe(authority);
         expect(hasSessionControlAuthority()).toBe(false);
         expect(() => hasSessionControlAuthority(upgrade)).toThrow(/source changed/i);
       },

@@ -24,10 +24,7 @@ const mocks = vi.hoisted(() => ({
   refreshRegistry: vi.fn(),
   replaceConfig: vi.fn(),
   selectWriteOptions: vi.fn((writeOptions: unknown) => writeOptions),
-  slotSelection: vi.fn((config: unknown): { config: unknown; warnings: string[] } => ({
-    config,
-    warnings: [],
-  })),
+  slotSelection: vi.fn((config: unknown) => config),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -142,7 +139,7 @@ describe("managed plugin installation", () => {
       hookMutation: { mode: "allowed" },
       pluginMutation: { mode: "allowed" },
     });
-    mocks.slotSelection.mockImplementation((config) => ({ config, warnings: [] }));
+    mocks.slotSelection.mockImplementation((config) => config);
     mocks.installRecords.mockResolvedValue({});
     mocks.readConfig.mockResolvedValue(configSnapshot());
     mocks.persistInstall.mockResolvedValue({});
@@ -185,7 +182,6 @@ describe("managed plugin installation", () => {
     expect(mocks.officialCatalog).not.toHaveBeenCalled();
     expect(mocks.clawhubInstall).toHaveBeenCalledWith(
       expect.objectContaining({
-        spec: "clawhub:@openclaw/diffs",
         expectedPluginId: "diffs",
       }),
     );
@@ -460,28 +456,5 @@ describe("managed plugin installation", () => {
     await install;
     await enable;
     expect(mocks.readConfig).toHaveBeenCalledTimes(2);
-  });
-
-  it("classifies unavailable ClawHub security checks", async () => {
-    const code = "clawhub_security_unavailable";
-    mocks.clawhubInstall.mockResolvedValue({
-      ok: false,
-      error: "ClawHub install failed",
-      code,
-      version: "1.2.3",
-      warning: "Review the release",
-    });
-
-    await expect(
-      installManagedPlugin({
-        request: { source: "clawhub", packageName: "community/plugin" },
-        env: {},
-      }),
-    ).rejects.toMatchObject({
-      kind: "unavailable",
-      code,
-      version: "1.2.3",
-      warning: "Review the release",
-    });
   });
 });

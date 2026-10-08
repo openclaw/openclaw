@@ -85,6 +85,7 @@ type LocalUserMessageInput = {
   };
   replyToId?: string;
   runId?: string;
+  steerTargetRunId?: string;
   sender?: SenderIdentity;
   text: string;
 };
@@ -133,6 +134,7 @@ export function buildLocalUserMessage(
         ? { workContext: { snapshot: input.workContext, text: input.text } }
         : {}),
       ...(input.runId ? { idempotencyKey: `${input.runId}:user` } : {}),
+      ...(input.steerTargetRunId ? { steerTargetRunId: input.steerTargetRunId } : {}),
       ...(input.pending
         ? {
             kind: "pending-send",

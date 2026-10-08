@@ -88,7 +88,6 @@ describe("Teams thread parent hydration", () => {
       "group-1",
       channelConversationId,
       root,
-      50,
       expect.objectContaining({ label: "MS Teams inbound preprocessing" }),
     );
     expect(dispatch).toHaveBeenCalledTimes(2);

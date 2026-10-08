@@ -50,7 +50,7 @@ vi.mock("../infra/tmp-openclaw-dir.js", () => ({
 vi.mock("../cli/daemon-cli/restart-health.js", async (original) => ({
   ...(await original<typeof import("../cli/daemon-cli/restart-health.js")>()),
   inspectGatewayRestart: vi.fn(async () => ({ healthy: true })),
-  waitForGatewayHealthyRestart: vi.fn(async () => ({ healthy: true })),
+  waitForGatewayHealthyRestart: vi.fn(async () => ({ outcome: "ready", healthy: true })),
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -162,6 +162,9 @@ async function repair(scenario: Scenario) {
         StartLimitBurst: { type: "u", data: 5 },
         ActiveEnterTimestampMonotonic: { type: "t", data: 100 },
         InactiveEnterTimestampMonotonic: { type: "t", data: 200 },
+        UnitFileState: { type: "s", data: "enabled" },
+        RefuseManualStart: { type: "b", data: false },
+        CanStart: { type: "b", data: true },
         Result: { type: "s", data: "success" },
         NRestarts: { type: "u", data: 0 },
         MainPID: { type: "u", data: running ? pid : 0 },

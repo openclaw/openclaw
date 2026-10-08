@@ -156,7 +156,6 @@ Feishu/Lark supports ACP for DMs and group thread messages. Feishu/Lark ACP is t
   agents: {
     entries: {
       codex: {
-        default: true,
         runtime: {
           type: "acp",
           acp: {
@@ -210,8 +209,13 @@ Use `bindings` to route Feishu/Lark DMs or groups to different agents.
 ```json5
 {
   agents: {
+    ownership: "explicit",
+    defaults: {
+      heartbeat: { agentId: "main" },
+      systemAgent: { agentId: "main" },
+    },
     entries: {
-      main: { default: true },
+      main: { workspace: "~/.openclaw/workspace" },
       "agent-a": { workspace: "/home/user/agent-a" },
       "agent-b": { workspace: "/home/user/agent-b" },
     },
@@ -231,7 +235,9 @@ Use `bindings` to route Feishu/Lark DMs or groups to different agents.
         peer: { kind: "group", id: "oc_zzz" },
       },
     },
+    { agentId: "main", match: { channel: "feishu", accountId: "*" } },
   ],
+  talk: { agentId: "main" },
 }
 ```
 

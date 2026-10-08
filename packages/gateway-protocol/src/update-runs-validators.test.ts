@@ -224,6 +224,11 @@ describe("update run wire contract", () => {
   );
 
   it.each([
+    {
+      failureFacts: [
+        { check: "npm", code: "ETARGET", npmErrorCode: "ETARGET", packageSpec: "file-type@22.1.1" },
+      ],
+    },
     { exitCode: 23 },
     { exitCode: 0 },
     { exitCode: null },
@@ -324,6 +329,18 @@ describe("update run wire contract", () => {
         },
       },
     ],
+    [
+      "unknown npm error code",
+      {
+        steps: [
+          {
+            step: "package-install",
+            status: "failed",
+            failureFacts: [{ check: "npm", code: "unknown", npmErrorCode: "private-code" }],
+          },
+        ],
+      },
+    ],
     ["negative timestamp", { updatedAtMs: -1 }],
     ["unsafe timestamp", { updatedAtMs: Number.MAX_SAFE_INTEGER + 1 }],
     ["oversized text", { reason: "x".repeat(1025) }],
@@ -366,6 +383,7 @@ describe("update run wire contract", () => {
       [
         ["errorName", 81],
         ["location", 161],
+        ["packageSpec", 201],
       ] as const
     ).map(
       ([field, length]) =>

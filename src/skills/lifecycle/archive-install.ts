@@ -31,7 +31,6 @@ import type {
 export type { SkillArchiveInstallFailureKind } from "./workspace-types.js";
 
 const DEFAULT_SKILL_ARCHIVE_ROOT_MARKERS = ["SKILL.md"] as const;
-/** Accepted root marker names for ClawHub skill archive uploads. */
 export const CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS = [
   "SKILL.md",
   "skill.md",
@@ -161,7 +160,9 @@ export async function installExtractedSkillRoot(
 
 /** Native file replacement on the workspace host; policy and hook dispatch stay with the caller. */
 export async function applyExtractedSkillRoot(
-  params: Parameters<WorkspaceSkillLifecycle["applyExtractedSkillRoot"]>[0],
+  params: Parameters<WorkspaceSkillLifecycle["applyExtractedSkillRoot"]>[0] & {
+    authorizeMutation?: () => Promise<void>;
+  },
 ): Promise<SkillRootApplyResult> {
   try {
     if (
@@ -210,6 +211,7 @@ export async function applyExtractedSkillRoot(
       logger: params.logger,
       copyErrorPrefix: "failed to install skill",
       beforePersistentApply: params.beforePersistentApply,
+      authorizeMutation: params.authorizeMutation,
       hasDeps: false,
       depsLogMessage: "",
       ...(expectedClawHubState !== undefined

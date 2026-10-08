@@ -9,10 +9,7 @@ import { normalizeReasoningLevel, normalizeThinkLevel } from "../../auto-reply/t
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveCurrentSessionPrimaryConversation } from "../../config/sessions/conversation-registry.js";
-import {
-  loadTranscriptEvents,
-  resolveSessionTranscriptRuntimeTarget,
-} from "../../config/sessions/session-accessor.js";
+import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,
@@ -80,12 +77,13 @@ export async function runGatewaySessionCompaction(
   params: GatewaySessionCompactionParams,
   host: Parameters<typeof compactEmbeddedAgentSession>[1],
 ): Promise<Awaited<ReturnType<typeof compactEmbeddedAgentSession>>> {
-  const transcriptTarget = await resolveSessionTranscriptRuntimeTarget({
+  // The lifecycle owner already selected and revalidated this exact current window.
+  const transcriptTarget = {
     agentId: params.agentId,
     sessionId: params.sessionId,
     sessionKey: params.sessionStoreKey,
     storePath: params.storePath,
-  });
+  };
   const resolvedModel = resolveSessionModelRef(params.cfg, params.entry, params.agentId);
   const workspaceDir =
     resolveIngressWorkspaceOverrideForSessionRun({
@@ -98,7 +96,8 @@ export async function runGatewaySessionCompaction(
     entry: params.entry,
     cfg: params.cfg,
   });
-  const primaryConversation = resolveCurrentSessionPrimaryConversation(transcriptTarget);
+  const primaryConversation = await resolveCurrentSessionPrimaryConversation(transcriptTarget);
+  params.abortSignal?.throwIfAborted();
   return await compactEmbeddedAgentSession(
     {
       abortSignal: params.abortSignal,
@@ -107,12 +106,7 @@ export async function runGatewaySessionCompaction(
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
       agentId: params.agentId,
-      sessionTarget: {
-        agentId: params.agentId,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      },
+      sessionTarget: transcriptTarget,
       allowGatewaySubagentBinding: true,
       sessionFile: transcriptTarget.sessionKey,
       workspaceDir,

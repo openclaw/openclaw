@@ -70,7 +70,9 @@ openclaw voicecall expose --mode funnel
 When the Gateway is already running, operational `voicecall` commands
 delegate to the Gateway-owned voice-call runtime so the CLI does not bind a
 second webhook server. If no Gateway is reachable, the commands fall back to
-a standalone CLI runtime.
+a standalone CLI runtime. After printing the call result, that process keeps
+serving its webhook until SIGINT or SIGTERM. Shutdown joins runtime creation,
+accepted command work, and pending reaper hangups before closing its resources.
 
 `latency` reads persisted call records from SQLite by default. Use
 `--file <path>` to read an existing custom JSONL log (with a basename other than
@@ -78,10 +80,17 @@ a standalone CLI runtime.
 analysis to the last N records (default 200). Output includes min/max/avg,
 p50, and p95 for turn latency and listen-wait times.
 
-Doctor imports older `calls.jsonl` records into SQLite, preserving call data and
-event ordering, and keeps the original log as `calls.jsonl.migrated`. Run
-`openclaw doctor --fix` before starting Voice Call with an older call log;
-runtime call-history reads use only canonical SQLite records.
+Voice Call JSONL logs are retired pre-July state. Upgrade through OpenClaw
+2026.9.7 and run `openclaw doctor --fix` to import them into SQLite before
+updating. That release preserves call data, event ordering, and the original
+log as `calls.jsonl.migrated`. Current Doctor preserves any remaining source
+and reports the intermediate upgrade; runtime reads only canonical SQLite.
+
+Calls retain the agent selected when they were created. Changing the configured
+agent affects new calls. Older active records without an explicit `agentId` are
+not resumed automatically, even if a session key names an agent. Their stored
+rows and transcripts remain unchanged; hang up any remaining call at the provider
+and start a new call. Completed history remains readable without an agent owner.
 
 ## Agent tool
 
