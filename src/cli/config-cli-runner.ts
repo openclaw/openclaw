@@ -507,11 +507,28 @@ export async function runConfigOperations(params: {
       !unchanged &&
       operations.some((operation) => operation.inputMode !== "value")
     ) {
-      const reasons = previewConfigFileWriteSafety({
-        sourceConfig: authoredNextConfig,
-        snapshot,
-        writeOptions,
-      });
+      let reasons: string[];
+      try {
+        reasons = previewConfigFileWriteSafety({
+          sourceConfig: authoredNextConfig,
+          snapshot,
+          writeOptions,
+        });
+      } catch (error) {
+        if (!options.json) {
+          throw error;
+        }
+        throw new ConfigSetDryRunValidationError({
+          ...validation.result,
+          ok: false,
+          errors: [
+            {
+              kind: error instanceof ConfigMutationConflictError ? "conflict" : "schema",
+              message: formatErrorMessage(error),
+            },
+          ],
+        });
+      }
       if (reasons.length > 0) {
         validation.result.ok = false;
         validation.result.errors = [
