@@ -42,9 +42,11 @@ const contentVersionQuery = createSqliteQueryCache((db) =>
 /** Content and its marker commit together, even while older readers retain their version floor. */
 export function readStateSchemaContentVersion(
   db: DatabaseSync,
+  published?: number,
   readRow?: StateSchemaContentVersionRowReader,
 ): number {
   const schema = getAdmittedSqliteSchemaFacts(db);
+  const version = published ?? schema?.userVersion ?? readSqliteUserVersion(db);
   const revision = getSqliteReadOperationRevision(db);
   const admitted = admittedContentVersions.get(db);
   if (
@@ -53,13 +55,10 @@ export function readStateSchemaContentVersion(
     admitted.dataVersion === revision.dataVersion &&
     admitted.mutationRevision === revision.mutationRevision
   ) {
-    return admitted.contentVersion;
+    return Math.max(version, admitted.contentVersion);
   }
-  const contentVersion = readContentVersion(
-    db,
-    schema?.userVersion ?? readSqliteUserVersion(db),
-    readRow,
-  );
+  // A caller-provided version floor belongs to this read, not the retained marker.
+  const contentVersion = readContentVersionMarker(db, readRow);
   if (revision && getSqliteReadOperationRevision(db) === revision) {
     if (!admitted) {
       const unregister = registerNodeSqliteDisposeCallback(db, () => {
@@ -69,24 +68,23 @@ export function readStateSchemaContentVersion(
     }
     admittedContentVersions.set(db, { ...revision, contentVersion });
   }
-  return contentVersion;
+  return Math.max(version, contentVersion);
 }
 
 export function readStateSchemaContentVersionRow(db: DatabaseSync) {
   return contentVersionQuery(db)().rows[0];
 }
 
-function readContentVersion(
+function readContentVersionMarker(
   db: DatabaseSync,
-  published: number,
   readRow: StateSchemaContentVersionRowReader = readStateSchemaContentVersionRow,
 ): number {
   if (!tableExists(db, "config_machine_state")) {
-    return published;
+    return 0;
   }
   const row = readRow(db);
   if (!row) {
-    return published;
+    return 0;
   }
   let contentVersion: unknown;
   try {
@@ -106,20 +104,28 @@ function readContentVersion(
       `Invalid shared state schema content version in ${CONTENT_VERSION_KEY}.`,
     );
   }
-  return Math.max(published, contentVersion);
+  return contentVersion;
 }
+
+/** Valid only for the unchanged read snapshot that produced these versions. */
+export type StateSchemaVersionFacts = { userVersion: number; contentVersion: number };
 
 export function assertSupportedStateSchemaVersion(
   db: DatabaseSync,
   pathname: string,
+  prepared?: StateSchemaVersionFacts,
   readRow?: StateSchemaContentVersionRowReader,
 ): number {
   try {
-    const userVersion = getAdmittedSqliteSchemaFacts(db)?.userVersion ?? readSqliteUserVersion(db);
+    const userVersion =
+      prepared?.userVersion ??
+      getAdmittedSqliteSchemaFacts(db)?.userVersion ??
+      readSqliteUserVersion(db);
     const contentVersion =
-      userVersion > OPENCLAW_STATE_SCHEMA_VERSION
+      prepared?.contentVersion ??
+      (userVersion > OPENCLAW_STATE_SCHEMA_VERSION
         ? userVersion
-        : readStateSchemaContentVersion(db, readRow);
+        : readStateSchemaContentVersion(db, userVersion, readRow));
     if (contentVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
       throw createNewerSqliteSchemaVersionError(
         "OpenClaw state database",

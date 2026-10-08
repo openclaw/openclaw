@@ -130,7 +130,12 @@ it("keeps a pinned ACP snapshot and refreshes after it closes", () => {
       const readPinned = () => {
         const metadata = prepareAcpSessionMetadataRead(command);
         return runSqliteReadOperationSync(db, () => {
-          assertSupportedStateSchemaVersion(db, pathname, metadata.readContentVersionRow);
+          assertSupportedStateSchemaVersion(
+            db,
+            pathname,
+            undefined,
+            metadata.readContentVersionRow,
+          );
           return metadata.read(db);
         });
       };

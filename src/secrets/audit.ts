@@ -271,62 +271,40 @@ function collectModelsJsonSecrets(params: {
     if (!isRecord(providerValue)) {
       continue;
     }
-    const apiKey = providerValue.apiKey;
-    if (coerceSecretRef(apiKey)) {
+    const collectValue = (value: unknown, headerKey?: string) => {
+      const isHeader = headerKey !== undefined;
+      const ref = coerceSecretRef(value);
+      if (
+        !ref &&
+        (!isNonEmptyString(value) ||
+          (isHeader ? isSecretRefHeaderValueMarker(value) : isNonSecretApiKeyMarker(value)) ||
+          (isHeader && !isLikelySensitiveModelProviderHeaderName(headerKey)))
+      ) {
+        return;
+      }
       params.collector.findings.push({
-        code: "REF_UNRESOLVED",
-        severity: "error",
+        code: ref ? "REF_UNRESOLVED" : "PLAINTEXT_FOUND",
+        severity: ref ? "error" : "warn",
         file: params.modelsJsonPath,
-        jsonPath: `providers.${providerId}.apiKey`,
-        message: "models.json contains an unresolved SecretRef object; regenerate models.json.",
+        jsonPath: `providers.${providerId}.${isHeader ? `headers.${headerKey}` : "apiKey"}`,
+        message: ref
+          ? isHeader
+            ? "models.json contains an unresolved SecretRef object for provider headers; regenerate models.json."
+            : "models.json contains an unresolved SecretRef object; regenerate models.json."
+          : isHeader
+            ? "models.json provider header value is stored as plaintext."
+            : "models.json provider apiKey is stored as plaintext.",
         provider: providerId,
       });
-    } else if (isNonEmptyString(apiKey) && !isNonSecretApiKeyMarker(apiKey)) {
-      params.collector.findings.push({
-        code: "PLAINTEXT_FOUND",
-        severity: "warn",
-        file: params.modelsJsonPath,
-        jsonPath: `providers.${providerId}.apiKey`,
-        message: "models.json provider apiKey is stored as plaintext.",
-        provider: providerId,
-      });
-    }
+    };
+    collectValue(providerValue.apiKey);
 
     const headers = isRecord(providerValue.headers) ? providerValue.headers : undefined;
     if (!headers) {
       continue;
     }
     for (const [headerKey, headerValue] of Object.entries(headers)) {
-      const headerPath = `providers.${providerId}.headers.${headerKey}`;
-      if (coerceSecretRef(headerValue)) {
-        params.collector.findings.push({
-          code: "REF_UNRESOLVED",
-          severity: "error",
-          file: params.modelsJsonPath,
-          jsonPath: headerPath,
-          message:
-            "models.json contains an unresolved SecretRef object for provider headers; regenerate models.json.",
-          provider: providerId,
-        });
-        continue;
-      }
-      if (!isNonEmptyString(headerValue)) {
-        continue;
-      }
-      if (isSecretRefHeaderValueMarker(headerValue)) {
-        continue;
-      }
-      if (!isLikelySensitiveModelProviderHeaderName(headerKey)) {
-        continue;
-      }
-      params.collector.findings.push({
-        code: "PLAINTEXT_FOUND",
-        severity: "warn",
-        file: params.modelsJsonPath,
-        jsonPath: headerPath,
-        message: "models.json provider header value is stored as plaintext.",
-        provider: providerId,
-      });
+      collectValue(headerValue, headerKey);
     }
   }
 }

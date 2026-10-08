@@ -369,6 +369,12 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
     validateTaskSuggestionsAcceptParams,
     async (options) => {
       const { params, respond } = options;
+      const respondOutcome = (outcome: TaskSuggestionAcceptanceResult) =>
+        respond(
+          outcome.ok,
+          outcome.ok ? outcome.result : undefined,
+          outcome.ok ? undefined : outcome.error,
+        );
       // Shipped RPC clients omit mode for an explicit worktree choice. Bundled
       // clients always send local; retain this wire contract for those callers.
       const mode = params.mode ?? "worktree";
@@ -434,12 +440,7 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       }
       const active = activeAcceptances.get(params.taskId);
       if (active) {
-        const outcome = await active;
-        respond(
-          outcome.ok,
-          outcome.ok ? outcome.result : undefined,
-          outcome.ok ? undefined : outcome.error,
-        );
+        respondOutcome(await active);
         return;
       }
       const acceptance = beginTaskSuggestionAcceptance(params.taskId);
@@ -472,18 +473,11 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
           });
         }
         const agentId = normalizeAgentId(sourceOwner.agentId);
+        const task = { taskId: params.taskId, suggestion: acceptance.suggestion, options, agentId };
         return mode === "session"
-          ? deliverSuggestedTaskToSourceSession({
-              taskId: params.taskId,
-              suggestion: acceptance.suggestion,
-              options,
-              agentId,
-            })
+          ? deliverSuggestedTaskToSourceSession(task)
           : createSuggestedTaskSession({
-              taskId: params.taskId,
-              suggestion: acceptance.suggestion,
-              options,
-              agentId,
+              ...task,
               mode,
               cwd: params.cwd,
               ...(cloudProfileId ? { cloudProfileId } : {}),
@@ -494,12 +488,7 @@ export const taskSuggestionsHandlers: GatewayRequestHandlers = {
       });
       activeAcceptances.set(params.taskId, pending);
       try {
-        const outcome = await pending;
-        respond(
-          outcome.ok,
-          outcome.ok ? outcome.result : undefined,
-          outcome.ok ? undefined : outcome.error,
-        );
+        respondOutcome(await pending);
       } finally {
         activeAcceptances.delete(params.taskId);
       }

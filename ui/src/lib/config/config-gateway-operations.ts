@@ -7,6 +7,7 @@ import { t } from "../../i18n/index.ts";
 import { copyToClipboard } from "../clipboard.ts";
 import { formatUiError, formatUiExternalText } from "../format-error.ts";
 import { showToast } from "../toast.ts";
+import type { AppliedConfigRefresh } from "./applied-refresh.ts";
 import {
   adoptConfigWriteAck,
   isConfigWriteAck,
@@ -151,9 +152,7 @@ export type ConfigWriteCoordinatorContext = {
     preservePendingChanges?: boolean,
   ) => Promise<boolean>;
   canCallConfigMethod: (method: ConfigMethod) => boolean;
-  cancelAppliedRefresh: () => void;
-  reconcileAppliedRefresh: () => void;
-  disposeAppliedRefresh: () => void;
+  appliedRefresh: AppliedConfigRefresh;
   isDisposed: () => boolean;
 };
 

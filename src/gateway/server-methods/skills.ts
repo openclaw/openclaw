@@ -61,11 +61,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     try {
       const { report } = await buildRemoteAwareWorkspaceSkillStatus(resolved);
       const targets = collectClawHubVerdictTargets(report);
-      if (targets.length === 0) {
-        respond(true, { schema: "openclaw.skills.security-verdicts.v1", items: [] }, undefined);
-        return;
-      }
-      const items = await fetchOpenClawSkillSecurityVerdicts(targets);
+      const items = targets.length === 0 ? [] : await fetchOpenClawSkillSecurityVerdicts(targets);
       respond(true, { schema: "openclaw.skills.security-verdicts.v1", items }, undefined);
     } catch (error) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));

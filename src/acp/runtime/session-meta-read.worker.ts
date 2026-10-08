@@ -115,7 +115,7 @@ function selectAcpResumeSessions(
     db,
     getAcpSessionKysely(db)
       .selectFrom("acp_sessions")
-      .select(["session_key", "session_id", "updated_at", "backend"])
+      .select(["session_key", "session_id", "updated_at", "backend", "agent"])
       .$if(input.sessionKey !== undefined, (query) =>
         query.where(
           "session_key",
@@ -152,6 +152,7 @@ function selectAcpResumeSessions(
               sessionKey: key.storeSessionKey,
               session_id: row.session_id,
               updated_at: row.updated_at,
+              agent: row.agent,
             },
           ]
         : [];

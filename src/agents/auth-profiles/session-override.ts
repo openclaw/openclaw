@@ -264,6 +264,7 @@ export async function clearSessionAuthProfileOverride(params: {
   sessionKey: string;
   storePath?: string;
   assertCommitAllowed?: () => void;
+  expectedSnapshot?: SessionAuthProfileOverrideSnapshot;
 }) {
   await persistSessionAuthProfileOverrideState({
     ...params,

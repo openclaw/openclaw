@@ -125,19 +125,17 @@ export async function saveIdentityDraft(params: {
     }
     const refreshErrors = mutation.refresh.ok ? [] : [mutation.refresh.error];
     agentIdentity.invalidate([agentId]);
-    try {
-      await agents.refreshList();
-    } catch (error) {
-      refreshErrors.push(
-        `Agent identity was saved, but the agent list refresh failed: ${formatUiError(error)}`,
-      );
-    }
-    try {
-      await agentIdentity.ensure([agentId]);
-    } catch (error) {
-      refreshErrors.push(
-        `Agent identity was saved, but the identity refresh failed: ${formatUiError(error)}`,
-      );
+    for (const [refresh, subject] of [
+      [() => agents.refreshList(), "agent list"],
+      [() => agentIdentity.ensure([agentId]), "identity"],
+    ] as const) {
+      try {
+        await refresh();
+      } catch (error) {
+        refreshErrors.push(
+          `Agent identity was saved, but the ${subject} refresh failed: ${formatUiError(error)}`,
+        );
+      }
     }
     if (params.isCurrent()) {
       resetIdentityDraft(host);

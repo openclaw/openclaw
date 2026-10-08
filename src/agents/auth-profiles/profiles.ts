@@ -94,21 +94,18 @@ export async function setAuthProfileOrder(params: {
   const sanitized =
     params.order && Array.isArray(params.order) ? normalizeStringEntries(params.order) : [];
   const deduped = dedupeProfileIds(sanitized);
+  const order = deduped.length > 0 ? deduped : undefined;
 
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
     sharedStoreWrite: params.sharedStoreWrite,
     // Keep inherited IDs in local order; pruning them silently undoes the requested switch.
-    ...(deduped.length > 0 ? { saveOptions: { preserveOrderProfileIds: deduped } } : {}),
+    ...(order ? { saveOptions: { preserveOrderProfileIds: order } } : {}),
     updater: (store) => {
-      if (deduped.length === 0) {
-        if (listProviderAuthStateEntries(store.order, providerKey).length === 0) {
-          return false;
-        }
-        store.order = replaceProviderAuthState(store.order, providerKey);
-        return true;
+      if (!order && listProviderAuthStateEntries(store.order, providerKey).length === 0) {
+        return false;
       }
-      store.order = replaceProviderAuthState(store.order, providerKey, deduped);
+      store.order = replaceProviderAuthState(store.order, providerKey, order);
       return true;
     },
   });
@@ -250,16 +247,20 @@ type AuthProfileRemovalTarget = {
   expectedProfiles: ReadonlyMap<string, AuthProfileCredential | undefined>;
 };
 
+function loadRemovalStore(agentDir?: string): AuthProfileStore {
+  return loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
+    allowKeychainPrompt: false,
+    inheritedAuthDir: agentDir,
+  });
+}
+
 function createAuthProfileRemovalTarget(params: {
   agentDir?: string;
   profileIds?: ReadonlySet<string>;
   provider?: string;
 }): AuthProfileRemovalTarget {
   // Removal compares the physical write target, without inherited credentials.
-  const store = loadAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
-    allowKeychainPrompt: false,
-    inheritedAuthDir: params.agentDir,
-  });
+  const store = loadRemovalStore(params.agentDir);
   const profileIds =
     params.profileIds ?? new Set(listProfilesForProvider(store, params.provider ?? ""));
   return {
@@ -367,12 +368,7 @@ function readRemovalProfileState(
     }
   };
   for (const target of targets) {
-    const store = current
-      ? loadAuthProfileStoreWithoutExternalProfiles(target.agentDir, {
-          allowKeychainPrompt: false,
-          inheritedAuthDir: target.agentDir,
-        })
-      : undefined;
+    const store = current ? loadRemovalStore(target.agentDir) : undefined;
     for (const profileId of target.profileIds) {
       add(
         target,
@@ -421,10 +417,7 @@ async function removeAuthProfileTargetsWithLocks(
   const catalogStores = credentials.size > 0 ? await listCandidateAuthProfileStores({ cfg }) : [];
   return await withOAuthProfileLocks(lockKeys, async () => {
     for (const target of targets) {
-      const current = loadAuthProfileStoreWithoutExternalProfiles(target.agentDir, {
-        allowKeychainPrompt: false,
-        inheritedAuthDir: target.agentDir,
-      });
+      const current = loadRemovalStore(target.agentDir);
       if (!authProfileRemovalTargetMatches(target, current)) {
         return { kind: "retry" };
       }
@@ -501,13 +494,7 @@ async function removeAuthProfileTargetsWithLocks(
         }
       }
       const restored = targets.every((target) =>
-        authProfileRemovalTargetMatches(
-          target,
-          loadAuthProfileStoreWithoutExternalProfiles(target.agentDir, {
-            allowKeychainPrompt: false,
-            inheritedAuthDir: target.agentDir,
-          }),
-        ),
+        authProfileRemovalTargetMatches(target, loadRemovalStore(target.agentDir)),
       );
       throw new AggregateError(
         failures,

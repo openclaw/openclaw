@@ -4402,7 +4402,8 @@ jobs:
       - name: Check docs
         env:
           OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: ${{ github.workspace }}/clawhub-source
-        run: pnpm check:docs
+        # Keep the content checks serial; only their read-only formatter runs alongside.
+        run: pnpm run --workspace-concurrency=2 --no-bail '/^(format:docs:check|check:docs:content)$/'
 
   skills-python:
     permissions:

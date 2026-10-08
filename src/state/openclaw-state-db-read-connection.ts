@@ -211,13 +211,18 @@ function assertStateReadSchemaForPolicy(
       integrityPolicy,
     );
   } else {
-    assertSupportedStateSchemaVersion(database, pathname, readContentVersionRow);
+    assertSupportedStateSchemaVersion(database, pathname, undefined, readContentVersionRow);
   }
 }
 
 function admitStateReadSchemaFacts(database: DatabaseSync, pathname: string): void {
   try {
-    admitSqliteSchema(database);
+    admitSqliteSchema(database, (userVersion) =>
+      assertSupportedStateSchemaVersion(database, pathname, {
+        userVersion,
+        contentVersion: userVersion,
+      }),
+    );
   } catch (error) {
     // An unreadable newer catalog must not be mistaken for a repair this build can perform.
     let version: number;

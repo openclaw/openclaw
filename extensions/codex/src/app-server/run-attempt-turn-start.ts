@@ -38,7 +38,7 @@ export async function startCodexAttemptTurn(
   notifications: CodexAttemptNotificationController,
   requestRuntime: Awaited<ReturnType<typeof prepareCodexAttemptTurnRequest>>,
 ): Promise<{ result: EmbeddedRunAttemptResult } | CodexStartedTurn> {
-  const { prompt, state: resourceState, trajectoryRecorder, markTrajectoryEndRecorded } = resources;
+  const { prompt, state: resourceState, trajectoryRecorder } = resources;
   const { context, turnState, systemPromptReport } = prompt;
   const { runtime, historyState, hookContext, hookRunner } = context;
   const { connection, runtimeParams } = runtime;
@@ -166,7 +166,7 @@ export async function startCodexAttemptTurn(
         aborted: runAbortController.signal.aborted,
         promptError: message,
       });
-      markTrajectoryEndRecorded();
+      resourceState.trajectoryEndRecorded = true;
       runAgentHarnessLlmOutputHook({
         event: {
           ...buildLlmOutputEvent(),

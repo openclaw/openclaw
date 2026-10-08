@@ -4,7 +4,6 @@ import {
   isSystemEventStoreCurrent,
   recordSystemEventStoreReplaced,
 } from "../../../infra/system-event-ownership.js";
-import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import {
   isGatewayRestartDraining,
   runWithGatewayDetachedWorkAdmission,
@@ -39,8 +38,6 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
 const pendingStoreRetirements = new Map<object, Promise<void>>();
-const reportedOwnerlessStoreRetirements = new WeakSet<object>();
-const log = createSubsystemLogger("agents/subagent-registry");
 
 export async function suspendPendingFinalDelivery(
   context: SubagentLifecycleCleanupContext & SubagentLifecycleWakeContext,
@@ -146,6 +143,8 @@ export function suspendReplacedStoreNotifications(
         delivery.deliveredAt === undefined &&
         delivery.announcedAt === undefined &&
         entry.execution.status === "terminal" &&
+        entry.execution.outcome !== undefined &&
+        entry.pauseReason !== "sessions_yield" &&
         entry.expectsCompletionMessage === true &&
         !isSystemEventStoreCurrent(requesterSessionKey, requesterStorePath, requesterAgentId)
       );
@@ -172,13 +171,6 @@ export function suspendReplacedStoreNotifications(
           storeReplaced: true,
         }))
       ) {
-        const owner = getSubagentRunRuntimeKey(entry);
-        if (!reportedOwnerlessStoreRetirements.has(owner)) {
-          reportedOwnerlessStoreRetirements.add(owner);
-          log.info("subagent notification store retirement has no current native owner", {
-            runId: entry.runId,
-          });
-        }
         continue;
       }
       current = getCurrentSubagentRunOwner(options.runs, entry);

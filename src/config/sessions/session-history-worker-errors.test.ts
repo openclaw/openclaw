@@ -354,8 +354,13 @@ it.each([
   { retired: false, fails: false },
   { retired: false, fails: true },
 ])(
-  "settles failed reads after their own retirement (already retired=$retired, failure=$fails)",
+  "settles failed reads after pool retirement (already retired=$retired, failure=$fails)",
   async ({ retired, fails }) => {
+    const earlier = input();
+    observed.run.mockResolvedValueOnce({ ok: true, value: false });
+    await withSessionHistoryWorkerDatabase(earlier.database, (owner) =>
+      owner.readEntryPresence(earlier.scope),
+    );
     const primary = new WorkerTaskError(
       "worker response failed",
       retired ? "unavailable" : "failed",
@@ -382,22 +387,14 @@ it.each([
       .finally(() => {
         settled = true;
       });
-    if (retired) {
-      try {
-        expect(
-          await Promise.race([
-            pending.then(() => "settled"),
-            entered.promise.then(() => "rotating successor"),
-          ]),
-        ).toBe("settled");
-        expect(await pending).toBe(primary);
-      } finally {
-        retirement.resolve();
-        await pending;
-      }
-      return;
+    try {
+      expect(
+        await Promise.race([pending.then(() => "settled"), entered.promise.then(() => "rotating")]),
+      ).toBe("rotating");
+    } catch (error) {
+      retirement.resolve();
+      throw error;
     }
-    await entered.promise;
     expect(settled).toBe(false);
     expect(observed.unregister).not.toHaveBeenCalled();
     if (fails) {
@@ -415,7 +412,7 @@ it.each([
       expect(observed.unregister).not.toHaveBeenCalled();
     } else {
       expect(failure).toBe(primary);
-      expect(observed.unregister).toHaveBeenCalledTimes(1);
+      expect(observed.unregister).toHaveBeenCalledTimes(2);
     }
   },
 );

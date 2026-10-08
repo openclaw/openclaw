@@ -6,11 +6,8 @@ export function mergeModelMediaInput(
   base: ModelMediaInputConfig | undefined,
   override: ModelMediaInputConfig | undefined,
 ): ModelMediaInputConfig | undefined {
-  if (!base) {
-    return override;
-  }
-  if (!override) {
-    return base;
+  if (!base || !override) {
+    return base || override;
   }
   return {
     ...base,

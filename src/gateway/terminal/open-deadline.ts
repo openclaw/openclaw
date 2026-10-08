@@ -33,9 +33,6 @@ export async function waitForTerminalOpenDeadline<T>(
   run: () => Promise<T>,
   deadline: TerminalOpenDeadline,
 ): Promise<T> {
-  if (deadline.controller.signal.aborted || Date.now() >= deadline.expiresAtMs) {
-    throw expireTerminalOpenDeadline(deadline);
-  }
   const expire = () => {
     throw expireTerminalOpenDeadline(deadline);
   };
@@ -44,6 +41,7 @@ export async function waitForTerminalOpenDeadline<T>(
       expire();
     }
   };
+  assertCurrent();
   return await raceWithTimeout(
     async () => {
       try {

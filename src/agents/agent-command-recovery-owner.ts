@@ -26,7 +26,6 @@ import {
   type MainSessionRecoveryOwnerLease,
   type MainSessionRecoveryPendingTarget,
 } from "./main-session-recovery/main-session-recovery-store.js";
-import { createAgentRunRestartAbortError, isAgentRunDirectAbortReason } from "./run-termination.js";
 
 const log = createSubsystemLogger("agents/agent-command");
 const COMMAND_ADMISSION_OWNER = Symbol.for("openclaw.agentCommand");
@@ -259,10 +258,7 @@ export async function runWithAgentCommandRecoveryOwner<
           owner: COMMAND_ADMISSION_OWNER,
           serializeOwner: true,
           signal: params.opts.abortSignal,
-          onInterrupt: (reason) =>
-            interrupted.abort(
-              isAgentRunDirectAbortReason(reason) ? reason : createAgentRunRestartAbortError(),
-            ),
+          onInterrupt: (reason) => interrupted.abort(reason),
           assertAllowed: () => {
             params.opts.abortSignal?.throwIfAborted();
             assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);

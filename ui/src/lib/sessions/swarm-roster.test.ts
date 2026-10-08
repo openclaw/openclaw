@@ -460,9 +460,11 @@ describe("SwarmRosterHydrator", () => {
       hydrator.update(params);
       expect(hydrator.rows.map((entry) => entry.key)).toEqual([row(0).key]);
       expect(hydrator.hydrated).toBe(false);
+      expect(hydrator.childrenRead).toBe(false);
 
       await vi.advanceTimersByTimeAsync(250);
       expect(hydrator.hydrated).toBe(true);
+      expect(hydrator.childrenRead).toBe(true);
       expect(hydrator.rows.map((entry) => entry.key).toSorted()).toEqual(
         [row(0).key, row(1).key, parentRow().key].toSorted(),
       );
@@ -471,6 +473,7 @@ describe("SwarmRosterHydrator", () => {
 
       hydrator.update({ ...params, sourceEpoch: 2, currentRows: () => [] });
       expect(hydrator.hydrated).toBe(false);
+      expect(hydrator.childrenRead).toBe(false);
     } finally {
       hydrator.dispose();
     }
@@ -558,6 +561,8 @@ describe("SwarmRosterHydrator", () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(list.mock.calls.length).toBe(reads + 1);
       expect(hydrator.hydrated).toBe(false);
+      // Rows already shown stay trusted while the launch re-read is pending.
+      expect(hydrator.childrenRead).toBe(true);
       held.resolve();
       await vi.advanceTimersByTimeAsync(250);
       expect(hydrator.hydrated).toBe(true);

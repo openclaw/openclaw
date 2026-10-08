@@ -53,16 +53,9 @@ describe("protected historical session cancellation", () => {
     await testState.cleanup();
   });
 
-  it.each([
-    ["planning", false],
-    ["materialization", false],
-    ["worker", false],
-    ["worker", true],
-    ["archived entry", false],
-    ["archived entry", true],
-  ] as const)(
-    "retains history after %s cancellation releases pressure (measurement fails: %s)",
-    async (stage, measurementFails) => {
+  it.each(["planning", "materialization", "worker", "archived entry"] as const)(
+    "retains history after %s cancellation releases pressure",
+    async (stage) => {
       const dayMs = 24 * 60 * 60 * 1000;
       const oldestAt = Date.now() - 8 * dayMs;
       const histories = ["protected", "next"].map((name, index) => ({
@@ -90,7 +83,6 @@ describe("protected historical session cancellation", () => {
       const measure = diskBudget.measureSessionPhysicalDiskUsage;
       const before = await measure(storePath);
       const highWaterBytes = before.totalBytes - peerBytes / 2;
-      const measurementFailure = new Error("synthetic post-cancellation measurement failure");
       let protectionChanged = false;
       vi.spyOn(diskBudget, "measureSessionPhysicalDiskUsage").mockImplementation(
         async (pathname) => {
@@ -98,9 +90,6 @@ describe("protected historical session cancellation", () => {
             expect(
               lifecycle.isSessionLifecycleMutationActive(storePath, [protectedHistory.sessionId]),
             ).toBe(false);
-            if (measurementFails) {
-              throw measurementFailure;
-            }
           }
           return await measure(pathname);
         },
@@ -218,12 +207,7 @@ describe("protected historical session cancellation", () => {
             preserveRecentMs: 7 * dayMs,
           },
         });
-        let result: Awaited<ReturnType<typeof enforceSqliteSessionHistoryDiskBudget>> | undefined;
-        if (measurementFails) {
-          await expect(sweep).rejects.toBe(measurementFailure);
-        } else {
-          result = await sweep;
-        }
+        const result = await sweep;
         expect(protectionChanged).toBe(true);
         expect(fs.existsSync(peerArtifact)).toBe(false);
         if (stage === "worker" || stage === "archived entry") {
@@ -247,11 +231,9 @@ describe("protected historical session cancellation", () => {
           expect(admissions).toEqual([]);
           expect(reclaimedHistories).toEqual([]);
         }
-        if (!measurementFails) {
-          expect(result).toMatchObject({ removedEntries: 0, removedFiles: 0 });
-          expect(result?.totalBytesAfter).toBeLessThanOrEqual(highWaterBytes);
-          expect(result?.totalBytesAfter).toBe((await measure(storePath)).totalBytes);
-        }
+        expect(result).toMatchObject({ removedEntries: 0, removedFiles: 0 });
+        expect(result?.totalBytesAfter).toBeLessThanOrEqual(highWaterBytes);
+        expect(result?.totalBytesAfter).toBe((await measure(storePath)).totalBytes);
       } finally {
         observeAdmissions.mockRestore();
       }

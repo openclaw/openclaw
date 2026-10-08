@@ -100,20 +100,12 @@ function createCurrentConversationBindingQueries(db: DatabaseSync) {
         CurrentConversationBindingRow
       >(db, (parameter) =>
         query
-          .where(
-            "target_session_key",
-            "=",
-            parameter((params) => params.targetSessionKey),
-          )
-          .where(
-            "channel",
-            "=",
-            parameter((params) => params.scope.channel),
-          )
-          .where(
-            "account_id",
-            "=",
-            parameter((params) => params.scope.accountId),
+          .where((eb) =>
+            eb.and({
+              target_session_key: parameter((params) => params.targetSessionKey),
+              channel: parameter((params) => params.scope.channel),
+              account_id: parameter((params) => params.scope.accountId),
+            }),
           )
           .orderBy("binding_id", "asc"),
       ),

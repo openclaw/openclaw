@@ -222,10 +222,9 @@ async function prepareAdmittedAgentSession(
       channel: sessionDeliveryChannel(entry) ?? params.recipientChannel,
     }),
   });
-  const visibleRequest =
-    effectiveBootstrapContextRunKind !== "cron" &&
-    effectiveBootstrapContextRunKind !== "heartbeat" &&
-    !params.request.internalEvents?.length;
+  const isSystemGatewayRun =
+    effectiveBootstrapContextRunKind === "cron" || effectiveBootstrapContextRunKind === "heartbeat";
+  const visibleRequest = !isSystemGatewayRun && !params.request.internalEvents?.length;
   const failedSessionTranscriptMissing = (candidateEntry: SessionEntry | undefined): boolean => {
     if (candidateEntry?.status !== "failed" || !candidateEntry.sessionId?.trim()) {
       return false;
@@ -243,8 +242,6 @@ async function prepareAdmittedAgentSession(
     }
   };
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: canonicalSessionAgentId });
-  const isSystemGatewayRun =
-    effectiveBootstrapContextRunKind === "cron" || effectiveBootstrapContextRunKind === "heartbeat";
   const reuse = await evaluateAgentSessionReuse({
     freshEntry: entry,
     cfg,

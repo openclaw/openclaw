@@ -314,9 +314,7 @@ async function steerWithTranscriptLifecycle(
     function onAbort() {
       abortRequested = true;
       rejectAfterCancellation(
-        accepted
-          ? "queued steering message was cancelled before delivery"
-          : "queued steering message was cancelled before acceptance",
+        `queued steering message was cancelled before ${accepted ? "delivery" : "acceptance"}`,
       );
     }
     abortSignal?.addEventListener("abort", onAbort, { once: true });

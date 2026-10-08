@@ -1,7 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { sql } from "kysely";
 import { z } from "zod";
-/** SQLite-backed persistence for durable per-agent Talk voice-call records. */
 import { compileSqliteQueryBindings, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
   getSqliteReadOperationRevision,
@@ -110,11 +109,6 @@ const clientVoiceSessionRecordSchema = z.looseObject({
     ),
 });
 
-function parseVoiceSessionRecord(value: unknown): ClientVoiceSessionRecord | undefined {
-  const parsed = clientVoiceSessionRecordSchema.safeParse(value);
-  return parsed.success ? (parsed.data as ClientVoiceSessionRecord) : undefined;
-}
-
 export function parseStoredVoiceSessionRecord(
   valueJson: unknown,
 ): ClientVoiceSessionRecord | undefined {
@@ -122,7 +116,8 @@ export function parseStoredVoiceSessionRecord(
     return undefined;
   }
   try {
-    return parseVoiceSessionRecord(JSON.parse(valueJson));
+    const parsed = clientVoiceSessionRecordSchema.safeParse(JSON.parse(valueJson));
+    return parsed.success ? (parsed.data as ClientVoiceSessionRecord) : undefined;
   } catch {
     return undefined;
   }

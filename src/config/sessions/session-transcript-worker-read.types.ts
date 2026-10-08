@@ -1,8 +1,11 @@
 import type { SessionCostUsageCacheRead } from "../../infra/session-cost-usage-cache-read.js";
 import type { DatabaseFileIdentity } from "../../infra/sqlite-worker-identity.js";
-import type { SessionTranscriptEventMatch } from "../../sessions/transcript-visible-record.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { VoiceSessionLookup } from "../../talk/client-voice-session-store.js";
+import type {
+  SessionTranscriptRawDeltaLimits,
+  SessionTranscriptVisibleMessageDeltaLimits,
+} from "./session-accessor.sqlite-contract.js";
 import type {
   ResolvedTranscriptReadScope,
   ResolvedTranscriptScope,
@@ -11,7 +14,10 @@ import type {
   SessionTranscriptReadScope,
   SessionTranscriptRuntimeTarget,
 } from "./session-accessor.types.js";
-import type { SessionModelContextLimits } from "./session-history-read.types.js";
+import type {
+  SessionModelContextLimits,
+  SessionTranscriptEventMatch,
+} from "./session-history-read.types.js";
 import type { SessionTranscriptAnchorSelection } from "./session-transcript-anchor-read.kernel.js";
 import type { SessionTranscriptSearchParams } from "./session-transcript-search.types.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
@@ -31,13 +37,6 @@ export type SessionTranscriptSearchWorkerInput = {
   kind: "transcript-search";
   database: { agentId: string; path: string };
   params: SessionTranscriptSearchParams;
-};
-
-export type SessionTranscriptSearchCurrentWorkerInput = {
-  kind: "transcript-search-current";
-  database: { agentId: string; path: string };
-  revision: string;
-  env: NodeJS.ProcessEnv;
 };
 
 export type SessionProjectionStatusWorkerInput = {
@@ -83,6 +82,27 @@ export type SessionTranscriptMessagePresenceWorkerInput = Omit<
   "kind"
 > & {
   kind: "transcript-message-presence";
+};
+
+export type SessionTranscriptDeltaWorkerInput = Omit<
+  SessionTranscriptWatermarkWorkerInput,
+  "kind"
+> & {
+  resolved: ResolvedTranscriptReadScope;
+  admission?: UserTurnTranscriptAdmissionReceipt;
+} & (
+    | { kind: "transcript-raw-delta"; limits: SessionTranscriptRawDeltaLimits }
+    | { kind: "transcript-visible-delta"; limits: SessionTranscriptVisibleMessageDeltaLimits }
+  );
+
+export type SessionMemoryCaptureWorkerInput = Omit<
+  SessionTranscriptWatermarkWorkerInput,
+  "kind"
+> & {
+  kind: "session-memory-capture";
+  resolved: ResolvedTranscriptReadScope;
+  messageCount: number;
+  admission?: UserTurnTranscriptAdmissionReceipt;
 };
 
 export type VoiceSessionsWorkerInput = {

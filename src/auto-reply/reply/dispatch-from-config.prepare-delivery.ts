@@ -209,8 +209,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
   const sendReplyOperationAsync = async (
     operation: ReplyDispatchOperation,
     abortSignal?: AbortSignal,
-    mirror?: boolean,
-    kind: ReplyDispatchKind = "tool",
+    kind: "tool" | "block" = "tool",
     deliveryIntentId?: string,
   ) => {
     const payload = operation.kind === "prepared" ? operation.plan.payload : operation.payload;
@@ -223,7 +222,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     }
     const result = await routeReplyOperationToOriginating(operation, {
       abortSignal: effectiveAbortSignal,
-      mirror,
+      mirror: false,
       kind,
       deliveryIntentId,
     });
@@ -241,14 +240,8 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     return result;
   };
 
-  const sendPayloadAsync = (
-    payload: ReplyPayload,
-    abortSignal?: AbortSignal,
-    mirror?: boolean,
-    kind: ReplyDispatchKind = "tool",
-    deliveryIntentId?: string,
-  ) =>
-    sendReplyOperationAsync({ kind: "raw", payload }, abortSignal, mirror, kind, deliveryIntentId);
+  const sendPayloadAsync = (payload: ReplyPayload) =>
+    sendReplyOperationAsync({ kind: "raw", payload });
 
   const deliverBindingPayload = async (
     payload: ReplyPayload,

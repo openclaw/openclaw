@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
   embeddedAgentLog: { debug: mocks.debug },
+  loadCodexBundleMcpThreadConfig: async () => ({ staticServerNames: [], diagnostics: [] }),
 }));
 
 vi.mock("./shared-client.js", async (importOriginal) => ({
@@ -17,7 +18,29 @@ vi.mock("./shared-client.js", async (importOriginal) => ({
   getSharedCodexAppServerClient: mocks.getSharedCodexAppServerClient,
 }));
 
-const { prewarmCodexAttemptClient } = await import("./run-attempt-client-prewarm.js");
+vi.mock("./auth-binding.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-binding.js")>()),
+  prepareCodexAppServerAuthBinding: async ({
+    authProfileStore,
+  }: {
+    authProfileStore: unknown;
+  }) => ({
+    authProfileStore,
+    fingerprint: "auth-fingerprint",
+  }),
+}));
+
+vi.mock("./auth-bridge.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./auth-bridge.js")>()),
+  resolveCodexAppServerAuthAccountCacheKey: async () => undefined,
+}));
+
+vi.mock("./dynamic-tool-build.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./dynamic-tool-build.js")>()),
+  shouldEnableCodexAppServerNativeToolSurface: () => false,
+}));
+
+const { prepareCodexAttemptRuntime } = await import("./run-attempt-runtime.js");
 
 function createInput(params?: {
   attemptClientFactory?: () => Promise<never>;
@@ -26,28 +49,33 @@ function createInput(params?: {
 }) {
   const runAbortController = new AbortController();
   return {
-    clientOptions: {
+    params: {
       authProfileStore: { kind: "test-store" },
-      authBindingFingerprint: "auth-fingerprint",
-      agentDir: "/tmp/openclaw-agent",
-      startOptions: { command: "codex", args: ["app-server"] },
       config: { agents: { defaults: { workspace: "/tmp/workspace" } } },
-      pluginConfig: { appServer: { enabled: true } },
-      authRequirement: "subscription",
-      authProfileId: "profile-1",
-      timeoutMs: 12_345,
-      abandonSignal: runAbortController.signal,
+      model: { id: "test-model", provider: "openai", input: ["text"] },
+      modelId: "test-model",
+      provider: "openai",
     },
-    connection: {
-      assertCurrent: vi.fn(),
-      assertLegacyCurrent: vi.fn(),
-      attemptClientFactory:
-        params?.attemptClientFactory ?? mocks.getLeasedSharedCodexAppServerClient,
-      options: params?.clientFactory ? { clientFactory: params.clientFactory } : {},
-      runAbortController,
-      runtimeArtifactRequest: params?.runtimeArtifactRequest,
+    appServer: {
+      start: { command: "codex", args: ["app-server"] },
+      requestTimeoutMs: 12_345,
     },
-  } as unknown as Parameters<typeof prewarmCodexAttemptClient>[0];
+    agentDir: "/tmp/openclaw-agent",
+    sessionAgentId: "main",
+    pluginConfig: { appServer: { enabled: true } },
+    startupAuthProfileId: "profile-1",
+    startupClientAuthProfileId: "profile-1",
+    startupAuthRequirement: "subscription",
+    assertCurrent: vi.fn(),
+    assertLegacyCurrent: vi.fn(),
+    attemptClientFactory: params?.attemptClientFactory ?? mocks.getLeasedSharedCodexAppServerClient,
+    options: params?.clientFactory ? { clientFactory: params.clientFactory } : {},
+    runAbortController,
+    runtimeArtifactRequest: params?.runtimeArtifactRequest,
+    mutable: {},
+    bindingIdentity: { kind: "session", sessionKey: "test-session" },
+    preDynamicStartupStages: { mark: vi.fn() },
+  } as unknown as Parameters<typeof prepareCodexAttemptRuntime>[0];
 }
 
 describe("Codex attempt client prewarm", () => {
@@ -57,13 +85,13 @@ describe("Codex attempt client prewarm", () => {
     mocks.getSharedCodexAppServerClient.mockResolvedValue({});
   });
 
-  it("starts the shared client before the attempt needs its lease", () => {
+  it("starts the shared client before the attempt needs its lease", async () => {
     const input = createInput();
 
-    prewarmCodexAttemptClient(input);
+    await prepareCodexAttemptRuntime(input);
 
     expect(mocks.getSharedCodexAppServerClient).toHaveBeenCalledWith({
-      assertCurrent: input.connection.assertLegacyCurrent,
+      assertCurrent: input.assertLegacyCurrent,
       startOptions: { command: "codex", args: ["app-server"] },
       pluginConfig: { appServer: { enabled: true } },
       authProfileId: "profile-1",
@@ -73,7 +101,7 @@ describe("Codex attempt client prewarm", () => {
       agentDir: "/tmp/openclaw-agent",
       config: { agents: { defaults: { workspace: "/tmp/workspace" } } },
       timeoutMs: 12_345,
-      abandonSignal: input.connection.runAbortController.signal,
+      abandonSignal: input.runAbortController.signal,
     });
   });
 
@@ -84,8 +112,8 @@ describe("Codex attempt client prewarm", () => {
       { attemptClientFactory: async () => await new Promise<never>(() => {}) },
     ],
     ["runtime artifact capture", { runtimeArtifactRequest: {} }],
-  ])("skips %s", (_label, options) => {
-    prewarmCodexAttemptClient(createInput(options));
+  ])("skips %s", async (_label, options) => {
+    await prepareCodexAttemptRuntime(createInput(options));
 
     expect(mocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
   });
@@ -94,7 +122,7 @@ describe("Codex attempt client prewarm", () => {
     const error = new Error("cold start failed");
     mocks.getSharedCodexAppServerClient.mockRejectedValue(error);
 
-    prewarmCodexAttemptClient(createInput());
+    await prepareCodexAttemptRuntime(createInput());
     await vi.waitFor(() => {
       expect(mocks.debug).toHaveBeenCalledWith("codex app-server client prewarm failed", { error });
     });

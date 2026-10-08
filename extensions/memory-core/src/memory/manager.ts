@@ -27,7 +27,6 @@ import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import {
   resolveEffectiveMemorySearchSettings,
   resolveMemoryEmbeddingProviderRequirement,
-  type MemoryEmbeddingBootstrapDebug,
   type MemoryEmbeddingProviderRequirement,
 } from "./manager-provider-lifecycle.js";
 import { getLocalEmbeddingRuntimeFacts } from "./manager-provider-runtime-facts.js";
@@ -410,13 +409,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
           forceFtsOnly = true;
         }
         if (hadBootstrapFailure && !this.provider) {
-          const failure = this.embeddingBootstrapFailure!;
-          const nextFailure: MemoryEmbeddingBootstrapDebug = {
-            ...failure,
-            reason: this.providerUnavailableReason ?? failure.reason,
-          };
-          this.embeddingBootstrapFailure = nextFailure;
-          this.cacheProbeResult({ ok: false, error: nextFailure.reason });
+          this.refreshEmbeddingBootstrapFailure(this.embeddingBootstrapFailure!);
           forceFtsOnly = true;
         }
       }

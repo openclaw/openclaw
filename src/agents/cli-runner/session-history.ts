@@ -7,12 +7,12 @@ import {
 import { selectResetKeptEntries } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 import {
   readSessionTranscriptBoundedMessageTailPage,
-  readSessionTranscriptWatermark,
   waitForSessionTranscriptProjection,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
 import { SessionTranscriptStorageUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
+import { readSessionTranscriptWatermarkAsync } from "../../config/sessions/session-transcript-watermark.js";
 import { estimateToolResultTextChars } from "../embedded-agent-runner/tool-result-text-budget.js";
 import { MAX_AGENT_HOOK_HISTORY_MESSAGES } from "../harness/hook-history.js";
 import { isOpenClawRuntimeContextCustomMessage } from "../internal-runtime-context.js";
@@ -335,7 +335,8 @@ export async function hasCliSessionTranscript({
     return sessionManager.getEntries().length > 0;
   }
   return (
-    sessionTarget !== undefined && readSessionTranscriptWatermark(sessionTarget).maxSeq !== null
+    sessionTarget !== undefined &&
+    (await readSessionTranscriptWatermarkAsync(sessionTarget)).maxSeq !== null
   );
 }
 

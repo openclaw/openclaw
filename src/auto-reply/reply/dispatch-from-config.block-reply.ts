@@ -188,7 +188,6 @@ export function createDispatchBlockReplyHandler(state: PrepareDispatchExecutionR
           const result = await state.sendReplyOperationAsync(
             deliveryOperation,
             context?.abortSignal,
-            false,
             "block",
             context?.deliveryIntentId,
           );
