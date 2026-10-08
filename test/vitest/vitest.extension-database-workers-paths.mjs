@@ -84,6 +84,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/sms/src/ingress-spool.test.ts",
   "extensions/synology-chat/src/webhook-ingress.test.ts",
   "extensions/telegram/src/polling-session.test.ts",
+  "extensions/telegram/src/model-callback.loopback.integration.test.ts",
   "extensions/telegram/src/telegram-ingress-drain.test.ts",
   "extensions/telegram/src/webhook.test.ts",
   "extensions/tlon/src/monitor/ingress.test.ts",

@@ -265,6 +265,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/system-agent/config-write-validation.test.ts",
   "src/system-agent/inference-route-runtime.test.ts",
   "src/wizard/setup.gateway-config.test.ts",
+  "src/wizard/setup.finalize.trusted-proxy.test.ts",
   "src/state/openclaw-state-lease-async.test.ts",
   "src/state/openclaw-state-db.wal.test.ts",
   "src/state/openclaw-state-lease-heartbeat.activation.test.ts",
