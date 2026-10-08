@@ -186,10 +186,12 @@ describe("outbox", () => {
       effectiveEngine: selected,
       effectiveEngineId: engineId,
       degraded: false,
+      disposed: false,
       selectForHost: vi.fn(),
       degradeBeforeStart: vi.fn(),
       begin: vi.fn(),
       deferDisposalUntil: vi.fn(),
+      onDispose: vi.fn(),
       dispose: async () => undefined,
     } satisfies ContextEngineLogicalTurnLease;
     const warn = vi.fn();

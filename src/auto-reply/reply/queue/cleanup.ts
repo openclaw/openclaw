@@ -13,7 +13,7 @@ import {
 import { defaultRuntime } from "../../../runtime.js";
 import { removeQueuedItemsByRef } from "../../../utils/queue-helpers.js";
 import { clearFollowupDrainCallback } from "./drain.js";
-import { completeFollowupRunLifecycle } from "./lifecycle.js";
+import { completeFollowupRuns } from "./lifecycle.js";
 import { FOLLOWUP_QUEUES, followupQueueSources } from "./state.js";
 import { consumeQueueSummaryDelivery } from "./summary-consumption.js";
 import type { FollowupRun } from "./types.js";
@@ -175,13 +175,9 @@ export function prepareSessionFollowupCleanup(params: {
       );
       const detached = new Set([...pending, ...summaries]);
       removed += detached.size;
-      for (const source of detached) {
-        try {
-          completeFollowupRunLifecycle(source);
-        } catch (error) {
-          defaultRuntime.error?.(`followup queue cancellation settlement failed: ${String(error)}`);
-        }
-      }
+      completeFollowupRuns(detached, (error) => {
+        defaultRuntime.error?.(`followup queue cancellation settlement failed: ${String(error)}`);
+      });
       // Settlement of accepted removals is unconditional; later effects need current authority.
       params.assertCurrent();
       if (

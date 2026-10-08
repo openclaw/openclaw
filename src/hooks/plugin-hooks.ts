@@ -9,7 +9,6 @@ type PluginHookDirEntry = {
   rootDir: string;
 };
 
-/** Resolve hook directories declared by active plugin manifests. */
 export function resolvePluginHookDirs(params: {
   workspaceDir: string | undefined;
   config?: OpenClawConfig;

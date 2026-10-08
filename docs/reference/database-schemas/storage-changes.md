@@ -52,8 +52,9 @@ Foreign commits invalidate readiness without resetting
 an in-progress cursor. Maintenance reaches later keys before starting another pass,
 and only a full pass at a stable foreign revision can certify a clean store.
 The planner consumes this owner's pending list.
-Search also verifies that its original reader connection and revision remain current
-after readiness returns; a changed hit snapshot keeps the indexing hint. Read-only
+Search keeps its hit read, host readiness exchange, and original-connection
+revision check in one worker task while independent searches remain parallel.
+A changed hit snapshot keeps the indexing hint. Read-only
 searches also retain their results with that conservative hint when writable
 maintenance is unavailable.
 Clean status reads reuse these facts without entering a write transaction or
@@ -389,11 +390,14 @@ authority after waiting, without copying the live database for each observation.
 Cold sources and unavailable or replaced native paths retain artifact-preserving
 snapshot preparation. Schema, permissions, and update behavior are unchanged.
 
-Default project recents reuse the Gateway's resident session-row projection after
-readiness, including archived metadata. The combined-store loader retains physical
-store selection, sentinel precedence, and process-local incognito reads. Observed
-checkout requests prepare durable session listings through the existing
-session-transcript worker. Federation captures physical targets,
+Project recents and observed checkout requests consume the Gateway's prepared
+session-row metadata, including archived rows. The existing selection owner maintains
+physical-store and sentinel precedence through committed row and topology publications;
+listings do not reread or rebuild the durable session stores. Recent-project ties retain
+physical-store and SQLite binary key order. Process-local incognito entries remain with
+their native snapshot owner and never enter the resident selection.
+Other combined-store listings use the existing session-transcript worker.
+Federation captures physical targets,
 options, and a transferable environment before waiting, preserving canonical
 keys, ordering, and admission diagnostics; unavailable reads remain errors.
 The Gateway resolves current profile aliases and disclosure
@@ -1286,7 +1290,15 @@ No schema, stored format, migration, or updater behavior changes.
 
 Model-context reads and session transcript preparation use the session-transcript
 worker with separate bounded queues. Background preparation cannot occupy the
-foreground context queue. Session exports read events, statistics, and session
+foreground context queue. Foreground history and model-context pools each use up
+to eight read-only workers, each capped at half the host computation budget
+(rounded up). A single-CPU host keeps one worker in each pool. Each worker
+retains its own SQLite connections and snapshots; writer admission and final
+snapshot validation preserve ordered reads. Database closure joins every reader
+in the pool, and idle retirement releases their retained state. Background
+maintenance, exports, and SQLite writers keep their existing capacity. No schema,
+stored format, or update migration changes are required.
+Session exports read events, statistics, and session
 classification from one read-only SQLite snapshot, then prepare text and
 provenance off the Gateway thread. The caller carries its current exact-secret
 redaction snapshot and rejects results prepared against an obsolete registry.
@@ -1370,6 +1382,14 @@ backup-based planning fallback. Health metadata remains best-effort; the file an
 health row are not one atomic transaction. Synchronous config readers and writers
 keep their existing APIs; config parsing, validation, and plugin preparation retain
 their own execution paths.
+
+GitHub OAuth reconciliation loads persisted config through the asynchronous config
+owner. A runtime-config replacement or changed OAuth record during the read leaves
+the pending outcome for a later reconciliation. Health comparisons use conditional
+writes against every original raw field, including nulls; audit appends read their
+sequence and retention count together within the existing write transaction.
+Foreign commits remain visible on each new operation. These changes preserve
+schemas, retention, synchronous cold-load compatibility, and update behavior.
 
 The native Gateway host supplies snapshot preparation through its registered
 config owner. Those reads prepare deferred migration and plugin metadata with the
@@ -2100,19 +2120,11 @@ Process identity caches retain their existing database-path and identity-key
 scope; warm cached values need no database operation. Schemas and update behavior
 are unchanged; no migration or operator action is required.
 
-Skill Workshop proposal reads, publication, evaluation, rollback metadata, and
-status transitions execute in the existing shared-state worker. Record and event
-writes remain one synchronous transaction, including revision comparisons and
-pending-proposal limits. The host retains filesystem work and the collection and
-target leases through settlement; worker transactions verify every held lease
-before effects and commit. A failed reply is reconciled before discarding a
-staged generation or restoring live files.
-
-Collection history reads and experience-review outcomes use the same worker.
-Doctor awaits legacy proposal imports before deleting their source sidecars.
-Transaction-bound relocation kernels and read-only migration readers retain their
-supplied connections. Proposal generations, schemas, limits, retention, and
-rollback ordering are unchanged.
+Skill Workshop change-feed reads and writes and skill usage reads and writes
+execute in the existing shared-state worker. The retired proposal tables have no
+runtime worker operations; Doctor reads them once in its one-shot export before
+dropping them. See the
+[proposal retirement](/reference/database-schemas/state-schema-history#skill-workshop-proposal-retirement-state-schema-20-same-version).
 
 Cron receipt execution identity binding runs in the shared-state worker. Its
 transaction rereads the exact live receipt owner and rechecks the caller's current

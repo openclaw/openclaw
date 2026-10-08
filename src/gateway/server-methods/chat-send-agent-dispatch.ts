@@ -69,7 +69,6 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     client,
     context,
     toolsAllow,
-    skillWorkshopProposalRevision,
     prepareSkillLibraryAuthoring,
     cronCreatorAuthority,
     assertDashboardReadCurrent,
@@ -331,7 +330,6 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 operatorAuthority: admission.operatorAuthority,
                 providerReviewAcknowledgment: request.providerReviewAcknowledgment,
                 dashboardReadAdmission,
-                skillWorkshopProposalRevision,
                 skillLibraryAuthoring,
                 ...(cronCreatorAuthority
                   ? { cronCreatorAuthorityCapability: cronCreatorAuthority }
@@ -582,6 +580,15 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           ) {
             await persistGatewayUserTurnTranscriptBestEffort();
           }
+          const replyFinalization = {
+            requesterContext: ctx,
+            abortSignal: activeRunAbort.controller.signal,
+            accountId,
+            context,
+            deliveredReplies: replyDispatch.deliveredReplies,
+            emitFirstAssistantServerTiming,
+            session,
+          };
           let finalizedSourceReply = false;
           // A dispatched runtime owns its persisted turn; this owner projects
           // only settled, post-hook replies. Native runtimes project their own stream.
@@ -592,15 +599,9 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             !context.chatRunState.hasAbortMarker(clientRunId)
           ) {
             await finalizeChatSendDispatchedReplies({
-              requesterContext: ctx,
-              abortSignal: activeRunAbort.controller.signal,
-              accountId,
-              context,
-              deliveredReplies: replyDispatch.deliveredReplies,
-              emitFirstAssistantServerTiming,
+              ...replyFinalization,
               foldCommandBlocks: isInternalTextSlashCommandTurn || replyDispatchRun !== undefined,
               persistUserTurnTranscript: persistGatewayUserTurnTranscriptBestEffort,
-              session,
               suppressReplies: !replyDispatchRun && replyDispatch.hasAppendedWebchatAgentMedia(),
               // Bound ACP writes its own transcript; the dashboard still needs its reply.
               runtimeOwnsTranscript:
@@ -613,14 +614,8 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             });
           } else if (!progressRefresh && !context.chatRunState.hasAbortMarker(clientRunId)) {
             finalizedSourceReply = await finalizeChatSendSourceReplies({
-              requesterContext: ctx,
-              abortSignal: activeRunAbort.controller.signal,
-              accountId,
-              context,
-              deliveredReplies: replyDispatch.deliveredReplies,
-              emitFirstAssistantServerTiming,
+              ...replyFinalization,
               hasReturnedAgentErrorPayloads: hasReturnedAgentError,
-              session,
               suppressFinal: runtimeFailed,
             });
           }

@@ -1098,7 +1098,37 @@ describe("release Telegram QA workflow", () => {
     expect(createSut).toContain('"regular file:600:0:0"');
     expect(createSut).toContain('/usr/bin/setpriv --reuid="$SUT_UID" --regid="$SUT_GID"');
     expect(createSut).toContain('export OPENCLAW_CONFIG_PATH="$projection_dir/openclaw.json"');
-    expect(createSut).toContain('"${OPENCLAW_STATE_DIR}/qa-runtime-config/openclaw.json") ;;');
+  });
+
+  it("admits only one source-generation directory beneath the writable config root", () => {
+    const launcher = extractHereDocument(
+      requireRun("run_telegram", "Create isolated Telegram SUT identity and launcher"),
+      "LAUNCHER",
+    );
+    const admission = launcher.match(/case "\$OPENCLAW_CONFIG_PATH" in\n[\s\S]*?\n\s*esac/u)?.[0];
+    expect(admission).toBeTruthy();
+    const stateRoot = "/isolated-telegram/state";
+    const generation = "a".repeat(64);
+    const paths = [
+      [`${stateRoot}/qa-runtime-config/${generation}/openclaw.json`, true],
+      [`${stateRoot}/qa-runtime-config/openclaw.json`, false],
+      [`${stateRoot}/qa-runtime-config/not-a-generation/openclaw.json`, false],
+      [`${stateRoot}/qa-runtime-config/nested/${generation}/openclaw.json`, false],
+      [`${stateRoot}/qa-runtime-config/${generation.slice(1)}/openclaw.json`, false],
+      [`${stateRoot}/qa-runtime-config/${generation.toUpperCase()}/openclaw.json`, false],
+      [`${stateRoot}/other/${generation}/openclaw.json`, false],
+    ] as const;
+    for (const [configPath, allowed] of paths) {
+      const result = spawnSync("bash", ["-ceu", admission!], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_STATE_DIR: stateRoot,
+          OPENCLAW_CONFIG_PATH: configPath,
+        },
+      });
+      expect(result.status === 0, configPath).toBe(allowed);
+    }
   });
 
   it("keeps launcher identity private while forwarding the Gateway stdin lifeline", () => {

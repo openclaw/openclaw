@@ -351,7 +351,7 @@ class SidebarCatalogGroupingTest {
       composeRule.runOnIdle {
         assertEquals(listOf(true, false), dragStates)
         assertEquals(
-          listOf("home", "work", "agents", "skills", "threads", "automations", "usage", "skill-workshop", "dreaming", "terminal", "desktop"),
+          listOf("home", "work", "agents", "skills", "threads", "automations", "usage", "dreaming", "terminal", "desktop"),
           prefs.sidebarPageOrder.value,
         )
       }
@@ -377,7 +377,7 @@ class SidebarCatalogGroupingTest {
         .performTouchInput(dragOnePageDown)
       composeRule.runOnIdle {
         assertEquals(
-          listOf("home", "agents", "work", "skills", "threads", "automations", "usage", "skill-workshop", "dreaming", "terminal", "desktop"),
+          listOf("home", "agents", "work", "skills", "threads", "automations", "usage", "dreaming", "terminal", "desktop"),
           prefs.sidebarPageOrder.value,
         )
         assertEquals(listOf("agents", "home", "skills", "threads"), prefs.sidebarVisiblePages.value)

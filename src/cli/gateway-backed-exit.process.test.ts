@@ -668,10 +668,10 @@ describe("gateway-backed CLI process exit", () => {
       method: "device.pair.list",
     },
     {
-      label: "skills workshop apply",
-      args: ["skills", "workshop", "apply", "proposal-missing-credentials"],
+      label: "skills workshop archive",
+      args: ["skills", "workshop", "archive", "missing-credentials-skill"],
       gatewayOwnsLock: true,
-      method: "skills.proposals.inspect",
+      method: "skills.workshop.archive",
     },
   ])(
     "renders missing $label credentials as expected guidance, not a crash",

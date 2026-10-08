@@ -211,12 +211,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       if (!userId || (config.users !== undefined && !config.users.includes(userId))) {
         continue;
       }
-      const key = `${keyPrefix}${userId}`;
-      if (isDiscordOfflineStatus(presence.status)) {
-        this.recordPresenceBaseline(data.id, key, "offline");
-      } else if (isDiscordOnlineStatus(presence.status)) {
-        this.recordPresenceBaseline(data.id, key, "online");
-      }
+      this.recordPresenceBaseline(data.id, `${keyPrefix}${userId}`, presence.status);
     }
   }
 
@@ -347,11 +342,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       lastEmittedAtMs,
     });
     if (!presenceEvent) {
-      if (isDiscordOfflineStatus(data.status)) {
-        this.recordPresenceBaseline(data.guild_id, presenceKey, "offline");
-      } else if (isDiscordOnlineStatus(data.status)) {
-        this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
-      }
+      this.recordPresenceBaseline(data.guild_id, presenceKey, data.status);
       return;
     }
 
@@ -500,11 +491,12 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
     );
   }
 
-  private recordPresenceBaseline(guildId: string, key: string, status: "offline" | "online"): void {
-    const evictedGuildId =
-      status === "offline"
-        ? this.presenceBaseline.observeOffline(guildId, key)
-        : this.presenceBaseline.observeOnline(guildId, key);
+  private recordPresenceBaseline(guildId: string, key: string, status: string | undefined): void {
+    const evictedGuildId = isDiscordOfflineStatus(status)
+      ? this.presenceBaseline.observeOffline(guildId, key)
+      : isDiscordOnlineStatus(status)
+        ? this.presenceBaseline.observeOnline(guildId, key)
+        : undefined;
     if (!evictedGuildId) {
       return;
     }

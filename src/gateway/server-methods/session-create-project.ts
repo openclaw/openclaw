@@ -329,16 +329,14 @@ export async function prepareSessionWorkspaceForRun(params: {
       assertRunOwnership();
       projectIdentity?.assertSelected();
     };
+    const cloneOptions = {
+      signal,
+      token: projectToken,
+      assertCurrent: assertProjectCurrent,
+      startRun: projectIdentity?.start,
+    };
     const project = gitUrl
-      ? await materializeProjectClone(
-          { cfg, gitUrl },
-          {
-            signal,
-            token: projectToken,
-            assertCurrent: assertProjectCurrent,
-            startRun: projectIdentity?.start,
-          },
-        )
+      ? await materializeProjectClone({ cfg, gitUrl }, cloneOptions)
       : undefined;
     projectIdentity?.assertSelected();
     assertRunOwnership();
@@ -398,12 +396,7 @@ export async function prepareSessionWorkspaceForRun(params: {
           resolved.error.code === ErrorCodes.INVALID_REQUEST &&
           project?.source === "cloned"
         ) {
-          await refreshProjectClone(project, {
-            signal,
-            token: projectToken,
-            assertCurrent: assertProjectCurrent,
-            startRun: projectIdentity?.start,
-          });
+          await refreshProjectClone(project, cloneOptions);
           projectIdentity?.assertSelected();
           assertRunOwnership();
           resolved = await resolveSessionWorktreeBase(directory, pending.baseRef, signal);

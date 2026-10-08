@@ -37,6 +37,7 @@ import {
   resolveDeliveryNotSentRetryability,
 } from "./delivery-recovery.shared.js";
 import { formatErrorMessage } from "./errors.js";
+import { readExecRequestOwners } from "./exec-request-context.js";
 import { classifyHeartbeatAgentOutcome } from "./heartbeat-delivery-normalization.js";
 import { isExecCompletionSystemEvent } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
@@ -78,7 +79,7 @@ type HeartbeatDispatch = {
   result?: HeartbeatRunResult;
   deliveryError?: string;
   retryUnqueuedDelivery?: boolean;
-  execEffectSettled?: boolean;
+  execDeliveryOutcome?: "delivered" | "recovery-owned" | "unknown-after-send" | "rejected";
   deliveryReason?: string;
   deliverySilent?: boolean;
   projectTarget?: boolean;
@@ -130,7 +131,11 @@ async function prepareHeartbeatDispatchReply(
     runState.admission.reason === "active-run" &&
     !response &&
     (!selected || !hasOutboundReplyContent(selected));
-  if (execution === "cancelled" || execution === "superseded" || admissionBusy) {
+  const execCancelled = () =>
+    prepared.inspectedSystemEventsToConsume.some((event) =>
+      readExecRequestOwners(event)?.some((owner) => owner.signal.aborted),
+    );
+  if (execution === "cancelled" || execution === "superseded" || admissionBusy || execCancelled()) {
     const reason =
       execution === "superseded"
         ? "preempted"
@@ -225,17 +230,26 @@ async function prepareHeartbeatDispatchReply(
       accountId: delivery.accountId,
     });
     const queueKey = resolveSystemEventQueueKey(sessionKey, agentId);
+    // Stop cannot revoke a confirmed send or transfer recovery's existing custody
+    // to a newly generated reply for the surviving occurrences.
+    const settleEvents =
+      !execCancelled() ||
+      (policy.execDeliveryOutcome !== undefined && policy.execDeliveryOutcome !== "rejected");
     if (completedExecTurn && preflight.shouldInspectPendingEvents && !consume) {
       const execEvents = prepared.inspectedSystemEventsToConsume.filter(
         isExecCompletionSystemEvent,
       );
-      if (policy.execEffectSettled) {
+      if (policy.execDeliveryOutcome && settleEvents) {
         consumeSelectedSystemEventEntries(queueKey, execEvents);
-      } else if (policy.deliveryError && !policy.retryUnqueuedDelivery) {
+      } else if (
+        !policy.execDeliveryOutcome &&
+        policy.deliveryError &&
+        !policy.retryUnqueuedDelivery
+      ) {
         holdSystemEventDelivery(queueKey, execEvents);
       }
     }
-    if (consume && preflight.shouldInspectPendingEvents) {
+    if (consume && settleEvents && preflight.shouldInspectPendingEvents) {
       consumeSelectedSystemEventEntries(resolveSystemEventQueueKey(sessionKey, agentId), [
         ...prepared.inspectedSystemEventsToConsume,
         ...prepared.deferredGenericEvents,
@@ -260,8 +274,9 @@ async function prepareHeartbeatDispatchReply(
     }
     if (
       completedExecTurn &&
+      settleEvents &&
       (consume ||
-        policy.execEffectSettled ||
+        policy.execDeliveryOutcome ||
         (policy.deliveryError && !policy.retryUnqueuedDelivery)) &&
       preflight.deferredEventEntries.length > 0
     ) {
@@ -496,9 +511,6 @@ async function prepareHeartbeatDispatchReply(
     }),
     settle: async (result) => {
       const sent = result === "delivered";
-      if (sent && !failed) {
-        policy.execEffectSettled = true;
-      }
       if (!sent) {
         await unconfirmed(policy.deliveryError ?? policy.deliveryReason ?? result);
       }
@@ -600,6 +612,8 @@ export async function deliverHeartbeatDispatch(
       });
       if (!committed.ok) {
         policy.deliveryReason = committed.reason;
+      } else {
+        policy.execDeliveryOutcome = "delivered";
       }
       // Settlement consumes only captured occurrences, and only after the
       // canonical transcript owner accepts this generation's write or replay.
@@ -633,8 +647,12 @@ export async function deliverHeartbeatDispatch(
     if (send.status === "failed" || send.status === "partial_failed") {
       throw send.error;
     }
-    if (send.status === "suppressed" && send.reason === "adapter_returned_no_identity") {
-      policy.execEffectSettled = true;
+    if (policy.projectTarget !== false) {
+      if (send.status === "sent") {
+        policy.execDeliveryOutcome = "delivered";
+      } else if (send.status === "suppressed" && send.reason === "adapter_returned_no_identity") {
+        policy.execDeliveryOutcome = "unknown-after-send";
+      }
     }
     if (send.status === "suppressed") {
       policy.deliveryReason = send.reason;
@@ -647,22 +665,28 @@ export async function deliverHeartbeatDispatch(
     };
   } catch (error) {
     policy.deliveryError = formatErrorMessage(error);
-    // Published custody can also end in a confirmed permanent rejection. Retire
-    // that occurrence, but not an unpublished rollback or an ambiguous send.
-    policy.execEffectSettled =
-      isDeliveryRecoveryOwnedRetry(error) ||
-      (publishedIntent &&
-        isOutboundDeliveryError(error) &&
-        error.queueCustody === "released" &&
-        resolveDeliveryNotSentRetryability(error) === false);
-    // The queue owner marks uncertain publication as held even before its intent
-    // callback. Only an unowned attempt that never reached dispatch may regenerate.
+    policy.execDeliveryOutcome =
+      policy.projectTarget === false
+        ? undefined
+        : isDeliveryRecoveryOwnedRetry(error)
+          ? "recovery-owned"
+          : publishedIntent &&
+              isOutboundDeliveryError(error) &&
+              error.queueCustody === "released" &&
+              resolveDeliveryNotSentRetryability(error) === false
+            ? "rejected"
+            : undefined;
+    // Uncertain publication retains recovery custody even before the intent callback.
+    // A cancelled, unpublished direct send settles its claimed final without replay;
+    // published cancellation additionally needs the queue owner's released custody.
     policy.retryUnqueuedDelivery =
       policy.prepared.hasExecCompletion &&
-      !policy.execEffectSettled &&
-      !publishedIntent &&
+      !policy.execDeliveryOutcome &&
       !platformDispatchStarted &&
-      !hasPendingFinalOwner;
+      ((!publishedIntent && (!hasPendingFinalOwner || signal?.aborted === true)) ||
+        (signal?.aborted === true &&
+          isOutboundDeliveryError(error) &&
+          error.queueCustody === "released"));
     throw error;
   }
 }

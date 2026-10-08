@@ -81,10 +81,6 @@ impl Observation {
         })
     }
 
-    pub(crate) fn is_current(&self, runtime: &BundledRuntime) -> bool {
-        self.uses_runtime_path(&runtime.bun)
-    }
-
     pub(crate) fn paused(&self) -> bool {
         self.command().is_some()
             && (self.flag("/service/loaded") == Some(false)
@@ -169,7 +165,7 @@ impl Observation {
         let Some(port) = self.number("/port/port").filter(|port| *port > 0) else {
             return false;
         };
-        self.is_current(runtime)
+        self.uses_runtime_path(&runtime.bun)
             && self.text("/service/runtimeIntent/pin/runtime") == Some("bun")
             && self
                 .text("/service/runtimeIntent/pin/path")

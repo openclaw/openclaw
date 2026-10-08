@@ -214,28 +214,8 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
   },
   isToolDeliveryAction: ({ args }) =>
     typeof args.action === "string" && TELEGRAM_TOOL_DELIVERY_ACTIONS.has(args.action),
-  handleAction: async ({
-    action,
-    params,
-    reply,
-    progressSnapshot,
-    cfg,
-    accountId,
-    mediaAccess,
-    mediaLocalRoots,
-    mediaReadFile,
-    sessionKey,
-    inboundEventKind,
-    toolContext,
-    conversationReadOrigin,
-    requesterAccountId,
-    requesterSenderId,
-    gatewayClientScopes,
-    deliveryRetryOwner,
-    onPlatformSendDispatch,
-    assertDirectAdapterHandoff,
-    skipQueue,
-  }) => {
+  handleAction: async (ctx) => {
+    const { action, params, cfg, accountId, toolContext } = ctx;
     const telegramAction =
       TELEGRAM_MESSAGE_ACTION_MAP[action as keyof typeof TELEGRAM_MESSAGE_ACTION_MAP];
     if (!telegramAction) {
@@ -267,21 +247,23 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       },
       cfg,
       {
-        ...(mediaAccess !== undefined ? { mediaAccess } : {}),
-        mediaLocalRoots,
-        mediaReadFile,
-        sessionKey,
-        inboundEventKind,
-        gatewayClientScopes,
-        deliveryRetryOwner,
-        onPlatformSendDispatch,
-        assertDirectAdapterHandoff,
-        skipQueue,
-        ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
-        ...(requesterAccountId ? { requesterAccountId } : {}),
-        ...(requesterSenderId ? { requesterSenderId } : {}),
-        ...(reply ? { reply } : {}),
-        ...(progressSnapshot ? { progressSnapshot } : {}),
+        ...(ctx.mediaAccess !== undefined ? { mediaAccess: ctx.mediaAccess } : {}),
+        mediaLocalRoots: ctx.mediaLocalRoots,
+        mediaReadFile: ctx.mediaReadFile,
+        sessionKey: ctx.sessionKey,
+        inboundEventKind: ctx.inboundEventKind,
+        gatewayClientScopes: ctx.gatewayClientScopes,
+        deliveryRetryOwner: ctx.deliveryRetryOwner,
+        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+        assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
+        skipQueue: ctx.skipQueue,
+        ...(ctx.conversationReadOrigin
+          ? { conversationReadOrigin: ctx.conversationReadOrigin }
+          : {}),
+        ...(ctx.requesterAccountId ? { requesterAccountId: ctx.requesterAccountId } : {}),
+        ...(ctx.requesterSenderId ? { requesterSenderId: ctx.requesterSenderId } : {}),
+        ...(ctx.reply ? { reply: ctx.reply } : {}),
+        ...(ctx.progressSnapshot ? { progressSnapshot: ctx.progressSnapshot } : {}),
         ...(toolContext ? { toolContext } : {}),
       },
     );

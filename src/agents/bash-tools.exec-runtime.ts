@@ -269,12 +269,15 @@ function maybeNotifyOnExit(
   const eventText = appendExecTimeoutRetryGuidance(summary, session.exitReason);
   const eventRouting = session.eventRouting ?? {};
   const eventSessionKey = resolveEventSessionKeyForPolicy(sessionKey, eventRouting);
-  const eventOptions = {
-    sessionKey: eventSessionKey,
-    contextKey: `exec:${session.id}`,
-    deliveryContext: session.notifyDeliveryContext,
-    fromConversationTurn: session.notifyFromConversationTurn,
-  };
+  const eventOptions = withExecRequestOwners(
+    {
+      sessionKey: eventSessionKey,
+      contextKey: `exec:${session.id}`,
+      deliveryContext: session.notifyDeliveryContext,
+      fromConversationTurn: session.notifyFromConversationTurn,
+    },
+    readExecRequestOwners(session),
+  );
   const remove = enqueueSystemEventWithReceipt(
     eventText,
     session.agentId ? withSystemEventOwner(eventOptions, session.agentId) : eventOptions,

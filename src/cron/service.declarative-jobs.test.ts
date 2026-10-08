@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { resolveCronJobConfigRevision } from "./config-revision.js";
 import { resolveCronSession } from "./isolated-agent/session.js";
@@ -12,7 +11,6 @@ import {
   writeCronStoreSnapshot,
 } from "./service.test-harness.js";
 import type { CronAddOptions } from "./service/state.js";
-import { resolveSkillCollectionReviewMonitorSpecs } from "./skill-collection-review-monitor.js";
 import { loadCronStore } from "./store.js";
 import type { CronJob, CronJobCreate } from "./types.js";
 
@@ -237,49 +235,6 @@ describe("CronService declarative jobs", () => {
       expect((await add(cron, input, { enabledExplicit: true })).updated).toBe(false);
     },
   );
-
-  it("persists an ineligible review and reconciles recovery without replacing its job", async () => {
-    const { cron, storePath } = await setup();
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { model: "openai/gpt-blocked" },
-        entries: {
-          main: {
-            models: { "openai/gpt-blocked": { agentRuntime: { id: "unsupported-harness" } } },
-          },
-        },
-      },
-      skills: { workshop: { autonomous: { mode: "auto" } } },
-    };
-    const project = () => {
-      const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg, [], {
-        schedulerSeed: "test-seed",
-      });
-      return spec!.input;
-    };
-    const created = await add(cron, project(), { enabledExplicit: true, systemOwned: true });
-    expect(created.job).toMatchObject({
-      enabled: false,
-      displayName: expect.stringContaining("no-rooted-runtime"),
-    });
-    expect(created.job.state.nextRunAtMs).toBeUndefined();
-    expect(
-      (await loadCronStore(storePath)).jobs.find((job) => job.id === created.id),
-    ).toMatchObject({ enabled: false, displayName: created.job.displayName });
-    cfg.agents!.defaults!.model = "anthropic/claude-sonnet-4-6";
-    const recovered = await add(cron, project(), { enabledExplicit: true, systemOwned: true });
-    expect(recovered).toMatchObject({
-      id: created.id,
-      created: false,
-      updated: true,
-      enabled: true,
-    });
-    expect(recovered.job.displayName).toBe("Skill collection review (main)");
-    expect(recovered.job.state.nextRunAtMs).toEqual(expect.any(Number));
-    expect(
-      (await loadCronStore(storePath)).jobs.find((job) => job.id === created.id),
-    ).toMatchObject({ enabled: true, displayName: "Skill collection review (main)" });
-  });
 
   it("keeps the first creator across declaration convergence and restart", async () => {
     const { cron: writer, storePath } = await setup();

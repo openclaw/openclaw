@@ -3,8 +3,8 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { QueuedChatTurnEntry } from "../chat-queued-turns.js";
 import { registerWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import { createWorkerInferenceCancellationService } from "../worker-environments/inference-control.test-helpers.js";
+import * as abortDescendants from "./chat-abort-descendants.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
-import * as abortRuntime from "./chat-abort-runtime.js";
 import * as persistence from "./chat-transcript-persistence.js";
 import {
   createSingleAbortContext,
@@ -695,9 +695,9 @@ describe("chat.abort original authority and registration", () => {
     context.chatAbortControllers.set("parent-run", run);
     context.chatRunState.getOrCreate("parent-run").buffer = "captured parent output";
     const descendants = vi
-      .spyOn(abortRuntime, "abortControlledSubagents")
+      .spyOn(abortDescendants, "abortControlledSubagents")
       .mockImplementationOnce(async (params) => {
-        await params.beforeKill?.();
+        await params.beforeKill?.(() => {});
         throw descendantFailure;
       });
     const persist = vi

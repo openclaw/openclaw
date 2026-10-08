@@ -92,10 +92,20 @@ function notifyQrUpdate(login: ActiveLogin) {
   previous.resolve();
 }
 
-function updateLoginQrState(login: ActiveLogin, qr: string): number {
+function updateLoginQrState(accountId: string, login: ActiveLogin, qr: string, notify = false) {
   login.qr = qr;
   login.qrVersion += 1;
-  return login.qrVersion;
+  if (notify) {
+    notifyQrUpdate(login);
+  }
+  void ensureQrDataUrl({
+    accountId,
+    loginId: login.id,
+    qr,
+    qrVersion: login.qrVersion,
+  }).catch(() => {
+    // Background rendering must not clobber the active login; foreground callers report errors.
+  });
 }
 
 async function ensureQrDataUrl(params: {
@@ -160,18 +170,6 @@ async function ensureQrDataUrl(params: {
   }
 }
 
-function renderLatestQrDataUrlInBackground(params: {
-  accountId: string;
-  loginId: string;
-  qr: string;
-  qrVersion: number;
-}) {
-  void ensureQrDataUrl(params).catch(() => {
-    // Ignore background QR render failures; the caller can still retry or surface
-    // the login state without clobbering the active session.
-  });
-}
-
 function attachLoginWaiter(accountId: string, login: ActiveLogin) {
   login.waitPromise = waitForWhatsAppLoginResult({
     sock: login.sock,
@@ -186,14 +184,7 @@ function attachLoginWaiter(accountId: string, login: ActiveLogin) {
       if (!current || current.id !== login.id) {
         return;
       }
-      const qrVersion = updateLoginQrState(current, qr);
-      notifyQrUpdate(current);
-      renderLatestQrDataUrlInBackground({
-        accountId,
-        loginId: login.id,
-        qr,
-        qrVersion,
-      });
+      updateLoginQrState(accountId, current, qr, true);
     },
     onSocketReplaced: (sock) => {
       const current = activeLogins.get(accountId);
@@ -368,13 +359,7 @@ export async function startWebLoginWithQr(
         pendingQr = qr;
         const current = activeLogins.get(account.accountId);
         if (current && current.id === loginId) {
-          const qrVersion = updateLoginQrState(current, qr);
-          renderLatestQrDataUrlInBackground({
-            accountId: account.accountId,
-            loginId,
-            qr,
-            qrVersion,
-          });
+          updateLoginQrState(account.accountId, current, qr);
         }
         clearTimeout(qrTimer);
         qrReady.resolve({ outcome: "qr", qr });
@@ -418,13 +403,7 @@ export async function startWebLoginWithQr(
   operationOwner.current = nextLogin;
   activeLogins.set(account.accountId, nextLogin);
   if (pendingQr) {
-    const qrVersion = updateLoginQrState(nextLogin, pendingQr);
-    renderLatestQrDataUrlInBackground({
-      accountId: account.accountId,
-      loginId: nextLogin.id,
-      qr: pendingQr,
-      qrVersion,
-    });
+    updateLoginQrState(account.accountId, nextLogin, pendingQr);
   }
   attachLoginWaiter(account.accountId, nextLogin);
 

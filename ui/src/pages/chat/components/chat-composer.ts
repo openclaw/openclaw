@@ -129,8 +129,7 @@ export function renderChatComposer(props: ChatComposerProps) {
         : sendingForCurrentSession || submittedProgress
           ? t("chat.composer.sendingMessage")
           : t("chat.composer.working", { name: assistantName });
-  // Persistent sr-only live region: run phases are otherwise conveyed only
-  // visually (thread spark, content arriving, interrupted toast).
+  // Keep run phases accessible alongside the transcript and working indicator.
   const runStatusAnnouncement =
     composerRunStatus == null
       ? ""
@@ -654,7 +653,6 @@ export function renderChatComposer(props: ChatComposerProps) {
     showAbortableUi,
     visibleDraft,
     runStatusAnnouncement,
-    composerRunStatus,
     requestUpdate,
     sendShortcut,
     questionPanelProps,

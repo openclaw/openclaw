@@ -114,16 +114,16 @@ type QaCredentialDoctorCheck = {
   status: "fail" | "pass" | "warn";
 };
 
+function adminErrorFactory(code: string) {
+  return (message: string) => new QaCredentialAdminError({ code, message });
+}
+
 function parsePositiveIntegerEnv(env: NodeJS.ProcessEnv, key: string, fallback: number): number {
   return parseQaCredentialPositiveIntegerEnv({
     env,
     key,
     fallback,
-    createError: (message) =>
-      new QaCredentialAdminError({
-        code: "INVALID_ENV",
-        message,
-      }),
+    createError: adminErrorFactory("INVALID_ENV"),
   });
 }
 
@@ -131,11 +131,7 @@ function normalizeConvexSiteUrl(raw: string, env: NodeJS.ProcessEnv): string {
   return normalizeQaCredentialConvexSiteUrl({
     raw,
     env,
-    createError: (message) =>
-      new QaCredentialAdminError({
-        code: "INVALID_SITE_URL",
-        message,
-      }),
+    createError: adminErrorFactory("INVALID_SITE_URL"),
   });
 }
 
@@ -145,11 +141,7 @@ function normalizeEndpointPrefix(value: string | undefined): string {
     invalidAbsoluteMessage:
       '--endpoint-prefix must be an absolute path like "/qa-credentials/v1" (not //host).',
     invalidSegmentsMessage: '--endpoint-prefix must not contain backslashes or ".." path segments.',
-    createError: (message) =>
-      new QaCredentialAdminError({
-        code: "INVALID_ARGUMENT",
-        message,
-      }),
+    createError: adminErrorFactory("INVALID_ARGUMENT"),
   });
 }
 

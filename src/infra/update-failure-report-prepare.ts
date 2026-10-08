@@ -111,10 +111,7 @@ function sanitizeReportField(
     typeof value === "bigint"
       ? String(value)
       : "unknown";
-  const redacted = redactSupportString(redactDiagnosticLines(text), {
-    env: context.env,
-    stateDir: context.stateDir,
-  });
+  const redacted = redactSupportString(redactDiagnosticLines(text), context);
   return truncateUtf8Prefix(redacted.trim(), maxBytes);
 }
 

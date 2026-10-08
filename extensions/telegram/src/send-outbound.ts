@@ -53,6 +53,7 @@ export function withTelegramMessageAction<T, TMessageId extends string | number 
   opts: TelegramMessageActionOpts,
   operation: (context: TelegramMessageActionContext<TMessageId>) => Promise<T>,
   shouldRetry?: (error: unknown) => boolean,
+  writebackAuthority: "caller" | "internal" = "caller",
 ): Promise<T> {
   return withTelegramApiContext(opts, async (context) => {
     const { cfg, api } = context;
@@ -63,7 +64,7 @@ export function withTelegramMessageAction<T, TMessageId extends string | number 
       lookupTarget: parseTelegramTarget(rawTarget).chatId,
       persistTarget: rawTarget,
       verbose: opts.verbose,
-      gatewayClientScopes: opts.gatewayClientScopes,
+      gatewayClientScopes: writebackAuthority === "internal" ? undefined : opts.gatewayClientScopes,
     });
     const request = createTelegramRequestWithDiag({
       cfg,

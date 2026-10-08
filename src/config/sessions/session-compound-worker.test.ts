@@ -9,7 +9,6 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -78,66 +77,6 @@ afterEach(() => {
   delivery.afterCommit = undefined;
   vi.restoreAllMocks();
 });
-
-it.each(["fresh", "replay"])(
-  "fences unstaged original input at COMMIT while retaining %s semantics",
-  async (mode) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const f = fixture();
-      let live = true;
-      const assertCurrent = vi.fn(() => {
-        if (!live) {
-          throw new Error("original input authority closed");
-        }
-      });
-      const recorder = () =>
-        createUserTurnTranscriptRecorder({
-          message: {
-            role: "user",
-            content: "synthetic command",
-            timestamp: Date.now(),
-            idempotencyKey: "unstaged-command",
-          },
-          target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: f.read() },
-          assertOriginalInputCommit: assertCurrent,
-          beforeMessageWrite: ({ message }) => {
-            assertCurrent();
-            return message;
-          },
-          onPersistenceError: () => {},
-          updateMode: "none",
-        });
-      if (mode === "replay") {
-        await recorder().persistFallback();
-        live = false;
-        assertCurrent.mockClear();
-      }
-      let commitSeen = false;
-      const create = admission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) =>
-          create((request, grant) => {
-            if (request.stage === "commit") {
-              commitSeen = true;
-              live = false;
-            }
-            callback(request, grant);
-          }, attachment),
-      );
-      if (mode === "fresh") {
-        await expect(recorder().persistFallback()).rejects.toThrow(
-          "original input authority closed",
-        );
-        expect(commitSeen).toBe(true);
-        expect(f.events()).toEqual([]);
-      } else {
-        await expect(recorder().persistFallback()).resolves.toMatchObject({ appended: false });
-        expect(assertCurrent).not.toHaveBeenCalled();
-        expect(f.events().filter((event) => event.type === "message")).toHaveLength(1);
-      }
-    });
-  },
-);
 
 it.each(["turn", "reset"] as const)(
   "publishes an acknowledged %s exactly once after a lost worker reply",

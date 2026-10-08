@@ -210,11 +210,8 @@ export async function createThreadDiscord(
   }
   let channel: APIChannel | undefined;
   if (!payload.messageId) {
-    try {
-      channel = await getChannel(rest, channelId);
-    } catch {
-      // Channel metadata only enriches standalone creation; Discord still validates it.
-    }
+    // Channel metadata only enriches standalone creation; Discord still validates it.
+    channel = await getChannel(rest, channelId).catch(() => undefined);
   }
   // Discord clients preselect the parent default, but REST thread creation needs
   // it explicitly. Keep a caller override authoritative when one was supplied.

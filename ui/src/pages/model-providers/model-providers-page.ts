@@ -599,12 +599,10 @@ export class ModelProvidersPage extends OpenClawLightDomElement {
         : data.providerOutcomes,
       pendingProviders: catalog?.pendingProviders,
       providerUsage: data.providerUsage?.ok ? data.providerUsage.value : null,
-      configProviderIds: config.providerIds,
-      configApiKeyProviderIds: config.apiKeyProviderIds,
-      configProviderAuthModes: config.providerAuthModes,
+      configProviders: config.providers,
     });
     const configuredProviderIds = new Set([
-      ...config.providerIds,
+      ...config.providers.map(({ key }) => key),
       ...(data.authStatus?.providers
         .filter((provider) => Boolean(provider.apiKey) || provider.profiles.length > 0)
         .map((provider) => provider.provider) ?? []),

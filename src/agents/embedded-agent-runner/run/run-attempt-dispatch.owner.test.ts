@@ -346,7 +346,6 @@ it.each(dispatchCases)(
           ? {
               media: [{ path: imagePath, contentType: "image/png", kind: "image" as const }],
               requireWorkspaceOnly: true as const,
-              requireWritableSandbox: true as const,
             }
           : {}),
         timeoutMs: 5_000,
@@ -390,6 +389,8 @@ it.each(dispatchCases)(
           },
         },
         preparedRuntime: {
+          provider: "fixture",
+          modelId: "fixture-model",
           requestedModelId: "fixture-model",
           nativeModelOwned: true,
           attemptAuthProfileStore: authProfileStore,
@@ -423,8 +424,6 @@ it.each(dispatchCases)(
           suppressNextUserMessagePersistence: false,
         },
         terminalRetryState: { beforeFinalizeRevisionAttempts: 0 },
-        provider: "fixture",
-        modelId: "fixture-model",
         replayState: { replayInvalid: false, hadPotentialSideEffects: false },
         startupStagesEmitted: false,
         bootstrapPromptWarningSignaturesSeen: [],

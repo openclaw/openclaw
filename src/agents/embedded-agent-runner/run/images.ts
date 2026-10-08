@@ -316,10 +316,7 @@ export async function detectAndLoadPromptImages(
     factIndex: number | undefined,
     allowUnowned: boolean,
   ): PromptImageEntry | undefined => {
-    const exact =
-      factIndex === undefined
-        ? -1
-        : unusedExisting.findIndex((entry) => entry.factIndex === factIndex);
+    const exact = unusedExisting.findIndex((entry) => entry.factIndex === factIndex);
     const index =
       exact >= 0
         ? exact
@@ -401,6 +398,7 @@ export async function detectAndLoadPromptImages(
   const imageSanitization = {
     maxBytes: params.maxBytes,
     maxDimensionPx: params.maxDimensionPx,
+    verifyDecodability: true,
   };
   const sanitized: PromptImageEntry[] = [];
   let dropped = 0;
