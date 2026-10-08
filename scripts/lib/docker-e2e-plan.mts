@@ -524,11 +524,25 @@ function expandUpgradeSurvivorBaselineLanes(
   const scenarios = configuredScenarios.length > 0 ? supportedScenarios : [];
   const matrixBaselines: Array<string | undefined> =
     baselineSpecs.length > 0 ? baselineSpecs : [undefined];
+  const scenarioCells = (selectedScenarios: Array<string | undefined>) => [
+    ...matrixBaselines.flatMap((baselineSpec) =>
+      selectedScenarios
+        .filter(
+          (scenario) =>
+            !isPackageRecoveryScenario(scenario) &&
+            supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec),
+        )
+        .map((scenario) => ({ baselineSpec, scenario })),
+    ),
+    ...selectedScenarios
+      .filter(isPackageRecoveryScenario)
+      .flatMap((scenario) =>
+        packageRecoveryBaselines(scenario).map((baselineSpec) => ({ baselineSpec, scenario })),
+      ),
+  ];
   const omittedLaneNames = survivorLanes.flatMap((poolLane) =>
-    matrixBaselines.flatMap((baselineSpec) =>
-      unsupportedScenarios
-        .filter((scenario) => supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec))
-        .map((scenario) => expandedUpgradeSurvivorLaneName(poolLane.name, baselineSpec, scenario)),
+    scenarioCells(unsupportedScenarios).map(({ baselineSpec, scenario }) =>
+      expandedUpgradeSurvivorLaneName(poolLane.name, baselineSpec, scenario),
     ),
   );
   if (supportedScenarios.length === 0 && unsupportedScenarios.length > 0) {
@@ -549,18 +563,7 @@ function expandUpgradeSurvivorBaselineLanes(
         return [poolLane];
       }
       const matrixScenarios = scenarios.length > 0 ? scenarios : [undefined];
-      const cells = matrixBaselines.flatMap((baselineSpec) =>
-        matrixScenarios
-          .filter((scenario) => supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec))
-          .map((scenario) => ({ baselineSpec, scenario })),
-      );
-      for (const scenario of matrixScenarios.filter(isPackageRecoveryScenario)) {
-        for (const baselineSpec of packageRecoveryBaselines(scenario)) {
-          if (!matrixBaselines.includes(baselineSpec)) {
-            cells.push({ baselineSpec, scenario });
-          }
-        }
-      }
+      const cells = scenarioCells(matrixScenarios);
       return cells.map(({ baselineSpec, scenario }) => {
         const name = expandedUpgradeSurvivorLaneName(poolLane.name, baselineSpec, scenario);
         const suffix = name.slice(poolLane.name.length + 1);

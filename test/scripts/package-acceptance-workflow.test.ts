@@ -4033,6 +4033,7 @@ function runReleaseSurvivorProfileStep(params: {
   ref?: string;
   override?: string;
   supportsScenario?: boolean;
+  supportsPackageRecovery?: boolean;
   metadataError?: boolean;
 }) {
   const step = workflowStep(
@@ -4082,7 +4083,14 @@ if (tool === "gh") {
       FIXTURE_DIRECTORY: JSON.stringify(
         params.supportsScenario === false
           ? ["run.sh"]
-          : ["run.sh", "legacy-operator-state.mjs", "custom-plugin-siblings.mjs"],
+          : [
+              "run.sh",
+              "legacy-operator-state.mjs",
+              "custom-plugin-siblings.mjs",
+              ...(params.supportsPackageRecovery === false
+                ? []
+                : ["package-activation-recovery.mjs"]),
+            ],
       ),
     },
   });
@@ -12163,6 +12171,17 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     const { result, output } = runReleaseSurvivorProfileStep(params);
     expect(result.status, result.stderr).toBe(0);
     expect(output).toEqual({ baselines: "", scenarios: "base" });
+  });
+
+  it("does not send recovery scenarios to a current-line source without the recovery harness", () => {
+    const { result, output } = runReleaseSurvivorProfileStep({
+      soak: true,
+      supportsPackageRecovery: false,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(output.baselines).toBe("supported-lines");
+    expect(output.scenarios?.split(" ")).toContain("legacy-operator-state");
+    expect(output.scenarios).not.toMatch(/package-(?:publication|verification|stranded)/);
   });
 
   it("preserves the historical candidate-compatible upgrade survivor soak inventory without the new scenario", () => {

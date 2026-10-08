@@ -65,6 +65,27 @@ fs.writeFileSync(path.join(prefix, "bin", "openclaw"), '#!/usr/bin/env node\\n' 
 }
 
 describe("published baseline startup admission", () => {
+  it("checks each pinned recovery driver once before scheduling exact rows", () => {
+    const fixture = runFixture("runtime", {
+      LANES: "published-upgrade-survivor",
+      OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS:
+        "package-publication-recovery package-verification-recovery package-stranded-first-hop",
+    });
+    expect(fixture.result.status, fixture.result.stderr).toBe(0);
+    expect(JSON.parse(fixture.result.stdout)).toHaveLength(5);
+    expect(
+      fixture.report.baselines.map((entry: { baseline: string; status: string }) => [
+        entry.baseline,
+        entry.status,
+      ]),
+    ).toEqual([
+      ["openclaw@2026.9.8", "usable"],
+      ["openclaw@2026.9.9", "usable"],
+      ["openclaw@2026.9.7", "usable"],
+    ]);
+    expect(readFileSync(fixture.installs, "utf8").trim().split("\n")).toHaveLength(3);
+  });
+
   it.each(["version", "runtime"] as const)(
     "skips unusable %s baselines with evidence before scheduling scenarios",
     (failure) => {
