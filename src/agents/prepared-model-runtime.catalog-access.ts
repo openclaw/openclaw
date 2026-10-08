@@ -29,6 +29,7 @@ import {
   preparedProviderCatalogCredentials,
   preparedProviderCatalogSource,
 } from "./prepared-model-runtime.catalog-source.js";
+import * as retry from "./prepared-model-runtime.discovery-retry.js";
 import { assertPreparedModelRuntimeInputCurrent } from "./prepared-model-runtime.errors.js";
 import {
   fingerprintPreparedRuntimeFacts,
@@ -131,18 +132,9 @@ export async function createFullModelCatalogAccess(
     params.isCurrent,
     () => {
       if (published.inventory) {
-        const providers = new Map(published.inventory.providers);
-        // Failed renewal retains rows, but must not retain a successful discovery deadline.
-        for (const provider of pending?.providers ?? providers.keys()) {
-          const facts = providers.get(provider);
-          if (facts) {
-            const { expiresAt: _expiresAt, ...retained } = facts;
-            providers.set(provider, retained);
-          }
-        }
         published = {
           ...published,
-          inventory: { ...published.inventory, providers },
+          inventory: retry.recordFailedDiscovery(published.inventory, pending?.providers),
         };
         params.inventoryOwner.catalogInventory = published.inventory;
       }
@@ -389,7 +381,7 @@ export async function createFullModelCatalogAccess(
             {
               source: providerSource(provider),
               credentials: preparedProviderCatalogCredentials(auth, provider, normalizeProvider),
-              ...(!failed && expiresAt !== undefined ? { expiresAt } : {}),
+              ...retry.discoveryDeadline(failed, expiresAt, retained?.providers.get(provider)),
               ...(legacyRows.get(provider)?.size ? { legacyRows: legacyRows.get(provider) } : {}),
             },
           ] as const;
@@ -683,10 +675,16 @@ export async function createFullModelCatalogAccess(
       return published.catalog ?? staticCatalog;
     })().finally(() => {
       pending = undefined;
+      retryFailedDiscovery();
     });
     pending = { providers: fullRefresh ? undefined : providers, nativeProviders, promise };
     return promise;
   };
+  const retryFailedDiscovery = retry.createFailedDiscoveryRetry(
+    params.retirementSignal,
+    () => (pending ? undefined : published.inventory),
+    acquireCatalog,
+  );
   return {
     accountCatalog,
     initialAuth: currentAuth,

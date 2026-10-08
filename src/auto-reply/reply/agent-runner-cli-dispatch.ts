@@ -149,12 +149,13 @@ export function createCliToolSummaryTracker(params: {
     noteToolEvent: async (payload: CliToolEventPayload): Promise<boolean> => {
       if (payload.phase === "start") {
         if (payload.toolCallId && payload.name) {
+          const name = stripOpenClawMcpToolPrefix(payload.name);
           toolByCallId.set(payload.toolCallId, {
-            name: payload.name,
-            meta: inferToolMetaFromArgsCore(payload.name, payload.args, {
+            name,
+            meta: inferToolMetaFromArgsCore(name, payload.args, {
               detailMode: params.detailMode ?? "explain",
             }),
-            commandBearing: isCommandBearingToolCall(payload.name, payload.args),
+            commandBearing: isCommandBearingToolCall(name, payload.args),
           });
         }
         return false;
@@ -163,16 +164,14 @@ export function createCliToolSummaryTracker(params: {
         return false;
       }
       const storedTool = payload.toolCallId ? toolByCallId.get(payload.toolCallId) : undefined;
-      const toolName = payload.name ?? storedTool?.name;
+      const toolName =
+        payload.name === undefined ? storedTool?.name : stripOpenClawMcpToolPrefix(payload.name);
       const meta =
         params.commandDetailsVisible || !storedTool?.commandBearing ? storedTool?.meta : undefined;
       if (payload.toolCallId) {
         toolByCallId.delete(payload.toolCallId);
       }
-      if (
-        payload.isError !== true &&
-        isAgentPlanProgressToolName(stripOpenClawMcpToolPrefix(toolName ?? ""))
-      ) {
+      if (payload.isError !== true && isAgentPlanProgressToolName(toolName ?? "")) {
         return false;
       }
       if (!params.shouldEmitToolResult()) {

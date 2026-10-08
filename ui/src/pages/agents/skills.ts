@@ -48,7 +48,7 @@ export async function loadAgentSkills(state: AgentSkillsState, agentId: string) 
  * Allowlist after toggling one skill. Without an existing filter, the first toggle snapshots
  * the reported skills, leaving out learned Workshop skills: they bypass allowlists.
  */
-export function nextAgentSkillAllowlist(params: {
+function nextAgentSkillAllowlist(params: {
   configured: string[] | undefined;
   report: SkillStatusReport | null;
   skillName: string;

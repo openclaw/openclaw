@@ -79,7 +79,9 @@ validation and upgrade or downgrade behavior are unchanged.
 Registry discovery reuses successful migration checks for the admitted schema
 generation. The minute retention sweep reads deletion history in a worker and
 shares one matcher across its agent stores; live deletion status and lifecycle
-commit guards still apply. Legacy watch-marker discovery uses an indexed prefix
+commit guards still apply. Cron registry retention validates the complete listing
+in its reader worker and returns only cron-run entries to the Gateway; ordinary
+session metadata stays in the worker. Legacy watch-marker discovery uses an indexed prefix
 range. Retention continues as rows age, even without writes; schema, upgrade, and
 retention policies are unchanged.
 
