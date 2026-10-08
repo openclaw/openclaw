@@ -1,9 +1,12 @@
 import type { WorkerProvider } from "../../plugins/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import { sameWorkerBuild } from "../../worker/worker-build-identity.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
+import { workerEnvironmentServiceError as serviceError } from "./environment-errors.js";
 import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerProviderLifecycleOptions } from "./provider-lifecycle.types.js";
+import type { createWorkerProviderOwnerLifecycle } from "./provider-owner-lifecycle.js";
 import type { WorkerEnvironmentRecord } from "./store.js";
 
 export type WorkerRuntimeRefreshInFlight = {
@@ -27,35 +30,19 @@ type WorkerRuntimeRefreshOptions = Pick<
   WorkerProviderLifecycleOptions,
   | "store"
   | "callBootstrap"
-  | "serviceError"
   | "isStopping"
   | "placementStore"
   | "ensureNodeWorkerBundle"
   | "bootstrapWorker"
   | "credentialBroker"
-> & {
-  requireCurrentOwner: (record: WorkerEnvironmentRecord) => WorkerEnvironmentRecord;
-  stopOwner: (
-    record: WorkerEnvironmentRecord,
-    reason: undefined,
-    runtimeRefresh: { assertCurrent: () => void },
-  ) => Promise<WorkerEnvironmentRecord>;
-  identityResolverFor: (
-    record: WorkerEnvironmentRecord,
-    provider: WorkerProvider,
-    leaseId: string,
-  ) => Parameters<WorkerProviderLifecycleOptions["bootstrapWorker"]>[0]["resolveIdentity"];
-};
+> &
+  Pick<
+    ReturnType<typeof createWorkerProviderOwnerLifecycle>,
+    "requireCurrentOwner" | "stopOwner" | "identityResolverFor"
+  >;
 
 export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOptions) {
-  const {
-    store,
-    callBootstrap,
-    serviceError,
-    requireCurrentOwner,
-    stopOwner,
-    identityResolverFor,
-  } = options;
+  const { store, callBootstrap, requireCurrentOwner, stopOwner, identityResolverFor } = options;
   const { ensurePendingCredential } = options.credentialBroker;
   const inFlight = new Map<string, WorkerRuntimeRefreshInFlight>();
   const refresh = async (
@@ -81,22 +68,9 @@ export function createWorkerRuntimeRefresher(options: WorkerRuntimeRefreshOption
     const listeners = new Set<() => void>();
     const fact: WorkerRuntimeRefreshInFlight = {
       settled: settled.promise,
-      onProgress(listener) {
-        listeners.add(listener);
-        return () => {
-          listeners.delete(listener);
-        };
-      },
+      onProgress: (listener) => registerListener(listeners, listener),
     };
-    const reportProgress = () => {
-      for (const listener of listeners) {
-        try {
-          listener();
-        } catch {
-          // Progress observers must not interrupt installation.
-        }
-      }
-    };
+    const reportProgress = () => notifyListeners(listeners, undefined);
     inFlight.set(record.environmentId, fact);
     try {
       const sessionId = record.state === "attached" ? record.attachedSessionIds[0] : undefined;

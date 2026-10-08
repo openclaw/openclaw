@@ -1,4 +1,3 @@
-// Permissions and search command registration for channel message surfaces.
 import type { Command } from "commander";
 import { collectOption } from "../helpers.js";
 import type { MessageCliHelpers } from "./helpers.js";

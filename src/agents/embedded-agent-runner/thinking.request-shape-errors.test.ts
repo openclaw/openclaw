@@ -6,7 +6,7 @@ import { castAgentMessages } from "../test-helpers/agent-message-fixtures.js";
 import { wrapAnthropicStreamWithRecovery } from "./thinking.js";
 
 const genericizedProviderError =
-  "LLM request failed: provider rejected the request schema or tool payload.";
+  "The AI service couldn't accept this request. Try a new conversation with /new, or choose another model in the Control UI.";
 const unsupportedThinkingParamMessage =
   '"thinking.type.disabled" is not supported for this model. Use "thinking.type.between_tools" for the lowest thinking setting, or "thinking.type.adaptive" and "output_config.effort" to control thinking behavior.';
 

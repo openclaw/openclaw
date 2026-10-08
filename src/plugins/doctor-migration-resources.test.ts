@@ -7,7 +7,10 @@ import { coercePluginDoctorContractModule } from "./doctor-contract-module.js";
 import type { PluginDoctorStateMigration } from "./doctor-contract-module.js";
 import { preparePluginDoctorMigrationBackupResources } from "./doctor-contract-registry.js";
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
-import { preparePluginDoctorMigrationResources } from "./doctor-migration-resources.js";
+import {
+  type PluginDoctorMigrationResourceCollectionParams,
+  preparePluginDoctorMigrationResources,
+} from "./doctor-migration-resources.js";
 import { waitForPluginCacheRetirement } from "./plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -33,21 +36,17 @@ afterEach(async () => {
   }
 });
 
-function params() {
+function params(): PluginDoctorMigrationResourceCollectionParams {
   return {
     config: {},
     env: { OPENCLAW_STATE_DIR: stateDir, OPENCLAW_HOME: stateDir },
     stateDir,
     requireLocalResources: true,
-    warnings: [] as Array<{
-      kind: "undeclared-migration-resources";
-      pluginId: string;
-      message: string;
-    }>,
+    warnings: [],
   };
 }
 
-it("admits the actual bundled Canvas legacy migration with an honest recovery-set warning", async () => {
+it("warns once per undeclared owner without running the bundled Canvas migration", async () => {
   const migration = canvasMigrations.find(
     (entry) => entry.id === "canvas-custom-root-documents-to-core",
   );
@@ -59,7 +58,11 @@ it("admits the actual bundled Canvas legacy migration with an honest recovery-se
   const migrate = vi.spyOn(migration, "migrateLegacyState");
   const input = params();
   const result = await preparePluginDoctorMigrationResources(
-    [{ pluginId: "canvas", migration }],
+    [
+      { pluginId: "canvas", migration },
+      { pluginId: "canvas", migration: { ...migration, id: "second-action" } },
+      { pluginId: "other-owner", migration },
+    ],
     input,
   );
   expect(result.resources).toEqual([]);
@@ -70,96 +73,57 @@ it("admits the actual bundled Canvas legacy migration with an honest recovery-se
       message:
         "canvas migration declares no data resources; its private state is not in the recovery set",
     },
+    {
+      kind: "undeclared-migration-resources",
+      pluginId: "other-owner",
+      message:
+        "other-owner migration declares no data resources; its private state is not in the recovery set",
+    },
   ]);
   expect(detect).not.toHaveBeenCalled();
   expect(migrate).not.toHaveBeenCalled();
 });
 
-it("records one warning per undeclared owner while preserving separate owners", async () => {
-  const migration = canvasMigrations[0]!;
-  const input = params();
-  await preparePluginDoctorMigrationResources(
-    [
-      { pluginId: "canvas", migration },
-      { pluginId: "canvas", migration: { ...migration, id: "second-action" } },
-      { pluginId: "other-owner", migration },
-    ],
-    input,
-  );
-  expect(input.warnings.map((warning) => warning.pluginId)).toEqual(["canvas", "other-owner"]);
-});
-
-it("keeps declared resources and forwards strict locality without running the migration", async () => {
-  const input = params();
-  const source = path.join(stateDir, "declared.sqlite");
-  const collect = vi.fn<NonNullable<PluginDoctorStateMigration["collectBackupResources"]>>(() => [
-    { path: source, kind: "sqlite" as const },
-  ]);
-  const migrate = vi.fn();
-  const migration = {
-    ...canvasMigrations[0]!,
-    collectBackupResources: collect,
-    migrateLegacyState: migrate,
-  };
-  const result = await preparePluginDoctorMigrationResources(
-    [{ pluginId: "declared-owner", migration }],
-    input,
-  );
-  expect(result.resources).toEqual([{ path: source, kind: "sqlite" }]);
-  expect(collect).toHaveBeenCalledOnce();
-  expect(collect.mock.calls[0]?.[0].requireLocalResources).toBe(true);
-  expect(collect.mock.calls[0]?.[0].stateDir).toBe(stateDir);
-  expect(input.warnings).toEqual([]);
-  expect(migrate).not.toHaveBeenCalled();
-});
-
-it("preserves a declared inventory through the SDK plan adapter and contract coercion", async () => {
-  const input = params();
-  const source = path.join(stateDir, "planned.sqlite");
-  const collectBackupResources = vi.fn(() => [{ path: source, kind: "sqlite" as const }]);
-  const resolvePlans = vi.fn(() => []);
-  const declaration = {
-    id: "planned-migration",
-    label: "Planned migration",
-    resolvePlans,
-    collectBackupResources,
-  };
-  const migration = definePluginDoctorMigrationFromPlans(declaration);
-  const contract = coercePluginDoctorContractModule({ stateMigrations: [migration] });
-  const coerced = contract?.stateMigrations?.[0];
-  if (!coerced) {
-    throw new Error("Missing adapted migration");
-  }
-  const result = await preparePluginDoctorMigrationResources(
-    [{ pluginId: "planned-owner", migration: coerced }],
-    input,
-  );
-  expect(result.resources).toEqual([{ path: source, kind: "sqlite" }]);
-  expect(collectBackupResources).toHaveBeenCalledOnce();
-  expect(collectBackupResources).toHaveBeenCalledWith(
-    expect.objectContaining({ stateDir, requireLocalResources: true }),
-  );
-  expect(resolvePlans).not.toHaveBeenCalled();
-  expect(input.warnings).toEqual([]);
-});
-
-it("does not downgrade a malformed adapter declaration to an undeclared warning", async () => {
-  const input = params();
-  const resolvePlans = vi.fn(() => []);
-  const migration = definePluginDoctorMigrationFromPlans({
-    id: "invalid-adapter",
-    label: "Invalid adapter",
-    resolvePlans,
-    collectBackupResources: null as unknown as NonNullable<
-      PluginDoctorStateMigration["collectBackupResources"]
-    >,
-  });
-  await expect(
-    preparePluginDoctorMigrationResources([{ pluginId: "invalid-owner", migration }], input),
-  ).rejects.toThrow("collectBackupResources");
-  expect(resolvePlans).not.toHaveBeenCalled();
-  expect(input.warnings).toEqual([]);
-});
+it.each(["declared", "malformed"] as const)(
+  "preserves the SDK adapter's %s inventory without resolving migration plans",
+  async (declaration) => {
+    const input = params();
+    const source = path.join(stateDir, "planned.sqlite");
+    const collectBackupResources = vi.fn(() => [{ path: source, kind: "sqlite" as const }]);
+    const resolvePlans = vi.fn(() => []);
+    const migration = definePluginDoctorMigrationFromPlans({
+      id: "planned-migration",
+      label: "Planned migration",
+      resolvePlans,
+      collectBackupResources:
+        declaration === "declared"
+          ? collectBackupResources
+          : (null as unknown as NonNullable<PluginDoctorStateMigration["collectBackupResources"]>),
+    });
+    if (declaration === "malformed") {
+      await expect(
+        preparePluginDoctorMigrationResources([{ pluginId: "planned-owner", migration }], input),
+      ).rejects.toThrow("collectBackupResources");
+    } else {
+      const contract = coercePluginDoctorContractModule({ stateMigrations: [migration] });
+      const coerced = contract?.stateMigrations?.[0];
+      if (!coerced) {
+        throw new Error("Missing adapted migration");
+      }
+      const result = await preparePluginDoctorMigrationResources(
+        [{ pluginId: "planned-owner", migration: coerced }],
+        input,
+      );
+      expect(result.resources).toEqual([{ path: source, kind: "sqlite" }]);
+      expect(collectBackupResources).toHaveBeenCalledOnce();
+      expect(collectBackupResources).toHaveBeenCalledWith(
+        expect.objectContaining({ stateDir, requireLocalResources: true }),
+      );
+    }
+    expect(resolvePlans).not.toHaveBeenCalled();
+    expect(input.warnings).toEqual([]);
+  },
+);
 
 it.each([
   ["non-array inventory", () => ({}), "Invalid migration backup inventory"],

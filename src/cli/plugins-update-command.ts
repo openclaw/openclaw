@@ -52,10 +52,12 @@ import {
 } from "../plugins/plugin-package-update.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../plugins/registry-refresh.js";
 import {
+  isClawHubTrustSkippedOutcome,
   isPluginInstallRecordUpdateSource,
   pluginInstallRecordMayMigrateConfigId,
   updateNpmInstalledPlugins,
   type PluginUpdateIntegrityDriftParams,
+  type PluginUpdateOutcome,
 } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
@@ -64,7 +66,6 @@ import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import { createPluginInstallLogger } from "./plugins-command-helpers.js";
 import { resolvePluginLifecycleGateway } from "./plugins-lifecycle-client.js";
-import { logPluginUpdateOutcomes } from "./plugins-update-outcomes.js";
 import {
   resolveHookPackUpdateSelection,
   resolvePluginUpdateSelection,
@@ -73,6 +74,29 @@ import { promptYesNo } from "./prompt.js";
 
 const DEPRECATED_DANGEROUS_FORCE_UNSAFE_UPDATE_WARNING =
   "--dangerously-force-unsafe-install is deprecated and no longer affects plugin updates because built-in install-time dangerous-code scanning has been removed. Configure security.installPolicy for operator-owned install decisions.";
+
+function logPluginUpdateOutcomes(
+  outcomes: readonly Pick<PluginUpdateOutcome, "status" | "message" | "channelFallback" | "code">[],
+): 0 | 1 {
+  let exitCode: 0 | 1 = 0;
+  for (const outcome of outcomes) {
+    if (outcome.status === "error") {
+      exitCode = 1;
+      defaultRuntime.error(theme.error(outcome.message));
+    } else if (outcome.status === "skipped") {
+      if (isClawHubTrustSkippedOutcome(outcome)) {
+        exitCode = 1;
+      }
+      defaultRuntime.log(theme.warn(outcome.message));
+    } else {
+      defaultRuntime.log(outcome.message);
+    }
+    if (outcome.channelFallback) {
+      defaultRuntime.log(theme.warn(outcome.channelFallback.message));
+    }
+  }
+  return exitCode;
+}
 
 async function confirmUpdateIntegrityDrift(
   item: string,
@@ -168,9 +192,11 @@ export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParam
     await gateway("plugins.list", {});
   }
   let changed = false;
+  let activationDeferred = false;
   const update = withPluginLifecycleLease({}, (lease) =>
-    runPluginUpdateCommandUnlocked(params, lease, () => {
+    runPluginUpdateCommandUnlocked(params, lease, (deferred) => {
       changed = true;
+      activationDeferred ||= deferred;
     }),
   );
   let updateFailure: { error: unknown } | undefined;
@@ -179,7 +205,7 @@ export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParam
   });
   // The runtime owner takes the same lease. Old callbacks retain their captured
   // package graph while this explicit application waits for ownership.
-  if (changed) {
+  if (changed && !activationDeferred) {
     if (gateway) {
       try {
         const result = await gateway<PluginsRefreshResult>("plugins.refresh", {});
@@ -219,7 +245,7 @@ export async function runPluginUpdateCommand(params: RunPluginUpdateCommandParam
 async function runPluginUpdateCommandUnlocked(
   params: RunPluginUpdateCommandParams,
   lease?: PluginLifecycleLeaseContext,
-  onMetadataChanged?: () => void,
+  onMetadataChanged?: (activationDeferred: boolean) => void,
 ): Promise<0 | 1> {
   const assertOwned = lease?.assertOwned.bind(lease);
   if (!params.opts.dryRun) {
@@ -587,13 +613,7 @@ async function runPluginUpdateCommandUnlocked(
           : undefined;
       if (!pluginResult.changed && !hookResult.changed && !migration?.changed) {
         await migration?.publish(nextConfig, async () => {});
-        return logPluginUpdateOutcomes({
-          outcomes: [...pluginResult.outcomes, ...hookResult.outcomes],
-          log: defaultRuntime.log,
-          error: defaultRuntime.error,
-        }).hasErrors
-          ? 1
-          : 0;
+        return logPluginUpdateOutcomes([...pluginResult.outcomes, ...hookResult.outcomes]);
       }
       nextConfig = migration?.config ?? nextConfig;
       const commit = async () => {
@@ -632,7 +652,10 @@ async function runPluginUpdateCommandUnlocked(
       };
       await (migration ? migration.publish(nextConfig, commit) : commit());
       packageUpdatePersisted = true;
-      onMetadataChanged?.();
+      onMetadataChanged?.(Boolean(migration?.activationWarning));
+      if (migration?.activationWarning) {
+        logger.warn(migration.activationWarning);
+      }
       await settlePluginInstallTransactions(deferredInstallTransactions, "commit").catch(() =>
         logger.warn("Plugin update committed, but cleanup failed. Run openclaw plugins doctor."),
       );
@@ -647,12 +670,7 @@ async function runPluginUpdateCommandUnlocked(
       }
     }
 
-    const outcomeSummary = logPluginUpdateOutcomes({
-      outcomes: [...pluginResult.outcomes, ...hookResult.outcomes],
-      log: defaultRuntime.log,
-      error: defaultRuntime.error,
-    });
-    return outcomeSummary.hasErrors ? 1 : 0;
+    return logPluginUpdateOutcomes([...pluginResult.outcomes, ...hookResult.outcomes]);
   } catch (error) {
     updateFailure = { error };
     if (getRetainedPluginInstallPublication(error)) {

@@ -1,5 +1,4 @@
 /** Handles /mcp commands for showing and mutating configured MCP servers. */
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
@@ -12,11 +11,11 @@ import type { ReplyPayload } from "../types.js";
 import {
   commandReply,
   defineAuthorizedTextCommand,
+  renderCommandJsonBlock,
   requireCommandFlagEnabled,
   requireGatewayClientScope,
 } from "./command-gates.js";
 import {
-  buildPrivateCommandApprovalRequest,
   deliverPrivateCommandReply,
   resolvePrivateCommandRouteTargets,
 } from "./commands-private-route.js";
@@ -33,10 +32,6 @@ const MCP_SHOW_PRIVATE_ROUTE_REPLIES = {
     "MCP server configuration is sensitive. Private delivery was suppressed; no details were sent.",
   failed: MCP_SHOW_PRIVATE_ROUTE_UNAVAILABLE,
 };
-
-function renderJsonBlock(label: string, value: unknown): string {
-  return `${label}\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
-}
 
 function redactMcpServerArgsForDisplay(server: unknown): unknown {
   if (!server || typeof server !== "object" || Array.isArray(server)) {
@@ -80,14 +75,14 @@ async function buildMcpShowReply(name?: string): Promise<ReplyPayload> {
       [name]: server,
     })[name];
     return {
-      text: renderJsonBlock(`🔌 MCP server "${name}" (${loaded.path})`, redactedServer),
+      text: renderCommandJsonBlock(`🔌 MCP server "${name}" (${loaded.path})`, redactedServer),
     };
   }
   if (Object.keys(loaded.mcpServers).length === 0) {
     return { text: `🔌 No MCP servers configured in ${loaded.path}.` };
   }
   return {
-    text: renderJsonBlock(
+    text: renderCommandJsonBlock(
       `🔌 MCP servers (${loaded.path})`,
       redactMcpServersForDisplay(loaded.mcpServers),
     ),
@@ -95,22 +90,10 @@ async function buildMcpShowReply(name?: string): Promise<ReplyPayload> {
 }
 
 async function deliverGroupMcpShowReplyPrivately(params: HandleCommandsParams, name?: string) {
-  const now = Date.now();
-  const agentId =
-    params.agentId ??
-    resolveSessionAgentId({
-      sessionKey: params.sessionKey,
-      config: params.cfg,
-    });
   const targets = await resolvePrivateCommandRouteTargets({
     commandParams: params,
-    request: buildPrivateCommandApprovalRequest({
-      commandParams: params,
-      id: "mcp-show-private-route",
-      command: params.command.commandBodyNormalized,
-      agentId,
-      createdAtMs: now,
-    }),
+    id: "mcp-show-private-route",
+    command: params.command.commandBodyNormalized,
   });
   if (targets.length === 0) {
     return commandReply(MCP_SHOW_PRIVATE_ROUTE_UNAVAILABLE);

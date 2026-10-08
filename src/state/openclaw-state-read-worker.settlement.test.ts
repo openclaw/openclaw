@@ -3,8 +3,8 @@
 import { emptyReply, mock, queueTask, source, tempDirs } from "./openclaw-state-read-worker.test-harness.js";
 import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { expect, it, vi } from "vitest";
-import { createRetainedOperation } from "../infra/retained-operation.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "./openclaw-state-db-cache.js";
 import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.js";
@@ -27,7 +27,7 @@ it("drains accepted settlement before retiring the shared pool during whole-cach
   await closeOpenClawStateDatabaseAsync();
   const warm = queueTask();
   warm.result.resolve(emptyReply);
-  await executeExistingOpenClawStateRead(options, { type: "fleet.list" });
+  await executeExistingOpenClawStateRead(options, { type: "backup.runs" });
   const context = captureOpenClawStateWorkerContext(options);
   const mutationSettled = createDeferredCore();
   const poolStopping = createDeferredCore();
@@ -244,7 +244,7 @@ it("services two accepted recovery reads through release from their follower's c
       expect(request.command).toEqual(
         index < 2
           ? { type: "userProfiles.reconcile", profileId: profiles[index]!.id }
-          : { type: "fleet.list" },
+          : { type: "backup.runs" },
       );
     };
     if (index < 2) {
@@ -314,7 +314,7 @@ it("services two accepted recovery reads through release from their follower's c
     ]);
     expect(submissions).toBe(2);
     expect(released).toBe(0);
-    follower = executeExistingOpenClawStateRead(options, { type: "fleet.list" });
+    follower = executeExistingOpenClawStateRead(options, { type: "backup.runs" });
     const followerSource = captured.source;
     if (!followerSource) {
       throw new Error("Follower read source was not captured");
@@ -362,7 +362,7 @@ it("uses completed admission for later resource closes through the same pool own
   });
   const early = queueTask();
   early.result.resolve(emptyReply);
-  await executeExistingOpenClawStateRead(options, { type: "fleet.list" });
+  await executeExistingOpenClawStateRead(options, { type: "backup.runs" });
   await closeOpenClawStateDatabaseByPathAsync(pathname);
   expect(mock.rotate).toHaveBeenCalledOnce();
   expect(mock.closeResources).not.toHaveBeenCalled();
@@ -374,7 +374,7 @@ it("uses completed admission for later resource closes through the same pool own
   });
   const admitted = queueTask();
   admitted.result.resolve(emptyReply);
-  await executeExistingOpenClawStateRead(options, { type: "fleet.list" });
+  await executeExistingOpenClawStateRead(options, { type: "backup.runs" });
   const request = await admitted.captured;
   await closeOpenClawStateDatabaseByPathAsync(pathname);
   expect(mock.closeResources).toHaveBeenCalledExactlyOnceWith(request.expectedIdentity);

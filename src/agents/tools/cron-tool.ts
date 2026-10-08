@@ -195,7 +195,7 @@ function buildCronToolDescription(params: { triggersEnabled: boolean }): string 
     : `TRIGGERS DISABLED (cron.triggers.enabled=false): condition triggers, script payloads, and stream schedules are unavailable here. Omit trigger; use plain time-based schedules. If the user asks for a conditional watcher, say it is unsupported — never model-poll instead, and never silently create an unconditional job in its place.`;
   const silentWatcherCue = params.triggersEnabled ? ' Silent watcher=>mode:"none".' : "";
   const scriptCue = params.triggersEnabled
-    ? " When a script can decide there is nothing to do, use a trigger or script payload so quiet fires skip the model; scripts reach MCP only for servers named in toolsAllow (<server>__tool or <server>__*). When a run fails, throw from the script so the run records the failure (returning {error} still succeeds); failure alerts already wait for consecutive failures, so a one-off failure stays quiet."
+    ? " When a script can decide there is nothing to do, use a trigger or script payload so quiet fires skip the model; scripts reach MCP only for servers named in toolsAllow (<server>__tool or <server>__*). When a run fails, throw from the script so the run records the failure (returning {error} still succeeds); only the failure alert waits for consecutive failures, run output still follows the job's delivery."
     : "";
   return `Gateway scheduler: reminders, delayed self-wakeups, loops, recurring work${params.triggersEnabled ? ", event watchers" : ""}. Never exec sleep/poll as timer.
 
@@ -445,17 +445,11 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
             assertNoCronShellExecution(canonicalJob);
             assertCronDeliveryInputNonBlankFields(canonicalJob.delivery);
             assertCronPacingInput(canonicalJob.pacing);
-            if (
-              typeof canonicalJob.declarationKey === "string" &&
-              canonicalJob.declarationKey.trim().length === 0
-            ) {
-              throw new Error("declarationKey must be a non-empty string");
-            }
-            if (
-              typeof canonicalJob.displayName === "string" &&
-              canonicalJob.displayName.trim().length === 0
-            ) {
-              throw new Error("displayName must be a non-empty string");
+            for (const key of ["declarationKey", "displayName"]) {
+              const value = canonicalJob[key];
+              if (typeof value === "string" && value.trim().length === 0) {
+                throw new Error(`${key} must be a non-empty string`);
+              }
             }
             const enabledExplicit = typeof canonicalJob.enabled === "boolean";
             const job =

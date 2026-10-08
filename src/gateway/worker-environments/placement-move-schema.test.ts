@@ -62,7 +62,12 @@ describe("worker placement move schema", () => {
     expect(beforeMove.placements.get("session-move")).toMatchObject({ state: "active" });
     expect(beforeMove.moves.size).toBe(0);
     expect(beforeMove.workspaceResultReconcilingSessionIds.size).toBe(0);
-    const begun = store.beginPlacementMove({
+    database.db.exec("DROP TABLE worker_session_placement_moves");
+    const withoutMoveTable = await store.readProjection(["session-move"]);
+    expect(withoutMoveTable.placements.get("session-move")).toMatchObject({ state: "active" });
+    expect(withoutMoveTable.moves.size).toBe(0);
+    database.db.exec(previousSchema.slice(moveSchemaStart, moveSchemaEnd + ") STRICT;".length));
+    const begun = await store.beginPlacementMove({
       sessionId: "session-move",
       source: { generation: 4, environmentId: "environment-source", ownerEpoch: 7 },
       target: {
@@ -72,6 +77,9 @@ describe("worker placement move schema", () => {
         os: "os-a",
       },
     });
+    expect((await store.readProjection(["session-move"])).moves.get("session-move")).toEqual(
+      begun.intent,
+    );
     expect(database.db.prepare("PRAGMA table_info(worker_session_placement_moves)").all()).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: "target_machine_class" }),

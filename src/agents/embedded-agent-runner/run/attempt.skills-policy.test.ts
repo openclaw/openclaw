@@ -15,6 +15,7 @@ import {
   runWithCronCreatorAuthorityCapability,
 } from "../../cron-creator-authority-context.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { formatToolExecutionGatedMessage } from "../../tool-policy-shared.js";
 import type {
   ToolSearchCatalogRef,
   ToolSearchCatalogToolExecutor,
@@ -38,6 +39,10 @@ import type { RunEmbeddedAgentParams } from "./params.js";
 
 const reviewRunEmbeddedAgent = vi.hoisted(() => vi.fn());
 vi.mock("../../embedded-agent.js", () => ({ runEmbeddedAgent: reviewRunEmbeddedAgent }));
+vi.mock("../../../skills/workshop/library.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../skills/workshop/library.js")>()),
+  listWorkshopChanges: async () => [],
+}));
 const hoisted = getHoisted();
 const tempPaths: string[] = [];
 const skillsPrompt = [
@@ -98,6 +103,7 @@ function toolDigest(
   session = { sessionId: "embedded-session", sessionKey: "agent:main:main" },
 ) {
   return beginPromptCacheObservation({
+    messages: [],
     ...session,
     provider: "openai",
     modelId: "gpt-test",
@@ -213,7 +219,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       { workspaceDir, modelId: "gpt-test" },
     );
     candidate.ctx.foregroundPromptContext = foregroundPromptContext;
-    candidate.config = { skills: { workshop: { autonomous: { mode: "propose" } } } };
+    candidate.config = { skills: { workshop: { autonomous: { mode: "auto" } } } };
     await runSkillExperienceReview(candidate);
     expect(foreground.toolNames).toContain("transcripts");
     expect(review).toEqual(foreground);
@@ -256,6 +262,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         },
         attemptOverrides: {
           disableTools: false,
+          disableToolSearch: true,
           disableMessageTool: false,
           reasoningLevel: "on",
           sessionId: session.sessionId,
@@ -267,7 +274,7 @@ describe("runEmbeddedAttempt skill policy projections", () => {
             ? {
                 sessionPersistence: "detached" as const,
                 toolExecutionAllow: ["skill_workshop"],
-                skillWorkshopProposalOnly: true,
+                skillWorkshopReviewOf: "agent:main:main",
                 disableTrajectory: true,
                 verboseLevel: "off" as const,
                 trigger: "user" as const,
@@ -283,10 +290,9 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     }
     expect(reviewReadOutcomes).toMatchObject([
       {
-        status: "rejected",
-        reason: {
-          message:
-            "Unavailable in this run. Continue with the tools permitted by the run's instructions.",
+        status: "fulfilled",
+        value: {
+          content: [{ text: formatToolExecutionGatedMessage("read", ["skill_workshop"]) }],
         },
       },
     ]);
@@ -395,11 +401,11 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       },
     });
     expect(executed).toEqual(["skill_workshop"]);
-    expect(outcomes.map((outcome) => outcome.status)).toEqual(["rejected", "fulfilled"]);
-    expect(outcomes[0]).toMatchObject({
-      status: "rejected",
-      reason: { message: expect.stringContaining("Unavailable in this run") },
-    });
+    const denial = formatToolExecutionGatedMessage("read", ["skill_workshop"]);
+    expect(outcomes).toMatchObject([
+      { status: "fulfilled", value: { content: [{ text: expect.stringContaining(denial) }] } },
+      { status: "fulfilled" },
+    ]);
     const activities = sessionManager.getEntries().flatMap((entry) => {
       const activity = entry.type === "message" && readNestedToolActivity(entry.message);
       return activity ? [activity.details] : [];
@@ -407,10 +413,8 @@ describe("runEmbeddedAttempt skill policy projections", () => {
     expect(activities).toHaveLength(2);
     expect(activities.find((activity) => activity.toolName === "read")).toMatchObject({
       parentToolCallId: "call-read",
-      isError: true,
-      result: {
-        details: { status: "error", error: expect.stringContaining("Unavailable in this run") },
-      },
+      isError: false,
+      result: { content: [{ type: "text", text: denial }] },
     });
     expect(activities.find((activity) => activity.toolName === "skill_workshop")).toMatchObject({
       parentToolCallId: "call-workshop",

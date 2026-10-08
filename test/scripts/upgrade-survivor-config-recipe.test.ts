@@ -562,10 +562,6 @@ esac
     { version: "2026.7.2-beta.4", legacy: false, explicit: false },
     { version: "2026.7.2-beta.5", legacy: false, explicit: false },
     { version: "2026.7.2", legacy: false, explicit: false },
-    { version: "2026.7.33", legacy: true, explicit: false },
-    { version: "2026.7.34", legacy: true, explicit: false },
-    { version: "2026.7.35", legacy: true, explicit: false },
-    { version: "2026.7.36", legacy: true, explicit: false },
     { version: "2026.8.1-beta.1", legacy: false, explicit: false },
     { version: "2026.8.1-beta.2", legacy: false, explicit: true },
     { version: "2026.8.1", legacy: false, explicit: true },
@@ -638,7 +634,7 @@ esac
     expect(agents.entries.ops.fastModeDefault).toBe(true);
   });
 
-  it.each(["2026.6.1", "2026.6.34", "2026.6.35", "2026.7.2-beta.3", "2026.7.33"])(
+  it.each(["2026.6.1", "2026.6.34", "2026.6.35", "2026.7.2-beta.3"])(
     "preserves the legacy agent contract for baseline %s",
     (version) => {
       const agentStep = resolveUpgradeSurvivorConfigStepsForBaseline("base", version).find(

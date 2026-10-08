@@ -18,28 +18,11 @@ import {
   InvalidSummaryOutputError,
   ok,
   SummaryOutputBudgetError,
+  SummaryProviderError,
   type Result,
 } from "../types.js";
-import { SUMMARIZATION_SYSTEM_PROMPT } from "./summarization-prompts.js";
+import { createSummarizationContext } from "./summarization-prompts.js";
 import { extractSummaryText, serializeConversation } from "./utils.js";
-
-function createSummarizationOptions(
-  model: Model,
-  maxTokens: number,
-  apiKey: string | undefined,
-  headers: Record<string, string> | undefined,
-  signal: AbortSignal | undefined,
-  thinkingLevel: ThinkingLevel | undefined,
-): SimpleStreamOptions {
-  const options: SimpleStreamOptions = { maxTokens, signal, apiKey, headers };
-  const fableReasoning =
-    (model.api === "anthropic-messages" || model.api === "bedrock-converse-stream") &&
-    resolveClaudeFable5ModelIdentity(model) !== undefined;
-  if ((model.reasoning || fableReasoning) && thinkingLevel) {
-    options.reasoning = resolveAgentReasoningOption(model, thinkingLevel);
-  }
-  return options;
-}
 
 export interface SummarizationCompletionParams {
   messages: AgentMessage[];
@@ -71,24 +54,15 @@ export async function runSummarizationCompletion(
   if (params.customInstructions) {
     promptText += `\n\nAdditional focus: ${params.customInstructions}`;
   }
-  const context = {
-    systemPrompt: SUMMARIZATION_SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user" as const,
-        content: [{ type: "text" as const, text: promptText }],
-        timestamp: Date.now(),
-      },
-    ],
-  };
-  const options = createSummarizationOptions(
-    params.model,
-    params.maxTokens,
-    params.apiKey,
-    params.headers,
-    params.signal,
-    params.thinkingLevel,
-  );
+  const context = createSummarizationContext(promptText);
+  const { model, thinkingLevel, maxTokens, signal, apiKey, headers } = params;
+  const options: SimpleStreamOptions = { maxTokens, signal, apiKey, headers };
+  const fableReasoning =
+    (model.api === "anthropic-messages" || model.api === "bedrock-converse-stream") &&
+    resolveClaudeFable5ModelIdentity(model) !== undefined;
+  if ((model.reasoning || fableReasoning) && thinkingLevel) {
+    options.reasoning = resolveAgentReasoningOption(model, thinkingLevel);
+  }
   const response = params.streamFn
     ? await consumeAgentCoreStream(params.streamFn(params.model, context, options), params.runtime)
     : await resolveAgentCoreCompleteFn(params.runtime)(params.model, context, options);
@@ -101,9 +75,9 @@ export async function runSummarizationCompletion(
   }
   if (response.stopReason === "error") {
     return err(
-      new CompactionError(
-        "summarization_failed",
+      new SummaryProviderError(
         `${params.errorLabel} failed: ${response.errorMessage || "Unknown error"}`,
+        response,
       ),
     );
   }

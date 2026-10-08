@@ -90,7 +90,7 @@ describe("buildChannelProgressDraftLine", () => {
       kind: "item",
       label: "Progress Card",
       status: "blocked",
-      text: "🗺️ Progress Card",
+      text: "Progress Card",
     });
   });
 
@@ -102,7 +102,15 @@ describe("buildChannelProgressDraftLine", () => {
       args: { command: "echo private" },
     };
 
-    expect(buildChannelProgressDraftLineForEntry(undefined, input)?.text).toBe("🛠️ Exec");
+    const line = buildChannelProgressDraftLineForEntry(undefined, input);
+    expect(line?.text).toBe("Exec");
+    expect(line?.icon).toBeUndefined();
+    expect(
+      formatChannelProgressDraftText({
+        entry: { streaming: { progress: { label: false } } },
+        lines: line ? [line, { ...line, icon: "🔧" }] : [],
+      }),
+    ).toBe("• Exec\n🔧 Exec");
     expect(
       buildChannelProgressDraftLineForEntry(
         { streaming: { progress: { commandText: "raw" } } },
@@ -118,7 +126,7 @@ describe("buildChannelProgressDraftLine", () => {
       title: "echo private",
       exitCode: 1,
     };
-    expect(buildChannelProgressDraftLine(commandOutput)?.text).toBe("🛠️ exit 1");
+    expect(buildChannelProgressDraftLine(commandOutput)?.text).toBe("exit 1");
     expect(buildChannelProgressDraftLine(commandOutput, { commandText: "raw" })?.text).toContain(
       "echo private",
     );
@@ -131,7 +139,7 @@ describe("buildChannelProgressDraftLine", () => {
       status: "running",
       meta: "echo private",
     };
-    expect(buildChannelProgressDraftLine(item)?.text).toBe("🛠️ Exec");
+    expect(buildChannelProgressDraftLine(item)?.text).toBe("Exec");
     expect(buildChannelProgressDraftLine(item, { commandText: "raw" })?.text).toContain(
       "echo private",
     );
@@ -150,7 +158,7 @@ describe("buildChannelProgressDraftLine", () => {
 });
 
 describe("backend tool-name casing", () => {
-  it("renders capitalized shell tools and their summary as one line without duplicate icons", () => {
+  it("renders capitalized shell tools and their summary as one line", () => {
     const name = "Bash";
     const args = { command: "echo alpha", description: "print text" };
     const structured = buildChannelProgressDraftLine(
@@ -174,7 +182,7 @@ describe("backend tool-name casing", () => {
 
     expect(merged).toHaveLength(1);
     expect(structured?.detail).toBe("print text");
-    expect(structured?.text).toBe("🛠️ print text");
+    expect(structured?.text).toBe("print text");
   });
 });
 
@@ -184,7 +192,7 @@ describe("mergeChannelProgressDraftLine", () => {
       id: "command-1",
       kind: "command-output" as const,
       label: "Exec",
-      text: "🛠️ exit 1",
+      text: "exit 1",
       status: "exit 1",
     };
     const lines = mergeChannelProgressDraftLine(
@@ -193,7 +201,7 @@ describe("mergeChannelProgressDraftLine", () => {
       { maxLines: 2 },
     );
 
-    expect(lines.map((line) => line.text)).toEqual(["🛠️ exit 1", "Read second file"]);
+    expect(lines.map((line) => line.text)).toEqual(["exit 1", "Read second file"]);
   });
 });
 
@@ -265,7 +273,7 @@ describe("progress narration", () => {
             progress: { toolProgress: true, label: false, maxLines: 3 },
           },
         },
-        lines: [{ kind: "command-output", label: "Exec", text: "🛠️ exit 1", status: "exit 1" }],
+        lines: [{ kind: "command-output", label: "Exec", text: "exit 1", status: "exit 1" }],
         plan,
       });
 
@@ -292,11 +300,11 @@ describe("progress narration", () => {
     expect(
       formatChannelProgressDraftText({
         entry: { streaming: { mode: "progress", progress: { label: false } } },
-        lines: ["🛠️ Exec"],
+        lines: ["Exec"],
         narration: "Working through the plan.",
         plan,
       }),
-    ).toBe("Working through the plan.\n\n🛠️ Exec\n✅ Inspect\n▸ Patch\n▢ Verify");
+    ).toBe("Working through the plan.\n\n• Exec\n✅ Inspect\n▸ Patch\n▢ Verify");
   });
 
   it("uses only a summary when the checklist has one line available", () => {
@@ -456,7 +464,7 @@ describe("channel-streaming embedded command items", () => {
         kind: "command-output",
         detail,
         status: params.finalStatus,
-        text: `🛠️ ${params.exitCode === 0 ? "" : "exit 1; "}${detail}`,
+        text: `${params.exitCode === 0 ? "" : "exit 1; "}${detail}`,
       });
       expect(rendered.match(/run tests/g)).toHaveLength(1);
     } finally {

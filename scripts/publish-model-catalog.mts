@@ -2,6 +2,11 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  canonicalModelFamily,
+  canonicalModelKey,
+  compareModelRecency,
+} from "@openclaw/model-catalog-core";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import {
   MODEL_PRICING_SOURCES,
@@ -79,8 +84,14 @@ export const MODEL_CATALOG_MIN_MODELS = 200;
 const SCRIPT_LABEL = "publish-model-catalog";
 const PRICING_FETCH_TIMEOUT_MS = 60_000;
 const MAX_PRICING_CATALOG_BYTES = 5 * 1024 * 1024;
+// models.dev serves every provider's metadata in one document (5.1 MiB in October 2026).
+const MAX_MODELS_DEV_CATALOG_BYTES = 32 * 1024 * 1024;
 const BUNDLE_SIZE_WARNING_BYTES = 2 * 1024 * 1024;
 const CLIENT_BUNDLE_LIMIT_BYTES = 4 * 1024 * 1024;
+const RECOMMENDED_MODELS_FILE = "scripts/lib/recommended-models.json";
+const MAX_RECOMMENDED_MODELS = 200;
+// Catalog rows carry no release dates, so recency falls back to version order.
+const NO_RELEASE_DATES: ReadonlyMap<string, number> = new Map();
 const defaultRootDir = resolveRepoRoot(import.meta.url);
 const NATIVE_CATALOG_PARSER_EXPORTS = {
   cerebras: "parseCerebrasPricingCatalog",
@@ -188,7 +199,8 @@ export async function assembleModelCatalogBundle(options: {
         throw new Error(`provider ${providerId} is declared by more than one plugin manifest`);
       }
       if (isRecord(provider)) {
-        const { recommendedModels: _recommendedModels, ...v1Provider } = provider;
+        // Manifests shipped since 2026.9.7 may still carry the retired authoring field.
+        const { recommendedModels: _retired, ...v1Provider } = provider;
         providers[providerId] = v1Provider;
       } else {
         providers[providerId] = provider;
@@ -413,13 +425,13 @@ function readModelsDevPricingProviders(
   return providers;
 }
 
-async function readJsonResponse(response: Response, source: string) {
+async function readJsonResponse(response: Response, source: string, maxBytes: number) {
   if (!response.ok) {
     throw new Error(`${source} request failed: HTTP ${response.status}`);
   }
   const contentLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(contentLength) && contentLength > MAX_PRICING_CATALOG_BYTES) {
-    throw new Error(`${source} response exceeds ${MAX_PRICING_CATALOG_BYTES} bytes`);
+  if (Number.isFinite(contentLength) && contentLength > maxBytes) {
+    throw new Error(`${source} response exceeds ${maxBytes} bytes`);
   }
   const reader = response.body?.getReader();
   if (!reader) {
@@ -433,9 +445,9 @@ async function readJsonResponse(response: Response, source: string) {
       break;
     }
     total += value.byteLength;
-    if (total > MAX_PRICING_CATALOG_BYTES) {
+    if (total > maxBytes) {
       await reader.cancel();
-      throw new Error(`${source} response exceeds ${MAX_PRICING_CATALOG_BYTES} bytes`);
+      throw new Error(`${source} response exceeds ${maxBytes} bytes`);
     }
     chunks.push(value);
   }
@@ -465,7 +477,15 @@ function createModelCatalogSourceLoader(fetchImpl: typeof fetch = fetch): ModelC
         headers: { Accept: "application/json" },
         signal: AbortSignal.timeout(PRICING_FETCH_TIMEOUT_MS),
       })
-        .then((response) => readJsonResponse(response, label))
+        .then((response) =>
+          readJsonResponse(
+            response,
+            label,
+            url === MODELS_DEV_CATALOG_URL
+              ? MAX_MODELS_DEV_CATALOG_BYTES
+              : MAX_PRICING_CATALOG_BYTES,
+          ),
+        )
         .catch((cause: unknown) => {
           throw new Error(`${label} catalog unavailable: ${String(cause)}`, { cause });
         });
@@ -1008,32 +1028,82 @@ function serializeStandalonePricing(prices: Map<string, SourcedPricing> | undefi
   );
 }
 
+/** Reads the curated global list; publication fails on any entry that is not canonical. */
+function readRecommendedModels(rootDir: string): string[] {
+  const ids: unknown = JSON.parse(
+    fs.readFileSync(path.join(rootDir, RECOMMENDED_MODELS_FILE), "utf8"),
+  );
+  if (!Array.isArray(ids) || ids.length > MAX_RECOMMENDED_MODELS) {
+    throw new Error(
+      `${RECOMMENDED_MODELS_FILE} must be an array of at most ${MAX_RECOMMENDED_MODELS} model ids`,
+    );
+  }
+  const seen = new Set<string>();
+  for (const id of ids) {
+    if (typeof id !== "string" || !id || canonicalModelKey(id) !== id) {
+      throw new Error(
+        `${RECOMMENDED_MODELS_FILE}: ${JSON.stringify(id)} is not a canonical model id`,
+      );
+    }
+    if (seen.has(id)) {
+      throw new Error(`${RECOMMENDED_MODELS_FILE}: duplicate model id ${id}`);
+    }
+    seen.add(id);
+  }
+  return ids;
+}
+
+/**
+ * Projects the global list onto one provider's served model rows, in list order. A
+ * listed model is hidden when the provider also serves a newer listed member of its
+ * family. Deprecated, disabled and replaced rows are not served.
+ */
+export function projectRecommendedModels(
+  recommendedModels: readonly string[],
+  models: readonly Pick<ModelCatalogModel, "id" | "name" | "status" | "replacedBy">[],
+): string[] {
+  // The shortest id is the base alias, ahead of dated, tagged, or -fast variants.
+  const idByKey = new Map<string, string>();
+  for (const { id, name, status, replacedBy } of models) {
+    if (replacedBy || status === "deprecated" || status === "disabled") {
+      continue;
+    }
+    const key = canonicalModelKey(id, name);
+    const current = idByKey.get(key);
+    if (!current || id.length < current.length || (id.length === current.length && id < current)) {
+      idByKey.set(key, id);
+    }
+  }
+  const served = recommendedModels.flatMap((key) => {
+    const id = idByKey.get(key);
+    return id ? [{ key, id, family: canonicalModelFamily(key).name }] : [];
+  });
+  return served
+    .filter(
+      ({ key, family }) =>
+        !served.some(
+          (other) =>
+            other.family === family && compareModelRecency(other.key, key, NO_RELEASE_DATES) > 0,
+        ),
+    )
+    .map(({ id }) => id);
+}
+
 export async function assembleModelCatalogBundleV2(
   bundle: PublishedModelCatalogBundle,
   pricingSelections: WeakMap<ModelCatalogModel, PricingSelection>,
   standalonePricing?: StandalonePricing,
-  manifests: ModelCatalogManifestInput[] = [],
+  recommendedModels: readonly string[] = [],
 ): Promise<RemoteModelCatalogBundleV2> {
-  const recommendations = new Map<string, string[]>();
-  for (const entry of manifests) {
-    const catalog = normalizeModelCatalog(entry.manifest.modelCatalog, {
-      ownedProviders: new Set(entry.manifest.providers ?? []),
-    });
-    for (const [id, provider] of Object.entries(catalog?.providers ?? {})) {
-      if (provider.recommendedModels?.length) {
-        recommendations.set(id, provider.recommendedModels);
-      }
-    }
-  }
   const providers: RemoteModelCatalogBundleV2["providers"] = {};
   const models: RemoteModelCatalogBundleV2["models"] = [];
   for (const [providerId, provider] of Object.entries(bundle.providers)) {
-    const recommendedModels = recommendations.get(providerId);
+    const recommended = projectRecommendedModels(recommendedModels, provider.models);
     providers[providerId] = {
       api: provider.api,
       defaultModel: provider.defaultModel,
       defaultUtilityModel: provider.defaultUtilityModel,
-      ...(recommendedModels?.length ? { recommendedModels } : {}),
+      ...(recommended.length > 0 ? { recommendedModels: recommended } : {}),
     };
     for (const model of provider.models) {
       const { cost, ...metadata } = model;
@@ -1129,6 +1199,7 @@ export async function runPublishModelCatalog(
   const generatedAt = (options.now ?? Date.now)();
   const sourceCommit = options.sourceCommit ?? resolveSourceCommit(rootDir);
   const manifests = readModelCatalogManifests({ rootDir });
+  const recommendedModels = readRecommendedModels(rootDir);
   let bundle = await assembleModelCatalogBundle({ manifests, generatedAt, sourceCommit });
   const pricingSelections = new WeakMap<ModelCatalogModel, PricingSelection>();
   // Capture seed ownership before hydration/enrichment can replace its cost.
@@ -1156,7 +1227,12 @@ export async function runPublishModelCatalog(
   const validateBundle = await loadClientBundleValidator();
   // Project while selection facts still refer to the assembled model objects.
   const bundleV2 = args.outV2
-    ? await assembleModelCatalogBundleV2(bundle, pricingSelections, standalonePricing, manifests)
+    ? await assembleModelCatalogBundleV2(
+        bundle,
+        pricingSelections,
+        standalonePricing,
+        recommendedModels,
+      )
     : undefined;
   bundle = validateBundle(bundle);
   const summary = summarizeModelCatalogBundle(bundle);
@@ -1204,7 +1280,7 @@ export async function runPublishModelCatalog(
       (message) => process.stderr.write(`[${SCRIPT_LABEL}] warning: ${message}\n`),
     );
     process.stdout.write(
-      `[${SCRIPT_LABEL}] published schemaVersion=2 models=${summary.models} bundleBytes=${bundleV2Bytes} out=${args.outV2}\n`,
+      `[${SCRIPT_LABEL}] published schemaVersion=2 models=${summary.models} recommendedProviders=${Object.values(bundleV2?.providers ?? {}).filter((provider) => provider.recommendedModels).length} bundleBytes=${bundleV2Bytes} out=${args.outV2}\n`,
     );
   } else {
     fs.mkdirSync(path.dirname(outputFile), { recursive: true });

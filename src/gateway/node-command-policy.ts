@@ -1,4 +1,8 @@
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeUniqueStringEntries,
   normalizeUniqueTrimmedStringList,
@@ -18,8 +22,12 @@ import {
 } from "../infra/node-commands.js";
 import { getActivePluginGatewayNodePolicyRegistry } from "../plugins/runtime-state.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
-import { normalizeDeviceMetadataForPolicy } from "./device-metadata-normalization.js";
-import { MOBILE_NODE_COMMANDS } from "./node-command-policy-mobile.js";
+
+const MOBILE_NODE_COMMANDS = {
+  location: ["location.get"],
+  androidNotification: ["notifications.list", "notifications.actions"],
+  device: ["device.info", "device.status"],
+};
 
 const CAMERA_COMMANDS = ["camera.list"];
 const MAC_CAMERA_COMMANDS = ["camera.ptz.status"];
@@ -203,6 +211,16 @@ const PLATFORM_RULES: ReadonlyArray<{
   { id: "linux", tokens: ["linux"] },
 ];
 
+function normalizeDeviceMetadataForPolicy(value?: string | null): string {
+  const trimmed = normalizeOptionalString(value);
+  if (!trimmed) {
+    return "";
+  }
+  // Policy classification should collapse Unicode confusables to stable ASCII-ish
+  // tokens where possible before matching platform/family rules.
+  return normalizeLowercaseStringOrEmpty(trimmed.normalize("NFKD").replace(/\p{M}/gu, ""));
+}
+
 function normalizePlatformId(platform?: string, deviceFamily?: string): PlatformId {
   const raw = normalizeDeviceMetadataForPolicy(platform);
   const family = normalizeDeviceMetadataForPolicy(deviceFamily);
@@ -307,15 +325,12 @@ function hasTalkSurface(node?: NodeCommandPolicyNode): boolean {
 function resolveNodeCommandAllowlistInternal(
   cfg: OpenClawConfig,
   node?: NodeCommandPolicyNode,
-  options?: { includeDesktopHostCommands?: boolean; includeDangerousDefaults?: boolean },
+  pairing = false,
 ): Set<string> {
   const platformId = normalizePlatformId(node?.platform, node?.deviceFamily);
   const desktop = platformId === "macos" || platformId === "windows" || platformId === "linux";
   const base = PLATFORM_DEFAULTS[platformId].filter(
-    (command) =>
-      options?.includeDesktopHostCommands === true ||
-      !desktop ||
-      !DESKTOP_HOST_COMMANDS.has(command),
+    (command) => pairing || !desktop || !DESKTOP_HOST_COMMANDS.has(command),
   );
   const watchRelayCommands =
     platformId === "ios" && normalizeDeviceMetadataForPolicy(node?.deviceFamily) === "iphone"
@@ -343,17 +358,17 @@ function resolveNodeCommandAllowlistInternal(
   );
   // Dangerous built-ins that also appear in PLATFORM_DEFAULTS stay declarable
   // at pairing but do not enter the runtime allowlist by default.
-  const dangerousBuiltinCommands =
-    options?.includeDangerousDefaults === true
-      ? new Set<string>()
-      : new Set(DEFAULT_DANGEROUS_NODE_COMMANDS);
+  const dangerousBuiltinCommands = new Set(DEFAULT_DANGEROUS_NODE_COMMANDS);
   // Dangerous plugin commands are excluded from plugin defaults. Explicit
   // gateway.nodes.commands.allow below can still opt them in for operators.
   const allow = new Set(
     [...base, ...watchRelayCommands, ...talkCommands, ...pluginDefaults, ...approved, ...extra]
       .map((cmd) => cmd.trim())
       .filter(
-        (cmd) => cmd && !dangerousPluginCommands.has(cmd) && !dangerousBuiltinCommands.has(cmd),
+        (cmd) =>
+          cmd &&
+          !dangerousPluginCommands.has(cmd) &&
+          (pairing || !dangerousBuiltinCommands.has(cmd)),
       ),
   );
   for (const cmd of extra) {
@@ -368,13 +383,9 @@ function resolveNodeCommandAllowlistInternal(
   // In pairing mode, denylisted dangerous defaults stay declarable so an
   // explicit persistent allow can authorize them without another pairing.
   // Invoke-time policy still honors deny in full.
-  const denyExemptDeclarable =
-    options?.includeDangerousDefaults === true
-      ? new Set(DEFAULT_DANGEROUS_NODE_COMMANDS)
-      : new Set<string>();
   for (const blocked of deny) {
     const trimmed = blocked.trim();
-    if (trimmed && !denyExemptDeclarable.has(trimmed)) {
+    if (trimmed && (!pairing || !dangerousBuiltinCommands.has(trimmed))) {
       allow.delete(trimmed);
     }
   }
@@ -395,10 +406,7 @@ export function resolveNodePairingCommandAllowlist(
   cfg: OpenClawConfig,
   node?: NodeCommandPolicyNode,
 ): Set<string> {
-  return resolveNodeCommandAllowlistInternal(cfg, node, {
-    includeDesktopHostCommands: true,
-    includeDangerousDefaults: true,
-  });
+  return resolveNodeCommandAllowlistInternal(cfg, node, true);
 }
 
 export function normalizeDeclaredNodeCommands(params: {

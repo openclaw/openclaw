@@ -42,7 +42,7 @@ export class WorkboardPromoteStore extends WorkboardEnrichmentStore {
       const reason = normalizeBoundedString(input.reason, undefined, 1000, "promote reason");
       const comments = appendComment(existing.metadata?.comments, reason);
       return await this.updateCard(
-        id,
+        await this.requireCard(id),
         {
           status: "ready",
           metadata: {

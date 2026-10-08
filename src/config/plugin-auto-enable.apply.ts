@@ -12,8 +12,8 @@ import type {
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 type PluginAutoEnableCacheEntry = {
-  discoveryFingerprint: string;
-  registryFingerprint: string;
+  candidates: PluginDiscoveryResult["candidates"];
+  plugins: PluginManifestRegistry["plugins"];
   ambientEnvTriggers: AmbientEnvTriggerPolicy;
   result: PluginAutoEnableResult;
 };
@@ -24,12 +24,9 @@ type PluginAutoEnableConfigCache = WeakMap<object, PluginAutoEnableEnvCache>;
 
 let sameTurnApplyCache: PluginAutoEnableConfigCache | undefined;
 let sameTurnApplyCacheClearScheduled = false;
-let stableFingerprintMemo = new WeakMap<object, string>();
 
-// Metadata arrays use replacement snapshots; lifecycle clear refreshes their identity memo.
-// Config/env identity is already enforced by the nested same-turn cache.
+// Metadata snapshots are replaced; mutable discovery is invalidated by its lifecycle owner.
 registerPluginMetadataProcessMemoLifecycleClear(() => {
-  stableFingerprintMemo = new WeakMap();
   sameTurnApplyCache = undefined;
 });
 
@@ -58,27 +55,6 @@ function getOrCreateWeakMap<K extends object, V>(
   const next = create();
   parent.set(key, next);
   return next;
-}
-
-function stableFingerprintValue(value: unknown): string {
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value) ?? "null";
-  }
-  const cached = stableFingerprintMemo.get(value);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const fingerprint = Array.isArray(value)
-    ? `[${value.map((entry) => stableFingerprintValue(entry)).join(",")}]`
-    : (() => {
-        const record = value as Record<string, unknown>;
-        return `{${Object.keys(record)
-          .toSorted((left, right) => left.localeCompare(right))
-          .map((key) => `${JSON.stringify(key)}:${stableFingerprintValue(record[key])}`)
-          .join(",")}}`;
-      })();
-  stableFingerprintMemo.set(value, fingerprint);
-  return fingerprint;
 }
 
 /** Applies already detected plugin auto-enable candidates to config. */
@@ -112,13 +88,9 @@ export function materializePluginAutoEnableCandidates(params: {
   });
 }
 
-export function applyPluginAutoEnable(params: {
-  config?: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  manifestRegistry?: PluginManifestRegistry;
-  discovery?: PluginDiscoveryResult;
-  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
-}): PluginAutoEnableResult {
+export function applyPluginAutoEnable(
+  params: Parameters<typeof detectPluginAutoEnableCandidates>[0],
+): PluginAutoEnableResult {
   const config = params.config;
   const ambientEnvTriggers = params.ambientEnvTriggers ?? "allow";
   let discoveryCache: PluginAutoEnableDiscoveryCache | undefined;
@@ -142,8 +114,8 @@ export function applyPluginAutoEnable(params: {
     const cached = discoveryCache.get(params.discovery);
     if (
       cached &&
-      cached.discoveryFingerprint === stableFingerprintValue(params.discovery.candidates) &&
-      cached.registryFingerprint === stableFingerprintValue(params.manifestRegistry.plugins) &&
+      cached.candidates === params.discovery.candidates &&
+      cached.plugins === params.manifestRegistry.plugins &&
       cached.ambientEnvTriggers === ambientEnvTriggers
     ) {
       return cached.result;
@@ -159,8 +131,8 @@ export function applyPluginAutoEnable(params: {
   });
   if (discoveryCache && params.discovery && params.manifestRegistry) {
     discoveryCache.set(params.discovery, {
-      discoveryFingerprint: stableFingerprintValue(params.discovery.candidates),
-      registryFingerprint: stableFingerprintValue(params.manifestRegistry.plugins),
+      candidates: params.discovery.candidates,
+      plugins: params.manifestRegistry.plugins,
       ambientEnvTriggers,
       result,
     });

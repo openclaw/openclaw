@@ -1,5 +1,4 @@
 // Qa Lab tests cover suite runtime flow plugin behavior.
-import { parseModelRef } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -137,10 +136,6 @@ async function captureQaGatewayLogDeps(
     env,
     scenario,
     runScenario: vi.fn(),
-    splitModelRef: (raw) => parseModelRef(raw, "openai"),
-    formatErrorMessage: (error) => String(error),
-    liveTurnTimeoutMs: () => 60_000,
-    resolveQaLiveTurnTimeoutMs: () => 60_000,
     constants: qaSuiteRuntimeFlowTestConstants,
   });
 
@@ -254,20 +249,12 @@ describe("qa suite runtime flow", () => {
       },
     };
     const runScenario = vi.fn();
-    const splitModelRef = vi.fn((raw: string) => parseModelRef(raw, "openai"));
-    const formatErrorMessage = vi.fn();
-    const liveTurnTimeoutMs = vi.fn(() => 60_000);
-    const resolveQaLiveTurnTimeoutMs = vi.fn();
     createQaScenarioRuntimeApi.mockReturnValue({ api: "ok" });
 
     const result = await runQaSuiteScenarioDefinition({
       env,
       scenario,
       runScenario,
-      splitModelRef,
-      formatErrorMessage,
-      liveTurnTimeoutMs,
-      resolveQaLiveTurnTimeoutMs,
       constants: qaSuiteRuntimeFlowTestConstants,
     });
 
@@ -478,10 +465,6 @@ describe("qa suite runtime flow", () => {
       env,
       scenario,
       runScenario,
-      splitModelRef: (raw) => parseModelRef(raw, "openai"),
-      formatErrorMessage: (error) => String(error),
-      liveTurnTimeoutMs: () => 60_000,
-      resolveQaLiveTurnTimeoutMs: () => 60_000,
       constants: qaSuiteRuntimeFlowTestConstants,
     });
 
@@ -531,7 +514,6 @@ describe("qa suite runtime flow", () => {
       const prepareFlow = vi.fn(async () => undefined);
       const env = createQaSuiteRuntimeFlowTestEnv({ prepareFlow });
       const scenario = makeQaSuiteTestScenario("flow-without-explicit-deadline", { config: {} });
-      const liveTurnTimeoutMs = vi.fn(() => 5);
       createQaScenarioRuntimeApi.mockImplementationOnce(
         (params: { deps: { runScenario: typeof runQaSuiteScenarioSteps } }) => ({
           runScenario: params.deps.runScenario,
@@ -544,8 +526,8 @@ describe("qa suite runtime flow", () => {
             name: "Longer than preparation fallback",
             run: async () => {
               await new Promise<void>((resolve) => {
-                // Exceed the 5ms fallback plus its 5s watchdog grace without wall-clock sleep.
-                setTimeout(resolve, 6_000);
+                // Exceed the 60s fallback plus its 5s watchdog grace without wall-clock sleep.
+                setTimeout(resolve, 66_000);
               });
             },
           },
@@ -556,20 +538,15 @@ describe("qa suite runtime flow", () => {
         env,
         scenario,
         runScenario: runQaSuiteScenarioSteps,
-        splitModelRef: (raw) => parseModelRef(raw, "openai"),
-        formatErrorMessage: (error) => String(error),
-        liveTurnTimeoutMs,
-        resolveQaLiveTurnTimeoutMs: liveTurnTimeoutMs,
         constants: qaSuiteRuntimeFlowTestConstants,
       });
 
-      await vi.advanceTimersByTimeAsync(6_000);
+      await vi.advanceTimersByTimeAsync(66_000);
       const result = await pending;
       expect(vi.getTimerCount()).toBe(0);
       expect(result.status).toBe("pass");
-      expect(liveTurnTimeoutMs).toHaveBeenCalledOnce();
       expect(prepareFlow).toHaveBeenCalledWith(
-        expect.objectContaining({ signal: expect.any(AbortSignal), timeoutMs: 5 }),
+        expect.objectContaining({ signal: expect.any(AbortSignal), timeoutMs: 60_000 }),
       );
     } finally {
       vi.clearAllTimers();
@@ -617,10 +594,6 @@ describe("qa suite runtime flow", () => {
           env,
           scenario,
           runScenario: runQaSuiteScenarioSteps,
-          splitModelRef: (raw) => parseModelRef(raw, "openai"),
-          formatErrorMessage: (error) => String(error),
-          liveTurnTimeoutMs: () => 60_000,
-          resolveQaLiveTurnTimeoutMs: () => 60_000,
           constants: qaSuiteRuntimeFlowTestConstants,
         });
         await vi.advanceTimersByTimeAsync(preparationMs + 7_999);
@@ -666,10 +639,6 @@ describe("qa suite runtime flow", () => {
           env,
           scenario,
           runScenario: runQaSuiteScenarioSteps,
-          splitModelRef: (raw) => parseModelRef(raw, "openai"),
-          formatErrorMessage: (error) => String(error),
-          liveTurnTimeoutMs: () => 60_000,
-          resolveQaLiveTurnTimeoutMs: () => 60_000,
           constants: qaSuiteRuntimeFlowTestConstants,
         });
         await vi.advanceTimersByTimeAsync(64_999);
@@ -732,10 +701,6 @@ describe("qa suite runtime flow", () => {
         env,
         scenario,
         runScenario: runQaSuiteScenarioSteps,
-        splitModelRef: (raw) => parseModelRef(raw, "openai"),
-        formatErrorMessage: (error) => String(error),
-        liveTurnTimeoutMs: () => 60_000,
-        resolveQaLiveTurnTimeoutMs: () => 60_000,
         constants: qaSuiteRuntimeFlowTestConstants,
       });
       await vi.advanceTimersByTimeAsync(5_039);
@@ -794,10 +759,6 @@ describe("qa suite runtime flow", () => {
         env,
         scenario: makeQaSuiteTestScenario("transport-loss", { config: {} }),
         runScenario: runQaSuiteScenarioSteps,
-        splitModelRef: (raw) => parseModelRef(raw, "openai"),
-        formatErrorMessage: String,
-        liveTurnTimeoutMs: () => 60_000,
-        resolveQaLiveTurnTimeoutMs: () => 60_000,
         constants: qaSuiteRuntimeFlowTestConstants,
       });
       await entered.promise;
@@ -843,10 +804,6 @@ describe("qa suite runtime flow", () => {
         env,
         scenario,
         runScenario: runQaSuiteScenarioSteps,
-        splitModelRef: (raw) => parseModelRef(raw, "openai"),
-        formatErrorMessage: (error) => String(error),
-        liveTurnTimeoutMs: () => 60_000,
-        resolveQaLiveTurnTimeoutMs: () => 60_000,
         constants: qaSuiteRuntimeFlowTestConstants,
       });
       await vi.advanceTimersByTimeAsync(30);
@@ -886,10 +843,6 @@ describe("qa suite runtime flow", () => {
         env,
         scenario,
         runScenario: runQaSuiteScenarioSteps,
-        splitModelRef: (raw) => parseModelRef(raw, "openai"),
-        formatErrorMessage: (error) => String(error),
-        liveTurnTimeoutMs: () => 60_000,
-        resolveQaLiveTurnTimeoutMs: () => 60_000,
         constants: qaSuiteRuntimeFlowTestConstants,
       });
 

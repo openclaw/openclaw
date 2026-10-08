@@ -67,7 +67,7 @@ describe("config io compatibility", () => {
   });
 
   it("logs each warning payload once until warnings clear", async () => {
-    const { logger, options, write } = await fixture({});
+    const { io, logger, options, write } = await fixture({});
     const load = () => createConfigIO(options).loadConfig();
     const writeRemovedPlugin = (pluginId: string) =>
       write({ plugins: { entries: { [pluginId]: { enabled: false } } } });
@@ -104,7 +104,8 @@ describe("config io compatibility", () => {
     expect(logger.warn).toHaveBeenCalledTimes(3);
 
     await write(null);
-    expect(load).toThrow();
+    expect(load).toThrow(expect.objectContaining({ code: "INVALID_CONFIG" }));
+    expect(await io.readConfigFileSnapshot()).toMatchObject({ exists: true, valid: false });
     await writeRemovedPlugin("google-gemini-cli-auth");
     load();
     expect(logger.warn).toHaveBeenCalledTimes(3);
@@ -142,9 +143,8 @@ describe("config io compatibility", () => {
         },
       },
       agents: {
-        list: [
-          {
-            id: "ops",
+        entries: {
+          ops: {
             tools: {
               exec: {
                 safeBinTrustedDirs: [" /ops/bin ", "/ops/bin"],
@@ -156,7 +156,7 @@ describe("config io compatibility", () => {
               },
             },
           },
-        ],
+        },
       },
     };
     normalizeExecSafeBinProfilesInConfig(cfg);
@@ -166,11 +166,11 @@ describe("config io compatibility", () => {
       },
     });
     expect(cfg.tools?.exec?.safeBinTrustedDirs).toEqual(["/custom/bin", "/agent/bin"]);
-    expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinProfiles).toEqual({
+    expect(cfg.agents?.entries?.ops?.tools?.exec?.safeBinProfiles).toEqual({
       custom: {
         deniedFlags: ["-f"],
       },
     });
-    expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinTrustedDirs).toEqual(["/ops/bin"]);
+    expect(cfg.agents?.entries?.ops?.tools?.exec?.safeBinTrustedDirs).toEqual(["/ops/bin"]);
   });
 });

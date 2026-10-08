@@ -1,4 +1,5 @@
-import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
+import { AsyncLocalStorage } from "node:async_hooks";
+import "./detached-async-context.js";
 import { createDeferredCore } from "./deferred.js";
 import { resolveGlobalSingleton } from "./global-singleton.js";
 
@@ -13,10 +14,6 @@ const currentWorkScope = resolveGlobalSingleton(
 const currentWorkScopeAncestry = resolveGlobalSingleton(
   Symbol.for("openclaw.asyncWorkScopeAncestry"),
   () => new AsyncLocalStorage<AsyncWorkScopeFrame>(),
-);
-const detachedAsyncContext = resolveGlobalSingleton(
-  Symbol.for("openclaw.detachedAsyncContext"),
-  () => new AsyncResource("openclaw.detached-async-context"),
 );
 
 /** Joins cooperating descendants even when their caller returns a cached value first. */
@@ -70,16 +67,6 @@ export class AsyncWorkScope {
     }
     // Register before invoking without delaying received node results behind
     // a subsequent socket-close event. Async descendants inherit this exact owner.
-    const operation = this.registerWork<T>();
-    try {
-      operation.resolve(this.enter(run));
-    } catch (error) {
-      operation.reject(error);
-    }
-    return operation.promise;
-  }
-
-  private registerWork<T>() {
     const operation = createDeferredCore<T>();
     this.pending.add(operation.promise);
     void operation.promise.then(
@@ -89,7 +76,12 @@ export class AsyncWorkScope {
         this.failures?.add(error);
       },
     );
-    return operation;
+    try {
+      operation.resolve(this.enter(run));
+    } catch (error) {
+      operation.reject(error);
+    }
+    return operation.promise;
   }
 
   beginClose(reason?: unknown): void {
@@ -165,11 +157,6 @@ export function captureAsyncWorkTracker(): typeof trackAsyncWork {
 /** Starts work its caller does not own, so the caller's scope neither waits for it nor closes under it. */
 export function runOutsideAsyncWorkScope<T>(run: () => T): T {
   return currentWorkScope.exit(() => currentWorkScopeAncestry.exit(run));
-}
-
-/** Runs under the context-free async root initialized before managed work can begin. */
-export function runInDetachedAsyncContext<T>(run: () => T): T {
-  return detachedAsyncContext.runInAsyncScope(run);
 }
 
 export function getAsyncWorkSignal(): AbortSignal | undefined {

@@ -1,4 +1,3 @@
-// Powershell script supports OpenClaw repository automation.
 import { modelProviderConfigBatchJson, providerIdFromModelId } from "./provider-auth.ts";
 
 export function psSingleQuote(value: string): string {

@@ -52,21 +52,14 @@ function resolveTurnSourceTelegramOriginTarget(
   };
 }
 
-function resolveSessionTelegramOriginTarget(sessionTarget: {
-  to: string;
-  threadId?: string | number | null;
-}): TelegramOriginTarget {
-  return {
-    to: normalizeTelegramChatId(sessionTarget.to) ?? sessionTarget.to,
-    threadId: parseTelegramThreadId(sessionTarget.threadId),
-  };
-}
-
 const resolveTelegramOriginTarget = createChannelNativeOriginTargetResolver({
   channel: "telegram",
   shouldHandleRequest: shouldHandleTelegramExecApprovalRequest,
   resolveTurnSourceTarget: resolveTurnSourceTelegramOriginTarget,
-  resolveSessionTarget: resolveSessionTelegramOriginTarget,
+  resolveSessionTarget: (sessionTarget) => ({
+    to: normalizeTelegramChatId(sessionTarget.to) ?? sessionTarget.to,
+    threadId: parseTelegramThreadId(sessionTarget.threadId),
+  }),
 });
 
 const resolveTelegramApproverDmTargets = createChannelApproverDmTargetResolver({
@@ -115,32 +108,20 @@ const telegramNativeApprovalCapability = createApproverRestrictedNativeApprovalC
   }),
 });
 
-const resolveTelegramApproveCommandBehavior: NonNullable<
-  ChannelApprovalCapability["resolveApproveCommandBehavior"]
-> = (params) => {
-  const { cfg, accountId, senderId, approvalKind } = params;
-  if (approvalKind !== "exec") {
-    return undefined;
-  }
-  if (isTelegramExecApprovalClientEnabled({ cfg, accountId })) {
-    return undefined;
-  }
-  if (isTelegramExecApprovalTargetRecipient({ cfg, accountId, senderId })) {
-    return undefined;
-  }
-  if (
-    isTelegramExecApprovalAuthorizedSender({ cfg, accountId, senderId }) &&
-    !isTelegramExecApprovalApprover({ cfg, accountId, senderId })
-  ) {
-    return undefined;
-  }
-  return {
-    kind: "reply",
-    text: "❌ Telegram exec approvals are not enabled for this bot account.",
-  };
-};
-
 export const telegramApprovalCapability: ChannelApprovalCapability = {
   ...telegramNativeApprovalCapability,
-  resolveApproveCommandBehavior: resolveTelegramApproveCommandBehavior,
+  resolveApproveCommandBehavior: (params) => {
+    if (
+      params.approvalKind !== "exec" ||
+      isTelegramExecApprovalClientEnabled(params) ||
+      isTelegramExecApprovalTargetRecipient(params) ||
+      (isTelegramExecApprovalAuthorizedSender(params) && !isTelegramExecApprovalApprover(params))
+    ) {
+      return undefined;
+    }
+    return {
+      kind: "reply",
+      text: "❌ Telegram exec approvals are not enabled for this bot account.",
+    };
+  },
 };

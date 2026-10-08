@@ -24,7 +24,6 @@ import {
 import type { HookExternalContentSource } from "../security/external-content.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import {
-  commitHookTransformMappingReload,
   hasHookTemplateExpressions,
   type HookMappingResolved,
   normalizeHookMatchPath,
@@ -133,10 +132,6 @@ export function resolveHooksConfig(cfg: OpenClawConfig): HooksConfigResolved | n
       allowedSessionKeyPrefixes,
     },
   };
-}
-
-export function commitHooksConfigReload(): void {
-  commitHookTransformMappingReload();
 }
 
 function resolveHookBodyLimitsByPath(mappings: HookMappingResolved[]): ReadonlyMap<string, number> {
@@ -315,6 +310,12 @@ export type HookAgentDispatchPayload = Omit<HookAgentPayload, "sessionKey"> & {
    * cache nothing, and turn each redelivery into the same cold burst forever.
    */
   admissionMode?: "bounded" | "background";
+  /**
+   * Replay identity from the HTTP handler. A failed admission leaves the item
+   * retryable, so each producer redelivery runs again; the failure notice for
+   * one identity announces once per dedupe window instead of once per retry.
+   */
+  replayKey?: string;
 };
 
 const listHookChannelValues = () => ["last", ...listChannelPlugins().map((plugin) => plugin.id)];
@@ -461,21 +462,6 @@ export type HookTargetAgentResolution =
     }
   | { ok: false; code: "owner-retired"; ownerAgentId: string; error: string };
 
-/** Resolve an optional config-mapped target to a known agent or the configured default. */
-function resolveHookTargetAgentId(
-  hooksConfig: HooksConfigResolved,
-  agentId: string | undefined,
-): string | undefined {
-  const raw = normalizeOptionalString(agentId);
-  if (!raw) {
-    return undefined;
-  }
-  const normalized = normalizeAgentId(raw);
-  return hooksConfig.agentPolicy.knownAgentIds.has(normalized)
-    ? normalized
-    : hooksConfig.agentPolicy.defaultAgentId;
-}
-
 /** Resolve request or config-mapped agent selection against durable session ownership. */
 export function resolveEffectiveHookTargetAgentId(
   hooksConfig: HooksConfigResolved,
@@ -483,9 +469,13 @@ export function resolveEffectiveHookTargetAgentId(
   source: "request" | "mapping",
 ): HookTargetAgentResolution {
   const raw = normalizeOptionalString(agentId);
-  let selectedAgentId =
-    source === "mapping" ? resolveHookTargetAgentId(hooksConfig, agentId) : undefined;
-  if (source === "request" && raw) {
+  let selectedAgentId: string | undefined;
+  if (source === "mapping" && raw) {
+    const normalized = normalizeAgentId(raw);
+    selectedAgentId = hooksConfig.agentPolicy.knownAgentIds.has(normalized)
+      ? normalized
+      : hooksConfig.agentPolicy.defaultAgentId;
+  } else if (source === "request" && raw) {
     const normalized = normalizeAgentIdStrict(raw);
     if (!normalized.ok) {
       return {
@@ -649,6 +639,9 @@ export function normalizeAgentPayload(
   );
   const wakeMode = payload.wakeMode === "next-heartbeat" ? "next-heartbeat" : "now";
   const sessionKey = normalizeOptionalString(payload.sessionKey);
+  if (payload.sessionKey !== undefined && !sessionKey) {
+    return { ok: false, error: "sessionKey must be a non-empty string" };
+  }
   const sessionModeRaw = payload.sessionMode;
   if (
     sessionModeRaw !== undefined &&

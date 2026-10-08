@@ -28,7 +28,6 @@ import {
   type ChatTypingOverflow,
 } from "./chat-typing-presence.ts";
 import { canManageChatSessionSharing } from "./components/chat-session-sharing.ts";
-import { lockChatScroll } from "./scroll.ts";
 
 const TYPING_ACTIVE_MS = 2_500;
 const TYPING_DRAFT_ACTIVE_MS = 10_000;
@@ -452,10 +451,6 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
       this.removeTypingActor(event.actor.id);
       this.refreshTypingPresentation();
       return;
-    }
-    if (!this.typingActors.has(event.actor.id) && state.chatHasAutoScrolled) {
-      // Retire queued and native follow before the new remote draft changes the transcript.
-      lockChatScroll(state, "remote-input");
     }
     const activeMs = event.preview ? TYPING_DRAFT_ACTIVE_MS : TYPING_ACTIVE_MS;
     const now = Date.now();

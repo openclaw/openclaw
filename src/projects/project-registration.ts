@@ -1,15 +1,8 @@
 import path from "node:path";
-import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import type { OpenClawStateLeaseContext } from "../state/openclaw-state-lease.js";
-import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import {
-  ProjectCheckoutError,
-  resolveProjectCheckout,
-  withProjectCheckoutLifecycle,
-} from "./project-checkout.js";
-import type { ProjectRegistryInsert, ProjectRegistryRecord } from "./project-registry.kernel.js";
+import { ProjectCheckoutError, resolveProjectCheckout } from "./project-checkout.js";
+import type { ProjectRegistryRecord } from "./project-registry.types.js";
 
 type ProjectRegistrationInput = {
   path: string;
@@ -18,14 +11,9 @@ type ProjectRegistrationInput = {
   source: "registered" | "cloned";
 };
 
-type PreparedProjectRegistration = {
-  requestedPath: string;
-  project: ProjectRegistryInsert;
-};
+type PreparedProjectRegistration = Awaited<ReturnType<typeof prepareProjectRegistration>>;
 
-export async function prepareProjectRegistration(
-  input: ProjectRegistrationInput,
-): Promise<PreparedProjectRegistration> {
+export async function prepareProjectRegistration(input: ProjectRegistrationInput) {
   const { path: requestedPath, name, originUrl, source } = input;
   const checkout = await resolveProjectCheckout(requestedPath);
   return {
@@ -44,6 +32,7 @@ export async function registerPreparedProjectRegistry(
   lease: OpenClawStateLeaseContext,
   context: OpenClawStateWorkerContext,
   onRegistered?: () => void,
+  assertCurrent?: () => void,
 ): Promise<ProjectRegistryRecord> {
   // A deletion can win after planning; revalidate under the original checkout owner.
   const current = await resolveProjectCheckout(prepared.project.repoRoot);
@@ -55,27 +44,18 @@ export async function registerPreparedProjectRegistry(
   }
   const { runWithOpenClawStateLeaseWorker } =
     await import("../state/openclaw-state-lease-worker-operation.js");
-  return await runWithOpenClawStateLeaseWorker(lease, context, async (scope, identity) => {
-    const project = await scope.execute({
-      type: "projects.insert",
-      input: { project: prepared.project, lease: identity },
-    });
-    // Preserve acknowledgement before worker and lease finalization can fail.
-    onRegistered?.();
-    return project;
-  });
-}
-
-export async function registerResolvedProject(
-  input: ProjectRegistrationInput,
-  options: Pick<OpenClawStateDatabaseOptions, "path" | "env">,
-): Promise<ProjectRegistryRecord> {
-  const env = cloneEnvWithPlatformSemantics(options.env ?? process.env);
-  const context = captureOpenClawStateWorkerContext({ path: options.path, env });
-  const prepared = await prepareProjectRegistration(input);
-  return await withProjectCheckoutLifecycle(
-    prepared.project.repoRoot,
-    { path: context.admission.databasePath, env },
-    (lease) => registerPreparedProjectRegistry(prepared, lease, context),
+  return await runWithOpenClawStateLeaseWorker(
+    lease,
+    context,
+    async (scope, identity) => {
+      const project = await scope.execute({
+        type: "projects.insert",
+        input: { project: prepared.project, lease: identity },
+      });
+      // Preserve acknowledgement before worker and lease finalization can fail.
+      onRegistered?.();
+      return project;
+    },
+    assertCurrent ? { assertCurrent, beforeCommit: assertCurrent } : undefined,
   );
 }

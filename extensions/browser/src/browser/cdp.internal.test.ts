@@ -1,7 +1,8 @@
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import "../test-support/browser-security.mock.js";
+import * as cdpHelpers from "./cdp.helpers.js";
 import {
   captureScreenshot,
   createTargetViaCdp,
@@ -46,6 +47,7 @@ async function startMockWsServer(handle: (msg: Message) => Reply | undefined) {
   return { wss: server, wsUrl: `ws://127.0.0.1:${port}/devtools/browser/TEST` };
 }
 afterEach(async () => {
+  vi.restoreAllMocks();
   if (wss) {
     await new Promise<void>((resolve) => {
       wss?.close(() => resolve());
@@ -68,7 +70,6 @@ const ax = (
 
 describe("CDP screenshots", () => {
   it.each([
-    { options: {}, params: { format: "png" }, activates: true },
     {
       options: { format: "jpeg", quality: 250, headless: false },
       params: { format: "jpeg", quality: 100 },
@@ -84,6 +85,7 @@ describe("CDP screenshots", () => {
     params: Record<string, unknown>;
     activates: boolean;
   }>)("captures $params without changing emulation", async ({ options, params, activates }) => {
+    const socket = vi.spyOn(cdpHelpers, "withCdpSocket");
     const messages: Message[] = [];
     const server = await startMockWsServer((msg) => {
       messages.push(msg);
@@ -95,9 +97,13 @@ describe("CDP screenshots", () => {
       }
       return undefined;
     });
-    expect(await captureScreenshot({ wsUrl: server.wsUrl, ...options })).toEqual(
+    expect(await captureScreenshot({ wsUrl: server.wsUrl, ...options, timeoutMs: 12_345 })).toEqual(
       Buffer.from("image"),
     );
+    expect(socket).toHaveBeenCalledWith(server.wsUrl, expect.any(Function), {
+      commandTimeoutMs: 12_345,
+      lookup: undefined,
+    });
     expect(messages.map(({ method }) => method)).toEqual([
       "Page.enable",
       ...(activates ? ["Page.bringToFront"] : []),

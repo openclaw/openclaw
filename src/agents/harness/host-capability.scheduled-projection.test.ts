@@ -35,7 +35,13 @@ afterEach(() => {
 describe("agent harness scheduled tool projection", () => {
   it("issues scheduled shell projections only from this host-created tool surface", async () => {
     const host = await createHost("run-scheduled-tool-projection");
-    const sourceTools = host.hostCapabilities.createToolSurface?.({}) ?? [];
+    expect(
+      resolveAgentHarnessScheduledToolProjectionCapability({
+        hostCapabilities: host.hostCapabilities,
+        ownerPluginId: "other-harness",
+      }),
+    ).toBeUndefined();
+    const sourceTools = (await host.hostCapabilities.createToolSurfaceAsync?.({})) ?? [];
     const execTool = sourceTools.find((tool) => tool.name === "exec");
     const createProjection = resolveAgentHarnessScheduledToolProjectionCapability({
       hostCapabilities: host.hostCapabilities,
@@ -95,18 +101,6 @@ describe("agent harness scheduled tool projection", () => {
 
     host.closeHost();
     expect(() => readCronScheduledToolProjection(alias)).toThrow();
-  });
-
-  it("keeps scheduled shell issuance private to the registered owner plugin", async () => {
-    const host = await createHost("run-projection-owner");
-
-    expect(
-      resolveAgentHarnessScheduledToolProjectionCapability({
-        hostCapabilities: host.hostCapabilities,
-        ownerPluginId: "other-harness",
-      }),
-    ).toBeUndefined();
-    host.closeHost();
   });
 
   it("constructs scheduled exec projections with host-owned policy", async () => {

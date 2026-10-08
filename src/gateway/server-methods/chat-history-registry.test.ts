@@ -1,8 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
+import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "../../agents/subagents/registry/subagent-registry.store.test-support.js";
 import {
   appendTranscriptMessage,
   replaceSessionEntrySync,
@@ -53,12 +53,47 @@ describe("chat history registry projection", () => {
     });
   });
 
+  it("asks for a reload when an absent session is created during the read", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const context = await createHistoryReadContext();
+      const scope = { agentId: "main", sessionKey: "agent:main:created-mid-read" };
+      const prepare = sharingPreparation.prepareSessionMutationFacts;
+      const probe = vi
+        .spyOn(sharingPreparation, "prepareSessionMutationFacts")
+        .mockImplementationOnce(async (params) => {
+          await upsertSessionEntryCore(scope, { sessionId: "created-mid-read", updatedAt: 1 });
+          return await prepare(params);
+        });
+      try {
+        const respond = vi.fn<RespondFn>();
+        await expectDefined(
+          chatHistoryHandlers["chat.history"],
+          "history handler",
+        )({
+          params: { sessionKey: scope.sessionKey },
+          respond,
+          req: { type: "req", id: "created-mid-read", method: "chat.history" },
+          client: null,
+          isWebchatConnect: () => false,
+          context,
+        });
+        expect(respond).toHaveBeenCalledExactlyOnceWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
+        );
+      } finally {
+        probe.mockRestore();
+      }
+    });
+  });
+
   it.each(["global", "per-sender"] as const)(
     "reads the selected agent's %s main alias before a competing literal row",
     async (sessionScope) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const cfg = {
-          agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+          agents: { ownership: "explicit", entries: { main: {}, work: {} } },
           session: { scope: sessionScope, mainKey: "home" },
         } satisfies OpenClawConfig;
         await state.writeConfig(cfg);

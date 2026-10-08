@@ -2,18 +2,23 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
+import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { registerSessionStateWatch } from "./session-state-events.js";
 import { settleSessionUpstreamLink } from "./session-upstream-links-runtime.js";
 import {
   deleteSessionUpstreamLink,
+  deleteSessionUpstreamLinkAsync,
   listWatchedSessionUpstreamLinks,
   readSessionUpstreamLink,
   upsertSessionUpstreamLink,
+  upsertSessionUpstreamLinkAsync,
+  upsertSessionUpstreamLinkWithCurrentSource,
 } from "./session-upstream-links.js";
 
 const tempDirs: string[] = [];
@@ -45,6 +50,7 @@ function upsertLink(
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
@@ -55,6 +61,111 @@ afterAll(() => {
 });
 
 describe("session upstream links", () => {
+  it("orders asynchronous writes and exact deletion without caller-thread SQL", async () => {
+    const database = createDatabaseOptions();
+    const input = {
+      sessionKey: "agent:main:adopted:async",
+      agentId: "main",
+      catalogId: "codex",
+      hostId: "gateway:local",
+      threadId: "async",
+      upstreamKind: "codex-app-server" as const,
+      upstreamRef: { threadId: "async" },
+      marker: null,
+    };
+    const expected = { ...input, createdAt: 100, updatedAt: 100 };
+    const sql = observeMainThreadSql();
+    try {
+      const first = upsertSessionUpstreamLinkAsync(input, {
+        ...database,
+        now: 100,
+        ifAbsent: true,
+      });
+      const second = upsertSessionUpstreamLinkAsync(
+        { ...input, threadId: "loser" },
+        { ...database, ifAbsent: true },
+      );
+      expect(await Promise.all([first, second])).toEqual([true, false]);
+      expect(
+        await deleteSessionUpstreamLinkAsync(input.sessionKey, input.agentId, {
+          ...database,
+          expected: { ...expected, threadId: "other" },
+        }),
+      ).toBe("changed");
+      expect(
+        await deleteSessionUpstreamLinkAsync(input.sessionKey, input.agentId, {
+          ...database,
+          expected,
+        }),
+      ).toBe("deleted");
+      expect(
+        await deleteSessionUpstreamLinkAsync(input.sessionKey, input.agentId, {
+          ...database,
+          expected,
+        }),
+      ).toBe("absent");
+      sql.expectIdle();
+    } finally {
+      sql.restore();
+    }
+    expect(readSessionUpstreamLink(input.sessionKey, input.agentId, database)).toBeUndefined();
+  });
+
+  it("observes foreign source changes and rolls back a revoked commit grant", async () => {
+    const database = createDatabaseOptions();
+    const sourceKey = "agent:main:adopted:source";
+    upsertLink(sourceKey, "claude", database);
+    const source = readSessionUpstreamLink(sourceKey, "main", database)!;
+    const child = { ...source, sessionKey: "agent:main:adopted:child" };
+    const sourceCurrent = {
+      context: captureOpenClawStateWorkerContext(database),
+      expected: source,
+      withCurrent: <T>(run: () => T) => run(),
+    };
+    expect(
+      await upsertSessionUpstreamLinkWithCurrentSource(
+        child,
+        { ...database, ifAbsent: true },
+        sourceCurrent,
+      ),
+    ).toBe(true);
+    // The retained worker must see a commit from the released synchronous owner.
+    upsertSessionUpstreamLink({ ...source, threadId: "replacement" }, database);
+    await expect(
+      upsertSessionUpstreamLinkWithCurrentSource(
+        { ...child, sessionKey: "agent:main:adopted:stale" },
+        { ...database, ifAbsent: true },
+        sourceCurrent,
+      ),
+    ).rejects.toThrow("source changed");
+    let revoked = false;
+    const admission = operationAdmission.createSqliteWorkerOperationAdmission;
+    vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
+      (admit, ...args) =>
+        admission(
+          (request, grant) => {
+            if (request.stage === "commit") {
+              revoked = true;
+            }
+            admit(request, grant);
+          },
+          ...args,
+        ),
+    );
+    await expect(
+      deleteSessionUpstreamLinkAsync(child.sessionKey, child.agentId, {
+        ...database,
+        expected: readSessionUpstreamLink(child.sessionKey, child.agentId, database),
+        assertCommitAllowed: () => {
+          if (revoked) {
+            throw new Error("initializer revoked");
+          }
+        },
+      }),
+    ).rejects.toThrow("initializer revoked");
+    expect(readSessionUpstreamLink(child.sessionKey, child.agentId, database)).toBeDefined();
+    expect(readSessionUpstreamLink("agent:main:adopted:stale", "main", database)).toBeUndefined();
+  });
   it("returns each watched link once and skips ambiguous agent ownership without host SQL", async () => {
     const database = createDatabaseOptions();
     const watched = "agent:main:adopted:watched";
@@ -62,13 +173,13 @@ describe("session upstream links", () => {
     upsertLink(watched, "claude", database);
     upsertLink(unwatched, "codex", database);
     expect(
-      registerSessionStateWatch(
+      await registerSessionStateWatch(
         { watcherSessionKey: "agent:main:main", targetSessionKey: watched },
         database,
       ),
     ).toBe(true);
     expect(
-      registerSessionStateWatch(
+      await registerSessionStateWatch(
         { watcherSessionKey: "agent:other:main", targetSessionKey: watched },
         database,
       ),
@@ -91,7 +202,7 @@ describe("session upstream links", () => {
       ),
     ).toBe(true);
     expect(
-      registerSessionStateWatch(
+      await registerSessionStateWatch(
         { watcherSessionKey: "agent:main:main", targetSessionKey: ambiguous },
         database,
       ),
@@ -174,7 +285,7 @@ describe("session upstream links", () => {
     const database = createDatabaseOptions();
     const sessionKey = "agent:main:adopted:refresh";
     upsertLink(sessionKey, "claude", database);
-    registerSessionStateWatch(
+    await registerSessionStateWatch(
       { watcherSessionKey: "agent:main:main", targetSessionKey: sessionKey },
       database,
     );

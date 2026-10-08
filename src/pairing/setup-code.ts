@@ -18,6 +18,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { normalizeSecretInputString, resolveSecretInputRef } from "../config/types.secrets.js";
 import { materializeGatewayAuthSecretRefs } from "../gateway/auth-config-utils.js";
 import { assertExplicitGatewayAuthModeWhenBothConfigured } from "../gateway/auth-mode-policy.js";
+import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
 import { resolveAdvertisedLanHostCore } from "../infra/advertised-lan-host.js";
 import { issueDevicePairSetupBootstrapToken } from "../infra/device-bootstrap.js";
@@ -202,10 +203,7 @@ function validateMobilePairingUrl(url: string, source?: string): string | null {
   return describeSecureMobilePairingFix(source);
 }
 
-type ResolveAuthLabelResult = {
-  label?: "token" | "password" | "trusted-proxy";
-  error?: string;
-};
+type ResolveAuthLabelResult = { label: "token" | "password" | "trusted-proxy" } | { error: string };
 
 const GATEWAY_SCHEME_WITHOUT_AUTHORITY_RE = /^(?:https?|wss?):(?!\/\/)/i;
 const SCHEME_LIKE_PATH_RE = /^[A-Za-z][A-Za-z0-9+.-]*:\//;
@@ -496,12 +494,15 @@ export async function resolvePairingSetupFromConfig(
     hasPasswordFallback: Boolean(normalizeOptionalString(env.OPENCLAW_GATEWAY_PASSWORD)),
   });
   const authLabel = resolvePairingSetupAuthLabel(cfgForAuth, env);
-  if (authLabel.error) {
+  if ("error" in authLabel) {
     return { ok: false, error: authLabel.error };
   }
+  const explicitPublicUrl = normalizeOptionalString(options.publicUrl);
   const urlResult = await resolvePairingGatewayUrl(cfgForAuth, {
     env,
-    publicUrl: options.publicUrl,
+    publicUrl:
+      explicitPublicUrl ??
+      (options.preferRemoteUrl ? undefined : resolveConfiguredPairingPublicUrl(cfgForAuth)),
     publicOriginPreference: options.publicOriginPreference,
     preferRemoteUrl: options.preferRemoteUrl,
     useLocalGateway: options.useLocalGateway,
@@ -513,13 +514,19 @@ export async function resolvePairingSetupFromConfig(
   if (!urlResult.url) {
     return { ok: false, error: urlResult.error ?? "Gateway URL unavailable." };
   }
+  // Mobile dashboards use the paired endpoint path as their Control UI mount.
+  // Explicit overrides, remote endpoints, and configured proxy paths stay authoritative.
+  const basePath = normalizeControlUiBasePath(cfgForAuth.gateway?.controlUi?.basePath);
+  if (basePath && !explicitPublicUrl && urlResult.source !== "gateway.remote.url") {
+    const url = new URL(urlResult.url);
+    if (url.pathname === "/") {
+      url.pathname = basePath;
+      urlResult.url = url.toString();
+    }
+  }
   const mobilePairingUrlError = validateMobilePairingUrl(urlResult.url, urlResult.source);
   if (mobilePairingUrlError) {
     return { ok: false, error: mobilePairingUrlError };
-  }
-
-  if (!authLabel.label) {
-    return { ok: false, error: "Gateway auth is not configured (no token or password)." };
   }
 
   const requestedBootstrapProfile =

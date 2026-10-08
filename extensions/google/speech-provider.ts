@@ -14,7 +14,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGoogleEnvApiKey } from "./gemini-auth.js";
-import { readGoogleTtsSpeakers, type GoogleTtsDialogueSpeaker } from "./speech-dialogue.js";
+import { readGoogleTtsSpeakers } from "./speech-dialogue.js";
 import {
   assertSupportedGoogleTtsModel,
   DEFAULT_GOOGLE_TTS_MODEL,
@@ -36,25 +36,16 @@ import {
 } from "./speech-synthesis.js";
 import { GOOGLE_PREBUILT_VOICES } from "./voice-catalog.js";
 
-type GoogleTtsProviderConfig = {
-  apiKey?: string;
-  baseUrl?: string;
-  model: string;
-  voiceName: string;
-  audioProfile?: string;
-  speakerName?: string;
-  speakers?: GoogleTtsDialogueSpeaker[];
-  promptTemplate?: typeof GOOGLE_AUDIO_PROFILE_PROMPT_TEMPLATE;
-  personaPrompt?: string;
-};
-
 type GoogleTtsProviderOverrides = Partial<
-  Pick<GoogleTtsProviderConfig, "model" | "voiceName" | "audioProfile" | "speakerName">
+  Pick<
+    ReturnType<typeof readGoogleTtsProviderConfig>,
+    "model" | "voiceName" | "audioProfile" | "speakerName"
+  >
 >;
 
 function resolveGoogleTtsApiKey(params: {
   cfg?: OpenClawConfig;
-  providerConfig: GoogleTtsProviderConfig;
+  providerConfig: Partial<Pick<ReturnType<typeof readGoogleTtsProviderConfig>, "apiKey">>;
 }): string | undefined {
   return (
     params.providerConfig.apiKey ??
@@ -66,9 +57,7 @@ function resolveGoogleTtsApiKey(params: {
   );
 }
 
-function normalizeGoogleTtsProviderConfig(
-  rawConfig: Record<string, unknown>,
-): GoogleTtsProviderConfig {
+function normalizeGoogleTtsProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
   const raw = asOptionalRecord(providers?.google) ?? asOptionalRecord(rawConfig.google);
   return {
@@ -80,7 +69,7 @@ function normalizeGoogleTtsProviderConfig(
   };
 }
 
-function readGoogleTtsProviderConfig(config: SpeechProviderConfig): GoogleTtsProviderConfig {
+function readGoogleTtsProviderConfig(config: SpeechProviderConfig) {
   const promptTemplate = normalizeGooglePromptTemplate(config.promptTemplate);
   const personaPrompt = normalizeOptionalString(config.personaPrompt);
   const speakers = readGoogleTtsSpeakers(config.speakers);

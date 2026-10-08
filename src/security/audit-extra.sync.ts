@@ -3,7 +3,6 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
 import { resolveConfiguredToolPolicies } from "../agents/agent-tools.policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
@@ -59,67 +58,29 @@ function isGatewayRemotelyExposed(cfg: OpenClawConfig): boolean {
   return tailscaleMode === "serve" || tailscaleMode === "funnel";
 }
 
-function formatGatewayAuthDisplayLabel(label: GatewayAuthSharedSecretLabel): string {
-  if (label === "gateway auth password") {
-    return "Gateway password";
-  }
-  return "Gateway token";
-}
-
-function formatHooksTokenReuseDetail(reusedGatewayAuthLabel: GatewayAuthSharedSecretLabel): string {
-  if (reusedGatewayAuthLabel === "gateway auth password") {
-    return "hooks.token matches gateway.auth password; compromise of hooks expands blast radius to Gateway password auth.";
-  }
-  return "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.";
-}
-
-function findGatewayAuthLabelMatchingHooksToken(params: {
-  hooksToken: string;
-  auth: ResolvedGatewayAuth;
-}): GatewayAuthSharedSecretLabel | undefined {
-  const { auth, hooksToken } = params;
-  if (auth.mode === "token" && normalizeOptionalString(auth.token) === hooksToken) {
-    return "gateway auth token";
-  }
-  if (
-    (auth.mode === "password" || auth.mode === "trusted-proxy") &&
-    normalizeOptionalString(auth.password) === hooksToken
-  ) {
-    return "gateway auth password";
-  }
-  return undefined;
-}
-
 function findHooksTokenGatewayAuthReuse(params: {
   hooksToken: string;
   configGatewayAuth: ResolvedGatewayAuth;
   overrideGatewayAuth?: ResolvedGatewayAuth;
 }): GatewayAuthSharedSecretReuse | undefined {
-  const configReuseLabel = findGatewayAuthLabelMatchingHooksToken({
-    hooksToken: params.hooksToken,
-    auth: params.configGatewayAuth,
-  });
-  if (configReuseLabel) {
-    return { label: configReuseLabel, source: "config" };
+  for (const [source, auth] of [
+    ["config", params.configGatewayAuth],
+    ["override", params.overrideGatewayAuth],
+  ] as const) {
+    if (!auth) {
+      continue;
+    }
+    if (auth.mode === "token" && normalizeOptionalString(auth.token) === params.hooksToken) {
+      return { label: "gateway auth token", source };
+    }
+    if (
+      (auth.mode === "password" || auth.mode === "trusted-proxy") &&
+      normalizeOptionalString(auth.password) === params.hooksToken
+    ) {
+      return { label: "gateway auth password", source };
+    }
   }
-
-  const overrideReuseLabel = params.overrideGatewayAuth
-    ? findGatewayAuthLabelMatchingHooksToken({
-        hooksToken: params.hooksToken,
-        auth: params.overrideGatewayAuth,
-      })
-    : undefined;
-  if (!overrideReuseLabel) {
-    return undefined;
-  }
-  return { label: overrideReuseLabel, source: "override" };
-}
-
-function formatHooksTokenReuseRemediation(reuse: GatewayAuthSharedSecretReuse): string {
-  if (reuse.source === "override") {
-    return "Rotate hooks.token or the runtime Gateway shared-secret auth value used for this audit; doctor can only repair reuse that is present in persisted config or process env.";
-  }
-  return `Run ${formatCliCommand("openclaw doctor --fix")} to rotate a persisted hooks.token, then update external hook senders to use the new hook token.`;
+  return undefined;
 }
 
 function hasResolvedGatewayHttpAuth(auth: ResolvedGatewayAuth): boolean {
@@ -188,9 +149,6 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
 }
 
 function looksLikeNodeCommandPattern(value: string): boolean {
-  if (!value) {
-    return false;
-  }
   if (/[?*[\]{}(),|]/.test(value)) {
     return true;
   }
@@ -205,12 +163,7 @@ function looksLikeNodeCommandPattern(value: string): boolean {
   return /\s/.test(value) || value.includes("group:");
 }
 
-function suggestKnownNodeCommands(unknown: string, known: Set<string>): string[] {
-  const needle = unknown.trim();
-  if (!needle) {
-    return [];
-  }
-
+function suggestKnownNodeCommands(needle: string, known: Set<string>): string[] {
   // Fast path: prefix-ish suggestions.
   const prefix = needle.includes(".") ? needle.split(".").slice(0, 2).join(".") : needle;
   const prefixHits = Array.from(known)
@@ -523,12 +476,18 @@ export function collectHooksHardeningFindings(
     overrideGatewayAuth,
   });
   if (reusedGatewayAuth) {
+    const password = reusedGatewayAuth.label === "gateway auth password";
     findings.push({
       checkId: "hooks.token_reuse_gateway_token",
       severity: "critical",
-      title: `Hooks token reuses the ${formatGatewayAuthDisplayLabel(reusedGatewayAuth.label)}`,
-      detail: formatHooksTokenReuseDetail(reusedGatewayAuth.label),
-      remediation: formatHooksTokenReuseRemediation(reusedGatewayAuth),
+      title: `Hooks token reuses the Gateway ${password ? "password" : "token"}`,
+      detail: password
+        ? "hooks.token matches gateway.auth password; compromise of hooks expands blast radius to Gateway password auth."
+        : "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.",
+      remediation:
+        reusedGatewayAuth.source === "override"
+          ? "Rotate hooks.token or the runtime Gateway shared-secret auth value used for this audit; doctor can only repair reuse that is present in persisted config or process env."
+          : `Run ${formatCliCommand("openclaw doctor --fix")} to rotate a persisted hooks.token, then update external hook senders to use the new hook token.`,
     });
   }
 
@@ -899,7 +858,7 @@ export function collectNodeDangerousAllowCommandFindings(
     return findings;
   }
 
-  const allow = new Set(normalizeUniqueStringEntries(allowRaw.map(normalizeNodeCommand)));
+  const allow = new Set(allowRaw.map(normalizeNodeCommand).filter(Boolean));
   if (allow.size === 0) {
     return findings;
   }
@@ -1067,7 +1026,7 @@ export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): Securi
       "Heuristic signals indicate this gateway may be reachable by multiple users:\n" +
       signals.map((signal) => `- ${signal}`).join("\n") +
       `\n${impactLine}\n${riskyContextsDetail}\n` +
-      "OpenClaw's default security model is personal-assistant (one trusted operator boundary), not hostile multi-tenant isolation on one shared gateway. For multiple users or organizations, run one isolated Gateway cell per tenant: https://docs.openclaw.ai/gateway/multi-tenant-hosting",
+      "OpenClaw's default security model is personal-assistant (one trusted operator boundary), not hostile multi-tenant isolation on one shared gateway. For mutually untrusted users or organizations, run separate Gateways with separate credentials, ideally under separate OS users or hosts: https://docs.openclaw.ai/gateway/security/trust-model",
     remediation:
       'If users may be mutually untrusted, split trust boundaries (separate gateways + credentials, ideally separate OS users/hosts). If you intentionally run shared-user access, set agents.defaults.sandbox.mode="all", keep tools.fs.workspaceOnly=true, deny runtime/fs/web tools unless required, and keep personal/private identities + credentials off that runtime.',
   });

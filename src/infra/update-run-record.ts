@@ -53,7 +53,7 @@ export function updateStepDiagnostics(
 export function summarizeUpdateStepFailure(
   step: Pick<
     UpdateStepResult,
-    "name" | "exitCode" | "termination" | "stdoutTail" | "stderrTail" | "failureFacts"
+    "name" | "exitCode" | "termination" | "signal" | "stdoutTail" | "stderrTail" | "failureFacts"
   >,
 ): string {
   const diagnostics = updateStepDiagnostics(step);
@@ -86,7 +86,12 @@ export function summarizeUpdateStepFailure(
           return [truncateUtf16Safe(causeOnly, 120 - outcome.length - 2), outcome].join("; ");
         });
   return truncateUtf16Safe(
-    [step.termination ?? `Exit code: ${step.exitCode ?? "unknown"}`, ...excerpts]
+    [
+      step.termination === "signal"
+        ? `signal: ${step.signal ?? "unknown"}`
+        : (step.termination ?? `Exit code: ${step.exitCode ?? "unknown"}`),
+      ...excerpts,
+    ]
       .filter(Boolean)
       .join("; "),
     300,

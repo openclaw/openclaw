@@ -34,10 +34,7 @@ function hasNoCow(pathname: string): boolean {
   return flags.includes("C");
 }
 
-export function inspectDoctorSqliteNoCow(paths: readonly string[]): {
-  paths: string[];
-  notes: string[];
-} {
+export function inspectDoctorSqliteNoCow(paths: readonly string[]) {
   const result: { paths: string[]; notes: string[] } = { paths: [], notes: [] };
   for (const pathname of new Set(paths)) {
     try {
@@ -58,7 +55,7 @@ export function inspectDoctorSqliteNoCow(paths: readonly string[]): {
 }
 
 async function copyRegularFile(sourcePath: string, targetPath: string, assertCurrent: () => void) {
-  const source = await fsp.open(sourcePath, "r");
+  const source = await fsp.open(sourcePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
   try {
     const identity = await source.stat();
     assertCurrent();
@@ -203,6 +200,24 @@ function assertNoOpenFiles(paths: readonly string[]) {
   }
 }
 
+function readStoreEntries(directory: string): fs.Dirent[] {
+  const entries: fs.Dirent[] = [];
+  const pending = [directory];
+  // Recursive readdir follows directory symlinks, including targets outside the store.
+  for (const parent of pending) {
+    if (!fs.lstatSync(parent).isDirectory()) {
+      throw new Error(`store directory changed during traversal: ${parent}`);
+    }
+    for (const entry of fs.readdirSync(parent, { withFileTypes: true })) {
+      entries.push(entry);
+      if (entry.isDirectory()) {
+        pending.push(path.join(entry.parentPath, entry.name));
+      }
+    }
+  }
+  return entries;
+}
+
 /** Only the live Doctor maintenance owner may call this after draining its database handles. */
 export async function repairDoctorSqliteNoCow(params: {
   paths: readonly string[];
@@ -237,42 +252,64 @@ export async function repairDoctorSqliteNoCow(params: {
       if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
         throw new Error("store directory must be owned by the active state directory");
       }
-      const entries = fs.readdirSync(directory, { recursive: true, withFileTypes: true });
-      const files = entries.map((entry) => path.join(entry.parentPath, entry.name));
       assertDoctorSqliteMaintenancePathsNotAliased(
         "SQLite NOCOW repair",
-        [directory, ...files],
+        [directory],
         [params.stateDir],
       );
-      for (const pathname of files) {
-        const stat = fs.lstatSync(pathname);
-        if (!stat.isFile() && !stat.isDirectory()) {
-          throw new Error(`unsupported store directory entry: ${pathname}`);
+      const entries = readStoreEntries(directory);
+      const files = entries.map((entry) => path.join(entry.parentPath, entry.name));
+      const inventory = new Map(
+        files.map((pathname) => [pathname, fs.lstatSync(pathname, { bigint: true })]),
+      );
+      assertDoctorSqliteMaintenancePathsNotAliased(
+        "SQLite NOCOW repair",
+        files.filter((pathname) => !inventory.get(pathname)!.isSymbolicLink()),
+        [params.stateDir],
+      );
+      const sourceLinks = new Map<string, Buffer>();
+      for (const [pathname, stat] of inventory) {
+        if (stat.isSymbolicLink()) {
+          sourceLinks.set(pathname, fs.readlinkSync(pathname, { encoding: "buffer" }));
+        } else if (!stat.isFile() && !stat.isDirectory()) {
+          const type = stat.isFIFO()
+            ? "FIFO"
+            : stat.isSocket()
+              ? "socket"
+              : stat.isBlockDevice()
+                ? "block device"
+                : stat.isCharacterDevice()
+                  ? "character device"
+                  : "unknown";
+          throw new Error(`unsupported store directory entry (${type}): ${pathname}`);
         }
       }
-      const sqlitePaths = new Set(files.filter((pathname) => pathname.endsWith(".sqlite")));
+      const regularPaths = files.filter((pathname) => inventory.get(pathname)!.isFile());
+      const sqlitePaths = new Set(regularPaths.filter((pathname) => pathname.endsWith(".sqlite")));
       for (const pathname of params.paths) {
-        if (files.includes(pathname)) {
+        if (inventory.get(pathname)?.isFile()) {
           sqlitePaths.add(pathname);
         }
       }
       const sharedMemoryPaths = new Set([...sqlitePaths].map((pathname) => `${pathname}-shm`));
       const sourceIdentity = fs.statSync(directory, { bigint: true });
       const sourceFiles = new Map(
-        files
-          .filter((pathname) => !sharedMemoryPaths.has(pathname))
-          .map((pathname) => [pathname, fs.lstatSync(pathname, { bigint: true })]),
+        [...inventory].filter(
+          ([pathname, stat]) => !stat.isFile() || !sharedMemoryPaths.has(pathname),
+        ),
       );
       const sourceAcls = new Map(
-        [directory, ...sourceFiles.keys()].map((pathname) => [pathname, readAcl(pathname)]),
+        [directory, ...sourceFiles.keys()]
+          .filter((pathname) => !sourceLinks.has(pathname))
+          .map((pathname) => [pathname, readAcl(pathname)]),
       );
-      const regularPaths = files.filter((pathname) => fs.lstatSync(pathname).isFile());
+      // fuser follows links, so inspect only regular files owned by this tree.
       assertNoOpenFiles(regularPaths);
-      const size = files.reduce((total, pathname) => total + fs.lstatSync(pathname).size, 0);
+      const size = [...inventory.values()].reduce((total, stat) => total + stat.size, 0n);
       const space = fs.statfsSync(directory, { bigint: true });
-      if (space.bavail * space.bsize < BigInt(size) * 2n) {
+      if (space.bavail * space.bsize < size * 2n) {
         throw new Error(
-          `at least ${size * 2} bytes of free space are required (twice the store directory size)`,
+          `at least ${size * 2n} bytes of free space are required (twice the store directory size)`,
         );
       }
       backup = fs.mkdtempSync(`${directory}.nocow-backup-`);
@@ -292,6 +329,13 @@ export async function repairDoctorSqliteNoCow(params: {
         });
         setSqliteDirectoryNoCow(target);
       }
+      for (const [pathname, linkText] of sourceLinks) {
+        const target = path.join(backup, path.relative(directory, pathname));
+        const original = inventory.get(pathname)!;
+        params.assertCurrent();
+        fs.symlinkSync(linkText, target);
+        fs.lchownSync(target, Number(original.uid), Number(original.gid));
+      }
       for (const pathname of regularPaths) {
         params.assertCurrent();
         if (
@@ -305,6 +349,12 @@ export async function repairDoctorSqliteNoCow(params: {
         const relativePath = path.relative(directory, pathname);
         const target = path.join(backup, relativePath);
         if (sqlitePaths.has(pathname)) {
+          // SQLite consumes its sidecars too; its snapshot inputs must remain unaliased.
+          assertDoctorSqliteMaintenancePathsNotAliased(
+            "SQLite NOCOW repair",
+            [pathname, ...["-wal", "-shm", "-journal"].map((suffix) => `${pathname}${suffix}`)],
+            [params.stateDir],
+          );
           const snapshotPath = path.join(snapshotRoot, relativePath);
           fs.mkdirSync(path.dirname(snapshotPath), { recursive: true, mode: 0o700 });
           await createVerifiedSqliteSnapshot({
@@ -324,22 +374,18 @@ export async function repairDoctorSqliteNoCow(params: {
           await copyRegularFile(pathname, target, params.assertCurrent);
         }
         params.assertCurrent();
-        preserveMetadata(
-          target,
-          fs.lstatSync(pathname, { bigint: true }),
-          sourceAcls.get(pathname)!,
-        );
+        preserveMetadata(target, inventory.get(pathname)!, sourceAcls.get(pathname)!);
       }
       const sourceDirectories = [
         directory,
-        ...files.filter((pathname) => fs.lstatSync(pathname).isDirectory()),
+        ...files.filter((pathname) => inventory.get(pathname)!.isDirectory()),
       ];
       for (const sourceDirectory of sourceDirectories.toReversed()) {
         const stagedDirectory = path.join(backup, path.relative(directory, sourceDirectory));
         params.assertCurrent();
         preserveMetadata(
           stagedDirectory,
-          fs.statSync(sourceDirectory, { bigint: true }),
+          sourceDirectory === directory ? sourceIdentity : inventory.get(sourceDirectory)!,
           sourceAcls.get(sourceDirectory)!,
         );
         requireDirectorySync(
@@ -348,17 +394,16 @@ export async function repairDoctorSqliteNoCow(params: {
         );
       }
       params.assertCurrent();
-      const observedFiles = fs
-        .readdirSync(directory, { recursive: true, withFileTypes: true })
-        .map((entry) => path.join(entry.parentPath, entry.name));
+      const observedFiles = readStoreEntries(directory).map((entry) =>
+        path.join(entry.parentPath, entry.name),
+      );
       assertNoOpenFiles(observedFiles.filter((pathname) => fs.lstatSync(pathname).isFile()));
       // A file can appear while fuser checks the previously observed inventory.
       const currentIdentity = fs.statSync(directory, { bigint: true });
-      const currentFiles = fs
-        .readdirSync(directory, { recursive: true, withFileTypes: true })
+      const currentFiles = readStoreEntries(directory)
         .map((entry) => path.join(entry.parentPath, entry.name))
         .filter((pathname) => {
-          if (sharedMemoryPaths.has(pathname)) {
+          if (sharedMemoryPaths.has(pathname) && fs.lstatSync(pathname).isFile()) {
             return false;
           }
           // Reading a cleanly closed WAL database can create an empty WAL beside the source.
@@ -386,13 +431,19 @@ export async function repairDoctorSqliteNoCow(params: {
           return (
             !expected ||
             (expected.isDirectory()
-              ? expected.dev !== current.dev ||
+              ? !current.isDirectory() ||
+                expected.dev !== current.dev ||
                 expected.ino !== current.ino ||
                 expected.mode !== current.mode ||
                 expected.uid !== current.uid ||
                 expected.gid !== current.gid ||
                 readAcl(pathname) !== sourceAcls.get(pathname)
-              : !sameFileMutationFingerprint(expected, current))
+              : !sameFileMutationFingerprint(expected, current) ||
+                (expected.isSymbolicLink() &&
+                  (!current.isSymbolicLink() ||
+                    !fs
+                      .readlinkSync(pathname, { encoding: "buffer" })
+                      .equals(sourceLinks.get(pathname)!))))
           );
         })
       ) {

@@ -45,21 +45,19 @@ export function executeDeliveryQueueEnqueue(
     OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
     LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
   ];
-  const transaction: { outcome: "unobserved" | "pending" | "committed" | "rolled-back" } = {
-    outcome: "unobserved",
-  };
+  let rolledBack = false;
   try {
     return runOpenClawStateWriteTransaction(
       (database) => {
         stageSqliteTransactionState(database.db, {
           stage: () => {
-            transaction.outcome = "pending";
+            rolledBack = false;
           },
           commit: () => {
-            transaction.outcome = "committed";
+            rolledBack = false;
           },
           rollback: () => {
-            transaction.outcome = "rolled-back";
+            rolledBack = true;
           },
         });
         // Random inserts need the same rollback evidence as staged enqueues.
@@ -107,7 +105,7 @@ export function executeDeliveryQueueEnqueue(
     );
   } catch (cause) {
     // Coordinator cleanup happens after commit publication and cannot prove rollback.
-    if (transaction.outcome === "rolled-back") {
+    if (rolledBack) {
       const error = encodeOpenClawStateWorkerError(cause, { includeOrdinary: true });
       if (error) {
         return { status: "not-published", error };

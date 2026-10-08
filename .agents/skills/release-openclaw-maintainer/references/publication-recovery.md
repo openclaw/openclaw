@@ -39,9 +39,15 @@ Classify a failure before changing Git state:
   downstream evidence; after npm publication use a new beta/version.
 - Changelog-only defect: replace Release SHA and reuse Code SHA evidence only
   after proving the exact changelog delta.
-- Tooling, source mismatch, credential, infrastructure, wrapper, approval, or selector
-  failure: keep the candidate and recover the smallest failed surface. Change
-  Tooling SHA only when needed and record the invalidated evidence.
+- Qualification harness/contract defect: repair the frozen candidate closure,
+  freeze a new C/Q, and rebind evidence. Missing contracts require deliberate
+  backports, not a newer-main harness.
+- P-only admission/verifier/publisher, credential, infrastructure, monitor,
+  approval, or selector failure: keep C/Q and recover the smallest failed surface.
+  Change independent P only when needed; preserve original producer identities.
+- Uncertain qualification dispatch: reconcile the retained request read-only.
+  Explicit resume is allowed only before any Q ref mutation or FRV POST; never
+  retry an uncertain mutation or relabel historical requests as candidate-owned.
 
 After one diagnosis, fix when needed, and narrow retry, reassess. Do not rerun
 all phases or scan moving main automatically. Operator-authorized beta-attempt

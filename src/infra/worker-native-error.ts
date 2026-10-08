@@ -11,6 +11,8 @@ type NativeWorkerError = {
   errno?: number;
   cause?: NativeErrorValue;
   errors?: NativeErrorValue[];
+  error?: NativeErrorValue;
+  suppressed?: NativeErrorValue;
 };
 
 export type NativeWorkerFailure = NativeErrorValue;
@@ -37,9 +39,11 @@ export function encodeNativeWorkerFailure(value: unknown): NativeWorkerFailure {
       constructorName:
         current instanceof AggregateError
           ? "AggregateError"
-          : ([...errorConstructors].find(
-              ([, Constructor]) => current instanceof Constructor,
-            )?.[0] ?? "Error"),
+          : current instanceof SuppressedError
+            ? "SuppressedError"
+            : ([...errorConstructors].find(
+                ([, Constructor]) => current instanceof Constructor,
+              )?.[0] ?? "Error"),
       name: current.name,
       message: current.message,
       stack: current.stack,
@@ -63,6 +67,15 @@ export function encodeNativeWorkerFailure(value: unknown): NativeWorkerFailure {
     if (Array.isArray(errors)) {
       node.errors = errors.map(encode);
     }
+    // Downlevel async disposal uses a named Error with the same two failure fields.
+    if (current instanceof SuppressedError || current.name === "SuppressedError") {
+      for (const key of ["error", "suppressed"] as const) {
+        const field = Object.getOwnPropertyDescriptor(current, key);
+        if (field && "value" in field) {
+          node[key] = encode(field.value);
+        }
+      }
+    }
     return node;
   };
   return encode(value);
@@ -82,7 +95,9 @@ export function decodeNativeWorkerFailure(value: NativeWorkerFailure): unknown {
     const error =
       current.constructorName === "AggregateError"
         ? new AggregateError([], current.message)
-        : new Constructor(current.message);
+        : current.constructorName === "SuppressedError"
+          ? new SuppressedError(undefined, undefined, current.message)
+          : new Constructor(current.message);
     seen.set(current, error);
     error.name = current.name;
     error.stack = current.stack;
@@ -109,6 +124,16 @@ export function decodeNativeWorkerFailure(value: NativeWorkerFailure): unknown {
         writable: true,
         configurable: true,
       });
+    }
+    for (const key of ["error", "suppressed"] as const) {
+      const failure = current[key];
+      if (failure) {
+        Object.defineProperty(error, key, {
+          value: decode(failure),
+          writable: true,
+          configurable: true,
+        });
+      }
     }
     return error;
   };

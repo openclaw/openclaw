@@ -5,10 +5,7 @@ import { expect, vi } from "vitest";
 import { fixtureReceiptWorkerClientSource } from "../../test/helpers/fixture-receipts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createGatewayChatMetadataRuntime } from "../gateway/server-methods/chat-metadata-runtime.js";
-import {
-  buildModelsListResult,
-  createGatewayAgentModelCatalogProjector,
-} from "../gateway/server-methods/models-list-result.js";
+import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
@@ -20,6 +17,7 @@ import {
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import { formatModelCatalogAuthLabel } from "./model-catalog-auth-labels.js";
+import { createModelCatalogDecisions } from "./model-catalog-decisions.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { materializePreparedModelCatalogOwner } from "./prepared-model-catalog.js";
 import {
@@ -360,7 +358,7 @@ module.exports = {
   return pluginFile;
 }
 
-export function createCatalogFixture(
+export async function createCatalogFixture(
   makeTempDir: (prefix: string) => string,
   spinMs: number,
   envOverride: NodeJS.ProcessEnv = {},
@@ -460,7 +458,7 @@ export function createCatalogFixture(
         syncExternalCli: false,
       })
     : undefined;
-  seedFixturePluginModelCatalog(agentDir, env, PLUGIN_ID, PROVIDER_ID);
+  await seedFixturePluginModelCatalog(agentDir, env, PLUGIN_ID, PROVIDER_ID);
   return { agentDir, config, env, marker, externalAuthPath, hydratedAuthStore, root, workspaceDir };
 }
 
@@ -504,7 +502,7 @@ async function expectNativeHarnessModelsPublished(params: {
       getRuntimeConfig: () => params.config,
       logGateway: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     } as unknown as GatewayRequestContext;
-    const projector = createGatewayAgentModelCatalogProjector({
+    const projector = createModelCatalogDecisions({
       cfg: params.config,
       agentId: "main",
       snapshot: catalog,
@@ -515,7 +513,7 @@ async function expectNativeHarnessModelsPublished(params: {
       isCurrent: params.snapshot.isCurrent,
       observationConfig: params.snapshot.observationConfig,
     });
-    const hostEvaluation = await projector.evaluateEntry(nativeEntry!);
+    const hostEvaluation = projector.evaluateEntry(nativeEntry!);
     expect(projector.evaluateNative(nativeEntry!, hostEvaluation)).toMatchObject({
       availability: true,
     });
@@ -632,7 +630,7 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
       },
     },
   ]);
-  seedFixturePluginModelCatalog(agentDir, env, PLUGIN_ID, PROVIDER_ID);
+  await seedFixturePluginModelCatalog(agentDir, env, PLUGIN_ID, PROVIDER_ID);
   const input = {
     agentId: "main",
     agentDir,

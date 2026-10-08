@@ -235,26 +235,32 @@ describe("completed compaction accounting", () => {
     });
   });
 
-  it("does not commit accounting when authority closes after the queued updater", async () => {
-    await withAccountingFixture(async (fixture) => {
-      let authorized = true;
+  it.each(["compaction", "usage"] as const)(
+    "does not commit %s accounting when authority closes after admission",
+    async (kind) => {
+      await withAccountingFixture(async (fixture) => {
+        let authorized = true;
+        const authorize = () => {
+          queueMicrotask(() => {
+            authorized = false;
+          });
+          return authorized;
+        };
+        const result =
+          kind === "compaction"
+            ? await incrementCompactionCount({ ...fixture.params, tokensAfter: 123, authorize })
+            : await persistSessionUsageUpdate({
+                ...fixture.params,
+                cfg: {},
+                currentContextSnapshot: { tokens: 123 },
+                authorize,
+              });
 
-      expect(
-        await incrementCompactionCount({
-          ...fixture.params,
-          tokensAfter: 123,
-          authorize: () => {
-            queueMicrotask(() => {
-              authorized = false;
-            });
-            return authorized;
-          },
-        }),
-      ).toBeUndefined();
-
-      expect(fixture.cached()).toBe(fixture.entry);
-      expect(fixture.read()?.compactionCount).toBe(0);
-      expect(fixture.read()?.totalTokens).toBeUndefined();
-    });
-  });
+        expect(result).toBeUndefined();
+        expect(fixture.cached()).toBe(fixture.entry);
+        expect(fixture.read()?.compactionCount).toBe(0);
+        expect(fixture.read()?.totalTokens).toBeUndefined();
+      });
+    },
+  );
 });

@@ -12,6 +12,7 @@ import {
   runDetachedWebhookWork,
   sendHttpRequestRejection,
 } from "openclaw/plugin-sdk/webhook-request-guards";
+import type { dispatchA2aInbound } from "./inbound.js";
 import {
   A2aProtocolError,
   A2aRpcRequestSchema,
@@ -37,13 +38,10 @@ type A2aRpcResponse =
   | { jsonrpc: "2.0"; id: A2aRpcIdentifier; result: unknown }
   | { jsonrpc: "2.0"; id: A2aRpcIdentifier; error: { code: number; message: string } };
 
-type A2aInboundDispatch = {
-  taskId: string;
-  contextId: string;
-  messageId: string;
-  peerName: string;
-  text: string;
-};
+type A2aInboundDispatch = Pick<
+  Parameters<typeof dispatchA2aInbound>[0],
+  "taskId" | "contextId" | "messageId" | "peerName" | "text"
+>;
 
 type A2aHttpHandlerParams = {
   config: OpenClawConfig;

@@ -32,21 +32,20 @@ type SnapshotSelection = {
   source: "pre-compaction" | "current";
 };
 
+const CONTINUABLE_MESSAGE_ROLES = new Set([
+  "user",
+  "toolResult",
+  "branchSummary",
+  "compactionSummary",
+  "custom",
+  "bashExecution",
+]);
+
 export function canContinueFromMessage(message: AgentMessage | undefined): boolean {
   if (!message || ("excludeFromContext" in message && message.excludeFromContext === true)) {
     return false;
   }
-  switch (message.role) {
-    case "user":
-    case "toolResult":
-    case "branchSummary":
-    case "compactionSummary":
-    case "custom":
-    case "bashExecution":
-      return true;
-    default:
-      return false;
-  }
+  return CONTINUABLE_MESSAGE_ROLES.has(message.role);
 }
 
 // Drop trailing assistant/tool-call-only fragments before retrying. Those tails

@@ -1,3 +1,4 @@
+import type { MeetingSetupCheck } from "openclaw/plugin-sdk/meeting-runtime";
 import {
   addGoogleMeetOAuthOptions,
   callGoogleMeetRuntime,
@@ -14,12 +15,6 @@ import type { GoogleMeetConfig } from "./config.js";
 import { createGoogleMeetSpace, fetchGoogleMeetSpace } from "./meet-api.js";
 import { resolveGoogleMeetAccessToken } from "./oauth.js";
 
-type OAuthDoctorCheck = {
-  id: string;
-  ok: boolean;
-  message: string;
-};
-
 type OAuthDoctorReport = {
   ok: boolean;
   configured: boolean;
@@ -28,7 +23,7 @@ type OAuthDoctorReport = {
   scope?: string;
   meetingUri?: string;
   createdSpace?: string;
-  checks: OAuthDoctorCheck[];
+  checks: MeetingSetupCheck[];
 };
 
 function sanitizeOAuthErrorMessage(error: unknown): string {
@@ -48,7 +43,7 @@ async function buildOAuthDoctorReport(
   const refreshToken = options.refreshToken?.trim() || config.oauth.refreshToken;
   const accessToken = options.accessToken?.trim() || config.oauth.accessToken;
   const expiresAt = parseOptionalNumber(options.expiresAt) ?? config.oauth.expiresAt;
-  const checks: OAuthDoctorCheck[] = [];
+  const checks: MeetingSetupCheck[] = [];
 
   const hasRefreshConfig = Boolean(clientId && refreshToken);
   const hasAccessConfig = Boolean(accessToken);

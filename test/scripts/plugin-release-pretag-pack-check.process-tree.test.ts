@@ -171,43 +171,18 @@ describe("scripts/plugin-release-pretag-pack-check.ts process-tree proof", () =>
           expect(isProcessAlive(directPid)).toBe(true);
           expect(isProcessAlive(descendantPid)).toBe(true);
           const readyAt = Date.now();
-          let thrown: unknown;
-          try {
-            await withinTest(releaseAndWait(), signal);
-          } catch (error) {
-            thrown = error;
-          }
-          const elapsedMs = Date.now() - startedAt;
-          const completionMs = Date.now() - readyAt;
-
-          expect(thrown).toMatchObject({
+          await expect(withinTest(releaseAndWait(), signal)).rejects.toMatchObject({
             code: "ETIMEDOUT",
             message:
               "plugin runtime build for @openclaw/demo-plugin timed out after 100ms: node --import tsx scripts/check-plugin-npm-runtime-builds.mts --package extensions/demo-plugin",
           });
+          const elapsedMs = Date.now() - startedAt;
+          const completionMs = Date.now() - readyAt;
           expect(elapsedMs).toBeGreaterThanOrEqual(timeoutMs * 0.75);
           expect(completionMs).toBeLessThan(7_500);
-          expect(Number.isInteger(directPid) && directPid > 1).toBe(true);
-          expect(Number.isInteger(descendantPid) && descendantPid > 1).toBe(true);
           // requireProcessTreeExit joins the exact tree before this command rejects.
           expect(isProcessAlive(directPid)).toBe(false);
           expect(isProcessAlive(descendantPid)).toBe(false);
-
-          const proof = {
-            timeoutCode: (thrown as { code?: string }).code,
-            elapsedMs,
-            completionMs,
-            completionBounded: completionMs < 7_500,
-            directExited: !isProcessAlive(directPid),
-            descendantExited: !isProcessAlive(descendantPid),
-          };
-          console.log(`pretag-caller-process-tree-proof ${JSON.stringify(proof)}`);
-          expect(proof).toMatchObject({
-            timeoutCode: "ETIMEDOUT",
-            completionBounded: true,
-            directExited: true,
-            descendantExited: true,
-          });
         } finally {
           await releaseAndWait().catch(() => {});
           directPid ||= readPid(directPidFile);

@@ -56,25 +56,6 @@ function consumeMattermostPublishedChunk(params: {
   return params.source.startsWith(chunk, offset) ? offset + chunk.length : undefined;
 }
 
-export function createMattermostDraftPreviewBoundaryController(params: {
-  enabled: boolean;
-  forceNewMessage: () => void | Promise<void>;
-}) {
-  let hasStreamedContent = false;
-  return {
-    noteUpdate() {
-      hasStreamedContent = true;
-    },
-    async noteBoundary() {
-      if (!params.enabled || !hasStreamedContent) {
-        return;
-      }
-      hasStreamedContent = false;
-      await params.forceNewMessage();
-    },
-  };
-}
-
 export function createMattermostDraftStream(params: {
   client: MattermostClient;
   channelId: string;
@@ -355,8 +336,8 @@ export function createMattermostDraftStream(params: {
 
     let remainingText = text.trim();
     for (const sealedText of sealedAssistantTexts) {
-      const completed = sealedText.text.trim();
-      if (!completed || !remainingText.startsWith(completed)) {
+      const completed = sealedText.text;
+      if (!remainingText.startsWith(completed)) {
         return { kind: "full", text, publishedParts };
       }
       const suffix = remainingText.slice(completed.length);

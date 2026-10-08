@@ -367,7 +367,7 @@ describe("parallels npm update smoke", () => {
     const result = hostCommandRun(
       process.execPath,
       ["--import", "tsx", SCRIPT_PATH, "--windows-vm", "Windows Test Guest", "--help"],
-      { check: false, quiet: true },
+      { check: false },
     );
     expect(result.status, result.stderr).toBe(0);
   });
@@ -474,7 +474,7 @@ openclaw() {
 }
 ${script}`,
         ],
-        { check: false, quiet: true, timeoutMs: 5000 },
+        { check: false, timeoutMs: 5000 },
       );
 
       expect(result.status, result.stderr || result.stdout).toBe(0);
@@ -608,7 +608,6 @@ ${script}`,
     );
 
     expect(updateBlock).toContain("appendFileSync(logPath, text");
-    expect(updateBlock).toContain("run: ({ signal }) => fn({ append, logPath, signal })");
     expect(updateBlock).not.toContain("log += text");
   });
 
@@ -850,7 +849,6 @@ ${script}`,
     await expect(
       smoke["runStreamingToJobLog"]("openclaw-definitely-missing-command", [], 60 * 60 * 1000, {
         append: () => undefined,
-        logPath: "",
         signal: new AbortController().signal,
       }),
     ).rejects.toMatchObject({ code: "ENOENT" });
@@ -904,7 +902,6 @@ ${script}`,
         () =>
           smoke["runStreamingToJobLog"](process.execPath, [scriptPath], 500, {
             append: () => undefined,
-            logPath: path.join(root, "update.log"),
             signal: new AbortController().signal,
           }),
         readyPath,

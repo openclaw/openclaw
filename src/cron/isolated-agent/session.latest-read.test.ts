@@ -5,6 +5,7 @@
 // read is proven against the same canonical store the cron persist path writes.
 import path from "node:path";
 import { afterAll, expect, it } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { loadCronSessionEntryLatest } from "./session.js";
@@ -29,7 +30,13 @@ it("reads the latest persisted row after it is replaced", async () => {
     { sessionKey: SESSION_KEY, storePath },
     { sessionId: "sess-two", updatedAt: 2000 },
   );
-  expect(loadCronSessionEntryLatest(storePath, SESSION_KEY)?.sessionId).toBe("sess-two");
+  const sql = observeHostDataSql();
+  try {
+    expect((await loadCronSessionEntryLatest(storePath, SESSION_KEY))?.sessionId).toBe("sess-two");
+    expect(sql.queries).toEqual([]);
+  } finally {
+    sql.restore();
+  }
 });
 
 it("returns undefined for a session key without a persisted row", async () => {
@@ -38,5 +45,5 @@ it("returns undefined for a session key without a persisted row", async () => {
     { sessionKey: SESSION_KEY, storePath },
     { sessionId: "sess-one", updatedAt: 1000 },
   );
-  expect(loadCronSessionEntryLatest(storePath, "agent:main:cron:missing")).toBeUndefined();
+  expect(await loadCronSessionEntryLatest(storePath, "agent:main:cron:missing")).toBeUndefined();
 });

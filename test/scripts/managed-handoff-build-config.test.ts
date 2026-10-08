@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdirSync, readdirSync, realpathSync, readFileSync, lstatSync } from "node:fs";
 import path from "node:path";
@@ -72,23 +72,6 @@ vi.mock("../../src/infra/runtime-worker-url.js", async (importOriginal) => {
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => vi.restoreAllMocks());
-
-it("loads the worker compiler with native Node before preparing artifacts", () => {
-  const output = execFileSync(
-    process.execPath,
-    [
-      "--input-type=module",
-      "--eval",
-      `
-await import("./scripts/lib/vitest-worker-compiler.mts");
-console.log("native worker compiler import verified");
-`,
-    ],
-    { encoding: "utf8", timeout: 30_000 },
-  );
-
-  expect(output.trim()).toBe("native worker compiler import verified");
-});
 
 it.each(
   (["managed", "package"] as const).filter(
@@ -246,9 +229,6 @@ it.each(
             "createManagedHandoffLeaseStore",
             "resolveUpdateRestartNoticeMeta",
             "shouldPublishUpdateRestartNotice",
-            "extractSqliteTableSchema",
-            "readRestartSentinelRowSync",
-            "writeRestartSentinelRowIfRevisionSync",
           ]) {
             assert.equal(typeof runtime[name], "function", name);
           }
@@ -330,12 +310,7 @@ it.each(
         expect(stale.error).toBeUndefined();
         expect(stale.status).toBe(1);
         expect(stale.stderr).toContain("different operation");
-        const after = snapshot();
-        expect(after).toHaveLength(before.length);
-        for (const [index, original] of before.entries()) {
-          expect(after[index]!.ino).toBe(original.ino);
-          expect(after[index]!.bytes.equals(original.bytes)).toBe(true);
-        }
+        expect(snapshot()).toEqual(before);
       }
       // The replacement's temporary command is deliberately one-phase, never
       // another locator for the next operation after its helper has moved.

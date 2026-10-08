@@ -8,6 +8,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
+import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import * as readonlyDatabase from "../../state/openclaw-agent-db-readonly.js";
 import {
@@ -45,6 +46,16 @@ import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "./session-transcript-reconcile.js";
+
+const fault = useSqliteWorkerFault([
+  {
+    name: "refuse_archive_result",
+    match: /^update session_transcript_archives\b/u,
+    sql: `CREATE TEMP TRIGGER refuse_archive_result BEFORE UPDATE OF published_at
+      ON main.session_transcript_archives
+      BEGIN SELECT RAISE(ABORT, 'synthetic archive result recording failure'); END;`,
+  },
+]);
 
 const archiveScopeHooks = vi.hoisted(() => ({
   afterMaterializeQueued: undefined as (() => void) | undefined,
@@ -123,7 +134,7 @@ describe("SQLite transcript archive sessions", () => {
     });
   }
 
-  it("reads pending archives without waiting for reclamation or writer admission", async ({
+  it("reads fresh pending archives without waiting for reclamation or writer admission", async ({
     signal,
   }) => {
     const database = openLifecycleTestDatabase(storePath);
@@ -131,6 +142,7 @@ describe("SQLite transcript archive sessions", () => {
     const archiveEntered = createDeferred();
     const writerEntered = createDeferred();
     const release = createDeferred();
+    const peer = new (requireNodeSqlite().DatabaseSync)(database.path);
     const archive = runExclusiveSqliteTranscriptArchiveWorker(async () => {
       archiveEntered.resolve();
       await release.promise;
@@ -141,15 +153,24 @@ describe("SQLite transcript archive sessions", () => {
     });
     try {
       await Promise.all([archiveEntered.promise, writerEntered.promise]);
-      await expect(
+      const readPending = () =>
         withSqliteTranscriptArchiveSession(options, () =>
           archiveWorker.readPendingSqliteTranscriptArchivesInWorker(
             { agentId: "main", databasePath: database.path, env: testState.env },
             signal,
           ),
-        ),
-      ).resolves.toBe(false);
+        );
+      await expect(readPending()).resolves.toBe(false);
+      peer
+        .prepare(
+          "INSERT INTO session_transcript_archives (session_id, generation, session_key, reason, encoding, archive_blob, archive_sha256, archive_name, created_at) VALUES ('deleted-session', 'generation', 'agent:main:deleted-session', 'deleted', 'identity', X'', ?, 'pending.jsonl', 1)",
+        )
+        .run("0".repeat(64));
+      await expect(readPending()).resolves.toBe(true);
+      peer.exec("UPDATE session_transcript_archives SET published_at = 2");
+      await expect(readPending()).resolves.toBe(false);
     } finally {
+      peer.close();
       release.resolve();
       await Promise.allSettled([archive, writer]);
     }
@@ -285,12 +306,7 @@ describe("SQLite transcript archive sessions", () => {
         )
         .get(sessionIds[0]);
     const pending = readPending();
-    database.db.exec(`
-        CREATE TRIGGER refuse_archive_result BEFORE UPDATE OF published_at
-        ON session_transcript_archives BEGIN
-          SELECT RAISE(ABORT, 'synthetic archive result recording failure');
-        END;
-      `);
+    fault.enable();
     try {
       await expect(deleteArchivedSession(sessionKey)).rejects.toThrow(
         "synthetic archive result recording failure",
@@ -301,7 +317,7 @@ describe("SQLite transcript archive sessions", () => {
         loadTranscriptEvents({ sessionKey, sessionId: sessionIds[0], storePath }),
       ).resolves.toEqual([]);
     } finally {
-      database.db.exec("DROP TRIGGER refuse_archive_result");
+      fault.disable();
     }
 
     await expect(deleteArchivedSession(sessionKey)).resolves.toMatchObject({

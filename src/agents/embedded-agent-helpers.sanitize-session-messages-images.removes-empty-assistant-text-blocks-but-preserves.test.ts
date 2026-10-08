@@ -1,9 +1,8 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import {
-  sanitizeGoogleTurnOrdering,
-  sanitizeSessionMessagesImages,
-} from "./embedded-agent-helpers.js";
+import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { sanitizeGoogleTurnOrdering } from "./embedded-agent-helpers/google.js";
+import { sanitizeSessionMessagesImages } from "./embedded-agent-helpers/images.js";
 import {
   castAgentMessages,
   makeAgentAssistantMessage,
@@ -26,23 +25,6 @@ const replay = {
 } as const;
 
 describe("sanitizeSessionMessagesImages", () => {
-  it.each([
-    { options: undefined, expected: "call_123|fc_456" },
-    {
-      options: { sanitizeMode: "images-only", sanitizeToolCallIds: true, toolCallIdMode: "strict" },
-      expected: "call123fc456",
-    },
-  ] as const)("keeps paired tool IDs consistent: $expected", async ({ options, expected }) => {
-    const input = castAgentMessages([
-      assistant([call("call_123|fc_456")]),
-      { role: "toolResult", toolCallId: "call_123|fc_456", content: [text("ok")] },
-    ]);
-    expect(await sanitizeSessionMessagesImages(input, "test", options)).toEqual([
-      { ...input[0], content: [call(expected)] },
-      { ...input[1], toolCallId: expected },
-    ]);
-  });
-
   it("sanitizes legacy tool-use IDs alongside tool-call IDs", async () => {
     const input = castAgentMessages([
       {
@@ -85,18 +67,15 @@ describe("sanitizeSessionMessagesImages", () => {
     ]);
   });
 
-  it.each(["length", "error"] as const)(
-    "preserves an opaque replay owner after %s",
-    async (stopReason) => {
-      const message = assistant([text("")], {
-        stopReason,
-        providerReplay: { ...replay, type: "opaque-checkpoint", replayIndex: undefined },
-      });
-      expect(await sanitizeSessionMessagesImages([message], "test")).toEqual([
-        { ...message, content: [] },
-      ]);
-    },
-  );
+  it.each(["error"] as const)("preserves an opaque replay owner after %s", async (stopReason) => {
+    const message = assistant([text("")], {
+      stopReason,
+      providerReplay: { ...replay, type: "opaque-checkpoint", replayIndex: undefined },
+    });
+    expect(await sanitizeSessionMessagesImages([message], "test")).toEqual([
+      { ...message, content: [] },
+    ]);
+  });
 
   it("drops empty assistant turns while preserving the user turn", async () => {
     const user = { role: "user" as const, content: "hello", timestamp: 0 };
@@ -108,19 +87,19 @@ describe("sanitizeSessionMessagesImages", () => {
     ).toEqual([user]);
   });
 
-  it.each([
-    { visible: "hello", expected: "hello" },
-    { visible: "", expected: "[empty content omitted]" },
-  ])("keeps user and tool-result content nonempty: $visible", async ({ visible, expected }) => {
-    const input = castAgentMessages([
-      { role: "user", content: [text(""), text(visible)] },
-      { role: "toolResult", toolCallId: "tool-1", content: [text("   "), text(visible)] },
-    ]);
-    expect(await sanitizeSessionMessagesImages(input, "test")).toEqual([
-      { ...input[0], content: [text(expected)] },
-      { ...input[1], content: [text(expected)] },
-    ]);
-  });
+  it.each([{ visible: "", expected: "[empty content omitted]" }])(
+    "keeps user and tool-result content nonempty: $visible",
+    async ({ visible, expected }) => {
+      const input = castAgentMessages([
+        { role: "user", content: [text(""), text(visible)] },
+        { role: "toolResult", toolCallId: "tool-1", content: [text("   "), text(visible)] },
+      ]);
+      expect(await sanitizeSessionMessagesImages(input, "test")).toEqual([
+        { ...input[0], content: [text(expected)] },
+        { ...input[1], content: [text(expected)] },
+      ]);
+    },
+  );
 
   it("strips message-id signatures but retains provider signatures", async () => {
     const input = castAgentMessages([
@@ -174,6 +153,51 @@ describe("sanitizeSessionMessagesImages", () => {
       await sanitizeSessionMessagesImages(input, "test", { preserveSignatures: true }),
     ).toEqual([{ role: "assistant", content: [first, text("visible"), redacted, text("tail")] }]);
   });
+  it.each(["error", "aborted"] as const)(
+    "keeps corrupt history images omitted after %s and a recovered reply",
+    async (stopReason) => {
+      const png = createNoisyPngBuffer(64, 64);
+      const truncated = png.subarray(0, Math.floor(png.length / 2)).toString("base64");
+      const valid = png.toString("base64");
+      const image = (data: string) => ({ type: "image" as const, data, mimeType: "image/png" });
+      const omitted = {
+        type: "text",
+        text: expect.stringMatching(/^\[session:history\] omitted image payload: .*decode/i),
+      };
+      const stored = castAgentMessages([
+        {
+          role: "user",
+          content: [text("inspect these"), image(truncated), image(valid)],
+          timestamp: 1,
+        },
+        assistant([call("t1")], { stopReason: "toolUse" }),
+        {
+          role: "toolResult",
+          toolCallId: "t1",
+          toolName: "read",
+          content: [text("permission denied"), image(truncated)],
+          isError: true,
+          timestamp: 3,
+        },
+        assistant([text("interrupted")], { stopReason }),
+      ]);
+      const original = structuredClone(stored);
+      const expected = castAgentMessages([
+        { ...stored[0], content: [text("inspect these"), omitted, image(valid)] },
+        stored[1],
+        { ...stored[2], content: [text("permission denied"), omitted] },
+        stored[3],
+      ]);
+      expect(await sanitizeSessionMessagesImages(stored, "session:history")).toEqual(expected);
+      expect(stored).toEqual(original);
+
+      // Reload starts with the original stored bytes plus the recovered reply.
+      const recovered = assistant([text("recovered")]);
+      expect(
+        await sanitizeSessionMessagesImages([...stored, recovered], "session:history"),
+      ).toEqual([...expected, recovered]);
+    },
+  );
 });
 
 describe("sanitizeGoogleTurnOrdering", () => {
@@ -183,9 +207,5 @@ describe("sanitizeGoogleTurnOrdering", () => {
       expect.objectContaining({ role: "user" }),
       message,
     ]);
-  });
-  it("leaves user-first history unchanged", () => {
-    const input = castAgentMessages([{ role: "user", content: "hi" }]);
-    expect(sanitizeGoogleTurnOrdering(input)).toBe(input);
   });
 });

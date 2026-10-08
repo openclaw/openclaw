@@ -59,11 +59,8 @@ import { resolveMcpRequestContext } from "./mcp-http.request.js";
 import { resolveMcpLoopbackScopedTools } from "./mcp-http.runtime.js";
 import { buildMcpToolSchema } from "./mcp-http.schema.js";
 import type { SessionsListResult } from "./session-utils.types.js";
-import {
-  disconnectGatewayClient,
-  getGatewayE2ePortBlock,
-  startGatewayWithClient,
-} from "./test-helpers.e2e.js";
+import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock } from "./test-helpers.listener.js";
 
 const PRIMARY = "proof-primary/primary";
 const BACKUP = "proof-backup/backup";
@@ -381,14 +378,14 @@ describe("sessions_spawn model fallback through the Gateway", () => {
               },
             });
           }
-          const port = await getGatewayE2ePortBlock();
+          const claim = await acquireGatewayE2ePortBlock();
           let onSessionChanged: (payload: unknown) => void = () => {};
           gateway = await startGatewayWithClient({
             cfg,
-            port,
+            portClaim: claim,
             clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
             mode: GATEWAY_CLIENT_MODES.WEBCHAT,
-            origin: `http://127.0.0.1:${port}`,
+            origin: `http://127.0.0.1:${claim.port}`,
             configPath: await createGatewayConfigPath(home.tempHome),
             token,
             onEvent: ({ event, payload }) => {
@@ -417,7 +414,11 @@ describe("sessions_spawn model fallback through the Gateway", () => {
               { runId, timeoutMs: 240_000 },
               { timeoutMs: 245_000 },
             );
-          expect((await wait(accepted.runId)).status, JSON.stringify(provider.requests)).toBe("ok");
+          const parentTerminal = await wait(accepted.runId);
+          expect(
+            parentTerminal.status,
+            JSON.stringify({ parentTerminal, requests: provider.requests }),
+          ).toBe("ok");
           if (scenario.configuredAlias) {
             expect(provider.requests.filter((request) => !request.child)).toContainEqual(
               expect.objectContaining({ model: "primary" }),
@@ -717,7 +718,7 @@ describe("CLI model inheritance through MCP", () => {
         async () => {
           provider = await startProvider({ name: "CLI model inheritance", directAgent: true });
           const token = randomUUID();
-          const port = await getGatewayE2ePortBlock();
+          const claim = await acquireGatewayE2ePortBlock();
           setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
           const cfg: OpenClawConfig = {
             agents: {
@@ -741,12 +742,12 @@ describe("CLI model inheritance through MCP", () => {
               },
             },
             tools: { profile: "coding" },
-            gateway: { port, auth: { mode: "token", token } },
+            gateway: { port: claim.port, auth: { mode: "token", token } },
             hooks: { enabled: false },
           };
           gateway = await startGatewayWithClient({
             cfg,
-            port,
+            portClaim: claim,
             token,
             configPath: await createGatewayConfigPath(home.tempHome),
           });

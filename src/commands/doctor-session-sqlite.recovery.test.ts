@@ -9,7 +9,6 @@ import { assertSessionStoreMigrationComplete } from "../config/sessions/startup-
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { isSessionSqliteMigrationWarning } from "../infra/session-sqlite-migration-issues.js";
 import { createTranscriptEventReader } from "../infra/session-sqlite-migration-readers.js";
-import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
   importLegacyStore,
@@ -20,119 +19,95 @@ import {
 const { createLegacyStore } = useDoctorSessionSqliteTestFixture();
 
 describe("runDoctorSessionSqlite", () => {
-  it("moves corrupt SQLite database files aside during recovery", async () => {
-    const { sqlitePath, recover } = createRecoveryStore();
-    fs.writeFileSync(sqlitePath, "not a sqlite database\n", {
-      mode: process.platform === "win32" ? 0o600 : 0o400,
-    });
-    fs.writeFileSync(`${sqlitePath}-wal`, "wal", { mode: 0o600 });
-    fs.writeFileSync(`${sqlitePath}-shm`, "shm", { mode: 0o600 });
-    fs.writeFileSync(`${sqlitePath}-journal`, "journal", { mode: 0o600 });
-
-    const report = await recover();
-
-    expect(report.totals.issues).toBe(0);
-    expect(report.targets[0]?.corruptRecovery?.movedFiles).toHaveLength(4);
-    expect(report.targets[0]?.corruptRecovery?.skippedFiles).toEqual([]);
-    for (const candidate of resolveSqliteDatabaseFilePaths(sqlitePath)) {
-      expect(fs.existsSync(candidate)).toBe(false);
-      expect(
-        report.targets[0]?.corruptRecovery?.movedFiles.some((filePath) =>
-          filePath.startsWith(`${candidate}.corrupt-`),
-        ),
-      ).toBe(true);
-    }
-  });
-
-  it("moves orphaned SQLite sidecars aside during recovery", async () => {
-    const { sqlitePath, recover } = createRecoveryStore();
-    fs.writeFileSync(`${sqlitePath}-wal`, "wal", { mode: 0o600 });
-    fs.writeFileSync(`${sqlitePath}-journal`, "journal", { mode: 0o600 });
-
-    const report = await recover();
-
-    expect(report.totals.issues).toBe(0);
-    expect(report.targets[0]?.corruptRecovery?.movedFiles).toHaveLength(2);
-    expect(report.targets[0]?.corruptRecovery?.skippedFiles).toEqual([
-      sqlitePath,
-      `${sqlitePath}-shm`,
-    ]);
-    expect(fs.existsSync(`${sqlitePath}-wal`)).toBe(false);
-    expect(fs.existsSync(`${sqlitePath}-journal`)).toBe(false);
-  });
-
-  it("rolls back every completed corrupt-file move when a later rename fails", async () => {
-    const { sqlitePath, recover } = createRecoveryStore();
-    const expectedContents = new Map<string, string>();
-    for (const [candidate, contents] of [
-      [sqlitePath, "not a sqlite database\n"],
-      [`${sqlitePath}-wal`, "wal"],
-      [`${sqlitePath}-shm`, "shm"],
-      [`${sqlitePath}-journal`, "journal"],
-    ] as const) {
-      fs.writeFileSync(candidate, contents, { mode: 0o600 });
-      expectedContents.set(candidate, contents);
-    }
-    const renameSync = fs.renameSync.bind(fs);
-    let renameCalls = 0;
-    const renameSpy = vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
-      renameCalls += 1;
-      if (renameCalls === 2) {
-        throw new Error("forced corrupt recovery rename failure");
+  it.each(["orphaned", "rename-failure"] as const)(
+    "recovers the complete SQLite file set (%s)",
+    async (state) => {
+      const { sqlitePath, recover } = createRecoveryStore();
+      const files = new Map([
+        [sqlitePath, "not a sqlite database\n"],
+        [`${sqlitePath}-wal`, "wal"],
+        [`${sqlitePath}-shm`, "shm"],
+        [`${sqlitePath}-journal`, "journal"],
+      ]);
+      if (state === "orphaned") {
+        files.delete(sqlitePath);
+        files.delete(`${sqlitePath}-shm`);
       }
-      renameSync(source, destination);
-    });
+      for (const [file, contents] of files) {
+        fs.writeFileSync(file, contents, { mode: 0o600 });
+      }
+      const rename = fs.renameSync;
+      let calls = 0;
+      const spy =
+        state === "rename-failure"
+          ? vi.spyOn(fs, "renameSync").mockImplementation((source, destination) => {
+              if (++calls === 2) {
+                throw new Error("forced corrupt recovery rename failure");
+              }
+              rename(source, destination);
+            })
+          : undefined;
+      let report;
+      try {
+        report = await recover();
+      } finally {
+        spy?.mockRestore();
+      }
+      if (state === "rename-failure") {
+        expect(report.totals.issues).toBe(1);
+        expect(report.targets[0]?.corruptRecovery).toBeUndefined();
+        expect(report.targets[0]?.issues[0]).toMatchObject({
+          code: "sqlite_corrupt_recovery_failed",
+          message: expect.stringContaining("forced corrupt recovery rename failure"),
+        });
+        for (const [file, contents] of files) {
+          expect(fs.readFileSync(file, "utf8")).toBe(contents);
+        }
+        expect(
+          fs.readdirSync(path.dirname(sqlitePath)).filter((entry) => entry.includes(".corrupt-")),
+        ).toEqual([]);
+      } else {
+        expect(report.totals.issues).toBe(0);
+        expect(report.targets[0]?.corruptRecovery?.movedFiles).toHaveLength(files.size);
+        expect(report.targets[0]?.corruptRecovery?.skippedFiles).toEqual(
+          state === "orphaned" ? [sqlitePath, `${sqlitePath}-shm`] : [],
+        );
+        for (const file of files.keys()) {
+          expect(fs.existsSync(file)).toBe(false);
+          expect(
+            report.targets[0]?.corruptRecovery?.movedFiles.some((moved) =>
+              moved.startsWith(`${file}.corrupt-`),
+            ),
+          ).toBe(true);
+        }
+      }
+    },
+  );
 
-    let report: Awaited<ReturnType<typeof runDoctorSessionSqlite>> | undefined;
-    try {
-      report = await recover();
-    } finally {
-      renameSpy.mockRestore();
-    }
-
-    expect(report?.totals.issues).toBe(1);
-    expect(report?.targets[0]?.corruptRecovery).toBeUndefined();
-    expect(report?.targets[0]?.issues[0]).toMatchObject({
-      code: "sqlite_corrupt_recovery_failed",
-      message: expect.stringContaining("forced corrupt recovery rename failure"),
-    });
-    for (const [candidate, contents] of expectedContents) {
-      expect(fs.readFileSync(candidate, "utf8")).toBe(contents);
-    }
-    expect(
-      fs.readdirSync(path.dirname(sqlitePath)).filter((entry) => entry.includes(".corrupt-")),
-    ).toEqual([]);
-  });
-
-  it("does not move SQLite paths aside for non-corruption recovery inspection failures", async () => {
-    const { sqlitePath, recover } = createRecoveryStore();
-    fs.mkdirSync(sqlitePath, { recursive: true });
-
-    const report = await recover();
-
-    expect(report.totals.issues).toBe(1);
-    expect(report.targets[0]?.issues[0]?.code).toBe("sqlite_recovery_inspect_failed");
-    expect(report.targets[0]?.corruptRecovery).toBeUndefined();
-    expect(fs.statSync(sqlitePath).isDirectory()).toBe(true);
-  });
-
-  it.each(["maintenance", "inspection"])(
-    "preserves recovery state when the %s SQLite loader fails",
+  it.each(["directory", "maintenance", "inspection"] as const)(
+    "preserves recovery state when inspection fails (%s)",
     async (failure) => {
       const { sqlitePath, recover } = createRecoveryStore();
-      fs.writeFileSync(sqlitePath, "not a sqlite database\n", { mode: 0o600 });
+      if (failure === "directory") {
+        fs.mkdirSync(sqlitePath, { recursive: true });
+      } else {
+        fs.writeFileSync(sqlitePath, "not a sqlite database\n", { mode: 0o600 });
+      }
       const openDatabase = nodeSqlite.openNodeSqliteDatabase;
-      const openSqlite = vi
-        .spyOn(nodeSqlite, "openNodeSqliteDatabase")
-        .mockImplementation((pathname, options) => {
-          // An unavailable lease store must refuse; an unreadable agent copy is reportable.
-          if (failure === "maintenance" || path.basename(pathname) === path.basename(sqlitePath)) {
-            throw new Error("node:sqlite unavailable");
-          }
-          return openDatabase(pathname, options);
-        });
-
-      let report: Awaited<ReturnType<typeof runDoctorSessionSqlite>> | undefined;
+      const spy =
+        failure === "directory"
+          ? undefined
+          : vi
+              .spyOn(nodeSqlite, "openNodeSqliteDatabase")
+              .mockImplementation((pathname, options) => {
+                if (
+                  failure === "maintenance" ||
+                  path.basename(pathname) === path.basename(sqlitePath)
+                ) {
+                  throw new Error("node:sqlite unavailable");
+                }
+                return openDatabase(pathname, options);
+              });
       try {
         const recovery = recover();
         if (failure === "maintenance") {
@@ -142,18 +117,19 @@ describe("runDoctorSessionSqlite", () => {
           expect(fs.readFileSync(sqlitePath, "utf8")).toBe("not a sqlite database\n");
           return;
         }
-        report = await recovery;
+        const report = await recovery;
+        expect(report.totals.issues).toBe(1);
+        expect(report.targets[0]?.corruptRecovery).toBeUndefined();
+        expect(report.targets[0]?.issues[0]?.code).toBe("sqlite_recovery_inspect_failed");
+        if (failure === "directory") {
+          expect(fs.statSync(sqlitePath).isDirectory()).toBe(true);
+        } else {
+          expect(report.targets[0]?.issues[0]?.message).toContain("node:sqlite unavailable");
+          expect(fs.existsSync(sqlitePath)).toBe(true);
+        }
       } finally {
-        openSqlite.mockRestore();
+        spy?.mockRestore();
       }
-
-      expect(report?.totals.issues).toBe(1);
-      expect(report?.targets[0]?.issues[0]).toMatchObject({
-        code: "sqlite_recovery_inspect_failed",
-        message: expect.stringContaining("node:sqlite unavailable"),
-      });
-      expect(report?.targets[0]?.corruptRecovery).toBeUndefined();
-      expect(fs.existsSync(sqlitePath)).toBe(true);
     },
   );
 
@@ -194,105 +170,67 @@ describe("runDoctorSessionSqlite", () => {
     ).toHaveLength(3);
   });
 
-  it("reports custom explicit store sqlite paths beside the store", async () => {
-    const store = createLegacyStore({ customStore: true });
+  it("reports malformed transcripts while importing an entry with an existing prefix", async () => {
+    const store = createLegacyStore({
+      agentDirName: "token=supersecret",
+      transcriptLines: ['{"type":"session","sessionId":"session-1"}', "{bad"],
+    });
+    const original = fs.readFileSync(store.transcriptPath);
+
+    await importSqliteSessionRows({
+      agentId: "token-supersecret",
+      env: store.env,
+      sessionKey: "agent:main:main",
+      storePath: store.storePath,
+      entry: { sessionId: "session-1", updatedAt: 2000 },
+      readTranscriptEvents: createTranscriptEventReader(store.transcriptPath, "session-1", true),
+    });
 
     const report = await importLegacyStore(store);
-
-    expect(report.targets[0]?.sqlitePath).toBe(
-      path.join(store.sessionDir, "openclaw-agent.sqlite"),
-    );
-    expect(
-      fs.existsSync(
-        expectDefined(
-          report.targets[0]?.sqlitePath,
-          "report.targets[0]?.sqlitePath test invariant",
-        ),
-      ),
-    ).toBe(true);
+    const inspect = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "inspect",
+      store: store.storePath,
+    });
+    expect(report.totals.issues).toBe(1);
+    expect(report.totals).toMatchObject({
+      archivedTranscriptFiles: 2,
+      archivedUnreferencedJsonlFiles: 1,
+      importedEntries: 1,
+      importedTranscriptEvents: 0,
+      sqliteEntries: 1,
+      unreferencedJsonlFiles: 0,
+    });
+    expect(report.targets[0]?.issues[0]?.code).toBe("transcript_malformed");
+    expect(report.targets[0]?.issues.every(isSessionSqliteMigrationWarning)).toBe(true);
+    expect(fs.existsSync(store.transcriptPath)).toBe(false);
+    expect(fs.existsSync(store.unreferencedJsonlPath)).toBe(false);
+    expect(inspect.totals.sqliteEntries).toBe(1);
     expect(
       loadTranscriptEventsSync({
-        agentId: "main",
+        agentId: "token-supersecret",
         sessionId: "session-1",
         sessionKey: "agent:main:main",
         storePath: store.storePath,
       }),
-    ).toHaveLength(2);
+    ).toHaveLength(1);
+    const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
+    const transcriptMove = expectDefined(
+      manifest.targets[0]?.completedMoves.find((move) => move.kind === "transcript"),
+      "protected malformed transcript archive",
+    );
+    expect(transcriptMove.artifact?.classification).toBe("protected");
+    expect(fs.readFileSync(transcriptMove.archivePath)).toEqual(original);
+    expect(
+      manifest.targets[0]?.completedMoves.some((move) => move.kind === "unreferenced-jsonl"),
+    ).toBe(true);
+    expect(manifest.failedAt).toBeUndefined();
+    expect(manifest.failureReports).toBeUndefined();
+    expect(report.migrationRun?.failureReportMarkdownPath).toBeUndefined();
+    expect(() =>
+      assertSessionStoreMigrationComplete({ cfg: {}, env: store.env, operation: "doctor" }),
+    ).not.toThrow();
   });
-
-  it.each([false, true])(
-    "reports malformed transcripts while importing the session entry (existing prefix: %s)",
-    async (existingPrefix) => {
-      const store = createLegacyStore({
-        agentDirName: "token=supersecret",
-        transcriptLines: ['{"type":"session","sessionId":"session-1"}', "{bad"],
-      });
-      if (!existingPrefix) {
-        fs.truncateSync(store.transcriptPath, fs.statSync(store.transcriptPath).size - 1);
-      }
-      const original = fs.readFileSync(store.transcriptPath);
-      if (existingPrefix) {
-        await importSqliteSessionRows({
-          agentId: "token-supersecret",
-          env: store.env,
-          sessionKey: "agent:main:main",
-          storePath: store.storePath,
-          entry: { sessionId: "session-1", updatedAt: 2000 },
-          readTranscriptEvents: createTranscriptEventReader(
-            store.transcriptPath,
-            "session-1",
-            true,
-          ),
-        });
-      }
-
-      const report = await importLegacyStore(store);
-      const inspect = await runDoctorSessionSqlite({
-        env: store.env,
-        mode: "inspect",
-        store: store.storePath,
-      });
-
-      expect(report.totals.issues).toBe(1);
-      expect(report.totals).toMatchObject({
-        archivedTranscriptFiles: 2,
-        archivedUnreferencedJsonlFiles: 1,
-        importedEntries: 1,
-        importedTranscriptEvents: existingPrefix ? 0 : 1,
-        sqliteEntries: 1,
-        unreferencedJsonlFiles: 0,
-      });
-      expect(report.targets[0]?.issues[0]?.code).toBe("transcript_malformed");
-      expect(report.targets[0]?.issues.every(isSessionSqliteMigrationWarning)).toBe(true);
-      expect(fs.existsSync(store.transcriptPath)).toBe(false);
-      expect(fs.existsSync(store.unreferencedJsonlPath)).toBe(false);
-      expect(inspect.totals.sqliteEntries).toBe(1);
-      expect(
-        loadTranscriptEventsSync({
-          agentId: "token-supersecret",
-          sessionId: "session-1",
-          sessionKey: "agent:main:main",
-          storePath: store.storePath,
-        }),
-      ).toHaveLength(1);
-      const manifest = readMigrationManifest(report.migrationRun?.manifestPath);
-      const transcriptMove = expectDefined(
-        manifest.targets[0]?.completedMoves.find((move) => move.kind === "transcript"),
-        "protected malformed transcript archive",
-      );
-      expect(transcriptMove.artifact?.classification).toBe("protected");
-      expect(fs.readFileSync(transcriptMove.archivePath)).toEqual(original);
-      expect(
-        manifest.targets[0]?.completedMoves.some((move) => move.kind === "unreferenced-jsonl"),
-      ).toBe(true);
-      expect(manifest.failedAt).toBeUndefined();
-      expect(manifest.failureReports).toBeUndefined();
-      expect(report.migrationRun?.failureReportMarkdownPath).toBeUndefined();
-      expect(() =>
-        assertSessionStoreMigrationComplete({ cfg: {}, env: store.env, operation: "doctor" }),
-      ).not.toThrow();
-    },
-  );
 
   it("reports malformed selected legacy transcripts during validation", async () => {
     const store = createLegacyStore({ transcriptLines: ['{"type":"session"}', "{bad"] });

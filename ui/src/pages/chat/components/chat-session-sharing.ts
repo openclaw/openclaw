@@ -97,12 +97,11 @@ export function selectChatSessionSharingItem(
     }
     if (value === "public:copy" && props.state.result.publicShare) {
       props.onCopyPublicLink?.();
-    } else if (!props.publicShareDisabledReason) {
-      if (value === "public:enable") {
-        props.onPublicShareChange?.(true);
-      } else if (value === "public:disable") {
-        props.onPublicShareChange?.(false);
-      }
+    } else if (
+      !props.publicShareDisabledReason &&
+      (value === "public:enable" || value === "public:disable")
+    ) {
+      props.onPublicShareChange?.(value === "public:enable");
     }
     return;
   }

@@ -235,13 +235,13 @@ OpenClaw config:
 | `"external-native"` | Connect to an already-running native signal-cli daemon                                                                                                       |
 | `"container"`       | Connect to bbernhard REST at `/v2/send` and WebSocket at `/v1/receive/{account}`                                                                             |
 
-Setup and `openclaw doctor --fix` may probe an existing endpoint once to identify its concrete kind. Runtime operations do not auto-detect or switch protocols.
+Setup and `openclaw doctor --fix` may check an existing endpoint once to identify its concrete kind. Runtime operations do not auto-detect or switch protocols.
 
 Container mode supports the same Signal operations as native mode where the container exposes matching APIs: sends, receives, attachments, typing indicators, read/viewed receipts, reactions, groups, and styled text. OpenClaw translates native Signal RPC calls into the container's REST payloads, including `group.{base64(internal_id)}` group IDs and `text_mode: "styled"` for formatted text.
 
 Operational notes:
 
-- Use `MODE=json-rpc` for receiving. `MODE=normal` can make `/v1/about` look healthy, but `/v1/receive/{account}` will not WebSocket-upgrade, so container receive streaming will fail its probe.
+- Use `MODE=json-rpc` for receiving. `MODE=normal` can make `/v1/about` look healthy, but `/v1/receive/{account}` will not WebSocket-upgrade, so container receive streaming will fail its check.
 - Set `kind: "container"` for the bbernhard REST API and `kind: "external-native"` for native `signal-cli` JSON-RPC/SSE.
 - Container attachment downloads honor the same media byte limits as native mode. Oversized responses are rejected before being fully buffered when the server sends `Content-Length`, and while streaming otherwise.
 

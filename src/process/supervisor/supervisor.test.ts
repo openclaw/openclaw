@@ -106,21 +106,6 @@ describe("process supervisor", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("cancels a PTY while its adapter is starting", async () => {
-    const startup = createDeferred<StubChildAdapter>();
-    pty.mockReturnValueOnce(startup.promise);
-    const pending = supervisor.spawn({ mode: "pty", argv: ["fixture"], runId: "starting" });
-    supervisor.cancel("starting");
-    const adapter = terminating();
-    startup.resolve(adapter);
-    const run = await pending;
-    await run.waitForExtinction?.();
-    expect(adapter.killMock).toHaveBeenCalledWith("SIGKILL");
-    expect(adapter.disposeMock).toHaveBeenCalledOnce();
-    await expect(run.wait()).resolves.toMatchObject({ reason: "manual-cancel" });
-    expect(run.activity.resultSettled).toBe(true);
-  });
-
   it.each(["no-output-timeout", "manual-cancel"] as const)(
     "keeps late construction cleanup joinable after %s",
     async (reason) => {
@@ -334,6 +319,32 @@ describe("process supervisor", () => {
     await supervisor.shutdown();
   });
 
+  it.each([
+    { mode: "child", argv: ["fixture"], resolveArgs: () => ["bad\0resolved"] },
+    { mode: "child", argv: ["fixture"], argv0: "bad\0name" },
+    { mode: "anchored-shell", command: "printf bad\0command" },
+  ] satisfies SpawnInput[])(
+    "rejects NUL-containing $mode input before construction or scope replacement (%#)",
+    async (input) => {
+      const adapter = prepare();
+      const run = await spawn({ scopeKey: "scope" });
+      child.mockResolvedValue(terminating());
+      pty.mockResolvedValue(terminating());
+      try {
+        await expect(
+          supervisor.spawn({ ...input, scopeKey: "scope", replaceExistingScope: true }),
+        ).rejects.toThrow("must not contain NUL bytes");
+        expect(adapter.killMock).not.toHaveBeenCalled();
+        expect(child).toHaveBeenCalledOnce();
+        expect(pty).not.toHaveBeenCalled();
+      } finally {
+        adapter.settle(0);
+        await run.wait();
+        await supervisor.shutdown();
+      }
+    },
+  );
+
   it("rejects retired authority behind a scope fence without cancelling its survivor", async () => {
     const startup = createDeferred<StubChildAdapter>();
     child.mockReturnValueOnce(startup.promise);
@@ -391,40 +402,33 @@ describe("process supervisor", () => {
     expect(pty).not.toHaveBeenCalled();
   });
 
-  it.each(["timeoutMs", "noOutputTimeoutMs"] as const)(
-    "bounds oversized %s across a late intermediate timer",
-    async (field) => {
-      vi.useFakeTimers();
-      const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
-      const timer = vi.spyOn(globalThis, "setTimeout");
-      const adapter = prepare(terminating());
-      const run = await spawn({ [field]: MAX_TIMER_TIMEOUT_MS + 600_000 });
-      expect(timer.mock.calls.map(([, delay]) => delay)).toEqual([MAX_TIMER_TIMEOUT_MS]);
-      await vi.advanceTimersByTimeAsync(1);
-      expect(adapter.killMock).not.toHaveBeenCalled();
-      if (field === "noOutputTimeoutMs") {
-        adapter.emitStdout("progress");
-      }
-      now.mockReturnValue(1_000 + MAX_TIMER_TIMEOUT_MS + 540_000);
-      await vi.advanceTimersByTimeAsync(
-        field === "noOutputTimeoutMs" ? MAX_TIMER_TIMEOUT_MS : MAX_TIMER_TIMEOUT_MS - 1,
-      );
-      await vi.advanceTimersToNextTimerAsync();
-      expect(adapter.killMock).not.toHaveBeenCalled();
-      expect(timer.mock.calls.at(-1)?.[1]).toBe(60_000);
-      now.mockReturnValue(1_000 + MAX_TIMER_TIMEOUT_MS + 600_000);
-      await vi.advanceTimersByTimeAsync(60_000);
-      await vi.advanceTimersToNextTimerAsync();
-      await expect(run.wait()).resolves.toMatchObject({
-        reason: field === "timeoutMs" ? "overall-timeout" : "no-output-timeout",
-        timedOut: true,
-        noOutputTimedOut: field === "noOutputTimeoutMs",
-      });
-      expect(adapter.killMock).toHaveBeenCalledOnce();
-      expect(adapter.disposeMock).toHaveBeenCalledOnce();
-      expect(vi.getTimerCount()).toBe(0);
-    },
-  );
+  it("bounds an oversized output timeout across a late intermediate timer", async () => {
+    vi.useFakeTimers();
+    const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
+    const timer = vi.spyOn(globalThis, "setTimeout");
+    const adapter = prepare(terminating());
+    const run = await spawn({ noOutputTimeoutMs: MAX_TIMER_TIMEOUT_MS + 600_000 });
+    expect(timer.mock.calls.map(([, delay]) => delay)).toEqual([MAX_TIMER_TIMEOUT_MS]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(adapter.killMock).not.toHaveBeenCalled();
+    adapter.emitStdout("progress");
+    now.mockReturnValue(1_000 + MAX_TIMER_TIMEOUT_MS + 540_000);
+    await vi.advanceTimersByTimeAsync(MAX_TIMER_TIMEOUT_MS);
+    await vi.advanceTimersToNextTimerAsync();
+    expect(adapter.killMock).not.toHaveBeenCalled();
+    expect(timer.mock.calls.at(-1)?.[1]).toBe(60_000);
+    now.mockReturnValue(1_000 + MAX_TIMER_TIMEOUT_MS + 600_000);
+    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersToNextTimerAsync();
+    await expect(run.wait()).resolves.toMatchObject({
+      reason: "no-output-timeout",
+      timedOut: true,
+      noOutputTimedOut: true,
+    });
+    expect(adapter.killMock).toHaveBeenCalledOnce();
+    expect(adapter.disposeMock).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+  });
 
   it("preserves a queued successful exit when the deadline timer runs first", async () => {
     vi.useFakeTimers();

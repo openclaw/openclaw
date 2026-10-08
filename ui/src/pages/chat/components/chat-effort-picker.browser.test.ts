@@ -95,6 +95,7 @@ describe("effort bar colour and flow", () => {
             provider: "openai",
             available: true,
             supportsFastMode,
+            supportsServiceTierRecovery: true,
             serviceTiers: tiers,
           },
         ],
@@ -133,14 +134,40 @@ describe("effort bar colour and flow", () => {
       false,
       state("ultrafast", ["priority", "ultrafast"], false),
     );
-    expect(host!.querySelector('[data-chat-speed-option="ultrafast"]')).toBeNull();
+    expect(
+      host!.querySelector<HTMLButtonElement>('[data-chat-speed-option="ultrafast"]')!.disabled,
+    ).toBe(true);
     expect(host!.querySelector('[data-chat-speed-option="on"]')).toBeNull();
-    await fixture(["low", "medium", "high"], "high", false, state("ultrafast"));
-    expect(host!.querySelector('[data-chat-speed-option="ultrafast"]')).toBeNull();
-    expect(host!.querySelector("summary")!.getAttribute("aria-label")).not.toContain("Ultrafast");
-    expect(host!.querySelector('[data-chat-speed-option="on"]')?.getAttribute("aria-checked")).toBe(
-      "true",
+    const standardOnly = await fixture(
+      ["low", "medium", "high"],
+      "high",
+      false,
+      state("ultrafast", ["default"], false),
     );
+    expect(
+      host!.querySelector('[data-chat-speed-option="off"]')?.getAttribute("aria-checked"),
+    ).toBe("true");
+    for (const option of host!.querySelectorAll<HTMLButtonElement>("[data-chat-speed-option]")) {
+      expect(option.disabled).toBe(true);
+      option.click();
+    }
+    expect(standardOnly.onFastModeSelect).not.toHaveBeenCalled();
+    expect(standardOnly.input.disabled).toBe(false);
+    expect(host!.querySelector(".chat-controls__effort-zap")).toBeNull();
+    await fixture(["low", "medium", "high"], "high", false, state("ultrafast"));
+    expect(
+      host!.querySelector<HTMLButtonElement>('[data-chat-speed-option="ultrafast"]')!.disabled,
+    ).toBe(true);
+    expect(host!.querySelector("summary")!.getAttribute("aria-label")).toContain("Ultrafast");
+    expect(
+      host!.querySelector('[data-chat-speed-option="ultrafast"]')?.getAttribute("aria-checked"),
+    ).toBe("true");
+    expect(host!.querySelector('[data-chat-speed-option="off"]')?.getAttribute("tabindex")).toBe(
+      "0",
+    );
+    expect(
+      host!.querySelector('[data-chat-speed-option="ultrafast"]')?.getAttribute("tabindex"),
+    ).toBe("-1");
   });
 
   it.each(["dark", "light"])("highlights the highest discrete effort in %s mode", async (theme) => {

@@ -35,22 +35,12 @@ export function resolveHeartbeatVisibility(params: {
       ? resolveChannelAccountEntry(channelCfg?.accounts, accountId, channel, (id) => id)
       : undefined;
   const perAccount = accountCfg?.heartbeatVisibility;
+  const resolve = (key: keyof ResolvedHeartbeatVisibility) =>
+    perAccount?.[key] ?? perChannel?.[key] ?? channelDefaults?.[key] ?? DEFAULT_VISIBILITY[key];
 
   return {
-    showOk:
-      perAccount?.showOk ??
-      perChannel?.showOk ??
-      channelDefaults?.showOk ??
-      DEFAULT_VISIBILITY.showOk,
-    showAlerts:
-      perAccount?.showAlerts ??
-      perChannel?.showAlerts ??
-      channelDefaults?.showAlerts ??
-      DEFAULT_VISIBILITY.showAlerts,
-    useIndicator:
-      perAccount?.useIndicator ??
-      perChannel?.useIndicator ??
-      channelDefaults?.useIndicator ??
-      DEFAULT_VISIBILITY.useIndicator,
+    showOk: resolve("showOk"),
+    showAlerts: resolve("showAlerts"),
+    useIndicator: resolve("useIndicator"),
   };
 }

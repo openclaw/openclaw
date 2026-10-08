@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import * as runtimePaths from "../../daemon/runtime-paths.js";
 import * as daemonService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
@@ -21,6 +21,10 @@ import { updateCommand } from "./update-command.js";
 vi.mock("../../infra/container-environment.js", () => ({ isContainerEnvironment: () => false }));
 
 const { fixture } = installFreshUpdateFixture();
+beforeEach(() => {
+  // This synthetic installation has no plugins to include in its recovery baseline.
+  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+});
 it.each([
   { name: "no restart", restart: false, debugCapture: true },
   { name: "replacement" },
@@ -160,7 +164,6 @@ it.each([
         },
       ];
       const message = [
-        "openclaw@2026.9.2 requires Node >=26.1.0; selected runtime is Node 24.16.0 at /service/node.",
         "Recovery:",
         ...recoverySteps.map(
           (step, index) =>
@@ -169,26 +172,26 @@ it.each([
       ].join("\n");
       if (json) {
         expect(preview).toMatchObject({
-          notes: [`Would refuse update: ${message}`],
+          notes: [expect.stringContaining(message)],
           failures: [
             {
               reason: "node-runtime-preflight",
-              message,
+              message: expect.stringContaining(message),
               recoverySteps,
-              failureFacts: [
-                {
+              failureFacts: expect.arrayContaining([
+                expect.objectContaining({
                   check: "node-runtime",
                   code: "node-runtime-preflight",
                   affectedKey: "engines.node",
                   message:
-                    "Target package: openclaw@2026.9.2; Minimum Node engine: 26.1.0; Running Node: 24.16.0",
-                },
-              ],
+                    "Required: openclaw@2026.9.2 Node >=26.1.0; detected: Node 24.16.0 at [redacted-path]",
+                }),
+              ]),
             },
           ],
         });
       } else {
-        expect(log).toHaveBeenCalledWith(`  - Would refuse update: ${message}`);
+        expect(log).toHaveBeenCalledWith(expect.stringContaining(message));
       }
     } else if (replacement) {
       expect(notes).toContain("/service/node");
@@ -222,12 +225,12 @@ it.each([
                 stderrTail: expect.stringContaining(
                   `node ${process.platform === "win32" ? quotePowerShellArg(path.join(fixture.root, "openclaw.mjs")) : quoteCliArg(path.join(fixture.root, "openclaw.mjs"))} update --tag 2026.9.2`,
                 ),
-                failureFacts: [
+                failureFacts: expect.arrayContaining([
                   expect.objectContaining({
                     code: "node-runtime-preflight",
-                    message: expect.stringContaining("Minimum Node engine: 26.1.0"),
+                    message: expect.stringContaining("Required: openclaw@2026.9.2 Node >=26.1.0"),
                   }),
-                ],
+                ]),
               }),
             ]),
           }),

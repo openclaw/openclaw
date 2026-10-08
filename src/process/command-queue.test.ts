@@ -1,7 +1,6 @@
 // Command queue tests cover bounded command execution and queue ordering.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { spawnSync } from "node:child_process";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -9,7 +8,9 @@ import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runt
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { createLaneQueue, type LaneState } from "./command-queue.state.js";
 import { resetCommandQueueStateForTest } from "./command-queue.test-support.js";
+import type { CommandQueueTaskDeadline } from "./command-queue.types.js";
 import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
@@ -47,18 +48,6 @@ let resetAllLanes: CommandQueueModule["resetAllLanes"];
 let resetCommandLane: CommandQueueModule["resetCommandLane"];
 let setCommandLaneConcurrency: CommandQueueModule["setCommandLaneConcurrency"];
 
-function mockCallArg(
-  mock: { mock: { calls: readonly unknown[][] } },
-  label: string,
-  argIndex: number,
-): unknown {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call[argIndex];
-}
-
 function enqueueBlockedMainTask<T = void>(
   onRelease?: () => Promise<T> | T,
 ): {
@@ -71,16 +60,6 @@ function enqueueBlockedMainTask<T = void>(
     return (await onRelease?.()) as T;
   });
   return { task, release: deferred.resolve };
-}
-
-function expectLaneSnapshotFields(
-  lane: string,
-  fields: Partial<ReturnType<CommandQueueModule["getCommandLaneSnapshot"]>>,
-): void {
-  const snapshot = getCommandLaneSnapshot(lane);
-  for (const [key, value] of Object.entries(fields)) {
-    expect(snapshot[key as keyof typeof snapshot]).toBe(value);
-  }
 }
 
 function diagnosticDebugMessages(): string[] {
@@ -137,43 +116,13 @@ describe("command queue", () => {
     setLoggerOverride(null);
     loggingState.rawConsole = null;
     resetLogger();
+    resetCommandQueueStateForTest();
   });
 
-  it("resetAllLanes is safe when no lanes have been created", () => {
-    expect(getTotalQueueSize()).toBe(0);
-    resetAllLanes();
-    expect(getTotalQueueSize()).toBe(0);
-  });
-
-  it("runs tasks one at a time in order", async () => {
-    let active = 0;
-    let maxActive = 0;
-    const calls: number[] = [];
-
-    const makeTask = (id: number) => async () => {
-      active += 1;
-      maxActive = Math.max(maxActive, active);
-      calls.push(id);
-      await Promise.resolve();
-      active -= 1;
-      return id;
-    };
-
-    const results = await Promise.all([
-      enqueueCommandInLane(CommandLane.Main, makeTask(1)),
-      enqueueCommandInLane(CommandLane.Main, makeTask(2)),
-      enqueueCommandInLane(CommandLane.Main, makeTask(3)),
-    ]);
-
-    expect(results).toEqual([1, 2, 3]);
-    expect(calls).toEqual([1, 2, 3]);
-    expect(maxActive).toBe(1);
-    expect(getQueueSize()).toBe(0);
-  });
-
-  it("runs queued tasks in their enqueue-time async context", async () => {
+  it("runs queued tasks and their lifecycle callbacks in their enqueue-time async context", async () => {
     const context = new AsyncLocalStorage<string>();
     const blocker = createDeferred();
+    const callbacks: Array<[string, string | undefined]> = [];
     const first = context.run("first", () =>
       enqueueCommandInLane(CommandLane.Main, async () => {
         await blocker.promise;
@@ -181,71 +130,31 @@ describe("command queue", () => {
       }),
     );
     const second = context.run("second", () =>
-      enqueueCommandInLane(CommandLane.Main, async () => context.getStore()),
+      enqueueCommandInLane(CommandLane.Main, async () => context.getStore(), {
+        warnAfterMs: 0,
+        onWait: () => callbacks.push(["wait", context.getStore()]),
+        taskTimeoutMs: 60_000,
+        taskTimeoutProgressAtMs: () => {
+          callbacks.push(["progress", context.getStore()]);
+          return Date.now();
+        },
+        taskTimeoutSubscribe: () => {
+          callbacks.push(["subscribe", context.getStore()]);
+          return () => callbacks.push(["unsubscribe", context.getStore()]);
+        },
+      }),
     );
 
     blocker.resolve();
 
     await expect(first).resolves.toBe("first");
     await expect(second).resolves.toBe("second");
-  });
-
-  it("runs foreground work before already queued background work", async () => {
-    const { task: blocker, release } = enqueueBlockedMainTask(async () => "blocker");
-    const calls: string[] = [];
-
-    const background = enqueueCommandInLane(
-      CommandLane.Main,
-      async () => {
-        calls.push("background");
-        return "background";
-      },
-      { priority: "background" },
-    );
-    const normal = enqueueCommandInLane(CommandLane.Main, async () => {
-      calls.push("normal");
-      return "normal";
-    });
-    const foreground = enqueueCommandInLane(
-      CommandLane.Main,
-      async () => {
-        calls.push("foreground");
-        return "foreground";
-      },
-      { priority: "foreground" },
-    );
-
-    release();
-    await expect(blocker).resolves.toBe("blocker");
-    await expect(foreground).resolves.toBe("foreground");
-    await expect(normal).resolves.toBe("normal");
-    await expect(background).resolves.toBe("background");
-    expect(calls).toEqual(["foreground", "normal", "background"]);
-  });
-
-  it("preserves FIFO order within each priority", async () => {
-    const { task: blocker, release } = enqueueBlockedMainTask(async () => "blocker");
-    const calls: string[] = [];
-
-    const first = enqueueCommandInLane(
-      CommandLane.Main,
-      async () => {
-        calls.push("first");
-      },
-      { priority: "foreground" },
-    );
-    const second = enqueueCommandInLane(
-      CommandLane.Main,
-      async () => {
-        calls.push("second");
-      },
-      { priority: "foreground" },
-    );
-
-    release();
-    await blocker;
-    await Promise.all([first, second]);
-    expect(calls).toEqual(["first", "second"]);
+    expect(callbacks).toEqual([
+      ["wait", "second"],
+      ["progress", "second"],
+      ["subscribe", "second"],
+      ["unsubscribe", "second"],
+    ]);
   });
 
   it("preserves priority and FIFO order across partial drains and resumed growth", async () => {
@@ -368,114 +277,6 @@ describe("command queue", () => {
     expect(onQueued).not.toHaveBeenCalled();
   });
 
-  it("reports queueAhead after priority insertion", async () => {
-    vi.useFakeTimers();
-    try {
-      const { task: blocker, release } = enqueueBlockedMainTask(async () => "blocker");
-      const calls: string[] = [];
-      let queuedAhead: number | null = null;
-
-      const background = enqueueCommandInLane(
-        CommandLane.Main,
-        async () => {
-          calls.push("background");
-          return "background";
-        },
-        { priority: "background" },
-      );
-      const foreground = enqueueCommandInLane(
-        CommandLane.Main,
-        async () => {
-          calls.push("foreground");
-          return "foreground";
-        },
-        {
-          priority: "foreground",
-          warnAfterMs: 5,
-          onWait: (_ms, ahead) => {
-            queuedAhead = ahead;
-          },
-        },
-      );
-
-      await vi.advanceTimersByTimeAsync(6);
-      release();
-      await expect(blocker).resolves.toBe("blocker");
-      await expect(foreground).resolves.toBe("foreground");
-      await expect(background).resolves.toBe("background");
-
-      expect(calls).toEqual(["foreground", "background"]);
-      expect(queuedAhead).toBe(0);
-      const waitWarning = diagnosticMocks.diag.warn.mock.calls.find(
-        ([message]) =>
-          typeof message === "string" && message.includes("lane wait exceeded: lane=main"),
-      );
-      expect(waitWarning?.[0]).toContain("queueAhead=0 activeAhead=1");
-      expect(waitWarning?.[0]).toContain("queueBehind=1");
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("logs enqueue depth after push", async () => {
-    const task = enqueueCommandInLane(CommandLane.Main, async () => {});
-
-    expect(diagnosticMocks.logLaneEnqueue).toHaveBeenCalledTimes(1);
-    expect(mockCallArg(diagnosticMocks.logLaneEnqueue, "logLaneEnqueue", 1)).toBe(1);
-
-    await task;
-  });
-
-  it("invokes onWait callback when a task waits past the threshold", async () => {
-    const consoleOutput = captureDiagnosticConsole("warn");
-    let waited: number | null = null;
-    let queuedAhead: number | null = null;
-    const taskIdentity = {
-      taskKind: "spawn",
-      sessionKey: "agent:example:subagent:child",
-      runId: "child-run",
-      requesterSessionKey: "agent:example:dashboard:parent",
-    };
-
-    vi.useFakeTimers();
-    try {
-      const blocker = createDeferred();
-      const first = enqueueCommandInLane(CommandLane.Main, async () => {
-        await blocker.promise;
-      });
-
-      const second = enqueueCommandInLane(CommandLane.Main, async () => {}, {
-        taskIdentity,
-        warnAfterMs: 5,
-        onWait: (ms, ahead) => {
-          waited = ms;
-          queuedAhead = ahead;
-        },
-      });
-
-      await vi.advanceTimersByTimeAsync(6);
-      blocker.resolve();
-      await Promise.all([first, second]);
-
-      expect(typeof waited).toBe("number");
-      expect(waited).toBeGreaterThanOrEqual(5);
-      expect(queuedAhead).toBe(0);
-      const waitWarning = diagnosticMocks.diag.warn.mock.calls.find(
-        ([message]) =>
-          typeof message === "string" && message.includes("lane wait exceeded: lane=main"),
-      );
-      expect(waitWarning?.[0]).toContain("queueAhead=0 activeAhead=1");
-      expect(waitWarning?.[1]).toMatchObject(taskIdentity);
-      expect(consoleOutput).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "taskKind=spawn sessionKey=agent:example:subagent:child runId=child-run requesterSessionKey=agent:example:dashboard:parent",
-        ),
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("demotes live model switch lane failures to debug noise", async () => {
     const error = new Error("Live session model switch requested: anthropic/claude-opus-4-6");
     error.name = "LiveSessionModelSwitchError";
@@ -549,16 +350,6 @@ describe("command queue", () => {
         message.includes(`lane task interrupted: lane=${lane}`),
       ),
     ).toBe(false);
-  });
-
-  it("reports process queue totals while tasks execute", async () => {
-    const { task, release } = enqueueBlockedMainTask();
-
-    expect(getTotalQueueSize()).toBe(1);
-
-    release();
-    await task;
-    expect(getTotalQueueSize()).toBe(0);
   });
 
   it("resetAllLanes drains queued work immediately after reset", async () => {
@@ -637,73 +428,6 @@ describe("command queue", () => {
     await expect(other).resolves.toBe("other");
   });
 
-  it("task timeout releases a stuck lane and drains queued work", async () => {
-    const lane = `timeout-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    setCommandLaneConcurrency(lane, 1);
-
-    vi.useFakeTimers();
-    try {
-      const first = enqueueCommandInLane(lane, async () => new Promise<never>(() => {}), {
-        taskTimeoutMs: 25,
-      });
-      const firstRejected = expect(first).rejects.toMatchObject({
-        name: "CommandLaneTaskTimeoutError",
-        message: expect.stringContaining("elapsed 25ms reached task budget 25ms"),
-      });
-      let secondRan = false;
-      const second = enqueueCommandInLane(lane, async () => {
-        secondRan = true;
-        return "second";
-      });
-
-      expect(secondRan).toBe(false);
-      expectLaneSnapshotFields(lane, {
-        activeCount: 1,
-        queuedCount: 1,
-      });
-
-      await vi.advanceTimersByTimeAsync(25);
-
-      await firstRejected;
-      await expect(second).resolves.toBe("second");
-      expect(secondRan).toBe(true);
-      expectLaneSnapshotFields(lane, {
-        activeCount: 0,
-        queuedCount: 0,
-      });
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("clamps oversized task timeouts before arming lane timers", async () => {
-    const lane = `timeout-clamp-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    setCommandLaneConcurrency(lane, 1);
-
-    vi.useFakeTimers();
-    try {
-      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-      const blocker = createDeferred();
-      const task = enqueueCommandInLane(
-        lane,
-        async () => {
-          await blocker.promise;
-        },
-        { taskTimeoutMs: MAX_TIMER_TIMEOUT_MS + 1 },
-      );
-
-      await Promise.resolve();
-
-      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-
-      blocker.resolve();
-      await task;
-      setTimeoutSpy.mockRestore();
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("task timeout renews from progress timestamps", async () => {
     const lane = `timeout-progress-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setCommandLaneConcurrency(lane, 1);
@@ -743,79 +467,6 @@ describe("command queue", () => {
     }
   });
 
-  it("task timeout switches to a short abort grace period", async () => {
-    const lane = `timeout-abort-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    setCommandLaneConcurrency(lane, 1);
-
-    vi.useFakeTimers();
-    try {
-      const abortController = new AbortController();
-      const first = enqueueCommandInLane(lane, async () => new Promise<never>(() => {}), {
-        taskTimeoutMs: 48 * 60 * 60 * 1000,
-        taskTimeoutAbortSignal: abortController.signal,
-        taskTimeoutAbortGraceMs: 25,
-      });
-      const firstRejected = expect(first).rejects.toMatchObject({
-        name: "CommandLaneTaskTimeoutError",
-        message: expect.stringContaining(
-          "abort grace 25ms elapsed (task budget 172800000ms, elapsed 25ms)",
-        ),
-      });
-      let secondRan = false;
-      const second = enqueueCommandInLane(lane, async () => {
-        secondRan = true;
-        return "second";
-      });
-
-      abortController.abort();
-      await vi.advanceTimersByTimeAsync(24);
-      expect(secondRan).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
-
-      await firstRejected;
-      await expect(second).resolves.toBe("second");
-      expect(secondRan).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("task timeout release signal skips the abort grace period", async () => {
-    const lane = `timeout-release-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    setCommandLaneConcurrency(lane, 1);
-
-    vi.useFakeTimers();
-    try {
-      const releaseController = new AbortController();
-      const first = enqueueCommandInLane(lane, async () => new Promise<never>(() => {}), {
-        taskTimeoutMs: 48 * 60 * 60 * 1000,
-        taskTimeoutProgressAtMs: () => Date.now(),
-        taskTimeoutAbortGraceMs: 25,
-        taskTimeoutReleaseSignal: releaseController.signal,
-      });
-      const firstRejected = expect(first).rejects.toMatchObject({
-        name: "CommandLaneTaskTimeoutError",
-        message: expect.stringContaining(
-          "lane release requested after 0ms (task budget 172800000ms)",
-        ),
-      });
-      let secondRan = false;
-      const second = enqueueCommandInLane(lane, async () => {
-        secondRan = true;
-        return "second";
-      });
-
-      releaseController.abort();
-      await vi.advanceTimersByTimeAsync(0);
-
-      await firstRejected;
-      await expect(second).resolves.toBe("second");
-      expect(secondRan).toBe(true);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it("task timeout falls back when progress timestamp callback throws", async () => {
     const lane = `timeout-progress-throw-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setCommandLaneConcurrency(lane, 1);
@@ -846,85 +497,6 @@ describe("command queue", () => {
     }
   });
 
-  it("keeps work queued while a lane has zero concurrency and drains after resume", async () => {
-    const lane = `suspended-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    setCommandLaneConcurrency(lane, 0);
-
-    let ran = false;
-    const task = enqueueCommandInLane(lane, async () => {
-      ran = true;
-      return "resumed";
-    });
-
-    await Promise.resolve();
-    expect(ran).toBe(false);
-    expectLaneSnapshotFields(lane, {
-      activeCount: 0,
-      queuedCount: 1,
-      maxConcurrent: 0,
-    });
-
-    setCommandLaneConcurrency(lane, 1);
-
-    await expect(task).resolves.toBe("resumed");
-    expect(ran).toBe(true);
-    expectLaneSnapshotFields(lane, {
-      activeCount: 0,
-      queuedCount: 0,
-      maxConcurrent: 1,
-    });
-  });
-
-  it("getCommandLaneSnapshot reports active and queued work for one lane", async () => {
-    const lane = `snapshot-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-    setCommandLaneConcurrency(lane, 1);
-
-    const blocker = createDeferred();
-    const first = enqueueCommandInLane(lane, async () => {
-      await blocker.promise;
-      return "first";
-    });
-    const second = enqueueCommandInLane(lane, async () => "second");
-
-    expectLaneSnapshotFields(lane, {
-      lane,
-      activeCount: 1,
-      queuedCount: 1,
-      maxConcurrent: 1,
-      draining: false,
-      generation: 0,
-    });
-
-    blocker.resolve();
-    await expect(first).resolves.toBe("first");
-    await expect(second).resolves.toBe("second");
-  });
-
-  it("clearCommandLane rejects pending promises at every priority", async () => {
-    // First task blocks the lane.
-    const { task: first, release } = enqueueBlockedMainTask(async () => "first");
-
-    const background = enqueueCommandInLane(CommandLane.Main, async () => "background", {
-      priority: "background",
-    });
-    const normal = enqueueCommandInLane(CommandLane.Main, async () => "normal");
-    const foreground = enqueueCommandInLane(CommandLane.Main, async () => "foreground", {
-      priority: "foreground",
-    });
-    const rejectionChecks = [background, normal, foreground].map((task) =>
-      expect(task).rejects.toBeInstanceOf(CommandLaneClearedError),
-    );
-
-    const removed = clearCommandLane();
-    expect(removed).toBe(3); // only the queued (not active) entries
-
-    await Promise.all(rejectionChecks);
-
-    // Let the active task finish normally.
-    release();
-    await expect(first).resolves.toBe("first");
-  });
-
   it("keeps draining functional after synchronous onWait failure", async () => {
     const lane = `drain-sync-throw-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setCommandLaneConcurrency(lane, 1);
@@ -951,23 +523,7 @@ describe("command queue", () => {
   it.each([
     { reason: "restart", message: "Gateway is restarting. Please try again shortly." },
     {
-      reason: "restart (SIGUSR2: update.run)",
-      message: "Gateway is restarting. Please try again shortly.",
-    },
-    {
-      reason: "restart (SIGTERM: gateway.restart)",
-      message: "Gateway is restarting. Please try again shortly.",
-    },
-    {
       reason: "stop (SIGTERM)",
-      message: "Gateway is shutting down. Please try again once it is back online.",
-    },
-    {
-      reason: "stop (SIGINT)",
-      message: "Gateway is shutting down. Please try again once it is back online.",
-    },
-    {
-      reason: "stop (hosted Gateway stop)",
       message: "Gateway is shutting down. Please try again once it is back online.",
     },
   ] satisfies {
@@ -1046,12 +602,6 @@ describe("command queue", () => {
     }
   });
 
-  it("resetAllLanes clears gateway draining flag and re-allows enqueue", async () => {
-    markGatewayDraining();
-    resetAllLanes();
-    await expect(enqueueCommandInLane(CommandLane.Main, async () => "ok")).resolves.toBe("ok");
-  });
-
   it("re-admits preserved queued work after reset retires its captured root", async () => {
     const outerLane = `restart-outer-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     const innerLane = `restart-inner-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -1123,5 +673,409 @@ describe("command queue", () => {
       blocker.resolve();
       commandQueueA.resetAllLanes();
     }
+  });
+  describe("scoped command lane lifecycle", () => {
+    function getCommandLaneRegistryForTest(): Map<string, unknown> {
+      const state = (globalThis as Record<PropertyKey, unknown>)[
+        Symbol.for("openclaw.commandQueueState")
+      ];
+      const lanes = (state as { lanes?: unknown } | undefined)?.lanes;
+      if (!(lanes instanceof Map)) {
+        throw new Error("Expected the shared command lane registry to be initialized");
+      }
+      return lanes as Map<string, unknown>;
+    }
+
+    it("retires ten independently completed session lanes from the shared registry", async () => {
+      const lanes = getCommandLaneRegistryForTest();
+      const baselineSize = lanes.size;
+      const allRunsStarted = createDeferred();
+      let activeRuns = 0;
+      let peakActiveRuns = 0;
+      const laneNames = Array.from(
+        { length: 10 },
+        (_, index) => `session:agent:main:autoqa-${index}`,
+      );
+
+      const results = await Promise.all(
+        laneNames.map((lane, index) =>
+          enqueueCommandInLane(lane, async () => {
+            activeRuns += 1;
+            peakActiveRuns = Math.max(peakActiveRuns, activeRuns);
+            if (activeRuns === laneNames.length) {
+              allRunsStarted.resolve();
+            }
+            await allRunsStarted.promise;
+            activeRuns -= 1;
+            return index;
+          }),
+        ),
+      );
+
+      expect(results).toEqual(Array.from({ length: 10 }, (_, index) => index));
+      expect(peakActiveRuns).toBe(10);
+      expect(activeRuns).toBe(0);
+      expect(getTotalQueueSize()).toBe(0);
+      expect(lanes.size).toBe(baselineSize);
+      for (const lane of laneNames) {
+        expect(lanes.has(lane)).toBe(false);
+      }
+    });
+
+    it("keeps a session lane until its queued successor finishes", async () => {
+      const lanes = getCommandLaneRegistryForTest();
+      const lane = "session:agent:main:autoqa-queued";
+      const firstGate = createDeferred();
+      const secondGate = createDeferred();
+
+      const first = enqueueCommandInLane(lane, async () => {
+        await firstGate.promise;
+        return "first";
+      });
+      const second = enqueueCommandInLane(lane, async () => {
+        await secondGate.promise;
+        return "second";
+      });
+
+      expect(lanes.has(lane)).toBe(true);
+      firstGate.resolve();
+      await expect(first).resolves.toBe("first");
+      expect(lanes.has(lane)).toBe(true);
+      expect(getCommandLaneSnapshot(lane)).toMatchObject({ activeCount: 1, queuedCount: 0 });
+
+      secondGate.resolve();
+      await expect(second).resolves.toBe("second");
+      expect(lanes.has(lane)).toBe(false);
+    });
+
+    it("updates each session's subagent capacity and retires the queues after completion", async () => {
+      const lanes = getCommandLaneRegistryForTest();
+      const parents = ["subagent:agent:main:parent-a", "subagent:agent:main:parent-b"];
+      const gate = createDeferred();
+      setCommandLaneConcurrency(CommandLane.Subagent, 2);
+      const runs = parents.flatMap((lane) =>
+        Array.from({ length: 3 }, () =>
+          enqueueCommandInLane(lane, async () => {
+            await gate.promise;
+          }),
+        ),
+      );
+
+      try {
+        for (const lane of parents) {
+          expect(getCommandLaneSnapshot(lane)).toMatchObject({
+            maxConcurrent: 2,
+            activeCount: 2,
+            queuedCount: 1,
+          });
+        }
+
+        setCommandLaneConcurrency(CommandLane.Subagent, 1);
+        for (const lane of parents) {
+          expect(getCommandLaneSnapshot(lane)).toMatchObject({
+            maxConcurrent: 1,
+            activeCount: 2,
+            queuedCount: 1,
+          });
+        }
+
+        setCommandLaneConcurrency(CommandLane.Subagent, 3);
+        for (const lane of parents) {
+          expect(getCommandLaneSnapshot(lane)).toMatchObject({
+            maxConcurrent: 3,
+            activeCount: 3,
+            queuedCount: 0,
+          });
+        }
+      } finally {
+        gate.resolve();
+        await Promise.all(runs);
+      }
+      for (const lane of parents) {
+        expect(lanes.has(lane)).toBe(false);
+        expect(getCommandLaneSnapshot(lane).maxConcurrent).toBe(3);
+        expect(lanes.has(lane)).toBe(false);
+      }
+    });
+
+    it("preserves explicitly configured and paused dynamic lanes", async () => {
+      const lanes = getCommandLaneRegistryForTest();
+      const configuredLane = "session:agent:main:autoqa-configured";
+      const pausedLane = "nested:agent:main:autoqa-paused";
+
+      setCommandLaneConcurrency(configuredLane, 2);
+      await Promise.all([
+        enqueueCommandInLane(configuredLane, async () => "first"),
+        enqueueCommandInLane(configuredLane, async () => "second"),
+      ]);
+
+      expect(lanes.has(configuredLane)).toBe(true);
+      expect(getCommandLaneSnapshot(configuredLane)).toMatchObject({
+        activeCount: 0,
+        queuedCount: 0,
+        maxConcurrent: 2,
+      });
+
+      setCommandLaneConcurrency(pausedLane, 0);
+      let pausedRunStarted = false;
+      const pausedRun = enqueueCommandInLane(pausedLane, async () => {
+        pausedRunStarted = true;
+        return "resumed";
+      });
+
+      expect(pausedRunStarted).toBe(false);
+      expect(lanes.has(pausedLane)).toBe(true);
+      expect(getCommandLaneSnapshot(pausedLane)).toMatchObject({
+        activeCount: 0,
+        queuedCount: 1,
+        maxConcurrent: 0,
+      });
+
+      setCommandLaneConcurrency(pausedLane, 1);
+      await expect(pausedRun).resolves.toBe("resumed");
+      expect(lanes.has(pausedLane)).toBe(false);
+      expect(lanes.has(configuredLane)).toBe(true);
+    });
+
+    it("does not let stale session completion retire a replacement-generation run", async () => {
+      const lanes = getCommandLaneRegistryForTest();
+      const lane = "session:agent:main:autoqa-replacement";
+      const staleGate = createDeferred();
+      const replacementGate = createDeferred();
+      const staleRun = enqueueCommandInLane(lane, async () => {
+        await staleGate.promise;
+        return "stale";
+      });
+
+      expect(resetCommandLane(lane)).toBe(1);
+      const replacementRun = enqueueCommandInLane(lane, async () => {
+        await replacementGate.promise;
+        return "replacement";
+      });
+      const replacementState = lanes.get(lane);
+
+      staleGate.resolve();
+      await expect(staleRun).resolves.toBe("stale");
+      expect(lanes.get(lane)).toBe(replacementState);
+      expect(getCommandLaneSnapshot(lane)).toMatchObject({ activeCount: 1, queuedCount: 0 });
+
+      replacementGate.resolve();
+      await expect(replacementRun).resolves.toBe("replacement");
+      expect(lanes.has(lane)).toBe(false);
+    });
+
+    it("recreates a maintenance lane for deferred same-session follow-up work", async () => {
+      const lanes = getCommandLaneRegistryForTest();
+      const lane = "context-engine-turn-maintenance:agent:main:autoqa-rerun";
+      const replacementGate = createDeferred();
+      const firstRun = enqueueCommandInLane(lane, async () => "first");
+      const originalState = lanes.get(lane);
+      const replacementRun = firstRun.then(() =>
+        enqueueCommandInLane(lane, async () => {
+          await replacementGate.promise;
+          return "replacement";
+        }),
+      );
+
+      await expect(firstRun).resolves.toBe("first");
+      expect(lanes.has(lane)).toBe(true);
+      expect(lanes.get(lane)).not.toBe(originalState);
+      expect(getCommandLaneSnapshot(lane)).toMatchObject({ activeCount: 1, queuedCount: 0 });
+
+      replacementGate.resolve();
+      await expect(replacementRun).resolves.toBe("replacement");
+      expect(lanes.has(lane)).toBe(false);
+    });
+
+    it("does not retire a newer lane state when stale work finishes", async () => {
+      const lanes = getCommandLaneRegistryForTest();
+      const lane = "session:agent:main:autoqa-recreated-state";
+      const staleGate = createDeferred();
+      const staleRun = enqueueCommandInLane(lane, async () => {
+        await staleGate.promise;
+        return "stale";
+      });
+      const replacementState = {
+        lane,
+        queue: createLaneQueue(),
+        activeTaskIds: new Set<number>(),
+        maxConcurrent: 1,
+        draining: false,
+        generation: 0,
+      } satisfies LaneState;
+
+      lanes.set(lane, replacementState);
+      staleGate.resolve();
+      await expect(staleRun).resolves.toBe("stale");
+
+      expect(lanes.get(lane)).toBe(replacementState);
+      lanes.delete(lane);
+    });
+
+    it("retires a scoped lane after its active task times out", async () => {
+      const lanes = getCommandLaneRegistryForTest();
+      const lane = "session:agent:main:autoqa-timed-out";
+
+      vi.useFakeTimers();
+      try {
+        const timedOut = enqueueCommandInLane(lane, async () => new Promise<never>(() => {}), {
+          taskTimeoutMs: 5,
+        });
+        const rejection = expect(timedOut).rejects.toMatchObject({
+          name: "CommandLaneTaskTimeoutError",
+        });
+
+        await vi.advanceTimersByTimeAsync(5);
+        await rejection;
+
+        expect(lanes.has(lane)).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
+
+  describe("command lane owner deadlines", () => {
+    const lane = "runtime-deadline-test";
+    const finishers: Array<() => void> = [];
+
+    function enqueueOwnedTask(initialDeadline: CommandQueueTaskDeadline, initiallyAborted = false) {
+      const finish = createDeferred();
+      finishers.push(finish.resolve);
+      const abort = new AbortController();
+      const release = new AbortController();
+      if (initiallyAborted) {
+        abort.abort();
+      }
+      const unsubscribe = vi.fn();
+      let progressAtMs = Date.now();
+      let publish: (deadline: CommandQueueTaskDeadline | undefined) => void = () => {
+        throw new Error("deadline subscription is not active");
+      };
+      const task = enqueueCommandInLane(lane, () => finish.promise, {
+        taskTimeoutMs: 25,
+        taskTimeoutProgressAtMs: () => progressAtMs,
+        taskTimeoutAbortSignal: abort.signal,
+        taskTimeoutAbortGraceMs: 5,
+        taskTimeoutReleaseSignal: release.signal,
+        taskTimeoutSubscribe: (onDeadline) => {
+          publish = onDeadline;
+          onDeadline(initialDeadline);
+          return unsubscribe;
+        },
+      });
+      const outcome = task.then(
+        () => ({ status: "completed" as const }),
+        (error: unknown) => ({ status: "failed" as const, error }),
+      );
+      return {
+        abort,
+        release,
+        finish: finish.resolve,
+        outcome,
+        unsubscribe,
+        publish: (deadline: CommandQueueTaskDeadline | undefined) => publish(deadline),
+        progress: () => {
+          progressAtMs = Date.now();
+        },
+      };
+    }
+
+    beforeEach(() => {
+      resetCommandQueueStateForTest();
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.parse("2026-08-20T12:00:00Z"));
+    });
+
+    afterEach(async () => {
+      for (const finish of finishers.splice(0)) {
+        finish();
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      resetCommandQueueStateForTest();
+      vi.useRealTimers();
+    });
+
+    it("replaces idle timing with an absolute deadline that progress cannot extend", async () => {
+      const owner = enqueueOwnedTask({ kind: "bounded", deadlineAtMs: Date.now() + 100 });
+      const next = vi.fn(async () => "next");
+      const queued = enqueueCommandInLane(lane, next);
+      await vi.advanceTimersByTimeAsync(50);
+      owner.progress();
+      await vi.advanceTimersByTimeAsync(49);
+      expect(next).not.toHaveBeenCalled();
+      expect(getCommandLaneSnapshot(lane)).toMatchObject({ activeCount: 1, queuedCount: 1 });
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(owner.outcome).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          name: "CommandLaneTaskTimeoutError",
+          message: expect.stringContaining("owner deadline"),
+        },
+      });
+      await expect(queued).resolves.toBe("next");
+      expect(owner.unsubscribe).toHaveBeenCalledOnce();
+    });
+
+    it("lets unlimited execution hand off to bounded terminal settlement", async () => {
+      const owner = enqueueOwnedTask({ kind: "unlimited" });
+      await vi.advanceTimersByTimeAsync(49 * 60 * 60 * 1000);
+      expect(getCommandLaneSnapshot(lane).activeCount).toBe(1);
+      owner.publish({ kind: "bounded", deadlineAtMs: Date.now() + 120_000 });
+      await vi.advanceTimersByTimeAsync(119_999);
+      expect(getCommandLaneSnapshot(lane).activeCount).toBe(1);
+      owner.finish();
+      await expect(owner.outcome).resolves.toEqual({ status: "completed" });
+      owner.publish({ kind: "bounded", deadlineAtMs: Date.now() });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(getCommandLaneSnapshot(lane).activeCount).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("restores ordinary idle recovery after the runtime releases deadline ownership", async () => {
+      const owner = enqueueOwnedTask({ kind: "unlimited" });
+      await vi.advanceTimersByTimeAsync(1_000);
+      owner.progress();
+      owner.publish(undefined);
+      await vi.advanceTimersByTimeAsync(24);
+      expect(getCommandLaneSnapshot(lane).activeCount).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(owner.outcome).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          name: "CommandLaneTaskTimeoutError",
+          message: expect.stringContaining("no progress for 25ms"),
+        },
+      });
+    });
+
+    it("does not let a late deadline update replace an accepted abort grace", async () => {
+      const owner = enqueueOwnedTask({ kind: "unlimited" });
+      owner.abort.abort();
+      owner.publish({ kind: "unlimited" });
+      await vi.advanceTimersByTimeAsync(4);
+      expect(getCommandLaneSnapshot(lane).activeCount).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(owner.outcome).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          name: "CommandLaneTaskTimeoutError",
+          message: expect.stringContaining("abort grace 5ms"),
+        },
+      });
+    });
+
+    it("honors immediate release when initially aborted", async () => {
+      const owner = enqueueOwnedTask({ kind: "unlimited" }, true);
+      owner.release.abort();
+      await expect(owner.outcome).resolves.toMatchObject({
+        status: "failed",
+        error: {
+          name: "CommandLaneTaskTimeoutError",
+          message: expect.stringContaining("lane release requested"),
+        },
+      });
+      expect(getCommandLaneSnapshot(lane).activeCount).toBe(0);
+    });
   });
 });

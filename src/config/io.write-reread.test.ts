@@ -2,19 +2,12 @@ import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import {
-  releaseUpdateCommandPreflightForHandoff,
-  withUpdateCommandExecutor,
-} from "../cli/update-cli/update-command-executor.js";
 import { captureUpdateDoctorConfigWrites } from "../infra/update-doctor-result.js";
-import {
-  captureManagedUpdateLeaseDatabaseIdentity,
-  createManagedHandoffLeaseDatabase,
-} from "../infra/update-managed-service-handoff-database.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { readLatestConfigSnapshotAuditRecord } from "./config-journal-snapshot.js";
+import { withExecutor } from "./config-executor.test-support.js";
+import { readLatestConfigSnapshotAuditRecordAsync } from "./config-journal-snapshot.js";
 import { listConfigAuditRecordsForTests } from "./io.audit.test-support.js";
 import { createConfigIO } from "./io.factory.js";
 import { hashConfigRaw } from "./io.read-helpers.js";
@@ -30,29 +23,6 @@ import {
 } from "./runtime-snapshot.js";
 import { withTempHome } from "./test-helpers.js";
 import { withConfigWriteLock } from "./write-lock.js";
-
-async function withConfigExecutor(
-  home: string,
-  operation: (assertCurrent: () => void, revoke: () => void) => Promise<void>,
-) {
-  const root = path.join(await fs.realpath(home), "package");
-  await fs.mkdir(root);
-  const databasePath = path.join(home, "control", "managed-update-handoffs.sqlite");
-  createManagedHandoffLeaseDatabase(databasePath)(true, () => undefined);
-  await withUpdateCommandExecutor(
-    "config-compensation-fence",
-    async (executor) => {
-      const fence = await executor.enter(root, { preflight: true });
-      await operation(fence.assertCurrent, () => releaseUpdateCommandPreflightForHandoff(fence));
-    },
-    {
-      existingAuthority: {
-        ...captureManagedUpdateLeaseDatabaseIdentity(databasePath),
-        installKey: root,
-      },
-    },
-  );
-}
 
 const original = '{"gateway":{"mode":"local","port":18789}}\n';
 const nextConfig = { gateway: { mode: "local" as const, port: 19001 } };
@@ -166,11 +136,11 @@ describe("writeConfigFile canonical reread", () => {
     "rechecks compensation authority after reading the committed file (existed=$existed, revoke=$revoke)",
     async ({ existed, revoke }) => {
       await withTempHome(async (home) =>
-        withConfigExecutor(home, async (assertCurrent, revokeExecutor) => {
+        withExecutor(home, "config-compensation-fence", async (assertCurrent, revokeExecutor) => {
           const { configPath, env, options } = await prepareWrite(home, existed);
           const auditSnapshot = () =>
-            readLatestConfigSnapshotAuditRecord({ env, homedir: () => home });
-          const beforeAuditSnapshot = auditSnapshot();
+            readLatestConfigSnapshotAuditRecordAsync({ env, homedir: () => home });
+          const beforeAuditSnapshot = await auditSnapshot();
           let compensating = false;
           let committedRaw: string | Buffer | undefined;
           const readFile = fsNode.promises.readFile.bind(fsNode.promises);
@@ -218,7 +188,7 @@ describe("writeConfigFile canonical reread", () => {
               "message",
               expect.stringContaining("Rollback failed"),
             );
-            expect(auditSnapshot()).toEqual(beforeAuditSnapshot);
+            expect(await auditSnapshot()).toEqual(beforeAuditSnapshot);
             if (existed) {
               await expect(fs.readFile(configPath, "utf8")).resolves.toBe(original);
             } else {
@@ -300,7 +270,7 @@ describe("writeConfigFile canonical reread", () => {
         if (authority === "ordinary") {
           await write();
         } else {
-          await withConfigExecutor(home, async (assertCurrent) => {
+          await withExecutor(home, "config-compensation-fence", async (assertCurrent) => {
             await withConfigWriteLock(configPath, write, env, assertCurrent);
           });
         }
@@ -314,7 +284,7 @@ describe("writeConfigFile canonical reread", () => {
     "fences direct root compensation after %s",
     async (fault) => {
       await withTempHome(async (home) =>
-        withConfigExecutor(home, async (assertCurrent, revokeExecutor) => {
+        withExecutor(home, "config-compensation-fence", async (assertCurrent, revokeExecutor) => {
           const { configPath, io, options } = await prepareWrite(home);
           const realRename = fsNode.renameSync;
           const rootRenames: string[] = [];
@@ -323,13 +293,33 @@ describe("writeConfigFile canonical reread", () => {
           ).map((name) => vi.spyOn(fsNode, name));
           const opens = vi.spyOn(fsNode, "openSync");
           let observed: { raw: string; ino: bigint; counts: number[] } | undefined;
+          const targetsConfig = (target: fsNode.PathLike | number, callOrder: number) => {
+            if (typeof target !== "number") {
+              return String(target) === configPath;
+            }
+            const openedAt = opens.mock.results.findLastIndex(
+              (result, index) =>
+                result.type === "return" &&
+                result.value === target &&
+                opens.mock.invocationCallOrder[index]! < callOrder,
+            );
+            return openedAt >= 0 && String(opens.mock.calls[openedAt]?.[0]) === configPath;
+          };
+          // Worker lock custody can advance independently of the fenced config target.
           const effects = () => [
             rootRenames.length,
-            ...mutations.map(({ mock }) => mock.calls.length),
-            opens.mock.calls.filter(([, flags]) =>
-              typeof flags === "number"
-                ? Boolean(flags & (fsNode.constants.O_WRONLY | fsNode.constants.O_RDWR))
-                : /[wa+]/.test(flags),
+            ...mutations.map(
+              ({ mock }) =>
+                mock.calls.filter((args, index) =>
+                  targetsConfig(args[0], mock.invocationCallOrder[index]!),
+                ).length,
+            ),
+            opens.mock.calls.filter(
+              ([target, flags]) =>
+                String(target) === configPath &&
+                (typeof flags === "number"
+                  ? Boolean(flags & (fsNode.constants.O_WRONLY | fsNode.constants.O_RDWR))
+                  : /[wa+]/.test(flags)),
             ).length,
           ];
           vi.spyOn(fsNode, "renameSync").mockImplementation((source, destination) => {

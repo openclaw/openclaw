@@ -15,18 +15,23 @@ installGatewayTestHooks({ scope: "suite" });
 const createStubChannelPlugin = (params: {
   id: ChannelPlugin["id"];
   label: string;
-  summary?: Record<string, unknown>;
+  inspection?: Record<string, unknown>;
 }): ChannelPlugin => ({
   ...createChannelTestPluginBase({
     id: params.id,
     label: params.label,
-    config: { isConfigured: async () => false },
+    config: {
+      inspectAccount: (_cfg, accountId) => ({
+        accountId,
+        enabled: true,
+        configured: false,
+        ...params.inspection,
+      }),
+      isConfigured: async () => false,
+    },
   }),
   status: {
-    buildChannelSummary: async () => ({
-      configured: false,
-      ...params.summary,
-    }),
+    defaultRuntime: { accountId: "default", lastProbeAt: null },
   },
   gateway: {
     logoutAccount: async () => ({
@@ -48,7 +53,7 @@ const defaultRegistry = createRegistry([
     plugin: createStubChannelPlugin({
       id: "telegram",
       label: "Telegram",
-      summary: { tokenSource: "none", lastProbeAt: null },
+      inspection: { tokenSource: "none" },
     }),
   },
   {
@@ -57,7 +62,6 @@ const defaultRegistry = createRegistry([
     plugin: createStubChannelPlugin({
       id: "signal",
       label: "Signal",
-      summary: { lastProbeAt: null },
     }),
   },
 ]);
@@ -97,7 +101,7 @@ describe("gateway server channels", () => {
     expect(res.ok).toBe(true);
     const telegram = res.payload?.channels?.telegram;
     const signal = res.payload?.channels?.signal;
-    expect(res.payload?.channels?.whatsapp?.configured).toBeTypeOf("boolean");
+    expect(res.payload?.channels?.whatsapp?.configured).toBe(false);
     expect(telegram?.configured).toBe(false);
     expect(telegram?.tokenSource).toBe("none");
     expect(telegram?.probe).toBeUndefined();
