@@ -123,6 +123,21 @@ function renderHelpTitle(params: {
   `;
 }
 
+function renderBehaviorSetting(field: "thinking" | "fastMode", control: TemplateResult) {
+  return renderSettingsRow({
+    title: renderHelpTitle({
+      title: t(`quickSettings.model.${field}`),
+      label: t(`modelProviders.defaults.${field}HelpLabel`),
+      triggerId: field === "thinking" ? THINKING_HELP_ID : FAST_MODE_HELP_ID,
+      paragraphs: [
+        t(`modelProviders.defaults.${field}Help`),
+        t(`modelProviders.defaults.${field}DefaultHelp`),
+      ],
+    }),
+    control,
+  });
+}
+
 function fastModeOptionValue(value: ReturnType<typeof formatFastModeValue>): FastMode {
   return value === "auto" || value === "ultrafast" ? value : value === "on";
 }
@@ -294,17 +309,9 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
           onChange: (value) => props.onFallbackChange(value || null),
         }),
       })}
-      ${renderSettingsRow({
-        title: renderHelpTitle({
-          title: t("quickSettings.model.thinking"),
-          label: t("modelProviders.defaults.thinkingHelpLabel"),
-          triggerId: THINKING_HELP_ID,
-          paragraphs: [
-            t("modelProviders.defaults.thinkingHelp"),
-            t("modelProviders.defaults.thinkingDefaultHelp"),
-          ],
-        }),
-        control: html`
+      ${renderBehaviorSetting(
+        "thinking",
+        html`
           ${renderSettingsSegmented({
             value: props.thinkingLevel ?? "",
             ariaLabel: t("quickSettings.model.thinking"),
@@ -330,18 +337,10 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
             },
           })}
         `,
-      })}
-      ${renderSettingsRow({
-        title: renderHelpTitle({
-          title: t("quickSettings.model.fastMode"),
-          label: t("modelProviders.defaults.fastModeHelpLabel"),
-          triggerId: FAST_MODE_HELP_ID,
-          paragraphs: [
-            t("modelProviders.defaults.fastModeHelp"),
-            t("modelProviders.defaults.fastModeDefaultHelp"),
-          ],
-        }),
-        control: html`
+      )}
+      ${renderBehaviorSetting(
+        "fastMode",
+        html`
           ${renderSettingsSegmented<"" | ReturnType<typeof formatFastModeValue>>({
             value: fastMode,
             ariaLabel: t("quickSettings.model.fastMode"),
@@ -369,7 +368,7 @@ export function renderDefaultModels(props: DefaultModelsViewProps) {
             },
           })}
         `,
-      })}
+      )}
       ${renderCatalogProgress(props)}
       ${props.canMutate ? renderMutationMessage(props.message) : nothing}
     </div>

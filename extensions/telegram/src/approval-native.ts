@@ -108,24 +108,20 @@ const telegramNativeApprovalCapability = createApproverRestrictedNativeApprovalC
   }),
 });
 
-const resolveTelegramApproveCommandBehavior: NonNullable<
-  ChannelApprovalCapability["resolveApproveCommandBehavior"]
-> = (params) => {
-  if (
-    params.approvalKind !== "exec" ||
-    isTelegramExecApprovalClientEnabled(params) ||
-    isTelegramExecApprovalTargetRecipient(params) ||
-    (isTelegramExecApprovalAuthorizedSender(params) && !isTelegramExecApprovalApprover(params))
-  ) {
-    return undefined;
-  }
-  return {
-    kind: "reply",
-    text: "❌ Telegram exec approvals are not enabled for this bot account.",
-  };
-};
-
 export const telegramApprovalCapability: ChannelApprovalCapability = {
   ...telegramNativeApprovalCapability,
-  resolveApproveCommandBehavior: resolveTelegramApproveCommandBehavior,
+  resolveApproveCommandBehavior: (params) => {
+    if (
+      params.approvalKind !== "exec" ||
+      isTelegramExecApprovalClientEnabled(params) ||
+      isTelegramExecApprovalTargetRecipient(params) ||
+      (isTelegramExecApprovalAuthorizedSender(params) && !isTelegramExecApprovalApprover(params))
+    ) {
+      return undefined;
+    }
+    return {
+      kind: "reply",
+      text: "❌ Telegram exec approvals are not enabled for this bot account.",
+    };
+  },
 };

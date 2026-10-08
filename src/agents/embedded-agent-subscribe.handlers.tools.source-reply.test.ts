@@ -1,7 +1,7 @@
 // Tool-authored source replies at tool completion: only a direct call to a tool
 // whose author declared `canDeliverSourceReply` can hand the host a reply.
 import { describe, expect, it } from "vitest";
-import { handleToolExecutionStart } from "./embedded-agent-subscribe.handlers.tools.js";
+import { handleToolExecutionStart } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import {
   createTestContext,
   endTool,

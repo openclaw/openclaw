@@ -400,12 +400,23 @@ export async function resolveContextTokenBudgetForModel(
     if (!entry) {
       return current;
     }
-    const projection = resolveModelContextTokenProjection({
-      ...input,
-      modelContextWindow: profile.contextTokens,
-      modelContextWindowSource: profile.contextWindow ? undefined : entry.contextWindowSource,
-      modelContextTokens: entry.contextTokens,
-    });
+    // Fresh catalog facts replace an unbound cache estimate; only caller/configuration caps remain.
+    current = resolveModelContextTokenProjectionFromCache(
+      { ...input, cfg: request.config },
+      () => undefined,
+      () => undefined,
+    );
+    const projection = resolveModelContextTokenProjectionFromCache(
+      {
+        ...input,
+        cfg: request.config,
+        modelContextWindow: profile.contextTokens,
+        modelContextWindowSource: profile.contextWindow ? undefined : entry.contextWindowSource,
+        modelContextTokens: entry.contextTokens,
+      },
+      () => undefined,
+      () => undefined,
+    );
     const { fixedContextWindow } = resolveConfiguredContextTokenLimits({
       ...input,
       cfg: request.config,

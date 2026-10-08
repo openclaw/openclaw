@@ -172,8 +172,7 @@ export async function createModelSelectionState(params: {
     }));
   const runtimeModelNormalization = resolveRuntimeNormalization(cfg);
 
-  let provider = params.provider;
-  let model = params.model;
+  let { provider, model } = params;
   const primaryProvider = params.primaryProvider ?? defaultProvider;
   const primaryModel = params.primaryModel ?? defaultModel;
   const modelSelectionLocked = sessionEntry?.modelSelectionLocked === true;
@@ -427,8 +426,7 @@ export async function createModelSelectionState(params: {
       usesStoredAutomaticSelection ||
       visibilityPolicy.allows(normalizedStoredOverride)
     ) {
-      provider = normalizedStoredOverride.provider;
-      model = normalizedStoredOverride.model;
+      ({ provider, model } = normalizedStoredOverride);
     }
   }
 
@@ -446,8 +444,7 @@ export async function createModelSelectionState(params: {
         `Configured default model "${buildModelCatalogRef(provider, model)}" is not allowed by ${policyPath}, and no allowed model is available.`,
       );
     }
-    provider = allowedInitialSelection.provider;
-    model = allowedInitialSelection.model;
+    ({ provider, model } = allowedInitialSelection);
   }
   let operatorModelOverride = false;
   if (!params.hasModelDirective) {
@@ -466,8 +463,7 @@ export async function createModelSelectionState(params: {
       throw new Error("No model is available for this operator role and agent.");
     }
     operatorModelOverride = selection.provider !== provider || selection.model !== model;
-    provider = selection.provider;
-    model = selection.model;
+    ({ provider, model } = selection);
   }
 
   if (
@@ -589,29 +585,27 @@ export async function createModelSelectionState(params: {
   const resolveThinkingCatalog = async (
     selection: ThinkingDefaultSelection = { provider, model },
   ) => {
-    const thinkingSelection = resolveThinkingSelection(selection);
-    const { agentRuntime } = thinkingSelection;
+    const { agentRuntime } = resolveThinkingSelection(selection);
     const key = JSON.stringify([selection.provider, selection.model, agentRuntime]);
-    const cached = thinkingCatalogs.get(key);
-    if (cached) {
-      return cached.length > 0 ? cached : undefined;
-    }
-    let catalog = visibilityPolicy.catalog;
-    if (needsThinkHydration(catalog, selection.provider, selection.model, agentRuntime)) {
-      const { loadProviderScopedThinkingCatalog } = await modelCatalogRuntimeLoader.load();
-      const preparedCatalog = await loadProviderScopedThinkingCatalog({
-        config: cfg,
-        agentId: params.agentId,
-        provider: selection.provider,
-        model: selection.model,
-        agentRuntime,
-      });
-      // An empty refresh cannot replace the admitted owner with a configuration-only row.
-      if (findSelectedCatalogEntry({ catalog: preparedCatalog, ...selection })) {
-        catalog = createVisibilityPolicy(preparedCatalog).catalog;
+    let catalog = thinkingCatalogs.get(key);
+    if (!catalog) {
+      catalog = visibilityPolicy.catalog;
+      if (needsThinkHydration(catalog, selection.provider, selection.model, agentRuntime)) {
+        const { loadProviderScopedThinkingCatalog } = await modelCatalogRuntimeLoader.load();
+        const preparedCatalog = await loadProviderScopedThinkingCatalog({
+          config: cfg,
+          agentId: params.agentId,
+          provider: selection.provider,
+          model: selection.model,
+          agentRuntime,
+        });
+        // An empty refresh cannot replace the admitted owner with a configuration-only row.
+        if (findSelectedCatalogEntry({ catalog: preparedCatalog, ...selection })) {
+          catalog = createVisibilityPolicy(preparedCatalog).catalog;
+        }
       }
+      thinkingCatalogs.set(key, catalog);
     }
-    thinkingCatalogs.set(key, catalog);
     return catalog.length > 0 ? catalog : undefined;
   };
 

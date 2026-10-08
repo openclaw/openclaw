@@ -157,7 +157,7 @@ export function listSqliteSessionEntriesFromDatabase(
                 ),
             ).rows
           : [];
-        return { entries: scope.cronRetention ? entries : selected, rows };
+        return { entries: selected, rows };
       }),
     );
     // Cold JSON decoding must not extend the worker's deferred read transaction.

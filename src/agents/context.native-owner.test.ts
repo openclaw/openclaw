@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { resolveProjectedSessionContextTokenBudget } from "../config/sessions/context-token-provenance.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createRunResult, withSession } from "./command/session-store.test-support.js";
 import { getContextWindowCaches, providerContextTokenCacheKey } from "./context-cache.js";
 import { resolveContextTokenBudgetForModel } from "./context.js";
@@ -10,21 +11,26 @@ import {
   type SessionContextCapacityOwner,
 } from "./session-context-capacity.js";
 
-const facts = vi.hoisted(() => ({
-  owner: undefined as SessionContextCapacityOwner | undefined,
-  load: vi.fn(),
-}));
+const facts = vi.hoisted(() => {
+  const runtimeConfig: OpenClawConfig = {};
+  return {
+    owner: undefined as SessionContextCapacityOwner | undefined,
+    load: vi.fn(),
+    runtimeConfig,
+  };
+});
 // mock-isolation: exercise cold budget orchestration against an admitted owner without discovery.
 vi.mock("./prepared-model-catalog.js", () => ({
   getPublishedPreparedModelCatalogOwnerSnapshot: () => facts.owner,
   loadPreparedModelCatalogSnapshot: facts.load,
 }));
 // mock-isolation: Keep host configuration outside synthetic native-owner fixtures.
-vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
+vi.mock("../config/config.js", () => ({ getRuntimeConfig: () => facts.runtimeConfig }));
 
 beforeEach(() => {
   resetContextWindowCacheForTest();
   facts.owner = undefined;
+  facts.runtimeConfig = {};
   facts.load.mockReset();
 });
 
@@ -153,6 +159,69 @@ it.each([
   );
   expect(facts.load).not.toHaveBeenCalled();
 });
+
+it.each([
+  ["cache-only estimate", undefined, undefined, 777_000, false],
+  ["genuine caller cap", 96_000, undefined, 96_000, false],
+  ["authored cap", undefined, 32_000, 32_000, false],
+  ["runtime-config authored cap", undefined, 32_000, 32_000, true],
+] as const)(
+  "reconciles fresh cold catalog capacity with %s",
+  async (_name, caller, authored, expected, runtimeConfig) => {
+    const provider = "fixture-accounting";
+    const model = "cold-cache-recovery";
+    getContextWindowCaches().discoveredTokenCache.set(
+      providerContextTokenCacheKey(provider, model),
+      64_000,
+    );
+    const entry: ModelCatalogEntry = {
+      provider,
+      id: model,
+      name: "Current catalog",
+      contextWindow: 1_000_000,
+      contextTokens: 777_000,
+    };
+    facts.load.mockResolvedValue({ entries: [entry], routeVariants: [entry] });
+    const cfg =
+      authored === undefined
+        ? {}
+        : {
+            models: {
+              providers: {
+                [provider]: {
+                  baseUrl: "https://fixture.example.test/v1",
+                  models: [
+                    {
+                      id: model,
+                      name: "Configured",
+                      reasoning: false,
+                      input: ["text" as const],
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                      contextTokens: authored,
+                      maxTokens: 4096,
+                    },
+                  ],
+                },
+              },
+            },
+          };
+    facts.runtimeConfig = cfg;
+    const result = await resolveContextTokenBudgetForModel({
+      ...(runtimeConfig ? {} : { cfg }),
+      provider,
+      model,
+      nativeRuntime: "openclaw",
+      ...(caller === undefined
+        ? {}
+        : { modelContextTokens: caller, modelContextWindow: 1_000_000 }),
+    });
+    expect(result).toMatchObject({
+      contextTokens: expected,
+      source: authored === undefined ? "model" : "configured",
+    });
+    expect(facts.load).toHaveBeenCalledOnce();
+  },
+);
 
 it("uses the actual native prompt cap beside a synthetic native estimate", async () => {
   publish([

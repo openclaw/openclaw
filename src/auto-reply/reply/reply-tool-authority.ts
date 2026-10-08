@@ -194,6 +194,15 @@ function applyReplyToolAuthorityOverlay(
   };
 }
 
+function resolveReplyToolSandboxParams(execution: ReplyToolAuthorityInput["run"]) {
+  return {
+    cfg: execution.config,
+    agentId: execution.agentId,
+    sessionKey: execution.sessionKey,
+    classificationSessionKey: execution.runtimePolicySessionKey ?? execution.sessionKey,
+  };
+}
+
 export function resolveReplyToolAuthorityContext(
   snapshot: ReplyToolAuthorityInput,
   route?: ReplyToolAuthorityRoute,
@@ -204,13 +213,7 @@ export function resolveReplyToolAuthorityContext(
   const model = route?.model ?? execution.model;
   const policySessionKey = execution.runtimePolicySessionKey ?? execution.sessionKey;
   const sandboxRuntime =
-    preparedSandbox ??
-    resolveSandboxRuntimeStatus({
-      cfg: execution.config,
-      agentId: execution.agentId,
-      sessionKey: execution.sessionKey,
-      classificationSessionKey: policySessionKey,
-    });
+    preparedSandbox ?? resolveSandboxRuntimeStatus(resolveReplyToolSandboxParams(execution));
   const capabilityProfile = resolveConversationCapabilityProfile({
     config: execution.config,
     sessionId: execution.sessionId,
@@ -256,12 +259,7 @@ async function withPreparedReplyToolAuthorityContext<T>(
     assertCurrentOperatorAuthority(input.operatorAuthority);
   };
   return withSandboxRuntimeStatusInWorker(
-    {
-      cfg: input.run.config,
-      agentId: input.run.agentId,
-      sessionKey: input.run.sessionKey,
-      classificationSessionKey: input.run.runtimePolicySessionKey ?? input.run.sessionKey,
-    },
+    resolveReplyToolSandboxParams(input.run),
     { env: { ...process.env }, cwd: process.cwd(), ...source, assertCurrent: assertActive },
     async (sandbox) => {
       assertActive();
@@ -272,44 +270,32 @@ async function withPreparedReplyToolAuthorityContext<T>(
   );
 }
 
-function isReplyToolAllowed(
+/** Screen needs browser control; theme remains requester-scoped without it. */
+export function resolveReplyPersonalToolTargets(
   input: ReplyToolAuthorityInput,
-  toolName: string,
-  preparedProfile?: ResolvedConversationCapabilityProfile,
-): boolean {
-  if (input.disableTools === true || !isRuntimeToolAllowed(toolName, input.toolsAllow)) {
-    return false;
-  }
-  const policies = resolveConversationToolPolicies({
-    capabilityProfile: preparedProfile ?? resolveReplyToolAuthorityContext(input).capabilityProfile,
-  });
-  return isToolAllowedByPolicies(toolName, [
-    ...Object.values(policies),
-    input.run.senderIsOwner === false ? { deny: [...GATEWAY_OWNER_ONLY_CORE_TOOLS] } : undefined,
-  ]);
-}
-
-/** Browser identity matters to admission only while this turn can control the UI. */
-export function resolveReplyScreenToolTarget(
-  input: ReplyToolAuthorityInput,
-  preparedProfile?: ResolvedConversationCapabilityProfile,
+  preparedProfile: ResolvedConversationCapabilityProfile,
 ) {
-  return input.run.gatewayUiCommandTarget &&
-    hasGatewayClientCap(input.run.clientCaps, GATEWAY_CLIENT_CAPS.UI_COMMANDS) &&
-    isReplyToolAllowed(input, "screen", preparedProfile)
-    ? input.run.gatewayUiCommandTarget
-    : undefined;
-}
-
-/** Profile appearance remains requester-scoped even without browser control. */
-export function resolveReplyThemeProfileId(
-  input: ReplyToolAuthorityInput,
-  preparedProfile?: ResolvedConversationCapabilityProfile,
-): string | undefined {
-  return input.run.gatewayUiCommandTarget?.profileId &&
-    isReplyToolAllowed(input, "theme", preparedProfile)
-    ? input.run.gatewayUiCommandTarget.profileId
-    : undefined;
+  const target = input.run.gatewayUiCommandTarget;
+  let policies: ReturnType<typeof resolveConversationToolPolicies> | undefined;
+  const isAllowed = (toolName: string) => {
+    if (input.disableTools === true || !isRuntimeToolAllowed(toolName, input.toolsAllow)) {
+      return false;
+    }
+    policies ??= resolveConversationToolPolicies({ capabilityProfile: preparedProfile });
+    return isToolAllowedByPolicies(toolName, [
+      ...Object.values(policies),
+      input.run.senderIsOwner === false ? { deny: [...GATEWAY_OWNER_ONLY_CORE_TOOLS] } : undefined,
+    ]);
+  };
+  return {
+    screenTarget:
+      target &&
+      hasGatewayClientCap(input.run.clientCaps, GATEWAY_CLIENT_CAPS.UI_COMMANDS) &&
+      isAllowed("screen")
+        ? target
+        : undefined,
+    themeProfileId: target?.profileId && isAllowed("theme") ? target.profileId : undefined,
+  };
 }
 
 const operatorAuthorityIdentities = resolveGlobalSingleton(
@@ -324,18 +310,16 @@ export function resolveReplyOperatorAuthorityKey(
   if (!authority) {
     return "";
   }
-  const identity = (value: object): number => {
-    let key = operatorAuthorityIdentities.keys.get(value);
-    if (key === undefined) {
-      key = operatorAuthorityIdentities.nextId++;
-      operatorAuthorityIdentities.keys.set(value, key);
-    }
-    return key;
-  };
+  const source = authority.source ?? authority;
+  let identity = operatorAuthorityIdentities.keys.get(source);
+  if (identity === undefined) {
+    identity = operatorAuthorityIdentities.nextId++;
+    operatorAuthorityIdentities.keys.set(source, identity);
+  }
   return JSON.stringify([
     authority.profileId,
     [...new Set(authority.scopes.map((scope) => scope.trim()).filter(Boolean))].toSorted(),
-    identity(authority.source ?? authority),
+    identity,
   ]);
 }
 
@@ -357,8 +341,10 @@ export function resolveFollowupRunToolAuthorityFingerprint(
     preparedContext ?? resolveReplyToolAuthorityContext(snapshot, route);
   const authority = snapshot.operatorAuthority;
   assertCurrentOperatorAuthority(authority);
-  const screenTarget = resolveReplyScreenToolTarget(snapshot, capabilityProfile);
-  const themeProfileId = resolveReplyThemeProfileId(snapshot, capabilityProfile);
+  const { screenTarget, themeProfileId } = resolveReplyPersonalToolTargets(
+    snapshot,
+    capabilityProfile,
+  );
   return createHash("sha256")
     .update(
       stableStringify({
@@ -624,10 +610,7 @@ export function prepareReplyToolAuthority(
         assertSources();
         assertClassificationSession(entry, original);
         const sandbox = resolveSandboxRuntimeStatus({
-          cfg: snapshot.run.config,
-          agentId: snapshot.run.agentId,
-          sessionKey: snapshot.run.sessionKey,
-          classificationSessionKey: snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey,
+          ...resolveReplyToolSandboxParams(snapshot.run),
           preparedSessionEntry: entry ?? null,
         });
         for (const input of [snapshot, projected]) {

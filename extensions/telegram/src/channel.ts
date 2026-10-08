@@ -8,6 +8,7 @@ import {
   buildChannelOutboundSessionRoute,
   buildThreadAwareOutboundSessionRoute,
   createChatChannelPlugin,
+  type ChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
 import {
   createAccountStatusSink,
@@ -149,6 +150,24 @@ async function resolveTelegramSend(deps?: OutboundSendDeps): Promise<TelegramSen
   );
 }
 
+type TelegramHeartbeat = NonNullable<ChannelPlugin["heartbeat"]>;
+
+async function sendTelegramHeartbeatTyping(
+  { cfg, to, accountId, threadId }: Parameters<NonNullable<TelegramHeartbeat["sendTyping"]>>[0],
+  guard?: Pick<
+    Parameters<NonNullable<TelegramHeartbeat["sendTypingGuarded"]>>[0],
+    "signal" | "assertPlatformSendAuthorized"
+  >,
+) {
+  const { sendTypingTelegram } = await loadTelegramSendModule();
+  await sendTypingTelegram(to, {
+    cfg,
+    ...(accountId ? { accountId } : {}),
+    messageThreadId: parseTelegramThreadId(threadId),
+    ...guard,
+  });
+}
+
 const telegramChannelOutbound = createTelegramOutboundAdapter({
   resolveSend: resolveTelegramSend,
   loadSendModule: loadTelegramSendModule,
@@ -208,24 +227,6 @@ function normalizeTelegramAcpConversationId(conversationId: string, parentConver
     conversationId: parsed.canonicalConversationId,
     parentConversationId: parsed.chatId,
   };
-}
-
-function matchTelegramAcpConversation(params: {
-  bindingConversationId: string;
-  conversationId: string;
-  parentConversationId?: string;
-}) {
-  const binding = normalizeTelegramAcpConversationId(params.bindingConversationId);
-  if (!binding) {
-    return null;
-  }
-  const incoming = normalizeTelegramAcpConversationId(
-    params.conversationId,
-    params.parentConversationId,
-  );
-  return incoming && binding.conversationId === incoming.conversationId
-    ? { ...incoming, matchPriority: 2 }
-    : null;
 }
 
 function targetsMatchTelegramReplySuppression(params: {
@@ -630,12 +631,16 @@ export const telegramPlugin = createChatChannelPlugin({
       selfParentConversationByDefault: true,
       compileConfiguredBinding: ({ conversationId }) =>
         normalizeTelegramAcpConversationId(conversationId),
-      matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) =>
-        matchTelegramAcpConversation({
-          bindingConversationId: compiledBinding.conversationId,
-          conversationId,
-          parentConversationId,
-        }),
+      matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) => {
+        const binding = normalizeTelegramAcpConversationId(compiledBinding.conversationId);
+        if (!binding) {
+          return null;
+        }
+        const incoming = normalizeTelegramAcpConversationId(conversationId, parentConversationId);
+        return incoming && binding.conversationId === incoming.conversationId
+          ? { ...incoming, matchPriority: 2 }
+          : null;
+      },
       resolveCommandConversation: resolveTelegramCommandConversation,
     },
     conversationBindings: {
@@ -725,31 +730,9 @@ export const telegramPlugin = createChatChannelPlugin({
       },
     },
     heartbeat: {
-      sendTypingGuarded: async ({
-        cfg,
-        to,
-        accountId,
-        threadId,
-        signal,
-        assertPlatformSendAuthorized,
-      }) => {
-        const { sendTypingTelegram } = await loadTelegramSendModule();
-        await sendTypingTelegram(to, {
-          cfg,
-          ...(accountId ? { accountId } : {}),
-          messageThreadId: parseTelegramThreadId(threadId),
-          signal,
-          assertPlatformSendAuthorized,
-        });
-      },
-      sendTyping: async ({ cfg, to, accountId, threadId }) => {
-        const { sendTypingTelegram } = await loadTelegramSendModule();
-        await sendTypingTelegram(to, {
-          cfg,
-          ...(accountId ? { accountId } : {}),
-          messageThreadId: parseTelegramThreadId(threadId),
-        });
-      },
+      sendTypingGuarded: ({ signal, assertPlatformSendAuthorized, ...params }) =>
+        sendTelegramHeartbeatTyping(params, { signal, assertPlatformSendAuthorized }),
+      sendTyping: sendTelegramHeartbeatTyping,
     },
     approvalCapability: {
       ...telegramApprovalCapability,

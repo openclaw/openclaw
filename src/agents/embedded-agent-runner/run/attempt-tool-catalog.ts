@@ -130,19 +130,12 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       subagentPolicy,
       inheritedToolPolicy,
     } = runtimeCapabilityProfile.policy;
+    const agentToolLabel = agentId ? `agents.${agentId}.tools` : "agent tools";
     const explicitToolAllowlistSources = collectExplicitToolAllowlistSources([
       { label: "tools.allow", allow: globalPolicy?.allow },
       { label: "tools.byProvider.allow", allow: globalProviderPolicy?.allow },
-      {
-        label: agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
-        allow: agentPolicy?.allow,
-      },
-      {
-        label: agentId
-          ? `agents.${agentId}.tools.byProvider.allow`
-          : "agent tools.byProvider.allow",
-        allow: agentProviderPolicy?.allow,
-      },
+      { label: `${agentToolLabel}.allow`, allow: agentPolicy?.allow },
+      { label: `${agentToolLabel}.byProvider.allow`, allow: agentProviderPolicy?.allow },
       { label: "group tools.allow", allow: groupPolicy?.allow },
       { label: "sandbox tools.allow", allow: sandboxPolicy?.allow },
       { label: "subagent tools.allow", allow: subagentPolicy?.allow },

@@ -425,6 +425,57 @@ describe("synthetic configured context publication", () => {
     expect(status.text).toContain("/872k");
   });
   it.each([
+    { name: "declared default", selected: undefined, expected: 64_000 },
+    { name: "selected small window", selected: "small", expected: 64_000 },
+    { name: "selected wide window", selected: "wide", expected: 872_000 },
+  ])("preserves $name when accepted capacity supersedes an estimate", ({ selected, expected }) => {
+    const options = [
+      { id: "small", label: "Small", contextWindow: 64_000 },
+      { id: "wide", label: "Wide", contextWindow: 1_000_000 },
+    ];
+    const publication = prepareModelCatalogPublication(
+      {
+        entries: [discovered],
+        routeVariants: [discovered],
+        providerOutcomes: [{ provider: "fixture", status: "ready" }],
+      },
+      new Map(),
+      undefined,
+      auth("account-a"),
+      (provider) => provider,
+      new Map(),
+    );
+    const catalog = materializePreparedModelCatalog(
+      publication.catalog,
+      [],
+      [
+        {
+          ...fallback,
+          baseUrl: discovered.baseUrl,
+          contextWindows: options,
+          contextWindowDefault: "small",
+        },
+      ],
+      new Set(publication.discoveryOrigins.map(({ provider }) => provider)),
+    );
+    const capacity = createSessionContextCapacityResolver({
+      isCurrent: () => true,
+      modelCatalog: catalog,
+    });
+    expect(capacity("fixture", "new-model", { contextWindow: selected })).toMatchObject({
+      state: "ready",
+      contextTokens: expected,
+      synthetic: false,
+    });
+    const declared = [
+      ...catalog.entries,
+      ...catalog.routeVariants,
+      ...(catalog.staticEntries ?? []),
+    ].find((entry) => entry.contextWindows?.length);
+    expect(declared?.contextWindows).toEqual(options);
+    expect(declared?.contextWindowDefault).toBe("small");
+  });
+  it.each([
     ["matching physical route", discovered, false],
     ["different physical endpoint", { ...discovered, baseUrl: "https://other.example/v1" }, true],
   ] as const)("replaces only the %s synthetic fallback", (_name, physical, retained) => {

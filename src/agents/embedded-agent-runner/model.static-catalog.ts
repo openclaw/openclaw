@@ -240,13 +240,10 @@ export function createBundledStaticCatalogModelResolver(
       lookup.modelId.trim(),
       params?.includeRuntimeDiscovery === true,
     ]);
-    const cachedDonor = state.donorRows.get(donorKey);
-    if (cachedDonor !== undefined) {
-      return cachedDonor ? { ...modelFromStaticCatalogRow(cachedDonor), provider } : undefined;
-    }
-    const findDonor = (): NormalizedModelCatalogRow | undefined => {
+    let donor = state.donorRows.get(donorKey);
+    if (donor === undefined) {
       const donors = getPlan();
-      let donor: NormalizedModelCatalogRow | undefined;
+      donor = null;
       for (const row of acceptedRows(donors)) {
         if (row.id !== lookup.modelId.trim()) {
           continue;
@@ -278,14 +275,13 @@ export function createBundledStaticCatalogModelResolver(
             metadataSnapshot,
           })?.suppress
         ) {
-          return undefined;
+          donor = null;
+          break;
         }
         donor = row;
       }
-      return donor;
-    };
-    const donor = findDonor();
-    state.donorRows.set(donorKey, donor ?? null);
+      state.donorRows.set(donorKey, donor);
+    }
     return donor ? { ...modelFromStaticCatalogRow(donor), provider } : undefined;
   };
 }

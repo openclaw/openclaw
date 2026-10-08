@@ -14,13 +14,7 @@ type SessionCompactionStartEvent = Extract<AgentSessionEvent, { type: "compactio
 type SessionCompactionEndEvent = Extract<AgentSessionEvent, { type: "compaction_end" }>;
 type CompactionReason = SessionCompactionStartEvent["reason"];
 
-type CompactionStartEvent =
-  | SessionCompactionStartEvent
-  | {
-      type: "compaction_start";
-      reason?: unknown;
-      itemId?: string;
-    };
+type CompactionStartEvent = Omit<SessionCompactionStartEvent, "reason"> & { reason?: unknown };
 
 // Unknown reasons come from external runtimes or older sessions. Treat them as
 // threshold compaction so logs and event payloads stay on the closed reason set.
@@ -206,11 +200,7 @@ export function handleCompactionEnd(
         (reasonClass === "no_compactable_entries" ||
           reasonClass === "below_threshold" ||
           reasonClass === "already_compacted"));
-    if (benign) {
-      ctx.log.info(`embedded run ${kind} ${outcome.status}`, metadata);
-    } else {
-      ctx.log.warn(`embedded run ${kind} ${outcome.status}`, metadata);
-    }
+    ctx.log[benign ? "info" : "warn"](`embedded run ${kind} ${outcome.status}`, metadata);
   }
   emitCompactionAgentEvent(ctx, {
     phase: "end",

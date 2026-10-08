@@ -16,6 +16,7 @@ import {
   modelCatalogRouteVariantKey,
   modelCatalogRowToEntry,
 } from "./model-catalog-entry.js";
+import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
@@ -344,23 +345,24 @@ export function materializePreparedModelCatalog(
   // The inventory owner has already validated source, account and generation. Only a
   // provider-marked unknown-model estimate may yield to that accepted inventory;
   // curated static metadata and authored caps keep their existing minimum semantics.
-  const superseded = (entry: ModelCatalogSnapshot["entries"][number]) =>
+  const supersedingEntry = (entry: ModelCatalogSnapshot["entries"][number]) =>
     acceptedDiscoveryProviders.has(normalizeProviderId(entry.provider)) &&
-    entry.contextWindowSource === "synthetic" &&
-    sourceRoutes.some(
-      (accepted) =>
-        !accepted.nativeRuntime &&
-        accepted.provider === entry.provider &&
-        accepted.id === entry.id &&
-        Boolean(accepted.api) &&
-        accepted.api === entry.api &&
-        modelTransportRoutesMatch(accepted, entry) &&
-        // Only a reported limit grants replacement: a real prompt limit, or a native
-        // window that is not itself a provider estimate.
-        (accepted.contextTokens ??
-          (accepted.contextWindowSource === "synthetic" ? undefined : accepted.contextWindow) ??
-          0) > 0,
-    );
+    entry.contextWindowSource === "synthetic"
+      ? sourceRoutes.find(
+          (accepted) =>
+            !accepted.nativeRuntime &&
+            accepted.provider === entry.provider &&
+            accepted.id === entry.id &&
+            Boolean(accepted.api) &&
+            accepted.api === entry.api &&
+            modelTransportRoutesMatch(accepted, entry) &&
+            // Only a reported limit grants replacement: a real prompt limit, or a native
+            // window that is not itself a provider estimate.
+            (accepted.contextTokens ??
+              (accepted.contextWindowSource === "synthetic" ? undefined : accepted.contextWindow) ??
+              0) > 0,
+        )
+      : undefined;
   const identityKey = createModelCatalogIdentityKeyResolver();
   // Re-enrich exact harness observations from this API generation, not a pre-await projection.
   const hostRows = enrichHarnessRows(Object.values(snapshot.nativeHostRows ?? {}).flat(), snapshot);
@@ -410,9 +412,23 @@ export function materializePreparedModelCatalog(
   if (snapshot.staticEntries || configuredStaticEntries.length > 0) {
     materialized.staticEntries = project(
       dedupeByKey(
-        [...configuredStaticEntries, ...(snapshot.staticEntries ?? [])].filter(
-          (entry) => !superseded(entry),
-        ),
+        [...configuredStaticEntries, ...(snapshot.staticEntries ?? [])].flatMap((entry) => {
+          const accepted = supersedingEntry(entry);
+          if (!accepted) {
+            return [entry];
+          }
+          return entry.contextWindows?.length
+            ? [
+                overlayCatalogMetadata(accepted, {
+                  provider: entry.provider,
+                  id: entry.id,
+                  name: entry.name,
+                  contextWindows: entry.contextWindows,
+                  contextWindowDefault: entry.contextWindowDefault,
+                }),
+              ]
+            : [];
+        }),
         identityKey,
       ),
     );

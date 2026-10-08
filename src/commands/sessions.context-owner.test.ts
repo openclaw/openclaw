@@ -437,6 +437,13 @@ describe("passive session context owner", () => {
           config: { ...cfg, session: { store } },
         });
         expect(summary.sessions.recent[0]?.contextTokens).toBe(expected);
+        if (current && catalogRuntime === "codex") {
+          setMockSessionsConfig(() => cfg);
+          const result = await runSessionsJson<{
+            sessions: Array<{ contextTokens: number | null }>;
+          }>(sessionsCommand, store);
+          expect(result.sessions[0]?.contextTokens).toBe(expected);
+        }
       } finally {
         await closeOpenClawAgentDatabaseByPathAsync(store);
         cleanupStore(store);

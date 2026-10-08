@@ -165,10 +165,6 @@ export function nodeText(nodes: readonly HtmlNode[], preserveMediaSources = fals
   return parts.join("");
 }
 
-function normalizeIslandText(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
-}
-
 // Raw round-trip of a subtree; keeps unsupported wrappers fully literal.
 function serializeHtmlNodes(nodes: readonly HtmlNode[]): string {
   return nodes
@@ -248,7 +244,7 @@ export function htmlNodesToRichText(
     }
     if (node.name === "tg-emoji") {
       const emojiId = parseHtmlAttrs(node.raw).get("emoji-id");
-      const alternative = normalizeIslandText(nodeText(node.children));
+      const alternative = nodeText(node.children).replace(/\s+/g, " ").trim();
       // Wire contract: custom_emoji_id must be a valid Number (live-verified
       // 400 otherwise); unknown-but-numeric IDs degrade server-side.
       if (emojiId && /^\d+$/.test(emojiId) && alternative) {

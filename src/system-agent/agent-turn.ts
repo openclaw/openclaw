@@ -1,4 +1,3 @@
-// OpenClaw agent turns run the real embedded agent loop with the ring-zero tool.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -25,6 +24,7 @@ import { buildAgentMainSessionKey, toAgentStoreSessionKey } from "../routing/ses
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import { buildSystemAgentSystemPrompt } from "./assistant-prompts.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
+import { requireSystemAgentInferenceRoute } from "./inference-guard.js";
 import type { SystemAgentConfiguredRoute } from "./inference-route.js";
 import type { SystemAgentProposalRef } from "./operator-approval.js";
 import {
@@ -249,25 +249,9 @@ async function runSystemAgentTurnWithDeps(
   deps: SystemAgentTurnDeps = {},
 ): Promise<SystemAgentTurnReply | null> {
   const binding = params.session.verifiedInference;
-  if (!binding) {
-    return throwSystemAgentInferenceUnavailable({ session: params.session, guidance: "setup" });
-  }
-  let plan: SystemAgentConfiguredRoute | null;
-  try {
-    plan = await resolveSystemAgentVerifiedInferenceRoute(binding, deps);
-  } catch (error) {
-    return throwSystemAgentInferenceUnavailable({
-      session: params.session,
-      failures: [error],
-      guidance: "route-changed",
-    });
-  }
-  if (!plan) {
-    return throwSystemAgentInferenceUnavailable({
-      session: params.session,
-      guidance: "route-changed",
-    });
-  }
+  const plan = await requireSystemAgentInferenceRoute(binding, deps, "agent-turn", () =>
+    clearFailedSystemAgentSessionState(params.session),
+  );
   let expectedAgentHarnessRuntimeArtifact: ReturnType<
     typeof resolveSystemAgentExpectedAgentHarnessRuntimeArtifact
   >;

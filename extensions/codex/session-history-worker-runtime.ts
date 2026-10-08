@@ -53,6 +53,8 @@ const historyReads = new WorkerTaskPool<CodexHistoryWorkerInput, CodexHistoryWor
         root: fileURLToPath(new URL("../..", import.meta.url)),
       })
     : sourceWorkerUrl,
+  workerClass: "reader",
+  // Published plugin supports older hosts that only understand numeric sizing.
   maxWorkers: 1,
 });
 

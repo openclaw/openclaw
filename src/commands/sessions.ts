@@ -252,6 +252,8 @@ export async function sessionsCommand(
   const displayDefaults = resolveSessionDisplayDefaults(cfg);
   const { lookupContextTokens, resolveModelContextTokenProjection } =
     await import("../agents/context.js");
+  const { resolveModelContextTokenProjectionFromCache } =
+    await import("../agents/context-resolution.js");
   const { getPublishedPreparedModelCatalogOwnerSnapshot } =
     await import("../agents/prepared-model-catalog.js");
   const { createStatusModelResolver } = await import("../status/status-model-auth.js");
@@ -343,13 +345,6 @@ export async function sessionsCommand(
               sessionEntry: entry,
             })
           : agentRuntime.id;
-      const modelContext = resolveModelContextTokenProjection({
-        cfg,
-        provider: modelRef.provider,
-        model: modelRef.model,
-        nativeRuntime: runtimeId,
-        allowAsyncLoad: false,
-      });
       const owner = getPublishedPreparedModelCatalogOwnerSnapshot({ config: cfg, agentId });
       const ownerCapacity = owner?.workspaceDir
         ? (
@@ -369,6 +364,21 @@ export async function sessionsCommand(
             })
           ).ownerCapacity
         : { state: "unavailable" as const };
+      const modelContextParams = {
+        cfg,
+        provider: modelRef.provider,
+        model: modelRef.model,
+        nativeRuntime: runtimeId,
+        allowAsyncLoad: false,
+      };
+      const modelContext =
+        ownerCapacity?.state === "ready" && !ownerCapacity.synthetic
+          ? resolveModelContextTokenProjectionFromCache(
+              { ...modelContextParams, modelContextTokens: ownerCapacity.contextTokens },
+              () => undefined,
+              () => undefined,
+            )
+          : resolveModelContextTokenProjection(modelContextParams);
       const contextTokens =
         resolveProjectedSessionContextTokens({
           entry,

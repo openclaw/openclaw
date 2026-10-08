@@ -53,17 +53,6 @@ function pluginMemberDescriptor(object: object, key: PropertyKey) {
   return descriptor;
 }
 
-function readPluginMember(
-  object: object,
-  key: PropertyKey,
-  invoke: (run: () => unknown) => unknown,
-  receiver = object,
-): unknown {
-  return pluginMemberNeedsAdmission(object, key)
-    ? invoke(() => Reflect.get(object, key, receiver))
-    : Reflect.get(object, key, receiver);
-}
-
 function pluginMemberNeedsAdmission(object: object, key: PropertyKey, getters = true): boolean {
   for (let source: object | null = object; source; source = Object.getPrototypeOf(source)) {
     if (types.isProxy(source)) {
@@ -323,7 +312,9 @@ function createPluginBindings(
       let property: unknown;
       try {
         resolvedReceiver = resolveReceiver(key, receiver);
-        property = readPluginMember(object, key, invoke, resolvedReceiver);
+        property = pluginMemberNeedsAdmission(object, key)
+          ? invoke(() => Reflect.get(object, key, resolvedReceiver))
+          : Reflect.get(object, key, resolvedReceiver);
       } catch (error) {
         if (protocol && iteration?.active) {
           iteration.close();
@@ -484,7 +475,11 @@ function createPluginBindings(
             object,
             key,
             next,
-            pluginMemberDescriptor(object, key)?.set ? resolveReceiver(key, receiver) : receiver,
+            // Inherited and derived data writes must reach their owning view's defineProperty.
+            (receiver === result && !derivedReceivers.has(object)) ||
+              pluginMemberDescriptor(object, key)?.set
+              ? resolveReceiver(key, receiver)
+              : receiver,
           ),
         ),
       // Freezing only the shadow would invalidate its live original-property projection.

@@ -759,6 +759,8 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     });
 
     const verified = await prepareStats({
+      assistantProvider: " COST-TEST-PROVIDER ",
+      assistantModel: " cost-model ",
       outerContextTokenMeta: { contextTokens: 1_000_000, contextTokensSource: "resolved-v1" },
     });
     expect(verified.agentMeta).toMatchObject({
@@ -770,6 +772,7 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
   it.each([
     { name: "provider", assistantProvider: "other-provider", assistantModel: undefined },
     { name: "model", assistantProvider: undefined, assistantModel: "other-model" },
+    { name: "case-distinct model", assistantProvider: undefined, assistantModel: "Cost-model" },
   ])(
     "does not let a reported $name inherit the prepared model's trusted window",
     async (identity) => {

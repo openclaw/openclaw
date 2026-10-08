@@ -62,11 +62,9 @@ function refreshActiveGoalContextText(
   let insertionIndex: number | undefined;
   const retained: string[] = [];
   for (const block of blocks) {
-    const isInjected = injectedGoals.has(block) || isQueuedGoalOnlyBlock(block, injectedGoals);
-    if (isInjected && insertionIndex === undefined) {
-      insertionIndex = retained.length;
-    }
-    if (!isInjected) {
+    if (injectedGoals.has(block) || isQueuedGoalOnlyBlock(block, injectedGoals)) {
+      insertionIndex ??= retained.length;
+    } else {
       retained.push(block);
     }
   }
@@ -185,31 +183,24 @@ function truncateBodyHeadTail(body: string): string {
   return `${head}${HEAD_TAIL_OMISSION_MARKER}${tail}`;
 }
 
-function sanitizeTranscriptField(value: unknown): string | undefined {
+function sanitizeTranscriptText(
+  value: unknown,
+  kind: "field" | "body" = "field",
+): string | undefined {
   const body = sanitizePromptBody(value);
   if (!body) {
     return undefined;
   }
-  return neutralizeMarkdownFences(
-    truncateWithMarker(body, MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS, {
-      marker: "…[truncated]",
-      reserve: 14,
-      trimEnd: true,
-    }),
-  )
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function sanitizeTranscriptBody(value: unknown): string | undefined {
-  const body = sanitizePromptBody(value);
-  if (!body) {
-    return undefined;
-  }
-  const sanitized = neutralizeMarkdownFences(truncateBodyHeadTail(body))
-    .replace(/\s+/g, " ")
-    .trim();
-  return sanitized || undefined;
+  const truncated =
+    kind === "body"
+      ? truncateBodyHeadTail(body)
+      : truncateWithMarker(body, MAX_UNTRUSTED_TRANSCRIPT_FIELD_CHARS, {
+          marker: "…[truncated]",
+          reserve: 14,
+          trimEnd: true,
+        });
+  const sanitized = neutralizeMarkdownFences(truncated).replace(/\s+/g, " ").trim();
+  return kind === "body" ? sanitized || undefined : sanitized;
 }
 
 function formatChannelStructuredContextLabel(label: unknown): string {
@@ -218,7 +209,7 @@ function formatChannelStructuredContextLabel(label: unknown): string {
 }
 
 function formatStructuredContextRelation(value: unknown): string | undefined {
-  const relation = sanitizeTranscriptField(value);
+  const relation = sanitizeTranscriptText(value);
   if (relation === "around_reply_target") {
     return "around replied-to message";
   }
@@ -239,14 +230,14 @@ function formatChatWindowMessage(
   if (!isRecord(value)) {
     return undefined;
   }
-  const messageId = sanitizeTranscriptField(value["message_id"]);
-  const sender = sanitizeTranscriptField(value["sender"]) ?? "unknown sender";
+  const messageId = sanitizeTranscriptText(value["message_id"]);
+  const sender = sanitizeTranscriptText(value["sender"]) ?? "unknown sender";
   const timestamp = formatChatWindowTimestamp(value["timestamp_ms"], envelope);
-  const replyToId = sanitizeTranscriptField(value["reply_to_id"]);
-  const mediaType = sanitizeTranscriptField(value["media_type"]);
+  const replyToId = sanitizeTranscriptText(value["reply_to_id"]);
+  const mediaType = sanitizeTranscriptText(value["media_type"]);
   const mediaLocator =
-    normalizePromptMediaPath(value["media_path"]) ?? sanitizeTranscriptField(value["media_ref"]);
-  const body = sanitizeTranscriptBody(value["body"]);
+    normalizePromptMediaPath(value["media_path"]) ?? sanitizeTranscriptText(value["media_ref"]);
+  const body = sanitizeTranscriptText(value["body"], "body");
   const details = [
     messageId ? `#${messageId}` : undefined,
     timestamp,
@@ -276,9 +267,9 @@ function formatChatWindowStructuredContext(
   if (lines.length === 0) {
     return undefined;
   }
-  const label = sanitizeTranscriptField(entry.label) ?? "Chat window";
+  const label = sanitizeTranscriptText(entry.label) ?? "Chat window";
   const relation = formatStructuredContextRelation(entry.payload["relation"]);
-  const order = sanitizeTranscriptField(entry.payload["order"]);
+  const order = sanitizeTranscriptText(entry.payload["order"]);
   const qualifiers = [order, relation].filter(Boolean).join(", ");
   const header = qualifiers ? `${label} (${qualifiers}):` : `${label}:`;
   return [markInboundContextLabel(header), ...lines].join("\n");
@@ -404,7 +395,7 @@ function formatTelegramCurrentMessageContext(ctx: TemplateContext): string | und
     return undefined;
   }
   const quote =
-    sanitizeTranscriptField(ctx.ReplyToQuoteText) ?? sanitizeTranscriptBody(ctx.ReplyToBody);
+    sanitizeTranscriptText(ctx.ReplyToQuoteText) ?? sanitizeTranscriptText(ctx.ReplyToBody, "body");
   if (!quote) {
     return undefined;
   }
@@ -558,7 +549,7 @@ export function buildInboundUserContextPrefix(
   // prompt stays byte-stable across task-scoped sessions and reply turns.
   const conversationInfo = {
     requester_profile: requester
-      ? { id: requester.id, display_name: sanitizeTranscriptField(requester.displayName) }
+      ? { id: requester.id, display_name: sanitizeTranscriptText(requester.displayName) }
       : undefined,
     // Inside the marked block so display, history and memory strippers drop it with the rest.
     requester_profile_hint: requester
@@ -568,11 +559,11 @@ export function buildInboundUserContextPrefix(
     message_id: shouldIncludeConversationInfo ? resolvedMessageId : undefined,
     reply_to_id: shouldIncludeConversationInfo ? replyToId : undefined,
     conversation_label: isDirect ? undefined : normalizePromptMetadataString(ctx.ConversationLabel),
-    sender: shouldIncludeConversationInfo
-      ? Object.values(senderIdentity).some((value) => value !== undefined)
+    sender:
+      shouldIncludeConversationInfo &&
+      Object.values(senderIdentity).some((value) => value !== undefined)
         ? senderIdentity
-        : undefined
-      : undefined,
+        : undefined,
     timestamp: timestampStr,
     source_modality: resolveInboundSourceModality(ctx),
     group_subject: normalizePromptMetadataString(ctx.GroupSubject),
