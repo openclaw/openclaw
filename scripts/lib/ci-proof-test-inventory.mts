@@ -682,7 +682,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/openrouter/music-generation-provider.transport.test.ts",
   "extensions/parallel/src/parallel-web-search-provider.test.ts",
   "extensions/perplexity/src/perplexity-web-search-provider.test.ts",
-  "extensions/policy/src/cli.agent-owner.test.ts",
   "extensions/policy/src/cli.test.ts",
   "extensions/qa-channel/setup-entry.test.ts",
   "extensions/qa-channel/src/bus-client.test.ts",
