@@ -377,7 +377,8 @@ import Testing
             appModel: appModel,
             startDiscovery: false,
             tcpReachabilityProbe: { _, _, _, _ in true },
-            tlsFingerprintProbe: { _ in .systemTrusted(fingerprint: "setup-system-trusted") })
+            tlsFingerprintProbe: { _ in .systemTrusted(fingerprint: "setup-system-trusted") },
+            ingress: makeOrdinaryIngress())
 
         let result = await controller.connectManual(
             host: link.host,
@@ -422,7 +423,8 @@ import Testing
             persistTLSFingerprint: { fingerprint, stableID in
                 persistedFingerprint.withLock { $0 = (fingerprint, stableID) }
                 return true
-            })
+            },
+            ingress: makeOrdinaryIngress())
 
         let result = await controller.connectManual(
             host: link.host,
@@ -928,7 +930,8 @@ import Testing
                     return $0 > 1
                 }
             },
-            tlsFingerprintProbe: { _ in .fingerprint(fingerprint) })
+            tlsFingerprintProbe: { _ in .fingerprint(fingerprint) },
+            ingress: makeOrdinaryIngress())
         var pending: GatewayConnectionController.ManualAuthOverride? = auth.manualAuthOverride
         let firstInput = GatewayConnectionController.ManualAuthOverride.currentManualInput(
             token: "edited-token",
@@ -961,15 +964,16 @@ import Testing
         #expect(retryInput.token == "edited-token")
         let accepted = await controller.retryGatewayConnection()
         #expect(accepted == .accepted)
+        await self.waitUntil { !controller.hasPendingConnectionHandoff }
         // Settings did not receive this result and still owns its old value. The controller's
         // shared handoff receipt, not a view-local clear, must retire its setup credentials.
         #expect(pending != nil)
         #expect(pending?.wasHandedOff == true)
         #expect(pending?.bootstrapToken == "unconsumed-bootstrap")
         #expect(controller.pendingGatewayRetryKind == nil)
-        await self.waitUntil { appModel.activeGatewayConnectConfig != nil }
-        #expect(appModel.activeGatewayConnectConfig?.token == "edited-token")
-        #expect(appModel.activeGatewayConnectConfig?.bootstrapToken == "unconsumed-bootstrap")
+        let config = try #require(appModel.activeGatewayConnectConfig)
+        #expect(config.token == "edited-token")
+        #expect(config.bootstrapToken == "unconsumed-bootstrap")
 
         // Model the durable credential handoff before a later Retry. The spent setup context
         // must not win over the store, either in the form-input owner or the root retry route.

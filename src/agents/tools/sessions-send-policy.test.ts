@@ -359,6 +359,38 @@ describe("sessions_send directed policy at the tool boundary", () => {
     },
   );
 
+  it.each(["interrupted", "failed", "killed", "timeout", "done"] as const)(
+    "adds restart context only when continuing an interrupted child (%s)",
+    async (status) => {
+      const target = { agentId: "worker", sessionKey: nativeChildKey };
+      const entry = {
+        sessionId: "native-child-session",
+        updatedAt: 1,
+        spawnedBy: requesterKey,
+      };
+      await replaceSessionEntry(target, { ...entry, status });
+      try {
+        const result = await send(configFor({ send: [], visibility: "tree" }), {
+          sessionKey: nativeChildKey,
+        });
+        expect(result.details).toMatchObject({ status: "ok", reply: replyText });
+        const prompt = callGateway.mock.calls.find(([request]) => request.method === "agent")?.[0]
+          .params.message;
+        expect(prompt).toContain("Please handle this task");
+        if (status === "interrupted") {
+          expect(prompt).toContain("interrupted by a gateway restart");
+          expect(prompt).toContain("marked interrupted, missing, or aborted");
+          expect(prompt).toContain("unknown outcome");
+          expect(prompt).toContain("not proof of tool failure");
+        } else {
+          expect(prompt).not.toContain("gateway restart");
+        }
+      } finally {
+        await replaceSessionEntry(target, entry);
+      }
+    },
+  );
+
   it.each([
     { label: "native-child", key: nativeChildKey },
     { label: "acp-child", key: acpChildKey },

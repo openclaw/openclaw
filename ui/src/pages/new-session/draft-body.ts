@@ -68,6 +68,7 @@ export function renderNewSessionBody(options: {
   statusLabel?: string;
   completion?: { label: string; onOpen?: () => void; disabled?: boolean };
   showDraft?: boolean;
+  inChat?: boolean;
   renderDraft: () => TemplateResult;
   onOpenImage: (item: ImageLightboxItem) => void;
 }) {
@@ -84,7 +85,7 @@ export function renderNewSessionBody(options: {
       ${pendingMessage ? (options.completion?.label ?? options.statusLabel ?? t("newSession.starting")) : nothing}
     </div>
     <div
-      class="new-session-page__scroll ${pendingMessage ? `chat-thread ${avatarPlacement === "footer" ? "chat-thread--direct" : ""}` : ""}"
+      class="${options.inChat ? "" : "new-session-page__scroll"} ${pendingMessage || options.inChat ? `chat-thread ${avatarPlacement === "footer" ? "chat-thread--direct" : ""}` : ""}"
       ?inert=${draftLocked}
       aria-busy=${String(options.submitting)}
       @mousedown=${beginNativeWindowDragFromTopInset}

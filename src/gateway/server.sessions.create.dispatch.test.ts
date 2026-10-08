@@ -13,7 +13,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
-  beginSessionWorkAdmission,
   getSessionWorkAdmissionRelease,
   isSessionWorkAdmissionActive,
 } from "../sessions/session-lifecycle-admission.js";
@@ -35,6 +34,7 @@ import {
   requireNonEmptyString,
   withFixedOwnerSessionStore,
 } from "./server.sessions.create.test-support.js";
+import { sessionTitleRequests } from "./session-title-state.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 import {
   dispatchInboundMessageMock,
@@ -103,15 +103,15 @@ test("sessions.create publishes repository metadata before the next socket read"
   }
 });
 
-test("chat.send fences dashboard title persistence from concurrent session deletion", async () => {
+test("chat.send deletes a session before its pending dashboard title finishes", async () => {
   const { storePath } = await createSessionStoreDir();
   const { ws } = await openClient();
-  let releaseDrainProbe = () => {};
   let deletionCleanup: Promise<unknown> | undefined;
+  let titleCompletion: Promise<boolean> | undefined;
   let dispatchAdmissionsReleased: Promise<void> | undefined;
   const scheduleTitle = await actualDashboardTitleScheduler();
   dashboardTitleScheduleMocks.schedule.mockImplementationOnce((params, turn) => {
-    // Capture chat custody before the independent title admission is created.
+    // Wait for the real reply custody, independently of the pending metadata title.
     dispatchAdmissionsReleased = getSessionWorkAdmissionRelease({
       scope: params.storePath,
       identities: [params.sessionKey, params.admittedSessionId],
@@ -142,7 +142,7 @@ test("chat.send fences dashboard title persistence from concurrent session delet
     };
   });
   try {
-    const created = await rpcReq<{ key: string }>(ws, "sessions.create", {
+    const created = await rpcReq<{ key: string; sessionId: string }>(ws, "sessions.create", {
       agentId: "main",
       key: "agent:main:dashboard:title-order",
     });
@@ -156,47 +156,35 @@ test("chat.send fences dashboard title persistence from concurrent session delet
     });
     expect(sent.ok, JSON.stringify(sent.error)).toBe(true);
     await Promise.all([dispatchStarted.promise, titleStarted]);
-    finishDispatch?.();
+    titleCompletion = sessionTitleRequests.get({
+      storePath,
+      sessionKey,
+      sessionId: requireNonEmptyString(created.payload?.sessionId, "created session id"),
+    });
+    expect(titleCompletion).toBeDefined();
+    finishDispatch();
     expect(dispatchAdmissionsReleased).toBeDefined();
     await dispatchAdmissionsReleased;
-    expect(isSessionWorkAdmissionActive(storePath, [sessionKey])).toBe(true);
-    const drainStarted = createDeferredCore();
-    const drainProbe = await beginSessionWorkAdmission({
-      scope: storePath,
-      identities: [sessionKey],
-      assertAllowed: () => {},
-      onInterrupt: () => {
-        drainStarted.resolve();
-        releaseDrainProbe();
-      },
-    });
-    releaseDrainProbe = drainProbe.release;
-    let deletionSettled = false;
+    expect(isSessionWorkAdmissionActive(storePath, [sessionKey])).toBe(false);
+
+    // Metadata-only naming must not delay deletion, even while its model is blocked.
     const deletion = directSessionReq<{ deleted: boolean }>("sessions.delete", {
       key: sessionKey,
-    }).finally(() => {
-      deletionSettled = true;
     });
     deletionCleanup = deletion.catch(() => {});
-    // Deletion drains title work outside its mutation lock; observe the drain owner itself.
-    await Promise.race([
-      drainStarted.promise,
-      deletion.then((result) => {
-        throw new Error(`Deletion returned before draining: ${JSON.stringify(result)}`);
-      }),
-    ]);
-    expect(isSessionWorkAdmissionActive(storePath, [sessionKey])).toBe(true);
-    expect(deletionSettled).toBe(false);
-
-    finishTitle?.();
     const deleted = await deletion;
     expect(deleted.ok, JSON.stringify(deleted.error)).toBe(true);
     expect(deleted.payload?.deleted).toBe(true);
     expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
-  } finally {
-    releaseDrainProbe();
-    finishDispatch?.();
+
+    // Join the title writer itself before proving that its late result cannot recreate the row.
     finishTitle?.();
+    await expect(titleCompletion).resolves.toBe(false);
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
+  } finally {
+    finishDispatch();
+    finishTitle?.();
+    await titleCompletion;
     await deletionCleanup;
     ws.close();
   }
