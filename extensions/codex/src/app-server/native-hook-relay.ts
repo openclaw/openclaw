@@ -115,18 +115,14 @@ export function scheduleCodexNativeHookRelayUnregister(params: {
   relay: ReturnType<typeof registerNativeHookRelayForBundledRuntime>;
   hookTimeoutSec?: number;
 }): void {
+  const hookTimeoutMs =
+    finiteSecondsToTimerSafeMilliseconds(normalizeHookTimeoutSec(params.hookTimeoutSec)) ?? 0;
   nativeHookRelayUnregisterQueue.schedule(
     params.relay,
-    resolveCodexNativeHookRelayUnregisterGraceMs(params.hookTimeoutSec),
-  );
-}
-
-function resolveCodexNativeHookRelayUnregisterGraceMs(hookTimeoutSec: number | undefined): number {
-  const hookTimeoutMs =
-    finiteSecondsToTimerSafeMilliseconds(normalizeHookTimeoutSec(hookTimeoutSec)) ?? 0;
-  return Math.max(
-    CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS,
-    addTimerTimeoutGraceMs(hookTimeoutMs, CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS) ?? 0,
+    Math.max(
+      CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS,
+      addTimerTimeoutGraceMs(hookTimeoutMs, CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS) ?? 0,
+    ),
   );
 }
 
@@ -217,12 +213,7 @@ export function createCodexNativeHookRelay(params: {
   const directChildClaims = new Map<string, symbol>();
   const pendingDirectChildAdmissions = new Map<
     string,
-    {
-      promise: Promise<symbol>;
-      resolve: (claim: symbol) => void;
-      reject: (reason: Error) => void;
-      waiters: number;
-    }
+    ReturnType<typeof createDeferred<symbol>> & { waiters: number }
   >();
   let foregroundClosed = false;
   let successfulYieldRetentionAuthorized = false;

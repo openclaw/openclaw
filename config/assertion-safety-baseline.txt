@@ -1956,7 +1956,7 @@ src/cron/store/delivery-codec.ts	2
 src/cron/store/row-codec.ts	3
 src/daemon/arg-split.ts	2
 src/daemon/launchd-install.ts	4
-src/daemon/launchd-lifecycle.ts	4
+src/daemon/launchd-lifecycle.ts	3
 src/daemon/launchd-service-files.ts	1
 src/daemon/launchd-stop.ts	2
 src/daemon/schtasks-control.ts	5
@@ -2487,7 +2487,7 @@ src/plugins/plugin-package-update.ts	1
 src/plugins/plugin-peer-link.ts	2
 src/plugins/plugin-sdk-native-resolver.ts	1
 src/plugins/prepared-message-tool-catalog.ts	1
-src/plugins/provider-auth-choice-helpers.ts	8
+src/plugins/provider-auth-choice-helpers.ts	5
 src/plugins/provider-catalog-result.ts	7
 src/plugins/provider-discovery.runtime.ts	2
 src/plugins/provider-discovery.ts	1
@@ -2760,7 +2760,7 @@ ui/src/components/lobster-dex.ts	2
 ui/src/components/login-gate.ts	2
 ui/src/components/markdown-assistant-transcript.ts	1
 ui/src/components/markdown-code-blocks.ts	1
-ui/src/components/markdown-parser.ts	2
+ui/src/components/markdown-parser.ts	1
 ui/src/components/mcp-app-theme.ts	1
 ui/src/components/mcp-app-view.ts	5
 ui/src/components/mcp-server-form.ts	1

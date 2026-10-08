@@ -204,20 +204,15 @@ export function resolveServerUiPrefStateFromSnapshot<K extends SyncedPrefKey>(
         settings,
       ));
   const applicableServerValue = canApplyServerValue ? serverValue : productDefault;
-  if (canSync === null && profilePrefs != null && isAppearancePref(key)) {
-    // Offline profile snapshots supply a local reset baseline. Cancel queued
-    // edits without creating a new remote write while identity is disconnected.
+  if (
+    (canSync === null && profilePrefs != null && isAppearancePref(key)) ||
+    (canSync === false && shadowPrefs && key in shadowPrefs)
+  ) {
+    // Disconnected profiles and read-only queued edits use the last server
+    // baseline without claiming a pending sync or creating another remote write.
     return { ...localState(applicableServerValue), provenance: "device-local" };
   }
   if (shadowPrefs && key in shadowPrefs) {
-    if (canSync === false) {
-      return {
-        ...localState(applicableServerValue),
-        // Keep queued intent for a later authorized reconnect without claiming
-        // that this connected read-only browser is pending a server sync.
-        provenance: "device-local",
-      };
-    }
     const shadowValue = shadowPrefs[key];
     if (shadowValue === null) {
       return { ...localState(resetValue), provenance: "pending" };
@@ -229,28 +224,17 @@ export function resolveServerUiPrefStateFromSnapshot<K extends SyncedPrefKey>(
       value: shadowValue as SyncedPrefValue<K>,
     };
   }
-  if (serverValue === undefined) {
+  if (serverValue === undefined || (!canApplyServerValue && canSync === false)) {
     return localState(productDefault);
   }
-  if (!canApplyServerValue) {
-    if (canSync === false) {
-      return localState(productDefault);
-    }
+  if (!canApplyServerValue || prefValuesEqual(localValue, serverValue)) {
     // Preserve authored server provenance even when this browser cannot render
     // the value, so Restore default still removes the server override.
     return {
       overridden: true,
       provenance: isProfileValue ? "profile" : "synced",
       resetValue,
-      value: localValue,
-    };
-  }
-  if (prefValuesEqual(localValue, serverValue)) {
-    return {
-      overridden: true,
-      provenance: isProfileValue ? "profile" : "synced",
-      resetValue,
-      value: serverValue,
+      value: canApplyServerValue ? serverValue : localValue,
     };
   }
   return localState(serverValue);

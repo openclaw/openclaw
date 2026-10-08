@@ -12,6 +12,19 @@ export class PluginHostObject {
   }
 }
 
+export class PluginFactoryBinding extends PluginHostObject {
+  #factory: object;
+
+  constructor(value: object, factory: object) {
+    super(value);
+    this.#factory = factory;
+  }
+
+  static belongsTo(value: object, factory: object): boolean {
+    return #factory in value && value.#factory === factory;
+  }
+}
+
 export class PluginCallToken extends PluginHostObject {
   #hostCleanup: boolean;
 

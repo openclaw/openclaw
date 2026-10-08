@@ -245,7 +245,7 @@ class Monitor {
       prepareReceiver: (state, threadId) => this.prepareReceiverChild(state, threadId),
       registerChild: (state, assignment, childOptions) =>
         this.registerChildThread(state, assignment, childOptions),
-      admitFollowup: (known, id) => this.admitFollowupChild(known, id),
+      admitFollowup: (known) => this.admitFollowupChild(known),
       resumeChild: (child) => this.resumeChild(child),
       completeChild: (notification, child) => this.handleChildTurnCompletion(notification, child),
       retain: (state, threadId) => {
@@ -493,8 +493,8 @@ class Monitor {
       assertInputCurrent: (threadId, owner) =>
         this.submissions.modelInputs.assertModelInputCurrent(threadId, owner),
       hasPendingInput: (input) => this.submissions.modelInputs.hasPendingModelInput(input),
-      onExecutionAdmitted: (known, threadId) => {
-        this.admitFollowupChild(known, threadId);
+      onExecutionAdmitted: (known) => {
+        this.admitFollowupChild(known);
       },
       registerChildExecution: (state, modelRequest, agentPath, completionCustody) => {
         this.registerChildThread(
@@ -1082,7 +1082,6 @@ class Monitor {
     const observedTurn = Boolean(child.nativeTurnId && child.nativeTurnId !== turnId);
     if (child.nativeTurnId !== turnId) {
       child.nativeTurnId = turnId;
-      child.nativeTurnState = undefined;
       child.activityWait = undefined;
     }
     child.nativeTurnState = recovery.nativeTurnState;
@@ -1111,10 +1110,10 @@ class Monitor {
       );
     }
     if (observedTurn && known.pendingTurns.length === 0) {
-      this.associatePendingChildInteraction(known, child.childThreadId, child.nativeTurnId);
+      this.associatePendingChildInteraction(known, child.nativeTurnId);
     }
     this.submissions.observeKnownChild(child.childThreadId);
-    return this.admitFollowupChild(known, child.childThreadId);
+    return this.admitFollowupChild(known);
   }
 
   private async processCompletion(
@@ -1484,9 +1483,9 @@ class Monitor {
       }
     }
     if (observedTurn) {
-      this.associatePendingChildInteraction(known, threadId, turnId);
+      this.associatePendingChildInteraction(known, turnId);
     }
-    this.admitFollowupChild(known, threadId);
+    this.admitFollowupChild(known);
     const startedChild = this.currentChild(threadId);
     if (startedChild && !known.pendingTurns.some((candidate) => candidate.turnId === turnId)) {
       // Reserve the new turn before persistence yields to a later completion receipt.
@@ -1496,14 +1495,9 @@ class Monitor {
     return true;
   }
 
-  private associatePendingChildInteraction(
-    known: KnownChild,
-    threadId: string,
-    nativeTurnId: string,
-  ): void {
+  private associatePendingChildInteraction(known: KnownChild, nativeTurnId: string): void {
     associateNativeChildInteraction(
       known,
-      threadId,
       nativeTurnId,
       this.admissionCustody.entries,
       (owner, turnId) => this.drainPendingChildAdmissionEvidence(known.parent, owner, turnId),
@@ -1559,11 +1553,8 @@ class Monitor {
     }
   }
 
-  private admitFollowupChild(
-    known: KnownChild,
-    threadId: string,
-    owner?: ParentOwner,
-  ): ChildState | undefined {
+  private admitFollowupChild(known: KnownChild, owner?: ParentOwner): ChildState | undefined {
+    const threadId = known.assignment.childThreadId;
     if (
       this.parentStates.get(known.parent.parentThreadId) !== known.parent ||
       this.retiredParentStates.has(known.parent)
@@ -1735,8 +1726,7 @@ class Monitor {
       registerAgentPath: (parent, threadId, path) => this.registerAgentPath(parent, threadId, path),
       registerChildThread: (parent, threadId, options) =>
         this.registerChildThread(parent, threadId, options),
-      admitFollowupChild: (known, threadId, admittedOwner) =>
-        this.admitFollowupChild(known, threadId, admittedOwner),
+      admitFollowupChild: (known, admittedOwner) => this.admitFollowupChild(known, admittedOwner),
       observeActivity: (child) =>
         this.turnObservation.emitChildTaskActivity(
           {
