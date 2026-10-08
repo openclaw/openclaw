@@ -14,59 +14,15 @@ import {
   type ProviderRequestTransport,
   resolveProviderRequestCapabilities,
 } from "./provider-attribution.js";
+import type {
+  ModelProviderRequestTransportOverrides,
+  ProviderRequestAuthOverride,
+  ProviderRequestProxyOverride,
+  ProviderRequestTlsOverride,
+  ProviderRequestTransportOverrides,
+} from "./provider-request-config.types.js";
 
 type RequestApi = Api | ModelDefinitionConfig["api"];
-
-/** Auth override accepted from sanitized provider/model request config. */
-export type ProviderRequestAuthOverride =
-  | {
-      mode: "provider-default";
-    }
-  | {
-      mode: "authorization-bearer";
-      token: string;
-    }
-  | {
-      mode: "header";
-      headerName: string;
-      value: string;
-      prefix?: string;
-    };
-
-/** TLS override accepted from sanitized provider/model request config. */
-export type ProviderRequestTlsOverride = {
-  ca?: string;
-  cert?: string;
-  key?: string;
-  passphrase?: string;
-  serverName?: string;
-  insecureSkipVerify?: boolean;
-};
-
-/** Proxy override accepted from sanitized provider/model request config. */
-export type ProviderRequestProxyOverride =
-  | {
-      mode: "env-proxy";
-      tls?: ProviderRequestTlsOverride;
-    }
-  | {
-      mode: "explicit-proxy";
-      url: string;
-      tls?: ProviderRequestTlsOverride;
-    };
-
-/** Transport override block shared by provider and model request config. */
-export type ProviderRequestTransportOverrides = {
-  headers?: Record<string, string>;
-  auth?: ProviderRequestAuthOverride;
-  proxy?: ProviderRequestProxyOverride;
-  tls?: ProviderRequestTlsOverride;
-};
-
-/** Model-scoped transport overrides, including private-network policy. */
-export type ModelProviderRequestTransportOverrides = ProviderRequestTransportOverrides & {
-  allowPrivateNetwork?: boolean;
-};
 
 type ProviderRequestHeaderPrecedence = "caller-wins" | "defaults-win";
 
@@ -261,7 +217,6 @@ export function mergeModelProviderRequestOverrides(
   return hasMerged ? merged : undefined;
 }
 
-/** Normalizes provider base URLs by trimming trailing slashes. */
 export function normalizeBaseUrl(baseUrl: string | undefined, fallback: string): string;
 export function normalizeBaseUrl(
   baseUrl: string | undefined,
@@ -487,7 +442,7 @@ function applyResolvedAuthHeader(
     auth.mode === "authorization-bearer"
       ? `Bearer ${auth.value}`
       : `${auth.prefix ?? ""}${auth.value}`;
-  return Object.keys(next).length > 0 ? next : undefined;
+  return next;
 }
 
 function toTlsConnectOptions(
@@ -511,7 +466,6 @@ function toTlsConnectOptions(
   return Object.keys(next).length > 0 ? next : undefined;
 }
 
-/** Builds the dispatcher proxy/TLS policy for outbound provider requests. */
 export function buildProviderRequestDispatcherPolicy(
   request: Pick<ResolvedProviderRequestConfig, "proxy" | "tls">,
 ): PinnedDispatcherPolicy | undefined {
@@ -534,7 +488,6 @@ export function buildProviderRequestDispatcherPolicy(
   };
 }
 
-/** Resolves the full provider request policy, headers, auth, proxy, and TLS config. */
 export function resolveProviderRequestPolicyConfig(
   params: ResolveProviderRequestPolicyConfigParams,
 ) {
@@ -634,7 +587,6 @@ export function resolveProviderRequestConfig(params: {
 
 type ResolvedProviderRequestConfig = ReturnType<typeof resolveProviderRequestConfig>;
 
-/** Resolves final headers for one provider request route. */
 export function resolveProviderRequestHeaders(params: {
   provider: string;
   api?: RequestApi;
@@ -697,7 +649,6 @@ export function attachModelProviderRequestTransport<TModel extends object>(
   return { ...model, [MODEL_PROVIDER_REQUEST_TRANSPORT_SYMBOL]: request };
 }
 
-/** Reads provider request transport metadata attached to a model definition. */
 export function getModelProviderRequestTransport(
   model: object,
 ): ModelProviderRequestTransportOverrides | undefined {
@@ -734,7 +685,6 @@ export function attachModelProviderRequestRouteFacts<TModel extends ProviderRequ
   };
 }
 
-/** Reads the prepared provider route attached to a transport model. */
 export function getModelProviderRequestRouteFacts(
   model: object,
 ): ProviderRequestRouteFacts | undefined {

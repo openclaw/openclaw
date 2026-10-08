@@ -27,7 +27,7 @@ describe("Codex Computer Use periodic health", () => {
       "thread/start",
       {
         input: [],
-        developerInstructions: "OpenClaw Computer Use readiness probe",
+        developerInstructions: "OpenClaw Computer Use readiness check",
         ephemeral: true,
       },
       { timeoutMs: 60_000 },

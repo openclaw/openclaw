@@ -3,6 +3,7 @@ import path from "node:path";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   type AgentsFilesGetParams,
+  type AgentsFilesGetResult,
   ErrorCodes,
   errorShape,
   validateAgentsFilesGetParams,
@@ -89,35 +90,6 @@ async function statWorkspaceFileSafely(
   }
 }
 
-async function listAgentFiles(workspaceDir: string, options?: { hideBootstrap?: boolean }) {
-  const access = getAgentWorkspaceAccess(workspaceDir);
-  const workspaceRoot = access ? null : await root(workspaceDir).catch(() => null);
-  const names = options?.hideBootstrap ? CORE_FILE_NAMES_POST_ONBOARDING : CORE_FILE_NAMES;
-  return await Promise.all(
-    names.map(async (name) => {
-      let meta: FileMeta | null;
-      if (access) {
-        const stat = await access.bridge.stat({ filePath: name });
-        if (getAgentWorkspaceAccess(workspaceDir) !== access) {
-          throw new Error("Workspace access changed while listing Agent documents");
-        }
-        meta =
-          stat?.type === "file" ? { size: stat.size, updatedAtMs: Math.floor(stat.mtimeMs) } : null;
-      } else {
-        meta = await statWorkspaceFileSafely(workspaceRoot, name);
-      }
-      return Object.assign(
-        {
-          name,
-          path: path.join(workspaceDir, name),
-          missing: meta === null,
-        },
-        meta ?? { expectedAbsent: isExpectedAbsentBootstrapFile(name) },
-      );
-    }),
-  );
-}
-
 function respondWorkspaceFileUnsafe(respond: RespondFn, name: string): void {
   respond(
     false,
@@ -185,7 +157,6 @@ async function readWorkspaceFileContent(
     const workspaceRoot = await root(workspaceDir);
     const safeRead = await workspaceRoot.read(name, {
       hardlinks: "reject",
-      nonBlockingRead: true,
     });
     return safeRead.buffer.toString("utf-8");
   } catch (err) {
@@ -214,31 +185,6 @@ export async function buildIdentityMarkdownOrRespondUnsafe(params: {
   }
 }
 
-function respondWorkspaceFileMissing(params: {
-  respond: RespondFn;
-  agentId: string;
-  workspaceDir: string;
-  name: string;
-  filePath: string;
-}): void {
-  params.respond(
-    true,
-    {
-      agentId: params.agentId,
-      workspace: params.workspaceDir,
-      // Clients merge this entry over the listed one, so it must carry the same
-      // absence classification or a picked optional file re-renders as a fault.
-      file: {
-        name: params.name,
-        path: params.filePath,
-        missing: true,
-        expectedAbsent: isExpectedAbsentBootstrapFile(params.name),
-      },
-    },
-    undefined,
-  );
-}
-
 async function readWorkspaceFileHash(
   workspaceRoot: WorkspaceRoot,
   name: string,
@@ -246,7 +192,6 @@ async function readWorkspaceFileHash(
   try {
     const safeRead = await workspaceRoot.read(name, {
       hardlinks: "reject",
-      nonBlockingRead: true,
     });
     return sha256Hex(safeRead.buffer);
   } catch (err) {
@@ -295,7 +240,34 @@ export const agentFileHandlers: Pick<
     } catch {
       // Fall back to showing BOOTSTRAP if workspace state cannot be read.
     }
-    const files = await listAgentFiles(workspaceDir, { hideBootstrap });
+    const access = getAgentWorkspaceAccess(workspaceDir);
+    const workspaceRoot = access ? null : await root(workspaceDir).catch(() => null);
+    const names = hideBootstrap ? CORE_FILE_NAMES_POST_ONBOARDING : CORE_FILE_NAMES;
+    const files = await Promise.all(
+      names.map(async (name) => {
+        let meta: FileMeta | null;
+        if (access) {
+          const stat = await access.bridge.stat({ filePath: name });
+          if (getAgentWorkspaceAccess(workspaceDir) !== access) {
+            throw new Error("Workspace access changed while listing Agent documents");
+          }
+          meta =
+            stat?.type === "file"
+              ? { size: stat.size, updatedAtMs: Math.floor(stat.mtimeMs) }
+              : null;
+        } else {
+          meta = await statWorkspaceFileSafely(workspaceRoot, name);
+        }
+        return Object.assign(
+          {
+            name,
+            path: path.join(workspaceDir, name),
+            missing: meta === null,
+          },
+          meta ?? { expectedAbsent: isExpectedAbsentBootstrapFile(name) },
+        );
+      }),
+    );
     respond(true, { agentId, workspace: workspaceDir, files }, undefined);
   },
   "agents.files.get": async ({ params, respond, context }) => {
@@ -312,6 +284,22 @@ export const agentFileHandlers: Pick<
     }
     const { agentId, workspaceDir, name } = resolved;
     const filePath = path.join(workspaceDir, name);
+    const respondFile = (file?: Omit<AgentsFilesGetResult["file"], "name" | "path" | "missing">) =>
+      respond(
+        true,
+        {
+          agentId,
+          workspace: workspaceDir,
+          file: {
+            name,
+            path: filePath,
+            missing: file === undefined,
+            // Missing entries retain the same absence classification as the file list.
+            ...(file ?? { expectedAbsent: isExpectedAbsentBootstrapFile(name) }),
+          },
+        },
+        undefined,
+      );
     const access = getAgentWorkspaceAccess(workspaceDir);
     let file: FileMeta & { hash: string; content: string };
     if (access) {
@@ -320,7 +308,7 @@ export const agentFileHandlers: Pick<
         throw new Error("Workspace access changed while reading an Agent document");
       }
       if (!stat) {
-        respondWorkspaceFileMissing({ respond, agentId, workspaceDir, name, filePath });
+        respondFile();
         return;
       }
       const data = await access.bridge.readFile({
@@ -345,11 +333,10 @@ export const agentFileHandlers: Pick<
         const workspaceRoot = await root(workspaceDir);
         safeRead = await workspaceRoot.read(name, {
           hardlinks: "reject",
-          nonBlockingRead: true,
         });
       } catch (err) {
         if (isMissingPathError(err)) {
-          respondWorkspaceFileMissing({ respond, agentId, workspaceDir, name, filePath });
+          respondFile();
           return;
         }
         if (err instanceof FsSafeError) {
@@ -365,20 +352,7 @@ export const agentFileHandlers: Pick<
         content: safeRead.buffer.toString("utf-8"),
       };
     }
-    respond(
-      true,
-      {
-        agentId,
-        workspace: workspaceDir,
-        file: {
-          name,
-          path: filePath,
-          missing: false,
-          ...file,
-        },
-      },
-      undefined,
-    );
+    respondFile(file);
   },
   "agents.files.set": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateAgentsFilesSetParams, "agents.files.set", respond)) {

@@ -43,6 +43,7 @@ import * as inProcessGateway from "./in-process-gateway.js";
 import type { AgentToolGatewayRequestCaller } from "./in-process-gateway.js";
 import * as sessionsSendFollowup from "./sessions-send-followup-custody.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
+import * as sessionsSendDelivery from "./sessions-send-tool.delivery.js";
 import { createSessionsSendTool } from "./sessions-send-tool.js";
 
 vi.mock("./sessions-send-tool.a2a.js", () => ({
@@ -315,6 +316,9 @@ describe("sessions_send dispatch admission", () => {
       const gateway = vi
         .spyOn(inProcessGateway, "callAgentToolGatewayRequest")
         .mockImplementation(callGateway);
+      const mutation = vi
+        .spyOn(sessionsSendDelivery, "callSessionsSendGateway")
+        .mockImplementation(callGateway);
       // This routing fixture supplies a run-scoped Gateway, not a native task
       // receipt. Keep its real A2A/route assertions at that explicit boundary;
       // retained core authority and custody have separate owner/integration proof.
@@ -369,6 +373,7 @@ describe("sessions_send dispatch admission", () => {
       } finally {
         prepareFollowup.mockRestore();
         gateway.mockRestore();
+        mutation.mockRestore();
       }
     },
   );
@@ -422,6 +427,9 @@ describe("sessions_send dispatch admission", () => {
     const gateway = vi
       .spyOn(inProcessGateway, "callAgentToolGatewayRequest")
       .mockImplementation(callGateway);
+    const mutation = vi
+      .spyOn(sessionsSendDelivery, "callSessionsSendGateway")
+      .mockImplementation(callGateway);
     try {
       const tool = createOpenClawTools({
         agentSessionKey: sessionKey,
@@ -474,6 +482,7 @@ describe("sessions_send dispatch admission", () => {
       expect(sendParams).not.toHaveProperty("sessionGeneration");
     } finally {
       gateway.mockRestore();
+      mutation.mockRestore();
     }
   });
 

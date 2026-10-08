@@ -51,7 +51,6 @@ export function createCronStreamWatchers(
   params: Omit<CronStreamOwnerParams, "minIntervalMs"> & {
     /** Test seams; production uses the built-in cadence and retry schedules. */
     minIntervalMs?: number;
-    legacyDefaultAgentId?: string;
   },
 ): CronStreamWatchers {
   const owners = new Map<string, CronStreamJobOwner>();
@@ -85,16 +84,8 @@ export function createCronStreamWatchers(
   };
 
   const ownerParams: CronStreamOwnerParams = {
-    scheduler: params.scheduler,
-    getProcessSupervisor: params.getProcessSupervisor,
+    ...params,
     minIntervalMs: params.minIntervalMs ?? resolveCronTriggerMinIntervalMs(),
-    retryBackoffMs: params.retryBackoffMs,
-    updateState: params.updateState,
-    retireSource: params.retireSource,
-    ...(params.updateCounters ? { updateCounters: params.updateCounters } : {}),
-    recordFailure: params.recordFailure,
-    fireBatch: params.fireBatch,
-    logger: params.logger,
   };
 
   const retainCounterSeed = (owner: CronStreamJobOwner): void => {
@@ -201,9 +192,7 @@ export function createCronStreamWatchers(
     }
     try {
       assertCanonicalCronDeliveryMode(job.delivery);
-      if (params.legacyDefaultAgentId) {
-        resolveCronJobEffectiveAgentId(job, undefined, params.legacyDefaultAgentId);
-      }
+      resolveCronJobEffectiveAgentId(job, params.getDefaultAgentId?.());
     } catch (error) {
       if (owners.has(job.id)) {
         await stop(job.id, "disabled", job);

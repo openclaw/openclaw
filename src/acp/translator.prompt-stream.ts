@@ -65,32 +65,6 @@ function isGatewayCloseError(err: unknown): boolean {
   return message.startsWith("gateway closed (");
 }
 
-function buildSystemInputProvenance(originSessionId: string) {
-  return {
-    kind: "external_user" as const,
-    originSessionId,
-    sourceChannel: "acp",
-    sourceTool: "openclaw_acp",
-  };
-}
-
-function buildSystemProvenanceReceipt(params: {
-  cwd: string;
-  sessionId: string;
-  sessionKey: string;
-}) {
-  return [
-    "[Source Receipt]",
-    "bridge=openclaw-acp",
-    `originHost=${os.hostname()}`,
-    `originCwd=${shortenHomePath(params.cwd)}`,
-    `acpSessionId=${params.sessionId}`,
-    `originSessionId=${params.sessionId}`,
-    `targetSession=${params.sessionKey}`,
-    "[/Source Receipt]",
-  ].join("\n");
-}
-
 export class AcpTranslatorPromptStream {
   private readonly pendingPrompts = new Map<string, AcpPendingPrompt>();
   private readonly pendingPromptAdmissions = new Map<string, AcpPendingPromptAdmission>();
@@ -242,14 +216,26 @@ export class AcpTranslatorPromptStream {
     const message = prefixCwd ? `[Working directory: ${displayCwd}]\n\n${userText}` : userText;
     const provenanceMode = this.opts.provenanceMode ?? "off";
     const systemInputProvenance =
-      provenanceMode === "off" ? undefined : buildSystemInputProvenance(params.sessionId);
+      provenanceMode === "off"
+        ? undefined
+        : {
+            kind: "external_user" as const,
+            originSessionId: params.sessionId,
+            sourceChannel: "acp",
+            sourceTool: "openclaw_acp",
+          };
     const systemProvenanceReceipt =
       provenanceMode === "meta+receipt"
-        ? buildSystemProvenanceReceipt({
-            cwd: session.cwd,
-            sessionId: params.sessionId,
-            sessionKey: session.sessionKey,
-          })
+        ? [
+            "[Source Receipt]",
+            "bridge=openclaw-acp",
+            `originHost=${os.hostname()}`,
+            `originCwd=${displayCwd}`,
+            `acpSessionId=${params.sessionId}`,
+            `originSessionId=${params.sessionId}`,
+            `targetSession=${session.sessionKey}`,
+            "[/Source Receipt]",
+          ].join("\n")
         : undefined;
 
     // The cwd prefix also counts against the prompt budget.
@@ -452,9 +438,7 @@ export class AcpTranslatorPromptStream {
     if (this.getPendingPrompt(pending.sessionId, pending.idempotencyKey) !== pending) {
       return false;
     }
-    this.agentEvents.clearApprovalRelaysForPrompt(pending.sessionId, pending.idempotencyKey, {
-      denyActive: true,
-    });
+    this.agentEvents.clearApprovalRelaysForPrompt(pending.sessionId, pending.idempotencyKey);
     this.pendingPrompts.delete(pending.sessionId);
     this.sessionStore.clearActiveRun(pending.sessionId, pending.idempotencyKey);
     this.disconnects.clearWhenIdle();

@@ -18,11 +18,10 @@ function telegramMonospaceGraphemeWidth(grapheme: string): number {
   if (
     grapheme.includes(KEYCAP_COMBINING_MARK) ||
     EMOJI_PRESENTATION_PATTERN.test(grapheme) ||
-    (grapheme.includes(EMOJI_PRESENTATION_SELECTOR) && EXTENDED_PICTOGRAPHIC_PATTERN.test(grapheme))
+    (grapheme.includes(EMOJI_PRESENTATION_SELECTOR) &&
+      EXTENDED_PICTOGRAPHIC_PATTERN.test(grapheme)) ||
+    TELEGRAM_WIDE_CODE_POINT_PATTERN.test(grapheme)
   ) {
-    return 2;
-  }
-  if (TELEGRAM_WIDE_CODE_POINT_PATTERN.test(grapheme)) {
     return 2;
   }
   return NON_PRINTING_ONLY_PATTERN.test(grapheme) ? 0 : 1;

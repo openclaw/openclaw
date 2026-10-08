@@ -316,9 +316,10 @@ describe.runIf(process.platform === "win32")("native Windows config fallback eff
     },
   );
 
-  it(
-    "preserves the open rollback destination when Windows denies a parent-directory move",
-    async ({ signal }) => {
+  it.for(["parent-directory", "same-byte-file"] as const)(
+    "does not write the open rollback destination after a %s replacement attempt",
+    { timeout: testTimeout },
+    async (replacement, { signal }) => {
       const f = fixture();
       const { prepared, guarded } = await prepare(f);
       try {
@@ -344,97 +345,16 @@ describe.runIf(process.platform === "win32")("native Windows config fallback eff
                 flags & fs.constants.O_EXCL
               ) {
                 destinationFd = fd;
-                observed = identity(f.target);
-                // Windows denies this move while the atomic stage/destination is open.
-                // The cross-platform effect matrix separately proves the parent guard.
-                fs.renameSync(f.dir, movedParent);
-              }
-              return fd;
-            } catch (error) {
-              // The production adapter cannot adopt the descriptor until this call returns.
-              try {
-                fs.closeSync(fd);
-              } catch (closeError) {
-                throw new AggregateError(
-                  [error, closeError],
-                  "Native parent-move injection and descriptor close failed",
-                  { cause: closeError },
-                );
-              }
-              throw error;
-            }
-          },
-          writeSync: new Proxy(fs.writeSync, {
-            apply(fn, self, args) {
-              if (args[0] === destinationFd) {
-                destinationWrites++;
-              }
-              return Reflect.apply(fn, self, args);
-            },
-          }),
-        };
-        await expect(
-          rollbackConfigFileWriteIfUnchanged({
-            configPath: f.target,
-            previousSnapshot: f.options.snapshot,
-            committedHash: hashConfigRaw(content),
-            fsModule: instrumented,
-            ...rollbackProof,
-            durable: true,
-            destinationHardlinks: "reject",
-          }),
-        ).rejects.toMatchObject({
-          code: "EPERM",
-          syscall: "rename",
-          path: f.dir,
-          dest: movedParent,
-        });
-      });
-      expect(observed).toBeDefined();
-      expect(observed?.raw).toBe("");
-      expect(destinationWrites).toBe(0);
-      expect(identity(f.target)).toEqual(observed);
-      expect(fs.lstatSync(f.dir, { bigint: true })).toMatchObject({
-        dev: parentBefore.dev,
-        ino: parentBefore.ino,
-      });
-      expect(fs.existsSync(movedParent)).toBe(false);
-      expect(fs.readFileSync(`${f.target}.bak`, "utf8")).toBe(original);
-      expect(fs.readdirSync(f.dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
-    },
-    testTimeout,
-  );
-
-  it(
-    "does not write a same-byte-file replacement after opening its native rollback destination",
-    async ({ signal }) => {
-      const f = fixture();
-      const { prepared, guarded } = await prepare(f);
-      try {
-        prepared.publish();
-      } finally {
-        await prepared[Symbol.asyncDispose]();
-      }
-      const rollbackProof = guarded.captureRollbackProof(f.assertCurrent);
-      let observed: ReturnType<typeof identity> | undefined;
-      let replacementWrites = 0;
-      await withNativeSharingViolation(f.target, signal, async (io) => {
-        let destinationFd: number | undefined;
-        const instrumented: typeof fs = {
-          ...io,
-          openSync(name, flags, mode) {
-            const fd = fs.openSync(name, flags, mode);
-            try {
-              if (
-                String(name) === f.target &&
-                typeof flags === "number" &&
-                flags & fs.constants.O_EXCL
-              ) {
-                destinationFd = fd;
-                const raw = fs.readFileSync(f.target, "utf8");
-                fs.renameSync(f.target, `${f.target}.owned`);
-                fs.writeFileSync(f.target, raw);
-                observed = identity(f.target);
+                if (replacement === "parent-directory") {
+                  observed = identity(f.target);
+                  // Windows denies this move while the atomic stage/destination is open.
+                  fs.renameSync(f.dir, movedParent);
+                } else {
+                  const raw = fs.readFileSync(f.target, "utf8");
+                  fs.renameSync(f.target, `${f.target}.owned`);
+                  fs.writeFileSync(f.target, raw);
+                  observed = identity(f.target);
+                }
               }
               return fd;
             } catch (error) {
@@ -454,30 +374,45 @@ describe.runIf(process.platform === "win32")("native Windows config fallback eff
           writeSync: new Proxy(fs.writeSync, {
             apply(fn, self, args) {
               if (args[0] === destinationFd) {
-                replacementWrites++;
+                destinationWrites++;
               }
               return Reflect.apply(fn, self, args);
             },
           }),
         };
-        await expect(
-          rollbackConfigFileWriteIfUnchanged({
-            configPath: f.target,
-            previousSnapshot: f.options.snapshot,
-            committedHash: hashConfigRaw(content),
-            fsModule: instrumented,
-            ...rollbackProof,
-            durable: true,
-            destinationHardlinks: "reject",
-          }),
-        ).rejects.toThrow(/changed/u);
+        const rollback = rollbackConfigFileWriteIfUnchanged({
+          configPath: f.target,
+          previousSnapshot: f.options.snapshot,
+          committedHash: hashConfigRaw(content),
+          fsModule: instrumented,
+          ...rollbackProof,
+          durable: true,
+          destinationHardlinks: "reject",
+        });
+        if (replacement === "parent-directory") {
+          await expect(rollback).rejects.toMatchObject({
+            code: "EPERM",
+            syscall: "rename",
+            path: f.dir,
+            dest: movedParent,
+          });
+        } else {
+          await expect(rollback).rejects.toThrow(/changed/u);
+        }
       });
       expect(observed).toBeDefined();
-      expect(replacementWrites).toBe(0);
+      expect(destinationWrites).toBe(0);
       expect(identity(f.target)).toEqual(observed);
+      if (replacement === "parent-directory") {
+        expect(observed?.raw).toBe("");
+        expect(fs.lstatSync(f.dir, { bigint: true })).toMatchObject({
+          dev: parentBefore.dev,
+          ino: parentBefore.ino,
+        });
+        expect(fs.existsSync(movedParent)).toBe(false);
+      }
       expect(fs.readFileSync(`${f.target}.bak`, "utf8")).toBe(original);
       expect(fs.readdirSync(f.dir).filter((name) => name.endsWith(".tmp"))).toEqual([]);
     },
-    testTimeout,
   );
 });

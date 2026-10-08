@@ -283,7 +283,14 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
   }
 
   async closeAll(): Promise<void> {
-    await this.runGlobalClose(() => this.retryFailedGlobalClose());
+    const previous = this.closePromise ?? Promise.resolve();
+    const operation = () => this.retryFailedGlobalClose();
+    const closePromise = previous.then(operation, operation);
+    this.closePromise = closePromise;
+    await closePromise;
+    if (this.closePromise === closePromise) {
+      this.closePromise = null;
+    }
   }
 
   async closeForAgent(params: {
@@ -291,9 +298,7 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     purpose: MemoryIndexManagerPurpose;
   }): Promise<void> {
     const scope = { agentId: normalizeAgentId(params.agentId), purpose: params.purpose };
-    await this.runScopeOperation(scope, async () => {
-      await this.closeScopeUnlocked(scope);
-    });
+    await this.runScopeOperation(scope, () => this.closeScopeUnlocked(scope));
   }
 
   deleteIfCurrent(key: string, manager: T): void {
@@ -310,16 +315,6 @@ export class MemoryManagerRegistry<T extends ClosableMemoryManager> {
     } catch (err) {
       this.closeFailed = true;
       throw err;
-    }
-  }
-
-  private async runGlobalClose(operation: () => Promise<void>): Promise<void> {
-    const previous = this.closePromise ?? Promise.resolve();
-    const closePromise = previous.then(operation, operation);
-    this.closePromise = closePromise;
-    await closePromise;
-    if (this.closePromise === closePromise) {
-      this.closePromise = null;
     }
   }
 

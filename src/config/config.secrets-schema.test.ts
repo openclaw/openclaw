@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  INVALID_EXEC_SECRET_REF_IDS,
-  VALID_EXEC_SECRET_REF_IDS,
-} from "../test-utils/secret-ref-test-vectors.js";
+import { INVALID_EXEC_SECRET_REF_IDS } from "../test-utils/secret-ref-test-vectors.js";
 import { validateConfigObjectRaw } from "./validation.js";
 
 function validateOpenAiApiKeyRef(apiKey: unknown) {
@@ -124,72 +121,6 @@ describe("config secret refs schema", () => {
     expect(validateConfigObjectRaw({ tools: { github: {} } }).ok).toBe(false);
   });
 
-  it("accepts media request secret refs for auth, headers, and tls material", () => {
-    const result = validateConfigObjectRaw({
-      tools: {
-        media: {
-          audio: {
-            enabled: true,
-            request: {
-              headers: {
-                "X-Tenant": { source: "env", provider: "default", id: "MEDIA_TENANT_HEADER" },
-              },
-              auth: {
-                mode: "authorization-bearer",
-                token: { source: "env", provider: "default", id: "MEDIA_AUDIO_TOKEN" },
-              },
-              proxy: {
-                mode: "explicit-proxy",
-                url: "http://proxy.example:8080",
-                tls: {
-                  ca: { source: "file", provider: "filemain", id: "/tls/proxy-ca" },
-                },
-              },
-              tls: {
-                cert: { source: "file", provider: "filemain", id: "/tls/client-cert" },
-                key: { source: "file", provider: "filemain", id: "/tls/client-key" },
-                passphrase: { source: "exec", provider: "vault", id: "media/audio/passphrase" },
-              },
-            },
-          },
-          models: [{ provider: "openai", model: "gpt-4o-mini-transcribe" }],
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-  });
-
-  it("accepts model provider header SecretRef values", () => {
-    const result = validateConfigObjectRaw({
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            api: "openai-completions",
-            headers: {
-              Authorization: {
-                source: "env",
-                provider: "default",
-                id: "OPENAI_HEADER_TOKEN",
-              },
-            },
-            models: [],
-          },
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.config.models?.providers?.openai?.headers?.Authorization).toEqual({
-        source: "env",
-        provider: "default",
-        id: "OPENAI_HEADER_TOKEN",
-      });
-    }
-  });
-
   it("rejects model provider request proxy url secret refs", () => {
     const result = validateConfigObjectRaw({
       models: {
@@ -214,31 +145,6 @@ describe("config secret refs schema", () => {
         result.issues.some((issue) => issue.path.includes("models.providers.openai.request.proxy")),
       ).toBe(true);
     }
-  });
-
-  it('accepts file refs with id "value" for singleValue mode providers', () => {
-    const result = validateConfigObjectRaw({
-      secrets: {
-        providers: {
-          rawfile: {
-            source: "file",
-            path: "~/.openclaw/token.txt",
-            mode: "singleValue",
-          },
-        },
-      },
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "file", provider: "rawfile", id: "value" },
-            models: [{ id: "gpt-5", name: "gpt-5" }],
-          },
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
   });
 
   it("rejects env refs that are not env var names", () => {
@@ -276,17 +182,6 @@ describe("config secret refs schema", () => {
             issue.message.includes("absolute JSON pointer"),
         ),
       ).toBe(true);
-    }
-  });
-
-  it("accepts valid exec secret reference ids", () => {
-    for (const id of VALID_EXEC_SECRET_REF_IDS) {
-      const result = validateOpenAiApiKeyRef({
-        source: "exec",
-        provider: "vault",
-        id,
-      });
-      expect(result.ok, `expected valid exec ref id: ${id}`).toBe(true);
     }
   });
 

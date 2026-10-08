@@ -13,12 +13,15 @@ export {
 } from "../agents/embedded-agent-tool-results.js";
 export { extractMessagingToolSourceReplyPayload } from "../agents/embedded-agent-messaging-extraction.js";
 export { collectMessagingMediaUrlsFromRecord } from "../agents/embedded-agent-tool-media.js";
+export {
+  collectAgentHarnessMessagingMediaUrls,
+  mapAgentHarnessMessagingMediaValues,
+} from "../agents/harness/messaging-media.js";
 export { getCoreTtsToolResultMediaUrls } from "../agents/tools/tts-tool-result-provenance.js";
 export { consumeTrustedToolNoStartError } from "../agents/tool-result-error.js";
 export {
   recordAgentHarnessMessagingDelivery,
   recordAgentHarnessToolResultTelemetry,
-  collectAgentHarnessMessagingMediaUrls,
   type AgentHarnessToolResultTelemetry,
   recordAgentHarnessToolResultMedia,
   type AgentHarnessMessagingDeliveryFacts,
@@ -37,7 +40,7 @@ export {
 } from "../agents/runtime/internal-hooks.js";
 
 type OpenClawCodingToolsOptions = NonNullable<
-  Parameters<typeof import("./agent-harness.js").createOpenClawCodingTools>[0]
+  Parameters<typeof import("./agent-harness.js").createOpenClawCodingToolsAsync>[0]
 >;
 
 type CoreCompactTools = ReturnType<typeof createAgentHarnessToolSurfaceRuntimeCore>["compactTools"];

@@ -490,19 +490,15 @@ function assertUpdated(p, observations, packageRoot) {
   assert(doctor, "Installed updater's candidate Doctor did not perform the owner repair");
   assert.deepEqual(updater.before, fixture.before, "Specimen changed before the installed update");
   assert.equal(doctor.before.legacySourceSha256, fixture.legacySha256);
+  const persistedFields = ({ job_id, agent_id, job_json, state_json }) => ({
+    job_id,
+    agent_id,
+    job_json,
+    state_json,
+  });
   assert.deepEqual(
-    doctor.before.rows.map(({ job_id, agent_id, job_json, state_json }) => ({
-      job_id,
-      agent_id,
-      job_json,
-      state_json,
-    })),
-    fixture.before.rows.map(({ job_id, agent_id, job_json, state_json }) => ({
-      job_id,
-      agent_id,
-      job_json,
-      state_json,
-    })),
+    doctor.before.rows.map(persistedFields),
+    fixture.before.rows.map(persistedFields),
     "Jobs were repaired before candidate Doctor received them",
   );
   for (const receipt of [updater, doctor]) {
@@ -564,12 +560,6 @@ function assertUpdated(p, observations, packageRoot) {
   );
   assert.equal(beforeImport.length, 1, "Missing unique pre-import snapshot");
   assert.equal(beforeOwnership.length, 1, "Missing unique pre-ownership snapshot");
-  const persistedFields = ({ job_id, agent_id, job_json, state_json }) => ({
-    job_id,
-    agent_id,
-    job_json,
-    state_json,
-  });
   assert.deepEqual(
     beforeImport[0].rows.map(persistedFields),
     fixture.before.rows.map(persistedFields),

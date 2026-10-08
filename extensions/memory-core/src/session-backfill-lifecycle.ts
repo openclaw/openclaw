@@ -177,10 +177,6 @@ async function deleteSessionBackfillRewindBatches(
   }
 }
 
-function belongsToAgentFileState(key: string, agentId: string): boolean {
-  return key.startsWith(`${agentId}:`);
-}
-
 function belongsToAgentSeenState(key: string, agentId: string): boolean {
   const archivePrefix = "archive:";
   if (!key.startsWith(archivePrefix)) {
@@ -201,7 +197,7 @@ export async function resetSessionBackfillIngestionState(params: {
   await writeSessionIngestionState(params.workspaceDir, {
     ...state,
     files: Object.fromEntries(
-      Object.entries(state.files).filter(([key]) => !belongsToAgentFileState(key, params.agentId)),
+      Object.entries(state.files).filter(([key]) => !key.startsWith(`${params.agentId}:`)),
     ),
     seenMessages: Object.fromEntries(
       Object.entries(state.seenMessages).filter(
@@ -254,19 +250,16 @@ function aggregateSessionBackfillBatches(
       });
     }
   }
+  const total = (
+    field: "candidateCount" | "stagedEntries" | "writtenDiaryEntries" | "replacedDiaryEntries",
+  ) => executions.reduce((sum, { result }) => sum + result[field], 0);
   return {
     ...first,
     days: [...days.values()].toSorted((a, b) => a.day.localeCompare(b.day)),
-    candidateCount: executions.reduce((sum, execution) => sum + execution.result.candidateCount, 0),
-    stagedEntries: executions.reduce((sum, execution) => sum + execution.result.stagedEntries, 0),
-    writtenDiaryEntries: executions.reduce(
-      (sum, execution) => sum + execution.result.writtenDiaryEntries,
-      0,
-    ),
-    replacedDiaryEntries: executions.reduce(
-      (sum, execution) => sum + execution.result.replacedDiaryEntries,
-      0,
-    ),
+    candidateCount: total("candidateCount"),
+    stagedEntries: total("stagedEntries"),
+    writtenDiaryEntries: total("writtenDiaryEntries"),
+    replacedDiaryEntries: total("replacedDiaryEntries"),
     batchCount: executions.length,
     batches: executions.map((execution, index) => ({
       batch: index + 1,

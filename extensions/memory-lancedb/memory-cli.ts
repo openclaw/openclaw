@@ -10,16 +10,16 @@ import {
   type MemoryQueryFilter,
   type MemoryDB,
 } from "./lancedb-store.js";
-import { normalizeRecallQuery } from "./memory-policy.js";
+import { normalizeRecallQuery, projectMemorySearchResult } from "./memory-policy.js";
 import type { MemoryStatsSource } from "./memory-stats.js";
 
-function parsePositiveIntegerOption(value: string | undefined, flag: string): number | undefined {
+function parseLimit(value: string | undefined): number | undefined {
   if (value === undefined) {
     return undefined;
   }
   const parsed = parseStrictPositiveInteger(value);
   if (parsed === undefined) {
-    throw new Error(`${flag} must be a positive integer`);
+    throw new Error("--limit must be a positive integer");
   }
   return parsed;
 }
@@ -125,7 +125,7 @@ export function registerMemoryCli(
         .option("--order-by-created-at", "Order memories by createdAt descending", false)
         .action(async (opts) => {
           const agentId = resolveCliAgentId(opts.agent);
-          const limit = parsePositiveIntegerOption(opts.limit, "--limit");
+          const limit = parseLimit(opts.limit);
           const entries = await db.list(agentId, limit, {
             orderByCreatedAt: Boolean(opts.orderByCreatedAt),
           });
@@ -142,7 +142,7 @@ export function registerMemoryCli(
           let failure: { error: unknown } | undefined;
           try {
             const agentId = resolveCliAgentId(opts.agent);
-            const limit = parsePositiveIntegerOption(opts.limit, "--limit");
+            const limit = parseLimit(opts.limit);
             const config = resolveConfig();
             const vector = await embeddings.embed(
               agentId,
@@ -150,14 +150,7 @@ export function registerMemoryCli(
               config.embedding,
             );
             const results = await db.search(agentId, vector, limit, 0.3);
-            const output = results.map((r) => ({
-              id: r.entry.id,
-              text: r.entry.text,
-              category: r.entry.category,
-              importance: r.entry.importance,
-              score: r.score,
-            }));
-            defaultRuntime.writeJson(output);
+            defaultRuntime.writeJson(results.map(projectMemorySearchResult));
           } catch (error) {
             failure = { error };
           }
@@ -187,7 +180,7 @@ export function registerMemoryCli(
           if (order && !selectedColumns.includes(order.column)) {
             selectedColumns.push(order.column);
           }
-          const limit = parsePositiveIntegerOption(opts.limit, "--limit") ?? 10;
+          const limit = parseLimit(opts.limit) ?? 10;
           let rows = await db.query(agentId, {
             columns: selectedColumns,
             filter: parseMemoryCliFilter(opts.filter),

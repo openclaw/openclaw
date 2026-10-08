@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 import { z } from "zod";
 import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import type {
@@ -121,10 +121,7 @@ function normalizeMemoryHostWorkspaceKey(workspaceDir: string): string {
 }
 
 function memoryHostWorkspacePrefix(workspaceDir: string): string {
-  return createHash("sha256")
-    .update(normalizeMemoryHostWorkspaceKey(workspaceDir))
-    .digest("hex")
-    .slice(0, WORKSPACE_HASH_BYTES);
+  return sha256HexPrefixCore(normalizeMemoryHostWorkspaceKey(workspaceDir), WORKSPACE_HASH_BYTES);
 }
 
 function truncateUtf8(value: string, maxBytes: number): { value: string; truncated: boolean } {

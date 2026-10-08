@@ -862,7 +862,7 @@ describe("plugin publication artifact", () => {
         runStatePolicy: "same-run-producer-success",
         workflowJobsMetadataPath: fixture.workflowJobsPath,
       }),
-    ).toThrow("Current producer workflow attempt must still be active or failed.");
+    ).toThrow("Current producer workflow attempt must still be active or sealed.");
   });
 
   it("retries bounded metadata, attempt, and archive failures against the exact run attempt", async () => {

@@ -7,7 +7,7 @@ import { EDITOR_IDS, type EditorId } from "../lib/editor-links.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { icons } from "./icons.ts";
 import { menuShortcutHint } from "./menu-shortcuts.ts";
-import { handleAppearanceGridKeydown, renderAppearancePicker } from "./session-icon-picker.ts";
+import { renderAppearancePicker } from "./session-icon-picker.ts";
 import {
   renderCompactSessionMenuFrame,
   renderCompactSessionMenuNavigationItem,
@@ -653,7 +653,6 @@ export class SessionMenuActions {
       onBack: this.showIconGrid,
       onInput: this.updateCustomIconValue,
       onApply: this.applyCustomIcon,
-      onGridKeydown: handleAppearanceGridKeydown,
     });
   }
 

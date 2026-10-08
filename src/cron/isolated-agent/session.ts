@@ -15,12 +15,13 @@ import {
   resolveSessionResetPolicy,
   type SessionFreshness,
 } from "../../config/sessions/reset-policy.js";
+import { readSessionEntriesFromStoreInWorker } from "../../config/sessions/session-accessor.js";
 import {
-  readSessionEntriesFromStoreInWorker,
-  loadSessionEntry,
-} from "../../config/sessions/session-accessor.js";
-import { preserveSqliteSameKeySessionRolloverLineage } from "../../config/sessions/session-entry-lineage.js";
+  preserveSessionInheritedToolPolicy,
+  preserveSqliteSameKeySessionRolloverLineage,
+} from "../../config/sessions/session-entry-lineage.js";
 import { preserveCreationStamp } from "../../config/sessions/session-entry-provenance.js";
+import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -44,9 +45,6 @@ const AMBIENT_SESSION_CONTEXT_FIELDS = [
   "spawnDepth",
   "subagentRole",
   "subagentControlScope",
-  "inheritedToolPolicyVersion",
-  "inheritedToolAllow",
-  "inheritedToolDeny",
   "permissionMode",
   "sandboxMode",
   "sessionRoot",
@@ -139,6 +137,7 @@ function sanitizeFreshCronSessionEntry(
   }
   if (options.preserveAmbientContext) {
     copySessionFields(next, entry, AMBIENT_SESSION_CONTEXT_FIELDS);
+    Object.assign(next, preserveSessionInheritedToolPolicy(entry));
   }
   preserveNonAutoModelOverride(next, entry);
   preserveUserAuthOverride(next, entry);
@@ -147,17 +146,16 @@ function sanitizeFreshCronSessionEntry(
 }
 
 /**
- * Reads the current cron session row without an in-process cache snapshot.
+ * Reads the current cron session row through the canonical agent worker.
  * Lifecycle admission guards compare this against the run's initial entry, so
- * the read must bypass cached store snapshots (accessor readConsistency
- * "latest"). Cron keys are canonicalized before use, so accessor key
- * resolution selects the same row the cron persist path writes.
+ * the read must bypass cached store snapshots. Canonical key resolution selects
+ * the same row the cron persist path writes.
  */
 export function loadCronSessionEntryLatest(
   storePath: string,
   sessionKey: string,
-): SessionEntry | undefined {
-  return loadSessionEntry({ sessionKey, storePath, readConsistency: "latest" });
+): Promise<SessionEntry | undefined> {
+  return readSessionEntryInWorker({ sessionKey, storePath, readConsistency: "latest" });
 }
 
 type CronSessionParams = {
@@ -168,6 +166,11 @@ type CronSessionParams = {
   nowMs: number;
   agentId: string;
   forceNew?: boolean;
+  /**
+   * The run executes in a hidden `:run:` row, so the base row's revision names
+   * this run's generation for continuation ownership and must be minted per run.
+   */
+  exactRunSession?: boolean;
   hookExternalContentSource?: SessionEntry["hookExternalContentSource"];
 };
 
@@ -273,7 +276,13 @@ export function resolveCronSession(
       : entry
     : undefined;
 
-  const lifecycleRevision = crypto.randomUUID();
+  // Reusing an incarnation in place keeps its revision: spawned children and
+  // memory-audience leases bind to it and treat any change as a new incarnation.
+  const reusedLifecycleRevision =
+    !isNewSession && !sourceSessionDiffers && !params.exactRunSession
+      ? entry?.lifecycleRevision
+      : undefined;
+  const lifecycleRevision = reusedLifecycleRevision ?? crypto.randomUUID();
   const sessionEntry: SessionEntry = {
     // Fresh cron sessions keep user preference/auth overrides but drop resume
     // handles and auto-fallback model overrides that belong to the old run.

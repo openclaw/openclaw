@@ -1,3 +1,4 @@
+import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
 // Install manager and runtime mocks before loading the reset implementation.
 // oxfmt-ignore
 import {
@@ -7,10 +8,7 @@ import {
 } from "./test/server-sessions.test-helpers.js";
 import { afterEach, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  readAcpSessionMeta,
-  writeAcpSessionMetaForMigration,
-} from "../acp/runtime/session-meta.js";
+import { readAcpSessionMeta } from "../acp/runtime/session-meta.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { disposeSessionReadContexts } from "./server-methods/sessions-read-cache.test-support.js";
@@ -23,7 +21,7 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
 });
 
-test.each(["already ineligible", "caller retired", "eligibility retired"] as const)(
+test.each(["already retired", "caller retired"] as const)(
   "ACP reset preserves its row and resume state when %s before metadata commit",
   async (reason) => {
     const acpEntryWriter = await import("../acp/runtime/session-meta-entry.js");
@@ -31,7 +29,7 @@ test.each(["already ineligible", "caller retired", "eligibility retired"] as con
     const { storePath } = await createSessionStoreDir();
     const sessionKey = "agent:main:main";
     await writeSessionStore({ entries: { main: sessionStoreEntry("sess-main") } });
-    writeAcpSessionMetaForMigration({
+    seedCanonicalAcpSessionMeta({
       sessionKey,
       meta: {
         backend: "acpx",
@@ -69,29 +67,25 @@ test.each(["already ineligible", "caller retired", "eligibility retired"] as con
         }
         return await originalWrite(input);
       });
-    let current = true;
-    let eligible = reason !== "already ineligible";
-    const onResetMeta = vi.fn();
+    let current = reason !== "already retired";
     const resetting = closeAcpRuntimeForSession({
       cfg: { session: { store: storePath } },
       agentId: "main",
       sessionKey,
       reason: "session-reset",
-      shouldCleanup: () => eligible,
       assertCurrent: () => {
         if (!current) {
           throw new Error("reset caller retired");
         }
       },
-      onResetMeta,
     });
     const outcome = resetting.then(
       (value) => ({ ok: true as const, value }),
       (error: unknown) => ({ ok: false as const, error }),
     );
     try {
-      if (reason === "already ineligible") {
-        await expect(outcome).resolves.toEqual({ ok: true, value: undefined });
+      if (reason === "already retired") {
+        await expect(outcome).resolves.toMatchObject({ ok: false });
         expect(intercepted).not.toHaveBeenCalled();
       } else {
         await Promise.race([
@@ -100,16 +94,14 @@ test.each(["already ineligible", "caller retired", "eligibility retired"] as con
             throw new Error("ACP reset settled before the metadata mutation boundary");
           }),
         ]);
-        current = reason !== "caller retired";
-        eligible = reason !== "eligibility retired";
+        current = false;
         release.resolve();
         const settled = await outcome;
         expect(settled.ok).toBe(false);
         if (!settled.ok) {
-          expect(String(settled.error)).toMatch(/reset caller retired|superseded/);
+          expect(String(settled.error)).toContain("reset caller retired");
         }
       }
-      expect(onResetMeta).not.toHaveBeenCalled();
       expect(loadSessionEntry(scope)).toEqual(beforeEntry);
       expect(readAcpSessionMeta({ sessionKey })).toEqual(beforeMeta);
     } finally {

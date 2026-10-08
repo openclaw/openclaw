@@ -117,27 +117,11 @@ export function hasAsyncActivity(toolMetas?: readonly { asyncStarted?: boolean }
 
 type AcceptedSessionSpawnContinuationAttempt = Pick<
   EmbeddedRunAttemptResult,
-  | "acceptedSessionSpawns"
+  | Exclude<keyof TerminalAttemptState, "hasToolMediaBlockReply">
   | "assistantTexts"
-  | "clientToolCalls"
-  | "didDeliverSourceReplyViaMessageTool"
-  | "didSendDeterministicApprovalPrompt"
-  | "didSendViaMessagingTool"
-  | "heartbeatToolResponse"
-  | "lastToolError"
-  | "messagingToolSentMediaUrls"
-  | "messagingToolSentTargets"
-  | "messagingToolSentTexts"
-  | "messagingToolSourceReplyPayloads"
-  | "successfulCronAdds"
   | "terminal"
-  | "toolAudioAsVoice"
-  | "toolMediaUrls"
-  | "toolTrustedLocalMedia"
-  | "toolMetas"
   | "sourceReplyDelivered"
   | "sourceReplyDeliveryState"
-  | "yieldDetected"
 >;
 
 type AcceptedSessionSpawnContinuationRun = Pick<

@@ -55,7 +55,7 @@ describe("cron script immediate wake", () => {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: { heartbeat: { every: "0m" } },
-          list: [{ id: "main" }, { id: "finn" }],
+          entries: { main: {}, finn: {} },
         },
       };
       const sessionKey = resolveAgentMainSessionKey({ cfg, agentId: "finn" });

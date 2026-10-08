@@ -34,6 +34,7 @@ export function createMetricsHarness(
     OpenClawPluginServiceContext["internalDiagnostics"]
   >["getRuntimeIdentity"],
   config: OpenClawPluginServiceContext["config"] = {},
+  onGatewayWorkMetrics?: TrustedExporterInternalDiagnostics["onGatewayWorkMetrics"],
 ) {
   const exporter = createDiagnosticsPrometheusExporter();
   let listener:
@@ -45,6 +46,7 @@ export function createMetricsHarness(
     | undefined;
   const internalDiagnostics: TrustedExporterInternalDiagnostics = {
     ...(getRuntimeIdentity ? { getRuntimeIdentity } : {}),
+    ...(onGatewayWorkMetrics ? { onGatewayWorkMetrics } : {}),
     emit() {},
     onEvent(nextListener) {
       listener = nextListener;

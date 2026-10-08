@@ -1,5 +1,3 @@
-// Channel avatar route tests cover authenticated session lookup, managed-media
-// resolution, image validation, cache reuse, and conditional responses.
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -141,10 +139,11 @@ describe("handleChannelAvatarHttpRequest", () => {
     { label: "PNG", buffer: PNG_BYTES },
     { label: "APNG", buffer: APNG_BYTES },
   ])(
-    "serves managed conversation $label bytes with sandboxed image headers",
+    "serves and revalidates cached conversation $label bytes with sandboxed headers",
     async ({ label, buffer }) => {
       mocks.readMedia.mockResolvedValue({ buffer });
-      const response = await fetch(avatarRoute(`agent:main:discord:direct:${label}`));
+      const route = avatarRoute(`agent:main:discord:direct:${label}`);
+      const response = await fetch(route);
 
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toBe("image/png");
@@ -163,22 +162,14 @@ describe("handleChannelAvatarHttpRequest", () => {
         "inbound",
         HTTP_IMAGE_MAX_BYTES,
       );
+      const etag = response.headers.get("etag");
+      const revalidated = await fetch(route, { headers: { "If-None-Match": etag ?? "" } });
+      expect(etag).toBeTruthy();
+      expect(revalidated.status).toBe(304);
+      expect((await revalidated.arrayBuffer()).byteLength).toBe(0);
+      expect(mocks.readMedia).toHaveBeenCalledTimes(1);
     },
   );
-
-  it("reuses cached bytes and supports ETag revalidation", async () => {
-    const first = await fetch(avatarRoute("agent:main:cached"));
-    const etag = first.headers.get("etag");
-    await first.arrayBuffer();
-    const second = await fetch(avatarRoute("agent:main:cached"), {
-      headers: { "If-None-Match": etag ?? "" },
-    });
-
-    expect(etag).toBeTruthy();
-    expect(second.status).toBe(304);
-    expect((await second.arrayBuffer()).byteLength).toBe(0);
-    expect(mocks.readMedia).toHaveBeenCalledTimes(1);
-  });
 
   it("shares one cold load across concurrent GET and HEAD requests", async () => {
     const arrived = createDeferredCore();
@@ -206,6 +197,8 @@ describe("handleChannelAvatarHttpRequest", () => {
     for (const [index, response] of responses.entries()) {
       expect(response.status).toBe(200);
       expect(response.headers.get("etag")).toBe(etag);
+      expect(response.headers.get("content-type")).toBe("image/png");
+      expect(response.headers.get("content-length")).toBe(String(PNG_BYTES.byteLength));
       expect(Buffer.from(await response.arrayBuffer())).toEqual(
         index % 2 ? Buffer.alloc(0) : PNG_BYTES,
       );
@@ -295,15 +288,6 @@ describe("handleChannelAvatarHttpRequest", () => {
     expect(mocks.readMedia).toHaveBeenCalledTimes(readsBeforeRevisit);
   });
 
-  it("keeps representation headers but omits bytes on HEAD", async () => {
-    const response = await fetch(avatarRoute("agent:main:head"), { method: "HEAD" });
-
-    expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toBe("image/png");
-    expect(response.headers.get("content-length")).toBe(String(PNG_BYTES.byteLength));
-    expect((await response.arrayBuffer()).byteLength).toBe(0);
-  });
-
   it.each([
     { label: "missing session", entry: undefined },
     { label: "session without an avatar", entry: avatarEntry("") },
@@ -317,44 +301,18 @@ describe("handleChannelAvatarHttpRequest", () => {
     expect(mocks.resolveReference).not.toHaveBeenCalled();
   });
 
-  it("returns 404 when the stored reference no longer resolves", async () => {
-    mocks.resolveReference.mockResolvedValue(null);
-
-    const response = await fetch(avatarRoute("agent:main:pruned"));
-
-    expect(response.status).toBe(404);
-    expect(response.headers.get("cache-control")).toBe("no-store");
-  });
-
-  it("never resolves session or media state for an unauthenticated caller", async () => {
-    mocks.authorize.mockImplementation(
-      async (params: { res: { statusCode: number; end: () => void } }) => {
-        params.res.statusCode = 401;
-        params.res.end();
+  it("never reads session or media state when authentication or owner access is denied", async () => {
+    for (const statusCode of [401, 403]) {
+      mocks.authorize.mockImplementation(async ({ res }: { res: ServerResponse }) => {
+        res.statusCode = statusCode;
+        res.end();
         return null;
-      },
-    );
-
-    const response = await fetch(avatarRoute("agent:main:hidden"));
-
-    expect(response.status).toBe(401);
-    expect(mocks.loadEntry).not.toHaveBeenCalled();
-    expect(mocks.resolveReference).not.toHaveBeenCalled();
-  });
-
-  it("does not resolve the session when the owner-read authorizer denies access", async () => {
-    mocks.authorize.mockImplementation(
-      async (params: { res: { statusCode: number; end: () => void } }) => {
-        params.res.statusCode = 403;
-        params.res.end();
-        return null;
-      },
-    );
-
-    const response = await fetch(avatarRoute("agent:main:hidden"));
-
-    expect(response.status).toBe(403);
-    expect(mocks.loadEntry).not.toHaveBeenCalled();
+      });
+      const response = await fetch(avatarRoute("agent:main:hidden"));
+      expect(response.status).toBe(statusCode);
+      expect(mocks.loadEntry).not.toHaveBeenCalled();
+      expect(mocks.resolveReference).not.toHaveBeenCalled();
+    }
   });
 
   it.each(["/__openclaw__/channel-avatar/", "/__openclaw__/channel-avatar/a/b"])(

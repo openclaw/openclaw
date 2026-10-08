@@ -8,8 +8,8 @@ import { runDoctorStateSqliteCompact } from "../../src/commands/doctor-state-sql
 import { openNodeSqliteDatabase } from "../../src/infra/node-sqlite.js";
 import { createLocalSqliteSnapshotProvider } from "../../src/snapshot/local-repository.js";
 import type { SnapshotDatabaseIdentity } from "../../src/snapshot/snapshot-provider.js";
+import { assertOpenClawAgentDatabaseForMaintenance } from "../../src/state/openclaw-agent-db-maintenance.js";
 import {
-  assertOpenClawAgentDatabaseForMaintenance,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../src/state/openclaw-agent-db.js";
@@ -26,7 +26,6 @@ import {
   STRESS_TABLE_SQL,
   type CliOptions,
   type CompactionPayloadProof,
-  type ReliabilityReport,
   type ReliabilityStateProof,
 } from "./sqlite-reliability-contract.js";
 import { runIndexRepairInterruptionProof } from "./sqlite-reliability-index-repair.js";
@@ -46,7 +45,7 @@ import {
 
 type TargetDatabase = ReturnType<typeof resolveTargetDatabase>;
 
-type CompactionProof = ReliabilityReport["maintenanceProof"]["compaction"];
+type CompactionProof = ReturnType<typeof assertCompactionProof>;
 
 // Keep 50% headroom above the 2 MiB staged-restore threshold without copying
 // an arbitrarily large payload through every repository and restore crash phase.
@@ -378,7 +377,7 @@ function assertCompactionProof(proof: {
   reclaimedBytes: number;
   walBytesAfter: number;
   walBytesBefore: number;
-}): CompactionProof {
+}) {
   if (proof.autoVacuumAfter !== 2) {
     throw new Error(`compaction did not enable incremental auto_vacuum: ${proof.autoVacuumAfter}`);
   }
@@ -467,7 +466,7 @@ async function runMaintenanceRoundTrip(params: {
   syncedRepository: string;
   target: TargetDatabase;
   validationRoot: string;
-}): Promise<ReliabilityReport["maintenanceProof"]> {
+}) {
   const autoVacuumBeforeKill = prepareVacuumRollbackSentinel(params.target.path);
   writeCompactionBloatRange(params.target.path, 1, COMPACTION_BLOAT_ROWS, true);
   const expectedState = verifyRestoredDatabase({
@@ -525,7 +524,7 @@ async function runMaintenanceRoundTrip(params: {
       verifyState,
     }),
   );
-  let vacuumInterruption: ReliabilityReport["maintenanceProof"]["vacuumInterruption"];
+  let vacuumInterruption: Awaited<ReturnType<typeof runVacuumInterruptionProof>>;
   try {
     writeCompactionBloatRange(params.target.path, COMPACTION_BLOAT_ROWS + 1, VACUUM_BLOAT_ROWS);
     const vacuumExpectedPayload = readCompactionPayload(params.target.path);
@@ -625,7 +624,7 @@ async function runSnapshotRoundTrip(params: {
   };
 }
 
-export async function runReliabilityStress(options: CliOptions): Promise<ReliabilityReport> {
+export async function runReliabilityStress(options: CliOptions) {
   const profile = PROFILES[options.profile];
   const ownsStateDir = options.stateDir === null;
   const cleanupIterationArtifacts = ownsStateDir && options.repository === null;

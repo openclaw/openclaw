@@ -19,7 +19,6 @@ import {
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
-import { ADMIN_SCOPE } from "../method-scopes.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const CHANNEL_AGNOSTIC_SESSION_SCOPES = new Set([
@@ -48,14 +47,14 @@ type ChatSendOriginatingRoute = {
 };
 
 export type ChatSendExplicitOrigin = {
-  originatingChannel?: string;
-  originatingTo?: string;
+  originatingChannel: string;
+  originatingTo: string;
   accountId?: string;
   messageThreadId?: string;
 };
 
 export function normalizeExplicitChatSendOrigin(
-  params: ChatSendExplicitOrigin,
+  params: Partial<ChatSendExplicitOrigin>,
 ): { ok: true; value?: ChatSendExplicitOrigin } | { ok: false; error: string } {
   const originatingChannel = normalizeOptionalString(params.originatingChannel);
   const originatingTo = normalizeOptionalString(params.originatingTo);
@@ -100,7 +99,7 @@ export function resolveChatSendOriginatingRoute(params: {
   mainKey?: string;
   sessionKey: string;
 }): ChatSendOriginatingRoute {
-  if (params.explicitOrigin?.originatingChannel && params.explicitOrigin.originatingTo) {
+  if (params.explicitOrigin) {
     return {
       originatingChannel: params.explicitOrigin.originatingChannel,
       originatingTo: params.explicitOrigin.originatingTo,
@@ -195,45 +194,28 @@ export function resolveChatSendOriginatingRoute(params: {
   };
 }
 
-function isAcpSessionKey(sessionKey: string | undefined): boolean {
-  return Boolean(sessionKey?.split(":").includes("acp"));
-}
-
-function resolveExplicitOriginBinding(origin: ChatSendExplicitOrigin | undefined) {
-  if (!origin?.originatingChannel || !origin.originatingTo || !origin.accountId) {
-    return undefined;
-  }
-  const channel = normalizeMessageChannel(origin.originatingChannel);
-  if (!channel || channel === INTERNAL_MESSAGE_CHANNEL) {
-    return undefined;
-  }
-  return getSessionBindingService().resolveByConversation({
-    channel,
-    accountId: origin.accountId,
-    conversationId: origin.originatingTo,
-  });
-}
-
-export function explicitOriginTargetsAcpSession(
+export async function resolveExplicitOriginBindingTargets(
   origin: ChatSendExplicitOrigin | undefined,
-): boolean {
-  return isAcpSessionKey(resolveExplicitOriginBinding(origin)?.targetSessionKey);
-}
-
-export function explicitOriginTargetsPluginBinding(
-  origin: ChatSendExplicitOrigin | undefined,
-): boolean {
-  return isPluginOwnedSessionBindingRecord(resolveExplicitOriginBinding(origin));
+): Promise<{ acp: boolean; plugin: boolean }> {
+  const binding =
+    origin?.accountId && origin.originatingChannel !== INTERNAL_MESSAGE_CHANNEL
+      ? await getSessionBindingService().resolveByConversationAsync({
+          channel: origin.originatingChannel,
+          accountId: origin.accountId,
+          conversationId: origin.originatingTo,
+        })
+      : undefined;
+  return {
+    acp: Boolean(binding?.targetSessionKey?.split(":").includes("acp")),
+    plugin: isPluginOwnedSessionBindingRecord(binding),
+  };
 }
 
 export function normalizeOptionalChatSystemReceipt(
-  value: unknown,
+  value: string | undefined,
 ): { ok: true; receipt?: string } | { ok: false; error: string } {
   if (value == null) {
     return { ok: true };
-  }
-  if (typeof value !== "string") {
-    return { ok: false, error: "systemProvenanceReceipt must be a string" };
   }
   const sanitized = sanitizeChatSendMessageInput(value);
   if (!sanitized.ok) {
@@ -251,9 +233,4 @@ export function isAcpBridgeClient(client: GatewayRequestHandlerOptions["client"]
     info?.displayName === "ACP" &&
     info?.version === "acp"
   );
-}
-
-export function hasGatewayAdminScope(client: GatewayRequestHandlerOptions["client"]): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  return scopes.includes(ADMIN_SCOPE);
 }

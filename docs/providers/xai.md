@@ -745,6 +745,8 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
       configurable effort control, but still request
       `include: ["reasoning.encrypted_content"]` so prior encrypted reasoning
       can be replayed on follow-up turns.
+      For those models, OpenClaw's `off` setting omits the effort override;
+      it does not turn off the model's native reasoning.
     - `web_search`, `x_search`, and `code_execution` are exposed as OpenClaw
       tools. OpenClaw attaches only the specific xAI built-in each tool needs
       to that tool's request instead of attaching every native tool to every
@@ -762,7 +764,7 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
 ## Live testing
 
 The xAI media paths are covered by unit tests and opt-in live suites. Export
-`XAI_API_KEY` in the process environment before running live probes.
+`XAI_API_KEY` in the process environment before running live checks.
 
 ```bash
 pnpm test extensions/xai

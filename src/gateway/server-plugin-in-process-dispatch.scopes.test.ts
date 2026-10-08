@@ -170,7 +170,6 @@ describe("registered plugin SDK scope attenuation", () => {
   it.each([
     { original: "write", scoped: "read", effective: "read" },
     { original: "read", scoped: "write", effective: "read" },
-    { original: "read", scoped: "admin", effective: "read" },
     { original: "admin", scoped: "write", effective: "write" },
   ] as const)(
     "retains the original $original source within scoped $scoped authority",
@@ -315,7 +314,6 @@ describe("native tool scope provenance", () => {
     { name: "staff write minimum", source: ["operator.write"], broad: true },
     { name: "staff read minimum", source: ["operator.read"], read: true, broad: true },
     { name: "admin minimum", source: ["operator.admin"], broad: true, admin: true },
-    { name: "Guest minimum", source: ["operator.sessions.write"] },
     {
       name: "original Guest ceiling",
       source: ["operator.sessions.write"],

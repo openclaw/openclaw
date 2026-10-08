@@ -59,20 +59,16 @@ async function fixture(
   };
 }
 
-it.each(["returned failure", "terminal warning", "manual export"] as const)(
+it.each(["terminal warning", "manual export"] as const)(
   "%s preserves state and finishes siblings",
   async (outcome) => {
     const manual = outcome === "manual export";
-    const blocked = outcome !== "returned failure";
-    const needsRetry = !blocked;
     const ids = ["subject", "healthy-sibling"];
     const requests = new Map<string, TranscriptStartRequest>();
     let cleanupFails = !manual;
     const stop = vi.fn<NonNullable<TranscriptSourceProvider["stop"]>>(async ({ sessionId }) => {
       if (sessionId === "subject" && cleanupFails) {
-        if (outcome === "terminal warning") {
-          await requests.get(sessionId)!.onStatus?.({ active: false });
-        }
+        await requests.get(sessionId)!.onStatus?.({ active: false });
         return { ok: false, error: providerError };
       }
       return { ok: true, sessionId };
@@ -101,10 +97,8 @@ it.each(["returned failure", "terminal warning", "manual export"] as const)(
         const subject = requests.get("subject")!.session;
         const sessionDir = f.store().sessionDir(subject);
         const summaryPath = path.join(sessionDir, "summary.md");
-        if (blocked) {
-          await fs.mkdir(path.dirname(sessionDir), { recursive: true });
-          await fs.writeFile(sessionDir, obstruction, { flag: "wx" });
-        }
+        await fs.mkdir(path.dirname(sessionDir), { recursive: true });
+        await fs.writeFile(sessionDir, obstruction, { flag: "wx" });
         if (manual) {
           const result = await f.execute("stop", "subject");
           expect(result.details).toMatchObject({
@@ -123,39 +117,32 @@ it.each(["returned failure", "terminal warning", "manual export"] as const)(
         for (const id of ids) {
           const stored = (await reopened.readSession(id))!;
           const summary = await reopened.readSummary(stored);
-          if (id === "subject" && needsRetry) {
-            expect(stored.stoppedAt).toBeUndefined();
-            expect(summary).toEqual({});
+          expect(stored.stoppedAt).toEqual(expect.any(String));
+          expect(summary).toMatchObject({
+            summary: { utteranceCount: 1, transcript: [capturedText] },
+            markdown: expect.stringContaining(capturedText),
+          });
+          if (id === "subject") {
+            expect(await fs.readFile(sessionDir, "utf8")).toBe(obstruction);
+            await expect(fs.readFile(summaryPath)).rejects.toMatchObject({ code: "ENOTDIR" });
           } else {
-            expect(stored.stoppedAt).toEqual(expect.any(String));
-            expect(summary).toMatchObject({
-              summary: { utteranceCount: 1, transcript: [capturedText] },
-              markdown: expect.stringContaining(capturedText),
-            });
-            if (id === "subject" && blocked) {
-              expect(await fs.readFile(sessionDir, "utf8")).toBe(obstruction);
-              await expect(fs.readFile(summaryPath)).rejects.toMatchObject({ code: "ENOTDIR" });
-            } else {
-              expect(
-                await fs.readFile(path.join(reopened.sessionDir(stored), "summary.md"), "utf8"),
-              ).toContain(capturedText);
-            }
+            expect(
+              await fs.readFile(path.join(reopened.sessionDir(stored), "summary.md"), "utf8"),
+            ).toContain(capturedText);
           }
         }
-        await f.status(needsRetry ? [{ sessionId: "subject" }] : []);
+        await f.status([]);
         if (manual) {
           expect(warnings).toEqual([]);
         } else {
           expect(warnings.length).toBeGreaterThan(0);
           const logged = warnings.join(" ");
           expect(logged).toContain("subject");
-          if (blocked) {
-            expect(logged).toMatch(/summary saved.*export failed/i);
-            expect(logged).toContain("ENOTDIR");
-            expect(logged).toContain(JSON.stringify(summaryPath));
-            expect(logged).toContain("openclaw transcripts path <session>");
-            expect(logged).toMatch(/(?:repair|correct).*destination/i);
-          }
+          expect(logged).toMatch(/summary saved.*export failed/i);
+          expect(logged).toContain("ENOTDIR");
+          expect(logged).toContain(JSON.stringify(summaryPath));
+          expect(logged).toContain("openclaw transcripts path <session>");
+          expect(logged).toMatch(/(?:repair|correct).*destination/i);
           expect(logged).toContain("fixture stop failure");
           expect(logged).toMatch(/stop failed/);
           for (const warning of warnings) {
@@ -170,9 +157,7 @@ it.each(["returned failure", "terminal warning", "manual export"] as const)(
         cleanupFails = false;
         await f.service.stop();
         expect((await f.store().readSummary(subject)).summary?.transcript).toEqual([capturedText]);
-        expect(stop.mock.calls.map(([request]) => request.sessionId)).toEqual(
-          needsRetry ? [...ids, "subject"] : ids,
-        );
+        expect(stop.mock.calls.map(([request]) => request.sessionId)).toEqual(ids);
         expect(f.logger.warn.mock.calls.map(([message]) => message)).toEqual(warnings);
         await f.status([]);
       } finally {

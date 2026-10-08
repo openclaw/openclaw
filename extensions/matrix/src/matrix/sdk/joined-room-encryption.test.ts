@@ -76,50 +76,41 @@ describe("joined-room recovery with the installed Matrix SDK", () => {
     vi.restoreAllMocks();
   });
 
-  it("restores missing encryption while excluding invited, left, and no-longer-joined cached rooms", async () => {
+  it("recovers joined rooms from cached or fetched state while isolating ineligible and failed rooms", async () => {
     const missing = seedRoom("!missing:example.org");
     const cached = seedRoom("!cached:example.org", "join", true);
     const invited = seedRoom("!invited:example.org", "invite");
     const left = seedRoom("!left:example.org", "leave");
     const stale = seedRoom("!stale:example.org");
-    joined = [missing.roomId, cached.roomId, invited.roomId, left.roomId];
+    const plain = seedRoom("!plain:example.org");
+    const offline = seedRoom("!offline:example.org");
+    const invalid = seedRoom("!invalid:example.org");
+    joined = [plain, offline, invalid, missing, cached, invited, left].map((room) => room.roomId);
+    fetchRoom = async (id) => {
+      if (id === plain.roomId) {
+        return Response.json({ errcode: "M_NOT_FOUND" }, { status: 404 });
+      }
+      if (id === offline.roomId) {
+        return Response.json({ errcode: "M_FORBIDDEN" }, { status: 403 });
+      }
+      return Response.json(id === invalid.roomId ? { algorithm: "unsupported" } : encryption);
+    };
     const crypto = client.getCrypto()!;
     expect(await crypto.isEncryptionEnabledInRoom(missing.roomId)).toBe(false);
     await reconcileJoinedRoomEncryption(client, abort.signal, () => undefined);
-    expect(fetched).toEqual([missing.roomId]);
+    expect(fetched.toSorted()).toEqual(
+      [missing, plain, offline, invalid].map((room) => room.roomId).toSorted(),
+    );
     for (const expected of [missing, cached]) {
       expect(await crypto.isEncryptionEnabledInRoom(expected.roomId)).toBe(true);
       expect(expected.currentState.getStateEvents(EventType.RoomEncryption, "")).toBeInstanceOf(
         MatrixEvent,
       );
     }
-    for (const excluded of [invited, left, stale]) {
+    for (const excluded of [invited, left, stale, plain, offline, invalid]) {
       expect(await crypto.isEncryptionEnabledInRoom(excluded.roomId)).toBe(false);
     }
-  });
-
-  it("keeps failed and unsupported rooms unconfigured while recovering other rooms", async () => {
-    joined = [
-      "!plain:example.org",
-      "!offline:example.org",
-      "!invalid:example.org",
-      "!valid:example.org",
-    ];
-    const rooms = joined.map((id) => seedRoom(id));
-    fetchRoom = async (id) => {
-      if (id === joined[0]) {
-        return Response.json({ errcode: "M_NOT_FOUND" }, { status: 404 });
-      }
-      if (id === joined[1]) {
-        return Response.json({ errcode: "M_FORBIDDEN" }, { status: 403 });
-      }
-      return Response.json(id === joined[2] ? { algorithm: "unsupported" } : encryption);
-    };
-    await reconcileJoinedRoomEncryption(client, abort.signal, () => undefined);
-    expect(
-      await Promise.all(joined.map((id) => client.getCrypto()!.isEncryptionEnabledInRoom(id))),
-    ).toEqual([false, false, false, true]);
-    expect(rooms[2]?.hasEncryptionStateEvent()).toBe(true);
+    expect(invalid.hasEncryptionStateEvent()).toBe(true);
   });
 
   it("bounds a large room set and aborts in-flight HTTP without scheduling the remaining rooms", async () => {

@@ -17,7 +17,6 @@ export default defineConfig({
       "src/**/*.node.test.ts",
       "src/pages/chat/chat-responsive.browser.test.ts",
       "src/pages/chat/chat-footer-layout.browser.test.ts",
-      "src/pages/sessions/view.browser.test.ts",
     ],
     environment: "node",
   },

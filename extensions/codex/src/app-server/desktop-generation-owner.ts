@@ -1,22 +1,23 @@
+import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
+
 const SETTLE_DELAY_MS = 1_000;
 
 export type CodexDesktopGeneration = Readonly<{ epoch: number; fingerprint: string }>;
 
 /** Coalesces filesystem invalidations into one stable desktop generation. */
 export function createCodexDesktopGenerationOwner(params: {
+  signal: AbortSignal;
   readFingerprint: () => Promise<string>;
   onGenerationChange?: (generation: CodexDesktopGeneration) => void;
   initialGeneration?: CodexDesktopGeneration;
 }) {
   let generation = params.initialGeneration;
   let invalidation = 0;
-  let dirty = false;
+  let settledInvalidation = 0;
   let refresh: Promise<CodexDesktopGeneration> | undefined;
-  let stopped = false;
 
   const markDirty = () => {
     invalidation += 1;
-    dirty = true;
   };
   const reconcile = () => {
     if (refresh) {
@@ -24,21 +25,14 @@ export function createCodexDesktopGenerationOwner(params: {
     }
     refresh = (async () => {
       for (;;) {
-        if (stopped) {
-          throw new Error("Codex desktop generation owner stopped");
-        }
+        params.signal.throwIfAborted();
         const observedInvalidation = invalidation;
         const first = await params.readFingerprint();
-        await new Promise((resolve) => {
-          setTimeout(resolve, SETTLE_DELAY_MS);
-        });
-        if (stopped) {
-          throw new Error("Codex desktop generation owner stopped");
-        }
+        // This bounded convergence delay belongs to the active fingerprint read.
+        await sleepWithAbort(SETTLE_DELAY_MS, params.signal, { ref: false });
+        params.signal.throwIfAborted();
         const second = await params.readFingerprint();
-        if (stopped) {
-          throw new Error("Codex desktop generation owner stopped");
-        }
+        params.signal.throwIfAborted();
         if (observedInvalidation !== invalidation || first !== second) {
           continue;
         }
@@ -47,7 +41,7 @@ export function createCodexDesktopGenerationOwner(params: {
           previous?.fingerprint === second
             ? previous
             : { epoch: (previous?.epoch ?? 0) + 1, fingerprint: second };
-        dirty = false;
+        settledInvalidation = invalidation;
         if (previous && generation !== previous) {
           params.onGenerationChange?.(generation);
         }
@@ -61,7 +55,7 @@ export function createCodexDesktopGenerationOwner(params: {
   return {
     read: () => generation,
     markDirty,
-    wait: () => (dirty ? reconcile() : Promise.resolve(generation)),
+    wait: () => (settledInvalidation !== invalidation ? reconcile() : Promise.resolve(generation)),
     refresh: () => {
       markDirty();
       return reconcile();
@@ -69,13 +63,14 @@ export function createCodexDesktopGenerationOwner(params: {
     isCurrent: (candidate: CodexDesktopGeneration | undefined) =>
       Boolean(
         candidate &&
-        !dirty &&
+        !params.signal.aborted &&
+        settledInvalidation === invalidation &&
         generation &&
         candidate.epoch === generation.epoch &&
         candidate.fingerprint === generation.fingerprint,
       ),
-    stop: () => {
-      stopped = true;
+    waitForIdle: async () => {
+      await refresh?.catch(() => {});
     },
   };
 }

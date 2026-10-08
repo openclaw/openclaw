@@ -4,13 +4,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { modelKey } from "../shared/model-key.js";
 import { resolveAgentEntry } from "./agent-scope-config.js";
 
-type ModelExtraParamSources = {
-  defaultParams?: Record<string, unknown>;
-  modelParams?: Record<string, unknown>;
-  agentModelParams?: Record<string, unknown>;
-  agentParams?: Record<string, unknown>;
-};
-
 const FAST_MODE_CUTOFF_MODEL_PARAM_KEYS = new Set([
   "fastAutoOnSeconds",
   "fastSeconds",
@@ -52,7 +45,7 @@ export function resolveModelExtraParamSources(params: {
   provider: string;
   modelId?: string;
   agentId?: string;
-}): ModelExtraParamSources {
+}) {
   const defaultParams = params.config?.agents?.defaults?.params;
   const configuredModels = params.config?.agents?.defaults?.models;
   const canonicalKey = params.modelId ? modelKey(params.provider, params.modelId) : undefined;

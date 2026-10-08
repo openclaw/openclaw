@@ -14,12 +14,8 @@ const publications: Record<string, string | symbol> = {
   "src/agents/auth-profiles/runtime-snapshots.ts": Symbol.for(
     "openclaw.runtimeAuthSnapshotsTestApi",
   ),
-  "src/agents/auth-profiles/store.ts": Symbol.for("openclaw.authProfileStoreTestApi"),
   "src/agents/auth-profiles/usage.ts": Symbol.for("openclaw.authProfileUsageTestApi"),
   "src/agents/bash-process-registry.ts": Symbol.for("openclaw.bashProcessRegistryTestApi"),
-  "src/agents/cli-auth-epoch.ts": Symbol.for("openclaw.cliAuthEpochTestApi"),
-  "src/agents/cli-backends.ts": Symbol.for("openclaw.cliBackendsTestApi"),
-  "src/agents/cli-runner/prepare.ts": Symbol.for("openclaw.cliRunnerPrepareTestApi"),
   "src/agents/embedded-agent-runner/context-engine-maintenance.ts": Symbol.for(
     "openclaw.contextEngineMaintenanceTestApi",
   ),
@@ -29,7 +25,6 @@ const publications: Record<string, string | symbol> = {
   ),
   "src/agents/prepared-model-runtime.ts": Symbol.for("openclaw.preparedModelRuntimeTestApi"),
   "src/agents/session-suspension.ts": Symbol.for("openclaw.sessionSuspensionTestApi"),
-  "src/agents/sessions/tools/bash.ts": Symbol.for("openclaw.bashToolTestApi"),
   "src/agents/subagents/announce/subagent-announce-delivery.ts": Symbol.for(
     "openclaw.subagentAnnounceDeliveryTestApi",
   ),
@@ -76,7 +71,6 @@ const publications: Record<string, string | symbol> = {
   "src/logging/diagnostic.ts": Symbol.for("openclaw.diagnosticTestApi"),
   "src/logging/secret-redaction-registry.ts": Symbol.for("openclaw.secretRedactionRegistryTestApi"),
   "src/media/playback-transcode.ts": Symbol.for("openclaw.playbackTranscodeTestApi"),
-  "src/model-catalog/remote-overlay.ts": Symbol.for("openclaw.remoteModelCatalogOverlayTestApi"),
   "src/node-host/plugin-node-host.ts": Symbol.for("openclaw.nodeHostPluginTestApi"),
   "src/plugins/memory-runtime.ts": Symbol.for("openclaw.memoryRuntimeTestApi"),
   "src/sessions/session-lifecycle-admission.ts": Symbol.for(

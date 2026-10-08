@@ -100,9 +100,7 @@ describe("llama-server provider discovery", () => {
         },
         outcomes: [{ provider: "llama-cpp", profileId: "llama-cpp:default", status: "ready" }],
       });
-      expect(discoverMock).toHaveBeenCalledWith(
-        expect.objectContaining({ apiKey: "profile-key", cacheTtlMs: 0 }),
-      );
+      expect(discoverMock).toHaveBeenCalledWith(expect.objectContaining({ apiKey: "profile-key" }));
     });
 
     it("prefers configured Authorization over ambient API-key discovery auth", async () => {
@@ -299,7 +297,7 @@ describe("llama-server provider discovery", () => {
     );
 
     expect(discoverMock).toHaveBeenCalledWith(
-      expect.objectContaining({ apiKey: undefined, headers, cacheTtlMs: 0 }),
+      expect.objectContaining({ apiKey: undefined, headers }),
     );
   });
 

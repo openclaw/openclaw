@@ -940,7 +940,7 @@ describe("plugin runtime session work admission", () => {
     const runtime = createRuntimeAgent();
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
-    const mutation = runExclusiveSessionLifecycleMutation({
+    const mutation = runExclusiveSessionLifecycleMutation("plugin-create", {
       scope: storePath,
       identities: [sessionKey, sessionId],
       prepare: async () => {
@@ -968,7 +968,7 @@ describe("plugin runtime session work admission", () => {
     const runtime = createRuntimeAgent();
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
-    const mutation = runExclusiveSessionLifecycleMutation({
+    const mutation = runExclusiveSessionLifecycleMutation("plugin-create", {
       scope: storePath,
       identities: [sessionKey, sessionId],
       prepare: async () => {

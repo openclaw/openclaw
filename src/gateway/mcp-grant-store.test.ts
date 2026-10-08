@@ -246,18 +246,10 @@ describe("mcp-grant-store", () => {
 
   it("retains the exact admitted host context outside child-visible grant data", async () => {
     const admittedRunContext = await admitted("run-retained-context");
-    const rootedExecution = {
-      root: "/tmp/workshop",
-      workspaceDir: "/tmp/workshop",
-      cwd: "/tmp/workshop",
-      requireWorkspaceOnly: true as const,
-      sandbox: null,
-    };
     const grant = mintMcpLoopbackClientGrant({
       context: { sessionKey: "agent:main:first", senderIsOwner: false },
       runtimeOwnerToken: "runtime-one",
       admittedRunContext,
-      rootedExecution,
     });
     activateMcpLoopbackClientGrantCapture({
       token: grant.token,
@@ -271,10 +263,7 @@ describe("mcp-grant-store", () => {
       captureKey: "capture-a",
     });
     expect(resolved?.admittedRunContext).toBe(admittedRunContext);
-    expect(resolved?.rootedExecution).toBe(rootedExecution);
     expect(grant.context).not.toHaveProperty("admittedRunContext");
-    expect(grant.context).not.toHaveProperty("rootedExecution");
-    expect(grant).not.toHaveProperty("rootedExecution");
     revokeMcpLoopbackClientGrant(grant.token);
     expect(resolved?.isCurrent()).toBe(false);
   });

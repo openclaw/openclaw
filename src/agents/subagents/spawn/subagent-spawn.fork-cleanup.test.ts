@@ -134,10 +134,10 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     forkedEntry = undefined;
     fork.mockClear();
     resetScheduler();
-    registerSubagentRun.mockReset();
-    startQueuedSubagentRun.mockReset().mockReturnValue(false);
-    settleFailedQueuedSubagentLaunch.mockReset().mockReturnValue(true);
-    completeCollectorLaunchCleanup.mockReset();
+    registerSubagentRun.mockReset().mockResolvedValue(undefined);
+    startQueuedSubagentRun.mockReset().mockResolvedValue(false);
+    settleFailedQueuedSubagentLaunch.mockReset().mockResolvedValue(true);
+    completeCollectorLaunchCleanup.mockReset().mockResolvedValue(undefined);
     prepareSubagentSpawn.mockReset();
     dispatch
       .mockReset()
@@ -210,57 +210,51 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     vi.doUnmock("../../provider-model-normalization.runtime.js");
   });
 
-  it.each(["child", "parent"] as const)(
-    "cleans up the provisional child when fork %s lookup rejects",
-    async (lookup) => {
-      const runtime = await import("./subagent-spawn.runtime.js");
-      const resolveTarget = runtime.resolveGatewaySessionStoreTargetInWorker;
-      let provisional: { sessionKey: string; entry: SessionEntry } | undefined;
-      const selected = vi
-        .spyOn(runtime, "resolveGatewaySessionStoreTargetInWorker")
-        .mockImplementation(async (params) => {
-          const child = sessions
-            .listSessionEntriesCore({ agentId: "main", storePath })
-            .find(({ sessionKey }) => sessionKey !== parentKey);
-          if (
-            child &&
-            (lookup === "child" ? params.key === child.sessionKey : params.key === parentKey)
-          ) {
-            provisional = child;
-            throw new Error("fork lookup source unavailable");
-          }
-          return await resolveTarget(params);
-        });
-      try {
-        await spawnSubagentDirect(
-          { task: "inspect parent history", context: "fork" },
-          { agentSessionKey: parentKey },
-        ).catch(() => undefined);
+  it("cleans up the provisional child when fork parent lookup rejects", async () => {
+    const runtime = await import("./subagent-spawn.runtime.js");
+    const resolveTarget = runtime.resolveGatewaySessionStoreTargetInWorker;
+    let provisional: { sessionKey: string; entry: SessionEntry } | undefined;
+    const selected = vi
+      .spyOn(runtime, "resolveGatewaySessionStoreTargetInWorker")
+      .mockImplementation(async (params) => {
+        const child = sessions
+          .listSessionEntriesCore({ agentId: "main", storePath })
+          .find(({ sessionKey }) => sessionKey !== parentKey);
+        if (child && params.key === parentKey) {
+          provisional = child;
+          throw new Error("fork lookup source unavailable");
+        }
+        return await resolveTarget(params);
+      });
+    try {
+      await spawnSubagentDirect(
+        { task: "inspect parent history", context: "fork" },
+        { agentSessionKey: parentKey },
+      ).catch(() => undefined);
 
-        const created = expectDefined(provisional, "committed provisional child");
-        expect(
-          sessions.loadSessionEntry({ agentId: "main", sessionKey: created.sessionKey, storePath }),
-        ).toBeUndefined();
-        expect(dispatch).toHaveBeenCalledWith(
-          "sessions.delete",
-          expect.objectContaining({
-            key: created.sessionKey,
-            expectedSessionId: created.entry.sessionId,
-            expectedLifecycleRevision: created.entry.lifecycleRevision,
-          }),
-          expect.anything(),
-        );
-        expect(fork).not.toHaveBeenCalled();
-        expect(registerSubagentRun).not.toHaveBeenCalled();
-        expect(dispatch.mock.calls.some(([method]) => method === "agent")).toBe(false);
-        expect(
-          sessions.loadSessionEntry({ agentId: "main", sessionKey: parentKey, storePath }),
-        ).toMatchObject({ sessionId: parentId, lifecycleRevision: "parent-revision" });
-      } finally {
-        selected.mockRestore();
-      }
-    },
-  );
+      const created = expectDefined(provisional, "committed provisional child");
+      expect(
+        sessions.loadSessionEntry({ agentId: "main", sessionKey: created.sessionKey, storePath }),
+      ).toBeUndefined();
+      expect(dispatch).toHaveBeenCalledWith(
+        "sessions.delete",
+        expect.objectContaining({
+          key: created.sessionKey,
+          expectedSessionId: created.entry.sessionId,
+          expectedLifecycleRevision: created.entry.lifecycleRevision,
+        }),
+        expect.anything(),
+      );
+      expect(fork).not.toHaveBeenCalled();
+      expect(registerSubagentRun).not.toHaveBeenCalled();
+      expect(dispatch.mock.calls.some(([method]) => method === "agent")).toBe(false);
+      expect(
+        sessions.loadSessionEntry({ agentId: "main", sessionKey: parentKey, storePath }),
+      ).toMatchObject({ sessionId: parentId, lifecycleRevision: "parent-revision" });
+    } finally {
+      selected.mockRestore();
+    }
+  });
 
   it.each(["fork", "isolated"] as const)(
     "protects locked parent transcript ownership with context=%s",
@@ -340,7 +334,7 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
     "records the committed context when $scenario",
     async ({ args, parentTokens, preparedMode, operation }) => {
       prepareSubagentSpawn.mockResolvedValue(undefined);
-      startQueuedSubagentRun.mockReturnValue(true);
+      startQueuedSubagentRun.mockResolvedValue(true);
       threadBindingAvailable = true;
       config.logging = { audit: { enabled: true, executionIdentity: true } };
       const parentScope = {

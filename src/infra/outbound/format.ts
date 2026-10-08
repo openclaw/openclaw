@@ -13,10 +13,7 @@ const resolveChannelLabel = (channel: string) => {
   }
   // Some legacy chat channels are not plugins; keep their human labels for CLI output.
   const normalized = normalizeChatChannelId(channel);
-  if (normalized) {
-    return findChatChannelMeta(normalized)?.label ?? channel;
-  }
-  return channel;
+  return normalized ? (findChatChannelMeta(normalized)?.label ?? channel) : channel;
 };
 
 export function formatOutboundDeliverySummary(
@@ -25,17 +22,9 @@ export function formatOutboundDeliverySummary(
   opts?: { action?: string },
 ): string {
   const action = opts?.action ?? "Sent";
-  if (!result) {
-    return `✅ ${action} via ${resolveChannelLabel(channel)}. Message ID: unknown`;
-  }
-
-  const label = resolveChannelLabel(result.channel);
-  const base = `✅ ${action} via ${label}. Message ID: ${result.messageId}`;
-
-  if (result.target) {
-    return `${base} (${result.target.kind} ${result.target.id})`;
-  }
-  return base;
+  const label = resolveChannelLabel(result ? result.channel : channel);
+  const base = `✅ ${action} via ${label}. Message ID: ${result ? result.messageId : "unknown"}`;
+  return result?.target ? `${base} (${result.target.kind} ${result.target.id})` : base;
 }
 
 export function formatGatewaySummary(params: {

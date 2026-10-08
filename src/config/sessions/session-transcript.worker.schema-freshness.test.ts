@@ -1,15 +1,20 @@
 import assert from "node:assert/strict";
 import type { Transferable } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
+import { prepareChatHistoryResponsePage } from "../../gateway/server-methods/chat-history-response-page.js";
 import type { SessionArtifactReadQuery } from "../../gateway/session-artifact-read.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { applyAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import * as nodeSqlite from "../../infra/node-sqlite.js";
 import type { UsageCostWorkerReply } from "../../infra/session-cost-usage-worker.types.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import { getOpenClawAgentDatabaseValidationForTransfer } from "../../state/openclaw-agent-db-validation-cache.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { captureOpenClawStateReadWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
 import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import type { ChatHistoryPageParams } from "./session-history-types.js";
 import type {
   SessionTranscriptWorkerInput,
   SessionTranscriptWorkerReply,
@@ -40,6 +45,85 @@ vi.mock("../../infra/worker-task-server.js", async (importOriginal) => ({
   },
 }));
 import "./session-transcript.worker.js";
+
+it("transfers bounded history JSON without retaining the worker buffer", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agentId = "main";
+    const sessionKey = "agent:main:history-transfer";
+    const sessionId = "history-transfer";
+    const { path } = openOpenClawAgentDatabase({ agentId, env: state.env });
+    const scope = { agentId, sessionKey, sessionId, storePath: path, env: state.env };
+    replaceSessionEntrySync(scope, { sessionId, updatedAt: 1 });
+    for (const [index, length] of [64, 200_000].entries()) {
+      appendTranscriptMessageSync(scope, {
+        eventId: `message-${index}`,
+        message: {
+          role: "assistant",
+          timestamp: 1_800_000_000_000 + index,
+          content: [{ type: "text", text: `Synthetic 漢字🦞\\"\n${"x".repeat(length)}` }],
+        },
+      });
+    }
+    await closeOpenClawAgentDatabaseByPathAsync(path);
+    const stateContext = captureOpenClawStateReadWorkerContext({ env: state.env });
+    const params: ChatHistoryPageParams & { sessionId: string; storePath: string } = {
+      entry: undefined,
+      provider: undefined,
+      sessionId,
+      storePath: path,
+      sessionAgentId: agentId,
+      canonicalKey: sessionKey,
+      max: 200,
+      maxHistoryBytes: 1024,
+      effectiveMaxChars: 300_000,
+      offset: undefined,
+      messageId: undefined,
+    };
+    const read = async (encodeResponse: boolean) => {
+      const reply = await worker.read({
+        kind: "history-page",
+        database: { agentId, path },
+        request: { kind: "rpc", params: { ...params, encodeResponse } },
+        target: {
+          transcript: { agentId, sessionId, sessionKey, storePath: path, sessionFile: sessionKey },
+          entryValidationKey: sessionKey,
+          stateDatabase: {
+            path: stateContext.admission.databasePath,
+            environment: stateContext.environment,
+          },
+        },
+      });
+      assert(reply.ok && typeof reply.value === "object" && reply.value !== null);
+      assert("kind" in reply.value && reply.value.kind === "rpc");
+      return { reply, page: reply.value.page };
+    };
+    try {
+      const ordinary = await read(false);
+      const expected = prepareChatHistoryResponsePage(ordinary.page, params);
+      const { reply, page } = await read(true);
+      const body = page.encodedResponse?.messages;
+      assert(body);
+      expect(body.byteLength).toBeLessThanOrEqual(params.maxHistoryBytes);
+      expect(JSON.parse(new TextDecoder().decode(body))).toEqual(expected.messages);
+      const received = structuredClone(reply, { transfer: worker.transfers(reply) });
+      expect(body.byteLength).toBe(0);
+      expect(received).toMatchObject({
+        ok: true,
+        value: {
+          kind: "rpc",
+          page: {
+            messages: [],
+            encodedResponse: {
+              messages: new TextEncoder().encode(JSON.stringify(expected.messages)),
+            },
+          },
+        },
+      });
+    } finally {
+      worker.close(JSON.stringify([{ path }]));
+    }
+  });
+});
 
 it.for([
   { change: "newer schema", sql: "PRAGMA user_version = 999", error: /newer schema version/ },
@@ -114,6 +198,19 @@ it.for([
         }
         // Refresh the retained admission, rather than hiding the bug with a cold reader.
         expect(countOpens()).toBe(1);
+        if (!error) {
+          const receipt = getOpenClawAgentDatabaseValidationForTransfer(database);
+          assert(receipt);
+          await applyAgentDatabaseReaderRequest({
+            kind: "close",
+            candidates: [{ path }],
+            deleted: false,
+          });
+          worker.close(JSON.stringify([{ path }]));
+          expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
+          expect(Atomics.load(new Int32Array(receipt.valid), 0)).toBe(1);
+          expect(Atomics.load(new Int32Array(receipt.canonicalReady), 0)).toBe(1);
+        }
       } finally {
         vi.runOnlyPendingTimers();
         await Promise.allSettled([pending]);

@@ -92,6 +92,18 @@ describe("resident node manifest capture", () => {
     );
     expect(child).toMatchObject({ code: 0, stdout: `${native}\n` });
     expect(memo.size).toBe(1);
+    for (const maxHashMemoBytes of [2, 8192, 2]) {
+      const captured = parseRemoteWorkspaceManifestEnvelope(
+        await runNodeWorkspaceManifestCapture({
+          argv: [workspaceDir, "", "all", "memo-v1"],
+          home,
+          memo: "[]",
+          maxHashMemoBytes,
+        }),
+      );
+      expect(captured.manifestRef).toBe(native);
+      expect(captured.memo).toHaveLength(maxHashMemoBytes === 2 ? 0 : 1);
+    }
   });
 
   it("rejects escaping symlinks and cancellation before capture", async () => {

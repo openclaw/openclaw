@@ -10,7 +10,7 @@ This page covers Podman as the sandbox backend for agent tool execution. Running
 
 ## Podman backend
 
-Use `sandbox.backend: "podman"` to select the native `podman` CLI directly. This is a built-in backend, not a plugin. It does not probe or select Docker, even when the `docker` executable is installed.
+Use `sandbox.backend: "podman"` to select the native `podman` CLI directly. This is a built-in backend, not a plugin. It does not check or select Docker, even when the `docker` executable is installed.
 
 Podman reuses the existing `sandbox.docker.*` settings and the active native `podman` CLI context; it adds no separate connection configuration surface.
 

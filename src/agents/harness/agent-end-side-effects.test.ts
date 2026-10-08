@@ -1,15 +1,23 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import * as transcriptAnchor from "../../config/sessions/session-accessor.sqlite-transcript-anchor.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import * as nativeTranscriptAnchor from "../../config/sessions/session-accessor.sqlite-transcript-anchor.js";
+import * as transcriptAnchor from "../../config/sessions/session-transcript-anchor-read.js";
 import { recordRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import { scheduleSkillExperienceReview } from "../../skills/workshop/experience-review-default.js";
-import { awaitAgentEndSideEffects, runAgentEndSideEffects } from "./agent-end-side-effects.js";
+import {
+  awaitAgentEndSideEffects,
+  runAgentEndSideEffects,
+  runAgentEndSideEffectsAsync,
+} from "./agent-end-side-effects.js";
 import {
   awaitAgentHarnessAgentEndHook,
   runAgentHarnessAgentEndHook,
 } from "./lifecycle-hook-helpers.js";
 
-vi.mock("../../skills/workshop/experience-review-default.js", () => ({
+vi.mock("../../skills/workshop/experience-review-default.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../skills/workshop/experience-review-default.js")>()),
   scheduleSkillExperienceReview: vi.fn(),
+  scheduleUnusedWorkshopSkillArchive: vi.fn(),
 }));
 
 vi.mock("./lifecycle-hook-helpers.js", () => ({
@@ -35,7 +43,10 @@ const skillExperienceReviewSource = {
 describe("agent end side effects", () => {
   afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
-    vi.spyOn(transcriptAnchor, "readActiveTranscriptEntryAnchor").mockReturnValue(
+    vi.spyOn(nativeTranscriptAnchor, "readActiveTranscriptEntryAnchor").mockReturnValue(
+      skillExperienceReviewSource,
+    );
+    vi.spyOn(transcriptAnchor, "readActiveTranscriptEntryAnchorAsync").mockResolvedValue(
       skillExperienceReviewSource,
     );
     mockExperienceReview.mockReset();
@@ -43,52 +54,68 @@ describe("agent end side effects", () => {
     mockRunAgentEndHook.mockReset();
   });
 
-  it("schedules experience review synchronously alongside plugin agent_end hooks", () => {
-    recordRunSkillUsage({
-      runId: "run-1",
-      name: "release-runbook",
-      source: "workspace",
-      activation: "read",
-    });
-    runAgentEndSideEffects({
-      skillExperienceReviewSource,
-      event: {
-        messages: [],
-        success: true,
-      },
-      ctx: {
+  it.each(["sdk", "bundled"] as const)(
+    "prepares the experience review before %s plugin hooks",
+    async (mode) => {
+      const read = createDeferred<typeof skillExperienceReviewSource>();
+      vi.mocked(transcriptAnchor.readActiveTranscriptEntryAnchorAsync).mockReturnValueOnce(
+        read.promise,
+      );
+      recordRunSkillUsage({
         runId: "run-1",
-        sessionKey: "agent:main:main",
-        workspaceDir: "/workspace",
-        trigger: "user",
-        foregroundPromptContext: {
-          agentId: "main",
-          agentDir: "/agent",
-          workspaceDir: "/workspace",
-          sandboxSessionKey: "agent:main:main",
-          trigger: "user",
+        name: "release-runbook",
+        source: "workspace",
+        activation: "read",
+      });
+      const params = {
+        skillExperienceReviewSource,
+        event: {
+          messages: [],
+          success: true,
         },
-        config: {
-          skills: {
-            workshop: {
-              autonomous: {
-                mode: "propose",
+        ctx: {
+          runId: "run-1",
+          sessionKey: "agent:main:main",
+          workspaceDir: "/workspace",
+          trigger: "user",
+          foregroundPromptContext: {
+            agentId: "main",
+            agentDir: "/agent",
+            workspaceDir: "/workspace",
+            sandboxSessionKey: "agent:main:main",
+            trigger: "user",
+          },
+          config: {
+            skills: {
+              workshop: {
+                autonomous: {
+                  mode: "auto" as const,
+                },
               },
             },
           },
         },
-      },
-    });
+      } satisfies Parameters<typeof runAgentEndSideEffects>[0];
 
-    expect(mockRunAgentEndHook).toHaveBeenCalledTimes(1);
-    expect(mockExperienceReview).toHaveBeenCalledTimes(1);
-    expect(mockExperienceReview).toHaveBeenCalledWith(
-      expect.objectContaining({
-        usedSkills: [{ name: "release-runbook", source: "workspace", activation: "read" }],
-        source: skillExperienceReviewSource,
-      }),
-    );
-  });
+      if (mode === "bundled") {
+        const completion = runAgentEndSideEffectsAsync(params);
+        expect(mockRunAgentEndHook).not.toHaveBeenCalled();
+        expect(mockExperienceReview).not.toHaveBeenCalled();
+        read.resolve(skillExperienceReviewSource);
+        await completion;
+      } else {
+        expect(runAgentEndSideEffects(params)).toBeUndefined();
+      }
+      expect(mockRunAgentEndHook).toHaveBeenCalledTimes(1);
+      expect(mockExperienceReview).toHaveBeenCalledTimes(1);
+      expect(mockExperienceReview).toHaveBeenCalledWith(
+        expect.objectContaining({
+          usedSkills: [{ name: "release-runbook", source: "workspace", activation: "read" }],
+          source: skillExperienceReviewSource,
+        }),
+      );
+    },
+  );
 
   it.each(["scheduling", "anchor read"])(
     "still runs agent_end hooks when %s fails",
@@ -96,7 +123,7 @@ describe("agent end side effects", () => {
       const fail =
         phase === "scheduling"
           ? mockExperienceReview
-          : vi.mocked(transcriptAnchor.readActiveTranscriptEntryAnchor);
+          : vi.mocked(transcriptAnchor.readActiveTranscriptEntryAnchorAsync);
       fail.mockImplementationOnce(() => {
         throw new Error(`${phase} failed`);
       });

@@ -1,5 +1,21 @@
 [
   {
+    "source": "X / Twitter",
+    "target": "X / Twitter"
+  },
+  {
+    "source": "X plugin reference",
+    "target": "X 插件参考"
+  },
+  {
+    "source": "X replies",
+    "target": "X 回复"
+  },
+  {
+    "source": "x",
+    "target": "x"
+  },
+  {
     "source": "Radius",
     "target": "Radius"
   },
@@ -2516,6 +2532,10 @@
     "target": "Gateway 网关服务与进程"
   },
   {
+    "source": "Config validation and checks",
+    "target": "配置验证与检查"
+  },
+  {
     "source": "Config validation and probes",
     "target": "配置校验与探针"
   },
@@ -4672,8 +4692,12 @@
     "target": "Telegram 传输方式"
   },
   {
-    "source": "Telegram Dashboard Mini App",
-    "target": "Telegram 仪表盘小程序"
+    "source": "Control UI Mini App",
+    "target": "Control UI 小程序"
+  },
+  {
+    "source": "Telegram Control UI Mini App",
+    "target": "Telegram Control UI 小程序"
   },
   {
     "source": "Telegram troubleshooting",
@@ -5002,5 +5026,13 @@
   {
     "source": "Deploy a team server",
     "target": "部署团队服务器"
+  },
+  {
+    "source": "Worker-local inference",
+    "target": "工作器本地推理"
+  },
+  {
+    "source": "Recommended models",
+    "target": "推荐模型"
   }
 ]

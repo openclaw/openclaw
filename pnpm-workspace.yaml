@@ -10,17 +10,19 @@ minimumReleaseAgeStrict: true
 
 # Trusted Codex runtimes are outside the dependency cooldown.
 minimumReleaseAgeExclude:
+  # Security fix for GHSA-68fv-2mgg-jv7q (released 2026-09-30); remove after 2026-10-07T14:08:09.382Z.
+  - "source-map-js@1.2.2"
   - "@openai/codex"
   - "@openai/codex-*"
-  # Reviewed fs-safe 0.22.0 release and native helpers; remove after 2026-10-08T06:00:12.449Z.
-  - "@openclaw/fs-safe@0.22.0"
-  - "@openclaw/fs-safe-darwin-arm64@0.22.0"
-  - "@openclaw/fs-safe-darwin-x64@0.22.0"
-  - "@openclaw/fs-safe-linux-arm64-gnu@0.22.0"
-  - "@openclaw/fs-safe-linux-arm64-musl@0.22.0"
-  - "@openclaw/fs-safe-linux-x64-gnu@0.22.0"
-  - "@openclaw/fs-safe-linux-x64-musl@0.22.0"
-  - "@openclaw/fs-safe-win32-x64-msvc@0.22.0"
+  # Reviewed fs-safe 0.24.2 release and native helpers; remove after 2026-10-14T04:50:36.473Z.
+  - "@openclaw/fs-safe@0.24.2"
+  - "@openclaw/fs-safe-darwin-arm64@0.24.2"
+  - "@openclaw/fs-safe-darwin-x64@0.24.2"
+  - "@openclaw/fs-safe-linux-arm64-gnu@0.24.2"
+  - "@openclaw/fs-safe-linux-arm64-musl@0.24.2"
+  - "@openclaw/fs-safe-linux-x64-gnu@0.24.2"
+  - "@openclaw/fs-safe-linux-x64-musl@0.24.2"
+  - "@openclaw/fs-safe-win32-x64-msvc@0.24.2"
 
 # Isolated installs let pnpm reuse whole-package APFS clones instead of relinking every file.
 nodeLinker: isolated
@@ -38,10 +40,10 @@ overrides:
   "chevrotain>lodash-es": 4.18.1
   "@chevrotain/cst-dts-gen>lodash-es": 4.18.1
   "@chevrotain/gast>lodash-es": 4.18.1
-  "@agentclientprotocol/codex-acp@1.12.0>@openai/codex": 0.158.0
+  "@agentclientprotocol/codex-acp@1.12.0>@openai/codex": 0.160.0
   "@codemirror/commands@6.11.1>@codemirror/view": 6.43.13
   "@codemirror/view@6.43.13>@codemirror/state": 6.7.6
-  "@anthropic-ai/sdk": 0.127.0
+  "@anthropic-ai/sdk": 0.128.0
   "@anthropic-ai/vertex-sdk@0.19.10>google-auth-library": 11.1.0
   "@opentelemetry/core": 2.11.0
   "@opentelemetry/propagator-jaeger": 2.11.0
@@ -58,6 +60,8 @@ overrides:
   request-promise: "npm:@cypress/request-promise@5.0.0"
   basic-ftp: 6.2.1
   brace-expansion: 5.0.12
+  # GHSA-68fv-2mgg-jv7q: source-map-js <1.2.2 event-loop DoS (via css-tree).
+  source-map-js: 1.2.2
   file-type: 22.1.1
   form-data: 4.0.6
   "werift-ice@0.2.2>ip": "npm:neoip@3.1.0"
@@ -116,10 +120,10 @@ packageExtensions:
 
 patchedDependencies:
   "baileys@7.0.0-rc14": patches/baileys@7.0.0-rc14.patch
-  "chrome-devtools-mcp@1.9.0": patches/chrome-devtools-mcp@1.9.0.patch
   "matrix-js-sdk@42.4.0": patches/matrix-js-sdk@42.4.0.patch
   "@novnc/novnc@1.7.0": patches/@novnc__novnc@1.7.0.patch
   vitest@5.0.1: patches/vitest@5.0.1.patch
   "@awesome.me/webawesome@3.13.0": patches/@awesome.me__webawesome@3.13.0.patch
   "@openclaw/proxyline@0.3.12": patches/@openclaw__proxyline@0.3.12.patch
   ghostty-web@0.4.0: patches/ghostty-web@0.4.0.patch
+  chrome-devtools-mcp@1.10.1: patches/chrome-devtools-mcp@1.10.1.patch

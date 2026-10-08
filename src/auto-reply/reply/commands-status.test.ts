@@ -10,7 +10,7 @@ import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-su
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import {
-  addSubagentRunForTests,
+  seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -272,7 +272,7 @@ async function writeTranscriptUsageLog(params: {
 }
 
 describe("buildStatusReply subagent summary", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     cliBackendsTesting.setDepsForTest({
       resolvePluginSetupRegistry: () => ({
         providers: [],
@@ -291,16 +291,16 @@ describe("buildStatusReply subagent summary", () => {
         },
       ],
     });
-    resetSubagentRegistryForTests();
+    await resetSubagentRegistryForTests({ persist: false });
   });
 
-  afterEach(() => {
-    resetSubagentRegistryForTests();
+  afterEach(async () => {
+    await resetSubagentRegistryForTests({ persist: false });
   });
 
   it("counts ended orchestrators with active descendants as active", async () => {
     const parentKey = "agent:main:subagent:status-ended-parent";
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-status-ended-parent",
       childSessionKey: parentKey,
       requesterSessionKey: "agent:main:main",
@@ -312,7 +312,7 @@ describe("buildStatusReply subagent summary", () => {
       endedAt: Date.now() - 110_000,
       outcome: { status: "ok" },
     });
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-status-active-child",
       childSessionKey: "agent:main:subagent:status-ended-parent:subagent:child",
       requesterSessionKey: parentKey,
@@ -330,7 +330,7 @@ describe("buildStatusReply subagent summary", () => {
 
   it("dedupes stale rows in the verbose subagent status summary", async () => {
     const childSessionKey = "agent:main:subagent:status-dedupe-worker";
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-status-current",
       childSessionKey,
       requesterSessionKey: "agent:main:main",
@@ -340,7 +340,7 @@ describe("buildStatusReply subagent summary", () => {
       createdAt: Date.now() - 60_000,
       startedAt: Date.now() - 60_000,
     });
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-status-stale",
       childSessionKey,
       requesterSessionKey: "agent:main:main",
@@ -363,7 +363,7 @@ describe("buildStatusReply subagent summary", () => {
     const oldParentKey = "agent:main:subagent:status-old-parent";
     const newParentKey = "agent:main:subagent:status-new-parent";
     const childSessionKey = "agent:main:subagent:status-shared-child";
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-status-old-parent",
       childSessionKey: oldParentKey,
       requesterSessionKey: "agent:main:main",
@@ -373,7 +373,7 @@ describe("buildStatusReply subagent summary", () => {
       createdAt: Date.now() - 120_000,
       startedAt: Date.now() - 120_000,
     });
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-status-new-parent",
       childSessionKey: newParentKey,
       requesterSessionKey: "agent:main:main",
@@ -383,7 +383,7 @@ describe("buildStatusReply subagent summary", () => {
       createdAt: Date.now() - 90_000,
       startedAt: Date.now() - 90_000,
     });
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-status-child-stale-old-parent",
       childSessionKey,
       requesterSessionKey: oldParentKey,
@@ -394,7 +394,7 @@ describe("buildStatusReply subagent summary", () => {
       createdAt: Date.now() - 60_000,
       startedAt: Date.now() - 60_000,
     });
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-status-child-current-new-parent",
       childSessionKey,
       requesterSessionKey: newParentKey,
@@ -413,7 +413,7 @@ describe("buildStatusReply subagent summary", () => {
   });
 
   it("counts controller-owned runs even when the latest child requester differs", async () => {
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "run-status-controller-owned",
       childSessionKey: "agent:main:subagent:status-controller-owned",
       requesterSessionKey: "agent:main:requester-only",
@@ -754,7 +754,7 @@ describe("buildStatusReply subagent summary", () => {
         ...baseCfg,
         agents: {
           defaults: {
-            agentRuntime: { id: "codex" },
+            models: { "openai/gpt-5.4": { agentRuntime: { id: "codex" } } },
           },
         },
       },
@@ -846,7 +846,7 @@ describe("buildStatusReply subagent summary", () => {
             ...baseCfg,
             agents: {
               defaults: {
-                agentRuntime: { id: "codex" },
+                models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
               },
             },
           },
@@ -913,7 +913,7 @@ describe("buildStatusReply subagent summary", () => {
             ...baseCfg,
             agents: {
               defaults: {
-                agentRuntime: { id: "codex" },
+                models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
               },
             },
           },
@@ -1051,7 +1051,7 @@ describe("buildStatusReply subagent summary", () => {
             ...baseCfg,
             agents: {
               defaults: {
-                agentRuntime: { id: "codex" },
+                models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
               },
             },
           },
@@ -1088,11 +1088,9 @@ describe("buildStatusReply subagent summary", () => {
               authProfileId: "work",
             },
           ],
-          config: expect.objectContaining({
-            agents: expect.objectContaining({
-              defaults: expect.objectContaining({ agentRuntime: { id: "codex" } }),
-            }),
-          }),
+        });
+        expect(providerUsageCall[0]?.config?.agents?.defaults?.models).toEqual({
+          "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
         });
       },
       { skipSessionCleanup: true, skipHomeCleanup: true },
@@ -1119,7 +1117,7 @@ describe("buildStatusReply subagent summary", () => {
             ...baseCfg,
             agents: {
               defaults: {
-                agentRuntime: { id: "codex" },
+                models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
               },
             },
           },
@@ -1172,7 +1170,7 @@ describe("buildStatusReply subagent summary", () => {
             ...baseCfg,
             agents: {
               defaults: {
-                agentRuntime: { id: "codex" },
+                models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
               },
             },
           },
@@ -1632,7 +1630,7 @@ describe("buildStatusReply subagent summary", () => {
             ...baseCfg,
             agents: {
               defaults: {
-                agentRuntime: { id: "claude-cli" },
+                models: { "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } } },
               },
             },
           },
@@ -1667,7 +1665,7 @@ describe("buildStatusReply subagent summary", () => {
         ...baseCfg,
         agents: {
           defaults: {
-            agentRuntime: { id: "claude-cli" },
+            models: { "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } } },
           },
         },
       },
@@ -1718,7 +1716,7 @@ describe("buildStatusReply subagent summary", () => {
         },
         agents: {
           defaults: {
-            agentRuntime: { id: "codex" },
+            models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
           },
         },
       },
@@ -1758,7 +1756,7 @@ describe("buildStatusReply subagent summary", () => {
         },
         agents: {
           defaults: {
-            agentRuntime: { id: "codex" },
+            models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
           },
         },
       },
@@ -1856,7 +1854,7 @@ describe("buildStatusReply subagent summary", () => {
         ...baseCfg,
         agents: {
           defaults: {
-            agentRuntime: { id: "codex" },
+            models: { "openai/gpt-5.4": { agentRuntime: { id: "codex" } } },
           },
         },
       },
@@ -1947,7 +1945,7 @@ describe("buildStatusReply subagent summary", () => {
         ...baseCfg,
         agents: {
           defaults: {
-            agentRuntime: { id: "codex" },
+            models: { "openai/gpt-5.4": { agentRuntime: { id: "codex" } } },
           },
         },
       },
@@ -2079,13 +2077,12 @@ describe("buildStatusReply", () => {
         defaults: {
           model: "openai/gpt-5.4",
         },
-        list: [
-          {
-            id: "kira",
+        entries: {
+          kira: {
             model: "openai/gpt-5.4",
             thinkingDefault: "xhigh",
           },
-        ],
+        },
       },
       channels: {
         whatsapp: { allowFrom: ["*"] },
@@ -2107,15 +2104,14 @@ describe("buildStatusReply", () => {
             fallbacks: ["anthropic/claude-sonnet-4-6"],
           },
         },
-        list: [
-          {
-            id: "kira",
+        entries: {
+          kira: {
             model: {
               primary: "openai/gpt-5.4",
               fallbacks: ["google/gemini-2.5-flash"],
             },
           },
-        ],
+        },
       },
       channels: {
         whatsapp: { allowFrom: ["*"] },
@@ -2138,11 +2134,7 @@ describe("buildStatusReply", () => {
             fallbacks: ["anthropic/claude-sonnet-4-6"],
           },
         },
-        list: [
-          {
-            id: "kira",
-          },
-        ],
+        entries: { kira: {} },
       },
       channels: {
         whatsapp: { allowFrom: ["*"] },
@@ -2164,14 +2156,13 @@ describe("buildStatusReply", () => {
             fallbacks: ["anthropic/claude-sonnet-4-6"],
           },
         },
-        list: [
-          {
-            id: "kira",
+        entries: {
+          kira: {
             model: {
               primary: "openai/gpt-5.4",
             },
           },
-        ],
+        },
       },
       channels: {
         whatsapp: { allowFrom: ["*"] },
@@ -2193,15 +2184,14 @@ describe("buildStatusReply", () => {
             fallbacks: ["anthropic/claude-sonnet-4-6"],
           },
         },
-        list: [
-          {
-            id: "kira",
+        entries: {
+          kira: {
             model: {
               primary: "openai/gpt-5.4",
               fallbacks: [],
             },
           },
-        ],
+        },
       },
       channels: {
         whatsapp: { allowFrom: ["*"] },

@@ -39,11 +39,13 @@ export type WorkerInferenceCancellation = {
   }): Promise<string[]>;
 };
 
-type WorkerInferenceSessionControl = {
-  reserveDrain: (sessionId: string) => WorkerInferenceSessionDrainReservation;
-  captureCancel: (sessionId: string, runId?: string) => WorkerInferenceCancellation;
-  resolveTarget: (runId: string) => BoundAgentRunSessionTarget | undefined;
-};
+type WorkerInferenceSessionControl = Pick<
+  ReturnType<typeof createWorkerInferenceSessionControls>,
+  | "hasSession"
+  | "reserveSessionDrain"
+  | "captureSessionCancellation"
+  | "resolveSessionTargetForRunId"
+>;
 
 // Session lifecycle needs a stronger control without widening the inferred public service shape.
 // The weak registration follows the concrete service instance's lifetime.
@@ -56,35 +58,13 @@ export function registerWorkerInferenceSessionControl(
   sessionControlByService.set(service, control);
 }
 
-export function reserveWorkerInferenceSessionDrain(
+export function getWorkerInferenceSessionControl(
   service: unknown,
-  sessionId: string,
-): WorkerInferenceSessionDrainReservation | undefined {
+): WorkerInferenceSessionControl | undefined {
   if (typeof service !== "object" || service === null) {
     return undefined;
   }
-  return sessionControlByService.get(service)?.reserveDrain(sessionId);
-}
-
-export function captureWorkerInferenceCancellation(
-  service: unknown,
-  sessionId: string,
-  runId?: string,
-): WorkerInferenceCancellation | undefined {
-  if (typeof service !== "object" || service === null) {
-    return undefined;
-  }
-  return sessionControlByService.get(service)?.captureCancel(sessionId, runId);
-}
-
-export function resolveWorkerInferenceTarget(
-  service: unknown,
-  runId: string,
-): BoundAgentRunSessionTarget | undefined {
-  if (typeof service !== "object" || service === null) {
-    return undefined;
-  }
-  return sessionControlByService.get(service)?.resolveTarget(runId);
+  return sessionControlByService.get(service);
 }
 
 export function safeRevalidate(
@@ -182,7 +162,6 @@ export function createWorkerInferenceSessionControls(params: {
   const { active, operations, unknownSettlements, recovered, settleAbort } = params;
   const drainingSessions = new Map<string, Promise<void>>();
   let stoppingPromise: Promise<void> | undefined;
-  let stopping = false;
 
   const captureCancellationEntries = (predicate: (entry: ActiveInference) => boolean) =>
     [...active.values()].filter(predicate).map((entry) => ({
@@ -223,11 +202,8 @@ export function createWorkerInferenceSessionControls(params: {
     predicate: (entry: ActiveInference) => boolean,
     reason: WorkerInferenceErrorReason,
   ) => cancelCaptured(captureCancellationEntries(predicate), reason);
-  const cancelEnvironment = (
-    environmentId: string,
-    reason: WorkerInferenceErrorReason = "session-not-attached",
-  ): Promise<void> =>
-    cancelWhere((entry) => entry.identity.environmentId === environmentId, reason);
+  const cancelEnvironment = (environmentId: string): Promise<void> =>
+    cancelWhere((entry) => entry.identity.environmentId === environmentId, "session-not-attached");
   const cancelClaim = (claimKey: string): Promise<void> =>
     cancelWhere((entry) => entry.claimKey === claimKey, "session-not-attached");
   const captureSessionCancellation = (
@@ -268,16 +244,11 @@ export function createWorkerInferenceSessionControls(params: {
   const reserveSessionDrain = (sessionId: string): WorkerInferenceSessionDrainReservation => {
     const captured = captureCancellationEntries((entry) => entry.request.sessionId === sessionId);
     const entries = new Set(captured.map(({ entry }) => entry));
-    const capturedOperations = new Set(
-      [...operations].flatMap(([operation, owner]) =>
-        owner.sessionId === sessionId ? [operation] : [],
-      ),
-    );
+    const sessionOperations = [...operations].filter(([, owner]) => owner.sessionId === sessionId);
+    const capturedOperations = new Set(sessionOperations.map(([operation]) => operation));
     const capturedStoreKeys = new Set([
       ...captured.map(({ entry }) => entry.storeKey),
-      ...[...operations.values()]
-        .filter((owner) => owner.sessionId === sessionId)
-        .map((owner) => owner.storeKey),
+      ...sessionOperations.map(([, owner]) => owner.storeKey),
     ]);
     let reserved = true;
     let accepted: ReturnType<WorkerInferenceSessionDrainReservation["accept"]> | undefined;
@@ -308,14 +279,10 @@ export function createWorkerInferenceSessionControls(params: {
         let started = false;
         let settled = false;
         let releaseRequested = false;
-        let released = false;
         const release = () => {
           releaseRequested = true;
-          if (settled && !released) {
-            released = true;
-            if (drainingSessions.get(sessionId) === drained) {
-              drainingSessions.delete(sessionId);
-            }
+          if (settled && drainingSessions.get(sessionId) === drained) {
+            drainingSessions.delete(sessionId);
           }
         };
         const startedSignal = createDeferredCore();
@@ -382,7 +349,6 @@ export function createWorkerInferenceSessionControls(params: {
     if (stoppingPromise) {
       return stoppingPromise;
     }
-    stopping = true;
     const stopped = createDeferredCore();
     stoppingPromise = stopped.promise;
     const acceptedDrains = new Map(drainingSessions);
@@ -398,7 +364,7 @@ export function createWorkerInferenceSessionControls(params: {
   };
 
   return {
-    isStopping: () => stopping,
+    isStopping: () => stoppingPromise !== undefined,
     isDraining: (sessionId: string) => drainingSessions.has(sessionId),
     getClosing: (sessionId: string) => drainingSessions.get(sessionId) ?? stoppingPromise,
     cancelEnvironment,

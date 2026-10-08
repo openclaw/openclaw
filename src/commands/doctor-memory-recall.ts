@@ -13,7 +13,10 @@ import {
   repairShortTermPromotionArtifacts,
   type ShortTermAuditSummary,
 } from "../plugin-sdk/memory-core-bundled-runtime.js";
-import { getActiveMemorySearchManagerCore } from "../plugins/memory-runtime.js";
+import {
+  getActiveMemorySearchManagerCore,
+  resolveActiveMemoryBackendConfig,
+} from "../plugins/memory-runtime.js";
 import {
   formatMemoryDoctorAgentMessage,
   resolveMemoryDoctorAgentScopes,
@@ -69,6 +72,11 @@ export async function noteMemoryRecallHealth(cfg: OpenClawConfig): Promise<void>
   for (const scope of scopes) {
     const report = (message: string) =>
       note(formatMemoryDoctorAgentMessage(scope.agentId, labelAgents, message), "Memory search");
+    const backend = resolveActiveMemoryBackendConfig({ cfg, agentId: scope.agentId });
+    if (backend?.backend === "provider-runtime") {
+      report(`Not applicable: ${backend.providerId} uses the provider runtime; see its health.`);
+      continue;
+    }
     try {
       const workspaceDir = await resolveRuntimeMemoryWorkspaceDir(cfg, scope.agentId);
       if (!workspaceDir) {
@@ -111,8 +119,18 @@ export async function maybeRepairMemoryRecallHealth(params: {
   for (const scope of scopes) {
     const agentMessage = (message: string) =>
       formatMemoryDoctorAgentMessage(scope.agentId, labelAgents, message);
+    const backend = resolveActiveMemoryBackendConfig({ cfg: params.cfg, agentId: scope.agentId });
+    if (backend?.backend === "provider-runtime") {
+      note(
+        agentMessage(
+          `Not applicable: ${backend.providerId} uses the provider runtime; see its health.`,
+        ),
+        "Memory search",
+      );
+      continue;
+    }
     await maybeRepairWorkspaceMemoryHealth({
-      ...params,
+      prompter: params.prompter,
       scope: {
         agentId: scope.agentId,
         workspaceDir: scope.workspaceDir,

@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 import Observation
+import enum OpenClawKit.GatewayPayloadDecoding
 import OpenClawProtocol
 import SwiftUI
 
@@ -181,8 +182,8 @@ public final class OpenClawChatSidebarPeople {
         self.refreshActivity()
         let identified = entries.compactMap { entry -> (PresenceEntry, User)? in
             guard entry.reason != "disconnect", let value = entry.user,
-                  let data = try? JSONEncoder().encode(value),
-                  let user = try? JSONDecoder().decode(User.self, from: data), !user.id.isEmpty else { return nil }
+                  let user = try? GatewayPayloadDecoding.decode(AnyCodable(value), as: User.self),
+                  !user.id.isEmpty else { return nil }
             return (entry, user)
         }
         let selfKey = self.connectionID.flatMap { id in identified.first { $0.0.connectionid == id }?.1.key }
@@ -212,7 +213,7 @@ public final class OpenClawChatSidebarPeople {
     }
 
     private static func firstText(_ values: [String?]) -> String? {
-        values.compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }.min()
+        values.compactMap(ChatPayloadDecoding.trimmedNonEmptyString).min()
     }
 
     public func refreshCounts(load: () async throws -> [SessionOwnerSessionCount]?) async {

@@ -215,7 +215,8 @@ function resolveSlackRelayConfig(params: { relay: unknown; accountId: string }):
   };
 }
 
-export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
+export async function monitorSlackProvider(opts: MonitorSlackOpts) {
+  const { scheduler } = opts;
   const cfg = opts.config ?? getRuntimeConfig();
   const runtime: RuntimeEnv = opts.runtime ?? createNonExitingRuntime();
 
@@ -501,15 +502,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   });
   let presenceRequestAbort: AbortController | undefined;
   let presenceMonitor: ReturnType<typeof createSlackPresenceMonitor> | undefined;
-  let presenceMonitorStarted = false;
   let runtimeStarted = false;
-  const startPresenceMonitor = () => {
-    if (!presenceMonitor || presenceMonitorStarted) {
-      return;
-    }
-    presenceMonitor.start();
-    presenceMonitorStarted = true;
-  };
   const installSlackPresenceRuntime = (identity: SlackInstallationIdentity) => {
     if (
       !presenceEventsEnabled ||
@@ -535,6 +528,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       installationIdentity: identity,
     });
     presenceMonitor = createSlackPresenceMonitor({
+      scheduler,
       accountId: account.accountId,
       accountConfig: slackCfg.presenceEvents,
       resolveClient: (workspaceTeamId) => resolveClient(workspaceTeamId).users,
@@ -543,7 +537,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       error: runtime.error,
     });
     if (runtimeStarted) {
-      startPresenceMonitor();
+      presenceMonitor.start();
     }
   };
   const handleSlackMessage = createSlackMessageHandler({
@@ -563,10 +557,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
   let workspaceRuntimePromise: Promise<void> | undefined;
   const installSlackWorkspaceRuntime = async () => {
-    if (workspaceRuntimePromise) {
-      return await workspaceRuntimePromise;
-    }
-    workspaceRuntimePromise = (async () => {
+    workspaceRuntimePromise ??= (async () => {
       registerSlackWorkspaceEvents({
         ctx,
         appHomeSlashCommandName,
@@ -574,7 +565,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       });
       void ctx.readRuntimeContext();
       if (runtimeStarted) {
-        startPresenceMonitor();
+        presenceMonitor?.start();
       }
     })();
     return await workspaceRuntimePromise;
@@ -683,7 +674,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     await installSlackRuntimeForIdentity(installationIdentity);
     durableIngress.start();
     runtimeStarted = true;
-    startPresenceMonitor();
+    presenceMonitor?.start();
     if (slackMode === "http" && slackHttpHandler) {
       unregisterHttpHandler = registerSlackHttpHandler({
         path: slackWebhookPath,
@@ -834,8 +825,7 @@ function createSlackWorkspaceClientResolver(params: {
     return () => params.appClient;
   }
   const clients = new Map<string, WebClient>();
-  return (rawTeamId?: string) => {
-    const teamId = rawTeamId;
+  return (teamId?: string) => {
     if (!teamId || !/^T[A-Z0-9]+$/.test(teamId)) {
       throw new Error("Slack Enterprise Grid workspace client requires a valid teamId");
     }

@@ -48,14 +48,6 @@ export const LEGACY_NODE_HOST_CONFIG_CLAIM_SUFFIX = ".doctor-importing";
 
 type NodeHostConfigDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
 
-function resolveLegacyNodeHostConfigPath(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), LEGACY_NODE_HOST_CONFIG_FILE);
-}
-
-function resolveLegacyNodeHostConfigClaimPath(env: NodeJS.ProcessEnv = process.env): string {
-  return `${resolveLegacyNodeHostConfigPath(env)}${LEGACY_NODE_HOST_CONFIG_CLAIM_SUFFIX}`;
-}
-
 function legacyPathMayExist(filePath: string): boolean {
   try {
     fs.lstatSync(filePath);
@@ -72,8 +64,8 @@ function legacyPathMayExist(filePath: string): boolean {
 
 /** Runtime must not choose between canonical SQLite state and a retired file store. */
 function assertNodeHostLegacyStateMigrated(env: NodeJS.ProcessEnv = process.env): void {
-  const sourcePath = resolveLegacyNodeHostConfigPath(env);
-  const claimPath = resolveLegacyNodeHostConfigClaimPath(env);
+  const sourcePath = path.join(resolveStateDir(env), LEGACY_NODE_HOST_CONFIG_FILE);
+  const claimPath = `${sourcePath}${LEGACY_NODE_HOST_CONFIG_CLAIM_SUFFIX}`;
   if (!legacyPathMayExist(sourcePath) && !legacyPathMayExist(claimPath)) {
     return;
   }
@@ -182,7 +174,10 @@ function normalizeGatewayConfig(gateway: NodeHostGatewayConfig): NodeHostGateway
   return Object.values(normalized).some((value) => value !== undefined) ? normalized : undefined;
 }
 
-async function readNodeHostConfig(env: NodeJS.ProcessEnv): Promise<NodeHostConfig | null> {
+/** Read canonical node-host state without creating a store or joining its writable lifecycle. */
+export async function loadNodeHostConfig(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<NodeHostConfig | null> {
   const selectedEnv = { ...env, OPENCLAW_STATE_DIR: resolveStateDir(env) };
   assertNodeHostLegacyStateMigrated(selectedEnv);
   const reply = await executeExistingOpenClawStateRead(
@@ -207,20 +202,6 @@ async function readNodeHostConfig(env: NodeJS.ProcessEnv): Promise<NodeHostConfi
     throw new Error("invalid node-host SQLite row: updated_at_ms must be a non-negative integer");
   }
   return normalizeStoredNodeHostConfig(value);
-}
-
-/** Load canonical node-host state. Legacy files block the read until Doctor migrates them. */
-export async function loadNodeHostConfig(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<NodeHostConfig | null> {
-  return readNodeHostConfig(env);
-}
-
-/** Load existing node-host state without creating or joining the writable shared-state lifecycle. */
-export async function loadNodeHostConfigReadOnly(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<NodeHostConfig | null> {
-  return readNodeHostConfig(env);
 }
 
 /**
