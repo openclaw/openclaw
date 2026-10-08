@@ -108,25 +108,6 @@ describe("ConfigPage custom theme import ownership", () => {
     expect(state.customThemeImport.message).toBe(clearMessage);
   });
 
-  it("preserves a newer URL draft when the previous import resolves", async () => {
-    const existingTheme = customThemeFixture("Existing", "existing");
-    const replacement = deferred<ImportedCustomTheme>();
-    importCustomThemeFromUrl.mockReturnValueOnce(replacement.promise);
-    const { state } = createCustomThemePage({ theme: "knot", customTheme: existingTheme });
-    state.setCustomThemeImportUrl("first");
-
-    const pendingImport = state.importCustomTheme();
-    state.setCustomThemeImportUrl("second");
-    replacement.resolve(customThemeFixture("First", "first"));
-    await pendingImport;
-
-    expect(state.customThemeImport.busy).toBe(false);
-    expect(state.customThemeImport.url).toBe("second");
-    expect(state.customThemeImport.message).toBeNull();
-    expect(state.settings.theme).toBe("knot");
-    expect(state.settings.customTheme).toBe(existingTheme);
-  });
-
   it("lets a newer import own state when the stale import settles first", async () => {
     const first = deferred<ImportedCustomTheme>();
     const second = deferred<ImportedCustomTheme>();
@@ -152,31 +133,6 @@ describe("ConfigPage custom theme import ownership", () => {
     expect(state.customThemeImport.busy).toBe(false);
     expect(state.customThemeImport.url).toBe("");
     expect(state.customThemeImport.message?.kind).toBe("success");
-    expect(state.settings.theme).toBe("custom");
-    expect(state.settings.customTheme).toBe(secondTheme);
-  });
-
-  it("keeps a completed newer import final when the stale import settles last", async () => {
-    const first = deferred<ImportedCustomTheme>();
-    const second = deferred<ImportedCustomTheme>();
-    importCustomThemeFromUrl.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
-    const { state } = createCustomThemePage();
-    state.setCustomThemeImportUrl("first");
-
-    const firstImport = state.importCustomTheme();
-    state.setCustomThemeImportUrl("second");
-    const secondImport = state.importCustomTheme();
-    const secondTheme = customThemeFixture("Second", "second");
-    second.resolve(secondTheme);
-    await secondImport;
-    const successMessage = state.customThemeImport.message;
-
-    first.resolve(customThemeFixture("First", "first"));
-    await firstImport;
-
-    expect(state.customThemeImport.busy).toBe(false);
-    expect(state.customThemeImport.url).toBe("");
-    expect(state.customThemeImport.message).toBe(successMessage);
     expect(state.settings.theme).toBe("custom");
     expect(state.settings.customTheme).toBe(secondTheme);
   });

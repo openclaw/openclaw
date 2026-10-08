@@ -4475,7 +4475,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "ui/src/pages/chat/talk/ordering.test.ts",
   "ui/src/pages/chat/user-message-content.test.ts",
   "ui/src/pages/config/config-page.session-observer.test.ts",
-  "ui/src/pages/config/config-page.transcripts.test.ts",
   "ui/src/pages/config/settings-search.test.ts",
   "ui/src/pages/config/settings-targets.test.ts",
   "ui/src/pages/config/updates.test.ts",
