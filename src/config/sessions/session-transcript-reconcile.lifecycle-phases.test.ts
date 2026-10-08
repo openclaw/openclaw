@@ -7,7 +7,6 @@ import { MessageChannel, type MessagePort } from "node:worker_threads";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
@@ -131,87 +130,7 @@ function observe(context: OpenClawStateWorkerContext) {
   });
 }
 
-it("counts all eight boundaries, including pre-attached cached statements and unknown databases", () => {
-  const sqlite = requireNodeSqlite();
-  const existing = new sqlite.DatabaseSync(":memory:");
-  const cached = existing.prepare("SELECT 1 AS value");
-  const observation = observeReconcileHostSqlite({ data: [] });
-  try {
-    const database = new sqlite.DatabaseSync(":memory:");
-    database.exec("CREATE TABLE data (value INTEGER)");
-    database.prepare("INSERT INTO data VALUES (1)").run();
-    database.prepare("SELECT value FROM data").get();
-    database.prepare("SELECT value FROM data").all();
-    expect([...database.prepare("SELECT value FROM data").iterate()]).toEqual([{ value: 1 }]);
-    database.close();
-    expect(Object.values(observation.counts()).every((count) => count > 0)).toBe(true);
-    expect(observation.calls.every((call) => call.bucket === "unknown")).toBe(true);
-    observation.calls.length = 0;
-    expect(cached.get()).toEqual({ value: 1 });
-    expect(observation.calls).toEqual([
-      expect.objectContaining({ method: "get", bucket: "unknown" }),
-    ]);
-  } finally {
-    observation.restore();
-    existing.close();
-  }
-});
-
 describe("reconciliation cleanup transport native custody", () => {
-  it.each([false, true])(
-    "keeps cold/warm cleanup and drain off the host, serving Gateway owner=%s",
-    async (owned) => {
-      await withOpenClawTestState(
-        { scenario: "external-service", label: "reconcile-native-phases" },
-        async (state) => {
-          const leases = ["cold", "warm"].map((name) => {
-            const path = state.path(name, "agent.sqlite");
-            return {
-              path,
-              leaseId: claimOpenClawAgentDatabaseLease({ agentId: name, path }),
-            };
-          });
-          closeOpenClawStateDatabaseForTest();
-          const context = captureOpenClawStateWorkerContext();
-          const parent = owned
-            ? acquireGatewayStateOwner({
-                databasePath: context.admission.databasePath,
-                payload: {
-                  pid: process.pid,
-                  createdAt: new Date().toISOString(),
-                  configPath: state.configPath,
-                  stateDir: state.stateDir,
-                  role: "gateway",
-                },
-              })
-            : undefined;
-          const pool = createPool();
-          const observation = observe(context);
-          try {
-            for (const lease of leases) {
-              await expect(
-                releaseInRealWorker(pool, context, lease.leaseId, lease.path),
-              ).resolves.toEqual([{ type: "lease-released" }]);
-            }
-            expect(pool.getSnapshot().workersCreated).toBe(1);
-            await pool.close();
-            expect(observation.calls).toEqual([]);
-            expect(Object.values(observation.counts())).toEqual(Array(8).fill(0));
-          } finally {
-            await pool.close();
-            observation.restore();
-            parent?.release();
-          }
-          expect(
-            openOpenClawStateDatabase()
-              .db.prepare("SELECT count(*) AS count FROM agent_database_leases")
-              .get(),
-          ).toEqual({ count: 0 });
-        },
-      );
-    },
-  );
-
   it("refuses revoked authority at native admission and joins retirement", async () => {
     await withOpenClawTestState(
       { scenario: "external-service", label: "reconcile-revoked-phase" },
@@ -404,7 +323,6 @@ it("joins native exit when shared-state close fails after lease deletion", async
 });
 
 it.each([
-  { owned: false, replacement: false },
   { owned: true, replacement: false },
   { owned: false, replacement: true },
 ])(

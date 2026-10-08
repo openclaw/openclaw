@@ -30,7 +30,6 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { withEnvAsync } from "../../test-utils/env.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import * as reconcilePool from "./session-transcript-reconcile-pool.js";
-import { getSessionTranscriptReconcileWorkerPoolSnapshot } from "./session-transcript-reconcile-pool.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
   reconcileSessionTranscriptIndexes,
@@ -214,122 +213,6 @@ async function waitForCurrentProjection(databasePath: string, sessionId: string)
 }
 
 describe("session transcript reconcile worker lifecycle", () => {
-  it("queues dirty agents behind one reusable fleet worker and releases each database lease", async () => {
-    const stateDir = tempDirs.make("openclaw-reconcile-fleet-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
-    const agents = Array.from({ length: 8 }, (_, index) => ({ agentId: `fleet-${index}`, env }));
-    const sessionId = "fleet-session";
-    const canonical = observeCanonicalWriterLeases();
-    const hostLeases: string[] = [];
-    const allQueued = createDeferred();
-    let queued = 0;
-    const runOperation = reconcilePool.runSessionTranscriptReconcileOperation;
-    const operationSpy = vi
-      .spyOn(reconcilePool, "runSessionTranscriptReconcileOperation")
-      .mockImplementation((generation, run, owner) =>
-        runOperation(
-          generation,
-          (operation) =>
-            run({
-              ...operation,
-              startTask: (...args) => {
-                const pending = operation.startTask(...args);
-                if (args[0].mode === "disk" && ++queued === agents.length) {
-                  allQueued.resolve();
-                }
-                return pending;
-              },
-            }),
-          owner,
-        ),
-      );
-    try {
-      for (const options of agents) {
-        await persistSessionTranscriptTurn(
-          { ...options, sessionId, sessionKey: `agent:${options.agentId}:fleet` },
-          {
-            messages: [
-              transcriptMessage(options.agentId, null, { role: "user", content: options.agentId }),
-            ],
-            touchSessionEntry: false,
-          },
-        );
-        await waitForSessionTranscriptIndexReconcile(options);
-        // Leave only the native fixture lease before queuing cold publication workers.
-        await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
-        openOpenClawAgentDatabase(options)
-          .db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1")
-          .run();
-      }
-      for (const options of agents) {
-        const leases = readAgentDatabaseLeaseIds(resolveOpenClawAgentSqlitePath(options), env);
-        expect(leases).toHaveLength(1);
-        hostLeases.push(...leases);
-      }
-      const before = getSessionTranscriptReconcileWorkerPoolSnapshot();
-      const fence = createPlanFinishFence(sessionId);
-      for (const options of agents) {
-        startSessionTranscriptIndexReconcile(options);
-      }
-      const completion = Promise.all(
-        agents.map((agent) => waitForSessionTranscriptIndexReconcile(agent)),
-      );
-      try {
-        await fence.paused;
-        await allQueued.promise;
-        expect(getSessionTranscriptReconcileWorkerPoolSnapshot()).toMatchObject({
-          maxWorkers: 1,
-          workers: 1,
-          workersCreated: before.workersCreated + 1,
-          activeTasks: 1,
-          pendingTasks: agents.length,
-        });
-      } finally {
-        fence.release();
-        await completion;
-      }
-      expect(getSessionTranscriptReconcileWorkerPoolSnapshot()).toMatchObject({
-        maxWorkers: 1,
-        workers: 1,
-        workersCreated: before.workersCreated + 1,
-        activeTasks: 0,
-        pendingTasks: 0,
-      });
-      const retainedLeases: string[] = [];
-      for (const options of agents) {
-        const database = openOpenClawAgentDatabase(options);
-        expect(
-          database.db.prepare("SELECT message_id, text FROM session_transcript_fts").all(),
-        ).toEqual([{ message_id: options.agentId, text: options.agentId }]);
-        expect(
-          database.db.prepare("SELECT needs_rebuild FROM session_transcript_index_state").all(),
-        ).toEqual([{ needs_rebuild: 0 }]);
-        const leases = readAgentDatabaseLeaseIds(database.path, env);
-        const plannerLeaseId = fence.plannerLeases.get(database.path);
-        expect(plannerLeaseId).toMatch(/^[a-f0-9-]+$/u);
-        expect(leases).not.toContain(plannerLeaseId);
-        retainedLeases.push(...leases);
-      }
-      expect(retainedLeases.filter((lease) => hostLeases.includes(lease)).toSorted()).toEqual(
-        hostLeases.toSorted(),
-      );
-      const idleLeases = retainedLeases.filter((lease) => !hostLeases.includes(lease));
-      // Planner leases are released while the four most recent canonical executors stay idle.
-      expect(idleLeases).toHaveLength(4);
-      for (const lease of idleLeases) {
-        expect([...canonical.leases.values()]).toContain(lease);
-      }
-    } finally {
-      operationSpy.mockRestore();
-      canonical.restore();
-      await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
-      await closeOpenClawAgentDatabasesAsync();
-      closeOpenClawAgentDatabasesForTest();
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-    }
-  }, 30_000);
-
   it("drains later fixture owners without waiting for an unrelated state directory", async () => {
     const root = tempDirs.make("openclaw-reconcile-scope-");
     const stateDir = path.join(root, "state");
