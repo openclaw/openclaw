@@ -150,7 +150,7 @@ export function sessionPullRequestsForGateway(
     }
   };
 
-  const matchesSession = (sessionKey: string, eventKey: string, agentId?: string) =>
+  const matchesSession = (sessionKey: string, eventKey: string, agentId?: string | null) =>
     uiSessionEventMatches(
       {
         assistantAgentId: gateway.snapshot.assistantAgentId,
