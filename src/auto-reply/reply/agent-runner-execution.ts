@@ -1,4 +1,3 @@
-/** Agent-runner execution loop, fallback handling, and user-facing failure mapping. */
 import crypto from "node:crypto";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
@@ -14,7 +13,6 @@ import {
   type DeferredEmbeddedRunLifecycleManager,
 } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
-import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { renderRateLimitOrOverloadedCopy } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { leaseMcpAppModelContextForSessionTurn } from "../../agents/mcp-ui-resource.js";
@@ -33,6 +31,7 @@ import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js"
 import { drainAgentRunTerminalWrites } from "../../infra/agent-run-terminal-writes.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
 import {
   bindGatewayContextResolver,
@@ -59,17 +58,18 @@ import type {
   AgentTurnInternalResult,
   AgentTurnParams,
   InternalFollowupRun,
-  RuntimeFallbackAttempt,
 } from "./agent-runner-execution.types.js";
 import {
   buildTerminalAgentRunFailureReplyPayload,
   markAgentRunFailureReplyPayload,
 } from "./agent-runner-failure-reply.js";
-import {
-  executeAgentFallbackCycle,
-  type AgentFallbackCycleState,
-} from "./agent-runner-fallback-cycle.js";
+import { executeAgentFallbackCycle } from "./agent-runner-fallback-cycle.js";
+import type {
+  AgentFallbackCycleResult,
+  AgentFallbackCycleState,
+} from "./agent-runner-fallback-cycle.types.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
+import { buildReplyMediaContextParams } from "./agent-runner-run-params.js";
 import {
   createAgentTurnTimingTracker,
   resolveRunStartupPhase,
@@ -81,14 +81,14 @@ import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn
 import type { FollowupRun } from "./queue.js";
 import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { resolveReplyFailureVisibility, type DirectBlockDelivery } from "./reply-delivery.js";
-import type { ReplyMediaContext } from "./reply-media-paths.js";
-import { createReplyMediaContext } from "./reply-media-paths.runtime.js";
+import { createReplyMediaContext, type ReplyMediaContext } from "./reply-media-paths.js";
 import { resolveReplyOperationAbortReason } from "./reply-operation-abort.js";
 import {
   markReplyOperationExecutionStarted,
   retainReplyOperationUntilComplete,
 } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
+import { getReplySystemEventContext } from "./system-event-session-key.js";
 
 async function executeAgentTurnInternalLoop(
   inputParams: AppContextTurnParams,
@@ -143,11 +143,11 @@ async function executeAgentTurnInternalLoop(
   const agentTurnTiming = createAgentTurnTimingTracker({
     profilerEnabled: isReplyProfilerEnabled({ config: runtimeConfig }),
   });
-  const shouldSurfaceToControlUi = isInternalMessageChannel(
+  const messageProvider =
     params.followupRun.run.messageProvider ??
-      params.sessionCtx.Surface ??
-      params.sessionCtx.Provider,
-  );
+    params.sessionCtx.Surface ??
+    params.sessionCtx.Provider;
+  const shouldSurfaceToControlUi = isInternalMessageChannel(messageProvider);
   const lifecycleGeneration = captureAgentRunLifecycleGeneration(runId);
   if (params.sessionKey) {
     registerAgentRunContext(runId, {
@@ -168,10 +168,7 @@ async function executeAgentTurnInternalLoop(
       sessionKey: params.sessionKey,
       sessionId: params.followupRun.run.sessionId,
       agentId: params.followupRun.run.agentId,
-      channel:
-        params.followupRun.run.messageProvider ??
-        params.sessionCtx.Surface ??
-        params.sessionCtx.Provider,
+      channel: messageProvider,
       trigger: params.isHeartbeat ? "heartbeat" : "user",
     });
   }
@@ -182,23 +179,9 @@ async function executeAgentTurnInternalLoop(
     replyMediaContext =
       params.replyMediaContext ??
       agentTurnTiming.measureSync("reply_media_context", () =>
-        createReplyMediaContext({
-          cfg: runtimeConfig,
-          agentId: params.followupRun.run.agentId,
-          sessionKey: params.sessionKey,
-          workspaceDir: params.followupRun.run.workspaceDir,
-          mediaNormalizationOwner: params.followupRun.run.mediaNormalizationOwner,
-          messageProvider: params.followupRun.run.messageProvider,
-          accountId:
-            params.followupRun.originatingAccountId ?? params.followupRun.run.agentAccountId,
-          groupId: params.followupRun.run.groupId,
-          groupChannel: params.followupRun.run.groupChannel,
-          groupSpace: params.followupRun.run.groupSpace,
-          requesterSenderId: params.followupRun.run.senderId,
-          requesterSenderName: params.followupRun.run.senderName,
-          requesterSenderUsername: params.followupRun.run.senderUsername,
-          requesterSenderE164: params.followupRun.run.senderE164,
-        }),
+        createReplyMediaContext(
+          buildReplyMediaContextParams(params.followupRun, params.sessionKey, runtimeConfig),
+        ),
       );
     const internalFollowupRun = params.followupRun as InternalFollowupRun;
     const hasQueuedCurrentTurnImages =
@@ -352,12 +335,7 @@ async function executeAgentTurnInternalLoop(
     };
   };
   const notifyUserAboutCompaction = shouldNotifyUserAboutCompaction(runtimeConfig);
-  let runResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
-  let fallbackProvider = params.followupRun.run.provider;
-  let fallbackModel = params.followupRun.run.model;
-  let fallbackAttempts: RuntimeFallbackAttempt[] = [];
-  let fallbackExhausted = false;
-  let terminalRunFailed = false;
+  let cycle: AgentFallbackCycleResult;
   let liveModelSwitchRetries = 0;
   const fallbackCycleState: AgentFallbackCycleState = {
     deferredLifecycle,
@@ -365,8 +343,8 @@ async function executeAgentTurnInternalLoop(
     turnStartedAtMs: Date.now(),
     compaction,
     postCompactionModelAttempted: false,
-    attemptedRuntimeProvider: fallbackProvider,
-    attemptedRuntimeModel: fallbackModel,
+    attemptedRuntimeProvider: params.followupRun.run.provider,
+    attemptedRuntimeModel: params.followupRun.run.model,
     bootstrapPromptWarningSignaturesSeen: resolveBootstrapWarningSignaturesSeen(
       params.getActiveSessionEntry()?.systemPromptReport,
     ),
@@ -392,7 +370,7 @@ async function executeAgentTurnInternalLoop(
         directBlockDeliveries,
         heartbeatState,
       });
-      const cycle = await executeAgentFallbackCycle({
+      cycle = await executeAgentFallbackCycle({
         preparedRunAdmission,
         turn: params,
         effectiveRun,
@@ -412,25 +390,6 @@ async function executeAgentTurnInternalLoop(
         commitTerminalOutcome,
         clearRecoveredAutoFallbackPrimaryProbe,
       });
-      if (cycle.kind === "aborted") {
-        return cycle;
-      }
-      if (cycle.kind === "final") {
-        return {
-          ...cycle,
-          resolved: {
-            provider: fallbackCycleState.attemptedRuntimeProvider,
-            model: fallbackCycleState.attemptedRuntimeModel,
-          },
-        };
-      }
-      runResult = cycle.runResult;
-      fallbackProvider = cycle.fallbackProvider;
-      fallbackModel = cycle.fallbackModel;
-      fallbackExhausted = cycle.fallbackExhausted;
-      fallbackAttempts = cycle.fallbackAttempts;
-      terminalRunFailed = cycle.terminalRunFailed;
-      break;
     } catch (err) {
       if (err instanceof LiveSessionModelSwitchError) {
         liveModelSwitchRetries += 1;
@@ -448,31 +407,39 @@ async function executeAgentTurnInternalLoop(
         resolveVisibleReplyDelivery: () =>
           resolveReplyFailureVisibility(params.resolveVisibleReplyDelivery, directBlockDeliveries),
       });
-      if (action.kind === "aborted") {
-        return action;
-      }
-      if (action.kind === "final") {
-        return {
-          ...action,
-          resolved: {
-            provider: fallbackCycleState.attemptedRuntimeProvider,
-            model: fallbackCycleState.attemptedRuntimeModel,
-          },
-        };
-      }
-      if (action.liveModelSwitchError) {
-        const switchError = action.liveModelSwitchError;
-        applyLiveModelSwitchToRun(params.followupRun.run, switchError);
-        if (runnableRun !== params.followupRun.run) {
-          applyLiveModelSwitchToRun(runnableRun, switchError);
+      if (action.kind !== "retry") {
+        cycle = action;
+      } else {
+        if (action.liveModelSwitchError) {
+          for (const run of new Set([params.followupRun.run, runnableRun, effectiveRun])) {
+            applyLiveModelSwitchToRun(run, action.liveModelSwitchError);
+          }
         }
-        if (effectiveRun !== runnableRun && effectiveRun !== params.followupRun.run) {
-          applyLiveModelSwitchToRun(effectiveRun, switchError);
-        }
+        continue;
       }
-      continue;
     }
+    if (cycle.kind === "aborted") {
+      return cycle;
+    }
+    if (cycle.kind === "final") {
+      return {
+        ...cycle,
+        resolved: {
+          provider: fallbackCycleState.attemptedRuntimeProvider,
+          model: fallbackCycleState.attemptedRuntimeModel,
+        },
+      };
+    }
+    break;
   }
+  const {
+    runResult,
+    fallbackProvider,
+    fallbackModel,
+    fallbackExhausted,
+    fallbackAttempts,
+    terminalRunFailed,
+  } = cycle;
 
   // Preserve successful content and formatted tool errors. Mid-turn provider failures
   // still pass through normal payload filtering and accounting (#36142).
@@ -558,6 +525,7 @@ async function executeAgentTurnInternal(
     readChannelContextGatewayContextResolver(params.sessionCtx) ??
     getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   const preparedRunAdmission = prepareChannelRunAdmission({
+    sourceContext: params.followupRun.run,
     cfg: resolveQueuedReplyRuntimeConfig(params.followupRun.run.config),
     runId,
     agentId: params.followupRun.run.agentId,
@@ -609,7 +577,6 @@ async function executeAgentTurnInternal(
   }
 }
 
-/** Runs the agent turn with provider/model fallback, retry, and closed settlement. */
 async function executeAgentTurnOutcome(
   executionParams: AppContextTurnParams,
   runId: string,
@@ -664,30 +631,26 @@ async function executeAgentTurnOutcome(
         commitTerminalOutcome();
       }
     });
-    if (internal.kind === "aborted") {
-      return { runId, outcome: { ...internal, ...completedCompaction() } };
-    }
-    const abortReason = resolveReplyOperationAbortReason(executionParams.replyOperation);
+    const abortReason =
+      internal.kind !== "aborted" &&
+      resolveReplyOperationAbortReason(executionParams.replyOperation);
     if (abortReason) {
       return { runId, outcome: { kind: "aborted", reason: abortReason, ...completedCompaction() } };
     }
-    if (internal.kind === "final") {
-      return {
-        runId,
-        outcome: {
-          kind: "rejected",
-          payload: internal.payload,
-          resolved: internal.resolved,
-          ...(internal.postCompactionModelFailure
-            ? { postCompactionModelFailure: internal.postCompactionModelFailure }
-            : {}),
-          ...completedCompaction(),
-        },
-      };
-    }
+    const outcome: AgentTurnExecutionResult["outcome"] =
+      internal.kind === "final"
+        ? {
+            kind: "rejected",
+            payload: internal.payload,
+            resolved: internal.resolved,
+            ...(internal.postCompactionModelFailure
+              ? { postCompactionModelFailure: internal.postCompactionModelFailure }
+              : {}),
+          }
+        : internal;
     return {
       runId,
-      outcome: { ...internal, ...completedCompaction() },
+      outcome: { ...outcome, ...completedCompaction() },
     };
   } catch (error) {
     const abortReason = resolveReplyOperationAbortReason(executionParams.replyOperation, error);
@@ -698,7 +661,6 @@ async function executeAgentTurnOutcome(
   }
 }
 
-/** Runs the agent turn and records its execution and message-tool delivery outcomes. */
 export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTurnExecutionResult> {
   params.opts?.onRunVerbosityResolved?.({
     verboseLevelOverride: params.followupRun.run.verboseLevelOverride,
@@ -712,7 +674,19 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
   const executionParams =
     params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
   try {
-    const result = await executeAgentTurnOutcome(executionParams, runId);
+    const result = await withExecRequestTurn(
+      {
+        identity: {
+          runId,
+          sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+          sessionId: params.followupRun.run.sessionId,
+          agentId: params.followupRun.run.agentId,
+        },
+        owners: getReplySystemEventContext(params.opts)?.execRequestOwners,
+        abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+      },
+      () => executeAgentTurnOutcome(executionParams, runId),
+    );
     await recordAgentTurnExecutionOutcome(executionParams, result);
     return result;
   } catch (error) {

@@ -40,7 +40,7 @@ function ownedSource() {
 async function completeRead(options: ReturnType<typeof source>["options"]) {
   const task = queueTask();
   task.result.resolve(emptyReply);
-  const result = await executeExistingOpenClawStateRead(options, { type: "fleet.list" });
+  const result = await executeExistingOpenClawStateRead(options, { type: "backup.runs" });
   await task.captured;
   return result;
 }
@@ -67,13 +67,13 @@ it.each(["submission", "dispatch"] as const)(
         const unexpectedTask = queueTask();
         unexpectedTask.result.resolve(emptyReply);
         await expect(
-          executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
+          executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
         ).rejects.toThrow(/could not be verified|Shared-state read and cleanup failed/);
         expect(mock.runTask).toHaveBeenCalledTimes(submittedBefore);
         expect(() => assertStateDatabaseAccessAllowed(pathname)).toThrow("could not be verified");
       } else {
         const task = queueTask(dispatch.promise);
-        const settled = executeExistingOpenClawStateRead(options, { type: "fleet.list" }).then(
+        const settled = executeExistingOpenClawStateRead(options, { type: "backup.runs" }).then(
           (value) => ({ value }),
           (error: unknown) => ({ error }),
         );
@@ -122,9 +122,9 @@ it("retries an intact owner's read after one transient verification error withou
     // On the old implementation this callback consumes EMFILE and permanently
     // poisons the owner; without a monitor the expired read consumes it instead.
     vi.advanceTimersByTime(1000);
-    await expect(executeExistingOpenClawStateRead(options, { type: "fleet.list" })).rejects.toThrow(
-      /could not be verified|EMFILE|Shared-state read and cleanup failed/,
-    );
+    await expect(
+      executeExistingOpenClawStateRead(options, { type: "backup.runs" }),
+    ).rejects.toThrow(/could not be verified|EMFILE|Shared-state read and cleanup failed/);
     expect(failVerification).toBe(false);
     expect(mock.runTask).toHaveBeenCalledOnce();
     await expect(completeRead(options)).resolves.toEqual(emptyReply);

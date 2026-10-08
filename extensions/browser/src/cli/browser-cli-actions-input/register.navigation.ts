@@ -1,9 +1,6 @@
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  parseBrowserViewportDimension,
-  runBrowserResizeWithOutput,
-} from "../browser-cli-resize.js";
+import { registerBrowserResizeCommand } from "../browser-cli-resize.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   runBrowserCliRequest,
@@ -29,25 +26,8 @@ export function registerBrowserNavigationCommands(
       });
     });
 
-  browser
-    .command("resize")
-    .description("Resize the viewport")
-    .argument("<width>", "Viewport width")
-    .argument("<height>", "Viewport height")
-    .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
-    .action(async (width: string, height: string, opts, cmd) => {
-      const normalizedWidth = parseBrowserViewportDimension(width, "width");
-      const normalizedHeight = parseBrowserViewportDimension(height, "height");
-      if (normalizedWidth === undefined || normalizedHeight === undefined) {
-        return;
-      }
-      await runBrowserResizeWithOutput({
-        parent: parentOpts(cmd),
-        width: normalizedWidth,
-        height: normalizedHeight,
-        targetId: opts.targetId,
-        successMessage: `resized to ${normalizedWidth}x${normalizedHeight}`,
-        errorPolicy: "inline",
-      });
-    });
+  registerBrowserResizeCommand(
+    browser.command("resize").description("Resize the viewport"),
+    parentOpts,
+  );
 }

@@ -6,7 +6,7 @@ import { prepareQualifiedSessionEntryTarget } from "../config/sessions/session-a
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import { removeSessionMember as removeSessionMemberSync } from "../config/sessions/session-sharing-store.native.js";
-import { historyLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { projectionLane } from "../config/sessions/session-transcript-worker-resources.js";
 import { readOpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -60,9 +60,7 @@ it.each(["before", "after"] as const)(
         retarget();
         // Join any unexpectedly accepted reader so the negative control cannot leak custody.
         await expect(
-          prepareSessionSharingSource(target, () => {}).then((prepared) => {
-            prepared.release();
-          }),
+          prepareSessionSharingSource(target, () => {}).then((prepared) => prepared.release()),
         ).rejects.toThrow("Session sharing source changed");
       } else {
         const prepared = await prepareSessionSharingSource(target, () => {});
@@ -71,7 +69,7 @@ it.each(["before", "after"] as const)(
           retarget();
           expect(() => prepared.assertCurrent()).toThrow("Session sharing source changed");
         } finally {
-          prepared.release();
+          await prepared.release();
         }
       }
     });
@@ -195,9 +193,9 @@ it("allows unrelated config reloads while worker authorization reads are pending
         id: client.authenticatedUserProfile!.profileId,
       },
     });
-    const read = historyLane.pool.run.bind(historyLane.pool);
+    const read = projectionLane.pool.run.bind(projectionLane.pool);
     let reloads = 0;
-    const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+    const spy = vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
       const reply = await read(...args);
       if (
         reply.ok &&
@@ -316,10 +314,10 @@ it.each([
     if (!authorization) {
       throw new Error("expected session authorization");
     }
-    const read = historyLane.pool.run.bind(historyLane.pool);
+    const read = projectionLane.pool.run.bind(projectionLane.pool);
     let revoked = false;
     let closing: Promise<void> | undefined;
-    const spy = vi.spyOn(historyLane.pool, "run").mockImplementation(async (...args) => {
+    const spy = vi.spyOn(projectionLane.pool, "run").mockImplementation(async (...args) => {
       const reply = await read(...args);
       if (
         boundary.endsWith("before-consume") &&

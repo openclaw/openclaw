@@ -57,7 +57,8 @@ it("bounds content, snapshot, and checkout removal through cancellation while me
     }
   };
   // Exercise host batch admission without starting a worker or child process.
-  vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(async (command, options) => {
+  vi.spyOn(WorkerTaskPool.prototype, "run").mockImplementation(async (request, options) => {
+    const command = typeof request === "function" ? await request() : request;
     const input = asOptionalRecord(asOptionalRecord(command)?.input);
     const cwd = input?.cwd ?? input?.root ?? input?.repoRoot;
     const taskSignal = options.signal ?? new AbortController().signal;

@@ -90,10 +90,6 @@ export function normalizeDiscordObservedMessage(
   };
 }
 
-function reactionEmojiName(reaction: DiscordReaction) {
-  return reaction.emoji?.name?.trim() || reaction.emoji?.id?.trim() || "";
-}
-
 export function normalizeDiscordReactionSnapshot(params: {
   message: DiscordMessage;
   observedAt: Date;
@@ -104,7 +100,7 @@ export function normalizeDiscordReactionSnapshot(params: {
     observedAt: params.observedAt.toISOString(),
     reactions: (params.message.reactions ?? [])
       .map((reaction) => ({
-        emoji: reactionEmojiName(reaction),
+        emoji: reaction.emoji?.name?.trim() || reaction.emoji?.id?.trim() || "",
         count: Math.max(0, Math.floor(reaction.count ?? 0)),
         me: reaction.me === true,
       }))

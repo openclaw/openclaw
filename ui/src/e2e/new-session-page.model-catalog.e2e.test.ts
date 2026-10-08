@@ -476,7 +476,7 @@ suite.define(() => {
         await picker
           .locator(`[data-chat-account-option="account:${account.authProfileId}"]`)
           .click();
-        await expect.poll(() => startHint.getAttribute("content")).toBe("Checking models…");
+        await expect.poll(() => startHint.getAttribute("content")).toBe("Loading models…");
         expect(await start.getAttribute("aria-disabled")).toBe("true");
         await gateway.rejectDeferred("models.list", { code: "UNAVAILABLE", message: "Try again" });
         await expect.poll(() => startHint.getAttribute("content")).toBe("Models unavailable");
@@ -503,7 +503,7 @@ suite.define(() => {
         await picker
           .locator(`[data-chat-account-option="account:${account.authProfileId}"]`)
           .click();
-        await expect.poll(() => startHint.getAttribute("content")).toBe("Checking models…");
+        await expect.poll(() => startHint.getAttribute("content")).toBe("Loading models…");
         await gateway.rejectDeferred("models.list", { code: "UNAVAILABLE", message: "Try again" });
         await expect.poll(() => startHint.getAttribute("content")).toBe("Models unavailable");
         expect(await start.getAttribute("aria-disabled")).toBe("true");
@@ -550,7 +550,7 @@ suite.define(() => {
         '.new-session-page__composer [data-chat-model-select="true"]',
       );
       await expect.poll(() => modelTrigger.getAttribute("aria-busy")).toBe("true");
-      expect(await modelTrigger.getAttribute("aria-label")).toContain("Checking models…");
+      expect(await modelTrigger.getAttribute("aria-label")).toContain("Loading models…");
       expect(await modelTrigger.textContent()).not.toContain("gpt-5.6-luna");
       expect(await page.locator(".chat-controls__model-trigger-skeleton").count()).toBe(1);
       await page

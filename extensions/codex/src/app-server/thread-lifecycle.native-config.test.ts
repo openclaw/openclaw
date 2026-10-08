@@ -359,11 +359,13 @@ describe("Codex native configuration lifecycle", () => {
         clientId: client.getInstanceId(),
       });
       expect(request.mock.calls.map(([method]) => method)).toEqual([
+        "skills/list",
         "config/read",
         "configRequirements/read",
         "thread/read",
         "thread/resume",
         "thread/inject_items",
+        "skills/list",
         "config/read",
         "configRequirements/read",
         "thread/read",

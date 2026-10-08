@@ -367,11 +367,10 @@ function mapGroup(groupId: string, group: GroupInfo): ZaloGroup {
 }
 
 async function ensureApi(
-  profileInput?: string | null,
+  profile: string,
   timeoutMs = API_LOGIN_TIMEOUT_MS,
   credentialPersistence: CredentialPersistenceMode = "persist",
 ): Promise<API> {
-  const profile = normalizeProfile(profileInput);
   const env = captureZalouserCredentialsEnv();
   const pendingRevocation = credentials.pendingRevocation(profile);
   if (pendingRevocation) {
@@ -461,8 +460,7 @@ async function withZaloApi<T>(
   return result;
 }
 
-function invalidateApi(profileInput?: string | null): void {
-  const profile = normalizeProfile(profileInput);
+function invalidateApi(profile: string): void {
   const api = apiByProfile.get(profile);
   if (api) {
     try {
@@ -479,8 +477,7 @@ function isQrLoginFresh(login: ActiveZaloQrLogin): boolean {
   return Date.now() - login.startedAt < QR_LOGIN_TTL_MS;
 }
 
-function resetQrLogin(profileInput?: string | null): void {
-  const profile = normalizeProfile(profileInput);
+function resetQrLogin(profile: string): void {
   const active = activeQrLogins.get(profile);
   if (!active) {
     return;
@@ -1095,11 +1092,7 @@ export async function startZaloQrLogin(params: {
 
           if (event.actions?.abort) {
             current.abort = () => {
-              try {
-                event.actions?.abort?.();
-              } catch {
-                // ignore
-              }
+              event.actions?.abort?.();
             };
           }
 

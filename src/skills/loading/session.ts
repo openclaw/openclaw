@@ -1,6 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
-import { getAgentDir } from "../../agents/config.js";
 import { CONFIG_DIR_NAME } from "../../agents/package-metadata.js";
 import type { ResourceDiagnostic } from "../../agents/sessions/diagnostics.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
@@ -192,8 +191,6 @@ interface LoadSkillsOptions {
 export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
   const { cwd, agentDir, skillPaths, includeDefaults } = options;
 
-  const resolvedAgentDir = agentDir ?? getAgentDir();
-
   const skillMap = new Map<string, Skill>();
   const realPathSet = new Set<string>();
   const allDiagnostics: ResourceDiagnostic[] = [];
@@ -228,7 +225,7 @@ export function loadSkills(options: LoadSkillsOptions): LoadSkillsResult {
     }
   }
 
-  const userSkillsDir = join(resolvedAgentDir, "skills");
+  const userSkillsDir = join(agentDir, "skills");
   const projectSkillsDir = resolve(cwd, CONFIG_DIR_NAME, "skills");
   if (includeDefaults) {
     addSkills(loadSkillsFromDirInternal(userSkillsDir, "user", true));

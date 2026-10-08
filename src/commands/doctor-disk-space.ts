@@ -31,35 +31,7 @@ export function formatBytes(bytes: number): string {
   });
 }
 
-function buildDiskSpaceWarnings(params: {
-  availableBytes: number;
-  displayStateDir: string;
-}): string[] {
-  const { availableBytes, displayStateDir } = params;
-  const displayFreeSpace = formatBytes(availableBytes);
-  const warnings: string[] = [];
-
-  if (availableBytes < CRITICAL_BYTES) {
-    warnings.push(
-      `- CRITICAL: only ${displayFreeSpace} free on the partition containing ${displayStateDir}.`,
-    );
-    warnings.push("- Config writes, session transcripts, and log rotation may fail silently.");
-    warnings.push("- Free up disk space immediately to avoid data loss.");
-  } else if (availableBytes < WARNING_BYTES) {
-    warnings.push(
-      `- Low disk space: ${displayFreeSpace} free on the partition containing ${displayStateDir}.`,
-    );
-    warnings.push("- Consider freeing space to prevent future config/session write failures.");
-  }
-
-  return warnings;
-}
-
-function collectDiskSpaceWarnings(): {
-  availableBytes: number;
-  stateDir: string;
-  warnings: readonly string[];
-} | null {
+function collectDiskSpaceWarnings() {
   const env = process.env;
   const homedir = () => resolveRequiredHomeDir(env, os.homedir);
   const stateDir = resolveStateDir(env, homedir);
@@ -73,13 +45,23 @@ function collectDiskSpaceWarnings(): {
   }
 
   const displayStateDir = shortenHomePath(stateDir);
-  const warnings = buildDiskSpaceWarnings({
-    availableBytes: snapshot.availableBytes,
-    displayStateDir,
-  });
-
+  const { availableBytes } = snapshot;
+  const displayFreeSpace = formatBytes(availableBytes);
+  const warnings =
+    availableBytes < CRITICAL_BYTES
+      ? [
+          `- CRITICAL: only ${displayFreeSpace} free on the partition containing ${displayStateDir}.`,
+          "- Config writes, session transcripts, and log rotation may fail silently.",
+          "- Free up disk space immediately to avoid data loss.",
+        ]
+      : availableBytes < WARNING_BYTES
+        ? [
+            `- Low disk space: ${displayFreeSpace} free on the partition containing ${displayStateDir}.`,
+            "- Consider freeing space to prevent future config/session write failures.",
+          ]
+        : [];
   return {
-    availableBytes: snapshot.availableBytes,
+    availableBytes,
     stateDir,
     warnings,
   };

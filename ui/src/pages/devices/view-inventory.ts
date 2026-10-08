@@ -63,9 +63,7 @@ function inventorySummary(
 }
 
 export function renderDeviceInventory(props: DevicesProps) {
-  const list = props.devicesList ?? { pending: [], paired: [] };
-  const pending = Array.isArray(list.pending) ? list.pending : [];
-  const paired = Array.isArray(list.paired) ? list.paired : [];
+  const { pending, paired } = props.devicesList ?? { pending: [], paired: [] };
   const groups = buildDeviceInventory({ paired, nodes: props.nodes, presence: props.presence });
   const gatewayPresence = findGatewayPresence(props.presence);
   const unpairedPresence = listUnpairedPresence(props.presence, groups);
@@ -199,38 +197,22 @@ function entryWarnStatuses(
   gatewayVersion: string | null,
 ): TemplateResult[] {
   const statuses: TemplateResult[] = [];
-  const isApprovedNode = isApprovedNodeEntry(entry);
-  const nodeVersion = resolveNodeCoreVersion(entry);
-  const normalizedGatewayVersion = normalizeOptionalString(gatewayVersion);
-  if (
-    isApprovedNode &&
-    nodeVersion &&
-    normalizedGatewayVersion &&
-    nodeVersion !== normalizedGatewayVersion
-  ) {
-    const title = t("devices.inventory.versionDriftTitle", {
-      nodeVersion,
-      gatewayVersion: normalizedGatewayVersion,
-    });
+  const warn = (kind: string, title = t(`devices.inventory.${kind}Title`)) =>
     statuses.push(
       html`<span title=${title}>
-        ${renderSettingsStatus({ kind: "warn", label: t("devices.inventory.versionDrift") })}
+        ${renderSettingsStatus({ kind: "warn", label: t(`devices.inventory.${kind}`) })}
       </span>`,
     );
+  const isApprovedNode = isApprovedNodeEntry(entry);
+  const nodeVersion = resolveNodeCoreVersion(entry);
+  if (isApprovedNode && nodeVersion && gatewayVersion && nodeVersion !== gatewayVersion) {
+    warn("versionDrift", t("devices.inventory.versionDriftTitle", { nodeVersion, gatewayVersion }));
   }
   if (entry.node?.workerBundle?.status === "missing") {
-    statuses.push(
-      html`<span title=${t("devices.inventory.workerMissingTitle")}>
-        ${renderSettingsStatus({ kind: "warn", label: t("devices.inventory.workerMissing") })}
-      </span>`,
-    );
+    warn("workerMissing");
   }
   if (isApprovedNode && entry.node?.connected === false && isWindowsPlatform(entry.platform)) {
-    statuses.push(
-      html`<span title=${t("devices.inventory.manualWakeTitle")}>
-        ${renderSettingsStatus({ kind: "warn", label: t("devices.inventory.manualWake") })}
-      </span>`,
-    );
+    warn("manualWake");
   }
   const approvalState = entry.node?.approvalState;
   if (approvalState === "pending-approval" || approvalState === "pending-reapproval") {

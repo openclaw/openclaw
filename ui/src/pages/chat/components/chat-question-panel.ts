@@ -250,14 +250,14 @@ export class ChatQuestionPanel extends OpenClawLightDomElement {
     if (event.target instanceof HTMLAnchorElement) {
       return;
     }
-    if (event.target instanceof HTMLInputElement) {
-      if (
-        event.key === "Enter" &&
-        (question.allowEmpty || this.answerValues(model, question).length > 0)
-      ) {
+    if (event.key === "Enter" && !(event.target instanceof HTMLButtonElement)) {
+      if (question.allowEmpty || this.answerValues(model, question).length > 0) {
         event.preventDefault();
         this.advanceOrSubmit(model, question);
       }
+      return;
+    }
+    if (event.target instanceof HTMLInputElement) {
       return;
     }
     if (
@@ -312,15 +312,6 @@ export class ChatQuestionPanel extends OpenClawLightDomElement {
       )?.focus({
         preventScroll: true,
       });
-      return;
-    }
-    if (
-      event.key === "Enter" &&
-      !(event.target instanceof HTMLButtonElement) &&
-      (question.allowEmpty || this.answerValues(model, question).length > 0)
-    ) {
-      event.preventDefault();
-      this.advanceOrSubmit(model, question);
     }
   }
 

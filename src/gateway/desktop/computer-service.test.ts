@@ -159,6 +159,12 @@ function createFixture() {
     idempotencyKey: "observe-1",
     ...overrides,
   });
+  const click = (idempotencyKey: string) =>
+    request({
+      command: "computer.act",
+      params: { executionId: logicalId, action: "left_click", x: 1, y: 2 },
+      idempotencyKey,
+    });
   return {
     service,
     config,
@@ -172,10 +178,112 @@ function createFixture() {
     leases,
     stops,
     request,
+    click,
   };
 }
 
 describe("Gateway computer service", () => {
+  it("reads declared and recorded capabilities without starting or waiting for a computer", async () => {
+    const f = createFixture();
+    const cold = await f.service.status({ probe: false });
+    expect(cold).toMatchObject({
+      configured: true,
+      available: false,
+      computerUse: { provider: { generation: "generation-0" } },
+    });
+    expect(startComputerHostProcess).not.toHaveBeenCalled();
+    expect(f.leases).toHaveLength(0);
+
+    const started = createDeferredCore();
+    const ready = createDeferredCore();
+    const startProcess = vi.mocked(startComputerHostProcess).getMockImplementation()!;
+    vi.mocked(startComputerHostProcess).mockImplementationOnce((options) => {
+      const child = startProcess(options);
+      started.resolve();
+      return { ...child, ready: ready.promise.then(() => child.ready) };
+    });
+    const probing = f.service.status({ probe: true });
+    try {
+      await started.promise;
+      expect(await f.service.status({ probe: false })).toEqual(cold);
+    } finally {
+      ready.resolve();
+    }
+    const live = await probing;
+    expect(live).toMatchObject({
+      available: true,
+      computerUse: { provider: { generation: "generation-1" } },
+    });
+    expect(await f.service.status({ probe: false })).toEqual(live);
+    f.leases[0]!.valid = false;
+    expect(await f.service.status({ probe: false })).toMatchObject({
+      available: false,
+      computerUse: cold.computerUse,
+    });
+    expect(startComputerHostProcess).toHaveBeenCalledOnce();
+    expect(f.leases[0]!.release).not.toHaveBeenCalled();
+  });
+
+  it("does not renew or restart an idle computer when reading its status", async () => {
+    vi.useFakeTimers();
+    try {
+      const f = createFixture();
+      const live = await f.service.status();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await f.service.status({ probe: false })).toEqual(live);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(await f.service.status({ probe: false })).toMatchObject({
+        configured: true,
+        available: false,
+        computerUse: { actions: ["screenshot", "left_click"] },
+      });
+      expect(startComputerHostProcess).toHaveBeenCalledOnce();
+      expect(f.leases[0]!.release).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps native readiness authoritative when an unprepared declaration fails", async () => {
+    const f = createFixture();
+    const entry = f.registry.nodeHostCommands.find((candidate) => candidate.command.computerUse)!;
+    entry.command.computerUse = () => {
+      throw new Error("Declaration needs a native desktop");
+    };
+    expect(await f.service.status({ probe: false })).toMatchObject({
+      configured: true,
+      available: false,
+      error: "Declaration needs a native desktop",
+    });
+    expect(startComputerHostProcess).not.toHaveBeenCalled();
+    expect(await f.service.status({ probe: true })).toMatchObject({ available: true });
+    expect(await f.service.status({ probe: false })).toMatchObject({ available: true });
+  });
+
+  it("invalidates declared capabilities on provider replacement and disablement", async () => {
+    const f = createFixture();
+    const entry = f.registry.nodeHostCommands.find((candidate) => candidate.command.computerUse)!;
+    const descriptor = (await f.service.status({ probe: false })).computerUse!;
+    const computerUse = vi.fn(() => ({ ...descriptor, actions: ["screenshot", "list_windows"] }));
+    entry.command = { ...entry.command, computerUse };
+    expect((await f.service.status({ probe: false })).computerUse?.actions).toContain(
+      "list_windows",
+    );
+    await f.service.status({ probe: false });
+    expect(computerUse).toHaveBeenCalledOnce();
+    f.config.plugins!.entries!.fixture!.enabled = false;
+    expect(await f.service.status({ probe: false })).toEqual({
+      configured: false,
+      available: false,
+    });
+    f.config.plugins!.entries!.fixture!.enabled = true;
+    expect((await f.service.status({ probe: false })).computerUse?.actions).toContain(
+      "list_windows",
+    );
+    expect(computerUse).toHaveBeenCalledTimes(2);
+    expect(startComputerHostProcess).not.toHaveBeenCalled();
+  });
+
   it.each(["native target", "managed target", "desktop", "helper"] as const)(
     "fences stale %s input and joins cleanup before concurrent discovery",
     async (source) => {
@@ -195,14 +303,7 @@ describe("Gateway computer service", () => {
         f.config.desktop!.host!.enabled = !initiallyManaged;
       }
       await expect(
-        f.service.invoke({
-          ...f.request({
-            command: "computer.act",
-            params: { executionId: logicalId, action: "left_click", x: 1, y: 2 },
-            idempotencyKey: "stale-target-click",
-          }),
-          generation: originalGeneration,
-        }),
+        f.service.invoke({ ...f.click("stale-target-click"), generation: originalGeneration }),
       ).rejects.toThrow("COMPUTER_STALE_OBSERVATION");
       expect(f.act).not.toHaveBeenCalled();
       expect(startComputerHostProcess).toHaveBeenCalledOnce();
@@ -423,13 +524,7 @@ describe("Gateway computer service", () => {
     });
     const physicalId = f.openExecution.mock.calls[0]![0].executionId;
     expect(physicalId).not.toBe(logicalId);
-    await f.service.invoke(
-      f.request({
-        command: "computer.act",
-        params: { executionId: logicalId, action: "left_click", x: 1, y: 2 },
-        idempotencyKey: "click-1",
-      }),
-    );
+    await f.service.invoke(f.click("click-1"));
     expect(JSON.parse(f.act.mock.calls[0]![0] ?? "{}")).toMatchObject({
       executionId: physicalId,
       action: "left_click",

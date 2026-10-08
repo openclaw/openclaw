@@ -93,8 +93,20 @@ export function isBundledSkillAllowed(entry: SkillEntry, allowlist?: ReadonlySet
   if (!BUNDLED_SOURCES.has(resolveSkillSource(entry.skill))) {
     return true;
   }
-  const key = resolveSkillKey(entry.skill, entry);
+  const key = resolveSkillKey(entry);
   return allowlist.has(key) || allowlist.has(entry.skill.name);
+}
+
+/** Learned Workshop skills bypass agent allowlists and session toggles; archiving hides them. */
+export function isSkillEntrySelected(
+  entry: SkillEntry,
+  skillFilter: readonly string[] | undefined,
+  skillOverrides: Readonly<Record<string, boolean>> | undefined,
+): boolean {
+  return (
+    resolveSkillSource(entry.skill) === "openclaw-workshop" ||
+    isSessionSkillEnabled(entry.skill.name, skillFilter, skillOverrides, resolveSkillKey(entry))
+  );
 }
 
 export function shouldIncludeSkill(params: {
@@ -106,7 +118,7 @@ export function shouldIncludeSkill(params: {
   platform?: string;
 }): boolean {
   const { entry, config, bundledAllowlist, eligibility } = params;
-  const skillKey = resolveSkillKey(entry.skill, entry);
+  const skillKey = resolveSkillKey(entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
 
   if (skillConfig?.enabled === false) {
@@ -160,14 +172,7 @@ export async function prepareSkillBinaryProbe(
     return true;
   };
   for (const entry of entries) {
-    if (
-      !isSessionSkillEnabled(
-        entry.skill.name,
-        opts?.skillFilter,
-        opts?.skillOverrides,
-        resolveSkillKey(entry.skill, entry),
-      )
-    ) {
+    if (!isSkillEntrySelected(entry, opts?.skillFilter, opts?.skillOverrides)) {
       continue;
     }
     const requires = entry.metadata?.requires;

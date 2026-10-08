@@ -51,22 +51,30 @@ export function readPreparedChatMetadata(
 ): ChatMetadataResult {
   readParams.draftAccountSelection?.assertCurrent();
   const { agent } = projection;
-  return projectChatSessionMetadata(
-    readParams,
-    {
-      ...projection.read(),
-      ...(agent.commands !== undefined ? { commands: agent.commands } : {}),
-      swarmEnabled: agent.swarmEnabled,
-      accountSelection:
-        readAccountSelection?.() ??
-        resolveChatAccountSelection({
-          authStore: agent.authStore,
-          sessionEntry: readParams.sessionEntry,
-        }),
-    },
-    config,
-    acpMeta,
-  );
+  const metadata: ChatMetadataResult = {
+    ...projection.read(),
+    ...(agent.commands !== undefined ? { commands: agent.commands } : {}),
+    swarmEnabled: agent.swarmEnabled,
+    accountSelection:
+      readAccountSelection?.() ??
+      resolveChatAccountSelection({
+        authStore: agent.authStore,
+        sessionEntry: readParams.sessionEntry,
+      }),
+  };
+  const projected = metadata.models
+    ? { ...metadata, models: projectSessionModelCatalog(readParams, metadata.models, config) }
+    : metadata;
+  if (!readParams.sessionKey) {
+    return projected;
+  }
+  return {
+    ...projected,
+    runtimeSelectionLocked: resolveGatewaySessionRuntimeSelectionLocked(
+      readParams.sessionEntry,
+      acpMeta ?? undefined,
+    ),
+  };
 }
 
 export async function prepareSessionAcpMeta(
@@ -100,16 +108,16 @@ export async function prepareChatMetadataModelProjection(params: {
   read: () => { models?: ModelChoice[] };
   isCurrent: () => boolean;
 }> {
-  const [{ prepareModelsListResult }, { createModelCatalogDecisions }] = await Promise.all([
+  const [{ prepareModelsListResult }, { prepareModelCatalogDecisions }] = await Promise.all([
     import("./models-list-result.js"),
     import("../../agents/model-catalog-decisions.js"),
   ]);
   // A draft has no persisted session grant: recheck its live human before hydrating private auth.
   await withCurrentReadAuthority(params, () => {});
   // Chat metadata must stay on process-published facts. Live discovery belongs to explicit
-  // models.list control-plane reads so a slow provider cannot delay chat startup.
+  // models.list refresh requests so a slow provider cannot delay chat startup.
   const snapshot = params.facts.modelCatalog;
-  const projectorParams: Parameters<typeof createModelCatalogDecisions>[0] = {
+  const projectorParams: Parameters<typeof prepareModelCatalogDecisions>[0] = {
     cfg: params.facts.owner.config,
     agentId: params.facts.agentId,
     snapshot,
@@ -130,9 +138,7 @@ export async function prepareChatMetadataModelProjection(params: {
     ...(params.profileProvider ? { profileProvider: params.profileProvider } : {}),
     ...(params.runtimeOverride ? { runtimeOverride: params.runtimeOverride } : {}),
   };
-  const projector = await withCurrentReadAuthority(params, () =>
-    createModelCatalogDecisions(projectorParams),
-  );
+  const projector = await prepareModelCatalogDecisions(projectorParams, params);
   const work = [
     projector.projectCatalog(params),
     prepareModelsListResult({
@@ -223,12 +229,21 @@ export function projectSessionModelCatalog(
   config: OpenClawConfig,
 ): ModelChoice[] {
   const ownership = readSessionRuntimeOwnership({ ...readParams, config });
-  if (ownership?.auth !== "native") {
+  const nativeAuth = ownership?.auth === "native";
+  const entry = readParams.sessionEntry;
+  const authProfileSource = resolveCollapsedSessionAuthPinSource(entry);
+  const workerAuth =
+    readParams.workerInference === "worker" &&
+    !entry?.modelOverride?.trim() &&
+    !entry?.agentRuntimeOverride?.trim() &&
+    !(entry?.authProfileOverride?.trim() && authProfileSource === "user");
+  if (!nativeAuth && !workerAuth) {
     return models;
   }
-  // Pending native branches have no tuple. Omit host readiness without claiming native login.
+  // Pending native branches have no tuple. Worker inference uses the configured ambient model;
+  // explicit model, runtime, and personal-account choices retain Gateway availability checks.
   const renderedModel =
-    ownership.modelRef ??
+    ownership?.modelRef ??
     resolveSessionModelRef(config, readParams.sessionEntry, readParams.agentId, {
       allowPluginNormalization: false,
     });
@@ -236,34 +251,19 @@ export function projectSessionModelCatalog(
     if (model.provider !== renderedModel.provider || model.id !== renderedModel.model) {
       return model;
     }
+    if (
+      workerAuth &&
+      model.unavailableReason !== "missing-auth" &&
+      model.unavailableReason !== "auth-failed"
+    ) {
+      return model;
+    }
     const {
       available: _available,
       unavailableReason: _reason,
       unavailableUntil: _until,
-      ...native
+      ...available
     } = model;
-    return native;
+    return available;
   });
-}
-
-function projectChatSessionMetadata(
-  readParams: ChatMetadataReadParams,
-  metadata: ChatMetadataResult,
-  config: OpenClawConfig,
-  preparedAcpMeta: SessionAcpMeta | null,
-): ChatMetadataResult {
-  const projected = metadata.models
-    ? { ...metadata, models: projectSessionModelCatalog(readParams, metadata.models, config) }
-    : metadata;
-  if (!readParams.sessionKey) {
-    return projected;
-  }
-  const entry = readParams.sessionEntry;
-  return {
-    ...projected,
-    runtimeSelectionLocked: resolveGatewaySessionRuntimeSelectionLocked(
-      entry,
-      preparedAcpMeta ?? undefined,
-    ),
-  };
 }

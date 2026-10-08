@@ -8,7 +8,6 @@ import { listMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-ho
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   formatMemoryDreamingDay,
-  resolveMemoryDreamingWorkspaces,
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
@@ -38,7 +37,6 @@ import {
   runDreamNarrative,
 } from "./dreaming-narrative.js";
 import { formatErrorMessage } from "./dreaming-shared.js";
-import { normalizeMemoryCoreWorkspaceKey } from "./dreaming-state.js";
 import { listMemorySessionTombstones } from "./memory-entry-origins.js";
 import {
   inspectWorkspaceFile,
@@ -51,13 +49,13 @@ import {
   appendSessionCorpusLines,
   mergeTrackedMessageHashes,
   resolveAdmissionPolicy,
+  resolveSessionAgentsForWorkspace,
+  resolveSessionIngestionFileCap,
   scanSessionIngestionSource,
-  sessionExclusionReason,
+  sessionExclusionReasons,
   sessionIngestionSourceFromCorpus,
   sessionIngestionStateKeyFromCorpus,
-  SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
   SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP,
-  SESSION_INGESTION_MIN_MESSAGES_PER_FILE,
   trimTrackedSessionScopes,
   type SessionAdmissionPolicy,
   type SessionEntryOrigin,
@@ -479,22 +477,6 @@ function isCheckpointSessionTranscriptPath(absolutePath: string): boolean {
   return SESSION_CHECKPOINT_TRANSCRIPT_FILENAME_RE.test(path.basename(absolutePath));
 }
 
-function resolveSessionAgentsForWorkspace(params: {
-  cfg: OpenClawConfig;
-  workspaceDir: string;
-}): string[] {
-  const { cfg, workspaceDir } = params;
-  const target = normalizeMemoryCoreWorkspaceKey(workspaceDir);
-  const workspaces = resolveMemoryDreamingWorkspaces(cfg);
-  const match = workspaces.find(
-    (entry) => normalizeMemoryCoreWorkspaceKey(entry.workspaceDir) === target,
-  );
-  if (!match) {
-    return [];
-  }
-  return uniqueStrings(match.agentIds.filter((agentId) => agentId.trim().length > 0)).toSorted();
-}
-
 async function collectSessionIngestionBatches(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
@@ -528,6 +510,7 @@ async function collectSessionIngestionBatches(params: {
     const forgottenSessionIds = new Set(
       (await listMemorySessionTombstones({ agentId })).map((tombstone) => tombstone.sessionId),
     );
+    const selectedSources: SessionIngestionSource[] = [];
     for (const entry of await listSessionTranscriptCorpusEntriesForAgent(agentId, {
       includeRetainedSqlite: true,
     })) {
@@ -544,16 +527,20 @@ async function collectSessionIngestionBatches(params: {
       ) {
         continue;
       }
-      const excludedReason = sessionExclusionReason(
-        source,
-        params.admissionPolicy,
-        forgottenSessionIds,
-      );
+      selectedSources.push(source);
+    }
+    const excludedReasons = sessionExclusionReasons(
+      selectedSources,
+      params.admissionPolicy,
+      forgottenSessionIds,
+    );
+    for (const source of selectedSources) {
+      const excludedReason = excludedReasons.get(source);
       if (excludedReason) {
         // Record exclusion before reading transcript content; the empty
         // fingerprint makes removing the policy re-admit this session.
         nextFiles[source.stateKey] = {
-          mtimeMs: entry.updatedAtMs ?? 0,
+          mtimeMs: source.buildOptions.updatedAtMs ?? 0,
           size: 0,
           contentHash: "",
           lineCount: 0,
@@ -581,13 +568,7 @@ async function collectSessionIngestionBatches(params: {
 
   const totalCap = SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP;
   let remaining = totalCap;
-  const perFileCap = Math.min(
-    SESSION_INGESTION_MAX_MESSAGES_PER_FILE,
-    Math.max(
-      SESSION_INGESTION_MIN_MESSAGES_PER_FILE,
-      Math.ceil(totalCap / Math.max(1, sortedSources.length)),
-    ),
-  );
+  const perFileCap = resolveSessionIngestionFileCap(sortedSources.length);
   for (const source of sortedSources) {
     if (remaining <= 0) {
       break;
@@ -1068,22 +1049,7 @@ function buildLightDreamingBody(entries: ShortTermRecallEntry[]): string[] {
   ]);
 }
 
-type RemTruthSelection = {
-  key: string;
-  snippet: string;
-  confidence: number;
-  evidence: string;
-};
-
-type RemTruthCandidate = Omit<RemTruthSelection, "key">;
-
-export type RemDreamingPreview = {
-  sourceEntryCount: number;
-  reflections: string[];
-  candidateTruths: RemTruthCandidate[];
-  candidateKeys: string[];
-  bodyLines: string[];
-};
+export type RemDreamingPreview = ReturnType<typeof previewRemDreaming>;
 
 function calculateCandidateTruthConfidence(entry: ShortTermRecallEntry): number {
   const recallStrength = Math.min(1, Math.log1p(entry.recallCount) / Math.log1p(6));
@@ -1099,10 +1065,7 @@ function calculateCandidateTruthConfidence(entry: ShortTermRecallEntry): number 
   );
 }
 
-function selectRemCandidateTruths(
-  entries: ShortTermRecallEntry[],
-  limit: number,
-): RemTruthSelection[] {
+function selectRemCandidateTruths(entries: ShortTermRecallEntry[], limit: number) {
   if (limit <= 0) {
     return [];
   }
@@ -1168,7 +1131,7 @@ export function previewRemDreaming(params: {
   entries: ShortTermRecallEntry[];
   limit: number;
   minPatternStrength: number;
-}): RemDreamingPreview {
+}) {
   const reflections = buildRemReflections(params.entries, params.limit, params.minPatternStrength);
   const candidateSelections = selectRemCandidateTruths(
     params.entries,
@@ -1222,27 +1185,32 @@ async function ingestDreamingPhaseSignals(
   });
 }
 
+async function readDreamingPhaseEntries(
+  params: DreamingPhaseRunParams<LightDreamingConfig | RemDreamingConfig>,
+  phase: "light" | "rem",
+): Promise<ShortTermRecallEntry[]> {
+  const { workspaceDir, nowMs } = params;
+  let entries = filterRecallEntriesWithinLookback({
+    entries: await readShortTermRecallEntries({ workspaceDir, nowMs }),
+    nowMs,
+    lookbackDays: params.config.lookbackDays,
+  });
+  if (phase === "light") {
+    entries = await filterFreshLightDreamingEntries({ workspaceDir, nowMs, entries });
+  }
+  return (
+    await filterLiveShortTermRecallEntries({
+      workspaceDir,
+      entries,
+    })
+  ).filter((entry) => !isPromotionOriginBlocked(entry));
+}
+
 async function prepareLightDreaming(
   params: DreamingPhaseRunParams<LightDreamingConfig>,
 ): Promise<NarrativePhaseData | undefined> {
   const { nowMs } = params;
-  const recentEntries = (
-    await filterLiveShortTermRecallEntries({
-      workspaceDir: params.workspaceDir,
-      entries: await filterFreshLightDreamingEntries({
-        workspaceDir: params.workspaceDir,
-        nowMs,
-        entries: filterRecallEntriesWithinLookback({
-          entries: await readShortTermRecallEntries({
-            workspaceDir: params.workspaceDir,
-            nowMs,
-          }),
-          nowMs,
-          lookbackDays: params.config.lookbackDays,
-        }),
-      }),
-    })
-  ).filter((entry) => !isPromotionOriginBlocked(entry));
+  const recentEntries = await readDreamingPhaseEntries(params, "light");
   const rankedEntries = dedupeEntries(
     recentEntries.toSorted((a, b) => {
       const byTime = compareStoreTimestampDesc(a.lastRecalledAt, b.lastRecalledAt);
@@ -1299,16 +1267,7 @@ async function prepareRemDreaming(
   params: DreamingPhaseRunParams<RemDreamingConfig>,
 ): Promise<NarrativePhaseData | undefined> {
   const { nowMs } = params;
-  const allEntries = (
-    await filterLiveShortTermRecallEntries({
-      workspaceDir: params.workspaceDir,
-      entries: filterRecallEntriesWithinLookback({
-        entries: await readShortTermRecallEntries({ workspaceDir: params.workspaceDir, nowMs }),
-        nowMs,
-        lookbackDays: params.config.lookbackDays,
-      }),
-    })
-  ).filter((entry) => !isPromotionOriginBlocked(entry));
+  const allEntries = await readDreamingPhaseEntries(params, "rem");
   // Prefer entries staged by light sleep so REM synthesises from the
   // sequential light→REM pipeline instead of rescanning the full store.
   const lightKeys = await readLightStagedKeys({

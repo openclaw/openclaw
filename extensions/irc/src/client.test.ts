@@ -77,7 +77,8 @@ async function startLoopbackIrcServer(options?: {
 }
 
 async function connectAndCollectRegistration(params: {
-  nickserv: NonNullable<Parameters<typeof connectIrcClient>[0]["nickserv"]>;
+  nickserv?: NonNullable<Parameters<typeof connectIrcClient>[0]["nickserv"]>;
+  password?: string;
 }): Promise<{ lines: string[]; errors: Error[] }> {
   const server = await startLoopbackIrcServer();
   const errors: Error[] = [];
@@ -90,6 +91,7 @@ async function connectAndCollectRegistration(params: {
       nick: "bot",
       username: "bot",
       realname: "OpenClaw Bot",
+      password: params.password,
       nickserv: params.nickserv,
       onError: (error) => errors.push(error),
     });
@@ -184,6 +186,26 @@ describe("irc client nickserv", () => {
     });
 
     expect(result.lines).toContain("PRIVMSG NickServ :IDENTIFY secret JOIN #bad");
+  });
+
+  it("sends backslashes in the NickServ password unchanged", async () => {
+    const result = await connectAndCollectRegistration({
+      nickserv: { password: String.raw`pa\tss\new\x41` },
+    });
+
+    expect(result.lines).toContain(String.raw`PRIVMSG NickServ :IDENTIFY pa\tss\new\x41`);
+  });
+});
+
+describe("irc client server password", () => {
+  it.each([
+    { password: "secret", expected: "PASS secret" },
+    { password: "correct horse battery staple", expected: "PASS :correct horse battery staple" },
+    { password: ":colon-first", expected: "PASS ::colon-first" },
+  ])("sends $password as $expected", async ({ password, expected }) => {
+    const result = await connectAndCollectRegistration({ password });
+
+    expect(result.lines[0]).toBe(expected);
   });
 });
 
@@ -389,7 +411,7 @@ describe("irc client PRIVMSG chunking on the wire", () => {
   it("rejects text that becomes empty after transport sanitization", async () => {
     const server = await startLoopbackIrcServer();
     try {
-      await expect(collectPrivmsgBodies(server, String.raw`\u0001`)).rejects.toThrow(
+      await expect(collectPrivmsgBodies(server, "\u0001")).rejects.toThrow(
         "Message must be non-empty for IRC sends",
       );
       expect(server.lines.some((line) => line.startsWith("PRIVMSG "))).toBe(false);
@@ -408,6 +430,21 @@ describe("irc client PRIVMSG chunking on the wire", () => {
   }>([
     { name: "multibyte byte limit", text: "漢".repeat(900) },
     { name: "emoji byte limit", text: "😀".repeat(300) },
+    {
+      name: "joined emoji at the character cap",
+      text: `${"x".repeat(348)}👨‍👩‍👧‍👦tail`,
+      bodies: ["x".repeat(348), "👨‍👩‍👧‍👦tail"],
+    },
+    {
+      name: "joined emoji at the byte cap",
+      text: `${"漢".repeat(162)}👨‍👩‍👧‍👦tail`,
+      bodies: ["漢".repeat(162), "👨‍👩‍👧‍👦tail"],
+    },
+    {
+      name: "combining mark at the character cap",
+      text: `${"x".repeat(349)}e\u0301tail`,
+      bodies: ["x".repeat(349), "e\u0301tail"],
+    },
     { name: "default ASCII cap", text: "a".repeat(900), lengths: [350, 350, 200] },
     {
       name: "multibyte character cap",

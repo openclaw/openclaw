@@ -45,10 +45,8 @@ import { formatSidebarBuildSubtitle } from "./sidebar-build-chip-format.ts";
 import { renderSidebarReorderMenu } from "./sidebar-reorder.ts";
 
 export type AppSidebarRenderHost = AppSidebarSessionNavigationElement & {
-  activePluginTabId: string;
   teamOnlineExpanded: boolean;
   readonly people: import("./sidebar-people-controller.ts").SidebarPeopleController;
-  getRouteSessionKey(): string;
   renderPinnedSidebarSession(session: SidebarRecentSession): unknown;
   toggleSection(sectionId: string): void;
 };
@@ -338,7 +336,7 @@ export function renderAppSidebarPagesHead(host: AppSidebarRenderHost, row: unkno
           aria-expanded=${String(host.sidebarMenus.moreMenuPosition !== null)}
           aria-label=${t("nav.customize")}
           @click=${(event: MouseEvent) =>
-            host.sidebarMenus.toggleMoreMenu(event.currentTarget as HTMLElement)}
+            host.sidebarMenus.togglePositionedMenu("more", event.currentTarget as HTMLElement)}
         >
           ${icons.penLine}
         </button>
@@ -347,7 +345,6 @@ export function renderAppSidebarPagesHead(host: AppSidebarRenderHost, row: unkno
   `;
 }
 
-/** Zone 5: product chrome recedes to one slim footer bar. */
 export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
   const connectionStatus = host.connectionStatus;
   const selfUser = host.sessionDataContext

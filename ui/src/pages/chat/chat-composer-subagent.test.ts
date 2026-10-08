@@ -412,7 +412,7 @@ it.each([
       );
       expect(
         container.querySelector("[data-chat-model-select]")?.getAttribute("aria-label"),
-      ).toContain("Checking models…");
+      ).toContain("Loading models…");
       expect(container.textContent).not.toContain("primary-model");
       expect(container.textContent).not.toContain("cached-default");
       expect(container.querySelector("[data-chat-model-option]")).toBeNull();

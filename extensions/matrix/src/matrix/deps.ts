@@ -57,16 +57,12 @@ function isMuslRuntime(): boolean {
 function resolveMatrixCryptoNativeBindingFilename(): string | null {
   switch (process.platform) {
     case "darwin":
-      return process.arch === "arm64"
-        ? "matrix-sdk-crypto.darwin-arm64.node"
-        : process.arch === "x64"
-          ? "matrix-sdk-crypto.darwin-x64.node"
-          : null;
+      return ["arm64", "x64"].includes(process.arch)
+        ? `matrix-sdk-crypto.darwin-${process.arch}.node`
+        : null;
     case "linux":
       if (process.arch === "x64") {
-        return isMuslRuntime()
-          ? "matrix-sdk-crypto.linux-x64-musl.node"
-          : "matrix-sdk-crypto.linux-x64-gnu.node";
+        return `matrix-sdk-crypto.linux-x64-${isMuslRuntime() ? "musl" : "gnu"}.node`;
       }
       if (process.arch === "arm64" && !isMuslRuntime()) {
         return "matrix-sdk-crypto.linux-arm64-gnu.node";
@@ -79,13 +75,9 @@ function resolveMatrixCryptoNativeBindingFilename(): string | null {
       }
       return null;
     case "win32":
-      return process.arch === "x64"
-        ? "matrix-sdk-crypto.win32-x64-msvc.node"
-        : process.arch === "ia32"
-          ? "matrix-sdk-crypto.win32-ia32-msvc.node"
-          : process.arch === "arm64"
-            ? "matrix-sdk-crypto.win32-arm64-msvc.node"
-            : null;
+      return ["x64", "ia32", "arm64"].includes(process.arch)
+        ? `matrix-sdk-crypto.win32-${process.arch}-msvc.node`
+        : null;
     default:
       return null;
   }

@@ -163,7 +163,6 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       }
       await replaceSessionEntry(target, {
         ...entry,
-        status: "running",
         lifecycleRunId: runId,
         startedAt: Date.now(),
       });
@@ -191,11 +190,15 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         store: { [target.sessionKey]: entry },
       };
       const barriers = createGatewayWorkerPlacementReclaimBarriers({
-        placements: { get: () => placement as never, waitForTurnClaimRelease: async () => {} },
+        placements: {
+          get: () => placement as never,
+          getAsync: async () => placement as never,
+          waitForTurnClaimRelease: async () => {},
+        },
         loadSessionRuntime: async () =>
           ({
             managedWorktrees: {
-              findLiveByOwner: () => ({
+              findLiveByOwner: async () => ({
                 id: "terminal-worktree",
                 ownerId: target.sessionKey,
                 path: root,
@@ -227,7 +230,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
       expect(context.chatAbortControllers.has(runId)).toBe(true);
       expect(owned.activeRunAbort.entry?.projectSessionTerminalPersistence).toBeInstanceOf(Promise);
       expect(reclaimEffectStarted).toBe(false);
-      expect(loadSessionEntry(target)?.status).toBe("running");
+      expect(loadSessionEntry(target)?.status).toBeUndefined();
       const late = await admit("during-terminal-write");
       expect(late.ok).toBe(false);
       expect(
@@ -257,7 +260,7 @@ it.each(["success", "failed-write", "setup-failed-write"] as const)(
         await heldWriter;
         await rejected;
         expect(reclaimEffectStarted).toBe(false);
-        expect(loadSessionEntry(target)?.status).toBe("running");
+        expect(loadSessionEntry(target)?.status).toBeUndefined();
         return;
       }
       releaseWriter.resolve();

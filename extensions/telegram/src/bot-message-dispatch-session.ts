@@ -22,7 +22,7 @@ export function createFreshTelegramSessionEntryLoader(params: {
   telegramDeps: TelegramBotDeps;
 }): FreshTelegramSessionEntryLoader {
   const entriesByPathAndKey = new Map<string, ReturnType<typeof getSessionEntry>>();
-  const load = ((agentId: string, sessionKey: string) => {
+  const load = (agentId: string, sessionKey: string) => {
     const storePath = params.telegramDeps.resolveStorePath(params.cfg.session?.store, { agentId });
     const cacheKey = `${storePath}\0${sessionKey}`;
     if (entriesByPathAndKey.has(cacheKey)) {
@@ -35,9 +35,8 @@ export function createFreshTelegramSessionEntryLoader(params: {
     });
     entriesByPathAndKey.set(cacheKey, entry);
     return { storePath, entry };
-  }) as FreshTelegramSessionEntryLoader;
-  load.clear = () => entriesByPathAndKey.clear();
-  return load;
+  };
+  return Object.assign(load, { clear: () => entriesByPathAndKey.clear() });
 }
 
 export function resolveTelegramReasoningLevel(params: {

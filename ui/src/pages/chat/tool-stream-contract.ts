@@ -37,9 +37,6 @@ export type ToolStreamEntry = {
   resultReceived?: boolean;
   startedAt: number;
   receivedAt: number;
-  /** User boundaries observed while this live tool belonged to the active run. */
-  afterBoundaryRunId?: string;
-  boundaryRunId?: string;
   message: Record<string, unknown>;
 };
 

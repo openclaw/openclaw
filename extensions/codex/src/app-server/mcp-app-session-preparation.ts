@@ -17,13 +17,10 @@ import {
   buildCodexAppServerRuntimeFingerprint,
 } from "./plugin-app-cache-key.js";
 import {
-  createCodexPluginThreadConfigStartupProvider,
+  prepareCodexPluginThreadConfigStartupProvider,
   resolveCodexPluginThreadConfigStartupPolicy,
 } from "./plugin-thread-config-deadline.js";
-import {
-  buildCodexPluginThreadConfigInputFingerprint,
-  mergeCodexThreadConfigs,
-} from "./plugin-thread-config.js";
+import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
 import type { CodexAppServerBindingStore } from "./session-binding.js";
 import { sessionBindingIdentity, resolveCodexSessionBinding } from "./session-binding.js";
 import { applyCodexSessionPermissionPolicy } from "./session-permission-policy.js";
@@ -155,22 +152,15 @@ export async function prepareCodexMcpAppSession(params: {
           appServerVersion: client.getServerVersion(),
           runtimeIdentity: client.getRuntimeIdentity(),
         });
-        const pluginThreadConfig = pluginPolicy.pluginThreadConfigRequired
-          ? createCodexPluginThreadConfigStartupProvider({
-              inputFingerprint: buildCodexPluginThreadConfigInputFingerprint({
-                pluginConfig: pluginPolicy.pluginThreadConfigPluginConfig,
-                appCacheKey,
-              }),
-              enabledPluginConfigKeys: pluginPolicy.enabledPluginConfigKeys,
-              policy: pluginPolicy.resolvedPluginPolicy,
-              requestTimeoutMs: appServer.requestTimeoutMs,
-              signal: input.abortSignal ?? new AbortController().signal,
-              pluginConfig: pluginPolicy.pluginThreadConfigPluginConfig,
-              client,
-              configCwd: input.workspaceDir,
-              appCacheKey,
-            })
-          : undefined;
+        const pluginThreadConfig = prepareCodexPluginThreadConfigStartupProvider({
+          startupPolicy: pluginPolicy,
+          appCacheKey,
+        })?.({
+          requestTimeoutMs: appServer.requestTimeoutMs,
+          signal: input.abortSignal ?? new AbortController().signal,
+          client,
+          configCwd: input.workspaceDir,
+        });
         // Static projections use the configuration/credential owner; they do not
         // create a second MCP client to discover policy before native startup.
         const bundle = await loadCodexBundleMcpThreadConfig({

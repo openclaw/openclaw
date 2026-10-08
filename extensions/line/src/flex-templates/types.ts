@@ -1,4 +1,3 @@
-// Line type declarations define plugin contracts.
 import type { messagingApi } from "@line/bot-sdk";
 
 export type FlexContainer = messagingApi.FlexContainer;

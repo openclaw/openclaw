@@ -1,10 +1,16 @@
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { readAcpSessionCommand } from "../acp/runtime/session-meta-read.worker.js";
+import {
+  prepareAcpSessionMetadataRead,
+  readAcpSessionCommand,
+} from "../acp/runtime/session-meta-read.worker.js";
 import {
   loadSubagentRunsForChildSessionFromSqlite,
   loadSubagentSessionListRunsFromSqlite,
 } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
-import { readSubagentRunsInWorker } from "../agents/subagents/registry/subagent-registry.store.worker.js";
+import {
+  readSubagentRunsInWorker,
+  streamSubagentRegistryInWorker,
+} from "../agents/subagents/registry/subagent-registry.store.worker.js";
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { readChannelIngressInDatabase } from "../channels/message/ingress-queue-read.worker.js";
@@ -30,6 +36,7 @@ import {
   readKnownRepositoryGitHubPublicationPullRequestUrlsInDatabase,
   readRepositoryGitHubPublicationInDatabase,
 } from "../gateway/github-repository-publication-store.js";
+import { readPlacementGrantRows } from "../gateway/operator-approval-placement-grants.read.js";
 import {
   listCronStandingGrantsInDatabase,
   lookupCronStandingGrantInDatabase,
@@ -105,6 +112,7 @@ import {
 import { readMcpOAuthStateCommand } from "./openclaw-state-read-mcp-oauth.js";
 import { stateReadRegistry } from "./openclaw-state-read-operation-registry.js";
 import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
+import { readSessionRowsSharedFacts } from "./openclaw-state-read-session-rows.worker.js";
 import type {
   OpenClawStateReadReply,
   OpenClawStateReadResult,
@@ -117,18 +125,19 @@ import {
   resolveUserChannelIdentityInDatabase,
 } from "./user-channel-identities.js";
 import { readUserChannelIdentityResult } from "./user-channel-identities.worker.js";
-import { listUserProfileAuthLinksInDatabase } from "./user-model-accounts.js";
+import { readUserModelAccountCommand } from "./user-model-accounts.read.worker.js";
 import { selectUserPreferenceValues } from "./user-preferences.store.js";
 import { readUserProfileGitHubCommand } from "./user-profile-github-identity.js";
 import {
-  readUserProfileAuthorityInDatabase,
+  readUserProfileAuthorityCommand,
+  readCurrentUserProfileAliasesInDatabase,
   readUserProfileSnapshotCommand,
   readUserProfileIdForEmail,
 } from "./user-profile-identity.read.js";
 import { readUserProfileAvatarCommand } from "./user-profiles-internal.js";
 
 serveOwnedWorkerTasks(
-  function read(input): OpenClawStateReadReply | Promise<OpenClawStateReadReply> {
+  async function read(input, channel, control): Promise<OpenClawStateReadReply> {
     let sourceAdmitted: true | undefined;
     let nativeCleanupFailure: OpenClawStateReadReply["nativeCleanupFailure"];
     try {
@@ -137,9 +146,9 @@ serveOwnedWorkerTasks(
       }
       const prepared = stateReadRegistry.prepare(input.command.type);
       if (prepared) {
-        return prepared.then(() => read(input));
+        return prepared.then(() => read(input, channel, control));
       }
-      const executeRead = (): OpenClawStateReadReply => {
+      const executeRead = async (): Promise<OpenClawStateReadReply> => {
         if (input.checkFreshAdmission) {
           openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
             input.databasePath,
@@ -154,6 +163,17 @@ serveOwnedWorkerTasks(
         const { command } = input;
         if (command.type === "admit") {
           return { ok: true, type: "admit" };
+        }
+        if (command.type === "subagents.restore") {
+          if (!channel) {
+            throw new Error("Subagent restore requires a bounded receiver");
+          }
+          const count = await control.runNativeSection(() =>
+            streamSubagentRegistryInWorker(input, channel, () => {
+              sourceAdmitted = true;
+            }),
+          );
+          return { ok: true, type: command.type, sourceAdmitted: true, count };
         }
         if (command.type === "doctor.gatewayOwnerLease.read") {
           const lease = inspectGatewayOwnerLeaseForMaintenance(input, () => {
@@ -212,6 +232,10 @@ serveOwnedWorkerTasks(
                 },
               };
         }
+        const metadataRead =
+          command.type === "acpSessions.metadata"
+            ? prepareAcpSessionMetadataRead(command)
+            : undefined;
         const result = withOpenClawStateReadOnlyLocation(
           ({ db }): OpenClawStateReadResult => {
             sourceAdmitted = true;
@@ -258,7 +282,7 @@ serveOwnedWorkerTasks(
               command.type === "acpSessions.list" ||
               command.type === "acpSessions.metadata"
             ) {
-              return readAcpSessionCommand(db, command);
+              return metadataRead ? metadataRead.read(db) : readAcpSessionCommand(db, command);
             }
             if (isChannelIngressReadCommand(command)) {
               return readChannelIngressInDatabase(db, command);
@@ -414,6 +438,9 @@ serveOwnedWorkerTasks(
                   : undefined,
               };
             }
+            if (command.type === "operatorApprovals.placementGrant") {
+              return { type: command.type, rows: readPlacementGrantRows(db, command.input) };
+            }
             if (command.type === "operatorApprovals.history") {
               return {
                 type: command.type,
@@ -494,9 +521,12 @@ serveOwnedWorkerTasks(
               };
             }
             if (command.type === "userProfiles.authority.resolve") {
+              return readUserProfileAuthorityCommand(db, command);
+            }
+            if (command.type === "userProfiles.aliases.resolve") {
               return {
                 type: command.type,
-                profile: readUserProfileAuthorityInDatabase(db, command.profileId),
+                ...readCurrentUserProfileAliasesInDatabase(db, command.profileId),
               };
             }
             if (
@@ -537,13 +567,11 @@ serveOwnedWorkerTasks(
                 values: selectUserPreferenceValues(db, command.profileIds, command.key),
               };
             }
-            if (command.type === "userModelAccounts.links") {
-              return {
-                type: command.type,
-                links: runSqliteDeferredTransactionSync(db, () =>
-                  listUserProfileAuthLinksInDatabase(db, command.profileId),
-                ),
-              };
+            if (
+              command.type === "userModelAccounts.links" ||
+              command.type === "userModelAccounts.catalog"
+            ) {
+              return readUserModelAccountCommand(db, command);
             }
             if (command.type === "userProfiles.email.resolve") {
               return {
@@ -563,6 +591,9 @@ serveOwnedWorkerTasks(
                   }),
                 ),
               };
+            }
+            if (command.type === "sessionRows.sharedFacts") {
+              return readSessionRowsSharedFacts(db, command);
             }
             if (command.type === "workerPlacements.changeSnapshot") {
               return {
@@ -612,10 +643,11 @@ serveOwnedWorkerTasks(
               : readStateRegistryCommand(db, command);
           },
           ...locationArgs,
+          metadataRead?.readContentVersionRow,
         );
         return { ok: true, sourceAdmitted: true, ...result };
       };
-      const reply = withSqliteReaderOwner(
+      const reply = await withSqliteReaderOwner(
         { operation: input.command.type, ownerKind: "worker" },
         () => runWithSqliteWorkerStateContext(input.context, executeRead),
       );

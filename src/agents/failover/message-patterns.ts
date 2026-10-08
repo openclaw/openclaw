@@ -297,7 +297,9 @@ export function matchesFormatErrorPattern(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.format);
 }
 export function isSessionTranscriptValidationErrorMessage(raw: string): boolean {
-  return /\binvalid session transcript entry\b/i.test(raw);
+  return /\b(?:invalid session transcript entry|persisted legacy session transcripts require doctor\/import migration)\b/i.test(
+    raw,
+  );
 }
 export function isRateLimitErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.rateLimit);

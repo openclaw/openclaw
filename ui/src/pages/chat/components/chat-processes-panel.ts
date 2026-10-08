@@ -9,6 +9,7 @@ import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import { ProcessesPanelData } from "../processes-panel-data.ts";
 import "../../../components/elapsed-time.ts";
+import "./chat-session-panels.css";
 import "./chat-processes-panel.css";
 
 class ChatProcessesPanel extends OpenClawLightDomElement {

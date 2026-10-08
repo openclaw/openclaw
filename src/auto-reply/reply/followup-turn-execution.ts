@@ -6,8 +6,8 @@ import { withOrderedSessionEntriesInWorker } from "../../config/sessions/session
 import {
   captureSessionEntryReadScope,
   isNativeSessionEntryRead,
-  withSessionStoreReaderInWorker,
-} from "../../config/sessions/session-entry-read-runtime.js";
+} from "../../config/sessions/session-entry-read-request.js";
+import { withSessionStoreReaderInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -19,6 +19,7 @@ import type { ReplyPayload } from "../types.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
+import { resolveFollowupCurrentMessageId } from "./agent-runner-utils.js";
 import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.js";
 import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
@@ -47,11 +48,7 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
   const run = queued.run;
   const surface = queued.originatingChannel ?? run.messageProvider;
   const sessionKey = turn.session.kind === "session" ? turn.session.key : run.sessionKey;
-  const currentMessageId =
-    run.inputProvenance?.kind === "internal_system" &&
-    run.inputProvenance.sourceTool === "restart-sentinel"
-      ? queued.originatingReplyToId
-      : queued.messageId;
+  const currentMessageId = resolveFollowupCurrentMessageId(queued);
   return {
     Provider: run.messageProvider,
     Surface: surface,
@@ -102,7 +99,10 @@ export async function executeFollowupTurn(params: {
   // Queued turns are never heartbeats; heartbeat runs never supply the drain callback.
   const isHeartbeat = false;
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
-  const progressAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
+  const deliveryAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
+  const progressAllowed = () =>
+    deliveryAllowed() &&
+    (sourceOpts?.progressRequiresReply !== true || terminalReplyExpectation === "required");
   const verboseRead =
     turn.session.kind === "session" && turn.session.storePath
       ? captureSessionEntryReadScope({
@@ -225,31 +225,32 @@ export async function executeFollowupTurn(params: {
   turn.queued.operatorAuthority?.assertCurrent();
   let progressChain: Promise<void> = Promise.resolve();
   let visibleReplyDelivered = false;
-  let pendingProgressTaskFailure: unknown;
+  const pendingTaskFailures: { progress?: unknown; tool?: unknown } = {};
   const pendingWorkTasks = new Set<Promise<void>>();
+  const trackPendingWork = (task: Promise<void>, kind: "progress" | "tool") => {
+    const observedTask = task.catch((error: unknown) => {
+      pendingTaskFailures[kind] ??= error;
+      throw error;
+    });
+    const watcher = observedTask.finally(() => pendingWorkTasks.delete(watcher));
+    void watcher.catch(() => undefined);
+    pendingWorkTasks.add(watcher);
+  };
   const enqueueProgress = (deliver: () => Promise<void> | void): Promise<void> => {
     const deliveryTask = progressChain.then(deliver);
     progressChain = deliveryTask.catch(() => undefined);
-    const observedTask = deliveryTask.catch((error: unknown) => {
-      pendingProgressTaskFailure ??= error;
-      throw error;
-    });
-    const trackedTask = observedTask.finally(() => pendingWorkTasks.delete(trackedTask));
-    void trackedTask.catch(() => undefined);
-    pendingWorkTasks.add(trackedTask);
+    trackPendingWork(deliveryTask, "progress");
     return progressChain;
   };
   const enqueueProgressResult = async (
     deliver: () => Promise<boolean | void> | boolean | void,
   ): Promise<boolean | void> => {
-    let completed = false;
     let result: boolean | void = false;
     await enqueueProgress(async () => {
       result = await deliver();
       visibleReplyDelivered ||= result !== false;
-      completed = true;
     });
-    return completed ? result : false;
+    return result;
   };
   const wrap = <T>(callback: ((value: T) => unknown) | undefined, allowed = progressAllowed) =>
     callback
@@ -262,12 +263,12 @@ export async function executeFollowupTurn(params: {
       : undefined;
   const wrapVisibility = <Args extends unknown[]>(
     callback: ((...args: Args) => Promise<boolean | void> | boolean | void) | undefined,
-    allowed = progressAllowed,
+    allowed: (...args: Args) => boolean = progressAllowed,
   ) =>
     callback
       ? (...args: Args) =>
           enqueueProgressResult(async () => {
-            if (!allowed()) {
+            if (!allowed(...args)) {
               return false;
             }
             return (await settleProgressVisibilityCallbackResult(callback(...args))).visible;
@@ -312,20 +313,13 @@ export async function executeFollowupTurn(params: {
     onAssistantMessageStart: undefined,
     onToolStart: wrapVisibility(sourceOpts?.onToolStart, shouldEmitToolLifecycle),
     onCommandOutput: wrapVisibility(sourceOpts?.onCommandOutput, shouldEmitStructuredProgress),
-    onItemEvent: sourceOpts?.onItemEvent
-      ? (item) =>
-          enqueueProgressResult(async () => {
-            // Only an explicit draft-vs-durable owner contract may bypass hidden
-            // tool-progress filtering for queued preambles.
-            const draftOwnsPreamble =
-              progressAllowed() && item.kind === "preamble" && draftOwnsCommentaryProgress;
-            if (!draftOwnsPreamble && !shouldEmitStructuredProgress()) {
-              return false;
-            }
-            return (await settleProgressVisibilityCallbackResult(sourceOpts.onItemEvent!(item)))
-              .visible;
-          })
-      : undefined,
+    onItemEvent: wrapVisibility<Parameters<NonNullable<InternalGetReplyOptions["onItemEvent"]>>>(
+      sourceOpts?.onItemEvent ? (item) => sourceOpts.onItemEvent!(item) : undefined,
+      (item) =>
+        // Only the explicit draft owner may bypass hidden tool-progress filtering for preambles.
+        (progressAllowed() && item.kind === "preamble" && draftOwnsCommentaryProgress) ||
+        shouldEmitStructuredProgress(),
+    ),
     onNarrationUpdate: wrap(sourceOpts?.onNarrationUpdate),
     onPlanUpdate: wrapVisibility(sourceOpts?.onPlanUpdate),
     onApprovalEvent: wrapVisibility(sourceOpts?.onApprovalEvent, shouldEmitStructuredProgress),
@@ -337,10 +331,10 @@ export async function executeFollowupTurn(params: {
     onReasoningEnd: wrapVisibility(sourceOpts?.onReasoningEnd),
     onToolResult: async (payload) => {
       return await enqueueProgressResult(async () => {
-        if (!progressAllowed()) {
+        const requiresDurableToolResult = requiresDurableToolResultDelivery(payload);
+        if (!deliveryAllowed() || (!requiresDurableToolResult && !progressAllowed())) {
           return false;
         }
-        const requiresDurableToolResult = requiresDurableToolResultDelivery(payload);
         if (sourceOpts?.suppressToolProgressMessages && !requiresDurableToolResult) {
           return false;
         }
@@ -389,16 +383,9 @@ export async function executeFollowupTurn(params: {
       });
     },
   };
-  let pendingToolTaskFailure: unknown;
   const pendingToolTasks = new (class extends Set<Promise<void>> {
     override add(task: Promise<void>): this {
-      const observedTask = task.catch((error: unknown) => {
-        pendingToolTaskFailure ??= error;
-        throw error;
-      });
-      const watcher = observedTask.finally(() => pendingWorkTasks.delete(watcher));
-      void watcher.catch(() => undefined);
-      pendingWorkTasks.add(watcher);
+      trackPendingWork(task, "tool");
       return super.add(task);
     }
   })();
@@ -529,7 +516,7 @@ export async function executeFollowupTurn(params: {
     progress: {
       drain: async () => {
         await drainPendingWork();
-        const firstFailure: unknown = pendingProgressTaskFailure ?? pendingToolTaskFailure;
+        const firstFailure: unknown = pendingTaskFailures.progress ?? pendingTaskFailures.tool;
         if (firstFailure !== undefined) {
           throw firstFailure instanceof Error
             ? firstFailure

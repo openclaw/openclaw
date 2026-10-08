@@ -215,38 +215,6 @@ operations retire when the view stops being presented, even while its DOM and
 host lifetime survive. Use the fresh operations supplied by `update` when the
 view is presented again; previously captured operations remain retired.
 
-Session-header accessories also receive `props.session`, the pane's current
-session snapshot. It can be absent while loading and does not depend on the
-filtered sidebar roster. Changes arrive through the accessory's `update`.
-
-For a standard direct link, register an accessory using the shared browser
-helper. The plugin decides when and where the link appears:
-
-```typescript
-import { createSessionHeaderLink, defineControlUiPlugin } from "openclaw/plugin-sdk/control-ui";
-
-export default defineControlUiPlugin({
-  id: "example-chat",
-  activate(host) {
-    return host.ui.registerAccessory({
-      id: "conversation-origin",
-      placement: "session-header",
-      mount: createSessionHeaderLink(({ conversationLink }) =>
-        conversationLink && URL.parse(conversationLink.url)?.hostname === "chat.example.com"
-          ? conversationLink
-          : undefined,
-      ),
-    });
-  },
-});
-```
-
-The helper is bundled into the plugin's browser code. It creates an HTTP(S)
-anchor with the shared header style, opens directly in a new tab, and removes
-the link when the resolver returns `undefined` or the view is hidden/disposed.
-Without a registered accessory, saved conversation-link metadata creates no
-button. Custom accessory mounts can still render arbitrary HTML, CSS, and JavaScript.
-
 ### Host capabilities
 
 Use the host for shared application behavior:
@@ -347,12 +315,14 @@ under `dist/control-ui/<content-hash>/`, then publishes their paths in
 and assets usable. `plugins validate` and `plugins build --check` detect stale
 source, assets, or generated metadata.
 
-The build emits one self-contained JavaScript entry and optional CSS. Embed
-other static assets in the bundle; arbitrary files and split lazy chunks are
+The build emits a JavaScript entry, optional CSS, and JavaScript chunks for lazy
+imports. The content hash covers the complete generation, including its chunks.
+CSS remains attached to the entry; loading a JavaScript chunk does not attach
+stylesheets. Embed other static assets in the bundle; arbitrary files are
 outside this build contract. Imports must be analyzable by esbuild: literal
 paths and supported glob imports work; unresolved dynamic imports, indirect
 `require` calls, and `require.resolve` are rejected. Each asset is limited to
-4 MiB, with an 8 MiB limit for the whole plugin browser build.
+4 MiB, with an 8 MiB and 128-asset limit for the whole plugin browser build.
 
 Plugins with prebuilt browser bundles can omit `package.json.openclaw.controlUi`
 and declare the built entry and styles in `openclaw.plugin.json.controlUi`.

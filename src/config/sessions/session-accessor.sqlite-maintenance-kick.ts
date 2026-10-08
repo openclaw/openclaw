@@ -500,17 +500,21 @@ async function runPendingMaintenance(
       }
       return age.nextAt;
     };
-    if (plan.archived === 0 && plan.entryRemovals.length === 0) {
-      await readAge(true);
+    const noChanges = plan.archived === 0 && plan.entryRemovals.length === 0;
+    const noFinalization = noChanges && plan.stateDeletePlans.length === 0;
+    const verifiedNextAt = noChanges ? await readAge(true) : undefined;
+    if (!noFinalization) {
+      await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(owner.scope, [plan], {
+        isCurrent,
+      });
     }
-    await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(owner.scope, [plan], {
-      isCurrent,
-    });
     finalized = true;
     // A deadline-probe retry cannot restore a completed pass's write protection.
     activeSessionKeys = [];
     if (isCurrent() && owner.generation === generation) {
-      nextMaintenanceAt = await readAge(false);
+      assertInputsCurrent();
+      // Empty finalization has no yield; the verified receipt also owns this deadline.
+      nextMaintenanceAt = noFinalization ? verifiedNextAt : await readAge(false);
       if (owner.ageChanges.size > 0) {
         planningChanged = true;
         throw new SqliteReclamationInputsChangedError(

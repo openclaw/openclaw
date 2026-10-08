@@ -95,6 +95,27 @@ unscoped calls warn once per method. Core and bundled callers use the awaited
 methods. This migration changes no RPC schema, stored data, retention, or update
 behavior.
 
+## Await placement preparation
+
+Gateway contexts provide `workerSessionPlacementService.getManyAsync` and
+`retireSessionPlacementAsync`. Await their results before using placement facts,
+starting dependent work, or releasing request resources. Their synchronous
+counterparts shipped through the 2026.9.8 Gateway SDK and remain deprecated
+compatibility methods until the next Plugin SDK major.
+
+Use `placementStandingGrants.resolveBindingAsync`, `validateAsync`, and
+`retainAsync` for node-grant preparation. `resolveAsync` combines binding and
+retained-parent validation in one request. These additions are optional on the
+released interface so existing custom service implementations remain compatible;
+the native Gateway supplies them. Keep `consume` at the final synchronous
+transport authorization boundary: earlier prepared facts do not replace current
+placement, pairing, or parent-approval authority.
+
+Device-placement demand also has an awaited
+`workerPlacementDispatchService.getAdmittedDeviceSessionCountsAsync` companion.
+The synchronous method keeps its released signature until the next Plugin SDK
+major. These migrations change no schemas, stored data, or update behavior.
+
 ## Await reply tool authority
 
 Harness attempt parameters from `openclaw/plugin-sdk/agent-harness-runtime`
@@ -139,14 +160,27 @@ await before consumption. An optional per-item
 otherwise the entire admission fails. A late compatibility refusal rejects the
 entire undispatched batch, without repeating native checks or settlement callbacks.
 
-Pending-question claims and cancellation retain their synchronous contracts.
-If queueing may answer or cancel a pending question, pass `compatAssertCurrent`
-to that path so its final check still reads current policy. Queue-only target
-eligibility stays with ordinary enqueue admission; it does not add database
+Pending-question sinks can implement `claimPendingUserInputAnswerAsync` and
+`cancelPendingUserInputAsync`, taking the same preparation object as the queue
+companion. Pass it as `authority.toolAuthorityPreparation` to the shared question
+functions, alongside your current backend assertion. The question owner composes
+fresh policy reads with its final resolve or cancel boundary. Legacy sinks retain
+their full synchronous `compatAssertCurrent` assertion; an earlier snapshot never
+substitutes for current policy.
+
+Custom question dispatchers retain `version: 2`. When source-bound authority
+provides `assertCurrentAsync`, await it after transport preparation, then invoke
+`assertCurrent` immediately before I/O. Older implementations that only invoke
+`assertCurrent` retain the released fresh native check. A failed awaited check
+must not trigger a synchronous fallback or replay a possibly accepted input.
+Run-owned legacy callbacks keep a fresh native policy assertion immediately before
+dispatch because their unscoped contract exposes no awaited effect boundary.
+
+Queue-only target eligibility stays with ordinary enqueue admission; it does not add database
 reads to question callbacks. Built-in ordinary steering installs input inside
 its final admission and notifies subscribers after releasing that admission.
 
-The synchronous fingerprint, projection, binding, and queue methods are deprecated under
+The synchronous fingerprint, projection, binding, and injection methods are deprecated under
 `reply-tool-authority-sync-preparation`, with removal gated on the next Plugin
 SDK major and explicit breaking-release approval. No runtime warning, schema
 change, retention change, or update migration is introduced.
@@ -177,6 +211,26 @@ the next Plugin SDK major and explicit breaking-release approval. Their
 deprecation is recorded in TypeScript and the compatibility registry without
 runtime warnings. This migration changes no schema, stored data, retention, or
 update behavior.
+
+## Await locked transcript preparation
+
+Inside `withSessionTranscriptWriteLock`, use
+`prepareMessageAfterIdempotencyCheckAsync` when message preparation needs to await
+work. Returning `undefined` suppresses a fresh append. Duplicate messages and
+accepted pending inputs retain their original preparation decision. The existing
+`prepareMessageAfterIdempotencyCheck` callback remains synchronous inside the
+transaction until the next Plugin SDK major.
+
+Await each append to consume its result. The lock also joins accepted operations
+in call order before releasing the writer, including when its callback fails or
+returns without awaiting an append. Retained context methods reject new calls
+after the callback finishes. Keep current authority checks in
+`beforeFreshMessageCommit`.
+
+Bundled adapters use `composeSessionTranscriptWriteAssertion` to preserve prepared
+owner checks through wrappers. Pass existing assertions as sources; a custom
+check may inspect only owned in-memory state. Unprepared callbacks retain their
+native transaction ordering.
 
 ## Await session transcript persistence
 
@@ -258,6 +312,15 @@ context consumer. It retains the actor through scanning, consumption, validation
 and cleanup. Without an actor binding it returns `undefined`, preserving the
 existing host route. The synchronous Codex context reader and validators refuse
 actor-bound access; they never reopen a native incognito database.
+
+Plugins that project durable history in their own worker can await
+`readCodexSessionContextProjection(target, project, signal?)` from the same SDK
+subpath. The projection callback receives the captured target, admission, and
+physical source. Pass those facts to the worker's `readCodexSessionContext`
+call and return `{ value, version }`. The retained transcript reader validates
+the result before returning it, keeping final version and admission checks off
+the Gateway thread. The synchronous validation exports remain compatible until
+the next Plugin SDK major.
 
 `branchAsync` can hydrate missing history through the read worker before selecting
 the branch. `resetLeafAsync(): Promise<void>` orders an in-memory navigation reset

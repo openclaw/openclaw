@@ -352,7 +352,13 @@ export function resolveCandidatePresentation(
       entry.choiceId === candidate.kind ||
       entry.deprecatedChoiceIds?.includes(candidate.kind) === true,
   );
-  const brandId = resolveSetupInferenceCandidateBrandId(candidate, choice?.providerId);
+  // Built-in CLI detection kinds are runtime identities, not display brands.
+  const brandId =
+    candidate.kind === "claude-cli"
+      ? "claude"
+      : candidate.kind === "codex-cli"
+        ? "openai"
+        : choice?.providerId?.trim() || candidate.modelRef.split("/", 1)[0]?.trim() || undefined;
   return {
     ...(brandId ? { brandId } : {}),
     ...(choice?.icon ? { icon: choice.icon } : {}),
@@ -456,20 +462,6 @@ export function validateSetupInferenceOwnerEvidence(params: {
     }
   }
   return undefined;
-}
-
-function resolveSetupInferenceCandidateBrandId(
-  candidate: { kind: string; modelRef: string },
-  providerId?: string,
-): string | undefined {
-  // Built-in CLI detection kinds are runtime identities, not display brands.
-  if (candidate.kind === "claude-cli") {
-    return "claude";
-  }
-  if (candidate.kind === "codex-cli") {
-    return "openai";
-  }
-  return providerId?.trim() || candidate.modelRef.split("/", 1)[0]?.trim() || undefined;
 }
 
 /** CLI backends need a hard tool-free mode; the probe must not let a CLI act on the host. */

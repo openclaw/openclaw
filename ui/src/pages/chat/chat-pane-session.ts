@@ -4,13 +4,16 @@ import type {
   SessionsCatalogReadResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type {
+  ControlUiSessionBranch,
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequestSnapshot,
 } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { collectUnreadHiddenRunRows } from "../../components/app-sidebar-session-parent.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
+import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { projectsForGateway } from "../../lib/projects.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
@@ -27,6 +30,7 @@ import {
 } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
+import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 import { loadChatBranches } from "./chat-history-branches.ts";
@@ -41,6 +45,7 @@ import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import {
+  chatBranchId,
   chatPullRequestId,
   dismissChatPullRequest,
   listDismissedChatPullRequests,
@@ -51,11 +56,22 @@ import { scheduleChatScroll } from "./scroll.ts";
 export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   private deferredSessionHydrationActive = false;
   private pendingDeferredSessionHydration: (() => void) | null = null;
+  /** Hidden-run acknowledgements in flight or sent, keyed by run and activity revision. */
+  private readonly hiddenRunReadRequests = new Map<
+    string,
+    { revision: number | null; guard: SessionUnreadPatchGuard }
+  >();
+
+  protected resetSessionReadAcknowledgements(): void {
+    this.unreadPatchGuard.beginActivation(this.state?.sessionKey ?? "");
+    this.hiddenRunReadRequests.clear();
+  }
 
   protected secondarySessionReadsReady(explicit = false): boolean {
     const state = this.state;
     return Boolean(
       state?.connected &&
+      isGatewayAvailable(this.context.gateway.snapshot) &&
       this.presented &&
       document.visibilityState !== "hidden" &&
       (explicit ||
@@ -83,6 +99,11 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     return this.sessionPullRequests.filter(
       (pullRequest) => !this.dismissedSessionPullRequestIds.has(chatPullRequestId(pullRequest)),
     );
+  }
+
+  protected get sessionPullRequestsBranchDismissed(): boolean {
+    const branch = this.sessionPullRequestsBranch;
+    return branch !== undefined && this.dismissedSessionPullRequestIds.has(chatBranchId(branch));
   }
 
   private applyPullRequestPresentation(
@@ -210,13 +231,21 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   protected readonly dismissSessionPullRequest = (
     pullRequest: ControlUiSessionPullRequest,
   ): void => {
+    this.dismissSessionPullRequestId(chatPullRequestId(pullRequest));
+  };
+
+  protected readonly dismissSessionPullRequestsBranch = (branch: ControlUiSessionBranch): void => {
+    this.dismissSessionPullRequestId(chatBranchId(branch));
+  };
+
+  private dismissSessionPullRequestId(id: string): void {
     const sessionKey = this.state?.sessionKey;
     if (!sessionKey) {
       return;
     }
-    this.dismissedSessionPullRequestIds = dismissChatPullRequest(sessionKey, pullRequest);
+    this.dismissedSessionPullRequestIds = dismissChatPullRequest(sessionKey, id);
     this.requestUpdate();
-  };
+  }
 
   protected deferSessionHydrationUntilTranscript(
     sessionKey: string,
@@ -296,7 +325,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
 
   protected markSessionRead(row: GatewaySessionRow | undefined) {
     const state = this.state;
-    if (!state?.connected || !row) {
+    if (!state?.connected || !row || !isGatewayAvailable(this.context.gateway.snapshot)) {
       return;
     }
     const failureAt = row.endedAt ?? row.updatedAt ?? 0;
@@ -307,7 +336,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     const unread = row.unread === true || unreadFailure || agentStatusActive;
     if (!unread) {
       this.unreadPatchGuard.shouldPatch(state.sessionKey, false, row.markedUnreadAt);
-      return;
     }
     const agentId = parseAgentSessionKey(row.key)?.agentId ?? resolveChatAgentId(state);
     const access = readSessionMethodAccess(this.context.gateway.snapshot, {
@@ -325,12 +353,24 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         listLoading: state.sessionsLoading,
         sessionKey: `${resolveChatAgentId(state) ?? ""}\0${state.sessionKey}`,
         session: row,
-      }) ||
-      !this.unreadPatchGuard.shouldPatch(state.sessionKey, true, row.markedUnreadAt)
+      })
     ) {
       return;
     }
-    const guardKey = state.sessionKey;
+    // Hidden runs fold their unread state into this row, even after it was read.
+    this.markHiddenRunsRead(row);
+    if (!unread || !this.unreadPatchGuard.shouldPatch(state.sessionKey, true, row.markedUnreadAt)) {
+      return;
+    }
+    this.acknowledgeSessionRead(row, this.unreadPatchGuard, agentId);
+  }
+
+  private acknowledgeSessionRead(
+    row: GatewaySessionRow,
+    guard: SessionUnreadPatchGuard,
+    agentId: string | undefined,
+  ) {
+    const settle = guard.settlePatch();
     void this.context.sessions
       .patch(
         row.key,
@@ -338,19 +378,40 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         { agentId, expectedMarkedUnreadAt: row.markedUnreadAt ?? null },
       )
       .then(
-        (result) => {
-          // A null result means no request was sent (connection scope lost);
-          // unlatch like a failure or the badge stays lit until navigation.
-          if (result === null) {
-            this.unreadPatchGuard.patchFailed(guardKey);
-          }
-        },
-        (error: unknown) => {
-          // The capability publishes the error once; only transient failures
-          // may send another acknowledgement on the next snapshot.
-          this.unreadPatchGuard.patchFailed(guardKey, error);
-        },
+        (result) => settle(result !== null),
+        (error: unknown) => settle(false, error),
       );
+  }
+
+  private markHiddenRunsRead(parent: GatewaySessionRow) {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    const runs = collectUnreadHiddenRunRows(state.sessionsResult?.sessions ?? [], parent.key);
+    for (const run of runs) {
+      const revision = run.updatedAt ?? null;
+      // Manual unread markers stay until the run itself is acknowledged.
+      if (run.markedUnreadAt != null || run.sharingRole === "viewer") {
+        continue;
+      }
+      const agentId = parseAgentSessionKey(run.key)?.agentId ?? resolveChatAgentId(state);
+      const access = readSessionMethodAccess(this.context.gateway.snapshot, {
+        method: "sessions.patch",
+        params: { key: run.key, unread: false, agentId },
+      });
+      if (!access.allowed) {
+        continue;
+      }
+      let request = this.hiddenRunReadRequests.get(run.key);
+      if (!request || request.revision !== revision) {
+        request = { revision, guard: new SessionUnreadPatchGuard() };
+        this.hiddenRunReadRequests.set(run.key, request);
+      }
+      if (request.guard.shouldPatch(run.key, true)) {
+        this.acknowledgeSessionRead(run, request.guard, agentId);
+      }
+    }
   }
 
   protected async restoreArchivedSession(sessionKey: string, expectedSessionId: string) {

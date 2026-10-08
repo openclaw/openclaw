@@ -29,7 +29,7 @@ Once the server is saved, verify it actually answers:
 openclaw mcp doctor <name> --probe
 ```
 
-Saving a definition proves nothing about reachability — the probe does. With Gateway hot reload enabled, changed or removed servers retire immediately and the next turn's discovery uses the new definition. Unchanged servers keep their connections and cached tools, including for runs already in progress. Requester sign-in tools refresh on the next message after runtime replacement.
+Saving a definition proves nothing about reachability — the check does. With Gateway hot reload enabled, changed or removed servers retire immediately and the next turn's discovery uses the new definition. Unchanged servers keep their connections and cached tools, including for runs already in progress. Requester sign-in tools refresh on the next message after runtime replacement.
 
 If a connected server exits or its connection must be replaced, its tools,
 resource utilities, and prompt utilities disappear from new discovery until
@@ -139,7 +139,7 @@ For servers launched by OpenClaw's built-in MCP client, debug logs prefix stderr
 
 Set `auth: "oauth"` plus any required `oauth` metadata. In **Settings → MCP**, an administrator can select **Sign in** for an enabled HTTP server that uses shared native OAuth credentials. Approve access in the browser, then return to Settings. If the browser blocks the new tab, use the sign-in link in the dialog.
 
-**Authentication saved** means credentials were saved on the Gateway selected when sign-in started. It does not prove the server is reachable or its tools work; run a probe or use the connector next. Changing the selected Gateway or agent closes the dialog. A Gateway restart ends an unfinished browser sign-in, but does not remove saved credentials.
+**Authentication saved** means credentials were saved on the Gateway selected when sign-in started. It does not prove the server is reachable or its tools work; run a check or use the connector next. Changing the selected Gateway or agent closes the dialog. A Gateway restart ends an unfinished browser sign-in, but does not remove saved credentials.
 
 Browser sign-in requires Settings on the Gateway's own HTTPS address (including an operator-managed reverse proxy or Tailscale Serve route), its local loopback address, or its published Tailscale address. A separately hosted UI cannot receive the Gateway's callback. Older Gateways and unsupported addresses keep the terminal instructions. Servers with an existing auth-profile mapping or per-requester identity use that account's sign-in path instead; Settings does not create a second credential for them.
 

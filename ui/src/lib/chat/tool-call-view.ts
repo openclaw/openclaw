@@ -1,11 +1,3 @@
-/**
- * View-model for tool-call rows.
- *
- * Classifies a tool call into a small set of presentation kinds (command,
- * read, edit, write, search, fetch, generic) across the arg spellings used by
- * the OpenClaw session tools and foreign harnesses (Claude/Codex style).
- */
-
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { unwrapToolCallForDisplay } from "../../../../src/agents/tool-display-call.js";
@@ -41,7 +33,6 @@ export type ToolCallView = {
   target?: string;
   /** Dimmed secondary detail (directory, query scope, URL host…). */
   targetDetail?: string;
-  /** Inline diff rows for edit/write calls. */
   diff?: DiffLine[];
   stat?: DiffStat;
   /** Producer-recorded operations for patch rows. */

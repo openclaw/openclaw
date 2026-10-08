@@ -428,6 +428,7 @@ export function createRuntimeSecretsActivator(params: {
               activateRuntimeSecretsSnapshot: (snapshot) =>
                 activateSecretsRuntimeSnapshotState({
                   snapshot,
+                  runtimeSourceConfig: activationParams.runtimeSourceConfig,
                   refreshContext: fastPath.refreshContext,
                   refreshHandler: {
                     preflight: async (refreshParams) =>

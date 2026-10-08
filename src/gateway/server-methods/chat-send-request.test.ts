@@ -47,8 +47,8 @@ describe("normalizeChatSendRequest", () => {
     { page: "review:board", detail: { filter: "stuck" } },
   ])(
     "keeps $page context out of authored text while preserving the model payload",
-    (workContext) => {
-      const result = normalizeChatSendRequest({
+    async (workContext) => {
+      const result = await normalizeChatSendRequest({
         params: validParams({ message: "Explain this task", workContext }),
         client: humanClient(),
       });
@@ -67,7 +67,7 @@ describe("normalizeChatSendRequest", () => {
           JSON.stringify(workContext),
       );
       expect(result.value.inboundMessage).toBe(result.value.rawMessage);
-      const other = normalizeChatSendRequest({
+      const other = await normalizeChatSendRequest({
         params: validParams({
           message: "Explain this task",
           workContext: { ...workContext, title: "Other work" },
@@ -86,13 +86,13 @@ describe("normalizeChatSendRequest", () => {
     { workContext: { page: "chat", selection: "x".repeat(641) } },
     { workContext: { page: "chat", permission: "admin" } },
     { workContext: { page: " " } },
-  ])("rejects invalid context rather than accepting hidden control input: %j", (input) => {
-    expect(normalizeChatSendRequest({ params: validParams(input), client: humanClient() }).ok).toBe(
-      false,
-    );
+  ])("rejects invalid context rather than accepting hidden control input: %j", async (input) => {
+    expect(
+      (await normalizeChatSendRequest({ params: validParams(input), client: humanClient() })).ok,
+    ).toBe(false);
   });
 
-  it("normalizes Unicode and whitespace together with selected mention spans", () => {
+  it("normalizes ordinary chat and selected mention spans without yielding", () => {
     const message = "  e\u0301 @Zoe\u0308 🌈  ";
     const mentions = [{ profileId: "zoe", start: 5, end: 10 }];
     const result = normalizeChatSendRequest({
@@ -109,9 +109,9 @@ describe("normalizeChatSendRequest", () => {
     });
   });
 
-  it("shifts spans across stripped controls outside the selected token", () => {
+  it("shifts spans across stripped controls outside the selected token", async () => {
     expect(
-      normalizeChatSendRequest({
+      await normalizeChatSendRequest({
         params: validParams({
           message: "hi\u0001 @Bob",
           mentions: [{ profileId: "bob", start: 4, end: 8 }],
@@ -138,15 +138,15 @@ describe("normalizeChatSendRequest", () => {
     { message: "@Bo\u0001b", mentions: [{ profileId: "bob", start: 0, end: 5 }] },
     { message: "@😀", mentions: [{ profileId: "bob", start: 0, end: 2 }] },
     { message: "@e\u0301", mentions: [{ profileId: "bob", start: 0, end: 2 }] },
-  ])("rejects annotations that do not bind a complete visible token: %j", (input) => {
+  ])("rejects annotations that do not bind a complete visible token: %j", async (input) => {
     expect(
-      normalizeChatSendRequest({ params: validParams(input), client: humanClient() }),
+      await normalizeChatSendRequest({ params: validParams(input), client: humanClient() }),
     ).toMatchObject({ ok: false });
   });
 
-  it("keeps ordinary typed @names inert and fingerprints only explicit selections", () => {
-    const fingerprint = (profileId?: string) => {
-      const result = normalizeChatSendRequest({
+  it("keeps ordinary typed @names inert and fingerprints only explicit selections", async () => {
+    const fingerprint = async (profileId?: string) => {
+      const result = await normalizeChatSendRequest({
         params: validParams({
           message: "@Alex hello",
           ...(profileId ? { mentions: [{ profileId, start: 0, end: 5 }] } : {}),
@@ -158,15 +158,19 @@ describe("normalizeChatSendRequest", () => {
       }
       return result.value;
     };
-    expect(fingerprint().mentions).toBeUndefined();
-    expect(fingerprint("alex-one").requestIdentity).not.toBe(
-      fingerprint("alex-two").requestIdentity,
+    expect((await fingerprint()).mentions).toBeUndefined();
+    expect((await fingerprint("alex-one")).requestIdentity).not.toBe(
+      (await fingerprint("alex-two")).requestIdentity,
     );
-    expect(fingerprint("alex-one").requestIdentity).not.toBe(fingerprint().requestIdentity);
-    expect(fingerprint("alex-one").requestIdentity).toBe(fingerprint("alex-one").requestIdentity);
+    expect((await fingerprint("alex-one")).requestIdentity).not.toBe(
+      (await fingerprint()).requestIdentity,
+    );
+    expect((await fingerprint("alex-one")).requestIdentity).toBe(
+      (await fingerprint("alex-one")).requestIdentity,
+    );
   });
 
-  it("requires authenticated human ingress and rejects unsupported mention modes", () => {
+  it("requires authenticated human ingress and rejects unsupported mention modes", async () => {
     const mentions = [{ profileId: "bob", start: 0, end: 4 }];
     const unqualified = humanClient();
     delete unqualified.authenticatedUserProfile;
@@ -174,14 +178,14 @@ describe("normalizeChatSendRequest", () => {
     synthetic.internal = { syntheticClient: true };
     for (const client of [null, unqualified, synthetic]) {
       expect(
-        normalizeChatSendRequest({
+        await normalizeChatSendRequest({
           params: validParams({ message: "@Bob hello", mentions }),
           client,
         }),
       ).toMatchObject({ ok: false });
     }
     expect(
-      normalizeChatSendRequest({
+      await normalizeChatSendRequest({
         params: validParams({
           message: "@Bob hello",
           mentions,
@@ -191,7 +195,7 @@ describe("normalizeChatSendRequest", () => {
       }),
     ).toMatchObject({ ok: false });
     expect(
-      normalizeChatSendRequest({
+      await normalizeChatSendRequest({
         params: validParams({
           message: "/btw @Bob hello",
           mentions: [{ profileId: "bob", start: 5, end: 9 }],
@@ -203,9 +207,9 @@ describe("normalizeChatSendRequest", () => {
 
   it.each(["/stop", "/btw investigate", "  résumé\n\n  preserve spacing  "])(
     "admits Goal objective %j literally without command interpretation",
-    (message) => {
+    async (message) => {
       expect(
-        normalizeChatSendRequest({
+        await normalizeChatSendRequest({
           params: validParams({
             message,
             intent: { kind: "session-goal-start", version: 1, issuedAtMs: Date.now() },
@@ -243,9 +247,9 @@ describe("normalizeChatSendRequest", () => {
     {
       intent: { kind: "session-goal-start", version: 1, issuedAtMs: 1, objective: "second target" },
     },
-  ])("rejects invalid Goal intent before admission: %j", (overrides) => {
+  ])("rejects invalid Goal intent before admission: %j", async (overrides) => {
     expect(
-      normalizeChatSendRequest({
+      await normalizeChatSendRequest({
         params: validParams({
           intent: { kind: "session-goal-start", version: 1, issuedAtMs: Date.now() },
           ...overrides,
@@ -255,21 +259,21 @@ describe("normalizeChatSendRequest", () => {
     ).toMatchObject({ ok: false });
   });
 
-  it("binds Goal retries to immutable attachments, reply context, options, and timestamp", () => {
+  it("binds Goal retries to immutable attachments, reply context, options, and timestamp", async () => {
     const base = validParams({
       intent: { kind: "session-goal-start", version: 1, issuedAtMs: 1 },
       attachments: [{ mimeType: "text/plain", content: "aGVsbG8=" }],
       replyToId: "reply-1",
     });
-    const fingerprint = (params: Record<string, unknown>) => {
-      const result = normalizeChatSendRequest({ params, client: null });
+    const fingerprint = async (params: Record<string, unknown>) => {
+      const result = await normalizeChatSendRequest({ params, client: null });
       if (!result.ok) {
         throw new Error(result.error);
       }
       return result.value.goalOperation?.requestFingerprint;
     };
-    const original = fingerprint(base);
-    expect(fingerprint(Object.fromEntries(Object.entries(base).toReversed()))).toBe(original);
+    const original = await fingerprint(base);
+    expect(await fingerprint(Object.fromEntries(Object.entries(base).toReversed()))).toBe(original);
     for (const change of [
       { attachments: [] },
       { replyToId: "reply-2" },
@@ -277,12 +281,12 @@ describe("normalizeChatSendRequest", () => {
       { message: "different" },
       { intent: { kind: "session-goal-start", version: 1, issuedAtMs: 2 } },
     ]) {
-      expect(fingerprint({ ...base, ...change })).not.toBe(original);
+      expect(await fingerprint({ ...base, ...change })).not.toBe(original);
     }
   });
 
-  it("normalizes the message and derives the main-turn defaults", () => {
-    const result = normalizeChatSendRequest({ params: validParams(), client: null });
+  it("normalizes the message and derives the main-turn defaults", async () => {
+    const result = await normalizeChatSendRequest({ params: validParams(), client: null });
 
     expect(result).toMatchObject({
       ok: true,
@@ -297,8 +301,8 @@ describe("normalizeChatSendRequest", () => {
     });
   });
 
-  it("rejects an empty text-and-attachment request", () => {
-    const result = normalizeChatSendRequest({
+  it("rejects an empty text-and-attachment request", async () => {
+    const result = await normalizeChatSendRequest({
       params: validParams({ message: "  " }),
       client: null,
     });
@@ -306,15 +310,15 @@ describe("normalizeChatSendRequest", () => {
     expect(result).toEqual({ ok: false, error: "message or attachment required" });
   });
 
-  it("accepts start-or-steer requests with or without a transcript leaf", () => {
+  it("accepts start-or-steer requests with or without a transcript leaf", async () => {
     expect(
-      normalizeChatSendRequest({
+      await normalizeChatSendRequest({
         params: validParams({ queueMode: "steer" }),
         client: null,
       }),
     ).toMatchObject({ ok: true });
     expect(
-      normalizeChatSendRequest({
+      await normalizeChatSendRequest({
         params: validParams({
           queueMode: "steer",
           expectedLeafEntryId: "leaf-1",
@@ -324,8 +328,8 @@ describe("normalizeChatSendRequest", () => {
     ).toMatchObject({ ok: true });
   });
 
-  it("accepts an attachment-only request after attachment normalization", () => {
-    const result = normalizeChatSendRequest({
+  it("accepts an attachment-only request after attachment normalization", async () => {
+    const result = await normalizeChatSendRequest({
       params: validParams({
         message: "",
         attachments: [{ mimeType: "text/plain", content: "aGVsbG8=" }],
@@ -342,8 +346,8 @@ describe("normalizeChatSendRequest", () => {
     });
   });
 
-  it("rejects partial explicit-origin fields before session work", () => {
-    const result = normalizeChatSendRequest({
+  it("rejects partial explicit-origin fields before session work", async () => {
+    const result = await normalizeChatSendRequest({
       params: validParams({ originatingChannel: "slack" }),
       client: null,
     });
@@ -354,8 +358,8 @@ describe("normalizeChatSendRequest", () => {
     });
   });
 
-  it("rejects reserved provenance controls without admin scope", () => {
-    const result = normalizeChatSendRequest({
+  it("rejects reserved provenance controls without admin scope", async () => {
+    const result = await normalizeChatSendRequest({
       params: validParams({ suppressCommandInterpretation: true }),
       client: null,
     });
@@ -366,14 +370,16 @@ describe("normalizeChatSendRequest", () => {
     });
   });
 
-  it("requires capable copilot runs to carry explicit tool bindings", () => {
-    expect(normalizeChatSendRequest({ params: validParams(), client: copilotClient() })).toEqual({
+  it("requires capable copilot runs to carry explicit tool bindings", async () => {
+    expect(
+      await normalizeChatSendRequest({ params: validParams(), client: copilotClient() }),
+    ).toEqual({
       ok: false,
       error: "browser copilot runs require an explicit browser tool binding",
     });
 
     expect(
-      normalizeChatSendRequest({
+      await normalizeChatSendRequest({
         params: validParams({ toolBindings: { unrelated: true } }),
         client: copilotClient(["run-tool-bindings"]),
       }),
@@ -384,31 +390,34 @@ describe("normalizeChatSendRequest", () => {
 
     const toolBindings = { browser: { kind: "tab", tabId: 1, targetId: "target" } };
     expect(
-      normalizeChatSendRequest({
+      await normalizeChatSendRequest({
         params: validParams({ toolBindings }),
         client: copilotClient(),
       }),
     ).toEqual({ ok: false, error: "run tool bindings require client capability" });
     expect(
-      normalizeChatSendRequest({
+      await normalizeChatSendRequest({
         params: validParams({ toolBindings }),
         client: copilotClient(["run-tool-bindings"]),
       }),
     ).toMatchObject({ ok: true, value: { p: { toolBindings } } });
   });
 
-  it("accepts tool bindings only from a server-paired copilot identity", () => {
+  it("accepts tool bindings only from a server-paired copilot identity", async () => {
     const toolBindings = { browser: { kind: "tab", tabId: 1, targetId: "target" } };
     const unpaired = copilotClient(["run-tool-bindings"]);
     unpaired.pairedClientId = undefined;
     expect(
-      normalizeChatSendRequest({ params: validParams({ toolBindings }), client: unpaired }),
+      await normalizeChatSendRequest({ params: validParams({ toolBindings }), client: unpaired }),
     ).toEqual({ ok: false, error: "run tool bindings require a paired browser copilot" });
 
     const otherClient = copilotClient(["run-tool-bindings"]);
     otherClient.connect.client.id = "openclaw-control-ui";
     expect(
-      normalizeChatSendRequest({ params: validParams({ toolBindings }), client: otherClient }),
+      await normalizeChatSendRequest({
+        params: validParams({ toolBindings }),
+        client: otherClient,
+      }),
     ).toEqual({ ok: false, error: "run tool bindings require a paired browser copilot" });
   });
 });

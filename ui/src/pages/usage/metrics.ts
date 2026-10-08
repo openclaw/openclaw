@@ -48,23 +48,18 @@ function formatHourLabel(hour: number): string {
   return date.toLocaleTimeString(undefined, { hour: "numeric", timeZone: "UTC" });
 }
 
-function forEachSessionHourSlice(
+function visitSessionHours(
   session: UsageSessionEntry,
   timeZone: "local" | "utc",
-  visitor: (params: {
-    usage: NonNullable<UsageSessionEntry["usage"]>;
-    hour: number;
-    weekday: number;
-    share: number;
-  }) => void,
+  visitor:
+    | { kind: "inclusive"; visit: (hour: number) => boolean }
+    | {
+        kind: "weighted";
+        visit: (slice: { hour: number; weekday: number; share: number }) => void;
+      },
 ) {
-  const usage = session.usage;
-  if (!usage) {
-    return false;
-  }
-
-  const start = usage.firstActivity ?? session.updatedAt;
-  const end = usage.lastActivity ?? session.updatedAt;
+  const start = session.usage?.firstActivity ?? session.updatedAt;
+  const end = session.usage?.lastActivity ?? session.updatedAt;
   if (!start || !end) {
     return false;
   }
@@ -72,29 +67,27 @@ function forEachSessionHourSlice(
   const startMs = Math.min(start, end);
   const endMs = Math.max(start, end);
 
-  if (startMs === endMs) {
-    const date = new Date(startMs);
-    visitor({
-      usage,
-      hour: getZonedHour(date, timeZone),
-      weekday: getZonedWeekday(date, timeZone),
-      share: 1,
-    });
-    return true;
-  }
-
   const durationMs = endMs - startMs;
   let cursor = startMs;
-  while (cursor < endMs) {
+  while (cursor <= endMs) {
     const date = new Date(cursor);
-    const nextMs = Math.min(nextHourBoundary(date, timeZone), endMs);
-    visitor({
-      usage,
-      hour: getZonedHour(date, timeZone),
-      weekday: getZonedWeekday(date, timeZone),
-      share: (nextMs - cursor) / durationMs,
-    });
-    cursor = nextMs;
+    if (visitor.kind === "inclusive") {
+      if (!visitor.visit(getZonedHour(date, timeZone)) || cursor === endMs) {
+        break;
+      }
+      cursor = Math.min(nextHourBoundary(date, timeZone), endMs);
+    } else {
+      const nextMs = cursor === endMs ? cursor : Math.min(nextHourBoundary(date, timeZone), endMs);
+      visitor.visit({
+        hour: getZonedHour(date, timeZone),
+        weekday: getZonedWeekday(date, timeZone),
+        share: startMs === endMs ? 1 : (nextMs - cursor) / durationMs,
+      });
+      if (nextMs === endMs) {
+        break;
+      }
+      cursor = nextMs;
+    }
   }
 
   return true;
@@ -116,11 +109,7 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
     // For local view, construct a Date from the UTC components and use getHours()
     // so the browser's DST-aware timezone logic handles offset automatically.
     if (usage.utcQuarterHourMessageCounts && usage.utcQuarterHourMessageCounts.length > 0) {
-      const bucketState: UtcQuarterBucketState = {
-        utcDateKey: undefined,
-        utcWeekday: null,
-        utcStartMs: 0,
-      };
+      const bucketState = createUtcQuarterBucketState();
       for (const quarterHour of usage.utcQuarterHourMessageCounts) {
         const mapped = mapUtcQuarterBucket(
           quarterHour.date,
@@ -138,9 +127,12 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
     }
 
     // Fallback: time-based proportional allocation (legacy algorithm)
-    forEachSessionHourSlice(session, timeZone, ({ hour, share }) => {
-      hourErrors[hour] = (hourErrors[hour] ?? 0) + (messageCounts.errors ?? 0) * share;
-      hourMsgs[hour] = (hourMsgs[hour] ?? 0) + messageCounts.total * share;
+    visitSessionHours(session, timeZone, {
+      kind: "weighted",
+      visit: ({ hour, share }) => {
+        hourErrors[hour] = (hourErrors[hour] ?? 0) + (messageCounts.errors ?? 0) * share;
+        hourMsgs[hour] = (hourMsgs[hour] ?? 0) + messageCounts.total * share;
+      },
     });
   }
 
@@ -164,13 +156,6 @@ function buildPeakErrorHours(sessions: UsageSessionEntry[], timeZone: "local" | 
       sub: `${Math.round(entry.errors)} ${normalizeLowercaseStringOrEmpty(t("usage.overview.errors"))} · ${Math.round(entry.msgs)} ${t("usage.overview.messagesAbbrev")}`,
     }));
 }
-
-type UsageMosaicStats = {
-  hasData: boolean;
-  totalTokens: number;
-  hourTotals: number[];
-  weekdayTotals: Array<{ label: string; tokens: number }>;
-};
 
 function getZonedHour(date: Date, zone: "local" | "utc"): number {
   return zone === "utc" ? date.getUTCHours() : date.getHours();
@@ -204,6 +189,10 @@ type UtcQuarterBucketState = {
   utcWeekday: number | null;
   utcStartMs: number;
 };
+
+function createUtcQuarterBucketState(): UtcQuarterBucketState {
+  return { utcDateKey: undefined, utcWeekday: null, utcStartMs: 0 };
+}
 
 function mapUtcQuarterBucket(
   dateStr: string,
@@ -268,11 +257,7 @@ function forEachSessionTokenUsageBucket(
     return false;
   }
   let visited = false;
-  const bucketState: UtcQuarterBucketState = {
-    utcDateKey: undefined,
-    utcWeekday: null,
-    utcStartMs: 0,
-  };
+  const bucketState = createUtcQuarterBucketState();
   for (const bucket of buckets) {
     if (bucket.totalTokens <= 0) {
       continue;
@@ -291,34 +276,6 @@ function forEachSessionTokenUsageBucket(
   return visited;
 }
 
-function sessionSpanTouchesSelectedHours(
-  session: UsageSessionEntry,
-  hours: number[],
-  timeZone: "local" | "utc",
-): boolean {
-  const usage = session.usage;
-  const start = usage?.firstActivity ?? session.updatedAt;
-  const end = usage?.lastActivity ?? session.updatedAt;
-  if (!start || !end) {
-    return false;
-  }
-  const startMs = Math.min(start, end);
-  const endMs = Math.max(start, end);
-  let cursor = startMs;
-  while (cursor <= endMs) {
-    const date = new Date(cursor);
-    const hour = getZonedHour(date, timeZone);
-    if (hours.includes(hour)) {
-      return true;
-    }
-    if (cursor === endMs) {
-      break;
-    }
-    cursor = Math.min(nextHourBoundary(date, timeZone), endMs);
-  }
-  return false;
-}
-
 function sessionTouchesSelectedHours(
   session: UsageSessionEntry,
   hours: number[],
@@ -335,13 +292,17 @@ function sessionTouchesSelectedHours(
   if (hasPreciseTokenBuckets) {
     return touches;
   }
-  return sessionSpanTouchesSelectedHours(session, hours, timeZone);
+  visitSessionHours(session, timeZone, {
+    kind: "inclusive",
+    visit: (hour) => {
+      touches = hours.includes(hour);
+      return !touches;
+    },
+  });
+  return touches;
 }
 
-function buildUsageMosaicStats(
-  sessions: UsageSessionEntry[],
-  timeZone: "local" | "utc",
-): UsageMosaicStats {
+function buildUsageMosaicStats(sessions: UsageSessionEntry[], timeZone: "local" | "utc") {
   const hourTotals = Array.from({ length: 24 }, () => 0);
   const weekdayTotals = Array.from({ length: 7 }, () => 0);
   let totalTokens = 0;
@@ -365,9 +326,12 @@ function buildUsageMosaicStats(
     }
 
     if (
-      !forEachSessionHourSlice(session, timeZone, ({ usage: usageLocal, hour, weekday, share }) => {
-        hourTotals[hour] = (hourTotals[hour] ?? 0) + usageLocal.totalTokens * share;
-        weekdayTotals[weekday] = (weekdayTotals[weekday] ?? 0) + usageLocal.totalTokens * share;
+      !visitSessionHours(session, timeZone, {
+        kind: "weighted",
+        visit: ({ hour, weekday, share }) => {
+          hourTotals[hour] = (hourTotals[hour] ?? 0) + usage.totalTokens * share;
+          weekdayTotals[weekday] = (weekdayTotals[weekday] ?? 0) + usage.totalTokens * share;
+        },
       })
     ) {
       continue;
@@ -518,19 +482,16 @@ function parseIsoDayIndex(dateStr: string): number | null {
 }
 
 function formatDayLabel(dateStr: string): string {
-  const date = parseYmdDate(dateStr);
-  if (!date) {
-    return dateStr;
-  }
-  return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return formatCalendarDate(dateStr, { month: "short", day: "numeric" });
 }
 
 function formatFullDate(dateStr: string): string {
+  return formatCalendarDate(dateStr, { month: "long", day: "numeric", year: "numeric" });
+}
+
+function formatCalendarDate(dateStr: string, options: Intl.DateTimeFormatOptions): string {
   const date = parseYmdDate(dateStr);
-  if (!date) {
-    return dateStr;
-  }
-  return date.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
+  return date ? date.toLocaleDateString(undefined, options) : dateStr;
 }
 
 function buildUsageCostWindows(

@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { stripInboundMetadata } from "../../../auto-reply/reply/strip-inbound-meta.js";
 import { buildTimestampPrefix } from "../../../gateway/server-methods/agent-timestamp.js";
@@ -11,6 +12,7 @@ import {
 import { INTER_SESSION_PROMPT_PREFIX_BASE } from "../../../sessions/input-provenance.js";
 import { hasPersistedMedia, MEDIA_ONLY_USER_TEXT } from "../../../sessions/user-turn-media.js";
 import { buildLateMediaAttachedProjection } from "../../../sessions/user-turn-transcript.js";
+import { isTextContentBlock } from "../../content-blocks.js";
 import {
   escapeInternalRuntimeContextDelimiters,
   isOpenClawSystemUpdateMessage,
@@ -28,7 +30,6 @@ import {
   contentMatchesTimestampOverride,
   findActiveUserMessageIndex,
   hasNonBlankUserText,
-  isUserTextBlock,
   projectPersistedSenderContext,
   resolveUserTranscriptMessages,
   splitLeadingTimestampEnvelope,
@@ -265,10 +266,7 @@ export function installRuntimeContextMessageForPrompt(params: {
       return;
     }
     const canonicalUser = owner.transcriptUser ?? owner.user;
-    const canonicalKey =
-      typeof canonicalUser === "object" && canonicalUser !== null
-        ? Reflect.get(canonicalUser, "idempotencyKey")
-        : undefined;
+    const canonicalKey = asOptionalObjectRecord(canonicalUser)?.idempotencyKey;
     const userIdempotencyKey =
       owner.transcriptUser === undefined
         ? (params.persistedUserIdempotencyKey ?? canonicalKey)
@@ -340,49 +338,30 @@ export function installRuntimeContextMessageForPrompt(params: {
   };
 }
 
-function replaceUserTextPrompt(params: {
-  messages: AgentMessage[];
-  userIndex: number;
-  transcriptText?: string;
-  replace: (text: string) => string | undefined;
-}): AgentMessage[] {
-  const { userIndex } = params;
-  const message = params.messages[userIndex];
-  if (!message || message.role !== "user") {
-    return params.messages;
-  }
-  const content = (message as { content?: unknown }).content;
-  let nextContent: unknown;
+function transformUserTextContent(
+  content: unknown,
+  transform: (text: string) => string | undefined,
+  mode: "first" | "all" = "all",
+): { content: unknown; changed: boolean } {
   if (typeof content === "string") {
-    nextContent = params.replace(content);
-    if (nextContent === undefined) {
-      return params.messages;
-    }
-  } else if (Array.isArray(content)) {
-    let replaced = false;
-    nextContent = content.map((block) => {
-      if (replaced || !isUserTextBlock(block)) {
-        return block;
-      }
-      const replacement = params.replace(block.text);
-      if (replacement === undefined) {
-        return block;
-      }
-      replaced = true;
-      return Object.assign({}, block, { text: replacement });
-    });
-    if (!replaced) {
-      return params.messages;
-    }
-  } else {
-    return params.messages;
+    const replacement = transform(content);
+    return { content: replacement ?? content, changed: replacement !== undefined };
   }
-  const next = params.messages.slice();
-  next[userIndex] = { ...message, content: nextContent } as AgentMessage;
-  if (params.transcriptText !== undefined) {
-    markTranscriptPromptText(next[userIndex], params.transcriptText);
-  }
-  return next;
+  let changed = false;
+  const projected = Array.isArray(content)
+    ? content.map((block) => {
+        if (mode === "first" && changed) {
+          return block;
+        }
+        const text = isTextContentBlock(block) ? transform(block.text) : undefined;
+        if (text === undefined) {
+          return block;
+        }
+        changed = true;
+        return Object.assign({}, block, { text });
+      })
+    : content;
+  return { content: changed ? projected : content, changed };
 }
 
 function composeModelPromptContext(params: {
@@ -435,10 +414,7 @@ export function installModelPromptTransform(params: {
       }
     }
     const canonicalPrompt = promptOwner?.transcriptUser ?? targetPrompt;
-    const key =
-      typeof canonicalPrompt === "object" && canonicalPrompt !== null
-        ? Reflect.get(canonicalPrompt, "idempotencyKey")
-        : undefined;
+    const key = asOptionalObjectRecord(canonicalPrompt)?.idempotencyKey;
     let userIndex = messages.findIndex(
       (message) => message === targetPrompt || message === canonicalPrompt,
     );
@@ -461,25 +437,38 @@ export function installModelPromptTransform(params: {
       );
       userIndex = matches.length === 1 ? (matches[0] ?? -1) : -1;
     }
-    const promptMessages = replaceUserTextPrompt({
-      messages,
-      userIndex,
-      transcriptText: params.transcriptPrompt,
-      replace: (text) => {
-        if (modelPrompt?.trim() && text === params.transcriptPrompt) {
-          return modelPrompt;
+    const transcriptPrompt = params.transcriptPrompt;
+    const targetIndex = userIndex;
+    const message = messages[targetIndex];
+    let promptMessages = messages;
+    if (message && message.role === "user") {
+      const transformed = transformUserTextContent(
+        message.content,
+        (text) => {
+          if (modelPrompt?.trim() && text === params.transcriptPrompt) {
+            return modelPrompt;
+          }
+          if (!hasPromptContext) {
+            return undefined;
+          }
+          const replacement = composeModelPromptContext({
+            prompt: text,
+            prependContext: params.prependContext,
+            appendContext: params.appendContext,
+          });
+          return replacement === text ? undefined : replacement;
+        },
+        "first",
+      );
+      if (transformed.changed) {
+        const nextMessages = messages.slice();
+        nextMessages[targetIndex] = { ...message, content: transformed.content } as AgentMessage;
+        if (transcriptPrompt !== undefined) {
+          markTranscriptPromptText(nextMessages[targetIndex], transcriptPrompt);
         }
-        if (!hasPromptContext) {
-          return undefined;
-        }
-        const replacement = composeModelPromptContext({
-          prompt: text,
-          prependContext: params.prependContext,
-          appendContext: params.appendContext,
-        });
-        return replacement === text ? undefined : replacement;
-      },
-    });
+        promptMessages = nextMessages;
+      }
+    }
     return originalTransformContext
       ? await originalTransformContext.call(agent, promptMessages, signal)
       : promptMessages;
@@ -496,7 +485,7 @@ function canonicalizeTextOnlyUserContent(content: unknown): unknown {
     return content;
   }
   const block = content[0];
-  return isUserTextBlock(block) ? block.text : content;
+  return isTextContentBlock(block) ? block.text : content;
 }
 
 // Stamp from the message's fixed timestamp so current and historical turns share
@@ -604,45 +593,27 @@ function normalizeUserMessagesForLlmBoundary(
       );
     };
 
-    const canonical = canonicalizeTextOnlyUserContent(content);
-    if (typeof canonical === "string") {
-      const next = transformText(canonical);
-      if (next === content) {
-        return message;
-      }
-      changed = true;
-      return { ...message, content: next } as AgentMessage;
-    }
-
-    if (!Array.isArray(content)) {
-      return message;
-    }
-
     // Stamp only the first text block; strip historical metadata from later blocks.
-    let contentChanged = false;
     let processedFirstText = false;
-    const nextContent = content.map((block) => {
-      if (!isUserTextBlock(block)) {
-        return block;
-      }
-      let nextText: string;
-      if (!processedFirstText) {
-        nextText = transformText(block.text);
+    const transformed = transformUserTextContent(
+      canonicalizeTextOnlyUserContent(content),
+      (text) => {
+        const nextText = !processedFirstText
+          ? transformText(text)
+          : preserveInboundMetadata
+            ? text
+            : stripInboundMetadata(text);
         processedFirstText = true;
-      } else {
-        nextText = preserveInboundMetadata ? block.text : stripInboundMetadata(block.text);
-      }
-      if (nextText === block.text) {
-        return block;
-      }
-      contentChanged = true;
-      return Object.assign({}, block, { text: nextText });
-    });
-    if (!processedFirstText && injectMediaText) {
-      nextContent.unshift({ type: "text", text: transformText("") });
-      contentChanged = true;
+        return nextText === text ? undefined : nextText;
+      },
+    );
+    let nextContent = transformed.content;
+    if (Array.isArray(nextContent) && !processedFirstText && injectMediaText) {
+      const withPlaceholder = nextContent.slice();
+      withPlaceholder.unshift({ type: "text", text: transformText("") });
+      nextContent = withPlaceholder;
     }
-    if (!contentChanged) {
+    if (nextContent === content) {
       return message;
     }
     changed = true;
@@ -654,16 +625,11 @@ function normalizeUserMessagesForLlmBoundary(
 function stripUnsafeBlockedRunMetadata(messages: AgentMessage[]): AgentMessage[] {
   let changed = false;
   const nextMessages = messages.map((message) => {
-    const openclaw = Reflect.get(message, "__openclaw");
-    if (!openclaw || typeof openclaw !== "object") {
+    const openclaw = asOptionalObjectRecord(Reflect.get(message, "__openclaw"));
+    const blocked = asOptionalObjectRecord(openclaw?.beforeAgentRunBlocked);
+    if (!blocked) {
       return message;
     }
-    const beforeAgentRunBlocked = (openclaw as { beforeAgentRunBlocked?: unknown })
-      .beforeAgentRunBlocked;
-    if (!beforeAgentRunBlocked || typeof beforeAgentRunBlocked !== "object") {
-      return message;
-    }
-    const blocked = beforeAgentRunBlocked as Record<string, unknown>;
     const safeBlocked: Record<string, unknown> = {};
     if (typeof blocked.blockedBy === "string") {
       safeBlocked.blockedBy = blocked.blockedBy;
@@ -672,7 +638,7 @@ function stripUnsafeBlockedRunMetadata(messages: AgentMessage[]): AgentMessage[]
       safeBlocked.blockedAt = blocked.blockedAt;
     }
     const nextOpenClaw = {
-      ...(openclaw as Record<string, unknown>),
+      ...openclaw,
       beforeAgentRunBlocked: safeBlocked,
     };
     changed = true;

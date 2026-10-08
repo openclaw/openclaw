@@ -1,4 +1,4 @@
-import { afterEach, expect, test, vi } from "vitest";
+import { expect, test, vi } from "vitest";
 import { claimAgentSessionWriter } from "../agents/embedded-agent-runner/run/session-bootstrap.js";
 import { commitMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-store.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -12,7 +12,6 @@ import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import * as storeWrites from "../shared/store-writer-queue.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { writeSessionStore } from "./test-helpers.js";
 import {
@@ -26,10 +25,6 @@ import type { WorkerPlacementDispatchService } from "./worker-environments/place
 import type { WorkerSessionPlacementRecord } from "./worker-environments/placement-record.js";
 
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
-
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
 
 test.each([false, true])(
   "concurrent cloud recovery waits for its canonical successor and rechecks queued authority (revoked: %s)",
@@ -211,15 +206,15 @@ test.each([false, true])(
 );
 
 test.each([
-  { status: "running", live: false },
-  { status: "failed", live: false },
-  { status: "failed", live: true },
-  { status: undefined, live: false },
-  { status: "done", live: false },
-  { status: "killed", live: false },
+  { name: "admitted", status: undefined, admitted: true, live: false },
+  { name: "failed", status: "failed", admitted: false, live: false },
+  { name: "failed", status: "failed", admitted: false, live: true },
+  { name: "statusless", status: undefined, admitted: false, live: false },
+  { name: "done", status: "done", admitted: false, live: false },
+  { name: "killed", status: "killed", admitted: false, live: false },
 ] as const)(
-  "sessions.recover reconciles a $status interrupted writer only without a live owner (live=$live)",
-  async ({ status, live }) => {
+  "sessions.recover reconciles a $name interrupted writer only without a live owner (live=$live)",
+  async ({ status, live, admitted }) => {
     const { dir, storePath } = await createSessionStoreDir();
     const sessionKey = "agent:main:dashboard:orphaned-recovery";
     const sessionId = "orphaned-recovery-session";
@@ -284,7 +279,7 @@ test.each([
       sessionId,
       messages: [{ role: "user", content: "preserve this conversation" }],
     });
-    if (status !== "running") {
+    if (!admitted) {
       await patchSessionEntryCore(target, () => ({
         status,
         ...(status === undefined ? { abortedLastRun: undefined } : {}),
@@ -296,10 +291,10 @@ test.each([
     }
     const stranded = loadSessionEntry(target);
     expect(stranded?.status).toBe(status);
-    expect(stranded?.abortedLastRun).toBe(status === undefined ? undefined : false);
+    expect(stranded?.abortedLastRun).toBe(!admitted && status === undefined ? undefined : false);
     expect(stranded).toMatchObject({
       activeWriterRunId: runId,
-      ...(status === "running" ? { lifecycleRunId: runId } : {}),
+      ...(admitted ? { lifecycleRunId: runId } : {}),
       mainRestartRecovery: { cycleId, revision: 4, chargedAttempts: 1, startedAttempt: 1 },
       restartRecoveryRuns: [{ runId, lifecycleGeneration }],
     });

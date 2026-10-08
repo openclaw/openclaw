@@ -1,5 +1,3 @@
-// Gateway node catalog builder.
-// Merges paired devices, approved node records, and live websocket sessions.
 import {
   hasNonEmptyString,
   normalizeLowercaseStringOrEmpty,
@@ -86,7 +84,6 @@ function compareKnownNodes(left: NodeListNode, right: NodeListNode): number {
   return left.nodeId.localeCompare(right.nodeId);
 }
 
-/** Builds a node catalog keyed by node id from pairing stores and live sessions. */
 export function createKnownNodeCatalog(params: {
   pairedDevices: readonly PairedDevice[];
   pairedNodes?: readonly PairedDeviceNode[];
@@ -268,9 +265,4 @@ export function createKnownNodeCatalog(params: {
 /** Lists known nodes with connected nodes first and deterministic display ordering. */
 export function listKnownNodes(catalog: KnownNodeCatalog): NodeListNode[] {
   return [...catalog.values()].toSorted(compareKnownNodes);
-}
-
-/** Returns the effective node row shown to gateway clients. */
-export function getKnownNode(catalog: KnownNodeCatalog, nodeId: string): NodeListNode | null {
-  return catalog.get(nodeId) ?? null;
 }

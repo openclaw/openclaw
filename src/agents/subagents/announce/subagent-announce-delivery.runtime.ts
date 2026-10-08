@@ -1,8 +1,9 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../../../config/legacy.default-agent-owner.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions.js";
 import { loadSessionEntryReadOnly as loadSessionEntry } from "../../../config/sessions/session-accessor.js";
-import { withSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
+import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
@@ -28,6 +29,14 @@ type RequesterSessionEntryResult = {
   agentId?: string;
   storePath?: string;
 };
+
+export function hasUsableSessionEntry(entry: unknown): entry is Record<string, unknown> {
+  if (!isRecord(entry)) {
+    return false;
+  }
+  const sessionId = entry.sessionId;
+  return typeof sessionId !== "string" || sessionId.trim() !== "";
+}
 
 export function tryResolveSubagentRequesterAgentId(
   cfg: OpenClawConfig,
@@ -111,14 +120,10 @@ export async function loadSessionEntryByKey(sessionKey: string, explicitAgentId?
     return undefined;
   }
   const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
-  return await withSessionEntryReadOnlyInWorker(
-    { storePath, sessionKey, agentId, projection: "list" },
-    () => {},
-    async (read) => {
-      if (!read.ok) {
-        throw read.error;
-      }
-      return read.value;
-    },
-  );
+  return await readSessionEntryReadOnlyInWorker({
+    storePath,
+    sessionKey,
+    agentId,
+    projection: "list",
+  });
 }

@@ -127,6 +127,7 @@ it.each([false, true])(
         usageUpdatedAt: expect.any(Number),
         modelCatalogChanged: false,
         authChanged: false,
+        commandsChanged: false,
         ...(failed ? { usageRefreshFailed: true } : {}),
       },
       { dropIfSlow: true },
@@ -170,7 +171,7 @@ it("retires model choices at its config commit before pending metadata settles",
     publishOperatorRoleConfigChange(ownedContext);
     expect(broadcast).toHaveBeenCalledExactlyOnceWith(
       "chat.metadata.changed",
-      { modelSelectionChanged: true },
+      { modelSelectionChanged: true, commandsChanged: false },
       { dropIfSlow: true },
     );
     broadcast.mockClear();
@@ -181,7 +182,7 @@ it("retires model choices at its config commit before pending metadata settles",
     publishOperatorRoleConfigChange(ownedContext);
     expect(broadcast).toHaveBeenCalledExactlyOnceWith(
       "chat.metadata.changed",
-      { modelSelectionChanged: true },
+      { modelSelectionChanged: true, commandsChanged: false },
       { dropIfSlow: true },
     );
   } finally {
@@ -427,7 +428,7 @@ describe("gateway chat metadata lifecycle", () => {
       expect(harness.refresh).toHaveBeenCalledOnce();
       expect(harness.broadcast).toHaveBeenCalledExactlyOnceWith(
         "chat.metadata.changed",
-        { modelCatalogChanged: true, authChanged: true },
+        { modelCatalogChanged: true, authChanged: true, commandsChanged: false },
         { dropIfSlow: true },
       );
       await harness.lifecycle.read({ agentId: "main" });
@@ -644,9 +645,13 @@ describe("gateway chat metadata lifecycle", () => {
     await expect(lifecycle.read({ agentId: "main" })).rejects.toThrow("owner publication failed");
     expect(outcomes[6]).toBe("owner publication failed");
     expect(broadcast.mock.calls).toEqual(
-      Array.from({ length: 7 }, () => [
+      Array.from({ length: 7 }, (_, index) => [
         "chat.metadata.changed",
-        { modelCatalogChanged: true, authChanged: true },
+        {
+          modelCatalogChanged: true,
+          authChanged: true,
+          ...(index === 3 || index === 4 ? { commandsChanged: false } : {}),
+        },
         { dropIfSlow: true },
       ]),
     );
@@ -800,6 +805,12 @@ describe("gateway chat metadata lifecycle", () => {
   );
 
   it.each([
+    {
+      phase: "catalog-observation",
+      modelFactsChanged: false,
+      refreshStatusChanged: false,
+      refreshes: false,
+    },
     { modelFactsChanged: true, refreshStatusChanged: false, refreshes: true },
     { modelFactsChanged: false, refreshStatusChanged: false, refreshes: false },
     { modelFactsChanged: undefined, refreshStatusChanged: false, refreshes: true },
@@ -851,10 +862,22 @@ describe("gateway chat metadata lifecycle", () => {
         expect(payloadJson).toBe('{"pendingProviders":["synthetic"]}');
 
         pending = false;
-        modelListener({ phase, modelFactsChanged, refreshStatusChanged });
+        modelListener({ phase, modelFactsChanged, refreshStatusChanged, agentId: "main" });
         await read();
 
         expect(payloadJson).toBe("{}");
+        if (phase === "catalog-observation") {
+          expect(requestContext.broadcast).toHaveBeenCalledExactlyOnceWith(
+            "chat.metadata.changed",
+            {
+              agentId: "main",
+              modelCatalogChanged: true,
+              authChanged: false,
+              commandsChanged: false,
+            },
+            { dropIfSlow: true },
+          );
+        }
         expect(produce).toHaveBeenCalledTimes(2);
         expect(mocks.invalidate).not.toHaveBeenCalled();
         expect(mocks.refresh).toHaveBeenCalledTimes(refreshes ? 3 : 2);

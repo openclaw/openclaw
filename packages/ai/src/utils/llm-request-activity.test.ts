@@ -10,9 +10,9 @@ it("keeps a replacement activity subscription when an old disposer runs again", 
   const stop = onLlmRequestActivity(signal, active);
   try {
     unsubscribe();
-    notifyLlmRequestActivity(signal);
+    notifyLlmRequestActivity(signal, false);
     expect(retired).not.toHaveBeenCalled();
-    expect(active).toHaveBeenCalledOnce();
+    expect(active).toHaveBeenCalledExactlyOnceWith(false);
     stop();
     notifyLlmRequestActivity(signal);
     expect(active).toHaveBeenCalledOnce();

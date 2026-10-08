@@ -1,12 +1,17 @@
+import fs from "node:fs";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import * as agentExecution from "../../state/openclaw-agent-execution.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
+import { captureSessionStoreReadCandidate } from "./session-store-read-candidates.js";
 import * as projectionWriter from "./session-transcript-projection-writer.js";
 import {
   isSessionTranscriptIndexReconcileRunning,
@@ -17,6 +22,89 @@ import {
   searchSessionTranscripts,
   searchSessionTranscriptsReadOnlySync,
 } from "./session-transcript-search.js";
+import {
+  historyLane,
+  projectionLane,
+  withSessionHistoryWorkerReadCandidates,
+} from "./session-transcript-worker-resources.js";
+import { retainSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
+
+it("keeps a warmed search reader through discovery and retires it through its captured alias", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const directory = fs.realpathSync(state.stateDir);
+    const storePath = path.join(directory, "discovery.main.sqlite");
+    const aliasDirectory = path.join(directory, "discovery-alias");
+    fs.symlinkSync(directory, aliasDirectory, "junction");
+    const aliasPath = path.join(aliasDirectory, path.basename(storePath));
+    const database = { agentId: "main", path: storePath, env: state.env };
+    const scope = { agentId: "main", storePath, env: state.env };
+    const sessionKey = "agent:main:discovery-custody";
+    await replaceTranscriptEvents({ ...scope, sessionKey, sessionId: "discovery-custody" }, [
+      { type: "session", id: "discovery-custody", version: 3 },
+      {
+        type: "message",
+        id: "selected-message",
+        parentId: null,
+        timestamp: 1,
+        message: { role: "assistant", content: "Retained discovery needle" },
+      },
+    ]);
+    await waitForSessionTranscriptIndexReconcile(database);
+    const request = { ...scope, query: "needle", sessionKeys: [sessionKey] };
+    const reader = retainSessionHistoryWorkerDatabase(database);
+    const search = () =>
+      reader.owner.searchTranscripts(request, () =>
+        projectionWriter.readSessionTranscriptIndexStatus(database),
+      );
+    try {
+      const initial = await search();
+      expect(initial.hits).toMatchObject([{ messageId: "selected-message" }]);
+      expect(initial.indexing).toBe(false);
+      const hostSql = observeHostDataSql();
+      try {
+        await withSessionHistoryWorkerReadCandidates(
+          [
+            captureSessionStoreReadCandidate(
+              path.join(aliasDirectory, "discovery.sqlite"),
+              "sibling-family",
+            ),
+          ],
+          (owner) =>
+            owner.readStoreTarget({
+              agentId: "main",
+              storePath: aliasPath,
+              env: state.env,
+              registeredDatabases: [],
+            }),
+        );
+        expect(await search()).toEqual(initial);
+        expect(hostSql.queries).toEqual([]);
+      } finally {
+        hostSql.restore();
+      }
+      const changed = await reader.owner.searchTranscripts(request, async () => {
+        runOpenClawAgentWriteTransaction(({ db }) => {
+          executeSqliteQuerySync(
+            db,
+            getNodeSqliteKysely<DB>(db)
+              .updateTable("schema_meta")
+              .set({ updated_at: 2 })
+              .where("meta_key", "=", "primary"),
+          );
+        }, database);
+        return projectionWriter.readSessionTranscriptIndexStatus(database);
+      });
+      expect(changed.indexing).toBe(true);
+      const refreshed = await search();
+      expect(refreshed.hits).toEqual(initial.hits);
+      expect(refreshed.indexing).toBe(false);
+      await closeOpenClawAgentDatabaseByPathAsync(aliasPath, "main");
+      await expect(search()).rejects.toThrow("revoked");
+    } finally {
+      reader.release();
+    }
+  });
+});
 
 it("keeps scoped search bytes while disk SQL executes outside the caller thread", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -111,6 +199,26 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
       }
     }
 
+    const now = performance.now.bind(performance);
+    let hostWait = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now() + hostWait);
+    const slowUnavailable = vi
+      .spyOn(projectionWriter, "readSessionTranscriptIndexStatus")
+      .mockImplementationOnce(async () => {
+        hostWait = 120_000;
+        throw new Error("projection writer unavailable after admission wait");
+      });
+    try {
+      expect(await searchSessionTranscripts(request, database)).toEqual({
+        ...golden,
+        indexing: true,
+      });
+      expect(slowUnavailable).toHaveBeenCalledTimes(1);
+    } finally {
+      slowUnavailable.mockRestore();
+      clock.mockRestore();
+    }
+
     runOpenClawAgentWriteTransaction(
       ({ db }) => {
         executeSqliteQuerySync(
@@ -148,4 +256,64 @@ it("keeps scoped search bytes while disk SQL executes outside the caller thread"
       indexing: false,
     });
   });
+});
+
+describe("search reader concurrency", () => {
+  const lifetime = createFixtureLifetime();
+  afterEach(() => lifetime.cleanup());
+
+  it.skipIf(historyLane.pool.getSnapshot().maxWorkers < 2)(
+    "searches while foreground and projection readers await index status",
+    (context) =>
+      lifetime.run(() =>
+        withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+          const storePath = path.join(state.stateDir, "parallel-search.sqlite");
+          const sessionKey = "agent:main:parallel-search";
+          const scope = { agentId: "main", storePath, env: state.env };
+          const database = { agentId: "main", path: storePath, env: state.env };
+          await replaceTranscriptEvents({ ...scope, sessionKey, sessionId: "parallel-search" }, [
+            { type: "session", id: "parallel-search", version: 3 },
+            {
+              type: "message",
+              id: "needle",
+              parentId: null,
+              timestamp: 1,
+              message: { role: "assistant", content: "Parallel needle" },
+            },
+          ]);
+          await waitForSessionTranscriptIndexReconcile(database);
+          const request = { ...scope, query: "needle", sessionKeys: [sessionKey] };
+          const release = createDeferred();
+          const readers = [historyLane, projectionLane].map((lane) => {
+            const reader = retainSessionHistoryWorkerDatabase(database, lane);
+            const entered = createDeferred();
+            const work = reader.owner.searchTranscripts(request, async () => {
+              entered.resolve();
+              await release.promise;
+              return projectionWriter.readSessionTranscriptIndexStatus(database);
+            });
+            void work.catch(() => {});
+            return { reader, entered: entered.promise, work };
+          });
+          let search: ReturnType<typeof searchSessionTranscripts> | undefined;
+          try {
+            await withinTest(Promise.all(readers.map(({ entered }) => entered)), context.signal);
+            search = searchSessionTranscripts(request, database);
+            expect(await withinTest(search, context.signal)).toMatchObject({
+              hits: [{ messageId: "needle" }],
+              indexing: false,
+            });
+          } finally {
+            release.resolve();
+            await Promise.allSettled([
+              ...readers.map(({ work }) => work),
+              ...(search ? [search] : []),
+            ]);
+            for (const { reader } of readers) {
+              reader.release();
+            }
+          }
+        }),
+      ),
+  );
 });

@@ -355,9 +355,9 @@ function packNegativeUpdateFixture(candidateTarball, outputTarball, expectedMiss
 export function packFutureUpdateFixture(candidateTarball, outputTarball, sequence = 0) {
   return {
     method: "candidate-same-schema-self-update-fixture",
-    ...packTransformedFixture(candidateTarball, outputTarball, (root) => {
-      return markFutureUpdateFixture(root, sequence);
-    }),
+    ...packTransformedFixture(candidateTarball, outputTarball, (root) =>
+      markFutureUpdateFixture(root, sequence),
+    ),
   };
 }
 

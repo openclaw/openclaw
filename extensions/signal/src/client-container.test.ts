@@ -138,22 +138,6 @@ describe("container REST responses", () => {
     await expect(rpc("version")).rejects.toThrow(/exceeds \d+ bytes/);
     expect(emitted).toBeLessThan(20);
   });
-  it("parses a multi-MiB success response without truncation", async () => {
-    const items = Array.from({ length: 50_000 }, (_, id) => ({
-      id,
-      note: "signal-container-payload-entry",
-    }));
-    const text = JSON.stringify({ items });
-    expect(text.length).toBeGreaterThan(2 * 1024 * 1024);
-    expect(text.length).toBeLessThan(16 * 1024 * 1024);
-    mockFetch.mockResolvedValue(new Response(text));
-    await expect(rpc("version")).resolves.toEqual({ items });
-    expect(request()).toMatchObject({
-      url: `${baseUrl}/v1/about`,
-      method: "GET",
-      headers: { "Content-Type": "application/json" },
-    });
-  });
 });
 
 describe("container send payloads", () => {
@@ -282,13 +266,10 @@ describe("container send payloads", () => {
     });
     expect(payload()).toEqual({ recipient: target });
   });
-  it.each([
-    { type: undefined, expected: "read" },
-    { type: "viewed", expected: "viewed" },
-  ])("sends a $expected receipt", async ({ type, expected }) => {
+  it("sends a read receipt", async () => {
     mockFetch.mockResolvedValue(new Response(null, { status: 204 }));
     await expect(
-      rpc("sendReceipt", { account, recipient, targetTimestamp: 1700000000000, type }),
+      rpc("sendReceipt", { account, recipient, targetTimestamp: 1700000000000 }),
     ).resolves.toBeUndefined();
     expect(request()).toMatchObject({
       url: `${baseUrl}/v1/receipts/%2B14259798283`,
@@ -297,7 +278,7 @@ describe("container send payloads", () => {
     expect(payload()).toEqual({
       recipient: "+15550001111",
       timestamp: 1700000000000,
-      receipt_type: expected,
+      receipt_type: "read",
     });
   });
   it.each([

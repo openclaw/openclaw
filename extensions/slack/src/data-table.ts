@@ -1,4 +1,3 @@
-// Slack data_table Block Kit contract, projection, and text fallback.
 import type { Block } from "@slack/web-api";
 import {
   renderMessagePresentationTableFallbackText,
@@ -174,7 +173,6 @@ export function countSlackDataTableCellCharacters(value: unknown): number | unde
     : cellCharacterCount;
 }
 
-/** Count the aggregate native-table cell characters already present in a message. */
 export function countSlackDataTableBlocksCellCharacters(
   blocks?: readonly unknown[],
 ): number | undefined {
@@ -251,7 +249,6 @@ export function resolveSlackDataTableCellCharacterCount(
     : undefined;
 }
 
-/** Map a validated portable table to Slack's current app-facing Block Kit shape. */
 export function buildSlackDataTableBlock(
   block: MessagePresentationTableBlock,
   options: SlackDataTableBuildOptions = {},
@@ -299,7 +296,6 @@ function renderSlackDataTable(
   return caption && mrkdwnSafe ? escapeSlackMrkdwn(caption) : caption;
 }
 
-/** Extract a deterministic accessible summary from a native Slack table block. */
 export function renderSlackDataTableFallbackText(
   value: unknown,
   mrkdwnSafe = false,

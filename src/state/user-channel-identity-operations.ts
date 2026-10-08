@@ -19,6 +19,7 @@ import {
   emitUserProfilesChanged,
   fenceUserProfileMutationAuthority,
   publishUserProfileAliasChange,
+  readUserProfileVersion,
 } from "./user-profile-events.js";
 import { UserProfileNotFoundError, UserProfileOwnerError } from "./user-profiles-schema.js";
 import type {
@@ -256,9 +257,9 @@ export async function prepareUserChannelIdentityAuthority(
 
 export async function prepareUserProfileRoleAuthority(
   profileId: string,
-  options: IdentityOptions = {},
+  options: IdentityOptions & { includeProfile?: boolean } = {},
 ) {
-  return prepareUserProfileAuthority(profileId, options, "authority");
+  return prepareUserProfileAuthority(profileId, options, "authority", options.includeProfile);
 }
 
 export async function prepareUserProfileSelectionAuthority(
@@ -273,15 +274,18 @@ async function prepareUserProfileAuthority(
   profileId: string,
   options: IdentityOptions,
   dependency: "authority" | "identity",
+  includeProfile?: boolean,
 ) {
   const context = captureAuthorityContext(options);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const read = await captureUserProfileAuthorityRead(context.admission, undefined, dependency);
+    const profileRevision = readUserProfileVersion();
     const reply = await executeExistingOpenClawStateRead(
       { path: context.admission.databasePath, env: context.environment },
       {
         type: "userProfiles.authority.resolve",
         profileId,
+        ...(includeProfile ? { includeProfile } : {}),
       },
     );
     context.admission.assertCurrent();
@@ -294,12 +298,17 @@ async function prepareUserProfileAuthority(
     if (!reply.profile) {
       return undefined;
     }
+    if (includeProfile && profileRevision !== readUserProfileVersion()) {
+      continue;
+    }
     const sourceProfiles = [profileId, reply.profile.profileId];
     const isCurrent = read.bind(sourceProfiles);
     if (isCurrent) {
       return {
         ...reply.profile,
-        isCurrent,
+        isCurrent: includeProfile
+          ? () => isCurrent() && profileRevision === readUserProfileVersion()
+          : isCurrent,
         readSource: () => {
           read.assertSettled(sourceProfiles);
           return { path: context.admission.databasePath, env: context.environment };

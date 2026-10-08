@@ -117,7 +117,7 @@ Minimal config:
 - Media uploads are not supported by the bot API; outbound media is appended as an `Attachment: <url>` line.
 - The webhook payload does not distinguish DMs from rooms; set `apiUser` + `apiPassword` to enable room-type lookups (cached about 5 minutes). Without them, every conversation is treated as a room.
 - Outbound requests go through the SSRF guard. For a Nextcloud host on a trusted private/internal network, opt in with `channels.nextcloud-talk.network.dangerouslyAllowPrivateNetwork: true`.
-- With `apiUser`/`apiPassword` and `webhookPublicUrl` set, `openclaw channels status` probes the bot and warns when the `response` feature is missing.
+- With `apiUser`/`apiPassword` and `webhookPublicUrl` set, `openclaw channels status` checks the bot and warns when the `response` feature is missing.
 
 Pre-July-2026 JSON replay caches under `<state-dir>/nextcloud-talk/replay-dedupe/`
 are outside the supported upgrade window. Doctor leaves these files unchanged and
@@ -163,7 +163,7 @@ budgets even when the accounts have the same backend and secret.
 
 Webhook paths retain exact request matching, including query strings, case, and
 trailing slashes. `/health`, `/healthz`, `/ready`, `/readyz`, `/startup`, and
-`/startupz` belong to Gateway probes, including when a query string follows.
+`/startupz` belong to Gateway checks, including when a query string follows.
 Paths under `/api/channels` require Gateway authentication, including encoded
 aliases; Nextcloud's signature does not supply that authentication.
 Doctor warns about these paths, and an account without an explicit legacy listener cannot
@@ -184,7 +184,7 @@ Legacy ports preserve the exact `/healthz` response: `200 ok` with
 Query strings, case changes, and trailing slashes do not match that health path.
 This keeps existing reverse-proxy health checks working. When moving the proxy
 upstream, use the Gateway's own health checks and `openclaw channels status --probe`;
-the main Gateway port keeps its existing JSON probe responses.
+the main Gateway port keeps its existing JSON check responses.
 
 ## Access control (DMs)
 
@@ -236,7 +236,7 @@ Provider options:
 - `channels.nextcloud-talk.baseUrl`: Nextcloud instance URL.
 - `channels.nextcloud-talk.botSecret`: bot shared secret (string or secret reference).
 - `channels.nextcloud-talk.botSecretFile`: regular-file secret path. Symlinks are rejected.
-- `channels.nextcloud-talk.apiUser`: API user for room lookups (DM detection) and the status probe.
+- `channels.nextcloud-talk.apiUser`: API user for room lookups (DM detection) and the status check.
 - `channels.nextcloud-talk.apiPassword`: API/app password for room lookups.
 - `channels.nextcloud-talk.apiPasswordFile`: API password file path.
 - `channels.nextcloud-talk.legacyWebhook`: `false | { port, host? }`. An object opens a forwarding listener; `host` defaults to `0.0.0.0`. Omitted or `false` opens no listener. Named accounts inherit the root setting unless they override it.

@@ -36,7 +36,6 @@ import {
   type SessionPendingInput,
   type SessionPendingInputOwner,
   type SessionPendingInputPage,
-  type SessionPendingInputState,
 } from "./session-accessor.sqlite-pending-inputs.js";
 import {
   resolveSqliteSessionKey,
@@ -44,12 +43,14 @@ import {
   toDatabaseOptions,
 } from "./session-accessor.sqlite-scope.js";
 import { redactTranscriptMessageForStorage } from "./session-accessor.sqlite-transcript-store.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import {
   withCurrentPendingInputAuthority,
   type SessionPendingInputAuthority,
 } from "./session-pending-input-authority.js";
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import type { PendingInputCustodyGrant } from "./session-pending-input-operations.types.js";
+import type { SessionPendingInputReceipt } from "./session-pending-input-receipt.types.js";
 import { readPendingInputSource } from "./session-pending-input-source.js";
 import { preparePendingInputStore, type PendingInputScope } from "./session-pending-input-store.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
@@ -57,20 +58,17 @@ import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-
 
 export { withSessionPendingInputRelocation };
 export type { SessionPendingInput, SessionPendingInputPage };
-export type SessionPendingInputReceipt = {
-  state: "queued" | "consumed";
-  inputId: string;
-  message: PersistedUserTurnMessage;
-  run: <T>(operation: () => T) => T;
-  runAsync?: <T>(operation: () => T) => Promise<Awaited<T>>;
-  assertLifetimeCurrent?: () => void;
-  finish: (disposition: Exclude<SessionPendingInputState, "queued">) => void;
-  completion?: AgentRunTerminalOutcome;
-  complete?: (outcome: AgentRunTerminalOutcome) => AgentRunTerminalOutcome;
-  completeAsync?: (outcome: AgentRunTerminalOutcome) => Promise<AgentRunTerminalOutcome>;
-  settled?: () => Promise<void>;
-};
+export type { SessionPendingInputReceipt } from "./session-pending-input-receipt.types.js";
+
 const receiptOwners = new WeakMap<SessionPendingInputReceipt, SessionPendingInputOwner>();
+const withdrawnOwners = new WeakSet<SessionPendingInputOwner>();
+
+export function readWithdrawnSessionPendingInputId(
+  receipt: SessionPendingInputReceipt | undefined,
+): string | undefined {
+  const owner = receipt && receiptOwners.get(receipt);
+  return owner && withdrawnOwners.has(owner) ? owner.inputId : undefined;
+}
 
 function ownerReceipt(owner: SessionPendingInputOwner): SessionPendingInputReceipt {
   const receipt: SessionPendingInputReceipt = {
@@ -207,11 +205,12 @@ export function stageSessionPendingInput(
   scope: PendingInputScope,
   options: PendingInputStageOptions,
 ): Promise<SessionPendingInputReceipt | undefined> {
-  scope.incognito?.admissionSignal?.throwIfAborted();
-  scope.incognito?.actor.assertCurrent();
+  const incognito = scope.incognito ?? captureIncognitoSessionOperation(scope);
+  incognito?.admissionSignal?.throwIfAborted();
+  incognito?.actor.assertCurrent();
   const captured = {
     ...scope,
-    incognito: scope.incognito && { ...scope.incognito },
+    incognito: incognito && { ...incognito },
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
   const preparedRequest = preparePendingInputRequest(options);
@@ -392,10 +391,13 @@ async function stagePreparedPendingInput(
       // Prompt authority ends now; history custody lasts through terminal settlement.
       const settleDisposition = async () => {
         if (owner && !owner.consumed) {
-          await store.mutate(
+          const receipt = await store.mutate(
             { ...settlementIdentity(), kind: "finish", inputId: owner.inputId, disposition },
             () => assertRegisteredSessionPendingInputOwner(owner!),
           );
+          if (receipt.withdrawnInputId === owner.inputId) {
+            withdrawnOwners.add(owner);
+          }
         }
       };
       const ending = completion

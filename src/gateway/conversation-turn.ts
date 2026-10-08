@@ -29,7 +29,8 @@ import {
   ConversationOperationConflictError,
 } from "./conversation-errors.js";
 import {
-  assertConversationDeliveryAttemptAuthorized,
+  withAuthorizedConversationDelivery,
+  assertConversationDeliveryRouteAuthorized,
   assertConversationRouteEligibleForAgent,
 } from "./conversation-route-ownership.js";
 
@@ -233,14 +234,20 @@ export async function runGatewayConversationTurn(params: {
         route,
         sourceSessionKey: params.sourceSessionKey,
         // Replay authority after plugin route resolution at the session-binding commit.
-        assertCommitAllowed: () => {
-          assertConversationDeliveryAttemptAuthorized({
-            config: readCurrentConfig(),
-            agentId: params.agentId,
+        workerGuard: {
+          conversation: {
             conversationRef: discoveredConversation.conversationRef,
             expectedRouteFingerprint: discoveredRouteFingerprint,
-            scope,
-          });
+          },
+          assertCurrent: () => {
+            assertConversationDeliveryRouteAuthorized({
+              config: readCurrentConfig(),
+              agentId: params.agentId,
+              conversationRef: discoveredConversation.conversationRef,
+              expectedRouteFingerprint: discoveredRouteFingerprint,
+              conversation: discoveredConversation,
+            });
+          },
         },
       },
       preparedBinding,
@@ -260,15 +267,18 @@ export async function runGatewayConversationTurn(params: {
     conversation,
   });
   const routeFingerprint = resolveConversationRouteFingerprint(conversation);
+  const authority = {
+    conversationRef: conversation.conversationRef,
+    expectedRouteFingerprint: routeFingerprint,
+    expectedSessionId: conversation.sessionId,
+    expectedSessionKey: conversation.sessionKey,
+  };
   const assertCurrent = () => {
-    assertConversationDeliveryAttemptAuthorized({
+    assertConversationDeliveryRouteAuthorized({
+      ...authority,
       config: readCurrentConfig(),
       agentId: params.agentId,
-      conversationRef: conversation.conversationRef,
-      expectedRouteFingerprint: routeFingerprint,
-      expectedSessionId: conversation.sessionId,
-      expectedSessionKey: conversation.sessionKey,
-      scope,
+      conversation,
     });
   };
   if (!begun) {
@@ -281,6 +291,7 @@ export async function runGatewayConversationTurn(params: {
           conversationRef: conversation.conversationRef,
           ...(params.sourceSessionKey ? { sourceSessionKey: params.sourceSessionKey } : {}),
           message: params.message,
+          authority,
           preparedMessageId: candidatePreparedMessageId,
         },
         assertCurrent,
@@ -333,7 +344,19 @@ export async function runGatewayConversationTurn(params: {
       operation: begun.record,
       preparedMessageId,
       routeFingerprint,
+      authority,
       assertCurrent,
+      withDirectAdapterHandoff: (initiate) =>
+        withAuthorizedConversationDelivery(
+          {
+            ...authority,
+            config: authorizedConfig,
+            readCurrentConfig,
+            agentId: params.agentId,
+            scope,
+          },
+          initiate,
+        ),
     });
     if (sent.deliveryStatus !== "sent") {
       pending.cancel();

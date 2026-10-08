@@ -15,12 +15,22 @@ import { resolveOpenClawAgentSqlitePath } from "openclaw/plugin-sdk/sqlite-runti
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
+  useSqliteWorkerFault,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
 import { writeMemoryIndexArchiveTranscript } from "./index-archive.test-support.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import type { MemoryTargetedSessionSyncQueue } from "./manager-sync-control.js";
 import type { MemoryIndexManager } from "./manager.js";
+
+const fault = useSqliteWorkerFault([
+  {
+    name: "fail_queued_session_publication",
+    match: /^insert into memory_index_chunks\b/u,
+    sql: `CREATE TEMP TRIGGER fail_queued_session_publication AFTER INSERT ON main.memory_index_chunks
+      BEGIN SELECT RAISE(FAIL, 'forced queued session publication failure'); END;`,
+  },
+]);
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
@@ -615,7 +625,6 @@ describe("memory index", () => {
       "cli",
     );
     const dbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    const db = new DatabaseSync(dbPath);
     try {
       await manager.sync({ reason: "test-baseline", force: true });
       for (const [sessionId, marker] of Object.entries(markers)) {
@@ -626,13 +635,7 @@ describe("memory index", () => {
         });
       }
 
-      db.exec(`
-        CREATE TRIGGER fail_queued_session_publication
-        AFTER INSERT ON memory_index_chunks
-        BEGIN
-          SELECT RAISE(FAIL, 'forced queued session publication failure');
-        END;
-      `);
+      fault.enable();
 
       const active = manager.sync({
         reason: "test-failed-owner",
@@ -644,15 +647,12 @@ describe("memory index", () => {
       });
       const failures = await Promise.allSettled([active, failedQueued]);
       for (const result of failures) {
-        expect(result.status).toBe("rejected");
-        if (result.status !== "rejected") {
-          throw new Error("expected failed SQLite publication to reject");
-        }
+        assert.ok(result.status === "rejected", "expected failed SQLite publication to reject");
         expect(result.reason).toMatchObject({
           message: "forced queued session publication failure",
         });
       }
-      db.exec("DROP TRIGGER fail_queued_session_publication");
+      fault.disable();
 
       const ftsMatchCount = (marker: string): number => {
         const observer = new DatabaseSync(dbPath, { readOnly: true });
@@ -701,7 +701,7 @@ describe("memory index", () => {
       expect(recoveryState.sessionSyncQueue.sessions.size).toBe(0);
       expect(recoveryProgress).toHaveBeenCalled();
     } finally {
-      db.close();
+      fault.disable();
       await manager.close?.();
     }
   });

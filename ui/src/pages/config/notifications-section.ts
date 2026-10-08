@@ -96,29 +96,27 @@ function renderQuietHoursWindowRows(
     ${renderSettingsRow({
       title: t("configView.notifications.quietHoursWindow"),
       control: html`
-        <input
-          type="time"
-          class="settings-input"
-          aria-label=${t("configView.notifications.quietHoursStart")}
-          .value=${minutesToTime(quietHours.startMinute)}
-          @change=${(event: Event) =>
-            onChange({
-              ...quietHours,
-              startMinute: timeToMinutes(inputTarget(event).value, quietHours.startMinute),
-            })}
-        />
-        <span class="settings-row__value" aria-hidden="true">–</span>
-        <input
-          type="time"
-          class="settings-input"
-          aria-label=${t("configView.notifications.quietHoursEnd")}
-          .value=${minutesToTime(quietHours.endMinute)}
-          @change=${(event: Event) =>
-            onChange({
-              ...quietHours,
-              endMinute: timeToMinutes(inputTarget(event).value, quietHours.endMinute),
-            })}
-        />
+        ${(
+          [
+            ["startMinute", "quietHoursStart"],
+            ["endMinute", "quietHoursEnd"],
+          ] as const
+        ).map(
+          ([field, label], index) => html`
+            ${index ? html`<span class="settings-row__value" aria-hidden="true">–</span>` : nothing}
+            <input
+              type="time"
+              class="settings-input"
+              aria-label=${t(`configView.notifications.${label}`)}
+              .value=${minutesToTime(quietHours[field])}
+              @change=${(event: Event) =>
+                onChange({
+                  ...quietHours,
+                  [field]: timeToMinutes(inputTarget(event).value, quietHours[field]),
+                })}
+            />
+          `,
+        )}
       `,
     })}
     ${renderSettingsSelectRow({

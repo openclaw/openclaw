@@ -37,6 +37,10 @@ commands, skills, replies, and background task notifications retain the
 agent selected by the route or explicit request.
 Session lists, model filters, previews, and sharing controls also retain the
 stored conversation's agent, rather than the aggregate view's default agent.
+Renaming, pinning, or editing session metadata retains the existing message
+preview without rereading the transcript. New messages, transcript replacements,
+and completed transcript repairs refresh previews; changes to model selection
+or fallback state refresh the relevant model facts.
 Stopping with `/stop`, deleting, resetting, or archiving a session cancels only that agent's work for
 the selected conversation. Another agent's active turn and queued messages are
 preserved even when the agents use the same session key.
@@ -216,9 +220,30 @@ Accepting, queueing, or preparing a resume request alone does not refresh it.
 CLI backends that do not report turn acceptance refresh the budget only after
 observed assistant output or tool activity; silent startup does not refresh it.
 
+For a freshly created session's eligible local, idle, restart-safe initial turn,
+`sessions.create` commits the session first, then commits the input transcript and
+restart claim together before acknowledging a started run. Failure or a crash
+between those commits can leave the created session with no retained input bytes.
+After the input commits, restart recovery retains that turn even if the client
+never receives the acknowledgment. Queued input, hook-dependent input, worker
+placement, idle `chat.send`, and retries of existing durable input retain their
+existing admission and recovery behavior. A restart
+during managed worktree preparation resumes the accepted turn and prepares or
+reuses its local worktree before starting the agent. Recovery does not inherit
+the original caller's permission to run worktree setup scripts.
+
 When replaying an interrupted turn, recovery preserves its recorded tool calls
 and results, including nested tool activity, and reuses the original user message.
 A completed reply or a later user message closes that turn to replay.
+
+For authenticated operator turns, recovery revalidates the original caller's
+recorded permissions against current profile, role, access-grant, and device
+policy. A Control UI administrator can therefore continue authorized automation
+work after a restart without losing `operator.admin`. Recovery cannot gain scopes
+the original caller lacked, and revocation still stops the recovered run.
+Older interrupted turns without a recorded authorization source remain restricted;
+send a fresh authenticated message to continue privileged work. Session ownership
+or a saved display name never grants recovery permissions.
 
 This also covers parent turns started by subagent completion or pause notices.
 An interrupted parent continues independently of later child completions, and a
@@ -326,9 +351,9 @@ sessions retain their sidebar nesting; subagent runs appear in transcript activi
 and session transcripts. Existing child pins disappear and no longer protect the session
 from maintenance.
 
-Gateway model-run probe sessions are short-lived by default. Rows matching
+Gateway model-run check sessions are short-lived by default. Rows matching
 `agent:*:explicit:model-run-<uuid>` use fixed `24h` retention, but cleanup is
-pressure-gated: it only removes stale probe rows when session-entry
+pressure-gated: it only removes stale check rows when session-entry
 maintenance/cap pressure is reached, and runs before the broader stale-entry
 age cutoff and entry cap. Normal direct, group, thread, cron, hook, heartbeat,
 ACP, and sub-agent sessions do not inherit this 24h retention.

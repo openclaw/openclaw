@@ -331,12 +331,14 @@ export function createSqliteReadOnlyWorkerSession(
                 ? {
                     auth: {
                       expectedIdentity: options.expectedIdentity,
+                      artifactPreserving: options.artifactPreserving,
                     },
                   }
                 : options.mode === "operation"
                   ? {
                       operation: {
                         expectedIdentity: options.expectedIdentity,
+                        artifactPreserving: options.artifactPreserving,
                         command: serialize(options.command).toString("base64"),
                       },
                     }

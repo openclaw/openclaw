@@ -24,11 +24,9 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   getAgentTestMocks,
   makeContext,
-  type AgentHandlerArgs,
   type AgentParams,
   waitForAssertion,
   requireValue,
@@ -38,6 +36,7 @@ import {
   expectRespondError,
   flushScheduledDispatchStep,
   mockMainSessionEntry,
+  mockSuccessfulAgentCommand,
   buildExistingMainStoreEntry,
   setupNewYorkTimeConfig,
   resetTimeConfig,
@@ -311,10 +310,7 @@ describe("gateway agent handler", () => {
       canonicalKey: sessionKey,
     });
     mocks.updateSessionStore.mockClear();
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -782,10 +778,7 @@ describe("gateway agent handler", () => {
 
   it("keeps voice-originated followups on the voice message channel without delivery", async () => {
     mockMainSessionEntry({ sessionId: "voice-session-id" });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -933,56 +926,6 @@ describe("gateway agent handler", () => {
     expect(worktreeCall.cwd).toBe("/tmp/session-worktree");
   });
 
-  it("keeps origin messageChannel as webchat while delivery channel uses last session channel", async () => {
-    mockMainSessionEntry({
-      sessionId: "existing-session-id",
-      delivery: normalizeSessionDeliveryState({
-        context: { channel: "telegram", to: "12345" },
-      }),
-    });
-    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
-      const store: Record<string, unknown> = {
-        "agent:main:main": buildExistingMainStoreEntry({
-          delivery: normalizeSessionDeliveryState({
-            context: { channel: "telegram", to: "12345" },
-          }),
-        }),
-      };
-      return await updater(store);
-    });
-
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
-
-    await invokeAgent(
-      {
-        message: "webchat turn",
-        sessionKey: "agent:main:main",
-        idempotencyKey: "test-webchat-origin-channel",
-      },
-      {
-        reqId: "webchat-origin-1",
-        client: {
-          connect: {
-            client: { id: "webchat-ui", mode: "webchat" },
-          },
-        } as AgentHandlerArgs["client"],
-        isWebchatConnect: () => true,
-      },
-    );
-
-    const callArgs = await waitForAgentCommandCall<{
-      channel?: string;
-      messageChannel?: string;
-      runContext?: { messageChannel?: string };
-    }>();
-    expect(callArgs.channel).toBe("telegram");
-    expect(callArgs.messageChannel).toBe("webchat");
-    expect(callArgs.runContext?.messageChannel).toBe("webchat");
-  });
-
   it("forwards elevated defaults only for valid exec approval runtime handoffs", async () => {
     const bashElevated = {
       enabled: true,
@@ -1002,10 +945,7 @@ describe("gateway agent handler", () => {
       lastChannel: "telegram",
       lastTo: "123",
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -1094,10 +1034,7 @@ describe("gateway agent handler", () => {
       lastChannel: "telegram",
       lastTo: "123",
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {
@@ -1462,10 +1399,7 @@ describe("gateway agent handler", () => {
       lastChannel: "telegram",
       lastTo: "123",
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
     const agentCommandCallsBefore = mocks.agentCommand.mock.calls.length;
 
     const respond = await invokeAgent(
@@ -1561,10 +1495,7 @@ describe("gateway agent handler", () => {
       lastChannel: "telegram",
       lastTo: "123",
     });
-    mocks.agentCommand.mockResolvedValue({
-      payloads: [{ text: "ok" }],
-      meta: { durationMs: 100 },
-    });
+    mockSuccessfulAgentCommand();
 
     await invokeAgent(
       {

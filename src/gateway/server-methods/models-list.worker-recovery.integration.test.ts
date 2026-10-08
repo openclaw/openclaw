@@ -8,6 +8,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { refreshExpiredPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { getPreparedModelFullCatalogAuth } from "../../agents/prepared-model-runtime-auth.js";
 import {
   getPreparedModelRuntimeSnapshot,
@@ -247,20 +248,22 @@ it("model reads recover a failed shared-worker publication and retain the failed
       const renewalFailed = createDeferred<Error>();
       const recoveryFailed = createDeferred<Error>();
       releasePublication = registerPreparedModelRuntimePublicationListener((event) => {
-        if (event.phase === "published" && !original!.isCurrent()) {
-          events.emit("recovered");
-        } else if (event.phase === "failed") {
+        if (event.phase === "failed") {
           renewalFailed.resolve(event.error);
           recoveryFailed.resolve(event.error);
         } else if (event.phase === "catalog-failed") {
           renewalFailed.resolve(event.error);
         }
       });
-      // Arm the held request before making renewal due; a wall-clock TTL can expire
-      // during the initial models.list response, before this observer exists.
+      // The shipped SDK renewal entry point still owns background expiry; Gateway reads stay passive.
       hold = true;
       const renewal = once(events, "request");
       providerFacts.expiresAt = 0;
+      const renewing = refreshExpiredPreparedModelCatalog({
+        agentId: "main",
+        config: original!.config,
+      });
+      expect(renewing?.pendingProviders).toContain(provider);
       const retained = await list();
       expect(retained.models).toEqual(initial.models);
       // Bind waits to the test signal so a stall still reaches held-response and Gateway cleanup.
@@ -315,6 +318,39 @@ it("model reads recover a failed shared-worker publication and retain the failed
           expect.objectContaining({ provider, id: "original", available: true }),
         ]),
       );
+      const session = await client.request<{ key: string }>("sessions.create", {
+        agentId: "main",
+        key: "agent:main:recovered-runtime",
+        model: `${provider}/original`,
+      });
+      const turn = await client.request<{ runId: string; status: string }>("chat.send", {
+        sessionKey: session.key,
+        message: "Reply with the recovered runtime marker.",
+        idempotencyKey: "recovered-runtime-turn",
+      });
+      expect(turn.status).toBe("started");
+      const completed = await client.request<{ status: string; error?: string }>(
+        "agent.wait",
+        { runId: turn.runId, timeoutMs: 30_000 },
+        { timeoutMs: 35_000 },
+      );
+      expect(completed).toMatchObject({ status: "ok" });
+      const history = await client.request<{ messages: unknown[] }>("chat.history", {
+        sessionKey: session.key,
+      });
+      expect(history.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            role: "assistant",
+            content: expect.arrayContaining([
+              expect.objectContaining({ type: "text", text: "RECOVERED_RUNTIME_REPLY" }),
+            ]),
+          }),
+        ]),
+      );
+      expect(inferenceRequests).toEqual([
+        { authorization: `Bearer synthetic-${provider}`, model: "original" },
+      ]);
       for (let read = 0; read < 3; read++) {
         const saved = await list();
         expect(saved.models).toEqual(initial.models);
@@ -374,39 +410,6 @@ it("model reads recover a failed shared-worker publication and retain the failed
         refreshed.models.filter((row) => row.provider === provider).map((row) => row.id),
       ).toEqual(["original", "recovered"]);
       expect(refreshed.refreshFailed).not.toBe(true);
-      const session = await client.request<{ key: string }>("sessions.create", {
-        agentId: "main",
-        key: "agent:main:recovered-runtime",
-        model: `${provider}/original`,
-      });
-      const turn = await client.request<{ runId: string; status: string }>("chat.send", {
-        sessionKey: session.key,
-        message: "Reply with the recovered runtime marker.",
-        idempotencyKey: "recovered-runtime-turn",
-      });
-      expect(turn.status).toBe("started");
-      const completed = await client.request<{ status: string; error?: string }>(
-        "agent.wait",
-        { runId: turn.runId, timeoutMs: 30_000 },
-        { timeoutMs: 35_000 },
-      );
-      expect(completed).toMatchObject({ status: "ok" });
-      const history = await client.request<{ messages: unknown[] }>("chat.history", {
-        sessionKey: session.key,
-      });
-      expect(history.messages).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            role: "assistant",
-            content: expect.arrayContaining([
-              expect.objectContaining({ type: "text", text: "RECOVERED_RUNTIME_REPLY" }),
-            ]),
-          }),
-        ]),
-      );
-      expect(inferenceRequests).toEqual([
-        { authorization: `Bearer synthetic-${provider}`, model: "original" },
-      ]);
     } finally {
       releasePublication?.();
       hold = false;

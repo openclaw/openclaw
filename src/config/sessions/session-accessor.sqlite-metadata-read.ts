@@ -2,7 +2,6 @@ import {
   createSqliteQueryCache,
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
 import {
@@ -44,14 +43,7 @@ export function hasSessionTranscriptEventsSync(scope: SessionTranscriptReadScope
 export function readTranscriptMutationStateSync(scope: SessionTranscriptReadScope) {
   const resolved = resolveSqliteTranscriptReadScope(scope);
   const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  return runSqliteDeferredTransactionSync(
-    database.db,
-    () => readTranscriptMutationStateInTransaction(database, resolved.sessionId),
-    {
-      databaseLabel: database.path,
-      operationLabel: "session transcript mutation read",
-    },
-  );
+  return readTranscriptMutationStateInTransaction(database, resolved.sessionId);
 }
 
 /** Reads only the current transcript mutation fence without parsing transcript rows. */

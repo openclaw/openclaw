@@ -99,7 +99,7 @@ class UsagePage extends OpenClawLightDomElement {
       if (reason === "manual") {
         this.usageUpdatedAt = this.usagePublication.updatedAt;
       }
-      this.clearDateDebounce();
+      this.clearDebounce("dateDebounceTimer");
       const sessionKey =
         reason === "manual" && this.usageSelectedSessions.length === 1
           ? this.usageSelectedSessions[0]
@@ -213,8 +213,8 @@ class UsagePage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.subscriptions.clear();
-    this.clearDateDebounce();
-    this.clearQueryDebounce();
+    this.clearDebounce("dateDebounceTimer");
+    this.clearDebounce("queryDebounceTimer");
     this.refreshPolicy.dispose();
     this.usageRequest.cancel();
     this.details.cancel();
@@ -281,7 +281,7 @@ class UsagePage extends OpenClawLightDomElement {
   }
 
   private resetForClientChange() {
-    this.clearDateDebounce();
+    this.clearDebounce("dateDebounceTimer");
     this.usageRequest.cancel();
     if (this.routeDataInitialized) {
       this.routeDataEnabled = false;
@@ -425,15 +425,16 @@ class UsagePage extends OpenClawLightDomElement {
     this.details.clear();
   }
 
-  private clearDateDebounce() {
-    if (this.dateDebounceTimer !== null) {
-      window.clearTimeout(this.dateDebounceTimer);
-      this.dateDebounceTimer = null;
+  private clearDebounce(timer: "dateDebounceTimer" | "queryDebounceTimer") {
+    if (this[timer] !== null) {
+      window.clearTimeout(this[timer]);
+      this[timer] = null;
     }
   }
 
   private scheduleUsageLoad() {
-    this.clearDateDebounce();
+    this.clearSelectionsAndDetails();
+    this.clearDebounce("dateDebounceTimer");
     this.usageRequest.cancel();
     this.usageError = null;
     // Cancel the old query's poll before it can consume this debounce and retry budget.
@@ -471,13 +472,6 @@ class UsagePage extends OpenClawLightDomElement {
       ]) {
         void detail.recover(sessionKey, detail === this.details.contextWeight);
       }
-    }
-  }
-
-  private clearQueryDebounce() {
-    if (this.queryDebounceTimer !== null) {
-      window.clearTimeout(this.queryDebounceTimer);
-      this.queryDebounceTimer = null;
     }
   }
 
@@ -575,12 +569,10 @@ class UsagePage extends OpenClawLightDomElement {
         filters: {
           onStartDateChange: (date) => {
             this.usageStartDate = date;
-            this.clearSelectionsAndDetails();
             this.scheduleUsageLoad();
           },
           onEndDateChange: (date) => {
             this.usageEndDate = date;
-            this.clearSelectionsAndDetails();
             this.scheduleUsageLoad();
           },
           onScopeChange: (scope) => {
@@ -616,18 +608,18 @@ class UsagePage extends OpenClawLightDomElement {
           },
           onQueryDraftChange: (query) => {
             this.usageQueryDraft = query;
-            this.clearQueryDebounce();
+            this.clearDebounce("queryDebounceTimer");
             this.queryDebounceTimer = window.setTimeout(() => {
               this.usageQuery = this.usageQueryDraft;
               this.queryDebounceTimer = null;
             }, 250);
           },
           onApplyQuery: () => {
-            this.clearQueryDebounce();
+            this.clearDebounce("queryDebounceTimer");
             this.usageQuery = this.usageQueryDraft;
           },
           onClearQuery: () => {
-            this.clearQueryDebounce();
+            this.clearDebounce("queryDebounceTimer");
             this.usageQueryDraft = "";
             this.usageQuery = "";
           },

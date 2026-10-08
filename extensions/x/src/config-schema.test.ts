@@ -43,3 +43,20 @@ describe("X cost limit configuration", () => {
     expect(XConfigSchema.safeParse({ accounts: { team: { costLimits } } }).success).toBe(false);
   });
 });
+
+describe("X public work-session configuration", () => {
+  it("preserves account opt-outs from the shared publication default", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        x: {
+          autoPublishWorkSessions: true,
+          accounts: { inherited: {}, private: { autoPublishWorkSessions: false } },
+        },
+      },
+    };
+    expect(XConfigSchema.safeParse(cfg.channels?.x).success).toBe(true);
+    expect(resolveXAccount(cfg, "inherited").config.autoPublishWorkSessions).toBe(true);
+    expect(resolveXAccount(cfg, "private").config.autoPublishWorkSessions).toBe(false);
+    expect(resolveXAccount({}).config.autoPublishWorkSessions).toBeUndefined();
+  });
+});

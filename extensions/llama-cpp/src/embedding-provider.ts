@@ -133,10 +133,9 @@ function wrapProvider(params: {
     model: params.canonicalModel,
     dimensions: params.provider.dimensions,
     maxInputTokens: params.provider.maxInputTokens,
-    embed: async (input, callOptions) =>
-      await withFacts(async () => await params.provider.embed(input, callOptions)),
-    embedBatch: async (inputs, callOptions) =>
-      await withFacts(async () => await params.provider.embedBatch(inputs, callOptions)),
+    embed: (input, callOptions) => withFacts(() => params.provider.embed(input, callOptions)),
+    embedBatch: (inputs, callOptions) =>
+      withFacts(() => params.provider.embedBatch(inputs, callOptions)),
     close: params.provider.close,
   };
   Object.defineProperty(wrapped, LOCAL_EMBEDDING_RUNTIME_FACTS, {

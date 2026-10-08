@@ -7,6 +7,7 @@ import {
   validateSessionSuggestionsResolveParams,
   validateSessionTypingParams,
   type SessionSuggestion,
+  type SessionSuggestionEvent,
   type SessionTypingEvent,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -55,12 +56,11 @@ import {
   authorizeSessionSuggestionMutation,
   createSessionSuggestionMutation,
   suggestionScope,
-  publishSuggestion,
   requireSuggestionTarget,
   requireVisibleSuggestionRole,
 } from "./sessions-suggestions-access.js";
 import { dispatchSuggestion } from "./sessions-suggestions-dispatch.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 function protocolSuggestion(
@@ -80,6 +80,27 @@ function protocolSuggestion(
     createdAt: suggestion.createdAt,
     state: suggestion.state,
   };
+}
+
+function publishSuggestion(
+  context: GatewayRequestContext,
+  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>,
+  requestedSessionKey: string,
+  action: SessionSuggestionEvent["action"],
+  stored: StoredSessionSuggestion,
+): SessionSuggestion {
+  const suggestion = protocolSuggestion(target, stored);
+  context.broadcast(
+    "session.suggestion",
+    { action, suggestion },
+    {
+      sessionKeys: [
+        ...new Set([requestedSessionKey, target.canonicalKey, target.storeKey]),
+      ].toSorted(),
+      agentId: suggestion.agentId,
+    },
+  );
+  return suggestion;
 }
 
 function respondSuggestionDispatchError(respond: RespondFn, error: unknown): void {
@@ -185,12 +206,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
               assertCurrent,
             );
             mutation.readCurrent();
-            const projected = protocolSuggestion(target, suggestion);
-            publishSuggestion(context, target, params.sessionKey, {
-              action: "added",
-              suggestion: projected,
-            });
-            return projected;
+            return publishSuggestion(context, target, params.sessionKey, "added", suggestion);
           },
         });
         if (added.ok) {
@@ -421,9 +437,8 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
             });
             if (!released.ok) {
               respond(false, undefined, released.error);
-              return false;
             }
-            return true;
+            return released.ok;
           } catch (error) {
             respondSuggestionDispatchError(respond, error);
             return false;
@@ -482,12 +497,7 @@ export const sessionSuggestionHandlers: GatewayRequestHandlers = {
             if (!suggestion) {
               return null;
             }
-            const projected = protocolSuggestion(target, suggestion);
-            publishSuggestion(context, target, params.sessionKey, {
-              action: "resolved",
-              suggestion: projected,
-            });
-            return projected;
+            return publishSuggestion(context, target, params.sessionKey, "resolved", suggestion);
           },
         });
         if (!finalizeResult.ok) {

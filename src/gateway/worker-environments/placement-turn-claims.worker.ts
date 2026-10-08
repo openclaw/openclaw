@@ -79,12 +79,7 @@ function operation<
         const source = guardedWorkspaceWrite ? input.sessionEntryCurrentSource : undefined;
         const admit = (stage: "transaction" | "commit", facts: unknown) =>
           requestSessionEntryCurrentAdmission(source, { stage, facts }, { lookup: "logical" });
-        admit(
-          "transaction",
-          guardedWorkspaceWrite
-            ? { placement: find(db, sessionId), placementMove: move() }
-            : undefined,
-        );
+        admit("transaction", { placement: find(db, sessionId), placementMove: move() });
         const receipt = execute(
           {
             path: database.path,

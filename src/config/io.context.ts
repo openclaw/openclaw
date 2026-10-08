@@ -13,7 +13,10 @@ import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metad
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-record-reader.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import { withSynchronousArtifactPreservingStateSnapshot } from "../state/openclaw-state-db-readonly.js";
+import {
+  isArtifactPreservingStateRead,
+  withSynchronousArtifactPreservingStateSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { applyConfigEnvVars, cloneEnvWithPlatformSemantics } from "./config-env-vars.js";
 import { applyImplicitAgentRosterDefaults } from "./implicit-agent-roster.js";
@@ -67,7 +70,9 @@ export function createConfigIoContext(
   options: ConfigIoFactoryOptions = {},
   transformRecoveryCandidate?: ConfigRecoveryCandidateTransform,
 ) {
-  const deps = normalizeConfigIoDeps(options);
+  const deps = normalizeConfigIoDeps(
+    isArtifactPreservingStateRead("agent") ? { ...options, observe: false } : options,
+  );
   const configPath = resolveConfigPathForDeps(deps);
   // The normalized default homedir already applies OPENCLAW_HOME. Path
   // resolvers need the original OS-home fallback or relative overrides expand twice.
@@ -331,18 +336,6 @@ export function createConfigIoContext(
     }
   }
 
-  function prepareRecoveryBackupCandidate(
-    candidate: ConfigRecoveryCandidate,
-  ): ConfigRecoveryCandidatePreparation {
-    return runConfigIoSync(prepareRecoveryBackupCandidateSteps(candidate));
-  }
-
-  async function prepareRecoveryBackupCandidateAsync(
-    candidate: ConfigRecoveryCandidate,
-  ): Promise<ConfigRecoveryCandidatePreparation> {
-    return await runConfigIoAsync(prepareRecoveryBackupCandidateSteps(candidate));
-  }
-
   return {
     deps,
     pathResolution,
@@ -357,7 +350,9 @@ export function createConfigIoContext(
     finalizeLoadedRuntimeConfigAsync,
     createValidationPluginMetadataSnapshotLoader,
     resolveRuntimePreflightSourceConfig,
-    prepareRecoveryBackupCandidate,
-    prepareRecoveryBackupCandidateAsync,
+    prepareRecoveryBackupCandidate: (candidate: ConfigRecoveryCandidate) =>
+      runConfigIoSync(prepareRecoveryBackupCandidateSteps(candidate)),
+    prepareRecoveryBackupCandidateAsync: async (candidate: ConfigRecoveryCandidate) =>
+      await runConfigIoAsync(prepareRecoveryBackupCandidateSteps(candidate)),
   };
 }

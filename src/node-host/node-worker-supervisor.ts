@@ -75,14 +75,18 @@ class NodeWorkerSupervisor {
 
   constructor(options: NodeWorkerSupervisorOptions = {}) {
     const env = options.env ?? process.env;
+    const startup = {
+      nativeInferenceSnapshot: options.nativeInferenceSnapshot,
+      workerEnv: snapshotNodeWorkerEnv(env),
+      engineEnv: { ...process.env, ...env },
+    };
     const bundleRoot = path.resolve(
       options.bundleRoot ?? path.join(resolveStateDir(env), "node-host"),
     );
     this.journal = new NodeWorkerJournalWorker({ env });
     this.store = new NodeWorkerLaunchStore(this.journal);
     this.turns = new NodeWorkerTurnStore(this.journal);
-    this.workerEnv = snapshotNodeWorkerEnv(env);
-    const engineEnv = { ...process.env, ...env };
+    this.workerEnv = startup.workerEnv;
     const containerEngine = options.containerEngine;
     this.containerLifecycle = options.containerEngine
       ? new NodeWorkerContainerLifecycle(options.containerEngine, bundleRoot, this.store)
@@ -101,7 +105,7 @@ class NodeWorkerSupervisor {
     });
     this.children = new NodeWorkerChildLifecycle({
       bundleRoot,
-      engineEnv,
+      ...startup,
       store: this.store,
       turns: this.turns,
       capacity: this.capacity,
@@ -352,7 +356,6 @@ class NodeWorkerSupervisor {
       workerEnv: homeDir ? snapshotNodeWorkerEnv(this.workerEnv, homeDir) : this.workerEnv,
       input,
       descriptor,
-      planHash: claimInput.planHash,
       supervisor,
       signal,
       claim: claimInput,

@@ -76,8 +76,8 @@ export async function prepareGatewayExit(
   }
 }
 
-/** Only a timed-out external restart may discard teardown of this process. */
-export function interruptedRestartExitOptions(params: {
+/** Only a timed-out process exit may discard teardown after database close. */
+export function interruptedShutdownExitOptions(params: {
   request: GatewayRunSignalRequest;
   drainCutShort: boolean;
   ownsProcessLifecycle?: boolean;
@@ -88,7 +88,8 @@ export function interruptedRestartExitOptions(params: {
   exit: (code: number) => void;
 }): { onProcessExitReady?: () => Promise<void> } {
   if (
-    params.request.action !== "external-restart" ||
+    params.request.action === "restart" ||
+    params.request.hostedStop ||
     !params.drainCutShort ||
     params.ownsProcessLifecycle !== true
   ) {

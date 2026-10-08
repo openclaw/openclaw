@@ -131,7 +131,8 @@ describe("prepared model runtime scoped refresh", () => {
         runtimeId: "openclaw",
         api: "openai-responses",
         baseUrl: "https://synthetic.example/v1",
-        serviceTiers: ["priority"],
+        requestedTier: "ultrafast",
+        responseTier: "priority",
       };
       const recordChanged = accounts.prepareServiceTierObserver({
         selectedCredential: {
@@ -163,21 +164,30 @@ describe("prepared model runtime scoped refresh", () => {
       };
       await refresh(authStore);
       expect(
-        accounts.readServiceTiers({ ...observation, identityKey: "profile:demo:changed" }),
-      ).toEqual(["priority"]);
+        accounts.readServiceTierObservation({
+          ...observation,
+          identityKey: "profile:demo:changed",
+        }),
+      ).toEqual({ requestedTier: "ultrafast", responseTier: "priority" });
       await refresh({
         version: 1,
         profiles: { "demo:changed": { ...credential, key: "synthetic-replacement" } },
       });
       for (const profileId of ["demo:changed", "demo:removed"]) {
         expect(
-          accounts.readServiceTiers({ ...observation, identityKey: `profile:${profileId}` }),
+          accounts.readServiceTierObservation({
+            ...observation,
+            identityKey: `profile:${profileId}`,
+          }),
         ).toBeUndefined();
       }
       for (const profileId of ["other:retained", personalId]) {
         expect(
-          accounts.readServiceTiers({ ...observation, identityKey: `profile:${profileId}` }),
-        ).toEqual(["priority"]);
+          accounts.readServiceTierObservation({
+            ...observation,
+            identityKey: `profile:${profileId}`,
+          }),
+        ).toEqual({ requestedTier: "ultrafast", responseTier: "priority" });
       }
       expect(recordChanged({ ...observation, modelId: "next-model" })).toBe(false);
       expect(owner.isCurrent()).toBe(true);
@@ -547,8 +557,10 @@ describe("prepared model runtime scoped refresh", () => {
         },
       };
       const learned = { provider: "demo", id: "learned", name: "Learned" };
+      // Discovered by full acquisition only: neither configured nor credentialed.
+      const unrelated = { provider: "unrelated", id: "found", name: "Found" };
       serveCatalog(
-        makeCatalog([...buildConfiguredModelCatalog({ cfg: config }), learned], {
+        makeCatalog([...buildConfiguredModelCatalog({ cfg: config }), learned, unrelated], {
           routeVariants: [learned],
         }),
       );
@@ -583,10 +595,15 @@ describe("prepared model runtime scoped refresh", () => {
           });
         }
         await refreshPreparedModelRuntimeSnapshots(nextConfig, options);
-        expect(
+        const entries =
           getPreparedModelRuntimeSnapshot({ ...input, config: nextConfig })!.readFullModelCatalog!()
-            ?.entries ?? [],
-        ).not.toContainEqual(expect.objectContaining(learned));
+            ?.entries ?? [];
+        expect(entries).not.toContainEqual(expect.objectContaining(learned));
+        if (change === "plugin") {
+          expect(entries).not.toContainEqual(expect.objectContaining(unrelated));
+        } else {
+          expect(entries).toContainEqual(expect.objectContaining(unrelated));
+        }
       } finally {
         mocks.pluginMetadataSnapshot.index = originalIndex;
       }

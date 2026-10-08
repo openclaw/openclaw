@@ -155,14 +155,13 @@ export async function prepareGatewaySessionStoreReadPlan(params: {
   target: GatewaySessionStoreTargetWithStore;
   plan: GatewaySessionStorePlan<GatewaySessionStoreTargetWithStore>;
 }> {
-  const resolve = async <T>(plan: GatewaySessionStorePlan<T>) => {
-    return await params.prepareReads(plan.reads, () => {
+  const resolve = async <T>(plan: GatewaySessionStorePlan<T>) =>
+    await params.prepareReads(plan.reads, () => {
       if (plan.reads.some((read) => read.result === undefined)) {
         throw new Error("Session lookup facts were not prepared");
       }
       return plan.resolve();
     });
-  };
   const deletedMain = params.legacy;
   if (deletedMain) {
     const target = await resolve(deletedMain);

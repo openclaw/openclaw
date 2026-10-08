@@ -242,11 +242,11 @@ export async function finishGatewayStartup(params: {
       kernel.setScheduledServiceHandles(activated);
     });
   };
-  const { createGatewayServerActiveWorkInspectors } = await startupTrace.measure(
+  const { startGatewayActiveWork } = await startupTrace.measure(
     "gateway.active-work-import",
-    () => import("./server-active-work.js"),
+    () => import("./server-work-metrics.js"),
   );
-  const activeWorkInspectors = createGatewayServerActiveWorkInspectors(gatewayRequestContext);
+  const activeWorkInspectors = startGatewayActiveWork(runtime, log);
   const trackStartupWork = <T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> => {
     // Register before starting, without lending the connection scope to long-lived services.
     const operation = Promise.resolve().then(() => run(runtime.connectionWork.signal));
@@ -284,6 +284,7 @@ export async function finishGatewayStartup(params: {
           deps,
           startChannels,
           recoveryRuntime: gatewayInstanceRuntime.recovery,
+          isRestartRecoverySuppressed: () => channelManager.getAutostartSuppression() !== null,
           resolveGatewayContext: gatewayRequestContext.resolveGatewayContext!,
           logHooks,
           logChannels,

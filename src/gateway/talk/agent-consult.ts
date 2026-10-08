@@ -20,7 +20,7 @@ import type { GatewayRequestHandlerOptions } from "../server-methods/shared-type
 import { formatForLog } from "../ws-log.js";
 import { prepareTalkAgentConsultTranscript } from "./agent-consult-transcript.js";
 import { resolveTalkAgentConsultAuthority } from "./client-gateway-control.js";
-import { registerTalkRealtimeRelayAgentRun } from "./relay/index.js";
+import { registerTalkRealtimeRelayAgentRun } from "./relay/operations.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
 function terminalTalkChatSendAckError(result: unknown): ErrorShape | undefined {
@@ -36,7 +36,6 @@ function terminalTalkChatSendAckError(result: unknown): ErrorShape | undefined {
   return message ? errorShape(ErrorCodes.UNAVAILABLE, message) : undefined;
 }
 
-/** Starts the chat run that backs a realtime Talk tool call. */
 export async function startTalkRealtimeAgentConsult(
   request: GatewayRequestHandlerOptions,
   params: {
@@ -60,6 +59,10 @@ export async function startTalkRealtimeAgentConsult(
     request.client?.connect?.scopes,
     request.client,
   );
+  const unavailable = (errorMessage: string) => ({
+    ok: false as const,
+    error: errorShape(ErrorCodes.UNAVAILABLE, errorMessage),
+  });
   return await new Promise<
     { ok: true; runId: string; idempotencyKey: string } | { ok: false; error: ErrorShape }
   >((resolve) => {
@@ -126,13 +129,7 @@ export async function startTalkRealtimeAgentConsult(
           resolve(
             runId
               ? { ok: true, runId, idempotencyKey }
-              : {
-                  ok: false,
-                  error: errorShape(
-                    ErrorCodes.UNAVAILABLE,
-                    "chat.send did not acknowledge an active run",
-                  ),
-                },
+              : unavailable("chat.send did not acknowledge an active run"),
           );
         } catch (registrationError) {
           abortChatRunById(request.context, {
@@ -140,10 +137,7 @@ export async function startTalkRealtimeAgentConsult(
             sessionKey: params.sessionTarget.canonicalKey,
             stopReason: "voice session binding failed",
           });
-          resolve({
-            ok: false,
-            error: errorShape(ErrorCodes.UNAVAILABLE, formatForLog(registrationError)),
-          });
+          resolve(unavailable(formatForLog(registrationError)));
         }
       },
     } satisfies GatewayRequestHandlerOptions;
@@ -156,13 +150,7 @@ export async function startTalkRealtimeAgentConsult(
     void Promise.resolve(chatSendResult).then(
       () => {
         if (!acknowledged) {
-          resolve({
-            ok: false,
-            error: errorShape(
-              ErrorCodes.UNAVAILABLE,
-              "chat.send did not return a realtime tool result",
-            ),
-          });
+          resolve(unavailable("chat.send did not return a realtime tool result"));
         }
       },
       (error: unknown) => {
@@ -172,10 +160,7 @@ export async function startTalkRealtimeAgentConsult(
           );
           return;
         }
-        resolve({
-          ok: false,
-          error: errorShape(ErrorCodes.UNAVAILABLE, formatForLog(error)),
-        });
+        resolve(unavailable(formatForLog(error)));
       },
     );
   });

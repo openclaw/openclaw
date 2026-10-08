@@ -182,8 +182,7 @@ export function extractToolPreview(outputText: string | undefined): CanvasToolPr
 function extractToolPresentation(
   details: unknown,
   text: string | undefined,
-  name: string,
-  browserToolName = name,
+  browserToolName: string,
 ): Pick<ToolCard, "preview" | "browserTab"> {
   const preview = extractCanvasFromDetails(details);
   const canvas =
@@ -363,6 +362,39 @@ function extractToolCards(message: unknown): ToolCard[] {
   const fallbackMatchedCards = new WeakSet<ToolCard>();
   const transcriptMessageId = resolveTranscriptMessageId(m);
   const messageRunId = readSessionMessageIdentity(m)?.runId ?? readNonBlankString(m.runId);
+  const readResult = (
+    item: Record<string, unknown>,
+    browserToolName: string,
+    standalone = false,
+  ) => {
+    const text = extractToolText(item);
+    const details = item.details ?? m.details;
+    const metadata = asNullableRecord(item["__openclaw"]);
+    const isError = readToolErrorFlag(item) ?? messageIsError;
+    const exitCode = readToolExitCode(
+      item,
+      details,
+      text ? safeParseJsonRecord(text.trim()) : undefined,
+      standalone ? undefined : m,
+    );
+    return {
+      outputText: text,
+      resultMessageId:
+        !standalone && metadata && Object.hasOwn(metadata, "id")
+          ? readNonBlankString(metadata.id)
+          : transcriptMessageId,
+      outputTruncated:
+        (metadata && Object.hasOwn(metadata, "truncated")
+          ? metadata
+          : asNullableRecord(m["__openclaw"])
+        )?.truncated === true,
+      toolOutput: readToolOutputMetadata(item) ?? readToolOutputMetadata(m),
+      ...(details !== undefined ? { details } : {}),
+      ...(isError !== undefined ? { isError } : {}),
+      ...(exitCode !== undefined ? { exitCode } : {}),
+      ...extractToolPresentation(details, text, browserToolName),
+    };
+  };
 
   for (let index = 0; index < content.length; index++) {
     const item = content[index] ?? {};
@@ -413,18 +445,6 @@ function extractToolCards(message: unknown): ToolCard[] {
           card.outputText === undefined &&
           !fallbackMatchedCards.has(card),
       );
-    const text = extractToolText(item);
-    const resultMetadata = asNullableRecord(item["__openclaw"]);
-    const resultMessageId =
-      resultMetadata && Object.hasOwn(resultMetadata, "id")
-        ? readNonBlankString(resultMetadata.id)
-        : transcriptMessageId;
-    const toolOutput = readToolOutputMetadata(item) ?? readToolOutputMetadata(m);
-    const outputTruncated =
-      (resultMetadata && Object.hasOwn(resultMetadata, "truncated")
-        ? resultMetadata
-        : asNullableRecord(m["__openclaw"])
-      )?.truncated === true;
     // Browser previews trigger I/O. Nested content cannot override its tool
     // envelope, and a paired result cannot override the authoritative call.
     const envelopeName = isStandaloneToolMessage ? resolveToolName({}, m) : undefined;
@@ -432,24 +452,7 @@ function extractToolCards(message: unknown): ToolCard[] {
       envelopeName && envelopeName !== "browser"
         ? envelopeName
         : (existing?.name ?? envelopeName ?? name);
-    const presentation = extractToolPresentation(details, text, name, browserToolName);
-    const isError = readToolErrorFlag(item) ?? messageIsError;
-    const exitCode = readToolExitCode(
-      item,
-      details,
-      text ? safeParseJsonRecord(text.trim()) : undefined,
-      m,
-    );
-    const result = {
-      outputText: text,
-      resultMessageId,
-      outputTruncated,
-      toolOutput,
-      ...(details !== undefined ? { details } : {}),
-      ...(isError !== undefined ? { isError } : {}),
-      ...(exitCode !== undefined ? { exitCode } : {}),
-      ...presentation,
-    };
+    const result = readResult(item, browserToolName);
     if (existing) {
       fallbackMatchedCards.add(existing);
       existing.callId ??= callId;
@@ -463,8 +466,8 @@ function extractToolCards(message: unknown): ToolCard[] {
         existing.completed = true;
       }
       Object.assign(existing, result, {
-        preview: presentation.preview,
-        browserTab: presentation.browserTab,
+        preview: result.preview,
+        browserTab: result.browserTab,
       });
       continue;
     }
@@ -480,28 +483,15 @@ function extractToolCards(message: unknown): ToolCard[] {
       (typeof m.toolName === "string" && m.toolName) ||
       (typeof m.tool_name === "string" && m.tool_name) ||
       "tool";
-    const text = extractToolText(m);
     const callId = resolveToolCallId({}, m);
-    const exitCode = readToolExitCode(
-      m,
-      m.details,
-      text ? safeParseJsonRecord(text.trim()) : undefined,
-    );
     cards.push({
       id: callId ?? `${resolveToolName({}, m)}:0`,
       ...(callId ? { callId } : {}),
       ...(messageRunId ? { runId: messageRunId } : {}),
       name,
       completed: isToolResultMessage(message) || role === "tool" || role === "function",
-      outputText: text,
-      resultMessageId: transcriptMessageId,
-      outputTruncated: asNullableRecord(m["__openclaw"])?.truncated === true,
-      toolOutput: readToolOutputMetadata(m),
-      ...(m.details !== undefined ? { details: m.details } : {}),
       messageId: transcriptMessageId,
-      ...(messageIsError !== undefined ? { isError: messageIsError } : {}),
-      ...(exitCode !== undefined ? { exitCode } : {}),
-      ...extractToolPresentation(m.details, text, name),
+      ...readResult(m, name, true),
     });
   }
 

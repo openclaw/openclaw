@@ -228,6 +228,7 @@ describe("DraftSubmissionFlow", () => {
         mentions: flow.mentions,
         attachments: flow.attachmentDraft.attachments,
       };
+      const navigationsBeforeCleanup = vi.mocked(context.navigateAndWait).mock.calls.length;
       if (next === "reconnect") {
         flow.invalidate("gateway-changed");
       }
@@ -239,7 +240,8 @@ describe("DraftSubmissionFlow", () => {
       expect(flow.mentions).toEqual([]);
       expect(flow.attachmentDraft.attachments).toEqual([]);
       expect(context.sessions.createResult).toHaveBeenCalledOnce();
-      expect(context.navigateAndWait).toHaveBeenCalledTimes(next === "navigation" ? 1 : 0);
+      expect(navigationsBeforeCleanup).toBe(1);
+      expect(context.navigateAndWait).toHaveBeenCalledOnce();
       const retained = context.chatSubmissions.readInitial(
         sessionKey,
         context.gateway.snapshot.client,
@@ -545,7 +547,7 @@ describe("DraftSubmissionFlow", () => {
     expect(getChatAttachmentDataUrl(displaced)).toBeNull();
     expect(noteUserMutation).not.toHaveBeenCalled();
     expect(requestUpdate).toHaveBeenCalledOnce();
-    flow.attachmentDraft.reset({ release: true });
+    flow.attachmentDraft.reset();
   });
 
   it("releases the displaced payload and renders placement recovery once without a user mutation", () => {
@@ -602,7 +604,7 @@ describe("DraftSubmissionFlow", () => {
         content: "cmVjb3ZlcmVk",
       },
     ]);
-    flow.attachmentDraft.reset({ release: true });
+    flow.attachmentDraft.reset();
   });
 
   it.each([

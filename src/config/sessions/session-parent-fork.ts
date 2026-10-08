@@ -11,6 +11,7 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import type { AgentDatabaseRegistryChange } from "../../state/openclaw-agent-db-registry-listing.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
@@ -19,6 +20,7 @@ import { forkCliSessionBindings } from "./cli-session-binding.js";
 import { publishCommittedSessionIdentity } from "./session-accessor.sqlite-identity.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import {
+  resolveSqliteScope,
   formatLegacySqliteSessionMarkerForScope,
   resolveSqliteSessionKey,
   toDatabaseOptions,
@@ -470,7 +472,9 @@ function withIncognitoForkWorkers<T>(
     owner: Pick<IncognitoParentForkBinding["source"], "actor" | "authority">,
   ): ForkOwner => {
     if (
-      path.resolve(scope.storePath) !== owner.actor.path ||
+      (path.resolve(scope.storePath) !== owner.actor.path &&
+        resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolveSqliteScope(scope))) !==
+          owner.actor.path) ||
       (scope.agentId && scope.agentId !== owner.actor.agentId)
     ) {
       throw new Error("Incognito parent fork binding does not match its captured store");

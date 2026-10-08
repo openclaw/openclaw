@@ -1,3 +1,4 @@
+import { copyFile, readFile, rename } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
@@ -11,8 +12,10 @@ import {
   appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
+  patchSessionEntryCore,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import * as sessionRunError from "../../sessions/session-run-error.js";
@@ -20,6 +23,7 @@ import {
   AgentDatabaseAdmissionError,
   createAgentDatabaseInspectionRefusal,
 } from "../../state/agent-database-admission.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { abortChatRunById, registerChatAbortController } from "../chat-abort.js";
 import { projectChatDisplayMessages } from "../chat-display-projection.js";
@@ -34,6 +38,39 @@ import {
 
 const policyMessage =
   "OpenCode cannot run with this chat's tool restrictions. Choose a different model provider or update the tool settings.";
+
+async function captureTerminalTarget(scope: {
+  agentId?: string;
+  sessionKey: string;
+  storePath: string;
+}) {
+  return withSessionEntriesFromStoresInWorker(
+    [
+      {
+        ...scope,
+        agentId: scope.agentId ?? "main",
+        sessionKeys: [scope.sessionKey],
+        projection: "exact",
+      },
+    ],
+    ([read]) => {
+      const source = read!.result.source;
+      if (!source) {
+        throw new Error("Expected an admitted physical session source");
+      }
+      return {
+        target: {
+          ...scope,
+          readSource: source,
+          target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+        },
+        expectedLifecycleRevision: read!.result.entries[0]?.entry.lifecycleRevision,
+        assertCurrent: vi.fn(),
+      };
+    },
+    { ordered: true },
+  );
+}
 
 describe("handleChatSendSetupError", () => {
   it.each([
@@ -102,6 +139,100 @@ describe("handleChatSendSetupError", () => {
 });
 
 describe("createChatSendDispatchErrorLifecycle", () => {
+  it("does not terminalize a replacement physical store containing the same claim", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = {
+        agentId: "main",
+        sessionKey: "agent:main:terminal",
+        storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+      };
+      await upsertSessionEntryCore(scope, {
+        sessionId: "same-session",
+        updatedAt: 1,
+        restartRecoveryDeliveryRunId: "same-run",
+      });
+      const captured = await captureTerminalTarget(scope);
+      await closeOpenClawAgentDatabasesAsync();
+      const original = `${scope.storePath}.original`;
+      await rename(scope.storePath, original);
+      await copyFile(original, scope.storePath);
+      const replacement = await readFile(scope.storePath);
+      await expect(
+        terminalizeRestartSafeChatAdmission({
+          ...captured,
+          admittedSessionId: "same-session",
+          clientRunId: "same-run",
+          startedAt: 1,
+          status: "killed",
+          retryable: false,
+        }),
+      ).rejects.toThrow(/identity changed/u);
+      expect(await readFile(scope.storePath)).toEqual(replacement);
+    });
+  });
+  it.each(["claim", "lifecycle", "authority"] as const)(
+    "refuses queued terminal settlement after its %s changes",
+    async (changed) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const scope = {
+          agentId: "main",
+          sessionKey: "agent:main:terminal",
+          storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+        };
+        await upsertSessionEntryCore(scope, {
+          sessionId: "terminal-session",
+          lifecycleRevision: "terminal-lifecycle",
+          updatedAt: 1,
+          restartRecoveryDeliveryRunId: "terminal-run",
+        });
+        const captured = await captureTerminalTarget(scope);
+        const entered = createDeferred();
+        const resume = createDeferred();
+        let current = true;
+        const writer = patchSessionEntryCore(scope, async () => {
+          entered.resolve();
+          await resume.promise;
+          return changed === "claim"
+            ? { restartRecoveryDeliveryRunId: "successor-run" }
+            : changed === "lifecycle"
+              ? { lifecycleRevision: "successor-lifecycle" }
+              : null;
+        });
+        await entered.promise;
+        const terminal = terminalizeRestartSafeChatAdmission({
+          ...captured,
+          admittedSessionId: "terminal-session",
+          clientRunId: "terminal-run",
+          startedAt: 1,
+          status: "killed",
+          retryable: false,
+          assertCurrent() {
+            if (!current) {
+              throw new Error("terminal owner released");
+            }
+          },
+        });
+        const observed = terminal.then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        current = changed !== "authority";
+        resume.resolve();
+        await writer;
+        if (changed === "authority") {
+          expect(await observed).toMatchObject({
+            error: expect.objectContaining({ message: "terminal owner released" }),
+          });
+        } else {
+          expect(await observed).toEqual({ value: false });
+        }
+        expect(loadSessionEntry(scope)?.status).toBeUndefined();
+        expect(loadSessionEntry(scope)?.restartRecoveryDeliveryRunId).toBe(
+          changed === "claim" ? "successor-run" : "terminal-run",
+        );
+      });
+    },
+  );
   it.each([
     { settlement: "fallback", missingProfile: false, policyFailure: false, sessionChanged: false },
     { settlement: "fallback", stateContention: true },
@@ -150,7 +281,6 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           updatedAt: 1_000,
           startedAt: 1_000,
           lifecycleRunId: runId,
-          status: "running",
           ...(restartSafe
             ? {
                 restartRecoveryDeliveryRunId: runId,
@@ -168,6 +298,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         if (restartSafe) {
           await persistUserTurnTranscript();
         }
+        const terminalTarget = await captureTerminalTarget(target);
         const warn = vi.fn();
         const chatRunState = createChatRunState();
         const broadcast = vi.fn();
@@ -228,7 +359,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           terminalizeRestartSafeAdmission: (terminal) =>
             terminalizeRestartSafeChatAdmission({
               ...terminal,
-              ...target,
+              ...terminalTarget,
               admittedSessionId: target.sessionId,
               clientRunId: runId,
               startedAt: 1_000,
@@ -346,7 +477,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         if (restartSafe) {
           expect(loadSessionEntry(target)?.restartRecoveryDeliveryRunId).toBe(runId);
           const terminal = {
-            ...target,
+            ...terminalTarget,
             admittedSessionId: target.sessionId,
             clientRunId: runId,
             startedAt: 1_000,
@@ -381,10 +512,11 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       const report = vi
         .spyOn(sessionRunError, "recordGatewaySessionRunFailure")
         .mockRejectedValueOnce(new Error("notice write failed"));
+      const terminalTarget = await captureTerminalTarget(target);
       try {
         expect(
           await terminalizeRestartSafeChatAdmission({
-            ...target,
+            ...terminalTarget,
             admittedSessionId: "settled-session",
             clientRunId: "settled-run",
             startedAt: 1_000,
@@ -411,7 +543,12 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       const cleanupAdmittedRun = vi.fn();
       const removeChatRun = vi.fn();
       const warn = vi.fn();
-      const dedupe = new Map();
+      const cached = {
+        ts: 1,
+        ok: true,
+        payload: { runId: "run-1", status: completed ? "completed" : "accepted" },
+      };
+      const dedupe = new Map([["chat:run-1", cached]]);
       const lifecycle = createChatSendDispatchErrorLifecycle({
         admission: {
           sessionBinding: {
@@ -441,7 +578,6 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           removeChatRun,
         } as never,
         isQueuedFollowupEnqueued: () => true,
-        isQueuedFollowupCompleted: () => completed,
         isAgentRunStarted: () => false,
         persistUserTurnTranscript: vi.fn(),
         session: {
@@ -463,15 +599,8 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining("dispatch failed after followup queue admission"),
       );
-      expect(dedupe.get("chat:run-1")).toMatchObject({
-        ok: true,
-        payload: { runId: "run-1", status: completed ? "completed" : "ok" },
-      });
-      expect(broadcast).toHaveBeenCalledWith(
-        "chat",
-        expect.objectContaining({ runId: "run-1", state: "final" }),
-        { sessionKeys: ["agent:main:main"] },
-      );
+      expect(dedupe.get("chat:run-1")).toBe(cached);
+      expect(broadcast).not.toHaveBeenCalled();
       expect(cleanupAdmittedRun).toHaveBeenCalledOnce();
       expect(removeChatRun).toHaveBeenCalledWith("run-1", "run-1", "agent:main:main");
     },

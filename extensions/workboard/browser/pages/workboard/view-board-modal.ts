@@ -24,7 +24,10 @@ export type BoardDraft = {
   saving: boolean;
   error: string | null;
 };
-const originals = new WeakMap<BoardDraft, Pick<BoardDraft, "name" | "icon" | "color">>();
+const originals = new WeakMap<
+  BoardDraft,
+  Pick<BoardDraft, "name" | "icon" | "color" | "sessions">
+>();
 
 export function createBoardDraft(board: WorkboardBoardSummary): BoardDraft {
   const fields = { name: board.name ?? board.id, icon: board.icon ?? "", color: board.color ?? "" };
@@ -36,7 +39,7 @@ export function createBoardDraft(board: WorkboardBoardSummary): BoardDraft {
     saving: false,
     error: null,
   };
-  originals.set(draft, fields);
+  originals.set(draft, { ...fields, sessions: structuredClone(draft.sessions) });
   return draft;
 }
 
@@ -111,7 +114,10 @@ export function renderBoardModal(props: {
         "workboard.boards.upsert",
         input,
       );
-      if (sessions) {
+      if (
+        sessions &&
+        JSON.stringify(draft.sessions?.columns) !== JSON.stringify(original?.sessions?.columns)
+      ) {
         if (!props.canWrite) {
           throw new Error(t("workboard.sessionsBoard.writeUnavailable"));
         }

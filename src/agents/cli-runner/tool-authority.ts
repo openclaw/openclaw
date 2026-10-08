@@ -5,7 +5,10 @@ import {
   readPreparedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../admitted-run-context.js";
-import { createAgentQuestionAnswerAuthority } from "../harness/host-private-capabilities.js";
+import {
+  createAgentQuestionAnswerAuthority,
+  prepareReplyToolAuthorityCallerRead,
+} from "../harness/host-private-capabilities.js";
 import type { RunCliAgentParams } from "./types.js";
 
 /** Bind CLI and loopback questions to the original creator, not their callback transport. */
@@ -22,10 +25,18 @@ export function bindCliQuestionAnswerAuthority(params: {
   return (sessionKey: string, assertActive: () => void) => {
     const source = params.readSource();
     source?.assertCurrent();
-    return createAgentQuestionAnswerAuthority({
+    const authority = createAgentQuestionAnswerAuthority({
       sessionKey,
       requesterProfileId: source?.profileId,
       fingerprint: params.fingerprint,
+      prepareCaller: async (caller) =>
+        prepareReplyToolAuthorityCallerRead(
+          params.operation?.projectToolAuthorityFingerprintAsync ?? params.snapshot?.projectAsync,
+          caller,
+          params.fingerprint,
+          params.route,
+          () => authority.assertActive(),
+        ),
       project: (caller) =>
         params.operation
           ? params.operation.projectToolAuthorityFingerprint(caller)
@@ -47,6 +58,7 @@ export function bindCliQuestionAnswerAuthority(params: {
         assertActive();
       },
     });
+    return authority;
   };
 }
 

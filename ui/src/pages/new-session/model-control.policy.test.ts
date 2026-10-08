@@ -105,7 +105,7 @@ describe("New Session policy presentation", () => {
         expect(Boolean(container.querySelector("[data-chat-model-option]"))).toBe(!clearsChoices);
         if (clearsChoices) {
           expect(container.textContent).not.toContain("forbidden-default");
-          expect(control.modelSelectionBlockedReason(agent)).toBe("Checking models…");
+          expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
         }
         const published = loadModelCatalog(context.gateway.snapshot.client!, scope);
         wire.reject(new Error("Catalog unavailable"));
@@ -130,7 +130,7 @@ describe("New Session policy presentation", () => {
         expect(checking.querySelector('[data-chat-model-catalog-state="error"]')).toBeNull();
         expect(checking.querySelector(".btn__spinner")).not.toBeNull();
         if (clearsChoices) {
-          expect(control.modelSelectionBlockedReason(agent)).toBe("Checking models…");
+          expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
         } else {
           expect(
             checking.querySelector('[data-chat-model-option="fixture/permitted"]'),
@@ -202,7 +202,7 @@ describe("New Session policy presentation", () => {
         control.load(next.context, "main", true, { agent });
         const pending = loadModelCatalog(next.context.gateway.snapshot.client!, scope);
         expect(control.modelForSubmission()).toBe("fixture/previous");
-        expect(control.modelSelectionBlockedReason(agent)).toBe("Checking models…");
+        expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
         const waiting = renderControl(control, next.context, "main", agent);
         expect(waiting.textContent).not.toContain("previous");
         expect(waiting.textContent).not.toContain("Previous model");

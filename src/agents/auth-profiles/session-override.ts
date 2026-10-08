@@ -73,21 +73,19 @@ function applySessionAuthProfileOverrideState(
   state: SessionAuthProfileOverrideState,
   updatedAt: number,
 ): void {
-  if (state.authProfileOverride === undefined) {
-    delete entry.authProfileOverride;
-  } else {
-    entry.authProfileOverride = state.authProfileOverride;
-  }
-  if (state.authProfileOverrideSource === undefined) {
-    delete entry.authProfileOverrideSource;
-  } else {
-    entry.authProfileOverrideSource = state.authProfileOverrideSource;
-  }
-  if (state.authProfileOverrideCompactionCount === undefined) {
-    delete entry.authProfileOverrideCompactionCount;
-  } else {
-    entry.authProfileOverrideCompactionCount = state.authProfileOverrideCompactionCount;
-  }
+  const apply = <K extends keyof SessionAuthProfileOverrideState>(
+    key: K,
+    value: SessionAuthProfileOverrideState[K],
+  ) => {
+    if (value === undefined) {
+      delete entry[key];
+    } else {
+      entry[key] = value;
+    }
+  };
+  apply("authProfileOverride", state.authProfileOverride);
+  apply("authProfileOverrideSource", state.authProfileOverrideSource);
+  apply("authProfileOverrideCompactionCount", state.authProfileOverrideCompactionCount);
   entry.updatedAt = Math.max(entry.updatedAt ?? 0, updatedAt);
 }
 
@@ -187,24 +185,21 @@ function isProfileForProvider(params: {
   store: ReturnType<typeof ensureAuthProfileStore>;
 }): boolean {
   const entry = params.store.profiles[params.profileId];
-  if (entry) {
-    if (!entry.provider) {
-      return false;
-    }
-    return params.providers.some((provider) =>
-      isStoredCredentialCompatibleWithAuthProvider({
-        cfg: params.cfg,
-        provider,
-        credential: entry,
-      }),
-    );
+  if (entry && !entry.provider) {
+    return false;
   }
   return params.providers.some((provider) =>
-    isConfiguredAwsSdkAuthProfileForProvider({
-      cfg: params.cfg,
-      provider,
-      profileId: params.profileId,
-    }),
+    entry
+      ? isStoredCredentialCompatibleWithAuthProvider({
+          cfg: params.cfg,
+          provider,
+          credential: entry,
+        })
+      : isConfiguredAwsSdkAuthProfileForProvider({
+          cfg: params.cfg,
+          provider,
+          profileId: params.profileId,
+        }),
   );
 }
 
@@ -269,6 +264,7 @@ export async function clearSessionAuthProfileOverride(params: {
   sessionKey: string;
   storePath?: string;
   assertCommitAllowed?: () => void;
+  expectedSnapshot?: SessionAuthProfileOverrideSnapshot;
 }) {
   await persistSessionAuthProfileOverrideState({
     ...params,
@@ -548,10 +544,8 @@ async function resolveSessionAuthProfileOverride(params: {
   let next = current;
   if (retryableHigherPriorityProfile) {
     next = retryableHigherPriorityProfile;
-  } else if (isNewSession || shouldRotateCurrent) {
+  } else if (isNewSession || shouldRotateCurrent || !current) {
     next = pickAvailable(currentUnavailable ? undefined : current);
-  } else if (!current) {
-    next = pickAvailable();
   }
 
   if (!next) {

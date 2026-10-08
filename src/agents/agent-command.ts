@@ -64,7 +64,6 @@ import type {
 } from "./command/types.js";
 import { createInternalSessionEffectsCleanup } from "./internal-session-effects.js";
 import type { MainSessionRecoveryPendingTarget } from "./main-session-recovery/main-session-recovery-store.js";
-import { createAgentRunRestartAbortError, isAgentRunDirectAbortReason } from "./run-termination.js";
 import { withAgentPluginRegistry } from "./runtime-plugins.js";
 import { beginForegroundSessionMaintenance } from "./session-maintenance/coordinator.js";
 import {
@@ -100,34 +99,23 @@ async function agentCommandInternal(
       ? AbortSignal.any([preparedOpts.abortSignal, lifecycleAbortController.signal])
       : lifecycleAbortController.signal,
   };
+  const preparedContext = { ...prepared };
   const {
-    body,
-    transcriptBody,
     cfg,
-    configuredThinkingCatalog,
     agentCfg,
-    thinkOverride,
-    thinkOnce,
-    verboseOverride,
     sessionId,
     sessionKey,
     sessionStore,
     storePath,
     isNewSession,
-    persistedThinking,
-    persistedVerbose,
     sessionAgentId,
-    outboundSession,
     workspaceDir,
     cwd,
     runId,
     isSubagentLane,
-    acpManager,
     acpResolution,
-    pluginsEnabled,
     manifestMetadataSnapshot,
-    modelManifestContext,
-  } = prepared;
+  } = preparedContext;
   const isIncognito =
     prepared.sessionEntry?.incognito === true || isIncognitoSessionKey(sessionKey);
   // Provider and persistence errors can include temporary conversation content.
@@ -166,6 +154,7 @@ async function agentCommandInternal(
   let releaseForeground: (() => void) | undefined;
   let maintenanceRequest: SessionMaintenanceRequest | undefined;
   let preparedRunAdmission: ReturnType<typeof prepareAgentCommandExecutionIdentity> | undefined;
+  let completionSource: Awaited<ReturnType<typeof bindCommandHarnessCompletionAssertion>>["source"];
   let commandError: unknown;
   try {
     const operatorSession =
@@ -196,10 +185,7 @@ async function agentCommandInternal(
       scope: storePath ?? `agent:${sessionAgentId}`,
       identities: [sessionKey, sessionId],
       signal: opts.abortSignal,
-      onInterrupt: (reason) =>
-        lifecycleAbortController.abort(
-          isAgentRunDirectAbortReason(reason) ? reason : createAgentRunRestartAbortError(),
-        ),
+      onInterrupt: (reason) => lifecycleAbortController.abort(reason),
       assertAllowed: () => {
         const currentEntry =
           sessionStoreRuntime && storePath && sessionKey
@@ -323,8 +309,7 @@ async function agentCommandInternal(
       ) {
         const now = Date.now();
         const currentStoreEntry = sessionStore[sessionKey];
-        const allowCreateRestartRecoveryEntry =
-          currentStoreEntry === undefined && sessionEntry === undefined;
+        const allowCreate = currentStoreEntry === undefined && sessionEntry === undefined;
         const initialEntry = currentStoreEntry ??
           sessionEntry ?? { sessionId, updatedAt: now, sessionStartedAt: now };
         const isSessionRollover = isNewSession && initialEntry.sessionId !== sessionId;
@@ -337,6 +322,7 @@ async function agentCommandInternal(
             sessionKey,
             runId,
             agentId: sessionAgentId,
+            lifecycleGeneration,
             opts,
             deliveryContext: currentRunDeliveryContext,
             now,
@@ -358,12 +344,7 @@ async function agentCommandInternal(
               isCompletionCurrent(current) &&
               (isSessionRollover
                 ? current?.sessionId === initialEntry.sessionId
-                : shouldPersistRestartRecoveryContextClaim(
-                    current,
-                    sessionId,
-                    runId,
-                    allowCreateRestartRecoveryEntry,
-                  ))
+                : shouldPersistRestartRecoveryContextClaim(current, sessionId, runId, allowCreate))
             );
           },
         });
@@ -371,13 +352,15 @@ async function agentCommandInternal(
         // cancellation invalidates the task during the awaited session write.
         sessionEntry = persisted;
         trackedRestartRecoveryDeliveryClaim = persisted?.restartRecoveryDeliveryRunId === runId;
-        opts = bindCommandHarnessCompletionAssertion({
+        const completion = await bindCommandHarnessCompletionAssertion({
           claim: guardedHarnessCompletion,
           persisted,
           sessionKey,
           storePath,
           opts,
         });
+        opts = completion.opts;
+        completionSource = completion.source;
         if (operatorSession && (!persisted || persisted.sessionId !== sessionId)) {
           throw createSessionWorkStartChangedError(sessionKey);
         }
@@ -405,25 +388,15 @@ async function agentCommandInternal(
           lifecycleGeneration,
         });
         return await runAcpAgentCommand({
-          cfg,
+          ...preparedContext,
           deps: resolvedDeps,
           runtime,
           opts,
-          outboundSession,
           sessionEntry,
-          sessionStore,
-          body,
-          transcriptBody,
           suppressVisibleSessionEffects,
           provenance: isSubagentLane ? "agent" : sessionStateActor.actorType,
-          sessionAgentId,
-          sessionId,
           sessionKey,
-          storePath,
-          workspaceDir,
-          runId,
           lifecycleGeneration,
-          acpManager,
           acpResolution,
           trackInternalModelRunTarget,
           preparedRunAdmission,
@@ -434,26 +407,14 @@ async function agentCommandInternal(
         "session-state",
         () =>
           prepareEmbeddedSessionState({
-            cfg,
+            ...preparedContext,
             opts,
             sessionEntry,
-            sessionStore,
-            sessionKey,
-            sessionId,
-            storePath,
-            sessionAgentId,
             lifecycleGeneration,
-            runId,
             executionWorkspaceDir: cwd ?? workspaceDir,
             watchSkills,
-            isNewSession,
             isSubagentLaneTurn: isSubagentLane,
             suppressVisibleSessionEffects,
-            thinkOnce,
-            thinkOverride,
-            persistedThinking,
-            verboseOverride,
-            persistedVerbose,
             verboseDefault: agentCfg?.verboseDefault as VerboseLevel | undefined,
             sessionStateActor,
             ...(manifestMetadataSnapshot
@@ -469,23 +430,10 @@ async function agentCommandInternal(
         "model-selection",
         () =>
           resolveEmbeddedModelSelection({
-            cfg,
+            ...preparedContext,
             opts,
             sessionEntry,
-            sessionStore,
-            sessionKey,
-            sessionId,
-            storePath,
-            sessionAgentId,
-            workspaceDir,
-            pluginsEnabled,
-            manifestMetadataSnapshot,
-            modelManifestContext,
-            configuredThinkingCatalog,
             requestedThinkLevel,
-            thinkOverride,
-            thinkOnce,
-            isSubagentLane,
             suppressVisibleSessionEffects,
             runContext,
           }),
@@ -591,6 +539,7 @@ async function agentCommandInternal(
       sessionWorkAdmission,
       cleanupInternalModelRunTargets,
       releaseForeground,
+      completionSource,
     });
     if (maintenanceRequest) {
       scheduleSessionMaintenance(maintenanceRequest);

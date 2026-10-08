@@ -1,4 +1,3 @@
-/** Utilities for queued reply runtime config, auth, threading, and embedded run params. */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -41,7 +40,6 @@ import type { FollowupRun } from "./queue.js";
 import { readChannelSourceTurnId } from "./source-turn-id.js";
 export { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
 
-const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
 type EmbeddedReplyRoute = Pick<
   FollowupRun,
   | "originatingChannel"
@@ -53,7 +51,6 @@ type EmbeddedReplyRoute = Pick<
   | "originatingReplyToMode"
 >;
 
-/** Selects the freshest runtime config usable by queued reply execution. */
 export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenClawConfig {
   return (
     selectApplicableRuntimeConfig({
@@ -64,7 +61,6 @@ export function resolveQueuedReplyRuntimeConfig(config: OpenClawConfig): OpenCla
   );
 }
 
-/** Resolves command secrets for queued reply execution, scoped to the origin route. */
 export async function resolveQueuedReplyExecutionConfig(
   config: OpenClawConfig,
   params?: {
@@ -111,7 +107,6 @@ export async function resolveQueuedReplyExecutionConfig(
   return scopedResolved.resolvedConfig ?? baseResolvedConfig;
 }
 
-/** Builds channel threading context for message-tool replies. */
 export function buildThreadingToolContext(params: {
   sessionCtx: TemplateContext;
   config: OpenClawConfig | undefined;
@@ -145,40 +140,31 @@ export function buildThreadingToolContext(params: {
   const provider = normalizeChatChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
   // Fallback for unrecognized/plugin channels (e.g., iMessage before plugin registry init)
   const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
-  if (!threading?.buildToolContext) {
-    return {
-      currentChannelId: normalizeOptionalString(originTo),
-      currentChannelProvider: provider ?? (rawProvider as ChannelId),
-      currentMessageId,
-      currentSourceTurnId,
-      replyToMode: sessionCtx.ReplyToMode,
-      hasRepliedRef,
-    };
-  }
-  const context =
-    threading.buildToolContext({
-      cfg: config,
-      accountId: sessionCtx.AccountId,
-      context: {
-        Channel: originProvider,
-        From: sessionCtx.From,
-        To: originTo,
-        ChatType: sessionCtx.ChatType,
-        CurrentMessageId: currentMessageId,
-        ReplyToMode: sessionCtx.ReplyToMode,
-        ReplyToId: sessionCtx.ReplyToId,
-        ReplyToIdFull: sessionCtx.ReplyToIdFull,
-        ThreadLabel: sessionCtx.ThreadLabel,
-        MessageThreadId: sessionCtx.MessageThreadId,
-        TransportThreadId: sessionCtx.TransportThreadId,
-        NativeChannelId: sessionCtx.NativeChannelId,
-      },
-      hasRepliedRef,
-    }) ?? {};
+  const context: InternalChannelThreadingToolContext = threading?.buildToolContext
+    ? (threading.buildToolContext({
+        cfg: config,
+        accountId: sessionCtx.AccountId,
+        context: {
+          Channel: originProvider,
+          From: sessionCtx.From,
+          To: originTo,
+          ChatType: sessionCtx.ChatType,
+          CurrentMessageId: currentMessageId,
+          ReplyToMode: sessionCtx.ReplyToMode,
+          ReplyToId: sessionCtx.ReplyToId,
+          ReplyToIdFull: sessionCtx.ReplyToIdFull,
+          ThreadLabel: sessionCtx.ThreadLabel,
+          MessageThreadId: sessionCtx.MessageThreadId,
+          TransportThreadId: sessionCtx.TransportThreadId,
+          NativeChannelId: sessionCtx.NativeChannelId,
+        },
+        hasRepliedRef,
+      }) ?? {})
+    : { currentChannelId: normalizeOptionalString(originTo), hasRepliedRef };
   const hasAdapterCurrentMessageId = Object.hasOwn(context, "currentMessageId");
   return {
     ...context,
-    currentChannelProvider: provider!, // guaranteed non-null since threading exists
+    currentChannelProvider: provider ?? (rawProvider as ChannelId),
     // Some providers expose only thread resources as reply targets; explicit
     // `undefined` means the adapter rejected the generic message-id fallback.
     currentMessageId: hasAdapterCurrentMessageId ? context.currentMessageId : currentMessageId,
@@ -187,13 +173,12 @@ export function buildThreadingToolContext(params: {
   };
 }
 
-/** Detects Bun socket-close errors that should be formatted more clearly. */
-export const isBunFetchSocketError = (message?: string) =>
-  message ? BUN_FETCH_SOCKET_ERROR_RE.test(message) : false;
-
-/** Formats Bun socket-close errors for user-facing reply output. */
-export const formatBunFetchSocketError = () =>
-  "⚠️ Lost the connection to the AI service. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
+export function resolveFollowupCurrentMessageId(queued: FollowupRun): string | undefined {
+  return queued.run.inputProvenance?.kind === "internal_system" &&
+    queued.run.inputProvenance.sourceTool === "restart-sentinel"
+    ? queued.originatingReplyToId
+    : queued.messageId;
+}
 
 /** Remaps the original inline request without reusing a queued model's clamped level. */
 export function resolveRunThinkingLevelForFallbackCandidate(
@@ -212,7 +197,6 @@ export function resolveRunThinkingLevelForFallbackCandidate(
   });
 }
 
-/** Resolves candidate-scoped fast mode after model fallback changes provider/model. */
 export function resolveRunFastModeForFallbackCandidate(params: {
   run: FollowupRun["run"];
   config: OpenClawConfig;
@@ -300,7 +284,6 @@ function buildEmbeddedContextFromTemplate(params: {
       normalizeOptionalString(sessionCtx.NativeChannelId) ??
       normalizeOptionalString(sessionCtx.ChatId),
     memberRoleIds: normalizeOptionalTrimmedStringList(sessionCtx.MemberRoleIds),
-    // Provider threading context for tool auto-injection
     ...buildThreadingToolContext({
       sessionCtx,
       config: params.run.config,
@@ -400,7 +383,6 @@ export function mintReplyMessageActionTurnCapability(
   });
 }
 
-/** Builds execution-specific embedded run params for queued reply dispatch. */
 export async function buildEmbeddedRunExecutionParams(params: {
   run: FollowupRun["run"];
   replyRoute?: EmbeddedReplyRoute;

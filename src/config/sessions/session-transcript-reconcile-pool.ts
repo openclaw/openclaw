@@ -5,6 +5,7 @@ import type { Result } from "@openclaw/normalization-core/result";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { resolveWorkerPoolSize } from "../../infra/worker-pool-sizing.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -39,7 +40,7 @@ type ReconcileRuntime = {
   stopped: boolean;
   closing?: Promise<void>;
 };
-const MAX_WORKERS = 1;
+const MAX_WORKERS = resolveWorkerPoolSize("writer");
 const runtime = resolveGlobalSingleton<ReconcileRuntime>(
   Symbol.for("openclaw.sessionTranscriptReconcilePool"),
   () => ({

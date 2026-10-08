@@ -4,7 +4,6 @@
  */
 import path from "node:path";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import type { Result } from "@openclaw/normalization-core/result";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
@@ -12,6 +11,7 @@ import { withSqliteWorkerCleanupFailure } from "../../infra/sqlite-worker-broker
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { evaluateStoredCredentialEligibility } from "./credential-state.js";
 import { hasLegacyAuthProfileCredentialSource } from "./legacy-source-diagnostic.js";
+import { withAuthProfileCleanup } from "./operation-cleanup.js";
 import {
   resolveSharedAuthStoreOwnershipAsync,
   resolveSharedAuthStorePath,
@@ -63,20 +63,14 @@ function canonicalStoreOwnsProviderRoute(
   }
   const store =
     inspection.status === "readable" ? coercePersistedAuthProfileStore(inspection.raw) : null;
-  if (!store) {
-    // A present but unreadable canonical row must route through the loader so
-    // AUTH_PROFILE_STORE_UNREADABLE fails closed before env/config fallback.
-    return true;
-  }
-  return storeHasProviderProfile(store, provider, profileIds);
+  // A present but unreadable canonical row must route through the loader so
+  // AUTH_PROFILE_STORE_UNREADABLE fails closed before env/config fallback.
+  return !store || storeHasProviderProfile(store, provider, profileIds);
 }
 
 /** Synchronous Doctor/CLI and released coding-tool construction compatibility. */
 export function hasAnyAuthProfileStoreSource(agentDir?: string): boolean {
-  if (hasLocalAuthProfileStoreSource(agentDir)) {
-    return true;
-  }
-  if (hasAnyRuntimeAuthProfileStoreSource(agentDir)) {
+  if (hasLocalAuthProfileStoreSource(agentDir) || hasAnyRuntimeAuthProfileStoreSource(agentDir)) {
     return true;
   }
 
@@ -84,16 +78,13 @@ export function hasAnyAuthProfileStoreSource(agentDir?: string): boolean {
     ? resolveAuthProfileDatabasePath(agentDir)
     : resolveSharedAuthStorePath();
   const mainAuthPath = resolveSharedAuthStorePath();
-  if (
+  return Boolean(
     agentDir &&
     authPath !== mainAuthPath &&
     (hasLegacyAuthProfileCredentialSource(undefined) ||
       inspectPersistedAuthProfileStoreRaw(undefined).status !== "missing" ||
-      readPersistedAuthProfileStateRaw(undefined))
-  ) {
-    return true;
-  }
-  return false;
+      readPersistedAuthProfileStateRaw(undefined)),
+  );
 }
 
 /** Runtime source detection retains the existing readers through classification and cleanup. */
@@ -158,31 +149,28 @@ export async function hasAnyAuthProfileStoreSourceAsync(agentDir?: string): Prom
         : await readAgent(sharedPath),
     );
   };
-  let result: Result<boolean, unknown>;
-  try {
-    result = { ok: true, value: await readSource() };
-  } catch (error) {
-    result = { ok: false, error };
-  }
-  const cleanup = await Promise.allSettled([...readers.values()].map((reader) => reader.dispose()));
-  const failures = cleanup.flatMap((entry) => (entry.status === "rejected" ? [entry.reason] : []));
-  if (failures.length) {
-    const error =
-      failures.length === 1
-        ? failures[0]
-        : new AggregateError(failures, "Auth source reader cleanup failed", {
-            cause: failures[0],
-          });
-    throw result.ok
-      ? error
-      : withSqliteWorkerCleanupFailure(
-          toErrorObject(result.error, "Auth source read failed"),
-          error,
-        );
-  }
-  if (!result.ok) {
-    throw result.error;
-  }
+  const result = await withAuthProfileCleanup(readSource, async (outcome) => {
+    const cleanup = await Promise.allSettled(
+      [...readers.values()].map((reader) => reader.dispose()),
+    );
+    const failures = cleanup.flatMap((entry) =>
+      entry.status === "rejected" ? [entry.reason] : [],
+    );
+    if (failures.length) {
+      const error =
+        failures.length === 1
+          ? failures[0]
+          : new AggregateError(failures, "Auth source reader cleanup failed", {
+              cause: failures[0],
+            });
+      throw outcome.ok
+        ? error
+        : withSqliteWorkerCleanupFailure(
+            toErrorObject(outcome.error, "Auth source read failed"),
+            error,
+          );
+    }
+  });
   for (const reader of usedReaders) {
     reader.assertCurrent();
   }
@@ -190,21 +178,17 @@ export async function hasAnyAuthProfileStoreSourceAsync(agentDir?: string): Prom
     context.maintenanceScope?.assertAdmission();
     context.admission.assertCurrent();
   }
-  return result.value;
+  return result;
 }
 
 /** Returns true when the requested agent dir has a local auth profile source. */
 export function hasLocalAuthProfileStoreSource(agentDir?: string): boolean {
-  if (hasRuntimeAuthProfileStoreSource(agentDir)) {
-    return true;
-  }
-  if (hasLegacyAuthProfileCredentialSource(agentDir)) {
-    return true;
-  }
-  if (inspectPersistedAuthProfileStoreRaw(agentDir).status !== "missing") {
-    return true;
-  }
-  return Boolean(readPersistedAuthProfileStateRaw(agentDir));
+  return (
+    hasRuntimeAuthProfileStoreSource(agentDir) ||
+    hasLegacyAuthProfileCredentialSource(agentDir) ||
+    inspectPersistedAuthProfileStoreRaw(agentDir).status !== "missing" ||
+    Boolean(readPersistedAuthProfileStateRaw(agentDir))
+  );
 }
 
 type AuthProfileSourceForProviderOptions = {
@@ -225,37 +209,16 @@ export function hasAuthProfileStoreSourceForProvider(
   if (profileIds?.length === 0) {
     return false;
   }
-  const localRuntimeStore = getRuntimeAuthProfileStoreSnapshotCore(agentDir);
-  if (
-    storeHasProviderProfile(
-      coercePersistedAuthProfileStore(localRuntimeStore),
-      provider,
-      profileIds,
-    )
-  ) {
-    return true;
-  }
   // A retired credential source is intentionally opaque to runtime. Treat it
   // as potentially owning the provider so the canonical loader can fail closed
   // with AUTH_PROFILE_MIGRATION_REQUIRED instead of falling through to env auth.
-  if (hasLegacyAuthProfileCredentialSource(agentDir)) {
-    return true;
-  }
-  if (canonicalStoreOwnsProviderRoute(agentDir, provider, profileIds)) {
-    return true;
-  }
-
-  if (!agentDir) {
-    return false;
-  }
-  const mainRuntimeStore = getRuntimeAuthProfileStoreSnapshotCore();
-  if (
-    storeHasProviderProfile(coercePersistedAuthProfileStore(mainRuntimeStore), provider, profileIds)
-  ) {
-    return true;
-  }
-  if (hasLegacyAuthProfileCredentialSource()) {
-    return true;
-  }
-  return canonicalStoreOwnsProviderRoute(undefined, provider, profileIds);
+  const ownsProvider = (ownerAgentDir: string | undefined) =>
+    storeHasProviderProfile(
+      coercePersistedAuthProfileStore(getRuntimeAuthProfileStoreSnapshotCore(ownerAgentDir)),
+      provider,
+      profileIds,
+    ) ||
+    hasLegacyAuthProfileCredentialSource(ownerAgentDir) ||
+    canonicalStoreOwnsProviderRoute(ownerAgentDir, provider, profileIds);
+  return ownsProvider(agentDir) || (Boolean(agentDir) && ownsProvider(undefined));
 }

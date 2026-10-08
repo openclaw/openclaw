@@ -159,21 +159,19 @@ function extractTelegramAllowedReactions(
     return undefined;
   }
   if (availableReactions == null) {
-    // Explicitly omitted/null => all emoji reactions are allowed in this chat.
+    // Explicit null means all emoji reactions are allowed in this chat.
     return null;
   }
   if (!Array.isArray(availableReactions)) {
     return [];
   }
 
-  const allowed: TelegramAllowedReaction[] = [];
-  const identifiers = new Set<string>();
+  const allowed = new Map<string, TelegramAllowedReaction>();
   for (const reaction of availableReactions) {
     if (reaction.type === "custom_emoji") {
       const identifier = normalizeOptionalString(reaction.custom_emoji_id);
-      if (identifier && !identifiers.has(`custom:${identifier}`)) {
-        identifiers.add(`custom:${identifier}`);
-        allowed.push({ type: "custom_emoji", custom_emoji_id: identifier });
+      if (identifier) {
+        allowed.set(`custom:${identifier}`, { type: "custom_emoji", custom_emoji_id: identifier });
       }
       continue;
     }
@@ -181,12 +179,11 @@ function extractTelegramAllowedReactions(
       continue;
     }
     const emoji = resolveTelegramReactionEmoji(reaction.emoji);
-    if (emoji && !identifiers.has(`emoji:${emoji}`)) {
-      identifiers.add(`emoji:${emoji}`);
-      allowed.push({ type: "emoji", emoji });
+    if (emoji) {
+      allowed.set(`emoji:${emoji}`, { type: "emoji", emoji });
     }
   }
-  return allowed;
+  return [...allowed.values()];
 }
 
 export async function resolveTelegramAllowedReactions(params: {
@@ -199,15 +196,10 @@ export async function resolveTelegramAllowedReactions(params: {
     return fromMessage;
   }
 
-  if (params.getChat) {
-    const fromLookup = extractTelegramAllowedReactions(await params.getChat(params.chatId));
-    if (fromLookup !== undefined) {
-      return fromLookup;
-    }
-  }
-
   // If unavailable, assume no explicit restriction.
-  return null;
+  return params.getChat
+    ? (extractTelegramAllowedReactions(await params.getChat(params.chatId)) ?? null)
+    : null;
 }
 
 export function resolveTelegramReactionVariant(params: {

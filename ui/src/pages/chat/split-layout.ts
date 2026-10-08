@@ -57,7 +57,6 @@ export function panesOf(layout: ChatSplitLayout): ChatSplitPane[] {
   return layout.columns.flatMap((column) => column.panes);
 }
 
-/** Panes actually rendered at the current viewport width. */
 export function visiblePanesOf(layout: ChatSplitLayout, narrow: boolean): ChatSplitPane[] {
   if (!narrow) {
     return panesOf(layout);
@@ -115,10 +114,8 @@ export function closePane(
     return next;
   }
   const { column } = location;
-  const activeWasClosed = next.activePaneId === paneId;
-  let nextActivePaneId = next.activePaneId;
-  if (activeWasClosed) {
-    nextActivePaneId =
+  if (next.activePaneId === paneId) {
+    next.activePaneId =
       column.panes[location.paneIndex - 1]?.id ??
       next.columns[location.columnIndex - 1]?.panes.at(-1)?.id ??
       next.columns.flatMap((entry) => entry.panes).find((pane) => pane.id !== paneId)?.id ??
@@ -138,7 +135,6 @@ export function closePane(
     return undefined;
   }
   next.columnWeights = normalizeSplitLayoutWeights(next.columnWeights);
-  next.activePaneId = nextActivePaneId;
   return next;
 }
 

@@ -69,6 +69,8 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
     ...actual,
     createOwnedWorkerTaskPool: (poolOptions: WorkerTaskPoolOptions<unknown>) => {
       let worker: ReturnType<NonNullable<typeof poolOptions.prepareWorker>> | undefined;
+      const retiring = new Set<NonNullable<typeof worker>>();
+      let activeTasks = 0;
       return {
         async run(prepare: () => unknown, options: WorkerTaskOptions<unknown>) {
           const prepareInput = () => {
@@ -76,16 +78,29 @@ vi.mock("../../infra/worker-task-pool.js", async (importOriginal) => {
             worker ??= poolOptions.prepareWorker?.();
             return input;
           };
-          return await (observed.deferredRun
-            ? observed.deferredRun(prepareInput, options)
-            : observed.run(prepareInput(), options));
+          activeTasks++;
+          try {
+            return await (observed.deferredRun
+              ? observed.deferredRun(prepareInput, options)
+              : observed.run(prepareInput(), options));
+          } finally {
+            activeTasks--;
+          }
         },
+        getSnapshot: () => ({ activeTasks }),
         async rotate() {
-          const previous = worker;
+          if (worker) {
+            retiring.add(worker);
+          }
           worker = undefined;
+          const previous = [...retiring];
           try {
             await observed.rotate();
-            await previous?.releaseResources?.();
+            for (const prepared of previous) {
+              if (retiring.delete(prepared)) {
+                await prepared.releaseResources?.();
+              }
+            }
           } catch (error) {
             void Promise.resolve(poolOptions.onRetirementFailure?.(error)).catch(() => undefined);
             throw error;

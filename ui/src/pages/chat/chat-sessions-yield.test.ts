@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChatItem } from "../../lib/chat/chat-types.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
+import { resetWorkingProgress } from "./chat-progress.ts";
 import { pendingSessionsYield, projectSessionsYieldItems } from "./chat-sessions-yield.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { createProps } from "./chat-thread.test-support.ts";
@@ -42,6 +43,8 @@ const nestedHistory = [
   },
 ];
 const pendingHandoff = { timestamp: 2_000, runId: "parent-run" };
+// A confirmed handoff leaves one structural item behind and nothing to draw.
+const silentBoundary = expect.objectContaining({ kind: "notice", handoffBoundary: true, text: "" });
 
 describe("sessions_yield transcript projection", () => {
   it.each([false, true])(
@@ -82,7 +85,10 @@ describe("sessions_yield transcript projection", () => {
     ["nested exec activity", nestedHistory],
   ])("leaves no transcript row for %s and reports the pending handoff", (_name, messages) => {
     const original = structuredClone(messages);
-    expect(buildChatItems(createProps({ messages, showToolCalls: false }))).toEqual([]);
+    // Only the boundary remains, and it carries nothing a reader could see.
+    expect(buildChatItems(createProps({ messages, showToolCalls: false }))).toEqual([
+      silentBoundary,
+    ]);
     expect(pendingSessionsYield(messages)).toEqual(pendingHandoff);
     expect(pendingSessionsYield(messages)).toEqual(pendingHandoff);
     expect(messages).toEqual(original);
@@ -100,9 +106,7 @@ describe("sessions_yield transcript projection", () => {
     const messages = [...separateHistory, later];
     const items = buildChatItems(createProps({ messages }));
     // The boundary is structural: it carries nothing a reader could see.
-    expect(items.filter((item) => item.kind === "notice")).toEqual([
-      expect.objectContaining({ handoffBoundary: true, text: "" }),
-    ]);
+    expect(items.filter((item) => item.kind === "notice")).toEqual([silentBoundary]);
     expect(items[0]).toMatchObject({ kind: "notice", handoffBoundary: true });
     expect(items[0]).not.toHaveProperty("label");
     expect(pendingSessionsYield(messages)).toBeNull();
@@ -172,7 +176,7 @@ describe("sessions_yield transcript projection", () => {
       },
     ];
     const items = buildChatItems(createProps({ messages }));
-    expect(items.some((item) => item.kind === "notice")).toBe(false);
+    expect(items.filter((item) => item.kind === "notice")).toEqual([silentBoundary]);
     const remaining = items.flatMap((item) => (item.kind === "group" ? item.messages : []));
     expect(
       remaining.flatMap(({ message }) => extractToolCardsCached(message).map((card) => card.name)),
@@ -215,7 +219,7 @@ describe("sessions_yield transcript projection", () => {
     const items = buildChatItems(
       createProps({ messages, subagentWait: { startedAt: 2_500, runId: "parent-run" } }),
     );
-    expect(items.some((item) => item.kind === "notice")).toBe(false);
+    expect(items.filter((item) => item.kind === "notice")).toEqual([silentBoundary]);
     expect(items.at(-1)).toMatchObject({
       kind: "reading-indicator",
       waitingOn: "subagents",
@@ -237,5 +241,59 @@ describe("sessions_yield transcript projection", () => {
       expect.objectContaining({ runId: "resumed-run" }),
     ]);
     expect(working.at(-1)).not.toHaveProperty("waitingOn");
+  });
+
+  describe("a run that resumed the handoff", () => {
+    const asked = { role: "user", content: "Split the work.", timestamp: 1_000 };
+    const request = { askedAt: 1_000, runIds: ["parent-run"] };
+    const working = { runActive: true, runWorking: true, streamStartedAt: 3_000 };
+    const status = (messages: unknown[], overrides: Parameters<typeof createProps>[0] = {}) =>
+      buildChatItems(
+        createProps({ messages, runId: "resumed-run", ...working, ...overrides }),
+      ).find((item) => item.kind === "reading-indicator");
+
+    it("counts from the request and names the run that handed off", () => {
+      expect(status([asked, ...separateHistory])).toMatchObject({
+        runId: "resumed-run",
+        startedAt: 1_000,
+        request,
+      });
+      // Search hides rows, not what the run is answering.
+      expect(
+        status([asked, ...separateHistory], { searchOpen: true, searchQuery: "no such text" }),
+      ).toMatchObject({ startedAt: 1_000, request });
+      // A second handoff in the same request extends the chain, oldest run first.
+      const again = separateHistory.map((message) => ({
+        ...message,
+        runId: "second-run",
+        timestamp: message.timestamp + 500,
+      }));
+      expect(status([asked, ...separateHistory, ...again])).toMatchObject({
+        request: { askedAt: 1_000, runIds: ["parent-run", "second-run"] },
+      });
+    });
+
+    it("is recognized before the pane knows its run id", () => {
+      resetWorkingProgress();
+      const items = buildChatItems(
+        createProps({ messages: [asked, ...separateHistory], ...working }),
+      );
+      const unnamed = items.find((item) => item.kind === "reading-indicator");
+      expect(unnamed).toMatchObject({ startedAt: 1_000, request });
+      expect(unnamed).not.toHaveProperty("runId");
+    });
+
+    it("keeps its own status when the turn is not just that chain", () => {
+      // The request is outside the loaded window.
+      const unanchored = status(separateHistory);
+      expect(unanchored).toMatchObject({ runId: "resumed-run", startedAt: 3_000 });
+      expect(unanchored).not.toHaveProperty("request");
+      // A message sent after the handoff starts a request of its own.
+      const later = { role: "user", content: "Also check the docs.", timestamp: 2_500 };
+      expect(status([asked, ...separateHistory, later])).not.toHaveProperty("request");
+      // Another run already answered before the one that handed off began.
+      const earlier = { role: "assistant", runId: "first-run", timestamp: 1_500, content: "Done." };
+      expect(status([asked, earlier, ...separateHistory])).not.toHaveProperty("request");
+    });
   });
 });

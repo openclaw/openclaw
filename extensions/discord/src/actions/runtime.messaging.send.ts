@@ -35,14 +35,6 @@ function resolveActionReplyReference(ctx: DiscordMessagingActionContext, replyTo
     : createReusableDiscordReplyReference(replyToId);
 }
 
-function readDiscordThreadArchiveTimestamp(thread: unknown): string | undefined {
-  const metadata = asOptionalRecord(asOptionalRecord(thread)?.thread_metadata);
-  const archiveTimestamp = metadata?.archive_timestamp;
-  return typeof archiveTimestamp === "string" && archiveTimestamp.trim()
-    ? archiveTimestamp
-    : undefined;
-}
-
 function normalizeDiscordThreadListActionResult(params: {
   value: unknown;
   includeArchived: boolean;
@@ -54,10 +46,13 @@ function normalizeDiscordThreadListActionResult(params: {
   const record = asOptionalRecord(params.value);
   const threadItems = Array.isArray(record?.threads) ? record.threads : [];
   const hasMore = record?.has_more === true;
-  const nextBefore =
+  const archiveTimestamp =
     params.includeArchived && hasMore
-      ? readDiscordThreadArchiveTimestamp(threadItems[threadItems.length - 1])
+      ? asOptionalRecord(asOptionalRecord(threadItems[threadItems.length - 1])?.thread_metadata)
+          ?.archive_timestamp
       : undefined;
+  const nextBefore =
+    typeof archiveTimestamp === "string" && archiveTimestamp.trim() ? archiveTimestamp : undefined;
 
   return {
     ok: true,
@@ -85,7 +80,7 @@ async function appendDiscordThreadRenameResult(
     threadName?: string;
   },
 ) {
-  const threadName = params.threadName?.trim();
+  const threadName = params.threadName;
   if (!threadName) {
     return params.payload;
   }
@@ -337,14 +332,9 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
             "Discord active thread lists require a wildcard channel allowlist so each read target can be authorized.",
         });
       }
+      const query = { guildId, channelId, includeArchived, before, limit };
       const response = await discordMessagingActionRuntime.listThreadsDiscord(
-        {
-          guildId,
-          channelId,
-          includeArchived,
-          before,
-          limit,
-        },
+        query,
         ctx.withOpts(),
       );
       // Discord's active-thread endpoint is guild-wide even when the caller
@@ -356,11 +346,8 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       return jsonResult(
         normalizeDiscordThreadListActionResult({
           value: threads,
-          guildId,
-          channelId,
+          ...query,
           includeArchived: includeArchived === true,
-          before,
-          limit,
         }),
       );
     }

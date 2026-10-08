@@ -115,7 +115,10 @@ class ProgressActivityTimeDirective extends AsyncDirective {
   }
 
   protected override disconnected(): void {
-    this.stopTimer();
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = undefined;
+    }
   }
 
   protected override reconnected(): void {
@@ -128,13 +131,6 @@ class ProgressActivityTimeDirective extends AsyncDirective {
       return;
     }
     this.timer = setInterval(() => this.setValue(this.renderTime()), 30_000);
-  }
-
-  private stopTimer(): void {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = undefined;
-    }
   }
 
   private renderTime() {

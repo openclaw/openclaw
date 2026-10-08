@@ -4,22 +4,41 @@ import SwiftUI
 
 struct ChatSystemNoticeRow: View {
     let notice: ChatTranscriptRow.SystemNotice
+    // periphery:ignore - Read and written through $isExpanded; Xcode 27 omits the projected-binding reference.
+    @State private var isExpanded = false
 
     var body: some View {
-        VStack(spacing: 8) {
-            ChatSystemLine(
-                systemImage: self.notice.systemImage,
-                label: self.notice.label,
-                metric: nil)
-            Text(self.notice.body)
-                .font(OpenClawChatTypography.footnote)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: .infinity)
+        if self.notice.collapsesBody {
+            DisclosureGroup(isExpanded: self.$isExpanded) {
+                Text(self.notice.body)
+                    .font(OpenClawChatTypography.footnote)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 8)
+            } label: {
+                ChatSystemLine(
+                    systemImage: self.notice.systemImage,
+                    label: self.notice.label,
+                    metric: nil)
+            }
+            .foregroundStyle(.secondary)
+            .tint(.secondary)
+            .padding(.vertical, 4)
+        } else {
+            VStack(spacing: 8) {
+                ChatSystemLine(
+                    systemImage: self.notice.systemImage,
+                    label: self.notice.label,
+                    metric: nil)
+                Text(self.notice.body)
+                    .font(OpenClawChatTypography.footnote)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+            }
+            .foregroundStyle(.secondary)
+            .padding(.vertical, 4)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(verbatim: "\(self.notice.label), \(self.notice.body)"))
         }
-        .foregroundStyle(.secondary)
-        .padding(.vertical, 4)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(verbatim: "\(self.notice.label), \(self.notice.body)"))
     }
 }
 
@@ -80,6 +99,8 @@ private struct ChatSystemLine: View {
             }
             .lineLimit(1)
             .minimumScaleFactor(0.75)
+            // The rules take what the label leaves; equal thirds truncated any label longer than a third of the row.
+            .layoutPriority(1)
             Rectangle()
                 .fill(OpenClawChatTheme.divider)
                 .frame(height: 1)
@@ -969,6 +990,16 @@ extension View {
     }
 }
 
+/// Defers action construction until SwiftUI evaluates this body, instead of eagerly assembling actions
+/// in every parent-row update. SwiftUI owns when menu content is evaluated.
+struct ChatDeferredContent<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        self.content()
+    }
+}
+
 struct ChatStreamingAssistantText {
     let sourceText: String
     let includesThinking: Bool
@@ -1168,17 +1199,12 @@ private struct ChatStreamingAssistantTextBody: View {
         let now = Date.timeIntervalSinceReferenceDate
         let nextSnapshot = self.inputSnapshot
         let nextLocation = nextSnapshot.lastProseLocation
-        let nextRevealState: ChatStreamingRevealState
-        if let nextLocation {
-            let nextText = nextSnapshot.prose(at: nextLocation).plainText
-            if nextLocation == self.revealLocation {
-                nextRevealState = step(state: self.revealState, newText: nextText, now: now)
-            } else {
-                nextRevealState = step(state: ChatStreamingRevealState(), newText: nextText, now: now)
-            }
-        } else {
-            nextRevealState = ChatStreamingRevealState()
-        }
+        let nextRevealState = nextLocation.map { location in
+            step(
+                state: location == self.revealLocation ? self.revealState : ChatStreamingRevealState(),
+                newText: nextSnapshot.prose(at: location).plainText,
+                now: now)
+        } ?? ChatStreamingRevealState()
 
         self.snapshot = nextSnapshot
         self.revealLocation = nextLocation

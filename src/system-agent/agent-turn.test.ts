@@ -230,7 +230,9 @@ describe("runSystemAgentTurn", () => {
     currentConfig = {
       agents: { defaults: { model: "anthropic/claude-opus-4-8" } },
     };
-    await expect(turn()).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    await expect(turn()).rejects.toMatchObject({
+      message: expect.stringContaining("verified inference route changed"),
+    });
     expect(runEmbeddedAgent).toHaveBeenCalledOnce();
     expect(session.verifiedInference).toBe(binding);
     expect(session.cliSession).toBeUndefined();
@@ -444,6 +446,8 @@ describe("runSystemAgentTurn", () => {
     }
 
     expect(failure).toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    expect((failure as Error).message).toContain("Select a compatible model/runtime route");
+    expect((failure as Error).message).not.toContain("openclaw onboard");
     expect((failure as SystemAgentInferenceUnavailableError).failures).toEqual([
       expect.objectContaining({
         message: expect.stringContaining(
@@ -917,7 +921,7 @@ describe("runSystemAgentTurn", () => {
         runEmbeddedAgent: runEmbeddedAgent as never,
         readConfigFileSnapshot: readConfigFileSnapshot as never,
       }),
-    ).rejects.toBeInstanceOf(SystemAgentInferenceUnavailableError);
+    ).rejects.toMatchObject({ message: expect.stringContaining("openclaw onboard") });
     expect(readConfigFileSnapshot).not.toHaveBeenCalled();
     expect(runCliAgent).not.toHaveBeenCalled();
     expect(runEmbeddedAgent).not.toHaveBeenCalled();

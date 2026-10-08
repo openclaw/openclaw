@@ -1,4 +1,7 @@
-import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type {
+  ChannelIngressContextBinding,
+  ResolveStableChannelMessageIngressParams,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveXAccount } from "./accounts.js";
 import { normalizeXUserId, openXAllowlist } from "./allowlist.js";
@@ -13,6 +16,7 @@ export async function resolveXIngress(
   post: XPost,
   cfg: OpenClawConfig,
   contextBinding?: ChannelIngressContextBinding,
+  childSessionPublication?: ResolveStableChannelMessageIngressParams["childSessionPublication"],
 ) {
   const core = getXRuntime();
   const account = resolveXAccount(cfg, accountId);
@@ -35,6 +39,7 @@ export async function resolveXIngress(
     subject: { stableId: post.author_id },
     conversation: { kind: "group", id: post.conversation_id },
     contextBinding,
+    childSessionPublication,
     event: { kind: "message", authMode: "inbound", mayPair: false },
     dmPolicy: "disabled",
     groupPolicy:

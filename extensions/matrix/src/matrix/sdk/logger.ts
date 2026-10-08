@@ -7,9 +7,7 @@ import { getMatrixRuntime } from "../../runtime.js";
 
 type LogLevel = "debug" | "info" | "warn" | "error";
 
-export function noop(): void {
-  // no-op
-}
+export function noop(): void {}
 
 let forceConsoleLogging = false;
 let serviceQuiet = false;

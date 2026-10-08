@@ -25,6 +25,8 @@ it.each([
     const root = await fs.realpath(dirs.make("openclaw-entry-replacement-"));
     const sources = [
       "src/entry.ts",
+      "src/shared/detached-async-context.ts",
+      "src/shared/global-singleton.ts",
       "src/cli/dotenv.ts",
       "src/logging.ts",
       "src/cli/failure-output.ts",
@@ -37,7 +39,7 @@ it.each([
     );
     for (const [source, destination] of relocated) {
       const code = (await fs.readFile(source, "utf8")).replace(
-        /(from\s+|import\()"([^"\n]+)"/g,
+        /(from\s+|import\(|import\s+)"([^"\n]+)"/g,
         (_match, prefix: string, specifier: string) => {
           const target = specifier.startsWith(".")
             ? path.resolve(path.dirname(source), specifier).replace(/\.js$/, ".ts")

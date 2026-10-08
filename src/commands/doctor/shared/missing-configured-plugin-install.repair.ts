@@ -36,6 +36,7 @@ import {
   hasRetainedManagedNpmInstallMarker,
   markRetainedManagedNpmInstall,
 } from "../../../plugins/managed-npm-retention.js";
+import { resolveTrustedSourceLinkedOfficialClawHubInstall } from "../../../plugins/official-external-install-records.js";
 import { isPayloadMissing } from "../../../plugins/payload-verification.js";
 import {
   withPluginLifecycleLease,
@@ -48,11 +49,7 @@ import {
 } from "../../../plugins/update.js";
 import { resolveUserPath } from "../../../utils.js";
 import { VERSION_BOUND_RUNTIME_PLUGIN_IDS } from "./configured-runtime-plugin-installs.js";
-import {
-  collectDownloadableInstallCandidates,
-  collectUpdateDeferredPluginIds,
-  resolveConfiguredPluginInstallContext,
-} from "./missing-configured-plugin-install.candidates.js";
+import { resolveConfiguredPluginInstallContext } from "./missing-configured-plugin-install.candidates.js";
 import {
   collectBlockedPluginIds,
   collectConfiguredChannelIds,
@@ -72,7 +69,6 @@ import {
   resolveConfiguredPluginCandidateRepair,
   resolveConfiguredPluginRepairVersions,
 } from "./missing-configured-plugin-install.targets.js";
-import { shouldDeferConfiguredPluginInstallRepair } from "./update-phase.js";
 
 type PluginInstallRepairWarning = {
   message: string;
@@ -80,15 +76,12 @@ type PluginInstallRepairWarning = {
 };
 
 type RepairMissingPluginInstallsResult = {
-  /** User-facing repair notes for installed or recovered plugin records. */
   changes: string[];
-  /** User-facing warnings for failed or skipped plugin install repairs. */
   /** User-facing notices from successful repairs that still need operator review. */
   notices?: string[];
   warnings: string[];
   /** Unresolved consent errors, kept typed for update finalization. */
   outcomes?: PluginUpdateOutcome[];
-  /** Plugin ids successfully repaired from current configuration. */
   repairedPluginIds?: string[];
   /** Successful install-record or package repairs that invalidate retained metadata. */
   pluginInventoryChanged?: true;
@@ -96,15 +89,8 @@ type RepairMissingPluginInstallsResult = {
   deferredRepairDetails?: string[];
   /** Plugin ids whose install repair failed and should be preserved from cleanup passes. */
   failedPluginIds?: string[];
-  /**
-   * The full install-record map after repair. Equal to the input
-   * `baselineRecords` (or the disk-loaded records when no baseline was
-   * provided) plus any mutations (newly-installed payloads, removed stale
-   * bundled records). Callers that need to subsequently overwrite the
-   * persisted index MUST seed their write from this map — the disk has
-   * already been written to with the same set, but the in-memory caller
-   * state is stale otherwise.
-   */
+  /** Complete post-repair records, including baseline mutations. Subsequent
+   * index writes must use this map instead of the caller's stale snapshot. */
   records: Record<string, PluginInstallRecord>;
 };
 
@@ -116,17 +102,11 @@ type PluginInstallRepairOptions = {
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   onWarning?: (warning: PluginInstallRepairWarning) => void;
   beforePersistentEffect?: () => void | Promise<void>;
-  /**
-   * Optional pre-seeded records. When provided, this map is used instead of
-   * the disk-loaded install-record snapshot. Pass the in-memory records
-   * from earlier post-core steps (sync/npm) so this repair pass can layer
-   * its mutations on top of them rather than reading a stale disk
-   * snapshot. The merged result is persisted before this function returns.
-   */
+  /** Earlier post-core sync/npm records replace the disk snapshot so their
+   * pending changes survive this repair's merged index write. */
   baselineRecords?: Record<string, PluginInstallRecord>;
 };
 
-/** Repair missing installs inferred from the current OpenClaw config. */
 export async function repairMissingConfiguredPluginInstalls(
   params: PluginInstallRepairOptions & { repairVersionDrift?: boolean },
 ): Promise<RepairMissingPluginInstallsResult> {
@@ -140,7 +120,6 @@ export async function repairMissingConfiguredPluginInstalls(
   );
 }
 
-/** Repair missing installs for an explicit plugin/channel id set. */
 export async function repairMissingPluginInstallsForIds(
   params: PluginInstallRepairOptions & {
     pluginIds: Iterable<string>;
@@ -234,7 +213,6 @@ async function repairMissingPluginInstallsWithLease(
   });
   const {
     knownIds,
-    configuredChannelOwnerPluginIds,
     bundledPluginsById,
     configuredPluginIdsWithStaleDescriptors,
     operatorManagedPluginIds,
@@ -244,9 +222,7 @@ async function repairMissingPluginInstallsWithLease(
     updateChannel,
     installedPluginIdsWithRepairablePackageDiagnostics,
     installedPluginIdsWithStaleVersionBoundRuntimePackages,
-    installedPluginIdsWithRepairablePackages,
     installedPluginMissingRequiredDependencies,
-    officialReplacementPluginIds,
   } = installContext;
   const changes: string[] = [];
   const notices: string[] = [];
@@ -267,7 +243,6 @@ async function repairMissingPluginInstallsWithLease(
       repairVersionDrift: params.repairVersionDrift,
       onWarning: warn,
     });
-  const deferredPluginIds = new Set<string>();
   let nextRecords = records;
   const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
   const recordFailure = (pluginId: string, messages: string[], code?: string) => {
@@ -336,46 +311,18 @@ async function repairMissingPluginInstallsWithLease(
     );
   }
 
-  if (shouldDeferConfiguredPluginInstallRepair(env)) {
-    const updateDeferredPluginIds = collectUpdateDeferredPluginIds({
-      cfg: params.cfg,
-      env,
-      configuredPluginIds: params.pluginIds,
-      configuredChannelIds: params.channelIds,
-      configuredChannelOwnerPluginIds,
-      blockedPluginIds: params.blockedPluginIds,
-    });
-    for (const pluginId of updateDeferredPluginIds) {
-      if (operatorManagedPluginIds.has(pluginId)) {
-        continue;
-      }
-      deferredPluginIds.add(pluginId);
-      const record = nextRecords[pluginId];
-      if (
-        !record ||
-        (!isPayloadMissing(env, record.installPath) &&
-          !installedPluginMissingRequiredDependencies.has(pluginId))
-      ) {
-        continue;
-      }
-      const detail = `Skipped package-manager repair for configured plugin "${pluginId}" during package update; rerun "openclaw doctor --fix" after the update completes.`;
-      changes.push(detail);
-      deferredRepairDetails.push(detail);
-    }
+  const { pluginIds: deferredPluginIds, repairPluginIds } =
+    installContext.collectDeferredRepairs(nextRecords);
+  for (const pluginId of repairPluginIds) {
+    const detail = `Skipped package-manager repair for configured plugin "${pluginId}" during package update; rerun "openclaw doctor --fix" after the update completes.`;
+    changes.push(detail);
+    deferredRepairDetails.push(detail);
   }
 
-  const missingRecordedPlugins = Object.entries(records).filter(
-    ([pluginId]) =>
-      !operatorManagedPluginIds.has(pluginId) &&
-      !deferredPluginIds.has(pluginId) &&
-      !officialReplacementPluginIds.has(pluginId) &&
-      Object.hasOwn(nextRecords, pluginId) &&
-      !bundledPluginsById.has(pluginId) &&
-      ((params.pluginIds.has(pluginId) &&
-        (!knownIds.has(pluginId) || isPayloadMissing(env, nextRecords[pluginId]?.installPath))) ||
-        configuredPluginIdsWithStaleDescriptors.has(pluginId) ||
-        installedPluginIdsWithRepairablePackages.has(pluginId) ||
-        driftedPluginIds.has(pluginId)),
+  const missingRecordedPlugins = installContext.collectRecordedRepairs(
+    nextRecords,
+    deferredPluginIds,
+    driftedPluginIds,
   );
   const missingRecordedPluginIds = missingRecordedPlugins.map(([pluginId]) => pluginId);
 
@@ -433,8 +380,10 @@ async function repairMissingPluginInstallsWithLease(
                 (updateChannel === "stable" || updateChannel === "extended-stable") &&
                 params.pluginIds.has(pluginId) &&
                 VERSION_BOUND_RUNTIME_PLUGIN_IDS.has(pluginId) &&
-                record.source === "npm" &&
-                Boolean(cohortSpecs[pluginId]) &&
+                ((record.source === "npm" && Boolean(cohortSpecs[pluginId])) ||
+                  Boolean(
+                    resolveTrustedSourceLinkedOfficialClawHubInstall({ pluginId, record }),
+                  )) &&
                 !newerRecordedPluginIds.has(pluginId) &&
                 (installedPluginIdsWithStaleVersionBoundRuntimePackages.has(pluginId) ||
                   isPayloadMissing(env, record.installPath)),
@@ -504,34 +453,7 @@ async function repairMissingPluginInstallsWithLease(
     }
   }
 
-  const missingPluginIds = new Set(
-    [...params.pluginIds].filter((pluginId) => {
-      if (operatorManagedPluginIds.has(pluginId) || deferredPluginIds.has(pluginId)) {
-        return false;
-      }
-      const hasRecord = Object.hasOwn(nextRecords, pluginId);
-      return (
-        (!knownIds.has(pluginId) && !hasRecord && !bundledPluginsById.has(pluginId)) ||
-        (hasRecord &&
-          !bundledPluginsById.has(pluginId) &&
-          isPayloadMissing(env, nextRecords[pluginId]?.installPath))
-      );
-    }),
-  );
-  const installCandidatePluginIds = new Set([...missingPluginIds, ...officialReplacementPluginIds]);
-  for (const candidate of collectDownloadableInstallCandidates({
-    cfg: params.cfg,
-    env,
-    missingPluginIds: installCandidatePluginIds,
-    configuredPluginIds: params.pluginIds,
-    configuredChannelIds: params.channelIds,
-    configuredChannelOwnerPluginIds,
-    blockedPluginIds: new Set([
-      ...(params.blockedPluginIds ?? []),
-      ...deferredPluginIds,
-      ...operatorManagedPluginIds,
-    ]),
-  })) {
+  for (const candidate of installContext.collectInstallCandidates(nextRecords, deferredPluginIds)) {
     const repair = resolveConfiguredPluginCandidateRepair({
       candidate,
       records: nextRecords,
@@ -580,9 +502,8 @@ async function repairMissingPluginInstallsWithLease(
     );
     if (shouldReplaceBrokenOfficialInstall) {
       const installedRecord = installed.records[candidate.pluginId];
-      const replacementSucceeded = installed.records !== previousRecords;
       if (
-        replacementSucceeded &&
+        installed.records !== previousRecords &&
         removalPath &&
         assertRemovalPath &&
         removalParent &&

@@ -10,9 +10,7 @@ const CR = "\r";
 const TAB = "\t";
 const BACKSPACE = "\x7f";
 
-/** Bracketed-paste prefix emitted before pasted text. */
 const BRACKETED_PASTE_START = `${ESC}[200~`;
-/** Bracketed-paste suffix emitted after pasted text. */
 const BRACKETED_PASTE_END = `${ESC}[201~`;
 
 type Modifiers = {
@@ -131,7 +129,6 @@ type KeyEncodingResult = {
   warnings: string[];
 };
 
-/** True when request keys depend on normal vs application cursor-key mode. */
 export function hasCursorModeSensitiveKeys(request: KeyEncodingRequest): boolean {
   return (
     request.keys?.some((raw) => {
@@ -148,7 +145,6 @@ export function hasCursorModeSensitiveKeys(request: KeyEncodingRequest): boolean
   );
 }
 
-/** Encodes literal, hex, and named key tokens into one PTY byte payload. */
 export function encodeKeySequence(
   request: KeyEncodingRequest,
   cursorKeyMode?: "normal" | "application",
@@ -175,7 +171,6 @@ export function encodeKeySequence(
   return { data, warnings };
 }
 
-/** Wraps pasted text in bracketed-paste markers when enabled. */
 export function encodePaste(text: string, bracketed = true): string {
   if (!bracketed) {
     return text;
@@ -208,7 +203,6 @@ function encodeKeyToken(
     return `${ESC}[Z`;
   }
 
-  // Handle arrow keys specially based on cursor key mode.
   // DECCKM only changes unmodified cursor keys; modified keys use xterm modifier scheme.
   if (
     modifiableNamedKeys.has(baseLower) &&

@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -113,41 +114,30 @@ export function reserveUpdateFailureReportReceipt(
   );
 }
 
-export function beginUpdateFailureReportReceiptCleanup(
-  attemptId: string,
-  reservationId: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => beginUpdateFailureReportReceiptCleanupRowSync(db, attemptId, reservationId),
-    { env },
-    { operationLabel: "update-failure-report.begin-cleanup" },
-  );
+function receiptTransition<Input>(
+  operationLabel: string,
+  transition: (db: DatabaseSync, attemptId: string, input: Input) => boolean,
+) {
+  return (attemptId: string, input: Input, env: NodeJS.ProcessEnv = process.env): boolean =>
+    runOpenClawStateWriteTransaction(
+      ({ db }) => transition(db, attemptId, input),
+      { env },
+      { operationLabel },
+    );
 }
 
-export function beginStaleUpdateFailureReportReceiptCleanup(
-  attemptId: string,
-  reservationId: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => beginStaleUpdateFailureReportReceiptCleanupRowSync(db, attemptId, reservationId),
-    { env },
-    { operationLabel: "update-failure-report.begin-stale-cleanup" },
-  );
-}
-
-export function completeUpdateFailureReportReceiptCleanup(
-  attemptId: string,
-  reservationId: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => completeUpdateFailureReportReceiptCleanupRowSync(db, attemptId, reservationId),
-    { env },
-    { operationLabel: "update-failure-report.complete-cleanup" },
-  );
-}
+export const beginUpdateFailureReportReceiptCleanup = receiptTransition(
+  "update-failure-report.begin-cleanup",
+  beginUpdateFailureReportReceiptCleanupRowSync,
+);
+export const beginStaleUpdateFailureReportReceiptCleanup = receiptTransition(
+  "update-failure-report.begin-stale-cleanup",
+  beginStaleUpdateFailureReportReceiptCleanupRowSync,
+);
+export const completeUpdateFailureReportReceiptCleanup = receiptTransition(
+  "update-failure-report.complete-cleanup",
+  completeUpdateFailureReportReceiptCleanupRowSync,
+);
 
 export function claimUpdateFailureReportArtifactSweep(
   attemptId: string,
@@ -225,29 +215,15 @@ export function readUpdateFailureReportReceipt(
   );
 }
 
-export function refreshUpdateFailureReportReceiptPreparation(
-  attemptId: string,
-  reservationId: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => refreshUpdateFailureReportReceiptPreparationRowSync(db, attemptId, reservationId),
-    { env },
-    { operationLabel: "update-failure-report.refresh-preparation" },
-  );
-}
+export const refreshUpdateFailureReportReceiptPreparation = receiptTransition(
+  "update-failure-report.refresh-preparation",
+  refreshUpdateFailureReportReceiptPreparationRowSync,
+);
 
-export function finalizeUpdateFailureReportReceipt(
-  attemptId: string,
-  receipt: UpdateFailureReportReceipt,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => finalizeUpdateFailureReportReceiptRowSync(db, attemptId, receipt),
-    { env },
-    { operationLabel: "update-failure-report.finalize" },
-  );
-}
+export const finalizeUpdateFailureReportReceipt = receiptTransition(
+  "update-failure-report.finalize",
+  finalizeUpdateFailureReportReceiptRowSync,
+);
 
 export function markUpdateFailureReportReceiptPending(
   attemptId: string,
@@ -456,9 +432,10 @@ async function readUpdateInstallReceiptPayload(
   }
 }
 
-function normalizeVerifiedGitUpdateReceipt(
-  payload: RestartSentinelPayload | null,
-): VerifiedGitUpdateReceipt | null {
+export async function readVerifiedGitUpdateReceipt(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<VerifiedGitUpdateReceipt | null> {
+  const payload = await readUpdateInstallReceiptPayload(env);
   // Receipt rows are only written after the running install verifies root and revision.
   // An error status records a post-install failure, not an untrusted install.
   if (payload?.kind !== "update" || payload.stats?.mode !== "git" || !payload.stats.after) {
@@ -479,12 +456,6 @@ function normalizeVerifiedGitUpdateReceipt(
     ...(upstreamRef ? { upstreamRef } : {}),
     installedAtMs: payload.ts,
   };
-}
-
-export async function readVerifiedGitUpdateReceipt(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<VerifiedGitUpdateReceipt | null> {
-  return normalizeVerifiedGitUpdateReceipt(await readUpdateInstallReceiptPayload(env));
 }
 
 export async function hasRestartSentinel(env: NodeJS.ProcessEnv = process.env): Promise<boolean> {
@@ -523,19 +494,15 @@ export function formatRestartSentinelMessage(payload: RestartSentinelPayload): s
   return lines.join("\n");
 }
 
-function isRestartRequiredConfigWriteSentinel(payload: RestartSentinelPayload): boolean {
-  return (
-    (payload.kind === "config-apply" || payload.kind === "config-patch") &&
-    payload.status === "ok" &&
-    payload.stats?.requiresRestart === true
-  );
-}
-
 export function summarizeRestartSentinel(payload: RestartSentinelPayload): string {
   if (payload.kind === "config-auto-recovery") {
     return "Gateway auto-recovery";
   }
-  if (isRestartRequiredConfigWriteSentinel(payload)) {
+  if (
+    (payload.kind === "config-apply" || payload.kind === "config-patch") &&
+    payload.status === "ok" &&
+    payload.stats?.requiresRestart === true
+  ) {
     const mode = payload.stats?.mode ? ` (${payload.stats.mode})` : "";
     return `Gateway restart required${mode}`.trim();
   }

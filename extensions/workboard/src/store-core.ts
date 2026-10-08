@@ -48,7 +48,6 @@ import {
   normalizeBoardId,
   normalizeBoundedString,
   normalizeExecution,
-  normalizeLabels,
   normalizeLinkType,
   normalizeMetadata,
   normalizeNotes,
@@ -62,6 +61,7 @@ import {
   trimMetadataToBudget,
 } from "./store-normalizers.js";
 import { readCards } from "./store-read.js";
+import { normalizeCappedStringList } from "./store-string-lists.js";
 
 type WorkboardMutationJournalEntry = {
   before?: WorkboardCard;
@@ -122,8 +122,8 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
   }
 
   async compensateWorkspaceMutation(before: WorkboardCard, after: WorkboardCard): Promise<void> {
-    await this.enqueueMutation(
-      async () => await this.rollbackUpdatedCard(before, after, invertWorkboardWorkspaceMutation),
+    await this.enqueueMutation(() =>
+      this.rollbackUpdatedCard(before, after, invertWorkboardWorkspaceMutation),
     );
   }
 
@@ -323,8 +323,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     assertOwnerCurrent?: () => void,
   ): Promise<WorkboardCard> {
     return await this.enqueueMutation(
-      async () =>
-        await this.withCardCompensation(async () => await this.createDirect(input, scope)),
+      () => this.withCardCompensation(() => this.createDirect(input, scope)),
       assertOwnerCurrent,
     );
   }
@@ -423,7 +422,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
       title: normalizeTitle(input.title),
       status,
       priority: normalizePriority(input.priority, "normal"),
-      labels: normalizeLabels(input.labels),
+      labels: normalizeCappedStringList(input.labels, "labels"),
       position,
       createdAt: now,
       updatedAt: now,
@@ -654,7 +653,7 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
         labels:
           effectivePatch.labels === undefined
             ? existing.labels
-            : normalizeLabels(effectivePatch.labels),
+            : normalizeCappedStringList(effectivePatch.labels, "labels"),
         agentId:
           effectivePatch.agentId === undefined
             ? existing.agentId
@@ -857,11 +856,10 @@ export class WorkboardCoreStore extends WorkboardBoardStore {
     childId: string,
     scope?: WorkboardMutationScope,
   ): Promise<WorkboardCard> {
-    return await this.enqueueMutation(
-      async () =>
-        await this.withCardCompensation(
-          async () => await this.linkCardsDirect(parentId, childId, Date.now(), { scope }),
-        ),
+    return await this.enqueueMutation(() =>
+      this.withCardCompensation(() =>
+        this.linkCardsDirect(parentId, childId, Date.now(), { scope }),
+      ),
     );
   }
 

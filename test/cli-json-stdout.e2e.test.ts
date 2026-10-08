@@ -334,7 +334,7 @@ describe("cli json stdout contract", () => {
             expect(report.probe).toEqual({
               ok: false,
               timedOut: true,
-              error: "probe timed out after 20ms",
+              error: "check timed out after 20ms",
             });
           } else {
             expect(report.probe).toEqual({ ok: true });

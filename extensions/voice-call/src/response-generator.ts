@@ -21,7 +21,6 @@ import { resolveVoiceResponseModel } from "./response-model.js";
 type VoiceResponseParams = {
   voiceConfig: VoiceCallConfig;
   coreConfig: OpenClawConfig;
-  /** Injected host agent runtime */
   agentRuntime: OpenClawPluginApi["runtime"]["agent"];
   /** Call ID for session tracking */
   callId: string;

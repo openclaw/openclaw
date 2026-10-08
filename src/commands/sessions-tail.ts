@@ -1,20 +1,22 @@
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString as toOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
-import { resolveSessionStorePathForAcp } from "../acp/runtime/session-meta.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { callGatewayFromCliWithTransport } from "../cli/gateway-rpc.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { resolveStoredSessionKeyForAgentStore } from "../gateway/session-store-key.js";
+import type { GatewaySessionRow } from "../gateway/session-utils.types.js";
+import { isGatewayRpcUnavailableError } from "../gateway/transport-error.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { sessionActivityTimestamp } from "../shared/session-activity-timestamp.js";
 import { loadSqliteTrajectoryRuntimeEventRowsSync } from "../trajectory/runtime-store.sqlite.js";
 import type { TrajectoryEvent } from "../trajectory/types.js";
 import { resolveCommandSessionStoreTargets } from "./session-store-targets.js";
@@ -54,7 +56,7 @@ function formatTimestamp(ts: string): string {
   if (Number.isNaN(date.getTime())) {
     return "--:--:--";
   }
-  return date.toISOString().slice(11, 19);
+  return `${date.toISOString().slice(11, 19)}Z`;
 }
 
 function toolName(data: Record<string, unknown> | undefined): string {
@@ -130,7 +132,9 @@ function formatProgressLine(event: TrajectoryEvent): string {
   const sessionLabel = formatTextCell(sanitizeTerminalText(sessionKey), SESSION_KEY_PAD);
   const typeLabel = formatTextCell(sanitizeTerminalText(event.type), EVENT_TYPE_PAD);
   const preview = safePreview(event);
-  return [formatTimestamp(event.ts), typeLabel, sessionLabel, preview].join(" ").trimEnd();
+  return [formatTimestamp(event.ts).padEnd(9), typeLabel, sessionLabel, preview]
+    .join(" ")
+    .trimEnd();
 }
 
 function renderEvents(events: TrajectoryEvent[], runtime: RuntimeEnv): void {
@@ -139,41 +143,62 @@ function renderEvents(events: TrajectoryEvent[], runtime: RuntimeEnv): void {
   }
 }
 
-function isRunningSession(selection: TailSelection): boolean {
-  const cfg = getRuntimeConfig();
-  const sessionKey = resolveStoredSessionKeyForAgentStore({
-    cfg,
-    agentId: selection.agentId,
-    sessionKey: selection.key,
-  });
-  const { agentId } = resolveSessionStorePathForAcp({ cfg, sessionKey });
-  const acpMeta = readAcpSessionMetaForEntry({
-    cfg,
-    sessionKey,
-    agentId,
-    entry: selection.entry,
-  });
-  return selection.entry.status === "running" || acpMeta?.state === "running";
-}
-
-function compareSelectionsByUpdatedAt(a: TailSelection, b: TailSelection): number {
-  return (b.entry.updatedAt ?? 0) - (a.entry.updatedAt ?? 0);
-}
-
-function selectSessionsToTail(selections: TailSelection[], sessionKey?: string): TailSelection[] {
-  if (sessionKey) {
-    return selections.filter((selection) => selection.key === sessionKey);
+async function selectSessionsToTail(
+  selections: TailSelection[],
+  opts: SessionsTailOptions,
+  runtime: RuntimeEnv,
+): Promise<TailSelection[]> {
+  if (opts.sessionKey || selections.length === 0) {
+    return selections.filter((selection) => selection.key === opts.sessionKey);
   }
-
-  const running = selections.filter((selection) => isRunningSession(selection));
-  if (running.length > 0) {
-    // Without an explicit key, prefer all running sessions so follow mode shows
-    // concurrent active work instead of only the newest store entry.
-    return running.toSorted(compareSelectionsByUpdatedAt);
+  const sorted = selections.toSorted(
+    (a, b) => sessionActivityTimestamp(b.entry) - sessionActivityTimestamp(a.entry),
+  );
+  if (opts.store !== undefined) {
+    runtime.log("explicit store: ordered by activity");
+  } else {
+    try {
+      const cfg = getRuntimeConfig();
+      const { sessions } = await callGatewayFromCliWithTransport<{
+        sessions: Pick<GatewaySessionRow, "key" | "sessionId" | "hasActiveRun" | "status">[];
+      }>(
+        "sessions.list",
+        { config: cfg },
+        {
+          activeOnly: true,
+          agentId: opts.allAgents ? undefined : selections[0]?.agentId,
+          limit: selections.length,
+          includeGlobal: true,
+          includeUnknown: true,
+        },
+        { progress: false },
+      );
+      const running = new Map(
+        sessions
+          .filter((row) => row.hasActiveRun && row.status !== "queued")
+          .map((row) => [row.key, row.sessionId]),
+      );
+      const active = sorted.filter(
+        (selection) =>
+          running.get(
+            resolveStoredSessionKeyForAgentStore({
+              cfg,
+              agentId: selection.agentId,
+              sessionKey: selection.key,
+            }),
+          ) === selection.sessionId,
+      );
+      if (active.length > 0) {
+        return active;
+      }
+    } catch (error) {
+      if (!isGatewayRpcUnavailableError(error)) {
+        throw error;
+      }
+      runtime.log("Gateway unreachable: showing the most recently active session");
+    }
   }
-
-  const latest = selections.toSorted(compareSelectionsByUpdatedAt)[0];
-  return latest ? [latest] : [];
+  return sorted.slice(0, 1);
 }
 
 function readNewSqliteFollowEvents(state: SqliteFollowState): TrajectoryEvent[] {
@@ -280,7 +305,11 @@ export async function sessionsTailCommand(
       }
     }
   }
-  const selected = selectSessionsToTail(selections, requestedKey);
+  const selected = await selectSessionsToTail(
+    selections,
+    { ...opts, sessionKey: requestedKey },
+    runtime,
+  );
   if (selected.length === 0) {
     if (requestedKey) {
       runtime.error(

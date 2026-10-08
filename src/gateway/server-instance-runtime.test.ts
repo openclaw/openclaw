@@ -93,10 +93,12 @@ describe("createGatewayInstanceRuntime", () => {
     });
     const registry = createRegistry({ agent: rawAgent });
     const context = createContext();
+    const preparing = createDeferred<number | undefined>();
     const runtime = createGatewayInstanceRuntime({
       getContext: () => context,
       getMethodRegistry: () => registry,
       isDispatchAvailable: () => available,
+      prepareRestartRecovery: () => preparing.promise,
     });
     expect(getGatewayRecoveryRuntime()).toBe(runtime.recovery);
 
@@ -149,7 +151,10 @@ describe("createGatewayInstanceRuntime", () => {
     const retainedFacade = await runtime.createAgentTurnFacade({
       client: createSyntheticPluginRuntimeClient({ scopes: [WRITE_SCOPE] }),
     });
+    const preparation = runtime.recovery.prepareRestartRecovery();
     runtime.close();
+    preparing.resolve(undefined);
+    await expect(preparation).rejects.toThrow("Gateway instance dispatch unavailable");
     expect(getGatewayRecoveryRuntime()).toBeUndefined();
     await expect(runtime.recovery.waitForAgent({ runId: "run-1" })).rejects.toThrow(
       "Gateway instance dispatch unavailable",

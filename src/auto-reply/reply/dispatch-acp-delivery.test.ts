@@ -79,7 +79,8 @@ vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
 
-vi.mock("./route-reply.runtime.js", () => ({
+vi.mock("./route-reply.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./route-reply.js")>()),
   routeReply: deliveryMocks.routeReply,
 }));
 
@@ -205,7 +206,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.hasDeliveredFinalReply()).toBe(true);
     expect(coordinator.hasDeliveredVisibleText()).toBe(true);
     expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
-    expect(coordinator.getRoutedCounts().final).toBe(0);
+    expect(coordinator.applyRoutedCounts({ tool: 0, block: 0, final: 0 }).final).toBe(0);
   });
 
   it("tracks visible direct block text for dispatcher-backed delivery", async () => {
@@ -217,7 +218,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.hasDeliveredFinalReply()).toBe(false);
     expect(coordinator.hasDeliveredVisibleText()).toBe(true);
     expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
-    expect(coordinator.getRoutedCounts().block).toBe(0);
+    expect(coordinator.applyRoutedCounts({ tool: 0, block: 0, final: 0 }).block).toBe(0);
   });
 
   it.each([false, true])(
@@ -519,7 +520,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.hasDeliveredFinalReply()).toBe(false);
     expect(coordinator.hasDeliveredVisibleText()).toBe(false);
     expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
-    expect(coordinator.getRoutedCounts().block).toBe(0);
+    expect(coordinator.applyRoutedCounts({ tool: 0, block: 0, final: 0 }).block).toBe(0);
   });
 
   it("honors the legacy routed visibility hook name for plugin compatibility", async () => {
@@ -807,7 +808,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     expect(coordinator.hasDeliveredVisibleText()).toBe(true);
     expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
-    expect(coordinator.getRoutedCounts().block).toBe(1);
+    expect(coordinator.applyRoutedCounts({ tool: 0, block: 0, final: 0 }).block).toBe(1);
     await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("hello");
   });
 
@@ -859,7 +860,7 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(delivered).toBe(true);
     expect(coordinator.hasDeliveredVisibleText()).toBe(true);
     expect(coordinator.hasFailedVisibleTextDelivery()).toBe(false);
-    expect(coordinator.getRoutedCounts().block).toBe(0);
+    expect(coordinator.applyRoutedCounts({ tool: 0, block: 0, final: 0 }).block).toBe(0);
     await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
   });
 });

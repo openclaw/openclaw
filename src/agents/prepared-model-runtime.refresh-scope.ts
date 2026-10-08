@@ -193,18 +193,23 @@ export function resolveSafeRefreshAgentIds(
   return requested;
 }
 
-/** A retired Gateway lender cannot leave a live configured publication without a successor. */
-function createPreparedModelRuntimePluginRecovery(
-  owners: ReadonlyMap<string, PreparedModelRuntimeOwner>,
-  canRecover: () => boolean,
+/** Recovery operations share configured owners and the lifecycle's existing publication barrier. */
+export function createPreparedModelRuntimeRecovery(host: {
+  owners: Map<string, PreparedModelRuntimeOwner>;
+  canRecover: () => boolean;
+  getReplacement: () => PreparedModelRuntimeReplacement | undefined;
+  getAdmissionReplacement: () => PreparedModelRuntimeReplacement | undefined;
+  captureLifetime: () => () => void;
   publish: (
-    config: () => OpenClawConfig,
+    config: OpenClawConfig | (() => OpenClawConfig | Promise<OpenClawConfig>),
     options: PreparedModelRuntimeRefreshOptions,
-  ) => Promise<void>,
-) {
-  return (owner: PreparedModelRuntimeOwner): void => {
+  ) => Promise<void>;
+}) {
+  const { owners, publish } = host;
+  function recoverPlugin(owner: PreparedModelRuntimeOwner): void {
     if (
-      !canRecover() ||
+      !host.canRecover() ||
+      host.getReplacement() ||
       owner.provenance !== "configured" ||
       owner.pending ||
       owners.get(ownerKey(owner.input)) !== owner
@@ -225,17 +230,11 @@ function createPreparedModelRuntimePluginRecovery(
         }
       }
     });
-  };
-}
+  }
 
-/** A failed shared catalog isolate retires its borrowers through the publication owner. */
-function createPreparedModelRuntimeCatalogRecovery(
-  owners: ReadonlyMap<string, PreparedModelRuntimeOwner>,
-  publish: (config: OpenClawConfig, options: PreparedModelRuntimeRefreshOptions) => Promise<void>,
-) {
-  return async (
+  async function recoverCatalog(
     borrowers: readonly { agentDir: string; isCurrent: () => boolean }[],
-  ): Promise<void> => {
+  ): Promise<void> {
     const failed = new Map(
       borrowers
         .filter((borrower) => borrower.isCurrent())
@@ -279,21 +278,8 @@ function createPreparedModelRuntimeCatalogRecovery(
       }
       throw error;
     }
-  };
-}
+  }
 
-/** Recovery operations share configured owners and the lifecycle's existing publication barrier. */
-export function createPreparedModelRuntimeRecovery(host: {
-  owners: Map<string, PreparedModelRuntimeOwner>;
-  canRecover: () => boolean;
-  getReplacement: () => PreparedModelRuntimeReplacement | undefined;
-  getAdmissionReplacement: () => PreparedModelRuntimeReplacement | undefined;
-  captureLifetime: () => () => void;
-  publish: (
-    config: OpenClawConfig | (() => OpenClawConfig | Promise<OpenClawConfig>),
-    options: PreparedModelRuntimeRefreshOptions,
-  ) => Promise<void>;
-}) {
   /** Rechecks only failed catalog-worker replacements, using the existing publication barrier. */
   async function ensureGatewayPreparedModelRuntimeReady({
     agentId,
@@ -313,14 +299,18 @@ export function createPreparedModelRuntimeRecovery(host: {
       return;
     }
     const owner = resolveConfiguredOwner(host.owners, { agentId, agentDir: ".", config: {} });
+    const replacement = host.getAdmissionReplacement();
+    if (replacement && !replacement.degraded) {
+      assertPreparedModelRuntimeAdmissionCanWait();
+    } else if (owner?.pending) {
+      assertPreparedModelRuntimeAdmissionCanWait(owner);
+    }
     const recovery = owner?.catalogRecovery;
     if (!owner || !recovery) {
       return;
     }
     const assertLifetime = host.captureLifetime();
-    const replacement = host.getAdmissionReplacement();
     if (replacement && !replacement.degraded) {
-      assertPreparedModelRuntimeAdmissionCanWait(owner);
       const joinsRecovery = recovery.replacementGateId === replacement.gateId;
       // A publication for another scope must not spend this failure's scheduled opportunity.
       if (demand === "scheduled" && joinsRecovery) {
@@ -376,11 +366,7 @@ export function createPreparedModelRuntimeRecovery(host: {
 
   return {
     ensureReady: ensureGatewayPreparedModelRuntimeReady,
-    recoverCatalog: createPreparedModelRuntimeCatalogRecovery(host.owners, host.publish),
-    recoverPlugin: createPreparedModelRuntimePluginRecovery(
-      host.owners,
-      () => host.canRecover() && !host.getReplacement(),
-      host.publish,
-    ),
+    recoverCatalog,
+    recoverPlugin,
   };
 }

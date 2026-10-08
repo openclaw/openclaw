@@ -47,6 +47,11 @@ const RATE_LIMIT_SPECIFIC_HINT_RE =
   /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again in\b|\bresets?\b|\bplan\b|\bquota\b/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
   /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context length exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
+const PROVIDER_PROMPT_SIZE_LIMIT_RE =
+  /\b(?:this\s+)?prompt\s+(?:is\s+)?(?:too long|longer than)\b.{0,120}\b(?:free tier|single request|per[- ]request)\b/i;
+const PROVIDER_PROMPT_SIZE_LIMIT_USER_MESSAGE =
+  "⚠️ The provider rejected this request because the prompt exceeds its per-request limit. Shorten the prompt and try again, or choose a model with a larger limit.";
+const PROVIDER_PROMPT_SIZE_ERROR_PARSE_MAX_LENGTH = 16_384;
 const NON_ERROR_PROVIDER_PAYLOAD_MAX_LENGTH = 16_384;
 const NON_ERROR_PROVIDER_PAYLOAD_PREFIX_RE = /^codex\s*error(?:\s+\d{3})?[:\s-]+/i;
 
@@ -95,6 +100,21 @@ function extractProviderRateLimitMessage(raw: string): string | undefined {
   return `⚠️ ${trimmed}`;
 }
 
+function renderProviderPromptSizeLimitCopy(raw: string): string | undefined {
+  if (raw.length > PROVIDER_PROMPT_SIZE_ERROR_PARSE_MAX_LENGTH) {
+    return undefined;
+  }
+  const status = extractErrorHttpStatus(raw);
+  if (status?.code !== 400) {
+    return undefined;
+  }
+  const info = parseApiErrorInfo(raw) ?? parseApiErrorInfo(status.rest);
+  const providerMessage = info?.message ?? status.rest;
+  return providerMessage.length <= 300 && PROVIDER_PROMPT_SIZE_LIMIT_RE.test(providerMessage)
+    ? PROVIDER_PROMPT_SIZE_LIMIT_USER_MESSAGE
+    : undefined;
+}
+
 /** Render rate-limit versus overload copy from the canonical classified reason. */
 export function renderRateLimitOrOverloadedCopy(params: {
   reason: Extract<FailoverReason, "rate_limit" | "overloaded">;
@@ -106,6 +126,10 @@ export function renderRateLimitOrOverloadedCopy(params: {
   }
   if (params.reason === "overloaded") {
     return OVERLOADED_ERROR_USER_MESSAGE;
+  }
+  const promptSizeCopy = renderProviderPromptSizeLimitCopy(raw);
+  if (promptSizeCopy) {
+    return promptSizeCopy;
   }
   for (const leg of splitFailoverAggregateLegs(raw)) {
     const fromLeg = extractProviderRateLimitMessage(leg);
@@ -194,17 +218,15 @@ export function renderSanitizedUserFacingText(
       ? formatRawAssistantErrorForUi(trimmed)
       : sanitized;
   }
-  const commandError = formatCommandErrorForUser(trimmed);
-  if (commandError) {
-    return commandError;
-  }
-  const execDenied = formatExecDeniedUserMessage(trimmed);
-  if (execDenied) {
-    return execDenied;
-  }
-  const diskSpace = formatDiskSpaceErrorCopy(trimmed);
-  if (diskSpace) {
-    return diskSpace;
+  for (const format of [
+    formatCommandErrorForUser,
+    formatExecDeniedUserMessage,
+    formatDiskSpaceErrorCopy,
+  ]) {
+    const copy = format(trimmed);
+    if (copy) {
+      return copy;
+    }
   }
   if (/incorrect role information|roles must alternate/i.test(trimmed)) {
     return "Message ordering conflict - please try again. If this persists, use /new to start a fresh session.";
@@ -387,6 +409,12 @@ export function renderRateLimitReplyCopy(params: {
   sanitizeText?: (text: string) => string;
 }): string {
   const attempts = params.attempts ?? [];
+  if (params.reason === "rate_limit") {
+    const promptSizeCopy = renderProviderPromptSizeLimitCopy(params.message);
+    if (promptSizeCopy) {
+      return promptSizeCopy;
+    }
+  }
   const usageLimit = extractCodexUsageLimitErrorMessage(
     attempts,
     params.message,

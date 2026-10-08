@@ -2,8 +2,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChatPendingInputsPage } from "../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { GatewayChatClient } from "../src/tui/gateway-chat.js";
 import { writeOpenAiResponsesSse } from "./helpers/openai-responses-sse.js";
@@ -365,17 +365,6 @@ describe("Gateway queued session rotation", () => {
       client.start();
       await client.waitForReady();
       const sessionKey = "agent:main:followup-drain-restart-e2e";
-      let queuedSourceSettled = false;
-      client.onEvent = ({ event, payload }) => {
-        if (
-          event === "chat" &&
-          isRecord(payload) &&
-          payload.runId === "followup-restart-queued" &&
-          payload.state === "final"
-        ) {
-          queuedSourceSettled = true;
-        }
-      };
       try {
         const first = await client.sendChat({
           sessionKey,
@@ -391,8 +380,17 @@ describe("Gateway queued session rotation", () => {
           runId: "followup-restart-queued",
         });
         expect(second.status).toBe("started");
-        await vi.waitFor(() => {
-          expect(queuedSourceSettled).toBe(true);
+        await vi.waitFor(async () => {
+          const history = (await client.loadHistory({ sessionKey })) as {
+            pendingInputs?: ChatPendingInputsPage;
+          };
+          expect(history.pendingInputs?.items).toEqual([
+            expect.objectContaining({
+              runId: "followup-restart-queued",
+              state: "queued",
+              queued: true,
+            }),
+          ]);
           expect(modelServer.requests).toHaveLength(1);
         }, WAIT_OPTS);
 

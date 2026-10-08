@@ -62,21 +62,7 @@ describe("chat pane composer controls", () => {
       state.sessionKey = "agent:main:main";
       state.chatModelCatalogInitialized = false;
       const container = document.createElement("div");
-      const draw = () =>
-        render(
-          renderChatPaneComposerControls({
-            state,
-            selectedSession: undefined,
-            agentDefaultModel: undefined,
-            modelAccess: { allowed: true, requiredScope: "operator.write" },
-            effortAccess: { allowed: true, requiredScope: "operator.write" },
-            contextWindowAccess: { allowed: true, requiredScope: "operator.admin" },
-            permissionAccess: { allowed: true, requiredScope: "operator.write" },
-            canSelectFull: true,
-            onModelSetup: vi.fn(),
-          }).composerControls,
-          container,
-        );
+      const draw = () => render(composerControls(state), container);
       onTestFinished(() => {
         checking.resolve({ models: [] });
         retireChatMetadataRequests(state);
@@ -120,7 +106,7 @@ describe("chat pane composer controls", () => {
         expect(container.textContent).toContain("Cached Model");
       } else {
         expect(container.querySelector('[data-chat-model-catalog-state="loading"]')).not.toBeNull();
-        expect(container.textContent).toContain("Checking models…");
+        expect(container.textContent).toContain("Loading models…");
       }
 
       checking.reject(new Error("Runtime preparation still failed"));
@@ -129,7 +115,7 @@ describe("chat pane composer controls", () => {
       expect(container.querySelector('[data-chat-model-catalog-state="error"]')).not.toBeNull();
       expect(container.textContent).toContain(failureLabel);
       expect(container.querySelector(".btn__spinner")).toBeNull();
-      expect(container.textContent).not.toContain("Checking models…");
+      expect(container.textContent).not.toContain("Loading models…");
       expect(state.chatModelCatalogError).toContain("Runtime preparation still failed");
 
       request.mockResolvedValueOnce({ models: cachedModels });
@@ -216,7 +202,7 @@ describe("chat pane composer controls", () => {
         expect(container.textContent).toContain("Cached Model");
       } else {
         expect(container.querySelector('[data-chat-model-catalog-state="loading"]')).not.toBeNull();
-        expect(container.textContent).toContain("Checking models…");
+        expect(container.textContent).toContain("Loading models…");
       }
       const freshModels = [{ id: "fresh-model", name: "Fresh Model", provider: "openai" }];
       catalog.resolve({
@@ -283,7 +269,7 @@ describe("chat pane composer controls", () => {
     render(composerControls(host), container);
     expect(container.querySelector("[data-chat-model-catalog-state]")).toBeNull();
     expect(container.textContent).toContain("Cached Model");
-    expect(container.textContent).not.toContain("Checking models…");
+    expect(container.textContent).not.toContain("Loading models…");
 
     startup.resolve({
       messages: [],
