@@ -268,7 +268,10 @@ suite.define(() => {
       expectedConfigRevision: "automation-v1",
       patch: { enabled: false },
     });
-    expect(await autoMerge.isDisabled()).toBe(true);
+    expect(await autoFix.isChecked()).toBe(false);
+    expect(await autoMerge.isEnabled()).toBe(true);
+    expect(await page.locator(".chat-ci__automation-status").count()).toBe(0);
+    expect(await page.getByRole("link", { name: "Open automation" }).count()).toBe(0);
     const disabledFix = { ...fix, enabled: false, configRevision: "automation-v2" };
     await gateway.setMethodResponse("cron.list", automationInventory([disabledFix, merge]));
     await gateway.resolveDeferred("cron.update", disabledFix);

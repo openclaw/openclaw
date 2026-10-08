@@ -11,6 +11,7 @@ import { resolveHeartbeatSession } from "../../infra/heartbeat-runner-session.js
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import type { SqliteWorkerOperationSettlement } from "../../infra/sqlite-worker-operation-settlement.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import * as registryListing from "../../state/openclaw-agent-db-registry-listing.js";
 import {
   registerOpenClawAgentDatabase,
@@ -38,19 +39,19 @@ import {
 import { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
 import {
   loadSessionEntry,
-  patchSessionEntryCore,
+  patchSessionEntryTarget,
   replaceSessionEntrySync,
 } from "./session-accessor.sqlite-entry.js";
 import { loadExactSessionEntryReadOnly } from "./session-accessor.sqlite-exact-read.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import type { SessionAccessScope } from "./session-accessor.types.js";
+import type { SessionAccessScope, SessionEntryTargetPatchScope } from "./session-accessor.types.js";
 import {
   readSessionEntryInWorker,
   readSessionEntryReadOnlyInWorker,
   withSessionEntriesFromStoresInWorker,
 } from "./session-entry-read-runtime.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
-import { historyLane } from "./session-transcript-worker-resources.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 
 let state: OpenClawTestState;
 beforeAll(async () => {
@@ -646,18 +647,20 @@ it.each([
         await release.promise;
       }
     };
-    const closeResources = historyLane.pool.closeResources.bind(historyLane.pool);
-    const rotate = historyLane.pool.rotate.bind(historyLane.pool);
+    const closeResources = targetDiscoveryLane.pool.closeResources.bind(targetDiscoveryLane.pool);
+    const rotate = targetDiscoveryLane.pool.rotate.bind(targetDiscoveryLane.pool);
     const closeIntercept = vi
-      .spyOn(historyLane.pool, "closeResources")
+      .spyOn(targetDiscoveryLane.pool, "closeResources")
       .mockImplementation(async (key) => {
         await closeResources(key);
         await holdDiscoveryCleanup();
       });
-    const rotateIntercept = vi.spyOn(historyLane.pool, "rotate").mockImplementation(async () => {
-      await rotate();
-      await holdDiscoveryCleanup();
-    });
+    const rotateIntercept = vi
+      .spyOn(targetDiscoveryLane.pool, "rotate")
+      .mockImplementation(async () => {
+        await rotate();
+        await holdDiscoveryCleanup();
+      });
     const capture = executionOwner.captureOpenClawAgentDatabaseExecution;
     const intercept = vi
       .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution")
@@ -764,20 +767,26 @@ it.each(
     ["global", "topic"].map((sessionKey) => ({ agentId, sessionKey })),
   ),
 )(
-  "preserves a populated incognito owner for a mismatched explicit locator ($agentId, $sessionKey)",
+  "preserves a populated incognito owner for an explicit locator ($agentId, $sessionKey)",
   async ({ agentId, sessionKey }) => {
     const owner = { agentId: `ops-memory-${agentId ?? "missing"}-${sessionKey}`, env: state.env };
     const storePath = resolveIncognitoOpenClawAgentSqlitePath(owner);
     const ownedScope = { ...owner, storePath, sessionKey };
-    replaceSessionEntrySync(ownedScope, { sessionId: "private-ops-session", updatedAt: 1 });
+    const entry = { sessionId: "private-ops-session", updatedAt: 1 };
+    replaceSessionEntrySync(ownedScope, entry);
+    const database = openOpenClawAgentDatabase({ ...owner, path: storePath });
     const scope = { env: state.env, storePath, sessionKey, agentId };
-    expect(() => loadSessionEntry(scope)).toThrow(/already open for agent ops-memory-/);
+    if (agentId === undefined) {
+      expect(loadSessionEntry(scope)).toMatchObject(entry);
+      await expect(readSessionEntryInWorker(scope)).resolves.toMatchObject(entry);
+    } else {
+      const mismatch = "Explicit incognito database target does not match its agent and state root";
+      expect(() => loadSessionEntry(scope)).toThrow(mismatch);
+      await expect(readSessionEntryInWorker(scope)).rejects.toThrow(mismatch);
+    }
     expect(fs.existsSync(storePath)).toBe(false);
-    await expect
-      .soft(readSessionEntryInWorker(scope, () => {}))
-      .rejects.toThrow(/already open for agent ops-memory-/);
-    expect.soft(fs.existsSync(storePath)).toBe(false);
-    expect(loadSessionEntry(ownedScope)).toMatchObject({ sessionId: "private-ops-session" });
+    expect(openOpenClawAgentDatabase({ ...owner, path: storePath })).toBe(database);
+    expect(loadSessionEntry(ownedScope)).toMatchObject(entry);
   },
 );
 
@@ -851,6 +860,7 @@ function holdCohortReply() {
 
 it("refreshes admitted cohorts after a known write and a foreign membership commit between phases", async () => {
   const { scope, database } = createCohortFixture("fresh-phases");
+  const identity = readOpenClawAgentDatabaseIdentity(database);
   addSessionMember(scope, { identityId: "original-member", addedBy: "owner", addedAt: 1 });
   const { claim, reader } = await admitCohort(scope);
   const request = { sessionKeys: [scope.sessionKey], includeMembers: true, snapshotFields: [] };
@@ -873,6 +883,28 @@ it("refreshes admitted cohorts after a known write and a foreign membership comm
     );
     expect(observer.counts).toEqual(emptySqliteCounts());
     expect(escaped).toThrow("consumption has ended");
+    let readTarget: SessionEntryTargetPatchScope | undefined;
+    const recordReadTarget = (target: SessionEntryTargetPatchScope) => {
+      readTarget = target;
+    };
+    await expect(
+      readSessionEntryInWorker(scope, () => {}, undefined, recordReadTarget, reader),
+    ).resolves.toMatchObject({ sessionId: "fresh-phases", lifecycleRevision: "original" });
+    if (!readTarget) {
+      throw new Error("Writable cohort read omitted its physical target");
+    }
+    expect(readTarget).toMatchObject({
+      agentId: scope.agentId,
+      storePath: database.path,
+      readSource: {
+        agentId: database.agentId,
+        path: database.path,
+        databaseIdentity: identity.identity,
+        databaseBirthtime: identity.birthtime,
+      },
+      target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+    });
+    expect(observer.counts).toEqual(emptySqliteCounts());
     following = external.promise.then(() =>
       reader.withRead(
         request,
@@ -886,7 +918,9 @@ it("refreshes admitted cohorts after a known write and a foreign membership comm
       ),
     );
     // Completing the writer before releasing the external wait proves no FIFO is held between phases.
-    await patchSessionEntryCore(scope, () => ({ label: "known write" }), { skipMaintenance: true });
+    await patchSessionEntryTarget(readTarget, () => ({ label: "known write" }), {
+      skipMaintenance: true,
+    });
     peer.prepare("DELETE FROM session_members WHERE session_key = ?").run(scope.sessionKey);
     peer
       .prepare(`INSERT INTO session_members (session_key, identity_id, added_by, added_at)
@@ -903,6 +937,12 @@ it("refreshes admitted cohorts after a known write and a foreign membership comm
         async () => undefined,
       ),
     ).rejects.toThrow("consumers must remain synchronous");
+    await claim.release();
+    readTarget = undefined;
+    await expect(
+      readSessionEntryInWorker(scope, () => {}, undefined, recordReadTarget, reader),
+    ).rejects.toThrow(/released|closed|revoked/iu);
+    expect(readTarget).toBeUndefined();
   } finally {
     observer.restore();
     external.resolve();

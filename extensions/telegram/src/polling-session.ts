@@ -181,7 +181,12 @@ export class TelegramPollingSession {
     );
   }
 
-  #drainPendingDeliveriesAfterReconnect() {
+  #maybeDrainPendingDeliveries(finishedAt: number) {
+    if (finishedAt < this.#nextDeliveryDrainAt) {
+      return;
+    }
+    // Match the queue's first retry window, including while an earlier drain is still active.
+    this.#nextDeliveryDrainAt = finishedAt + TELEGRAM_DELIVERY_DRAIN_INTERVAL_MS;
     if (this.#deliveryDrainInFlight) {
       return;
     }
@@ -209,16 +214,6 @@ export class TelegramPollingSession {
       .finally(() => {
         this.#deliveryDrainInFlight = false;
       });
-  }
-
-  #maybeDrainPendingDeliveries(finishedAt: number) {
-    if (finishedAt < this.#nextDeliveryDrainAt) {
-      return;
-    }
-    // Match the queue's first retry window. This keeps healthy polling useful
-    // as a recovery driver without reopening the drain on every long poll.
-    this.#nextDeliveryDrainAt = finishedAt + TELEGRAM_DELIVERY_DRAIN_INTERVAL_MS;
-    this.#drainPendingDeliveriesAfterReconnect();
   }
 
   async #createPollingBot(cycleAbortController: AbortController): Promise<TelegramBot | undefined> {

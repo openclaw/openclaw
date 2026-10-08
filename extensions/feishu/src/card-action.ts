@@ -70,19 +70,11 @@ function beginFeishuCardActionToken(params: {
   if (processedCardActions.has(key)) {
     return false;
   }
-  const expiresAt = resolveExpiresAtMsFromDurationMs(FEISHU_CARD_ACTION_TOKEN_TTL_MS, {
-    nowMs: now,
-  });
-  if (expiresAt !== undefined) {
-    processedCardActions.set(key, {
-      status: "inflight",
-      expiresAt,
-    });
-  }
+  refreshFeishuCardActionToken(normalizedToken, params.accountId, now);
   return true;
 }
 
-function completeFeishuCardAction(actionId: string, accountId: string, now = Date.now()): void {
+function refreshFeishuCardActionToken(actionId: string, accountId: string, now = Date.now()): void {
   const normalizedActionId = actionId.trim();
   if (!normalizedActionId) {
     return;
@@ -95,10 +87,7 @@ function completeFeishuCardAction(actionId: string, accountId: string, now = Dat
     processedCardActions.delete(key);
     return;
   }
-  processedCardActions.set(key, {
-    status: "completed",
-    expiresAt,
-  });
+  processedCardActions.set(key, { expiresAt });
 }
 
 function buildSyntheticMessageEvent(
@@ -396,6 +385,6 @@ export async function handleFeishuCardAction(params: {
       account,
     });
   } finally {
-    completeFeishuCardAction(event.token, account.accountId);
+    refreshFeishuCardActionToken(event.token, account.accountId);
   }
 }

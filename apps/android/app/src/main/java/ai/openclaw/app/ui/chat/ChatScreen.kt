@@ -39,6 +39,7 @@ import ai.openclaw.app.chat.ChatWidgetResource
 import ai.openclaw.app.chat.MessageSpeechPhase
 import ai.openclaw.app.chat.MessageSpeechState
 import ai.openclaw.app.chat.SessionBranch
+import ai.openclaw.app.chat.SessionEditorAttachment
 import ai.openclaw.app.chat.VoiceNoteRecorderState
 import ai.openclaw.app.chat.chatOutboxQueueFailureText
 import ai.openclaw.app.chat.isTranscriptOnlyOpenClawAssistant
@@ -334,6 +335,21 @@ private data class ChatBrowserPresentation(
   val identity: List<String>,
   val tab: ChatBrowserTab,
 )
+
+private fun sessionEditorDraft(
+  owner: ChatComposerOwner,
+  expectedInput: String,
+  editorText: String?,
+  editorAttachments: List<SessionEditorAttachment>,
+): ChatDraft =
+  ChatDraft(
+    text = editorText.orEmpty(),
+    placement = ChatDraftPlacement.Replace,
+    owner = owner,
+    expectedExistingText = expectedInput,
+    acceptsEmptyText = true,
+    attachments = editorAttachments.toPendingAttachments(),
+  )
 
 /** Full chat surface that wires MainViewModel state to messages, attachments, voice, and composer actions. */
 @Composable
@@ -1011,16 +1027,7 @@ internal fun ChatScreen(
       val expectedInput = inputDrafts[composerOwner].orEmpty()
       scope.launch {
         val result = viewModel.rewindChatAtEntry(entryId) ?: return@launch
-        viewModel.setChatDraft(
-          ChatDraft(
-            text = result.editorText.orEmpty(),
-            placement = ChatDraftPlacement.Replace,
-            owner = composerOwner,
-            expectedExistingText = expectedInput,
-            acceptsEmptyText = true,
-            attachments = result.editorAttachments.toPendingAttachments(),
-          ),
-        )
+        viewModel.setChatDraft(sessionEditorDraft(composerOwner, expectedInput, result.editorText, result.editorAttachments))
       }
     },
     onForkMessage = { entryId ->
@@ -1029,16 +1036,7 @@ internal fun ChatScreen(
         val newOwner = composerOwner.copy(sessionKey = result.sessionKey)
         val expectedInput = inputDrafts[newOwner].orEmpty()
         viewModel.switchChatSession(result.sessionKey, composerOwner.agentId)
-        viewModel.setChatDraft(
-          ChatDraft(
-            text = result.editorText.orEmpty(),
-            placement = ChatDraftPlacement.Replace,
-            owner = newOwner,
-            expectedExistingText = expectedInput,
-            acceptsEmptyText = true,
-            attachments = result.editorAttachments.toPendingAttachments(),
-          ),
-        )
+        viewModel.setChatDraft(sessionEditorDraft(newOwner, expectedInput, result.editorText, result.editorAttachments))
       }
     },
     speechState = messageSpeechState,
@@ -2073,6 +2071,12 @@ private fun EmptyChatHint(
   onStarterPrompt: (String) -> Unit,
   modifier: Modifier = Modifier,
 ) {
+  val (title, body) =
+    when {
+      healthOk -> nativeString("Ready when you are") to nativeString("Start with a prompt, or use voice.")
+      gatewayOffline -> nativeString("Gateway offline") to nativeString("Use the recovery options below to reconnect.")
+      else -> nativeString("Chat not ready") to nativeString("Use Refresh chat to check Gateway health.")
+    }
   Column(
     modifier = modifier.fillMaxWidth().padding(horizontal = 2.dp),
     horizontalAlignment = Alignment.CenterHorizontally,
@@ -2080,26 +2084,12 @@ private fun EmptyChatHint(
   ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
       Text(
-        text =
-          if (healthOk) {
-            nativeString("Ready when you are")
-          } else if (gatewayOffline) {
-            nativeString("Gateway offline")
-          } else {
-            nativeString("Chat not ready")
-          },
+        text = title,
         style = ClawTheme.type.title.copy(lineHeight = 23.sp),
         color = ClawTheme.colors.text,
       )
       Text(
-        text =
-          if (healthOk) {
-            nativeString("Start with a prompt, or use voice.")
-          } else if (gatewayOffline) {
-            nativeString("Use the recovery options below to reconnect.")
-          } else {
-            nativeString("Use Refresh chat to check Gateway health.")
-          },
+        text = body,
         style = ClawTheme.type.body,
         color = ClawTheme.colors.textMuted,
         textAlign = TextAlign.Center,
@@ -3018,22 +3008,7 @@ private fun ProgressCardPill(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
       ) {
-        if (expanded) {
-          Text(
-            text = nativeString("Task progress"),
-            style = ClawTheme.type.caption.copy(fontWeight = FontWeight.SemiBold),
-            color = ClawTheme.colors.text,
-            modifier = Modifier.weight(1f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-          )
-          Text(
-            text = expandedActivityLabel,
-            style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Medium),
-            color = ClawTheme.colors.textMuted,
-            maxLines = 1,
-          )
-        } else {
+        if (!expanded) {
           when {
             complete -> {
               Icon(
@@ -3052,22 +3027,22 @@ private fun ProgressCardPill(
               Box(modifier = Modifier.width(14.dp))
             }
           }
+        }
+        Text(
+          text = if (expanded) nativeString("Task progress") else currentStep?.step ?: nativeString("Progress note"),
+          style = ClawTheme.type.caption.copy(fontWeight = if (expanded) FontWeight.SemiBold else FontWeight.Medium),
+          color = ClawTheme.colors.text,
+          modifier = Modifier.weight(1f),
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
+        if (expanded || steps.isNotEmpty()) {
           Text(
-            text = currentStep?.step ?: nativeString("Progress note"),
-            style = ClawTheme.type.caption.copy(fontWeight = FontWeight.Medium),
-            color = ClawTheme.colors.text,
-            modifier = Modifier.weight(1f),
+            text = if (expanded) expandedActivityLabel else nativeString("\$currentPosition/\${steps.size}", currentPosition, steps.size),
+            style = if (expanded) ClawTheme.type.caption.copy(fontWeight = FontWeight.Medium) else ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
             maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
           )
-          if (steps.isNotEmpty()) {
-            Text(
-              text = nativeString("\$currentPosition/\${steps.size}", currentPosition, steps.size),
-              style = ClawTheme.type.caption,
-              color = ClawTheme.colors.textMuted,
-              maxLines = 1,
-            )
-          }
         }
         Icon(
           imageVector = if (expanded) Icons.Default.KeyboardArrowUp else Icons.AutoMirrored.Filled.KeyboardArrowRight,
@@ -3493,16 +3468,15 @@ private fun ChatComposer(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
       ) {
-        if (voiceNoteState is VoiceNoteRecorderState.Recording) {
-          VoiceNoteRecordingControls(
+        if (voiceNoteState is VoiceNoteRecorderState.Recording || voiceNoteState is VoiceNoteRecorderState.Preparing) {
+          VoiceNoteControls(
+            preparing = voiceNoteState is VoiceNoteRecorderState.Preparing,
             elapsedMs = voiceNoteElapsedMs,
             level = voiceNoteLevel,
             onCancel = onCancelVoiceNote,
             onDone = onFinishVoiceNote,
             modifier = Modifier.weight(1f),
           )
-        } else if (voiceNoteState is VoiceNoteRecorderState.Preparing) {
-          VoiceNotePreparing(modifier = Modifier.weight(1f))
         } else {
           inputContent()
         }
@@ -4121,9 +4095,7 @@ private fun ChatModelPickerRow(
         GatewayModelUnavailableReason.AuthFailed,
         -> nativeString("Authentication needed")
 
-        GatewayModelUnavailableReason.Cooldown -> nativeString("Unavailable")
-
-        null -> nativeString("Unavailable")
+        GatewayModelUnavailableReason.Cooldown, null -> nativeString("Unavailable")
       }
     }
   Surface(

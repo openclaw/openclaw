@@ -42,6 +42,16 @@ type PlacementDatabase = Pick<
 
 export const query = (db: DatabaseSync) => getNodeSqliteKysely<PlacementDatabase>(db);
 
+export function turnClaimValues(claim: PersistedTurnClaim | null) {
+  return {
+    turn_claim_owner: claim?.owner ?? null,
+    turn_claim_id: claim?.claimId ?? null,
+    turn_claim_run_id: claim?.runId ?? null,
+    turn_claim_generation: claim?.generation ?? null,
+    turn_claim_owner_epoch: claim?.ownerEpoch ?? null,
+  };
+}
+
 function parseTurnClaim(row: PlacementRow): PersistedTurnClaim | null {
   if (row.turn_claim_owner === null) {
     return null;
@@ -229,32 +239,30 @@ export function ensureLocal(
   }
   executeSqliteQuerySync(
     db,
-    query(db).insertInto("worker_session_placements").values({
-      session_id: identity.sessionId,
-      agent_id: identity.agentId,
-      session_key: identity.sessionKey,
-      execution_mode: null,
-      state: "local",
-      environment_id: null,
-      transition_generation: 0,
-      active_owner_epoch: null,
-      workspace_base_manifest_ref: null,
-      remote_workspace_dir: null,
-      worker_bundle_hash: null,
-      last_transcript_ack_cursor: null,
-      last_live_event_ack_cursor: null,
-      recovery_error: null,
-      terminal_reason: null,
-      terminal_at_ms: null,
-      turn_claim_owner: null,
-      turn_claim_id: null,
-      turn_claim_run_id: null,
-      turn_claim_generation: null,
-      turn_claim_owner_epoch: null,
-      created_at_ms: nowMs,
-      updated_at_ms: nowMs,
-      state_changed_at_ms: nowMs,
-    }),
+    query(db)
+      .insertInto("worker_session_placements")
+      .values({
+        session_id: identity.sessionId,
+        agent_id: identity.agentId,
+        session_key: identity.sessionKey,
+        execution_mode: null,
+        state: "local",
+        environment_id: null,
+        transition_generation: 0,
+        active_owner_epoch: null,
+        workspace_base_manifest_ref: null,
+        remote_workspace_dir: null,
+        worker_bundle_hash: null,
+        last_transcript_ack_cursor: null,
+        last_live_event_ack_cursor: null,
+        recovery_error: null,
+        terminal_reason: null,
+        terminal_at_ms: null,
+        ...turnClaimValues(null),
+        created_at_ms: nowMs,
+        updated_at_ms: nowMs,
+        state_changed_at_ms: nowMs,
+      }),
   );
   const record = getRequired(db, identity.sessionId);
   publishPlacementTurnClaimState(db, record, null);
@@ -328,11 +336,7 @@ export function transitionValues(
           : nullableRequired(patch.terminalReason, "terminal reason")
         : null,
     terminal_at_ms: to === "reclaimed" || to === "failed" ? (current.terminalAtMs ?? nowMs) : null,
-    turn_claim_owner: null,
-    turn_claim_id: null,
-    turn_claim_run_id: null,
-    turn_claim_generation: null,
-    turn_claim_owner_epoch: null,
+    ...turnClaimValues(null),
     created_at_ms: current.createdAtMs,
     updated_at_ms: nowMs,
     state_changed_at_ms: nowMs,

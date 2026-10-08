@@ -27,6 +27,8 @@ const { clearActivePluginRegistry, disposePluginRegistryInstances } =
   await import("../plugins/runtime.js");
 
 const contextEvaluation = Symbol.for("openclaw.test.isolatedContextEvaluation");
+const { resolveIsolatedCompletionRuntime } = await import("./isolated-completion-route.js");
+
 beforeEach(resetIsolatedCompletionTestState);
 afterEach(async () => {
   await clearActivePluginRegistry();
@@ -140,4 +142,29 @@ it("keeps isolated registry preparation distinct from an ordinary agent publicat
     preparedModelRuntimeWorkspaceFactsKey(isolated),
   );
   expect(hasSameLifecycleInput(input, isolated)).toBe(false);
+});
+
+it.each(["cli", "harness"] as const)("reports the %s owner the run dispatches to", async (kind) => {
+  const cli = kind === "cli";
+  mocks.resolveEmbeddedCliBackendDispatchEligibility.mockReturnValue(
+    cli ? { provider: "claude-cli" } : undefined,
+  );
+  mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "Utility result" }] });
+  registerIsolatedHarness({
+    runIsolatedCompletionV2: vi.fn(async () => ({
+      assistant: isolatedAssistant([{ type: "text", text: "done" }]),
+    })),
+  });
+  const request = cli
+    ? {
+        ...isolatedRequest(),
+        provider: "anthropic",
+        model: "claude-test",
+        agentHarnessRuntimeOverride: undefined,
+      }
+    : isolatedRequest();
+  const status = resolveIsolatedCompletionRuntime(request);
+  const run = await runIsolatedCompletion(request);
+  expect(run.owner).toEqual({ kind, id: cli ? "claude-cli" : "codex" });
+  expect(status).toEqual({ id: run.owner.id, kind, ...(cli ? {} : { harnessLabel: "Codex" }) });
 });

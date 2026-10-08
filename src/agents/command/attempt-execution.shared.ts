@@ -25,11 +25,10 @@ export async function persistAgentSession(
     { agentId: params.agentId, sessionKey: params.sessionKey, storePath: params.storePath },
     (_entry, context) => {
       const shouldPersistCurrent = params.shouldPersist?.(context.existingEntry);
-      if (!context.existingEntry && shouldPersistCurrent !== true) {
-        rejectedMissingEntry = true;
-        return null;
-      }
-      if (shouldPersistCurrent === false) {
+      if (
+        (!context.existingEntry && shouldPersistCurrent !== true) ||
+        shouldPersistCurrent === false
+      ) {
         rejectedMissingEntry = !context.existingEntry;
         return null;
       }

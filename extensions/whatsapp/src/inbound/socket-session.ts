@@ -219,6 +219,16 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
     );
   };
 
+  const currentSocketOperations = (currentSock: WASocket) =>
+    createWhatsAppSocketOperationTimeoutAdapter(currentSock, sendOperationTimeoutMs, {
+      assertCurrent: () => {
+        if (getCurrentSock() !== currentSock) {
+          throw new Error(RECONNECT_IN_PROGRESS_ERROR);
+        }
+      },
+      onSendMessageTimeout: ({ jid, promise }) => trackLateAcceptedSend(jid, promise),
+    });
+
   let reachoutTimeLock: ReachoutTimelockState | undefined;
   let reachoutTimeLockFetch: Promise<ReachoutTimelockState | undefined> | undefined;
   let reachoutTimeLockVersion = 0;
@@ -328,20 +338,11 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
       if (currentSock) {
         try {
           await assertCanSendToJid(jid, currentSock, { useVerifiedReady: true });
-          const result = await createWhatsAppSocketOperationTimeoutAdapter(
-            currentSock,
-            sendOperationTimeoutMs,
-            {
-              assertCurrent: () => {
-                if (getCurrentSock() !== currentSock) {
-                  throw new Error(RECONNECT_IN_PROGRESS_ERROR);
-                }
-              },
-              onSendMessageTimeout: ({ jid: timedOutJid, promise }) => {
-                trackLateAcceptedSend(timedOutJid, promise);
-              },
-            },
-          ).sendMessage(jid, content, sendOptions);
+          const result = await currentSocketOperations(currentSock).sendMessage(
+            jid,
+            content,
+            sendOptions,
+          );
           rememberOutboundMessage(jid, result);
           return result;
         } catch (error) {
@@ -382,17 +383,7 @@ export async function createWhatsAppAttachedSocketSession(options: SocketSession
       if (!currentSock) {
         throw new Error(RECONNECT_IN_PROGRESS_ERROR);
       }
-      return await createWhatsAppSocketOperationTimeoutAdapter(
-        currentSock,
-        sendOperationTimeoutMs,
-        {
-          assertCurrent: () => {
-            if (getCurrentSock() !== currentSock) {
-              throw new Error(RECONNECT_IN_PROGRESS_ERROR);
-            }
-          },
-        },
-      ).sendPresenceUpdate(presenceLocal, jid);
+      return await currentSocketOperations(currentSock).sendPresenceUpdate(presenceLocal, jid);
     },
   };
 

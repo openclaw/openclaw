@@ -1,8 +1,8 @@
-import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { ensureOpenDmPolicyAllowFromWildcard } from "../../../channels/plugins/dm-access.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { getDoctorChannelCapabilities } from "../channel-capabilities.js";
+import { iterateDoctorChannelAccounts } from "./allowlist.js";
 
 export function collectOpenPolicyAllowFromWarnings(params: {
   changes: string[];
@@ -46,19 +46,11 @@ export function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
         pathPrefix,
         changes,
       });
-    repair(channelConfig, `channels.${channelName}`);
-
-    const accounts = asNullableRecord(channelConfig.accounts);
-    if (!accounts) {
-      continue;
-    }
-    for (const [accountName, accountConfig] of Object.entries(accounts)) {
-      if (accountConfig && typeof accountConfig === "object") {
-        repair(
-          accountConfig as Record<string, unknown>,
-          `channels.${channelName}.accounts.${accountName}`,
-        );
-      }
+    for (const { account, prefix } of iterateDoctorChannelAccounts(
+      channelConfig,
+      `channels.${channelName}`,
+    )) {
+      repair(account, prefix);
     }
   }
 

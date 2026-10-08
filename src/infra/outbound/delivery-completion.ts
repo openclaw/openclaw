@@ -27,7 +27,6 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import {
   resolveDeliveryQueueStateEnv,
   type DeliveryQueueStateContext,
@@ -40,11 +39,8 @@ import type { DurableDeliveryCompletion } from "./delivery-queue-types.js";
 export type ConversationDeliveryTarget = Pick<
   PreparedConversationRegistryScope,
   "agentId" | "databaseAgentId" | "storePath"
-> & {
-  stateDir: string;
-  workerContext: OpenClawStateWorkerContext;
-  supervisorMode?: "external";
-};
+> &
+  DeliveryQueueStateContext;
 
 export function captureConversationDeliveryTarget(
   scope: PreparedConversationRegistryScope,
@@ -341,24 +337,7 @@ export async function completeDurableDelivery(
   stateContext?: DeliveryQueueStateContext,
   target?: ConversationDeliveryTarget,
 ): Promise<DurableDeliveryCompletionResult> {
-  return completion.kind === "pending-final"
-    ? await settlePendingFinalDelivery(completion, "delivered", undefined, {
-        stateDir,
-        stateContext,
-        identifiedResult: result,
-      })
-    : conversationResult(
-        completion,
-        (scope) =>
-          markConversationDeliverySent(
-            scope,
-            completion.operationId,
-            readPlatformMessageId(result),
-          ),
-        stateDir,
-        stateContext,
-        target,
-      );
+  return settleDurableDelivery(completion, { result }, stateDir, stateContext, target);
 }
 
 type DurableDeliveryTerminalEvidence =
@@ -374,21 +353,30 @@ export async function settleDurableDelivery(
   stateContext?: DeliveryQueueStateContext,
   target?: ConversationDeliveryTarget,
 ): Promise<DurableDeliveryCompletionResult> {
-  if ("result" in evidence) {
-    return completeDurableDelivery(completion, evidence.result, stateDir, stateContext, target);
-  }
   // Proven no-send rejections suppress a pending final without owing an
   // uncertainty notice; conversation delivery retains the explicit rejection.
   const state =
-    "platformSendStarted" in evidence && evidence.platformSendStarted ? "unknown" : "suppressed";
+    "result" in evidence
+      ? "delivered"
+      : "platformSendStarted" in evidence && evidence.platformSendStarted
+        ? "unknown"
+        : "suppressed";
   return completion.kind === "pending-final"
     ? await settlePendingFinalDelivery(completion, state, undefined, {
         stateDir,
         stateContext,
+        ...("result" in evidence ? { identifiedResult: evidence.result } : {}),
       })
     : conversationResult(
         completion,
         (scope) => {
+          if ("result" in evidence) {
+            return markConversationDeliverySent(
+              scope,
+              completion.operationId,
+              readPlatformMessageId(evidence.result),
+            );
+          }
           if ("rejectionError" in evidence) {
             return markConversationDeliveryRejected(
               scope,

@@ -2,7 +2,6 @@ import {
   ErrorCodes,
   errorShape,
   type ErrorShape,
-  type SessionSuggestionEvent,
   type SessionSuggestionResolution,
 } from "../../../packages/gateway-protocol/src/index.js";
 import {
@@ -77,13 +76,7 @@ export function requireVisibleSuggestionRole(params: {
     );
     return null;
   }
-  const role =
-    params.sharing?.roleForTarget(target) ??
-    resolveSessionSharingRole({
-      client: params.client,
-      cfg: params.cfg,
-      target,
-    });
+  const role = sharing?.roleForTarget(target) ?? resolveSessionSharingRole({ client, cfg, target });
   const incognitoError = authorizeIncognitoSessionTarget({
     client: params.client,
     sessionKey: params.sessionKey,
@@ -96,13 +89,9 @@ export function requireVisibleSuggestionRole(params: {
   if (resolveSessionVisibility(target.entry) !== "draft") {
     return role;
   }
-  const error = params.sharing
-    ? params.sharing.authorizeTarget(target)
-    : authorizeSessionSharingTarget({
-        client: params.client,
-        cfg: params.cfg,
-        target,
-      });
+  const error = sharing
+    ? sharing.authorizeTarget(target)
+    : authorizeSessionSharingTarget({ client, cfg, target });
   if (!error) {
     return role;
   }
@@ -294,18 +283,4 @@ export async function createSessionSuggestionMutation(params: {
     }
   };
   return { run, readCurrent, release: facts.release };
-}
-
-export function publishSuggestion(
-  context: GatewayRequestContext,
-  target: NonNullable<ReturnType<typeof resolveSessionSharingTarget>>,
-  requestedSessionKey: string,
-  event: SessionSuggestionEvent,
-): void {
-  context.broadcast("session.suggestion", event, {
-    sessionKeys: [
-      ...new Set([requestedSessionKey, target.canonicalKey, target.storeKey]),
-    ].toSorted(),
-    agentId: event.suggestion.agentId,
-  });
 }

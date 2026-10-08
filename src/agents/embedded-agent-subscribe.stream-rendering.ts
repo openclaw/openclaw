@@ -237,16 +237,13 @@ export function createStreamRendering({
           continue;
         }
         processed += scanText.slice(lastIndex, idx);
+      }
+      if (!inThinking || isClose) {
         hiddenInlineState = createInlineCodeState();
         hiddenFenceState = undefined;
         hiddenPendingFenceFragment = undefined;
       }
       inThinking = !isClose;
-      if (!inThinking) {
-        hiddenInlineState = createInlineCodeState();
-        hiddenFenceState = undefined;
-        hiddenPendingFenceFragment = undefined;
-      }
       lastIndex = idx + match[0].length;
     }
     if (inThinking) {
@@ -284,24 +281,16 @@ export function createStreamRendering({
       const isClose = match.isClose;
       const isSelfClosing = match.isSelfClosing;
 
-      if (isSelfClosing) {
-        if (inFinal) {
-          result += processed.slice(lastFinalIndex, idx);
-          inFinal = false;
-        } else {
-          inFinal = true;
-          everInFinal = true;
-        }
-        lastFinalIndex = idx + match.text.length;
-      } else if (!inFinal && !isClose) {
-        inFinal = true;
-        everInFinal = true;
-        lastFinalIndex = idx + match.text.length;
-      } else if (inFinal && isClose) {
+      if (inFinal && (isSelfClosing || isClose)) {
         result += processed.slice(lastFinalIndex, idx);
         inFinal = false;
-        lastFinalIndex = idx + match.text.length;
+      } else if (!inFinal && (isSelfClosing || !isClose)) {
+        inFinal = true;
+        everInFinal = true;
+      } else {
+        continue;
       }
+      lastFinalIndex = idx + match.text.length;
     }
 
     if (inFinal) {

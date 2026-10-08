@@ -530,14 +530,6 @@ function scanSourceRules(
   return findings;
 }
 
-function normalizeScanOptions(opts?: SkillScanOptions): Required<SkillScanOptions> {
-  return {
-    includeFiles: opts?.includeFiles ?? [],
-    maxFiles: Math.max(1, opts?.maxFiles ?? DEFAULT_MAX_SCAN_FILES),
-    maxFileBytes: Math.max(1, opts?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES),
-  };
-}
-
 async function statIfPresent(filePath: string): Promise<Stats | null> {
   try {
     return await fs.stat(filePath);
@@ -684,7 +676,11 @@ export async function scanDirectoryWithSummary(
   dirPath: string,
   opts?: SkillScanOptions,
 ): Promise<SkillScanSummary> {
-  const scanOptions = normalizeScanOptions(opts);
+  const scanOptions = {
+    includeFiles: opts?.includeFiles ?? [],
+    maxFiles: Math.max(1, opts?.maxFiles ?? DEFAULT_MAX_SCAN_FILES),
+    maxFileBytes: Math.max(1, opts?.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES),
+  };
   const { files, truncated } = await collectScannableFiles(dirPath, scanOptions);
   const allFindings: SkillScanFinding[] = [];
   let scannedFiles = 0;

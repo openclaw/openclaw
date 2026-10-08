@@ -6,6 +6,7 @@ import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../../auto-reply/get-reply-options.types.js";
+import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { GatewayUiCommandTarget } from "../../gateway/ui-command-target.types.js";
 import type { ImageContent as LlmImageContent } from "../../llm/types.js";
@@ -225,8 +226,13 @@ export type AgentCommandOpts = {
   onPostAdmittedRunContext?: (
     context: import("../admitted-run-context.js").AdmittedRunContext,
   ) => void | Promise<void>;
-  /** Gateway joins terminal transcript writes before delivery or failed-command cleanup. */
-  beforeTerminalDelivery?: () => Promise<void>;
+  /** Gateway owns final media projection and joins transcript writes before delivery or cleanup. */
+  beforeTerminalDelivery?: (reply?: {
+    payloads: ReplyPayload[];
+    sessionId: string;
+    lifecycleRevision?: string;
+    storePath?: string;
+  }) => Promise<void>;
   /** Gateway-owned preparation of runtime-appended assistant transcript messages. */
   prepareAssistantTranscriptMessage?: AgentRunTranscriptContext["prepareAssistantTranscriptMessage"];
   /** Called when the actual run model is selected, including fallback retries. */
@@ -248,28 +254,36 @@ export type AgentCommandOpts = {
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
 };
 
-type AgentCommandGatewayOnlyKey =
-  | "clientCaps"
-  | "gatewayUiCommandTarget"
-  | "toolBindings"
-  | "taskSuggestionDeliveryMode"
-  | "runtimeContextFragments"
-  | "mainRestartRecoveryOwnerLease"
-  | "mainRestartRecoveryAdmitted"
-  | "mainRestartRecoveryAttempt"
-  | "pinnedWidgetAuthoring"
-  | "executionIdentityAdmission"
-  | "operationalRunInstance"
-  | "operatorAuthority"
-  | "privateCompletion"
-  | "assertSourceCurrent"
-  | "skillLibraryAuthoring"
-  | "cronCreatorAuthorityCapability"
-  | "onAdmittedRunContext"
-  | "onPostAdmittedRunContext"
-  | "beforeTerminalDelivery"
-  | "prepareAssistantTranscriptMessage"
-  | "internalDeliverySuppressErrors";
+/** Public ingress clears the same host-owned fields its option type excludes. */
+export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = Object.freeze({
+  clientCaps: undefined,
+  gatewayUiCommandTarget: undefined,
+  toolBindings: undefined,
+  taskSuggestionDeliveryMode: undefined,
+  runtimeContextFragments: undefined,
+  senderIsOwner: false,
+  mainRestartRecoveryOwnerLease: undefined,
+  mainRestartRecoveryAdmitted: undefined,
+  mainRestartRecoveryAttempt: undefined,
+  pinnedWidgetAuthoring: undefined,
+  executionIdentityAdmission: undefined,
+  operationalRunInstance: undefined,
+  assertSourceCurrent: undefined,
+  operatorAuthority: undefined,
+  privateCompletion: undefined,
+  skillLibraryAuthoring: undefined,
+  cronCreatorAuthorityCapability: undefined,
+  onAdmittedRunContext: undefined,
+  onPostAdmittedRunContext: undefined,
+  beforeTerminalDelivery: undefined,
+  prepareAssistantTranscriptMessage: undefined,
+  internalDeliverySuppressErrors: undefined,
+} satisfies Partial<AgentCommandOpts>);
+
+type AgentCommandGatewayOnlyKey = Exclude<
+  keyof typeof AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS,
+  "senderIsOwner"
+>;
 
 /** Restricted option surface for external ingress callsites. */
 export type AgentCommandIngressOpts = Omit<

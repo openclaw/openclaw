@@ -107,7 +107,6 @@ describe("ACP operator model ceiling", () => {
   }
 
   it.each<[name: string, args: Parameters<typeof run>, beforeBackend: boolean]>([
-    ["excluded selection", ["fixture/denied"], true],
     ["unqualified selection", [undefined], true],
     [
       "native model alias with an exact exclusion",

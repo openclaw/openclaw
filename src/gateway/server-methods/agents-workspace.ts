@@ -205,17 +205,6 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
       respondNotFound();
       return;
     }
-    const respondUnsupported = () => {
-      respond(
-        false,
-        undefined,
-        workspaceError(
-          "workspace_file_unsupported",
-          "workspace file is not UTF-8 text or a supported image",
-          { path: browserPath },
-        ),
-      );
-    };
     const file = {
       path: browserPath,
       name: path.basename(browserPath),
@@ -225,35 +214,31 @@ export const agentsWorkspaceHandlers: GatewayRequestHandlers = {
     // The extension only picks the byte cap; content decides what leaves the
     // gateway. Magic-byte sniffing (no filename hints) keeps renamed binaries
     // from riding the image path past the UTF-8 text gate.
-    if (expectsImage) {
-      const sniffedMime = await detectMime({ buffer: read.buffer });
-      if (!sniffedMime || !SUPPORTED_IMAGE_MIME_TYPES.has(sniffedMime)) {
-        respondUnsupported();
-        return;
-      }
-      respond(true, {
-        agentId,
-        file: {
-          ...file,
-          mimeType: sniffedMime,
-          encoding: "base64" as const,
-          content: read.buffer.toString("base64"),
-        },
-      });
-      return;
-    }
-    const text = decodeUtf8Strict(read.buffer);
-    if (text === undefined) {
-      respondUnsupported();
+    const mimeType = expectsImage ? await detectMime({ buffer: read.buffer }) : "text/plain";
+    const content = expectsImage
+      ? mimeType && SUPPORTED_IMAGE_MIME_TYPES.has(mimeType)
+        ? read.buffer.toString("base64")
+        : undefined
+      : decodeUtf8Strict(read.buffer);
+    if (content === undefined) {
+      respond(
+        false,
+        undefined,
+        workspaceError(
+          "workspace_file_unsupported",
+          "workspace file is not UTF-8 text or a supported image",
+          { path: browserPath },
+        ),
+      );
       return;
     }
     respond(true, {
       agentId,
       file: {
         ...file,
-        mimeType: "text/plain",
-        encoding: "utf8" as const,
-        content: text,
+        mimeType,
+        encoding: expectsImage ? "base64" : "utf8",
+        content,
       },
     });
   },

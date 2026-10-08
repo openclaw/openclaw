@@ -6,23 +6,19 @@ import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
 import type { OutboundDeliveryResult } from "./deliver.js";
 
-const resolveChannelLabel = (channel: string) => {
-  const pluginLabel = getChannelPlugin(channel as ChannelId)?.meta.label;
-  if (pluginLabel) {
-    return pluginLabel;
-  }
-  // Some legacy chat channels are not plugins; keep their human labels for CLI output.
-  const normalized = normalizeChatChannelId(channel);
-  return normalized ? (findChatChannelMeta(normalized)?.label ?? channel) : channel;
-};
-
 export function formatOutboundDeliverySummary(
   channel: string,
   result?: OutboundDeliveryResult,
   opts?: { action?: string },
 ): string {
   const action = opts?.action ?? "Sent";
-  const label = resolveChannelLabel(result ? result.channel : channel);
+  const resultChannel = result ? result.channel : channel;
+  let label = getChannelPlugin(resultChannel as ChannelId)?.meta.label;
+  if (!label) {
+    // Some legacy chat channels are not plugins; keep their human labels for CLI output.
+    const normalized = normalizeChatChannelId(resultChannel);
+    label = normalized ? (findChatChannelMeta(normalized)?.label ?? resultChannel) : resultChannel;
+  }
   const base = `✅ ${action} via ${label}. Message ID: ${result ? result.messageId : "unknown"}`;
   return result?.target ? `${base} (${result.target.kind} ${result.target.id})` : base;
 }

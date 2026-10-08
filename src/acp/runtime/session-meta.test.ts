@@ -13,7 +13,6 @@ import { readAcpSessionMetaForEntry } from "./session-meta-readonly.js";
 import {
   listAcpSessionEntries,
   readAcpSessionEntry,
-  readAcpSessionMeta,
   readAcpSessionMetaBatch,
   upsertAcpSessionMeta,
   writeAcpSessionMetaForMigration,
@@ -96,7 +95,7 @@ describe("ACP session metadata SQLite store", () => {
       await closeOpenClawStateDatabaseAsync();
       const before = fs.readFileSync(databasePath);
 
-      expect(readAcpSessionMeta({ cfg, databasePath, env, sessionKey })).toMatchObject({
+      expect(readAcpSessionEntry({ cfg, databasePath, env, sessionKey })?.acp).toMatchObject({
         runtimeSessionName: "proof-runtime",
       });
       expect(fs.readFileSync(databasePath)).toEqual(before);
@@ -126,11 +125,11 @@ describe("ACP session metadata SQLite store", () => {
       }
 
       expect(
-        readAcpSessionMeta({ cfg, databasePath, sessionKey: "global", agentId: "research" })
+        readAcpSessionEntry({ cfg, databasePath, sessionKey: "global", agentId: "research" })?.acp
           ?.runtimeSessionName,
       ).toBe("research");
       expect(
-        readAcpSessionMeta({ cfg, databasePath, sessionKey: "global", agentId: "ops" })
+        readAcpSessionEntry({ cfg, databasePath, sessionKey: "global", agentId: "ops" })?.acp
           ?.runtimeSessionName,
       ).toBe("ops");
 
@@ -142,7 +141,7 @@ describe("ACP session metadata SQLite store", () => {
         mutate: () => null,
       });
       expect(
-        readAcpSessionMeta({ cfg, databasePath, sessionKey: "global", agentId: "ops" })
+        readAcpSessionEntry({ cfg, databasePath, sessionKey: "global", agentId: "ops" })?.acp
           ?.runtimeSessionName,
       ).toBe("ops");
     });
@@ -258,9 +257,6 @@ describe("ACP session metadata SQLite store", () => {
       expect(readAcpSessionEntry({ cfg, databasePath, sessionKey })?.acp?.runtimeSessionName).toBe(
         "codex-new",
       );
-      expect(readAcpSessionMeta({ cfg, databasePath, sessionKey })?.runtimeSessionName).toBe(
-        "codex-new",
-      );
       expect(await listAcpSessionEntries({ cfg, databasePath })).toHaveLength(1);
     });
   });
@@ -304,7 +300,7 @@ describe("ACP session metadata SQLite store", () => {
         })?.acp?.runtimeSessionName,
       ).toBe("codex-normalized");
       expect(
-        readAcpSessionMeta({ cfg, databasePath, sessionKey: `  ${rawSessionKey}  ` })
+        readAcpSessionEntry({ cfg, databasePath, sessionKey: `  ${rawSessionKey}  ` })?.acp
           ?.runtimeSessionName,
       ).toBe("codex-normalized");
       expect(fs.existsSync(storePath)).toBe(false);
@@ -425,7 +421,6 @@ describe("ACP session metadata SQLite store", () => {
       });
 
       expect(readAcpSessionEntry({ cfg, databasePath, sessionKey })?.acp).toBeUndefined();
-      expect(readAcpSessionMeta({ cfg, databasePath, sessionKey })).toBeUndefined();
       expect(await listAcpSessionEntries({ cfg, databasePath })).toHaveLength(0);
 
       writeAcpSessionMetaForMigration({

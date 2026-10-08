@@ -40,6 +40,7 @@ import {
 import {
   createRuntimeAuthProfileSnapshotSelection,
   prepareRuntimeAuthProfileSharedCredentialSnapshots,
+  prepareRuntimeAuthProfileSharedOwnerHandoff,
   sharedMutationAffectsSnapshot,
   type OwnedRuntimeSnapshot,
   type SharedAuthProfileStoreMutation,
@@ -63,7 +64,6 @@ export const {
   listRuntimeAuthProfileStoreSnapshotsForSharedOwner,
 } = createRuntimeAuthProfileSnapshotSelection(
   runtimeAuthStoreSnapshots,
-  getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath,
   clearRuntimeAuthProfileStoreSnapshotAtDatabasePath,
 );
 
@@ -102,26 +102,20 @@ export const runtimeAuthProfileRowsCache = createRuntimeAuthProfileRowsCache((da
   };
 });
 
-registerFreshSharedAuthStoreHandoff(({ previousSharedDatabasePath, sharedDatabasePath, env }) => {
-  let rebound = false;
-  const entries = listOwnedRuntimeAuthProfileStoreSnapshots();
-  for (const entry of entries) {
-    if (
-      (entry.owner.kind === "resolved" && entry.owner.location !== "legacy-main") ||
-      !runtimeAuthProfileSnapshotSharesOwner(entry.owner, {
-        sharedDatabasePath: previousSharedDatabasePath,
-        location: "legacy-main",
-      })
-    ) {
-      continue;
-    }
-    rebound = true;
-    entry.owner = { kind: "resolved", sharedDatabasePath, location: "state-db" };
-    entry.legacyCandidates = captureRuntimeAuthProfileLegacyCandidates(entry.agentDir, env);
+registerFreshSharedAuthStoreHandoff((handoff) => {
+  if (!handoff.sourceStillCurrent) {
+    invalidateRuntimeAuthProfileStoreSnapshotsForOwner({
+      databasePath: handoff.previousSharedDatabasePath,
+      sharedDatabasePath: handoff.previousSharedDatabasePath,
+      location: "legacy-main",
+    });
+    return;
   }
-  if (rebound) {
-    // Keep each published view and its overlays; the following credential commit rebuilds
-    // these now-derived views from the same owner that secrets activation will observe.
+  const entries = prepareRuntimeAuthProfileSharedOwnerHandoff(
+    listOwnedRuntimeAuthProfileStoreSnapshots(),
+    handoff,
+  );
+  if (entries) {
     replaceOwnedRuntimeAuthProfileStoreSnapshots(entries);
   }
 });

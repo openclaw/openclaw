@@ -682,7 +682,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       const bunVitestFiles = [
         "packages/markdown-core/src/render-aware-chunking.test.ts",
         workerMemoryTest,
-        "src/agents/code-mode-node.test.ts",
+        "src/shared/account-enabled.test.ts",
         vitestBunTarget,
         nativeCompilerTest,
         compilerGraphTest,
@@ -1231,6 +1231,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       dir: "",
       targets: [
         "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
+        "src/cli/admin-state-owner.process.test.ts",
         "src/infra/update-managed-service-handoff-reclamation.test.ts",
         "src/infra/worker-cpu.test.ts",
       ],

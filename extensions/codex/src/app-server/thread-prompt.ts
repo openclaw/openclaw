@@ -28,6 +28,8 @@ export type CodexThreadPromptContext = Pick<
   | "disableTools"
   | "disableMessageTool"
   | "delegationCapability"
+  | "pluginHarnessToolPolicyRestricted"
+  | "requireWorkspaceOnly"
   | "toolsAllow"
   | "sourceReplyDeliveryMode"
   | "promptMode"
@@ -83,6 +85,8 @@ export function buildDeveloperInstructions(
     !isMessageOnlyCodexSourceReply(params);
   const nativeDelegationAvailable =
     delegationGuidanceAvailable &&
+    params.pluginHarnessToolPolicyRestricted !== true &&
+    params.requireWorkspaceOnly !== true &&
     !isCodexResponsesOAuthRun(params) &&
     !isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow) &&
     !shouldDisableCodexToolSearchForModel(params.modelId);

@@ -144,6 +144,10 @@ own active chat runs and queued turns, and waits on the process-wide pending-rep
 count. Both report remaining work as named counts; categories can overlap and
 should not be added as distinct turns.
 
+When Gateway connection shutdown begins, session observer event subscriptions
+stop before the observer closes. Accepted observer work still settles, while
+chat events and terminal session writes continue through their own drain.
+
 If database closure refuses a follow-up drain, the drain parks its queued input
 instead of retrying against the closing owner. A fresh drain request can resume
 it after database admission reopens; durable input recovery owns restart replay.

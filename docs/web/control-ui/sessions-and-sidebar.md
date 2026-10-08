@@ -12,6 +12,11 @@ sidebarTitle: "Sessions and sidebar"
 
 The sidebar organizes every session, and the New session page starts new ones.
 
+Once the Gateway accepts a new session, the UI opens its conversation so you can
+follow the first turn. Clearing the submitted draft and saved worktree name
+continues alongside navigation; slow cleanup does not keep the conversation on
+**Starting…**.
+
 ## New session names
 
 In **New session**, pausing typing for one second prepares a session name in the
@@ -573,7 +578,8 @@ checkout directory's name.
 Registering the same resolved repository root again returns its existing project ID and
 display name. Passing a different `name` does not rename an existing project.
 
-`projects.list` returns recorded projects without checking Git. Operators with
+`projects.list` returns recorded projects without checking Git. Recent projects
+and folders do not wait for session display details to refresh. Operators with
 `operator.write` can request `{"includeObserved":true}` to discover additional
 checkouts from visible sessions and managed worktrees. Concurrent discovery of
 the same checkout set shares one bounded Git pass; subsequent requests read
