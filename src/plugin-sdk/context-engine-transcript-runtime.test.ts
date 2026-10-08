@@ -8,6 +8,7 @@ import {
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import {
   resetSessionEntryLifecycle,
+  rewriteTranscriptMessageAtAnchor,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
@@ -212,6 +213,45 @@ describe("context-engine transcript SDK", () => {
     });
     await expect(drain({ ...scope, start: "reset-window" })).resolves.toMatchObject({
       ids: ["after-user"],
+    });
+  });
+
+  it("ranks a reset above a generation rotation for reset-window cursors", async () => {
+    const scope = await createScope("rotated");
+    await append(scope, "old-user", { role: "user", content: "old" });
+    await resetSession(scope, "clear");
+    const edited = await append(scope, "edited-user", { role: "user", content: "draft" });
+    if (!edited.anchor) {
+      throw new Error("expected an edited transcript anchor");
+    }
+    const anchor = edited.anchor;
+    const editInPlace = (content: string) =>
+      rewriteTranscriptMessageAtAnchor(anchor, (message) => ({ ...(message as object), content }));
+    const first = await drain({ ...scope, start: "reset-window" });
+    expect(first.ids).toEqual(["edited-user"]);
+
+    // An in-place edit rotates the generation; the reset row it drained is unchanged.
+    await editInPlace("edited");
+    await expect(
+      readSessionTranscriptVisibleMessageDelta({ ...scope, cursor: first.cursor }),
+    ).resolves.toMatchObject({ kind: "reset", reason: "generation_mismatch" });
+    const second = await drain({ ...scope, start: "reset-window" });
+    expect(second.ids).toEqual(["edited-user"]);
+
+    // Rotation plus a newer reset reports the reset, whose fresh cursor skips the old window.
+    await editInPlace("edited again");
+    await resetSession(scope, "clear");
+    await append(scope, "new-user", { role: "user", content: "new" });
+    const reset = await readSessionTranscriptVisibleMessageDelta({
+      ...scope,
+      cursor: second.cursor,
+    });
+    expect(reset).toMatchObject({ kind: "reset", reason: "session_reset" });
+    if (reset.kind !== "reset") {
+      throw new Error("expected a session reset");
+    }
+    await expect(drain({ ...scope, cursor: reset.cursor })).resolves.toMatchObject({
+      ids: ["new-user"],
     });
   });
 });
