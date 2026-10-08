@@ -636,6 +636,35 @@ it.each(["cards", "sessions"] as const)(
   },
 );
 
+it("does not overwrite concurrent column edits when only renaming a sessions board", async () => {
+  const page = sessionsPage();
+  await page.connect();
+  button(page, "Edit board").click();
+  await vi.advanceTimersByTimeAsync(0);
+  const form = expectDefined(
+    page.container.querySelector<HTMLFormElement>(".workboard-board-draft"),
+    "board editor",
+  );
+  expectDefined(page.board.sessions.columns[0], "working column").label = "Newer column label";
+  const name = expectDefined(
+    form.querySelector<HTMLInputElement>(".workboard-board-draft__name input"),
+    "board name",
+  );
+  name.value = "Renamed board";
+  name.dispatchEvent(new Event("input", { bubbles: true }));
+  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  await vi.advanceTimersByTimeAsync(0);
+
+  expect(page.request).toHaveBeenCalledWith("workboard.boards.upsert", {
+    id: "sessions",
+    name: "Renamed board",
+  });
+  expect(
+    page.request.mock.calls.some(([method]) => method === "workboard.sessionsBoard.update"),
+  ).toBe(false);
+  expect(page.container.textContent).toContain("Newer column label");
+});
+
 it("validates session columns inline and preserves their ids and rules when labels change", async () => {
   const page = sessionsPage();
   expectDefined(page.board.sessions.columns[0], "working column").match = [
