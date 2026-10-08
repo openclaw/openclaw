@@ -1680,12 +1680,11 @@ src/claws/update-capability-changes.ts	7
 src/claws/workspace.ts	2
 src/cli/acp-cli.ts	7
 src/cli/attach-cli.ts	3
-src/cli/capability-cli/audio.ts	3
 src/cli/capability-cli/embedding.ts	2
 src/cli/capability-cli/image.ts	10
 src/cli/capability-cli/model.ts	4
 src/cli/capability-cli/tts.ts	6
-src/cli/capability-cli/video.ts	6
+src/cli/capability-cli/video.ts	5
 src/cli/capability-cli/web.ts	5
 src/cli/channel-auth.ts	4
 src/cli/channels-cli.ts	5
@@ -1737,7 +1736,7 @@ src/cli/program/register.configure.ts	1
 src/cli/program/register.migrate.ts	7
 src/cli/program/register.onboard.ts	27
 src/cli/program/register.setup.ts	2
-src/cli/program/register.status-health-sessions.ts	18
+src/cli/program/register.status-health-sessions.ts	9
 src/cli/run-main.ts	1
 src/cli/secrets-cli.ts	2
 src/cli/secrets-store-cli.ts	1
