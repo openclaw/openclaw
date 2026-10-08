@@ -78,7 +78,7 @@ command handling is enabled for the surface.
     plugins: false,
     debug: false,
     restart: true, // enables /restart and /update
-    ownerAllowFrom: ["discord:123456789012345678"],
+    ownerAllowFrom: ["discord:user:123456789012345678"],
     allowFrom: {
       "*": ["user1"],
       discord: ["user:123"],
@@ -142,9 +142,13 @@ command handling is enabled for the surface.
   first owner. Control UI pairing has an explicit owner checkbox. Authorized
   non-owners receive a refusal with the exact configuration command for their
   sender ID when using an owner-only command such as `/restart` or `/update`.
-  Use `channel:id` (for example, `discord:123456789012345678`). If an upgrade
-  leaves a legacy `channel:user:id` owner entry, run `openclaw doctor --fix`.
-  Doctor rewrites recognized channel entries and reports their list positions.
+  Use the channel's direct-user target, for example `discord:user:123456789012345678`
+  or `telegram:123456789`. Doctor preserves `user:` when the channel requires it
+  to distinguish users from shared conversations. This keeps the same owner usable
+  for both command authorization and heartbeat delivery.
+  If an older update removed that kind, run `openclaw doctor --fix`. Doctor restores
+  it only from matching config backup history; otherwise it reports the exact
+  owner entry to correct after you confirm the user ID.
 </ParamField>
 
 Channel plugins can enforce owner-only command access through their
