@@ -46,6 +46,7 @@ import { captureOwnedTranscriptWriteAssertion } from "./transcript-write-context
 export async function withWorkerTranscriptWriteLock<T>(
   scope: SessionTranscriptWriteScope &
     ResolvedTranscriptScope & { env: NodeJS.ProcessEnv; path: string; storePath: string },
+  ownerScope: SessionTranscriptWriteScope,
   run: (context: SessionTranscriptWriteLockAccessorContext) => Promise<T> | T,
   native: <R>(
     scope: SessionTranscriptWriteScope,
@@ -53,9 +54,12 @@ export async function withWorkerTranscriptWriteLock<T>(
     alreadyLocked?: boolean,
     snapshot?: SqliteTranscriptSnapshotState,
     onSnapshot?: (snapshot: SqliteTranscriptSnapshotState | undefined) => void,
+    ownerScope?: SessionTranscriptWriteScope,
   ) => Promise<R>,
 ): Promise<T> {
-  const assertOwned = captureOwnedTranscriptWriteAssertion(scope);
+  // Ownership keeps the caller's locator while storage retains its physical pin.
+  // Replacing either with the other rejects valid owners or reroutes awaited writes.
+  const assertOwned = captureOwnedTranscriptWriteAssertion(ownerScope);
   const custody = captureSessionPendingInputWorkerCustody();
   const database = { ...toDatabaseOptions(scope), path: scope.path };
   const identity = readDatabasePathIdentitySync(scope.path);
@@ -92,7 +96,7 @@ export async function withWorkerTranscriptWriteLock<T>(
         releaseExecution = false;
         await execution.release();
         assertDatabasePathIdentity(scope.path, identity);
-        return await native(fenced, run);
+        return await native(fenced, run, false, undefined, undefined, ownerScope);
       } finally {
         await owned.release?.();
       }
@@ -330,6 +334,7 @@ export async function withWorkerTranscriptWriteLock<T>(
                   (next) => {
                     snapshot = next;
                   },
+                  ownerScope,
                 );
               } finally {
                 await authority.release?.();
