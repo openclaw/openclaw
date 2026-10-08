@@ -6,11 +6,7 @@ import type { ReplyPayload } from "../reply-payload.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 
-/**
- * A sender who may not run commands is owed no reply when command handling ends without one;
- * the refusal is the answer. Authorized commands keep their requirement: a failure throws or
- * returns an error, and an empty result (such as unsent streamed blocks) still gets the notice.
- */
+/** Unauthorized commands owe no further reply; authorized empty results still do. */
 export function finishCommandTurn(params: {
   opts: GetReplyOptions | undefined;
   ctx: MsgContext;
@@ -23,7 +19,7 @@ export function finishCommandTurn(params: {
     runState &&
     runState.replyCompletion?.outcome !== "blocked" &&
     (Array.isArray(reply) ? reply.length === 0 : !reply) &&
-    !resolveCommandAuthorization({ ctx, cfg, commandAuthorized: ctx.CommandAuthorized === true })
+    !resolveCommandAuthorization({ ctx, cfg, commandAuthorized: ctx.CommandAuthorized })
       .isAuthorizedSender
   ) {
     runState.replyCompletion = resolveReplyCompletion("optional", "empty");
