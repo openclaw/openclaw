@@ -1,7 +1,7 @@
 import path from "node:path";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { captureAgentDatabasePreparationDeletion } from "../state/agent-database-admission.js";
+import { captureAgentDatabasePreparationDeletionForIdentity } from "../state/agent-database-admission.js";
 import {
   type AgentDeletionJournalCleanupPath,
   type AgentDeletionJournalEntry,
@@ -10,7 +10,8 @@ import {
   deleteAgentDeletionJournalInDatabase,
   updateAgentDeletionJournalPathsInDatabase,
 } from "../state/agent-deletion-journal.js";
-import { ensureAgentProvenanceSchema } from "../state/agent-provenance.js";
+import { ensureAgentProvenanceSchema } from "../state/agent-provenance.schema.js";
+import { requireOpenClawStateDatabaseIdentity } from "../state/openclaw-state-db-cache.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 
@@ -21,7 +22,13 @@ export function beginAgentDeletionJournal(
 ): AgentDeletionJournalEntry {
   ensureAgentProvenanceSchema(options);
   return runOpenClawStateWriteTransaction((database) => {
-    const invalidatePreparation = captureAgentDatabasePreparationDeletion(entry.agentId, database);
+    const invalidatePreparation = captureAgentDatabasePreparationDeletionForIdentity(
+      entry.agentId,
+      {
+        databasePath: database.path,
+        identityKey: requireOpenClawStateDatabaseIdentity(database).key,
+      },
+    );
     if (
       !stageSqliteTransactionState(database.db, {
         stage() {},

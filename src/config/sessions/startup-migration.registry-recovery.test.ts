@@ -280,8 +280,8 @@ it("observes committed deletion before startup handoff after canonical database 
           deleteFiles: false,
         });
         await prepareAgentDeleteDatabases(cfg, "alpha", agentDir, { env });
-        deletion.assertCurrent();
-        deletion.finish();
+        await deletion.assertCurrentAsync();
+        await deletion.finish();
       },
       { env },
     );

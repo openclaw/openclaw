@@ -107,7 +107,7 @@ it("purges only entry-referenced generations off the host and retains history an
 });
 
 it.each(["changed entry", "added owned key", "added survivor reference"] as const)(
-  "rejects a foreign commit with %s after planning",
+  "revalidates a foreign commit with %s after planning",
   async (change) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const f = fixture(state.statePath("shared.sqlite"));
@@ -130,10 +130,25 @@ it.each(["changed entry", "added owned key", "added survivor reference"] as cons
           return result;
         },
       );
-      await expect(f.purge()).rejects.toThrow(/changed|referenc/i);
+      if (change === "added survivor reference") {
+        await expect(f.purge()).resolves.toBeUndefined();
+        expect(f.read()).toBeUndefined();
+        expect(f.read("agent:main:concurrent")?.sessionId).toBe("current");
+      } else {
+        await expect(f.purge()).rejects.toThrow(/changed/i);
+        expect(f.read()?.sessionId).toBe(change === "changed entry" ? "concurrent" : "current");
+      }
       expect(changed).toBe(true);
-      expect(f.read()?.sessionId).toBe(change === "changed entry" ? "concurrent" : "current");
-      expect(f.transcript("current")).toEqual([{ type: "proof", data: "current" }]);
+      const transcript =
+        change === "added survivor reference"
+          ? loadTranscriptEventsSync({
+              agentId: "main",
+              sessionKey: "agent:main:concurrent",
+              sessionId: "current",
+              storePath: f.scope.storePath,
+            })
+          : f.transcript("current");
+      expect(transcript).toEqual([{ type: "proof", data: "current" }]);
     });
   },
 );

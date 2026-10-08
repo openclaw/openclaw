@@ -239,6 +239,7 @@ vi.mock("../../agents/agent-dir-registry.js", () => ({
   unregisterResolvedAgentDir: mocks.unregisterResolvedAgentDir,
 }));
 
+// mock-isolation: Handler tests inject deletion authority and settlement without real leases or workers.
 vi.mock("../../agents/agent-lifecycle-registry.js", () => ({
   AgentDeletionAuthorityRollbackError: class extends AggregateError {},
   AgentDeletionCommitUncertainError: class extends Error {
@@ -300,19 +301,23 @@ vi.mock("../../state/openclaw-agent-db.js", () => ({
     "/agents/test-agent/incognito-openclaw-agent.sqlite",
 }));
 
+// mock-isolation: Handler scenarios consume staged journal outcomes without shared-state storage.
 vi.mock("../../state/agent-deletion-journal.js", () => ({
   readAgentDeletionJournal: mocks.readAgentDeletionJournal,
   readAgentDeletionJournalAsync: async () => mocks.readAgentDeletionJournal(),
 }));
 
+// mock-isolation: Creation reads must consume the staged journal instead of a real worker database.
 vi.mock("../../state/agent-deletion-journal.read.js", () => ({
   readAgentDeletionJournalForCreation: async () => mocks.readAgentDeletionJournal(),
 }));
 
-vi.mock("../../state/agent-provenance.js", () => ({
+vi.mock("../../state/agent-provenance.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../state/agent-provenance.js")>()),
   recordAgentProvenance: vi.fn(async () => {}),
 }));
 
+// mock-isolation: Registered-path fixtures own discovery and invalidation without the global SQLite memo.
 vi.mock("../../state/openclaw-agent-db-registry-listing.js", () => ({
   invalidateRegisteredAgentDatabasesMemo: () => {},
   prepareOpenClawAgentDatabaseRegistrySnapshotRead: () => ({

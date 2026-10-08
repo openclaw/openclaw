@@ -300,10 +300,7 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "agentLifecycle.read") {
     return bytes + Buffer.byteLength(command.input, "utf8");
   }
-  if (
-    command.type === "agentDeletionJournal.status" ||
-    command.type === "agentDeletionJournal.authority"
-  ) {
+  if (command.type === "agentDeletionJournal.status") {
     return bytes + Buffer.byteLength(command.agentId, "utf8");
   }
   if (command.type === "subagents.runs") {

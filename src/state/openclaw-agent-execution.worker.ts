@@ -196,8 +196,7 @@ function openAgentDatabaseBackend(
     }
     return {
       startupJournal: attachment.startupJournal,
-      // SAFETY: captureAgentDeletionCleanupAdmission sends this private typed guard. Before SQL,
-      // the original live owner must grant the same guard by exact comparison.
+      // SAFETY: The host sends this typed guard; its live owner compares it before SQL.
       deletion: attachment.deletion as AgentDeletionWorkerGuard | undefined,
     };
   };

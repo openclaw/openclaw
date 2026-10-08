@@ -6,7 +6,6 @@ import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.gene
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
 
-export { ensureAgentProvenanceSchema } from "./agent-provenance.schema.js";
 export type { AgentCreatedVia, AgentProvenance } from "./agent-provenance.types.js";
 
 type AgentProvenanceDatabase = Pick<OpenClawStateKyselyDatabase, "agent_provenance">;

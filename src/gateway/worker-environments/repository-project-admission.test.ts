@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   prepareGitHubReadIdentity: vi.fn(),
   prepareGitPack: vi.fn(),
 }));
+// mock-isolation: HTTP admission tests inject retirement during awaits without a database lifecycle owner.
 vi.mock("../../agents/agent-lifecycle-registry.js", () => ({
   captureAgentLifecycleBinding: mocks.captureAgentLifecycleBinding,
   matchesAgentLifecycleBinding: mocks.matchesAgentLifecycleBinding,

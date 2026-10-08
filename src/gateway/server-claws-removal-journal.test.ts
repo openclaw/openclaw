@@ -36,6 +36,7 @@ describe("Gateway-owned Claw removal journal", () => {
       const sharedStorePath = state.statePath("shared.sqlite");
       await state.writeConfig({
         agents: {
+          ownership: "explicit",
           entries: {
             worker: { workspace: plan.agent.workspace },
             ...(scenario === "shared-session-owner" ? { survivor: {} } : {}),
