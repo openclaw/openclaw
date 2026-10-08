@@ -6,6 +6,7 @@ import {
 } from "./kysely-sync-cache-state.js";
 import {
   getSqlitePinnedReadSnapshot,
+  readSqliteVersionObservation,
   runSqlitePinnedReadSnapshotSync,
 } from "./sqlite-pinned-read-snapshot.js";
 import { findSqlCharacter } from "./sqlite-schema-sql.js";
@@ -578,31 +579,6 @@ function readChangedSqliteSchemaMarkers(
       facts.schemaVersion === schemaVersion && facts.userVersion === userVersion?.user_version;
     return matches ? undefined : { schemaVersion, userVersion: Number(userVersion?.user_version) };
   });
-}
-
-function readSqliteVersionObservation(database: DatabaseSync, previousDataVersion: number) {
-  const parameters = [previousDataVersion, previousDataVersion];
-  // One statement pins both markers; unchanged reads never evaluate their CASE branches.
-  // Function syntax refuses a table that shadows a pragma's name.
-  const row = executeWithCachedStatement(
-    database,
-    `SELECT data_version,
-      CASE WHEN data_version <> ? THEN
-        (SELECT schema_version FROM main.pragma_schema_version()) END AS schema_version,
-      CASE WHEN data_version <> ? THEN
-        (SELECT user_version FROM main.pragma_user_version()) END AS user_version
-      FROM main.pragma_data_version()`,
-    parameters,
-    (statement) => statement.get(...parameters),
-  );
-  if (typeof row?.data_version !== "number") {
-    throw new Error("SQLite did not return a numeric PRAGMA data_version");
-  }
-  return {
-    dataVersion: row.data_version,
-    schemaVersion: row.schema_version,
-    userVersion: row.user_version,
-  };
 }
 
 /** Admission observes foreign commits; explicit fresh reads never reuse an operation's probe. */
