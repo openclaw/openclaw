@@ -2,7 +2,6 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import {
-  isCurrentActiveWorkerEnvironment,
   workerDisappearanceError,
   type WorkerDispatchPlacement,
 } from "./placement-dispatch-failure.js";
@@ -11,6 +10,7 @@ import type { WorkerSessionPlacementProjection } from "./placement-read-projecti
 import { placementTurnOwner } from "./placement-record.js";
 import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import type { WorkerSessionTurnClaim } from "./placement-store.js";
+import { isCurrentActiveWorkerEnvironment } from "./placement-target.js";
 import { completeRecoveredWorkspaceTeardown } from "./placement-teardown.js";
 import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.types.js";
 import {

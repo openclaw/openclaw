@@ -48,8 +48,19 @@ export function createCliEventHandlers(params: {
   let observedCliActivity = false;
   let compactionActive = false;
   const compactionChangeListeners = new Set<() => void>();
-  let signaledToolExecutionStarted = false;
-  let signaledAssistantOutputStarted = false;
+  const signaledPhases = new Set<"tool_execution_started" | "assistant_output_started">();
+  const signalExecutionPhase = (phase: "tool_execution_started" | "assistant_output_started") => {
+    if (signaledPhases.has(phase)) {
+      return;
+    }
+    signaledPhases.add(phase);
+    runParams.onExecutionPhase?.({
+      phase,
+      provider: runParams.provider,
+      model: context.modelId,
+      backend: context.backendResolved.id,
+    });
+  };
   let commentaryCounter = 0;
   const toolSummaryById = new Map<
     string,
@@ -127,15 +138,7 @@ export function createCliEventHandlers(params: {
       startedAt: Date.now(),
     });
     recordToolSummary(event, false);
-    if (!signaledToolExecutionStarted) {
-      signaledToolExecutionStarted = true;
-      runParams.onExecutionPhase?.({
-        phase: "tool_execution_started",
-        provider: runParams.provider,
-        model: context.modelId,
-        backend: context.backendResolved.id,
-      });
-    }
+    signalExecutionPhase("tool_execution_started");
     if (tracked) {
       params.toolTracking.handleCliToolUseStart(event);
     }
@@ -392,15 +395,7 @@ export function createCliEventHandlers(params: {
   const emitCliAssistantDelta = ({ text, delta }: CliStreamingDelta) => {
     if (text || delta) {
       observedCliActivity = true;
-      if (!signaledAssistantOutputStarted) {
-        signaledAssistantOutputStarted = true;
-        runParams.onExecutionPhase?.({
-          phase: "assistant_output_started",
-          provider: runParams.provider,
-          model: context.modelId,
-          backend: context.backendResolved.id,
-        });
-      }
+      signalExecutionPhase("assistant_output_started");
     }
     emitLiveEvent("assistant", () => ({
       text: applyPluginTextReplacements(text, context.backendResolved.textTransforms?.output),

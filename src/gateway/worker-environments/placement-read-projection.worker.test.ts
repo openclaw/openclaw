@@ -257,7 +257,7 @@ describe("worker placement read projection", () => {
       });
       const read = vi.spyOn(store, "readProjection");
       const inventoryRead = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-      const prepare = () =>
+      const prepare = async () =>
         kind === "inventory"
           ? store.prepareMaintenancePlacements()
           : store.prepareRuntimeRefresh(placement.sessionId);

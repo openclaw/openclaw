@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as cleanupTimeout from "../plugins/host-hook-cleanup-timeout.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
@@ -21,12 +22,19 @@ import {
   startTestGatewayServer,
 } from "./test-helpers.server.js";
 
+// Automatic metadata repair owns the same lease as this fixture's manual reload.
+vi.mock("./server-runtime-services.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-runtime-services.js")>()),
+  scheduleGatewayPostReadyMaintenance: () => {},
+}));
+
 vi.doUnmock("../plugins/loader.js");
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 installInstanceBindingConfigIo();
 
-it("serves active model and chat metadata throughout an admitted plugin call drain", async () => {
+it("serves active model and chat metadata throughout an admitted plugin call drain", async (ctx) => {
+  const { signal } = ctx;
   const fixture = await prepareInstanceBindingFixture(tempDirs.make("openclaw-drain-readers-"));
   const entered = createDeferredCore();
   const release = createDeferredCore();
@@ -120,7 +128,16 @@ it("serves active model and chat metadata throughout an admitted plugin call dra
         ),
     );
     held = rpcReq(connected, "instanceBinding.hold", {}, 120_000);
-    await entered.promise;
+    await withinTest(
+      awaitGateBeforeSettlement(
+        entered.promise,
+        held.then((result) => {
+          expect(result.ok, JSON.stringify(result)).toBe(true);
+        }),
+        "held plugin call settled before entering its handler",
+      ),
+      signal,
+    );
     let reloadSettled = false;
     reloading = rpcReq(
       connected,
@@ -131,9 +148,20 @@ it("serves active model and chat metadata throughout an admitted plugin call dra
       reloadSettled = true;
       return result;
     });
-    await draining.promise;
+    await withinTest(
+      awaitGateBeforeSettlement(
+        draining.promise,
+        reloading.then((result) => {
+          throw new Error(
+            `plugins.reload settled before entering drain: ${JSON.stringify(result)}`,
+          );
+        }),
+        "plugin reload settled before entering drain",
+      ),
+      signal,
+    );
     expect(instance.acceptingCalls).toBe(false);
-    const during = await reads();
+    const during = await withinTest(reads(), signal);
     expect(reloadSettled).toBe(false);
     expect(getActivePluginRegistry()).toBe(registry);
     expect(during.map((entry) => entry.payload)).toEqual(before.map((entry) => entry.payload));

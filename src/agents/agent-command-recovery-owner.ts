@@ -91,12 +91,10 @@ async function claimAgentCommandRecoveryOwner(params: {
       (transferredLease.agentId === undefined ||
         transferredLease.agentId === params.prepared.sessionAgentId) &&
       path.resolve(transferredLease.storePath) === path.resolve(params.prepared.storePath);
-    if (!matchesPreparedTarget) {
-      // Gateway transfers a persisted fence before preparation; bind it again after
-      // session resolution so rollover or rerouting cannot execute under another row's lease.
-      throw new Error("main-session recovery owner changed during ingress preparation; retry");
-    }
-    const snapshot = await refreshMainSessionRecoveryOwner(transferredLease, params.opts.runId);
+    // Bind the transferred fence again after preparation before refreshing its durable owner.
+    const snapshot = matchesPreparedTarget
+      ? await refreshMainSessionRecoveryOwner(transferredLease, params.opts.runId)
+      : undefined;
     if (!snapshot) {
       throw new Error("main-session recovery owner changed during ingress preparation; retry");
     }

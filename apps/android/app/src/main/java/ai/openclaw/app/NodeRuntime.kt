@@ -1939,7 +1939,7 @@ class NodeRuntime internal constructor(
           commandOutbox = chatCommandOutbox,
           recordModelRecent = prefs::recordModelRecent,
           onSessionDeleted = ::publishChatSessionDeletion,
-          onOfflineDefaultAgentRestored = ::syncMainSessionKey,
+          onOfflineDefaultAgentRestored = { prepareMainSessionKey(it, MainSessionUpdate.Sync) },
           onAssistantReplyFinalized = { owner, runId, text ->
             if (!_isForeground.value) {
               ConversationReplyNotifier(appContext).show(owner, runId, text)
@@ -2270,33 +2270,28 @@ class NodeRuntime internal constructor(
     }
   }
 
-  private fun syncMainSessionKey(agentId: String?) {
-    val resolvedKey = resolveNodeMainSessionKey(agentId)
-    talkMode.setMainSessionKey(resolvedKey)
-    if (!updateMainSessionKey(resolvedKey)) return
-    if (operatorConnected) {
-      chat.prepareMainSessionKey(resolvedKey)
-      chat.onGatewayConnected(mainSessionBinding(resolvedKey))
-    } else {
-      chat.applyMainSessionKey(resolvedKey)
-    }
-  }
+  private enum class MainSessionUpdate { Sync, Prepare, Select }
 
-  private fun prepareMainSessionKey(agentId: String?): String {
+  private fun prepareMainSessionKey(
+    agentId: String?,
+    update: MainSessionUpdate = MainSessionUpdate.Prepare,
+  ): String {
     val resolvedKey = resolveNodeMainSessionKey(agentId)
     // Always push into TalkMode so a lazy instance cannot retain the "main" alias.
     talkMode.setMainSessionKey(resolvedKey)
-    updateMainSessionKey(resolvedKey)
-    chat.prepareMainSessionKey(resolvedKey)
+    val changed = updateMainSessionKey(resolvedKey)
+    if (update == MainSessionUpdate.Sync && !changed) return resolvedKey
+    if (update == MainSessionUpdate.Sync && !operatorConnected) {
+      chat.applyMainSessionKey(resolvedKey)
+      return resolvedKey
+    }
+    if (update == MainSessionUpdate.Select) {
+      chat.prepareAndSelectMainSessionKey(resolvedKey)
+    } else {
+      chat.prepareMainSessionKey(resolvedKey)
+    }
+    if (update != MainSessionUpdate.Prepare) chat.onGatewayConnected(mainSessionBinding(resolvedKey))
     return resolvedKey
-  }
-
-  private fun selectMainSessionKey(agentId: String) {
-    val resolvedKey = resolveNodeMainSessionKey(agentId)
-    talkMode.setMainSessionKey(resolvedKey)
-    updateMainSessionKey(resolvedKey)
-    chat.prepareAndSelectMainSessionKey(resolvedKey)
-    chat.onGatewayConnected(mainSessionBinding(resolvedKey))
   }
 
   private fun mainSessionBinding(sessionKey: String): MainSessionBinding =
@@ -2462,13 +2457,12 @@ class NodeRuntime internal constructor(
       when (val outcome = parseGatewayCronRunOutcome(json.parseToJsonElement(response).asObjectOrNull())) {
         is GatewayCronRunOutcome.Started -> {
           outcome.runId?.let { runId ->
-            var trackingStarted = false
-            publishGatewayData(gatewayScope) {
-              trackingStarted =
+            val trackingStarted =
+              withCurrentGatewayData(gatewayScope) {
                 pendingCronRunRegistry.begin(actionJobId, runId) {
                   _pendingCronRunJobIds.value = it
                 }
-            }
+              }
             if (trackingStarted) {
               trackQueuedCronRun(gatewayScope = gatewayScope, jobId = actionJobId, runId = runId)
             }
@@ -3492,9 +3486,7 @@ class NodeRuntime internal constructor(
     // Don't re-enable on active=true; mic toggle drives that
   }
 
-  fun setMicEnabled(value: Boolean) {
-    setVoiceCaptureMode(if (value) VoiceCaptureMode.ManualMic else VoiceCaptureMode.Off)
-  }
+  fun setMicEnabled(value: Boolean): Unit = setVoiceCaptureMode(if (value) VoiceCaptureMode.ManualMic else VoiceCaptureMode.Off)
 
   internal fun hasActiveGatewaySwitchAudio(): Boolean =
     synchronized(voiceCaptureOwnershipLock) {
@@ -3519,13 +3511,9 @@ class NodeRuntime internal constructor(
     prefs.setVoiceMicEnabled(false)
   }
 
-  internal fun acknowledgeTalkModeFailure(notice: TalkFailureNotice) {
-    talkMode.acknowledgeFailure(notice)
-  }
+  internal fun acknowledgeTalkModeFailure(notice: TalkFailureNotice): Unit = talkMode.acknowledgeFailure(notice)
 
-  fun setTalkModeEnabled(value: Boolean) {
-    setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)
-  }
+  fun setTalkModeEnabled(value: Boolean): Unit = setVoiceCaptureMode(if (value) VoiceCaptureMode.TalkMode else VoiceCaptureMode.Off)
 
   private suspend fun handleTalkPttStart(): GatewaySession.InvokeResult =
     runTalkPttCommand {
@@ -3787,9 +3775,7 @@ class NodeRuntime internal constructor(
     talkMode.setPlaybackEnabled(value)
   }
 
-  fun setPreferredAudioInputDevice(value: String?) {
-    prefs.setPreferredAudioInputDevice(value)
-  }
+  fun setPreferredAudioInputDevice(value: String?): Unit = prefs.setPreferredAudioInputDevice(value)
 
   fun setVoiceWakeEnabled(value: Boolean) {
     if (value && !voiceWakeManager.isAvailable) return
@@ -5171,9 +5157,7 @@ class NodeRuntime internal constructor(
     return image.takeIf { isGatewayDataScopeCurrent(gatewayScope) && _gatewaySourcePreviewConfig.value === config }
   }
 
-  fun loadCurrentChat() {
-    chat.loadCurrent(resolveMainSessionKey())
-  }
+  fun loadCurrentChat(): Unit = chat.loadCurrent(resolveMainSessionKey())
 
   suspend fun rewindChatAtEntry(entryId: String): SessionRewindResult? = chat.rewindSessionAtEntryResult(chat.sessionKey.value, entryId)
 
@@ -5210,7 +5194,7 @@ class NodeRuntime internal constructor(
       // Agent selection owns every main-session consumer; switching chat alone would
       // leave Talk mode bound to the previous agent.
       selectedChatAgentId = normalizedAgentId
-      selectMainSessionKey(normalizedAgentId)
+      prepareMainSessionKey(normalizedAgentId, MainSessionUpdate.Select)
       selectedMainSessionKey = mainSessionKey.value
     }
     scope.launch {
@@ -5244,9 +5228,7 @@ class NodeRuntime internal constructor(
   fun toggleMessageSpeech(
     messageId: String,
     text: String,
-  ) {
-    messageSpeechController.toggle(messageId = messageId, text = text)
-  }
+  ): Unit = messageSpeechController.toggle(messageId = messageId, text = text)
 
   fun stopMessageSpeech() {
     if (messageSpeechControllerLazy.isInitialized()) messageSpeechController.stop()
@@ -5416,12 +5398,10 @@ class NodeRuntime internal constructor(
   ) {
     val gatewayScope = captureGatewayDataScope()?.takeIf { it.stableId == endpointStableId } ?: return
     val words = parseVoiceWakeWords(payloadJson) ?: return
-    var applied = false
-    publishGatewayData(gatewayScope) {
-      if (isCurrentConnection()) {
-        applied = applyAuthoritativeVoiceWakeWords(words, gatewayStableId = gatewayScope.stableId)
+    val applied =
+      withCurrentGatewayData(gatewayScope) {
+        isCurrentConnection() && applyAuthoritativeVoiceWakeWords(words, gatewayStableId = gatewayScope.stableId)
       }
-    }
     if (applied) resumeVoiceWakeAfterGatewayWords(gatewayScope)
   }
 
@@ -5430,15 +5410,14 @@ class NodeRuntime internal constructor(
     val requestRevision = currentVoiceWakeWordsRevision()
     try {
       val words = parseVoiceWakeWords(requestGatewayData(gatewayScope, GatewayMethod.VoicewakeGet.rawValue, "{}")) ?: return
-      var applied = false
-      publishGatewayData(gatewayScope) {
-        applied =
+      val applied =
+        withCurrentGatewayData(gatewayScope) {
           applyAuthoritativeVoiceWakeWords(
             words = words,
             gatewayStableId = gatewayScope.stableId,
             expectedRevision = requestRevision,
           )
-      }
+        }
       if (applied) resumeVoiceWakeAfterGatewayWords(gatewayScope)
     } catch (_: CancellationException) {
       // A replacement Gateway owns the next refresh.
@@ -5450,10 +5429,10 @@ class NodeRuntime internal constructor(
   private fun applyVoiceWakeWords(payloadJson: String?) {
     val gatewayScope = captureGatewayDataScope() ?: return
     val words = parseVoiceWakeWords(payloadJson) ?: return
-    var applied = false
-    publishGatewayData(gatewayScope) {
-      applied = applyAuthoritativeVoiceWakeWords(words, gatewayStableId = gatewayScope.stableId)
-    }
+    val applied =
+      withCurrentGatewayData(gatewayScope) {
+        applyAuthoritativeVoiceWakeWords(words, gatewayStableId = gatewayScope.stableId)
+      }
     if (applied) resumeVoiceWakeAfterGatewayWords(gatewayScope)
   }
 
@@ -5668,21 +5647,26 @@ class NodeRuntime internal constructor(
     }
   }
 
-  private fun isGatewayDataScopeCurrent(gatewayScope: GatewayDataScope): Boolean =
-    synchronized(gatewayDataScopeLock) {
-      gatewayScope.generation == gatewayDataGeneration && connectedEndpoint?.stableId == gatewayScope.stableId
-    }
+  private fun isGatewayDataScopeCurrent(gatewayScope: GatewayDataScope): Boolean = withCurrentGatewayData(gatewayScope) { true }
 
   private inline fun publishGatewayData(
     gatewayScope: GatewayDataScope,
     publish: () -> Unit,
   ): Boolean =
+    withCurrentGatewayData(gatewayScope) {
+      publish()
+      true
+    }
+
+  private inline fun withCurrentGatewayData(
+    gatewayScope: GatewayDataScope,
+    action: () -> Boolean,
+  ): Boolean =
     synchronized(gatewayDataScopeLock) {
       if (gatewayScope.generation != gatewayDataGeneration || connectedEndpoint?.stableId != gatewayScope.stableId) {
         return@synchronized false
       }
-      publish()
-      true
+      action()
     }
 
   private suspend fun <T> refreshGatewaySummary(
@@ -5936,19 +5920,14 @@ class NodeRuntime internal constructor(
           sessionCatalogContinueParams(entry),
         )
       val sessionKey = parseSessionCatalogContinueResult(response, json)
-      var opened = false
-      val published =
-        publishGatewayData(gatewayScope) {
-          if (sessionCatalogContinueSeq.get() == requestSeq) {
-            _sessionCatalogState.value = _sessionCatalogState.value.copy(continuingEntryId = null)
-            if (chatSelectionSeq.compareAndSet(selectionSeq, selectionSeq + 1)) {
-              stopMessageSpeech()
-              chat.switchSession(sessionKey, entry.agentId)
-              opened = true
-            }
-          }
-        }
-      return published && opened
+      return withCurrentGatewayData(gatewayScope) {
+        if (sessionCatalogContinueSeq.get() != requestSeq) return@withCurrentGatewayData false
+        _sessionCatalogState.value = _sessionCatalogState.value.copy(continuingEntryId = null)
+        if (!chatSelectionSeq.compareAndSet(selectionSeq, selectionSeq + 1)) return@withCurrentGatewayData false
+        stopMessageSpeech()
+        chat.switchSession(sessionKey, entry.agentId)
+        true
+      }
     } catch (err: CancellationException) {
       throw err
     } catch (_: Throwable) {
@@ -5997,8 +5976,8 @@ class NodeRuntime internal constructor(
     refreshGeneration: Long,
     crossinline publish: () -> Unit,
   ): Boolean =
-    publishGatewayData(gatewayScope) {
-      if (!publishIfCurrent(refreshGeneration) { publish() }) return false
+    withCurrentGatewayData(gatewayScope) {
+      publishIfCurrent(refreshGeneration) { publish() }
     }
 
   private fun publishAppearancePreferences(
@@ -6422,7 +6401,7 @@ class NodeRuntime internal constructor(
         _gatewayAgents.value = agents
         val selectedAgentId = selectedChatAgentId?.takeIf { id -> agents.any { it.id == id } }
         selectedChatAgentId = selectedAgentId
-        syncMainSessionKey(selectedAgentId ?: resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId.value)
+        prepareMainSessionKey(selectedAgentId ?: resolveAgentIdFromMainSessionKey(mainKey) ?: gatewayDefaultAgentId.value, MainSessionUpdate.Sync)
       }
     } catch (_: Throwable) {
       // ignore
@@ -6862,15 +6841,13 @@ class NodeRuntime internal constructor(
       if (!isGatewayDataScopeCurrent(gatewayScope)) return@launch
       val terminalRun = completedRun ?: return@launch
 
-      var pendingCleared = false
-      val scopeCurrent =
-        publishGatewayData(gatewayScope) {
-          pendingCleared =
-            pendingCronRunRegistry.finish(jobId, runId) {
-              _pendingCronRunJobIds.value = it
-            }
+      val pendingCleared =
+        withCurrentGatewayData(gatewayScope) {
+          pendingCronRunRegistry.finish(jobId, runId) {
+            _pendingCronRunJobIds.value = it
+          }
         }
-      if (!scopeCurrent || !pendingCleared) return@launch
+      if (!pendingCleared) return@launch
 
       refreshCronFromGateway()
       reloadCronJobIfSelected(jobId)
@@ -6991,11 +6968,20 @@ class NodeRuntime internal constructor(
 
   private fun checkClawHubSkillMethods(gatewayScope: GatewayDataScope): Boolean {
     if (clawHubSkillMethodsAvailable.value) return true
-    publishGatewayData(gatewayScope) {
-      _clawHubSkillSearchState.value =
-        _clawHubSkillSearchState.value.copy(errorText = CLAWHUB_SKILL_GATEWAY_UNAVAILABLE)
+    updateClawHubSkillSearch(gatewayScope) {
+      it.copy(errorText = CLAWHUB_SKILL_GATEWAY_UNAVAILABLE)
     }
     return false
+  }
+
+  private inline fun updateClawHubSkillSearch(
+    gatewayScope: GatewayDataScope,
+    isCurrent: () -> Boolean = { true },
+    update: (GatewayClawHubSkillSearchState) -> GatewayClawHubSkillSearchState,
+  ) {
+    publishGatewayData(gatewayScope) {
+      if (isCurrent()) _clawHubSkillSearchState.value = update(_clawHubSkillSearchState.value)
+    }
   }
 
   private suspend fun searchClawHubSkillsFromGateway(query: String) {
@@ -7012,42 +6998,35 @@ class NodeRuntime internal constructor(
       return
     }
     if (!checkClawHubSkillMethods(gatewayScope)) return
-    publishGatewayData(gatewayScope) {
-      _clawHubSkillSearchState.value =
-        _clawHubSkillSearchState.value.copy(
-          query = normalized,
-          searching = true,
-          results = emptyList(),
-          reviewingSlug = null,
-          installReview = null,
-          errorText = null,
-          messageText = null,
-        )
+    updateClawHubSkillSearch(gatewayScope) {
+      it.copy(
+        query = normalized,
+        searching = true,
+        results = emptyList(),
+        reviewingSlug = null,
+        installReview = null,
+        errorText = null,
+        messageText = null,
+      )
     }
     try {
       val response = requestGatewayData(gatewayScope, "skills.search", clawHubSearchParams(normalized))
       val results = parseClawHubSearchResults(response, json)
-      publishGatewayData(gatewayScope) {
-        if (clawHubSkillSearchSeq.get() == searchSeq) {
-          _clawHubSkillSearchState.value =
-            _clawHubSkillSearchState.value.copy(
-              searching = false,
-              results = results,
-              messageText = if (results.isEmpty()) "No ClawHub skills matched." else null,
-            )
-        }
+      updateClawHubSkillSearch(gatewayScope, { clawHubSkillSearchSeq.get() == searchSeq }) {
+        it.copy(
+          searching = false,
+          results = results,
+          messageText = if (results.isEmpty()) "No ClawHub skills matched." else null,
+        )
       }
     } catch (err: CancellationException) {
       throw err
     } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) {
-        if (clawHubSkillSearchSeq.get() == searchSeq) {
-          _clawHubSkillSearchState.value =
-            _clawHubSkillSearchState.value.copy(
-              searching = false,
-              errorText = nativeString("Could not search ClawHub skills."),
-            )
-        }
+      updateClawHubSkillSearch(gatewayScope, { clawHubSkillSearchSeq.get() == searchSeq }) {
+        it.copy(
+          searching = false,
+          errorText = nativeString("Could not search ClawHub skills."),
+        )
       }
     }
   }
@@ -7063,45 +7042,38 @@ class NodeRuntime internal constructor(
       return
     }
     if (!checkClawHubSkillMethods(gatewayScope)) return
-    publishGatewayData(gatewayScope) {
-      _clawHubSkillSearchState.value =
-        _clawHubSkillSearchState.value.copy(
-          reviewingSlug = skill.reference,
-          installReview = null,
-          errorText = null,
-          messageText = null,
-        )
+    updateClawHubSkillSearch(gatewayScope) {
+      it.copy(
+        reviewingSlug = skill.reference,
+        installReview = null,
+        errorText = null,
+        messageText = null,
+      )
     }
     try {
       val response = requestGatewayData(gatewayScope, "skills.detail", clawHubDetailParams(skill.reference))
       val review = parseClawHubInstallReview(response, skill, json)
-      publishGatewayData(gatewayScope) {
-        if (clawHubSkillReviewSeq.get() == reviewSeq) {
-          _clawHubSkillSearchState.value =
-            _clawHubSkillSearchState.value.copy(
-              reviewingSlug = null,
-              installReview = review,
-              errorText =
-                if (review == null) {
-                  "ClawHub did not return an installable version for ${skill.reference}."
-                } else {
-                  null
-                },
-            )
-        }
+      updateClawHubSkillSearch(gatewayScope, { clawHubSkillReviewSeq.get() == reviewSeq }) {
+        it.copy(
+          reviewingSlug = null,
+          installReview = review,
+          errorText =
+            if (review == null) {
+              "ClawHub did not return an installable version for ${skill.reference}."
+            } else {
+              null
+            },
+        )
       }
     } catch (err: CancellationException) {
       throw err
     } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) {
-        if (clawHubSkillReviewSeq.get() == reviewSeq) {
-          _clawHubSkillSearchState.value =
-            _clawHubSkillSearchState.value.copy(
-              reviewingSlug = null,
-              errorText =
-                nativeString("Could not load ClawHub details for \${skill.reference}.", skill.reference),
-            )
-        }
+      updateClawHubSkillSearch(gatewayScope, { clawHubSkillReviewSeq.get() == reviewSeq }) {
+        it.copy(
+          reviewingSlug = null,
+          errorText =
+            nativeString("Could not load ClawHub details for \${skill.reference}.", skill.reference),
+        )
       }
     }
   }
@@ -7120,42 +7092,37 @@ class NodeRuntime internal constructor(
     }
     if (!checkClawHubSkillMethods(gatewayScope)) return
     if (!operatorAdminScopeAvailable.value) {
-      publishGatewayData(gatewayScope) {
-        _clawHubSkillSearchState.value =
-          _clawHubSkillSearchState.value.copy(
-            errorText =
-              nativeString(
-                "This gateway connection needs operator.admin to install ClawHub skills.",
-              ),
-          )
+      updateClawHubSkillSearch(gatewayScope) {
+        it.copy(
+          errorText =
+            nativeString(
+              "This gateway connection needs operator.admin to install ClawHub skills.",
+            ),
+        )
       }
       return
     }
     clawHubSkillInstallBeforeClaimObserverForTests?.invoke()
     val claimed =
       clawHubSkillInstallMutex.withLock {
-        var published = false
         // Gateway switches reset this shared UI state while installs can wait
         // on the mutex. Claim under the scope lock so stale work cannot leak in.
-        publishGatewayData(gatewayScope) {
+        withCurrentGatewayData(gatewayScope) {
           val current = _clawHubSkillSearchState.value
-          if (slug !in current.installingSlugs) {
-            _clawHubSkillSearchState.value =
-              current.copy(installingSlugs = current.installingSlugs + slug)
-            published = true
-          }
+          if (slug in current.installingSlugs) return@withCurrentGatewayData false
+          _clawHubSkillSearchState.value =
+            current.copy(installingSlugs = current.installingSlugs + slug)
+          true
         }
-        published
       }
     if (!claimed) return
     val attemptedVersion = version?.trim()?.takeIf(String::isNotEmpty)
-    publishGatewayData(gatewayScope) {
-      _clawHubSkillSearchState.value =
-        _clawHubSkillSearchState.value.copy(
-          installReview = null,
-          errorText = null,
-          messageText = null,
-        )
+    updateClawHubSkillSearch(gatewayScope) {
+      it.copy(
+        installReview = null,
+        errorText = null,
+        messageText = null,
+      )
     }
     try {
       val root =
@@ -7170,54 +7137,49 @@ class NodeRuntime internal constructor(
       val warning =
         root.nonBlankString("warning")
       val refreshed = refreshSkillsFromGateway()
-      publishGatewayData(gatewayScope) {
-        _clawHubSkillSearchState.value =
-          _clawHubSkillSearchState.value.copy(
-            messageText =
-              formatClawHubInstallMessage(
-                message ?: "Installed $slug.",
-                listOfNotNull(
-                  warning,
-                  if (refreshed != null) null else "Installed, but the skills list could not be refreshed.",
-                ).joinToString("\n").ifBlank { null },
-              ),
-          )
+      updateClawHubSkillSearch(gatewayScope) {
+        it.copy(
+          messageText =
+            formatClawHubInstallMessage(
+              message ?: "Installed $slug.",
+              listOfNotNull(
+                warning,
+                if (refreshed != null) null else "Installed, but the skills list could not be refreshed.",
+              ).joinToString("\n").ifBlank { null },
+            ),
+        )
       }
     } catch (err: CancellationException) {
       throw err
     } catch (_: GatewayRequestOutcomeUnknown) {
       val confirmed = refreshAndConfirmClawHubInstall(gatewayScope, slug, attemptedVersion)
-      publishGatewayData(gatewayScope) {
-        _clawHubSkillSearchState.value =
-          _clawHubSkillSearchState.value.copy(
-            errorText = if (confirmed) null else clawHubInstallOutcomeUnknownMessage(slug),
-            messageText = if (confirmed) "Installed $slug." else null,
-          )
+      updateClawHubSkillSearch(gatewayScope) {
+        it.copy(
+          errorText = if (confirmed) null else clawHubInstallOutcomeUnknownMessage(slug),
+          messageText = if (confirmed) "Installed $slug." else null,
+        )
       }
     } catch (err: GatewayRequestRejected) {
       val confirmed = refreshAndConfirmClawHubInstall(gatewayScope, slug, attemptedVersion)
       val rejection = if (confirmed) null else clawHubInstallRejection(err.gatewayError)
-      publishGatewayData(gatewayScope) {
-        _clawHubSkillSearchState.value =
-          _clawHubSkillSearchState.value.copy(
-            errorText = rejection?.let { formatClawHubInstallMessage(it.message, it.warning) },
-            messageText = if (confirmed) "Installed $slug." else null,
-          )
+      updateClawHubSkillSearch(gatewayScope) {
+        it.copy(
+          errorText = rejection?.let { formatClawHubInstallMessage(it.message, it.warning) },
+          messageText = if (confirmed) "Installed $slug." else null,
+        )
       }
     } catch (_: Throwable) {
-      publishGatewayData(gatewayScope) {
-        _clawHubSkillSearchState.value =
-          _clawHubSkillSearchState.value.copy(
-            errorText = nativeString("Could not install \${slug} from ClawHub.", slug),
-          )
+      updateClawHubSkillSearch(gatewayScope) {
+        it.copy(
+          errorText = nativeString("Could not install \${slug} from ClawHub.", slug),
+        )
       }
     } finally {
       clawHubSkillInstallMutex.withLock {
-        publishGatewayData(gatewayScope) {
-          _clawHubSkillSearchState.value =
-            _clawHubSkillSearchState.value.copy(
-              installingSlugs = _clawHubSkillSearchState.value.installingSlugs - slug,
-            )
+        updateClawHubSkillSearch(gatewayScope) {
+          it.copy(
+            installingSlugs = _clawHubSkillSearchState.value.installingSlugs - slug,
+          )
         }
       }
     }
@@ -8113,14 +8075,11 @@ class NodeRuntime internal constructor(
       scopes = grantedScopes,
       desired = desired,
       commitIfCurrent = { block ->
-        var current = false
-        publishGatewayData(gatewayScope) {
-          if (_operatorScopes.value == grantedScopes && currentNodeApprovalSurface() == desired) {
-            current = true
-            block()
-          }
+        withCurrentGatewayData(gatewayScope) {
+          if (_operatorScopes.value != grantedScopes || currentNodeApprovalSurface() != desired) return@withCurrentGatewayData false
+          block()
+          true
         }
-        current
       },
     )
   }

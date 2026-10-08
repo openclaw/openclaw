@@ -731,6 +731,7 @@ src/gateway/model-account-connect-errors.ts
 src/gateway/operator-scopes.ts
 src/gateway/security-path.ts
 src/gateway/server-methods/workspace-fs.ts
+src/gateway/worker-environments/placement-read-authority.ts
 src/gateway/worker-environments/placement-record.ts
 src/gateway/worker-environments/placement-row-codec.ts
 src/gateway/worker-environments/placement-state.ts
