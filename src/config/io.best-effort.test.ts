@@ -193,8 +193,10 @@ describe("readCurrentConfigForResolution", () => {
 
         expect(resolution.config).toEqual({});
         const warning = warn.mock.calls.map(([line]) => String(line)).join("\n");
-        expect(warning).toContain("Config unavailable");
-        expect(warning).not.toContain("Reason:");
+        // Absent files carry no rejection reason, so the warning stays plain.
+        expect(warning).toContain(
+          `${configPath}: Config unavailable; using environment and default agent directory settings.`,
+        );
       } finally {
         warn.mockRestore();
       }
