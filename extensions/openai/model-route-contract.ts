@@ -122,18 +122,12 @@ export function resolveOpenAICodexReasoningEfforts(
   if (observed === undefined || observed.length === 0) {
     return observed ? [] : [...known];
   }
-  const normalizedObserved = observed.map((effort) => effort.trim().toLowerCase()).filter(Boolean);
-  const supported = new Set([...known, ...normalizedObserved]);
-  const knownSet = new Set(known);
-  for (const effort of OPENAI_CODEX_REASONING_EFFORT_ORDER) {
-    if (!knownSet.has(effort)) {
-      supported.delete(effort);
-    }
-  }
-  return [
-    ...OPENAI_CODEX_REASONING_EFFORT_ORDER.filter((effort) => supported.delete(effort)),
-    ...supported,
-  ];
+  const extraEfforts = observed
+    .map((effort) => effort.trim().toLowerCase())
+    .filter(
+      (effort) => effort && !OPENAI_CODEX_REASONING_EFFORT_ORDER.some((level) => level === effort),
+    );
+  return [...known, ...new Set(extraEfforts)];
 }
 
 export function isOpenAIDualRouteModelId(value: string | undefined): boolean {

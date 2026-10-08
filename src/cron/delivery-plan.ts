@@ -24,15 +24,6 @@ export type CronDeliveryPlan = Pick<
   requested: boolean;
 };
 
-/** Returns whether a delivery plan names a concrete channel, recipient, thread, or account. */
-export function hasExplicitCronDeliveryTarget(
-  plan: Pick<CronDeliveryPlan, "channel" | "to" | "threadId" | "accountId">,
-): boolean {
-  return Boolean(
-    (plan.channel && plan.channel !== "last") || plan.to || plan.threadId != null || plan.accountId,
-  );
-}
-
 function resolveAnnounceChannel(params: {
   channel?: CronMessageChannel;
   to?: string;

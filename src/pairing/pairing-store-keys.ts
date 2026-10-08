@@ -1,7 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
-import type { PairingChannel } from "./pairing-store.types.js";
+import type { PairingChannel, PairingRequestRecord } from "./pairing-store.types.js";
 
 type PairingKeyKind = "channel" | "account id";
 
@@ -58,4 +58,8 @@ export function resolveAllowFromAccountId(accountId?: string): string {
     throw invalidPairingKeyError("account id", "expected non-empty string", accountId);
   }
   return normalizeLowercaseStringOrEmpty(accountId) || DEFAULT_ACCOUNT_ID;
+}
+
+export function resolvePairingRequestAccountId(entry: PairingRequestRecord): string {
+  return resolveAllowFromAccountId(entry.meta?.accountId);
 }

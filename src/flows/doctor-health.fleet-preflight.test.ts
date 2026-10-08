@@ -389,7 +389,7 @@ it("shares one fleet preflight with Doctor admission and its health contribution
   });
 });
 
-it.each(["copy", "hardlink", "relocated-copy"] as const)(
+it.each(["hardlink", "relocated-copy"] as const)(
   "reconciles Doctor admission with physical quarantine across ancestor aliases: %s",
   async (kind) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

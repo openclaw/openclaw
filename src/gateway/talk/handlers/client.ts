@@ -7,7 +7,6 @@ import {
   validateTalkClientToolCallParams,
   validateTalkClientTranscriptParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import { AgentSelectionRequiredError } from "../../../agents/agent-scope.js";
 import { createPluginRuntime } from "../../../plugins/runtime/index.js";
 import { withOpenClawAgentDatabaseRuntime } from "../../../state/openclaw-agent-db.js";
 import {
@@ -33,7 +32,6 @@ import {
 import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
 import type { GatewayRequestHandlers } from "../../server-methods/types.js";
 import { defineValidatedGatewayHandler } from "../../server-methods/validation.js";
-import { SessionMutationAuthorizationChangedError } from "../../session-mutation-authorization-error.js";
 import { formatForLog } from "../../ws-log.js";
 import { startTalkRealtimeAgentConsult } from "../agent-consult.js";
 import { prepareTalkClientControlAuthority } from "../client-agent-consult.js";
@@ -45,6 +43,7 @@ import {
   ensureTalkRealtimeRelayVoiceSession,
   flushTalkRealtimeRelayVoiceWrites,
 } from "../relay/operations.js";
+import { talkRequestError } from "../request-error.js";
 import { resolveOwnedActiveTalkRunTarget } from "../run-ownership.js";
 import { prepareTalkSessionTarget, requirePreparedTalkSessionTarget } from "../session-target.js";
 import { unregisterTalkVoiceSession } from "../voice-selection.js";
@@ -312,20 +311,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         });
         respond(true, result, undefined);
       } catch (err) {
-        if (err instanceof SessionMutationAuthorizationChangedError) {
-          respond(false, undefined, err.error);
-          return;
-        }
-        respond(
-          false,
-          undefined,
-          errorShape(
-            err instanceof AgentSelectionRequiredError
-              ? ErrorCodes.INVALID_REQUEST
-              : ErrorCodes.UNAVAILABLE,
-            formatForLog(err),
-          ),
-        );
+        respond(false, undefined, talkRequestError(err));
       }
     },
   ),

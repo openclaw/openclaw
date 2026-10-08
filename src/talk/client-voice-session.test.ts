@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
@@ -50,9 +50,10 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/sessions/session-accessor.js")>();
   return { ...actual, appendTranscriptMessage: sessionAccessorMocks.appendTranscriptMessage };
 });
-vi.mock("../channels/message/runtime.js", () => ({
-  sendDurableMessageBatchCore: sendDurableMessageBatch,
-}));
+vi.mock("../channels/message/runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../channels/message/runtime.js")>();
+  return { ...actual, sendDurableMessageBatchCore: sendDurableMessageBatch };
+});
 
 const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 let tempDir: string;
@@ -189,7 +190,7 @@ describe("client voice session", () => {
     expect(isClientVoiceSessionConfirmable(binding(relay))).toBe(true);
   });
 
-  it("waits for transcript serialization but not mutation digest delivery", async () => {
+  it("waits for transcript serialization but not mutation digest delivery", async ({ signal }) => {
     await seedSession("agent:main:main", {
       channel: "discord",
       to: "channel:voice-updates",
@@ -239,7 +240,11 @@ describe("client voice session", () => {
     );
 
     const digestSend = createDeferred<{ status: "sent" }>();
-    sendDurableMessageBatch.mockImplementationOnce(() => digestSend.promise);
+    const digestStarted = createDeferred();
+    sendDurableMessageBatch.mockImplementationOnce(() => {
+      digestStarted.resolve();
+      return digestSend.promise;
+    });
     let closeSettled = false;
     const close = closeClientVoiceSession({
       agentId: "main",
@@ -263,7 +268,8 @@ describe("client voice session", () => {
     expect(
       clientVoiceSessionTesting.readRecord("main", voiceSessionId)?.digestDeliveredAt,
     ).toBeUndefined();
-    await vi.waitFor(() => expect(sendDurableMessageBatch).toHaveBeenCalledOnce());
+    await withinTest(digestStarted.promise, signal);
+    expect(sendDurableMessageBatch).toHaveBeenCalledOnce();
 
     noteClientVoiceConfirmationUtterance({
       agentId: "main",

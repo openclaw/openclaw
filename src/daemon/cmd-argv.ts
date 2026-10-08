@@ -1,4 +1,3 @@
-/** Windows cmd argument quoting and parser mirror used by service tests. */
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import { assertNoCmdLineBreak } from "./cmd-set.js";
 
@@ -18,15 +17,11 @@ export function quoteCmdScriptArg(
   return `"${escaped}"`;
 }
 
-function unescapeCmdScriptArg(value: string): string {
-  return value.replace(/\^!/g, "!").replace(/%%/g, "%");
-}
-
 export function parseCmdScriptCommandLine(value: string): string[] {
   // Script renderer escapes quotes (`\"`) and cmd expansions (`%%`, `^!`).
   // Keep all other backslashes literal so Windows drive/UNC paths survive.
-  return splitArgsPreservingQuotes(value, { escapeMode: "backslash-quote-only" }).map(
-    unescapeCmdScriptArg,
+  return splitArgsPreservingQuotes(value, { escapeMode: "backslash-quote-only" }).map((argument) =>
+    argument.replace(/\^!/g, "!").replace(/%%/g, "%"),
   );
 }
 

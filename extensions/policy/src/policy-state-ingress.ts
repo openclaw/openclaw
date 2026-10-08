@@ -82,44 +82,29 @@ function hasImplicitDefaultAccountConfig(
   channel: string,
   config: Record<string, unknown>,
 ): boolean {
-  switch (channel) {
-    case "clickclack":
-      return (
-        hasConfiguredAccountValue(config.baseUrl) &&
-        hasConfiguredAccountValue(config.workspace) &&
-        hasConfiguredAccountValue(config.token)
-      );
-    case "feishu":
-      return hasConfiguredAccountValue(config.appId) && hasConfiguredAccountValue(config.appSecret);
-    case "irc":
-      return hasConfiguredAccountValue(config.host) && hasConfiguredAccountValue(config.nick);
-    case "line":
-      return (
-        hasConfiguredAccountValue(config.channelAccessToken) ||
-        hasConfiguredAccountValue(config.tokenFile)
-      );
-    case "matrix":
-      return (
-        hasConfiguredAccountValue(config.homeserver) &&
-        (hasConfiguredAccountValue(config.accessToken) ||
-          (hasConfiguredAccountValue(config.userId) && hasConfiguredAccountValue(config.password)))
-      );
-    case "mattermost":
-      return (
-        hasConfiguredAccountValue(config.baseUrl) && hasConfiguredAccountValue(config.botToken)
-      );
-    case "nextcloud-talk":
-      return (
-        hasConfiguredAccountValue(config.baseUrl) &&
-        (hasConfiguredAccountValue(config.botSecret) ||
-          hasConfiguredAccountValue(config.botSecretFile))
-      );
-    default:
-      return (IMPLICIT_DEFAULT_ACCOUNT_FIELDS[channel] ?? []).some((field) =>
-        hasConfiguredAccountValue(config[field]),
-      );
-  }
+  const alternatives =
+    IMPLICIT_ACCOUNT_REQUIREMENTS[channel] ??
+    (IMPLICIT_DEFAULT_ACCOUNT_FIELDS[channel] ?? []).map((field) => [field]);
+  return alternatives.some((fields) =>
+    fields.every((field) => hasConfiguredAccountValue(config[field])),
+  );
 }
+
+const IMPLICIT_ACCOUNT_REQUIREMENTS: Readonly<Record<string, readonly (readonly string[])[]>> = {
+  clickclack: [["baseUrl", "workspace", "token"]],
+  feishu: [["appId", "appSecret"]],
+  irc: [["host", "nick"]],
+  line: [["channelAccessToken"], ["tokenFile"]],
+  matrix: [
+    ["homeserver", "accessToken"],
+    ["homeserver", "userId", "password"],
+  ],
+  mattermost: [["baseUrl", "botToken"]],
+  "nextcloud-talk": [
+    ["baseUrl", "botSecret"],
+    ["baseUrl", "botSecretFile"],
+  ],
+};
 
 type ChannelIngressParams = {
   readonly channel: string;

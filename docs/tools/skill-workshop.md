@@ -13,6 +13,13 @@ skills**. The agent saves a procedure after hard multi-step work and fixes a
 learned skill that misled it; skills nobody uses for 30 days are archived. Every
 change applies immediately, saves the previous version first, and can be undone.
 
+Learned skills are procedures, not memory: the method for a task the user
+repeats, so the agent does not work it out again each time. Facts about the
+user or the world belong in [memory](/concepts/memory). Knowledge about one
+codebase, such as its conventions, build commands, or architecture, belongs in
+that repository's docs or `AGENTS.md`, where every agent working there reads it,
+so the agent does not save it as a learned skill.
+
 Learned skills belong to one agent and are always visible to it: they bypass
 `agents.defaults.skills` and `agents.entries.<id>.skills` allowlists. To hide
 one, archive it.

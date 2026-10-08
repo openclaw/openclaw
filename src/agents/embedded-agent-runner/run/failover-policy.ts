@@ -59,15 +59,6 @@ function isTerminalFormatFailure(params: {
   );
 }
 
-function shouldRotatePrompt(params: PromptDecisionParams): boolean {
-  return (
-    params.failoverFailure &&
-    params.failoverReason !== "timeout" &&
-    params.failoverReason !== "tls_certificate" &&
-    !isTerminalFormatFailure(params)
-  );
-}
-
 function isAssistantTimeoutFailure(params: AssistantDecisionParams): boolean {
   return (
     params.terminal.kind === "timeout" &&
@@ -166,8 +157,11 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
       }
       return surfaceError;
     }
-    shouldRotate = shouldRotatePrompt(params);
     shouldFallback = params.failoverFailure && !isTerminalFormatFailure(params);
+    shouldRotate =
+      shouldFallback &&
+      params.failoverReason !== "timeout" &&
+      params.failoverReason !== "tls_certificate";
   } else {
     if (
       params.signalOwnedInterruption ||

@@ -74,7 +74,7 @@ type MediaAuthorization = {
   topicConfig?: TelegramTopicConfig;
 };
 
-type TelegramMediaGroupInput = MediaAuthorization & {
+export type TelegramMediaGroupInput = MediaAuthorization & {
   ctx: TelegramContext;
   msg: Message;
   storeAllowFrom: string[];
@@ -310,6 +310,23 @@ export function createTelegramInboundMedia({
     return "process";
   };
 
+  const sendMediaWarning = (
+    warning: Pick<TelegramMediaGroupInput, "chatId" | "threadSpec" | "msg">,
+    text: string,
+  ) =>
+    withTelegramApiErrorLogging({
+      operation: "sendMessage",
+      runtime,
+      fn: () =>
+        bot.api.sendMessage(warning.chatId, text, {
+          ...buildTelegramThreadParams(warning.threadSpec),
+          reply_parameters: {
+            message_id: warning.msg.message_id,
+            allow_sending_without_reply: true,
+          },
+        }),
+    }).catch(() => {});
+
   const processMediaGroup = async (entry: BufferedMediaGroupEntry) => {
     try {
       const finalIngressMessageId = entry.messages.at(-1)?.msg.message_id;
@@ -412,22 +429,10 @@ export function createTelegramInboundMedia({
       }
       if (skippedCount > 0 && mediaDisposition !== "silent-ingest") {
         const verb = skippedCount === 1 ? "was" : "were";
-        await withTelegramApiErrorLogging({
-          operation: "sendMessage",
-          runtime,
-          fn: () =>
-            bot.api.sendMessage(
-              primary.msg.chat.id,
-              `⚠️ Received ${allMedia.length - skippedCount} of ${entry.messages.length} images — ${skippedCount} could not be fetched and ${verb} skipped.`,
-              {
-                ...buildTelegramThreadParams(entry.threadSpec),
-                reply_parameters: {
-                  message_id: primary.msg.message_id,
-                  allow_sending_without_reply: true,
-                },
-              },
-            ),
-        }).catch(() => {});
+        await sendMediaWarning(
+          { ...entry, ...primary, chatId: primary.msg.chat.id },
+          `⚠️ Received ${allMedia.length - skippedCount} of ${entry.messages.length} images — ${skippedCount} could not be fetched and ${verb} skipped.`,
+        );
       }
       const result = await processMessageWithReplyChain({
         ctx: primary.ctx,
@@ -630,5 +635,5 @@ export function createTelegramInboundMedia({
     return true;
   };
 
-  return { handleMediaGroup, resolveUnaddressedGroupMediaDisposition };
+  return { handleMediaGroup, resolveUnaddressedGroupMediaDisposition, sendMediaWarning };
 }

@@ -1,11 +1,12 @@
 import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { i18n } from "../../i18n/index.ts";
 import "../../styles.css";
 import "../../styles/settings.css";
 import "../../styles/agents.css";
 import "../../styles/sidebar-markdown.css";
-import { i18n } from "../../i18n/index.ts";
 import { getRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
+import { createAgentFileEditors } from "./agent-file-state.test-helpers.ts";
 import { renderAgentFiles } from "./panels-files.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;
@@ -73,8 +74,7 @@ function renderPreview(
       agentFilesLoading: false,
       agentFilesError: null,
       agentFileActive: "AGENTS.md",
-      agentFileContents: { "AGENTS.md": "Saved instructions" },
-      agentFileDrafts: { "AGENTS.md": draft },
+
       agentFileSaving: false,
       agentFileConflict: null,
       canWrite: true,
@@ -89,6 +89,13 @@ function renderPreview(
       onFileReload: () => undefined,
       onFileOverwrite: () => undefined,
       ...overrides,
+      agentFileEditors: {
+        "AGENTS.md": {
+          content: "Saved instructions",
+          draft,
+          ...overrides.agentFileEditors?.["AGENTS.md"],
+        },
+      },
     }),
     container,
   );
@@ -112,7 +119,9 @@ describe.runIf(browserMode)("agent file preview", () => {
           workspace: "/synthetic/workspace",
           files: [{ name: "AGENTS.md", path: "/synthetic/workspace/AGENTS.md", missing }],
         },
-        agentFileContents: { "AGENTS.md": draft },
+        agentFileEditors: createAgentFileEditors({
+          content: { "AGENTS.md": draft },
+        }),
         agentFileConflict: conflict,
       });
       const { webAwesomeDialog } = await getRenderedModalDialog(container);

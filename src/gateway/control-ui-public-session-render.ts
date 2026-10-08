@@ -35,7 +35,22 @@ export const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
     }catch{}
     return Boolean(credential)
   }
-  if(link)fetch(link.href+"&probe=1",{credentials:"same-origin",redirect:"error",cache:"no-store",signal:AbortSignal.timeout(5000)}).then(response=>{if(response.status===204||(response.status===401&&hasClientCredential()))location.replace(link.href+location.hash)}).catch(()=>{});
+  const pending=document.querySelector("main[data-entry-pending]");
+  function showUnavailable(main){
+    if(!main?.hasAttribute("data-entry-pending"))return;
+    main.removeAttribute("data-entry-pending");
+    document.title=main.querySelector(".entry-result h1").textContent+" · OpenClaw";
+  }
+  function probeFailed(){
+    if(!pending)return;
+    pending.querySelector(".entry-status h1").textContent="Could not check access";
+    pending.querySelector(".entry-status p").textContent="Check your connection, then reload or log in to try again.";
+  }
+  if(link)fetch(link.href+"&probe=1",{credentials:"same-origin",redirect:"error",cache:"no-store",signal:AbortSignal.timeout(5000)}).then(response=>{
+    if(response.status===204||(response.status===401&&hasClientCredential()))location.replace(link.href+location.hash);
+    else if(response.status===401||response.status===403)showUnavailable(pending);
+    else probeFailed();
+  }).catch(probeFailed);
   document.addEventListener("click",event=>{const login=event.target.closest?.("#session-login");if(login)login.hash=location.hash});
   let timer,etag="",running=false,retryAt=0;
   const enabled=()=>document.querySelector("main[data-public-refresh='true']")!==null;
@@ -56,6 +71,8 @@ export const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
       if(document.hidden||!main||!current)return;
       current.replaceWith(main);
       document.title=next.title;
+      // A revoked public read is already resolved; its inert script will not run here.
+      showUnavailable(main);
       etag=response.headers.get("ETag")||"";
     }catch{}finally{running=false;schedule(delay)}
   }
@@ -166,6 +183,7 @@ export function renderPublicSessionDocument(params: {
   unavailable?: boolean;
 }): string {
   const isLatest = params.isLatest !== false && !params.unavailable;
+  const entryPending = params.unavailable && Boolean(params.entryUrl);
   const entryLink = params.entryUrl
     ? `<a class="login" id="session-login"${params.clientAuthBasePath !== undefined ? ` data-gateway-path="${escapeHtml(params.clientAuthBasePath)}"` : ""} href="${escapeHtml(params.entryUrl)}">Log in <span aria-hidden="true">→</span></a>`
     : "";
@@ -211,7 +229,7 @@ export function renderPublicSessionDocument(params: {
 <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer"><meta name="robots" content="noindex, nofollow">
 ${isLatest && !params.entryUrl ? '<meta http-equiv="refresh" content="15">' : ""}
-<title>${title} · OpenClaw</title>${canonicalMetadata}
+<title>${entryPending ? "OpenClaw" : `${title} · OpenClaw`}</title>${canonicalMetadata}
 <meta property="og:type" content="website"><meta property="og:site_name" content="OpenClaw">
 <meta property="og:title" content="${title}"><meta property="og:description" content="${description}">
 <meta property="og:image" content="${escapeHtml(params.cardUrl)}">
@@ -222,14 +240,15 @@ ${isLatest && !params.entryUrl ? '<meta http-equiv="refresh" content="15">' : ""
 main{width:min(820px,calc(100% - 40px));margin:0 auto;padding:44px 0 60px}.brand{font-weight:750;letter-spacing:-.03em;font-size:19px;color:#edf1f5}.brand span{color:#ff786b;margin-right:9px}.login{display:inline-flex;align-items:center;gap:14px;border:1px solid #42515f;border-radius:8px;padding:9px 14px;color:#edf1f5;text-decoration:none;font-size:13px;font-weight:650;white-space:nowrap}.login:hover{background:#1a2631}.header-actions{display:flex;align-items:center;gap:14px}.masthead{display:flex;align-items:center;justify-content:space-between;gap:16px}.badge{border:1px solid #345044;background:#14281f;border-radius:99px;padding:6px 11px;color:#a3ddba;font-size:12px;font-weight:650;white-space:nowrap}.badge::before{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;background:#91d6ab;margin-right:7px}
 h1{font-size:clamp(28px,5vw,42px);line-height:1.15;letter-spacing:-.045em;margin:40px 0 16px;overflow-wrap:anywhere}.intro{color:#a6b3c0;font-size:14px;line-height:1.7;margin:0 0 30px;max-width:660px}.intro strong{color:#d6dee6;font-weight:550}.notice{padding:14px 18px;border:1px solid #554735;background:#261f16;color:#d7c4a7;font-size:13px;line-height:1.6;border-radius:10px;margin-bottom:28px}
 .pagination{display:flex;justify-content:space-between;gap:18px;margin:24px 0;font-size:13px}.pagination a{padding:9px 0}.transcript{border-top:1px solid #26313b}.message{padding:27px 0;display:grid;grid-template-columns:90px minmax(0,1fr);gap:18px;border-bottom:1px solid #202b35}.message h2{margin:3px 0 0;font-size:12px;letter-spacing:.02em;font-weight:650;color:#99a9ba}.assistant h2{color:#ff958b}.content{min-width:0;font-size:15px;line-height:1.75;overflow-wrap:anywhere}.content>:first-child{margin-top:0}.content>:last-child{margin-bottom:0}.content p{margin:0 0 16px}.content h1,.content h2,.content h3,.content h4{color:#edf1f5;font-size:18px;line-height:1.4;letter-spacing:-.02em;margin:24px 0 12px}.content li{padding-left:3px;margin:5px 0}.content ul,.content ol{padding-left:24px}.content blockquote{margin:20px 0;border-left:3px solid #465b6d;padding:0 18px;color:#b1bfcb}.content pre{overflow:auto;max-width:100%;padding:16px 18px;border:1px solid #283541;border-radius:10px;background:#080d12;font-size:12px;line-height:1.7}.content code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:.88em}.content :not(pre)>code{background:#1a2631;padding:2px 5px;border-radius:4px}.content table{display:block;max-width:100%;overflow:auto;border-collapse:collapse;font-size:13px}.content th,.content td{border:1px solid #34414d;text-align:left;padding:8px 12px}.content hr{border:0;border-top:1px solid #34414d;margin:24px 0}.omitted,.empty{color:#8c9dad;font-size:13px}.empty{padding:36px 0;line-height:1.7}footer{display:flex;justify-content:space-between;gap:20px;color:#80909f;font-size:12px;line-height:1.6;margin-top:30px}footer a{color:#a6b3c0}
+.entry-status{display:none}[data-entry-pending] .entry-result{display:none}[data-entry-pending] .entry-status{display:block}
 @media(max-width:560px){.masthead{flex-wrap:wrap}.header-actions{flex-wrap:wrap}main{width:calc(100% - 32px);padding-top:26px}.message{display:block;padding:23px 0}.message h2{margin:0 0 10px}.content h2{margin:24px 0 12px}.badge{font-size:11px}h1{margin-top:32px}footer{display:block}footer a{display:inline-block;margin-top:10px}}
-</style></head><body><main data-public-session data-public-refresh="${params.entryUrl && isLatest ? "true" : "false"}">
+</style>${entryPending ? "<noscript><style>[data-entry-pending] .entry-result{display:block}[data-entry-pending] .entry-status{display:none}</style></noscript>" : ""}</head><body><main data-public-session${entryPending ? " data-entry-pending" : ""} data-public-refresh="${params.entryUrl && isLatest ? "true" : "false"}">
 <header><div class="masthead"><div class="brand"><span aria-hidden="true">✳</span>OpenClaw</div><div class="header-actions">${params.unavailable ? "" : '<span class="badge">Public · Read-only</span>'}${entryLink}</div></div>
-<h1>${title}</h1><p class="intro">${
+${entryPending ? '<div class="entry-status" role="status"><h1>Loading conversation</h1><p class="intro">Checking access…</p></div><div class="entry-result">' : ""}<h1>${title}</h1><p class="intro">${
     params.unavailable
       ? "This conversation is not publicly available. Log in to open conversations you have access to."
       : `<strong>Shared with everyone, no login required.</strong> This ${isLatest ? "live view" : "page"} includes conversation text. Tool output, files, images, reasoning, and interactive content are omitted.${entryLink ? " Log in to open the full conversation if you have access." : ""}`
-  }</p></header>
+  }</p>${entryPending ? "</div>" : ""}</header>
 ${!isLatest && !params.unavailable ? `<p class="page-label">Earlier conversation · <a href="${escapeHtml(params.latestUrl)}">Back to latest</a></p>` : ""}
 ${truncated ? '<aside class="notice">Some messages or long text are omitted to keep this public page within its size limit.</aside>' : ""}
 ${navigation}

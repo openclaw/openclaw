@@ -469,6 +469,17 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   if (command.type === "onboardingRecommendations.read") {
     return bytes + Buffer.byteLength(command.configKey, "utf8");
   }
+  if (command.type === "userModelAccounts.catalog") {
+    return (
+      bytes +
+      Buffer.byteLength(
+        "profileId" in command.selection
+          ? command.selection.profileId
+          : command.selection.requesterProfileId,
+        "utf8",
+      )
+    );
+  }
   if (
     command.type === "userModelAccounts.links" ||
     command.type === "userProfiles.reconcile" ||

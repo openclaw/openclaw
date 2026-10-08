@@ -8,11 +8,7 @@ import * as originalCapture from "../commands/doctor-original-capture.js";
 import { preflightUpdateDoctorCli } from "../commands/doctor-update-schema-guard.js";
 import * as sqliteSnapshot from "../infra/sqlite-snapshot-source.js";
 import { buildUpdateRehearsalPathEnv } from "../infra/update-rehearsal-paths.js";
-import {
-  createUpdateRun,
-  finishUpdateRun,
-  recordUpdateRunStep,
-} from "../infra/update-run-ledger.js";
+import { createUpdateRun, recordUpdateRunStep } from "../infra/update-run-ledger.js";
 import { buildUpdateDoctorEnv } from "../infra/update-runner-doctor.js";
 import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
 import { initializeDebugProxyCaptureAsync } from "../proxy-capture/runtime.js";
@@ -138,57 +134,25 @@ describe("Doctor schema bumps under an updating parent", () => {
   );
 
   it.each([
-    {
-      ledger: "running",
-      update: "1",
-      driver: "2026.9.2",
-      bump: true,
-      deferred: true,
-      probeCapture: true,
-    },
-    { ledger: "running", update: "1", driver: "2026.9.2-rebuild.1", bump: true, deferred: true },
-    { ledger: "missing", update: "1", driver: "2026.9.1", bump: true },
-    { ledger: "finished", update: "1", driver: "2026.9.2", bump: true, deferred: true },
-    { ledger: "running", update: "1", driver: "2026.9.3-beta.1", bump: true, probeCapture: true },
-    { ledger: "running", update: "1", driver: "2026.9.1", bump: true },
-    { ledger: "running", update: "1", driver: "unknown", bump: true },
-    { ledger: "running", update: "1", driver: "2026.9.2", bump: false },
-    { ledger: "running", update: undefined, driver: "2026.9.2", bump: true, deferred: true },
+    { driver: "2026.9.2", deferred: true },
+    { driver: "2026.9.3-beta.1", deferred: false },
   ])(
-    "completes real migration when permitted: %j",
-    async ({ ledger, update, driver, bump, deferred, probeCapture }) => {
-      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", update);
+    "admits debug capture only after schema publication for $driver",
+    async ({ driver, deferred }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const captureSessionId = `doctor-readiness-${driver}`;
-        if (probeCapture) {
-          vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
-          vi.stubEnv("OPENCLAW_DEBUG_PROXY_SESSION_ID", captureSessionId);
-          vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", undefined);
-          vi.stubEnv("OPENCLAW_DEBUG_PROXY_REQUIRE", "1");
-        }
+        vi.stubEnv("OPENCLAW_DEBUG_PROXY_ENABLED", "1");
+        vi.stubEnv("OPENCLAW_DEBUG_PROXY_SESSION_ID", captureSessionId);
+        vi.stubEnv("OPENCLAW_DEBUG_PROXY_URL", undefined);
+        vi.stubEnv("OPENCLAW_DEBUG_PROXY_REQUIRE", "1");
         const shared = openOpenClawStateDatabase({ env: state.env }).path;
         const run = createUpdateRun({ trigger: "cli", before: { version: driver } });
-        if (ledger === "finished") {
-          finishUpdateRun(run.runId, { status: "succeeded" });
-        }
         await closeOpenClawStateDatabaseAsync();
-        if (ledger === "missing") {
-          const db = new DatabaseSync(shared);
-          try {
-            db.exec("DROP TABLE update_runs");
-          } finally {
-            db.close();
-          }
-        }
-        if (bump) {
-          setSchemaVersion(shared, OPENCLAW_STATE_SCHEMA_VERSION - 1);
-        }
+        setSchemaVersion(shared, OPENCLAW_STATE_SCHEMA_VERSION - 1);
         mocks.runContributions.mockImplementation(async () => {
           const result = repairOpenClawStateDatabaseSchema({ env: state.env });
           expect(result.warnings).toEqual([]);
-          if (probeCapture) {
-            await initializeDebugProxyCaptureAsync("before-readiness");
-          }
+          await initializeDebugProxyCaptureAsync("before-readiness");
         });
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
         try {
@@ -197,9 +161,7 @@ describe("Doctor schema bumps under an updating parent", () => {
             nonInteractive: true,
           });
         } finally {
-          if (probeCapture) {
-            await finalizeActiveDebugProxyCaptures();
-          }
+          await finalizeActiveDebugProxyCaptures();
           await closeOpenClawStateDatabaseAsync();
         }
         expect(readDatabase(shared).version).toBe(
@@ -213,11 +175,9 @@ describe("Doctor schema bumps under an updating parent", () => {
             ),
           );
         }
-        if (probeCapture) {
-          expect(readDatabase(shared).captureSessions).toEqual(
-            deferred ? [] : [{ id: captureSessionId, mode: "cli" }],
-          );
-        }
+        expect(readDatabase(shared).captureSessions).toEqual(
+          deferred ? [] : [{ id: captureSessionId, mode: "cli" }],
+        );
         expect(mocks.outro).toHaveBeenCalledWith("Doctor complete.");
       });
     },

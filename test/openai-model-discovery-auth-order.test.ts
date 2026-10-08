@@ -41,6 +41,12 @@ vi.mock("../src/plugins/provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime: () => discovery.providers,
 }));
 
+// mock-isolation: keep npm Codex version lookups off the network and out of shared cache state.
+vi.mock("../extensions/openai/codex-client-version.runtime.js", () => ({
+  resolveOpenAICodexModelsEndpoint: async () =>
+    "https://chatgpt.com/backend-api/codex/models?client_version=0.170.0",
+}));
+
 vi.mock("../src/plugins/provider-hook-runtime.js", async () => {
   const { createProviderHookRuntime } =
     await import("../src/plugins/provider-hook-runtime-core.js");
@@ -409,7 +415,7 @@ describe("Provider model discovery auth preparation", () => {
           origin: "https://chatgpt.com",
           pathname: "/backend-api/codex/models",
           authorization: `Bearer ${accessToken}`,
-          version: expect.any(String),
+          version: "0.170.0",
         },
       ]);
       expect(outcomes).toEqual([{ provider: "openai", status: "ready" }]);

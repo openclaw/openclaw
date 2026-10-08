@@ -9,6 +9,8 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { updateDeliveryQueueEntryInDatabase } from "../delivery-queue-sqlite.kernel.js";
+import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { runSqliteReadOperationSync } from "../sqlite-schema-facts.js";
 import { failPendingDelivery } from "./delivery-queue-ack.js";
 import { ackDeliveryInDatabase } from "./delivery-queue-ack.kernel.js";
 import { releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
@@ -30,6 +32,7 @@ import {
   reserveDeliveryAttempt,
   type QueuedDelivery,
 } from "./delivery-queue-storage.js";
+import { readOutboundDeliveriesInDatabase } from "./delivery-queue-storage.kernel.js";
 import { installDeliveryQueueTmpDirHooks, readQueuedEntry } from "./delivery-queue.test-helpers.js";
 import { acceptedPreparedOutboundEntries } from "./prepared-batch.js";
 
@@ -37,6 +40,58 @@ describe("delivery-queue storage", () => {
   const { tmpDir } = installDeliveryQueueTmpDirHooks();
   const enqueueTextDelivery = (params: Parameters<typeof enqueueDelivery>[0], rootDir = tmpDir()) =>
     enqueueDelivery(params, rootDir);
+
+  it("skips unchanged empty recovery scans and observes foreign, local, and rolled-back writes", async () => {
+    const options = { env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir() } };
+    const database = openOpenClawStateDatabase(options);
+    const reads = trackSqliteStatementExecutions(database.db, ["queue"], (sql) =>
+      /^select .+ from "delivery_queue_entries"/i.test(sql) ? "queue" : null,
+    );
+    const read = () =>
+      runSqliteReadOperationSync(database.db, () =>
+        readOutboundDeliveriesInDatabase(database, { mode: "unfinished" }),
+      );
+    const peer = openNodeSqliteDatabase(database.path);
+    try {
+      expect(read()).toEqual([]);
+      expect(read()).toEqual([]);
+      expect(reads.counts.queue).toBe(1);
+
+      const id = await enqueueTextDelivery({
+        channel: "directchat",
+        to: "+1555",
+        payloads: [{ text: "Queued after an idle poll" }],
+      });
+      expect(read().map(({ entry }) => entry.id)).toEqual([id]);
+      database.db
+        .prepare("UPDATE delivery_queue_entries SET status = 'completed' WHERE id = ?")
+        .run(id);
+      expect(read()).toEqual([]);
+      expect(read()).toEqual([]);
+      expect(reads.counts.queue).toBe(3);
+
+      peer.prepare("UPDATE delivery_queue_entries SET status = 'pending' WHERE id = ?").run(id);
+      expect(read().map(({ entry }) => entry.id)).toEqual([id]);
+      expect(reads.counts.queue).toBe(4);
+
+      expect(() =>
+        runOpenClawStateWriteTransaction(
+          () => {
+            database.db
+              .prepare("UPDATE delivery_queue_entries SET status = 'completed' WHERE id = ?")
+              .run(id);
+            expect(read()).toEqual([]);
+            throw new Error("roll back recovery fixture");
+          },
+          { ...options, database },
+        ),
+      ).toThrow("roll back recovery fixture");
+      expect(read().map(({ entry }) => entry.id)).toEqual([id]);
+    } finally {
+      peer.close();
+      reads.restore();
+    }
+  });
 
   function readStatus(id: string): string | undefined {
     const { db } = openOpenClawStateDatabase({

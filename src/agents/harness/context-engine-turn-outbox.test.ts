@@ -128,10 +128,12 @@ function createLease(engine: ContextEngine) {
     effectiveEngineId: "test",
     effectiveEnginePluginId: undefined,
     degraded: false,
+    disposed: false,
     degradedReason: undefined,
     selectForHost: vi.fn(),
     degradeBeforeStart: vi.fn(),
     begin: vi.fn(),
+    onDispose: vi.fn(),
     deferDisposalUntil: vi.fn(),
     dispose: vi.fn(async () => undefined),
   } satisfies ContextEngineLogicalTurnLease;
@@ -292,10 +294,12 @@ describe("context-engine turn outbox", () => {
         status: "committed",
       }));
       const lease = createLease(createEngine(commitTurn));
+      const warn = vi.fn();
       await drainPendingContextEngineTurnsBeforeRun({
         admission: accepted ? undefined : currentAdmission,
         isHeartbeat: false,
         lease,
+        warn,
         ...(accepted ? { recorder, sessionTarget: target } : {}),
       });
       if (accepted) {
@@ -326,6 +330,9 @@ describe("context-engine turn outbox", () => {
         await recorder.waitForRuntimePersistence();
       } else {
         expect(commitTurn).not.toHaveBeenCalled();
+        expect(warn).toHaveBeenCalledExactlyOnceWith(
+          `[context-engine] discarded unaccepted turn advancement: ${admission.logicalTurnId}: recovery found no host acceptance`,
+        );
       }
       const queued = database.db
         .prepare("SELECT advancement_key, payload_json FROM context_engine_turn_outbox")

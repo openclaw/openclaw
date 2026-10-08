@@ -22,6 +22,12 @@ import { linkEmail, setAvatar, setDisplayName } from "./user-profile-writes.work
 import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
 import { adoptTailscaleProfileAvatar, ensureProfileForEmail } from "./user-profiles.js";
 
+// Exercise retained-read progress even when CPU headroom would otherwise admit one reader.
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  availableParallelism: () => 2,
+}));
+
 const delivery = vi.hoisted(() => ({
   afterResult: undefined as (() => Promise<void>) | undefined,
   afterRead: undefined as (() => Promise<void>) | undefined,

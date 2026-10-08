@@ -61,11 +61,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
     try {
       const { report } = await buildRemoteAwareWorkspaceSkillStatus(resolved);
       const targets = collectClawHubVerdictTargets(report);
-      if (targets.length === 0) {
-        respond(true, { schema: "openclaw.skills.security-verdicts.v1", items: [] }, undefined);
-        return;
-      }
-      const items = await fetchOpenClawSkillSecurityVerdicts(targets);
+      const items = targets.length === 0 ? [] : await fetchOpenClawSkillSecurityVerdicts(targets);
       respond(true, { schema: "openclaw.skills.security-verdicts.v1", items }, undefined);
     } catch (error) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
@@ -86,22 +82,18 @@ export const skillsHandlers: GatewayRequestHandlers = {
       params.skillKey,
     );
     const skill = report.skills.find((candidate) => candidate.skillKey === params.skillKey);
-    if (!skill?.skillCard) {
+    const content = skill?.skillCard
+      ? files.find((file) => file.name === skill.name && file.filePath === skill.filePath)
+          ?.skillCard?.content
+      : undefined;
+    if (!skill?.skillCard || content === undefined) {
       respond(
         false,
         undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `skill card not found for ${params.skillKey}`),
-      );
-      return;
-    }
-    const content = files.find(
-      (file) => file.name === skill.name && file.filePath === skill.filePath,
-    )?.skillCard?.content;
-    if (content === undefined) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `skill card not readable for ${params.skillKey}`),
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `skill card not ${skill?.skillCard ? "readable" : "found"} for ${params.skillKey}`,
+        ),
       );
       return;
     }

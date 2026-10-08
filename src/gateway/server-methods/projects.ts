@@ -26,7 +26,6 @@ import {
 } from "../../agents/worktrees/run-end-lifecycle.js";
 import { managedWorktrees, type ManagedWorktreeService } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
-import { loadCombinedSessionStoreForGatewayCoreAsync } from "../../config/sessions/combined-store-gateway-read.js";
 import {
   captureIncognitoSessionBinding,
   withIncognitoSessionStoreEntries,
@@ -407,39 +406,17 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         let store: ReturnType<typeof loadCombinedSessionStoreForGatewayCore>["store"] = {};
         let observedProjects: ProjectSummary[] | undefined;
         if (client?.authenticatedUserProfile?.profileId || (params.includeObserved && canWrite())) {
-          if (params.includeObserved) {
-            store = (await loadCombinedSessionStoreForGatewayCoreAsync(cfg, { projection: "list" }))
-              .store;
-          } else {
-            const projection = requireSessionRowProjection(context);
-            do {
-              await projection.prepareSelection();
-            } while (projection.needsSelectionPreparation());
-            assertCurrent();
-            if (getSessionRowProjection(context) !== projection || projection.state.cfg !== cfg) {
-              throw new Error(
-                "Session projection changed while preparing the listing. Retry the request.",
-              );
-            }
-            store = loadProjectSessionStore(
-              cfg,
-              {
-                projection: "list",
-                // Federation and process-local incognito stores retain the existing loader.
-                loadEntries: (target) =>
-                  projection
-                    .selectEntries({ storePath: target.storePath, sortBy: null }, true)
-                    .map((row) => ({
-                      sessionKey: row.key,
-                      entry: row.storedEntry ?? row.entry,
-                      keyBytes: Buffer.from(row.key),
-                    }))
-                    // SQLite's binary key order breaks locale-equal recency ties.
-                    .toSorted((left, right) => Buffer.compare(left.keyBytes, right.keyBytes)),
-              },
-              incognitoStores,
-            ).store;
+          const projection = requireSessionRowProjection(context);
+          do {
+            await projection.prepareSelection();
+          } while (projection.needsSelectionPreparation());
+          assertCurrent();
+          if (getSessionRowProjection(context) !== projection || projection.state.cfg !== cfg) {
+            throw new Error(
+              "Session projection changed while preparing the listing. Retry the request.",
+            );
           }
+          store = loadProjectSessionStore(projection, incognitoStores);
           assertCurrent();
         }
         if (params.includeObserved && canWrite()) {
@@ -517,11 +494,10 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
       },
       projectCheckoutError,
     ),
-    "projects.add": async ({ params, respond, context, signal }) => {
-      if (!assertValidParams(params, validateProjectsAddParams, "projects.add", respond)) {
-        return;
-      }
-      try {
+    "projects.add": defineValidatedGatewayHandler(
+      "projects.add",
+      validateProjectsAddParams,
+      async ({ params, respond, context, signal }) => {
         const cfg = context.getRuntimeConfig();
         respond(
           true,
@@ -531,42 +507,28 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           ),
           undefined,
         );
-      } catch (error) {
-        if (isTrustedSecretSurfaceUnavailableError(error)) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE, {
-              details: {
-                code: GatewayErrorDetailCodes.PROJECT_CLONE_FAILED,
-                cause: "auth_required",
-              },
-              retryable: false,
-            }),
-          );
-          return;
-        }
-        if (error instanceof ProjectCloneError) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              error.failure === "invalid_url" ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
-              error.message,
+      },
+      (error) => {
+        const failure = isTrustedSecretSurfaceUnavailableError(error)
+          ? { cause: "auth_required", message: CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE }
+          : error instanceof ProjectCloneError
+            ? { cause: error.failure, message: error.message }
+            : undefined;
+        return failure
+          ? errorShape(
+              failure.cause === "invalid_url" ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+              failure.message,
               {
                 details: {
                   code: GatewayErrorDetailCodes.PROJECT_CLONE_FAILED,
-                  cause: error.failure,
+                  cause: failure.cause,
                 },
-                retryable: error.failure === "network" || error.failure === "clone_failed",
+                retryable: failure.cause === "network" || failure.cause === "clone_failed",
               },
-            ),
-          );
-          return;
-        }
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-      }
-    },
+            )
+          : errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
+      },
+    ),
     "projects.searchRemote": defineValidatedGatewayHandler(
       "projects.searchRemote",
       validateProjectsSearchRemoteParams,

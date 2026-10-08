@@ -4,19 +4,19 @@ import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { captureManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
-import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import { prepareManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import {
   childLineageDigest,
   type UpdateCommandChildGrant,
 } from "./update-command-executor-children.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
-export function resolveUpdateCommandChildBinding(
+export async function resolveUpdateCommandChildBinding(
   grant: UpdateCommandChildGrant,
   runId: string,
   root: string,
   onProcessIdentityWarning?: NonNullable<
-    Parameters<typeof createManagedHandoffLeaseStore>[0]
+    Parameters<typeof prepareManagedHandoffLeaseStore>[0]
   >["onProcessIdentityWarning"],
 ) {
   const slot = grant.slot;
@@ -105,7 +105,7 @@ export function resolveUpdateCommandChildBinding(
       (original.version === 1 ||
         (original.version === 2 && original.action.mutationProtocol === undefined)),
   );
-  const store = createManagedHandoffLeaseStore({
+  const store = await prepareManagedHandoffLeaseStore({
     databasePath,
     serviceManagerEnv: resolveServiceManagerEnv(),
     existingIdentity: databaseIdentity,

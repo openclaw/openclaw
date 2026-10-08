@@ -13,6 +13,7 @@ import {
   type UsageCostWorkerReply,
 } from "../../infra/session-cost-usage-worker.types.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
+import { SESSION_TRANSCRIPT_FOREGROUND_WORKERS } from "../../infra/worker-pool-sizing.js";
 import { WorkerTaskError, WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
@@ -41,10 +42,7 @@ import type {
   SessionStoreTargetReadResult,
   SessionStoreTargetInventoryResult,
 } from "./session-store-target-inventory.js";
-import {
-  createSessionTranscriptHistoryPool,
-  SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
-} from "./session-transcript-read-pools.js";
+import { createSessionTranscriptHistoryPool } from "./session-transcript-read-pools.js";
 import type { SessionHistoryWorkerInput } from "./session-transcript-worker.types.js";
 import { captureSessionTranscriptStorageEnvironment } from "./transcript-target-binding.js";
 
@@ -54,7 +52,8 @@ function createUsageCostPool(kind: "read" | "refresh") {
   return new WorkerTaskPool<UsageCostWorkerInput, UsageCostWorkerReply>({
     workerUrl,
     workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-    maxWorkers: 1,
+    // A retired task releases lane-wide database custody, which requires one native worker.
+    workerClass: kind === "refresh" ? "writer" : "singleton",
     // Foreground reads must remain available while refresh awaits a host writer.
     sharedCompute: kind === "refresh",
     idleTimeoutMs: 0,
@@ -134,6 +133,12 @@ export const maintenanceLane = createDatabaseWorkerLane(
   "Session maintenance",
   createSessionTranscriptHistoryPool(),
 );
+// Writers retain FIFO admission through target discovery and cleanup. These reads
+// cannot share a worker with history tasks that await a host-side database write.
+export const targetDiscoveryLane = createDatabaseWorkerLane(
+  "Session target discovery",
+  createSessionTranscriptHistoryPool(),
+);
 export const costReadLane = createDatabaseWorkerLane(
   "Session usage read",
   createUsageCostPool("read"),
@@ -143,7 +148,7 @@ export const costRefreshLane = createDatabaseWorkerLane(
   createUsageCostPool("refresh"),
 );
 
-const historyWorkerLanes = [historyLane, projectionLane, maintenanceLane];
+const historyWorkerLanes = [historyLane, projectionLane, maintenanceLane, targetDiscoveryLane];
 const databaseWorkerLanes = [...historyWorkerLanes, costReadLane, costRefreshLane];
 const memoryPressure = channel("openclaw.memory.critical");
 let pressureSubscribed = false;

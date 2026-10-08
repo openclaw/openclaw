@@ -30,10 +30,7 @@ import {
   type ReplyOperationPhase,
 } from "./reply-run-registry.contracts.js";
 
-export type ReplyRunWaiter = {
-  finish: (ended: boolean) => void;
-  timer?: NodeJS.Timeout;
-};
+export type ReplyRunWaiter = (ended: boolean) => void;
 
 export type ReplyRunAdmissionSource = {
   sessionId: string;
@@ -64,7 +61,6 @@ export type ReplyOperationAdmission = {
 
 type ReplyRunState = {
   activeRunsByKey: Map<string, ReplyOperation>;
-  activeSessionIdsByKey: Map<string, string>;
   activeKeysBySessionId: Map<string, string>;
   waitKeysBySessionId: Map<string, string>;
   waitersByKey: Map<string, Set<ReplyRunWaiter>>;
@@ -82,17 +78,12 @@ const REPLY_RUN_STATE_KEY = Symbol.for("openclaw.replyRunRegistry");
 
 export const replyRunState = resolveGlobalSingleton<ReplyRunState>(REPLY_RUN_STATE_KEY, () => ({
   activeRunsByKey: new Map<string, ReplyOperation>(),
-  activeSessionIdsByKey: new Map<string, string>(),
   activeKeysBySessionId: new Map<string, string>(),
   waitKeysBySessionId: new Map<string, string>(),
   waitersByKey: new Map<string, Set<ReplyRunWaiter>>(),
   followupAdmissionBarriersByKey: new Map<string, ReplyRunAdmissionBarrier>(),
   successorAdmissionBarriersByKey: new Map<string, ReplyRunAdmissionBarrier>(),
   sourceTurnByKey: new Map<string, string>(),
-  completionObservationsByKey: new Map<string, Set<ReplyRunCompletionObservation>>(),
-  evictOperationByOperation: new WeakMap<ReplyOperation, () => void>(),
-  executionStartedOperations: new WeakSet<ReplyOperation>(),
-  lifecycleAdmissionByOperation: new WeakMap<ReplyOperation, ReplyOperationAdmission>(),
 }));
 // Admission and the active operation must remain visible across transformed SDK graphs.
 export const lifecycleAdmissionByOperation = (replyRunState.lifecycleAdmissionByOperation ??=
@@ -174,9 +165,8 @@ export function prepareReplyRunKeyUpdate(
 export const clearReplyOperationByOperation = (replyRunState.clearOperationByOperation ??=
   new WeakMap<ReplyOperation, () => void>());
 
-export const evictReplyOperationByOperation =
-  replyRunState.evictOperationByOperation ??
-  (replyRunState.evictOperationByOperation = new WeakMap<ReplyOperation, () => void>());
+export const evictReplyOperationByOperation = (replyRunState.evictOperationByOperation ??=
+  new WeakMap<ReplyOperation, () => void>());
 
 export function notifyReplyRunEnded(sessionKey: string): void {
   // Rekey departures invalidate reads without granting destination-lane lineage.
@@ -189,7 +179,7 @@ export function notifyReplyRunEnded(sessionKey: string): void {
   }
   replyRunState.waitersByKey.delete(sessionKey);
   for (const waiter of waiters) {
-    waiter.finish(true);
+    waiter(true);
   }
 }
 
@@ -233,9 +223,8 @@ export function isReplyOperationPreBackendPhase(phase: ReplyOperationPhase): boo
 }
 
 export const attachedBackendByOperation = new WeakMap<ReplyOperation, ReplyBackendHandle>();
-const executionStartedOperations =
-  replyRunState.executionStartedOperations ??
-  (replyRunState.executionStartedOperations = new WeakSet<ReplyOperation>());
+const executionStartedOperations = (replyRunState.executionStartedOperations ??=
+  new WeakSet<ReplyOperation>());
 export function markReplyOperationExecutionStarted(operation: ReplyOperation): void {
   executionStartedOperations.add(operation);
   notifyGatewayWorkMetricsChanged();
@@ -683,7 +672,7 @@ export function clearReplyRunState(params: {
   if (replyRunState.activeRunsByKey.get(params.sessionKey) !== params.operation) {
     if (
       replyRunState.activeKeysBySessionId.get(params.sessionId) === params.sessionKey &&
-      replyRunState.activeSessionIdsByKey.get(params.sessionKey) !== params.sessionId
+      replyRunState.activeRunsByKey.get(params.sessionKey)?.sessionId !== params.sessionId
     ) {
       replyRunState.activeKeysBySessionId.delete(params.sessionId);
     }
@@ -706,7 +695,6 @@ export function clearReplyRunState(params: {
     );
   }
   replyRunState.activeRunsByKey.delete(params.sessionKey);
-  replyRunState.activeSessionIdsByKey.delete(params.sessionKey);
   replyRunState.sourceTurnByKey.delete(params.sessionKey);
   if (replyRunState.activeKeysBySessionId.get(params.sessionId) === params.sessionKey) {
     replyRunState.activeKeysBySessionId.delete(params.sessionId);

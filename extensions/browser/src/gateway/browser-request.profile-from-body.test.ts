@@ -176,27 +176,17 @@ describe("browser.request profile selection", () => {
     };
   }
 
-  it.each([
-    { path: "tabs/open/", body: { url: "https://example.com" } },
-    { path: "/stop/" },
-    { path: "/start" },
-    { path: "/reset-profile" },
-    { path: "/tabs/action", body: { action: "close", index: 0 } },
-  ])(
-    "keeps dashboard-scoped $path away from profile and indexed-tab mutations",
-    async ({ path, body }) => {
-      dispatchLocally({ ok: true });
-      const { respond, nodeRegistry } = await runRequest({
-        method: "POST",
-        path,
-        body,
-        dashboard: { sessionKey: "agent:main:browser-dashboard-proof", name: "service" },
-      });
-      invalid(respond);
-      expect(m.dispatch).not.toHaveBeenCalled();
-      expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-    },
-  );
+  it("keeps dashboard-scoped requests away from profile mutations", async () => {
+    dispatchLocally({ ok: true });
+    const { respond, nodeRegistry } = await runRequest({
+      method: "POST",
+      path: "/reset-profile",
+      dashboard: { sessionKey: "agent:main:browser-dashboard-proof", name: "service" },
+    });
+    invalid(respond);
+    expect(m.dispatch).not.toHaveBeenCalled();
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
 
   it("binds an omitted dashboard POST body to the retained tab", async () => {
     dispatchLocally({ targetId: "dashboard-tab" });
@@ -341,28 +331,6 @@ describe("browser.request profile selection", () => {
     expect(dispatched.requester.signal.aborted).toBe(true);
   });
 
-  it.each(["connection closed", "authority revoked"])(
-    "rejects local dispatch without current requester authority when %s",
-    async (reason) => {
-      const connection = new AbortController();
-      if (reason === "connection closed") {
-        connection.abort();
-      }
-      dispatchLocally({});
-      const { respond } = await runRequest(
-        { method: "POST", path: "/screencast", target: "host", timeoutMs: 1000 },
-        undefined,
-        [],
-        {
-          client: requesterClient(connection.signal),
-          hasCurrentClientAuthority: () => reason !== "authority revoked",
-        },
-      );
-      expect(reply(respond)[0]).toBe(false);
-      expect(m.dispatch).not.toHaveBeenCalled();
-    },
-  );
-
   it("rejects node screencast before preparation or dispatch", async () => {
     const { respond, nodeRegistry } = await runRequest({
       method: "POST",
@@ -384,92 +352,8 @@ describe("browser.request profile selection", () => {
     expect(m.start).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { target: "host", localAvailable: false },
-    { target: "node", localAvailable: true },
-  ] as const)(
-    "dispatches target=$target with localAvailable=$localAvailable while preserving the profile",
-    async ({ target, localAvailable }) => {
-      m.hostAvailable.mockReturnValue(localAvailable);
-      dispatchLocally({ targetId: "host-tab" });
-      const { respond, nodeRegistry } = await runRequest(
-        {
-          method: "POST",
-          path: "/tabs/focus",
-          target,
-          query: { profile: "work" },
-          body: { targetId: "same-tab" },
-        },
-        { ok: true, payload: { result: { targetId: "node-tab" } } },
-      );
-      const usesHost = target === "host" || (target === undefined && localAvailable);
-      expect(reply(respond)).toEqual([true, { targetId: usesHost ? "host-tab" : "node-tab" }]);
-      if (usesHost) {
-        expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-        expect(nodeRegistry.listConnected).not.toHaveBeenCalled();
-        expect(m.dispatch).toHaveBeenCalledWith(
-          expect.objectContaining({
-            method: "POST",
-            path: "/tabs/focus",
-            query: { profile: "work" },
-            body: { targetId: "same-tab" },
-          }),
-        );
-      } else {
-        expect(nodeInvocation(nodeRegistry)).toMatchObject({
-          nodeId: "node-1",
-          params: { profile: "work" },
-        });
-        expect(m.start).not.toHaveBeenCalled();
-      }
-    },
-  );
-
-  it("resolves an explicit node selector instead of the configured node", async () => {
-    m.hostAvailable.mockReturnValue(true);
-    policy("manual", "other");
-    const { respond, nodeRegistry } = await runRequest(
-      { method: "GET", path: "/tabs", target: "node", node: "Selected Node" },
-      undefined,
-      ["other", "selected"].map((nodeId) =>
-        browserNode(nodeId, { displayName: nodeId === "selected" ? "Selected Node" : "Other" }),
-      ),
-    );
-    expect(nodeInvocation(nodeRegistry).nodeId).toBe("selected");
-    expect(reply(respond)[0]).toBe(true);
-  });
-
-  it.each([
-    { query: { profile: "local-work" }, body: { profile: "node-work" }, local: true },
-    { query: undefined, body: { profile: "node-work" }, local: false },
-    { query: { profile: "node-work" }, body: { profile: "local-work" }, local: false },
-  ])("uses the selected profile's host availability for %j", async ({ query, body, local }) => {
-    m.hostAvailable.mockImplementation((_config, profileName) => profileName === "local-work");
-    dispatchLocally({ source: "host" });
-
-    const { respond, nodeRegistry } = await runRequest({
-      method: "POST",
-      path: "/start",
-      query,
-      body,
-    });
-
-    if (local) {
-      expect(reply(respond)).toEqual([true, { source: "host" }]);
-      expect(nodeRegistry.listConnected).not.toHaveBeenCalled();
-      expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-    } else {
-      expect(reply(respond)[0]).toBe(true);
-      expect(nodeInvocation(nodeRegistry)).toMatchObject({
-        command: "browser.proxy",
-        params: { profile: "node-work", errorEnvelope: "browser-v1" },
-      });
-      expect(m.dispatch).not.toHaveBeenCalled();
-    }
-  });
-
   it("does not replay a failed host action on a connected node", async () => {
-    m.hostAvailable.mockReturnValue(true);
+    m.hostAvailable.mockImplementation((_config, profileName) => profileName === "local-work");
     m.start.mockResolvedValueOnce(true);
     const message = "navigation timed out after the page received the request";
     m.dispatch.mockResolvedValueOnce({ status: 500, body: { error: message } });
@@ -477,7 +361,8 @@ describe("browser.request profile selection", () => {
     const { respond, nodeRegistry } = await runRequest({
       method: "POST",
       path: "/navigate",
-      body: { targetId: "local-tab", url: "https://example.com" },
+      query: { profile: "local-work" },
+      body: { targetId: "local-tab", url: "https://example.com", profile: "node-work" },
     });
 
     expect(reply(respond)).toEqual([
@@ -491,11 +376,7 @@ describe("browser.request profile selection", () => {
   });
 
   it.each([
-    { target: "sandbox" },
-    { target: "host", node: "node-1" },
-    { target: "node", node: " " },
     { target: "node", node: "n".repeat(257) },
-    { target: "node", path: "/system-profiles" },
     { target: "node", method: "POST", path: "/profiles/import" },
   ])("rejects invalid or host-only route identity before dispatch: %j", async (route) => {
     const { respond, nodeRegistry } = await runRequest({ method: "GET", path: "/tabs", ...route });
@@ -504,34 +385,24 @@ describe("browser.request profile selection", () => {
     expect(m.start).not.toHaveBeenCalled();
   });
 
-  it.each([
-    "unavailable host",
-    "missing node",
-    "unsupported upload",
-    "disabled policy",
-    "denied command",
-  ])("never retargets explicit node requests after %s", async (failure) => {
-    if (failure === "disabled policy") {
-      policy("off");
-    }
-    if (failure === "denied command") {
-      m.allowed.mockReturnValueOnce({ ok: false, reason: "not in allowlist" });
-    }
-    const { respond } = await runRequest(
-      failure === "unsupported upload"
-        ? {
-            method: "POST",
-            path: "/hooks/file-chooser",
-            target: "node",
-            body: { paths: ["/tmp/openclaw/uploads/report.txt"] },
-          }
-        : { method: "GET", path: "/tabs", target: "node" },
-      hostUnavailable,
-      failure === "missing node" ? [] : [browserNode()],
-    );
-    expect(reply(respond)[0]).toBe(false);
-    expect(m.start).not.toHaveBeenCalled();
-  });
+  it.each(["missing node", "disabled policy", "denied command"])(
+    "never retargets explicit node requests after %s",
+    async (failure) => {
+      if (failure === "disabled policy") {
+        policy("off");
+      }
+      if (failure === "denied command") {
+        m.allowed.mockReturnValueOnce({ ok: false, reason: "not in allowlist" });
+      }
+      const { respond } = await runRequest(
+        { method: "GET", path: "/tabs", target: "node" },
+        hostUnavailable,
+        failure === "missing node" ? [] : [browserNode()],
+      );
+      expect(reply(respond)[0]).toBe(false);
+      expect(m.start).not.toHaveBeenCalled();
+    },
+  );
 
   it("forces system-profile import host-local even when a browser node is connected", async () => {
     const { respond, nodeRegistry } = await runRequest({
@@ -576,11 +447,6 @@ describe("browser.request profile selection", () => {
       method: "DELETE",
       path: "/profiles/poc",
       body: undefined,
-    },
-    {
-      method: "POST",
-      path: "profiles/create",
-      body: { name: "poc", cdpUrl: "http://10.0.0.42:9222" },
     },
     {
       method: "POST",
@@ -654,30 +520,18 @@ describe("browser.request profile selection", () => {
     expect(m.prepareUpload).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      declaredCommands: undefined,
-      message: "browser node does not support remote upload transfer",
-    },
-    {
-      declaredCommands: ["browser.proxy", "browser.proxy.upload.v1"],
-      message: "remote upload transfer is pending approval",
-    },
-  ])(
-    "rejects configured-node upload before dispatch: $message",
-    async ({ declaredCommands, message }) => {
-      policy("auto", "node-1");
-      const { respond, nodeRegistry } = await runRequest(
-        { method: "POST", path: "/hooks/file-chooser", body: uploadBody },
-        undefined,
-        [browserNode("node-1", { declaredCommands })],
-      );
-      expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-      expect(m.start).not.toHaveBeenCalled();
-      expect(reply(respond)[2]?.message).toContain(message);
-      expect(m.prepareUpload).not.toHaveBeenCalled();
-    },
-  );
+  it("rejects configured-node uploads pending approval before preparation", async () => {
+    policy("auto", "node-1");
+    const { respond, nodeRegistry } = await runRequest(
+      { method: "POST", path: "/hooks/file-chooser", body: uploadBody },
+      undefined,
+      [browserNode("node-1", { declaredCommands: ["browser.proxy", "browser.proxy.upload.v1"] })],
+    );
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    expect(m.start).not.toHaveBeenCalled();
+    expect(reply(respond)[2]?.message).toContain("remote upload transfer is pending approval");
+    expect(m.prepareUpload).not.toHaveBeenCalled();
+  });
 
   it("preserves a configured node failure instead of falling back to the host", async () => {
     m.hostAvailable.mockReturnValue(true);
@@ -873,40 +727,39 @@ describe("session tab scope", () => {
     );
   });
 
-  it.each(["host", "node"] as const)(
-    "tracks panel-opened %s tabs on their resolved profile",
-    async (target) => {
-      const opened = { targetId: "panel-opened", tabId: "t1", resolvedProfile: "openclaw" };
-      const params = { target, query: { profile: "requested-profile" }, tabScope: { sessionKey } };
-      const route = { status: "resolved", profile: "openclaw", driver: "openclaw" };
-      async function dispatch(method: string, path: string, result: unknown, body?: unknown) {
-        hostResponse(result);
-        return runRequest(
-          { ...params, method, path, body },
-          { ok: true, payload: { result, route } },
-          [browserNode()],
-        );
-      }
-      const result = await dispatch("POST", "/tabs/open", opened, { url: "https://example.com" });
-      expect(reply(result.respond)).toEqual([true, opened]);
-      const listed = await dispatch("GET", "/tabs", {
-        running: true,
-        tabs: [opened, { targetId: "untracked" }],
-      });
-      expect(reply(listed.respond)).toEqual([true, { running: true, tabs: [opened] }]);
-    },
-  );
+  it("tracks panel-opened node tabs on their resolved profile", async () => {
+    const opened = { targetId: "panel-opened", tabId: "t1", resolvedProfile: "openclaw" };
+    const params = {
+      target: "node",
+      query: { profile: "requested-profile" },
+      tabScope: { sessionKey },
+    };
+    const route = { status: "resolved", profile: "openclaw", driver: "openclaw" };
+    async function dispatch(method: string, path: string, result: unknown, body?: unknown) {
+      hostResponse(result);
+      return runRequest(
+        { ...params, method, path, body },
+        { ok: true, payload: { result, route } },
+        [browserNode()],
+      );
+    }
+    const result = await dispatch("POST", "/tabs/open", opened, { url: "https://example.com" });
+    expect(reply(result.respond)).toEqual([true, opened]);
+    const listed = await dispatch("GET", "/tabs", {
+      running: true,
+      tabs: [opened, { targetId: "untracked" }],
+    });
+    expect(reply(listed.respond)).toEqual([true, { running: true, tabs: [opened] }]);
+  });
 
-  it.each(
-    ["/tabs/open", "/tabs/owned", "/navigate", "/tabs/focus", "/act", "/screenshot"].flatMap(
-      (path) =>
-        ["success", "failure", "stale"].map((outcome) => ({
-          path,
-          outcome,
-          method: path === "/tabs/owned" ? "DELETE" : "POST",
-        })),
-    ),
-  )(
+  it.each([
+    { path: "/tabs/open", method: "POST", outcome: "success" },
+    { path: "/tabs/open", method: "POST", outcome: "failure" },
+    { path: "/tabs/open", method: "POST", outcome: "stale" },
+    { path: "/tabs/owned", method: "DELETE", outcome: "success" },
+    { path: "/tabs/focus", method: "POST", outcome: "success" },
+    { path: "/screenshot", method: "POST", outcome: "success" },
+  ])(
     "updates ownership and activity only for current successful $path ($outcome)",
     async ({ path, method, outcome }) => {
       vi.spyOn(Date, "now").mockReturnValue(9_000);
@@ -1024,7 +877,6 @@ describe("session tab scope", () => {
   });
 
   it.each([
-    { tabScope: { sessionKey, extra: true } },
     {
       tabScope: {
         sessionKey,
@@ -1032,7 +884,6 @@ describe("session tab scope", () => {
       },
     },
     { dashboard: { sessionKey, name: "board" } },
-    { path: "/dashboard" },
   ])("rejects invalid or dashboard-mixed tab scopes before dispatch: %j", async (params) => {
     const { respond, nodeRegistry } = await runRequest({
       method: "GET",

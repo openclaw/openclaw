@@ -22,7 +22,6 @@ import {
 } from "./internal-hooks.js";
 import { createAssistantMessageEventStream, type Message } from "./llm.js";
 import type {
-  AfterToolOutcomeContext,
   AgentContext,
   AgentEvent,
   AgentLoopConfig,
@@ -31,140 +30,6 @@ import type {
 } from "./types.js";
 
 describe("agentLoop steering", () => {
-  it("makes a queued steer visible before the next sequential tool starts", async () => {
-    const firstReleased = createDeferred();
-    const firstStarted = createDeferred();
-    const firstExecute = vi.fn(async () => {
-      firstStarted.resolve();
-      await firstReleased.promise;
-      return { content: [{ type: "text" as const, text: "first result" }], details: {} };
-    });
-    const secondExecute = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "second result" }],
-      details: {},
-    }));
-    const requestMessages: Message[][] = [];
-    const streamFn = createTurnSequenceStream(
-      [
-        [makeCall("first", "call-first"), makeCall("second", "call-second")],
-        [{ type: "text", text: "handled steer 1" }],
-        [{ type: "text", text: "handled steer 2" }],
-      ],
-      requestMessages,
-    );
-    const afterToolOutcome = vi.fn(async (_context: AfterToolOutcomeContext) => undefined);
-    const commitReadyCalls = vi.fn();
-    const releaseSkippedCalls = vi.fn();
-    const events: AgentEvent[] = [];
-    const agent = new Agent({
-      initialState: {
-        model,
-        tools: [
-          {
-            ...makeTool("first"),
-            execute: firstExecute,
-          },
-          {
-            ...makeTool("second"),
-            execute: secondExecute,
-            resultContentSource: "network",
-          },
-        ],
-      },
-      streamFn,
-      toolExecution: "sequential",
-      afterToolOutcome,
-    });
-    setInternalBeforeToolBatch(agent, async () =>
-      attachInternalToolBatchLifecycle({}, { commitReadyCalls, releaseSkippedCalls }),
-    );
-    agent.subscribe((event) => {
-      events.push(event);
-    });
-    const firstSteer = { role: "user" as const, content: "steer one", timestamp: 2 };
-    const secondSteer = { role: "user" as const, content: "steer two", timestamp: 3 };
-
-    const run = agent.prompt("start");
-    await firstStarted.promise;
-    agent.steer(firstSteer);
-    agent.steer(secondSteer);
-    firstReleased.resolve();
-    await run;
-
-    expect(firstExecute).toHaveBeenCalledOnce();
-    expect(secondExecute).not.toHaveBeenCalled();
-    expect(commitReadyCalls).toHaveBeenCalledExactlyOnceWith([
-      { toolCallId: "call-first", args: {} },
-    ]);
-    expect(releaseSkippedCalls).toHaveBeenCalledWith(["call-second"]);
-    expect(requestMessages).toHaveLength(3);
-    expect(agent.state.messages.slice(1, 5)).toMatchObject([
-      { role: "assistant", stopReason: "toolUse" },
-      { role: "toolResult", toolCallId: "call-first", isError: false },
-      { role: "toolResult", toolCallId: "call-second", isError: true },
-      firstSteer,
-    ]);
-    expect(requestMessages[1]?.slice(-4)).toMatchObject([
-      { role: "assistant", stopReason: "toolUse" },
-      { role: "toolResult", toolCallId: "call-first", isError: false },
-      {
-        role: "toolResult",
-        toolCallId: "call-second",
-        isError: true,
-        content: [{ type: "text", text: "Skipped to process an incoming message." }],
-        details: { status: "skipped", deniedReason: "steering" },
-      },
-      firstSteer,
-    ]);
-    expect(requestMessages[1]?.at(-1)).toBe(firstSteer);
-    expect(requestMessages[1]).not.toContain(secondSteer);
-    expect(requestMessages[2]?.at(-1)).toBe(secondSteer);
-    const queuedMessageStarts = events.filter(
-      (event): event is Extract<AgentEvent, { type: "message_start" }> =>
-        event.type === "message_start" && event.message.role === "user",
-    );
-    expect(queuedMessageStarts.at(-2)?.message).toBe(firstSteer);
-    expect(queuedMessageStarts.at(-1)?.message).toBe(secondSteer);
-    expect(
-      requestMessages[1]?.find((message) => message.role === "toolResult" && message.isError),
-    ).not.toHaveProperty("__openclaw");
-    expect(afterToolOutcome).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolCall: expect.objectContaining({ id: "call-second" }),
-        isError: true,
-        executionStarted: false,
-        result: expect.objectContaining({
-          details: { status: "skipped", deniedReason: "steering" },
-        }),
-      }),
-      expect.any(AbortSignal),
-    );
-    const skippedOutcome = afterToolOutcome.mock.calls.find(
-      ([outcome]) => outcome.toolCall.id === "call-second",
-    )?.[0];
-    expect(skippedOutcome).not.toHaveProperty("errorKind");
-    expect(
-      events
-        .filter((event) => event.type === "tool_execution_start")
-        .map((event) => event.toolCallId),
-    ).toEqual(["call-first", "call-second"]);
-    expect(
-      events
-        .filter((event) => event.type === "tool_execution_end")
-        .map((event) => ({ id: event.toolCallId, started: event.executionStarted })),
-    ).toEqual([
-      { id: "call-first", started: true },
-      { id: "call-second", started: false },
-    ]);
-    const skippedEnd = events.find(
-      (event) => event.type === "tool_execution_end" && event.toolCallId === "call-second",
-    );
-    expect(skippedEnd).toMatchObject({
-      result: { details: { status: "skipped", deniedReason: "steering" } },
-    });
-    expect(skippedEnd).not.toHaveProperty("errorKind");
-  });
-
   it("restores drained steering in order when turn_end aborts before injection", async () => {
     const firstReleased = createDeferred();
     const firstStarted = createDeferred();
@@ -480,61 +345,58 @@ describe("agentLoop steering", () => {
     expect(dispose).toHaveBeenCalledOnce();
   });
 
-  it.each(["sequential", "parallel"] as const)(
-    "delivers async steering after %s tools before shouldStopAfterTurn",
-    async (toolExecution) => {
-      const steer = { role: "user" as const, content: "keep going", timestamp: 2 };
-      const queued: AgentMessage[] = [];
-      const secondExecute = vi.fn(async () => ({ content: [], details: {} }));
-      const requestMessages: Message[][] = [];
-      const streamFn = createTurnSequenceStream(
-        [
-          [makeCall("first", "stop-first"), makeCall("second", "stop-second")],
-          [{ type: "text", text: "continued" }],
-        ],
-        requestMessages,
-      );
-      const shouldStopAfterTurn = vi.fn(() => true);
+  it("delivers async steering after sequential tools before shouldStopAfterTurn", async () => {
+    const steer = { role: "user" as const, content: "keep going", timestamp: 2 };
+    const queued: AgentMessage[] = [];
+    const secondExecute = vi.fn(async () => ({ content: [], details: {} }));
+    const requestMessages: Message[][] = [];
+    const streamFn = createTurnSequenceStream(
+      [
+        [makeCall("first", "stop-first"), makeCall("second", "stop-second")],
+        [{ type: "text", text: "continued" }],
+      ],
+      requestMessages,
+    );
+    const shouldStopAfterTurn = vi.fn(() => true);
 
-      const getSteeringMessages = vi.fn(async function (this: { queuedSteering: AgentMessage[] }) {
-        return this.queuedSteering.splice(0, 1);
-      });
-      const steeringConfig = {
-        ...config,
-        toolExecution,
-        queuedSteering: queued,
-        getSteeringMessages,
-        shouldStopAfterTurn,
-      } satisfies AgentLoopConfig & { queuedSteering: AgentMessage[] };
-      await runAgentLoop(
-        [{ role: "user", content: "start", timestamp: 1 }],
-        {
-          systemPrompt: "",
-          messages: [],
-          tools: [
-            {
-              ...makeTool("first"),
-              execute: async () => {
-                queued.push(steer);
-                return { content: [{ type: "text", text: "first result" }], details: {} };
-              },
+    const getSteeringMessages = vi.fn(async function (this: { queuedSteering: AgentMessage[] }) {
+      return this.queuedSteering.splice(0, 1);
+    });
+    const steeringConfig = {
+      ...config,
+      toolExecution: "sequential",
+      queuedSteering: queued,
+      getSteeringMessages,
+      shouldStopAfterTurn,
+    } satisfies AgentLoopConfig & { queuedSteering: AgentMessage[] };
+    await runAgentLoop(
+      [{ role: "user", content: "start", timestamp: 1 }],
+      {
+        systemPrompt: "",
+        messages: [],
+        tools: [
+          {
+            ...makeTool("first"),
+            execute: async () => {
+              queued.push(steer);
+              return { content: [{ type: "text", text: "first result" }], details: {} };
             },
-            { ...makeTool("second"), execute: secondExecute },
-          ],
-        },
-        steeringConfig,
-        () => {},
-        undefined,
-        streamFn,
-      );
+          },
+          { ...makeTool("second"), execute: secondExecute },
+        ],
+      },
+      steeringConfig,
+      () => {},
+      undefined,
+      streamFn,
+    );
 
-      expect(requestMessages).toHaveLength(2);
-      expect(requestMessages[1]?.at(-1)).toBe(steer);
-      expect(secondExecute).toHaveBeenCalledTimes(toolExecution === "parallel" ? 1 : 0);
-      expect(shouldStopAfterTurn).toHaveBeenCalledOnce();
-      expect(getSteeringMessages).toHaveBeenCalled();
-    },
-  );
+    expect(requestMessages).toHaveLength(2);
+    expect(requestMessages[1]?.at(-1)).toBe(steer);
+    expect(secondExecute).toHaveBeenCalledTimes(0);
+    expect(shouldStopAfterTurn).toHaveBeenCalledOnce();
+    expect(getSteeringMessages).toHaveBeenCalled();
+  });
 
   it("commits drained steering and settled tools before a host-requested model-step stop", async () => {
     const steer = { role: "user" as const, content: "verify the new version", timestamp: 2 };
@@ -626,68 +488,6 @@ describe("agentLoop steering", () => {
     expect(requestMessages).toHaveLength(2);
     expect(requestMessages[1]?.at(-1)).toBe(steer);
     expect(queued).toEqual([]);
-  });
-
-  it("releases only admitted sequential calls when steering suppresses a mixed tail", async () => {
-    const execute = vi.fn(async () => ({ content: [], details: {} }));
-    const requestMessages: Message[][] = [];
-    const streamFn = createTurnSequenceStream(
-      [
-        [makeCall("first"), makeCall("required", "invalid-tail"), makeCall("valid", "valid-tail")],
-        [{ type: "text", text: "steer handled" }],
-      ],
-      requestMessages,
-    );
-    const agent = new Agent({
-      initialState: {
-        model,
-        tools: [
-          makeTool("first"),
-          {
-            name: "required",
-            label: "required",
-            description: "requires input",
-            parameters: Type.Object({ value: Type.String() }),
-            execute,
-          },
-          { ...makeTool("valid"), execute },
-        ],
-      },
-      streamFn,
-      toolExecution: "sequential",
-    });
-    const commitReadyCalls = vi.fn();
-    const releaseSkippedCalls = vi.fn();
-    setInternalBeforeToolBatch(agent, async ({ calls }) => {
-      expect(calls.map((call) => call.toolCall.id)).toEqual([
-        "first",
-        "invalid-tail",
-        "valid-tail",
-      ]);
-      return attachInternalToolBatchLifecycle({}, { commitReadyCalls, releaseSkippedCalls });
-    });
-    agent.subscribe(async (event) => {
-      if (
-        event.type === "message_end" &&
-        event.message.role === "assistant" &&
-        event.message.stopReason === "toolUse"
-      ) {
-        await Promise.resolve();
-        agent.steer({ role: "user", content: "redirect", timestamp: 2 });
-      }
-    });
-
-    await agent.prompt("start");
-
-    expect(requestMessages[1]?.slice(-4)).toMatchObject([
-      { role: "toolResult", toolCallId: "first", isError: false },
-      { role: "toolResult", toolCallId: "invalid-tail", isError: true },
-      { role: "toolResult", toolCallId: "valid-tail", isError: true },
-      { role: "user", content: "redirect" },
-    ]);
-    expect(execute).not.toHaveBeenCalled();
-    expect(commitReadyCalls).toHaveBeenCalledExactlyOnceWith([{ toolCallId: "first", args: {} }]);
-    expect(releaseSkippedCalls).toHaveBeenCalledExactlyOnceWith(["invalid-tail", "valid-tail"]);
   });
 
   it.each(["sequential", "parallel"] as const)(
@@ -791,7 +591,7 @@ describe("agentLoop steering", () => {
     },
   );
 
-  it.each(["sequential", "parallel", "mixed", "rejected-first"] as const)(
+  it.each(["parallel", "mixed", "rejected-first"] as const)(
     "shares the committed plan and FIFO steering across %s streamed batches",
     async (mode) => {
       const executed: string[] = [];

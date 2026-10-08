@@ -18,7 +18,7 @@ const measurements = resolveGlobalSingleton<{
         distWorkerPath: "config/sessions/disk-budget.worker.js",
       }),
       // Share one scan worker so concurrent stores cannot multiply filesystem scan heaps.
-      maxWorkers: 1,
+      workerClass: "singleton",
     }),
     pending: new Set<Promise<SessionPhysicalDiskUsage>>(),
   }),
