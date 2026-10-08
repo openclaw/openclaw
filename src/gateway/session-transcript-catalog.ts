@@ -284,10 +284,10 @@ export async function readSessionTranscriptCatalogPage(
         senderProjectors.set(identity.id, preparedSender);
       }
     }
-    const projectSender: typeof preparedSender.project = (params) =>
-      params.identity.type === "profile"
-        ? senderProjectors.get(params.identity.id)!.project(params)
-        : preparedSender.project(params);
+    const projectSender: typeof preparedSender.project = (sender) =>
+      sender.identity.type === "profile"
+        ? senderProjectors.get(sender.identity.id)!.project(sender)
+        : preparedSender.project(sender);
     const bySequence = new Map<unknown, SessionCatalogTranscriptItem[]>();
     for (const message of projected.toReversed()) {
       const seq = asOptionalRecord(message["__openclaw"])?.seq;

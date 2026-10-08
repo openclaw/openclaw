@@ -66,4 +66,6 @@ export function readUserProfileCommand(
         ),
       };
   }
+  command satisfies never;
+  throw new Error("Unsupported profile read command");
 }

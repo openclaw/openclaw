@@ -143,9 +143,11 @@ export function listSessionEntriesReadOnly(
       const sessionKeys = scope.sessionKeys;
       const readSelected = () =>
         runSqliteReadOperationSync(database.db, () => {
-          const entries = readSelectedSessionEntriesInDatabase(database, sessionKeys, {
-            ...(scope.projection === "list" ? {} : { fullEntryKeys: sessionKeys }),
-          });
+          const entries = readSelectedSessionEntriesInDatabase(
+            database,
+            sessionKeys,
+            scope.projection === "list" ? {} : { fullEntryKeys: sessionKeys },
+          );
           if (options.deferParticipants || scope.includeParticipants === false) {
             return entries;
           }

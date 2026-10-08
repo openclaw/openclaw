@@ -131,9 +131,9 @@ function readProfiles(
         }
         try {
           return [id, read([id], true).get(id)!];
-        } catch (error) {
-          const failure = failedProfile(error);
-          if (isSqliteCorruptionError(error)) {
+        } catch (profileError) {
+          const failure = failedProfile(profileError);
+          if (isSqliteCorruptionError(profileError)) {
             retireOpenClawStateReadConnectionAfterCorruption(db);
             terminal = failure;
           }
