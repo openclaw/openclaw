@@ -47,6 +47,9 @@ export type ProviderProfilesViewProps = {
   profileOrders: Record<string, string[]>;
   onAddAccount: (() => void) | undefined;
   addAccountDisabled: boolean;
+  onReconnect: (provider: string) => void;
+  canReconnect: (provider: string) => boolean;
+  reconnectDisabled: boolean;
   onProfileOrderChange: (cardId: string, provider: string, profileIds: string[] | null) => void;
   onRequestLogout: (pending: ModelProviderPendingLogout) => void;
 };
@@ -581,6 +584,21 @@ export function renderProviderProfiles(card: ModelProviderCard, props: ProviderP
                   >${profileStatus(profile, card.catalogStatus === "auth-rejected")}</span
                 >
                 <span class="model-providers__profile-actions">
+                  ${
+                    profile.type === "oauth" &&
+                    profile.status === "expired" &&
+                    profile.externallyManaged !== true &&
+                    props.canReconnect(provider)
+                      ? html`<button
+                          type="button"
+                          class="btn btn--sm model-providers__profile-reconnect"
+                          ?disabled=${props.reconnectDisabled}
+                          @click=${() => props.onReconnect(provider)}
+                        >
+                          ${t("modelProviders.profiles.reconnect")}
+                        </button>`
+                      : nothing
+                  }
                   ${
                     profile.logoutSupported === true && logoutProvider
                       ? html`<button
