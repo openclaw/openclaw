@@ -9,10 +9,11 @@ import {
 } from "../../../../src/chat/tool-content.js";
 import { readTranscriptDisplayPosition } from "../../../../src/chat/transcript-display-position.js";
 import type { ChatItem, ToolCard } from "../../lib/chat/chat-types.ts";
+import { normalizeRoleForGrouping, resolveMessageRole } from "../../lib/chat/message-normalizer.ts";
 import { readPreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolBlockCardsCached, extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { resolveToolBlockId } from "./chat-thread-items.ts";
-import { chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
+import { chatItemStartsDisplayTurn } from "./chat-turn-boundary.ts";
 import { buildToolStreamIdentity, extractToolMessageRefs } from "./tool-stream-identity.ts";
 
 type MessageItem = Extract<ChatItem, { kind: "message" }>;
@@ -310,7 +311,9 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       ? owner.source.index
       : invocation.first;
     const result = invocation.result;
-    const completed = result !== undefined && result.rank > 1;
+    const resultReceived = result !== undefined && result.rank > 1;
+    const itemEnded = invocation.live?.["__openclawToolStreamItemEnded"] === true;
+    const completed = resultReceived || itemEnded;
     const transcript =
       message.messageId ??
       metadata?.id ??
@@ -327,6 +330,8 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       owner.runId,
       Boolean(invocation.live),
       completed,
+      resultReceived,
+      itemEnded,
       transcript,
       invocation.live?.["__openclawToolStreamDiffStat"],
       invocation.live?.["__openclawToolStreamReceivedAt"],
@@ -361,7 +366,9 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       }
       for (const activity of activityItems) {
         const previous = prepared.get(activity.itemId);
-        if (previous?.phase !== "end" || activity.phase === "end") {
+        // Only an explicitly unpaired history call yields to live progress.
+        // A real terminal receipt stays terminal even when its outcome is unknown.
+        if (previous?.phase !== "end" || previous.unpairedCall || activity.phase === "end") {
           prepared.set(activity.itemId, activity);
         }
       }
@@ -389,7 +396,8 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
         ...(invocation.live
           ? {
               __openclawToolStreamLive: true,
-              __openclawToolStreamResultReceived: completed,
+              __openclawToolStreamResultReceived: resultReceived,
+              __openclawToolStreamItemEnded: itemEnded,
               __openclawToolStreamDiffStat: completed
                 ? undefined
                 : invocation.live["__openclawToolStreamDiffStat"],
@@ -493,7 +501,10 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
   return result;
 }
 
-export function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
+export function coalesceToolActivityMessages(
+  items: ChatItem[],
+  hiddenKeys?: ReadonlySet<string>,
+): ChatItem[] {
   const result: ChatItem[] = [];
   const appendTurn = (turn: ChatItem[]) => {
     if (turn.length === 0) {
@@ -531,13 +542,26 @@ export function coalesceToolActivityMessages(items: ChatItem[]): ChatItem[] {
   };
   let turn: ChatItem[] = [];
   for (const item of items) {
-    if (chatItemStartsUserTurn(item) || item.kind === "divider") {
+    const boundary = chatItemStartsDisplayTurn(item) || item.kind === "divider";
+    if (boundary) {
       appendTurn(turn);
-      result.push(item);
       turn = [];
-    } else {
-      turn.push(item);
     }
+    // Hidden rows still delimit turns: reused call ids must never pair across
+    // a prompt or forwarded input removed by transcript search.
+    if (hiddenKeys?.has(item.key)) {
+      continue;
+    }
+    if (
+      boundary &&
+      (item.kind !== "message" ||
+        normalizeRoleForGrouping(resolveMessageRole(item.message)) === "user")
+    ) {
+      result.push(item);
+      continue;
+    }
+    // A projected output starts the new turn and still owns its tool calls.
+    turn.push(item);
   }
   appendTurn(turn);
   return result;

@@ -1,10 +1,5 @@
-/** Doctor status summary for workspace skills and plugins. */
 import { note } from "../../packages/terminal-core/src/note.js";
-import {
-  listAgentIds,
-  resolveAgentWorkspaceDir,
-  tryResolveDefaultAgentId,
-} from "../agents/agent-scope.js";
+import { listAgentIds, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
@@ -128,20 +123,9 @@ function isGatewayRestartPending(
   );
 }
 
-function pluginCompatibilityWarningToHealthFinding(message: string): HealthFinding {
-  return {
-    checkId: WORKSPACE_STATUS_CHECK_ID,
-    severity: "warning",
-    message,
-    path: "plugins",
-    requirement: "plugin-compatibility",
-    fixHint: "Update or replace the plugin so it no longer depends on legacy compatibility paths.",
-  };
-}
-
 function pluginDiagnosticToHealthFinding(
   diagnostic: WorkspacePluginDiagnostic,
-  message = diagnostic.message,
+  message: string,
 ): HealthFinding {
   return {
     checkId: WORKSPACE_STATUS_CHECK_ID,
@@ -210,7 +194,6 @@ function visitWorkspacePluginStatus(
       inspect();
     }
   }
-  return scopes;
 }
 
 export function collectWorkspaceStatusHealthFindings(
@@ -221,9 +204,15 @@ export function collectWorkspaceStatusHealthFindings(
   visitWorkspacePluginStatus(cfg, options, ({ agentLabel, compatibilityWarnings, diagnostics }) => {
     const prefix = agentLabel ? `${agentLabel} ` : "";
     workspaceFindings.push(
-      ...compatibilityWarnings.map((message) =>
-        pluginCompatibilityWarningToHealthFinding(`${prefix}${message}`),
-      ),
+      ...compatibilityWarnings.map((message): HealthFinding => ({
+        checkId: WORKSPACE_STATUS_CHECK_ID,
+        severity: "warning",
+        message: `${prefix}${message}`,
+        path: "plugins",
+        requirement: "plugin-compatibility",
+        fixHint:
+          "Update or replace the plugin so it no longer depends on legacy compatibility paths.",
+      })),
       ...diagnostics.map((diagnostic) =>
         pluginDiagnosticToHealthFinding(diagnostic, `${prefix}${diagnostic.message}`),
       ),
@@ -325,10 +314,8 @@ function notePluginVersionReadiness(readiness: PluginVersionRestartReadiness | u
   );
 }
 
-/** Emits plugin recovery problem notes for doctor. */
 export function noteWorkspaceStatus(cfg: OpenClawConfig, options: NoteWorkspaceStatusOptions = {}) {
-  const defaultAgentId = tryResolveDefaultAgentId(cfg);
-  const scopes = visitWorkspacePluginStatus(
+  visitWorkspacePluginStatus(
     cfg,
     options,
     ({ agentLabel, registry, compatibilityWarnings, diagnostics }) => {
@@ -364,10 +351,4 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig, options: NoteWorkspaceS
     },
   );
   notePluginVersionReadiness(options.pluginVersionReadiness);
-
-  return {
-    workspaceDir:
-      scopes.find((scope) => scope.agentId === defaultAgentId)?.workspaceDir ??
-      scopes[0]?.workspaceDir,
-  };
 }

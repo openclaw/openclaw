@@ -1,6 +1,5 @@
 import type { PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
   formatDocumentTitle,
   isSettingsNavigationRoute,
@@ -65,6 +64,7 @@ import {
   type OptionalCustomElement,
   TERMINAL_PANEL_ELEMENT,
 } from "./lazy-custom-element.ts";
+import { LazyRenderer } from "./lazy-renderer.ts";
 import { postNativeNavState, type NativeNavState } from "./native-nav-state.ts";
 import { readNativeHistoryState, type NativeHistoryState } from "./native-web-chrome.ts";
 import { resolveOnboardingMode } from "./onboarding-mode.ts";
@@ -133,22 +133,13 @@ class OpenClawShell
   // Desktop and modal navigation are two slots for the same live sidebar.
   // Moving its element preserves session controllers and the resident pet
   // instead of resetting their lifecycle at every responsive breakpoint.
-  readonly navigationSidebar: HTMLElement & { requestUpdate?: () => void } = document.createElement(
-    APP_SIDEBAR_ELEMENT.tagName,
-  );
+  readonly navigationSidebar: HTMLElement = document.createElement(APP_SIDEBAR_ELEMENT.tagName);
   // Where "Back to app" / Escape leaves the settings takeover; falls back to
   // chat (the app default route) when settings was the entry point.
   lastWorkspaceLocation: ShellNavigationHost["lastWorkspaceLocation"] = null;
   custodianMinimizeRequestId = 0;
   lastConcreteRouteId: RouteId | undefined;
-  agentsListClient: GatewayBrowserClient | null = null;
-  agentsListSource: ApplicationContext["agents"] | null = null;
-  sessionKeyClient: GatewayBrowserClient | null = null;
-  runtimeConfigClient: GatewayBrowserClient | null = null;
-  runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
   lastLocalePrefSignature: string | null = null;
-  previousGatewayPhase: ApplicationContext["gateway"]["snapshot"]["phase"] | null = null;
-  agentRosterRefreshTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   outboxStoreRuntime: OutboxStoreRuntime | null = null;
   storedOutboxes: ReturnType<OutboxStoreRuntime["read"]> | undefined;
   private outboxStoreUnsubscribe: (() => void) | null = null;
@@ -167,31 +158,12 @@ class OpenClawShell
   readonly settingsPreloadTimers = new Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>();
   // Settings navigation is needed only after entering the settings takeover.
   // Keep its search, update-card, and sidebar rendering graph off the startup path.
-  @state() settingsSidebarRenderer:
-    | typeof import("../components/settings-sidebar.ts").renderSettingsSidebar
-    | null = null;
-  @state() settingsSidebarLoadFailed = false;
-  private settingsSidebarRuntime: Promise<unknown> | null = null;
+  readonly settingsSidebar = new LazyRenderer(this, () =>
+    import("../components/settings-sidebar.ts").then((module) => module.renderSettingsSidebar),
+  );
   private readonly sidebarUpdateCardImport = createIdleImport(
     () => import("../components/sidebar-update-card.ts"),
   );
-
-  loadSettingsSidebarRenderer(): void {
-    this.settingsSidebarRuntime ??= import("../components/settings-sidebar.ts")
-      .then((module) => {
-        this.settingsSidebarRenderer = module.renderSettingsSidebar;
-        this.settingsSidebarLoadFailed = false;
-      })
-      .catch(() => {
-        this.settingsSidebarLoadFailed = true;
-        this.settingsSidebarRuntime = null;
-      });
-  }
-
-  retrySettingsSidebarRenderer(): void {
-    this.settingsSidebarLoadFailed = false;
-    this.loadSettingsSidebarRenderer();
-  }
 
   private loadSidebarUpdateCard(): void {
     void this.sidebarUpdateCardImport.load().catch((error: unknown) => {
@@ -202,31 +174,13 @@ class OpenClawShell
   }
   // Lazy: the pairing modal is opened from Settings, not at
   // boot, so its template, icons, and strings stay off the startup chunk.
-  @state() devicePairSetupRenderer:
-    | typeof import("../pages/devices/view-pairing.runtime.ts").renderDevicePairSetup
-    | null = null;
   // A rejected chunk must stay visible: the overlay is already open, so the
   // shell renders a recoverable failure instead of an empty dialog frame.
-  @state() devicePairSetupLoadFailed = false;
-  private devicePairSetupRuntime: Promise<unknown> | null = null;
-
-  loadDevicePairSetupRenderer(): void {
-    this.devicePairSetupRuntime ??= import("../pages/devices/view-pairing.runtime.ts")
-      .then((module) => {
-        this.devicePairSetupRenderer = module.renderDevicePairSetup;
-        this.devicePairSetupLoadFailed = false;
-      })
-      .catch(() => {
-        // Clearing the promise is what makes the retry below able to refetch.
-        this.devicePairSetupLoadFailed = true;
-        this.devicePairSetupRuntime = null;
-      });
-  }
-
-  retryDevicePairSetupRenderer(): void {
-    this.devicePairSetupLoadFailed = false;
-    this.loadDevicePairSetupRenderer();
-  }
+  readonly devicePairSetup = new LazyRenderer(this, () =>
+    import("../pages/devices/view-pairing.runtime.ts").then(
+      (module) => module.renderDevicePairSetup,
+    ),
+  );
   private readonly subscriptions = new SubscriptionsController(this);
   private readonly shellNavigation = new ShellNavigationOwner(this);
   private readonly shellChrome = new ShellChromeOwner(this);
@@ -251,6 +205,8 @@ class OpenClawShell
   storedOutboxScopeHost(context: ApplicationContext): StoredOutboxScopeHost {
     const gatewaySnapshot = context.gateway.snapshot;
     return {
+      client: gatewaySnapshot.client,
+      connected: gatewaySnapshot.phase === "connected",
       settings: { gatewayUrl: context.gateway.connection.gatewayUrl },
       assistantAgentId: gatewaySnapshot.assistantAgentId,
       agentsList: context.agents.state.agentsList,
@@ -324,33 +280,14 @@ class OpenClawShell
           };
         },
       )
-      .watch(
-        () => this.context?.nativeDeviceSettings,
-        (settings, notify) => settings.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.navigation,
-        (navigation, notify) => navigation.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.plugins,
-        (plugins, notify) => plugins.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.agentSelection,
-        (selection, notify) => selection.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.settingsAgentSelection,
-        (selection, notify) => selection.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.agentIdentity,
-        (identity, notify) => identity.subscribe(notify),
-      )
-      .watch(
+      .watchStore(() => this.context?.nativeDeviceSettings)
+      .watchStore(() => this.context?.navigation)
+      .watchStore(() => this.context?.plugins)
+      .watchStore(() => this.context?.agentSelection)
+      .watchStore(() => this.context?.settingsAgentSelection)
+      .watchStore(() => this.context?.agentIdentity)
+      .watchStore(
         () => this.context?.gateway,
-        (gateway, notify) => gateway.subscribe(notify),
         (gateway) => {
           this.shellChrome.synchronizeCommandPaletteScope();
           this.shellGateway.synchronizeGateway(gateway.snapshot);
@@ -361,17 +298,10 @@ class OpenClawShell
         () => this.context?.gateway,
         (gateway) => gateway.subscribeEvents(this.handleGatewayEvent),
       )
-      .watch(
-        () => this.context?.config,
-        (config, notify) => config.subscribe(notify),
-      )
-      .watch(
-        () => this.context?.theme,
-        (theme, notify) => theme.subscribe(notify),
-      )
-      .watch(
+      .watchStore(() => this.context?.config)
+      .watchStore(() => this.context?.theme)
+      .watchStore(
         () => this.context?.agents,
-        (agents, notify) => agents.subscribe(notify),
         (agents) => {
           this.refreshStoredOutboxSummary();
           const snapshot = this.context?.gateway.snapshot;
@@ -391,22 +321,14 @@ class OpenClawShell
           );
         },
       )
-      .watch(
-        () => this.context?.overlays,
-        (overlays, notify) => overlays.subscribe(notify),
-      )
+      .watchStore(() => this.context?.overlays)
       .effect(
         () => this.context?.sessions,
         (sessions) => this.shellGateway.observeSessions(sessions, () => this.syncDocumentTitle()),
       )
-      .watch(
+      .watchStore(
         () => this.context?.placementStartup,
-        (startup, notify) => startup.subscribe(notify),
-        () => {
-          if (this.context) {
-            this.recoverDeletedActiveSession(this.context.sessions.state);
-          }
-        },
+        () => this.recoverDeletedActiveSession(),
       )
       .watch(
         () => this.context?.runtimeConfig,
@@ -485,13 +407,12 @@ class OpenClawShell
     this.storedOutboxes = context
       ? this.outboxStoreRuntime?.read(this.storedOutboxScopeHost(context))
       : undefined;
+    context?.nativeConversation?.publishSessionFacts(this.storedOutboxes?.sessions ?? null);
   }
 
   private readonly refreshStoredOutboxPresentation = () => {
-    // A sidebar update may already be queued when the outbox publishes.
     this.refreshStoredOutboxSummary();
     this.requestUpdate();
-    this.navigationSidebar.requestUpdate?.();
   };
 
   private resetForContextEpoch() {
@@ -619,7 +540,6 @@ class OpenClawShell
   readonly handleNativeToggleSearch = this.shellChrome.handleNativeToggleSearch;
   readonly handleNativeNewSession = this.shellChrome.handleNativeNewSession;
   readonly handleNativeNavigate = this.shellChrome.handleNativeNavigate;
-  readonly handleNativeHistoryState = this.shellChrome.handleNativeHistoryState;
   readonly handleWindowResize = this.shellChrome.handleWindowResize;
   readonly handleDocumentKeydown = this.shellChrome.handleDocumentKeydown;
   get pendingDebugOverlayMode() {
@@ -663,10 +583,17 @@ class OpenClawShell
     if (isSessionRouteId(routeId) && this.activeSessionKey) {
       primaryContext = this.chatTitleContext(context, outboxScopeHost) || primaryContext;
     }
-    const gatewayDisconnected = context.gateway.snapshot.phase !== "connected";
+    const { phase, lastError } = context.gateway.snapshot;
+    // A warm shell renders before hello; initial loading is not a lost connection.
+    const gatewayDisconnected =
+      phase !== "connected" &&
+      (Boolean(lastError) ||
+        phase === "reconnecting" ||
+        phase === "offline" ||
+        phase === "reload-required");
     let title = formatDocumentTitle({
       context: primaryContext,
-      attentionCount: context.overlays.snapshot.approvalQueue.length,
+      attentionCount: phase === "connected" ? context.overlays.snapshot.approvalQueue.length : 0,
       gatewayDisconnected,
     });
     const environment = context.config?.current.environment;

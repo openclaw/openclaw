@@ -353,7 +353,7 @@ function buildAuditIndex(
 
 export function resolveRoute(
   route: string,
-  { redirects, routes }: { redirects: Map<string, string>; routes: Set<string> },
+  { redirects, routes }: Pick<ReturnType<typeof buildAuditIndex>, "redirects" | "routes">,
 ) {
   let current = normalizeRoute(route);
   if (current === "/") {
@@ -416,7 +416,7 @@ export function prepareMirroredDocsDir(
 function parseAuditUrl(
   href: string,
   base = "https://docs.openclaw.ai",
-): Result<{ hostname: string; pathname: string; hash: string }, string> {
+): Result<Pick<URL, "hostname" | "pathname" | "hash">, string> {
   try {
     const url = new URL(href, base);
     return ok({
@@ -693,11 +693,6 @@ function runDocsLinkAuditCli() {
   }
 }
 
-function isCliEntry() {
-  const cliArg = process.argv[1];
-  return cliArg ? import.meta.url === pathToFileURL(cliArg).href : false;
-}
-
-if (isCliEntry()) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   process.exit(runDocsLinkAuditCli());
 }

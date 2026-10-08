@@ -1,6 +1,5 @@
-/**
- * Projects provider assistant messages into ordered visible stream state.
- */
+import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -38,36 +37,20 @@ export function isSubscribeTranscriptOnlyOpenClawAssistantMessage(
   return provider === "openclaw" && (model === "delivery-mirror" || model === "gateway-injected");
 }
 
-const RESPONSES_API_IDS = new Set([
-  "openai-responses",
-  "openai-chatgpt-responses",
-  "azure-openai-responses",
-  "openclaw-openai-responses-transport",
-  "openclaw-openai-chatgpt-responses-transport",
-  "openclaw-azure-openai-responses-transport",
-]);
+function readAssistantMessageApi(message: AgentMessage | undefined) {
+  return message?.role === "assistant" ? normalizeOptionalString(message.api) : undefined;
+}
 
 export function isResponsesApiAssistantMessage(message: AgentMessage | undefined): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
-  return RESPONSES_API_IDS.has(api);
+  return OPENAI_RESPONSES_APIS.has(readAssistantMessageApi(message) ?? "");
 }
 
 export function isAnthropicAssistantMessage(message: AgentMessage | undefined): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
-  return api === "anthropic-messages";
+  return readAssistantMessageApi(message) === "anthropic-messages";
 }
 
 export function isOpenAiCompletionsAssistantMessage(message: AgentMessage | undefined): boolean {
-  if (!message || message.role !== "assistant") {
-    return false;
-  }
-  const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
+  const api = readAssistantMessageApi(message);
   return api === "openai-completions" || api === "openclaw-openai-completions-transport";
 }
 
@@ -75,34 +58,26 @@ export function extractStandaloneMessageToolText(
   text: string,
   params: { allowCurrentSourceReply?: boolean; allowRoutedReply?: boolean } = {},
 ): string | undefined {
-  try {
-    if (!params.allowCurrentSourceReply && !params.allowRoutedReply) {
-      return undefined;
-    }
-    const trimmed = text.trim();
-    if (!trimmed.startsWith("{")) {
-      return undefined;
-    }
-    const record = asRecord(JSON.parse(trimmed) as unknown);
-    const args = asRecord(record?.arguments);
-    const hasRoute = Boolean(
-      normalizeOptionalString(args?.target) ||
-      normalizeOptionalString(args?.to) ||
-      normalizeOptionalString(args?.channel) ||
-      normalizeOptionalString(args?.accountId) ||
-      Array.isArray(args?.targets),
-    );
-    if (
-      normalizeOptionalString(record?.name) !== "message" ||
-      normalizeOptionalString(args?.action) !== "send" ||
-      (hasRoute ? !params.allowRoutedReply : !params.allowCurrentSourceReply)
-    ) {
-      return undefined;
-    }
-    return normalizeOptionalString(args?.message);
-  } catch {
+  if (!params.allowCurrentSourceReply && !params.allowRoutedReply) {
     return undefined;
   }
+  const record = safeParseJsonRecord(text.trim());
+  const args = asRecord(record?.arguments);
+  const hasRoute = Boolean(
+    normalizeOptionalString(args?.target) ||
+    normalizeOptionalString(args?.to) ||
+    normalizeOptionalString(args?.channel) ||
+    normalizeOptionalString(args?.accountId) ||
+    Array.isArray(args?.targets),
+  );
+  if (
+    normalizeOptionalString(record?.name) !== "message" ||
+    normalizeOptionalString(args?.action) !== "send" ||
+    (hasRoute ? !params.allowRoutedReply : !params.allowCurrentSourceReply)
+  ) {
+    return undefined;
+  }
+  return normalizeOptionalString(args?.message);
 }
 
 export function resolveAssistantStreamItemId(params: {
@@ -156,20 +131,16 @@ export function resolveAssistantStreamBlockIndex(
   if (indexedBlock && typeof indexedBlock === "object" && indexedBlock.type === "text") {
     return contentIndex;
   }
-  if (itemId) {
-    for (let index = message.content.length - 1; index >= 0; index -= 1) {
-      const candidate = message.content[index];
-      if (
-        candidate &&
-        typeof candidate === "object" &&
-        candidate.type === "text" &&
-        parseAssistantTextSignature(candidate)?.id === itemId
-      ) {
-        return index;
-      }
-    }
-  }
-  return undefined;
+  const index = itemId
+    ? message.content.findLastIndex(
+        (candidate) =>
+          candidate &&
+          typeof candidate === "object" &&
+          candidate.type === "text" &&
+          parseAssistantTextSignature(candidate)?.id === itemId,
+      )
+    : -1;
+  return index >= 0 ? index : undefined;
 }
 
 export function scopeAssistantMessageToStreamBlock(

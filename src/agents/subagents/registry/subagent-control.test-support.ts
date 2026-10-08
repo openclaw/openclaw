@@ -2,14 +2,20 @@
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../../browser-lifecycle-cleanup.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../../../config/config.js";
+import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
 import { resolveContextEngine } from "../../../context-engine/registry.js";
 import { callGateway } from "../../../gateway/call.js";
 import { flushLogger, resetLogger } from "../../../logging/logger.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
+import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
@@ -19,8 +25,6 @@ import {
 } from "../announce/subagent-announce.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { testing as schedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
-import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
-import * as registryState from "./subagent-registry-state.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.test-helpers.js";
@@ -39,12 +43,11 @@ vi.mock("../../runtime-plugins.js", async () => {
 });
 vi.mock("../announce/subagent-announce.js", { spy: true });
 vi.mock("../announce/subagent-announce.requester-settle-wake.js", { spy: true });
-vi.mock("./subagent-registry-state.js", { spy: true });
+vi.mock("../../../state/openclaw-state-worker-store.js", { spy: true });
 
-// Fault callbacks must delegate to the real writer, never their own mocked export.
-export const { persistSubagentRunsToDiskOrThrow } = await vi.importActual<typeof registryState>(
-  "./subagent-registry-state.js",
-);
+// Fault gates delegate to the native worker; it owns admission, transactions, and receipts.
+export const { runOpenClawStateWorkerOperation: runSubagentStateWorkerOperation } =
+  await vi.importActual<typeof stateWorker>("../../../state/openclaw-state-worker-store.js");
 
 export function useSubagentControlFixture() {
   const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
@@ -52,8 +55,7 @@ export function useSubagentControlFixture() {
   let settleRootWork: ReturnType<typeof observeRootWork>;
   const settle = (keepObserving = true) =>
     settleSubagentRegistryPersistenceWork(() => settleRootWork(keepObserving));
-  const persist = vi.mocked(registryState.persistSubagentRunsToDiskOrThrow);
-  const persistAsync = vi.mocked(registryState.persistSubagentRunsToDiskAsyncOrThrow);
+  const worker = vi.mocked(stateWorker.runOpenClawStateWorkerOperation);
   const gateway = vi.mocked(callGateway);
   const announce = vi.mocked(runSubagentAnnounceFlow);
   const capture = vi.mocked(captureSubagentCompletionReply);
@@ -73,7 +75,7 @@ export function useSubagentControlFixture() {
     );
     clearConfigCache();
     clearRuntimeConfigSnapshot();
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     gateway.mockReset().mockImplementation(async (request) => {
       if (request.method !== "agent.wait") {
         throw new Error(`Unexpected registry RPC ${request.method}`);
@@ -86,21 +88,7 @@ export function useSubagentControlFixture() {
     cleanup.mockReset().mockResolvedValue(undefined);
     pluginRuntime.mockReset();
     contextEngine.mockReset().mockImplementation(async () => new LegacyContextEngine());
-    persist.mockReset().mockImplementation(persistSubagentRunsToDiskOrThrow);
-    // Control fixtures inject their transaction faults through one persistence owner.
-    persistAsync.mockReset().mockImplementation(async (runs, ids, options) => {
-      const snapshot = structuredClone(runs);
-      await Promise.resolve();
-      let committed = false;
-      try {
-        options.assertCurrent?.();
-        persist(snapshot, ids);
-        committed = true;
-        options.onCommitted?.();
-      } catch (error) {
-        throw new SubagentRegistryWriteError(committed ? "committed" : "not-committed", error);
-      }
-    });
+    worker.mockReset().mockImplementation(runSubagentStateWorkerOperation);
     settleRootWork = observeRootWork();
   });
   afterEach(async () => {
@@ -115,12 +103,11 @@ export function useSubagentControlFixture() {
     // Preserve stores and their environment if detached writers have not settled.
     if (getActiveGatewayRootWorkCount() === 0) {
       try {
-        resetSubagentRegistryForTests({ persist: false });
+        await resetSubagentRegistryForTests({ persist: false });
         schedulerTesting.reset();
         await cleanupSessionStateForTest({ stateDir });
         for (const mock of [
-          persist,
-          persistAsync,
+          worker,
           gateway,
           announce,
           capture,
@@ -154,11 +141,51 @@ export function useSubagentControlFixture() {
     get stateDir() {
       return stateDir;
     },
-    persist,
+    worker,
     gateway,
     announce,
     capture,
     wake,
     cleanup,
   };
+}
+
+export function useSubagentControlSessionStores() {
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterAll(async () => {
+      await closeOpenClawAgentDatabasesAsync(tempRoot);
+      cleanup();
+    }),
+  );
+  const tempRoot = tempDirs.make("openclaw-subagent-control-");
+  let tempStoreIndex = 0;
+
+  function nextSessionStorePath(label: string) {
+    tempStoreIndex += 1;
+    return path.join(tempRoot, `${tempStoreIndex}-${label}.json`);
+  }
+
+  function cfgWithSessionStore(storePath = nextSessionStorePath("sessions")): OpenClawConfig {
+    return {
+      session: { store: storePath },
+    } as OpenClawConfig;
+  }
+
+  async function writeSessionStoreFixture(label: string, store: Record<string, unknown>) {
+    const storePath = nextSessionStorePath(label);
+    for (const [sessionKey, entry] of Object.entries(store)) {
+      const record = entry && typeof entry === "object" ? (entry as Record<string, unknown>) : {};
+      const sessionId =
+        typeof record.sessionId === "string" && record.sessionId.trim()
+          ? record.sessionId
+          : `sess-${sessionKey.replaceAll(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "")}`;
+      await replaceSessionEntry({ storePath, sessionKey }, {
+        ...record,
+        sessionId,
+      } as SessionEntry);
+    }
+    return storePath;
+  }
+
+  return { cfgWithSessionStore, writeSessionStoreFixture };
 }

@@ -20,17 +20,14 @@ type AttachGrant = {
   env: Record<string, string>;
 };
 
-export function writeClaudeMcpConfig(mcpConfig: AttachGrant["mcpConfig"]): {
-  path: string;
-  cleanup: () => void;
-} {
+export function writeClaudeMcpConfig(mcpConfig: AttachGrant["mcpConfig"]) {
   const dir = mkdtempSync(join(tmpdir(), "openclaw-attach-"));
   const path = join(dir, ".mcp.json");
   writeFileSync(path, JSON.stringify(mcpConfig, null, 2), { encoding: "utf8", mode: 0o600 });
   return { path, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-export async function registerAttachCli(program: Command, _argv: string[] = process.argv) {
+export async function registerAttachCli(program: Command) {
   program
     .command("attach")
     .description("Attach Claude Code to a gateway session with scoped MCP tools")

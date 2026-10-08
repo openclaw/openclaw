@@ -45,6 +45,14 @@ export { DEFAULT_TERMINAL_DETACH_SECONDS } from "./session-limits.js";
 
 const log = createSubsystemLogger("gateway/terminal");
 
+function killTerminalBackend(backend: TerminalBackend): void {
+  try {
+    backend.kill();
+  } catch {
+    // Teardown is best effort; callers retain any required exit observation.
+  }
+}
+
 /** Owns PTYs and indexes their connections for bounded disconnect cleanup. */
 export class TerminalSessionManager {
   private readonly sessions = new Map<string, TerminalSession>();
@@ -174,12 +182,8 @@ export class TerminalSessionManager {
       // A cancelled spawn cannot register an orphaned PTY.
       releaseEvictionClaim();
       backend.onExit(() => this.untrackPendingOpen(request.owner, pending, request.viewerConnId));
-      try {
-        backend.kill();
-      } catch {
-        // Keep the open tracked: archive must time out instead of committing
-        // before an unobserved backend exit.
-      }
+      // Keep tracking until exit even if kill fails; archive must not commit early.
+      killTerminalBackend(backend);
       return { ok: false, code: "closed", message: pending.abortMessage };
     }
     this.untrackPendingOpen(request.owner, pending, request.viewerConnId);
@@ -196,11 +200,7 @@ export class TerminalSessionManager {
         // rejoins the pool and may still be selected.
         const victim = this.claimLongestIdleAgentSession();
         if (!victim) {
-          try {
-            backend.kill();
-          } catch {
-            // Best-effort; the process may already be gone.
-          }
+          killTerminalBackend(backend);
           return {
             ok: false,
             code: "limit",
@@ -764,11 +764,7 @@ export class TerminalSessionManager {
     if (!opts?.backendExited && session.owner?.kind === "agent") {
       this.agentSessionDrain.trackExit(session);
     }
-    try {
-      session.backend.kill();
-    } catch {
-      // Process may already be gone; the kill is best-effort teardown.
-    }
+    killTerminalBackend(session.backend);
     this.sessions.delete(session.id);
     if (session.owner?.kind === "conn") {
       this.connections.removeSession(session.owner.connId, session.id);

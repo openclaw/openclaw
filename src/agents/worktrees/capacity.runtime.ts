@@ -4,6 +4,7 @@ import path from "node:path";
 import { isMissingPathError } from "../../infra/errors.js";
 import { createGitCommandError, requireGitCommandOutput } from "../../infra/git-exec.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import { rawPathStat } from "./git-path-inventory.js";
 import type { GitWorktreeOperations } from "./git-worktree-operations.js";
 import {
   requireGit,
@@ -66,11 +67,14 @@ async function hydrateCommitObjects(repoRoot: string, commit: string): Promise<v
     }
     // Hydrate once under the checkout budget; objectsize must never fetch one blob at a time.
     // Shared commits do not prove that their promised blobs are present.
+    // --refetch hints auto-maintenance to repack (gc.autoPackLimit=1); that repack must
+    // never run inside the allocation lease.
     await requireGit(
       repoRoot,
       [
         "fetch",
         "--refetch",
+        "--no-auto-maintenance",
         remote,
         "--no-tags",
         "--no-write-fetch-head",
@@ -275,16 +279,10 @@ export async function measureDirectoryTreeBytes(root: string, excludeGit = false
       continue;
     }
     const child = path.join(root, entry.name);
-    if (entry.isDirectory() && !entry.isSymbolicLink()) {
+    if (entry.isDirectory()) {
       total += await measureDirectoryTreeBytes(child, excludeGit);
     } else {
-      try {
-        total += (await fs.lstat(child)).size;
-      } catch (error) {
-        if (!isMissingPathError(error)) {
-          throw error;
-        }
-      }
+      total += (await rawPathStat(child))?.size ?? 0;
     }
   }
   return total;

@@ -608,6 +608,61 @@ describe("publish model catalog", () => {
     },
   );
 
+  it.each([
+    { paddingMiB: 6, outcome: "accepts" },
+    { paddingMiB: 40, outcome: "rejects" },
+  ])("$outcome a models.dev feed padded by $paddingMiB MiB", async ({ paddingMiB, outcome }) => {
+    const manifests = [
+      {
+        pluginId: "fixture",
+        manifestPath: "fixture.json",
+        manifest: {
+          providers: ["anthropic", "openai"],
+          modelCatalog: {
+            modelsDev: { anthropic: "anthropic" },
+            providers: {
+              anthropic: fixtureProvider("claude", 100),
+              openai: fixtureProvider("gpt", 100),
+            },
+          },
+        },
+      },
+    ];
+    const bundle = await assembleFixtureBundle(manifests);
+    const encoder = new TextEncoder();
+    const feed = encoder.encode(
+      JSON.stringify(modelsDevCatalog({ anthropic: [modelsDevModel("new-model")] })),
+    );
+    // JSON whitespace keeps the padded feed valid; no content-length forces the streamed bound.
+    const padding = encoder.encode(" ".repeat(1024 * 1024));
+    let sent = -1;
+    const hydration = hydrateModelCatalogFromModelsDev({
+      bundle,
+      manifests,
+      fetchImpl: async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              if (sent === paddingMiB) {
+                controller.close();
+                return;
+              }
+              controller.enqueue(sent === -1 ? feed : padding);
+              sent += 1;
+            },
+          }),
+        ),
+    });
+    if (outcome === "accepts") {
+      await expect(hydration).resolves.toEqual({
+        anthropic: { added: 1, filled: 0, skipped: 0 },
+      });
+    } else {
+      await expect(hydration).rejects.toThrow("models.dev response exceeds 33554432 bytes");
+      expect(sent).toBeLessThan(paddingMiB);
+    }
+  });
+
   it("publishes a provider unhydrated when its models.dev source disappears", async () => {
     const manifests = [
       {

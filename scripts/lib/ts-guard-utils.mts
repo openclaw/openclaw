@@ -30,9 +30,6 @@ type CollectFileViolationsParams<Violation extends object> = {
   sourceRoots: string[];
 };
 
-/**
- * Converts repo-relative source roots into absolute paths.
- */
 export function resolveSourceRoots(repoRoot: string, relativeRoots: string[]) {
   return relativeRoots.map((root) => path.join(repoRoot, ...root.split("/").filter(Boolean)));
 }
@@ -41,10 +38,7 @@ export function isTestLikeTypeScriptFile(filePath: string, extraTestSuffixes: st
   return [...baseTestSuffixes, ...extraTestSuffixes].some((suffix) => filePath.endsWith(suffix));
 }
 
-/**
- * Recursively collects TypeScript files under a file or directory target.
- */
-export async function collectTypeScriptFiles(
+async function collectTypeScriptFiles(
   targetPath: string,
   options: CollectTypeScriptFilesOptions = {},
 ): Promise<string[]> {
@@ -117,20 +111,11 @@ export async function collectTypeScriptFilesFromRoots(
 ) {
   return (
     await Promise.all(
-      sourceRoots.map(
-        async (root) =>
-          await collectTypeScriptFiles(root, {
-            ignoreMissing: true,
-            ...options,
-          }),
-      ),
+      sourceRoots.map((root) => collectTypeScriptFiles(root, { ignoreMissing: true, ...options })),
     )
   ).flat();
 }
 
-/**
- * Runs a guard's violation scanner across collected TypeScript source files.
- */
 export async function collectFileViolations<Violation extends object>(
   params: CollectFileViolationsParams<Violation>,
 ) {
@@ -294,15 +279,12 @@ export function getPropertyNameText(name: ts.PropertyName) {
 export function unwrapExpression(expression: ts.Expression) {
   let current = expression;
   while (true) {
-    if (ts.isParenthesizedExpression(current)) {
-      current = current.expression;
-      continue;
-    }
-    if (ts.isAsExpression(current) || ts.isTypeAssertion(current)) {
-      current = current.expression;
-      continue;
-    }
-    if (ts.isNonNullExpression(current)) {
+    if (
+      ts.isParenthesizedExpression(current) ||
+      ts.isAsExpression(current) ||
+      ts.isTypeAssertion(current) ||
+      ts.isNonNullExpression(current)
+    ) {
       current = current.expression;
       continue;
     }
@@ -390,19 +372,11 @@ export function collectCallExpressionLines(
   return lines;
 }
 
-function isDirectExecution(importMetaUrl: string) {
-  const entry = process.argv[1];
-  if (!entry) {
-    return false;
-  }
-  return path.resolve(entry) === fileURLToPath(importMetaUrl);
-}
-
 /**
  * Runs a script main function only when the module is the direct entrypoint.
  */
 export function runAsScript(importMetaUrl: string, main: () => Promise<unknown>) {
-  if (!isDirectExecution(importMetaUrl)) {
+  if (!process.argv[1] || path.resolve(process.argv[1]) !== fileURLToPath(importMetaUrl)) {
     return;
   }
   main().catch((error: unknown) => {

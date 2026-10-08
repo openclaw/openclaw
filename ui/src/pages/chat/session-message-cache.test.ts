@@ -8,6 +8,7 @@ import {
   readChatSessionSnapshot,
   type ChatMessageCache,
 } from "./session-message-cache.ts";
+import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 
 function createHost() {
   return {
@@ -143,8 +144,12 @@ describe("session message cache", () => {
     cacheChatMessages(cache, host, { sessionKey: "agent:ops:large" }, [21]);
 
     expect(cache.size).toBe(20);
-    expect(cache.has("agent:ops:session-0")).toBe(true);
-    expect(cache.has("agent:ops:session-1")).toBe(false);
+    expect(cache.has(resolveChatSnapshotKey(host, { sessionKey: "agent:ops:session-0" }))).toBe(
+      true,
+    );
+    expect(cache.has(resolveChatSnapshotKey(host, { sessionKey: "agent:ops:session-1" }))).toBe(
+      false,
+    );
     expect(readChatMessagesFromCache(cache, host, { sessionKey: "agent:ops:large" })).toEqual([21]);
   });
 

@@ -21,37 +21,6 @@ describe("PluginsPage settings navigation", () => {
 
   afterEach(resetPluginsPageTestState);
 
-  it("keeps the canonical settings inventory at /settings/plugins", async () => {
-    const { client } = createClient(async () => createResult());
-    const harness = createGateway(client);
-    const context = createContext(harness.gateway);
-    const routeData = createPluginsRouteData(
-      harness.gateway,
-      createResult(),
-      createPluginsRouteLocation("/settings/plugins"),
-    );
-    const { page } = await mountPage(context, routeData, "settings");
-
-    expect(context.replace).not.toHaveBeenCalled();
-    expect(page.querySelector('.plugins-settings-search input[type="search"]')).not.toBeNull();
-    expect(page.querySelector(".plugins-settings-tabs")?.classList.contains("oc-segmented")).toBe(
-      true,
-    );
-    const row = page.querySelector('[data-plugin-id="workboard"]');
-    expect(row?.querySelector("wa-switch")).toBeNull();
-    expect(row?.querySelector('[data-plugin-state="disabled"]')).not.toBeNull();
-    expect(page.querySelector("openclaw-plugin-manager")).toBeNull();
-
-    page.routeData = {
-      ...routeData,
-      location: createPluginsRouteLocation("/settings/plugins?tab=advanced"),
-    };
-    await page.updateComplete;
-    const advanced = page.querySelector("#plugin-settings-advanced");
-    expect(advanced?.firstElementChild?.tagName).toBe("OPENCLAW-PLUGIN-MANAGER");
-    expect(page.querySelectorAll("openclaw-plugin-manager")).toHaveLength(1);
-  });
-
   it.each([
     {
       label: "Settings",

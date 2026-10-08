@@ -38,10 +38,8 @@ import {
   writeFixtureText,
   pluginManifest,
 } from "./loader.test-harness.js";
-import {
-  listMemoryPromptPreparations,
-  listMemoryPromptSupplements,
-} from "./memory-state.test-fixtures.js";
+import { listMemoryPromptPreparations } from "./memory-state.test-fixtures.js";
+import { requireActivePluginRegistry } from "./runtime.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 
 afterEach(globalAfterEach0);
@@ -644,7 +642,7 @@ describe("loadOpenClawPlugins", () => {
             pluginId: "memory-prompt-supplement-malformed",
             message: "memory prompt supplement registration missing builder",
           });
-          expect(listMemoryPromptSupplements()).toStrictEqual([]);
+          expect(requireActivePluginRegistry().memoryPromptSupplements).toStrictEqual([]);
         },
       },
       {

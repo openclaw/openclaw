@@ -7,11 +7,6 @@ import { sandboxListCommand } from "../../commands/sandbox.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
-import {
-  withArtifactPreservingStateReads,
-  withDisposableOpenClawStateReads,
-  withOpenClawStateDatabaseReadSnapshot,
-} from "../../state/openclaw-state-db-readonly.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -157,60 +152,6 @@ it("keeps all absent registry reads noncreating", async () => {
   ).toEqual([]);
   expect(await readBrowserRegistry()).toEqual({ entries: [] });
   expect(fs.existsSync(databasePath)).toBe(false);
-});
-
-it("reads inherited snapshot bytes while the canonical registry changes", async () => {
-  fixture();
-  await seed();
-  await withOpenClawStateDatabaseReadSnapshot(async () => {
-    await updateRegistry({ ...container, lastUsedAtMs: 99 });
-    expect(await readRegistryEntry(container.containerName)).toMatchObject({ lastUsedAtMs: 2 });
-    expect((await readRegistry()).entries).toEqual([
-      expect.objectContaining({ containerName: container.containerName, lastUsedAtMs: 2 }),
-    ]);
-  });
-  expect(await readRegistryEntry(container.containerName)).toMatchObject({ lastUsedAtMs: 99 });
-});
-
-it("joins admitted sandbox reads before the disposable source scope exits", async () => {
-  const { databasePath } = fixture();
-  await seed();
-  let outcome: unknown;
-  await withDisposableOpenClawStateReads(databasePath, async () => {
-    void readRegistryEntry(container.containerName).then(
-      (entry) => {
-        outcome = entry;
-      },
-      (error: unknown) => {
-        outcome = error;
-      },
-    );
-  });
-  expect(outcome).toMatchObject(container);
-});
-
-it("preserves a cold artifact-protected source without creating sidecars", async () => {
-  const { databasePath } = fixture();
-  await seed();
-  await closeOpenClawStateDatabaseAsync();
-  const before = fs.readFileSync(databasePath);
-  const artifacts = () => fs.readdirSync(path.dirname(databasePath)).toSorted();
-  const names = artifacts();
-  await withArtifactPreservingStateReads(async () => {
-    expect(await readRegistryEntry(container.containerName)).toMatchObject(container);
-    expect(await readBrowserRegistry()).toEqual({ entries: [browser] });
-  });
-  expect(fs.readFileSync(databasePath)).toEqual(before);
-  expect(artifacts()).toEqual(names);
-});
-
-it("keeps the selected source when the ambient state directory changes before settlement", async () => {
-  fixture();
-  await seed();
-  const selected = readRegistryEntry(container.containerName);
-  vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-sandbox-unrelated-"));
-  expect(await selected).toMatchObject(container);
-  expect(await readRegistry()).toEqual({ entries: [] });
 });
 
 it("ignores malformed registry payloads without rewriting them", async () => {

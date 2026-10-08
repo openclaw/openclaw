@@ -3,12 +3,14 @@ import { nothing, render } from "lit";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { buildCachedChatItems, resetChatThreadState } from "../chat-thread.ts";
+import * as turnBoundary from "../chat-turn-boundary.ts";
+import { renderMessageGroup } from "./chat-message-group.ts";
 import {
   createAssistantMessage,
   createAttachmentBlock,
   createMessageGroup,
 } from "./chat-message.test-support.ts";
-import { renderMessageGroup } from "./chat-message.ts";
 import { projectTurnVideoMessages } from "./chat-turn-video-gallery.ts";
 
 const container = document.createElement("div");
@@ -16,6 +18,7 @@ afterEach(() => {
   render(nothing, container);
   container.remove();
   vi.restoreAllMocks();
+  resetChatThreadState();
 });
 
 function group(key: string, role = "assistant", extra: Partial<MessageGroup> = {}) {
@@ -25,6 +28,54 @@ function group(key: string, role = "assistant", extra: Partial<MessageGroup> = {
     ...extra,
   });
 }
+
+it("retains turn membership across renders and stream deltas while reading fresh stream text", () => {
+  const input = {
+    paneId: "video-pane",
+    sessionKey: "video-session",
+    messages: [{ role: "assistant", content: "Saved clip", timestamp: 1 }],
+    toolMessages: [],
+    streamSegments: [],
+    stream: "First clip",
+    streamStartedAt: 2,
+    showToolCalls: true,
+  };
+  const items = buildCachedChatItems(input);
+  const byMessage = projectTurnVideoMessages(items);
+  const live = items.find((item) => item.kind === "stream");
+  expect(live?.kind).toBe("stream");
+  const key = live!.key;
+  const firstMessage = byMessage.get(key)!.at(-1)!.message;
+  const boundary = vi.spyOn(turnBoundary, "chatItemStartsUserTurn");
+
+  projectTurnVideoMessages(buildCachedChatItems(input));
+  const next = projectTurnVideoMessages(buildCachedChatItems({ ...input, stream: "Second clip" }));
+  expect(boundary).not.toHaveBeenCalled();
+  expect(next.get(key)?.map((entry) => entry.message)).toEqual([
+    input.messages[0],
+    { role: "assistant", content: [{ type: "text", text: "Second clip" }] },
+  ]);
+  expect(firstMessage).toEqual({
+    role: "assistant",
+    content: [{ type: "text", text: "First clip" }],
+  });
+
+  // A full build can preserve its array; its generation still owns invalidation.
+  boundary.mockClear();
+  const rebuilt = buildCachedChatItems({ ...input, stream: "Second clip", queue: [] });
+  expect(rebuilt).toBe(items);
+  projectTurnVideoMessages(rebuilt);
+  expect(boundary).toHaveBeenCalled();
+
+  const replacement = {
+    ...input.messages[0],
+    provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+  };
+  const replaced = projectTurnVideoMessages(
+    buildCachedChatItems({ ...input, messages: [replacement], stream: "Second clip" }),
+  );
+  expect(replaced.get(key)?.map((entry) => entry.key)).toEqual([key]);
+});
 
 it("projects a whole turn across run frames, but never another user turn, divider, or forwarded session", () => {
   const a = group("a", "assistant", { runId: "run-a" });

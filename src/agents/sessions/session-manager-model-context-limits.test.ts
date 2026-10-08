@@ -10,6 +10,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { transcriptEventJsonSql } from "../../config/sessions/transcript-payload.js";
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
@@ -85,6 +86,58 @@ it("returns empty context within a one-byte budget", async () => {
   });
 });
 
+it("retires prior-series operators through bounded and detached transcript reads", async () => {
+  await withHistory("context-system-prompt-series", async ({ scope, source, verifyRead }) => {
+    source.appendMessage(makeUserMessage("Keep this question", 1));
+    const appendOperator = (content: string, kind: "prompt-update" | "runtime-context") =>
+      source.appendCustomMessageEntry("openclaw.system-update", content, false, {
+        kind,
+        turnScoped: kind === "runtime-context",
+      });
+    appendOperator("Retired instructions", "prompt-update");
+    appendOperator("Retained turn facts", "runtime-context");
+    const series = {
+      prefix: "Pinned stable instructions. ".repeat(100),
+      hash: "retained-prefix-hash",
+      renderedPrefix: "Effective stable instructions. ".repeat(100),
+      routeKey: "synthetic-provider/model/api-key",
+      historyId: null,
+    };
+    source.appendCustomEntry("openclaw.system-prompt", { ...series, restart: true });
+    appendOperator("Current instructions", "prompt-update");
+    appendOperator("Current facts", "runtime-context");
+    const checkpoint = { ...series, restart: false };
+    source.appendCustomEntry("openclaw.system-prompt", checkpoint);
+    const expected = source.buildSessionContext();
+    expect(expected.messages).toMatchObject([
+      { role: "user", content: "Keep this question" },
+      { role: "custom", content: "Retained turn facts" },
+      { role: "custom", content: "Current instructions" },
+      { role: "custom", content: "Current facts" },
+    ]);
+    await verifyRead(async () => {
+      const limits = { maxBytes: 16_384, maxEvents: 16 };
+      for (const restored of [
+        SessionManager.openBounded(scope, limits),
+        await SessionManager.openBoundedAsync(scope, limits),
+      ]) {
+        expect(restored.buildSessionContext()).toEqual(expected);
+        expect(
+          restored
+            .getBranch()
+            .findLast(
+              (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
+            ),
+        ).toMatchObject({ data: checkpoint });
+      }
+      expect(SessionManager.openModelContext(scope).buildSessionContext()).toEqual(expected);
+      expect(
+        (await SessionManager.openModelContextAsync(scope, { limits })).buildSessionContext(),
+      ).toEqual(expected);
+    });
+  });
+});
+
 it.each([false, true])(
   "bounds payload sizing by the event budget with retained compaction=%s",
   async (compacted) => {
@@ -132,11 +185,20 @@ it.each([false, true])(
 it("applies the aggregate byte budget before hydrating omitted message bodies", async () => {
   await withHistory("context-byte-limit", async ({ scope, source, verifyRead }) => {
     for (let index = 0; index < 8; index++) {
-      source.appendMessage(makeUserMessage(`body-payload-${index}:` + "x".repeat(1024), index));
+      source.appendMessage(makeUserMessage(`body-payload-${index}:` + "x".repeat(4096), index));
     }
+    const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
+    expect(
+      database.db
+        .prepare(
+          "SELECT count(*) AS count FROM transcript_events WHERE session_id = ? AND event_zstd IS NOT NULL",
+        )
+        .get(scope.sessionId),
+    ).toEqual({ count: 8 });
     const full = source.buildSessionContext().messages;
     await verifyRead(() => {
       const hydrated = new Set<string>();
+      const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
       const parse = JSON.parse;
       const spy = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
         for (const match of text.matchAll(/body-payload-\d+:/gu)) {
@@ -147,15 +209,17 @@ it("applies the aggregate byte budget before hydrating omitted message bodies", 
       let messages: typeof full;
       try {
         messages = SessionManager.openModelContext(scope, {
-          limits: { maxBytes: 4096, maxEvents: 20 },
+          limits: { maxBytes: 16_384, maxEvents: 20 },
         }).buildSessionContext().messages;
+        expect(decompress).toHaveBeenCalledTimes(messages.length);
       } finally {
         spy.mockRestore();
+        decompress.mockRestore();
       }
       expect(messages.length).toBeGreaterThan(0);
       expect(messages.length).toBeLessThan(full.length);
       expect(messages).toEqual(full.slice(-messages.length));
-      expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThanOrEqual(4096);
+      expect(Buffer.byteLength(JSON.stringify(messages))).toBeLessThanOrEqual(16_384);
       expect(hydrated).toEqual(
         new Set(
           messages.flatMap((message) => {
@@ -530,7 +594,7 @@ it.each(["sync", "async"])(
       await verifyRead(async () => {
         const limits = { maxBytes: 4096, maxEvents: 8 };
         expect(() => SessionManager.openModelContext(scope, { limits })).toThrow(
-          /without splitting a tool frame/u,
+          "The latest messages exceed this session's context limit. Start a new session with a brief summary to continue.",
         );
         const options = { limits: { ...limits, toolResultOverflow: "omit" as const } };
         let oversizedPayloadReads = 0;
@@ -542,13 +606,19 @@ it.each(["sync", "async"])(
           return parse(text, reviver);
         });
         let selected: SessionManager;
+        const decompress = vi.spyOn(resolveZstdCodec()!, "decompress");
         try {
           selected =
             mode === "async"
               ? await SessionManager.openModelContextAsync(scope, options)
               : SessionManager.openModelContext(scope, options);
+          if (mode === "sync") {
+            // One decode to size the omission, then one to hydrate the selected result.
+            expect(decompress).toHaveBeenCalledTimes(2);
+          }
         } finally {
           spy.mockRestore();
+          decompress.mockRestore();
         }
         const messages = selected.buildSessionContext().messages;
         expect(messages.map((message) => message.role)).toEqual([

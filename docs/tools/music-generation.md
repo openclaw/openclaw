@@ -196,9 +196,11 @@ Session-backed music generation runs as a background task:
   started/task response immediately, and posts the finished track later in
   a follow-up agent message.
 - **Duplicate prevention:** while a task is `queued` or `running`, later
-  `music_generate` calls in the same session return task status instead of
+  `music_generate` calls in the same chat return task status instead of
   starting another generation. Use `action: "status"` to check explicitly.
   A recently completed matching request is also deduplicated for 2 minutes.
+  Direct chats keep separate tasks even when they share the main session
+  transcript; completion returns to the requesting peer.
 - **Status lookup:** use `music_generate` with `action: "status"`.
 - **Completion wake:** OpenClaw injects an internal completion event back
   into the same session so the model can write the user-facing follow-up

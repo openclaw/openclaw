@@ -2,11 +2,12 @@ import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-i
 import { availableWorkerSlots } from "../../packages/gateway-protocol/src/worker-capacity.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
-  formatNodeRunnerInventoryIssue,
+  createNodeRunnerInventoryIssueError,
   NODE_RUNNER_UPDATE_REQUIRED_ISSUE,
   NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
   NODE_WORKER_STATUS_WAIT_VERSION,
   NODE_WORKER_PREPARED_WORKSPACE_VERSION,
+  NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   resolveNodeWorkerExecutionIssue,
   type NodeRunnerInventoryIssue,
@@ -82,7 +83,7 @@ export function createNodeRunnerStatePublisher(
     return Boolean(
       node &&
       node.client.invalidated !== true &&
-      resolveNodeWorkerSupervisorProof(node, runnerInventoryByConn),
+      resolveNodeWorkerSupervisorState(node, runnerInventoryByConn),
     );
   };
   return {
@@ -151,7 +152,7 @@ export async function waitForNodeRunnerAvailability(
       }
       const issue = transport.getIssue?.(nodeId);
       if (issue) {
-        throw new Error(formatNodeRunnerInventoryIssue(nodeId, issue));
+        throw createNodeRunnerInventoryIssueError(nodeId, issue);
       }
       await racePromiseWithAbortSignal(changed.promise, options.signal);
       changed = createDeferredCore();
@@ -183,7 +184,7 @@ export function collectNodeRunnerCatalogState(params: {
     if (!state || !current || current.connId !== node.connId) {
       continue;
     }
-    const proof = resolveNodeWorkerSupervisorProof(current, state.runnerInventoryByConn);
+    const proof = resolveNodeWorkerSupervisorState(current, state.runnerInventoryByConn);
     if (proof && proof.pairingGeneration === node.pairingGeneration) {
       sessionHostNodeIds.add(node.nodeId);
     }
@@ -207,6 +208,21 @@ export function collectNodeRunnerCatalogState(params: {
 }
 
 export function resolveNodeWorkerSupervisorProof(
+  node: NodeRunnerRegistrySession,
+  runnerInventoryByConn: ReadonlyMap<string, NodeRunnerInventoryRecord>,
+): NodeWorkerSupervisorNodeProof | undefined {
+  const current = resolveNodeWorkerSupervisorState(node, runnerInventoryByConn);
+  return current
+    ? {
+        ...current,
+        workerHost: structuredClone(current.workerHost),
+        commands: [...current.commands],
+      }
+    : undefined;
+}
+
+// Synchronous registry reads borrow admitted facts; only escaping proofs need a snapshot.
+function resolveNodeWorkerSupervisorState(
   node: NodeRunnerRegistrySession,
   runnerInventoryByConn: ReadonlyMap<string, NodeRunnerInventoryRecord>,
 ): NodeWorkerSupervisorNodeProof | undefined {
@@ -235,8 +251,8 @@ export function resolveNodeWorkerSupervisorProof(
     clientId: node.clientId,
     clientMode: "node",
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    workerHost: structuredClone(declaration.workerHost),
-    commands: [...node.commands],
+    workerHost: declaration.workerHost,
+    commands: node.commands,
   };
 }
 
@@ -279,12 +295,13 @@ export function isNodeWorkerSupervisorProofCurrent(
     statusWait?: boolean;
     preparedWorkspace?: boolean;
     capturedExecPolicy?: boolean;
+    workspaceQuiescence?: boolean;
   } = {},
 ): boolean {
   if (!node || node.client.invalidated === true || node.connId !== proof.connId) {
     return false;
   }
-  const current = resolveNodeWorkerSupervisorProof(node, runnerInventoryByConn);
+  const current = resolveNodeWorkerSupervisorState(node, runnerInventoryByConn);
   return (
     current?.pairingIdentity === proof.pairingIdentity &&
     current.pairingGeneration === proof.pairingGeneration &&
@@ -299,6 +316,8 @@ export function isNodeWorkerSupervisorProofCurrent(
     (!requirements.preparedWorkspace ||
       current.workerHost.preparedWorkspace === NODE_WORKER_PREPARED_WORKSPACE_VERSION) &&
     (!requirements.capturedExecPolicy || !resolveNodeWorkerExecutionIssue(current.workerHost)) &&
+    (!requirements.workspaceQuiescence ||
+      current.workerHost.workspaceQuiescence === NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION) &&
     (requirements.commands ?? []).every((command) => current.commands.includes(command))
   );
 }

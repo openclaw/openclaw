@@ -85,6 +85,10 @@ side-panel tabs when the panes are side by side. In a stacked layout, each
 header stays above its own pane. Side-panel tabs appear only when there are
 views to switch between.
 
+When a tab has one full-width widget, its title and controls live in the task
+menu instead of a pill over the widget, in both split and fullscreen views.
+Smaller widgets and multi-widget tabs keep their individual controls.
+
 ## Build a dashboard by asking
 
 For a pinned data summary, ask for a **native report** with text, metrics, tables,

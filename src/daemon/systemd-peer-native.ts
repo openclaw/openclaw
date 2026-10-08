@@ -23,12 +23,10 @@ const invoke = (fn: NativeFunction, ...args: unknown[]): Promise<number> =>
     fn.async(...args, (error: Error | null, result: number) => {
       if (error) {
         reject(error);
+      } else if (result < 0) {
+        reject(unavailable());
       } else {
-        try {
-          resolve(checked(result));
-        } catch (failure) {
-          reject(failure instanceof Error ? failure : unavailable());
-        }
+        resolve(result);
       }
     });
   });
@@ -301,6 +299,7 @@ async function openSystemdConnection(
     signatures: string[],
     until: number,
     assertCurrent?: () => void,
+    beforeDispatch?: () => void,
   ) => {
     const check = () => {
       remaining(until);
@@ -364,6 +363,7 @@ async function openSystemdConnection(
         }
         check();
         try {
+          beforeDispatch?.();
           await invoke(native.call, bus, message[0], remaining(until), error, reply);
         } catch (failure) {
           check();
@@ -406,10 +406,18 @@ async function openSystemdConnection(
   return {
     verify,
     close,
-    query(args: string[], signatures: string[], until: number, assertCurrent?: () => void) {
+    query(
+      args: string[],
+      signatures: string[],
+      until: number,
+      assertCurrent?: () => void,
+      beforeDispatch?: () => void,
+    ) {
       // One sd-bus connection is not thread-safe. Queue within the caller's
       // deadline; a queue wait never earns a new budget or custody interval.
-      return queue.run(until, () => execute(args, signatures, until, assertCurrent));
+      return queue.run(until, () =>
+        execute(args, signatures, until, assertCurrent, beforeDispatch),
+      );
     },
   };
 }

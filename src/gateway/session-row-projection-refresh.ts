@@ -1,9 +1,9 @@
+import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
 } from "../infra/worker-task-capacity.js";
-import { WorkerTaskError } from "../infra/worker-task-pool-core.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { yieldSessionListWork } from "./session-projection-work.js";
@@ -28,13 +28,12 @@ export function createSessionRowRefresh(
       registryPrepared: boolean;
     };
     databaseRevision: () => number;
-    registrySnapshot: () => object | undefined;
     env: NodeJS.ProcessEnv;
     runAsOwner: <T>(operation: () => T) => T;
     lookup: (query: records.Lookup) => records.Row | undefined;
     prepareRegistryFacts: () => Promise<void> | undefined;
     topology: () => Promise<void>;
-    catalog: { needsInitialRead: boolean; refresh: () => Promise<unknown> };
+    catalog: { needsInitialRead: boolean; isRefreshing: boolean; refresh: () => Promise<unknown> };
     placementFacts: { prepare: () => Promise<void>; needsPreparation: boolean };
     membership: { prepare: () => Promise<void>; needsPreparation: boolean };
   },
@@ -53,6 +52,9 @@ export function createSessionRowRefresh(
   let exactReadBytes = 0;
   let exactPreparations = 0;
   let exactPreparationsIdle: Deferred | undefined;
+  let selectionPreparation: Promise<void> | undefined;
+  // Admission and the background drain must share each pending database acquisition.
+  let refreshing: Promise<void> | undefined;
   function releaseExactRead(id: string, read: ExactRowPreparation) {
     exactReads.delete(id);
     exactReadBytes -= read.bytes;
@@ -67,7 +69,9 @@ export function createSessionRowRefresh(
           }),
         );
         if (selected.size > 0) {
-          await owner.runAsOwner(() => readRows(selected, true));
+          await owner.runAsOwner(() => readRows(selected, { archived: true }));
+          // Retained facts can finish through microtasks; let the loop run between row slices.
+          await yieldSessionListWork();
         }
       }
       for (const read of batch.values()) {
@@ -165,7 +169,10 @@ export function createSessionRowRefresh(
     // The bulk read may reject its facts; recheck the rows once it settles.
     return Promise.all([exact, ...joined]).then(() => prepareExactRows(queries));
   }
-  function readRows(selected: ReadonlySet<string>, materializeArchived = false) {
+  function readRows(
+    selected: ReadonlySet<string>,
+    options: { archived?: boolean; materialize?: boolean } = {},
+  ) {
     return withSessionRowDatabaseFacts(
       {
         rows: owner.rows,
@@ -173,14 +180,132 @@ export function createSessionRowRefresh(
         selected,
         cfg: owner.state().cfg,
         revision,
-        registrySnapshot: owner.registrySnapshot,
+        prepareRegistryFacts: owner.prepareRegistryFacts,
         env: owner.env,
       },
       {
-        refreshPending: materializer.refreshPending,
-        accept: (ids, facts) => materializer.accept(ids, facts, materializeArchived),
+        refreshPending: options.materialize === false ? () => false : materializer.refreshPending,
+        accept: (ids, facts) => materializer.accept(ids, facts, options),
       },
     );
+  }
+  function selectionNeedsPreparation() {
+    const state = owner.state();
+    if (state.disposed) {
+      return false;
+    }
+    if (
+      state.topologyDirty ||
+      !state.registryPrepared ||
+      owner.catalog.needsInitialRead ||
+      owner.membership.needsPreparation
+    ) {
+      return true;
+    }
+    // Accepted database facts already own selection metadata, even while display is dirty.
+    for (const id of owner.dirty) {
+      if (!records.isPreparedSessionRowDatabaseFacts(owner.rows.get(id)?.retainedDatabaseFacts)) {
+        return true;
+      }
+    }
+    return false;
+  }
+  function retainExactPreparation() {
+    exactPreparations++;
+    exactPreparationsIdle ??= createDeferredCore();
+    let retained = true;
+    return () => {
+      if (!retained) {
+        return;
+      }
+      retained = false;
+      if (--exactPreparations === 0) {
+        const idle = exactPreparationsIdle;
+        exactPreparationsIdle = undefined;
+        idle?.resolve();
+      }
+    };
+  }
+  function prepareSelection(yieldForCatalog = false): Promise<void> | undefined {
+    if (!owner.state().disposed && !owner.catalog.needsInitialRead) {
+      void owner.runAsOwner(() => owner.catalog.refresh());
+    }
+    if (yieldForCatalog && owner.catalog.isRefreshing) {
+      // Adopt completed catalog publications without waiting for a pending renewal.
+      return yieldSessionListWork().then(() => prepareSelection());
+    }
+    if (selectionPreparation) {
+      return selectionPreparation;
+    }
+    if (!selectionNeedsPreparation()) {
+      if (!owner.state().disposed) {
+        owner.prepare();
+      }
+      return undefined;
+    }
+    const release = retainExactPreparation();
+    // Lists share metadata readiness, then only their exact pages build display rows.
+    selectionPreparation = owner.runAsOwner(async () => {
+      try {
+        while (selectionNeedsPreparation()) {
+          for (
+            let pending = owner.prepareRegistryFacts();
+            pending;
+            pending = owner.prepareRegistryFacts()
+          ) {
+            await pending;
+          }
+          if (owner.state().topologyDirty) {
+            await owner.topology();
+          }
+          if (owner.state().disposed || owner.state().topologyDirty) {
+            continue;
+          }
+          await owner.membership.prepare();
+          if (owner.catalog.needsInitialRead) {
+            await owner.catalog.refresh();
+          }
+          const selected = new Set<string>();
+          const held = new Set<Promise<void>>();
+          for (const id of owner.dirty) {
+            if (
+              records.isPreparedSessionRowDatabaseFacts(owner.rows.get(id)?.retainedDatabaseFacts)
+            ) {
+              continue;
+            }
+            const pending = bulkReads.get(id) ?? exactReads.get(id)?.completion.promise;
+            if (pending) {
+              held.add(pending);
+            } else if (selected.add(id).size === MAX_SESSION_ROW_FACTS_KEYS) {
+              break;
+            }
+          }
+          if (selected.size > 0) {
+            const read = createDeferredCore();
+            for (const id of selected) {
+              bulkReads.set(id, read.promise);
+            }
+            try {
+              await readRows(selected, { materialize: false });
+            } finally {
+              for (const id of selected) {
+                bulkReads.delete(id);
+              }
+              read.resolve();
+            }
+          } else {
+            await Promise.all(held);
+          }
+        }
+        if (!owner.state().disposed) {
+          owner.prepare();
+        }
+      } finally {
+        selectionPreparation = undefined;
+        release();
+      }
+    });
+    return selectionPreparation;
   }
   async function refreshBatch() {
     for (
@@ -280,23 +405,23 @@ export function createSessionRowRefresh(
   }
   return {
     refresh: materializer.refresh,
-    refreshBatch,
+    refreshBatch(this: void) {
+      return (refreshing ??= refreshBatch().finally(() => {
+        refreshing = undefined;
+      }));
+    },
     prepareExactRows,
-    retainExactPreparation(this: void) {
-      exactPreparations++;
-      exactPreparationsIdle ??= createDeferredCore();
-      let retained = true;
-      return () => {
-        if (!retained) {
-          return;
-        }
-        retained = false;
-        if (--exactPreparations === 0) {
-          const idle = exactPreparationsIdle;
-          exactPreparationsIdle = undefined;
-          idle?.resolve();
-        }
-      };
+    prepareSelection,
+    selectionNeedsPreparation,
+    retainExactPreparation,
+    async withSelectionPreparation<T>(this: void, consume: () => Promise<T>): Promise<T> {
+      // Preserve page priority across search/placement awaits and metadata preparation.
+      const release = retainExactPreparation();
+      try {
+        return await consume();
+      } finally {
+        release();
+      }
     },
     dispose(this: void) {
       exactPreparationsIdle?.resolve();

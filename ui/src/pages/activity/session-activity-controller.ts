@@ -8,20 +8,41 @@ import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { createSessionEventRefreshCoordinator } from "../../lib/sessions/event-refresh-coordinator.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import {
+  createSessionRowProvenance,
+  createSessionWriteObservation,
+} from "../../lib/sessions/session-row-provenance.ts";
+import { activityPulseBoundaries } from "./activity-pulse-window.ts";
+import {
   readCurrentWorkChange,
+  readCurrentWorkChanges,
+  currentWorkIdentity,
+  isOlderCurrentWorkChange,
+  CURRENT_WORK_CHANGE_LIMIT,
   reconcileCurrentWork,
   type CurrentWorkChange,
+  type CurrentWorkFence,
 } from "./current-work.ts";
 import {
   canonicalSessionActivityLocation,
+  reconcileSessionActivity,
+  reconcileSessionActivityRead,
   sessionActivityLocation,
   type SessionActivityFilters,
 } from "./session-activity.ts";
 
 type ActivityQuery = SessionActivityFilters | "current";
-const CURRENT_WORK_CHANGE_LIMIT = 1_000;
 export const ACTIVITY_SUMMARY_ENSURE_METHOD = "sessions.activitySummary.ensure";
 const SUMMARY_BATCH_SIZE = 20;
+
+function sameActiveSnapshot(change: CurrentWorkChange | undefined, identity: string): boolean {
+  return Boolean(
+    change?.snapshot &&
+    !change.isAncestorReference &&
+    change.reason !== "delete" &&
+    change.hasActiveRun === true &&
+    currentWorkIdentity(change) === identity,
+  );
+}
 
 function summaryRowKey(row: Pick<GatewaySessionRow, "key" | "agentId">): string {
   return JSON.stringify([row.agentId ?? parseAgentSessionKey(row.key)?.agentId, row.key]);
@@ -61,9 +82,13 @@ export class SessionActivityController implements ReactiveController {
   private readonly summaryRetries = new Set<string>();
   private canEnsureSummaries = false;
   private filters: ActivityQuery | null = null;
-  private dayRollover?: ReturnType<typeof setTimeout>;
-  private readonly pendingChanges: CurrentWorkChange[] = [];
+  private bucketRollover?: ReturnType<typeof setTimeout>;
+  private pendingChanges: CurrentWorkChange[] = [];
   private changesOverflowed = false;
+  private readonly currentWorkFences = new Map<string, CurrentWorkFence>();
+  private retirementOverflowed = false;
+  private readonly historyRows = createSessionRowProvenance();
+  private historyRevision = 0;
   private normalizedLocation = "";
   private readonly observesPageLifecycle =
     typeof document !== "undefined" && typeof globalThis.addEventListener === "function";
@@ -96,9 +121,24 @@ export class SessionActivityController implements ReactiveController {
     this.summaryRetries.clear();
   }
 
+  private withActivitySummary(
+    row: GatewaySessionRow,
+    activitySummary: GatewaySessionRow["activitySummary"],
+    readCutoff: number,
+  ): GatewaySessionRow {
+    const next = this.historyRows.inheritRow({ ...row, activitySummary }, row);
+    this.historyRows.observeFields(
+      next,
+      ["activitySummary"],
+      createSessionWriteObservation(++this.historyRevision, null, readCutoff),
+      row.agentId,
+    );
+    return next;
+  }
+
   private resetQuery(): void {
-    clearTimeout(this.dayRollover);
-    this.dayRollover = undefined;
+    clearTimeout(this.bucketRollover);
+    this.bucketRollover = undefined;
     this.eventRefresh.reset();
     this.pending?.controller.abort();
     this.pending = undefined;
@@ -112,6 +152,9 @@ export class SessionActivityController implements ReactiveController {
     this.filters = null;
     this.pendingChanges.length = 0;
     this.changesOverflowed = false;
+    this.currentWorkFences.clear();
+    this.retirementOverflowed = false;
+    this.historyRows.reset();
     this.normalizedLocation = "";
   }
 
@@ -197,6 +240,7 @@ export class SessionActivityController implements ReactiveController {
           this.summaryAttempts.set(key, summaryRevision(row));
           this.summaryRetries.delete(key);
         }
+        const readRevision = ++this.historyRevision;
         try {
           const result = await client.request<{
             sessions: Array<Pick<GatewaySessionRow, "key" | "agentId" | "activitySummary">>;
@@ -220,7 +264,7 @@ export class SessionActivityController implements ReactiveController {
             ...this.result,
             sessions: this.result.sessions.map((row) =>
               rows.includes(row) && summaries.has(summaryRowKey(row))
-                ? { ...row, activitySummary: summaries.get(summaryRowKey(row)) }
+                ? this.withActivitySummary(row, summaries.get(summaryRowKey(row)), readRevision)
                 : row,
             ),
           };
@@ -232,7 +276,11 @@ export class SessionActivityController implements ReactiveController {
             ...this.result,
             sessions: this.result.sessions.map((row) =>
               rows.includes(row)
-                ? { ...row, activitySummary: { ...row.activitySummary, state: "unavailable" } }
+                ? this.withActivitySummary(
+                    row,
+                    { ...row.activitySummary, state: "unavailable" },
+                    readRevision,
+                  )
                 : row,
             ),
           };
@@ -339,16 +387,54 @@ export class SessionActivityController implements ReactiveController {
 
   invalidate(payload?: unknown): void {
     if (this.client && this.filters) {
-      if (this.filters === "current") {
-        const change = readCurrentWorkChange(payload);
-        if (change) {
-          if (this.result) {
-            const next = reconcileCurrentWork(this.result, [change]);
+      const changes =
+        this.filters === "current"
+          ? readCurrentWorkChanges(payload)
+          : [readCurrentWorkChange(payload)].filter((change) => change !== null);
+      if (changes.length) {
+        let requiresRefresh = this.filters !== "current" || !this.pending;
+        if (this.result) {
+          const next =
+            this.filters === "current"
+              ? this.reconcileCurrentWork(this.result, changes)
+              : !this.filters.personId && !this.filters.query
+                ? reconcileSessionActivity(
+                    this.result,
+                    changes,
+                    this.historyRows,
+                    ++this.historyRevision,
+                  )
+                : undefined;
+          if (next) {
             this.result = next.result;
-            this.incomplete ||= next.requiresRefresh;
+            requiresRefresh = next.requiresRefresh;
+            this.incomplete ||= this.filters === "current" && requiresRefresh;
             this.host.requestUpdate();
           }
-          if (this.pending) {
+        }
+        if (this.pending && this.filters === "current") {
+          for (const change of changes) {
+            if (change.snapshot) {
+              const identity = currentWorkIdentity(change);
+              if (
+                this.pendingChanges.some(
+                  (previous) =>
+                    currentWorkIdentity(previous) === identity &&
+                    isOlderCurrentWorkChange(change, previous),
+                )
+              ) {
+                continue;
+              }
+              // Preserve the first receipt and all ordering barriers; only replace a run's tail.
+              if (
+                sameActiveSnapshot(change, identity) &&
+                sameActiveSnapshot(this.pendingChanges.at(-1), identity) &&
+                sameActiveSnapshot(this.pendingChanges.at(-2), identity)
+              ) {
+                this.pendingChanges[this.pendingChanges.length - 1] = change;
+                continue;
+              }
+            }
             // Overlapping completions and replacement starts must retain their arrival order.
             if (this.pendingChanges.length < CURRENT_WORK_CHANGE_LIMIT) {
               this.pendingChanges.push(change);
@@ -357,9 +443,29 @@ export class SessionActivityController implements ReactiveController {
             }
           }
         }
+        if (!requiresRefresh && !this.incomplete && !this.changesOverflowed) {
+          this.eventRefresh.scheduleFallback();
+          return;
+        }
       }
       this.eventRefresh.schedule();
     }
+  }
+
+  private reconcileCurrentWork(
+    result: SessionsListResult,
+    changes: Iterable<CurrentWorkChange>,
+    acceptRead = false,
+  ) {
+    const next = reconcileCurrentWork(
+      result,
+      changes,
+      this.currentWorkFences,
+      this.retirementOverflowed,
+      acceptRead,
+    );
+    this.retirementOverflowed = next.retirementOverflowed;
+    return next;
   }
 
   load(
@@ -378,38 +484,35 @@ export class SessionActivityController implements ReactiveController {
       return Promise.resolve();
     }
     const now = new Date();
-    const until = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
-    clearTimeout(this.dayRollover);
-    this.dayRollover = undefined;
-    if (filters !== "current" && typeof setTimeout === "function") {
-      this.dayRollover = setTimeout(() => this.eventRefresh.schedule(), until - Date.now() + 1_000);
+    const boundaries =
+      filters === "current" ? undefined : activityPulseBoundaries(filters.time, now.getTime());
+    clearTimeout(this.bucketRollover);
+    this.bucketRollover = undefined;
+    if (boundaries && typeof setTimeout === "function") {
+      const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime();
+      const rollover = Math.min(boundaries.at(-1)!, midnight);
+      this.bucketRollover = setTimeout(
+        () => this.eventRefresh.schedule(),
+        rollover - now.getTime() + 1_000,
+      );
     }
-    const request =
-      filters === "current"
-        ? {
-            activeOnly: true,
-            archived: "all",
-            includeGlobal: true,
-            includeUnknown: true,
-            includeDerivedTitles: true,
-            limit: 100,
-          }
+    const request = {
+      source: "activity",
+      excludeDock: true,
+      rowMode: "compact",
+      archived: "all",
+      includeGlobal: true,
+      includeUnknown: true,
+      includeDerivedTitles: true,
+      limit: 100,
+      ...(filters === "current"
+        ? { activeOnly: true }
         : {
-            archived: "all",
-            includeGlobal: true,
-            includeUnknown: true,
             includePeople: true,
-            activityPulseSince: new Date(
-              now.getFullYear(),
-              now.getMonth(),
-              now.getDate(),
-            ).getTime(),
-            activityPulseUntil: until,
+            activityPulseBoundaries: boundaries,
             excludeSubagents: true,
             includeActivitySummary: true,
-            includeDerivedTitles: true,
             sortBy: "activity",
-            limit: 100,
             ...(filters.personId ? { involvingProfileId: filters.personId } : {}),
             ...(filters.query ? { search: filters.query } : {}),
             ...(filters.time === "all"
@@ -418,7 +521,8 @@ export class SessionActivityController implements ReactiveController {
                   activeMinutes:
                     filters.time === "24h" ? 1440 : filters.time === "7d" ? 10080 : 43200,
                 }),
-          };
+          }),
+    };
     const queryKey = JSON.stringify(request);
     const sameQuery = this.client === client && this.queryKey === queryKey;
     if (sameQuery && this.pending && reason !== "retry") {
@@ -443,17 +547,24 @@ export class SessionActivityController implements ReactiveController {
     this.requestState = reason === "retry" ? "retrying" : "loading";
     this.error = undefined;
     if (!sameQuery) {
+      this.currentWorkFences.clear();
+      this.retirementOverflowed = false;
+      this.historyRows.reset();
       this.resetSummaries();
       this.result = undefined;
       this.incomplete = false;
     }
+    const readRevision = ++this.historyRevision;
     this.host.requestUpdate();
     void client
       .request<SessionsListResult>("sessions.list", request, { signal: pending.controller.signal })
       .then((result) => {
         if (this.pending === pending) {
           if (filters === "current") {
-            const next = reconcileCurrentWork(result, this.pendingChanges);
+            if (!this.changesOverflowed) {
+              this.retirementOverflowed = false;
+            }
+            const next = this.reconcileCurrentWork(result, this.pendingChanges, true);
             this.incomplete = this.changesOverflowed || next.requiresRefresh;
             if (this.incomplete) {
               this.eventRefresh.schedule();
@@ -463,7 +574,16 @@ export class SessionActivityController implements ReactiveController {
               this.result = next.result;
             }
           } else {
-            this.result = result;
+            const next = reconcileSessionActivityRead(
+              result,
+              this.result,
+              this.historyRows,
+              readRevision,
+            );
+            if (next.requiresRefresh) {
+              this.eventRefresh.schedule();
+            }
+            this.result = next.result;
             void this.ensureSummaries();
           }
         }

@@ -49,10 +49,7 @@ export function resolveGlobalAwareNodeChatDeliveryKeys(params: {
   }
   const scopedAgentId = normalizeAgentId(selectedAgentId);
   const keys = [`agent:${scopedAgentId}:${params.sessionKey}`];
-  if (
-    unscopedOwnerAgentId &&
-    normalizeAgentId(unscopedOwnerAgentId) === normalizeAgentId(scopedAgentId)
-  ) {
+  if (unscopedOwnerAgentId && normalizeAgentId(unscopedOwnerAgentId) === scopedAgentId) {
     keys.push(params.sessionKey);
   }
   return keys;
@@ -79,13 +76,7 @@ export function sendGlobalAwareNodeChatPayload(params: {
   payload: unknown;
   opts?: GatewayBroadcastOpts;
 }): void {
-  const deliveryKeys =
-    params.opts?.sessionKeys ??
-    resolveChatSessionKeys({
-      context: params.context,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-    });
+  const deliveryKeys = params.opts?.sessionKeys ?? resolveChatSessionKeys(params);
   if (deliveryKeys[0]) {
     const opts = params.opts?.sessionKeys
       ? params.opts

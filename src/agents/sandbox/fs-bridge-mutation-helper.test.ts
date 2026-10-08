@@ -30,17 +30,11 @@ function runMutationWithSource(source: string, args: string[], input?: string) {
 function runWritePlan(args: string[], input?: string) {
   const plan = buildPinnedMutationPlan({
     kind: "write",
-    check: {
-      target: {
-        hostPath: args[1] ?? "",
-        containerPath: args[1] ?? "",
-        relativePath: path.posix.join(args[2] ?? "", args[3] ?? ""),
-        writable: true,
-      },
-      options: {
-        action: "write files",
-        requireWritable: true,
-      },
+    target: {
+      hostPath: args[1] ?? "",
+      containerPath: args[1] ?? "",
+      relativePath: path.posix.join(args[2] ?? "", args[3] ?? ""),
+      writable: true,
     },
     pinned: {
       mountRootPath: args[1] ?? "",
@@ -79,8 +73,8 @@ const FORCED_COPY_FAILURE_MUTATION_PYTHON = GUEST_FILESYSTEM_PYTHON.replace(
 );
 
 const FIFO_READ_WATCHDOG_MUTATION_PYTHON = GUEST_FILESYSTEM_PYTHON.replace(
-  "def read_file_impl(parent_fd, basename, max_bytes):",
-  "def read_file_impl(parent_fd, basename, max_bytes):\n    import signal\n    signal.alarm(1)",
+  "def read_file(parent_fd, basename, max_bytes=None):",
+  "def read_file(parent_fd, basename, max_bytes=None):\n    import signal\n    signal.alarm(1)",
 );
 
 const FORCED_CREATE_FAILURE_MUTATION_PYTHON = GUEST_FILESYSTEM_PYTHON.replace(

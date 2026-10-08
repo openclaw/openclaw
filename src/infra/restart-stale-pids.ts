@@ -231,13 +231,6 @@ function readUnixProcessArgsSync(pid: number, spawnTimeoutMs: number): string[] 
   return parsePsCommandLine(res.stdout.trim());
 }
 
-function verifyGatewayPidByArgvSync(pid: number, spawnTimeoutMs: number): boolean {
-  const args = readUnixProcessArgsSync(pid, spawnTimeoutMs);
-  return (
-    args != null && classifyOpenClawArgv(args, { command: "gateway", pid }).kind === "openclaw"
-  );
-}
-
 function parsePidsFromLsofOutput(
   stdout: string,
   spawnTimeoutMs: number,
@@ -254,7 +247,11 @@ function parsePidsFromLsofOutput(
     if (!pid || excluded.has(pid)) {
       continue;
     }
-    if (verifyGatewayPidByArgvSync(pid, spawnTimeoutMs)) {
+    const args = readUnixProcessArgsSync(pid, spawnTimeoutMs);
+    if (
+      args != null &&
+      classifyOpenClawArgv(args, { command: "gateway", pid }).kind === "openclaw"
+    ) {
       pids.push(pid);
     }
   }
@@ -318,14 +315,6 @@ function resolveProtectedPidAfterEnumeration(
   return options?.resolveProtectedPid ? options.resolveProtectedPid() : options?.protectedPid;
 }
 
-function findVerifiedWindowsGatewayPidsOnPortSync(
-  port: number,
-  options?: CleanStaleGatewayProcessesOptions,
-): number[] {
-  const rawPids = readWindowsListeningPidsOnPortSync(port);
-  return filterVerifiedWindowsGatewayPids(rawPids, resolveProtectedPidAfterEnumeration(options));
-}
-
 function findVerifiedWindowsGatewayPidsOnPortResultSync(
   port: number,
   options?: CleanStaleGatewayProcessesOptions,
@@ -350,7 +339,8 @@ function findGatewayPidsOnPortWithProtectedPidSync(
   if (process.platform === "win32") {
     // Use the shared Windows port inspection (PowerShell / netstat) with
     // command-line verification to find only openclaw gateway processes.
-    return findVerifiedWindowsGatewayPidsOnPortSync(port, options);
+    const rawPids = readWindowsListeningPidsOnPortSync(port);
+    return filterVerifiedWindowsGatewayPids(rawPids, resolveProtectedPidAfterEnumeration(options));
   }
   const lsof = resolveLsofCommandSync();
   const res = spawnSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], {
@@ -365,12 +355,7 @@ function findGatewayPidsOnPortWithProtectedPidSync(
     if (code === "ENOENT") {
       return [];
     }
-    const detail =
-      code && code.trim().length > 0
-        ? code
-        : res.error instanceof Error
-          ? res.error.message
-          : "unknown error";
+    const detail = code && code.trim().length > 0 ? code : res.error.message;
     restartLog.warn(`lsof failed during initial stale-pid scan for port ${port}: ${detail}`);
     return [];
   }
@@ -405,13 +390,17 @@ export function findGatewayPidsOnPortSync(port: number, spawnTimeoutMs?: number)
 }
 
 // Unknown probes distinguish permanent tool failures from retryable inspection errors.
-type PollResult = { free: true } | { free: false } | { free: null; permanent: boolean };
+type PollResult = { free: boolean } | { free: null; permanent: boolean };
 
 function pollPortOnce(port: number): PollResult {
-  if (process.platform === "win32") {
-    return pollPortOnceWindows(port);
-  }
   try {
+    if (process.platform === "win32") {
+      // Occupancy alone matters after cleanup; keep PowerShell within the per-probe budget.
+      const result = readWindowsListeningPidsResultSync(port, POLL_SPAWN_TIMEOUT_MS);
+      return result.ok
+        ? { free: result.pids.length === 0 }
+        : { free: null, permanent: result.permanent };
+    }
     const lsof = resolveLsofCommandSync();
     const res = spawnSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], {
       env: resolveDiagnosticProcessEnv(),
@@ -441,19 +430,6 @@ function pollPortOnce(port: number): PollResult {
     // status === 0: lsof found a listener. Occupancy does not depend on whether
     // its PID field is present, valid, or attributable to an OpenClaw process.
     return { free: false };
-  } catch {
-    return { free: null, permanent: false };
-  }
-}
-
-// Occupancy alone matters after cleanup; keep PowerShell within the per-probe budget.
-function pollPortOnceWindows(port: number): PollResult {
-  try {
-    const result = readWindowsListeningPidsResultSync(port, POLL_SPAWN_TIMEOUT_MS);
-    if (!result.ok) {
-      return { free: null, permanent: result.permanent };
-    }
-    return result.pids.length === 0 ? { free: true } : { free: false };
   } catch {
     return { free: null, permanent: false };
   }

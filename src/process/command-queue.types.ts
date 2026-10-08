@@ -37,6 +37,7 @@ export type CommandQueueTaskDeadline =
   | { kind: "unlimited" };
 
 export type CommandQueueEnqueueOptions = {
+  sessionTarget?: Readonly<{ agentId?: string; sessionKey?: string; sessionId: string }>;
   /** Enqueue-time provenance for diagnostics only; never used for admission. */
   taskIdentity?: Readonly<{
     taskKind: string;

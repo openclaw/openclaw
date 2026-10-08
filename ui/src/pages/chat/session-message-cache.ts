@@ -3,7 +3,6 @@ import {
   readSessionMessageSequence,
   reduceSessionProjection,
 } from "@openclaw/gateway-client/browser";
-import type { UiSessionDefaultsHost } from "../../lib/sessions/session-key.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
 import { readChatSessionProjectionScope, reduceChatSessionProjection } from "./history-merge.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
@@ -43,15 +42,8 @@ export type ChatCacheObserver = {
 
 const chatCacheObservers = new WeakMap<ChatMessageCache, ChatCacheObserver>();
 
-type ChatMessageCacheTarget = {
-  sessionKey: string;
-  agentId?: string | null;
-};
-
-type ChatMessageCacheHost = Pick<
-  UiSessionDefaultsHost,
-  "assistantAgentId" | "agentsList" | "hello"
->;
+type ChatMessageCacheHost = Parameters<typeof resolveChatSnapshotKey>[0];
+type ChatMessageCacheTarget = Parameters<typeof resolveChatSnapshotKey>[1];
 
 type ChatHistoryCursorHost = ChatMessageCacheHost & {
   sessionKey: string;
@@ -243,19 +235,6 @@ export function readChatSessionSnapshot(
   return getSessionCacheValue(cache, resolveChatSnapshotKey(host, target))?.snapshot ?? null;
 }
 
-export function measureChatSnapshotWeight(snapshot: ChatSessionSnapshot): number | null {
-  const messageWeights = measureMessageWeights(snapshot.messages);
-  if (!messageWeights) {
-    return null;
-  }
-  return measuredSnapshotWeight(
-    snapshot,
-    snapshot.pagination,
-    messageWeights.reduce((sum, weight) => sum + weight, 0),
-    messageWeights.length,
-  );
-}
-
 function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSessionSnapshot | null {
   const messageWeights = measureMessageWeights(snapshot.messages);
   if (!messageWeights) {
@@ -294,18 +273,16 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
       return null;
     }
     const boundarySeq = readSessionMessageSequence(snapshot.messages[start]);
-    retainedMessageWeight -= messageWeights[start] ?? 0;
-    start += 1;
-    if (boundarySeq === null) {
-      continue;
-    }
-    while (start < snapshot.messages.length) {
-      if (readSessionMessageSequence(snapshot.messages[start]) !== boundarySeq) {
-        break;
-      }
+    do {
       retainedMessageWeight -= messageWeights[start] ?? 0;
       start += 1;
-    }
+      if (boundarySeq === null) {
+        break;
+      }
+    } while (
+      start < snapshot.messages.length &&
+      readSessionMessageSequence(snapshot.messages[start]) === boundarySeq
+    );
   }
 }
 

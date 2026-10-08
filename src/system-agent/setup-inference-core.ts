@@ -9,7 +9,7 @@ import type { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/sto
 import type { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { describeFailoverError } from "../agents/failover-error.js";
-import type { FailoverReason } from "../agents/failover/signal.js";
+import { FAILOVER_PROBE_STATUS as SETUP_STATUS_BY_FAILOVER_REASON } from "../agents/failover/probe-status.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
 import type {
   detectInferenceBackends,
@@ -18,6 +18,7 @@ import type {
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { enablePluginInConfig } from "../plugins/enable.js";
 import type {
@@ -239,26 +240,11 @@ export async function waitForProviderAuth<T>(
   promise: Promise<T>,
   signal?: AbortSignal,
 ): Promise<T> {
-  if (!signal) {
-    return await promise;
-  }
-  if (signal.aborted) {
-    // The provider can cancel synchronously while constructing this already-started promise.
-    // Retain its rejection handler even though cancellation wins immediately.
-    void promise.catch(() => {});
-    throw new SetupInferenceCancelledError();
-  }
-  let rejectAborted: ((reason: unknown) => void) | undefined;
-  const aborted = new Promise<never>((_resolve, reject) => {
-    rejectAborted = reject;
-  });
-  const onAbort = () => rejectAborted?.(new SetupInferenceCancelledError());
-  signal.addEventListener("abort", onAbort, { once: true });
-  try {
-    return await Promise.race([promise, aborted]);
-  } finally {
-    signal.removeEventListener("abort", onAbort);
-  }
+  return await racePromiseWithAbortSignal(
+    promise,
+    signal,
+    () => new SetupInferenceCancelledError(),
+  );
 }
 
 export type ActivateSetupInferenceDeps = {
@@ -384,31 +370,6 @@ export function resolveSetupInferenceWorkspace(
   );
 }
 
-const SETUP_STATUS_BY_FAILOVER_REASON = {
-  auth: "auth",
-  auth_permanent: "auth",
-  format: "format",
-  rate_limit: "rate_limit",
-  overloaded: "rate_limit",
-  billing: "billing",
-  server_error: "unknown",
-  timeout: "timeout",
-  tls_certificate: "unknown",
-  context_overflow: "unknown",
-  model_not_found: "format",
-  session_expired: "unknown",
-  empty_response: "unknown",
-  no_error_details: "unknown",
-  unclassified: "unknown",
-  unknown: "unknown",
-} satisfies Record<FailoverReason, SetupInferenceFailureStatus>;
-
-function mapFailoverReasonToSetupStatus(
-  reason?: FailoverReason | null,
-): SetupInferenceFailureStatus {
-  return reason ? SETUP_STATUS_BY_FAILOVER_REASON[reason] : "unknown";
-}
-
 export function describeSetupInferenceError(
   error: unknown,
   route: SystemAgentConfiguredRoute,
@@ -428,7 +389,10 @@ export function describeSetupInferenceError(
           : undefined;
   return connectionError
     ? { status: "unavailable", error: `${connectionError} No default model was changed.` }
-    : { status: mapFailoverReasonToSetupStatus(described.reason), error: described.message };
+    : {
+        status: described.reason ? SETUP_STATUS_BY_FAILOVER_REASON[described.reason] : "unknown",
+        error: described.message,
+      };
 }
 
 export function validateSetupInferenceOwnerEvidence(params: {

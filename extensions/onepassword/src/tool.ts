@@ -58,10 +58,7 @@ export function redactPersistedOnePasswordResult(
   }
   const details = event.message.details;
   const contentText = event.message.content
-    .filter(
-      (part): part is Extract<(typeof event.message.content)[number], { type: "text" }> =>
-        part.type === "text",
-    )
+    .filter((part) => part.type === "text")
     .map((part) => part.text)
     .join("\n");
   const hasSecretValue =
@@ -80,8 +77,7 @@ export function redactPersistedOnePasswordResult(
   return {
     message: {
       ...event.message,
-      content: [{ type: "text", text: JSON.stringify(persisted, null, 2) }],
-      details: persisted,
+      ...jsonResult(persisted),
     },
   };
 }

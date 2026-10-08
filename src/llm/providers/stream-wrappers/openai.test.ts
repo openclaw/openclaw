@@ -15,6 +15,7 @@ import {
   createOpenAICompletionsStrictMessageKeysWrapper,
   createOpenAICompletionsToolsCompatWrapper,
   createOpenAIFastModeWrapper,
+  resolveOpenAIFastMode,
   createOpenAIThinkingLevelWrapper,
   createCodexNativeWebSearchWrapper,
 } from "./openai.js";
@@ -73,17 +74,32 @@ afterEach(() => {
 });
 
 describe("createOpenAIFastModeWrapper", () => {
+  it.each(["https://api.openai.com/v1", "https://proxy.example/v1"])(
+    "preserves Ultrafast on the API boundary at %s",
+    (baseUrl) => {
+      const { baseStreamFn, payloads } = createPayloadCapture();
+      const enabled = resolveOpenAIFastMode({ fastMode: "ultrafast" });
+      expect(enabled).toBe("ultrafast");
+      const wrapped = createOpenAIFastModeWrapper(baseStreamFn, () => enabled);
+      void wrapped({ ...openaiModel, baseUrl }, { messages: [] }, {});
+      expect(payloads[0]?.service_tier).toBe("ultrafast");
+    },
+  );
+
   it("resolves dynamic fast mode for each stream call", () => {
     const { baseStreamFn, payloads } = createPayloadCapture();
-    let enabled = true;
+    let enabled: boolean | "ultrafast" = true;
     const wrapped = createOpenAIFastModeWrapper(baseStreamFn, () => enabled);
 
+    void wrapped(openaiModel, { messages: [] }, {});
+    enabled = "ultrafast";
     void wrapped(openaiModel, { messages: [] }, {});
     enabled = false;
     void wrapped(openaiModel, { messages: [] }, {});
 
     expect(payloads[0]?.service_tier).toBe("priority");
-    expect(payloads[1]).not.toHaveProperty("service_tier");
+    expect(payloads[1]?.service_tier).toBe("ultrafast");
+    expect(payloads[2]).not.toHaveProperty("service_tier");
   });
 });
 
@@ -518,12 +534,11 @@ describe("createCodexNativeWebSearchWrapper", () => {
       agentId: "main",
       config: {
         agents: {
-          list: [
-            {
-              id: "main",
+          entries: {
+            main: {
               tools: { deny: ["group:web"] },
             },
-          ],
+          },
         },
         tools: {
           web: {

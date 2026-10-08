@@ -10,6 +10,10 @@ import {
 import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
   resolvePreferredOpenClawTmpDir,
   tempWorkspace,
   type TempWorkspace,
@@ -30,13 +34,7 @@ import {
 let testWorkspace: TempWorkspace;
 
 async function expectMissingPath(filePath: string): Promise<void> {
-  try {
-    await fs.access(filePath);
-  } catch (error) {
-    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    return;
-  }
-  throw new Error(`expected missing path: ${filePath}`);
+  await expect(fs.access(filePath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 function authProfileTarget(agentDir: string, profileId: string): string {
@@ -97,6 +95,8 @@ describe("Hermes migration secret items", () => {
 
   afterEach(async () => {
     vi.unstubAllEnvs();
+    await closeOpenClawAgentDatabasesAsync(testWorkspace.dir);
+    await closeOpenClawStateDatabaseAsync();
     await testWorkspace.cleanup();
   });
 
@@ -110,13 +110,11 @@ describe("Hermes migration secret items", () => {
         defaults: {
           workspace: workspaceDir,
         },
-        list: [
-          {
-            id: "custom",
-            default: true,
+        entries: {
+          custom: {
             agentDir: customAgentDir,
           },
-        ],
+        },
       },
     } as OpenClawConfig;
     const plan = await provider.plan(

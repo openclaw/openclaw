@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { listAgentIds, tryResolveSoleAgentId } from "../../agents/agent-scope-config.js";
 import {
@@ -265,12 +265,17 @@ function writeLedger(params: {
     status: "complete",
   };
   const reportJson = JSON.stringify(report);
-  const identityHash = createHash("sha256").update(JSON.stringify(params.identity)).digest("hex");
+  const identityHash = sha256Hex(JSON.stringify(params.identity));
   const runId = `${SOURCE_KEY}:${identityHash.slice(0, 24)}`;
   params.beforePersistentApply?.();
   runOpenClawStateWriteTransaction(
     ({ db }) => {
       const kysely = getNodeSqliteKysely<LedgerDatabase>(db);
+      const completion = {
+        finished_at: params.now,
+        status: "completed",
+        report_json: reportJson,
+      };
       executeSqliteQuerySync(
         db,
         kysely
@@ -278,18 +283,20 @@ function writeLedger(params: {
           .values({
             id: runId,
             started_at: params.now,
-            finished_at: params.now,
-            status: "completed",
-            report_json: reportJson,
+            ...completion,
           })
-          .onConflict((conflict) =>
-            conflict.column("id").doUpdateSet({
-              finished_at: params.now,
-              status: "completed",
-              report_json: reportJson,
-            }),
-          ),
+          .onConflict((conflict) => conflict.column("id").doUpdateSet(completion)),
       );
+      const sourceCompletion = {
+        source_path: params.stateDir,
+        source_sha256: identityHash,
+        source_record_count: params.outcomes.length,
+        last_run_id: runId,
+        status: "completed",
+        imported_at: params.now,
+        removed_source: 1,
+        report_json: reportJson,
+      };
       executeSqliteQuerySync(
         db,
         kysely
@@ -297,29 +304,11 @@ function writeLedger(params: {
           .values({
             source_key: SOURCE_KEY,
             migration_kind: MIGRATION_KIND,
-            source_path: params.stateDir,
             target_table: "session_nodes",
-            source_sha256: identityHash,
             source_size_bytes: null,
-            source_record_count: params.outcomes.length,
-            last_run_id: runId,
-            status: "completed",
-            imported_at: params.now,
-            removed_source: 1,
-            report_json: reportJson,
+            ...sourceCompletion,
           })
-          .onConflict((conflict) =>
-            conflict.column("source_key").doUpdateSet({
-              source_path: params.stateDir,
-              source_sha256: identityHash,
-              source_record_count: params.outcomes.length,
-              last_run_id: runId,
-              status: "completed",
-              imported_at: params.now,
-              removed_source: 1,
-              report_json: reportJson,
-            }),
-          ),
+          .onConflict((conflict) => conflict.column("source_key").doUpdateSet(sourceCompletion)),
       );
     },
     { env: params.env },

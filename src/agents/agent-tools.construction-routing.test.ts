@@ -71,48 +71,45 @@ describe("createOpenClawCodingTools cron scope", () => {
     expect(firstOpenClawToolsOptions()?.cronSelfRemoveOnlyJobId).toBe("job-current");
   });
 
-  it.each([undefined, "channel-owner"] as const)(
-    "admits only the automation tool for management-only authority=%s",
-    async (source) => {
-      const runId = "remote-management-tools";
-      const { operationalRunInstance } = createTestAdmittedRunContext(runId);
-      const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-      onTestFinished(() => {
-        releaseAgentRunDelegatedAuthority(authority);
-      });
-      const capability = createCronCreatorAuthorityCapability(
-        runId,
-        { kind: "unknown" },
-        source ? { source, isCurrent: () => true } : undefined,
-      )!;
-      const tools = await runWithCronCreatorAuthorityCapability(capability, () =>
-        withGatewayToolCallerIdentity(
-          {
-            agentId: "main",
-            sessionKey: "agent:main:control-ui",
-            operationalRunInstance,
-            approvalAuthority: authority,
-          },
-          () =>
-            createOpenClawCodingTools({
-              runId,
-              senderIsOwner: false,
-              wrapBeforeToolCallHook: false,
-              toolConstructionPlan: {
-                includeBaseCodingTools: false,
-                includeShellTools: false,
-                includeChannelTools: false,
-                includeOpenClawTools: true,
-                includePluginTools: false,
-              },
-            }),
-        ),
-      );
-      const names = tools.map((tool) => tool.name);
-      expect(names.includes(AUTOMATIONS_TOOL_NAME)).toBe(Boolean(source));
-      expect(names).not.toContain("gateway");
-    },
-  );
+  it("admits only the automation tool for channel-owner management authority", async () => {
+    const runId = "remote-management-tools";
+    const { operationalRunInstance } = createTestAdmittedRunContext(runId);
+    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    onTestFinished(() => {
+      releaseAgentRunDelegatedAuthority(authority);
+    });
+    const capability = createCronCreatorAuthorityCapability(
+      runId,
+      { kind: "unknown" },
+      { source: "channel-owner", isCurrent: () => true },
+    )!;
+    const tools = await runWithCronCreatorAuthorityCapability(capability, () =>
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:control-ui",
+          operationalRunInstance,
+          approvalAuthority: authority,
+        },
+        () =>
+          createOpenClawCodingTools({
+            runId,
+            senderIsOwner: false,
+            wrapBeforeToolCallHook: false,
+            toolConstructionPlan: {
+              includeBaseCodingTools: false,
+              includeShellTools: false,
+              includeChannelTools: false,
+              includeOpenClawTools: true,
+              includePluginTools: false,
+            },
+          }),
+      ),
+    );
+    const names = tools.map((tool) => tool.name);
+    expect(names).toContain(AUTOMATIONS_TOOL_NAME);
+    expect(names).not.toContain("gateway");
+  });
 });
 
 const createLazyExecToolMock = vi.hoisted(() => vi.fn());
@@ -210,15 +207,13 @@ describe("createOpenClawCodingTools sandbox filesystem ownership", () => {
     expect(mocks.createOpenClawToolsOptions).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { includeBaseCodingTools: true, includeShellTools: false },
-    { includeBaseCodingTools: false, includeShellTools: true },
-  ])("rejects sandbox filesystem families without their bridge: %o", (families) => {
+  it("rejects sandbox shell tools without their filesystem bridge", () => {
     expect(() =>
       createOpenClawCodingTools({
         sandbox,
         toolConstructionPlan: {
-          ...families,
+          includeBaseCodingTools: false,
+          includeShellTools: true,
           includeChannelTools: false,
           includeOpenClawTools: false,
           includePluginTools: false,

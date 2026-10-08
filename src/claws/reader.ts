@@ -1,4 +1,3 @@
-// Local package and development-manifest reader for Claws.
 import { createHash } from "node:crypto";
 import { realpath, stat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
@@ -6,9 +5,11 @@ import { assertNoSymlinkParents } from "@openclaw/fs-safe/advanced";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "../agents/workspace-bootstrap-read.js";
 import { FsSafeError, root as fsSafeRoot, type OpenResult } from "../infra/fs-safe.js";
+import { digestClawBytes } from "./digest.js";
 import { readClawOpenClawProfile } from "./openclaw-profile.js";
 import { isCanonicalClawHubPackageName, isExactSemVer } from "./schema-portability.js";
 import { clawManifestWorkspaceConflictsWithPath, parseClawManifest } from "./schema.js";
+import { clawWorkspaceSourceFailure } from "./source-diagnostics.js";
 import {
   MAX_CLAW_MANIFEST_BYTES,
   MAX_MANAGED_FILE_BYTES,
@@ -42,7 +43,6 @@ async function readBoundedFile(path: string, maxBytes: number): Promise<Buffer> 
   const read = await fileRoot.read(basename(path), {
     hardlinks: "reject",
     maxBytes,
-    nonBlockingRead: true,
     symlinks: "reject",
   });
   return read.buffer;
@@ -71,29 +71,8 @@ function updateSnapshotHash(
 }
 
 function workspaceSourceDiagnostic(error: unknown, sourcePath: string): ClawDiagnostic {
-  if (error instanceof FsSafeError && error.code === "too-large") {
-    return fileDiagnostic(
-      "workspace_source_too_large",
-      `Workspace source ${JSON.stringify(sourcePath)} exceeds ${MAX_MANAGED_FILE_BYTES} bytes.`,
-      "$.workspace",
-    );
-  }
-  if (
-    (error instanceof FsSafeError &&
-      (error.code === "symlink" || error.code === "hardlink" || error.code === "path-mismatch")) ||
-    (error instanceof Error && error.message.includes("symlinked directory"))
-  ) {
-    return fileDiagnostic(
-      "workspace_source_unsafe",
-      `Workspace source ${JSON.stringify(sourcePath)} must be a regular, non-symlinked, non-hardlinked file.`,
-      "$.workspace",
-    );
-  }
-  return fileDiagnostic(
-    "workspace_source_invalid",
-    `Workspace source ${JSON.stringify(sourcePath)} must resolve inside the Claw source.`,
-    "$.workspace",
-  );
+  const { code, message } = clawWorkspaceSourceFailure(error, sourcePath, "source");
+  return fileDiagnostic(code, message, "$.workspace");
 }
 
 async function buildDevelopmentSnapshot(params: {
@@ -121,7 +100,7 @@ async function buildDevelopmentSnapshot(params: {
   };
   const snapshotFile = (bytes: Buffer) => ({
     byteLength: bytes.byteLength,
-    digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+    digest: digestClawBytes(bytes),
   });
   const manifest = snapshotFile(params.manifestRaw);
   const openClawProfile = params.openClawProfile
@@ -151,7 +130,6 @@ async function buildDevelopmentSnapshot(params: {
       const read = await sourceRoot.read("BOOTSTRAP.md", {
         hardlinks: "reject",
         maxBytes: MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES,
-        nonBlockingRead: true,
         symlinks: "reject",
       });
       const text = new TextDecoder("utf-8", { fatal: true }).decode(read.buffer);
@@ -162,7 +140,7 @@ async function buildDevelopmentSnapshot(params: {
           "$.bootstrap",
         );
       }
-      const digest = `sha256:${createHash("sha256").update(read.buffer).digest("hex")}`;
+      const digest = digestClawBytes(read.buffer);
       add("bootstrap:BOOTSTRAP.md", read.buffer);
       packageBootstrap = {
         sourcePath: "BOOTSTRAP.md",
@@ -249,11 +227,10 @@ async function buildDevelopmentSnapshot(params: {
           "$.workspace",
         );
       }
-      const normalizedSourcePath = sourcePath.replaceAll("\\", "/");
-      const digest = `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
-      add(`workspace:${sourcePath.replaceAll("\\", "/")}`, bytes);
+      const digest = digestClawBytes(bytes);
+      add(`workspace:${sourcePath}`, bytes);
       workspaceSources.push({
-        sourcePath: normalizedSourcePath,
+        sourcePath,
         realPath: opened.realPath,
         byteLength: bytes.byteLength,
         digest,

@@ -23,6 +23,17 @@ read_when:
 - Media-bearing streamed replies deliver attachments and the current tool trace together. A later identical text-only final is suppressed only when its caption and tool trace were already delivered successfully.
 - Host-side self-check runner that writes a Markdown report to `.artifacts/qa-e2e/`.
 
+The outbound tool trace records sanitized tool starts, including Code Mode
+wrappers and nested calls. It does not establish successful completion. QA Lab
+derives logical tool activity from correlated transcript calls and results,
+retaining call identities and wrapper lineage. Repeated executions with distinct
+identities remain separate; a Code Mode wrapper does not add another success for
+its nested tool, and a nonzero shell exit is not a successful execution. Task
+followthrough checks use this activity to prove serial reads and writes before
+the terminal reply, alongside the artifact's modification time. Scenarios that
+check the Code Mode control protocol explicitly include control activity in their
+transcript summaries.
+
 ## Config
 
 ```json

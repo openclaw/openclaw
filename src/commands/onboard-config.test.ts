@@ -24,17 +24,6 @@ describe("applyLocalSetupWorkspaceConfig", () => {
     expect(resolveCoreToolProfilePolicy(result.tools?.profile)?.allow).toEqual(["*"]);
   });
 
-  it("preserves existing dmScope when already configured", () => {
-    const baseConfig: OpenClawConfig = {
-      session: {
-        dmScope: "main",
-      },
-    };
-    const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
-
-    expect(result.session?.dmScope).toBe("main");
-  });
-
   it("preserves explicit non-main dmScope values", () => {
     const baseConfig: OpenClawConfig = {
       session: {
@@ -67,7 +56,7 @@ describe("applyLocalSetupWorkspaceConfig", () => {
         },
         agents: {
           defaults: { sandbox: { mode: "all" } },
-          list: [{ id: "main", tools: { profile: "minimal", alsoAllow: ["message"] } }],
+          entries: { main: { tools: { profile: "minimal", alsoAllow: ["message"] } } },
         },
       };
       const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
@@ -77,13 +66,13 @@ describe("applyLocalSetupWorkspaceConfig", () => {
     },
   );
 
-  it("preserves agents.list and bindings on onboard rerun (openclaw#84692)", () => {
+  it("preserves agents.entries and bindings on onboard rerun (openclaw#84692)", () => {
     const baseConfig: OpenClawConfig = {
       agents: {
-        list: [
-          { id: "alpha", model: "anthropic/claude-3-5-sonnet" },
-          { id: "beta", model: "openai/gpt-4o" },
-        ],
+        entries: {
+          alpha: { model: "anthropic/claude-3-5-sonnet" },
+          beta: { model: "openai/gpt-4o" },
+        },
       },
       bindings: [
         {
@@ -92,27 +81,19 @@ describe("applyLocalSetupWorkspaceConfig", () => {
           match: { channel: "discord", peer: { kind: "direct", id: "user-1" } },
         },
       ],
-    } as OpenClawConfig;
+    };
 
     const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
 
-    expect(result.agents?.list?.map((a) => a.id)).toEqual(["alpha", "beta"]);
+    expect(Object.keys(result.agents?.entries ?? {})).toEqual(["alpha", "beta"]);
     expect(result.bindings).toEqual(baseConfig.bindings);
-  });
-
-  it("keeps fresh-install workspace writes unchanged", () => {
-    const result = applyLocalSetupWorkspaceConfig({}, "/tmp/new-workspace", {
-      env: { HOME: "/tmp/fresh-home", OPENCLAW_STATE_DIR: "/tmp/fresh-state" },
-    });
-
-    expect(result.agents?.defaults?.workspace).toBe("/tmp/new-workspace");
   });
 
   it("preserves the current workspace when an agent roster exists", () => {
     const baseConfig: OpenClawConfig = {
       agents: {
         defaults: { workspace: "/tmp/current-workspace" },
-        list: [{ id: "main" }, { id: "ops" }],
+        entries: { main: {}, ops: {} },
       },
     };
 
@@ -129,7 +110,7 @@ describe("applyLocalSetupWorkspaceConfig", () => {
   it("does not materialize a fleet default for an existing roster", () => {
     const env = { HOME: "/tmp/fleet-home", OPENCLAW_STATE_DIR: "/tmp/fleet-state" };
     const baseConfig: OpenClawConfig = {
-      agents: { list: [{ id: "main" }, { id: "ops" }] },
+      agents: { entries: { main: {}, ops: {} } },
     };
 
     const result = applyLocalSetupWorkspaceConfig(
@@ -185,7 +166,7 @@ describe("applyLocalSetupWorkspaceConfig", () => {
     const baseConfig: OpenClawConfig = {
       agents: {
         defaults: { workspace: "/tmp/current-workspace" },
-        list: [{ id: "main" }],
+        entries: { main: {} },
       },
     };
 

@@ -63,10 +63,6 @@ type IdentityChange =
   | { kind: "avatar"; file: File }
   | { kind: "git-coauthor"; enabled: boolean };
 
-function toIdentityErrorMessage(error: unknown): string {
-  return formatUiError(error, t("profilePage.identity.profileUnavailable"));
-}
-
 export class ProfilePage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: false })
   private context!: ApplicationContext;
@@ -89,10 +85,7 @@ export class ProfilePage extends OpenClawLightDomElement {
   private subscriptions: Array<() => void> = [];
   constructor() {
     super();
-    new SubscriptionsController(this).watch(
-      () => this.context?.config,
-      (config, notify) => config.subscribe(notify),
-    );
+    new SubscriptionsController(this).watchStore(() => this.context?.config);
   }
   override connectedCallback() {
     super.connectedCallback();
@@ -216,7 +209,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       }
     } catch (error) {
       if (requestId === this.identityRequestId) {
-        this.identityError = toIdentityErrorMessage(error);
+        this.identityError = formatUiError(error, t("profilePage.identity.profileUnavailable"));
       }
     } finally {
       if (requestId === this.identityRequestId) {
@@ -319,7 +312,7 @@ export class ProfilePage extends OpenClawLightDomElement {
                     ? "profilePage.identity.avatarErrors.sourceTooLarge"
                     : "profilePage.identity.avatarErrors.invalid",
               )
-            : toIdentityErrorMessage(error);
+            : formatUiError(error, t("profilePage.identity.profileUnavailable"));
       }
       return;
     } finally {
@@ -437,20 +430,6 @@ export class ProfilePage extends OpenClawLightDomElement {
     </div>`;
   }
 
-  private renderModelAccounts() {
-    return html`<openclaw-model-accounts
-      .identityId=${this.selfUser?.id ?? null}
-      .profileId=${this.ownProfile?.id ?? null}
-      .personLabel=${
-        this.ownProfile
-          ? this.ownProfile.displayName?.trim() ||
-            this.ownProfile.emails[0] ||
-            t("profilePage.modelAccounts.currentPerson")
-          : null
-      }
-    ></openclaw-model-accounts>`;
-  }
-
   private refreshManually() {
     if (this.connected && !this.identityBusy && !this.identityLoading) {
       if (this.client) {
@@ -496,7 +475,17 @@ export class ProfilePage extends OpenClawLightDomElement {
       ${
         connected
           ? html`
-              ${this.renderModelAccounts()}
+              <openclaw-model-accounts
+                .identityId=${this.selfUser?.id ?? null}
+                .profileId=${this.ownProfile?.id ?? null}
+                .personLabel=${
+                  this.ownProfile
+                    ? this.ownProfile.displayName?.trim() ||
+                      this.ownProfile.emails[0] ||
+                      t("profilePage.modelAccounts.currentPerson")
+                    : null
+                }
+              ></openclaw-model-accounts>
               <openclaw-github-connections></openclaw-github-connections>
               ${renderSettingsGroup(
                 renderSettingsNavRow({

@@ -130,31 +130,6 @@ function resolveThinkingCatalogEntry(
   );
 }
 
-function resolveThinkingPolicyContext(params: ThinkingProfileParams) {
-  const providerRaw = normalizeOptionalString(params.provider);
-  const modelId = normalizeOptionalString(params.model) ?? "";
-  const modelKey = normalizeOptionalLowercaseString(params.model) ?? "";
-  const candidate = resolveThinkingCatalogEntry(params);
-  const thinkingPolicyProvider = normalizeOptionalString(candidate?.thinkingPolicyProvider);
-  // Prepared catalogs keep the logical model identity but record the concrete
-  // runtime policy owner so every session and directive surface stays aligned.
-  const normalizedProvider = providerRaw
-    ? normalizeProviderId(thinkingPolicyProvider ?? providerRaw)
-    : "";
-  return {
-    catalogEntry: candidate,
-    normalizedProvider,
-    modelId,
-    modelKey,
-    api: candidate?.api,
-    baseUrl: candidate?.baseUrl,
-    reasoning: params.configuredReasoning ?? candidate?.configuredReasoning ?? candidate?.reasoning,
-    thinkingLevelMap: candidate?.thinkingLevelMap,
-    ...(candidate?.params ? { params: candidate.params } : {}),
-    compat: candidate?.compat,
-  };
-}
-
 function normalizeProfileLevel(
   level: ProviderThinkingProfile["levels"][number],
 ): RankedThinkingLevelOption | undefined {
@@ -200,21 +175,14 @@ function normalizeThinkingProfile(
   return normalized;
 }
 
-function buildBaseThinkingProfile(defaultLevel?: ThinkLevel | null): ResolvedThinkingProfile {
+function buildBaseThinkingProfile(): ResolvedThinkingProfile {
   return {
     levels: BASE_THINKING_LEVELS.map((id) => ({
       id,
       label: id,
       rank: THINKING_LEVEL_RANKS[id],
     })),
-    defaultLevel,
-  };
-}
-
-function buildOffOnlyThinkingProfile(): ResolvedThinkingProfile {
-  return {
-    levels: [{ id: "off", label: "off", rank: THINKING_LEVEL_RANKS.off }],
-    defaultLevel: "off",
+    defaultLevel: undefined,
   };
 }
 
@@ -251,25 +219,30 @@ function appendCatalogAdvancedThinkingLevels(
 
 /** Resolve only provider-owned effort choices, before adding harness modes. */
 function resolveModelThinkingProfile(params: ThinkingProfileParams): ResolvedThinkingProfile {
-  const context = resolveThinkingPolicyContext(params);
-  if (!context.normalizedProvider) {
+  const providerRaw = normalizeOptionalString(params.provider);
+  const candidate = resolveThinkingCatalogEntry(params);
+  // Prepared catalogs retain the logical model identity and name its runtime policy owner.
+  const provider = providerRaw
+    ? normalizeProviderId(normalizeOptionalString(candidate?.thinkingPolicyProvider) ?? providerRaw)
+    : "";
+  if (!provider) {
     return buildBaseThinkingProfile();
   }
-  const providerContext = {
-    provider: context.normalizedProvider,
-    modelId: context.modelId,
+  const context = {
+    provider,
+    modelId: normalizeOptionalString(params.model) ?? "",
     agentRuntime: params.agentRuntime,
-    api: context.api,
-    baseUrl: context.baseUrl,
-    reasoning: context.reasoning,
-    thinkingLevelMap: context.thinkingLevelMap,
-    ...(context.params ? { params: context.params } : {}),
-    compat: context.compat,
+    api: candidate?.api,
+    baseUrl: candidate?.baseUrl,
+    reasoning: params.configuredReasoning ?? candidate?.configuredReasoning ?? candidate?.reasoning,
+    thinkingLevelMap: candidate?.thinkingLevelMap,
+    ...(candidate?.params ? { params: candidate.params } : {}),
+    compat: candidate?.compat,
   };
   const providerProfileParams = {
-    provider: context.normalizedProvider,
-    context: providerContext,
-    ...(context.catalogEntry ? { catalogEntry: context.catalogEntry } : {}),
+    provider,
+    context,
+    ...(candidate ? { catalogEntry: candidate } : {}),
   };
   const providerProfile =
     typeof params.providerPolicySource === "object"
@@ -307,7 +280,10 @@ function resolveModelThinkingProfile(params: ThinkingProfileParams): ResolvedThi
     return normalizeThinkingProfile(pluginProfile, context.thinkingLevelMap, mappedLevels);
   }
   if (context.reasoning === false) {
-    return buildOffOnlyThinkingProfile();
+    return {
+      levels: [{ id: "off", label: "off", rank: THINKING_LEVEL_RANKS.off }],
+      defaultLevel: "off",
+    };
   }
 
   const profile = buildBaseThinkingProfile();
@@ -390,8 +366,8 @@ export function listThinkingLevelLabels(
   catalog?: ThinkingCatalogEntry[],
   agentRuntime?: string | null,
 ): string[] {
-  return listThinkingLevelOptions(provider, model, catalog, agentRuntime).map(
-    (level) => level.label,
+  return resolveThinkingProfile({ provider, model, catalog, agentRuntime }).levels.map(
+    ({ label }) => label,
   );
 }
 
@@ -414,18 +390,12 @@ export function resolveThinkingDefaultForModel(
     model: string;
   },
 ): ThinkLevel {
-  return resolveThinkingSelectionForModel({
-    ...params,
-    agentRuntime: params.agentRuntime,
-  }).requestedLevel;
+  return resolveThinkingSelectionForModel(params).requestedLevel;
 }
 
 /** Resolve intent, support, and execution level from one selected model profile. */
 export function resolveThinkingSelectionForModel(
-  params: ThinkingProfileParams & {
-    level?: ThinkLevel;
-    agentRuntime: string | null | undefined;
-  },
+  params: ThinkingProfileParams & { level?: ThinkLevel },
 ): { requestedLevel: ThinkLevel; level: ThinkLevel; supported: boolean } {
   const candidate = resolveThinkingCatalogEntry(params);
   const profile = resolveThinkingProfile({
@@ -450,10 +420,7 @@ export function isThinkingLevelSupported(
     level: ThinkLevel;
   },
 ): boolean {
-  return resolveThinkingSelectionForModel({
-    ...params,
-    agentRuntime: params.agentRuntime,
-  }).supported;
+  return resolveThinkingSelectionForModel(params).supported;
 }
 
 export function resolveSupportedThinkingLevelFromProfile(
@@ -482,5 +449,5 @@ export function resolveSupportedThinkingLevelFromProfile(
 export function resolveSupportedThinkingLevel(
   params: ThinkingProfileParams & { level: ThinkLevel },
 ): ThinkLevel {
-  return resolveThinkingSelectionForModel({ ...params, agentRuntime: params.agentRuntime }).level;
+  return resolveThinkingSelectionForModel(params).level;
 }

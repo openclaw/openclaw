@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveContextTokensForModelFromCache } from "../agents/context-resolution.js";
 import { VERSION } from "../version.js";
 import { createConfigIO } from "./io.factory.js";
 import type { ConfigIoFactoryOptions } from "./io.types.js";
@@ -41,7 +40,7 @@ async function fixture(authored: unknown, extra: ConfigIoFactoryOptions = {}) {
 }
 
 describe("config io compatibility", () => {
-  it("loads retired context-budget shapes and surfaces migration guidance without rewriting", async () => {
+  it("leaves retired context-budget shapes for Doctor instead of normalizing runtime reads", async () => {
     const authored = {
       models: {
         providers: {
@@ -57,45 +56,18 @@ describe("config io compatibility", () => {
         entries: { ops: { contextTokens: 32_000 } },
       },
     };
-    const { io, configPath, logger } = await fixture(authored, { pluginValidation: "core-only" });
+    const { io, configPath } = await fixture(authored, { pluginValidation: "core-only" });
     const raw = await fs.readFile(configPath, "utf-8");
-    const config = io.loadConfig();
+    expect(() => io.loadConfig()).toThrow(/contextTokens|contextWindow/);
     const snapshot = await io.readConfigFileSnapshot();
-    const provider = config.models?.providers?.openai;
-    const resolvedBudget = resolveContextTokensForModelFromCache({
-      cfg: config,
-      provider: "openai",
-      model: "gpt-5.4",
-    });
-
-    expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
-    expect(provider).not.toHaveProperty("contextTokens");
-    expect(provider).not.toHaveProperty("contextWindow");
-    expect(provider?.models?.[0]).toMatchObject({
-      contextTokens: 64_000,
-      contextWindow: 128_000,
-    });
-    expect(config.agents?.defaults).not.toHaveProperty("contextTokens");
-    expect(config.agents?.entries?.ops).not.toHaveProperty("contextTokens");
-    expect(resolvedBudget).toBe(64_000);
+    expect(snapshot.valid).toBe(false);
+    expect(snapshot.sourceConfig).toMatchObject(authored);
     expect(snapshot.sourceConfigBeforeMigrations).toMatchObject(authored);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("models.providers.<provider>.models[].contextTokens"),
-    );
-    expect(snapshot.warnings).toContainEqual({
-      path: "agents.defaults.contextTokens",
-      message: "Removed agents.defaults.contextTokens.",
-    });
-    expect(snapshot.warnings).toContainEqual({
-      path: "agents.defaults.contextTokens",
-      message: expect.stringContaining("models.providers.<provider>.models[].contextTokens"),
-    });
-    expect(snapshot.warnings).not.toContainEqual(expect.objectContaining({ path: "" }));
     await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(raw);
   });
 
   it("logs each warning payload once until warnings clear", async () => {
-    const { logger, options, write } = await fixture({});
+    const { io, logger, options, write } = await fixture({});
     const load = () => createConfigIO(options).loadConfig();
     const writeRemovedPlugin = (pluginId: string) =>
       write({ plugins: { entries: { [pluginId]: { enabled: false } } } });
@@ -132,7 +104,8 @@ describe("config io compatibility", () => {
     expect(logger.warn).toHaveBeenCalledTimes(3);
 
     await write(null);
-    expect(load).toThrow();
+    expect(load).toThrow(expect.objectContaining({ code: "INVALID_CONFIG" }));
+    expect(await io.readConfigFileSnapshot()).toMatchObject({ exists: true, valid: false });
     await writeRemovedPlugin("google-gemini-cli-auth");
     load();
     expect(logger.warn).toHaveBeenCalledTimes(3);
@@ -170,9 +143,8 @@ describe("config io compatibility", () => {
         },
       },
       agents: {
-        list: [
-          {
-            id: "ops",
+        entries: {
+          ops: {
             tools: {
               exec: {
                 safeBinTrustedDirs: [" /ops/bin ", "/ops/bin"],
@@ -184,7 +156,7 @@ describe("config io compatibility", () => {
               },
             },
           },
-        ],
+        },
       },
     };
     normalizeExecSafeBinProfilesInConfig(cfg);
@@ -194,11 +166,11 @@ describe("config io compatibility", () => {
       },
     });
     expect(cfg.tools?.exec?.safeBinTrustedDirs).toEqual(["/custom/bin", "/agent/bin"]);
-    expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinProfiles).toEqual({
+    expect(cfg.agents?.entries?.ops?.tools?.exec?.safeBinProfiles).toEqual({
       custom: {
         deniedFlags: ["-f"],
       },
     });
-    expect(cfg.agents?.list?.[0]?.tools?.exec?.safeBinTrustedDirs).toEqual(["/ops/bin"]);
+    expect(cfg.agents?.entries?.ops?.tools?.exec?.safeBinTrustedDirs).toEqual(["/ops/bin"]);
   });
 });

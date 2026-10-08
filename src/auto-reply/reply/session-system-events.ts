@@ -10,8 +10,11 @@ import {
   formatZonedTimestamp,
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
-import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
-import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
+import { isExecCompletionSystemEvent } from "../../infra/heartbeat-events-filter.js";
+import {
+  isSystemEventStoreCurrent,
+  resolveSystemEventQueueKey,
+} from "../../infra/system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
   peekSystemEventEntries,
@@ -31,14 +34,13 @@ function compactSystemEvent(event: SystemEvent): string | null {
     return trimmed;
   }
   const lower = normalizeLowercaseStringOrEmpty(trimmed);
-  if (lower.includes("reason periodic")) {
-    return null;
-  }
   // Keep retired heartbeat prompts out of replayed legacy system events.
-  if (lower.startsWith("read heartbeat.md")) {
-    return null;
-  }
-  if (lower.includes("heartbeat poll") || lower.includes("heartbeat wake")) {
+  if (
+    lower.includes("reason periodic") ||
+    lower.startsWith("read heartbeat.md") ||
+    lower.includes("heartbeat poll") ||
+    lower.includes("heartbeat wake")
+  ) {
     return null;
   }
   if (trimmed.startsWith("Node:")) {
@@ -78,11 +80,11 @@ function formatSystemEventTimestamp(ts: number, cfg: OpenClawConfig) {
   if (zone.mode === "utc") {
     return formatUtcTimestamp(date, { displaySeconds: true });
   }
-  if (zone.mode === "local") {
-    return formatZonedTimestamp(date, { displaySeconds: true }) ?? "unknown-time";
-  }
   return (
-    formatZonedTimestamp(date, { timeZone: zone.timeZone, displaySeconds: true }) ?? "unknown-time"
+    formatZonedTimestamp(date, {
+      ...(zone.mode === "iana" ? { timeZone: zone.timeZone } : {}),
+      displaySeconds: true,
+    }) ?? "unknown-time"
   );
 }
 
@@ -94,6 +96,8 @@ export async function drainFormattedSystemEvents(params: {
   isMainSession: boolean;
   isNewSession: boolean;
   events?: readonly SystemEvent[];
+  deferredEventIds?: readonly string[];
+  onEventsAdmitted?: (events: readonly SystemEvent[]) => void;
 }): Promise<string | undefined> {
   const systemLines: string[] = [];
   const queueKey = resolveSystemEventQueueKey(params.sessionKey, params.agentId);
@@ -102,18 +106,27 @@ export async function drainFormattedSystemEvents(params: {
   const queued = consumeSelectedSystemEventEntries(
     queueKey,
     (params.events ?? peekSystemEventEntries(queueKey)).filter(
-      (event) => !isExecCompletionEvent(event.text),
+      (event) => !isExecCompletionSystemEvent(event),
     ),
+    { deferredEventIds: params.deferredEventIds },
   );
-  const sessionStateTargets = queued
-    .map((event) =>
-      event.contextKey ? decodeSessionStateNoticeContextKey(event.contextKey) : undefined,
-    )
-    .filter((target): target is string => target !== undefined);
-  if (sessionStateTargets.length > 0) {
-    acknowledgeSessionStateNotices(params.sessionKey, sessionStateTargets);
+  params.onEventsAdmitted?.(queued);
+  const sessionStateNotices = queued.flatMap((event) => {
+    const targetSessionKey = event.contextKey
+      ? decodeSessionStateNoticeContextKey(event.contextKey)
+      : undefined;
+    return targetSessionKey === undefined
+      ? []
+      : [{ targetSessionKey, watcherStorePath: event.sessionStorePath ?? null }];
+  });
+  if (sessionStateNotices.length > 0) {
+    await acknowledgeSessionStateNotices(params.sessionKey, sessionStateNotices);
   }
   for (const event of queued) {
+    // A same-store resolver handoff does not retire already-consumed events.
+    if (!isSystemEventStoreCurrent(params.sessionKey, event.sessionStorePath, params.agentId)) {
+      continue;
+    }
     const compacted = compactSystemEvent(event);
     if (!compacted) {
       continue;

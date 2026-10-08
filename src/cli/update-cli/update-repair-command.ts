@@ -4,6 +4,7 @@ import {
 } from "../../config/config.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import { readPackageVersion } from "../../infra/package-json.js";
+import { settlePendingPackageActivation } from "../../infra/package-update-activation.js";
 import { tryProcessCwd } from "../../infra/safe-cwd.js";
 import {
   normalizeUpdateChannel,
@@ -12,6 +13,9 @@ import {
 import { compareSemverStrings, resolveNpmChannelTag } from "../../infra/update-check.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
+import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
+import { prepareManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
 import {
   inspectUpdateRepairDriverAdmission,
   inspectNewerRecoveryHistory,
@@ -20,6 +24,7 @@ import {
 } from "../../infra/update-run-activity.js";
 import {
   acknowledgeAbandonedUpdateRun,
+  createUpdateRun,
   listUpdateRuns,
   reconcileAbandonedUpdateRunsAsync,
   reconcilePackageOwnerRefusal,
@@ -41,6 +46,8 @@ import {
   resolveGatewayRestartProbeContext,
   waitForGatewayHttpReadiness,
 } from "../daemon-cli/restart-health-probe.js";
+import { hasCliProcessScope } from "../runtime-cleanup-scope.js";
+import { refuseHostOwnedUpdate } from "./host-owned.js";
 import {
   parseUpdateTimeoutMs,
   resolveUpdateRoot,
@@ -48,10 +55,16 @@ import {
   type UpdateFinalizeOptions,
 } from "./shared.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
+import { refuseImmutableUpdateActivation } from "./update-command-immutable.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 
 /** Public repair can clear a stale ledger without entering post-core maintenance. */
 export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<void> {
+  // Recovery refusal precedes discovery; later mutation checks still revalidate.
+  await assertUpdateRecoveryAdmission({ env: process.env });
+  const discoveredRoot = await resolveUpdateRoot();
+  await refuseHostOwnedUpdate(discoveredRoot, opts);
+  await refuseImmutableUpdateActivation(discoveredRoot, opts);
   const timeoutMs = parseUpdateTimeoutMs(opts.timeout);
   const env = resolveServiceRefreshEnv(process.env, tryProcessCwd());
   const options = { env, busyTimeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS };
@@ -67,6 +80,43 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
   if (admission.kind === "conflict") {
     throw new Error(admission.message);
   }
+  if (opts.channel === undefined || normalizeUpdateChannel(opts.channel)) {
+    const settled = await settlePendingPackageActivation(resolveUpdateInstallRoot(discoveredRoot));
+    if (settled) {
+      defaultRuntime.error(
+        `Warning: previous package update operation ${settled.operationId} closed as ${settled.reason}. ${
+          settled.retained
+            ? `Recovery evidence retained at ${settled.retained}.`
+            : "The original package and launchers remain unchanged."
+        }${settled.detail ? ` ${settled.detail}` : ""}`,
+      );
+      if (settled.detail) {
+        // The operation UUID identifies this repair receipt, not the original failed run.
+        // Replaying it after interrupted reporting preserves the original update outcome.
+        createUpdateRun(
+          {
+            runId: settled.operationId,
+            trigger: "cli",
+            settlement: {
+              reason: settled.reason,
+              detail: `${settled.detail} Operation ${settled.operationId}; evidence retained at ${settled.retained}.`,
+            },
+          },
+          options,
+        );
+      }
+    }
+  }
+  using handoff =
+    hasCliProcessScope() &&
+    !inheritedRunId &&
+    !env.OPENCLAW_UPDATE_RUN_HANDOFF &&
+    !env[POST_CORE_UPDATE_ENV] &&
+    (opts.channel === undefined || normalizeUpdateChannel(opts.channel))
+      ? await (
+          await prepareManagedHandoffLeaseStore()
+        ).prepareRepair(await resolveUpdateRoot(), env, timeoutMs)
+      : null;
   // Capture Doctor-visible history before finalization admits its own newer run.
   // Terminal age limits the shortcut below, not successful repair acknowledgment.
   const recentRuns = listUpdateRuns({ limit: 100 }, options);
@@ -76,16 +126,16 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
   if (admission.kind === "continuation") {
     const continuation = admission.run;
     recordUpdateRunRepairContinuation(continuation.runId, inheritedRunId, options);
-    await updateFinalizeCommand(
+    return await updateFinalizeCommand(
       opts,
       [...activeRuns, ...historicalRuns]
         .filter((run) => run.runId !== continuation.runId)
         .map((run) => run.runId),
     );
-    return;
   }
   const lastRun = recentRuns[0];
   if (
+    !handoff &&
     !activeRuns.length &&
     !historicalRuns.length &&
     opts.channel === undefined &&
@@ -142,6 +192,7 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
   ];
 
   if (
+    handoff ||
     opts.channel !== undefined ||
     opts.acceptCapabilities ||
     recoverySinceMs === undefined ||
@@ -150,14 +201,12 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
     history.postCoreRuns.length > 0 ||
     history.incomplete
   ) {
-    await updateFinalizeCommand(opts, recoveryRunIds);
-    return;
+    return await updateFinalizeCommand(opts, recoveryRunIds, handoff ?? undefined);
   }
 
   const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
   if (!snapshot.valid) {
-    await updateFinalizeCommand(opts, recoveryRunIds);
-    return;
+    return await updateFinalizeCommand(opts, recoveryRunIds);
   }
   const context = await resolveGatewayRestartProbeContext(env);
   const port = resolveGatewayPort(context.config, env);
@@ -187,8 +236,7 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
     http.healthz !== 200 ||
     http.readyz !== 200
   ) {
-    await updateFinalizeCommand(opts, recoveryRunIds);
-    return;
+    return await updateFinalizeCommand(opts, recoveryRunIds);
   }
 
   // Health probes await network I/O. Recheck current rows before the ledger's

@@ -39,7 +39,7 @@ export function registerPluginIncludeReferenceRepairTest({
           entries: {
             old: {
               enabled: true,
-              config: { token: "${OPENCLAW_TEST_PLUGIN_TOKEN}" },
+              config: { token: "${OPENCLAW_TEST_PLUGIN_TOKEN}", optional: "${OPTIONAL_TOKEN}" },
             },
           },
         },
@@ -52,7 +52,7 @@ export function registerPluginIncludeReferenceRepairTest({
     await fs.writeFile(previousBackupPath, "previous backup", { mode: 0o644 });
     const oldEntry = {
       enabled: true,
-      config: { token: "plugin-token-runtime" },
+      config: { token: "plugin-token-runtime", optional: "${OPTIONAL_TOKEN}" },
     };
     const snapshot: ConfigFileSnapshot = {
       ...createSnapshot({
@@ -84,7 +84,10 @@ export function registerPluginIncludeReferenceRepairTest({
     snapshot.authoredConfig = {
       plugins: {
         entries: {
-          old: { ...oldEntry, config: { token: "${OPENCLAW_TEST_PLUGIN_TOKEN}" } },
+          old: {
+            ...oldEntry,
+            config: { token: "${OPENCLAW_TEST_PLUGIN_TOKEN}", optional: "${OPTIONAL_TOKEN}" },
+          },
         },
       },
     };
@@ -178,10 +181,13 @@ export function registerPluginIncludeReferenceRepairTest({
       expect((await fs.stat(`${pluginsPath}.bak.1`)).mode & 0o777).toBe(0o600);
     }
     const persistedPlugins = JSON.parse(await fs.readFile(pluginsPath, "utf-8")) as {
-      entries?: Record<string, { config?: { token?: string } }>;
+      entries?: Record<string, { config?: { token?: string; optional?: string } }>;
       installs?: Record<string, unknown>;
     };
-    expect(persistedPlugins.entries?.old?.config?.token).toBe("${OPENCLAW_TEST_PLUGIN_TOKEN}");
+    expect(persistedPlugins.entries?.old?.config).toEqual({
+      token: "${OPENCLAW_TEST_PLUGIN_TOKEN}",
+      optional: "${OPTIONAL_TOKEN}",
+    });
     expect(persistedPlugins.entries?.demo).toEqual({ enabled: true });
     expect(persistedPlugins.installs).toBeUndefined();
   });

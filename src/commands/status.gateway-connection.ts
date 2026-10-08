@@ -6,7 +6,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { NodeOnlyGatewayInfo } from "./status.node-mode.js";
 import type { StatusScanOverviewResult } from "./status.scan-overview.ts";
 
-/** Logs multi-line gateway connection details with the standard heading. */
 export function logGatewayConnectionDetails(params: {
   runtime: Pick<RuntimeEnv, "log">;
   info: (value: string) => string;
@@ -42,7 +41,7 @@ export function resolveStatusAllConnectionDetails(params: {
     "Gateway target: (missing gateway.remote.url)",
     `Config: ${params.configPath}`,
     `Bind: ${params.bindMode ?? "loopback"}`,
-    `Local fallback (used for probes): ${projectGatewayUrlForDiagnostics(params.gatewayConnection.url)}`,
+    `Local fallback (used for checks): ${projectGatewayUrlForDiagnostics(params.gatewayConnection.url)}`,
     "Fix: set gateway.remote.url, or set gateway.mode=local.",
   ].join("\n");
 }

@@ -2,12 +2,12 @@ import { createCipheriv, createDecipheriv, hkdfSync, randomBytes } from "node:cr
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { CONTROL_UI_PUBLIC_SESSION_SHARE_TOKEN_MAX_LENGTH } from "@openclaw/session-url-contract/public-share";
-import { resolveDeviceIdentityStore } from "../infra/device-identity-store.js";
 import {
-  loadDeviceIdentityIfPresent,
-  loadOrCreateProcessDeviceIdentity,
-  type DeviceIdentity,
-} from "../infra/device-identity.js";
+  loadDeviceIdentityIfPresentAsync,
+  loadOrCreateProcessDeviceIdentityAsync,
+} from "../infra/device-identity-async.js";
+import { resolveDeviceIdentityStore } from "../infra/device-identity-store.js";
+import type { DeviceIdentity } from "../infra/device-identity.js";
 import { deriveCanonicalEd25519PrivateKeyRaw } from "../infra/ed25519-signature.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
@@ -49,22 +49,6 @@ function hasExactKeys(value: object, keys: readonly string[]): boolean {
   return Object.keys(value).toSorted().join("\0") === keys.join("\0");
 }
 
-function hasInvalidSessionIdCharacter(value: string): boolean {
-  for (const character of value) {
-    const codePoint = character.codePointAt(0) ?? 0;
-    if (
-      character === "/" ||
-      character === "\\" ||
-      character.trim() === "" ||
-      codePoint <= 0x1f ||
-      (codePoint >= 0x7f && codePoint <= 0x9f)
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function isValidLocator(value: unknown): value is PublicSessionShareLocator {
   if (!isRecord(value)) {
     return false;
@@ -79,7 +63,7 @@ function isValidLocator(value: unknown): value is PublicSessionShareLocator {
     typeof value.sessionId === "string" &&
     value.sessionId.length > 0 &&
     value.sessionId.length <= 512 &&
-    !hasInvalidSessionIdCharacter(value.sessionId) &&
+    !/[/\\\s\p{Cc}]/u.test(value.sessionId) &&
     typeof value.shareId === "string" &&
     /^[a-f0-9]{48}$/u.test(value.shareId)
   );
@@ -202,6 +186,10 @@ const codecsByDatabasePath = new Map<string, PublicSessionShareTokenCodec>();
 const missingIdentityDatabasePaths = new Map<string, true>();
 
 function cacheCodec(databasePath: string, identity: DeviceIdentity): PublicSessionShareTokenCodec {
+  const cached = codecsByDatabasePath.get(databasePath);
+  if (cached) {
+    return cached;
+  }
   const codec = createPublicSessionShareTokenCodec(identity);
   pruneMapToMaxSize(codecsByDatabasePath, PUBLIC_SESSION_TOKEN_CODEC_CACHE_LIMIT - 1);
   codecsByDatabasePath.set(databasePath, codec);
@@ -212,7 +200,7 @@ function cacheCodec(databasePath: string, identity: DeviceIdentity): PublicSessi
 function resolveProcessCodec(params: {
   create: boolean;
   env?: NodeJS.ProcessEnv;
-}): PublicSessionShareTokenCodec | null {
+}): PublicSessionShareTokenCodec | null | Promise<PublicSessionShareTokenCodec | null> {
   const options = params.env ? { env: params.env } : {};
   const { databasePath } = resolveDeviceIdentityStore(options);
   const cached = codecsByDatabasePath.get(databasePath);
@@ -223,39 +211,56 @@ function resolveProcessCodec(params: {
     return null;
   }
   const identity = params.create
-    ? loadOrCreateProcessDeviceIdentity(options)
-    : loadDeviceIdentityIfPresent(options);
-  if (!identity) {
-    pruneMapToMaxSize(missingIdentityDatabasePaths, PUBLIC_SESSION_TOKEN_CODEC_CACHE_LIMIT - 1);
-    missingIdentityDatabasePaths.set(databasePath, true);
-    return null;
-  }
-  return cacheCodec(databasePath, identity);
+    ? loadOrCreateProcessDeviceIdentityAsync({ ...options, path: databasePath })
+    : loadDeviceIdentityIfPresentAsync({ ...options, path: databasePath });
+  return identity.then((loaded) => {
+    if (!loaded) {
+      // Creation can finish while the read-only identity lookup is pending.
+      const created = codecsByDatabasePath.get(databasePath);
+      if (created) {
+        return created;
+      }
+      pruneMapToMaxSize(missingIdentityDatabasePaths, PUBLIC_SESSION_TOKEN_CODEC_CACHE_LIMIT - 1);
+      missingIdentityDatabasePaths.set(databasePath, true);
+      return null;
+    }
+    return cacheCodec(databasePath, loaded);
+  });
 }
 
-/** Loads the process codec before a session-store commit that will publish a grant. */
-export function loadPublicSessionShareTokenCodec(
-  options: { env?: NodeJS.ProcessEnv } = {},
+function requirePublicSessionShareTokenCodec(
+  codec: PublicSessionShareTokenCodec | null,
 ): PublicSessionShareTokenCodec {
-  const codec = resolveProcessCodec({
-    create: true,
-    ...(options.env ? { env: options.env } : {}),
-  });
   if (!codec) {
     throw new Error("public session token identity is unavailable");
   }
   return codec;
 }
 
+/** Warm codecs remain synchronous so a prepared session row needs no new read phase. */
+export function loadPublicSessionShareTokenCodec(
+  options: { env?: NodeJS.ProcessEnv } = {},
+): PublicSessionShareTokenCodec | Promise<PublicSessionShareTokenCodec> {
+  const codec = resolveProcessCodec({
+    create: true,
+    ...(options.env ? { env: options.env } : {}),
+  });
+  return codec instanceof Promise
+    ? codec.then(requirePublicSessionShareTokenCodec)
+    : requirePublicSessionShareTokenCodec(codec);
+}
+
 /** Resolves an opaque locator without letting anonymous traffic create durable identity state. */
-export function resolvePublicSessionShareToken(
+export async function resolvePublicSessionShareToken(
   token: string,
   options: { env?: NodeJS.ProcessEnv } = {},
-): PublicSessionShareLocator | null {
+): Promise<PublicSessionShareLocator | null> {
   return (
-    resolveProcessCodec({
-      create: false,
-      ...(options.env ? { env: options.env } : {}),
-    })?.resolve(token) ?? null
+    (
+      await resolveProcessCodec({
+        create: false,
+        ...(options.env ? { env: options.env } : {}),
+      })
+    )?.resolve(token) ?? null
   );
 }

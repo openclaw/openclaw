@@ -63,7 +63,7 @@ function getTimestampParts(date: Date, timeZone?: string) {
       minute: "2-digit",
       second: "2-digit",
       hour12: false,
-      fractionalSecondDigits: 3 as 1 | 2 | 3,
+      fractionalSecondDigits: 3,
       timeZoneName: "longOffset",
     });
     timestampFormatterCache.set(effectiveTimeZone, fmt);

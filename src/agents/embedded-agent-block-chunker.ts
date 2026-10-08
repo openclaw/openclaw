@@ -1,7 +1,7 @@
-/**
- * Splits streamed embedded-agent replies into Markdown-safe message chunks.
- */
-
+import {
+  findGraphemeChunkEnd,
+  firstGraphemeClusterLength,
+} from "@openclaw/normalization-core/grapheme";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { FenceSpan } from "../../packages/markdown-core/src/fences.js";
 import {
@@ -52,6 +52,8 @@ export type BlockChunkMetadata = {
 
 type BlockChunkDrain = {
   force: boolean;
+  /** Only for cumulative previews that replace previously emitted text. */
+  mutablePreview?: boolean;
   emit: (chunk: string, options?: BlockChunkMetadata) => void;
 };
 
@@ -65,7 +67,7 @@ function findSafeSentenceBreakIndex(
   const matches = text.matchAll(/[.!?](?=\s|$)/g);
   let sentenceIdx = -1;
   for (const match of matches) {
-    const at = match.index ?? -1;
+    const at = match.index;
     if (at < minChars) {
       continue;
     }
@@ -80,51 +82,25 @@ function findSafeSentenceBreakIndex(
   return sentenceIdx >= minChars ? sentenceIdx : -1;
 }
 
-function findSafeParagraphBreakIndex(params: {
+function findSafeLineBreakIndex(params: {
   text: string;
   unsafeSpans: readonly BreakSpan[];
   minChars: number;
   reverse: boolean;
+  separator: "\n" | "\n\n";
   offset?: number;
 }): number {
-  const { text, unsafeSpans, minChars, reverse, offset = 0 } = params;
-  let paragraphIdx = reverse ? text.lastIndexOf("\n\n") : text.indexOf("\n\n");
-  while (reverse ? paragraphIdx >= minChars : paragraphIdx !== -1) {
-    const candidates = [paragraphIdx, paragraphIdx + 1];
-    for (const candidate of candidates) {
-      if (candidate < minChars) {
-        continue;
-      }
-      if (candidate < 0 || candidate >= text.length) {
-        continue;
-      }
-      if (isSafeFenceBreak(unsafeSpans, offset + candidate)) {
+  const { text, unsafeSpans, minChars, reverse, separator, offset = 0 } = params;
+  let index = reverse ? text.lastIndexOf(separator) : text.indexOf(separator);
+  while (reverse ? index >= minChars : index !== -1) {
+    for (let candidate = index; candidate < index + separator.length; candidate++) {
+      if (candidate >= minChars && isSafeFenceBreak(unsafeSpans, offset + candidate)) {
         return candidate;
       }
     }
-    paragraphIdx = reverse
-      ? text.lastIndexOf("\n\n", paragraphIdx - 1)
-      : text.indexOf("\n\n", paragraphIdx + 2);
-  }
-  return -1;
-}
-
-function findSafeNewlineBreakIndex(params: {
-  text: string;
-  unsafeSpans: readonly BreakSpan[];
-  minChars: number;
-  reverse: boolean;
-  offset?: number;
-}): number {
-  const { text, unsafeSpans, minChars, reverse, offset = 0 } = params;
-  let newlineIdx = reverse ? text.lastIndexOf("\n") : text.indexOf("\n");
-  while (reverse ? newlineIdx >= minChars : newlineIdx !== -1) {
-    if (newlineIdx >= minChars && isSafeFenceBreak(unsafeSpans, offset + newlineIdx)) {
-      return newlineIdx;
-    }
-    newlineIdx = reverse
-      ? text.lastIndexOf("\n", newlineIdx - 1)
-      : text.indexOf("\n", newlineIdx + 1);
+    index = reverse
+      ? text.lastIndexOf(separator, index - 1)
+      : text.indexOf(separator, index + separator.length);
   }
   return -1;
 }
@@ -175,7 +151,6 @@ export class EmbeddedBlockChunker {
     this.#chunking = chunking;
   }
 
-  /** Add streamed text to the pending chunk buffer. */
   append(text: string) {
     if (!text) {
       return;
@@ -260,17 +235,14 @@ export class EmbeddedBlockChunker {
     return changed;
   }
 
-  /** Return the currently buffered text for tests and flush logic. */
   get bufferedText() {
     return this.#buffer ? `${this.#reopenPrefix}${this.#buffer}` : "";
   }
 
-  /** Return true when there is pending text to drain. */
   hasBuffered(): boolean {
     return this.#buffer.length > 0;
   }
 
-  /** Emit safe chunks according to size and Markdown fence constraints. */
   drain(params: BlockChunkDrain) {
     const sourceBreaks = this.#sourceBreaks;
     while (this.#nextSourceBreak < sourceBreaks.length) {
@@ -326,8 +298,8 @@ export class EmbeddedBlockChunker {
       this.#codeContext = "";
       return;
     }
-    const minChars = Math.max(1, Math.floor(chunking?.minChars ?? 1));
-    const maxChars = Math.max(minChars, Math.floor(chunking?.maxChars ?? Infinity));
+    const minChars = Math.max(1, Math.floor(chunking.minChars ?? 1));
+    const maxChars = Math.max(minChars, Math.floor(chunking.maxChars ?? Infinity));
     const force = params.force || availableLength >= maxChars;
     const originalSource = this.bufferedText;
     if (originalSource.length < minChars && !force) {
@@ -468,6 +440,7 @@ export class EmbeddedBlockChunker {
         force && remainingLength <= maxChars
           ? this.#pickPreferredBreakIndex(view, unsafe, chunking, false, 1, start, openFence)
           : this.#pickBreakIndex(
+              params,
               view,
               spans,
               chunking,
@@ -564,9 +537,6 @@ export class EmbeddedBlockChunker {
         ? fenceSplit.closeFenceLine
         : `\n${fenceSplit.closeFenceLine}`;
       rawChunk = `${rawChunk}${closeFence}`;
-    }
-
-    if (fenceSplit) {
       const closeFenceStart = findFenceCloseLineStart(source, fenceSplit.fence);
       if (absoluteBreakIdx === closeFenceStart) {
         // The synthetic closer already owns this boundary; replaying the source
@@ -603,29 +573,19 @@ export class EmbeddedBlockChunker {
     }
     const preference = chunking.breakPreference ?? "paragraph";
 
-    if (preference === "paragraph") {
-      const paragraphIdx = findSafeParagraphBreakIndex({
+    const separators: Array<"\n" | "\n\n"> =
+      preference === "paragraph" ? ["\n\n", "\n"] : preference === "newline" ? ["\n"] : [];
+    for (const separator of separators) {
+      const index = findSafeLineBreakIndex({
         text: buffer,
         unsafeSpans,
         minChars,
         reverse,
+        separator,
         offset,
       });
-      if (paragraphIdx !== -1) {
-        return { index: paragraphIdx };
-      }
-    }
-
-    if (preference === "paragraph" || preference === "newline") {
-      const newlineIdx = findSafeNewlineBreakIndex({
-        text: buffer,
-        unsafeSpans,
-        minChars,
-        reverse,
-        offset,
-      });
-      if (newlineIdx !== -1) {
-        return { index: newlineIdx };
+      if (index !== -1) {
+        return { index };
       }
     }
 
@@ -646,6 +606,7 @@ export class EmbeddedBlockChunker {
   }
 
   #pickBreakIndex(
+    { force, mutablePreview }: BlockChunkDrain,
     buffer: string,
     spans: BreakSpans,
     chunking: BlockReplyChunking,
@@ -698,6 +659,10 @@ export class EmbeddedBlockChunker {
       ).length;
       // An unfinished span ends at the buffer boundary without a source closer.
       const absoluteBreakIndex = offset + forcedBreakIndex;
+      const endingFence = findFenceSpanAt(spans.fences, absoluteBreakIndex - 1);
+      if (endingFence?.end === absoluteBreakIndex && endingFence !== openFence) {
+        return { index: forcedBreakIndex };
+      }
       const fence =
         findFenceSpanAt(spans.fences, absoluteBreakIndex) ??
         (openFence?.end === absoluteBreakIndex ? openFence : undefined);
@@ -726,7 +691,23 @@ export class EmbeddedBlockChunker {
           fenceSplit: { closeFenceLine, reopenFenceLine, fence },
         };
       }
-      return { index: forcedBreakIndex };
+      // Trailing clusters can gain combining marks or ZWJ continuations.
+      // Permanent replies wait for lookahead; cumulative previews can revise them.
+      const waitForBoundary = !force && !mutablePreview;
+      const graphemeSource =
+        !force && /[\uD800-\uDBFF]$/u.test(buffer) ? buffer.slice(0, -1) : buffer;
+      const maxEnd = Math.min(forcedBreakIndex, graphemeSource.length - (waitForBoundary ? 1 : 0));
+      const wholeEnd = findGraphemeChunkEnd(graphemeSource, 0, maxEnd, maxEnd, false);
+      if (waitForBoundary && wholeEnd > 0 && buffer.length === forcedBreakIndex) {
+        // Wait for lookahead instead of turning a full chunk into a shorter
+        // prefix and a trailing fragment solely to reserve its last cluster.
+        return { index: 0 };
+      }
+      return {
+        index:
+          wholeEnd ||
+          (firstGraphemeClusterLength(graphemeSource) >= forcedBreakIndex ? forcedBreakIndex : 0),
+      };
     }
 
     return { index: -1 };
@@ -754,10 +735,7 @@ function findNextParagraphBreak(
   re.lastIndex = startIndex;
   let match: RegExpExecArray | null;
   while ((match = re.exec(buffer)) !== null) {
-    const index = match.index ?? -1;
-    if (index < 0) {
-      continue;
-    }
+    const index = match.index;
     if (index - startIndex < minCharsFromStart) {
       continue;
     }

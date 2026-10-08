@@ -10,7 +10,8 @@ import { renderMessageWorkContext } from "./chat-message-context.ts";
 const container = document.createElement("div");
 afterEach(() => render(html``, container));
 const snapshot = {
-  page: "chat",
+  page: "review:board",
+  detail: { filter: "stuck" },
   title: "Parser work",
   file: "src/parser.ts",
   selection: "<img src=x onerror=alert(1)>",
@@ -18,8 +19,8 @@ const snapshot = {
 const text = "Please explain this";
 
 describe("attached message context", () => {
-  it.each(["optimistic", "history"])(
-    "keeps %s text and actions separate from its inspectable context",
+  it.each(["optimistic", "history", "pasted"])(
+    "distinguishes attached context from pasted text for %s messages",
     (source) => {
       const message =
         source === "optimistic"
@@ -27,11 +28,16 @@ describe("attached message context", () => {
           : {
               role: "user",
               content: text + "\n\n" + formatChatWorkContext(snapshot),
-              __openclaw: { workContext: { snapshot, text } },
+              ...(source === "history" ? { __openclaw: { workContext: { snapshot, text } } } : {}),
             };
+      render(renderMessageWorkContext(message), container);
+      if (source === "pasted") {
+        expect(extractText(message)).toBe(text + "\n\n" + formatChatWorkContext(snapshot));
+        expect(container.querySelector("details")).toBeNull();
+        return;
+      }
       expect(extractText(message)).toBe(text);
       expect(normalizeMessage(message).content).toEqual([{ type: "text", text }]);
-      render(renderMessageWorkContext(message), container);
       const details = container.querySelector("details")!;
       expect(details.open).toBe(false);
       expect(details.querySelector("summary")?.textContent).toContain("Context attached");
@@ -40,14 +46,6 @@ describe("attached message context", () => {
       expect(container.querySelector("img")).toBeNull();
     },
   );
-
-  it("leaves user-pasted lookalikes alone and omits the indicator without metadata", () => {
-    const content = text + "\n\n" + formatChatWorkContext(snapshot);
-    const message = { role: "user", content };
-    expect(extractText(message)).toBe(content);
-    render(renderMessageWorkContext(message), container);
-    expect(container.querySelector("details")).toBeNull();
-  });
 
   it("restores a captured outbox snapshot and retains a damaged row for explicit recovery", () => {
     const input = { id: "queued", text, createdAt: 123, workContext: snapshot };

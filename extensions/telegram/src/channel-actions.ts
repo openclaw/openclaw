@@ -20,6 +20,7 @@ import {
   listTelegramAccountIds,
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
+import { TELEGRAM_MESSAGE_ACTION_MAP } from "./action-names.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
 import {
   createTelegramPollExtraToolSchemas,
@@ -30,65 +31,34 @@ import { rejectTelegramNativeButtonParams } from "./native-button-params.js";
 
 const loadTelegramActionRuntime = createLazyRuntimeModule(() => import("./action-runtime.js"));
 
-const telegramMessageActionRuntime = {
-  handleTelegramAction: async (
-    ...args: Parameters<typeof import("./action-runtime.js").handleTelegramAction>
-  ): ReturnType<typeof import("./action-runtime.js").handleTelegramAction> => {
-    const readConfig = args[0].action === "read" ? createRuntimeConfigReader(args[1]) : undefined;
-    const admittedConfig = readConfig?.();
-    const assertReadCurrent = readConfig
-      ? () => {
-          args[2]?.assertDirectAdapterHandoff?.();
-          if (readConfig() !== admittedConfig) {
-            throw new Error(
-              "Telegram history policy changed during the read; retry with current permissions.",
-            );
-          }
+async function handleTelegramRuntimeAction(
+  ...args: Parameters<typeof import("./action-runtime.js").handleTelegramAction>
+): ReturnType<typeof import("./action-runtime.js").handleTelegramAction> {
+  const readConfig = args[0].action === "read" ? createRuntimeConfigReader(args[1]) : undefined;
+  const admittedConfig = readConfig?.();
+  const assertReadCurrent = readConfig
+    ? () => {
+        args[2]?.assertDirectAdapterHandoff?.();
+        if (readConfig() !== admittedConfig) {
+          throw new Error(
+            "Telegram history policy changed during the read; retry with current permissions.",
+          );
         }
-      : undefined;
-    assertReadCurrent?.();
-    const { handleTelegramAction } = await loadTelegramActionRuntime();
-    assertReadCurrent?.();
-    const result = await handleTelegramAction(...args);
-    assertReadCurrent?.();
-    return result;
-  },
-};
-
-const TELEGRAM_MESSAGE_ACTION_MAP = {
-  delete: "deleteMessage",
-  edit: "editMessage",
-  "emoji-list": "emoji-list",
-  poll: "poll",
-  react: "react",
-  read: "read",
-  send: "sendMessage",
-  sticker: "sendSticker",
-  "sticker-search": "searchSticker",
-  "topic-create": "createForumTopic",
-  "topic-edit": "editForumTopic",
-} as const satisfies Partial<Record<ChannelMessageActionName, string>>;
-
-const TELEGRAM_TOOL_DELIVERY_ACTIONS = new Set([
-  "createForumTopic",
-  "delete",
-  "deleteMessage",
-  "edit",
-  "editForumTopic",
-  "editMessage",
-  "poll",
-  "react",
-  "send",
-  "sendMessage",
-  "sendSticker",
-  "sticker",
-  "topic-create",
-  "topic-edit",
-]);
-
-function resolveTelegramMessageActionName(action: ChannelMessageActionName) {
-  return TELEGRAM_MESSAGE_ACTION_MAP[action as keyof typeof TELEGRAM_MESSAGE_ACTION_MAP];
+      }
+    : undefined;
+  assertReadCurrent?.();
+  const { handleTelegramAction } = await loadTelegramActionRuntime();
+  assertReadCurrent?.();
+  const result = await handleTelegramAction(...args);
+  assertReadCurrent?.();
+  return result;
 }
+
+const TELEGRAM_TOOL_DELIVERY_ACTIONS = new Set(
+  Object.entries(TELEGRAM_MESSAGE_ACTION_MAP).flatMap(([action, runtimeAction]) =>
+    ["read", "emoji-list", "sticker-search"].includes(action) ? [] : [action, runtimeAction],
+  ),
+);
 
 async function prepareTelegramSendPayload({
   ctx,
@@ -131,19 +101,12 @@ function resolveTelegramActionDiscovery({
   if (accounts.length === 0) {
     return null;
   }
-  const unionGate = createUnionActionGate(accounts, (account) =>
-    createTelegramActionGate({
-      cfg,
-      accountId: account.accountId,
-    }),
+  const actionGate = (account: (typeof accounts)[number]) =>
+    createTelegramActionGate({ cfg, accountId: account.accountId });
+  const unionGate = createUnionActionGate(accounts, actionGate);
+  const pollEnabled = accounts.some(
+    (account) => resolveTelegramPollActionGateState(actionGate(account)).enabled,
   );
-  const pollEnabled = accounts.some((account) => {
-    const accountGate = createTelegramActionGate({
-      cfg,
-      accountId: account.accountId,
-    });
-    return resolveTelegramPollActionGateState(accountGate).enabled;
-  });
   const buttonsEnabled = accounts.some((account) =>
     isTelegramInlineButtonsEnabled({ cfg, accountId: account.accountId }),
   );
@@ -168,34 +131,19 @@ function describeTelegramMessageTool({
       schema: null,
     };
   }
-  const actions = new Set<ChannelMessageActionName>();
-  actions.add("read");
-  if (discovery.isEnabled("sendMessage")) {
-    actions.add("send");
-  }
-  if (discovery.pollEnabled) {
-    actions.add("poll");
-  }
-  if (discovery.isEnabled("reactions")) {
-    actions.add("react");
-    actions.add("emoji-list");
-  }
-  if (discovery.isEnabled("deleteMessage")) {
-    actions.add("delete");
-  }
-  if (discovery.isEnabled("editMessage")) {
-    actions.add("edit");
-  }
-  if (discovery.isEnabled("sticker", false)) {
-    actions.add("sticker");
-    actions.add("sticker-search");
-  }
-  if (discovery.isEnabled("createForumTopic")) {
-    actions.add("topic-create");
-  }
-  if (discovery.isEnabled("editForumTopic")) {
-    actions.add("topic-edit");
-  }
+  const sendEnabled = discovery.isEnabled("sendMessage");
+  const reactionsEnabled = discovery.isEnabled("reactions");
+  const actions: ChannelMessageActionName[] = [
+    "read",
+    ...(sendEnabled ? ["send" as const] : []),
+    ...(discovery.pollEnabled ? ["poll" as const] : []),
+    ...(reactionsEnabled ? (["react", "emoji-list"] as const) : []),
+    ...(discovery.isEnabled("deleteMessage") ? ["delete" as const] : []),
+    ...(discovery.isEnabled("editMessage") ? ["edit" as const] : []),
+    ...(discovery.isEnabled("sticker", false) ? (["sticker", "sticker-search"] as const) : []),
+    ...(discovery.isEnabled("createForumTopic") ? ["topic-create" as const] : []),
+    ...(discovery.isEnabled("editForumTopic") ? ["topic-edit" as const] : []),
+  ];
   const schema: ChannelMessageToolSchemaContribution[] = [];
   if (discovery.pollEnabled) {
     schema.push({
@@ -203,7 +151,7 @@ function describeTelegramMessageTool({
       visibility: "all-configured",
     });
   }
-  if (discovery.isEnabled("reactions")) {
+  if (reactionsEnabled) {
     schema.push({
       properties: createTelegramReactionEmojiSchema(),
       // The shared emoji parameter keeps react valid across channels; this
@@ -211,14 +159,14 @@ function describeTelegramMessageTool({
       actions: [],
     });
   }
-  if (discovery.isEnabled("sendMessage")) {
+  if (sendEnabled) {
     schema.push({
       properties: createTelegramRichSendExtraToolSchemas(),
       visibility: "all-configured",
     });
   }
   return {
-    actions: Array.from(actions),
+    actions,
     capabilities: discovery.buttonsEnabled ? ["presentation", "delivery-pin"] : ["delivery-pin"],
     schema,
   };
@@ -288,7 +236,8 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     assertDirectAdapterHandoff,
     skipQueue,
   }) => {
-    const telegramAction = resolveTelegramMessageActionName(action);
+    const telegramAction =
+      TELEGRAM_MESSAGE_ACTION_MAP[action as keyof typeof TELEGRAM_MESSAGE_ACTION_MAP];
     if (!telegramAction) {
       throw new Error(`Unsupported Telegram action: ${action}`);
     }
@@ -303,7 +252,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       toolContext: _modelToolContext,
       ...runtimeParams
     } = params;
-    return await telegramMessageActionRuntime.handleTelegramAction(
+    return await handleTelegramRuntimeAction(
       {
         // Authority stays in the host-owned options object below. Model tool
         // arguments with these names must never reach the runtime as context.

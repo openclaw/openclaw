@@ -22,9 +22,8 @@ export async function readChannelIngressStoreAllowFromForDmPolicy(params: {
   const readStore =
     params.readStore ??
     (async (provider: PairingChannel, accountId: string) => {
-      // Pairing store loads channel adapters for legacy normalization; keep that
-      // registry edge lazy so pure ingress policy imports stay acyclic.
-      const { readChannelAllowFromStore } = await import("../../pairing/pairing-store.js");
+      // Doctor contracts import this policy helper; defer the database graph until a store read.
+      const { readChannelAllowFromStore } = await import("../../pairing/pairing-store.read.js");
       return await readChannelAllowFromStore(provider, process.env, accountId);
     });
   return await readStore(params.provider, params.accountId).catch(() => []);

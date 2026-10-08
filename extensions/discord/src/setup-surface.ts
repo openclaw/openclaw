@@ -10,12 +10,15 @@ import {
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
-import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { resolveDefaultDiscordAccountId, resolveDiscordAccountAllowFrom } from "./accounts.js";
 import { resolveDiscordChannelAllowlist } from "./resolve-channels.js";
 import { resolveDiscordUserAllowlist } from "./resolve-users.js";
 import { resolveDiscordSetupAccountConfig } from "./setup-account-state.js";
-import { createDiscordSetupWizardBase, parseDiscordAllowFromId } from "./setup-core.js";
+import {
+  createDiscordSetupWizardBase,
+  getDiscordAllowFromHelpLines,
+  parseDiscordAllowFromId,
+} from "./setup-core.js";
 import { resolveDiscordToken } from "./token.js";
 
 const t = createSetupTranslator();
@@ -33,18 +36,7 @@ async function promptDiscordAllowFrom(params: {
   });
   const account = resolveDiscordSetupAccountConfig({ cfg: params.cfg, accountId });
   const noteTitle = t("wizard.discord.allowlistTitle");
-  await params.prompter.note(
-    [
-      t("wizard.discord.allowlistIntro"),
-      t("wizard.discord.examples"),
-      "- 123456789012345678",
-      "- @alice",
-      "- alice#1234",
-      t("wizard.discord.multipleEntries"),
-      t("wizard.channels.docs", { link: formatDocsLink("/discord", "discord") }),
-    ].join("\n"),
-    noteTitle,
-  );
+  await params.prompter.note(getDiscordAllowFromHelpLines().join("\n"), noteTitle);
   const allowFrom = await promptResolvedAllowFrom({
     prompter: params.prompter,
     existing: resolveDiscordAccountAllowFrom({ cfg: params.cfg, accountId }) ?? [],
@@ -56,16 +48,11 @@ async function promptDiscordAllowFrom(params: {
     parseId: parseDiscordAllowFromId,
     invalidWithoutTokenNote: t("wizard.discord.allowFromInvalidWithoutToken"),
     resolveEntries: async ({ token, entries }) =>
-      (
-        await resolveDiscordUserAllowlist({
-          token,
-          entries,
-        })
-      ).map((entry) => ({
-        input: entry.input,
-        resolved: entry.resolved,
-        id: entry.id ?? null,
-      })),
+      await resolveBasicAllowFromEntries({
+        token,
+        entries,
+        resolveEntries: resolveDiscordUserAllowlist,
+      }),
   });
   return patchChannelConfigForAccount({
     cfg: params.cfg,

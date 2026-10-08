@@ -50,58 +50,37 @@ export function childLineageDigest(
   retained?: ManagedHandoffLease,
   slot?: Omit<NonNullable<UpdateCommandChildGrant["slot"]>, "childKey">,
 ): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify([
-        database.databasePath,
-        database.databaseIdentity,
-        database.parentIdentity,
-        [original, spawner, parent].map((lease) =>
-          // v1 stores only its runner; bind the borrowed updater too. Shipped
-          // v2/v3 payloads already carry both identities and keep their bytes.
-          lease.version === 1
-            ? [lease.key, lease.owner, lease.payload, lease.updatedAt, lease.helper, lease.executor]
-            : [lease.key, lease.owner, lease.payload, lease.updatedAt],
-        ),
-        ...(slot
-          ? [
-              [
-                "occupied-slot-v1",
-                ...[slot.parent, slot.spawner].map((lease) => [
-                  lease.key,
-                  lease.owner,
-                  lease.payload,
-                  lease.updatedAt,
-                ]),
-                ...(slot.reserver
-                  ? [
-                      [
-                        "legacy-slot-reserver-v1",
-                        slot.reserver.key,
-                        slot.reserver.owner,
-                        slot.reserver.payload,
-                        slot.reserver.updatedAt,
-                      ],
-                    ]
-                  : []),
-              ],
-            ]
-          : []),
-        // Absent retention preserves the shipped single-root digest bytes.
-        ...(retained
-          ? [
-              [
-                "retained-owner-v1",
-                retained.key,
-                retained.owner,
-                retained.payload,
-                retained.updatedAt,
-              ],
-            ]
-          : []),
-      ]),
-    )
-    .digest("hex");
+  const fields = (lease: ManagedHandoffParent) => [
+    lease.key,
+    lease.owner,
+    lease.payload,
+    lease.updatedAt,
+  ];
+  const lineage: unknown[] = [
+    database.databasePath,
+    database.databaseIdentity,
+    database.parentIdentity,
+    [original, spawner, parent].map((lease) =>
+      // v1 stores only its runner; bind the borrowed updater too. Shipped
+      // v2/v3 payloads already carry both identities and keep their bytes.
+      lease.version === 1
+        ? [lease.key, lease.owner, lease.payload, lease.updatedAt, lease.helper, lease.executor]
+        : fields(lease),
+    ),
+  ];
+  if (slot) {
+    lineage.push([
+      "occupied-slot-v1",
+      fields(slot.parent),
+      fields(slot.spawner),
+      ...(slot.reserver ? [["legacy-slot-reserver-v1", ...fields(slot.reserver)]] : []),
+    ]);
+  }
+  // Absent retention preserves the shipped single-root digest bytes.
+  if (retained) {
+    lineage.push(["retained-owner-v1", ...fields(retained)]);
+  }
+  return createHash("sha256").update(JSON.stringify(lineage)).digest("hex");
 }
 
 /** One child interval, shared by direct and delegated executors. */

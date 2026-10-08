@@ -5,6 +5,7 @@ import {
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { projectThreadBindingRecord } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import type { TelegramThreadBindingRecord } from "./thread-bindings-store.js";
 
 export function resolveBindingKey(params: { accountId: string; conversationId: string }): string {
@@ -15,30 +16,18 @@ export function toSessionBindingRecord(
   record: TelegramThreadBindingRecord,
   defaults: { idleTimeoutMs: number; maxAgeMs: number },
 ): SessionBindingRecord {
-  return {
-    bindingId: resolveBindingKey({
-      accountId: record.accountId,
-      conversationId: record.conversationId,
-    }),
-    targetSessionKey: record.targetSessionKey,
-    targetKind: record.targetKind === "subagent" ? "subagent" : "session",
+  return projectThreadBindingRecord(record, {
     conversation: {
       channel: "telegram",
-      accountId: record.accountId,
       conversationId: record.conversationId,
     },
-    status: "active",
-    boundAt: record.boundAt,
-    expiresAt: resolveThreadBindingEffectiveExpiresAt({
-      record,
-      defaultIdleTimeoutMs: defaults.idleTimeoutMs,
-      defaultMaxAgeMs: defaults.maxAgeMs,
-    }),
-    metadata: {
-      agentId: record.agentId,
-      label: record.label,
-      boundBy: record.boundBy,
-      lastActivityAt: record.lastActivityAt,
+    targetKind: record.targetKind === "subagent" ? "subagent" : "session",
+    lifecycle: {
+      expiresAt: resolveThreadBindingEffectiveExpiresAt({
+        record,
+        defaultIdleTimeoutMs: defaults.idleTimeoutMs,
+        defaultMaxAgeMs: defaults.maxAgeMs,
+      }),
       idleTimeoutMs:
         typeof record.idleTimeoutMs === "number"
           ? Math.max(0, Math.floor(record.idleTimeoutMs))
@@ -47,9 +36,9 @@ export function toSessionBindingRecord(
         typeof record.maxAgeMs === "number"
           ? Math.max(0, Math.floor(record.maxAgeMs))
           : defaults.maxAgeMs,
-      ...record.metadata,
     },
-  };
+    metadata: (lifecycleMetadata) => ({ ...lifecycleMetadata, ...record.metadata }),
+  });
 }
 
 export function fromSessionBindingInput(params: {
@@ -89,16 +78,13 @@ export function fromSessionBindingInput(params: {
     },
   };
 
-  if (typeof metadata.idleTimeoutMs === "number" && Number.isFinite(metadata.idleTimeoutMs)) {
-    record.idleTimeoutMs = Math.max(0, Math.floor(metadata.idleTimeoutMs));
-  } else if (typeof existing?.idleTimeoutMs === "number") {
-    record.idleTimeoutMs = existing.idleTimeoutMs;
-  }
-
-  if (typeof metadata.maxAgeMs === "number" && Number.isFinite(metadata.maxAgeMs)) {
-    record.maxAgeMs = Math.max(0, Math.floor(metadata.maxAgeMs));
-  } else if (typeof existing?.maxAgeMs === "number") {
-    record.maxAgeMs = existing.maxAgeMs;
+  for (const key of ["idleTimeoutMs", "maxAgeMs"] as const) {
+    const value = metadata[key];
+    if (typeof value === "number" && Number.isFinite(value)) {
+      record[key] = Math.max(0, Math.floor(value));
+    } else if (typeof existing?.[key] === "number") {
+      record[key] = existing[key];
+    }
   }
 
   return record;
@@ -117,18 +103,4 @@ export function summarizeLifecycleForLog(
   const idleLabel = formatThreadBindingDurationLabel(Math.max(0, Math.floor(idleTimeoutMs)));
   const maxAgeLabel = formatThreadBindingDurationLabel(Math.max(0, Math.floor(maxAgeMs)));
   return `idle=${idleLabel} maxAge=${maxAgeLabel}`;
-}
-
-export function normalizeDurationMs(raw: unknown, fallback: number): number {
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return fallback;
-  }
-  return Math.max(0, Math.floor(raw));
-}
-
-export function normalizeTimestampMs(raw: unknown): number {
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return Date.now();
-  }
-  return Math.max(0, Math.floor(raw));
 }

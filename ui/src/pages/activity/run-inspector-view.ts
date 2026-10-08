@@ -11,6 +11,7 @@ import {
   renderRunInspectorPagination,
   renderRunInspectorRemediation,
   renderRunInspectorSafeRef,
+  renderRunInspectorValues,
   runInspectorCoverageKey,
   runInspectorCoverageLabel,
 } from "./run-inspector-evidence-view.ts";
@@ -38,7 +39,7 @@ type RunInspectorProps = {
   onRetry: () => void;
 };
 
-type FactValue = [label: string, value: string | number, mono?: boolean, href?: string];
+type FactValue = [labelKey: string, value: string | number, mono?: boolean, href?: string];
 
 type IdentityFact = {
   label: string;
@@ -47,29 +48,15 @@ type IdentityFact = {
   reason?: string;
 };
 
-function evidenceStateLabel(state: EvidenceState): string {
-  return t(`activity.runInspector.evidenceState.${state}`);
-}
-
-function stateReason(label: string, state: EvidenceState): string | undefined {
-  return state === "present"
-    ? undefined
-    : t(`activity.runInspector.reasons.${state}`, { label: label.toLowerCase() });
-}
-
 function principalValues(principal: PrincipalRefV1 | undefined): FactValue[] {
   if (!principal) {
     return [];
   }
   return [
-    ...optionalReferenceValue(
-      t("activity.runInspector.values.label"),
-      principal.displayLabel,
-      false,
-    ),
-    [t("activity.runInspector.values.kind"), principal.kind],
-    [t("activity.runInspector.values.principalReference"), principal.principalRef, true],
-    [t("activity.runInspector.values.domainReference"), principal.domainRef, true],
+    ...optionalReferenceValue("label", principal.displayLabel, false),
+    ["kind", principal.kind],
+    ["principalReference", principal.principalRef, true],
+    ["domainReference", principal.domainRef, true],
   ];
 }
 
@@ -77,13 +64,19 @@ function optionalReferenceValue(
   label: string,
   value: string | undefined,
   mono = true,
+  href?: string,
 ): FactValue[] {
-  return value ? [[label, value, mono]] : [];
+  return value ? [[label, value, mono, href]] : [];
 }
 
 function renderFact(fact: IdentityFact) {
   const values = fact.values ?? [];
-  const reason = fact.reason ?? stateReason(fact.label, fact.state);
+  const stateLabel = t(`activity.runInspector.evidenceState.${fact.state}`);
+  const reason =
+    fact.reason ??
+    (fact.state === "present"
+      ? undefined
+      : t(`activity.runInspector.reasons.${fact.state}`, { label: fact.label.toLowerCase() }));
   return html`
     <div class="run-inspector__fact" data-state=${fact.state}>
       <dt>
@@ -92,25 +85,22 @@ function renderFact(fact: IdentityFact) {
           class="run-inspector__state run-inspector__state--${fact.state}"
           role="img"
           aria-label=${t("activity.runInspector.evidenceStateLabel", {
-            state: evidenceStateLabel(fact.state),
+            state: stateLabel,
           })}
         >
-          ${evidenceStateLabel(fact.state)}
+          ${stateLabel}
         </span>
       </dt>
       <dd>
         ${
           values.length > 0
-            ? html`<dl class="run-inspector__values">
-                ${values.map(
-                  ([label, value, mono, href]) => html`
-                    <div>
-                      <dt>${label}</dt>
-                      <dd>${renderRunInspectorSafeRef(value, mono, href)}</dd>
-                    </div>
-                  `,
-                )}
-              </dl>`
+            ? renderRunInspectorValues(
+                "values",
+                values.map(([labelKey, value, mono, href]) => [
+                  labelKey,
+                  renderRunInspectorSafeRef(value, mono, href),
+                ]),
+              )
             : nothing
         }
         ${reason ? html`<p class="run-inspector__reason">${reason}</p>` : nothing}
@@ -128,20 +118,17 @@ function identityFacts(context: ExecutionIdentityContextV1, basePath: string): I
       label: t("activity.runInspector.facts.trustDomain"),
       state: context.trustDomain.state,
       values: [
-        [t("activity.runInspector.values.kind"), context.trustDomain.kind],
-        [t("activity.runInspector.values.domainReference"), context.trustDomain.domainRef, true],
+        ["kind", context.trustDomain.kind],
+        ["domainReference", context.trustDomain.domainRef, true],
       ],
     },
     {
       label: t("activity.runInspector.facts.ingress"),
       state: context.ingress.state,
       values: [
-        [t("activity.runInspector.values.kind"), context.ingress.kind],
-        [t("activity.runInspector.values.owningBoundary"), context.ingress.boundary, true],
-        ...optionalReferenceValue(
-          t("activity.runInspector.values.sourceReference"),
-          context.ingress.sourceRef,
-        ),
+        ["kind", context.ingress.kind],
+        ["owningBoundary", context.ingress.boundary, true],
+        ...optionalReferenceValue("sourceReference", context.ingress.sourceRef),
       ],
     },
     {
@@ -163,25 +150,15 @@ function identityFacts(context: ExecutionIdentityContextV1, basePath: string): I
       state: sponsor?.state ?? "absent",
       values: [
         ...principalValues(sponsor?.principal),
-        ...optionalReferenceValue(
-          t("activity.runInspector.values.relationshipReference"),
-          sponsor?.relationshipRef,
-        ),
+        ...optionalReferenceValue("relationshipReference", sponsor?.relationshipRef),
       ],
     },
     {
       label: t("activity.runInspector.facts.agentDefinition"),
       state: context.agentDefinition.state,
       values: [
-        [
-          t("activity.runInspector.values.definitionReference"),
-          context.agentDefinition.definitionRef,
-          true,
-        ],
-        ...optionalReferenceValue(
-          t("activity.runInspector.values.revisionReference"),
-          context.agentDefinition.revisionRef,
-        ),
+        ["definitionReference", context.agentDefinition.definitionRef, true],
+        ...optionalReferenceValue("revisionReference", context.agentDefinition.revisionRef),
       ],
     },
     {
@@ -193,12 +170,8 @@ function identityFacts(context: ExecutionIdentityContextV1, basePath: string): I
       label: t("activity.runInspector.facts.runtimeInstance"),
       state: context.runtimeInstance.state,
       values: [
-        [t("activity.runInspector.values.kind"), context.runtimeInstance.kind],
-        [
-          t("activity.runInspector.values.runtimeReference"),
-          context.runtimeInstance.runtimeRef,
-          true,
-        ],
+        ["kind", context.runtimeInstance.kind],
+        ["runtimeReference", context.runtimeInstance.runtimeRef, true],
       ],
     },
     ...(context.applicableGrants.length === 0
@@ -212,7 +185,7 @@ function identityFacts(context: ExecutionIdentityContextV1, basePath: string): I
       : context.applicableGrants.map((grant, index): IdentityFact => ({
           label: t("activity.runInspector.facts.applicableGrant", { index: String(index + 1) }),
           state: grant.state,
-          values: [[t("activity.runInspector.values.grantReference"), grant.grantRef, true]],
+          values: [["grantReference", grant.grantRef, true]],
         }))),
     ...(context.assurance.length === 0
       ? [
@@ -228,9 +201,9 @@ function identityFacts(context: ExecutionIdentityContextV1, basePath: string): I
           }),
           state: "present" as const,
           values: [
-            [t("activity.runInspector.values.kind"), assurance.kind],
-            [t("activity.runInspector.values.strength"), assurance.strength],
-            [t("activity.runInspector.values.evidenceReference"), assurance.evidenceRef, true],
+            ["kind", assurance.kind],
+            ["strength", assurance.strength],
+            ["evidenceReference", assurance.evidenceRef, true],
           ],
         }))),
     {
@@ -238,32 +211,21 @@ function identityFacts(context: ExecutionIdentityContextV1, basePath: string): I
       state: lineage ? "present" : "absent",
       values: lineage
         ? [
-            [t("activity.runInspector.values.depth"), lineage.depth],
-            ...(lineage.parentRunId
-              ? ([
-                  [
-                    t("activity.runInspector.values.parentRunReference"),
-                    lineage.parentRunId,
-                    true,
-                    activityRunInspectorSelectorHref(
-                      { kind: "run", id: lineage.parentRunId },
-                      basePath,
-                    ),
-                  ],
-                ] satisfies FactValue[])
-              : []),
+            ["depth", lineage.depth],
             ...optionalReferenceValue(
-              t("activity.runInspector.values.parentExecutionReference"),
-              lineage.parentExecutionId,
+              "parentRunReference",
+              lineage.parentRunId,
+              true,
+              lineage.parentRunId
+                ? activityRunInspectorSelectorHref(
+                    { kind: "run", id: lineage.parentRunId },
+                    basePath,
+                  )
+                : undefined,
             ),
-            ...optionalReferenceValue(
-              t("activity.runInspector.values.parentContextReference"),
-              lineage.parentContextId,
-            ),
-            ...optionalReferenceValue(
-              t("activity.runInspector.values.delegationReference"),
-              lineage.delegationRef,
-            ),
+            ...optionalReferenceValue("parentExecutionReference", lineage.parentExecutionId),
+            ...optionalReferenceValue("parentContextReference", lineage.parentContextId),
+            ...optionalReferenceValue("delegationReference", lineage.delegationRef),
             ...principalValues(lineage.parentAgentPrincipal),
           ]
         : [],
@@ -272,33 +234,23 @@ function identityFacts(context: ExecutionIdentityContextV1, basePath: string): I
   ];
 }
 
-function diagnosticCopy(result: RunInspectorResult) {
-  const kind = classifyRunInspection(result);
-  if (kind === "present") {
-    return null;
-  }
-  const key = kind === "not-found" ? "notFound" : kind;
-  return {
-    title: t(`activity.runInspector.diagnostic.${key}.title`),
-    description: t(`activity.runInspector.diagnostic.${key}.description`),
-  };
-}
-
 function renderUnavailableResult(
   result: RunInspectorResult,
   basePath: string,
   executionPageStatus: "loading" | "error" | undefined,
   onLoadMoreExecutions: () => void,
 ) {
-  const copy = diagnosticCopy(result);
-  if (!copy || result.identity.state === "present") {
+  if (result.identity.state === "present") {
     return nothing;
   }
+  const kind = classifyRunInspection(result);
+  const key = kind === "not-found" ? "notFound" : kind;
+  const title = t(`activity.runInspector.diagnostic.${key}.title`);
   const identity = result.identity;
   return html`
-    <div class="run-inspector__result-state" role="status" aria-label=${copy.title}>
-      <h3>${copy.title}</h3>
-      <p>${copy.description}</p>
+    <div class="run-inspector__result-state" role="status" aria-label=${title}>
+      <h3>${title}</h3>
+      <p>${t(`activity.runInspector.diagnostic.${key}.description`)}</p>
       <p>
         ${t("activity.runInspector.diagnosticReason")}
         ${renderRunInspectorSafeRef(identity.reasonCode, true)}
@@ -350,13 +302,10 @@ function renderUnavailableResult(
 }
 
 function renderReady(
+  props: RunInspectorProps,
   state: Extract<RunInspectorState, { status: "ready" }>,
-  basePath: string,
-  selector: RunInspectorSelector | null,
-  selectorId: string | null,
-  onLoadMoreDecisions: () => void,
-  onLoadMoreExecutions: () => void,
 ) {
+  const { basePath, selector, selectorId, onLoadMoreDecisions, onLoadMoreExecutions } = props;
   const result = state.result;
   const currentCoverageLabel = runInspectorCoverageLabel(result.coverage.state);
   return html`
@@ -431,17 +380,7 @@ export function renderRunInspector(props: RunInspectorProps) {
     state.status === "ready" && state.result.identity.state === "present"
       ? state.result.identity.context
       : null;
-  const content =
-    state.status === "ready"
-      ? renderReady(
-          state,
-          props.basePath,
-          props.selector,
-          props.selectorId,
-          props.onLoadMoreDecisions,
-          props.onLoadMoreExecutions,
-        )
-      : renderPanel(props, state);
+  const content = state.status === "ready" ? renderReady(props, state) : renderPanel(props, state);
 
   return html`
     <section

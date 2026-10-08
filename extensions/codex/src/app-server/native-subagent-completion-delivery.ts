@@ -11,13 +11,11 @@ import { delayForAttempt } from "./native-subagent-retry.js";
 
 type CompletionDeliveryDependencies = {
   deliver: NativeSubagentMonitorRuntime["deliverAgentHarnessCompletion"];
-  now: () => number;
   retryDelaysMs?: readonly number[];
   maxRetries?: number;
-  isCurrentChild: (child: ChildState) => boolean;
-  isCurrentParent: (state: ParentState) => boolean;
-  isRetiredParent: (state: ParentState) => boolean;
-  getParent: (parentThreadId: string) => ParentState | undefined;
+  children: ReadonlyMap<string, ChildState>;
+  parents: ReadonlyMap<string, ParentState>;
+  retiredParents: Pick<WeakSet<ParentState>, "has">;
   unregisterChild: (child: ChildState) => void;
   releaseClientRetentionIfIdle: () => void;
 };
@@ -98,11 +96,7 @@ export class CodexNativeSubagentCompletionDelivery {
         replyInstruction:
           "Use the Codex native subagent result to continue or wrap up the parent task. If this is a Discord/channel session, send the visible response with the message tool instead of only writing a transcript final answer. Reply in your normal assistant voice and do not expose internal notification markup.",
       });
-      if (
-        !this.dependencies.isCurrentChild(childState) ||
-        !this.dependencies.isCurrentParent(state) ||
-        this.dependencies.isRetiredParent(state)
-      ) {
+      if (!this.isCurrent(state, childState)) {
         return;
       }
       // Keep accepted delivery before a fallible ownership read. A retry cannot
@@ -114,30 +108,19 @@ export class CodexNativeSubagentCompletionDelivery {
         this.prepareDelivery(state, childState);
         return;
       }
-      if (!this.claim(state, childState)) {
+      if (!this.claim(state, childState) || delivery.recoveryBlocked) {
         this.dependencies.unregisterChild(childState);
         return;
       }
-      if (delivery.recoveryBlocked) {
-        this.dependencies.unregisterChild(childState);
-        return;
-      }
-      if (delivery.recoveryPending) {
-        this.scheduleRetry(
-          childState,
-          delivery.error ?? "requester recovery owns completion",
-          false,
-        );
-        return;
-      }
-      const error = delivery.error ?? "completion delivery did not produce a parent response";
-      this.scheduleRetry(childState, error);
+      const recoveryPending = delivery.recoveryPending;
+      const error =
+        delivery.error ??
+        (recoveryPending
+          ? "requester recovery owns completion"
+          : "completion delivery did not produce a parent response");
+      this.scheduleRetry(childState, error, !recoveryPending);
     } catch (error) {
-      if (
-        !this.dependencies.isCurrentChild(childState) ||
-        !this.dependencies.isCurrentParent(state) ||
-        this.dependencies.isRetiredParent(state)
-      ) {
+      if (!this.isCurrent(state, childState)) {
         return;
       }
       if (!this.claim(state, childState)) {
@@ -162,27 +145,21 @@ export class CodexNativeSubagentCompletionDelivery {
   }
 
   finish(state: ParentState, child: ChildState): void {
-    if (child.completionDeliveryTimer) {
-      clearTimeout(child.completionDeliveryTimer);
-      child.completionDeliveryTimer = undefined;
-    }
+    clearTimeout(child.completionDeliveryTimer);
+    child.completionDeliveryTimer = undefined;
     void this.deliverPending(state, child);
   }
 
-  applyReceipts(
-    state: ParentState,
-    runIds: readonly string[],
-    children: ReadonlyMap<string, ChildState>,
-  ): void {
+  applyReceipts(state: ParentState, runIds: readonly string[]): void {
     for (const runId of runIds) {
-      const child = children.get(runId);
-      const deliveryParent = child && this.dependencies.getParent(child.parentThreadId);
+      const child = this.dependencies.children.get(runId);
+      const deliveryParent = child && this.dependencies.parents.get(child.parentThreadId);
       if (
         !child ||
         !deliveryParent ||
         !this.isCurrent(state, child) ||
-        !this.dependencies.isCurrentParent(deliveryParent) ||
-        this.dependencies.isRetiredParent(deliveryParent)
+        this.dependencies.parents.get(deliveryParent.parentThreadId) !== deliveryParent ||
+        this.dependencies.retiredParents.has(deliveryParent)
       ) {
         continue;
       }
@@ -216,8 +193,8 @@ export class CodexNativeSubagentCompletionDelivery {
     }
   }
 
-  deliverDetached(state: ParentState, children: Iterable<ChildState>): void {
-    for (const child of children) {
+  deliverDetached(state: ParentState): void {
+    for (const child of this.dependencies.children.values()) {
       if (child.parentThreadId === state.parentThreadId && child.pendingCompletion) {
         void this.deliverPending(state, child);
       }
@@ -226,9 +203,7 @@ export class CodexNativeSubagentCompletionDelivery {
 
   release(childState: ChildState): void {
     childState.completionCustody?.release();
-    if (childState.completionDeliveryTimer) {
-      clearTimeout(childState.completionDeliveryTimer);
-    }
+    clearTimeout(childState.completionDeliveryTimer);
     const deliveryOwnerKey = childState.deliveryOwnerKey;
     if (deliveryOwnerKey && completionDeliveryOwners.get(deliveryOwnerKey) === childState) {
       completionDeliveryOwners.delete(deliveryOwnerKey);
@@ -238,9 +213,9 @@ export class CodexNativeSubagentCompletionDelivery {
 
   private isCurrent(state: ParentState, child: ChildState): boolean {
     return (
-      this.dependencies.isCurrentChild(child) &&
-      this.dependencies.isCurrentParent(state) &&
-      !this.dependencies.isRetiredParent(state)
+      this.dependencies.children.get(child.runId) === child &&
+      this.dependencies.parents.get(state.parentThreadId) === state &&
+      !this.dependencies.retiredParents.has(state)
     );
   }
 
@@ -265,7 +240,7 @@ export class CodexNativeSubagentCompletionDelivery {
     if (
       !childState.pendingCompletion ||
       childState.completionDeliveryTimer ||
-      !this.dependencies.isCurrentChild(childState)
+      this.dependencies.children.get(childState.runId) !== childState
     ) {
       return;
     }
@@ -283,10 +258,10 @@ export class CodexNativeSubagentCompletionDelivery {
     );
     childState.completionDeliveryTimer = setTimeout(() => {
       childState.completionDeliveryTimer = undefined;
-      if (!this.dependencies.isCurrentChild(childState)) {
+      if (this.dependencies.children.get(childState.runId) !== childState) {
         return;
       }
-      const state = this.dependencies.getParent(childState.parentThreadId);
+      const state = this.dependencies.parents.get(childState.parentThreadId);
       if (state) {
         void this.deliverPending(state, childState);
       }

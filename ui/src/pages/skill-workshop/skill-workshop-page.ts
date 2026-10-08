@@ -1,300 +1,99 @@
 import { consume } from "@lit/context";
+import type { SkillsWorkshopReadResult } from "@openclaw/gateway-protocol";
 import { nothing } from "lit";
-import { applicationContext, type ApplicationGatewaySnapshot } from "../../app/context.ts";
-import "../../components/tooltip.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSkillWorkshopEnglish } from "../../i18n/locales/en-skill-workshop.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
-import type { SkillWorkshopProposalDecision } from "../../lib/skill-workshop/index.ts";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveUiSelectedGlobalAgentId,
+} from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { buildInitialChatSubmission } from "../chat/user-message-content.ts";
 import { retainRejectedInitialTurn } from "../new-session/rejected-initial-turn.ts";
-import { canCallWorkshopAdminMethod } from "./access.ts";
+import { resolveWorkshopAccess } from "./access.ts";
+import { loadWorkshopSnapshot, type WorkshopMutation, type WorkshopSnapshot } from "./api.ts";
 import { SKILL_WORKSHOP_LEARNING_PROMPT } from "./learning-prompt.ts";
-import type { SkillWorkshopRevisionRequest } from "./page-types.ts";
-import { renderSkillWorkshopPage } from "./page-view.ts";
-import {
-  requestSkillWorkshopRevision,
-  runSkillWorkshopEvaluation,
-  runSkillWorkshopLifecycleAction,
-} from "./proposal-actions.ts";
-import {
-  createSkillWorkshopState,
-  loadSkillWorkshopProposals,
-  resolveSkillWorkshopAgentId,
-  type SkillWorkshopState,
-} from "./proposals.ts";
-import {
-  SkillWorkshopRevisionRecoveryController,
-  skillWorkshopRevisionAdmissionsFor,
-} from "./revision-recovery.ts";
-import { resolveSelfLearning, setSelfLearningEnabled } from "./self-learning.ts";
-import {
-  captureSkillWorkshopSourceScope,
-  isCurrentSkillWorkshopSourceScope,
-  type SkillWorkshopPageContext,
-  type SkillWorkshopSourceScope,
-} from "./source-scope.ts";
-import { loadSkillWorkshopMode } from "./storage.ts";
+import { resolveWorkshopMode, setWorkshopMode, type SkillWorkshopMode } from "./mode.ts";
+import { renderSkillWorkshop, type WorkshopViewer, type WorkshopViewerTarget } from "./view.ts";
 
 registerSkillWorkshopEnglish();
 
+type WorkshopScope = { client: GatewayBrowserClient; agentId: string };
+
+function resolveWorkshopAgentId(context: ApplicationContext): string {
+  const snapshot = context.gateway.snapshot;
+  const selectedAgentId = context.agentSelection.state.selectedId;
+  const sessionAgentId = parseAgentSessionKey(snapshot.sessionKey)?.agentId;
+  return selectedAgentId
+    ? normalizeAgentId(selectedAgentId)
+    : sessionAgentId
+      ? normalizeAgentId(sessionAgentId)
+      : resolveUiSelectedGlobalAgentId(snapshot);
+}
+
 class SkillWorkshopPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
-  private context?: SkillWorkshopPageContext;
+  private context?: ApplicationContext;
 
-  private state?: SkillWorkshopState;
-  private operationEpoch = 0;
-  private hasBoundContext = false;
-  private contextSource?: SkillWorkshopPageContext;
-  private gatewaySource?: SkillWorkshopPageContext["gateway"];
-  private gatewayClient: SkillWorkshopPageContext["gateway"]["snapshot"]["client"] = null;
-  private gatewayHello: SkillWorkshopPageContext["gateway"]["snapshot"]["hello"] = null;
-  private gatewayConnected = false;
-  private hasBoundAgentSelection = false;
-  private agentSelectionSource?: SkillWorkshopPageContext["agentSelection"];
-  private selectedAgentId?: string | null;
-  private hasBoundSessions = false;
-  private sessionsSource?: SkillWorkshopPageContext["sessions"];
-  private selfLearningBusy = false;
-  private selfLearningError: string | null = null;
+  // Every result is owned by one connection and agent; a scope change retires them all.
+  private scope: WorkshopScope | null = null;
+  private generation = 0;
+  private loadSequence = 0;
+  private snapshot: WorkshopSnapshot | null = null;
+  private loading = false;
+  private error: string | null = null;
+  private viewer: WorkshopViewer | null = null;
+  private pendingAction: string | null = null;
+  private actionError: string | null = null;
+  private modeBusy = false;
+  private modeError: string | null = null;
   private learningBusy = false;
   private learningError: string | null = null;
-  private readonly requestPageUpdate = () => {
-    if (this.isConnected) {
-      this.requestUpdate();
-    }
-  };
-  private readonly revisionRecovery = new SkillWorkshopRevisionRecoveryController(
-    this.requestPageUpdate,
-  );
+
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    )
-    .effect(
-      () => this.context,
-      (context) => {
-        const sourceChanged = this.hasBoundContext && this.contextSource !== context;
-        this.hasBoundContext = true;
-        this.contextSource = context;
-        if (sourceChanged) {
-          const gateway = context.gateway;
-          this.gatewaySource = gateway;
-          this.gatewayClient = gateway.snapshot.client;
-          this.gatewayHello = gateway.snapshot.hello;
-          this.gatewayConnected = gateway.snapshot.phase === "connected";
-          this.agentSelectionSource = context.agentSelection;
-          this.selectedAgentId = context.agentSelection.state.selectedId;
-          this.sessionsSource = context.sessions;
-          this.resetSourceState();
-          this.loadProposals(true);
-        }
-      },
-    )
-    .effect(
-      () => this.context?.gateway,
-      (gateway) => {
-        const snapshot = gateway.snapshot;
-        const sourceChanged = this.gatewaySource !== undefined && this.gatewaySource !== gateway;
-        const clientChanged =
-          this.gatewaySource !== undefined && this.gatewayClient !== snapshot.client;
-        const connectionChanged =
-          this.gatewaySource !== undefined &&
-          this.gatewayConnected !== (snapshot.phase === "connected");
-        const helloChanged =
-          this.gatewaySource !== undefined && this.gatewayHello !== snapshot.hello;
-        this.applyGatewaySnapshot(
-          gateway,
-          snapshot,
-          sourceChanged || clientChanged || connectionChanged || helloChanged,
-        );
-        const cleanup = gateway.subscribe((nextSnapshot) => {
-          if (this.gatewaySource !== gateway || this.context?.gateway !== gateway) {
-            return;
-          }
-          const sourceEpochChanged =
-            nextSnapshot.client !== this.gatewayClient ||
-            (nextSnapshot.phase === "connected") !== this.gatewayConnected ||
-            nextSnapshot.hello !== this.gatewayHello;
-          this.applyGatewaySnapshot(gateway, nextSnapshot, sourceEpochChanged);
-        });
-        return cleanup;
-      },
-    )
-    .watch(
-      () => this.context?.config,
-      (config, notify) => config.subscribe(notify),
-    )
-    .effect(
-      () => this.context?.agentSelection,
-      (agentSelection) => {
-        let resetForSourceBind =
-          this.hasBoundAgentSelection && this.agentSelectionSource !== agentSelection;
-        this.hasBoundAgentSelection = true;
-        this.agentSelectionSource = agentSelection;
-        let initialNotification = true;
-        const handleChange = () => {
-          if (
-            this.agentSelectionSource !== agentSelection ||
-            this.context?.agentSelection !== agentSelection
-          ) {
-            return;
-          }
-          const nextAgentId = agentSelection.state.selectedId;
-          const agentChanged = !initialNotification && this.selectedAgentId !== nextAgentId;
-          this.selectedAgentId = nextAgentId;
-          const sourceEpochChanged = resetForSourceBind || agentChanged;
-          resetForSourceBind = false;
-          initialNotification = false;
-          if (sourceEpochChanged) {
-            this.resetSourceState();
-          }
-          this.loadProposals(sourceEpochChanged);
-        };
-        handleChange();
-        return agentSelection.subscribe(handleChange);
-      },
-    )
-    .effect(
-      () => this.context?.sessions,
-      (sessions) => {
-        const sourceChanged = this.hasBoundSessions && this.sessionsSource !== sessions;
-        this.hasBoundSessions = true;
-        this.sessionsSource = sessions;
-        if (sourceChanged) {
-          this.resetSourceState();
-          this.loadProposals(true);
-        }
-      },
-    )
-    .watch(
-      () => this.context?.agentIdentity,
-      (agentIdentity, notify) => agentIdentity.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.runtimeConfig,
-      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
-    )
-    .watch(
-      () => (this.context ? skillWorkshopRevisionAdmissionsFor(this.context) : undefined),
-      (admissions, notify) => admissions.subscribe(notify),
-    );
-
-  private readonly handleRevisionRequest: SkillWorkshopRevisionRequest = async (
-    instructions,
-    proposal,
-    proposalAgentId,
-    expectedRevisionHash,
-  ) => {
-    const scope = this.captureSourceScope();
-    if (!scope) {
-      return {
-        error: "Skill Workshop is not ready.",
-        id: "unowned",
-        status: "retryable-failed",
-      };
-    }
-    return await this.revisionRecovery.request({
-      context: scope.context,
-      expectedRevisionHash,
-      instructions,
-      proposal,
-      proposalAgentId,
-    });
-  };
-
-  private readonly handleLifecycleAction = (
-    scope: SkillWorkshopSourceScope,
-    action: "apply" | "reject",
-    decision: SkillWorkshopProposalDecision,
-  ) => {
-    if (!this.isCurrentSourceScope(scope)) {
-      return;
-    }
-    void runSkillWorkshopLifecycleAction(scope.state, scope.context, action, decision, {
-      isCurrent: () => this.isCurrentSourceScope(scope),
-      onProgress: this.requestPageUpdate,
-    }).finally(this.requestPageUpdate);
-  };
-
-  private readonly handleEvaluation = (proposalId: string) => {
-    const scope = this.captureSourceScope();
-    if (!scope) {
-      return;
-    }
-    void runSkillWorkshopEvaluation(scope.state, scope.context, proposalId, {
-      isCurrent: () => this.isCurrentSourceScope(scope),
-      onProgress: this.requestPageUpdate,
-    }).finally(this.requestPageUpdate);
-  };
-
-  private readonly handleRevisionSubmit = (proposalId: string) => {
-    const scope = this.captureSourceScope();
-    if (!scope) {
-      return;
-    }
-    void requestSkillWorkshopRevision(
-      scope.state,
-      scope.context,
-      proposalId,
-      this.handleRevisionRequest,
-      {
-        isCurrent: () => this.isCurrentSourceScope(scope),
-        onProgress: this.requestPageUpdate,
-      },
-    )
-      .then((outcome) => {
-        if (!outcome || outcome.status !== "admitted" || !this.isCurrentSourceScope(scope)) {
-          return;
-        }
-        scope.navigate(
-          "chat",
-          sessionNavigationTarget({
-            context: scope.context,
-            face: "chat",
-            sessionKey: outcome.sessionKey,
-          }).options,
-        );
-      })
-      .finally(this.requestPageUpdate);
-  };
+    .watchStore(() => this.context?.gateway)
+    .watchStore(() => this.context?.agentSelection)
+    .watchStore(() => this.context?.agents)
+    .watchStore(() => this.context?.runtimeConfig);
 
   override willUpdate() {
-    if (!this.state && this.context) {
-      this.state = createSkillWorkshopState();
-      this.state.skillWorkshopMode = loadSkillWorkshopMode();
+    const context = this.context;
+    const snapshot = context?.gateway.snapshot;
+    const client = snapshot?.phase === "connected" ? snapshot.client : null;
+    const agentId = context && client ? resolveWorkshopAgentId(context) : null;
+    if (client === (this.scope?.client ?? null) && agentId === (this.scope?.agentId ?? null)) {
+      return;
+    }
+    this.generation += 1;
+    this.scope = client && agentId ? { client, agentId } : null;
+    this.snapshot = null;
+    this.error = null;
+    this.viewer = null;
+    this.pendingAction = null;
+    this.actionError = null;
+    this.learningBusy = false;
+    this.learningError = null;
+    this.modeBusy = false;
+    this.modeError = null;
+    this.loading = false;
+    if (this.scope) {
+      void this.load();
     }
   }
 
   override updated() {
-    // Only kick a load when none is in flight and the last attempt did not
-    // fail: loadProposals early-returns resolve immediately and their finally
-    // schedules another update, so re-kicking here would spin forever when a
-    // load stays pending or the gateway keeps erroring.
-    const state = this.state;
-    const canLoad =
-      state &&
-      !state.skillWorkshopLoaded &&
-      !state.skillWorkshopLoading &&
-      !state.skillWorkshopError;
-    if (this.gatewayConnected && canLoad) {
-      this.loadProposals(false);
-    }
-    // Establish the proposal scope before restoring a revision notice: recovery
-    // must neither block the first list load nor lose its draft to the scope reset.
-    if (this.state && this.context) {
-      this.revisionRecovery.sync(this.context, this.state);
-    }
-    this.ensureWorkshopAgentIdentity();
     const runtimeConfig = this.context?.runtimeConfig;
     if (
+      this.scope &&
       runtimeConfig &&
-      this.gatewayConnected &&
       !runtimeConfig.state.configSnapshot &&
       !runtimeConfig.state.configLoading
     ) {
@@ -302,88 +101,155 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     }
   }
 
-  private resetSourceState() {
-    this.operationEpoch += 1;
-    this.selfLearningBusy = false;
-    this.selfLearningError = null;
-    this.learningBusy = false;
-    this.learningError = null;
-    const previous = this.state;
-    if (!previous) {
+  private async load(): Promise<void> {
+    const scope = this.scope;
+    if (!scope) {
       return;
     }
-    if (previous.skillWorkshopActionNoticeTimer) {
-      globalThis.clearTimeout(previous.skillWorkshopActionNoticeTimer);
+    const generation = this.generation;
+    const sequence = ++this.loadSequence;
+    const isCurrent = () => generation === this.generation && sequence === this.loadSequence;
+    this.loading = true;
+    this.error = null;
+    this.requestUpdate();
+    try {
+      const snapshot = await loadWorkshopSnapshot(scope.client, scope.agentId);
+      if (!isCurrent()) {
+        return;
+      }
+      this.snapshot = snapshot;
+      const selected = this.viewer?.target.name;
+      if (
+        selected &&
+        !snapshot.list.skills.some((skill) => skill.name === selected) &&
+        !snapshot.list.archived.some((skill) => skill.name === selected)
+      ) {
+        this.viewer = null;
+      }
+    } catch (error) {
+      if (isCurrent()) {
+        this.error = formatUiError(error);
+      }
+    } finally {
+      if (isCurrent()) {
+        this.loading = false;
+        this.requestUpdate();
+      }
     }
-    const next = createSkillWorkshopState();
-    next.skillWorkshopAgentId = previous.skillWorkshopAgentId;
-    next.skillWorkshopQuery = previous.skillWorkshopQuery;
-    next.skillWorkshopQueueWidth = previous.skillWorkshopQueueWidth;
-    next.skillWorkshopMode = previous.skillWorkshopMode;
-    this.state = next;
-    this.requestPageUpdate();
   }
 
-  private applyGatewaySnapshot(
-    gateway: SkillWorkshopPageContext["gateway"],
-    snapshot: ApplicationGatewaySnapshot,
-    sourceEpochChanged: boolean,
-  ) {
-    this.gatewaySource = gateway;
-    this.gatewayClient = snapshot.client;
-    this.gatewayHello = snapshot.hello;
-    this.gatewayConnected = snapshot.phase === "connected";
-    if (sourceEpochChanged) {
-      this.resetSourceState();
+  private async open(target: WorkshopViewerTarget): Promise<void> {
+    const scope = this.scope;
+    if (!scope) {
+      return;
     }
-    if (
-      snapshot.phase === "connected" &&
-      (sourceEpochChanged || !this.state?.skillWorkshopLoaded)
-    ) {
-      this.loadProposals(sourceEpochChanged);
+    const generation = this.generation;
+    const viewer: WorkshopViewer = { target, status: "loading" };
+    this.viewer = viewer;
+    this.requestUpdate();
+    let next: WorkshopViewer;
+    try {
+      const result = await scope.client.request<SkillsWorkshopReadResult>("skills.workshop.read", {
+        agentId: scope.agentId,
+        name: target.name,
+        filePath: target.filePath,
+        ...(target.versionId ? { versionId: target.versionId } : {}),
+      });
+      next = { target, status: "ready", result };
+    } catch (error) {
+      next = { target, status: "error", error: formatUiError(error) };
+    }
+    if (generation === this.generation && this.viewer === viewer) {
+      this.viewer = next;
+      this.requestUpdate();
     }
   }
 
-  private captureSourceScope(): SkillWorkshopSourceScope | null {
-    return captureSkillWorkshopSourceScope({
-      state: this.state,
-      context: this.context,
-      epoch: this.operationEpoch,
-    });
-  }
+  // A live skill opens at its current SKILL.md; an archived one at its newest saved version.
+  private readonly selectSkill = (name: string) => {
+    const list = this.snapshot?.list;
+    const live = list?.skills.some((skill) => skill.name === name);
+    const versionId = live
+      ? undefined
+      : list?.archived.find((skill) => skill.name === name)?.versions[0]?.id;
+    if (live || versionId) {
+      void this.open({ name, filePath: "SKILL.md", versionId });
+    }
+  };
 
-  private isCurrentSourceScope(scope: SkillWorkshopSourceScope): boolean {
-    return isCurrentSkillWorkshopSourceScope(scope, {
-      state: this.state,
-      context: this.context,
-      epoch: this.operationEpoch,
-    });
-  }
+  private readonly mutate = async (mutation: WorkshopMutation, key: string) => {
+    const scope = this.scope;
+    const access = resolveWorkshopAccess(this.context?.gateway.snapshot);
+    const allowed =
+      mutation.method === "skills.workshop.archive" ? access.canArchive : access.canRestore;
+    if (!scope || !allowed || this.pendingAction) {
+      return;
+    }
+    const generation = this.generation;
+    this.pendingAction = key;
+    this.actionError = null;
+    this.requestUpdate();
+    try {
+      const { method, ...params } = mutation;
+      await scope.client.request(method, { agentId: scope.agentId, ...params });
+      if (generation !== this.generation) {
+        return;
+      }
+      await this.load();
+      if (generation === this.generation && this.viewer?.target.name === mutation.name) {
+        this.selectSkill(mutation.name);
+      }
+    } catch (error) {
+      if (generation === this.generation) {
+        this.actionError = formatUiError(error);
+      }
+    } finally {
+      if (generation === this.generation) {
+        this.pendingAction = null;
+        this.requestUpdate();
+      }
+    }
+  };
 
-  private loadProposals(force: boolean) {
-    const state = this.state;
+  private readonly setMode = async (mode: SkillWorkshopMode) => {
     const context = this.context;
-    if (!state || !context || context.gateway.snapshot.phase !== "connected") {
+    const runtimeConfig = context?.runtimeConfig;
+    if (
+      !context ||
+      !runtimeConfig ||
+      this.modeBusy ||
+      !resolveWorkshopAccess(context.gateway.snapshot).canSetMode
+    ) {
       return;
     }
-    // The loaders own in-flight state. Even a later no-op load must not suppress
-    // the productive request's terminal repaint; resets already replace its state.
-    void loadSkillWorkshopProposals(state, context, {
-      force,
-      onProgress: this.requestPageUpdate,
-    }).finally(this.requestPageUpdate);
-    this.requestPageUpdate();
-  }
+    // A replaced application context or Gateway connection retires the write and its retry.
+    const generation = this.generation;
+    const isCurrent = () => this.context === context && generation === this.generation;
+    this.modeBusy = true;
+    this.modeError = null;
+    this.requestUpdate();
+    try {
+      const error = await setWorkshopMode(runtimeConfig, mode, isCurrent);
+      if (isCurrent()) {
+        this.modeError = error;
+      }
+    } finally {
+      if (isCurrent()) {
+        this.modeBusy = false;
+        this.requestUpdate();
+      }
+    }
+  };
 
-  private readonly handleLearn = async () => {
-    const scope = this.captureSourceScope();
-    const client = scope?.context.gateway.snapshot.client;
-    if (!scope || !client || this.learningBusy) {
+  private readonly learn = async () => {
+    const context = this.context;
+    const scope = this.scope;
+    if (!context || !scope || this.learningBusy) {
       return;
     }
-    const { context } = scope;
-    const hello = context.gateway.snapshot.hello;
-    const agentId = resolveSkillWorkshopAgentId(context);
+    const { client, agentId } = scope;
+    const generation = this.generation;
+    const isCurrent = () => this.context === context && generation === this.generation;
     const message = SKILL_WORKSHOP_LEARNING_PROMPT;
     const params = {
       agentId,
@@ -397,20 +263,20 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
     });
     if (!access.allowed) {
       this.learningError = access.reason;
-      this.requestPageUpdate();
+      this.requestUpdate();
       return;
     }
     this.learningBusy = true;
     this.learningError = null;
-    this.requestPageUpdate();
+    this.requestUpdate();
     const createdAt = Date.now();
     try {
       const result = await context.sessions.createResult(params, { reconciliation: "background" });
-      if (context.gateway.snapshot.client !== client || context.gateway.snapshot.hello !== hello) {
+      if (context.gateway.snapshot.client !== client) {
         return;
       }
       if (!result) {
-        if (this.isCurrentSourceScope(scope)) {
+        if (isCurrent()) {
           this.learningError =
             context.sessions.state.error ?? t("skillWorkshop.learning.startFailed");
         }
@@ -436,7 +302,7 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
           error: result.initialRun.error,
         });
       }
-      if (!this.isCurrentSourceScope(scope)) {
+      if (!isCurrent() || !this.isConnected) {
         return;
       }
       context.navigate(
@@ -450,88 +316,50 @@ class SkillWorkshopPage extends OpenClawLightDomElement {
         }).options,
       );
     } finally {
-      if (this.isCurrentSourceScope(scope)) {
+      if (isCurrent()) {
         this.learningBusy = false;
-        this.requestPageUpdate();
+        this.requestUpdate();
       }
     }
   };
-
-  private readonly handleSelfLearningToggle = (enabled: boolean) => {
-    void this.applySelfLearningToggle(enabled);
-  };
-
-  private async applySelfLearningToggle(enabled: boolean): Promise<void> {
-    if (!canCallWorkshopAdminMethod(this.context?.gateway?.snapshot, "config.patch")) {
-      return;
-    }
-    const scope = this.captureSourceScope();
-    const runtimeConfig = scope?.context.runtimeConfig;
-    if (!scope || !runtimeConfig || this.selfLearningBusy) {
-      return;
-    }
-    this.selfLearningBusy = true;
-    this.selfLearningError = null;
-    this.requestPageUpdate();
-    try {
-      const error = await setSelfLearningEnabled(runtimeConfig, enabled, () =>
-        this.isCurrentSourceScope(scope),
-      );
-      if (this.isCurrentSourceScope(scope)) {
-        this.selfLearningError = error;
-      }
-    } finally {
-      if (this.isCurrentSourceScope(scope)) {
-        this.selfLearningBusy = false;
-        this.requestPageUpdate();
-      }
-    }
-  }
-
-  private ensureWorkshopAgentIdentity(): void {
-    const context = this.context;
-    const agentId = this.state?.skillWorkshopAgentId;
-    if (!context || !agentId || context.agentIdentity.get(agentId)) {
-      return;
-    }
-    void context.agentIdentity.ensure([agentId]);
-  }
 
   override disconnectedCallback() {
     this.subscriptions.clear();
-    this.resetSourceState();
+    this.generation += 1;
+    this.scope = null;
     super.disconnectedCallback();
   }
 
   override render() {
-    const scope = this.captureSourceScope();
-    return scope
-      ? renderSkillWorkshopPage(
-          scope.state,
-          {
-            context: scope.context,
-            revisionRecoveryActive: this.revisionRecovery.active,
-            workshopAgentName:
-              scope.context.agentIdentity.get(scope.state.skillWorkshopAgentId)?.name?.trim() ?? "",
-            onLifecycleAction: (action, decision) =>
-              this.handleLifecycleAction(scope, action, decision),
-            onEvaluate: this.handleEvaluation,
-            onRevisionSubmit: this.handleRevisionSubmit,
-            selfLearning: resolveSelfLearning(
-              scope.context.runtimeConfig,
-              this.selfLearningBusy,
-              this.selfLearningError,
-              canCallWorkshopAdminMethod(scope.context.gateway.snapshot, "config.patch"),
-            ),
-            onSelfLearningToggle: this.handleSelfLearningToggle,
-            learningBusy: this.learningBusy,
-            learningError: this.learningError,
-            onLearn: this.handleLearn,
-            onRetry: () => this.loadProposals(true),
-          },
-          this.requestPageUpdate,
-        )
-      : nothing;
+    const context = this.context;
+    if (!context) {
+      return nothing;
+    }
+    return renderSkillWorkshop({
+      context,
+      agentId: this.scope?.agentId ?? null,
+      access: resolveWorkshopAccess(context.gateway.snapshot),
+      snapshot: this.snapshot,
+      loading: this.loading,
+      error: this.error,
+      viewer: this.viewer,
+      pendingAction: this.pendingAction,
+      actionError: this.actionError,
+      mode: resolveWorkshopMode(context.runtimeConfig),
+      modeBusy: this.modeBusy,
+      modeError: this.modeError,
+      learningAccess: readSessionMethodAccess(context.gateway.snapshot, {
+        method: "sessions.create",
+      }),
+      learningBusy: this.learningBusy,
+      learningError: this.learningError,
+      onRetry: () => void this.load(),
+      onSelectSkill: this.selectSkill,
+      onOpen: (target) => void this.open(target),
+      onMutate: (mutation, key) => void this.mutate(mutation, key),
+      onModeChange: (mode) => void this.setMode(mode),
+      onLearn: () => void this.learn(),
+    });
   }
 }
 

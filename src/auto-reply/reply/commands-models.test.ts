@@ -249,7 +249,7 @@ describe("handleModelsCommand", () => {
     expect(result?.reply?.text).toContain(recovery);
   });
 
-  it("offers a connection action for an unconfirmed captured CLI login", async () => {
+  it("reports sign-in needed for a logged-out configured CLI runtime", async () => {
     setCredentials([]);
     const params = buildParams("/models anthropic", {
       agents: {
@@ -260,10 +260,11 @@ describe("handleModelsCommand", () => {
       },
     });
     const result = await handleModelsCommand(params, true);
-    expect(result?.reply?.text).toContain("Connection not confirmed");
+    expect(result?.reply?.text).toContain("Sign-in needed");
     expect(result?.reply?.text).toContain(
-      "Connect with /login anthropic, or choose another model.",
+      "If Claude Code is signed out, run claude auth login on the Gateway host, or choose another model.",
     );
+    expect(result?.reply?.text).not.toContain("/login anthropic");
   });
 
   it.each([

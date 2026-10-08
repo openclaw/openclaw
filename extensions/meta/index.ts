@@ -1,6 +1,3 @@
-/**
- * Meta provider plugin entrypoint.
- */
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { applyMetaConnectionConfig } from "./onboard.js";

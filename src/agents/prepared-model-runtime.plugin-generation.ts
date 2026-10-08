@@ -1,9 +1,7 @@
+import { captureRemoteModelCatalogSnapshot } from "../model-catalog/remote-overlay.js";
 import { registryContainsRuntimePluginIds } from "../plugins/active-runtime-registry.js";
 import { capturePluginLifecycleAuthority } from "../plugins/registry-lifecycle.js";
-import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
-import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
-import { resolveAgentRuntimePluginLoadPlan } from "./harness/runtime-plugin-load-plan.js";
-import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
+import { resolveAgentRuntimePluginSelectionOwners } from "./harness/runtime-plugin-load-plan.js";
 import { ownPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
   PreparedModelRuntimeCatalogMode,
@@ -74,7 +72,7 @@ export function preparedPluginGenerationSupportsSelections(
     return true;
   }
   const registry = generation.pluginRegistry;
-  const plan = resolveAgentRuntimePluginLoadPlan({
+  const selection = resolveAgentRuntimePluginSelectionOwners({
     config: input.config,
     workspaceDir:
       generation.pluginMetadataSnapshot.workspaceDir ?? input.workspaceDir ?? process.cwd(),
@@ -83,9 +81,10 @@ export function preparedPluginGenerationSupportsSelections(
   });
   // Failed and disabled loads are recorded generation outcomes, not missing owners.
   // Borrowing preserves those outcomes; downstream model resolution owns availability.
+  // Shared capabilities retain their admitted outcome, including context-engine fallback.
   return (
     registry !== undefined &&
-    (plan.pluginIds ?? []).every(
+    selection.pluginIds.every(
       (id) =>
         registry.plugins.some(
           (plugin) =>
@@ -144,6 +143,7 @@ export function createPreparedPluginGeneration(params: {
     return derived;
   }
   const generation = Object.freeze({
+    remoteCatalog: captureRemoteModelCatalogSnapshot(),
     pluginMetadataSnapshot: params.pluginMetadataSnapshot,
     inlineProviderModels: Object.freeze([...params.inlineProviderModels]),
     configuredCatalogEntries: Object.freeze([...params.configuredCatalogEntries]),
@@ -168,42 +168,4 @@ export function createPreparedPluginGeneration(params: {
   });
   ownPreparedPluginGeneration(generation);
   return generation;
-}
-
-export async function buildPreparedPluginModelCatalog(params: {
-  includeNative?: boolean;
-  providerIds?: readonly string[];
-  agentFacts: {
-    credentials: Parameters<typeof buildPreparedModelCatalogSnapshot>[0]["authCredentials"];
-    input: PreparedModelRuntimeInput;
-  };
-  catalogMode: PreparedModelRuntimeCatalogMode;
-  modelRegistry: Parameters<typeof buildPreparedModelCatalogSnapshot>[0]["modelRegistry"];
-  providerOutcomes?: Parameters<typeof buildPreparedModelCatalogSnapshot>[0]["providerOutcomes"];
-  pluginGeneration: PreparedModelRuntimePluginGeneration;
-}) {
-  const { credentials, input } = params.agentFacts;
-  const { pluginMetadataSnapshot: metadataSnapshot, pluginRegistry } = params.pluginGeneration;
-  return await withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, async () => {
-    const snapshot = await buildPreparedModelCatalogSnapshot({
-      agentDir: input.agentDir,
-      authCredentials: credentials,
-      config: input.config,
-      modelRegistry: params.modelRegistry,
-      metadataSnapshot,
-      providerOutcomes: params.providerOutcomes,
-      includeProviderPluginAugmentation: params.catalogMode === "live",
-      providerIds: params.providerIds,
-      ...(input.env ? { env: input.env } : {}),
-      ...(input.readOnly ? { readOnly: true } : {}),
-      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-    });
-    return params.catalogMode === "live" && params.includeNative !== false
-      ? await augmentPreparedModelCatalogWithAgentHarness({
-          input,
-          snapshot,
-          pluginRegistry,
-        })
-      : snapshot;
-  });
 }

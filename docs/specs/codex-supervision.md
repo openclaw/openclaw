@@ -404,8 +404,8 @@ Codex approval, elicitation, event, and delivery handlers, then:
    `ConfigManager` state selects the model and provider, and the fork response
    reports the actual pair. If the model differs from the last model recorded
    in the source, Codex emits its normal model-difference warning. The harness
-   confirms `thread/unsubscribe` on that exact probe and physical connection
-   before creating the canonical thread. The probe is never persisted or archived.
+   confirms `thread/unsubscribe` on that exact check and physical connection
+   before creating the canonical thread. The check is never persisted or archived.
 2. On that same connection, starts the canonical full Codex harness thread with
    `threadSource: "appServer"`, OpenClaw's cwd, policy, config, environment, the
    full OpenClaw harness tool surface, and exactly the model and provider

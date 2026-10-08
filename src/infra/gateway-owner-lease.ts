@@ -1,50 +1,53 @@
 import { randomUUID } from "node:crypto";
 import { hostname } from "node:os";
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { RetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
 import type { OpenClawStateSchemaReadAdmission } from "../state/openclaw-state-db-contract.js";
 import {
   withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../state/openclaw-state-db-readonly.js";
-import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { withOpenClawStateStartupMigrationCheckpointDatabase } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  existingPathOrUndefined,
+  resolveOpenClawStateSqlitePath,
+} from "../state/openclaw-state-db.paths.js";
 import { startOpenClawStateLeaseHeartbeat } from "../state/openclaw-state-lease-heartbeat.js";
 import {
   acquireOpenClawStateLeaseInTransaction,
-  readOpenClawStateLease,
-  reclaimDeadOpenClawStateLeaseInTransaction,
   releaseOpenClawStateLeaseInTransaction,
 } from "../state/openclaw-state-lease-store.js";
 import { assertOpenClawStateWriteAllowed } from "../state/openclaw-state-ownership.js";
+import { captureOpenClawStateReadSource } from "../state/openclaw-state-read-worker.js";
+import type { OpenClawStateReadOutcome } from "../state/openclaw-state-read.types.js";
+import { captureOpenClawStateReadWorkerContext } from "../state/openclaw-state-worker-context.js";
+import {
+  classifyGatewayOwnerProcessNamespace,
+  describeGatewayLockHolder,
+  GATEWAY_OWNER_HEARTBEAT_MS,
+  GatewayLockNamespaceError,
+  readGatewayLockProcessNamespace,
+} from "./gateway-lock-payload.js";
+import { gatewayOwnerKey, readGatewayOwnerLeaseFromDatabase } from "./gateway-owner-lease.read.js";
+import type {
+  GatewayOwnerLeaseIdentity,
+  GatewayOwnerSupervisor,
+} from "./gateway-owner-lease.types.js";
+import { captureGatewayStateOwner, type StateDatabaseSchemaLease } from "./gateway-state-owner.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
+import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
+import { retainSnapshotTempDirectory } from "./sqlite-readonly-location-cleanup.js";
+import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
+import { prepareSqliteReadOnlyLocationSync } from "./sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { STARTUP_MIGRATION_LEASE_TTL_MS } from "./startup-migration-checkpoint.js";
-import {
-  parseStateLeaseProcessOwner,
-  readStateLeaseProcessOwnerStatus,
-  type StateLeaseProcessOwner,
-} from "./state-lease-process-owner.js";
+import { readStateLeaseProcessOwnerStatus } from "./state-lease-process-owner.js";
 
-const gatewayOwnerKey = { scope: "gateway-owner", key: "global" };
 const log = createSubsystemLogger("gateway");
-
-export type GatewayOwnerSupervisor = {
-  kind: "launchd" | "systemd" | "schtasks" | "external";
-  name: string | null;
-};
-
-export type GatewayOwnerLeaseIdentity = StateLeaseProcessOwner & {
-  owner: string;
-  port: number;
-  mode: "foreground" | "supervised";
-  supervisor: GatewayOwnerSupervisor | null;
-  state: "live" | "dead" | "unknown";
-  expired: boolean;
-};
 
 export type GatewayOwnerLease = {
   owner: string;
@@ -52,70 +55,155 @@ export type GatewayOwnerLease = {
   release: () => Promise<void>;
 };
 
-function parseSupervisor(value: unknown): GatewayOwnerSupervisor | null {
-  if (value === null) {
-    return null;
+function resolveStoppedGatewayOwnerLease(previous: GatewayOwnerLeaseIdentity | undefined) {
+  if (!previous) {
+    return undefined;
   }
-  if (
-    !isRecord(value) ||
-    (value.kind !== "launchd" &&
-      value.kind !== "systemd" &&
-      value.kind !== "schtasks" &&
-      value.kind !== "external") ||
-    (value.name !== null && (typeof value.name !== "string" || !value.name.trim()))
-  ) {
-    throw new Error("Gateway owner lease supervisor could not be verified");
+  if (previous.state === "dead") {
+    return previous;
   }
-  return { kind: value.kind, name: value.name };
+  const namespace = classifyGatewayOwnerProcessNamespace(previous.processNamespace, {
+    ownerHost: previous.host,
+    readHeartbeatAt: () => previous.heartbeatAt,
+  });
+  if (namespace === "dead") {
+    return previous;
+  }
+  if (namespace === "unknown") {
+    throw new GatewayLockNamespaceError(previous);
+  }
+  if (previous.expired && previous.state !== "live") {
+    return previous;
+  }
+  throw new Error(
+    `Another Gateway owner lease is still active for this state directory: ${describeGatewayLockHolder(previous, undefined, previous.state === "live" ? "live" : "unknown")}`,
+  );
 }
 
-/** Read through the caller's admitted connection when ownership guards a write. */
-export function readGatewayOwnerLeaseFromDatabase(
-  db: DatabaseSync,
-  port?: number,
-): GatewayOwnerLeaseIdentity | undefined {
-  if (!tableExists(db, "state_leases")) {
-    return undefined;
+/** Physical custody alone must not bypass a fresh, unverifiable lease during maintenance. */
+export async function assertGatewayOwnerLeaseStopped(
+  env: NodeJS.ProcessEnv,
+  maintenanceOwner?: StateDatabaseSchemaLease,
+): Promise<void> {
+  if (maintenanceOwner) {
+    const pathname = resolveOpenClawStateSqlitePath(env);
+    maintenanceOwner.assertDatabaseAccess(pathname);
+    if (existingPathOrUndefined(pathname) === undefined) {
+      return;
+    }
+    const context = captureOpenClawStateReadWorkerContext({ env, path: pathname });
+    const source = captureOpenClawStateReadSource();
+    const transport = source.createTransport({ type: "doctor.gatewayOwnerLease.read" });
+    const controller = new AbortController();
+    const callerSignal = getAsyncWorkSignal();
+    const signal = callerSignal
+      ? AbortSignal.any([callerSignal, controller.signal])
+      : controller.signal;
+    const authority = {
+      signal,
+      assertCurrent() {
+        signal.throwIfAborted();
+        context.maintenanceScope?.assertReadAdmission();
+        context.admission.assertCurrent();
+        maintenanceOwner.assertDatabaseAccess(pathname);
+      },
+    };
+    let prepared: PreparedSqliteReadOnlyLocation | undefined;
+    let releaseSnapshot: (() => void) | undefined;
+    let read: RetainedOperation<OpenClawStateReadOutcome> | undefined;
+    let retirement: RetainedOperation<void> | undefined;
+    let closing: Promise<void> | undefined;
+    const close = (): Promise<void> =>
+      (closing ??= (async () => {
+        // Read failure belongs to the caller; cleanup must still retire its native task.
+        await read?.result.catch(() => undefined);
+        retirement = transport.startClose();
+        await retirement.result;
+        retirement = undefined;
+        releaseSnapshot?.();
+        releaseSnapshot = undefined;
+        if (prepared) {
+          // Disposable cleanup warnings and retries belong to the snapshot owner.
+          await prepared.cleanupAsync();
+          prepared = undefined;
+        }
+        releaseSource();
+      })().finally(() => {
+        closing = undefined;
+      }));
+    const releaseSource = source.own(
+      () => {
+        read?.service();
+        retirement?.service();
+      },
+      () => {
+        controller.abort();
+        return close();
+      },
+    );
+    const errors: unknown[] = [];
+    let outcome: OpenClawStateReadOutcome | undefined;
+    try {
+      authority.assertCurrent();
+      prepared = prepareSqliteReadOnlyLocationSync(pathname);
+      releaseSnapshot = retainSnapshotTempDirectory(
+        prepared.cleanupRoot ?? path.dirname(prepared.location),
+      );
+      read = transport.startRead(
+        {
+          context,
+          location: prepared.location,
+          snapshotRoot: prepared.cleanupRoot,
+          // Physical maintenance custody admits this private copy before quarantine repair.
+          checkFreshAdmission: false,
+        },
+        authority,
+      );
+      outcome = await read.result;
+      if ("error" in outcome) {
+        errors.push(outcome.error);
+      }
+      authority.assertCurrent();
+    } catch (error) {
+      errors.push(error);
+    }
+    const cleanupErrors: unknown[] = [];
+    try {
+      await close();
+    } catch (error) {
+      cleanupErrors.push(error);
+    }
+    try {
+      authority.assertCurrent();
+      if (outcome && "value" in outcome) {
+        const reply = outcome.value;
+        if (reply.type !== "doctor.gatewayOwnerLease.read") {
+          throw new Error("Unexpected Gateway owner lease inspection result");
+        }
+        resolveStoppedGatewayOwnerLease(
+          reply.lease
+            ? {
+                ...reply.lease,
+                state: readStateLeaseProcessOwnerStatus(reply.lease, reply.lease.heartbeatAt),
+              }
+            : undefined,
+        );
+      }
+    } catch (error) {
+      errors.push(error);
+    }
+    throwSqliteLifecycleErrors(
+      [...errors, ...cleanupErrors],
+      "Gateway owner lease inspection and cleanup failed",
+    );
+    return;
   }
-  const row = readOpenClawStateLease(db, gatewayOwnerKey);
-  if (!row) {
-    return undefined;
-  }
-  const processOwner = parseStateLeaseProcessOwner(row.payloadJson);
-  let payload: unknown;
-  try {
-    payload = row.payloadJson ? JSON.parse(row.payloadJson) : null;
-  } catch {
-    payload = null;
-  }
-  if (
-    !processOwner ||
-    !isRecord(payload) ||
-    typeof payload.port !== "number" ||
-    !Number.isInteger(payload.port) ||
-    payload.port <= 0 ||
-    payload.port > 65535 ||
-    (payload.mode !== "foreground" && payload.mode !== "supervised")
-  ) {
-    throw new Error("Gateway owner lease identity could not be verified");
-  }
-  if (port !== undefined && payload.port !== port) {
-    return undefined;
-  }
-  const supervisor = parseSupervisor(payload.supervisor);
-  if ((payload.mode === "foreground") !== (supervisor === null)) {
-    throw new Error("Gateway owner lease supervisor does not match its listener mode");
-  }
-  return {
-    ...processOwner,
-    owner: row.owner,
-    port: payload.port,
-    mode: payload.mode,
-    supervisor,
-    // Expiry cannot revoke the separate physical Gateway coordinator.
-    state: readStateLeaseProcessOwnerStatus(processOwner),
-    expired: row.expiresAt === null || row.expiresAt <= Date.now(),
-  };
+  withExistingOpenClawStateDatabaseCurrentReadOnly(
+    ({ db }) => {
+      resolveStoppedGatewayOwnerLease(readGatewayOwnerLeaseFromDatabase(db));
+    },
+    { env },
+  );
 }
 
 export function readGatewayOwnerLease(
@@ -148,10 +236,12 @@ export function acquireGatewayOwnerLease(params: {
 }): GatewayOwnerLease {
   const env = params.env ?? process.env;
   const databasePath = resolveOpenClawStateSqlitePath(env);
+  const custody = captureGatewayStateOwner(databasePath);
   const identity = { ...gatewayOwnerKey, owner: params.owner ?? randomUUID() };
   const processOwner = {
     pid: process.pid,
     host: hostname(),
+    processNamespace: readGatewayLockProcessNamespace(),
     // Retry the native self lookup with its full Windows budget before publication.
     startedAt:
       getFileLockProcessStartTime(process.pid, env) ??
@@ -169,7 +259,10 @@ export function acquireGatewayOwnerLease(params: {
         db,
         () => {
           assertOpenClawStateWriteAllowed({ database: db, databasePath, env });
-          reclaimDeadOpenClawStateLeaseInTransaction(db, identity);
+          const previous = resolveStoppedGatewayOwnerLease(readGatewayOwnerLeaseFromDatabase(db));
+          if (previous) {
+            releaseOpenClawStateLeaseInTransaction(db, { ...identity, owner: previous.owner });
+          }
           const acquired = acquireOpenClawStateLeaseInTransaction(
             db,
             identity,
@@ -216,7 +309,7 @@ export function acquireGatewayOwnerLease(params: {
         leaseMs: STARTUP_MIGRATION_LEASE_TTL_MS,
         acquiredAt: expiresAt - STARTUP_MIGRATION_LEASE_TTL_MS,
         expiresAt,
-        heartbeatMs: 30_000,
+        heartbeatMs: GATEWAY_OWNER_HEARTBEAT_MS,
         ...(processOwner.startedAt === null
           ? { processOwner: { identity: processOwner, env: resolveDiagnosticProcessEnv(env) } }
           : {}),
@@ -248,7 +341,16 @@ export function acquireGatewayOwnerLease(params: {
         });
       }
       await heartbeat?.stop();
-      releaseRow();
+      try {
+        // Lost custody may join its worker, but cannot mutate the recorded lease.
+        if (!custody?.signal.aborted) {
+          releaseRow();
+        }
+      } catch (error) {
+        if (!custody?.signal.aborted) {
+          throw error;
+        }
+      }
       released = true;
     },
   };

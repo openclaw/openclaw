@@ -23,6 +23,7 @@ UNSUPPORTED_ADMISSION_PACKAGE=/tmp/openclaw-update-first-hop-unsupported-admissi
 ARTIFACT_DIR="${OPENCLAW_UPDATE_FIRST_HOP_ARTIFACT_DIR:-/tmp/openclaw-update-first-hop-artifacts}"
 EXPECTED_MISSING_CHUNK="${OPENCLAW_UPDATE_FIRST_HOP_EXPECTED_MISSING_CHUNK-}"
 ADMISSION_PROTOCOL="${OPENCLAW_UPDATE_FIRST_HOP_ADMISSION_PROTOCOL-}"
+SCENARIO="${OPENCLAW_UPDATE_FIRST_HOP_SCENARIO:-all}"
 BASE_PATH="$PATH"
 ACCOUNT_HOME="$HOME"
 mock_pid=""
@@ -37,7 +38,11 @@ export npm_config_audit=false
 export npm_config_fund=false
 export npm_config_loglevel=error
 
-for package_path in "$SOURCE_PACKAGE" "$CANDIDATE_PACKAGE" "$ORIGINAL_CANDIDATE_PACKAGE" "$NEGATIVE_PACKAGE" "$FUTURE_PACKAGE" "$ARTIFACT_DIR/source.json"; do
+required_packages=("$CANDIDATE_PACKAGE" "$FUTURE_PACKAGE")
+if [ "$SCENARIO" != "missing-load-path" ]; then
+  required_packages+=("$SOURCE_PACKAGE" "$ORIGINAL_CANDIDATE_PACKAGE" "$NEGATIVE_PACKAGE" "$ARTIFACT_DIR/source.json")
+fi
+for package_path in "${required_packages[@]}"; do
   if [ ! -f "$package_path" ]; then
     echo "missing package input: $package_path" >&2
     exit 2
@@ -195,7 +200,9 @@ setup_lane() {
   first_hop_timing "$lane install" "$install_started"
   openclaw --version >"$ARTIFACT_DIR/$lane-source-version.txt"
   assert_installed_build "$source_package" "$ARTIFACT_DIR/$lane-source-build-info.json"
-  install_update_restart_systemctl_shim
+  # This lane owns a synthetic service outside a delegated unit cgroup. Keep
+  # process-group custody here; the survivor membership lanes cover cgroup stops.
+  install_update_restart_systemctl_shim absent
   openclaw config set gateway.mode local >"$ARTIFACT_DIR/$lane-config.log" 2>&1
   openclaw config set gateway.port "$port" >>"$ARTIFACT_DIR/$lane-config.log" 2>&1
   openclaw config set gateway.reload.mode off >>"$ARTIFACT_DIR/$lane-config.log" 2>&1
@@ -362,7 +369,9 @@ run_positive_hops() {
 run_missing_path_admission() {
   local started=$SECONDS
   local lane=admission-missing-load-path
-  reset_lane positive
+  if [ "$SCENARIO" != "missing-load-path" ]; then
+    reset_lane positive
+  fi
   setup_lane "$lane" 18793 "$CANDIDATE_PACKAGE" 1
   run_update "$lane-update" "$FUTURE_PACKAGE"
   local assert_started=$SECONDS
@@ -384,6 +393,8 @@ run_missing_path_admission() {
     2>"$OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT/missing-load-path/doctor-lint.err" || lint_exit=$?
   [ "$lint_exit" -eq 1 ]
   node scripts/e2e/lib/upgrade-survivor/missing-load-path.mjs missing-load-path post-doctor
+  # Standalone Doctor can restart an offline service; join it before hashing profile artifacts.
+  systemctl --user stop openclaw-gateway.service
   node scripts/e2e/lib/upgrade-survivor/update-admission-entry-probe.mjs \
     "$(package_root)" "$ARTIFACT_DIR/$lane-entry-probe.json"
   record_residue "$ARTIFACT_DIR/$lane-transaction-residue.txt"
@@ -397,42 +408,54 @@ export OPENAI_API_KEY="sk-openclaw-first-hop"
 export MOCK_REQUEST_LOG="$ARTIFACT_DIR/openai-requests.jsonl"
 mock_pid="$(openclaw_e2e_start_mock_openai 44212 "$ARTIFACT_DIR/mock-openai.log")"
 openclaw_e2e_wait_mock_openai 44212
-if [ -n "$EXPECTED_MISSING_CHUNK" ]; then
-  run_negative_control
-else
-  echo "No deterministic missing-chunk restart control for $source_version; positive hops remain required."
+if [ "$SCENARIO" != "missing-load-path" ]; then
+  if [ -n "$EXPECTED_MISSING_CHUNK" ]; then
+    run_negative_control
+  else
+    echo "No deterministic missing-chunk restart control for $source_version; positive hops remain required."
+  fi
+  run_positive_hops
 fi
-run_positive_hops
-if [ "$ADMISSION_PROTOCOL" = "1" ]; then
+if [ "$SCENARIO" != "source" ] && [ "$ADMISSION_PROTOCOL" = "1" ]; then
   run_missing_path_admission
+elif [ "$SCENARIO" = "missing-load-path" ]; then
+  echo "the missing-load-path scenario requires candidate admission protocol 1" >&2
+  exit 2
 fi
 
 node -e '
   const fs = require("node:fs"), path = require("node:path");
-  const root = process.argv[1];
+  const [root, scenario] = process.argv.slice(1);
   const read = name => JSON.parse(fs.readFileSync(path.join(root, name), "utf8"));
-  const source = read("source.json");
-  const secondHopFixture = read("second-hop-fixture.json");
-  const retainedLegacyCompatibilityChunks = secondHopFixture.retainedLegacyCompatibilityChunks ?? [];
-  const [sourcePid, candidatePid, futurePid] = fs.readFileSync(path.join(root, "positive-service-pids.txt"), "utf8").trim().split("\n").map(Number);
-  fs.writeFileSync(path.join(root, "summary.json"), `${JSON.stringify({
-    source,
-    negativeControl: source.expectedMissingChunk
-      ? { status: "passed", exit: 1, missingChunk: source.expectedMissingChunk }
-      : source.negativeControl,
-    firstHop: { exit: 0, method: "in-process-self-update", selfUpdatePassed: true, serviceIntent: "active", residueCount: 0, build: read("positive-first-build-info.json"), beforePid: sourcePid, afterPid: candidatePid },
-    secondHop: { exit: 0, method: "in-process-self-update", legacyCompatibilityChunksPresent: retainedLegacyCompatibilityChunks.length > 0, retainedLegacyCompatibilityChunks, removedCompatibilityChunks: secondHopFixture.removedCompatibilityChunks ?? [], serviceIntent: "active", residueCount: 0, build: read("positive-second-build-info.json"), beforePid: candidatePid, afterPid: futurePid },
-    admission: process.env.OPENCLAW_UPDATE_FIRST_HOP_ADMISSION_PROTOCOL === "1" ? {
-      supportedTarget: read("positive-second-admission.json"),
-      unsupportedTarget: read("positive-unsupported-admission-admission.json"),
-      missingLoadPath: {
-        ...read("admission-missing-load-path-update-admission.json"),
-        postDoctor: read("admission-missing-load-path/missing-load-path/post-doctor.json"),
-        pendingLifecycleEntry: read("admission-missing-load-path-entry-probe.json"),
-        sameHopPolicyOverrideDemonstrated: false,
-      },
-    } : { status: "not-supported-by-candidate" },
-  }, null, 2)}\n`);
-' "$ARTIFACT_DIR"
+  const summary = {};
+  if (scenario !== "missing-load-path") {
+    const source = read("source.json");
+    const secondHopFixture = read("second-hop-fixture.json");
+    const retainedLegacyCompatibilityChunks = secondHopFixture.retainedLegacyCompatibilityChunks ?? [];
+    const [sourcePid, candidatePid, futurePid] = fs.readFileSync(path.join(root, "positive-service-pids.txt"), "utf8").trim().split("\n").map(Number);
+    Object.assign(summary, {
+      source,
+      negativeControl: source.expectedMissingChunk
+        ? { status: "passed", exit: 1, missingChunk: source.expectedMissingChunk }
+        : source.negativeControl,
+      firstHop: { exit: 0, method: "in-process-self-update", selfUpdatePassed: true, serviceIntent: "active", residueCount: 0, build: read("positive-first-build-info.json"), beforePid: sourcePid, afterPid: candidatePid },
+      secondHop: { exit: 0, method: "in-process-self-update", legacyCompatibilityChunksPresent: retainedLegacyCompatibilityChunks.length > 0, retainedLegacyCompatibilityChunks, removedCompatibilityChunks: secondHopFixture.removedCompatibilityChunks ?? [], serviceIntent: "active", residueCount: 0, build: read("positive-second-build-info.json"), beforePid: candidatePid, afterPid: futurePid },
+      admission: process.env.OPENCLAW_UPDATE_FIRST_HOP_ADMISSION_PROTOCOL === "1" ? {
+        supportedTarget: read("positive-second-admission.json"),
+        unsupportedTarget: read("positive-unsupported-admission-admission.json"),
+      } : { status: "not-supported-by-candidate" },
+    });
+  }
+  if (scenario !== "source" && process.env.OPENCLAW_UPDATE_FIRST_HOP_ADMISSION_PROTOCOL === "1") {
+    summary.admission ??= {};
+    summary.admission.missingLoadPath = {
+      ...read("admission-missing-load-path-update-admission.json"),
+      postDoctor: read("admission-missing-load-path/missing-load-path/post-doctor.json"),
+      pendingLifecycleEntry: read("admission-missing-load-path-entry-probe.json"),
+      sameHopPolicyOverrideDemonstrated: false,
+    };
+  }
+  fs.writeFileSync(path.join(root, "summary.json"), `${JSON.stringify(summary, null, 2)}\n`);
+' "$ARTIFACT_DIR" "$SCENARIO"
 
 echo "Packaged updater first-hop compatibility E2E passed."

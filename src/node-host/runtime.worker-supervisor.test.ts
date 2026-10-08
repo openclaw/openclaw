@@ -89,13 +89,12 @@ describe("node-host runtime worker supervisor lifetime", () => {
         nodeHost: { skills: { enabled: false }, workerRuns: { enabled: true, capacity: 2 } },
       },
       env: { ...fixture.env, PATH: process.env.PATH },
-      enableWorkerRuns: true,
       platform: "linux",
     });
     expect(prepared.workerHostingEnabled, prepared.workerHostingDisabledReason).toBe(true);
-    expect(prepared.manifest.commands).not.toEqual(
-      expect.arrayContaining([...NODE_WORKER_PRIVATE_COMMANDS]),
-    );
+    for (const command of NODE_WORKER_PRIVATE_COMMANDS) {
+      expect(prepared.manifest.commands, command).not.toContain(command);
+    }
     const capacitySnapshots: Array<{ total: number; available: number }> = [];
     const capacityReady = createDeferred();
     const runtime = prepared.start({

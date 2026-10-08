@@ -4,12 +4,8 @@ import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
-import {
-  type AgentCommandOutputEventData,
-  projectAgentToolActivity,
-  type AgentPatchSummaryEventData,
-} from "../infra/agent-activity-events.js";
-import { emitAgentEvent, type AgentApprovalEventData } from "../infra/agent-events.js";
+import { projectAgentToolActivity } from "../infra/agent-activity-events.js";
+import { emitAgentEvent } from "../infra/agent-events.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { projectProgressCardChannelUpdate } from "../session-cards/progress-card-channel-summary.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
@@ -76,6 +72,7 @@ import {
   toolStartData,
 } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
+import { captureToolAuthoredSourceReply } from "./embedded-agent-tool-authored-source-reply.js";
 import {
   collectMessagingMediaUrlsFromRecord,
   collectMessagingMediaUrlsFromToolResult,
@@ -87,7 +84,6 @@ import {
   isAsyncStartedToolResult,
   isToolResultTimedOut,
   readAsyncStartedTaskIds,
-  sanitizeToolResult,
 } from "./embedded-agent-tool-results.js";
 import { parseExecApprovalResultText } from "./exec-approval-result.js";
 import { readMcpConnectAction } from "./mcp-connect-action.js";
@@ -108,6 +104,7 @@ import { isAutomationsToolName } from "./tools/automations-tool-name.js";
 export async function handleToolExecutionEnd(
   ctx: ToolHandlerContext,
   evt: Extract<AgentEvent, { type: "tool_execution_end" }>,
+  readResult: () => unknown,
 ) {
   const toolName = normalizeToolPolicyName(evt.toolName);
   const toolCallId = evt.toolCallId;
@@ -119,7 +116,7 @@ export async function handleToolExecutionEnd(
   const result = evt.result;
   const toolSendReceiptResult = ctx.consumeToolSendReceipt?.(toolCallId);
   const observerIsError = evt.isError || isToolResultError(result);
-  const sanitizedResult = sanitizeToolResult(result);
+  const sanitizedResult = readResult();
   const approvalUnavailable =
     isExecToolName(toolName) &&
     readExecToolDetails(sanitizedResult)?.status === "approval-unavailable";
@@ -391,6 +388,32 @@ export async function handleToolExecutionEnd(
       ctx.trimMessagingToolSent();
     }
   }
+  ctx.state.turnToolsOnlySourceProgress =
+    (ctx.state.turnToolsOnlySourceProgress ?? true) &&
+    sourceReplyFinal === false &&
+    isMessagingSend &&
+    !isToolError &&
+    !messageDelivery?.partialDelivery;
+  ctx.state.lastToolTurnOnlySourceProgress = ctx.state.turnToolsOnlySourceProgress;
+  // A tool whose author declared `canDeliverSourceReply` may hand the host a
+  // finished reply. The host delivers it to the current source and records it as
+  // the assistant turn, so no further model turn has to restate it. A call nested
+  // inside a Code Mode program returns to that program, never to the conversation.
+  const toolAuthoredSourceReply =
+    !isToolError &&
+    !startData?.parentToolCallId &&
+    ctx.params.sourceReplyCapableToolNames?.has(toolName) === true
+      ? captureToolAuthoredSourceReply({
+          result,
+          toolCallId,
+          // The persisted assistant turn survives recovery runs; the run id is the fallback.
+          idempotencyScope: evt.assistantTurnId ?? runId,
+        })
+      : undefined;
+  if (toolAuthoredSourceReply) {
+    ctx.state.messagingToolSourceReplyPayloads.push(toolAuthoredSourceReply);
+    ctx.trimMessagingToolSent();
+  }
   // Track committed reminders only when cron.add completed successfully.
   if (
     !isToolError &&
@@ -486,80 +509,77 @@ export async function handleToolExecutionEnd(
       execDetails?.status === "approval-unavailable"
     ) {
       const approvalStatus = execDetails.status === "approval-pending" ? "pending" : "unavailable";
-      const approvalData: AgentApprovalEventData = {
-        phase: "requested",
-        kind: "exec",
-        status: approvalStatus,
-        title:
-          approvalStatus === "pending"
-            ? "Command approval requested"
-            : "Command approval unavailable",
-        itemId: commandItemId,
-        toolCallId,
-        ...(execDetails.status === "approval-pending"
-          ? {
-              approvalId: execDetails.approvalId,
-              approvalSlug: execDetails.approvalSlug,
-            }
-          : {}),
-        command: execDetails.command,
-        host: execDetails.host,
-        ...(execDetails.status === "approval-unavailable" ? { reason: execDetails.reason } : {}),
-        message: execDetails.warningText,
-      };
       emitToolActivityEvent(ctx, {
         stream: "approval",
-        data: approvalData,
+        data: {
+          phase: "requested",
+          kind: "exec",
+          status: approvalStatus,
+          title:
+            approvalStatus === "pending"
+              ? "Command approval requested"
+              : "Command approval unavailable",
+          itemId: commandItemId,
+          toolCallId,
+          ...(execDetails.status === "approval-pending"
+            ? {
+                approvalId: execDetails.approvalId,
+                approvalSlug: execDetails.approvalSlug,
+              }
+            : {}),
+          command: execDetails.command,
+          host: execDetails.host,
+          ...(execDetails.status === "approval-unavailable" ? { reason: execDetails.reason } : {}),
+          message: execDetails.warningText,
+        },
       });
     } else {
       const output = extractLiveExecOutput(eventResult);
       const rawOutput = extractExecOutput(sanitizedResult);
       const commandStatus =
         execDetails?.status === "failed" || isToolError ? terminalErrorStatus : "completed";
-      const outputData: AgentCommandOutputEventData = {
-        itemId: commandItemId,
-        phase: "end",
-        title: buildCommandItemTitle(toolName, meta),
-        toolCallId,
-        name: toolName,
-        ...(output ? { output } : {}),
-        status: commandStatus,
-        ...(execDetails && "exitCode" in execDetails ? { exitCode: execDetails.exitCode } : {}),
-        ...(execDetails &&
-        "durationMs" in execDetails &&
-        typeof execDetails.durationMs === "number" &&
-        Number.isFinite(execDetails.durationMs) &&
-        execDetails.durationMs >= 0
-          ? { durationMs: execDetails.durationMs }
-          : {}),
-        ...(execDetails && "cwd" in execDetails && typeof execDetails.cwd === "string"
-          ? { cwd: execDetails.cwd }
-          : {}),
-      };
       emitToolActivityEvent(ctx, {
         stream: "command_output",
-        data: outputData,
+        data: {
+          itemId: commandItemId,
+          phase: "end",
+          title: buildCommandItemTitle(toolName, meta),
+          toolCallId,
+          name: toolName,
+          ...(output ? { output } : {}),
+          status: commandStatus,
+          ...(execDetails && "exitCode" in execDetails ? { exitCode: execDetails.exitCode } : {}),
+          ...(execDetails &&
+          "durationMs" in execDetails &&
+          typeof execDetails.durationMs === "number" &&
+          Number.isFinite(execDetails.durationMs) &&
+          execDetails.durationMs >= 0
+            ? { durationMs: execDetails.durationMs }
+            : {}),
+          ...(execDetails && "cwd" in execDetails && typeof execDetails.cwd === "string"
+            ? { cwd: execDetails.cwd }
+            : {}),
+        },
       });
 
       if (typeof rawOutput === "string") {
         const parsedApprovalResult = parseExecApprovalResultText(rawOutput);
         if (parsedApprovalResult.kind === "denied") {
-          const approvalData: AgentApprovalEventData = {
-            phase: "resolved",
-            kind: "exec",
-            status: normalizeOptionalLowercaseString(parsedApprovalResult.metadata)?.includes(
-              "approval-request-failed",
-            )
-              ? "failed"
-              : "denied",
-            title: "Command approval resolved",
-            itemId: commandItemId,
-            toolCallId,
-            message: parsedApprovalResult.body || parsedApprovalResult.raw,
-          };
           emitToolActivityEvent(ctx, {
             stream: "approval",
-            data: approvalData,
+            data: {
+              phase: "resolved",
+              kind: "exec",
+              status: normalizeOptionalLowercaseString(parsedApprovalResult.metadata)?.includes(
+                "approval-request-failed",
+              )
+                ? "failed"
+                : "denied",
+              title: "Command approval resolved",
+              itemId: commandItemId,
+              toolCallId,
+              message: parsedApprovalResult.body || parsedApprovalResult.raw,
+            },
           });
         }
       }
@@ -570,20 +590,19 @@ export async function handleToolExecutionEnd(
     const patchSummary = readApplyPatchSummary(sanitizedResult);
     const patchItemId = buildPatchItemId(toolCallId);
     if (patchSummary) {
-      const patchData: AgentPatchSummaryEventData = {
-        itemId: patchItemId,
-        phase: "end",
-        title: buildPatchItemTitle(meta),
-        toolCallId,
-        name: toolName,
-        added: patchSummary.added,
-        modified: patchSummary.modified,
-        deleted: patchSummary.deleted,
-        summary: buildPatchSummaryText(patchSummary),
-      };
       emitToolActivityEvent(ctx, {
         stream: "patch",
-        data: patchData,
+        data: {
+          itemId: patchItemId,
+          phase: "end",
+          title: buildPatchItemTitle(meta),
+          toolCallId,
+          name: toolName,
+          added: patchSummary.added,
+          modified: patchSummary.modified,
+          deleted: patchSummary.deleted,
+          summary: buildPatchSummaryText(patchSummary),
+        },
       });
     }
   }

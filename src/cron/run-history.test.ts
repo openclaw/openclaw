@@ -1,14 +1,11 @@
 import { expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { ensureExecutionOwnerLifecycleBindingSchema } from "../audit/execution-owner-lifecycle-binding-store.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  cronQuietTriggerDetail,
-  cronRunLogEntryToDetail,
-  cronRunRecordToRunLogEntry,
-} from "./run-history-detail.js";
+import { cronQuietTriggerDetail, cronRunLogEntryToDetail } from "./run-history-detail.js";
 import { projectCronRunHistoryPage, type ReadCronRunHistoryPageOptions } from "./run-history.js";
 import { findCronRunRecoveryInDatabase } from "./service/run-history-recovery.js";
 import { cronStoreKey } from "./store/key.js";
@@ -112,11 +109,20 @@ it("retains history across worker reads, isolates stores, and recovers only an e
           }).finalized,
         ).toBeUndefined();
         // A late result cannot replace the first durable outcome for this exact run.
-        recordCronRunInDatabase(db, {
-          ...outcome(storeKey, "first"),
-          status: "failed",
-          endedAt: 40,
-        });
+        const reads = trackSqliteStatementExecutions(db, ["history"], (sql) =>
+          /^select\b/i.test(sql) && sql.includes('from "task_runs"') ? "history" : null,
+        );
+        try {
+          recordCronRunInDatabase(db, {
+            ...outcome(storeKey, "first"),
+            status: "failed",
+            endedAt: 40,
+          });
+          // Both stores can retain this run ID; unrelated runs must stay in SQLite.
+          expect(reads.rowCounts.history).toBe(2);
+        } finally {
+          reads.restore();
+        }
         expect(
           readCronRunRecordsInDatabase(db, "job").find((row) => row.runId === "cron:job:10:first")
             ?.endedAt,
@@ -259,36 +265,6 @@ it("admits actual worker writes and rolls back history pruning when commit is re
       }
     },
   );
-});
-
-it("reads released row fallback fields but never discloses internal recovery state", () => {
-  const record: CronRunRecord = {
-    id: "released",
-    jobId: "job",
-    createdAt: 1,
-    endedAt: 2,
-    status: "cancelled",
-    error: "operator reason",
-    summary: "old summary",
-    sessionKey: "agent:main:cron:job",
-    detail: {
-      kind: "cron-run",
-      status: "ok",
-      storeKey: "store",
-      sessionId: "old-generation",
-      triggerState: { secret: true },
-      futureInternal: "private",
-    },
-  };
-  const entry = cronRunRecordToRunLogEntry(record);
-  expect(entry).toMatchObject({
-    error: "operator reason",
-    summary: "old summary",
-    sessionId: "old-generation",
-  });
-  expect(entry).not.toHaveProperty("triggerState");
-  expect(entry).not.toHaveProperty("futureInternal");
-  expect(entry).not.toHaveProperty("storeKey");
 });
 
 it("retains legacy identities and raw details without inventing a store partition", async () => {

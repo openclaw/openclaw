@@ -7,7 +7,11 @@ import type {
   AgentMessage,
   AnyAgentTool,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { appendSessionTranscriptMessageByIdentityStrict } from "openclaw/plugin-sdk/session-transcript-runtime";
+import type { NativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
+import {
+  appendSessionTranscriptMessageByIdentityStrict,
+  publishSessionTranscriptUpdateByIdentity,
+} from "openclaw/plugin-sdk/session-transcript-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AgentsApiFunctionCall, AgentsApiItem } from "./agentsapi-client.js";
 import {
@@ -17,6 +21,46 @@ import {
   agentsApiNativeToolOutput,
 } from "./agentsapi-native-items.js";
 import { requireAgentsApiSessionTarget } from "./agentsapi-target.js";
+
+type TranscriptAssertion = NativeSessionBindingAuthority["assertLegacyCurrent"];
+
+export function bindAgentsApiTranscriptAuthority(
+  owner: TranscriptAssertion,
+  signal: AbortSignal,
+): TranscriptAssertion {
+  const assertCurrent = () => {
+    owner();
+    signal.throwIfAborted();
+  };
+  const prepare = owner.prepareSessionSource;
+  return prepare
+    ? Object.assign(assertCurrent, {
+        async prepareSessionSource() {
+          const source = await prepare();
+          return {
+            ...source,
+            assertCurrent: () => {
+              source.assertCurrent();
+              signal.throwIfAborted();
+            },
+          };
+        },
+      })
+    : assertCurrent;
+}
+
+async function assertTranscriptCurrent(assertCurrent: TranscriptAssertion): Promise<void> {
+  if (!assertCurrent.prepareSessionSource) {
+    assertCurrent();
+    return;
+  }
+  const source = await assertCurrent.prepareSessionSource();
+  try {
+    source.assertCurrent();
+  } finally {
+    await source.release?.();
+  }
+}
 
 /** Canonical native facts use the same durable identities during live and historical repair. */
 export async function recordAgentsApiNativeToolTranscript(
@@ -32,7 +76,7 @@ export async function recordAgentsApiNativeToolTranscript(
     captureTruncated?: boolean;
   } = {},
 ): Promise<boolean> {
-  assertCurrent();
+  await assertTranscriptCurrent(assertCurrent);
   const tool = agentsApiNativeTool(item, params);
   if (!tool || !["completed", "failed", "incomplete"].includes(item.status ?? "")) {
     // A failed parent turn can retire before its command completes. Do not
@@ -94,7 +138,7 @@ export async function recordAgentsApiNativeToolInvocation(
   assertCurrent: () => void,
   nextTimestamp: () => number,
 ): Promise<boolean> {
-  assertCurrent();
+  await assertTranscriptCurrent(assertCurrent);
   const tool = agentsApiNativeTool(item, params);
   if (!tool || !canRecordAgentsApiNativeToolInvocation(item)) {
     return false;
@@ -157,21 +201,36 @@ export async function recordAgentsApiToolTranscript(
 export async function appendAgentsApiTranscriptMessage<TMessage extends AgentMessage>(
   params: AgentHarnessAttemptParamsV2,
   message: TMessage,
-  assertCurrent: () => void,
+  assertCurrent: TranscriptAssertion,
+  assistantItemIds?: readonly string[],
 ): Promise<TMessage> {
-  assertCurrent();
+  await assertTranscriptCurrent(assertCurrent);
+  const target = requireAgentsApiSessionTarget(params);
   const append = await appendSessionTranscriptMessageByIdentityStrict({
-    ...requireAgentsApiSessionTarget(params),
+    ...target,
     config: params.config,
+    runId: params.runId,
     message,
-    prepareMessageAfterIdempotencyCheck: (prepared) => {
-      assertCurrent();
-      return prepared;
-    },
+    beforeFreshMessageCommit: assertCurrent,
   });
-  assertCurrent();
+  await assertTranscriptCurrent(assertCurrent);
   if (append.kind !== "result") {
     throw new Error("Agents API transcript append was refused");
+  }
+  if (assistantItemIds) {
+    await publishSessionTranscriptUpdateByIdentity({
+      ...target,
+      update: {
+        message: append.result.message,
+        messageId: append.result.messageId,
+        ...(append.result.anchor
+          ? { messageSeq: append.result.anchor.activeMessagePosition + 1 }
+          : {}),
+        runId: params.runId,
+        assistantItemIds,
+      },
+    });
+    await assertTranscriptCurrent(assertCurrent);
   }
   return append.result.message;
 }

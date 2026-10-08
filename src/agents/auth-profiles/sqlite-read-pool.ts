@@ -1,6 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import {
+  isDeletedAgentDatabasePath,
+  matchesAgentDatabaseReadCandidatePath,
+  registerAgentDatabaseReaderCloser,
+} from "../../infra/agent-database-readers.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
@@ -57,18 +62,23 @@ export function closeAuthProfileReadPool(scope?: AuthProfileReadPoolCloseScope):
     closeAuthProfileReadDatabase(scope.databasePath);
     return;
   }
-  if (scope?.kind === "root") {
-    for (const pathname of authProfileReadDatabases.keys()) {
-      if (isPathInside(scope.rootPath, pathname)) {
-        closeAuthProfileReadDatabase(pathname);
-      }
-    }
-    return;
-  }
   for (const pathname of authProfileReadDatabases.keys()) {
-    closeAuthProfileReadDatabase(pathname);
+    if (scope?.kind !== "root" || isPathInside(scope.rootPath, pathname)) {
+      closeAuthProfileReadDatabase(pathname);
+    }
   }
 }
+
+registerAgentDatabaseReaderCloser((candidates, retainedPaths) => {
+  for (const pathname of authProfileReadDatabases.keys()) {
+    if (
+      !retainedPaths?.has(pathname) &&
+      candidates.some((candidate) => matchesAgentDatabaseReadCandidatePath(candidate, pathname))
+    ) {
+      closeAuthProfileReadDatabase(pathname);
+    }
+  }
+});
 
 function armReadHandleIdleClose(pathname: string, entry: AuthProfileReadHandle): void {
   if (entry.idleTimer) {
@@ -108,6 +118,9 @@ export function acquireAuthProfileReadDatabase(
   pathname: string,
 ): { status: "missing" } | { status: "unreadable" } | { status: "readable"; db: DatabaseSync } {
   const resolvedPath = path.resolve(pathname);
+  if (isDeletedAgentDatabasePath(resolvedPath)) {
+    return { status: "missing" };
+  }
   const cached = authProfileReadDatabases.get(resolvedPath);
   if (cached?.ready && cached.db.isOpen) {
     authProfileReadDatabases.delete(resolvedPath);

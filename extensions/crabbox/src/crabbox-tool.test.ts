@@ -16,7 +16,22 @@ function fixture(toolContext = context) {
   const request = vi.fn().mockResolvedValue({ environmentId: "environment-one" });
   const tool = createCrabboxTool({
     context: toolContext,
-    gateway: { isAvailable: async () => true, request },
+    gateway: {
+      isAvailable: async () => true,
+      request,
+      subscribeSessionChanges() {
+        throw new Error("Unexpected session change subscription");
+      },
+      async readSessionFacts() {
+        throw new Error("Unexpected session facts request");
+      },
+      async withSessionFacts() {
+        throw new Error("Unexpected session read scope");
+      },
+      async openPluginPanel() {
+        throw new Error("Unexpected plugin panel request");
+      },
+    },
   });
   return { request, tool };
 }

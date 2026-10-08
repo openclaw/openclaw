@@ -1,7 +1,9 @@
-// Event-loop health monitor samples delay, utilization, and CPU pressure for gateway readiness snapshots.
 import { cpus, type CpuInfo } from "node:os";
 import { createHistogram, performance, type RecordableHistogram } from "node:perf_hooks";
 import { isMainThread, Worker } from "node:worker_threads";
+import type { Static } from "typebox";
+import type { SchemaContract } from "../../../packages/gateway-protocol/src/schema-contract.js";
+import type { GatewayEventLoopHealthSchema } from "../../../packages/gateway-protocol/src/schema/runtime-vitals.js";
 import { hasInternalDiagnosticEventInterest } from "../../infra/diagnostic-event-listener-presence.js";
 import {
   areDiagnosticsEnabledForProcess,
@@ -24,25 +26,11 @@ const WORKER_CPU_SAMPLE_BUDGET_MS = 100;
 
 type EventLoopUtilization = ReturnType<typeof performance.eventLoopUtilization>;
 
-type GatewayEventLoopHealthReason = "event_loop_delay" | "event_loop_utilization" | "cpu";
-
-export type GatewayEventLoopHealth = {
-  degraded: boolean;
+export type GatewayEventLoopHealth = SchemaContract<Static<typeof GatewayEventLoopHealthSchema>> & {
   degradedSinceMs: number | null;
-  reasons: GatewayEventLoopHealthReason[];
-  intervalMs: number;
-  delayP99Ms: number;
-  delayMaxMs: number;
-  utilization: number;
-  cpuCoreRatio: number;
-  cpuBreakdown?: {
-    mainThreadCoreRatio?: number;
-    workerCoreRatio?: number;
-    otherThreadsCoreRatio?: number;
-    hostUtilization?: number;
-    hostCpuCount?: number;
-  };
 };
+
+type GatewayEventLoopHealthReason = GatewayEventLoopHealth["reasons"][number];
 
 type GatewayEventLoopHealthMonitor = {
   snapshot: () => GatewayEventLoopHealth | undefined;

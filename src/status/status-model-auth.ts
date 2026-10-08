@@ -81,7 +81,7 @@ export function createStatusModelResolver(params: {
     const variants = decisions.snapshot.routeVariants.filter(
       (row) => row.provider === provider && row.id === model,
     );
-    const host = await decisions.evaluateEntry(
+    const host = decisions.evaluateEntry(
       entry ?? { provider, id: model },
       variants.length ? variants : entry ? [entry] : undefined,
       runtimeId,

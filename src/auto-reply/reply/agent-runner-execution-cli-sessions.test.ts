@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { prepareCliPromptImagePayload } from "../../agents/cli-runner/helpers.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
 import { detectAndLoadPromptImages } from "../../agents/embedded-agent-runner/run/images.js";
@@ -9,6 +9,11 @@ import { resetGeneratedMediaTaskActivityForTests } from "../../agents/media-gene
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import type { TemplateContext } from "../templating.js";
 import type { FallbackRunnerParams } from "./agent-runner-execution.test-support.js";
 import {
@@ -47,40 +52,135 @@ function rejectUnexpectedCompactionSuccessor(): never {
 }
 
 describe("executeAgentTurn: CLI session routing", () => {
-  it("carries prepared model and thread context facts into CLI execution", async () => {
-    const followupRun = createCliRun("claude-cli", "claude-sonnet-4-6");
-    state.runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "done" }],
-      meta: {},
-    });
-    followupRun.originatingThreadId = 42;
-    followupRun.run.thinkingCatalog = [
-      {
-        provider: "claude-cli",
-        id: "claude-sonnet-4-6",
-        contextWindow: 400_000,
-        contextTokens: 321_000,
-        input: ["text", "image"],
-      },
-    ];
+  it.each([
+    { provider: "telegram", messageId: "42", currentMessageId: "42" },
+    { provider: "webchat", messageId: "rpc-run-id", currentMessageId: undefined },
+  ])(
+    "carries prepared route facts without leaking $provider identity into replies",
+    async ({ provider, messageId, currentMessageId }) => {
+      const { isInternalMessageChannel } = await vi.importActual<
+        typeof import("../../utils/message-channel.js")
+      >("../../utils/message-channel.js");
+      state.isInternalMessageChannelMock.mockImplementation((channel) =>
+        isInternalMessageChannel(typeof channel === "string" ? channel : undefined),
+      );
+      const followupRun = createCliRun("claude-cli", "claude-sonnet-4-6");
+      state.runCliAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "done" }],
+        meta: {},
+      });
+      followupRun.originatingThreadId = 42;
+      followupRun.run.thinkingCatalog = [
+        {
+          provider: "claude-cli",
+          id: "claude-sonnet-4-6",
+          contextWindow: 400_000,
+          contextTokens: 321_000,
+          input: ["text", "image"],
+        },
+      ];
 
-    const executeAgentTurn = await getExecuteAgentTurnForTest();
-    const result = await executeAgentTurn(
-      createMinimalRunAgentTurnParams({
-        followupRun,
-        sessionCtx: {
-          Provider: "telegram",
-          MessageSid: "msg",
-          MessageThreadId: "stale-topic",
-        } as unknown as TemplateContext,
-      }),
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn(
+        createMinimalRunAgentTurnParams({
+          followupRun,
+          sessionCtx: {
+            Provider: provider,
+            OriginatingChannel: "telegram",
+            OriginatingTo: "12345",
+            MessageSid: messageId,
+            MessageThreadId: "stale-topic",
+          } as unknown as TemplateContext,
+        }),
+      );
+
+      expect(result.kind).toBe("success");
+      expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+        modelContextWindow: 400_000,
+        modelContextTokens: 321_000,
+        currentThreadTs: "42",
+        currentMessageId,
+      });
+    },
+  );
+
+  async function runSlackCliTurn(sessionCtx: Record<string, unknown>) {
+    // Mirrors Slack's adapter contract: a thread-originated turn requires its
+    // thread and upgrades the reply mode; standalone turns anchor on the message.
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "slack" }),
+            threading: {
+              buildToolContext: ({
+                context,
+              }: {
+                context: {
+                  To?: string;
+                  CurrentMessageId?: string | number;
+                  MessageThreadId?: string | number;
+                  ReplyToMode?: string;
+                };
+              }) => {
+                const threadTs =
+                  context.MessageThreadId != null ? String(context.MessageThreadId) : undefined;
+                return {
+                  currentChannelId: context.To,
+                  currentThreadTs: threadTs ?? String(context.CurrentMessageId),
+                  replyToMode: threadTs ? "all" : context.ReplyToMode,
+                  sameChannelThreadRequired: threadTs !== undefined,
+                };
+              },
+            },
+          },
+          source: "test",
+        },
+      ]),
     );
+    try {
+      const followupRun = createCliRun("claude-cli", "claude-opus-4-7");
+      state.runCliAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "done" }],
+        meta: {},
+      });
+      const executeAgentTurn = await getExecuteAgentTurnForTest();
+      const result = await executeAgentTurn(
+        createMinimalRunAgentTurnParams({
+          followupRun,
+          sessionCtx: {
+            Provider: "slack",
+            OriginatingChannel: "slack",
+            OriginatingTo: "channel:C123",
+            ChatType: "channel",
+            MessageSid: "1700000000.000200",
+            ReplyToMode: "off",
+            ...sessionCtx,
+          } as unknown as TemplateContext,
+        }),
+      );
+      expect(result.kind).toBe("success");
+    } finally {
+      resetPluginRuntimeStateForTest();
+    }
+  }
 
-    expect(result.kind).toBe("success");
+  it("keeps untargeted message-tool sends from a thread turn in that thread", async () => {
+    await runSlackCliTurn({ MessageThreadId: "1700000000.000100" });
+
     expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
-      modelContextWindow: 400_000,
-      modelContextTokens: 321_000,
-      currentThreadTs: "42",
+      currentThreadTs: "1700000000.000100",
+      replyToMode: "all",
+    });
+  });
+
+  it("keeps standalone turn route facts when the adapter requires no thread", async () => {
+    await runSlackCliTurn({});
+
+    expectMockCallArgFields(state.runCliAgentMock, 0, "CLI run params", {
+      currentThreadTs: undefined,
+      replyToMode: "off",
     });
   });
 
@@ -93,7 +193,7 @@ describe("executeAgentTurn: CLI session routing", () => {
     const images = [
       {
         type: "image" as const,
-        data: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP4z8Dwn4GBgYGJAQoAHxcCAr7cGDwAAAAASUVORK5CYII=",
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR42mP4z8DwH4QZYAwAR8oH+Rq28akAAAAASUVORK5CYII=",
         mimeType: "image/png",
       },
     ];
@@ -124,7 +224,7 @@ describe("executeAgentTurn: CLI session routing", () => {
     const images = [
       {
         type: "image" as const,
-        data: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAFElEQVR4nGP4z8Dwn4GBgYGJAQoAHxcCAr7cGDwAAAAASUVORK5CYII=",
+        data: "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEUlEQVR42mP4z8DwH4QZYAwAR8oH+Rq28akAAAAASUVORK5CYII=",
         mimeType: "image/png",
       },
     ];
@@ -222,6 +322,7 @@ describe("executeAgentTurn: CLI session routing", () => {
     followupRun.run.senderName = "Sender Static";
     followupRun.run.senderUsername = "sender-static-user";
     followupRun.run.senderE164 = "+15550002222";
+    followupRun.run.conversationToolPolicy = { allow: ["read", "sessions_spawn"], deny: ["exec"] };
     followupRun.run.execOverrides = { host: "node", node: "mac-a" };
     followupRun.run.bashElevated = {
       enabled: true,
@@ -249,6 +350,7 @@ describe("executeAgentTurn: CLI session routing", () => {
       senderName: "Sender Static",
       senderUsername: "sender-static-user",
       senderE164: "+15550002222",
+      conversationToolPolicy: { allow: ["read", "sessions_spawn"], deny: ["exec"] },
       execOverrides: { host: "node", node: "mac-a" },
       bashElevated: { enabled: true, allowed: true, defaultLevel: "full" },
       groupId: "group-static",

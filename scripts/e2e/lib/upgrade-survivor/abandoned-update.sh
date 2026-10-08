@@ -20,8 +20,11 @@ run_abandoned_update_survivor() {
   phase package-identities node "$helper" packages "$CANDIDATE_SPEC" "$(package_root)" "$ARTIFACT_ROOT"
   phase prepare-update-restart-probe prepare_update_restart_probe
   # The shipped ledger table is first-use-only, so let its own CLI create it.
-  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update --dry-run --yes --no-restart \
-    --tag "$(candidate_update_spec)" --json >"$ARTIFACT_ROOT/baseline-preview.json" 2>"$ARTIFACT_ROOT/baseline-preview.err"
+  local preview_args=(update --dry-run --yes --no-restart --tag "$(candidate_update_spec)" --json)
+  if candidate_requires_stable_channel "$candidate_version"; then
+    preview_args+=(--channel stable)
+  fi
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw "${preview_args[@]}" >"$ARTIFACT_ROOT/baseline-preview.json" 2>"$ARTIFACT_ROOT/baseline-preview.err"
   phase update-candidate update_candidate
   phase assert-candidate-build node "$helper" installed "$(package_root)" "$ARTIFACT_ROOT"
   if [ "$update_repair_required" != "0" ]; then

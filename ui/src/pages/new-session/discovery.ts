@@ -13,14 +13,11 @@ import type {
   WorkerOperatingSystem,
   WorkerSlotSummary,
 } from "../../../../packages/gateway-protocol/src/schema/environments.ts";
+import type { WorktreesBranchesResult } from "../../../../packages/gateway-protocol/src/schema/worktrees.ts";
 import { parseWorkerCapacity } from "../../../../packages/gateway-protocol/src/worker-capacity.ts";
 
-export type DraftBranches = {
+export type DraftBranches = Omit<WorktreesBranchesResult, "repositoryStatus"> & {
   repoRoot: string;
-  branches: Array<{ name: string; kind: "local" | "remote" }>;
-  defaultBranch?: string;
-  headBranch?: string;
-  branchesUnavailable?: boolean;
 };
 
 export type DraftRepositoryState =
@@ -35,16 +32,14 @@ export type DraftRepositoryState =
 
 export type DraftCloudProfile = {
   id: string;
+  inference?: "worker";
   providerId: string;
   providerDisplayId?: string;
   trust?: "persistent" | "disposable";
   executionModes?: readonly WorkerExecutionMode[];
-  machines?: DraftMachineOption[];
-  operatingSystems?: DraftOperatingSystem[];
+  machines?: WorkerMachineOption[];
+  operatingSystems?: WorkerOperatingSystem[];
 };
-
-export type DraftOperatingSystem = WorkerOperatingSystem;
-export type DraftMachineOption = WorkerMachineOption;
 
 export type DraftEnvironment = {
   id: string;
@@ -146,6 +141,7 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
         {
           id,
           providerId,
+          ...(profile.inference === "worker" ? { inference: profile.inference } : {}),
           ...(typeof profile.providerDisplayId === "string" &&
           /^[a-z][a-z0-9-]{0,63}$/.test(profile.providerDisplayId) &&
           profile.providerDisplayId.trim() === profile.providerDisplayId
@@ -163,8 +159,8 @@ export function readDraftCloudProfiles(value: unknown): DraftCloudProfile[] {
     .toSorted((left, right) => left.id.localeCompare(right.id));
 }
 
-function readDraftMachineOptions(value: unknown): DraftMachineOption[] {
-  const options = new Map<string, DraftMachineOption>();
+function readDraftMachineOptions(value: unknown): WorkerMachineOption[] {
+  const options = new Map<string, WorkerMachineOption>();
   for (const raw of (Array.isArray(value) ? value : []).slice(0, 64)) {
     if (!isRecord(raw)) {
       continue;
@@ -197,8 +193,8 @@ function readDraftMachineOptions(value: unknown): DraftMachineOption[] {
   return [...options.values()];
 }
 
-function readDraftOperatingSystems(value: unknown): DraftOperatingSystem[] {
-  const options = new Map<string, DraftOperatingSystem>();
+function readDraftOperatingSystems(value: unknown): WorkerOperatingSystem[] {
+  const options = new Map<string, WorkerOperatingSystem>();
   for (const raw of (Array.isArray(value) ? value : []).slice(0, 8)) {
     if (!isRecord(raw)) {
       continue;
@@ -228,7 +224,7 @@ export function defaultCloudOs(profile: DraftCloudProfile): string {
   );
 }
 
-export function cloudMachinesForOs(profile: DraftCloudProfile, os: string): DraftMachineOption[] {
+export function cloudMachinesForOs(profile: DraftCloudProfile, os: string): WorkerMachineOption[] {
   return (profile.machines ?? []).filter((machine) => !machine.os || machine.os === os);
 }
 
@@ -236,7 +232,7 @@ export function cloudMachinesForOs(profile: DraftCloudProfile, os: string): Draf
 export function defaultCloudMachine(
   profile: DraftCloudProfile,
   os = defaultCloudOs(profile),
-): DraftMachineOption | undefined {
+): WorkerMachineOption | undefined {
   const machines = cloudMachinesForOs(profile, os);
   return machines.find((machine) => machine.default) ?? machines[0];
 }

@@ -1,4 +1,5 @@
 /** Keeps automatic auth profiles stable unless reset, unavailable, or recovering a preference. */
+import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -14,7 +15,6 @@ import {
   isStoredCredentialCompatibleWithAuthProvider,
   resolveAuthProfileOrderWithMetadata,
 } from "../auth-profiles/order.js";
-import { hasAnyAuthProfileStoreSource } from "../auth-profiles/store.js";
 import {
   isActiveUnusableWindow,
   isModelScopedCooldownReason,
@@ -29,6 +29,7 @@ import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import { authProfilesLog } from "./constants.js";
 import { createSelectedAuthProfileUnavailableError } from "./selection-error.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "./source-check.js";
 import { ensureAuthProfileStore } from "./store-runtime.js";
 
 // Read-only auth resolution must not import session persistence.
@@ -72,21 +73,19 @@ function applySessionAuthProfileOverrideState(
   state: SessionAuthProfileOverrideState,
   updatedAt: number,
 ): void {
-  if (state.authProfileOverride === undefined) {
-    delete entry.authProfileOverride;
-  } else {
-    entry.authProfileOverride = state.authProfileOverride;
-  }
-  if (state.authProfileOverrideSource === undefined) {
-    delete entry.authProfileOverrideSource;
-  } else {
-    entry.authProfileOverrideSource = state.authProfileOverrideSource;
-  }
-  if (state.authProfileOverrideCompactionCount === undefined) {
-    delete entry.authProfileOverrideCompactionCount;
-  } else {
-    entry.authProfileOverrideCompactionCount = state.authProfileOverrideCompactionCount;
-  }
+  const apply = <K extends keyof SessionAuthProfileOverrideState>(
+    key: K,
+    value: SessionAuthProfileOverrideState[K],
+  ) => {
+    if (value === undefined) {
+      delete entry[key];
+    } else {
+      entry[key] = value;
+    }
+  };
+  apply("authProfileOverride", state.authProfileOverride);
+  apply("authProfileOverrideSource", state.authProfileOverrideSource);
+  apply("authProfileOverrideCompactionCount", state.authProfileOverrideCompactionCount);
   entry.updatedAt = Math.max(entry.updatedAt ?? 0, updatedAt);
 }
 
@@ -186,39 +185,28 @@ function isProfileForProvider(params: {
   store: ReturnType<typeof ensureAuthProfileStore>;
 }): boolean {
   const entry = params.store.profiles[params.profileId];
-  if (entry) {
-    if (!entry.provider) {
-      return false;
-    }
-    return params.providers.some((provider) =>
-      isStoredCredentialCompatibleWithAuthProvider({
-        cfg: params.cfg,
-        provider,
-        credential: entry,
-      }),
-    );
+  if (entry && !entry.provider) {
+    return false;
   }
   return params.providers.some((provider) =>
-    isConfiguredAwsSdkAuthProfileForProvider({
-      cfg: params.cfg,
-      provider,
-      profileId: params.profileId,
-    }),
+    entry
+      ? isStoredCredentialCompatibleWithAuthProvider({
+          cfg: params.cfg,
+          provider,
+          credential: entry,
+        })
+      : isConfiguredAwsSdkAuthProfileForProvider({
+          cfg: params.cfg,
+          provider,
+          profileId: params.profileId,
+        }),
   );
 }
 
 function uniqueProviders(provider: string, acceptedProviderIds?: readonly string[]): string[] {
-  const providers = new Set<string>();
-  const push = (value: string | undefined) => {
-    const normalized = value?.trim();
-    if (normalized) {
-      providers.add(normalized);
-    }
-  };
-  const candidates =
-    acceptedProviderIds && acceptedProviderIds.length > 0 ? acceptedProviderIds : [provider];
-  candidates.forEach(push);
-  return [...providers];
+  return normalizeUniqueTrimmedStringList(
+    acceptedProviderIds?.length ? acceptedProviderIds : [provider],
+  );
 }
 
 /** Resolve a person's new-session default through the canonical credential store. */
@@ -276,20 +264,15 @@ export async function clearSessionAuthProfileOverride(params: {
   sessionKey: string;
   storePath?: string;
   assertCommitAllowed?: () => void;
+  expectedSnapshot?: SessionAuthProfileOverrideSnapshot;
 }) {
-  const { sessionEntry, sessionStore, sessionKey, storePath } = params;
   await persistSessionAuthProfileOverrideState({
-    agentId: params.agentId,
-    sessionEntry,
-    sessionStore,
-    sessionKey,
+    ...params,
     state: {
       authProfileOverride: undefined,
       authProfileOverrideSource: undefined,
       authProfileOverrideCompactionCount: undefined,
     },
-    storePath,
-    assertCommitAllowed: params.assertCommitAllowed,
   });
 }
 
@@ -330,7 +313,7 @@ async function resolveSessionAuthProfileOverride(params: {
     !sessionEntry.authProfileOverride?.trim() &&
     !params.requesterProfileId &&
     !hasConfiguredAuthProfiles &&
-    !hasAnyAuthProfileStoreSource(agentDir)
+    !(await hasAnyAuthProfileStoreSourceAsync(agentDir))
   ) {
     return { profileId: undefined, store: undefined };
   }

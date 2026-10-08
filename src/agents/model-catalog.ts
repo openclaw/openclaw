@@ -26,7 +26,7 @@ import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
 import { createConfiguredProviderCatalogModelIdNormalizer } from "./model-ref-shared.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
-import type { AuthStorageData, ModelRegistry } from "./sessions/index.js";
+import type { AuthStorageData } from "./sessions/index.js";
 
 const log = createSubsystemLogger("model-catalog");
 
@@ -41,7 +41,7 @@ export type BuildPreparedModelCatalogParams = {
   agentDir: string;
   authCredentials: Readonly<AuthStorageData>;
   config: OpenClawConfig;
-  modelRegistry: ModelRegistry;
+  models: ReadonlyArray<Parameters<typeof modelCatalogRowToEntry>[0]>;
   readOnly?: boolean;
   includeProviderPluginAugmentation?: boolean;
   providerIds?: readonly string[];
@@ -119,10 +119,6 @@ type ModelCatalogRouteVariantCollector = {
   entries: ModelCatalogEntry[];
   indexByKey: Map<string, number>;
 };
-
-function createModelCatalogRouteVariantCollector(): ModelCatalogRouteVariantCollector {
-  return { entries: [], indexByKey: new Map() };
-}
 
 function mergeCatalogRouteVariants(
   collector: ModelCatalogRouteVariantCollector,
@@ -315,7 +311,7 @@ export async function buildPreparedModelCatalogSnapshot(
   params: BuildPreparedModelCatalogParams,
 ): Promise<ModelCatalogSnapshot> {
   const models: ModelCatalogEntry[] = [];
-  const routeVariants = createModelCatalogRouteVariantCollector();
+  const routeVariants: ModelCatalogRouteVariantCollector = { entries: [], indexByKey: new Map() };
   const cfg = params.config;
   const env = params.env ?? process.env;
   const timingEnabled = isDiagnosticFlagEnabled("ingress.timing", cfg);
@@ -343,7 +339,7 @@ export async function buildPreparedModelCatalogSnapshot(
     );
     const { buildShouldSuppressBuiltInModelCore } = await loadModelSuppression();
     logStage("catalog-deps-ready");
-    const entries = params.modelRegistry.getAll();
+    const entries = params.models;
     const manifestPlan = planEffectiveModelCatalogRows({
       registry: {
         plugins: resolveEligibleManifestCatalogPlugins(manifestMetadataSnapshot, cfg),

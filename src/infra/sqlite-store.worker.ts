@@ -3,6 +3,7 @@ import { deserialize, serialize } from "node:v8";
 import { parentPort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { routeLogsToStderr } from "../logging/console.js";
+import { flushLogger } from "../logging/logger.js";
 import { drainProcessOutput } from "../process/output-drain.js";
 import {
   encodeOpenClawStateWorkerError,
@@ -58,7 +59,6 @@ type StagedInput = {
   command: unknown;
 };
 let pendingInput: StagedInput | undefined;
-const actorPaths = new Map<number, string>();
 const stateContexts = new Map<number, SqliteWorkerStateContext>();
 let sourceLoaderRegistered = false;
 let nativeCleanupFailure: OpenClawStateWorkerErrorPayload | undefined;
@@ -109,126 +109,130 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       }
       // SAFETY: The broker serialized a command from this actor's typed store contract.
       const typedCommand = command as SqliteWorkerCommand<SqliteWorkerOperations>;
-      const assertSettled = () => {
-        const settlement: unknown = runInActorContext(request.actor, () => ({
-          settlement: backend.assertSettled?.(),
-        })).settlement;
-        if (
-          isPromise(settlement) ||
-          (isRecord(settlement) && typeof settlement.then === "function")
-        ) {
-          if (isPromise(settlement)) {
-            void settlement.catch(() => {});
-          }
-          throw new Error("SQLite worker settlement checks must remain synchronous");
-        }
-        return backend.assertSettled !== undefined;
-      };
-      const settleCommand = (failure?: { error: unknown }) => {
-        let verified: boolean;
-        try {
-          verified = assertSettled();
-        } catch (error) {
-          if (operationAdmission) {
-            settleSqliteWorkerOperationContext(operationAdmission.context, "unknown");
-          }
-          // The broker joins native exit before settling this operation's admission.
-          retire = true;
-          if (failure && failure.error !== error) {
-            throw new AggregateError(
-              [failure.error, error],
-              `${String(failure.error)}; SQLite worker settlement failed: ${String(error)}`,
-              { cause: error },
-            );
-          }
-          throw error;
-        }
-        try {
-          if (verified && backend[SQLITE_WORKER_OPERATION_CLEANUP]) {
-            const cleanup: unknown = runInActorContext(request.actor, () => ({
-              cleanup: backend[SQLITE_WORKER_OPERATION_CLEANUP]?.(typedCommand),
-            })).cleanup;
-            if (isPromise(cleanup) || (isRecord(cleanup) && typeof cleanup.then === "function")) {
-              if (isPromise(cleanup)) {
-                void cleanup.catch(() => {});
+      return withSqliteReaderOwner(
+        { operation: typedCommand.type, ownerKind: "worker", actorId: request.actor },
+        async () => {
+          const assertSettled = () => {
+            const settlement: unknown = runInActorContext(request.actor, () => ({
+              settlement: backend.assertSettled?.(),
+            })).settlement;
+            if (
+              isPromise(settlement) ||
+              (isRecord(settlement) && typeof settlement.then === "function")
+            ) {
+              if (isPromise(settlement)) {
+                void settlement.catch(() => {});
               }
-              throw new Error("SQLite worker operation cleanup must remain synchronous");
+              throw new Error("SQLite worker settlement checks must remain synchronous");
             }
-            assertSettled();
+            return backend.assertSettled !== undefined;
+          };
+          const settleCommand = (failure?: { error: unknown }) => {
+            let verified: boolean;
+            try {
+              verified = assertSettled();
+            } catch (error) {
+              if (operationAdmission) {
+                settleSqliteWorkerOperationContext(operationAdmission.context, "unknown");
+              }
+              // The broker joins native exit before settling this operation's admission.
+              retire = true;
+              if (failure && failure.error !== error) {
+                throw new AggregateError(
+                  [failure.error, error],
+                  `${String(failure.error)}; SQLite worker settlement failed: ${String(error)}`,
+                  { cause: error },
+                );
+              }
+              throw error;
+            }
+            try {
+              if (verified && backend[SQLITE_WORKER_OPERATION_CLEANUP]) {
+                const cleanup: unknown = runInActorContext(request.actor, () => ({
+                  cleanup: backend[SQLITE_WORKER_OPERATION_CLEANUP]?.(typedCommand),
+                })).cleanup;
+                if (
+                  isPromise(cleanup) ||
+                  (isRecord(cleanup) && typeof cleanup.then === "function")
+                ) {
+                  if (isPromise(cleanup)) {
+                    void cleanup.catch(() => {});
+                  }
+                  throw new Error("SQLite worker operation cleanup must remain synchronous");
+                }
+                assertSettled();
+              }
+            } catch (error) {
+              const cleanupError = error instanceof Error ? error : new Error(String(error));
+              nativeCleanupFailure =
+                encodeOpenClawStateWorkerError(cleanupError, { includeOrdinary: true }) ??
+                encodeOpenClawStateWorkerError(
+                  new Error("SQLite worker operation cleanup failed"),
+                  {
+                    includeOrdinary: true,
+                  },
+                );
+            } finally {
+              // Cleanup can still request live source authority; preserve the prior native outcome.
+              if (operationAdmission) {
+                settleSqliteWorkerOperationContext(
+                  operationAdmission.context,
+                  verified ? "completed" : "unknown",
+                );
+              }
+            }
+          };
+          const loading = backend[SQLITE_WORKER_PREPARE_COMMAND]?.(typedCommand.type);
+          if (loading) {
+            await loading;
           }
-        } catch (error) {
-          const cleanupError = error instanceof Error ? error : new Error(String(error));
-          nativeCleanupFailure =
-            encodeOpenClawStateWorkerError(cleanupError, { includeOrdinary: true }) ??
-            encodeOpenClawStateWorkerError(new Error("SQLite worker operation cleanup failed"), {
-              includeOrdinary: true,
-            });
-        } finally {
-          // Cleanup can still request live source authority; preserve the prior native outcome.
-          if (operationAdmission) {
-            settleSqliteWorkerOperationContext(
-              operationAdmission.context,
-              verified ? "completed" : "unknown",
+          try {
+            // Preparation carries captured facts without retaining synchronous admission authority.
+            const preparation = runWithActorFacts(request.actor, () =>
+              backend.prepare?.(typedCommand),
             );
-          }
-        }
-      };
-      const loading = backend[SQLITE_WORKER_PREPARE_COMMAND]?.(typedCommand.type);
-      if (loading) {
-        await loading;
-      }
-      try {
-        // Preparation carries captured facts without retaining synchronous admission authority.
-        const preparation = runWithActorFacts(request.actor, () => backend.prepare?.(typedCommand));
-        if (preparation !== undefined) {
-          await preparation;
-        }
-        if (backend[SQLITE_WORKER_PREPARE_ADMITTED]) {
-          // Only the synchronous prefix inherits authority; deferred preparation does not.
-          const admitted = runInActorContext(request.actor, () => ({
-            preparation: backend[SQLITE_WORKER_PREPARE_ADMITTED]?.(typedCommand),
-          })).preparation;
-          if (admitted !== undefined) {
-            await admitted;
-          }
-        }
-        value = runInActorContext(request.actor, () =>
-          withSqliteReaderOwner(
-            {
-              operation: typedCommand.type,
-              ownerKind: "worker",
-              actorId: request.actor,
-            },
-            () => ({
+            if (preparation !== undefined) {
+              await preparation;
+            }
+            if (backend[SQLITE_WORKER_PREPARE_ADMITTED]) {
+              // Only the synchronous prefix inherits authority; deferred preparation does not.
+              const admitted = runInActorContext(request.actor, () => ({
+                preparation: backend[SQLITE_WORKER_PREPARE_ADMITTED]?.(typedCommand),
+              })).preparation;
+              if (admitted !== undefined) {
+                await admitted;
+              }
+            }
+            value = runInActorContext(request.actor, () => ({
               // SAFETY: The typed host command is serialized once; framing validates complete reconstruction.
               result: backend.execute(typedCommand),
-            }),
-          ),
-        ).result;
-      } catch (error) {
-        // Cleanup can replace the refusal; only settled command failures retain its provenance.
-        const admissionRefused =
-          operationAdmission?.actor === request.actor &&
-          operationAdmission.context.refusal !== undefined &&
-          operationAdmission.context.refusal === error;
-        settleCommand({ error });
-        commandAdmissionRefused = admissionRefused;
-        throw error;
-      }
-      executed = true;
-      completeResult = true;
-      if (isPromise(value) || (isRecord(value) && typeof value.then === "function")) {
-        retire = true;
-        if (operationAdmission) {
-          settleSqliteWorkerOperationContext(operationAdmission.context, "unknown");
-        }
-        if (isPromise(value)) {
-          // Retirement owns the failure; consume rejection while native exit is joined.
-          void value.catch(() => {});
-        }
-        throw new Error("SQLite worker operations must remain synchronous");
-      }
-      settleCommand();
+            })).result;
+          } catch (error) {
+            // Cleanup can replace the refusal; only settled command failures retain its provenance.
+            const admissionRefused =
+              operationAdmission?.actor === request.actor &&
+              operationAdmission.context.refusal !== undefined &&
+              operationAdmission.context.refusal === error;
+            settleCommand({ error });
+            commandAdmissionRefused = admissionRefused;
+            throw error;
+          }
+          executed = true;
+          completeResult = true;
+          if (isPromise(value) || (isRecord(value) && typeof value.then === "function")) {
+            retire = true;
+            if (operationAdmission) {
+              settleSqliteWorkerOperationContext(operationAdmission.context, "unknown");
+            }
+            if (isPromise(value)) {
+              // Retirement owns the failure; consume rejection while native exit is joined.
+              void value.catch(() => {});
+            }
+            throw new Error("SQLite worker operations must remain synchronous");
+          }
+          settleCommand();
+        },
+      );
     };
     if (request.type === "result-next") {
       if (
@@ -333,6 +337,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         }
         return factory(input, {
           databasePath: request.databasePath,
+          ...(request.target ? { target: request.target } : {}),
           ...(request.preparation ? { preparation: deserialize(request.preparation) } : {}),
           ...(request.existingIdentity ? { existingIdentity: request.existingIdentity } : {}),
         });
@@ -362,7 +367,6 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
       }
       // SAFETY: The validated backend and its typed client own the private command contract.
       actors.set(request.actor, backend as SqliteWorkerPreparedBackend<SqliteWorkerOperations>);
-      actorPaths.set(request.actor, request.databasePath);
     } else if (request.type === "close") {
       const backend = actors.get(request.actor);
       if (!backend) {
@@ -378,7 +382,6 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
         throw error;
       }
       actors.delete(request.actor);
-      actorPaths.delete(request.actor);
       stateContexts.delete(request.actor);
     } else {
       await executeCommand(deserialize(request.input));
@@ -424,8 +427,10 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
     const errorContext =
       request.stateContext ??
       (request.type === "execute-frame" ? stateContexts.get(request.actor) : undefined);
-    const sharedState =
-      errorContext && !executed ? encodeOpenClawStateWorkerError(failure) : undefined;
+    // Canonical error identities also belong to context-free ephemeral actors.
+    const sharedState = !executed
+      ? encodeOpenClawStateWorkerError(failure, { includeOrdinary: Boolean(errorContext) })
+      : undefined;
     reply = {
       id: request.id,
       ok: false,
@@ -447,6 +452,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
   }
   if (request.type === "close" && reply.ok && actors.size === 0) {
     // The broker can terminate this worker as soon as the final close is acknowledged.
+    await flushLogger();
     await new Promise<void>((resolve) => {
       drainProcessOutput(resolve);
     });

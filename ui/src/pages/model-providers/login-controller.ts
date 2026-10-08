@@ -104,7 +104,6 @@ export class ModelProviderLoginController implements ReactiveController {
 
   get pageActions() {
     return {
-      selectedAgentId: this.options.getScope().agentId,
       onConnect: () => this.open(),
       connectDisabled: !this.options.canStart() || this.busy,
       login: this.render(),
@@ -228,7 +227,8 @@ export class ModelProviderLoginController implements ReactiveController {
         this.options.canContinue()
       );
     };
-    this.picker = { phase: "loading", providers, providerId: "", query: "", isCurrent };
+    const picker = { providers, providerId: "", query: "", isCurrent };
+    this.picker = { ...picker, phase: "loading" };
     this.focusPicker = null;
     this.message = undefined;
     this.host.requestUpdate();
@@ -247,12 +247,10 @@ export class ModelProviderLoginController implements ReactiveController {
             ? available[0]
             : undefined;
         this.picker = {
+          ...picker,
           phase: "ready",
-          providers,
           authStatus,
           providerId: provider?.id ?? "",
-          query: "",
-          isCurrent,
         };
         // An awaited inventory mounts the modal before its inputs exist.
         if (!scope.authStatus) {
@@ -262,11 +260,8 @@ export class ModelProviderLoginController implements ReactiveController {
     } catch (error) {
       if (isCurrent()) {
         this.picker = {
+          ...picker,
           phase: "error",
-          isCurrent,
-          providers,
-          providerId: "",
-          query: "",
           message: formatUiError(error, t("modelProviders.requestFailed")),
         };
       }

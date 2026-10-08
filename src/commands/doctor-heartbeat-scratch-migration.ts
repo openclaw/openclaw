@@ -13,8 +13,8 @@ import {
   deleteCronJobScratch,
   hashCronScratchSource,
   readCronJobScratchState,
-  writeCronJobScratch,
 } from "../cron/scratch-store.js";
+import { writeCronJobScratchForMaintenance } from "../cron/scratch-write.kernel.js";
 import { resolveCronJobsStorePathFromConfig } from "../cron/store.js";
 import type { CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
@@ -25,8 +25,8 @@ import { isPidAlive } from "../shared/pid-alive.js";
 import { escapeRegExp } from "../shared/regexp.js";
 import { shortenHomePath } from "../utils.js";
 import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration.js";
+import { noteDoctorMigrationResult } from "./doctor-migration-notes.js";
 
-const HEARTBEAT_SCRATCH_MIGRATION_CHECK_ID = "core/doctor/heartbeat-scratch-migration";
 const LEGACY_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
@@ -375,28 +375,15 @@ async function archiveSource(params: {
   }
 }
 
-function migrationFinding(params: {
-  agentId: string;
-  path: string;
-  requirement: string;
-  message: string;
-  severity?: HealthFinding["severity"];
-}): HealthFinding {
-  return {
-    checkId: HEARTBEAT_SCRATCH_MIGRATION_CHECK_ID,
-    severity: params.severity ?? "warning",
-    message: params.message,
-    path: params.path,
-    target: params.agentId,
-    requirement: params.requirement,
-    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to migrate HEARTBEAT.md into cron scratch.`,
-  };
-}
-
 /** Reports remaining workspace heartbeat files without changing them. */
 export async function collectHeartbeatScratchMigrationFindings(
   cfg: OpenClawConfig,
 ): Promise<readonly HealthFinding[]> {
+  const MIGRATION_FINDING_DEFAULTS = {
+    checkId: "core/doctor/heartbeat-scratch-migration",
+    severity: "warning",
+    fixHint: `Run ${formatCliCommand("openclaw doctor --fix")} to migrate HEARTBEAT.md into cron scratch.`,
+  } as const;
   const findings: HealthFinding[] = [];
   const { migrationAgents, disabledEntryKeys } = await resolveHeartbeatScratchMigrationOwners(cfg);
   for (const agent of migrationAgents) {
@@ -412,24 +399,22 @@ export async function collectHeartbeatScratchMigrationFindings(
       if (disabledEntryKeys.has(source.entryKey)) {
         continue;
       }
-      findings.push(
-        migrationFinding({
-          agentId: agent.agentId,
-          path: heartbeatPath,
-          requirement: "legacy-heartbeat-file",
-          message: `Agent "${agent.agentId}" still stores heartbeat instructions in HEARTBEAT.md.`,
-        }),
-      );
+      findings.push({
+        ...MIGRATION_FINDING_DEFAULTS,
+        target: agent.agentId,
+        path: heartbeatPath,
+        requirement: "legacy-heartbeat-file",
+        message: `Agent "${agent.agentId}" still stores heartbeat instructions in HEARTBEAT.md.`,
+      });
     } catch (error) {
-      findings.push(
-        migrationFinding({
-          agentId: agent.agentId,
-          path: heartbeatPath,
-          requirement: "heartbeat-file-migration-blocked",
-          severity: "error",
-          message: `Agent "${agent.agentId}" HEARTBEAT.md cannot be migrated: ${errorMessage(error)}`,
-        }),
-      );
+      findings.push({
+        ...MIGRATION_FINDING_DEFAULTS,
+        target: agent.agentId,
+        path: heartbeatPath,
+        requirement: "heartbeat-file-migration-blocked",
+        severity: "error",
+        message: `Agent "${agent.agentId}" HEARTBEAT.md cannot be migrated: ${errorMessage(error)}`,
+      });
     }
   }
   return findings;
@@ -467,9 +452,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
         );
       }
     }
-    if (warnings.length > 0) {
-      note(warnings.join("\n"), "Doctor warnings");
-    }
+    noteDoctorMigrationResult({ warnings });
     return { changes, warnings };
   }
 
@@ -583,7 +566,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
         const state = readCronJobScratchState(storePath, monitor.id, { env });
         const shouldWriteScratch = state.scratch?.sourceSha256 !== source.sha256;
         if (shouldWriteScratch) {
-          const write = writeCronJobScratch({
+          const write = writeCronJobScratchForMaintenance({
             storePath,
             jobId: monitor.id,
             content: source.content,
@@ -630,7 +613,7 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
         // A third writer retaining an earlier revision-0 token may race after rollback;
         // this is preferable to a tombstone permanently blocking future migration.
         const reverted = commit.previous
-          ? writeCronJobScratch({
+          ? writeCronJobScratchForMaintenance({
               storePath,
               jobId: commit.monitor.id,
               content: commit.previous.content,
@@ -688,11 +671,6 @@ export async function maybeMigrateHeartbeatFilesToScratch(params: {
     }
   }
 
-  if (changes.length > 0) {
-    note(changes.join("\n"), "Doctor changes");
-  }
-  if (warnings.length > 0) {
-    note(warnings.join("\n"), "Doctor warnings");
-  }
+  noteDoctorMigrationResult({ changes, warnings });
   return { changes, warnings };
 }

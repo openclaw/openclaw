@@ -31,19 +31,13 @@ import { retryTransientMemoryRead } from "./read-retry.js";
 import type { MemoryExtraPath } from "./types.js";
 
 export { hashText } from "./hash.js";
-export {
-  parseEmbedding,
-  cosineSimilarity,
-  encodeMemoryEmbedding,
-  decodeMemoryEmbedding,
-} from "./embedding-vector.js";
+export { encodeMemoryEmbedding, decodeMemoryEmbedding } from "./embedding-vector.js";
 export {
   chunkMarkdown,
   splitCuratedMarkdownEntries,
   remapChunkLines,
   MEMORY_CHUNKING_VERSION,
   type MemoryChunk,
-  type CuratedMarkdownEntry,
 } from "./markdown-chunks.js";
 
 export type MemoryFileEntry = {
@@ -101,7 +95,7 @@ function expandHomePath(value: string): string {
   return value;
 }
 
-export type NormalizedExtraMemoryPath = { path: string; pattern?: string };
+type NormalizedExtraMemoryPath = { path: string; pattern?: string };
 
 export function normalizeExtraMemoryPathEntries(
   workspaceDir: string,
@@ -434,12 +428,12 @@ export async function buildFileEntry(
   };
 }
 
-async function loadMultimodalEmbeddingInput(
+export async function buildMultimodalChunkForIndexing(
   entry: Pick<
     MemoryFileEntry,
-    "absPath" | "contentText" | "mimeType" | "kind" | "size" | "dataHash"
+    "absPath" | "contentText" | "mimeType" | "kind" | "hash" | "size" | "dataHash"
   >,
-): Promise<EmbeddingInput | null> {
+): Promise<MultimodalMemoryChunk | null> {
   if (entry.kind !== "multimodal" || !entry.contentText || !entry.mimeType) {
     return null;
   }
@@ -468,7 +462,7 @@ async function loadMultimodalEmbeddingInput(
   if (entry.dataHash && entry.dataHash !== dataHash) {
     return null;
   }
-  return {
+  const embeddingInput: EmbeddingInput = {
     text: entry.contentText,
     parts: [
       { type: "text", text: entry.contentText },
@@ -479,18 +473,6 @@ async function loadMultimodalEmbeddingInput(
       },
     ],
   };
-}
-
-export async function buildMultimodalChunkForIndexing(
-  entry: Pick<
-    MemoryFileEntry,
-    "absPath" | "contentText" | "mimeType" | "kind" | "hash" | "size" | "dataHash"
-  >,
-): Promise<MultimodalMemoryChunk | null> {
-  const embeddingInput = await loadMultimodalEmbeddingInput(entry);
-  if (!embeddingInput) {
-    return null;
-  }
   return {
     chunk: {
       startLine: 1,
@@ -508,7 +490,6 @@ export {
   INVALID_PROJECT_ANNOTATION_KEY,
   normalizeProjectAnnotationKey,
   stripMemoryAnnotationCarriers,
-  type CuratedProjectAnnotations,
 } from "./curated-annotations.js";
 
 export { runWithConcurrency } from "./concurrency.js";

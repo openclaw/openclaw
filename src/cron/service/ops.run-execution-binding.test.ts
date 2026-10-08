@@ -19,7 +19,10 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { saveCronStore } from "../store.js";
-import { finishCronRunReceipt, prepareCronRunReceiptClaim } from "../store/run-receipt-store.js";
+import {
+  finishCronRunReceiptAsync,
+  prepareCronRunReceiptClaim,
+} from "../store/run-receipt-store.js";
 import {
   claimCronRunReceiptInDatabaseForTest,
   inspectActiveCronRunReceipt,
@@ -203,7 +206,7 @@ describe("cron run execution binding", () => {
         expect(
           tableExists(openOpenClawStateDatabase().db, "execution_owner_lifecycle_bindings"),
         ).toBe(false);
-        finishCronRunReceipt({
+        await finishCronRunReceiptAsync({
           handle: replacement,
           status: "skipped",
           finishedAtMs: dueAt + 2,

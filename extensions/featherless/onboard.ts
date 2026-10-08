@@ -1,4 +1,3 @@
-// Featherless onboarding applies the curated model catalog and default.
 import {
   createModelCatalogPresetAppliers,
   createProviderConnectionPresetAppliers,

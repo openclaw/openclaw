@@ -1,4 +1,3 @@
-// Stable facade for message-action normalization, routing, and execution.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -6,12 +5,20 @@ import {
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
-import { readStringArrayParam, readToolStringParam } from "../../agents/tools/common.js";
+import {
+  readStringArrayParam,
+  readToolStringParam,
+  textResult,
+} from "../../agents/tools/common.js";
 import {
   appendReplyMediaFailures,
   getReplyPayloadMetadata,
 } from "../../auto-reply/reply-payload.js";
-import type { ChannelId, ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { isFencedProviderReadAction } from "../../channels/plugins/message-action-dispatch.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
+import type { ChannelId } from "../../channels/plugins/types.public.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { hasPollCreationParams } from "../../poll-params.js";
@@ -38,12 +45,17 @@ import {
   type ResolvedActionContext,
 } from "./message-action-contracts.js";
 import { MessageActionDeniedError } from "./message-action-denial.js";
-import { executeMessagePlugin, executeMessagePoll } from "./message-action-execution.js";
+import {
+  assertMessageDeliveryCurrent,
+  beforeMessageDeliveryAttempt,
+  withMessageActionEffectAuthority,
+  executeMessagePlugin,
+  executeMessagePoll,
+} from "./message-action-execution.js";
 import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaParams,
-  parseInteractiveParam,
   parseJsonMessageParam,
   resolveAttachmentMediaPolicy,
   resolveExtraActionMediaSourceParamKeys,
@@ -101,9 +113,6 @@ async function handleBroadcastAction(
     );
   }
   const rawTargets = readStringArrayParam(params, "targets", { required: true });
-  if (rawTargets.length === 0) {
-    throw new Error("Broadcast requires at least one target in --targets.");
-  }
   const channelHint = readToolStringParam(params, "channel");
   const explicitAccountId = await validateExplicitMessageAccountSelection({
     cfg: input.cfg,
@@ -159,25 +168,19 @@ async function handleBroadcastAction(
   for (const { channel: targetChannel, plugin: targetChannelPlugin } of targetChannels) {
     for (const target of rawTargets) {
       const receiptDiscriminator = `broadcast:${attemptIndex++}`;
-      if (interrupted) {
-        results.push({
-          channel: targetChannel,
-          to: target,
-          ok: false,
-          attempted: false,
-          error: "Broadcast canceled before this target was attempted.",
-        });
-        continue;
-      }
-      const hadAcceptedResult = hasAcceptedResult();
-      try {
-        throwIfAborted(input.abortSignal);
-        input.assertDirectAdapterHandoff?.();
-      } catch (err) {
-        if (!hadAcceptedResult) {
-          throw err;
+      const hadAcceptedResult = !interrupted && hasAcceptedResult();
+      if (!interrupted) {
+        try {
+          throwIfAborted(input.abortSignal);
+          input.assertDirectAdapterHandoff?.();
+        } catch (err) {
+          if (!hadAcceptedResult) {
+            throw err;
+          }
+          interrupted = true;
         }
-        interrupted = true;
+      }
+      if (interrupted) {
         results.push({
           channel: targetChannel,
           to: target,
@@ -246,34 +249,29 @@ async function handleBroadcastAction(
         }
         const interruption =
           err instanceof OutboundHandoffRejectedError ? err : captureInterruption();
+        let sentBeforeError: boolean | undefined;
         if (interruption) {
-          const sentBeforeError = errorSentBefore(err);
+          sentBeforeError = errorSentBefore(err);
           if (!hadAcceptedResult && !sentBeforeError) {
             throw err;
           }
           interrupted = true;
-          results.push({
-            channel: targetChannel,
-            to: target,
-            ok: false,
-            ...(!sentBeforeError && err instanceof OutboundHandoffRejectedError
-              ? {
-                  attempted: false as const,
-                  error: "Broadcast canceled before this target was attempted.",
-                }
-              : {
-                  error: formatErrorMessage(err),
-                  ...(sentBeforeError ? { sentBeforeError: true as const } : {}),
-                }),
-          });
-          continue;
         }
         results.push({
           channel: targetChannel,
           to: target,
           ok: false,
-          error: formatErrorMessage(err),
-          ...(errorSentBefore(err) ? { sentBeforeError: true as const } : {}),
+          ...(interruption && !sentBeforeError && err instanceof OutboundHandoffRejectedError
+            ? {
+                attempted: false as const,
+                error: "Broadcast canceled before this target was attempted.",
+              }
+            : {
+                error: formatErrorMessage(err),
+                ...((sentBeforeError ?? errorSentBefore(err))
+                  ? { sentBeforeError: true as const }
+                  : {}),
+              }),
         });
       }
     }
@@ -295,11 +293,7 @@ async function handleInternalSourceReplySendAction(
 ): Promise<MessageActionResult> {
   throwIfAborted(input.abortSignal);
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
-  const agentId =
-    input.agentId ??
-    (input.sessionKey
-      ? resolveSessionAgentId({ sessionKey: input.sessionKey, config: input.cfg })
-      : undefined);
+  const agentId = input.agentId;
   let recommendations:
     | Awaited<
         ReturnType<typeof import("./clawhub-recommendations.js").resolveClawHubRecommendations>
@@ -321,7 +315,7 @@ async function handleInternalSourceReplySendAction(
         input.workspaceDir ?? (agentId ? resolveAgentWorkspaceDir(input.cfg, agentId) : undefined),
     });
     throwIfAborted(input.abortSignal);
-    if (!recommendations.cards.length || !normalizeOptionalString(params.message)) {
+    if (!normalizeOptionalString(params.message)) {
       params.message = recommendations.text;
     }
   }
@@ -358,7 +352,6 @@ async function handleInternalSourceReplySendAction(
     }),
   });
   const sourceReply = await buildMessagePayload({
-    cfg: input.cfg,
     actionParams: params,
     input,
     agentId,
@@ -384,7 +377,7 @@ async function handleInternalSourceReplySendAction(
       throw new Error("Current-source media requires an agent workspace.");
     }
     const { createReplyMediaPathNormalizer } =
-      await import("../../auto-reply/reply/reply-media-paths.runtime.js");
+      await import("../../auto-reply/reply/reply-media-paths.js");
     sourceReplyPayload = await createReplyMediaPathNormalizer({
       cfg: input.cfg,
       sessionKey: input.sessionKey,
@@ -419,24 +412,45 @@ async function handleInternalSourceReplySendAction(
   const idempotencyKey = normalizeOptionalString(params.idempotencyKey);
   let persistedIdempotencyKey: string | undefined;
   let persistedTranscriptOwner = false;
+  if (!dryRun) {
+    await beforeMessageDeliveryAttempt(input);
+  }
   if (!dryRun && input.sessionId) {
     const sessionKey = input.sourceReplySessionKey ?? input.sessionKey;
     if (!sessionKey) {
       throw new Error("Internal source reply requires a session key");
     }
     const { persistInternalSourceReply } = await loadInternalSourceReplyPersistence();
-    await persistInternalSourceReply({
-      cfg: input.cfg,
-      sessionKey,
-      expectedSessionId: input.sessionId,
-      agentId: input.agentId ?? resolveSessionAgentId({ sessionKey, config: input.cfg }),
-      payload: sourceReplyPayload,
-      idempotencyKey,
-      runId: input.runId,
-      sourceReplyFinal: input.sourceReplyFinal,
-      toolCallId: input.sourceReplyToolCallId,
-      sourceTurnId: input.messageActionAuthorization?.toolContext?.currentSourceTurnId,
-    });
+    const persist = () =>
+      persistInternalSourceReply({
+        cfg: input.cfg,
+        sessionKey,
+        expectedSessionId: input.sessionId,
+        agentId: input.agentId ?? resolveSessionAgentId({ sessionKey, config: input.cfg }),
+        payload: sourceReplyPayload,
+        idempotencyKey,
+        runId: input.runId,
+        sourceReplyFinal: input.sourceReplyFinal,
+        toolCallId: input.sourceReplyToolCallId,
+        sourceTurnId: input.messageActionAuthorization?.toolContext?.currentSourceTurnId,
+      });
+    if (
+      input.messageActionAuthorization?.scheduled ||
+      input.messageActionAuthorization?.deliveryAttempt
+    ) {
+      await withSessionTranscriptWriteAssertion(
+        {
+          agentId: input.agentId ?? resolveSessionAgentId({ sessionKey, config: input.cfg }),
+          sessionKey,
+          sessionId: input.sessionId,
+          storePath: resolveSessionStorePathCore(input.cfg.session?.store, { agentId }),
+        },
+        () => assertMessageDeliveryCurrent(input),
+        persist,
+      );
+    } else {
+      await persist();
+    }
     persistedIdempotencyKey = idempotencyKey;
     persistedTranscriptOwner = true;
   }
@@ -455,30 +469,29 @@ async function handleInternalSourceReplySendAction(
     ...(sourceReplyMediaUrls.length ? { mediaUrls: sourceReplyMediaUrls } : {}),
     dryRun,
   };
-  const action = payload.dryRun ? "Prepared" : "Sent";
   const sink = payload.sourceReplySink ? ` via ${payload.sourceReplySink}` : "";
+  // A WebChat user turn shows this transcript to its user. An inter-session result turn may
+  // have no viewer here, so claim no visible delivery.
+  const receipt = input.sourceReplyTranscriptOnly
+    ? payload.dryRun
+      ? "Prepared reply for the current session transcript."
+      : `Recorded reply in the current session transcript${sink}. This send did not deliver it to an external channel.`
+    : `${payload.dryRun ? "Prepared" : "Sent"} visible reply to the current source conversation${sink}.`;
   const cards = readClawHubRecommendations(payload.sourceReply.channelData);
   // The model sees content, not private details. Report verified state even when it supplied prose.
   const recommendationSummary = cards.length
     ? cards
         .map((card) => `${card.name}: ${card.installed ? "Installed" : "Available to install"}.`)
         .join("\n")
-    : payload.sourceReply.channelData?.[CLAWHUB_RECOMMENDATIONS_CHANNEL_DATA_KEY]
-      ? payload.sourceReply.text
-      : undefined;
+    : recommendations?.text;
   const { sourceReplyDeliveryMode, ...details } = payload;
-  const toolResult = {
-    content: [
-      {
-        type: "text",
-        text: `${action} visible reply to the current source conversation${sink}.${recommendationSummary ? `\n${recommendationSummary}` : ""}`,
-      },
-    ],
-    details: {
+  const toolResult = textResult(
+    `${receipt}${recommendationSummary ? `\n${recommendationSummary}` : ""}`,
+    {
       ...details,
       ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
     },
-  } satisfies AgentToolResult<unknown>;
+  );
   return withSendNormalization(
     {
       kind: "send",
@@ -495,6 +508,12 @@ async function handleInternalSourceReplySendAction(
 }
 
 export async function runMessageAction(input: MessageActionInput): Promise<MessageActionResult> {
+  return withMessageActionEffectAuthority(input, () => runMessageActionWithAuthority(input));
+}
+
+async function runMessageActionWithAuthority(
+  input: MessageActionInput,
+): Promise<MessageActionResult> {
   throwIfAborted(input.abortSignal);
   const cfg = input.cfg;
   let params = { ...input.params };
@@ -505,7 +524,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
       : undefined);
   parseJsonMessageParam(params, "presentation");
   parseJsonMessageParam(params, "delivery");
-  parseInteractiveParam(params);
+  parseJsonMessageParam(params, "interactive");
 
   const action = input.action;
   enforceMessageActionAllowlist({
@@ -580,7 +599,7 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
           const sandboxMediaReadFile = input.workspaceMediaAccess?.readFile
             ? mediaAccess.readFile
             : undefined;
-          const normalizationPolicy = resolveAttachmentMediaPolicy({
+          const mediaPolicy = resolveAttachmentMediaPolicy({
             sandboxRoot: input.sandboxRoot,
             sandboxContainerWorkdir: input.sandboxContainerWorkdir,
             mediaAccess,
@@ -589,15 +608,9 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
 
           await normalizeSandboxMediaParams({
             args: params,
-            mediaPolicy: normalizationPolicy,
+            mediaPolicy,
             extraParamKeys: extraActionMediaSourceParamKeys,
             structuredAttachments: structuredAttachmentMode,
-          });
-          const mediaPolicy = resolveAttachmentMediaPolicy({
-            sandboxRoot: input.sandboxRoot,
-            sandboxContainerWorkdir: input.sandboxContainerWorkdir,
-            mediaAccess,
-            mediaReadFile: sandboxMediaReadFile,
           });
           const gateway = input.gateway;
           const preserveSendBuffer =
@@ -652,7 +665,6 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
             channel,
             channelPlugin,
             mediaAccess,
-            extraActionMediaSourceParamKeys,
             accountId,
             dryRun,
             gateway,
@@ -666,6 +678,19 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
         },
         input.abortSignal,
       );
+      if (!context.dryRun && !isFencedProviderReadAction(action)) {
+        await beforeMessageDeliveryAttempt(context.input);
+        if (
+          context.input.messageActionAuthorization?.scheduled ||
+          context.input.messageActionAuthorization?.deliveryAttempt
+        ) {
+          const deliveryInput = context.input;
+          context.input = {
+            ...deliveryInput,
+            assertDirectAdapterHandoff: () => assertMessageDeliveryCurrent(deliveryInput),
+          };
+        }
+      }
       if (action === "send") {
         return executeMessageSend(context);
       }

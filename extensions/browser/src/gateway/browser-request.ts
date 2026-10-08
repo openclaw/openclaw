@@ -19,12 +19,6 @@ import {
 import { z } from "zod";
 import { createBrowserControlContext } from "../browser-control-state.js";
 import {
-  inspectBrowserDashboard,
-  requestBrowserDashboard,
-  stopBrowserDashboard,
-  assertBrowserDashboardTargetCurrent,
-} from "../browser-dashboard.js";
-import {
   BROWSER_PROXY_COMMAND,
   BROWSER_PROXY_UPLOAD_COMMAND,
   browserProxyUploadUnavailableMessage,
@@ -181,6 +175,8 @@ export async function handleBrowserGatewayRequest({
       return;
     }
     try {
+      const { stopBrowserDashboard, inspectBrowserDashboard, requestBrowserDashboard } =
+        await import("../browser-dashboard.js");
       const run =
         methodRaw === "DELETE"
           ? stopBrowserDashboard
@@ -208,6 +204,8 @@ export async function handleBrowserGatewayRequest({
       return;
     }
     try {
+      const { inspectBrowserDashboard, assertBrowserDashboardTargetCurrent } =
+        await import("../browser-dashboard.js");
       const authority = { signal: requestSignal, assertCurrent: assertRequesterCurrent };
       const dashboard = await inspectBrowserDashboard(scope.data, authority);
       const tab = dashboard.browserTab;

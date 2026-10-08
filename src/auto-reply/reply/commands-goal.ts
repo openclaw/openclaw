@@ -1,8 +1,5 @@
 /** Handles /goal session objective commands and continuation prompt formatting. */
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   clearSessionGoal,
   createSessionGoal,
@@ -50,7 +47,7 @@ export function parseGoalCommand(raw: string): { action: string; text: string } 
   }
   const actionEnd = argText.search(/\s/);
   const actionRaw = actionEnd === -1 ? argText : argText.slice(0, actionEnd);
-  const action = normalizeOptionalLowercaseString(actionRaw) ?? "status";
+  const action = actionRaw.toLowerCase();
   if (!GOAL_ACTIONS.has(action)) {
     return { action: "start", text: argText };
   }
@@ -166,30 +163,29 @@ export async function executeSessionGoalCommand(params: {
       const goal = await updateSessionGoalObjective({ ...common, objective });
       return { text: `Goal updated: ${goal.objective}`, changed: true };
     }
-    case "pause": {
-      const goal = await updateSessionGoalStatus({ ...common, status: "paused", ...note });
-      return { text: `Goal paused: ${goal.objective}`, changed: true };
-    }
-    case "resume": {
-      const goal = await updateSessionGoalStatus({ ...common, status: "active", ...note });
-      return {
-        text: `Goal resumed: ${goal.objective}`,
-        continuationPrompt: formatGoalResumeContinuationPrompt(params.parsed.text),
-        changed: true,
-      };
-    }
+    case "pause":
+    case "resume":
     case "complete":
-    case "done": {
-      const goal = await updateSessionGoalStatus({ ...common, status: "complete", ...note });
-      return {
-        text: `Goal complete: ${goal.objective}\nTokens used: ${goal.tokensUsed}`,
-        changed: true,
-      };
-    }
+    case "done":
     case "block":
     case "blocked": {
-      const goal = await updateSessionGoalStatus({ ...common, status: "blocked", ...note });
-      return { text: `Goal blocked: ${goal.objective}`, changed: true };
+      const status = {
+        pause: "paused",
+        resume: "active",
+        complete: "complete",
+        done: "complete",
+        block: "blocked",
+        blocked: "blocked",
+      } as const;
+      const nextStatus = status[params.parsed.action];
+      const goal = await updateSessionGoalStatus({ ...common, status: nextStatus, ...note });
+      return {
+        text: `Goal ${nextStatus === "active" ? "resumed" : nextStatus}: ${goal.objective}${nextStatus === "complete" ? `\nTokens used: ${goal.tokensUsed}` : ""}`,
+        ...(nextStatus === "active"
+          ? { continuationPrompt: formatGoalResumeContinuationPrompt(params.parsed.text) }
+          : {}),
+        changed: true,
+      };
     }
     case "clear": {
       const removed = await clearSessionGoal(common);

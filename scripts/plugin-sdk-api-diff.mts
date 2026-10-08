@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -16,6 +17,7 @@ import {
   type PluginSdkApiDiffSurface,
 } from "../src/plugin-sdk/api-diff.ts";
 import { runTasksWithConcurrency } from "../src/utils/run-with-concurrency.js";
+import { ensureKyselyTypes } from "./generate-kysely-types.mts";
 import { isConstrainedCiCheckHost } from "./lib/local-check-runtime.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveNpmPreflightSdkSelectors } from "./openclaw-npm-extended-stable-release.mjs";
@@ -56,14 +58,16 @@ function readValue(argv: string[], index: number, flag: string): string {
 }
 
 function parseArgs(argv: string[]): Args {
-  let acknowledgement: string | null = null;
-  let base = "";
-  let bases: Args["bases"] = null;
-  let evidencePath: string | null = null;
-  let head = "";
-  let jsonPath: string | null = null;
-  let requireAcknowledgement = false;
-  let summaryPath: string | null = null;
+  const options: Args = {
+    acknowledgement: null,
+    base: "",
+    bases: null,
+    evidencePath: null,
+    head: "",
+    jsonPath: null,
+    requireAcknowledgement: false,
+    summaryPath: null,
+  };
 
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -71,11 +75,11 @@ function parseArgs(argv: string[]): Args {
       case "--":
         break;
       case "--acknowledge":
-        acknowledgement = readValue(argv, index, arg);
+        options.acknowledgement = readValue(argv, index, arg);
         index += 1;
         break;
       case "--base":
-        base = readValue(argv, index, arg);
+        options.base = readValue(argv, index, arg);
         index += 1;
         break;
       case "--bases-json": {
@@ -90,27 +94,27 @@ function parseArgs(argv: string[]): Args {
         ) {
           throw new Error("--bases-json requires exactly beta and latest Git refs");
         }
-        bases = { beta: value.beta, latest: value.latest };
+        options.bases = { beta: value.beta, latest: value.latest };
         index += 1;
         break;
       }
       case "--evidence":
-        evidencePath = path.resolve(readValue(argv, index, arg));
+        options.evidencePath = path.resolve(readValue(argv, index, arg));
         index += 1;
         break;
       case "--head":
-        head = readValue(argv, index, arg);
+        options.head = readValue(argv, index, arg);
         index += 1;
         break;
       case "--json":
-        jsonPath = path.resolve(readValue(argv, index, arg));
+        options.jsonPath = path.resolve(readValue(argv, index, arg));
         index += 1;
         break;
       case "--require-acknowledgement":
-        requireAcknowledgement = true;
+        options.requireAcknowledgement = true;
         break;
       case "--summary":
-        summaryPath = path.resolve(readValue(argv, index, arg));
+        options.summaryPath = path.resolve(readValue(argv, index, arg));
         index += 1;
         break;
       case "-h":
@@ -121,28 +125,19 @@ function parseArgs(argv: string[]): Args {
         usage();
     }
   }
-  if ((!base && !bases) || (base && bases) || !head) {
+  if ((!options.base && !options.bases) || (options.base && options.bases) || !options.head) {
     usage();
   }
-  if (bases && requireAcknowledgement) {
+  if (options.bases && options.requireAcknowledgement) {
     throw new Error(
       "Review beta/latest receipts using the selected publication channel's acknowledgement",
     );
   }
-  if (acknowledgement !== null && !/^[a-f0-9]{8}$/u.test(acknowledgement)) {
+  if (options.acknowledgement !== null && !/^[a-f0-9]{8}$/u.test(options.acknowledgement)) {
     console.error("--acknowledge must be the 8-character lowercase digest printed by the report.");
     usage();
   }
-  return {
-    acknowledgement,
-    base,
-    bases,
-    evidencePath,
-    head,
-    jsonPath,
-    requireAcknowledgement,
-    summaryPath,
-  };
+  return options;
 }
 
 function git(repoRoot: string, args: string[]): string {
@@ -241,6 +236,14 @@ async function renderWorker(argv: string[]): Promise<boolean> {
   const outputPath = argv[2] === "--output" ? argv[3] : undefined;
   if (!repoRoot || !outputPath || argv.length !== 4) {
     throw new Error("Invalid Plugin SDK API renderer invocation");
+  }
+  // Tagged revisions retain their checked-in declaration inputs.
+  if (
+    !["state", "agent"].every((name) =>
+      existsSync(path.join(repoRoot, `src/state/openclaw-${name}-db.generated.d.ts`)),
+    )
+  ) {
+    await ensureKyselyTypes(repoRoot);
   }
   await writeFile(outputPath, JSON.stringify(await renderPluginSdkApiRoot(repoRoot)));
   return true;

@@ -38,6 +38,20 @@ Codex buffers the input for the next model boundary.
 Use `/queue followup` or `/queue collect` when messages should queue
 by default instead of steering. See [Steering queue](/concepts/queue-steering).
 
+## Diagnostic-log warnings
+
+If Codex reports a process-wide failure to save its diagnostic logs, OpenClaw
+records that notice at warning level in the [Gateway logs](/gateway/logging).
+It records each native notice when received, rather than repeating it in every
+conversation sharing that app-server. A new app-server can report a new failure.
+
+This routing does not repair the native logging failure or upload diagnostics.
+The warning alone does not mean conversation state was lost. Other task-specific,
+configuration, and unrecognized warnings still reach chat. Gateway log visibility
+follows the configured logging levels and available sinks. As with other Gateway
+diagnostics, reporting is best effort: a logging failure never interrupts the
+native connection, and these operator-only notices do not fall back to chat.
+
 ## Codex feedback upload
 
 When `/diagnostics [note]` is approved for a session on the native Codex

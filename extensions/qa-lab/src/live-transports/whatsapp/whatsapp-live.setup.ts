@@ -1,81 +1,50 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { readLiveQaChannelAccounts } from "../shared/live-channel-status.js";
-import type { WhatsAppQaGateway } from "./whatsapp-live.contracts.js";
+import type { QaGatewayChild } from "../../gateway-child.js";
+import { waitForLiveQaChannelAccount } from "../shared/live-channel-status.js";
 
 const WHATSAPP_QA_READY_TIMEOUT_MS = 150_000;
 const WHATSAPP_QA_READY_STABILITY_MS = 20_000;
 const WHATSAPP_QA_AUTH_ARCHIVE_TIMEOUT_MS = 60_000;
 const WHATSAPP_QA_SIGNAL_SESSION_FILE_RE = /^session-[^/\\]+\.json$/u;
 
-type WhatsAppChannelStatus = Pick<
-  ChannelAccountSnapshot,
-  | "busy"
-  | "connected"
-  | "lastConnectedAt"
-  | "lastDisconnect"
-  | "lastError"
-  | "lastRunActivityAt"
-  | "restartPending"
-  | "running"
->;
-
-function isWhatsAppChannelReady(status: WhatsAppChannelStatus | undefined) {
-  return (
-    status?.running === true &&
-    status.connected === true &&
-    status.restartPending !== true &&
-    status.busy !== true
-  );
-}
-
-async function waitForWhatsAppChannelRunning(
-  gateway: WhatsAppQaGateway,
-  accountId: string,
-): Promise<WhatsAppChannelStatus> {
-  const startedAt = Date.now();
-  let lastStatus: WhatsAppChannelStatus | undefined;
-  while (Date.now() - startedAt < WHATSAPP_QA_READY_TIMEOUT_MS) {
-    try {
-      const accounts = await readLiveQaChannelAccounts(gateway, "whatsapp");
-      const match = accounts.find((entry) => entry.accountId === accountId);
-      lastStatus = match
-        ? {
-            busy: match.busy,
-            connected: match.connected,
-            lastConnectedAt: match.lastConnectedAt,
-            lastDisconnect: match.lastDisconnect,
-            lastError: match.lastError,
-            lastRunActivityAt: match.lastRunActivityAt,
-            restartPending: match.restartPending,
-            running: match.running,
-          }
-        : undefined;
-      if (lastStatus && isWhatsAppChannelReady(lastStatus)) {
-        return lastStatus;
-      }
-    } catch {
-      // retry
-    }
-    await sleep(750);
-  }
-  throw new Error(
-    `whatsapp account "${accountId}" did not become ready` +
-      (lastStatus ? `; last status: ${JSON.stringify(lastStatus)}` : ""),
-  );
-}
-
-export async function waitForWhatsAppChannelStable(gateway: WhatsAppQaGateway, accountId: string) {
+export async function waitForWhatsAppChannelStable(gateway: QaGatewayChild, accountId: string) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < WHATSAPP_QA_READY_TIMEOUT_MS) {
-    const status = await waitForWhatsAppChannelRunning(gateway, accountId);
+    const readyStatus = await waitForLiveQaChannelAccount({
+      gateway,
+      channel: "whatsapp",
+      accountId,
+      timeoutMs: WHATSAPP_QA_READY_TIMEOUT_MS,
+      pollMs: 750,
+      isReady: (status) =>
+        status.running === true &&
+        status.connected === true &&
+        status.restartPending !== true &&
+        status.busy !== true,
+      describeTimeout: (status) => {
+        const lastStatus = status && {
+          busy: status.busy,
+          connected: status.connected,
+          lastConnectedAt: status.lastConnectedAt,
+          lastDisconnect: status.lastDisconnect,
+          lastError: status.lastError,
+          lastRunActivityAt: status.lastRunActivityAt,
+          restartPending: status.restartPending,
+          running: status.running,
+        };
+        return (
+          `whatsapp account "${accountId}" did not become ready` +
+          (lastStatus ? `; last status: ${JSON.stringify(lastStatus)}` : "")
+        );
+      },
+    });
     const connectedAt =
-      typeof status.lastConnectedAt === "number" && status.lastConnectedAt > 0
-        ? status.lastConnectedAt
+      typeof readyStatus.lastConnectedAt === "number" && readyStatus.lastConnectedAt > 0
+        ? readyStatus.lastConnectedAt
         : Date.now();
     const connectedForMs = Date.now() - connectedAt;
     if (connectedForMs >= WHATSAPP_QA_READY_STABILITY_MS) {

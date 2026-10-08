@@ -1,7 +1,10 @@
 // Embedded gateway stub tests cover in-process gateway methods used by agent
 // tools when no external gateway transport is available.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChatHistoryPage } from "../../config/sessions/session-history-types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { decodeChatHistoryPageCursor } from "../../gateway/server-methods/chat-history-page-cursor.js";
+import { prepareChatHistoryResponsePage } from "../../gateway/server-methods/chat-history-response-page.js";
 import type { SessionRowProjection } from "../../gateway/session-row-projection.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -11,7 +14,7 @@ import {
 
 const runtime = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn((): OpenClawConfig => ({
-    agents: { list: [{ id: "main", default: true }] },
+    agents: { entries: { main: {} } },
   })),
   resolveSessionStoreKey: vi.fn(({ sessionKey }: { sessionKey: string }) =>
     sessionKey === "main" ? "agent:main:main" : sessionKey,
@@ -35,28 +38,23 @@ const runtime = vi.hoisted(() => ({
     canonicalKey: "agent:main:main",
   })),
   resolveSessionModelRef: vi.fn(() => ({ provider: "openai" })),
-  readChatHistoryPage: vi.fn(async () => ({
+  readChatHistoryPage: vi.fn(async (): Promise<ChatHistoryPage> => ({
     messages: [] as unknown[],
     pagination: { offset: 0, totalMessages: 0, rawPageMessages: 0 },
   })),
-  resolveChatHistoryNextOffset: vi.fn(
-    ({ offset, rawPageMessages }: { offset: number; rawPageMessages: number }) =>
-      offset + rawPageMessages,
-  ),
+  resolveTranscriptSessionKeyBySessionId: vi.fn(() => "agent:main:main"),
   resolveEffectiveChatHistoryMaxChars: vi.fn(() => 100_000),
-  getMaxChatHistoryMessagesBytes: vi.fn(() => 100_000),
-  CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: 100_000,
-  replaceOversizedChatHistoryMessages: vi.fn(({ messages }: { messages: unknown[] }) => ({
-    messages,
-  })),
-  capArrayByJsonBytes: vi.fn((items: unknown[]) => ({ items })),
+  getMaxChatHistoryMessagesBytes: vi.fn(() => 6 * 1024 * 1024),
   listProjectedSessions: vi.fn(
     async (_params: { projection: SessionRowProjection; opts: unknown }) => ({ sessions: [] }),
   ),
 }));
 
+// mock-isolation: Keep storage and session lifecycles synthetic, with the real response owner.
 vi.mock("./embedded-gateway-stub.runtime.js", () => ({
   ...runtime,
+  decodeChatHistoryPageCursor,
+  prepareChatHistoryResponsePage,
   withPreparedSessionResolve: async (
     {
       isCurrent,
@@ -86,7 +84,7 @@ describe("embedded gateway stub", () => {
     runtime.getRuntimeConfig.mockClear();
     runtime.resolveSessionKeyFromResolveParams.mockReset();
     runtime.readChatHistoryPage.mockClear();
-    runtime.resolveChatHistoryNextOffset.mockClear();
+    runtime.resolveTranscriptSessionKeyBySessionId.mockClear();
     runtime.loadSessionEntry.mockClear();
     runtime.resolveSessionAgentId.mockClear();
     runtime.resolveSessionStoreKey.mockClear();
@@ -215,7 +213,7 @@ describe("embedded gateway stub", () => {
     "canonicalizes embedded session search filters with store %s",
     async (store) => {
       const cfg: OpenClawConfig = {
-        agents: { list: [{ id: "main", default: true }] },
+        agents: { entries: { main: {} } },
         ...(store ? { session: { store } } : {}),
       };
       const storePath = store ? "/stores/main.sqlite" : "/tmp/openclaw-sessions.json";
@@ -257,7 +255,7 @@ describe("embedded gateway stub", () => {
     const agentId = "ops";
     const cfg: OpenClawConfig = {
       agents: {
-        list: [{ id: "main", default: true }, { id: "ops" }],
+        entries: { main: {}, ops: {} },
         defaults: { sessionStore: { agentId } },
       },
       session: { store: "/stores/shared.sqlite" },
@@ -317,7 +315,7 @@ describe("embedded gateway stub", () => {
     ).rejects.toThrow('belongs to "ops", not "research"');
     expect(runtime.resolveSessionAgentId).toHaveBeenCalledWith({
       sessionKey: "global",
-      config: { agents: { list: [{ id: "main", default: true }] } },
+      config: { agents: { entries: { main: {} } } },
       agentId: "research",
     });
     expect(runtime.searchSessionTranscripts).not.toHaveBeenCalled();
@@ -386,33 +384,109 @@ describe("embedded gateway stub", () => {
     });
   });
 
-  it("computes continuation from the final byte-budgeted visible page", async () => {
+  it.each([undefined, "205000"])(
+    "bounds embedded history and continues from retained rows with maxBytes %s",
+    async (maxBytes) => {
+      const messages = Array.from({ length: 6 }, (_, index) => ({
+        role: "assistant",
+        content: "x".repeat(100_000),
+        __openclaw: { id: `message-${index + 1}`, seq: index + 1 },
+      }));
+      runtime.readChatHistoryPage.mockResolvedValueOnce({
+        messages,
+        pagination: { offset: 0, totalMessages: 6, rawPageMessages: 6 },
+      });
+
+      const result = await createEmbeddedCallGateway()({
+        method: "chat.history",
+        params: { sessionKey: "agent:main:main", limit: 6, offset: 0, maxBytes },
+      });
+      const count = maxBytes === undefined ? 5 : 2;
+      expect(result).toMatchObject({
+        messages: messages.slice(-count),
+        nextOffset: count,
+        hasMore: true,
+      });
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThan(
+        maxBytes === undefined ? 512 * 1024 : Number(maxBytes),
+      );
+      expect(result).not.toHaveProperty("messagesBytes");
+    },
+  );
+
+  it("continues a retained anchored page through its original transcript source", async () => {
+    const cursor = {
+      sessionId: "retained-session",
+      source: "reset-archive",
+      messageId: "message-3",
+      direction: "older" as const,
+    };
     const messages = [
-      { role: "assistant", content: "older", __openclaw: { seq: 6 } },
-      { role: "assistant", content: "latest", __openclaw: { seq: 7 } },
+      { role: "assistant", content: "earlier", __openclaw: { id: "message-2", seq: 2 } },
     ];
-    const bounded = [messages[1]];
+    const initial = prepareChatHistoryResponsePage(
+      {
+        messages: [
+          { role: "assistant", content: "Anchor", __openclaw: { id: cursor.messageId, seq: 3 } },
+        ],
+        anchor: {
+          sessionId: cursor.sessionId,
+          source: cursor.source,
+          hasOlder: true,
+          hasNewer: false,
+        },
+      },
+      { entry: undefined, maxHistoryBytes: 512 * 1024, messageId: cursor.messageId },
+    );
     runtime.readChatHistoryPage.mockResolvedValueOnce({
       messages,
-      pagination: { offset: 0, totalMessages: 10, rawPageMessages: 5 },
+      anchor: {
+        sessionId: cursor.sessionId,
+        source: cursor.source,
+        direction: cursor.direction,
+        hasOlder: true,
+        hasNewer: true,
+      },
     });
-    runtime.capArrayByJsonBytes.mockReturnValueOnce({ items: bounded });
-    runtime.resolveChatHistoryNextOffset.mockReturnValueOnce(3);
-
-    const result = await createEmbeddedCallGateway()({
+    const result = await createEmbeddedCallGateway()<{
+      messages: unknown[];
+      sessionId: string;
+      olderCursor: string;
+    }>({
       method: "chat.history",
-      params: { sessionKey: "agent:main:main", limit: 2, offset: 0 },
+      params: { sessionKey: "agent:main:main", cursor: initial.olderCursor },
     });
-
-    expect(runtime.resolveChatHistoryNextOffset).toHaveBeenCalledWith({
-      messages: bounded,
-      totalMessages: 10,
-      offset: 0,
-      rawPageMessages: 5,
-      projected: messages,
+    expect(result.messages).toEqual(messages);
+    expect(result.sessionId).toBe(cursor.sessionId);
+    expect(decodeChatHistoryPageCursor(result.olderCursor)).toEqual({
+      ...cursor,
+      messageId: "message-2",
     });
-    expect(result).toMatchObject({ messages: bounded, nextOffset: 3, hasMore: true });
+    expect(runtime.readChatHistoryPage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entry: undefined,
+        sessionId: cursor.sessionId,
+        messageId: cursor.messageId,
+        pageCursor: cursor,
+      }),
+    );
   });
+
+  it.each([
+    { cursor: "delta:current", message: "delta cursors require a running gateway" },
+    { cursor: "history-page:invalid", message: "invalid history page cursor" },
+  ])(
+    "rejects unsupported or invalid cursor $cursor before reading",
+    async ({ cursor, message }) => {
+      await expect(
+        createEmbeddedCallGateway()({
+          method: "chat.history",
+          params: { sessionKey: "agent:main:main", cursor },
+        }),
+      ).rejects.toThrow(message);
+      expect(runtime.readChatHistoryPage).not.toHaveBeenCalled();
+    },
+  );
 
   it("normalizes string history limits before calling the shared owner", async () => {
     await createEmbeddedCallGateway()({

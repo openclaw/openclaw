@@ -326,8 +326,11 @@ describe("promptAuthChoiceGrouped", () => {
     expect(result).toBe("minimax-api");
   });
 
-  it("uses a caller-supplied method prompt when provided", async () => {
-    buildAuthChoiceGroups.mockReturnValue({ groups: [], skipOption: undefined });
+  it("uses a caller-supplied group and method prompt over a built-in group with the same id", async () => {
+    buildAuthChoiceGroups.mockReturnValue({
+      groups: [authChoiceGroup("detected-ai", "Built-in AI", [["built-in", "Built-in method"]])],
+      skipOption: undefined,
+    });
     const messages: string[] = [];
     const prompter = createPromptHarness(async (params) => {
       messages.push(params.message);

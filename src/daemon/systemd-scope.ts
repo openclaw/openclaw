@@ -37,13 +37,10 @@ import {
   resolveSystemdUnitPathForName,
 } from "./systemd-service-files.js";
 import { assertNoSystemSystemdOwnership, isSystemSystemdOwnershipError } from "./systemd-system.js";
-import { resolveSystemdUnitLoadPaths } from "./systemd-unit-load-paths.js";
-
-const SYSTEM_SYSTEMD_UNIT_DIRS = [
-  "/etc/systemd/system",
-  "/usr/lib/systemd/system",
-  "/lib/systemd/system",
-] as const;
+import {
+  DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS,
+  resolveSystemdUnitLoadPaths,
+} from "./systemd-unit-load-paths.js";
 
 type SystemdDiscoveryOptions = Pick<
   GatewayServiceReadOptions,
@@ -130,10 +127,6 @@ export async function isSystemdServiceAbsent(
   return (await findInstalledSystemdGatewayScope(env)) === null;
 }
 
-function unitBaseName(label: string): string {
-  return label.endsWith(".service") ? label.slice(0, -".service".length) : label;
-}
-
 function systemdTemplatePrefix(base: string): { template: string; instance: string } | null {
   const cut = base.indexOf("@");
   if (cut <= 0) {
@@ -158,7 +151,7 @@ function systemdUnitMatchesIdentity(
   allowedNames: Set<string>,
   explicit: boolean,
 ): boolean {
-  const base = unitBaseName(label);
+  const base = label.endsWith(".service") ? label.slice(0, -".service".length) : label;
   if (allowedNames.has(base)) {
     return true;
   }
@@ -200,25 +193,6 @@ export function resolveSystemdTemplateInstanceName(
       ? parsed.instance
       : os.userInfo().username;
   return `${template}@${instance}.service`;
-}
-
-async function findSystemSystemdUnitPath(
-  env: GatewayServiceEnv,
-): Promise<{ unitName: string; unitPath: string } | null> {
-  const candidates = systemdInstalledNameProbes(resolveInstalledSystemdServiceNameCandidates(env));
-  for (const name of candidates) {
-    const serviceFile = `${name}.service`;
-    for (const dir of SYSTEM_SYSTEMD_UNIT_DIRS) {
-      const candidate = path.posix.join(dir, serviceFile);
-      try {
-        await fs.access(candidate);
-        return { unitName: serviceFile, unitPath: candidate };
-      } catch {
-        continue;
-      }
-    }
-  }
-  return null;
 }
 
 export async function assertNoSystemGatewayOwnership(
@@ -452,12 +426,7 @@ async function findMarkerOwnedSystemSystemdUnit(
   const custom = new Map<string, SystemdServiceReadTarget>();
 
   const { findSystemGatewayServices } = await import("./inspect.js");
-  let services: Awaited<ReturnType<typeof findSystemGatewayServices>>;
-  try {
-    services = await findSystemGatewayServices();
-  } catch {
-    return null;
-  }
+  const services = await findSystemGatewayServices();
   for (const svc of services) {
     if (
       svc.platform !== "linux" ||
@@ -467,8 +436,7 @@ async function findMarkerOwnedSystemSystemdUnit(
     ) {
       continue;
     }
-    const match = /^unit:\s*(.+)$/.exec(svc.detail.trim());
-    const unitPath = match?.[1]?.trim();
+    const unitPath = svc.sourcePath;
     if (unitPath) {
       const target: SystemdServiceReadTarget = {
         scope: "system",
@@ -538,13 +506,22 @@ async function findSystemSystemdGatewayScope(
   options: SystemdDiscoveryOptions | undefined,
   discoverCustom: boolean,
 ): Promise<SystemdServiceReadTarget | null> {
-  const systemUnit = await findSystemSystemdUnitPath(env);
-  if (systemUnit) {
-    return {
-      scope: "system",
-      unitName: resolveSystemdTemplateInstanceName(systemUnit.unitName, env),
-      unitPath: systemUnit.unitPath,
-    };
+  const candidates = systemdInstalledNameProbes(resolveInstalledSystemdServiceNameCandidates(env));
+  for (const name of candidates) {
+    const unitName = `${name}.service`;
+    for (const dir of DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS) {
+      const unitPath = path.posix.join(dir, unitName);
+      try {
+        await fs.access(unitPath);
+      } catch {
+        continue;
+      }
+      return {
+        scope: "system",
+        unitName: resolveSystemdTemplateInstanceName(unitName, env),
+        unitPath,
+      };
+    }
   }
   if (env.OPENCLAW_SERVICE_KIND?.trim() === "node") {
     return null;

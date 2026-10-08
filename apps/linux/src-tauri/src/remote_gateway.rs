@@ -29,7 +29,6 @@ impl Drop for SshTunnel {
 #[derive(Clone)]
 pub(crate) struct TunnelRoute {
     pub id: u64,
-    pub selection: u64,
     pub request: RemoteGatewayRequest,
     pub url: Url,
 }
@@ -149,7 +148,6 @@ impl TunnelManager {
                 return Err("The SSH connection closed. Retry the connection.".to_string());
             }
             active.route.request = route.request;
-            active.route.selection = route.selection;
             active.recover = recover;
             return Ok(active.route.clone());
         }
@@ -291,24 +289,28 @@ pub(crate) fn desktop_node_identity_scope(
     ))
 }
 
-fn is_private_host(host: &str) -> bool {
+pub(crate) fn is_private_host(host: &str) -> bool {
     let host = host.trim_matches(['[', ']']).to_ascii_lowercase();
     if host == "localhost" || host.ends_with(".local") || host.ends_with(".ts.net") {
         return true;
     }
-    match host.parse::<IpAddr>() {
-        Ok(IpAddr::V4(address)) => {
+    host.parse::<IpAddr>()
+        .is_ok_and(|address| is_private_address(&address))
+}
+
+pub(crate) fn is_private_address(address: &IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
             let [first, second, _, _] = address.octets();
             address.is_loopback()
                 || address.is_private()
                 || address.is_link_local()
                 || (first == 100 && (64..=127).contains(&second))
         }
-        Ok(IpAddr::V6(address)) => {
+        IpAddr::V6(address) => {
             let first = address.segments()[0];
             address.is_loopback() || first & 0xfe00 == 0xfc00 || first & 0xffc0 == 0xfe80
         }
-        Err(_) => false,
     }
 }
 
@@ -608,14 +610,17 @@ fn configured_secret(
 fn configured_tls_fingerprint(remote: &Map<String, Value>) -> Result<Option<String>, String> {
     match remote.get("tlsFingerprint") {
         None | Some(Value::Null) => Ok(None),
-        Some(Value::String(value))
-            if value.trim().len() == 64
-                && value.trim().bytes().all(|byte| byte.is_ascii_hexdigit()) =>
-        {
-            Ok(Some(value.trim().to_string()))
-        }
+        Some(Value::String(value)) => normalize_tls_fingerprint(value).map(Some),
         Some(_) => Err("Gateway TLS fingerprint must be 64 hexadecimal characters.".to_string()),
     }
+}
+
+pub(crate) fn normalize_tls_fingerprint(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err("Gateway TLS fingerprint must be 64 hexadecimal characters.".to_string());
+    }
+    Ok(value.to_string())
 }
 
 pub(crate) fn resolve_remote_tls_fingerprint(
@@ -623,11 +628,7 @@ pub(crate) fn resolve_remote_tls_fingerprint(
     gateway_url: &Url,
 ) -> Result<(), String> {
     if let Some(fingerprint) = &request.tls_fingerprint {
-        let value = fingerprint.trim();
-        if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            return Err("Gateway TLS fingerprint must be 64 hexadecimal characters.".to_string());
-        }
-        request.tls_fingerprint = Some(value.to_string());
+        request.tls_fingerprint = Some(normalize_tls_fingerprint(fingerprint)?);
         return Ok(());
     }
     let Some(root) = read_config(&config_path()?)? else {
@@ -886,12 +887,9 @@ pub(crate) fn save_config_at(
         .unwrap_or_default();
     let same_endpoint = old_remote.get("url").and_then(Value::as_str) == Some(gateway_url.as_str())
         && old_remote.get("sshTarget").and_then(Value::as_str) == request.ssh_target.as_deref();
-    let credentials = credential_endpoint_matches(&old_remote, request).then(|| {
-        (
-            old_remote.get("token").cloned(),
-            old_remote.get("password").cloned(),
-        )
-    });
+    let credentials = credential_endpoint_matches(&old_remote, request);
+    let preserved_credentials = ["token", "password"]
+        .map(|key| (key, old_remote.get(key).filter(|_| credentials).cloned()));
     let mut remote = if same_endpoint {
         old_remote
     } else {
@@ -899,14 +897,10 @@ pub(crate) fn save_config_at(
     };
     // Credential identity is independent of whole-map retention. Copy raw refs
     // across URL normalization/forward-port changes, never their resolved bytes.
-    remote.remove("token");
-    remote.remove("password");
-    if let Some((token, password)) = credentials {
-        if let Some(token) = token {
-            remote.insert("token".to_string(), token);
-        }
-        if let Some(password) = password {
-            remote.insert("password".to_string(), password);
+    for (key, value) in preserved_credentials {
+        remote.remove(key);
+        if let Some(value) = value {
+            remote.insert(key.to_string(), value);
         }
     }
     remote.insert("url".to_string(), json!(gateway_url.as_str()));
@@ -921,10 +915,9 @@ pub(crate) fn save_config_at(
             json!(request.remote_port.unwrap_or(DEFAULT_GATEWAY_PORT)),
         );
     } else {
-        remote.remove("sshTarget");
-        remote.remove("sshIdentity");
-        remote.remove("remotePort");
-        remote.remove("sshHostKeyPolicy");
+        for key in ["sshTarget", "sshIdentity", "remotePort", "sshHostKeyPolicy"] {
+            remote.remove(key);
+        }
     }
     if let Some(token) = normalize_optional(request.token.clone()) {
         remote.remove("password");
@@ -979,7 +972,7 @@ pub(crate) fn save_config_at(
     result
 }
 
-fn normalize_optional(value: Option<String>) -> Option<String> {
+pub(crate) fn normalize_optional(value: Option<String>) -> Option<String> {
     value
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
@@ -2018,7 +2011,6 @@ mod tests {
         let url = Url::parse("ws://127.0.0.1:18789").unwrap();
         let route = TunnelRoute {
             id: 0,
-            selection: 7,
             request: request(),
             url: url.clone(),
         };

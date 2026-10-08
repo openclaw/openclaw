@@ -1,4 +1,3 @@
-// Session group catalog mutations.
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
@@ -14,13 +13,10 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
-import { ensureSessionGroupCatalog } from "../session-group-catalog.js";
+import { ensureSessionGroupCatalog, readSessionGroupCatalog } from "../session-group-catalog.js";
 import { filterMutableSessionGroupRecords } from "../session-group-defaults-access.js";
 import {
   deleteSessionGroup,
-  listSessionGroupDefaults,
-  listSidebarSectionOrder,
-  listSessionGroups,
   putSessionGroups,
   renameSessionGroup,
   SessionGroupNotEmptyError,
@@ -42,11 +38,8 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
     validateSessionsGroupsListParams,
     async ({ respond }) => {
       await ensureSessionGroupCatalog();
-      respond(
-        true,
-        { groups: listSessionGroups(), sectionOrder: listSidebarSectionOrder() },
-        undefined,
-      );
+      const { groups, sectionOrder } = readSessionGroupCatalog();
+      respond(true, { groups, sectionOrder }, undefined);
     },
   ),
   "sessions.groups.defaults": defineValidatedGatewayHandler(
@@ -57,7 +50,7 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
       const defaults = await filterMutableSessionGroupRecords({
         client,
         context,
-        records: () => listSessionGroupDefaults(),
+        records: () => readSessionGroupCatalog().defaults,
       });
       respond(true, { defaults }, undefined);
     },
@@ -76,9 +69,13 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
         assertCurrent: sessionMutationAuthorization?.assertCurrent,
         assertTargetCurrent: sessionMutationAuthorization?.assertTargetCurrent,
       });
-      respond(true, { ok: true, groups, sectionOrder: listSidebarSectionOrder() }, undefined);
+      respond(
+        true,
+        { ok: true, groups, sectionOrder: readSessionGroupCatalog().sectionOrder },
+        undefined,
+      );
       // Catalog-only changes still need to reach other open clients.
-      emitSessionsChanged(context, { reason: "groups" });
+      emitSessionsChanged(context, { reason: "groups" }, { catalogOnly: true });
     } catch (error) {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
@@ -191,12 +188,12 @@ export const sessionGroupHandlers: GatewayRequestHandlers = {
           defaults: await filterMutableSessionGroupRecords({
             client,
             context,
-            records: () => listSessionGroupDefaults(),
+            records: () => readSessionGroupCatalog().defaults,
           }),
         },
         undefined,
       );
-      emitSessionsChanged(context, { reason: "groups" });
+      emitSessionsChanged(context, { reason: "groups" }, { catalogOnly: true });
     },
   ),
   "sessions.groups.delete": defineValidatedGatewayHandler(

@@ -579,9 +579,9 @@ describe("web monitor inbox delivery and dedupe", () => {
     expect(sock.end).toHaveBeenCalledTimes(1);
   });
 
-  it("delivery coordinator drains serialized same-lane replies before socket close", async () => {
-    vi.useFakeTimers();
-    try {
+  it("delivery coordinator drains serialized same-lane replies before socket close", () =>
+    withRetryClock(async () => {
+      const firstBuffered = createDeferred<void>();
       let releaseFirst: (() => void) | undefined;
       const firstTurn = new Promise<void>((resolve) => {
         releaseFirst = resolve;
@@ -595,8 +595,14 @@ describe("web monitor inbox delivery and dedupe", () => {
       });
       const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
         debounceMs: 50,
+        shouldDebounce: () => {
+          firstBuffered.resolve();
+          return true;
+        },
       });
       sock.ev.emit("messages.upsert", dmUpsert(nextMessageId("debounce-close-reply-1"), "first"));
+      // Durable admission can complete after the virtual clock has already advanced.
+      await firstBuffered.promise;
       await vi.advanceTimersByTimeAsync(50);
       await waitForMessageCalls(onMessage, 1);
       expect(inboundMessage(onMessage).payload.body).toBe("first");
@@ -630,10 +636,7 @@ describe("web monitor inbox delivery and dedupe", () => {
       expect(sock.sendMessage.mock.invocationCallOrder.at(-1)).toBeLessThan(
         sock.end.mock.invocationCallOrder.at(0),
       );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+    }));
 
   it("delivery coordinator waits for in-flight handlers before close drain", async () => {
     let releaseHandler: (() => void) | undefined;

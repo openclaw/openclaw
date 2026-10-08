@@ -1,8 +1,3 @@
-/**
- * Shared sandbox naming and scope helpers.
- *
- * Produces stable session slugs, workspace directories, and registry scope keys.
- */
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveUserPath } from "../../infra/home-dir.js";

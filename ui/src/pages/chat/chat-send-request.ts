@@ -1,3 +1,4 @@
+import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatWorkContext } from "../../../../packages/gateway-protocol/src/chat-work-context.js";
 import type {
@@ -39,34 +40,50 @@ export async function requestChatSend(
   if (params.attachments?.length) {
     assertUploadsEnabled(state.uploadConfig);
   }
-  const routing = resolveChatSendRouting(state, params);
-  if (chatProviderReviewRow(state, routing.sessionKey, routing.selectedAgentId)?.providerReview) {
+  const sessionKey = params.sessionKey ?? state.sessionKey;
+  const selectedAgentId = params.agentId
+    ? normalizeAgentId(params.agentId)
+    : resolveUiSelectedSessionAgentId(state);
+  const currentSessionId = state.currentSessionId;
+  const canReuseCurrentSessionId =
+    sessionKey === state.sessionKey &&
+    (!isUiGlobalSessionKey(sessionKey) ||
+      (selectedAgentId !== undefined &&
+        selectedAgentId === resolveUiSelectedSessionAgentId(state)));
+  const routingSessionId =
+    canReuseCurrentSessionId && typeof currentSessionId === "string" && currentSessionId.trim()
+      ? currentSessionId.trim()
+      : undefined;
+  if (chatProviderReviewRow(state, sessionKey, selectedAgentId)?.providerReview) {
     throw new Error(t("chat.providerReview.pausedBody"));
   }
-  const sessionId = params.sessionId ?? (params.intent ? undefined : routing.sessionId);
+  const sessionId = params.sessionId ?? (params.intent ? undefined : routingSessionId);
   const controlUiReconnectResume = Boolean(
     !params.intent && sessionId && state.reconnectResumeSessionId === sessionId,
   );
-  const payload = await state.client!.request("chat.send", {
-    sessionKey: routing.sessionKey,
-    ...(isUiGlobalSessionKey(routing.sessionKey) && routing.selectedAgentId
-      ? { agentId: routing.selectedAgentId }
-      : {}),
-    ...(sessionId ? { sessionId } : {}),
-    ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
-    message: params.message,
-    ...(params.workContext ? { workContext: params.workContext } : {}),
-    ...(params.mentions?.length ? { mentions: params.mentions } : {}),
-    ...(params.intent ? { intent: params.intent } : {}),
-    deliver: false,
-    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-    ...(params.queueMode ? { queueMode: params.queueMode } : {}),
-    ...(params.expectedLeafEntryId !== undefined
-      ? { expectedLeafEntryId: params.expectedLeafEntryId }
-      : {}),
-    idempotencyKey: params.runId,
-    attachments: buildChatApiAttachments(params.attachments),
-  });
+  const payload = await state.client!.request(
+    "chat.send",
+    {
+      sessionKey,
+      ...(isUiGlobalSessionKey(sessionKey) && selectedAgentId ? { agentId: selectedAgentId } : {}),
+      ...(sessionId ? { sessionId } : {}),
+      ...(controlUiReconnectResume ? { __controlUiReconnectResume: true } : {}),
+      message: params.message,
+      ...(params.workContext ? { workContext: params.workContext } : {}),
+      ...(params.mentions?.length ? { mentions: params.mentions } : {}),
+      ...(params.intent ? { intent: params.intent } : {}),
+      deliver: false,
+      ...(params.replyToId ? { replyToId: params.replyToId } : {}),
+      ...(params.queueMode ? { queueMode: params.queueMode } : {}),
+      ...(params.expectedLeafEntryId !== undefined
+        ? { expectedLeafEntryId: params.expectedLeafEntryId }
+        : {}),
+      idempotencyKey: params.runId,
+      attachments: buildChatApiAttachments(params.attachments),
+    },
+    // This bounds receipt of the admission ACK, not execution of the admitted turn.
+    { timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS },
+  );
   if (controlUiReconnectResume) {
     state.reconnectResumeSessionId = null;
   }
@@ -91,32 +108,4 @@ export function isActiveLeafChangedError(err: unknown): err is GatewayRequestErr
     err instanceof GatewayRequestError &&
     asOptionalRecord(err.details)?.reason === ACTIVE_LEAF_CHANGED_ERROR_REASON
   );
-}
-
-function resolveChatSendRouting(
-  state: ChatState,
-  params: {
-    sessionKey?: string;
-    agentId?: string;
-  },
-): { selectedAgentId?: string; sessionId?: string; sessionKey: string } {
-  const sessionKey = params.sessionKey ?? state.sessionKey;
-  const selectedAgentId = params.agentId
-    ? normalizeAgentId(params.agentId)
-    : resolveUiSelectedSessionAgentId(state);
-  const currentSessionId = state.currentSessionId;
-  const canReuseCurrentSessionId =
-    sessionKey === state.sessionKey &&
-    (!isUiGlobalSessionKey(sessionKey) ||
-      (selectedAgentId !== undefined &&
-        selectedAgentId === resolveUiSelectedSessionAgentId(state)));
-  const sessionId =
-    canReuseCurrentSessionId && typeof currentSessionId === "string" && currentSessionId.trim()
-      ? currentSessionId.trim()
-      : undefined;
-  return {
-    sessionKey,
-    ...(selectedAgentId ? { selectedAgentId } : {}),
-    ...(sessionId ? { sessionId } : {}),
-  };
 }

@@ -13,7 +13,6 @@ const {
   getRemoteSkillEligibilityMock,
   updateSessionEntryMock,
   loadSessionEntryMock,
-  resolveNodeExecEligibilityMock,
 } = vi.hoisted(() => ({
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]) => ({
     prompt: "",
@@ -30,11 +29,26 @@ const {
   })),
   updateSessionEntryMock: vi.fn(),
   loadSessionEntryMock: vi.fn(),
-  resolveNodeExecEligibilityMock: vi.fn(() => ({ canExec: false })),
 }));
 
-vi.mock("../../agents/exec-defaults.js", () => ({
-  resolveNodeExecEligibility: resolveNodeExecEligibilityMock,
+// mock-isolation: Session classification is outside skill snapshot publication.
+vi.mock("../../agents/sandbox/runtime-status.js", () => ({
+  resolveSandboxRuntimeStatus: () => ({ sandboxed: false, sandboxRequired: false }),
+  withSandboxRuntimeStatusInWorker: async (
+    _params: unknown,
+    source: { assertCurrent: () => void },
+    consume: (sandbox: { sandboxed: boolean; sandboxRequired: boolean }) => Promise<unknown>,
+  ) => {
+    source.assertCurrent();
+    const result = await consume({ sandboxed: false, sandboxRequired: false });
+    source.assertCurrent();
+    return result;
+  },
+}));
+
+// mock-isolation: Use a fixed policy while testing skill ownership and publication.
+vi.mock("../../infra/exec-approvals-store.js", () => ({
+  loadExecApprovalsReadOnlyAsync: async () => ({ version: 1, agents: {} }),
 }));
 
 vi.mock("../../skills/runtime/remote.js", () => ({
@@ -61,14 +75,18 @@ vi.mock("../../config/sessions.js", () => ({
   resolveSessionFilePathOptions: vi.fn(),
 }));
 
+// mock-isolation: Skill-refresh cases control persistence acknowledgments without opening SQLite.
 vi.mock("../../config/sessions/session-accessor.js", () => ({
-  loadSessionEntry: loadSessionEntryMock,
-  patchSessionEntryCore: vi.fn(),
-  updateSessionEntry: async (...args: unknown[]) => {
+  patchSessionEntryCore: async (...args: unknown[]) => {
     const entry = await updateSessionEntryMock(...args);
     loadSessionEntryMock.mockReturnValue(entry ?? undefined);
     return entry;
   },
+}));
+
+// mock-isolation: Skill-refresh cases read the fixture's acknowledged row without starting workers.
+vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
+  readSessionEntryInWorker: loadSessionEntryMock,
 }));
 
 const { ensureSkillSnapshot } = await import("./session-updates.js");
@@ -87,7 +105,6 @@ describe("ensureSkillSnapshot", () => {
     updateSessionEntryMock.mockReset();
     loadSessionEntryMock.mockReset();
     updateSessionEntryMock.mockResolvedValue(null);
-    resolveNodeExecEligibilityMock.mockReturnValue({ canExec: false });
   });
 
   afterEach(() => {
@@ -116,12 +133,11 @@ describe("ensureSkillSnapshot", () => {
 
       expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledWith(
         workspaceDir,
-        expect.objectContaining({ agentId: "writer" }),
-      );
-      expect(resolveNodeExecEligibilityMock).toHaveBeenCalledWith(
         expect.objectContaining({
           agentId: "writer",
-          execOverrides: { host: "node", node: "build-node", security: "allowlist" },
+          eligibility: expect.objectContaining({
+            nodeSkills: { canExec: true, node: "build-node" },
+          }),
         }),
       );
     },
@@ -160,6 +176,7 @@ describe("ensureSkillSnapshot", () => {
         sessionKey,
       },
       expect.any(Function),
+      expect.any(Object),
     );
     expect(result.sessionEntry).toBeUndefined();
     expect(result.systemSent).toBe(false);

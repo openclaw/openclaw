@@ -40,9 +40,12 @@ type IosRemoteBuildUpload = {
   state: string;
 };
 
+type IosReleaseDestination = "app-store" | "testflight";
+
 export type IosReleasePlanInput = {
   appStoreVersions: IosRemoteAppStoreVersion[];
   buildUploads: IosRemoteBuildUpload[];
+  destination?: IosReleaseDestination;
   explicitBuildNumber?: string | null;
   explicitRevision?: string | number | null;
   gatewayVersion: string;
@@ -59,15 +62,16 @@ export type IosReleasePlan = {
   buildNumber: number;
   buildUploads: IosRemoteBuildUpload[];
   releaseNotesBaselines: IosReleasePlanInput["releaseNotesBaselines"];
-  decision: "new-revision" | "resume-editable" | "retry-upload";
+  decision:
+    | "new-revision"
+    | "resume-editable"
+    | "resume-testflight"
+    | "retry-upload"
+    | "stage-existing";
+  destination: IosReleaseDestination;
   gatewayVersion: string;
   sourceClean: boolean | null;
   sourceSha: string | null;
-};
-
-type DecodedVersion = {
-  legacy: boolean;
-  revision: number;
 };
 
 function parseVersionComponents(version: string): [number, number, number] | null {
@@ -97,10 +101,7 @@ function compareAppStoreVersions(left: string, right: string): number {
   return 0;
 }
 
-export function decodeIosAppStoreVersion(
-  gatewayVersion: string,
-  appStoreVersion: string,
-): DecodedVersion | null {
+export function decodeIosAppStoreVersion(gatewayVersion: string, appStoreVersion: string) {
   const canonicalGatewayVersion = normalizePinnedIosVersion(gatewayVersion);
   const gateway = parseVersionComponents(canonicalGatewayVersion);
   const candidate = parseVersionComponents(appStoreVersion);
@@ -180,16 +181,24 @@ function assertExplicitSelection(
 }
 
 export function resolveIosReleasePlan(input: IosReleasePlanInput): IosReleasePlan {
+  const destination = input.destination ?? "app-store";
+  if (destination !== "app-store" && destination !== "testflight") {
+    throw new Error("Unknown iOS release destination. Choose app-store or testflight.");
+  }
   const gatewayVersion = normalizePinnedIosVersion(input.gatewayVersion);
   const decodedVersions = input.appStoreVersions.map((version) => ({
     decoded: decodeIosAppStoreVersion(gatewayVersion, version.versionString),
     version,
   }));
-  // App Store Connect permits only one mutable iOS version. Treat any extra
-  // active record as ambiguous instead of guessing which release owns it.
-  const activeVersions = input.appStoreVersions.filter(
-    (version) => !RELEASED_APP_STORE_VERSION_STATES.has(version.state),
-  );
+  // Store releases own the mutable version. TestFlight shares its revision when
+  // it matches this gateway, but does not depend on another train's store draft.
+  const activeVersions = decodedVersions
+    .filter(
+      ({ decoded, version }) =>
+        !RELEASED_APP_STORE_VERSION_STATES.has(version.state) &&
+        (destination === "app-store" || (decoded && !decoded.legacy)),
+    )
+    .map(({ version }) => version);
   if (activeVersions.length > 1) {
     throw new Error(
       `App Store Connect has multiple active iOS versions: ${activeVersions
@@ -197,6 +206,10 @@ export function resolveIosReleasePlan(input: IosReleasePlanInput): IosReleasePla
         .join(", ")}.`,
     );
   }
+  const releasedRevisions = decodedVersions.flatMap(({ decoded, version }) =>
+    decoded && RELEASED_APP_STORE_VERSION_STATES.has(version.state) ? [decoded.revision] : [],
+  );
+  const highestReleased = releasedRevisions.length === 0 ? -1 : Math.max(...releasedRevisions);
 
   let revision: number;
   let decision: IosReleasePlan["decision"];
@@ -204,7 +217,10 @@ export function resolveIosReleasePlan(input: IosReleasePlanInput): IosReleasePla
 
   if (activeVersions.length === 1) {
     selectedVersion = activeVersions[0] ?? null;
-    if (!selectedVersion || !EDITABLE_APP_STORE_VERSION_STATES.has(selectedVersion.state)) {
+    if (
+      !selectedVersion ||
+      (destination === "app-store" && !EDITABLE_APP_STORE_VERSION_STATES.has(selectedVersion.state))
+    ) {
       throw new Error(
         `App Store version ${selectedVersion?.versionString ?? "unknown"} is locked in state ${selectedVersion?.state ?? "UNKNOWN"}.`,
       );
@@ -216,11 +232,24 @@ export function resolveIosReleasePlan(input: IosReleasePlanInput): IosReleasePla
       );
     }
     revision = decoded.revision;
-    decision = "resume-editable";
+    decision = destination === "testflight" ? "resume-testflight" : "resume-editable";
+    if (destination === "testflight") {
+      const conflictingUploads = input.buildUploads.filter((upload) => {
+        const uploaded = decodeIosAppStoreVersion(gatewayVersion, upload.shortVersion);
+        return (
+          uploaded &&
+          !uploaded.legacy &&
+          uploaded.revision > highestReleased &&
+          uploaded.revision !== revision
+        );
+      });
+      if (conflictingUploads.length > 0) {
+        throw new Error(
+          `Multiple unreleased TestFlight revisions exist for gateway ${gatewayVersion}: App Store version ${selectedVersion.versionString} conflicts with uploaded ${[...new Set(conflictingUploads.map((upload) => upload.shortVersion))].join(", ")}. Resolve App Store Connect state before retrying.`,
+        );
+      }
+    }
   } else {
-    const releasedRevisions = decodedVersions.flatMap(({ decoded, version }) =>
-      decoded && RELEASED_APP_STORE_VERSION_STATES.has(version.state) ? [decoded.revision] : [],
-    );
     let hasLegacyUpload = false;
     const uploadedRevisions = input.buildUploads.flatMap((upload) => {
       const decoded = decodeIosAppStoreVersion(gatewayVersion, upload.shortVersion);
@@ -239,7 +268,6 @@ export function resolveIosReleasePlan(input: IosReleasePlanInput): IosReleasePla
       }
       return [decoded.revision];
     });
-    const highestReleased = releasedRevisions.length === 0 ? -1 : Math.max(...releasedRevisions);
     const highestUploaded = uploadedRevisions.length === 0 ? -1 : Math.max(...uploadedRevisions);
     const unreleasedUploadedRevisions = [
       ...new Set(uploadedRevisions.filter((uploaded) => uploaded > highestReleased)),
@@ -310,12 +338,13 @@ export function resolveIosReleasePlan(input: IosReleasePlanInput): IosReleasePla
   const plan: IosReleasePlan = {
     appStoreRevision: revision,
     appStoreVersion,
-    appStoreVersionId: selectedVersion?.id ?? null,
-    appStoreVersionState: selectedVersion?.state ?? null,
+    appStoreVersionId: destination === "app-store" ? (selectedVersion?.id ?? null) : null,
+    appStoreVersionState: destination === "app-store" ? (selectedVersion?.state ?? null) : null,
     buildNumber,
     buildUploads: uploads,
     releaseNotesBaselines: baselines,
     decision,
+    destination,
     gatewayVersion,
     sourceClean: input.sourceClean ?? null,
     sourceSha: input.sourceSha?.trim() || null,
@@ -324,15 +353,7 @@ export function resolveIosReleasePlan(input: IosReleasePlanInput): IosReleasePla
   return plan;
 }
 
-type ChangelogSection = {
-  body: string;
-  end: number;
-  heading: string;
-  headingLine: string;
-  start: number;
-};
-
-function changelogSections(content: string): ChangelogSection[] {
+function changelogSections(content: string) {
   const lines = content.split(/\r?\n/u);
   const starts = lines.flatMap((line, index) => (line.startsWith("## ") ? [index] : []));
   return starts.map((start, index) => {

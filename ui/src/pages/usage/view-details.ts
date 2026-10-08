@@ -3,7 +3,6 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
-import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
 import { createMsFormatter } from "../../lib/format.ts";
@@ -40,7 +39,6 @@ function isLogInRange(log: SessionLogEntry, rangeStart: number, rangeEnd: number
   return ts >= Math.min(rangeStart, rangeEnd) && ts <= Math.max(rangeStart, rangeEnd);
 }
 
-/** Aggregate usage stats from time series points within a timestamp range. */
 function computeFilteredUsage(
   baseUsage: NonNullable<UsageSessionEntry["usage"]>,
   points: TimeSeriesPoint[],
@@ -175,40 +173,9 @@ export function renderSessionDetailPanel(
               : null
             : undefined,
         )}
-        <div class="session-detail-row">
-          ${renderTimeSeriesCompact(
-            detail.timeSeries,
-            detail.timeSeriesLoading,
-            detail.timeSeriesStatus,
-            detail.timeSeriesMode,
-            callbacks.onTimeSeriesModeChange,
-            detail.timeSeriesBreakdownMode,
-            callbacks.onTimeSeriesBreakdownChange,
-            range.startDate,
-            range.endDate,
-            range.selectedDays,
-            range.timeZone,
-            timeSeriesCursorStart,
-            timeSeriesCursorEnd,
-            callbacks.onTimeSeriesCursorRangeChange,
-          )}
-        </div>
+        <div class="session-detail-row">${renderTimeSeriesCompact(detail, callbacks, range)}</div>
         <div class="session-detail-bottom">
-          ${renderSessionLogsCompact(
-            detail.sessionLogs,
-            detail.sessionLogsLoading,
-            detail.sessionLogsStatus,
-            detail.sessionLogsExpanded,
-            callbacks.onToggleSessionLogsExpanded,
-            detail.logFilters,
-            callbacks.onLogFilterRolesChange,
-            callbacks.onLogFilterToolsChange,
-            callbacks.onLogFilterHasToolsChange,
-            callbacks.onLogFilterQueryChange,
-            callbacks.onLogFilterClear,
-            hasRange ? timeSeriesCursorStart : null,
-            hasRange ? timeSeriesCursorEnd : null,
-          )}
+          ${renderSessionLogsCompact(detail, callbacks)}
           ${renderContextPanel(detail.context, usage, contextExpanded, callbacks.onToggleContextExpanded)}
         </div>
       </div>
@@ -388,25 +355,18 @@ function renderContextPanel(
 }
 
 function renderSessionLogsCompact(
-  logs: SessionLogEntry[] | null,
-  loading: boolean,
-  status: PanelRefreshStatus,
-  expandedAll: boolean,
-  onToggleExpandedAll: () => void,
-  filters: {
-    roles: SessionLogRole[];
-    tools: string[];
-    hasTools: boolean;
-    query: string;
-  },
-  onFilterRolesChange: (next: SessionLogRole[]) => void,
-  onFilterToolsChange: (next: string[]) => void,
-  onFilterHasToolsChange: (next: boolean) => void,
-  onFilterQueryChange: (next: string) => void,
-  onFilterClear: () => void,
-  cursorStart?: number | null,
-  cursorEnd?: number | null,
+  detail: UsageProps["detail"],
+  callbacks: UsageProps["callbacks"]["details"],
 ) {
+  const {
+    sessionLogs: logs,
+    sessionLogsLoading: loading,
+    sessionLogsStatus: status,
+    sessionLogsExpanded: expandedAll,
+    logFilters: filters,
+    timeSeriesCursorStart: cursorStart,
+    timeSeriesCursorEnd: cursorEnd,
+  } = detail;
   const initialLoading = (loading || status.awaitingGateway) && !status.hasLoaded;
   const initialError = status.error && !status.hasLoaded;
   const refreshStatus = initialLoading
@@ -467,7 +427,7 @@ function renderSessionLogsCompact(
             (${displayedCount} ${normalizeLowercaseStringOrEmpty(t("usage.overview.messages"))})
           </span>
         </span>
-        <button class="btn btn--sm" @click=${onToggleExpandedAll}>
+        <button class="btn btn--sm" @click=${callbacks.onToggleSessionLogsExpanded}>
           ${expandedAll ? t("usage.details.collapseAll") : t("usage.details.expandAll")}
         </button>
       </div>
@@ -478,7 +438,7 @@ function renderSessionLogsCompact(
           size="4"
           aria-label=${t("usage.details.filterByRole")}
           @change=${(event: Event) =>
-            onFilterRolesChange(
+            callbacks.onLogFilterRolesChange(
               Array.from((event.target as HTMLSelectElement).selectedOptions).map(
                 (option) => option.value as SessionLogRole,
               ),
@@ -503,7 +463,7 @@ function renderSessionLogsCompact(
           size="4"
           aria-label=${t("usage.details.filterByTool")}
           @change=${(event: Event) =>
-            onFilterToolsChange(
+            callbacks.onLogFilterToolsChange(
               Array.from((event.target as HTMLSelectElement).selectedOptions).map(
                 (option) => option.value,
               ),
@@ -519,7 +479,7 @@ function renderSessionLogsCompact(
             type="checkbox"
             .checked=${filters.hasTools}
             @change=${(event: Event) =>
-              onFilterHasToolsChange((event.target as HTMLInputElement).checked)}
+              callbacks.onLogFilterHasToolsChange((event.target as HTMLInputElement).checked)}
           />
           ${t("usage.details.hasTools")}
         </label>
@@ -528,9 +488,11 @@ function renderSessionLogsCompact(
           placeholder=${t("usage.details.searchConversation")}
           aria-label=${t("usage.details.searchConversation")}
           .value=${filters.query}
-          @input=${(event: Event) => onFilterQueryChange((event.target as HTMLInputElement).value)}
+          @input=${(event: Event) => callbacks.onLogFilterQueryChange((event.target as HTMLInputElement).value)}
         />
-        <button class="btn btn--sm" @click=${onFilterClear}>${t("usage.filters.clear")}</button>
+        <button class="btn btn--sm" @click=${callbacks.onLogFilterClear}>
+          ${t("usage.filters.clear")}
+        </button>
       </div>
       <div class="session-logs-list">
         ${filteredEntries.map((entry) => {

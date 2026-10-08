@@ -155,11 +155,54 @@ describe("Codex Computer Use readiness", () => {
     });
     sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValue(harness.client);
     try {
-      await expect(
-        readCodexComputerUseStatus({
-          pluginConfig: readinessConfig(),
-        }),
-      ).resolves.toMatchObject({ ready: true });
+      const status = await readCodexComputerUseStatus({ pluginConfig: readinessConfig() });
+      expectStatusFields(status, {
+        enabled: true,
+        ready: true,
+        reason: "ready",
+        installed: true,
+        pluginEnabled: true,
+        mcpServerAvailable: true,
+        marketplaceName: "desktop-tools",
+        tools: ["list_apps"],
+        message: "Computer Use is ready.",
+      });
+      expect(status.installation).toMatchObject({
+        status: "installed",
+        ok: true,
+      });
+      expect(status.exposure).toMatchObject({
+        status: "available",
+        ok: true,
+      });
+      expect(status.liveTest).toMatchObject({
+        status: "passed",
+        ok: true,
+        attempted: true,
+        attempts: 1,
+        timeoutMs: 60_000,
+        retried: false,
+        repaired: false,
+      });
+      expect(fixture).toHaveBeenCalledWith("thread/start", {
+        input: [],
+        developerInstructions: "OpenClaw Computer Use readiness check",
+        ephemeral: true,
+      });
+      expect(fixture).toHaveBeenCalledWith("mcpServer/tool/call", {
+        threadId: "computer-use-probe-thread-1",
+        server: "computer-use",
+        tool: "list_apps",
+        arguments: {},
+      });
+      for (const method of [
+        "thread/archive",
+        "marketplace/add",
+        "experimentalFeature/enablement/set",
+        "plugin/install",
+      ]) {
+        expectRequestMethodNotCalled(fixture, method);
+      }
       expect(sharedClientMocks.getLeasedSharedCodexAppServerClient).toHaveBeenCalledTimes(1);
       expect(
         sharedClientMocks.releaseLeasedSharedCodexAppServerClient,
@@ -170,74 +213,6 @@ describe("Codex Computer Use readiness", () => {
     } finally {
       await harness.client.closeAndWait();
     }
-  });
-
-  it("reports an installed Computer Use MCP server from a registered marketplace", async () => {
-    const request = createComputerUseRequest({ installed: true });
-
-    const status = await readCodexComputerUseStatus({
-      pluginConfig: readinessConfig(),
-      request,
-    });
-
-    expectStatusFields(status, {
-      enabled: true,
-      ready: true,
-      reason: "ready",
-      installed: true,
-      pluginEnabled: true,
-      mcpServerAvailable: true,
-      marketplaceName: "desktop-tools",
-      tools: ["list_apps"],
-      message: "Computer Use is ready.",
-    });
-    expect(status.installation).toMatchObject({
-      status: "installed",
-      ok: true,
-    });
-    expect(status.exposure).toMatchObject({
-      status: "available",
-      ok: true,
-    });
-    expect(status.liveTest).toMatchObject({
-      status: "passed",
-      ok: true,
-      attempted: true,
-      attempts: 1,
-      timeoutMs: 60_000,
-      retried: false,
-      repaired: false,
-    });
-    expect(request).toHaveBeenCalledWith(
-      "thread/start",
-      {
-        input: [],
-        developerInstructions: "OpenClaw Computer Use readiness probe",
-        ephemeral: true,
-      },
-      { timeoutMs: 60_000 },
-    );
-    expect(request).toHaveBeenCalledWith(
-      "mcpServer/tool/call",
-      {
-        threadId: "computer-use-probe-thread-1",
-        server: "computer-use",
-        tool: "list_apps",
-        arguments: {},
-      },
-      {
-        timeoutMs: 60_000,
-      },
-    );
-    expect(request).toHaveBeenCalledWith(
-      "thread/unsubscribe",
-      { threadId: "computer-use-probe-thread-1" },
-      { timeoutMs: 60_000, signal: expect.any(AbortSignal) },
-    );
-    expectRequestMethodNotCalled(request, "thread/archive");
-    expectRequestMethodNotCalled(request, "marketplace/add");
-    expectRequestMethodNotCalled(request, "experimentalFeature/enablement/set");
-    expectRequestMethodNotCalled(request, "plugin/install");
   });
 
   it("probes unified Computer Use through its JavaScript tool", async () => {
@@ -262,7 +237,7 @@ describe("Codex Computer Use readiness", () => {
         threadId: "computer-use-probe-thread-1",
         server: "cua_repl",
         tool: "js",
-        arguments: { code: "await cua.getState();" },
+        arguments: { code: "await cua.listApps();" },
       },
       { timeoutMs: 60_000 },
     );

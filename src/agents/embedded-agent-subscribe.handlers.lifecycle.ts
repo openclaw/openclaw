@@ -42,13 +42,26 @@ export {
   handleCompactionStart,
 } from "./embedded-agent-subscribe.handlers.compaction.js";
 
-export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
-  // A same-prompt follow-up starts another core loop under the same delivery policy.
-  ctx.state.deferBlockReplyDelivery =
-    typeof ctx.params.onBeforeTerminalDelivery === "function" &&
-    ctx.params.deferTerminalDelivery !== false;
-  ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
-  const data = { phase: "start", startedAt: Date.now() };
+function runTerminalHook<T>(callback: () => T | Promise<T>, failed: (error: unknown) => void) {
+  let result: T | Promise<T>;
+  try {
+    result = callback();
+  } catch (error) {
+    failed(error);
+    return undefined;
+  }
+  return isPromiseLike<T>(result)
+    ? Promise.resolve(result).catch((error: unknown) => {
+        failed(error);
+      })
+    : result;
+}
+
+function emitLifecycleAgentEvent(
+  ctx: EmbeddedAgentSubscribeContext,
+  data: Record<string, unknown>,
+  eventData = data,
+) {
   emitAgentEvent({
     runId: ctx.params.runId,
     ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
@@ -58,7 +71,7 @@ export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
       ? { lifecycleGeneration: ctx.params.lifecycleGeneration }
       : {}),
     stream: "lifecycle",
-    data,
+    data: eventData,
   });
   runBestEffortCallback({
     label: "lifecycle agent event",
@@ -69,6 +82,15 @@ export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
         data,
       }),
   });
+}
+
+export function handleAgentStart(ctx: EmbeddedAgentSubscribeContext) {
+  // A same-prompt follow-up starts another core loop under the same delivery policy.
+  ctx.state.deferBlockReplyDelivery =
+    typeof ctx.params.onBeforeTerminalDelivery === "function" &&
+    ctx.params.deferTerminalDelivery !== false;
+  ctx.log.debug(`embedded run agent start: runId=${ctx.params.runId}`);
+  emitLifecycleAgentEvent(ctx, { phase: "start", startedAt: Date.now() });
 }
 
 export function handleAgentEnd(
@@ -243,26 +265,7 @@ export function handleAgentEnd(
       ...(livenessState ? { livenessState } : {}),
       ...(replayInvalid ? { replayInvalid } : {}),
     };
-    emitAgentEvent({
-      runId: ctx.params.runId,
-      ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-      ...(ctx.params.sessionId ? { sessionId: ctx.params.sessionId } : {}),
-      ...(ctx.params.agentId ? { agentId: ctx.params.agentId } : {}),
-      ...(ctx.params.lifecycleGeneration
-        ? { lifecycleGeneration: ctx.params.lifecycleGeneration }
-        : {}),
-      stream: "lifecycle",
-      data: { ...data, endedAt: Date.now() },
-    });
-    runBestEffortCallback({
-      label: "lifecycle agent event",
-      log: ctx.log,
-      callback: () =>
-        ctx.params.onAgentEvent?.({
-          stream: "lifecycle",
-          data,
-        }),
-    });
+    emitLifecycleAgentEvent(ctx, data, { ...data, endedAt: Date.now() });
   };
 
   const finalizeAgentEnd = () => {
@@ -294,11 +297,13 @@ export function handleAgentEnd(
   const runBeforeTerminalDelivery = ():
     | BeforeTerminalDeliveryDecision
     | Promise<BeforeTerminalDeliveryDecision> => {
+    // The acceptance hook inspects the answer this turn delivers, including a kept answer.
+    const answerAssistant = ctx.state.keptAnswer?.assistant ?? lastAssistant;
     return ctx.params.onBeforeTerminalDelivery?.({
       messages: evt?.messages ?? [],
       willRetry: evt?.willRetry === true,
       ...(evt?.assistantEntryId ? { assistantEntryId: evt.assistantEntryId } : {}),
-      ...(lastAssistant ? { lastAssistant } : {}),
+      ...(answerAssistant ? { lastAssistant: answerAssistant } : {}),
       assistantTexts: ctx.state.assistantTexts,
       hasAssistantVisibleText,
       isError,
@@ -328,12 +333,12 @@ export function handleAgentEnd(
     const flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer({ final: true });
     finalizeAgentEnd();
     const flushPendingMediaAndChannelResult = isPromiseLike<void>(flushBlockReplyBufferResult)
-      ? Promise.resolve(flushBlockReplyBufferResult).then(() => flushPendingMediaAndChannel())
+      ? Promise.resolve(flushBlockReplyBufferResult).then(flushPendingMediaAndChannel)
       : flushPendingMediaAndChannel();
 
     if (isPromiseLike<void>(flushPendingMediaAndChannelResult)) {
       return Promise.resolve(flushPendingMediaAndChannelResult).then(
-        () => emitLifecycleTerminalOnce(),
+        emitLifecycleTerminalOnce,
         rethrowAfterLifecycleTerminal,
       );
     }
@@ -368,57 +373,33 @@ export function handleAgentEnd(
       return;
     }
     lifecycleTerminalEmitted = true;
-    let beforeLifecycleTerminal: void | Promise<void> = undefined;
-    try {
-      beforeLifecycleTerminal = ctx.params.onBeforeLifecycleTerminal?.();
-    } catch (err) {
-      ctx.log.debug(`before lifecycle terminal failed: ${String(err)}`);
-    }
+    const beforeLifecycleTerminal = runTerminalHook(
+      () => ctx.params.onBeforeLifecycleTerminal?.(),
+      (err) => ctx.log.debug(`before lifecycle terminal failed: ${String(err)}`),
+    );
     if (isPromiseLike<void>(beforeLifecycleTerminal)) {
-      return Promise.resolve(beforeLifecycleTerminal)
-        .catch((err: unknown) => {
-          ctx.log.debug(`before lifecycle terminal failed: ${String(err)}`);
-        })
-        .then(() => {
-          emitLifecycleTerminal();
-        });
+      return Promise.resolve(beforeLifecycleTerminal).then(emitLifecycleTerminal);
     }
     emitLifecycleTerminal();
   };
 
-  let beforeTerminalDelivery:
-    | BeforeTerminalDeliveryDecision
-    | Promise<BeforeTerminalDeliveryDecision>;
-  try {
-    beforeTerminalDelivery = runBeforeTerminalDelivery();
-  } catch (error) {
-    ctx.log.warn(`before terminal delivery failed: ${String(error)}`);
+  const applyBeforeTerminalDecision = (decision: BeforeTerminalDeliveryDecision) => {
+    if (decision?.suppressTerminalDelivery === true) {
+      suppressTerminalDelivery();
+      return undefined;
+    }
+    if (decision?.continueCurrentTurn === true) {
+      return continueCurrentTurn();
+    }
     return deliverTerminalWithLifecycleErrorFallback();
-  }
+  };
+
+  const beforeTerminalDelivery = runTerminalHook(runBeforeTerminalDelivery, (error) =>
+    ctx.log.warn(`before terminal delivery failed: ${String(error)}`),
+  );
 
   if (isPromiseLike<BeforeTerminalDeliveryDecision>(beforeTerminalDelivery)) {
-    return Promise.resolve(beforeTerminalDelivery)
-      .catch((error: unknown) => {
-        ctx.log.warn(`before terminal delivery failed: ${String(error)}`);
-        return undefined;
-      })
-      .then((decision) => {
-        if (decision?.suppressTerminalDelivery === true) {
-          suppressTerminalDelivery();
-          return undefined;
-        }
-        if (decision?.continueCurrentTurn === true) {
-          return continueCurrentTurn();
-        }
-        return deliverTerminalWithLifecycleErrorFallback();
-      });
+    return Promise.resolve(beforeTerminalDelivery).then(applyBeforeTerminalDecision);
   }
-  if (beforeTerminalDelivery?.suppressTerminalDelivery === true) {
-    suppressTerminalDelivery();
-    return undefined;
-  }
-  if (beforeTerminalDelivery?.continueCurrentTurn === true) {
-    return continueCurrentTurn();
-  }
-  return deliverTerminalWithLifecycleErrorFallback();
+  return applyBeforeTerminalDecision(beforeTerminalDelivery);
 }

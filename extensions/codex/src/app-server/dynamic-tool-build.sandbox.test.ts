@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import "./dynamic-tool-build.test-support.js";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import { resolveAgentHarnessBeforePromptBuildResult } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createMockPluginRegistry,
@@ -61,58 +60,49 @@ describe("Codex app-server sandbox shell tools", () => {
     return { params, workspaceDir };
   }
 
-  it("exposes OpenClaw sandbox shell tools under distinct names for non-Docker sandbox backends", async () => {
-    const execTool = expectDefined(
-      createOpenClawCodingTools({ workspaceDir: tempDir }).find((tool) => tool.name === "exec"),
-      "assembled exec tool",
-    );
-
-    const sessionFile = path.join(tempDir, "session.jsonl");
+  it("keeps required-root Codex file tools confined without native or shell tools", async () => {
     const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(sessionFile, workspaceDir);
-    setCodexTestToolFactory(params, () => [
-      createRuntimeDynamicTool("read"),
-      createRuntimeDynamicTool("write"),
-      createRuntimeDynamicTool("edit"),
-      createRuntimeDynamicTool("apply_patch"),
-      execTool,
-      createRuntimeDynamicTool("process"),
-      createRuntimeDynamicTool("message"),
-    ]);
+    await fs.mkdir(workspaceDir);
+    const outside = path.join(tempDir, "outside.txt");
+    await fs.writeFile(outside, "outside");
+    await fs.symlink(outside, path.join(workspaceDir, "escape.txt"));
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
+    params.requireWorkspaceOnly = true;
+    params.sessionRoot = workspaceDir;
     params.runtimePlan = createCodexRuntimePlanFixture();
+    params.config = { plugins: { enabled: false } };
+    params.agentDir = path.join(tempDir, "agent");
+    params.toolsAllow = ["read", "write", "edit", "exec", "process"];
+    await bindProductionCodexHostCapabilities(params, hostCapabilityClosers);
 
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
-      sandbox: { enabled: true, backendId: "ssh" } as never,
       nativeToolSurfaceEnabled: false,
     });
-
-    expect(tools.map((tool) => tool.name)).toEqual([
-      "read",
-      "write",
-      "edit",
-      "apply_patch",
-      "message",
-      "sandbox_exec",
-      "sandbox_process",
-    ]);
-    expect(tools.find((tool) => tool.name === "sandbox_exec")?.description).toContain(
-      "configured sandbox backend",
+    expect(tools.map((tool) => tool.name)).toEqual(["read", "edit", "write"]);
+    const write = expectDefined(
+      tools.find((tool) => tool.name === "write"),
+      "rooted write",
     );
-    expect(tools.find((tool) => tool.name === "sandbox_exec")?.parameters).not.toHaveProperty(
-      "properties.security",
+    const read = expectDefined(
+      tools.find((tool) => tool.name === "read"),
+      "rooted read",
     );
-    expect(tools.find((tool) => tool.name === "sandbox_process")?.description).toContain(
-      "background shell sessions",
-    );
+    await write.execute("inside", { path: "inside.txt", content: "inside" });
+    expect(await fs.readFile(path.join(workspaceDir, "inside.txt"), "utf8")).toBe("inside");
+    for (const file of [outside, "../outside.txt", "escape.txt"]) {
+      await expect(read.execute("outside-read", { path: file })).rejects.toThrow();
+      await expect(
+        write.execute("outside-write", { path: file, content: "changed" }),
+      ).rejects.toThrow();
+    }
+    expect(await fs.readFile(outside, "utf8")).toBe("outside");
   });
 
   it.each([
-    { allow: undefined, expected: ["message", "sandbox_exec", "sandbox_process"] },
     { allow: ["group:runtime"], expected: ["sandbox_exec", "sandbox_process"] },
-    { allow: ["exec*"], expected: ["sandbox_exec", "sandbox_process"] },
     { allow: ["exec"], restrictWith: ["process"], expected: ["sandbox_process"] },
-    { allow: ["sandbox_process"], restrictWith: ["process"], expected: ["sandbox_process"] },
   ])(
     "keeps Docker shell projections pinned for runtime selectors $allow restricted by $restrictWith",
     async ({ allow, restrictWith, expected }) => {

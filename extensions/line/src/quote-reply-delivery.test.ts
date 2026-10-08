@@ -249,10 +249,16 @@ describe("the push delivery path", () => {
     });
 
     // The caption is the only part LINE lets a quote ride on; the image itself cannot.
-    expect(mocks.pushMessageLine).toHaveBeenCalledExactlyOnceWith(
-      "line:group:Cmedia",
-      "here you go",
-      expect.objectContaining({ quoteToken: "token-media" }),
+    expect(mocks.pushMessageLine.mock.calls).toEqual([
+      ["line:group:Cmedia", "here you go", expect.objectContaining({ quoteToken: "token-media" })],
+      [
+        "line:group:Cmedia",
+        "",
+        expect.objectContaining({ mediaUrl: "https://example.com/image.jpg" }),
+      ],
+    ]);
+    expect(expectDefined(mocks.pushMessageLine.mock.calls[1], "media push")[2]).not.toHaveProperty(
+      "quoteToken",
     );
   });
 
