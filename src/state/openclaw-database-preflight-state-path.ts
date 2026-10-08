@@ -3,12 +3,14 @@ import nodePath from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "../infra/errors.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
+import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import type { SqliteSchemaIssue } from "../infra/sqlite-schema-contract.js";
 import {
   createNewerSqliteSchemaVersionError,
   readSqliteUserVersion,
 } from "../infra/sqlite-user-version.js";
+import { configureSqliteReadOnlyPragmas } from "../infra/sqlite-wal.js";
 import { describeDeferredStateSchemaPublication } from "./openclaw-database-preflight.messages.js";
 import type {
   DeferredStateSchemaPublication,
@@ -72,9 +74,8 @@ export async function preflightOpenClawStateDatabasePath(
     database = openNodeSqliteDatabase(resolveImmutableSqliteFileUri(inspectionPath), {
       readOnly: true,
     });
-    database.exec(
-      `PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; PRAGMA query_only = ON; PRAGMA trusted_schema = OFF;`,
-    );
+    setSqliteBusyTimeout(database, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS);
+    configureSqliteReadOnlyPragmas(database);
     foundVersion = readSqliteUserVersion(database);
     if (!Number.isSafeInteger(foundVersion) || foundVersion < 0) {
       throw new Error(
