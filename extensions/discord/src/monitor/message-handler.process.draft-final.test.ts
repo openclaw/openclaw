@@ -131,10 +131,10 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     });
   });
 
-  it("keeps unset Discord preview streaming off and delivers the final normally", async () => {
+  it("keeps answer deltas private with default progress and delivers the final normally", async () => {
     await runSingleChunkFinalScenario({ maxLinesPerMessage: 5 });
     expect(getLastDispatchReplyOptions()?.onPartialReply).toBeUndefined();
-    expect(createDiscordDraftStream).not.toHaveBeenCalled();
+    expect(createDiscordDraftStream).toHaveBeenCalledOnce();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
     expectFreshFinalText("Hello\nWorld");
   });
@@ -639,34 +639,46 @@ describe("processDiscordMessage draft streaming progress", () => {
     expect(draftStream.update.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("keeps tool rows while yielding commentary to the durable verbose lane", async () => {
-    const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
-    const draftStream = createMockDraftStreamForTest();
+  it.each([false, true])(
+    "keeps commentary in the progress draft with verbose %s",
+    async (verbose) => {
+      const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
+      const draftStream = createMockDraftStreamForTest();
 
-    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.replyOptions?.onVerboseProgressVisibilityAsync?.(async () => true);
-      await params?.replyOptions?.onItemEvent?.({
-        itemId: "preamble-1",
-        kind: "preamble",
-        progressText: "Checking the current weather source before summarizing.",
+      dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+        expect(params?.replyOptions?.shouldDeliverCommentaryPayloads?.()).toBe(false);
+        await params?.replyOptions?.onItemEvent?.({
+          itemId: "preamble-1",
+          kind: "preamble",
+          progressText: "Checking the current weather source before summarizing.",
+        });
+        await startToolProgress(params);
+        await params?.replyOptions?.onCommandOutput?.({
+          phase: "end",
+          title: "Exec",
+          name: "exec",
+          exitCode: 0,
+        });
+        await elapseProgressDraftStartDelay();
+        return createNoQueuedDispatchResult();
       });
-      await startToolProgress(params);
-      await params?.replyOptions?.onCommandOutput?.({
-        phase: "end",
-        title: "Exec",
-        name: "exec",
-        exitCode: 0,
+
+      const ctx = await createAutomaticDraftContext({
+        cfg: { agents: { defaults: { verboseDefault: verbose ? "on" : "off" } } },
+        discordConfig: {
+          streaming: {
+            mode: "progress",
+            progress: { toolProgress: true, label: "Shelling", commentary: true },
+          },
+        },
       });
-      await elapseProgressDraftStartDelay();
-      return createNoQueuedDispatchResult();
-    });
+      await runProcessDiscordMessage(ctx);
 
-    await runProgressScenario({ toolProgress: true, label: "Shelling", commentary: true });
-
-    const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
-    expect(updates).toContain("Exec");
-    expect(updates).not.toContain("Checking the current weather source");
-  });
+      const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
+      expect(updates).toContain("Exec");
+      expect(updates).toContain("Checking the current weather source");
+    },
+  );
 
   it("re-arms progress collapse for a queued assistant turn", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
