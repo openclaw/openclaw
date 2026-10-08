@@ -429,7 +429,7 @@ describe("Feishu webhook Doctor notes", () => {
     await testState.cleanup();
   });
   it.each([
-    { path: "/readyz?tenant=test", reason: "is reserved for Gateway probes", legacy: false },
+    { path: "/readyz?tenant=test", reason: "is reserved for Gateway checks", legacy: false },
     { path: "/%61pi/channels/feishu", reason: "requires Gateway authentication", legacy: true },
   ])(
     "explains $path with legacy listener $legacy",

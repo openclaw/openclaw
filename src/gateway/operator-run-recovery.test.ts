@@ -502,6 +502,14 @@ describe("restart recovery authenticated operator source", () => {
         expect(restored.authority.modelPolicy?.allows({ provider: "fixture", model: "c" })).toBe(
           false,
         );
+        const widened = structuredClone(current);
+        expectDefined(widened.gateway?.roles?.definitions.operator, "operator role").modelPolicy = {
+          allow: ["fixture/a", "fixture/b", "fixture/c"],
+        };
+        fixture.setConfig(widened);
+        expect(restored.authority.modelPolicy?.models).toEqual([
+          { provider: "fixture", model: "b" },
+        ]);
       } finally {
         restored.release();
       }

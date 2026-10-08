@@ -941,7 +941,7 @@ export const telegramPlugin = createChatChannelPlugin({
             return;
           }
           if (getTelegramRuntime().logging.shouldLogVerbose()) {
-            ctx.log?.debug?.(`[${account.accountId}] bot probe failed: ${String(err)}`);
+            ctx.log?.debug?.(`[${account.accountId}] bot check failed: ${String(err)}`);
           }
           await restoreCachedBotInfo();
         }

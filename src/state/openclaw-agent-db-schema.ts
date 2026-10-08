@@ -19,7 +19,7 @@ import {
   type SqliteIntegrityOperation,
 } from "../infra/sqlite-integrity.js";
 import { runSqlitePinnedReadSnapshotSync } from "../infra/sqlite-pinned-read-snapshot.js";
-import { admitSqliteSchema, readSqliteCacheDataVersion } from "../infra/sqlite-schema-facts.js";
+import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { migrateSqliteSchemaToStrictInTransaction } from "../infra/sqlite-strict.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
@@ -238,13 +238,20 @@ export function refreshOpenClawAgentDatabaseSchema(
     throw new Error("Agent schema admission requires a settled writer");
   }
   try {
-    readSqliteCacheDataVersion(db, "fresh");
-    assertSupportedAgentSchemaVersion(db, pathname);
-    assertCurrentAgentSchemaMetadata(readExistingAgentSchemaMeta(db), agentId, pathname);
-    const validation = getOpenClawAgentDatabaseValidation(database);
-    if (validation && adoptOpenClawAgentDatabaseSchema(database)) {
-      return validation;
+    const reused = runSqliteReadOperationSync(
+      db,
+      () => {
+        assertSupportedAgentSchemaVersion(db, pathname);
+        assertCurrentAgentSchemaMetadata(readExistingAgentSchemaMeta(db), agentId, pathname);
+        const validation = getOpenClawAgentDatabaseValidation(database);
+        return validation && adoptOpenClawAgentDatabaseSchema(database) ? validation : undefined;
+      },
+      "fresh",
+    );
+    if (reused) {
+      return reused;
     }
+    const validation = getOpenClawAgentDatabaseValidation(database);
     invalidateOpenClawAgentDatabaseSchema(database);
     const convergence = runSqliteIntegrityOperationSync(
       agentDatabaseIntegrityBeforeMutationSteps(

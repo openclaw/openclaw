@@ -543,7 +543,8 @@ describe("existing shared-state schema admission", () => {
         const { db } = openOpenClawStateDatabase(options);
         const peer = new DatabaseSync(options.path);
         const reads = observeSqliteReadSql(StatementSync.prototype);
-        const read = () => runSqliteReadOperationSync(db, () => readStateSchemaContentVersion(db));
+        const read = () =>
+          runSqliteReadOperationSync(db, () => readStateSchemaContentVersion(db), "fresh");
         const readSnapshot = () => {
           expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
           peer
@@ -558,6 +559,12 @@ describe("existing shared-state schema admission", () => {
         };
         try {
           expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+          expect(read()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
+          expect(
+            reads.queries.filter((sql) =>
+              /^select "value_json" from "config_machine_state"/iu.test(sql),
+            ).length,
+          ).toBeLessThanOrEqual(1);
           reads.queries.length = 0;
           if (snapshot === "transaction") {
             db.exec("BEGIN");

@@ -95,8 +95,13 @@ import {
 } from "./server.chat-response.test-support.js";
 import {
   createDirectChatSessionStoreFixture,
+  futureFixtureUpdatedAt,
+  prepareMainHistoryHarness,
+  writeMainSessionStore,
+  writeStoredMainSession,
   writeMainChatSessionTranscript as writeMainSessionTranscript,
   type ChatSessionDirectoryOptions,
+  type StoredChatSessionEntry as StoredSessionEntry,
 } from "./server.chat-session-store.test-support.js";
 import type { GatewaySessionsDefaults } from "./session-utils.types.js";
 import {
@@ -214,17 +219,6 @@ function testSessionFilePath(sessionDir: string, sessionId: string): string {
   return path.join(sessionDir, `${sessionId}.jsonl`);
 }
 
-async function writeMainSessionStore(sessionId = "sess-main") {
-  await writeStoredMainSession({
-    sessionId,
-    updatedAt: futureFixtureUpdatedAt(),
-  });
-}
-
-function futureFixtureUpdatedAt(): number {
-  return Date.now() + 60_000;
-}
-
 type HistoryPage = {
   messages?: Array<{
     __openclaw?: { id?: string; seq?: number; truncated?: boolean; reason?: string };
@@ -267,8 +261,6 @@ async function withDirectChatSession(
   }
 }
 
-type StoredSessionEntry = Parameters<typeof writeSessionStore>[0]["entries"][string];
-
 function getDirectChatSessionWorkRelease(sessionKey = "agent:main:main") {
   return getSessionWorkAdmissionRelease({
     scope: resolveSessionStorePathForScope({ sessionKey }, getRuntimeConfig()),
@@ -281,18 +273,6 @@ async function resetDirectChatSession() {
   await sessionStoreFixture.reset();
   dispatchInboundMessageMock.mockReset();
   resetConfigRuntimeState();
-}
-
-async function writeStoredMainSession(entry: StoredSessionEntry = {}) {
-  await writeSessionStore({
-    entries: {
-      main: {
-        sessionId: "sess-main",
-        updatedAt: Date.now(),
-        ...entry,
-      },
-    },
-  });
 }
 
 type DirectChatMethod = "chat.abort" | "chat.history" | "chat.send" | "chat.startup";
@@ -562,18 +542,6 @@ const configuredImageModelCases: ConfiguredImageModelCase[] = [
     imageModel: { primary: "openai/gpt-4o", fallbacks: ["openai/gpt-4o-mini"] },
   },
 ];
-
-async function prepareMainHistoryHarness(params: {
-  ws: GatewaySocket;
-  createSessionDir: (options?: ChatSessionDirectoryOptions) => Promise<string>;
-  freshStore?: boolean;
-  sessionId?: string;
-}) {
-  await connectOk(params.ws);
-  const sessionDir = await params.createSessionDir({ fresh: params.freshStore });
-  await writeMainSessionStore(params.sessionId);
-  return sessionDir;
-}
 
 async function prepareUnconfiguredAcpHarnessSession(options?: { withMetadata?: boolean }) {
   openDirectChatSession({ fresh: true });
@@ -5615,7 +5583,7 @@ describe("gateway server chat", () => {
     });
   });
 
-  test("chat.history keeps older messages reachable past an oversized source row", async () => {
+  test("chat.history keeps older messages reachable past an oversized projected source row", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       await prepareMainHistoryHarness({ ws, createSessionDir });
       const projectedSiblingCount = 70;
@@ -5657,6 +5625,8 @@ describe("gateway server chat", () => {
           }),
         );
         expect(firstPage.ok).toBe(true);
+        const firstMessages = firstPage.payload?.messages;
+        expect(firstMessages).toHaveLength(1);
         expect(firstPage.payload?.messages).toMatchObject([
           {
             __openclaw: {

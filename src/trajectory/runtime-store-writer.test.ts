@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { afterEach, expect, it, vi } from "vitest";
-import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  patchSessionEntryCore,
+  replaceSessionEntry,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
 import type { SqliteWorkerOperationSettlement } from "../infra/sqlite-worker-operation-settlement.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -132,69 +136,87 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("refreshes retained retention reads while session writes and appends remain available", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const target = {
-      agentId: "main",
-      sessionId: "trajectory-during-retention",
-      sessionKey: "agent:main:trajectory-during-retention",
-      storePath: state.statePath("agents", "main", "agent.sqlite"),
-    };
-    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
-    await replaceSessionEntry(
-      { ...target, sessionKey: "agent:main:old-trajectory" },
-      { sessionId: "old-trajectory", updatedAt: 1 },
-    );
-    const database = openOpenClawAgentDatabase({ agentId: target.agentId, path: target.storePath });
-    database.db
-      .prepare(`INSERT INTO trajectory_runtime_events
+it.each([
+  { name: "worker session patches", replaceExternally: false, expectedReads: 1 },
+  {
+    name: "worker patches and a foreign session replacement",
+    replaceExternally: true,
+    expectedReads: 2,
+  },
+])(
+  "settles retention during concurrent appends and $name",
+  async ({ replaceExternally, expectedReads }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const target = {
+        agentId: "main",
+        sessionId: "trajectory-during-retention",
+        sessionKey: "agent:main:trajectory-during-retention",
+        storePath: state.statePath("agents", "main", "agent.sqlite"),
+      };
+      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+      await replaceSessionEntry(
+        { ...target, sessionKey: "agent:main:old-trajectory" },
+        { sessionId: "old-trajectory", updatedAt: 1 },
+      );
+      const database = openOpenClawAgentDatabase({
+        agentId: target.agentId,
+        path: target.storePath,
+      });
+      database.db
+        .prepare(`INSERT INTO trajectory_runtime_events
       (session_id, seq, run_id, event_json, created_at) VALUES (?, 0, 'old-run', ?, 1)`)
-      .run("old-trajectory", JSON.stringify({ type: "old" }));
-    const recorder = await createTrajectoryRuntimeRecorder({
-      sessionId: target.sessionId,
-      sessionKey: target.sessionKey,
-      sessionTarget: target,
-    });
-    assert(recorder);
-    const started = createDeferredCore();
-    const release = createDeferredCore();
-    retention.beforeRead = async () => {
-      started.resolve();
-      await release.promise;
-    };
-    try {
-      recorder.recordEvent("first");
+        .run("old-trajectory", JSON.stringify({ type: "old" }));
+      const recorder = await createTrajectoryRuntimeRecorder({
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        sessionTarget: target,
+      });
+      assert(recorder);
+      const started = createDeferredCore();
+      const release = createDeferredCore();
+      retention.beforeRead = async () => {
+        started.resolve();
+        await release.promise;
+        await patchSessionEntryCore(target, () => ({ label: `metadata-${retention.reads}` }), {
+          workerGuard: {},
+        });
+      };
+      try {
+        recorder.recordEvent("first");
+        await recorder.flush();
+        await started.promise;
+        assert(retention.accepted);
+        recorder.recordEvent("while-retention-reads");
+        await recorder.flush();
+        expect(retention.reads).toBe(1);
+        expect(
+          (await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type),
+        ).toEqual(["first", "while-retention-reads"]);
+        if (replaceExternally) {
+          // Commit outside the retained worker connection to require a fresh sweep.
+          replaceSessionEntrySync(target, { sessionId: target.sessionId, updatedAt: 2 });
+        }
+      } finally {
+        release.resolve();
+        await retention.accepted;
+      }
+      expect(retention.reads).toBe(expectedReads);
+      expect(
+        await loadSqliteTrajectoryRuntimeEvents({ ...target, sessionId: "old-trajectory" }),
+      ).toEqual([]);
+      const completedReads = retention.reads;
+      recorder.recordEvent("same-window");
       await recorder.flush();
-      await started.promise;
-      assert(retention.accepted);
-      recorder.recordEvent("while-retention-reads");
-      await recorder.flush();
-      expect(retention.reads).toBe(1);
+      await retention.accepted;
+      expect(retention.reads).toBe(completedReads);
       expect((await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type)).toEqual([
         "first",
         "while-retention-reads",
+        "same-window",
       ]);
-      await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 2 });
-    } finally {
-      release.resolve();
-      await retention.accepted;
-    }
-    expect(retention.reads).toBe(2);
-    expect(
-      await loadSqliteTrajectoryRuntimeEvents({ ...target, sessionId: "old-trajectory" }),
-    ).toEqual([]);
-    const completedReads = retention.reads;
-    recorder.recordEvent("same-window");
-    await recorder.flush();
-    await retention.accepted;
-    expect(retention.reads).toBe(completedReads);
-    expect((await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => event.type)).toEqual([
-      "first",
-      "while-retention-reads",
-      "same-window",
-    ]);
-  });
-});
+    });
+  },
+);
 
 it.each(["committed", "unknown"] as const)(
   "settles the captured trajectory prefix before another flush after a lost result (%s)",

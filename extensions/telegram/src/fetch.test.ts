@@ -516,7 +516,7 @@ describe("resolveTelegramFetch", () => {
       loggerWarn,
       "telegram transport attempt marked temporarily unhealthy",
     );
-    expectLoggerMessageContaining(loggerDebug, "fetch fallback: re-probing primary dispatcher");
+    expectLoggerMessageContaining(loggerDebug, "fetch fallback: rechecking primary dispatcher");
   });
 
   it("does not cool down transport attempts when the expiry exceeds the Date range", async () => {

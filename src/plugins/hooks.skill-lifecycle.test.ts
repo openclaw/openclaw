@@ -6,6 +6,8 @@ import type {
 import { createHookRunner } from "./hooks.js";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { createPluginRecord } from "./status.test-helpers.js";
+import type { PluginHookBeforeInstallEvent } from "./types.js";
 
 const ctx = { workspaceDir: "/tmp/openclaw-workspace", agentId: "main" };
 const event: PluginHookSkillProposalEvaluateEvent = {
@@ -32,18 +34,38 @@ describe("skill lifecycle hooks", () => {
       decision: "block" as const,
       decisionReason: "score below baseline",
     };
-    const high = vi.fn(() => result);
-    const low = vi.fn();
-    const registry = createMockPluginRegistry([
-      { hookName: "skill_proposal_evaluate", pluginId: "low", priority: 10, handler: low },
+    const high = vi.fn((observed: PluginHookSkillProposalEvaluateEvent) => {
+      expect(observed).not.toBe(event);
+      expect(Object.isFrozen(observed)).toBe(true);
+      expect(Object.isFrozen(observed.candidate)).toBe(true);
+      expect(Object.isFrozen(observed.candidate.skillMd)).toBe(true);
+      expect(() => {
+        observed.candidate.skillMd.content = "mutated";
+      }).toThrow();
+      return result;
+    });
+    const low = vi.fn((observed: PluginHookSkillProposalEvaluateEvent) => {
+      expect(observed.candidate.skillMd.content).toBe("demo");
+    });
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(...["low", "high"].map((id) => createPluginRecord({ id })));
+    registry.typedHooks.push(
+      {
+        hookName: "skill_proposal_evaluate",
+        pluginId: "low",
+        source: "test",
+        priority: 10,
+        handler: low,
+      },
       {
         hookName: "skill_proposal_evaluate",
         pluginId: "high",
+        source: "test",
         priority: 100,
         registrationId: "regression-score",
         handler: high,
       },
-    ]);
+    );
     const plugin = registry.plugins.find((entry) => entry.id === "high")!;
     plugin.packageVersion = "2.1.0";
     plugin.version = "runtime-override";
@@ -59,38 +81,6 @@ describe("skill lifecycle hooks", () => {
     ]);
     expect(high).toHaveBeenCalledOnce();
     expect(low).toHaveBeenCalledOnce();
-  });
-
-  it("passes a frozen candidate snapshot to every evaluator", async () => {
-    const first = vi.fn((observed: PluginHookSkillProposalEvaluateEvent) => {
-      expect(observed).not.toBe(event);
-      expect(Object.isFrozen(observed)).toBe(true);
-      expect(Object.isFrozen(observed.candidate)).toBe(true);
-      expect(Object.isFrozen(observed.candidate.skillMd)).toBe(true);
-      expect(() => {
-        observed.candidate.skillMd.content = "mutated";
-      }).toThrow();
-      return { summary: "first" };
-    });
-    const second = vi.fn((observed: PluginHookSkillProposalEvaluateEvent) => {
-      expect(observed.candidate.skillMd.content).toBe("demo");
-      return { summary: "second" };
-    });
-    const registry = createEmptyPluginRegistry();
-    registry.typedHooks.push(
-      ...[first, second].map((handler) => ({
-        pluginId: "test",
-        hookName: "skill_proposal_evaluate" as const,
-        source: "test",
-        handler,
-      })),
-    );
-    await expect(createHookRunner(registry).runSkillProposalEvaluate(event, ctx)).resolves.toEqual([
-      { evaluatorId: "test", pluginId: "test", status: "completed", result: { summary: "first" } },
-      { evaluatorId: "test", pluginId: "test", status: "completed", result: { summary: "second" } },
-    ]);
-    expect(first).toHaveBeenCalledOnce();
-    expect(second).toHaveBeenCalledOnce();
   });
 
   it("returns failures and timeouts as sanitized, attributed outcomes", async () => {
@@ -179,4 +169,51 @@ describe("skill lifecycle hooks", () => {
     expect(first).toHaveBeenCalledOnce();
     expect(second).toHaveBeenCalledOnce();
   });
+});
+
+const installEvent: PluginHookBeforeInstallEvent = {
+  targetName: "demo-skill",
+  targetType: "skill",
+  sourcePath: "/tmp/demo-skill",
+  sourcePathKind: "directory",
+  origin: "openclaw-workspace",
+  request: { kind: "skill-install", mode: "install" },
+  builtinScan: { status: "ok", scannedFiles: 1, critical: 0, warn: 0, info: 0, findings: [] },
+  skill: { installId: "deps" },
+};
+it("preserves findings in priority order and stops at the first install blocker", async () => {
+  const first = {
+    ruleId: "first",
+    severity: "warn",
+    file: "a.ts",
+    line: 1,
+    message: "first finding",
+  } as const;
+  const blocked = {
+    ruleId: "blocker",
+    severity: "critical",
+    file: "block.ts",
+    line: 3,
+    message: "blocked finding",
+  } as const;
+  const skipped = vi.fn(() => ({ findings: [first] }));
+  const runner = createHookRunner(
+    createMockPluginRegistry([
+      { hookName: "before_install", priority: 0, handler: skipped },
+      {
+        hookName: "before_install",
+        priority: 50,
+        handler: () => ({ findings: [blocked], block: true, blockReason: "policy blocked" }),
+      },
+      { hookName: "before_install", priority: 100, handler: () => ({ findings: [first] }) },
+    ]),
+  );
+  await expect(
+    runner.runBeforeInstall(installEvent, {
+      origin: "openclaw-workspace",
+      targetType: "skill",
+      requestKind: "skill-install",
+    }),
+  ).resolves.toEqual({ findings: [first, blocked], block: true, blockReason: "policy blocked" });
+  expect(skipped).not.toHaveBeenCalled();
 });

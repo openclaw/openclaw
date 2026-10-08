@@ -2,18 +2,22 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   AgentDatabaseSchemaAdmissionChangedError,
   AgentDatabaseSchemaAdmissionInvalidError,
 } from "./agent-database-admission-error.js";
 import { recordOpenClawAgentCanonicalValidation } from "./openclaw-agent-canonical-validation-receipt.js";
-import type {
-  OpenClawAgentDatabase,
-  OpenClawAgentDatabaseOptions,
+import {
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+  type OpenClawAgentDatabase,
+  type OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
 import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
 import {
+  adoptOpenClawAgentDatabaseSchema,
   adoptOpenClawAgentDatabaseValidation,
   captureOpenClawAgentDatabaseAdmissionPublication,
   captureOpenClawAgentDatabaseAliasPublication,
@@ -22,6 +26,7 @@ import {
   getOpenClawAgentDatabaseValidation,
   getOpenClawAgentDatabaseValidationForTransfer,
   hasOpenClawAgentCanonicalValidation,
+  invalidateOpenClawAgentDatabaseSchema,
   invalidateOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseValidationsForAgent,
   markOpenClawAgentCanonicalValidation,
@@ -59,6 +64,76 @@ async function withReceiptFixture(
 }
 
 describe("canonical proof on physical database validation", () => {
+  it("reuses admitted schema markers while preserving foreign changes and revocation", async () => {
+    await withReceiptFixture(false, (database, options) => {
+      const observe = (db: DatabaseSync) =>
+        trackSqliteStatementExecutions(
+          db,
+          ["data_version", "schema_version", "user_version"],
+          (sql) => {
+            const name = /^PRAGMA (data_version|schema_version|user_version);?$/iu.exec(sql)?.[1];
+            return name === "data_version" || name === "schema_version" || name === "user_version"
+              ? name
+              : null;
+          },
+        );
+      const warm = observe(database.db);
+      try {
+        runSqliteReadOperationSync(
+          database.db,
+          () => {
+            expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(true);
+            expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(true);
+          },
+          "fresh",
+        );
+        expect(warm.counts).toEqual({ data_version: 1, schema_version: 0, user_version: 0 });
+        database.db.exec("BEGIN");
+        try {
+          expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(false);
+          expect(warm.counts).toEqual({ data_version: 1, schema_version: 0, user_version: 0 });
+        } finally {
+          database.db.exec("ROLLBACK");
+        }
+      } finally {
+        warm.restore();
+      }
+
+      const reader = openOpenClawAgentDatabaseReadOnly(options);
+      if (!reader.found) {
+        throw new Error("Expected independent reader");
+      }
+      const cold = observe(reader.database.db);
+      try {
+        expect(adoptOpenClawAgentDatabaseSchema(reader.database)).toBe(true);
+        expect(cold.counts).toEqual({ data_version: 1, schema_version: 1, user_version: 1 });
+        runSqliteReadOperationSync(
+          reader.database.db,
+          () => expect(adoptOpenClawAgentDatabaseSchema(reader.database)).toBe(true),
+          "fresh",
+        );
+        expect(cold.counts).toEqual({ data_version: 2, schema_version: 1, user_version: 1 });
+      } finally {
+        cold.restore();
+        reader.database.close();
+      }
+
+      const writer = new DatabaseSync(database.path);
+      try {
+        writer.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1}`);
+        expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(false);
+        expect(() => adoptOpenClawAgentDatabaseSchema(database, true, true)).toThrow(
+          "Agent schema admission changed",
+        );
+      } finally {
+        writer.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION}`);
+        writer.close();
+      }
+      invalidateOpenClawAgentDatabaseSchema(database);
+      expect(adoptOpenClawAgentDatabaseSchema(database)).toBe(false);
+    });
+  });
+
   it.each(["durable receipt", "empty view"] as const)(
     "does not certify an uncommitted %s",
     async (proof) => {

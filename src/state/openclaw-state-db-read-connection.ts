@@ -210,6 +210,15 @@ function assertStateReadSchemaForPolicy(
   }
 }
 
+function admitStateReadSchemaFacts(database: DatabaseSync, pathname: string): void {
+  try {
+    admitSqliteSchema(database);
+  } catch (error) {
+    // Catalog admission precedes version validation's legacy-schema diagnostic boundary.
+    throw normalizeOpenClawStateSchemaReadError(error, pathname);
+  }
+}
+
 export function withOpenClawStateReadOnlyLocation<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   pathname: string,
@@ -263,12 +272,9 @@ export function readOpenClawStateReadOnlyLocation<T>(
       result = {
         status: "available",
         value: runSqliteReadOperationSync(opened.database.db, () => {
-          if (!existingSchema && isSqliteSchemaAdmissionCold(opened.database.db)) {
-            try {
-              admitSqliteSchema(opened.database.db);
-            } catch (error) {
-              throw normalizeOpenClawStateSchemaReadError(error, pathname);
-            }
+          const coldAdmission = !existingSchema && isSqliteSchemaAdmissionCold(opened.database.db);
+          admitStateReadSchemaFacts(opened.database.db, pathname);
+          if (coldAdmission) {
             // A peer can upgrade after catalog capture releases its SQLite snapshot.
             return runSqliteReadOperationSync(
               opened.database.db,
@@ -280,7 +286,6 @@ export function readOpenClawStateReadOnlyLocation<T>(
             );
           }
           assertStateReadSchemaForPolicy(opened.database.db, pathname, existingSchema);
-          admitSqliteSchema(opened.database.db);
           return operation(opened.database);
         }),
       };
@@ -358,8 +363,8 @@ export function openOpenClawStateReadOnlyLocation(
   const connection = openOpenClawStateReadConnection(pathname, source);
   try {
     runSqliteReadOperationSync(connection.database.db, () => {
+      admitStateReadSchemaFacts(connection.database.db, pathname);
       assertStateReadSchema(connection.database.db, pathname);
-      admitSqliteSchema(connection.database.db);
     });
   } catch (error) {
     try {

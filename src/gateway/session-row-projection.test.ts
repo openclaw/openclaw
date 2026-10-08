@@ -11,6 +11,16 @@ import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
+import {
+  getUserProfileDisplay,
+  hasMultipleSessionSharingIdentities,
+  isUserProfileCatalogReady,
+} from "../state/user-profile-list.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { ready } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
@@ -18,6 +28,32 @@ import { listProjectedSessions } from "./session-utils-list.js";
 import * as rowInputs from "./session-utils-row.js";
 
 afterEach(() => vi.restoreAllMocks());
+
+it("prepares cold profile facts through the reader and retains memory-only projection reads", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const first = ensureProfileForEmail("first@catalog.test");
+    ensureProfileForEmail("second@catalog.test");
+    const database = openOpenClawStateDatabase();
+    const reads = vi.spyOn(DatabaseSync.prototype, "prepare");
+    const projection = await createSessionRowProjection({ cfg: {} });
+    try {
+      expect(getUserProfileDisplay(first.id).displayName).toBe("first");
+      expect(hasMultipleSessionSharingIdentities()).toBe(true);
+      await projection.ensureMaterialized();
+      expect(
+        reads.mock.calls.filter(([statement]) => /\bFROM\s+"?user_profiles\b/i.test(statement)),
+      ).toEqual([]);
+      reads.mockRestore();
+      await closeOpenClawStateDatabaseByPathAsync(database.path);
+      openOpenClawStateDatabase();
+      await projection.ensureMaterialized();
+      expect(isUserProfileCatalogReady()).toBe(true);
+      expect(getUserProfileDisplay(first.id).displayName).toBe("first");
+    } finally {
+      projection.dispose();
+    }
+  });
+});
 
 it("resolves agent-scoped legacy locators from resident topology for reads and dirty publications", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

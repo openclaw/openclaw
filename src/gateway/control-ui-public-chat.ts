@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveGatewayPublicOrigin } from "../config/gateway-public-origin.js";
 import { resolveSessionPublicShare } from "../config/sessions/session-public-share.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ControlUiPublicSessionRequestGate } from "./control-ui-public-session-admission.js";
 import { isSecurePublicSessionIngress } from "./control-ui-public-session-ingress.js";
 import {
@@ -33,10 +34,15 @@ export async function serveControlUiPublicChat(params: {
   ingress: GatewayAttributedIngress;
   projection?: SessionRowProjection;
   gate: ControlUiPublicSessionRequestGate;
+  auth: ResolvedGatewayAuth;
+  serveApp: (path: string) => Promise<boolean>;
 }): Promise<true> {
   const { req, res, basePath, config, projection, gate } = params;
   const url = new URL(req.url ?? "/", "http://localhost");
-  const target = parseControlUiSessionReturnPath(url.pathname, basePath);
+  const entryQuery = new URLSearchParams(url.searchParams);
+  entryQuery.delete("offset");
+  const entryPath = url.pathname + (entryQuery.size ? `?${entryQuery}` : "");
+  const target = parseControlUiSessionReturnPath(entryPath, basePath);
   const publicOrigin = resolveGatewayPublicOrigin(config);
   const origin = resolveControlUiShareOrigin(req, publicOrigin);
   res.setHeader("Cache-Control", "no-store");
@@ -58,10 +64,7 @@ export async function serveControlUiPublicChat(params: {
     !origin ||
     (req.method !== "GET" && req.method !== "HEAD") ||
     url.searchParams.getAll("offset").length > 1 ||
-    !/^(?:0|[1-9][0-9]{0,9})$/u.test(offsetText) ||
-    url.searchParams.getAll("dashboard").length > 1 ||
-    (url.searchParams.has("dashboard") && url.searchParams.get("dashboard") !== "expanded") ||
-    [...url.searchParams.keys()].some((key) => key !== "offset" && key !== "dashboard")
+    !/^(?:0|[1-9][0-9]{0,9})$/u.test(offsetText)
   ) {
     return end(404, "Not found");
   }
@@ -69,13 +72,20 @@ export async function serveControlUiPublicChat(params: {
     res.setHeader("Allow", "GET");
     return end(405, "");
   }
+  const entryUrl = buildControlUiSessionEntryUrl(entryPath, basePath);
+  const clientAuthBasePath =
+    params.auth.mode === "token" || params.auth.mode === "password" ? basePath : undefined;
+  const secureIngress = isSecurePublicSessionIngress(req, params.ingress, publicOrigin);
+  if (!secureIngress && clientAuthBasePath !== undefined) {
+    // The shell contains no session data; token/password auth remains with the app.
+    await params.serveApp(entryPath);
+    return true;
+  }
   const admitted = gate.admitClient(params.ingress.rateLimit.subject.key);
   if (admitted.kind === "rate-limited") {
     res.setHeader("Retry-After", admitted.retryAfterSeconds);
     return end(429, "Too many public session requests. Please retry later.");
   }
-  const entryPath = url.pathname + (url.searchParams.has("dashboard") ? "?dashboard=expanded" : "");
-  const entryUrl = buildControlUiSessionEntryUrl(entryPath, basePath);
   const unavailable = () =>
     end(
       404,
@@ -85,13 +95,12 @@ export async function serveControlUiPublicChat(params: {
         truncated: false,
         latestUrl: url.pathname,
         entryUrl,
+        clientAuthBasePath,
         cardUrl: `${origin}${basePath}/share/card.png`,
         unavailable: true,
       }),
     );
-  // A public transcript needs secure transport, but private deployments must
-  // retain their ordinary login path even when anonymous publication is unavailable.
-  if (!isSecurePublicSessionIngress(req, params.ingress, publicOrigin)) {
+  if (!secureIngress) {
     return unavailable();
   }
   if (!projection) {
@@ -131,7 +140,15 @@ export async function serveControlUiPublicChat(params: {
       publicationKey: share.id,
       sessionKey: selected.key,
       config,
-      requestKey: JSON.stringify(["canonical", share.id, url.pathname, offset, origin, entryUrl]),
+      requestKey: JSON.stringify([
+        "canonical",
+        share.id,
+        url.pathname,
+        offset,
+        origin,
+        entryUrl,
+        clientAuthBasePath,
+      ]),
       work: async () => {
         const session = await readPublicSessionShare(config, locator, { offset, projection });
         return session
@@ -139,6 +156,7 @@ export async function serveControlUiPublicChat(params: {
               ...session,
               latestUrl: url.pathname,
               entryUrl,
+              clientAuthBasePath,
               canonicalUrl: `${origin}${url.pathname}`,
               cardUrl: `${origin}${basePath}/share/card.png`,
               isLatest: offset === 0,
