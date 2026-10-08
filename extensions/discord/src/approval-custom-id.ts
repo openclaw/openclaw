@@ -72,11 +72,7 @@ export function parseExecApprovalData(data: ComponentData): {
   const rawId = coerce(data.id);
   const rawKind = coerce(data.kind);
   const rawAction = coerce(data.action);
-  if (
-    !rawId ||
-    (rawKind !== "exec" && rawKind !== "plugin" && rawKind !== "system-agent") ||
-    !rawAction
-  ) {
+  if (!rawId || (rawKind !== "exec" && rawKind !== "plugin" && rawKind !== "system-agent")) {
     return null;
   }
   if (rawAction !== "allow-once" && rawAction !== "allow-always" && rawAction !== "deny") {

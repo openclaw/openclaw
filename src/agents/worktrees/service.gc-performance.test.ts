@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as gitExec from "../../infra/git-exec.js";
@@ -13,7 +14,7 @@ import {
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
 import * as checkoutInspection from "./checkout-inspection.js";
 import { repairWorktreePackIndex } from "./git-maintenance.js";
-import { requireGit } from "./git.js";
+import { requireGit, runGit } from "./git.js";
 import * as registryReads from "./registry-read.js";
 import * as registry from "./registry.js";
 import { deleteRegistryWorktree, insertRegistryWorktree } from "./registry.js";
@@ -124,6 +125,7 @@ describe("worktree Git maintenance", () => {
           signal: controller.signal,
           timeoutMs: 30 * 60_000,
           beforeRun: expect.any(Function),
+          env: expect.objectContaining({ GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" }),
         });
         options?.beforeRun?.();
         maintenanceRoots.push(cwd);
@@ -174,6 +176,59 @@ describe("worktree Git maintenance", () => {
       expect(commands).toHaveBeenCalledTimes(calls);
     } finally {
       logs.cleanup();
+    }
+  });
+
+  it("maintains partial clones without fetching missing historical heads", async () => {
+    const root = tempDirs.make("worktree-maintenance-partial-clone-");
+    const source = await initRepo(root);
+    await requireGit(source, ["config", "uploadpack.allowFilter", "true"]);
+    const clone = path.join(root, "clone");
+    await requireGit(root, [
+      "clone",
+      "--filter=blob:none",
+      "--no-checkout",
+      pathToFileURL(source).href,
+      clone,
+    ]);
+    await requireGit(source, ["commit", "--allow-empty", "-m", "historical head"]);
+    const missing = await requireGit(source, ["rev-parse", "HEAD"]);
+    // A retained branch can outlive the partial clone's locally available objects.
+    await fs.writeFile(path.join(clone, ".git", "refs", "heads", "historical"), `${missing}\n`);
+    await requireGit(clone, ["config", "maintenance.commit-graph.auto", "-1"]);
+    await insertRegistryWorktree(env, {
+      id: "partial-clone",
+      name: "partial-clone",
+      repoFingerprint: "partial-clone",
+      repoRoot: clone,
+      path: clone,
+      branch: "main",
+      baseRef: "HEAD",
+      ownerKind: "manual",
+      createdAt: 1,
+      lastActiveAt: 1,
+    });
+    const trace = path.join(root, "maintenance-trace.jsonl");
+    vi.stubEnv("GIT_TRACE2_EVENT", trace);
+    vi.stubEnv("GIT_NO_LAZY_FETCH", undefined);
+    vi.stubEnv("GIT_ALLOW_PROTOCOL", "file");
+    try {
+      expect((await new ManagedWorktreeService({ env, now: () => 3 }).gc()).outcome).toBe(
+        "completed",
+      );
+      expect(await fs.readFile(trace, "utf8")).not.toContain("upload-pack");
+      expect(
+        (
+          await runGit(clone, ["cat-file", "-e", missing], {
+            env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
+          })
+        ).code,
+      ).not.toBe(0);
+      await fs.access(
+        path.join(clone, ".git", "objects", "info", "commit-graphs", "commit-graph-chain"),
+      );
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 

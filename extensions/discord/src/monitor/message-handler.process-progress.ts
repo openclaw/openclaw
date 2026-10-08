@@ -62,6 +62,7 @@ export function createDiscordMessageProgressRuntime(params: {
   };
 
   const replyOptions: Partial<ReplyOptions> = {
+    progressRequiresReply: draftPreview.isProgressMode ? true : undefined,
     onAssistantMessageStart: draftPreview.draftStream
       ? () => {
           handleAssistantMessageBoundary();
@@ -143,8 +144,8 @@ export function createDiscordMessageProgressRuntime(params: {
     },
     onItemEvent: async (payload) => {
       if (
-        payload.kind === "preamble" &&
-        ((await shouldYieldDraftCommentary()) || abortSignal?.aborted)
+        abortSignal?.aborted ||
+        (payload.kind === "preamble" && (await shouldYieldDraftCommentary()))
       ) {
         return undefined;
       }

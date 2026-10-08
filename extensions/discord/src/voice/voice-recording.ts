@@ -173,12 +173,9 @@ export class DiscordVoiceRecording {
       try {
         await previousProcessing;
         outcome = await processDiscordVoiceSegment({
-          entry,
-          cfg: this.params.cfg,
+          ...this.params,
           wavPath: wav.path,
           durationSeconds: wav.durationSeconds,
-          userId: this.params.userId,
-          resolveIngressContext: this.params.resolveIngressContext,
           isConversationCurrent: this.params.canConverse,
           onConversationOnly: () => conversationOnly.resolve(),
           recording,

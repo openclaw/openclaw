@@ -1122,6 +1122,50 @@ export function createAuthProfileStoreRuntime(
     captureScope,
   });
 
+  /** Prepare a recorded provider without putting persisted SQLite reads on the caller's thread. */
+  async function prepareAuthProfileProvider(params: {
+    agentDir: string;
+    profileId: string;
+  }): Promise<{ provider: string | undefined }> {
+    const provider = getRuntimeAuthProfileStoreSnapshot(params.agentDir)?.profiles[params.profileId]
+      ?.provider;
+    if (provider || isEnvOnlyAuthProfileRuntime()) {
+      return { provider };
+    }
+    return withPreparedAuthProfileStoreReads(params.agentDir, { readOnly: true }, async (reads) => {
+      const readProvider = async (agentDir: string | undefined) => {
+        let recordedProvider: string | undefined;
+        await reads.readStore(agentDir, {
+          ...reads.options,
+          // Read the captured persisted rows, not the composed runtime/CLI overlay.
+          onReadOwner: (owner) => {
+            recordedProvider = owner.readStore()?.profiles[params.profileId]?.provider;
+          },
+        });
+        return recordedProvider;
+      };
+      const requestedProvider = await readProvider(reads.effectiveAgentDir);
+      const scopedSharedStore = reads.runInCapturedScope(getScopedSharedAuthStore);
+      if (scopedSharedStore) {
+        return {
+          provider: requestedProvider ?? scopedSharedStore.profiles[params.profileId]?.provider,
+        };
+      }
+      if (
+        requestedProvider ||
+        !reads.effectiveAgentDir ||
+        reads.runInCapturedScope(() => isSharedMainAuthProfileAgentDir(reads.effectiveAgentDir))
+      ) {
+        return { provider: requestedProvider };
+      }
+      return {
+        provider: await readProvider(
+          reads.runInCapturedScope(() => resolveRuntimeAuthProfileAgentDir()),
+        ),
+      };
+    });
+  }
+
   const {
     loadAuthProfileStoreWithoutExternalProfiles,
     ensureAuthProfileStore,
@@ -1580,5 +1624,6 @@ export function createAuthProfileStoreRuntime(
     saveAuthProfileStoreWithPreparedOwner,
     saveAuthProfileStoreIfPersistenceSnapshotMatches,
     findPersistedAuthProfileCredential,
+    prepareAuthProfileProvider,
   };
 }

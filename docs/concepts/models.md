@@ -122,6 +122,10 @@ without waiting for discovery. Pending providers show `checking models…`.
 Open the menu again to see newly discovered models; completing discovery does not
 edit a list that was already sent.
 
+Refreshing a selected account also keeps its last completed catalog available to
+other readers until discovery succeeds. Failed refreshes retain that catalog;
+replacing the account credentials invalidates it immediately.
+
 If preparing a large fleet takes longer than the two-minute startup budget, the
 Gateway starts with the agent model runtimes that have finished preparing. A
 warning names the remaining agents and acquisition stage, including workspace

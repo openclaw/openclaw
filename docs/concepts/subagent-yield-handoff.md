@@ -180,11 +180,12 @@ continuations do not send activity to an external channel. This
 activity signal does not change the configured message queue mode or restore
 individual tool-progress messages.
 
-On Telegram, a confirmed `progress` draft can stay with the yielding turn's
-announcing children instead of the waiting acknowledgment. Telegram keeps
+On Telegram and Discord, a confirmed `progress` draft can stay with the yielding
+turn's announcing children instead of the waiting acknowledgment. The channel keeps
 rendering, throttling and deleting it; the native registry only forwards child
 status and prepared operation names (never child prose, commands, arguments or
-results) and honors `streaming.progress.toolProgress`. A resumed parent that
+results). Public task state remains visible with the detailed tool log disabled;
+`streaming.progress.toolProgress` controls the rolling diagnostic rows. A resumed parent that
 yields again keeps the same draft for its new children. The draft is deleted when
 the settle wake completes the last tracked cohort (final, `NO_REPLY` or terminal
 failure) or when stop or reset cancels the children. It is process-local: a

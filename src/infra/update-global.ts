@@ -355,7 +355,7 @@ async function collectInstalledPackageDistErrors(params: {
   installedVersion: string | null;
   expectedVersion?: string | null;
 }): Promise<string[]> {
-  const criticalPaths = await collectCriticalInstalledPackageDistPaths(params.packageRoot);
+  let criticalPaths = await collectCriticalInstalledPackageDistPaths(params.packageRoot);
   let inventoryFiles: string[] | null = null;
   let inventoryError: string | null = null;
   try {
@@ -364,9 +364,11 @@ async function collectInstalledPackageDistErrors(params: {
     inventoryError = `invalid package dist inventory ${PACKAGE_DIST_INVENTORY_RELATIVE_PATH}`;
   }
 
+  let actualFiles: string[] | null = null;
+  let inventoryErrors: string[] = [];
   if (inventoryFiles !== null) {
-    const actualFiles = await collectPackageDistInventory(params.packageRoot);
-    const inventoryErrors = await collectInstalledPathErrors({
+    actualFiles = await collectPackageDistInventory(params.packageRoot);
+    inventoryErrors = await collectInstalledPathErrors({
       packageRoot: params.packageRoot,
       expectedFiles: inventoryFiles,
       actualFiles,
@@ -374,26 +376,18 @@ async function collectInstalledPackageDistErrors(params: {
       unexpectedMessage: (relativePath) => `unexpected packaged dist file ${relativePath}`,
     });
     const inventorySet = new Set(inventoryFiles);
-    const supplementalCriticalPaths = criticalPaths.filter(
-      (relativePath) => !inventorySet.has(relativePath),
-    );
-    return [
-      ...inventoryErrors,
-      ...(await collectInstalledPathErrors({
-        packageRoot: params.packageRoot,
-        expectedFiles: supplementalCriticalPaths,
-        actualFiles,
-        missingMessage: (relativePath) => `missing bundled runtime sidecar ${relativePath}`,
-      })),
-    ];
+    criticalPaths = criticalPaths.filter((relativePath) => !inventorySet.has(relativePath));
   }
 
   const criticalErrors = await collectInstalledPathErrors({
     packageRoot: params.packageRoot,
     expectedFiles: criticalPaths,
-    actualFiles: null,
+    actualFiles,
     missingMessage: (relativePath) => `missing bundled runtime sidecar ${relativePath}`,
   });
+  if (inventoryFiles !== null) {
+    return [...inventoryErrors, ...criticalErrors];
+  }
   if (inventoryError) {
     return [inventoryError, ...criticalErrors];
   }

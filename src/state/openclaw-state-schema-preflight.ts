@@ -23,11 +23,7 @@ import {
 } from "./openclaw-state-db-maintenance.js";
 import { normalizeOpenClawStateSchemaReadError } from "./openclaw-state-db-schema-migration-required.js";
 import { assertCanonicalStateSchemaShape } from "./openclaw-state-db-schema-repair.js";
-import {
-  readStateSchemaContentVersion,
-  readStateSchemaMigrationVersion,
-  STATE_SCHEMA_MIGRATION_CONTRACT_SQLS,
-} from "./openclaw-state-db-schema-version.js";
+import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import { inspectOpenClawStateOwnershipFromDatabase } from "./openclaw-state-ownership.js";
 import { inspectCurrentStateStartupSchema } from "./openclaw-state-schema-inspection.js";
 import { readStateSchemaPublicationBlocker } from "./openclaw-state-schema-publication.js";
@@ -51,10 +47,7 @@ export type StateSchemaInspection = {
   inspectionErrors: unknown[];
 };
 
-const canonicalStateInspectionSchemas = [
-  OPENCLAW_STATE_SCHEMA_SQL,
-  ...STATE_SCHEMA_MIGRATION_CONTRACT_SQLS,
-];
+const canonicalStateInspectionSchemas = [OPENCLAW_STATE_SCHEMA_SQL];
 
 /** Only trusted canonical definitions enter the expected-contract cache, never observed schemas. */
 export function captureStateSchemaInspectionContracts(): PreparedSqliteSchemaContract[] {
@@ -84,10 +77,16 @@ export function inspectStateDatabaseSchema(
         supportedVersion,
         ...(writerAppVersion ? { writerAppVersion } : {}),
       });
-      // This build cannot interpret a newer registry or prescribe repairs for it.
-      return inspection;
+      // An older target does not make this build's readable registry unavailable.
+      if (contentVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
+        return inspection;
+      }
     }
-    const migrationVersion = readStateSchemaMigrationVersion(database, contentVersion);
+    // An older target may have taken the header-only path; this build still needs the content marker.
+    const migrationVersion =
+      stateVersion > supportedVersion
+        ? readStateSchemaContentVersion(database, stateVersion)
+        : contentVersion;
     if (migrationVersion < supportedVersion) {
       schemas.pendingMigrations = [
         { kind: "state", path: pathname, foundVersion: stateVersion, supportedVersion },
@@ -129,7 +128,7 @@ export function inspectStateDatabaseSchema(
       try {
         assertOpenClawStateDatabaseForMaintenance(database, {
           pathname,
-          schemaVersions: { userVersion: stateVersion, contentVersion },
+          schemaVersions: { userVersion: stateVersion, contentVersion: migrationVersion },
         });
       } catch (error) {
         inspection.inspectionErrors.push(error);

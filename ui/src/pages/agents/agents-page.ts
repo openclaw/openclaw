@@ -82,7 +82,7 @@ import {
 } from "./route-navigation.ts";
 import type { AgentsRouteData } from "./route.ts";
 import { AgentSelectionDrafts } from "./selection-drafts.ts";
-import { clearAgentSkillFilter, loadAgentSkills } from "./skills.ts";
+import { clearAgentSkillFilter, loadAgentSkills, nextAgentSkillAllowlist } from "./skills.ts";
 import { renderAgents, renderAgentsPageHeader } from "./view.ts";
 
 type AgentsRequestSources = Partial<Pick<ApplicationContext, "agents" | "agentIdentity">>;
@@ -1095,21 +1095,18 @@ class AgentsPage
               if (!target || !skillName.trim()) {
                 return;
               }
-              const base =
-                resolveAgentSkillsFilter(
-                  currentConfigObject(this.context.runtimeConfig.state),
-                  agentId,
-                ) ??
-                this.agentSkillsReport?.agentSkillFilter ??
-                this.agentSkillsReport?.skills?.map((skill) => skill.name).filter(Boolean) ??
-                [];
-              const next = new Set(base);
-              if (enabled) {
-                next.add(skillName.trim());
-              } else {
-                next.delete(skillName.trim());
-              }
-              this.context.runtimeConfig.patchForm([...target.path, "skills"], [...next]);
+              this.context.runtimeConfig.patchForm(
+                [...target.path, "skills"],
+                nextAgentSkillAllowlist({
+                  configured: resolveAgentSkillsFilter(
+                    currentConfigObject(this.context.runtimeConfig.state),
+                    agentId,
+                  ),
+                  report: this.agentSkillsReport,
+                  skillName: skillName.trim(),
+                  enabled,
+                }),
+              );
             },
             onAgentSkillsClear: (agentId) => this.clearAgentSkills(agentId),
             onAgentSkillsDisableAll: (agentId) => {
