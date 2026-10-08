@@ -402,20 +402,12 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
         throw new MessageInjectionAcceptedUnconfirmedError({ cause: error });
       }
       if (!hasAcceptedSteeringCustody(error)) {
-        let observerFailure: { error: unknown } | undefined;
         try {
           options?.onQueueAccepted?.(false);
         } catch (observerError) {
-          observerFailure = { error: observerError };
-        }
-        if (observerFailure) {
-          throw new AggregateError(
-            [error, observerFailure.error],
-            "Steering rejection observer failed",
-            {
-              cause: error,
-            },
-          );
+          throw new AggregateError([error, observerError], "Steering rejection observer failed", {
+            cause: error,
+          });
         }
       }
       throw error;

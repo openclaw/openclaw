@@ -117,29 +117,23 @@ export function runEmbeddedAgent(
     (internalParamsInput.preparedModelRuntimeMode === "isolated-read-only"
       ? undefined
       : getPreparedModelRuntimePluginGeneration());
-  return withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
-    runEmbeddedAgentInternal({
+  return withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
+    const prepared = await prepareEmbeddedRunSession({
       ...internalParamsInput,
       config,
       lifecycleGeneration,
       ...(pluginGeneration ? { pluginGeneration } : {}),
-    }),
-  );
-}
-
-async function runEmbeddedAgentInternal(
-  paramsInput: RunEmbeddedAgentInternalParams,
-): Promise<EmbeddedAgentRunResult> {
-  const prepared = await prepareEmbeddedRunSession(paramsInput);
-  return await withRequiredSessionPlacement(
-    prepared.runSessionTarget,
-    {
-      config: prepared.params.config,
-      assertCurrent: () => prepared.params.preparedRunAdmission?.assertSourceCurrent(),
-      signal: prepared.params.abortSignal,
-    },
-    () => runEmbeddedAgentForSession(prepared),
-  );
+    });
+    return await withRequiredSessionPlacement(
+      prepared.runSessionTarget,
+      {
+        config: prepared.params.config,
+        assertCurrent: () => prepared.params.preparedRunAdmission?.assertSourceCurrent(),
+        signal: prepared.params.abortSignal,
+      },
+      () => runEmbeddedAgentForSession(prepared),
+    );
+  });
 }
 
 async function runEmbeddedAgentForSession(
@@ -306,16 +300,15 @@ async function runEmbeddedAgentForSession(
           model: requestedRuntimeSelection.modelId,
           requestedRouteResolution: params.requestedRouteResolution,
           fallbacksOverride: runtimePluginFallbacksOverride,
-        }).map((candidate, index): AgentHarnessPluginSelection =>
-          Object.assign(
-            { provider: candidate.provider, modelId: candidate.model },
-            // Preparation hints apply only to the requested route; fallbacks resolve their own policy.
-            requestedHarnessRuntime && (index === 0 || explicitHarnessRuntime)
-              ? { runtime: requestedHarnessRuntime }
-              : {},
-            { agentId: requestedWorkspaceResolution.agentId },
-          ),
-        );
+        }).map((candidate, index): AgentHarnessPluginSelection => ({
+          provider: candidate.provider,
+          modelId: candidate.model,
+          // Preparation hints apply only to the requested route; fallbacks resolve their own policy.
+          ...(requestedHarnessRuntime && (index === 0 || explicitHarnessRuntime)
+            ? { runtime: requestedHarnessRuntime }
+            : {}),
+          agentId: requestedWorkspaceResolution.agentId,
+        }));
         const preparedInput = {
           config,
           agentId: requestedWorkspaceResolution.agentId,

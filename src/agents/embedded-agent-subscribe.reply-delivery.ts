@@ -468,13 +468,11 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
   };
 
   const pushAssistantText = (text: string, normalizedText?: string) => {
-    if (!text) {
-      return;
-    }
-    if (params.silentExpected && !isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
-      return;
-    }
-    if (shouldSkipAssistantText(text, normalizedText)) {
+    if (
+      !text ||
+      (params.silentExpected && !isSilentReplyText(text, SILENT_REPLY_TOKEN)) ||
+      shouldSkipAssistantText(text, normalizedText)
+    ) {
       return;
     }
     assistantTexts.push(text);
@@ -506,13 +504,8 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     if (state.hasFlushedPartialText) {
       replaceCurrentAssistantText(text);
       state.hasFlushedPartialText = false;
-      state.assistantTextBaseline = assistantTexts.length;
-      return;
-    }
-
-    // If we're not streaming block replies, ensure the final payload includes
-    // the final text even when interim streaming was enabled.
-    if (state.includeReasoning && text && !params.onBlockReply) {
+    } else if (state.includeReasoning && text && !params.onBlockReply) {
+      // Without block replies, the final payload still owns text seen during interim streaming.
       replaceCurrentAssistantText(text);
       state.suppressBlockChunks = true;
     } else if (

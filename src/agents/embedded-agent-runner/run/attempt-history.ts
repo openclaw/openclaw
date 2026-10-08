@@ -44,10 +44,7 @@ function readFirstUserText(content: unknown): string | undefined {
   if (typeof content === "string") {
     return content;
   }
-  if (!Array.isArray(content)) {
-    return undefined;
-  }
-  return content.find(isTextContentBlock)?.text;
+  return Array.isArray(content) ? content.find(isTextContentBlock)?.text : undefined;
 }
 
 export function hasNonBlankUserText(content: unknown): boolean {
@@ -305,14 +302,11 @@ export function findActiveUserMessageIndex(messages: AgentMessage[]): number {
   // historical, not the active prompt boundary.
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (!message) {
-      continue;
-    }
-    if (message.role === "user" && !message.operatorMessage) {
+    if (message?.role === "user" && !message.operatorMessage) {
       return index;
     }
     if (
-      message.role === "assistant" &&
+      message?.role === "assistant" &&
       (!Array.isArray(message.content) || !message.content.some(isRunnerToolCallBlock))
     ) {
       return -1;

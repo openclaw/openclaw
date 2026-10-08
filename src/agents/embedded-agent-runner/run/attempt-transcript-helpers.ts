@@ -9,23 +9,16 @@ import { readSessionEntryInWorker } from "../../../config/sessions/session-entry
 import { resolveQuotaSuspensionEntryMaintenance } from "../../../config/sessions/store-maintenance.js";
 import type { SessionEntry as ConfigSessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../shared/transcript-only-openclaw-assistant.js";
 import { sanitizeCompactionReplayMessages } from "../../compaction-replay.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import { log } from "../logger.js";
 import { canContinueFromMessage, trimToContinuableTail } from "./compaction-timeout.js";
 import { isMidTurnPrecheckAssistantError } from "./midturn-precheck.js";
+import { preserveTrailingTranscriptMetadata } from "./transcript-tail-metadata.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptSessionManager = ReturnType<typeof guardSessionManager>;
-type AttemptSessionEntry = ReturnType<AttemptSessionManager["getEntries"]>[number];
-
-const preserveTrailing = (entry: AttemptSessionEntry) =>
-  entry.type === "custom" ||
-  entry.type === "label" ||
-  entry.type === "session_info" ||
-  (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message));
 
 export async function removeTrailingMidTurnPrecheckAssistantError(params: {
   activeSession: { agent: { state: { messages: AgentMessage[] } } };
@@ -35,7 +28,7 @@ export async function removeTrailingMidTurnPrecheckAssistantError(params: {
   const removedActiveError = isMidTurnPrecheckAssistantError(messages.at(-1));
   const persistedTail = params.sessionManager
     .getEntries()
-    .findLast((entry) => !preserveTrailing(entry));
+    .findLast((entry) => !preserveTrailingTranscriptMetadata(entry));
   // New guarded writes omit the signal. Retain cleanup for an already-persisted legacy error.
   const hasPersistedError =
     persistedTail?.type === "message" && isMidTurnPrecheckAssistantError(persistedTail.message);
@@ -44,7 +37,7 @@ export async function removeTrailingMidTurnPrecheckAssistantError(params: {
     (await params.sessionManager.removeTrailingEntriesAsync(
       (entry) => entry.type === "message" && isMidTurnPrecheckAssistantError(entry.message),
       {
-        preserveTrailing,
+        preserveTrailing: preserveTrailingTranscriptMetadata,
       },
     )) > 0;
   if (removedActiveError) {
@@ -68,7 +61,7 @@ export async function normalizeCompactionRecoveryTranscriptTail(params: {
   // back to a continuation. AgentCore rejects assistant tails before providers run.
   const removedEntries = await params.sessionManager.removeTrailingEntriesAsync(
     (entry) => entry.type === "message" && !canContinueFromMessage(entry.message),
-    { preserveTrailing },
+    { preserveTrailing: preserveTrailingTranscriptMetadata },
   );
   params.activeSession.agent.state.messages =
     removedEntries > 0

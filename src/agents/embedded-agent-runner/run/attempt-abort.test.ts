@@ -15,7 +15,7 @@ const mocks = vi.hoisted(() => ({
   markActiveEmbeddedRunAbandoned: vi.fn(),
 }));
 
-vi.mock("../../embedded-agent-subscribe.handlers.tools.js", () => ({
+vi.mock("../../embedded-agent-subscribe.handlers.tools.start.js", () => ({
   countActiveToolExecutions: mocks.countActiveToolExecutions,
 }));
 

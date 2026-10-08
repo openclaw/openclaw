@@ -13,11 +13,9 @@ import {
   handleMessageEnd,
 } from "./embedded-agent-subscribe.handlers.messages.lifecycle.js";
 import { handleMessageUpdate } from "./embedded-agent-subscribe.handlers.messages.update.js";
-import {
-  handleToolExecutionEnd,
-  handleToolExecutionStart,
-  handleToolExecutionUpdate,
-} from "./embedded-agent-subscribe.handlers.tools.js";
+import { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.completion.js";
+import { handleToolExecutionUpdate } from "./embedded-agent-subscribe.handlers.tools.progress.js";
+import { handleToolExecutionStart } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { recordEmbeddedToolTrajectoryEvent } from "./embedded-agent-subscribe.trajectory.js";
 import { prepareToolResult } from "./embedded-agent-tool-results.js";

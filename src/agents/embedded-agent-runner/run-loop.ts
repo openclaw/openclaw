@@ -229,9 +229,8 @@ export async function runPreparedEmbeddedLoop(
         effectiveModel,
         outerContextTokenMeta,
         lastProfileId,
-        thinkLevel: initialThinkLevel,
+        thinkLevel,
       } = attemptRuntimeSnapshot;
-      let thinkLevel = initialThinkLevel;
       if (isRunRetryBudgetExhausted(runRetryBudget)) {
         const message =
           `Exceeded retry limit after ${runRetryBudget.attemptsDispatched} attempts ` +
@@ -468,8 +467,7 @@ export async function runPreparedEmbeddedLoop(
         traceAttempts,
         suspensionSessionId: sessionPromptState.sessionId ?? params.sessionId,
       });
-      thinkLevel = assistantFailureOutcome.thinkLevel;
-      preparedRuntime.setThinkLevel(thinkLevel);
+      preparedRuntime.setThinkLevel(assistantFailureOutcome.thinkLevel);
       authRetryPending = assistantFailureOutcome.authRetryPending;
       emptyErrorRetries = assistantFailureOutcome.emptyErrorRetries;
       overloadProfileRotations = assistantFailureOutcome.overloadProfileRotations;
@@ -588,7 +586,7 @@ export async function runPreparedEmbeddedLoop(
         pluginHarnessOwnsTransport,
         pluginHarnessOwnsAuthBootstrap,
         traceAttempts,
-        thinkLevel,
+        thinkLevel: assistantFailureOutcome.thinkLevel,
         contextRecoveryState,
       });
       if (terminalResolution.action === "retry") {
