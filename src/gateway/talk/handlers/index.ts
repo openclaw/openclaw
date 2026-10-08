@@ -459,15 +459,11 @@ function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParams) {
         if (capabilities?.transports) {
           entry.transports = [...capabilities.transports];
         }
-        if (capabilities?.inputAudioFormats) {
-          entry.inputAudioFormats = capabilities.inputAudioFormats.map((format) => ({
-            ...format,
-          }));
-        }
-        if (capabilities?.outputAudioFormats) {
-          entry.outputAudioFormats = capabilities.outputAudioFormats.map((format) => ({
-            ...format,
-          }));
+        for (const key of ["inputAudioFormats", "outputAudioFormats"] as const) {
+          const formats = capabilities?.[key];
+          if (formats) {
+            entry[key] = formats.map((format) => Object.assign({}, format));
+          }
         }
         for (const key of [
           "supportsBargeIn",
@@ -896,19 +892,17 @@ export const talkHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      if ((result.provider ?? setup.provider).trim().length === 0) {
+      const invalidAudio =
+        (result.provider ?? setup.provider).trim().length === 0
+          ? "provider"
+          : result.audioBuffer.length === 0
+            ? "audio"
+            : undefined;
+      if (invalidAudio) {
         respond(
           false,
           undefined,
-          talkSpeakError("invalid_audio_result", "talk synthesis returned empty provider"),
-        );
-        return;
-      }
-      if (result.audioBuffer.length === 0) {
-        respond(
-          false,
-          undefined,
-          talkSpeakError("invalid_audio_result", "talk synthesis returned empty audio"),
+          talkSpeakError("invalid_audio_result", `talk synthesis returned empty ${invalidAudio}`),
         );
         return;
       }

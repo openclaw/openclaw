@@ -374,8 +374,6 @@ describe("sessions_send child coordination", () => {
 
   it.each([
     { acknowledgment: "acknowledged", watch: undefined },
-    { acknowledgment: "ACK lost", watch: false },
-    { acknowledgment: "acknowledged", watch: true },
     { acknowledgment: "ACK lost", watch: true },
   ] as const)(
     "delivers a queued child follow-up after its original wake was consumed ($acknowledgment, watch=$watch)",

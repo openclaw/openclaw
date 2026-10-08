@@ -93,6 +93,39 @@ serveOwnedWorkerTasks(
     const readRequest = async (): Promise<
       SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]
     > => {
+      if (request.kind === "transcript-search") {
+        if (!channel) {
+          throw new Error("Transcript search requires its host status channel");
+        }
+        const { searchSessionTranscriptsReadOnlySync, isSessionTranscriptSearchCurrentSync } =
+          await import("./session-transcript-search.js");
+        const options = {
+          ...request.database,
+          env: cloneEnvWithPlatformSemantics(request.params.env ?? process.env),
+        };
+        const { found, revision, ...result } = searchSessionTranscriptsReadOnlySync(
+          request.params,
+          options,
+        );
+        let indexing = false;
+        if (found) {
+          // Keep the connection in this task while the host checks its writer's status.
+          // A second pool request can run on another connection with an unrelated revision.
+          const status = await channel.request("transcript-index-status");
+          try {
+            if (typeof status.input !== "boolean") {
+              throw new Error("Invalid transcript search index status");
+            }
+            indexing =
+              status.input ||
+              revision === undefined ||
+              !isSessionTranscriptSearchCurrentSync(revision, options);
+          } finally {
+            status.consumed();
+          }
+        }
+        return { kind: request.kind, result: { ...result, indexing } };
+      }
       if (isSessionHistoryReadOperation(request)) {
         const execute = await prepareSessionHistoryReadOperation(request);
         return execute();

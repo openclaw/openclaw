@@ -243,27 +243,9 @@ public actor GatewayNodeSession {
 
         let channelGeneration: UInt64
         if shouldReconnect {
-            self.channel?.retireSocketAdmission()
-            let invalidatedAdmissionGeneration = self.admissionGeneration
-            self.channelGeneration &+= 1
-            self.admissionGeneration &+= 1
+            let detached = self.detachChannel(resetConnectionHistory: false)
             channelGeneration = self.channelGeneration
-            self.resetConnectionState()
-            let existing = self.channel
-            let previousOnRouteInvalidated = existing == nil ? nil : self.onRouteInvalidated
-            // Invalidate and detach synchronously. Every later connect/disconnect then waits
-            // on the same serialized teardown before it can install another route.
-            self.channel = nil
-            self.clearActiveRoute()
-            let teardown = if let existing {
-                self.enqueueRouteTeardown(
-                    channel: existing,
-                    admissionGeneration: invalidatedAdmissionGeneration,
-                    onRouteInvalidated: previousOnRouteInvalidated)
-            } else {
-                self.routeTeardownBarrier
-            }
-            await teardown?.value
+            await detached.teardown?.value
             // A newer connect or disconnect can run while teardown suspends. Never let the
             // superseded call install its endpoint or credentials afterward.
             guard self.channelGeneration == channelGeneration else { throw CancellationError() }
@@ -333,16 +315,32 @@ public actor GatewayNodeSession {
     }
 
     public func disconnect() async {
+        let detached = self.detachChannel(resetConnectionHistory: true)
+        if detached.channel != nil || !self.isExecutingLifecycleCallback() {
+            await detached.teardown?.value
+        }
+    }
+
+    private func detachChannel(
+        resetConnectionHistory: Bool) -> (channel: GatewayChannelActor?, teardown: Task<Void, Never>?)
+    {
         self.channel?.retireSocketAdmission()
         let invalidatedAdmissionGeneration = self.admissionGeneration
         self.channelGeneration &+= 1
         self.admissionGeneration &+= 1
+        if !resetConnectionHistory {
+            self.resetConnectionState()
+        }
         let channel = self.channel
         let onRouteInvalidated = channel == nil ? nil : self.onRouteInvalidated
+        // Invalidate and detach synchronously. Every later connect/disconnect then waits
+        // on the same serialized teardown before it can install another route.
         self.channel = nil
         self.clearActiveRoute()
-        self.hasEverConnected = false
-        self.resetConnectionState()
+        if resetConnectionHistory {
+            self.hasEverConnected = false
+            self.resetConnectionState()
+        }
         let teardown = if let channel {
             self.enqueueRouteTeardown(
                 channel: channel,
@@ -351,9 +349,7 @@ public actor GatewayNodeSession {
         } else {
             self.routeTeardownBarrier
         }
-        if channel != nil || !self.isExecutingLifecycleCallback() {
-            await teardown?.value
-        }
+        return (channel, teardown)
     }
 
     private func clearActiveRoute() {

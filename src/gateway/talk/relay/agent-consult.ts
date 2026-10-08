@@ -27,18 +27,15 @@ export function bindTalkRealtimeRelayAgentConsult(
       return await runner(request);
     };
   const steer = runPrompt.steer;
+  const claimForCurrentOwner = (claim: "claimAppend" | "claimFailureAppend") => {
+    const current = isCurrent();
+    const claimed = runPrompt[claim]();
+    return current && claimed;
+  };
   const lifecycleMethods = {
     adoptCompletionClaims: () => runPrompt.adoptCompletionClaims(),
-    claimAppend: () => {
-      const current = isCurrent();
-      const claimed = runPrompt.claimAppend();
-      return current && claimed;
-    },
-    claimFailureAppend: () => {
-      const current = isCurrent();
-      const claimed = runPrompt.claimFailureAppend();
-      return current && claimed;
-    },
+    claimAppend: () => claimForCurrentOwner("claimAppend"),
+    claimFailureAppend: () => claimForCurrentOwner("claimFailureAppend"),
     revokeRequesterFinal: () => runPrompt.revokeRequesterFinal?.(),
     ...(steer
       ? {

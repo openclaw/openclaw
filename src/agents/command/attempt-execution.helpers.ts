@@ -418,9 +418,8 @@ export function buildClaudeCliFallbackContextPrelude(params: {
 
 /** Creates an accumulator that strips ACP silent-reply prefixes while streaming. */
 export function createAcpVisibleTextAccumulator() {
-  let pendingSilentPrefix = "";
   let visibleText = "";
-  let rawVisibleText = "";
+  let rawText = "";
   const resolveNextCandidate = (base: string, chunk: string): string => {
     if (!base) {
       return chunk;
@@ -445,33 +444,30 @@ export function createAcpVisibleTextAccumulator() {
       }
 
       if (!visibleText) {
-        const leadCandidate = resolveNextCandidate(pendingSilentPrefix, chunk);
+        const leadCandidate = resolveNextCandidate(rawText, chunk);
+        rawText = leadCandidate;
         const trimmedLeadCandidate = leadCandidate.trim();
         if (
           isSilentReplyText(trimmedLeadCandidate, SILENT_REPLY_TOKEN) ||
           isSilentReplyPrefixText(trimmedLeadCandidate, SILENT_REPLY_TOKEN)
         ) {
-          pendingSilentPrefix = leadCandidate;
           return null;
         }
         const text = startsWithSilentToken(trimmedLeadCandidate, SILENT_REPLY_TOKEN)
           ? stripLeadingSilentToken(leadCandidate, SILENT_REPLY_TOKEN)
           : leadCandidate;
         if (!text) {
-          pendingSilentPrefix = leadCandidate;
           return null;
         }
-        pendingSilentPrefix = "";
-        rawVisibleText = leadCandidate;
         visibleText = text;
         return { text, delta: text };
       }
 
       const delta =
-        chunk.startsWith(rawVisibleText) && chunk.length > rawVisibleText.length
-          ? chunk.slice(rawVisibleText.length)
+        chunk.startsWith(rawText) && chunk.length > rawText.length
+          ? chunk.slice(rawText.length)
           : chunk;
-      rawVisibleText += delta;
+      rawText += delta;
       visibleText += delta;
       return { text: visibleText, delta };
     },
@@ -484,7 +480,7 @@ export function createAcpVisibleTextAccumulator() {
     finalizeReplySnapshot(): AgentRunTerminalReplySnapshot {
       return buildAgentRunTerminalReplySnapshot({
         visibleText,
-        rawText: pendingSilentPrefix,
+        rawText: visibleText ? "" : rawText,
       });
     },
   };

@@ -232,6 +232,12 @@ async function readIncrementalChatHistoryTailAttempt(params: {
   offset?: number;
   beforeSeq?: number;
   preserveProjectionContext?: boolean;
+  isPageFull?: (
+    projection: Pick<
+      ReturnType<typeof projectChatDisplayMessagesWithState>,
+      "messages" | "activity"
+    >,
+  ) => boolean;
   readMessageSequence?: (message: unknown) => number | undefined;
   readOnly?: boolean;
   deferProfileDisplay?: boolean;
@@ -383,19 +389,27 @@ async function readIncrementalChatHistoryTailAttempt(params: {
     return project();
   };
   let result = await projectWindow();
-  let estimatedVisibleMessages = result.projected.length;
+  let estimatedProjection: Pick<typeof result.projection, "messages" | "activity"> =
+    result.projection;
   let projectionDirty = false;
   let scanLimit = rawHistoryWindowMessages;
   let scannedBytes = 0;
   const unmeasuredPages: unknown[][] = [];
   let nextChunkMessages = SILENT_CHAT_HISTORY_TAIL_SCAN_CHUNK_MESSAGES;
   while (rawPageMessages < availableMessages) {
-    if (projectionDirty && estimatedVisibleMessages >= params.max) {
+    if (
+      projectionDirty &&
+      (estimatedProjection.messages.length >= params.max ||
+        params.isPageFull?.(estimatedProjection))
+    ) {
       result = await projectWindow();
       projectionDirty = false;
-      estimatedVisibleMessages = result.projected.length;
+      estimatedProjection = result.projection;
     }
-    if (result.projected.length >= params.max) {
+    if (
+      result.projected.length >= params.max ||
+      (!projectionDirty && params.isPageFull?.(result.projection))
+    ) {
       break;
     }
     if (rawPageMessages >= rawHistoryWindowMessages) {
@@ -433,9 +447,12 @@ async function readIncrementalChatHistoryTailAttempt(params: {
     rawPageMessages += chunkRawMessages.length;
     rawMessages = chunkRawMessages.concat(rawMessages);
     overreadContextMessage = contextMessage;
-    // Count fresh rows once; the authoritative whole-window projection preserves cross-chunk facts.
-    estimatedVisibleMessages += project(chunkRawMessages, contextMessage, false, []).projection
-      .messages.length;
+    // Estimate with fresh rows; only the whole-window projection can finish the page.
+    const chunkProjection = project(chunkRawMessages, contextMessage, false, []).projection;
+    estimatedProjection = {
+      messages: chunkProjection.messages.concat(estimatedProjection.messages),
+      activity: chunkProjection.activity.concat(estimatedProjection.activity),
+    };
     projectionDirty = true;
     unmeasuredPages.push(page.messages);
     if (rawPageMessages > rawHistoryWindowMessages) {

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -16,6 +17,7 @@ import { resolveAdmittedRunSessionFile } from "./agent-runner-core.js";
 import { buildPreflightCompactionFailureText } from "./agent-runner-failure-reply.js";
 import { runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
 import {
+  resolveFollowupCurrentMessageId,
   resolveQueuedReplyExecutionConfig,
   resolveQueuedReplyRuntimeConfig,
 } from "./agent-runner-utils.js";
@@ -81,13 +83,6 @@ type FollowupAdmissionResult =
       reason: "aborted" | "lifecycle-invalidated";
       operation?: ReplyOperation;
     };
-
-function resolveFollowupCurrentMessageId(queued: FollowupRun): string | undefined {
-  return queued.run.inputProvenance?.kind === "internal_system" &&
-    queued.run.inputProvenance.sourceTool === "restart-sentinel"
-    ? queued.originatingReplyToId
-    : queued.messageId;
-}
 
 function isSameSessionGeneration(
   left: SessionEntry | undefined,
@@ -425,9 +420,11 @@ export async function admitFollowupTurn(params: {
         turn.queued.run.verboseLevelOverride ??
         session.current()?.verboseLevel ??
         turn.queued.run.verboseLevel;
-      const text = buildPreflightCompactionFailureText(formatErrorMessage(error), {
-        includeDetails: admittedVerboseLevel === "on" || admittedVerboseLevel === "full",
-      });
+      const text =
+        renderAgentHarnessPreflightUserMessage(error) ??
+        buildPreflightCompactionFailureText(formatErrorMessage(error), {
+          includeDetails: admittedVerboseLevel === "on" || admittedVerboseLevel === "full",
+        });
       if (!text) {
         turn.preflightError = error;
       } else {

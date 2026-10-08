@@ -332,14 +332,9 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
             "Discord active thread lists require a wildcard channel allowlist so each read target can be authorized.",
         });
       }
+      const query = { guildId, channelId, includeArchived, before, limit };
       const response = await discordMessagingActionRuntime.listThreadsDiscord(
-        {
-          guildId,
-          channelId,
-          includeArchived,
-          before,
-          limit,
-        },
+        query,
         ctx.withOpts(),
       );
       // Discord's active-thread endpoint is guild-wide even when the caller
@@ -351,11 +346,8 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       return jsonResult(
         normalizeDiscordThreadListActionResult({
           value: threads,
-          guildId,
-          channelId,
+          ...query,
           includeArchived: includeArchived === true,
-          before,
-          limit,
         }),
       );
     }

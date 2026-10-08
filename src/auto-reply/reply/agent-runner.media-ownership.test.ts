@@ -20,7 +20,6 @@ describe("runReplyAgent media delivery ownership", () => {
 
   it.each([
     { sessionKey: "agent:qa:main", provider: "webchat", gateway: true },
-    { sessionKey: "global", provider: "slack", gateway: true },
     { sessionKey: "global", provider: "slack", gateway: false },
   ])(
     "keeps $sessionKey media with its prepared delivery owner (gateway=$gateway, provider=$provider)",

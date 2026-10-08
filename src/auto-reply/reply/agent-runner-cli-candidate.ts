@@ -262,22 +262,7 @@ export async function runCliFallbackCandidate(
                 }
               : undefined,
           preserveProgressCallbackStartOrder: params.preserveProgressCallbackStartOrder,
-          onAssistantText: async (text) => {
-            const classified = params.presentation.classifyStreamingPartial({ text });
-            if (classified.skip || !classified.text) {
-              return;
-            }
-            const textForTyping = classified.text;
-            const sanitized = params.presentation.sanitizeStreamingText(textForTyping, false);
-            const onPartialReply = turn.opts?.onPartialReply;
-            return await params.presentation.presentWithTyping(
-              turn.typingSignals.signalTextDelta(textForTyping),
-              () =>
-                sanitized.skip || !sanitized.text || !onPartialReply
-                  ? false
-                  : onPartialReply({ text: sanitized.text }),
-            );
-          },
+          onAssistantText: (text) => params.presentation.presentPartialReply({ text }, "cli"),
           onCompletedReply: async (text, assistantMessageIndex) => {
             params.runAbortSignal?.throwIfAborted();
             assertSettlementCurrent();
@@ -433,7 +418,6 @@ export async function runCliFallbackCandidate(
             replyToMode: cliReplyToMode,
             currentInboundAudio: hasInboundAudio(turn.sessionCtx),
             agentAccountId: turn.followupRun.run.agentAccountId,
-            skillWorkshopProposalRevision: params.candidateRun.skillWorkshopProposalRevision,
             skillLibraryAuthoring: params.candidateRun.skillLibraryAuthoring,
             toolAuthorityFingerprint,
             // Native input is already host-authored. Keep its stable delivery

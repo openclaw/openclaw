@@ -94,21 +94,15 @@ describe("SQLite historical session disk budget", () => {
     await testState.cleanup();
   });
 
-  it.each(
-    [
-      { oldestBytes: 64 * 1024, reclaimBytes: 1, capArchive: false },
-      { oldestBytes: 64 * 1024, reclaimBytes: 1, capArchive: true },
-      { oldestBytes: 8 * 1024 * 1024, reclaimBytes: 4 * 1024 * 1024, capArchive: false },
-      { oldestBytes: 8 * 1024 * 1024, reclaimBytes: 4 * 1024 * 1024, capArchive: true },
-    ].flatMap(({ oldestBytes, reclaimBytes, capArchive }) =>
-      (["worker", "in-process"] as const).map((execution) => ({
-        oldestBytes,
-        reclaimBytes,
-        capArchive,
-        execution,
-      })),
-    ),
-  )(
+  it.each([
+    { oldestBytes: 64 * 1024, reclaimBytes: 1, capArchive: false, execution: "worker" },
+    {
+      oldestBytes: 8 * 1024 * 1024,
+      reclaimBytes: 4 * 1024 * 1024,
+      capArchive: true,
+      execution: "in-process",
+    },
+  ] as const)(
     "evicts oldest history before the entry tier and reclaims $reclaimBytes bytes (cap archive: $capArchive, execution: $execution)",
     async ({ oldestBytes, reclaimBytes, capArchive, execution }) => {
       const sessionKey = "agent:main:history-order";

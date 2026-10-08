@@ -249,6 +249,10 @@ export function withSynchronousArtifactPreservingStateSnapshot<T>(
     const pathname = resolveReadOnlyPath(options.current);
     const inherited = synchronousReadSnapshots.current;
     const inheritedAuthority = synchronousReadSnapshots.currentAuthorityPath;
+    if (inherited && inheritedAuthority === pathname) {
+      // A composite assertion already selected fresh bytes for this database.
+      return operation();
+    }
     return stateSnapshotReads.exit(() => {
       synchronousReadSnapshots.current = undefined;
       synchronousReadSnapshots.currentAuthorityPath = pathname;

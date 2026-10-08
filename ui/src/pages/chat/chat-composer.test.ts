@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
+import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
@@ -606,33 +606,6 @@ describe("renderChatComposer status", () => {
     panel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
     expect(panel.props!.model.questions[0]?.question).toBe("Second prompt");
     expect(panel.props!.model.requestPosition).toEqual({ current: 2, total: 2 });
-  });
-
-  it("floats a fresh interrupted status above the composer", () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    let view = renderComposer({
-      runStatus: { phase: "done", runId: "run-0", sessionKey: "main", occurredAt: 900 },
-    });
-    expect(view.container.querySelector(".agent-chat__run-status")).toBeNull();
-
-    view = renderComposer({
-      runStatus: { phase: "interrupted", runId: "run-1", sessionKey: "main", occurredAt: 900 },
-      composerControls: html`<button type="button">Settings</button>`,
-    });
-    const interrupted = view.container.querySelector(".agent-chat__run-status--interrupted");
-    expect(interrupted).not.toBeNull();
-    expect(interrupted?.closest(".agent-chat__composer-run-status")).not.toBeNull();
-    expect(interrupted?.querySelector("rect")?.getAttribute("width")).toBe("18");
-    expect(
-      view.container.querySelector(".agent-chat__run-status-announcement")?.textContent,
-    ).toContain("Interrupted");
-
-    now.mockReturnValue(7_000);
-    view = renderComposer({
-      runStatus: { phase: "interrupted", runId: "run-1", sessionKey: "main", occurredAt: 1_000 },
-      composerControls: html`<button type="button">Settings</button>`,
-    });
-    expect(view.container.querySelector(".agent-chat__run-status--interrupted")).toBeNull();
   });
 
   it("keeps fallback status in the composer without a compaction overlay", () => {

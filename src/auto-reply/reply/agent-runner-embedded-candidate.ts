@@ -14,7 +14,6 @@ import {
   isMarkdownCapableMessageChannel,
   resolveMessageChannel,
 } from "../../utils/message-channel.js";
-import type { PartialReplyPayload } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../types.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveTerminalReplyDelivery } from "./agent-runner-core.js";
@@ -194,31 +193,7 @@ export async function runEmbeddedFallbackCandidate(
         blockReplyBreak: turn.resolvedBlockStreamingBreak,
         blockReplyChunking: turn.blockReplyChunking,
         // Subscriber callbacks are detached. Stage channel presentation before typing I/O.
-        onPartialReply: async (payload) => {
-          const classified = params.presentation.classifyStreamingPartial(payload);
-          if (classified.skip || !classified.text) {
-            return false;
-          }
-          const textForTyping = classified.text;
-          let didMaterialize = false;
-          let materializedText: string | undefined;
-          const partialPayload: PartialReplyPayload = {
-            get text() {
-              if (!didMaterialize) {
-                const sanitized = params.presentation.sanitizeStreamingText(textForTyping, false);
-                materializedText = sanitized.skip ? undefined : sanitized.text;
-                didMaterialize = true;
-              }
-              return materializedText;
-            },
-            mediaUrls: payload.mediaUrls,
-          };
-          const onPartialReply = turn.opts?.onPartialReply;
-          return await params.presentation.presentWithTyping(
-            turn.typingSignals.signalTextDelta(textForTyping),
-            () => (onPartialReply ? onPartialReply(partialPayload) : false),
-          );
-        },
+        onPartialReply: (payload) => params.presentation.presentPartialReply(payload, "embedded"),
         onAssistantMessageStart: async () => {
           await params.presentation.presentWithTyping(turn.typingSignals.signalMessageStart(), () =>
             turn.opts?.onAssistantMessageStart?.(),

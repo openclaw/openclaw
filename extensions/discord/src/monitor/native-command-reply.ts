@@ -163,9 +163,8 @@ export async function deliverDiscordInteractionReply(params: {
       ...(params.responseEphemeral !== undefined ? { ephemeral: params.responseEphemeral } : {}),
       ...(files?.length ? { files } : {}),
     };
-    let result: void | null;
     try {
-      result = await safeDiscordInteractionCall("interaction send", async () => {
+      const result = await safeDiscordInteractionCall("interaction send", async () => {
         const sent =
           !preferFollowUp && !payloadDelivered
             ? await interaction.reply(payloadLocal)
@@ -184,23 +183,18 @@ export async function deliverDiscordInteractionReply(params: {
           });
         }
       });
+      if (result === null) {
+        throw new PlatformMessageNotDispatchedError(
+          "Discord interaction expired before message dispatch",
+          { cause: new Error("Unknown interaction") },
+        );
+      }
     } catch (error) {
       if (!payloadDelivered) {
         throw error;
       }
       throw createChannelPartialDeliveryError(error, { visibleReplySent: true });
     }
-    if (result !== null) {
-      return;
-    }
-    const expiry = new PlatformMessageNotDispatchedError(
-      "Discord interaction expired before message dispatch",
-      { cause: new Error("Unknown interaction") },
-    );
-    if (!payloadDelivered) {
-      throw expiry;
-    }
-    throw createChannelPartialDeliveryError(expiry, { visibleReplySent: true });
   };
 
   const files = reply.hasMedia

@@ -27,6 +27,7 @@ import { matchesWorkerPlacementTarget } from "./placement-target.js";
 import { ActiveTurnClaimError } from "./placement-turn-claims.js";
 import { findPendingWorkerWorkspaceResult } from "./placement-workspace-result.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
+import type { WorkerPlacementRedispatch } from "./service-contract.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import {
   WorkerRunnerCapacityError,
@@ -61,11 +62,6 @@ const loadPlacementSandbox = createLazyRuntimeModule(() => import("./placement-s
 
 class WorkerRuntimeRefreshInFlightError extends Error {}
 
-type RedispatchableWorkerPlacement = Extract<
-  WorkerSessionPlacementRecord,
-  { state: "reclaimed" | "failed" }
->;
-
 type WorkerTurnLauncherOptions = {
   environments: WorkerTurnEnvironmentService;
   placements: WorkerSessionPlacementStore;
@@ -84,10 +80,7 @@ type WorkerTurnLauncherOptions = {
     placement: WorkerSessionPlacementRecord,
     signal?: AbortSignal,
   ) => Promise<WorkerSessionPlacementRecord>;
-  redispatchPlacement: (
-    placement: RedispatchableWorkerPlacement,
-    options: { assertCurrent: () => void; signal?: AbortSignal },
-  ) => Promise<ActiveWorkerPlacement>;
+  redispatchPlacement: WorkerPlacementRedispatch;
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 };

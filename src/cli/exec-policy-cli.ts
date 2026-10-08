@@ -279,25 +279,19 @@ function buildExecPolicyShowScope(snapshot: ExecPolicyScopeSnapshot) {
       runtimeApprovalsSource: "local-file" as const,
     };
   }
+  const nodeManagedPolicy = (field: "security" | "ask") => ({
+    requested: snapshot[field].requested,
+    requestedSource: snapshot[field].requestedSource,
+    host: "unknown" as const,
+    hostSource: "node runtime approvals",
+    effective: "unknown" as const,
+    note: "runtime policy resolved by node approvals",
+  });
   return {
     ...baseScope,
     runtimeApprovalsSource: "node-runtime" as const,
-    security: {
-      requested: snapshot.security.requested,
-      requestedSource: snapshot.security.requestedSource,
-      host: "unknown" as const,
-      hostSource: "node runtime approvals",
-      effective: "unknown" as const,
-      note: "runtime policy resolved by node approvals",
-    },
-    ask: {
-      requested: snapshot.ask.requested,
-      requestedSource: snapshot.ask.requestedSource,
-      host: "unknown" as const,
-      hostSource: "node runtime approvals",
-      effective: "unknown" as const,
-      note: "runtime policy resolved by node approvals",
-    },
+    security: nodeManagedPolicy("security"),
+    ask: nodeManagedPolicy("ask"),
     askFallback: {
       effective: "unknown" as const,
       source: "node runtime approvals",

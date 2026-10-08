@@ -271,7 +271,6 @@ suite.define(() => {
           },
         );
         await page.reload();
-        await enterControlUiSession(page);
         await waitForControlUiGatewayReady(page);
         const fileCard = page
           .locator(".chat-assistant-attachment-card")

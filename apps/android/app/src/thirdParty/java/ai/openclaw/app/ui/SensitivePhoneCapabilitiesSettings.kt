@@ -53,37 +53,26 @@ internal fun FlavorPhoneCapabilitiesSettings(viewModel: MainViewModel) {
   )
 
   if (showDisclosure) {
-    AccessibilityControlDisclosureDialog(
+    AppConfirmationDialog(
       onDismiss = { showDisclosure = false },
-      onAgree = {
+      title = nativeString("Allow control of other apps?"),
+      confirmLabel = nativeString("Enable and Open Settings"),
+      dismissLabel = nativeString("Not Now"),
+      onConfirm = {
         showDisclosure = false
         viewModel.setAccessibilityControlEnabled(true)
         AccessibilityComponentController(context).setEnabled(true)
         context.startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
       },
+      text = {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+          Text(
+            nativeString(
+              "Enabling lets OpenClaw observe and control other apps' screens when armed. Android accessibility access is required.",
+            ),
+          )
+        }
+      },
     )
   }
-}
-
-@Composable
-private fun AccessibilityControlDisclosureDialog(
-  onDismiss: () -> Unit,
-  onAgree: () -> Unit,
-) {
-  AppConfirmationDialog(
-    onDismiss = onDismiss,
-    title = nativeString("Allow control of other apps?"),
-    confirmLabel = nativeString("Enable and Open Settings"),
-    dismissLabel = nativeString("Not Now"),
-    onConfirm = onAgree,
-    text = {
-      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(
-          nativeString(
-            "Enabling lets OpenClaw observe and control other apps' screens when armed. Android accessibility access is required.",
-          ),
-        )
-      }
-    },
-  )
 }

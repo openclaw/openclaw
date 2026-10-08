@@ -1,7 +1,8 @@
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { beforeAll, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../gateway/server-instance-runtime.types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import * as sessionAdmission from "../sessions/session-lifecycle-admission.js";
@@ -30,6 +31,201 @@ const {
 } = compactionTestRuntime;
 
 registerAgentCommandCompactionTestHooks();
+
+let persistGatewaySessionLifecycleEvent: typeof import("../gateway/session-lifecycle-state.js").persistGatewaySessionLifecycleEvent;
+
+beforeAll(async () => {
+  ({ persistGatewaySessionLifecycleEvent } = await import("../gateway/session-lifecycle-state.js"));
+});
+
+it.each([
+  "stopped",
+  "replaced session",
+  "replaced claim",
+  "newer outcome",
+  "restart handoff",
+  "pending delivery",
+  "new execution",
+  "new generation",
+] as const)("settles only the stopped command's unowned claim: %s", async (scenario) => {
+  const sessionKey = "agent:main:main";
+  const sessionId = "stopped-command-session";
+  const runId = "stopped-command";
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const target = { agentId: "main", sessionKey, storePath: requireCompactionStorePath() };
+  const receipt = { runId: "completed-source", captured: true as const };
+  const entry: SessionEntry = {
+    sessionId,
+    updatedAt: 100,
+    startedAt: 100,
+    lifecycleRunId: runId,
+    restartRecoveryDeliveryRunId: runId,
+    restartRecoveryDeliverySourceRunId: runId,
+    restartRecoverySourceIngress: "control-ui",
+    restartRecoveryRuns: [{ runId, lifecycleGeneration }],
+    restartRecoveryTerminalRunIds: [receipt.runId],
+    restartRecoveryTerminalDeliveryEvidence: [receipt],
+  };
+  await replaceSessionEntry(target, entry);
+  await persistGatewaySessionLifecycleEvent({
+    sessionKey,
+    event: {
+      runId,
+      sessionId,
+      lifecycleGeneration,
+      ts: 200,
+      data: { phase: "end", aborted: true, stopReason: "rpc" },
+    },
+  });
+  const stopped = loadSessionEntry(target);
+  expect(stopped).toMatchObject({ status: "killed", abortedLastRun: true, lastRunId: runId });
+  expect(stopped?.restartRecoveryRuns).toBeUndefined();
+  const changes: Partial<SessionEntry> =
+    scenario === "replaced session"
+      ? { sessionId: "replacement-session" }
+      : scenario === "replaced claim"
+        ? { restartRecoveryDeliveryRunId: "replacement-run" }
+        : scenario === "newer outcome"
+          ? { lastRunId: "replacement-run" }
+          : scenario === "restart handoff"
+            ? { mainRestartRecovery: { cycleId: "restart-cycle", revision: 1, chargedAttempts: 0 } }
+            : scenario === "pending delivery"
+              ? {
+                  pendingFinalDelivery: {
+                    kind: "transport-only",
+                    createdAt: 200,
+                    intentId: "pending-final",
+                    context: { channel: "discord", to: "discord:dm:123" },
+                    deliveries: [{ id: "uncertain-delivery", state: "unknown" }],
+                  },
+                }
+              : scenario === "new execution"
+                ? { restartRecoveryRuns: [{ runId: "next-run", lifecycleGeneration }] }
+                : {};
+  await compactionTestRuntime.patchSessionEntryCore(target, () => changes);
+  const beforeCleanup = loadSessionEntry(target);
+  if (scenario === "new generation") {
+    rotateAgentEventLifecycleGeneration();
+  }
+  await finishAgentCommandCleanup({
+    prepared: {
+      ...target,
+      sessionAgentId: target.agentId,
+      runId,
+      sessionStore: { [sessionKey]: entry },
+    },
+    sessionEntry: entry,
+    runOwnedSessionId: sessionId,
+    sessionReboundDuringRun: false,
+    trackedRestartRecoveryDeliveryClaim: true,
+    terminalEvent: { data: { phase: "end", aborted: true, stopReason: "rpc" } },
+    lifecycleGeneration,
+    beforeTerminalDelivery: undefined,
+    reportCommitted: () => {},
+    preparedRunAdmission: undefined,
+    sessionWorkAdmission: undefined,
+    cleanupInternalModelRunTargets: async () => {},
+    releaseForeground: undefined,
+  });
+  const settled = loadSessionEntry(target);
+  if (scenario !== "stopped") {
+    expect(settled).toEqual(beforeCleanup);
+    return;
+  }
+  expect(settled).toMatchObject({
+    status: "killed",
+    abortedLastRun: true,
+    lastRunId: runId,
+    restartRecoveryTerminalRunIds: [receipt.runId, runId],
+    restartRecoveryTerminalDeliveryEvidence: [receipt],
+  });
+  expect(settled?.restartRecoveryDeliveryRunId).toBeUndefined();
+  expect(settled?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+});
+
+it("preserves a stopped source claim when generation retires before post-run persistence", async () => {
+  const sessionKey = "agent:main:main";
+  const sessionId = "stopped-post-run-session";
+  const runId = "stopped-post-run";
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const target = { agentId: "main", sessionKey, storePath: requireCompactionStorePath() };
+  await replaceSessionEntry(target, { sessionId, updatedAt: 100 });
+  state.runAgentAttemptMock.mockResolvedValue(
+    makeCompactionResult({ sessionId, text: "Completed before Stop", runner: "embedded" }),
+  );
+  const controller = new AbortController();
+  let deliverySettled = false;
+  let generationRetired = false;
+  state.deliverAgentCommandResultMock.mockImplementationOnce(async () => {
+    expect(loadSessionEntry(target)?.restartRecoveryDeliveryRunId).toBe(runId);
+    await persistGatewaySessionLifecycleEvent({
+      sessionKey,
+      event: {
+        runId,
+        sessionId,
+        lifecycleGeneration,
+        ts: Date.now(),
+        data: { phase: "end", aborted: true, stopReason: "rpc" },
+      },
+    });
+    controller.abort();
+    deliverySettled = true;
+    return { deliverySucceeded: true };
+  });
+  const patch = sessionAccessor.patchSessionEntryCore;
+  using _ = vi
+    .spyOn(sessionAccessor, "patchSessionEntryCore")
+    .mockImplementation((scope, update, options) => {
+      if (deliverySettled && !generationRetired && options?.workerGuard?.source) {
+        generationRetired = true;
+        rotateAgentEventLifecycleGeneration();
+      }
+      return patch(scope, update, options);
+    });
+  await expect(
+    agentCommandFromGatewayIngress(
+      {
+        sessionKey,
+        sessionId,
+        runId,
+        message: "Finish this turn",
+        allowModelOverride: false,
+        abortSignal: controller.signal,
+        operatorAuthority: createAdmittedRunOperatorAuthority({
+          profileId: "synthetic-operator",
+          scopes: ["operator.admin"],
+          recoverySnapshot: {
+            profileId: "synthetic-operator",
+            scopes: ["operator.admin"],
+            assignedRole: null,
+            githubLogin: null,
+            grant: null,
+            aliasBindingIds: [],
+            authPolicy: {
+              generation: "",
+              grantGeneration: "synthetic-generation",
+              role: "operator",
+              authMethod: "token",
+            },
+            controlUiAdmin: true,
+            localOperator: true,
+            sourceIngress: "control-ui",
+          },
+          assertCurrent() {},
+        }),
+      },
+      ...GATEWAY_INGRESS_ARGS,
+    ),
+  ).rejects.toThrow("stale gateway lifecycle");
+  expect(generationRetired).toBe(true);
+  expect(loadSessionEntry(target)).toMatchObject({
+    status: "killed",
+    abortedLastRun: true,
+    restartRecoveryDeliveryRunId: runId,
+    restartRecoveryDeliverySourceRunId: runId,
+  });
+  expect(loadSessionEntry(target)?.restartRecoveryTerminalRunIds ?? []).not.toContain(runId);
+});
 
 it.each([false, true])(
   "queues image follow-up and revalidates session replacement=%s",

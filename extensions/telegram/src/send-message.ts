@@ -206,7 +206,7 @@ export async function sendMessageTelegram(
       }
       return receipt;
     };
-    const { sendChunkedText } = createTelegramTextSender({
+    const sendChunkedText = createTelegramTextSender({
       cfg,
       ownerAgentId,
       account,
@@ -246,9 +246,8 @@ export async function sendMessageTelegram(
           sendLogger.warn(
             `Photo dimensions (${width}x${height}) are not valid for Telegram photos. Sending as document instead.`,
           );
-          return false;
         }
-        return true;
+        return isValidPhoto;
       } catch (err) {
         sendLogger.warn(
           `Failed to validate photo dimensions: ${formatErrorMessage(err)}. Sending as document instead.`,
@@ -449,7 +448,6 @@ export async function sendMessageTelegram(
         {
           partialDeliveryResult: () => ({
             receipt: buildMediaReceipt(),
-            visibleReplySent: true,
           }),
         },
       );
@@ -566,7 +564,6 @@ export async function sendMessageTelegram(
         opts.promptContextProjectionPlan?.cursor.invalidate();
         return sender.fail(error, 0, {
           receipt: buildMediaReceipt(),
-          visibleReplySent: true,
         });
       }
     }

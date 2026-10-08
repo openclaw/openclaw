@@ -1,7 +1,7 @@
 // Covers the SQLite WAL-reset corruption safety floor.
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync, type StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import type { setEnvironmentData } from "node:worker_threads";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -25,11 +25,17 @@ async function loadNodeSqliteWithVersion(version: string, extensionLoadingOmitte
   ) {
     if (
       sql ===
-      "SELECT sqlite_version() AS version, sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted"
+        "SELECT sqlite_version() AS version, sqlite_compileoption_used('OMIT_LOAD_EXTENSION') AS omitted" ||
+      sql === "SELECT sqlite_version() AS version"
     ) {
-      return {
-        get: () => ({ version, omitted: extensionLoadingOmitted ?? 0 }),
-      } as unknown as StatementSync;
+      const statement = originalPrepare.call(this, sql);
+      const capabilities = statement.get();
+      vi.spyOn(statement, "get").mockReturnValue({
+        ...capabilities,
+        version,
+        ...(extensionLoadingOmitted === undefined ? {} : { omitted: extensionLoadingOmitted }),
+      });
+      return statement;
     }
     return originalPrepare.call(this, sql);
   });
@@ -112,8 +118,9 @@ describe("node SQLite locations", () => {
   });
 
   it("opens special locations through the shared connection boundary", () => {
-    const database = openNodeSqliteDatabase(":memory:");
+    const database = openNodeSqliteDatabase(":memory:", { timeout: 5000 });
     try {
+      expect(database.prepare("PRAGMA busy_timeout").get()).toEqual({ timeout: 5000 });
       const identity = " a\0🦞 ";
       expect(database.prepare("SELECT CAST(? AS TEXT) AS identity").get(identity)).toEqual({
         identity,
@@ -208,23 +215,37 @@ describe("node SQLite safety", () => {
   );
 
   it.each([
-    { version: "3.51.3", jsonb: true },
-    { version: "3.52.0", jsonb: true },
-    { version: "4.0.0", jsonb: true },
-    { version: "3.50.7", jsonb: true },
-    { version: "3.44.6", jsonb: false },
-    { version: "3.44.7", jsonb: false },
+    { version: "3.51.3", jsonb: true, walNoop: false },
+    { version: "3.52.0", jsonb: true, walNoop: false },
+    { version: "3.53.0", jsonb: true, walNoop: true },
+    { version: "4.0.0", jsonb: true, walNoop: true },
+    { version: "3.50.7", jsonb: true, walNoop: false },
+    { version: "3.44.6", jsonb: false, walNoop: false },
+    { version: "3.44.7", jsonb: false, walNoop: false },
   ])(
-    "accepts patched SQLite $version and reuses its JSONB capability",
-    async ({ version, jsonb }) => {
+    "accepts patched SQLite $version and reuses its JSONB and WAL capabilities",
+    async ({ version, jsonb, walNoop }) => {
       const { requireNodeSqlite, supportsNodeSqliteJsonb, prepare } =
         await loadNodeSqliteWithVersion(version);
+      const { readSqliteWalState } = await import("./sqlite-wal-checkpoint.js");
       expect(() => requireNodeSqlite()).not.toThrow();
       const queries = prepare.mock.calls.length;
       expect(queries).toBe(1);
       expect(supportsNodeSqliteJsonb()).toBe(jsonb);
       expect(supportsNodeSqliteJsonb()).toBe(jsonb);
       expect(prepare.mock.calls).toHaveLength(queries);
+      const database = new DatabaseSync(":memory:");
+      try {
+        for (let observation = 0; observation < 2; observation++) {
+          expect(readSqliteWalState(database) !== undefined).toBe(walNoop);
+        }
+        // WAL state remains fresh; only the already-admitted library capability is reused.
+        expect(prepare.mock.calls.slice(queries).map(([sql]) => sql)).toEqual(
+          walNoop ? ["PRAGMA main.wal_checkpoint(NOOP)", "PRAGMA main.wal_checkpoint(NOOP)"] : [],
+        );
+      } finally {
+        database.close();
+      }
     },
   );
 
@@ -304,6 +325,7 @@ describe("node SQLite safety", () => {
       const worker = await loadNodeSqliteWithVersion("3.53.4", 0);
       expect(worker.supportsNodeSqliteJsonb()).toBe(changed !== "unchanged");
       expect(worker.supportsNodeSqliteExtensionLoading()).toBe(changed !== "unchanged");
+      expect(worker.supportsNodeSqliteWalCheckpointNoop()).toBe(changed !== "unchanged");
       if (changed === "unchanged") {
         expect(worker.prepare).not.toHaveBeenCalled();
       } else {

@@ -50,15 +50,12 @@ export function resetDirectoryCache(params?: {
   }
   const channelKey = params.channel;
   const accountKey = params.accountId ?? "default";
-  directoryCache.clearMatching((key) => {
-    if (!key.startsWith(`${channelKey}:`)) {
-      return false;
-    }
-    if (!params.accountId) {
-      return true;
-    }
-    return key.startsWith(`${channelKey}:${accountKey}:`);
-  }, params.cfg);
+  directoryCache.clearMatching(
+    (key) =>
+      key.startsWith(`${channelKey}:`) &&
+      (!params.accountId || key.startsWith(`${channelKey}:${accountKey}:`)),
+    params.cfg,
+  );
 }
 
 function stripTargetPrefixes(value: string, channel?: ChannelId, plugin?: ChannelPlugin): string {
@@ -144,11 +141,8 @@ function detectTargetKind(
   if (inferredChatType === "direct") {
     return "user";
   }
-  if (inferredChatType === "channel") {
-    return "channel";
-  }
-  if (inferredChatType === "group") {
-    return "group";
+  if (inferredChatType === "channel" || inferredChatType === "group") {
+    return inferredChatType;
   }
 
   if (raw.startsWith("@") || /^<@!?/.test(raw) || /^user:/i.test(raw)) {

@@ -63,9 +63,7 @@ function matchesKnownSenderPrefix(prefix: string, ctx: MsgContext): boolean {
     ctx.SenderName && senderUsername ? `${ctx.SenderName} (@${senderUsername})` : undefined,
   ];
   return candidates.some(
-    (candidate) =>
-      typeof candidate === "string" &&
-      normalizeLowercaseStringOrEmpty(candidate) === normalizedPrefix,
+    (candidate) => normalizeLowercaseStringOrEmpty(candidate) === normalizedPrefix,
   );
 }
 
@@ -154,9 +152,6 @@ function isRecognizedCommandSuffix(
 }
 
 function resolveAnchoredResetPayload(params: AnchoredResetCommand): string | undefined {
-  if (params.source === "") {
-    return undefined;
-  }
   const messageStart = resolveExplicitMessageStart(params.source, params.ctx);
   if (messageStart === undefined) {
     return undefined;

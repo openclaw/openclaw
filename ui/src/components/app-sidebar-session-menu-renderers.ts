@@ -9,7 +9,7 @@ import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
-import { renderSidebarMenuTrigger } from "./app-sidebar-nav-menus.ts";
+import { renderSidebarDropdown } from "./app-sidebar-nav-menus.ts";
 import { countSidebarSessionFilters } from "./app-sidebar-session-filter-summary.ts";
 import {
   SIDEBAR_SESSION_SORT_OPTIONS,
@@ -30,11 +30,7 @@ import {
 } from "./session-owner-chip.ts";
 import { renderSettingsSegmented } from "./settings-ui.ts";
 import type { SidebarFilterMenuView, SidebarMenusController } from "./sidebar-menus-controller.ts";
-import {
-  consumeDropdownKeyboardDismissal,
-  syncDropdownItemRadio,
-  trackDropdownKeyboardDismissal,
-} from "./web-awesome.ts";
+import { syncDropdownItemRadio } from "./web-awesome.ts";
 
 type SidebarSessionGroupMenuAction =
   | "group-defaults"
@@ -212,55 +208,47 @@ export function renderSidebarSessionGroupMenuForController(controller: SidebarMe
   </wa-dropdown-item>`;
   return keyed(
     menu,
-    html`
-      <wa-dropdown
-        class="session-menu sidebar-session-group-menu"
-        .open=${true}
-        placement="bottom-start"
-        .distance=${0}
-        aria-label=${t("sessionsView.groupMenu", { group: menu.group })}
-        @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-          event.preventDefault();
-          const value = event.detail.item.value;
-          if (
-            (value === "group-defaults" ||
-              value === "rename-group" ||
-              value === "new-group" ||
-              value === "delete-group") &&
-            !actionDisabledReasons[value]
-          ) {
-            controller.closeSessionGroupMenu({ restoreFocus: true });
-            switch (value) {
-              case "group-defaults":
-                if (groupDefaultsStatus === "unavailable") {
-                  host.sessionDataContext?.sessions.groupsInvalidate();
-                  void host.sessionDataContext?.sessions.groupsLoad();
-                  break;
-                }
-                void host.sessionOrganizer.editSessionGroupDefaults(menu.group);
+    renderSidebarDropdown({
+      position: menu,
+      className: "session-menu sidebar-session-group-menu",
+      label: t("sessionsView.groupMenu", { group: menu.group }),
+      onSelect: ({ value }) => {
+        if (
+          (value === "group-defaults" ||
+            value === "rename-group" ||
+            value === "new-group" ||
+            value === "delete-group") &&
+          !actionDisabledReasons[value]
+        ) {
+          controller.closeSessionGroupMenu({ restoreFocus: true });
+          switch (value) {
+            case "group-defaults":
+              if (groupDefaultsStatus === "unavailable") {
+                host.sessionDataContext?.sessions.groupsInvalidate();
+                void host.sessionDataContext?.sessions.groupsLoad();
                 break;
-              case "rename-group":
-                void host.sessionOrganizer.renameSessionGroupFromMenu(menu.group);
-                break;
-              case "new-group":
-                void host.sessionOrganizer.createSessionGroup();
-                break;
-              case "delete-group":
-                void host.sessionOrganizer.deleteSessionGroupFromMenu(menu.group);
-                break;
-            }
+              }
+              void host.sessionOrganizer.editSessionGroupDefaults(menu.group);
+              break;
+            case "rename-group":
+              void host.sessionOrganizer.renameSessionGroupFromMenu(menu.group);
+              break;
+            case "new-group":
+              void host.sessionOrganizer.createSessionGroup();
+              break;
+            case "delete-group":
+              void host.sessionOrganizer.deleteSessionGroupFromMenu(menu.group);
+              break;
           }
-        }}
-        @keydown=${(event: KeyboardEvent) =>
-          trackDropdownKeyboardDismissal(event, () => trigger?.focus())}
-        @wa-after-hide=${(event: Event) => {
-          const restoreFocus = consumeDropdownKeyboardDismissal(event);
-          if (controller.sessionGroupMenu === menu) {
-            controller.closeSessionGroupMenu({ restoreFocus });
-          }
-        }}
-      >
-        ${renderSidebarMenuTrigger(menu, t("sessionsView.groupMenu", { group: menu.group }))}
+        }
+      },
+      onTabAway: () => trigger?.focus(),
+      onClose: (restoreFocus) => {
+        if (controller.sessionGroupMenu === menu) {
+          controller.closeSessionGroupMenu({ restoreFocus });
+        }
+      },
+      content: html`
         ${renderAction(
           "group-defaults",
           groupDefaultsStatus === "unavailable"
@@ -272,8 +260,8 @@ export function renderSidebarSessionGroupMenuForController(controller: SidebarMe
         ${renderAction("new-group", t("sessionsView.newGroup"), icons.folder)}
         <div class="session-menu__separator" role="separator"></div>
         ${renderAction("delete-group", t("sessionsView.deleteGroupMenu"), icons.trash)}
-      </wa-dropdown>
-    `,
+      `,
+    }),
   );
 }
 
@@ -302,43 +290,33 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
   ] as const satisfies ReadonlyArray<{ grouping: CatalogProjectGrouping; label: string }>;
   return keyed(
     `${position.catalogId}:${position.x}:${position.y}`,
-    html`
-      <wa-dropdown
-        class=${`sidebar-session-sort-menu sidebar-catalog-view-menu${ownerFilter.compact ? " session-menu--compact" : ""}`}
-        .open=${true}
-        placement="bottom-start"
-        .distance=${0}
-        aria-label=${t("chat.sidebar.catalogViewOptions")}
-        @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-          event.preventDefault();
-          const value = event.detail.item.value;
-          const view = sidebarFilterMenuViewForValue(value);
-          if (view) {
-            controller.setFilterMenuView(view);
-          } else if (value?.startsWith("grouping:")) {
-            host.setCatalogProjectGrouping(
-              value.slice("grouping:".length) as CatalogProjectGrouping,
-            );
-            controller.closePositionedMenu("catalogView", { restoreFocus: true });
-          } else if (value?.startsWith("owner:")) {
-            setOwnerFilter(value.slice("owner:".length) || null);
-          } else if (value === "involving-me") {
-            setOwnerFilter(null, true);
-          } else if (value === "hide-catalog" && controller.catalogViewMenuPosition === position) {
-            host.hideSessionCatalog(position.catalogId);
-            controller.closePositionedMenu("catalogView");
-          }
-        }}
-        @keydown=${(event: KeyboardEvent) =>
-          trackDropdownKeyboardDismissal(event, () => trigger?.focus())}
-        @wa-after-hide=${(event: Event) => {
-          const restoreFocus = consumeDropdownKeyboardDismissal(event);
-          if (controller.catalogViewMenuPosition === position) {
-            controller.closePositionedMenu("catalogView", { restoreFocus });
-          }
-        }}
-      >
-        ${renderSidebarMenuTrigger(position, t("chat.sidebar.catalogViewOptions"))}
+    renderSidebarDropdown({
+      position,
+      className: `sidebar-session-sort-menu sidebar-catalog-view-menu${ownerFilter.compact ? " session-menu--compact" : ""}`,
+      label: t("chat.sidebar.catalogViewOptions"),
+      onSelect: ({ value }) => {
+        const view = sidebarFilterMenuViewForValue(value);
+        if (view) {
+          controller.setFilterMenuView(view);
+        } else if (value?.startsWith("grouping:")) {
+          host.setCatalogProjectGrouping(value.slice("grouping:".length) as CatalogProjectGrouping);
+          controller.closePositionedMenu("catalogView", { restoreFocus: true });
+        } else if (value?.startsWith("owner:")) {
+          setOwnerFilter(value.slice("owner:".length) || null);
+        } else if (value === "involving-me") {
+          setOwnerFilter(null, true);
+        } else if (value === "hide-catalog" && controller.catalogViewMenuPosition === position) {
+          host.hideSessionCatalog(position.catalogId);
+          controller.closePositionedMenu("catalogView");
+        }
+      },
+      onTabAway: () => trigger?.focus(),
+      onClose: (restoreFocus) => {
+        if (controller.catalogViewMenuPosition === position) {
+          controller.closePositionedMenu("catalogView", { restoreFocus });
+        }
+      },
+      content: html`
         ${
           ownerFilter.compact && controller.filterMenuView === "specific-owner"
             ? renderCompactSessionMenuFrame(
@@ -358,8 +336,8 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
                   <span class="session-menu__text">${t("chat.sidebar.hideFromSidebar")}</span>
                 </wa-dropdown-item>`
         }
-      </wa-dropdown>
-    `,
+      `,
+    }),
   );
 }
 

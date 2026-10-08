@@ -434,7 +434,7 @@ internal fun ChatReaderState.onViewportChanged(
   targetTolerancePx: Int,
 ): ChatReaderState {
   val nextTarget =
-    if (isAtTarget(index, offset, timeline.latestContentIndex, targetTolerancePx)) {
+    if (index == timeline.latestContentIndex && offset <= targetTolerancePx) {
       ChatScrollFollowTarget.LatestContent
     } else {
       null
@@ -459,10 +459,3 @@ private fun ChatTimeline.indexForFollowTarget(target: ChatScrollFollowTarget): I
   }
 
 private fun ChatTimeline.containsMessage(id: String): Boolean = items.any { it is ChatTimelineItem.Message && it.message.id == id }
-
-private fun isAtTarget(
-  index: Int,
-  offset: Int,
-  target: Int?,
-  tolerancePx: Int,
-): Boolean = target != null && index == target && offset <= tolerancePx

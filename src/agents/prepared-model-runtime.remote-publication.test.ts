@@ -35,6 +35,7 @@ import {
   acquireReadOnlyPreparedModelRuntime,
   applyRemoteModelCatalogUpdate,
   beginPreparedModelRuntimePluginDrain,
+  getPreparedModelRuntimeSnapshot,
   prepareModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "./prepared-model-runtime.js";
@@ -113,7 +114,7 @@ async function setup() {
   });
   stored.mockReturnValue(bundle(300));
 }
-async function refresh() {
+async function listModels(refresh: boolean) {
   const respond = vi.fn();
   const loader = (params: Parameters<typeof loadPreparedGatewayModelCatalogSnapshot>[0]) =>
     loadPreparedGatewayModelCatalogSnapshot({ ...params, getConfig: () => config });
@@ -123,8 +124,8 @@ async function refresh() {
       readPreparedGatewayModelCatalogOwnerSnapshot({ ...params, getConfig: () => config }),
   });
   await modelsHandlers["models.list"]!({
-    req: { type: "req", id: "refresh", method: "models.list" },
-    params: { agentId: "default", view: "all", refresh: true },
+    req: { type: "req", id: "list", method: "models.list" },
+    params: { agentId: "default", view: "all", refresh },
     respond,
     client: null,
     isWebchatConnect: () => false,
@@ -249,7 +250,7 @@ it("does not reuse a dynamic build captured before a remote publication", async 
   expect(next.snapshot.modelCatalog.entries.map((row) => row.id)).toContain("remote-300");
 });
 
-it("bounds refresh with two agents while another discovery is held and publishes later", async ({
+it("bounds refresh with two agents while another discovery is held and adopts after it", async ({
   signal,
 }) => {
   const release = createDeferred();
@@ -287,11 +288,13 @@ it("bounds refresh with two agents while another discovery is held and publishes
   });
   void other.catch(() => undefined);
   await discovering.promise;
-  const pending = refresh();
+  const pending = listModels(true);
   try {
-    // Discovery stays held until `finally`: a refresh or adoption that joined it never settles.
+    // The refresh stays bounded while discovery is held; adoption publishes after it completes.
     const result = await withinTest(pending, signal);
     expect(result.models.map((row: { id: string }) => row.id)).toContain("remote-200");
+    expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(200);
+    release.resolve();
     await withinTest(published.promise, signal);
     expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(300);
   } finally {
@@ -299,6 +302,47 @@ it("bounds refresh with two agents while another discovery is held and publishes
     await Promise.allSettled([pending, other]);
     stop();
     workerSpy.mockRestore();
+  }
+});
+
+it("keeps discovered rows published until the adopted catalog's discovery completes", async ({
+  signal,
+}) => {
+  await setup();
+  const discovering = createDeferred();
+  const release = createDeferred();
+  let held = false;
+  mocks.runPreparedModelCatalogWorker.mockImplementation(async () => {
+    // Discovery observes the catalog version of the generation that runs it.
+    const id = `discovered-${captureRemoteModelCatalogSnapshot()?.generatedAt}`;
+    if (held) {
+      discovering.resolve();
+      await release.promise;
+    }
+    const row = { id, provider: "custom", name: id };
+    return { entries: [row], routeVariants: [row] };
+  });
+  const rows = async () =>
+    (await listModels(false)).models.map((row: { id: string }) => row.id) as string[];
+  await getPreparedModelRuntimeSnapshot(fixture.agentInput("default", config))!
+    .loadFullModelCatalog!({ refresh: true });
+  expect(await rows()).toContain("discovered-200");
+  held = true;
+  const adoption = applyRemoteModelCatalogUpdate(() => config);
+  try {
+    await withinTest(discovering.promise, signal);
+    // Readers keep the accepted catalog's rows and prices while its successor discovers.
+    expect(await withinTest(rows(), signal)).toContain("discovered-200");
+    expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(200);
+    release.resolve();
+    expect(await withinTest(adoption, signal)).toBe("published");
+    const adopted = await rows();
+    expect(adopted).toContain("discovered-300");
+    expect(adopted).not.toContain("discovered-200");
+    expect(captureRemoteModelCatalogStartupSnapshot()?.generatedAt).toBe(300);
+  } finally {
+    release.resolve();
+    await adoption.catch(() => undefined);
   }
 });
 

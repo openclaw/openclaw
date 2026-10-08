@@ -42,7 +42,7 @@ const promptHashPool = resolveGlobalSingleton(
   () =>
     new WorkerTaskPool<ProviderPromptTask, ReturnType<typeof prepareProviderPrompt>>({
       workerUrl: resolveRuntimeProcessEntrypointUrl("providerPromptState"),
-      maxWorkers: 1,
+      workerClass: "compute",
       sharedCompute: true,
     }),
 );

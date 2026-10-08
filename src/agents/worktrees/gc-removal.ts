@@ -11,7 +11,11 @@ import {
 } from "./checkout-inspection.js";
 import type { WorktreeGcProgress } from "./gc-progress.js";
 import { prepareWorktreeRegistryGuard } from "./registry-read.js";
-import { deferWorktreeCleanup, retireMissingRegistryWorktree } from "./registry-retirement.js";
+import {
+  deferFailedWorktreeRemoval,
+  deferWorktreeCleanup,
+  retireMissingRegistryWorktree,
+} from "./registry-retirement.js";
 import {
   createWorktreeRemovalClaimsGuard,
   updateRegistryWorktree,
@@ -19,6 +23,7 @@ import {
 } from "./registry.js";
 import {
   isWorktreePermissionError,
+  isWorktreeRepositoryCorruptionError,
   WorktreeBranchMovedError,
   WorktreeRemovalLockError,
 } from "./removal-errors.js";
@@ -208,6 +213,7 @@ function assertOwnerPolicyAllowsCleanup(
 
 export function createWorktreeGcRemoval(context: {
   env: NodeJS.ProcessEnv;
+  records: readonly ManagedWorktreeRecord[];
   now: number;
   progress: WorktreeGcProgress;
   policy: WorktreeCleanupOwnerPolicy;
@@ -224,6 +230,21 @@ export function createWorktreeGcRemoval(context: {
 }) {
   const { env, now, progress, policy, assertCurrent, signal } = context;
   const registryContext = captureWorktreeRunEndContext(env);
+  // The registry owns persistence and revision invalidation; this pass shares its
+  // admitted failures so sibling checkouts do not rediscover broken object storage.
+  const repositoryFailures = new Map<string, { attempts: number; reason?: string }>();
+  for (const record of context.records) {
+    if (record.removedAt !== undefined || record.gcRetry?.stage !== "repository-corrupt") {
+      continue;
+    }
+    const previous = repositoryFailures.get(record.repoRoot);
+    repositoryFailures.set(record.repoRoot, {
+      attempts: Math.max(previous?.attempts ?? 0, record.gcRetry.attempts),
+      reason:
+        previous?.reason ??
+        (!policy.retryDeferred && now < record.gcRetry.retryAt ? record.gcProtection : undefined),
+    });
+  }
   const withOwnerCleanup = <T>(
     record: ManagedWorktreeRecord,
     run: (withOwnerMutation: WorktreeCleanupMutation) => Promise<T>,
@@ -270,6 +291,30 @@ export function createWorktreeGcRemoval(context: {
       return true;
     };
     if (retainUnreadable(initialError)) {
+      return;
+    }
+    if (isWorktreeRepositoryCorruptionError(initialError)) {
+      const reason = `Repository ${record.repoRoot} has missing or corrupt Git objects; repair its object storage, then run openclaw worktrees gc --retry-deferred`;
+      const previousAttempts = repositoryFailures.get(record.repoRoot)?.attempts ?? 0;
+      const retry = await withOwnerMutation(async () =>
+        deferFailedWorktreeRemoval({
+          env,
+          id: record.id,
+          stage: "repository-corrupt",
+          reason,
+          elapsedMs: 0,
+          now,
+          previousAttempts,
+          assertCurrent: await prepareOwnerCurrent(record, retiredOwner),
+        }),
+      );
+      if (retry) {
+        repositoryFailures.set(record.repoRoot, { attempts: retry.attempts, reason });
+        log.warn(
+          `${reason}; next automatic retry at ${new Date(retry.retryAt).toISOString()}: ${formatErrorMessage(initialError)}`,
+        );
+      }
+      progress.error("idle", `${reason}: ${formatErrorMessage(initialError)}`, record.id);
       return;
     }
     let error = initialError;
@@ -355,6 +400,7 @@ export function createWorktreeGcRemoval(context: {
     progress.error("idle", error, record.id);
   };
   return {
+    repositoryProtection: (repoRoot: string) => repositoryFailures.get(repoRoot)?.reason,
     remove: (record: ManagedWorktreeRecord, reason: string, retiredOwner = false) => {
       progress.result.eligibleCount += 1;
       return withOwnerCleanup(record, async (withOwnerMutation) => {

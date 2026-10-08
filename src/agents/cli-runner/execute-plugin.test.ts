@@ -556,17 +556,26 @@ describe("plugin-owned CLI execution host boundary", () => {
     registerOwnerSession(first.context, "original-live-process");
 
     const runApprovedTurn = async (context: PreparedCliRunContext, repeat: boolean) => {
-      await runPlugin(context, async function* (execution) {
-        await expect(
-          requestNativeTool(execution, "WebFetch", { url: "https://example.com" }),
-        ).resolves.toMatchObject({ behavior: "allow" });
-        if (repeat) {
+      await runPlugin(
+        context,
+        async function* (execution) {
+          const handle = execution.liveSession?.current();
+          if (!handle) {
+            throw new Error("Expected a registered live process");
+          }
+          execution.liveSession?.activate(handle);
           await expect(
-            requestNativeTool(execution, "WebFetch", { url: "https://example.com/next" }),
+            requestNativeTool(execution, "WebFetch", { url: "https://example.com" }),
           ).resolves.toMatchObject({ behavior: "allow" });
-        }
-        yield SUCCESS_RESULT;
-      });
+          if (repeat) {
+            await expect(
+              requestNativeTool(execution, "WebFetch", { url: "https://example.com/next" }),
+            ).resolves.toMatchObject({ behavior: "allow" });
+          }
+          yield SUCCESS_RESULT;
+        },
+        { liveSession: true },
+      );
     };
 
     await runApprovedTurn(first.context, true);
@@ -592,7 +601,7 @@ describe("plugin-owned CLI execution host boundary", () => {
     });
     expect(mockCallGatewayTool).toHaveBeenCalledOnce();
 
-    await closeCliLiveSession(first.context, "restart");
+    await closeCliLiveSession(sameProcess.context, "restart");
     registerOwnerSession(first.context, "replacement-live-process");
     const replacement = await createExecution({
       config,

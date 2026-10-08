@@ -135,7 +135,7 @@ it("reuses unchanged binding rows while local updates, expiry, and returned obje
     writeBinding(original);
     const { db } = openOpenClawStateDatabase();
     const executions = trackSqliteStatementExecutions(db, ["selection", "freshness"], (query) =>
-      query === "PRAGMA data_version"
+      /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(query)
         ? "freshness"
         : query.startsWith("with ") && query.includes('"current_conversation_bindings"')
           ? "selection"

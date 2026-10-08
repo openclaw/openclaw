@@ -1,4 +1,3 @@
-/** Summarizes installed service command paths and OpenClaw package layout. */
 import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -15,7 +14,6 @@ import {
   type GatewayServiceState,
 } from "./service-types.js";
 
-/** Summary of the installed gateway service command and package layout. */
 export type GatewayServiceLayoutSummary = {
   execStart: string;
   sourcePath?: string;

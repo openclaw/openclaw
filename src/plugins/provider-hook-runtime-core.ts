@@ -123,6 +123,24 @@ export function createProviderHookRuntime(
     });
   }
 
+  function resolveSelectedProvider(
+    selection: ReturnType<typeof resolvePluginProviderRegistryCore>,
+    provider: string,
+    ownerRefs: readonly string[],
+  ): ProviderPlugin | undefined {
+    const registration =
+      selection &&
+      findProviderRuntimeRegistrationInRegistry({
+        registry: selection.registry,
+        provider,
+        ownerRefs,
+        isOwnerEligible: (id) => selection.isProviderOwnerEligible(id, provider),
+      });
+    return registration
+      ? Object.assign({}, registration.provider, { pluginId: registration.pluginId })
+      : undefined;
+  }
+
   function resolveProviderRuntimePluginLookup(
     params: ProviderRuntimePluginLookupParams,
     registryScope?: "loaded",
@@ -148,20 +166,11 @@ export function createProviderHookRuntime(
       activate: false,
       skipIfLoadInFlight: true,
     });
-    const registration = selection
-      ? findProviderRuntimeRegistrationInRegistry({
-          registry: selection.registry,
-          provider: params.provider,
-          ownerRefs,
-          isOwnerEligible: (id) => selection.isProviderOwnerEligible(id, params.provider),
-        })
-      : undefined;
+    const plugin = resolveSelectedProvider(selection, params.provider, ownerRefs);
     return {
       ...params,
       ...(selection ? { workspaceDir: selection.workspaceDir } : {}),
-      plugin: registration
-        ? Object.assign({}, registration.provider, { pluginId: registration.pluginId })
-        : undefined,
+      plugin,
     };
   }
 
@@ -198,17 +207,7 @@ export function createProviderHookRuntime(
       activate: false,
       skipIfLoadInFlight: true,
     });
-    const registration = selection
-      ? findProviderRuntimeRegistrationInRegistry({
-          registry: selection.registry,
-          provider: params.provider,
-          ownerRefs: [],
-          isOwnerEligible: (id) => selection.isProviderOwnerEligible(id, params.provider),
-        })
-      : undefined;
-    return registration
-      ? Object.assign({}, registration.provider, { pluginId: registration.pluginId })
-      : undefined;
+    return resolveSelectedProvider(selection, params.provider, []);
   }
 
   function ensureProviderRuntimePluginHandle(

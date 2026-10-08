@@ -9,12 +9,12 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildDashboardSessionTitleSource } from "../../gateway/dashboard-session-title.js";
 import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveWorkspacePathContainment } from "../../gateway/server-methods/workspace-path-containment.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
 import { resolveWorkerPlacementDestination } from "../../gateway/worker-environments/placement-destination.js";
+import { readExecRequestOwners, withExecRequestOwners } from "../../infra/exec-request-context.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import {
   getCanonicalGatewayContextResolver,
@@ -30,12 +30,8 @@ import { resolveAgentIdentity } from "../identity.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
 import { resolveSpawnAdmission } from "../spawn-plan.js";
 import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
-import type { SpawnedToolContext } from "../spawned-context.js";
 import { prepareSubagentSessionListReadCache } from "../subagents/registry/subagent-registry-state.js";
-import {
-  countActiveRunsForSession,
-  registerSubagentRun,
-} from "../subagents/registry/subagent-registry.js";
+import { registerSubagentRun } from "../subagents/registry/subagent-registry.js";
 import { getSubagentDepthFromSessionStore } from "../subagents/spawn/subagent-depth.js";
 import { terminateAcceptedCollectorRun } from "../subagents/spawn/subagent-spawn-cleanup.js";
 import {
@@ -59,41 +55,13 @@ import {
   type InProcessGatewayCaller,
 } from "./in-process-gateway.js";
 import { startVisibleCloudSession } from "./sessions-spawn-cloud.js";
+import type { SessionsSpawnToolOptions } from "./sessions-spawn-options.js";
 import {
   cleanupVisibleSpawnSession,
   summarizeVisibleSessionSpawnError,
 } from "./sessions-spawn-visible-cleanup.js";
 import { resolveVisibleSessionOwner } from "./sessions-spawn-visible-owner.js";
 import { SessionsSpawnPlacementSchema } from "./sessions-spawn-visible.schema.js";
-
-export type SessionsSpawnToolOptions = {
-  callGateway?: InProcessGatewayCaller;
-  registerRun?: typeof registerSubagentRun;
-  countActiveRuns?: typeof countActiveRunsForSession;
-  agentSessionKey?: string;
-  /** Trusted parent invocation fact, not a model-facing spawn parameter. */
-  senderIsOwner?: boolean;
-  requesterTurnRunId?: string;
-  /** Separate key used only for completion routing (registerSubagentRun requesterSessionKey). */
-  completionOwnerKey?: string;
-  agentChannel?: string;
-  agentAccountId?: string;
-  agentTo?: string;
-  agentThreadId?: string | number;
-  currentMessagingTarget?: string;
-  currentChannelId?: string;
-  currentThreadTs?: string;
-  currentMessageId?: string | number;
-  sandboxed?: boolean;
-  config?: OpenClawConfig;
-  /** Explicit agent ID override for cron/hook sessions where session key parsing may not work. */
-  requesterAgentIdOverride?: string;
-  requesterRunId?: string;
-  swarmCollector?: boolean;
-  /** Backend-derived parent incarnation; never sourced from model arguments. */
-  expectedParentSessionId?: string;
-  signal?: AbortSignal;
-} & SpawnedToolContext;
 
 type VisibleSessionsSpawnOptions = SessionsSpawnToolOptions & {
   onSpawnEffectsStart?: () => void;
@@ -656,12 +624,17 @@ export async function maybeSpawnVisibleSession(params: {
           expectsCompletionMessage: params.expectsCompletionMessage,
           spawnMode: "run",
         },
-        {
-          assertCurrent: () => {
-            params.options?.signal?.throwIfAborted();
-            params.options?.assertActive?.();
+        withExecRequestOwners(
+          {
+            assertCurrent: () => {
+              params.options?.signal?.throwIfAborted();
+              params.options?.assertActive?.();
+            },
           },
-        },
+          !placement && params.runtime === "subagent" && params.options
+            ? readExecRequestOwners(params.options)
+            : undefined,
+        ),
       );
     } catch (error) {
       if (placement) {

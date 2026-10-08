@@ -153,6 +153,8 @@ export async function openTerminalSession(
   request: TerminalSessionOpenRequest,
 ): Promise<void> {
   const { respond, context } = opts;
+  const invalidPlan = (message: string) =>
+    invalid(respond, terminalFailureMessage(message, request.failureHint));
   const connId = requireConnId(opts);
   if (!connId) {
     return;
@@ -193,24 +195,17 @@ export async function openTerminalSession(
         respondTerminalUnavailable(respond, "terminal open timed out", request.failureHint);
         return;
       }
-      invalid(
-        respond,
-        terminalFailureMessage(
-          error instanceof Error
-            ? error.message
-            : (request.catalogFailureMessage ?? "catalog terminal open failed"),
-          request.failureHint,
-        ),
+      invalidPlan(
+        error instanceof Error
+          ? error.message
+          : (request.catalogFailureMessage ?? "catalog terminal open failed"),
       );
       return;
     }
     title = catalogPlan.title;
     if (catalogPlan.kind === "local") {
       if (catalogPlan.argv.length === 0) {
-        invalid(
-          respond,
-          terminalFailureMessage("catalog terminal plan has no command", request.failureHint),
-        );
+        invalidPlan("catalog terminal plan has no command");
         return;
       }
     } else {
@@ -245,10 +240,7 @@ export async function openTerminalSession(
           rows: request.rows,
         };
       } catch {
-        invalid(
-          respond,
-          terminalFailureMessage("catalog terminal plan has invalid params", request.failureHint),
-        );
+        invalidPlan("catalog terminal plan has invalid params");
         return;
       }
       // Pairing promotion mutates NodeSession in place; freeze its identity before policy awaits.
@@ -344,7 +336,7 @@ export async function openTerminalSession(
     }
     const readinessError = resolveSessionWorkStartError(agentSessionKey, entry);
     if (readinessError) {
-      invalid(respond, terminalFailureMessage(readinessError, request.failureHint));
+      invalidPlan(readinessError);
       return;
     }
     agentOwner = {
@@ -392,13 +384,7 @@ export async function openTerminalSession(
   }
   const spawnPlan = resolveTerminalOpenSpawnPlan(refreshedLaunch.plan, catalogPlan);
   if (request.requiredCwd !== undefined && spawnPlan.cwd !== request.requiredCwd) {
-    invalid(
-      respond,
-      terminalFailureMessage(
-        "cwd is no longer available; recreate or choose the worktree and retry",
-        request.failureHint,
-      ),
-    );
+    invalidPlan("cwd is no longer available; recreate or choose the worktree and retry");
     return;
   }
   const terminalEnv =

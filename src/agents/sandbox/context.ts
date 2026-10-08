@@ -214,19 +214,13 @@ function resolveSandboxSession(params: {
       sessionKey: `${rawSessionKey}:skills:${hashTextSha256(JSON.stringify(librarySelections))}`,
     };
   }
-  const configuredSandbox = librarySelections?.length
-    ? { ...configured, scope: "agent" as const }
-    : configured;
-  if (!runtime.sandboxRequired) {
-    return { rawSessionKey, runtime, cfg: configuredSandbox };
-  }
   // Docker and browser backends replace shared scope keys with a literal name;
   // agent scope lets the prepared isolation subject own every sandbox resource.
-  const cfg = {
-    ...configuredSandbox,
-    scope: "agent" as const,
-    workspaceAccess: runtime.workspaceAccess,
-  };
+  const cfg = runtime.sandboxRequired
+    ? { ...configured, scope: "agent" as const, workspaceAccess: runtime.workspaceAccess }
+    : librarySelections?.length
+      ? { ...configured, scope: "agent" as const }
+      : configured;
   return { rawSessionKey, runtime, cfg };
 }
 

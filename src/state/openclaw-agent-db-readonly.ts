@@ -12,6 +12,7 @@ import {
 import { withCommittedOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-companion.js";
 import {
   readOpenClawAgentDatabase,
+  readOpenClawAgentDatabaseSnapshot,
   type OpenClawAgentDatabaseReadOnlyResult,
   type OpenClawAgentReadOnlyDatabase,
 } from "./openclaw-agent-db-readonly-open.js";
@@ -100,10 +101,12 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
     ? undefined
     : findOpenAgentDatabase({ ...options, agentId });
   if (processOpened?.db.isTransaction) {
-    return withCommittedOpenClawAgentDatabaseReadOnly(processOpened, operation, {
-      ...options,
-      agentId,
-    });
+    return withCommittedOpenClawAgentDatabaseReadOnly(
+      processOpened,
+      operation,
+      { ...options, agentId },
+      behavior,
+    );
   }
   if (!processOpened) {
     return withScopedOpenClawAgentDatabaseReadOnly(
@@ -111,6 +114,9 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
       { ...options, agentId, path: pathname },
       behavior,
     );
+  }
+  if (behavior.snapshot) {
+    return readOpenClawAgentDatabaseSnapshot(processOpened, operation);
   }
   // The handle's admission owner refreshes these facts after DDL or a foreign commit.
   return runSqliteReadOperationSync(

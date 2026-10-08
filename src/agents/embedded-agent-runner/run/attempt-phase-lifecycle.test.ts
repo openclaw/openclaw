@@ -99,7 +99,6 @@ describe("embedded attempt phase lifecycle state", () => {
         promptError: null,
         promptErrorSource: null,
         yieldAborted: false,
-        sessionIdUsed: "session-1",
       },
       readLifecycleState: () => ({
         aborted: timedOut,
@@ -174,7 +173,6 @@ describe("embedded attempt phase lifecycle state", () => {
         promptError: null,
         promptErrorSource: null,
         yieldAborted: false,
-        sessionIdUsed: "session-1",
       },
       readLifecycleState: () => ({
         aborted: true,
@@ -262,7 +260,6 @@ describe("embedded attempt phase lifecycle state", () => {
         promptError: null,
         promptErrorSource: null,
         yieldAborted: false,
-        sessionIdUsed: "session-1",
       },
       readLifecycleState: () => ({
         aborted: false,

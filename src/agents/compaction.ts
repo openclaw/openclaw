@@ -173,15 +173,21 @@ async function summarizeWithFallback(params: CompactionSummaryParams): Promise<s
 
   let partialSummaryFallback: string | undefined;
   let lastError: unknown;
-  try {
-    return await summarizeChunks(params);
-  } catch (err) {
-    lastError = err;
+  const recordFailure = (error: unknown, label: string, suffix?: string) => {
+    lastError = error;
     if (params.signal.aborted) {
       throw lastError;
     }
-    log.warn(`Full summarization failed: ${formatErrorMessage(lastError)}`);
-    partialSummaryFallback = (lastError as PartialSummaryError).partialSummary;
+    log.warn(`${label}: ${formatErrorMessage(lastError)}`);
+    const partial = (lastError as PartialSummaryError).partialSummary;
+    if (suffix === undefined || partial) {
+      partialSummaryFallback = suffix === undefined ? partial : partial + suffix;
+    }
+  };
+  try {
+    return await summarizeChunks(params);
+  } catch (err) {
+    recordFailure(err, "Full summarization failed");
   }
 
   const { smallMessages, oversizedNotes } = await buildOversizedFallbackPlanWithWorker({
@@ -201,18 +207,8 @@ async function summarizeWithFallback(params: CompactionSummaryParams): Promise<s
       });
       return partialSummary + oversizedSuffix;
     } catch (partialError) {
-      lastError = partialError;
-      if (params.signal.aborted) {
-        throw lastError;
-      }
-      log.warn(`Partial summarization also failed: ${formatErrorMessage(lastError)}`);
-      // Prefer the oversized retry's partial summary over the full attempt's,
-      // since it covers the non-oversized transcript. Append oversized notes
-      // so the model knows large content was filtered.
-      const retryPartial = (lastError as PartialSummaryError).partialSummary;
-      if (retryPartial) {
-        partialSummaryFallback = retryPartial + oversizedSuffix;
-      }
+      // Prefer the retry's partial summary and retain its oversized-message notes.
+      recordFailure(partialError, "Partial summarization also failed", oversizedSuffix);
     }
   }
 
@@ -262,17 +258,16 @@ export async function summarizeInStages(
   },
 ): Promise<string> {
   const { messages } = params;
-  if (messages.length === 0) {
-    return await summarizeWithFallback(params);
-  }
-
-  const plan = await buildStageSplitPlanWithWorker({
-    messages,
-    maxChunkTokens: params.maxChunkTokens,
-    parts: params.parts,
-    minMessagesForSplit: params.minMessagesForSplit,
-    signal: params.signal,
-  });
+  const plan =
+    messages.length === 0
+      ? { mode: "single" as const }
+      : await buildStageSplitPlanWithWorker({
+          messages,
+          maxChunkTokens: params.maxChunkTokens,
+          parts: params.parts,
+          minMessagesForSplit: params.minMessagesForSplit,
+          signal: params.signal,
+        });
 
   if (plan.mode === "single") {
     return await summarizeWithFallback(params);

@@ -43,11 +43,19 @@ type MessageOperationRouteBindingEntry = {
 // Send and poll callers can spell one canonical route four ways by omitting or
 // supplying channel/account defaults. Preserve every alias for the full result budget.
 const MESSAGE_OPERATION_ROUTE_BINDING_MAX = DEDUPE_MAX * 4;
-const messageOperationRouteBindings = new WeakMap<
+const messageOperationRouteState = new WeakMap<
   GatewayRequestContext,
-  Map<string, MessageOperationRouteBindingEntry>
+  { bindings: Map<string, MessageOperationRouteBindingEntry>; queue: KeyedAsyncQueue }
 >();
-const messageOperationRouteBindingQueues = new WeakMap<GatewayRequestContext, KeyedAsyncQueue>();
+
+function getMessageOperationRouteState(context: GatewayRequestContext) {
+  let state = messageOperationRouteState.get(context);
+  if (!state) {
+    state = { bindings: new Map(), queue: new KeyedAsyncQueue() };
+    messageOperationRouteState.set(context, state);
+  }
+  return state;
+}
 
 function pruneMessageOperationRouteBindings(
   bindings: Map<string, MessageOperationRouteBindingEntry>,
@@ -75,22 +83,9 @@ function pruneMessageOperationRouteBindings(
 function getMessageOperationRouteBindings(
   context: GatewayRequestContext,
 ): Map<string, MessageOperationRouteBindingEntry> {
-  let bindings = messageOperationRouteBindings.get(context);
-  if (!bindings) {
-    bindings = new Map();
-    messageOperationRouteBindings.set(context, bindings);
-  }
+  const { bindings } = getMessageOperationRouteState(context);
   pruneMessageOperationRouteBindings(bindings, Date.now());
   return bindings;
-}
-
-function getMessageOperationRouteBindingQueue(context: GatewayRequestContext): KeyedAsyncQueue {
-  let queue = messageOperationRouteBindingQueues.get(context);
-  if (!queue) {
-    queue = new KeyedAsyncQueue();
-    messageOperationRouteBindingQueues.set(context, queue);
-  }
-  return queue;
 }
 
 async function acquireMessageOperationRouteBindingLock(params: {
@@ -105,13 +100,10 @@ async function acquireMessageOperationRouteBindingLock(params: {
   const held = createDeferredCore();
   // The lock covers mutable route selection through canonical in-flight registration.
   // Otherwise a later retry can bind newer defaults while the first request is resolving.
-  void getMessageOperationRouteBindingQueue(params.context).enqueue(
-    params.binding.key,
-    async () => {
-      acquired.resolve();
-      await held.promise;
-    },
-  );
+  void getMessageOperationRouteState(params.context).queue.enqueue(params.binding.key, async () => {
+    acquired.resolve();
+    await held.promise;
+  });
   await acquired.promise;
   return held.resolve;
 }

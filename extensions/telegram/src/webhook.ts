@@ -222,6 +222,13 @@ export async function startTelegramWebhook(opts: {
   status.noteStart();
   const webhookRegistrationRetryPolicy =
     opts.webhookRegistrationRetryPolicy ?? TELEGRAM_WEBHOOK_REGISTRATION_RETRY_POLICY;
+  const retryDelay = (operation: "getMe" | "setWebhook", attempt: number) => {
+    const delayMs = computeBackoff(webhookRegistrationRetryPolicy, attempt);
+    runtime.log?.(
+      `telegram ${operation} retry ${attempt} scheduled in ${formatDurationPrecise(delayMs)}`,
+    );
+    return delayMs;
+  };
   let shutdownPromise: Promise<void> | undefined;
   let unregisterRoute: (() => void) | undefined;
   let unregisterTarget: (() => void) | undefined;
@@ -341,11 +348,7 @@ export async function startTelegramWebhook(opts: {
         }
         attempt += 1;
         status.noteRecovery();
-        const delayMs = computeBackoff(webhookRegistrationRetryPolicy, attempt);
-        runtime.log?.(
-          `telegram getMe retry ${attempt} scheduled in ${formatDurationPrecise(delayMs)}`,
-        );
-        await sleepWithAbort(delayMs, initializationAbortSignal);
+        await sleepWithAbort(retryDelay("getMe", attempt), initializationAbortSignal);
       }
     }
   });
@@ -496,10 +499,7 @@ export async function startTelegramWebhook(opts: {
       if (shutdownPromise || opts.abortSignal?.aborted) {
         return;
       }
-      const delayMs = computeBackoff(webhookRegistrationRetryPolicy, attempt);
-      runtime.log?.(
-        `telegram setWebhook retry ${attempt} scheduled in ${formatDurationPrecise(delayMs)}`,
-      );
+      const delayMs = retryDelay("setWebhook", attempt);
       try {
         await sleepWithAbort(delayMs, opts.abortSignal);
       } catch {

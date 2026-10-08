@@ -392,12 +392,15 @@ export async function loadModelsProviderData(
     }
   }
 
+  // Selection needs the prepared capabilities, with selected physical routes
+  // ahead of other inventory rows for the same logical model.
+  const selectionCatalog = [...visibleCatalog, ...catalog];
   const runtimeChoicesByProvider = new Map<string, ModelsRuntimeChoice[]>();
   const runtimeChoicesByModel = new Map<string, ModelsRuntimeChoice[]>();
   for (const [provider, models] of byProvider) {
     const providerChoices = new Map<string, ModelsRuntimeChoice>();
     for (const model of models) {
-      const entry = [...visibleCatalog, ...catalog].find(
+      const entry = selectionCatalog.find(
         (row) => normalizeProviderId(row.provider) === provider && row.id === model,
       );
       const authEntry = entry ?? { provider, id: model, name: model };
@@ -459,9 +462,7 @@ export async function loadModelsProviderData(
     refreshWarning: snapshot.refreshFailed
       ? "Some models could not be refreshed. You can still choose from the available models."
       : undefined,
-    // Selection needs the prepared capabilities, with selected physical routes
-    // ahead of other inventory rows for the same logical model.
-    modelCatalog: dedupeModelCatalogEntries([...visibleCatalog, ...catalog]),
+    modelCatalog: dedupeModelCatalogEntries(selectionCatalog),
     runtimeChoicesByProvider,
     runtimeChoicesByModel,
     isCurrent: decisions.isCurrent,

@@ -150,10 +150,11 @@ function getNumericHttpStatus(err: unknown): number | undefined {
 // significant bits, so a non-safe integer is not the documented id and stays unreported.
 function describeTelegramSupergroupMigration(err: unknown): string | undefined {
   for (const candidate of collectTelegramErrorCandidates(err)) {
-    if (!isRecord(candidate) || candidate.error_code !== 400) {
-      continue;
-    }
-    if (candidate.description !== TELEGRAM_SUPERGROUP_MIGRATION_DESCRIPTION) {
+    if (
+      !isRecord(candidate) ||
+      candidate.error_code !== 400 ||
+      candidate.description !== TELEGRAM_SUPERGROUP_MIGRATION_DESCRIPTION
+    ) {
       continue;
     }
     const migratedChatId = isRecord(candidate.parameters)
@@ -207,16 +208,13 @@ export function isSafeToRetrySendError(err: unknown): boolean {
 }
 
 function hasTelegramErrorCode(err: unknown, matches: (code: number) => boolean): boolean {
-  for (const candidate of collectTelegramErrorCandidates(err)) {
+  return collectTelegramErrorCandidates(err).some((candidate) => {
     if (!candidate || typeof candidate !== "object" || !("error_code" in candidate)) {
-      continue;
+      return false;
     }
     const code = (candidate as { error_code: unknown }).error_code;
-    if (typeof code === "number" && matches(code)) {
-      return true;
-    }
-  }
-  return false;
+    return typeof code === "number" && matches(code);
+  });
 }
 
 export function isTelegramAuthenticationError(err: unknown): boolean {
