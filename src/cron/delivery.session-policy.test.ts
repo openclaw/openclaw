@@ -8,21 +8,31 @@ const mocks = vi.hoisted(() => ({
   loadSessionEntryReadOnly: vi.fn<() => SessionEntry | undefined>(),
   warn: vi.fn(),
 }));
+// mock-isolation: Observe route writes without opening a real session database.
 vi.mock("../config/sessions/inbound.runtime.js", () => ({
   resolveSessionStorePathCore: (_store: unknown, params: { agentId: string }) =>
     `/stores/${params.agentId}.json`,
   updateSessionLastRoute: mocks.updateSessionLastRoute,
 }));
+// mock-isolation: Supply source policy and storage failures independently of SQLite.
 vi.mock("../config/sessions/session-accessor.js", () => ({
   loadSessionEntryReadOnly: mocks.loadSessionEntryReadOnly,
 }));
+// mock-isolation: Capture policy warnings without writing process-global log files.
 vi.mock("../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => ({ warn: mocks.warn, debug: vi.fn(), info: vi.fn(), error: vi.fn() }),
+  createSubsystemLogger: () => ({
+    warn: mocks.warn,
+    debug: vi.fn(),
+    info: vi.fn(),
+    error: vi.fn(),
+  }),
 }));
+// mock-isolation: Confirm transport success without queue custody or a network channel.
 vi.mock("../channels/message/runtime.js", () => ({
   sendDurableMessageBatchCore: vi.fn(async () => ({ status: "sent" })),
   durableMessageBatchMayHaveReachedRecipient: () => true,
 }));
+// mock-isolation: Pin an explicit target without channel discovery or last-route reads.
 vi.mock("./isolated-agent/delivery-target.js", () => ({
   resolveDeliveryTarget: vi.fn(async () => ({
     ok: true,
@@ -31,9 +41,15 @@ vi.mock("./isolated-agent/delivery-target.js", () => ({
     mode: "explicit",
   })),
 }));
+// mock-isolation: Announcement identity must not read an agent workspace in this policy test.
 vi.mock("../infra/outbound/identity.js", () => ({ resolveAgentOutboundIdentity: () => undefined }));
-vi.mock("../infra/outbound/session-context.js", () => ({ buildOutboundSessionContext: () => ({}) }));
+// mock-isolation: Delivery context must not load unrelated source-session metadata.
+vi.mock("../infra/outbound/session-context.js", () => ({
+  buildOutboundSessionContext: () => ({}),
+}));
+// mock-isolation: No live channel send dependencies are needed behind the transport boundary.
 vi.mock("../cli/outbound-send-deps.js", () => ({ createOutboundSendDeps: () => ({}) }));
+// mock-isolation: Keep transcript mirroring outside this destination-policy test.
 vi.mock("./isolated-agent/session.js", () => ({ loadCronSessionEntryLatest: () => undefined }));
 
 // Load the announcement graph after Vitest installs the transport and storage boundaries.
