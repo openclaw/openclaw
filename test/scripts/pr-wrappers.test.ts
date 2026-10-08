@@ -1749,7 +1749,7 @@ exit 99
     },
   );
 
-  it.each(["prepare-run", "prepare-baseline-refresh"])(
+  it.each(["prepare-run", "prepare-baseline-refresh", "prepare-baseline-successor"])(
     "routes mismatched %s through the materialized anchor",
     (command) => {
       const fixture = makeMismatchedWrapperRepo();
