@@ -17,6 +17,7 @@ import {
 } from "./session-store-target-inventory.js";
 import {
   projectionLane,
+  targetDiscoveryLane,
   withSessionHistoryWorkerReadCandidates,
   type SessionHistoryWorkerLane,
 } from "./session-transcript-worker-resources.js";
@@ -171,7 +172,7 @@ export async function withSessionStoreTarget<T>(
   operation: (target: PreparedStoreTarget, owner: StoreTargetReadOwner) => Promise<T>,
   assertCallerCurrent?: () => void,
   onReadError?: (error: unknown, assertCurrent: () => void) => Promise<T>,
-  { lane }: { lane?: SessionHistoryWorkerLane } = {},
+  { lane = targetDiscoveryLane }: { lane?: SessionHistoryWorkerLane } = {},
 ): Promise<T> {
   assertCallerCurrent?.();
   const { candidates, ...targetRequest } = request;

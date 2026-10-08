@@ -2569,6 +2569,15 @@ stores, already executing workers, Doctor maintenance,
 and prepared native deletion rollback closures retain their synchronous kernels.
 Schemas, retained bytes, configuration, and update behavior are unchanged.
 
+Writer-held target discovery uses a separate, single-worker read lane under the
+existing session database lifecycle owner. Target reads and their awaited native
+cleanup cannot queue behind history searches that need the same database writer
+for index status. Exact-store FIFO admission, captured physical identity, live
+authority checks, and lexical reader custody remain unchanged. The additional
+worker starts on demand and participates in database close, idle retirement, and
+critical-memory-pressure cleanup. Read-only projection and maintenance callers
+retain their selected lanes. No schema, stored data, or update behavior changes.
+
 Durable trajectory preparation reads the exact target mapping through the session
 reader and constructs its sink while retaining the writer FIFO and native mutation
 witness. An absent metadata row remains an uncommitted target; a conflicting row

@@ -42,7 +42,7 @@ import {
   readSessionEntryInWorker,
   withSessionEntriesFromStoresInWorker,
 } from "./session-entry-read-runtime.js";
-import { historyLane } from "./session-transcript-worker-resources.js";
+import { targetDiscoveryLane } from "./session-transcript-worker-resources.js";
 
 let state: OpenClawTestState;
 beforeAll(async () => {
@@ -614,18 +614,20 @@ it.each([
         await release.promise;
       }
     };
-    const closeResources = historyLane.pool.closeResources.bind(historyLane.pool);
-    const rotate = historyLane.pool.rotate.bind(historyLane.pool);
+    const closeResources = targetDiscoveryLane.pool.closeResources.bind(targetDiscoveryLane.pool);
+    const rotate = targetDiscoveryLane.pool.rotate.bind(targetDiscoveryLane.pool);
     const closeIntercept = vi
-      .spyOn(historyLane.pool, "closeResources")
+      .spyOn(targetDiscoveryLane.pool, "closeResources")
       .mockImplementation(async (key) => {
         await closeResources(key);
         await holdDiscoveryCleanup();
       });
-    const rotateIntercept = vi.spyOn(historyLane.pool, "rotate").mockImplementation(async () => {
-      await rotate();
-      await holdDiscoveryCleanup();
-    });
+    const rotateIntercept = vi
+      .spyOn(targetDiscoveryLane.pool, "rotate")
+      .mockImplementation(async () => {
+        await rotate();
+        await holdDiscoveryCleanup();
+      });
     const capture = executionOwner.captureOpenClawAgentDatabaseExecution;
     const intercept = vi
       .spyOn(executionOwner, "captureOpenClawAgentDatabaseExecution")
