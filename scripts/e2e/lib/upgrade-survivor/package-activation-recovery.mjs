@@ -122,6 +122,10 @@ function main([command, artifacts, ...args]) {
       cut,
       previousRoot: path.join(anchor, "previous"),
     };
+    // A reused artifact directory must not make this invocation look already
+    // interrupted or let an old cut marker fail an unrelated Doctor child.
+    fs.rmSync(fault.evidence, { force: true });
+    fs.rmSync(`${fault.evidence}.doctor`, { force: true });
     write(faultFile, fault);
     write(file, {
       status: "running",

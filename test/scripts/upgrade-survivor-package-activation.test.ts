@@ -24,6 +24,51 @@ it.each([
 });
 
 describe("release package interruption fixture", () => {
+  it("re-arms publication and Doctor faults when the same artifact directory is reused", () => {
+    const artifacts = fs.realpathSync(dirs.make("package-recovery-rearm-"));
+    const installed = path.join(artifacts, "installed");
+    const packed = path.join(artifacts, "package");
+    for (const [root, version, buildId] of [
+      [installed, "2026.9.8", "released"],
+      [packed, "2026.9.10", "candidate"],
+    ] as const) {
+      fs.mkdirSync(path.join(root, "dist"), { recursive: true });
+      fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ version }));
+      fs.writeFileSync(path.join(root, "dist/build-info.json"), JSON.stringify({ buildId }));
+    }
+    const tarball = path.join(artifacts, "candidate.tgz");
+    const pack = spawnSync("tar", ["-czf", tarball, "-C", artifacts, "package"], {
+      encoding: "utf8",
+    });
+    expect(pack.status, pack.stderr).toBe(0);
+    const config = path.join(artifacts, "config.json");
+    fs.writeFileSync(config, JSON.stringify({ gateway: {}, plugins: { enabled: false } }));
+    const evidence = path.join(artifacts, "package-activation-cut.json");
+    for (const cut of ["publication-complete", "verification"]) {
+      fs.writeFileSync(evidence, '{"pid":"previous-run"}');
+      fs.writeFileSync(`${evidence}.doctor`, '{"exitCode":1}');
+      const setup = spawnSync(
+        process.execPath,
+        [
+          "scripts/e2e/lib/upgrade-survivor/package-activation-recovery.mjs",
+          "setup",
+          artifacts,
+          installed,
+          tarball,
+          cut,
+          config,
+        ],
+        { encoding: "utf8", timeout: 10_000 },
+      );
+      expect(setup.status, setup.stderr).toBe(0);
+      expect(fs.existsSync(evidence)).toBe(false);
+      expect(fs.existsSync(`${evidence}.doctor`)).toBe(false);
+      expect(
+        JSON.parse(fs.readFileSync(path.join(artifacts, "package-activation-fault.json"), "utf8"))
+          .cut,
+      ).toBe(cut);
+    }
+  });
   it.each(["run", "all"])(
     "kills only after the selected real SQLite commit through %s",
     (method) => {
