@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as sqliteSnapshotSource from "./sqlite-snapshot-source.js";
 import type { UpdateRepairTurnMessage } from "./update-repair-protocol.js";
 import { runDelegatedUpdateRepairTurn } from "./update-repair-turn-worker.js";
 import { createUpdateRun, recordUpdateRunPhase } from "./update-run-ledger.js";
@@ -157,6 +159,41 @@ describe("delegated repair requester binding", () => {
       });
     },
   );
+
+  it("carries admitted authority through the turn and rechecks it at settlement", async () => {
+    await withOpenClawTestState({ layout: "home" }, async (state) => {
+      await state.writeConfig({ commands: { ownerAllowFrom: ["owner"] } });
+      const run = createUpdateRun({ trigger: "chat", origin: { requester } }, { env: state.env });
+      recordUpdateRunPhase(run.runId, "repairing", undefined, { env: state.env });
+      // Like the delegated worker, read the updater's ledger without holding its writer.
+      await closeOpenClawStateDatabaseAsync();
+      const snapshots = vi.spyOn(sqliteSnapshotSource, "prepareSqliteReadOnlyLocationSync");
+      try {
+        runtime.runUpdateRepairTurn.mockImplementationOnce(async ({ isCurrent }) => {
+          snapshots.mockClear();
+          for (let check = 0; check < 20; check += 1) {
+            expect(isCurrent()).toBe(true);
+          }
+          expect(snapshots).not.toHaveBeenCalled();
+          await state.writeConfig({ commands: { ownerAllowFrom: ["other-owner"] } });
+          return {
+            toolCalls: 0,
+            envelope: { model: "repair", provider: "fixture", final: "No changes", status: "ok" },
+          };
+        });
+        const result = await runDelegatedUpdateRepairTurn(
+          message(run.runId, state, requester),
+          state.env,
+          new AbortController().signal,
+          vi.fn(),
+        );
+        expect(result).toMatchObject({ status: "aborted", reason: revoked });
+        expect(snapshots).toHaveBeenCalled();
+      } finally {
+        snapshots.mockRestore();
+      }
+    });
+  });
 });
 
 function message(
