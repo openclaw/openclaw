@@ -7,7 +7,7 @@ import * as providerPolicy from "../plugins/provider-policy-surface.js";
 import { buildStatusMessageParts, statusModelRefs } from "../status/status-message.test-support.js";
 import { prepareContextWindowCaches } from "./context-cache-projection.js";
 import { replaceContextWindowCaches } from "./context-cache.js";
-import { resetContextWindowCacheForTest } from "./context-runtime-state.js";
+import { resetContextWindowCacheForTest } from "./context.test-support.js";
 import { modelCatalogRowToEntry } from "./model-catalog-entry.js";
 import { orderModelCatalogForPicker } from "./model-catalog-order.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
