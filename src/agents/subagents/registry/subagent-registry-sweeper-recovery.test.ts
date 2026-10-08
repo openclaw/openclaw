@@ -8,6 +8,7 @@ import {
   replaceSessionEntrySync,
   resetSessionEntryLifecycle,
 } from "../../../config/sessions/session-accessor.js";
+import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { createMockGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime.test-support.js";
 import {
   getAgentEventLifecycleGeneration,
