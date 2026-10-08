@@ -5,22 +5,24 @@ import { performance } from "node:perf_hooks";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
 
 const [operation, mode, cache, output] = process.argv.slice(2);
-const script = JSON.parse(readFileSync("package.json", "utf8")).scripts["check:docs"];
-const [format, ...content] = script.split(" && ");
-if (format !== "pnpm format:docs:check" || content.length !== 7) {
+const scripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
+if (scripts["check:docs"] !== "pnpm format:docs:check && pnpm check:docs:content") {
   throw new Error("The pinned docs command inventory changed");
 }
 if (operation === "command") {
   if (!["serial", "parallel"].includes(mode)) throw new Error("Invalid mode");
-  const commands = mode === "serial" ? [script] : [format, content.join(" && ")];
-  const results = await Promise.allSettled(
-    commands.map((command) =>
-      runManagedCommand({ bin: "bash", args: ["-e", "-o", "pipefail", "-c", command] }),
-    ),
-  );
-  process.exitCode = results.every((result) => result.status === "fulfilled" && result.value === 0)
-    ? 0
-    : 1;
+  process.exitCode = await runManagedCommand({
+    bin: "pnpm",
+    args:
+      mode === "serial"
+        ? ["check:docs"]
+        : [
+            "run",
+            "--workspace-concurrency=2",
+            "--no-bail",
+            "/^(format:docs:check|check:docs:content)$/",
+          ],
+  });
 } else if (operation === "measure") {
   mkdirSync(cache, { recursive: true });
   mkdirSync(output, { recursive: true });
