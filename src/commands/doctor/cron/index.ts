@@ -6,7 +6,6 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { loadCronQuarantinedJobs, resolveCronJobsStorePath } from "../../../cron/store.js";
 import type { HealthFinding } from "../../../flows/health-checks.js";
 import { formatErrorMessage as errorMessage } from "../../../infra/errors.js";
-import { RetiredStateFormatError } from "../../../infra/state-migrations.retired-files.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { shortenHomePath } from "../../../utils.js";
 import type { DoctorPrompter, DoctorOptions } from "../../doctor-prompter.js";
@@ -14,14 +13,15 @@ import { countLabel as pluralize } from "../../doctor-state-integrity-format.js"
 import {
   applyLegacyCronStoreRepair,
   loadLegacyCronRepairState,
+  readLegacyCronStorePath,
+  rethrowLegacyCronStoreError,
   type LegacyCronRepairState,
 } from "./legacy-repair.js";
 import {
   formatLegacyIssuePreview,
   formatLegacyGatewayExecAdvisory,
   formatScheduledToolPolicyAdvisory,
-  formatUnresolvedCommandPromptAdvisory,
-  formatUnresolvedShellPromptAdvisory,
+  formatUnresolvedPromptAdvisory,
 } from "./repair-plan.js";
 import { rethrowSqliteSchemaVersionError } from "./schema-safety.js";
 import { normalizeStoredCronJobs } from "./store-migration.js";
@@ -32,66 +32,42 @@ export {
   noteLegacyWhatsAppCrontabHealthCheck,
 } from "./warnings.js";
 
-function readLegacyCronStorePath(cfg: OpenClawConfig): string | undefined {
-  return (cfg.cron as (NonNullable<OpenClawConfig["cron"]> & { store?: string }) | undefined)
-    ?.store;
-}
-
-// Scheduler startup owns interruption recovery; Doctor only reports retained markers.
-function countInFlightCronJobs(jobs: Array<Record<string, unknown>>): number {
-  return jobs.filter((job) => {
-    const state = job.state;
-    return (
-      typeof state === "object" &&
-      state !== null &&
-      typeof (state as { runningAtMs?: unknown }).runningAtMs === "number"
-    );
-  }).length;
-}
-
 // The advisory threshold is independent of the scheduler's transient-retry budget.
 const CHRONIC_FAILURE_MIN_CONSECUTIVE_ERRORS = 3;
 
-function countChronicallyFailingCronJobs(jobs: Array<Record<string, unknown>>): number {
-  return jobs.filter((job) => {
-    // Match the scheduler: only an explicit false disables a job.
-    if (job.enabled === false) {
-      return false;
-    }
+function inspectCronJobHealth(jobs: Array<Record<string, unknown>>) {
+  let inFlightCount = 0;
+  let chronicFailureCount = 0;
+  const autoDisabledJobs: Array<{
+    id: string;
+    name: string;
+    reason: "consecutive-failures" | "schedule-errors";
+    consecutiveErrors: number;
+  }> = [];
+  for (const job of jobs) {
     const state = job.state;
     if (typeof state !== "object" || state === null) {
-      return false;
-    }
-    const consecutiveErrors = (state as { consecutiveErrors?: unknown }).consecutiveErrors;
-    return (
-      typeof consecutiveErrors === "number" &&
-      consecutiveErrors >= CHRONIC_FAILURE_MIN_CONSECUTIVE_ERRORS
-    );
-  }).length;
-}
-
-type AutoDisabledCronJob = {
-  id: string;
-  name: string;
-  reason: "consecutive-failures" | "schedule-errors";
-  consecutiveErrors: number;
-};
-
-function collectAutoDisabledCronJobs(jobs: Array<Record<string, unknown>>): AutoDisabledCronJob[] {
-  const autoDisabledJobs: AutoDisabledCronJob[] = [];
-  for (const job of jobs) {
-    if (job.enabled !== false || typeof job.id !== "string") {
       continue;
     }
-    const state = job.state;
-    if (!isRecord(state)) {
+    // Scheduler startup owns interruption recovery; Doctor only reports retained markers.
+    if ("runningAtMs" in state && typeof state.runningAtMs === "number") {
+      inFlightCount += 1;
+    }
+    // Match the scheduler: only an explicit false disables a job.
+    if (
+      job.enabled !== false &&
+      "consecutiveErrors" in state &&
+      typeof state.consecutiveErrors === "number" &&
+      state.consecutiveErrors >= CHRONIC_FAILURE_MIN_CONSECUTIVE_ERRORS
+    ) {
+      chronicFailureCount += 1;
+    }
+    if (job.enabled !== false || typeof job.id !== "string" || !isRecord(state)) {
       continue;
     }
     const autoDisabled = state.autoDisabled;
-    if (!isRecord(autoDisabled)) {
-      continue;
-    }
     if (
+      !isRecord(autoDisabled) ||
       (autoDisabled.reason !== "consecutive-failures" &&
         autoDisabled.reason !== "schedule-errors") ||
       typeof autoDisabled.consecutiveErrors !== "number"
@@ -105,7 +81,7 @@ function collectAutoDisabledCronJobs(jobs: Array<Record<string, unknown>>): Auto
       consecutiveErrors: autoDisabled.consecutiveErrors,
     });
   }
-  return autoDisabledJobs;
+  return { inFlightCount, chronicFailureCount, autoDisabledJobs };
 }
 
 const LEGACY_CRON_STORE_CHECK_ID = "core/doctor/legacy-cron-store";
@@ -135,10 +111,7 @@ export async function collectLegacyCronStoreHealthFindings(params: {
   try {
     state = await loadLegacyCronRepairState({ cfg: params.cfg, readOnly: true });
   } catch (err) {
-    if (err instanceof RetiredStateFormatError) {
-      throw err;
-    }
-    rethrowSqliteSchemaVersionError(err);
+    rethrowLegacyCronStoreError(err);
     const storePath = resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg));
     return [
       legacyCronStoreFinding({
@@ -276,10 +249,7 @@ export async function maybeRepairLegacyCronStore(params: {
   try {
     state = await loadLegacyCronRepairState({ cfg: params.cfg });
   } catch (err) {
-    if (err instanceof RetiredStateFormatError) {
-      throw err;
-    }
-    rethrowSqliteSchemaVersionError(err);
+    rethrowLegacyCronStoreError(err);
     const reason = err instanceof Error ? err.message : String(err);
     const storePath = resolveCronJobsStorePath(readLegacyCronStorePath(params.cfg));
     note(
@@ -376,7 +346,7 @@ export async function maybeRepairLegacyCronStore(params: {
   noteCronModelOverrides({ cfg: params.cfg, jobs: rawJobs });
   noteCronDeliveryTargetAdvisory({ cfg: params.cfg, jobs: rawJobs });
 
-  const inFlightCount = countInFlightCronJobs(rawJobs);
+  const { inFlightCount, chronicFailureCount, autoDisabledJobs } = inspectCronJobHealth(rawJobs);
   if (inFlightCount > 0) {
     const subject = inFlightCount === 1 ? "it" : "them";
     note(
@@ -389,7 +359,6 @@ export async function maybeRepairLegacyCronStore(params: {
     );
   }
 
-  const chronicFailureCount = countChronicallyFailingCronJobs(rawJobs);
   if (chronicFailureCount > 0) {
     note(
       [
@@ -401,7 +370,6 @@ export async function maybeRepairLegacyCronStore(params: {
     );
   }
 
-  const autoDisabledJobs = collectAutoDisabledCronJobs(rawJobs);
   if (autoDisabledJobs.length > 0) {
     note(
       [
@@ -436,8 +404,8 @@ export async function maybeRepairLegacyCronStore(params: {
   // Unresolved agentTurn command prompts are not auto-fixable; keep them out of the
   // --fix preview so the repair note does not promise a fix that never lands (#94655).
   for (const advisory of [
-    formatUnresolvedCommandPromptAdvisory(normalized.unresolvedAgentTurnCommandPromptJobs),
-    formatUnresolvedShellPromptAdvisory(normalized.unresolvedAgentTurnShellToolPromptJobs),
+    formatUnresolvedPromptAdvisory(normalized.unresolvedAgentTurnCommandPromptJobs, "command"),
+    formatUnresolvedPromptAdvisory(normalized.unresolvedAgentTurnShellToolPromptJobs, "shell"),
     formatScheduledToolPolicyAdvisory({
       legacyJobs: normalized.legacyScheduledToolPolicyJobs,
       invalidJobs: normalized.invalidScheduledToolPolicyJobs,

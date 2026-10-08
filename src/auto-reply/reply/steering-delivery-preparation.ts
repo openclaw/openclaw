@@ -122,6 +122,13 @@ export function prepareSteeringDelivery(params: {
   const candidates = captureSessionStoreReadCandidates(scope.storePath!);
   const identities = captureSessionStoreCandidateIdentities(candidates);
   let selectedPath: string | undefined;
+  const bindSelectedPath = (path: string) => {
+    const physicalPath = assertSessionStoreReadCandidate(path, candidates);
+    if (selectedPath !== undefined && selectedPath !== physicalPath) {
+      throw new Error("Steering delivery selected store changed");
+    }
+    selectedPath = physicalPath;
+  };
   const assertSources = () => {
     params.assertCurrent();
     for (const candidate of candidates) {
@@ -163,11 +170,7 @@ export function prepareSteeringDelivery(params: {
       assertSources();
       const read = reads[0]!;
       read.assertCurrent();
-      const physicalPath = assertSessionStoreReadCandidate(read.database.path, candidates);
-      if (selectedPath !== undefined && selectedPath !== physicalPath) {
-        throw new Error("Steering delivery selected store changed");
-      }
-      selectedPath = physicalPath;
+      bindSelectedPath(read.database.path);
       assertEntry(
         resolveSessionEntryCandidates({
           entries: read.result.entries,
@@ -189,11 +192,7 @@ export function prepareSteeringDelivery(params: {
         await withSessionEntriesFromStoresInWorker(descriptor.reads, descriptor.assertPrepared, {
           prepareSource: (_input, database, identity) => {
             assertSources();
-            const physicalPath = assertSessionStoreReadCandidate(database.path, candidates);
-            if (selectedPath !== undefined && selectedPath !== physicalPath) {
-              throw new Error("Steering delivery selected store changed");
-            }
-            selectedPath = physicalPath;
+            bindSelectedPath(database.path);
             if (!identities.has(identity.canonicalPath)) {
               identities.set(identity.canonicalPath, identity);
             }

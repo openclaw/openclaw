@@ -27,11 +27,13 @@ import {
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { isCronRunSessionKey, parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
+import { formatSystemTurnPrompt } from "../../sessions/system-turn-prompt.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { bindRequesterYieldCronAuthority } from "../cron-creator-authority-context.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
+import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../restart-recovery-prompt.js";
 import { isTerminalAgentWaitTimeout, waitForAgentRunReply } from "../run-wait.js";
 import { isSubagentSessionFromEntry } from "../subagents/spawn/subagent-depth-policy.js";
 import {
@@ -129,6 +131,16 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       } catch (err) {
         return sendFailure("forbidden", formatErrorMessage(err));
       }
+      const readSession = (key: string, agentId: string) =>
+        resolveGatewaySessionStoreTargetWithStore({
+          cfg,
+          key,
+          agentId,
+          readOnly: true,
+          exactRead: true,
+          clone: false,
+          projection: "full",
+        });
 
       const sessionKeyParam = readToolStringParam(params, "sessionKey");
       const labelParam = readToolStringParam(params, "label");
@@ -190,7 +202,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
           ...(restrictToSpawned ? { spawnedBy: effectiveRequesterKey } : {}),
         };
-        let resolvedKey;
+        let resolvedKey = "";
         try {
           const resolved = await gatewayCall<{ agentId?: string; key: string }>({
             method: "sessions.resolve",
@@ -200,9 +212,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           resolvedKey = normalizeOptionalString(resolved?.key) ?? "";
           resolvedTargetAgentId = normalizeOptionalString(resolved?.agentId);
         } catch (err) {
-          if (isExpectedSessionLookupMiss(err)) {
-            resolvedKey = "";
-          } else {
+          if (!isExpectedSessionLookupMiss(err)) {
             const failure = sessionOwnershipLookupFailure(err);
             logSessionOwnershipLookupFailure({
               requesterSessionKey: effectiveRequesterKey,
@@ -356,15 +366,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
       const mayUseRequesterForLiteralSentinel =
         isLiteralUnscopedMainTarget && normalizeAgentId(targetAgentId) === requesterAgentId;
       const requesterSessionKey = opts?.agentSessionKey ? effectiveRequesterKey : undefined;
-      const requesterSession = resolveGatewaySessionStoreTargetWithStore({
-        cfg,
-        key: effectiveRequesterKey,
-        agentId: requesterAgentId,
-        readOnly: true,
-        exactRead: true,
-        clone: false,
-        projection: "full",
-      });
+      const requesterSession = readSession(effectiveRequesterKey, requesterAgentId);
       const requesterSessionEntry = requesterSession.store[requesterSession.canonicalKey];
       const requesterSessionId = opts?.agentSessionId ?? requesterSessionEntry?.sessionId;
       const requesterContinuationSession = requesterSessionId
@@ -482,15 +484,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
 
           const requesterChannel = opts?.agentChannel;
           const isIsolatedCronRequester = isCronRunSessionKey(requesterSessionKey);
-          const targetSession = resolveGatewaySessionStoreTargetWithStore({
-            cfg,
-            key: resolvedKey,
-            agentId: targetAgentId,
-            readOnly: true,
-            exactRead: true,
-            clone: false,
-            projection: "full",
-          });
+          const targetSession = readSession(resolvedKey, targetAgentId);
           const targetSessionEntry = targetSession.store[targetSession.canonicalKey];
           const targetAcpMeta = readAcpSessionMetaForEntry({
             sessionKey: targetSession.canonicalKey,
@@ -533,6 +527,9 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
             lane: resolveNestedAgentLaneForSession(resolvedKey),
             inputProvenance,
           };
+          if (!targetAcpMeta && targetIsSubagent && targetSessionEntry?.status === "interrupted") {
+            sendParams.message = `${formatSystemTurnPrompt(RESTART_RECOVERY_INTERRUPTION_NOTE)}\n\n${sendParams.message}`;
+          }
           if (
             mode === "resume" ||
             (mode === undefined &&
@@ -633,15 +630,7 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
           });
           try {
             const acceptedTarget = start.a2aSessionKey
-              ? resolveGatewaySessionStoreTargetWithStore({
-                  cfg,
-                  key: acceptedTargetSessionKey,
-                  agentId: targetAgentId,
-                  readOnly: true,
-                  exactRead: true,
-                  clone: false,
-                  projection: "full",
-                })
+              ? readSession(acceptedTargetSessionKey, targetAgentId)
               : targetSession;
             if (start.a2aSessionKey && !acceptedTarget.store[acceptedTarget.canonicalKey]) {
               throw new Error("Accepted Cron parent has no stored session entry.");
@@ -726,4 +715,3 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
     }),
   };
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

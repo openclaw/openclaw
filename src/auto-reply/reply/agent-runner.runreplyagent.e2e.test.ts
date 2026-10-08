@@ -218,12 +218,12 @@ function makeCompletedFallbackRunner(
 }
 
 let runReplyAgentPromise:
-  | Promise<(typeof import("./agent-runner.js"))["runReplyAgent"]>
+  | Promise<(typeof import("./agent-runner-run.js"))["runReplyAgent"]>
   | undefined;
 
 async function getRunReplyAgent() {
   if (!runReplyAgentPromise) {
-    runReplyAgentPromise = import("./agent-runner.js").then((m) => m.runReplyAgent);
+    runReplyAgentPromise = import("./agent-runner-run.js").then((m) => m.runReplyAgent);
   }
   return await runReplyAgentPromise;
 }
@@ -1371,12 +1371,12 @@ describe("runReplyAgent active steering", () => {
       resolvedQueueMode: "steer",
     });
 
-    await expect(run()).resolves.toBeUndefined();
+    await expect(run()).resolves.toMatchObject({ isError: true, text: "receipt unavailable" });
 
     expect(onAdopted).toHaveBeenCalledOnce();
-    expect(state.activeBackendCancelMock).toHaveBeenCalledOnce();
-    expect(runState.admission).toEqual({ status: "accepted", mode: "steer" });
-    expect(runState.messageInjectionAborted).toBe(true);
+    expect(state.activeBackendCancelMock).not.toHaveBeenCalled();
+    expect(runState.admission).toMatchObject({ reason: "question-response-indeterminate" });
+    expect(runState.messageInjectionAborted).toBeUndefined();
     expect(parkedSteer.consume).toHaveBeenCalledOnce();
     expect(parkedSteer.fallback).not.toHaveBeenCalled();
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
@@ -1384,7 +1384,7 @@ describe("runReplyAgent active steering", () => {
     active.complete();
   });
 
-  it("unconfirmed steer commit aborts only the captured operation, never a same-key successor", async () => {
+  it("unconfirmed steer commit cancels neither the captured operation nor a same-key successor", async () => {
     const active = createReplyOperation({
       sessionKey: "main",
       sessionId: "session-a",
@@ -1419,13 +1419,13 @@ describe("runReplyAgent active steering", () => {
       resolvedQueueMode: "steer",
     });
 
-    await expect(run()).resolves.toBeUndefined();
+    await expect(run()).resolves.toMatchObject({ isError: true, text: "receipt unavailable" });
     if (!successor || !successorAbortByUser) {
       throw new Error("expected same-key successor operation");
     }
     try {
       expect(successorAbortByUser).not.toHaveBeenCalled();
-      expect(activeAbortByUser).toHaveBeenCalledOnce();
+      expect(activeAbortByUser).not.toHaveBeenCalled();
     } finally {
       successor.complete();
     }
@@ -1591,6 +1591,7 @@ describe("runReplyAgent heartbeat followup guard", () => {
     createMinimalRun,
     makeSessionFixture,
     runEmbeddedAgentMock: state.runEmbeddedAgentMock,
+    queueEmbeddedAgentMessageMock: state.queueEmbeddedAgentMessageMock,
   });
 
   it("drops runs when reply-lane admission sees an already-aborted caller", async () => {
@@ -2814,55 +2815,6 @@ describe("runReplyAgent pending final delivery capture", () => {
       restartRecoveryDeliveryRunId: "active-recovery-run",
       restartRecoveryDeliverySourceRunId: sourceTurnId,
     });
-  });
-
-  it("tombstones a redelivered source whose recovery claim is already terminal", async () => {
-    const sessionCtx = {
-      Provider: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "channel:24680",
-      MessageSid: "redelivered-terminal-message",
-    } as const;
-    const sourceTurnId = requireBuiltChannelSourceTurnId({
-      provider: "discord",
-      conversationId: "channel:24680",
-      messageId: "redelivered-terminal-message",
-    });
-    const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
-      status: "done",
-      restartRecoveryDeliveryRunId: "terminal-recovery-run",
-      restartRecoveryDeliverySourceRunId: sourceTurnId,
-      restartRecoveryDeliveryContext: {
-        channel: "discord",
-        to: "channel:24680",
-      },
-    });
-    const onAdopted = vi.fn();
-    const duplicate = createMinimalRun({
-      isActive: true,
-      shouldSteer: true,
-      opts: { turnAdoptionLifecycle: { onAdopted } },
-      sessionCtx,
-      runOverrides: { messageProvider: "discord" },
-      sessionEntry,
-      sessionStore,
-      sessionKey: "main",
-      storePath,
-    });
-
-    await expect(duplicate.run()).resolves.toBeUndefined();
-
-    expect(duplicate.sourceTurnId).toBe(sourceTurnId);
-    expect(onAdopted).not.toHaveBeenCalled();
-    expect(state.queueEmbeddedAgentMessageMock).not.toHaveBeenCalled();
-    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
-    const stored = await readStoredMainSession(storePath);
-    expect(stored).toMatchObject({
-      status: "done",
-      restartRecoveryTerminalRunIds: [sourceTurnId],
-    });
-    expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
-    expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
   });
 
   it("atomically replaces a terminal stale recovery claim for the next run", async () => {

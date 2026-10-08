@@ -74,19 +74,22 @@ function resolveRequesterPolicyContext(requester?: WebchatReplyMediaRequesterCon
 }
 
 /** The policy facts retained while preparing one reply's files. */
-export function webchatReplyMediaAuthority(scope: WebchatReplyMediaScope): string {
+export function webchatReplyMediaAuthority(scope: WebchatReplyMediaScope) {
   const entry = scope.sessionEntry;
   const workspace = resolveWebchatReplyWorkspace(scope);
-  return JSON.stringify([
-    entry?.sessionId,
-    entry?.lifecycleRevision,
-    entry?.permissionMode,
-    entry?.execNode,
-    entry?.repositoryWorkspaceId,
-    workspace.remote,
-    workspace.workspaceDir,
-    resolveWebchatReplyWorkspaceOnly(scope),
-  ]);
+  return {
+    workspace,
+    key: JSON.stringify([
+      entry?.sessionId,
+      entry?.lifecycleRevision,
+      entry?.permissionMode,
+      entry?.execNode,
+      entry?.repositoryWorkspaceId,
+      workspace.remote,
+      workspace.workspaceDir,
+      resolveWebchatReplyWorkspaceOnly(scope),
+    ]),
+  };
 }
 
 /** Bind reads to the source session; reread its owner after every awaited file operation. */
@@ -95,16 +98,24 @@ export function captureWebchatReplyMediaScope(
     sessionKey: string;
     sessionLoadOptions?: Parameters<typeof loadSessionEntry>[1];
   },
-): WebchatReplyMediaScope & { sessionKey: string; assertCurrent: () => void } {
+): WebchatReplyMediaScope & {
+  sessionKey: string;
+  workspace: ReturnType<typeof resolveWebchatReplyWorkspace>;
+  assertCurrent: () => void;
+} {
   const readEntry = () => loadSessionEntry(params.sessionKey, params.sessionLoadOptions).entry;
   const sessionEntry = readEntry();
   const scope = { ...params, sessionEntry: sessionEntry ? { ...sessionEntry } : undefined };
   const expected = webchatReplyMediaAuthority(scope);
   return {
     ...scope,
+    // The custody fence already read this workspace; preparation consumes that same snapshot.
+    workspace: expected.workspace,
     assertCurrent: () => {
       params.assertCurrent?.();
-      if (webchatReplyMediaAuthority({ ...scope, sessionEntry: readEntry() }) !== expected) {
+      if (
+        webchatReplyMediaAuthority({ ...scope, sessionEntry: readEntry() }).key !== expected.key
+      ) {
         throw new Error("Session media access changed before attachment delivery.");
       }
     },
@@ -153,7 +164,9 @@ export async function withPreparedWebchatReplyMedia<T>(
         const payload = payloads[index];
         return payload ? replaceChatSendReplyPayload(input, payload) : [];
       });
-      const localRoots = getWebchatReplyMediaLocalRoots({ ...scope, storePath: params.storePath });
+      const localRoots = hasMedia
+        ? getWebchatReplyMediaLocalRoots({ ...scope, storePath: params.storePath })
+        : [];
       return prepare({
         payloads,
         inputsByIndex,
@@ -232,9 +245,9 @@ function resolveWebchatReplyWorkspaceOnly(params: WebchatReplyMediaScope): boole
 
 /** Trusted audio bypasses staging, but its reader must use the same session workspace. */
 export function getWebchatReplyMediaLocalRoots(
-  params: WebchatReplyMediaScope & { storePath?: string },
+  params: ReturnType<typeof captureWebchatReplyMediaScope> & { storePath?: string },
 ): readonly string[] {
-  const { remote, workspaceDir } = resolveWebchatReplyWorkspace(params);
+  const { remote, workspaceDir } = params.workspace;
   if (remote) {
     return [getMediaDir()];
   }
@@ -282,9 +295,7 @@ function shouldPreserveDisplayMediaUrl(payload: ReplyPayload, mediaUrl: string):
 
 /** Normalize reply media paths for webchat display without leaking sensitive media. */
 export async function normalizeWebchatReplyMediaPathsForDisplay(
-  params: WebchatReplyMediaScope & {
-    sessionKey: string;
-    accountId?: string;
+  params: ReturnType<typeof captureWebchatReplyMediaScope> & {
     payloads: ReplyPayload[];
   },
 ): Promise<ReplyPayload[]> {
@@ -300,13 +311,13 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(
     ) {
       return params.payloads;
     }
-    const { remote, workspaceDir } = resolveWebchatReplyWorkspace(params);
+    const { remote, workspaceDir } = params.workspace;
     if (!workspaceDir) {
       return params.payloads;
     }
     const assertCurrent = captureChannelReadAuthority();
     const { createReplyMediaPathNormalizer } =
-      await import("../../auto-reply/reply/reply-media-paths.runtime.js");
+      await import("../../auto-reply/reply/reply-media-paths.js");
     assertCurrent?.();
     const workspaceOnly = resolveWebchatReplyWorkspaceOnly(params);
     const normalizeMediaPaths = createReplyMediaPathNormalizer({

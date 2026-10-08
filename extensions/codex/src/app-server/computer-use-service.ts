@@ -7,7 +7,6 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   assertDirectoryIdentityStable,
   assertNotSymlink,
-  assertOwnedServiceParentStable,
   assertOwnedServicePath,
   directoryIdentityIsStable,
   ensureOwnedCodexHome,
@@ -28,6 +27,7 @@ const CLIENT_RELATIVE_PATH = path.join(
   "MacOS",
   "SkyComputerUseClient",
 );
+const SERVICE_PARENT_LABEL = "Computer Use service parent";
 const COPY_TIMEOUT_MS = 120_000;
 const INSPECT_TIMEOUT_MS = 30_000;
 const activeInstalls = new Map<
@@ -170,7 +170,7 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
     return alreadyCurrent;
   }
 
-  await assertOwnedServiceParentStable(ownedParent);
+  await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
   const stagingRoot = await fs.mkdtemp(path.join(ownedParent.realPath, ".service-app.staging-"));
   const stagingRootIdentity = await readRealDirectoryIdentity(
     stagingRoot,
@@ -183,21 +183,21 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
   );
   let backupCreated = false;
   const restoreBackup = async () => {
-    await assertOwnedServiceParentStable(ownedParent);
+    await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
     await fs.rename(backupPath, operationTargetPath);
-    await assertOwnedServiceParentStable(ownedParent);
+    await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
     backupCreated = false;
   };
   const removeBackup = async () => {
-    await assertOwnedServiceParentStable(ownedParent);
+    await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
     await assertNotSymlink(backupPath, "Computer Use service backup");
     await fs.rm(backupPath, { recursive: true, force: true });
-    await assertOwnedServiceParentStable(ownedParent);
+    await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
     backupCreated = false;
   };
   try {
     await (params.copyServiceApp ?? copyServiceAppWithDitto)(sourcePath, stagedPath);
-    await assertOwnedServiceParentStable(ownedParent);
+    await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
     await assertDirectoryIdentityStable(
       stagingRootIdentity,
       "Computer Use service staging directory",
@@ -214,7 +214,7 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
     // ditto can notify the source watcher without changing its generation. Settle
     // those events before the original generation's synchronous publication guard.
     await waitForCodexDesktopGeneration();
-    await assertOwnedServiceParentStable(ownedParent);
+    await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
     await assertDirectoryIdentityStable(
       stagingRootIdentity,
       "Computer Use service staging directory",
@@ -224,10 +224,10 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
     }
     await assertNotSymlink(operationTargetPath, "Computer Use service target");
     if (await pathExists(operationTargetPath)) {
-      await assertOwnedServiceParentStable(ownedParent);
+      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
       params.assertCurrent?.();
       await fs.rename(operationTargetPath, backupPath);
-      await assertOwnedServiceParentStable(ownedParent);
+      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
       backupCreated = true;
       const movedTarget = await readServiceAppSnapshot(backupPath, inspectServiceApp);
       if (movedTarget.identity && identitiesMatch(movedTarget.identity, sourceIdentity)) {
@@ -244,12 +244,12 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
       }
     }
     try {
-      await assertOwnedServiceParentStable(ownedParent);
+      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
       params.assertCurrent?.();
       await fs.rename(stagedPath, operationTargetPath);
-      await assertOwnedServiceParentStable(ownedParent);
+      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
     } catch (error) {
-      await assertOwnedServiceParentStable(ownedParent);
+      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
       await assertNotSymlink(operationTargetPath, "Computer Use service target");
       const winnerIdentity = await inspectServiceApp(operationTargetPath);
       if (!winnerIdentity || !identitiesMatch(winnerIdentity, sourceIdentity)) {
@@ -271,12 +271,12 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
       !identitiesMatch(installedSnapshot.identity, sourceIdentity)
     ) {
       if (filesystemSnapshotsMatch(installedSnapshot, stagedSnapshot)) {
-        await assertOwnedServiceParentStable(ownedParent);
+        await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
         await fs.rm(operationTargetPath, { recursive: true, force: true });
-        await assertOwnedServiceParentStable(ownedParent);
+        await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
         if (backupCreated) {
           await fs.rename(backupPath, operationTargetPath);
-          await assertOwnedServiceParentStable(ownedParent);
+          await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
           backupCreated = false;
         }
       }
@@ -299,7 +299,7 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
       (await directoryIdentityIsStable(ownedParent)) &&
       !(await pathExists(operationTargetPath))
     ) {
-      await assertOwnedServiceParentStable(ownedParent);
+      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
       await fs.rename(backupPath, operationTargetPath);
       backupCreated = false;
     }

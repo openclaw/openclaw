@@ -56,13 +56,6 @@ function resolveStorageRootMtimeMs(rootDir: string): number {
   }
 }
 
-type PopulatedMatrixStorageRoot = {
-  tokenHash: string;
-  rootDir: string;
-  score: number;
-  mtimeMs: number;
-};
-
 async function readStoredRootMetadata(rootDir: string): Promise<MatrixStorageMetadata> {
   await assertMatrixSupportedStateFile(path.join(rootDir, STORAGE_META_FILENAME));
   if (fs.existsSync(path.join(rootDir, "state", "openclaw.sqlite"))) {
@@ -159,7 +152,7 @@ async function resolvePreferredMatrixStorageRoot(params: {
     };
   }
 
-  const compatiblePopulatedSiblings: PopulatedMatrixStorageRoot[] = [];
+  const populatedSiblingTokenHashes: string[] = [];
   const populatedTokenHashes = bestCurrentScore > 0 ? [params.canonicalTokenHash] : [];
   for (const entry of siblingEntries.toSorted((a, b) => a.name.localeCompare(b.name))) {
     if (!entry.isDirectory()) {
@@ -191,15 +184,13 @@ async function resolvePreferredMatrixStorageRoot(params: {
       continue;
     }
     populatedTokenHashes.push(entry.name);
-    compatiblePopulatedSiblings.push({
+    populatedSiblingTokenHashes.push(entry.name);
+    const candidate = {
       rootDir: candidateRootDir,
       tokenHash: entry.name,
       score: candidateScore,
       mtimeMs: resolveStorageRootMtimeMs(candidateRootDir),
-    });
-  }
-
-  for (const candidate of compatiblePopulatedSiblings) {
+    };
     if (
       candidate.score > best.score ||
       (best.rootDir !== params.canonicalRootDir &&
@@ -218,7 +209,7 @@ async function resolvePreferredMatrixStorageRoot(params: {
         canonicalTokenHash: params.canonicalTokenHash,
         selectedTokenHash: best.tokenHash,
         populatedTokenHashes,
-        populatedSiblingTokenHashes: compatiblePopulatedSiblings.map((root) => root.tokenHash),
+        populatedSiblingTokenHashes,
         populatedRootCount: populatedTokenHashes.length,
       });
   }

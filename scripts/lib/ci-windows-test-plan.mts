@@ -27,7 +27,7 @@ const fileSeconds: Readonly<Record<string, number>> = {
   "extensions/mxc/test/path-comparison.test.ts": 1.6,
   "extensions/mxc/test/sandbox-policy-loader.test.ts": 0.1,
   "packages/terminal-core/src/display-string.test.ts": 0.1,
-  "src/agents/agent-tools.read.host-operations.test.ts": 6.2,
+  "src/agents/agent-tools.read.workspace-mutations.test.ts": 6.2,
   "src/agents/agent-tools.read.windows.test.ts": 18.2,
   "src/agents/apply-patch.test.ts": 3.9,
   "src/agents/bash-tools.exec.script-preflight.test.ts": 12.2,

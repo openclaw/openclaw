@@ -211,12 +211,7 @@ describe("subagent maintenance protection", () => {
       const cleaned = { ...changed, cleanupCompletedAt: 4 };
       saveSubagentRegistryToSqlite(new Map([[cleaned.runId, cleaned]]));
       subagentRuns.set(cleaned.runId, cleaned);
-      const events: Array<() => void> = [];
-      publishSubagentRunsAfterAtomicStore(
-        new Map([[cleaned.runId, cleaned]]),
-        [cleaned.runId],
-        events,
-      );
+      publishSubagentRunsAfterAtomicStore(new Map([[cleaned.runId, cleaned]]), [cleaned.runId]);
       expect(prepared.capture().providerKeys).toEqual([]);
     } finally {
       prepared.dispose();

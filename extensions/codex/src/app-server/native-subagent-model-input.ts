@@ -369,11 +369,7 @@ type AdmissionDrainDependencies = {
     threadId: string,
     options: { agentPath?: string; directOwner?: ParentOwner; nativeParentThreadId?: string },
   ) => ChildState | undefined;
-  admitFollowupChild: (
-    known: KnownChild,
-    threadId: string,
-    owner?: ParentOwner,
-  ) => ChildState | undefined;
+  admitFollowupChild: (known: KnownChild, owner?: ParentOwner) => ChildState | undefined;
   observeActivity: (child: ChildState) => void;
 };
 
@@ -386,17 +382,15 @@ export function drainNativeChildModelAdmissions(
 ): void {
   const pending = dependencies.admissions.get(turnId);
   const ownerIsCurrent = [...state.owners.values()].includes(owner);
+  const admittedByOwner = (entry: NativeChildAdmissionEvidence) =>
+    entry.kind === "interaction" &&
+    (entry.admittedOwner === owner ||
+      entry.modelSource?.owner === owner ||
+      (entry.owner === owner && entry.modelSource));
   if (
     !pending ||
     !dependencies.isCurrent(state) ||
-    (!ownerIsCurrent &&
-      !pending.some(
-        (entry) =>
-          entry.kind === "interaction" &&
-          (entry.admittedOwner === owner ||
-            entry.modelSource?.owner === owner ||
-            (entry.owner === owner && entry.modelSource)),
-      ))
+    (!ownerIsCurrent && !pending.some(admittedByOwner))
   ) {
     return;
   }
@@ -408,12 +402,7 @@ export function drainNativeChildModelAdmissions(
       continue;
     }
     if (evidence.kind === "interaction") {
-      if (
-        !ownerIsCurrent &&
-        evidence.admittedOwner !== owner &&
-        evidence.modelSource?.owner !== owner &&
-        !(evidence.owner === owner && evidence.modelSource)
-      ) {
+      if (!ownerIsCurrent && !admittedByOwner(evidence)) {
         remaining.push(evidence);
         continue;
       }
@@ -495,11 +484,7 @@ export function drainNativeChildModelAdmissions(
       continue;
     }
     const previous = dependencies.currentChild(threadId);
-    const child = dependencies.admitFollowupChild(
-      known,
-      threadId,
-      ownerIsCurrent ? owner : undefined,
-    );
+    const child = dependencies.admitFollowupChild(known, ownerIsCurrent ? owner : undefined);
     if (observeActivity && child && child !== previous && child.nativeTurnState === "active") {
       dependencies.observeActivity(child);
     }

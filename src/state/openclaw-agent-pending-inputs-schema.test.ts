@@ -1,11 +1,14 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, describe, expect, it } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import {
   listSessionPendingInputs,
   stageSessionPendingInput,
 } from "../config/sessions/session-accessor.pending-inputs.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { withoutCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
@@ -15,7 +18,10 @@ import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
 } from "./openclaw-agent-db.js";
-import { ensureSessionPendingInputsSchema } from "./openclaw-agent-pending-inputs-schema.js";
+import {
+  ensureSessionPendingInputsSchema,
+  hasSessionPendingInputsSchema,
+} from "./openclaw-agent-pending-inputs-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { tableHasColumn, tableExists } from "./openclaw-state-db-schema-helpers.js";
 
@@ -167,10 +173,18 @@ describe("pending input additive schema", () => {
     },
   );
 
-  it.each([false, true])(
-    "retries first-use DDL after rollback on the same connection (existing table: %s)",
-    (existing) => {
-      const database = new DatabaseSync(":memory:");
+  it.each([
+    { connection: "legacy", existing: false },
+    { connection: "legacy", existing: true },
+    { connection: "admitted", existing: false },
+    { connection: "admitted", existing: true },
+  ])(
+    "retries first-use DDL after rollback on the same $connection connection (existing table: $existing)",
+    ({ connection, existing }) => {
+      const database =
+        connection === "admitted"
+          ? openNodeSqliteDatabase(":memory:")
+          : new DatabaseSync(":memory:");
       try {
         database.exec(
           withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_SQL).replace(
@@ -182,16 +196,44 @@ describe("pending input additive schema", () => {
         if (!existing) {
           database.exec("DROP TABLE session_pending_inputs");
         }
+        if (connection === "admitted") {
+          admitSqliteSchema(database);
+        }
         const before = database.prepare("PRAGMA schema_version").get();
+        let schemaDiscoveryCalls: number | undefined;
         expect(() =>
           runSqliteImmediateTransactionSync(database, () => {
+            if (connection === "admitted") {
+              const observation = trackSqliteStatementExecutions(
+                database,
+                ["schemaDiscovery"],
+                (sql) =>
+                  /\b(?:sqlite_schema|sqlite_master|pragma_table_info)\b/iu.test(sql)
+                    ? "schemaDiscovery"
+                    : null,
+              );
+              try {
+                expect(hasSessionPendingInputsSchema(database)).toBe(existing);
+                expect(hasSessionPendingInputsSchema(database)).toBe(existing);
+                schemaDiscoveryCalls = observation.counts.schemaDiscovery;
+              } finally {
+                observation.restore();
+              }
+            }
             ensureSessionPendingInputsSchema(database);
+            if (connection === "admitted") {
+              expect(hasSessionPendingInputsSchema(database)).toBe(true);
+            }
             throw new Error("abort first use");
           }),
         ).toThrow("abort first use");
         expect(database.prepare("PRAGMA schema_version").get()).toEqual(before);
         expect(tableExists(database, "session_pending_inputs")).toBe(existing);
         expect(tableHasColumn(database, "session_pending_inputs", "consumed_event_id")).toBe(false);
+        if (connection === "admitted") {
+          expect(hasSessionPendingInputsSchema(database)).toBe(existing);
+          expect(schemaDiscoveryCalls).toBe(0);
+        }
         ensureSessionPendingInputsSchema(database);
         expect(tableHasColumn(database, "session_pending_inputs", "consumed_event_id")).toBe(true);
         const after = database.prepare("PRAGMA schema_version").get();

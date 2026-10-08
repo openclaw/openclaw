@@ -337,7 +337,12 @@ function prepareLegacySessionImport(
   };
   let recovery: LegacySessionRecord["recovery"];
   if (result.status === "missing") {
-    if (markAlreadyMigratedTranscript(record, report, existingSnapshot)) {
+    if (
+      existingSnapshot?.sessionIdsBySessionKey.get(record.sessionKey) === record.entry.sessionId
+    ) {
+      report.validatedEntries += 1;
+      report.validatedTranscriptEvents +=
+        existingSnapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0;
       return undefined;
     }
     return {
@@ -423,23 +428,6 @@ function prepareLegacySessionImport(
       ...(transcriptMtimeMs !== undefined ? { transcriptMtimeMs } : {}),
     },
   };
-}
-
-function markAlreadyMigratedTranscript(
-  record: LegacySessionRecord,
-  report: DoctorSessionSqliteTargetReport,
-  snapshot: ReadOnlySqliteValidationSnapshot | undefined,
-): boolean {
-  if (
-    !snapshot ||
-    snapshot.sessionIdsBySessionKey.get(record.sessionKey) !== record.entry.sessionId
-  ) {
-    return false;
-  }
-  report.validatedEntries += 1;
-  report.validatedTranscriptEvents +=
-    snapshot.transcriptEventCountsBySessionId.get(record.entry.sessionId) ?? 0;
-  return true;
 }
 
 function readLegacyTranscriptMtimeMs(record: LegacySessionRecord): number | undefined {

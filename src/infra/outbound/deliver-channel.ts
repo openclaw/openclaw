@@ -121,13 +121,11 @@ export async function resolveOutboundDurableFinalDeliverySupport(params: {
   for (const [capability, required] of Object.entries(params.requirements ?? {}) as Array<
     [DurableFinalDeliveryRequirement, boolean | undefined]
   >) {
-    if (required === true && durableFinal?.[capability] !== true) {
-      return { ok: false, reason: "capability_mismatch", capability };
-    }
     if (
       required === true &&
-      capability === "reconcileUnknownSend" &&
-      typeof messageDurableFinal?.reconcileUnknownSend !== "function"
+      (durableFinal?.[capability] !== true ||
+        (capability === "reconcileUnknownSend" &&
+          typeof messageDurableFinal?.reconcileUnknownSend !== "function"))
     ) {
       return { ok: false, reason: "capability_mismatch", capability };
     }
@@ -210,8 +208,13 @@ function createPluginHandler(
     // Keep the final authority check and adapter invocation in one synchronous
     // call stack. An awaited callback leaves a microtask gap where custody can
     // change after validation but before recipient-visible transport code runs.
-    assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
-    return await send();
+    const initiate = () => {
+      assertOutboundHandoffCurrent(params.assertDirectAdapterHandoff);
+      return send();
+    };
+    return params.withDirectAdapterHandoff
+      ? await params.withDirectAdapterHandoff(initiate)
+      : await initiate();
   };
   // A prepared transport id identifies one atomic platform message. Splitting it
   // would either reuse the id or leave later chunks outside reply correlation.
@@ -485,10 +488,8 @@ function createPluginHandler(
           messageMedia,
         );
       }
-      if (sendMedia) {
-        return dispatchToAdapter(mediaCtx, () => sendMedia(mediaCtx));
-      }
-      return dispatchToAdapter(mediaCtx, () => sendText!(mediaCtx));
+      const send = sendMedia ?? sendText!;
+      return dispatchToAdapter(mediaCtx, () => send(mediaCtx));
     },
   };
 }

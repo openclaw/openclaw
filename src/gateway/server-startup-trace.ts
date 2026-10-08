@@ -23,6 +23,7 @@ const STARTUP_PROGRESS_PHASES = new Set([
   "config.auth",
   "post-ready.startup-maintenance",
   "startup.maintenance.channels",
+  "startup.maintenance.plugin-registry",
   "state.desktop-approval-admission",
   "sessions.admission",
   "startup.maintenance.sessions",

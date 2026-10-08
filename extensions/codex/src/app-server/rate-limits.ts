@@ -133,12 +133,18 @@ export function formatCodexUsageLimitErrorMessage(params: {
   const nextReset =
     blockingReset ??
     (ordinaryUsageAllowed === undefined && !usageSummary?.blocked
-      ? selectNextRateLimitReset(params.rateLimits, nowMs)
+      ? selectRateLimitWindowEntry(
+          collectCodexRateLimitSnapshots(params.rateLimits).flatMap(readWindowEntries),
+          nowMs,
+          "next",
+        )?.window
       : undefined);
   const parts = [CODEX_USAGE_LIMIT_MESSAGE_PREFIX];
   let recoveryAction = "Wait until Codex becomes available";
   if (nextReset) {
-    parts.push(`Next reset ${formatResetTime(nextReset.resetsAtMs, nowMs)}.`);
+    parts.push(
+      `Next reset in ${formatRelativeDuration(nextReset.resetsAtMs - nowMs)}, ${formatCalendarResetTime(nextReset.resetsAtMs, nowMs)}.`,
+    );
     recoveryAction = "Wait until the reset time";
   } else {
     const codexRetryHint = extractCodexRetryHint(message);
@@ -256,7 +262,7 @@ function summarizeRateLimitUsage(
   nowMs: number,
 ): CodexAccountUsageSummary {
   const blockingEntries = blockingSnapshot ? readWindowEntries(blockingSnapshot) : [];
-  const blockingWindowEntry = selectBlockingWindowEntry(blockingEntries, nowMs);
+  const blockingWindowEntry = selectRateLimitWindowEntry(blockingEntries, nowMs);
   const blockingWindow = blockingWindowEntry?.window;
   const blockingReset =
     blockingWindow && blockingWindow.resetsAtMs > nowMs ? blockingWindow : undefined;
@@ -272,7 +278,7 @@ function summarizeRateLimitUsage(
     ...(blockingReset
       ? {
           blockedUntilMs: blockingReset.resetsAtMs,
-          blockedUntilText: formatAccountResetTime(blockingReset.resetsAtMs, nowMs),
+          blockedUntilText: `${formatCalendarResetTime(blockingReset.resetsAtMs, nowMs)} (in ${formatRelativeDuration(blockingReset.resetsAtMs - nowMs)})`,
           blockedResetRelative: `in ${formatRelativeDuration(blockingReset.resetsAtMs - nowMs)}`,
         }
       : {}),
@@ -320,21 +326,6 @@ export function buildCodexAppServerUsageSnapshot(
     }
   }
   return result;
-}
-
-function selectNextRateLimitReset(
-  value: JsonValue | undefined,
-  nowMs: number,
-): RateLimitReset | undefined {
-  const windows = collectCodexRateLimitSnapshots(value).flatMap((snapshot) =>
-    LIMIT_WINDOW_KEYS.flatMap((key) => snapshot[key] ?? []),
-  );
-  const futureWindows = windows.filter((window) => window.resetsAtMs > nowMs);
-  const exhaustedWindows = futureWindows.filter(
-    (window) => window.usedPercent !== undefined && window.usedPercent >= 100,
-  );
-  const candidates = exhaustedWindows.length > 0 ? exhaustedWindows : futureWindows;
-  return candidates.toSorted((left, right) => left.resetsAtMs - right.resetsAtMs)[0];
 }
 
 function selectBlockingRateLimitSnapshot(
@@ -456,19 +447,6 @@ function formatReachedType(value: string): string {
   return value.replace(/[_-]+/gu, " ").replace(/\s+/gu, " ").trim();
 }
 
-function formatResetTime(resetsAtMs: number, nowMs: number): string {
-  return `in ${formatRelativeDuration(resetsAtMs - nowMs)}, ${formatCalendarResetTime(
-    resetsAtMs,
-    nowMs,
-  )}`;
-}
-
-function formatAccountResetTime(resetsAtMs: number, nowMs: number): string {
-  return `${formatCalendarResetTime(resetsAtMs, nowMs)} (in ${formatRelativeDuration(
-    resetsAtMs - nowMs,
-  )})`;
-}
-
 function snapshotHasLimitBlock(snapshot: RateLimitSnapshot): boolean {
   return Boolean(
     snapshot.rateLimitReachedType ??
@@ -548,13 +526,14 @@ function selectSnapshotBlockingReset(
   snapshot: RateLimitSnapshot,
   nowMs: number,
 ): RateLimitReset | undefined {
-  const window = selectBlockingWindowEntry(readWindowEntries(snapshot), nowMs)?.window;
+  const window = selectRateLimitWindowEntry(readWindowEntries(snapshot), nowMs)?.window;
   return window && window.resetsAtMs > nowMs ? window : undefined;
 }
 
-function selectBlockingWindowEntry(
+function selectRateLimitWindowEntry(
   entries: RateLimitWindowEntry[],
   nowMs: number,
+  selection: "blocking" | "next" = "blocking",
 ): RateLimitWindowEntry | undefined {
   const futureEntries = entries.filter((entry) => entry.window.resetsAtMs > nowMs);
   const exhaustedFutureEntries = futureEntries.filter(
@@ -564,10 +543,13 @@ function selectBlockingWindowEntry(
     exhaustedFutureEntries.length > 0 ? exhaustedFutureEntries : futureEntries;
   if (resetCandidates.length > 0) {
     return resetCandidates.toSorted((left, right) =>
-      exhaustedFutureEntries.length > 0
+      selection === "blocking" && exhaustedFutureEntries.length > 0
         ? right.window.resetsAtMs - left.window.resetsAtMs
         : left.window.resetsAtMs - right.window.resetsAtMs,
     )[0];
+  }
+  if (selection === "next") {
+    return undefined;
   }
   const exhaustedEntries = entries.filter(
     (entry) => entry.window.usedPercent !== undefined && entry.window.usedPercent >= 100,

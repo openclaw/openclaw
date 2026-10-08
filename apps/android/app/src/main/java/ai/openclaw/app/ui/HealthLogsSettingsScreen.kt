@@ -7,8 +7,7 @@ import ai.openclaw.app.VoiceCaptureMode
 import ai.openclaw.app.gatewayConnectionStatusForDisplay
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.takeUtf16Safe
-import ai.openclaw.app.ui.design.ClawPanel
-import ai.openclaw.app.ui.design.ClawSeparatedColumn
+import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawStatus
 import ai.openclaw.app.ui.design.ClawStatusPill
 import ai.openclaw.app.ui.design.ClawStatusRow
@@ -103,10 +102,8 @@ internal fun HealthLogsSettingsScreen(
         ),
         HealthStatus(nativeString("Runs"), if (pendingRunCount > 0) nativeString("\$pendingRunCount active", pendingRunCount) else nativeString("Idle"), true),
       )
-    ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-      ClawSeparatedColumn(items = healthRows, dividerColor = ClawTheme.colors.border) { row ->
-        ClawStatusRow(title = row.title, value = row.value, healthy = row.healthy)
-      }
+    ClawListPanel(items = healthRows, contentPadding = PaddingValues(0.dp), dividerColor = ClawTheme.colors.border) { row ->
+      ClawStatusRow(title = row.title, value = row.value, healthy = row.healthy)
     }
     SettingsRefreshControls(isConnected, logsState.refreshing, logsState.errorText, viewModel::refreshHealthLogs, label = nativeString("Refresh Logs"))
     SettingsSummaryContent(logsState, isConnected, nativeString("Connect the gateway to load recent logs.")) { summary ->
@@ -149,18 +146,11 @@ private fun GatewayLogDetailSettingsScreen(
         ),
     )
     SettingsMessagePanel(title = nativeString("Message"), text = entry.message, color = ClawTheme.colors.text, spacing = 6.dp)
-    ClawPanel(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-      Text(text = nativeString("Raw"), style = ClawTheme.type.section, color = ClawTheme.colors.text)
-      Text(
-        text = entry.raw.takeUtf16Safe(4_000),
-        style = ClawTheme.type.caption,
-        color = ClawTheme.colors.textMuted,
-      )
-    }
+    SettingsMessagePanel(title = nativeString("Raw"), text = entry.raw.takeUtf16Safe(4_000), textStyle = ClawTheme.type.caption, spacing = 6.dp)
   }
 }
 
-private data class HealthStatus(
+internal data class HealthStatus(
   val title: String,
   val value: String,
   val healthy: Boolean,
@@ -181,10 +171,8 @@ private fun GatewayLogsPanel(
     if (summary.entries.isEmpty()) {
       SettingsMessagePanel(text = nativeString("No recent log entries."))
     } else {
-      ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-        ClawSeparatedColumn(items = summary.entries.takeLast(12), dividerColor = ClawTheme.colors.border) { entry ->
-          GatewayLogRow(entry = entry, onClick = { onLogClick(entry) })
-        }
+      ClawListPanel(items = summary.entries.takeLast(12), contentPadding = PaddingValues(0.dp), dividerColor = ClawTheme.colors.border) { entry ->
+        GatewayLogRow(entry = entry, onClick = { onLogClick(entry) })
       }
     }
     if (summary.truncated) {

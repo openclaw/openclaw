@@ -162,6 +162,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -169,6 +170,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.launch
 import java.text.DateFormat
@@ -190,7 +192,6 @@ internal fun SettingsDetailScreen(
     SettingsRoute.CronJobs -> CronJobsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Usage -> UsageSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Skills -> SkillsSettingsScreen(viewModel = viewModel, onBack = onBack)
-    SettingsRoute.SkillWorkshop -> SkillWorkshopSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.SystemAgent -> SystemAgentSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.NodesDevices -> NodesDevicesSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Channels -> ChannelsSettingsScreen(viewModel = viewModel, onBack = onBack)
@@ -674,9 +675,7 @@ private fun VoiceSettingsScreen(
     }
   }
 
-  LaunchedEffect(isConnected) {
-    if (isConnected) viewModel.refreshTalkSetupReadiness()
-  }
+  SettingsRefreshOnConnect(isConnected) { viewModel.refreshTalkSetupReadiness() }
 
   DisposableEffect(viewModel) {
     val observer = viewModel.observeAudioInputDevices { devices -> audioInputDevices = devices }
@@ -1007,15 +1006,8 @@ private fun NotificationSettingsScreen(
     }
   var listenerEnabled by remember { mutableStateOf(DeviceNotificationListenerService.isAccessEnabled(context)) }
 
-  DisposableEffect(lifecycleOwner, context) {
-    val observer =
-      LifecycleEventObserver { _, event ->
-        if (event == Lifecycle.Event.ON_RESUME) {
-          listenerEnabled = DeviceNotificationListenerService.isAccessEnabled(context)
-        }
-      }
-    lifecycleOwner.lifecycle.addObserver(observer)
-    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+  RefreshOnResume(lifecycleOwner, context) {
+    listenerEnabled = DeviceNotificationListenerService.isAccessEnabled(context)
   }
 
   val notificationPermissionLauncher =
@@ -1270,7 +1262,7 @@ private fun PhoneCapabilitiesScreen(
       photosGranted = photosAvailable && hasPhotoReadPermission(context)
     }
 
-  DisposableEffect(
+  RefreshOnResume(
     lifecycleOwner,
     context,
     photosAvailable,
@@ -1279,37 +1271,30 @@ private fun PhoneCapabilitiesScreen(
     awaitingBackgroundSettings,
     pendingAlwaysPreviousModeRaw,
   ) {
-    val observer =
-      LifecycleEventObserver { _, event ->
-        if (event == Lifecycle.Event.ON_RESUME) {
-          photosGranted = photosAvailable && hasPhotoReadPermission(context)
-          val foregroundGranted = hasLocationPermission(context)
-          val backgroundGranted = hasBackgroundLocationPermission(context)
-          if (awaitingBackgroundSettings && pendingAlwaysPreviousModeRaw != null) {
-            val previousMode = LocationMode.fromRawValue(pendingAlwaysPreviousModeRaw)
-            viewModel.setLocationMode(
-              locationModeAfterBackgroundSettings(
-                previousMode = previousMode,
-                foregroundGranted = foregroundGranted,
-                backgroundGranted = backgroundGranted,
-              ),
-            )
-            awaitingBackgroundSettings = false
-            pendingAlwaysPreviousModeRaw = null
-          } else if (
-            locationMode == LocationMode.Always &&
-            (!backgroundLocationAvailable || !foregroundGranted || !backgroundGranted)
-          ) {
-            viewModel.setLocationMode(
-              if (foregroundGranted) LocationMode.WhileUsing else LocationMode.Off,
-            )
-          } else if (locationMode == LocationMode.WhileUsing && !foregroundGranted) {
-            viewModel.setLocationMode(LocationMode.Off)
-          }
-        }
-      }
-    lifecycleOwner.lifecycle.addObserver(observer)
-    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    photosGranted = photosAvailable && hasPhotoReadPermission(context)
+    val foregroundGranted = hasLocationPermission(context)
+    val backgroundGranted = hasBackgroundLocationPermission(context)
+    if (awaitingBackgroundSettings && pendingAlwaysPreviousModeRaw != null) {
+      val previousMode = LocationMode.fromRawValue(pendingAlwaysPreviousModeRaw)
+      viewModel.setLocationMode(
+        locationModeAfterBackgroundSettings(
+          previousMode = previousMode,
+          foregroundGranted = foregroundGranted,
+          backgroundGranted = backgroundGranted,
+        ),
+      )
+      awaitingBackgroundSettings = false
+      pendingAlwaysPreviousModeRaw = null
+    } else if (
+      locationMode == LocationMode.Always &&
+      (!backgroundLocationAvailable || !foregroundGranted || !backgroundGranted)
+    ) {
+      viewModel.setLocationMode(
+        if (foregroundGranted) LocationMode.WhileUsing else LocationMode.Off,
+      )
+    } else if (locationMode == LocationMode.WhileUsing && !foregroundGranted) {
+      viewModel.setLocationMode(LocationMode.Off)
+    }
   }
 
   fun setCameraAccess(checked: Boolean) {
@@ -2141,12 +2126,7 @@ private fun AppearanceThemeFamilyCard(
         }
       }
       if (selected) {
-        Icon(
-          imageVector = Icons.Default.Check,
-          contentDescription = nativeString("Selected"),
-          tint = ClawTheme.colors.primary,
-          modifier = Modifier.size(18.dp),
-        )
+        SettingsSelectionCheck()
       }
     }
     Text(text = family.displayLabel, style = ClawTheme.type.label, color = ClawTheme.colors.text)
@@ -2464,10 +2444,29 @@ internal fun SettingsMessagePanel(
   title: String? = null,
   color: Color = ClawTheme.colors.textMuted,
   spacing: Dp = 3.dp,
+  titleStyle: TextStyle = ClawTheme.type.section,
+  textStyle: TextStyle = ClawTheme.type.body,
 ) {
   ClawPanel(verticalArrangement = Arrangement.spacedBy(spacing)) {
-    title?.let { Text(text = it, style = ClawTheme.type.section, color = ClawTheme.colors.text) }
-    Text(text = text, style = ClawTheme.type.body, color = color)
+    title?.let { Text(text = it, style = titleStyle, color = ClawTheme.colors.text) }
+    Text(text = text, style = textStyle, color = color)
+  }
+}
+
+/** Retain the callback captured for these keys until the observer is replaced. */
+@Composable
+internal fun RefreshOnResume(
+  lifecycleOwner: LifecycleOwner,
+  vararg keys: Any?,
+  onResume: () -> Unit,
+) {
+  DisposableEffect(lifecycleOwner, *keys) {
+    val observer =
+      LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_RESUME) onResume()
+      }
+    lifecycleOwner.lifecycle.addObserver(observer)
+    onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
   }
 }
 
@@ -2931,26 +2930,20 @@ internal fun execApprovalMetadata(
   nowMs: Long = System.currentTimeMillis(),
 ): String {
   val target =
-    when {
-      approval.host == "node" && approval.nodeId != null -> {
-        val nodeId = approval.nodeId.take(8)
-        nativeString("Node \${nodeId}", nodeId)
+    when (approval.host) {
+      "node" -> {
+        approval.nodeId?.let {
+          val nodeId = it.take(8)
+          nativeString("Node \${nodeId}", nodeId)
+        } ?: nativeString("Node")
       }
 
-      approval.host == "node" -> {
-        nativeString("Node")
-      }
-
-      approval.host == "gateway" -> {
+      "gateway", null -> {
         nativeString("Gateway")
-      }
-
-      approval.host != null -> {
-        approval.host
       }
 
       else -> {
-        nativeString("Gateway")
+        approval.host
       }
     }
   val agent =
@@ -3056,23 +3049,12 @@ internal fun formatUsageUpdated(
   val deltaMs = (nowMs - updated).coerceAtLeast(0L)
   val minutes = deltaMs / 60_000L
   val hours = minutes / 60L
+  val days = hours / 24L
   return when {
-    minutes < 1 -> {
-      nativeString("Now")
-    }
-
-    hours < 1 -> {
-      nativeString("\${minutes}m", minutes)
-    }
-
-    hours < 24 -> {
-      nativeString("\${hours}h", hours)
-    }
-
-    else -> {
-      val days = hours / 24L
-      nativeString("\${days}d", days)
-    }
+    minutes < 1 -> nativeString("Now")
+    hours < 1 -> nativeString("\${minutes}m", minutes)
+    hours < 24 -> nativeString("\${hours}h", hours)
+    else -> nativeString("\${days}d", days)
   }
 }
 
@@ -3179,10 +3161,8 @@ internal fun formatCronTimestamp(timeMs: Long?): String {
 
 @Composable
 internal fun SettingsTogglePanel(rows: List<SettingsToggleRow>) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-    ClawSeparatedColumn(items = rows) { row ->
-      SettingsToggleListRow(row)
-    }
+  ClawListPanel(items = rows, contentPadding = PaddingValues(0.dp)) { row ->
+    SettingsToggleListRow(row)
   }
 }
 

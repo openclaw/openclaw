@@ -97,7 +97,7 @@ export function createAgentRunMediaCustody(
             sessionKey: selected.legacyKey ?? selected.canonicalKey,
             entry: selected.entry,
             matches: (_before, after) =>
-              webchatReplyMediaAuthority({ ...scope, sessionEntry: after }) === expected,
+              webchatReplyMediaAuthority({ ...scope, sessionEntry: after }).key === expected.key,
           });
           releaseSource = registerOpenClawAgentDatabaseAsyncResource({
             agentId: source.agentId,
@@ -112,6 +112,7 @@ export function createAgentRunMediaCustody(
           });
           return {
             ...scope,
+            workspace: expected.workspace,
             assertCurrent: () => {
               assertCurrent();
               assertExistingDatabaseIdentity(
@@ -122,7 +123,8 @@ export function createAgentRunMediaCustody(
               if (
                 !active ||
                 !predicate?.isCurrent() ||
-                webchatReplyMediaAuthority({ ...scope, cfg: getRuntimeConfig() }) !== expected
+                webchatReplyMediaAuthority({ ...scope, cfg: getRuntimeConfig() }).key !==
+                  expected.key
               ) {
                 throw new SessionTranscriptWriterClaimReboundError();
               }

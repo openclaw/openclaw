@@ -47,10 +47,7 @@ it("does not refresh session metadata when an owned abort marker is already pers
   expect(before?.abortedLastRun).toBe(true);
   const marker = {
     childSessionKey: rootKey,
-    storePath,
-    hasSessionEntry: true,
-    expectedSessionId: sessionId,
-    expectedLifecycleRevision: before?.lifecycleRevision,
+    session: { storePath, entry: before },
     abortedLastRun: true,
   };
   expect(await killSession.persistSubagentAbortedLastRun(marker)).toBe(true);

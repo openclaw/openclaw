@@ -102,7 +102,10 @@ export async function executeFollowupTurn(params: {
   // Queued turns are never heartbeats; heartbeat runs never supply the drain callback.
   const isHeartbeat = false;
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
-  const progressAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
+  const deliveryAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
+  const progressAllowed = () =>
+    deliveryAllowed() &&
+    (sourceOpts?.progressRequiresReply !== true || terminalReplyExpectation === "required");
   const verboseRead =
     turn.session.kind === "session" && turn.session.storePath
       ? captureSessionEntryReadScope({
@@ -225,31 +228,32 @@ export async function executeFollowupTurn(params: {
   turn.queued.operatorAuthority?.assertCurrent();
   let progressChain: Promise<void> = Promise.resolve();
   let visibleReplyDelivered = false;
-  let pendingProgressTaskFailure: unknown;
+  const pendingTaskFailures: { progress?: unknown; tool?: unknown } = {};
   const pendingWorkTasks = new Set<Promise<void>>();
+  const trackPendingWork = (task: Promise<void>, kind: "progress" | "tool") => {
+    const observedTask = task.catch((error: unknown) => {
+      pendingTaskFailures[kind] ??= error;
+      throw error;
+    });
+    const watcher = observedTask.finally(() => pendingWorkTasks.delete(watcher));
+    void watcher.catch(() => undefined);
+    pendingWorkTasks.add(watcher);
+  };
   const enqueueProgress = (deliver: () => Promise<void> | void): Promise<void> => {
     const deliveryTask = progressChain.then(deliver);
     progressChain = deliveryTask.catch(() => undefined);
-    const observedTask = deliveryTask.catch((error: unknown) => {
-      pendingProgressTaskFailure ??= error;
-      throw error;
-    });
-    const trackedTask = observedTask.finally(() => pendingWorkTasks.delete(trackedTask));
-    void trackedTask.catch(() => undefined);
-    pendingWorkTasks.add(trackedTask);
+    trackPendingWork(deliveryTask, "progress");
     return progressChain;
   };
   const enqueueProgressResult = async (
     deliver: () => Promise<boolean | void> | boolean | void,
   ): Promise<boolean | void> => {
-    let completed = false;
     let result: boolean | void = false;
     await enqueueProgress(async () => {
       result = await deliver();
       visibleReplyDelivered ||= result !== false;
-      completed = true;
     });
-    return completed ? result : false;
+    return result;
   };
   const wrap = <T>(callback: ((value: T) => unknown) | undefined, allowed = progressAllowed) =>
     callback
@@ -337,10 +341,10 @@ export async function executeFollowupTurn(params: {
     onReasoningEnd: wrapVisibility(sourceOpts?.onReasoningEnd),
     onToolResult: async (payload) => {
       return await enqueueProgressResult(async () => {
-        if (!progressAllowed()) {
+        const requiresDurableToolResult = requiresDurableToolResultDelivery(payload);
+        if (!deliveryAllowed() || (!requiresDurableToolResult && !progressAllowed())) {
           return false;
         }
-        const requiresDurableToolResult = requiresDurableToolResultDelivery(payload);
         if (sourceOpts?.suppressToolProgressMessages && !requiresDurableToolResult) {
           return false;
         }
@@ -389,16 +393,9 @@ export async function executeFollowupTurn(params: {
       });
     },
   };
-  let pendingToolTaskFailure: unknown;
   const pendingToolTasks = new (class extends Set<Promise<void>> {
     override add(task: Promise<void>): this {
-      const observedTask = task.catch((error: unknown) => {
-        pendingToolTaskFailure ??= error;
-        throw error;
-      });
-      const watcher = observedTask.finally(() => pendingWorkTasks.delete(watcher));
-      void watcher.catch(() => undefined);
-      pendingWorkTasks.add(watcher);
+      trackPendingWork(task, "tool");
       return super.add(task);
     }
   })();
@@ -529,7 +526,7 @@ export async function executeFollowupTurn(params: {
     progress: {
       drain: async () => {
         await drainPendingWork();
-        const firstFailure: unknown = pendingProgressTaskFailure ?? pendingToolTaskFailure;
+        const firstFailure: unknown = pendingTaskFailures.progress ?? pendingTaskFailures.tool;
         if (firstFailure !== undefined) {
           throw firstFailure instanceof Error
             ? firstFailure

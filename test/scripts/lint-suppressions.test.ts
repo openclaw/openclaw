@@ -224,6 +224,7 @@ describe("production lint suppressions", () => {
         "src/cli/test-runtime-capture.ts|typescript/no-unnecessary-type-parameters|1",
         "src/commands/backup-restore.ts|preserve-caught-error|1",
         "src/config/sessions/session-accessor.sqlite-worker-request.ts|no-warning-comments|1",
+        "src/config/sessions/session-transcript-lock-settlement.ts|typescript/prefer-promise-reject-errors|2",
         "src/config/sessions/session-transcript-reconcile.close-failure.test-support.mjs|typescript/unbound-method|1",
         "src/config/sessions/session-transcript-reconcile.sql-observer.test-support.ts|typescript/unbound-method|1",
         // Canonical entries must honor toJSON and omit non-JSON values exactly as persistence does.

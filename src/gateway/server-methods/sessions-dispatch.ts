@@ -7,14 +7,16 @@ import {
   validateSessionsMoveParams,
   validateSessionsReclaimParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { readLiveRegistryWorktreeByOwner } from "../../agents/worktrees/registry-read.js";
-import { captureWorktreeRunEndContext } from "../../agents/worktrees/run-end-lifecycle.js";
+import { assertRequiredWorkerSelection } from "../../config/required-worker-profile.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
+import {
+  loadWorkerPlacementSessionRuntimeModule,
+  resolveWorkerPlacementSessionTarget,
+} from "../server-worker-placement-session-target.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
-import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { resolveDevicePlacementEligibility } from "../worker-environments/device-placement-eligibility.js";
 import { selectDevicePlacementCandidates } from "../worker-environments/device-placement-selector.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "../worker-environments/device-provider-identity.js";
@@ -39,6 +41,7 @@ import {
 } from "../worker-environments/placement-session-runtime.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "../worker-environments/placement-target.js";
 import type { WorkerPlacementDispatchRequest } from "../worker-environments/service-contract.js";
+import { readSessionWorkerPlacementAsync } from "../worker-environments/session-placement-lifecycle.js";
 import type { WorkerSessionWorkspace } from "../worker-environments/session-workspace.js";
 import { listGatewayEnvironments } from "./environments.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -108,13 +111,16 @@ function resolveWorkerSessionTarget(
     respond(false, undefined, requestedAgent.error);
     return undefined;
   }
-  const destination = resolveWorkerPlacementDestination({
-    cfg,
-    profileId: params.profileId,
-    deviceId: params.deviceId,
-    machineClass: params.machineClass,
-    os: params.os,
-  });
+  const destination =
+    method === "dispatch"
+      ? resolveWorkerPlacementDestination({
+          cfg,
+          profileId: params.profileId,
+          deviceId: params.deviceId,
+          machineClass: params.machineClass,
+          os: params.os,
+        })
+      : { ok: true as const, value: undefined };
   if (!destination.ok) {
     respondInvalidWorkerSession(respond, destination.error);
     return undefined;
@@ -141,6 +147,7 @@ function resolveWorkerSessionTarget(
 }
 
 async function resolveSessionWorkspace(params: {
+  config: OpenClawConfig;
   entry: NonNullable<ReturnType<typeof loadAccessorSessionEntryForGatewayTarget>["entry"]>;
   sessionKey: string;
   agentId: string;
@@ -148,50 +155,26 @@ async function resolveSessionWorkspace(params: {
   respond: RespondFn;
   assertCurrent?: () => void;
 }): Promise<WorkerSessionWorkspace | undefined> {
-  const worktreeContext = captureWorktreeRunEndContext(process.env);
-  if (params.entry.repositoryWorkspaceId) {
-    const repository = await getSessionRepositoryWorkspaceStore().get(
-      params.entry.repositoryWorkspaceId,
-    );
-    const current = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
-    if (
-      current.agentId === params.agentId &&
-      current.canonicalKey === params.sessionKey &&
-      current.entry?.sessionId === params.entry.sessionId &&
-      current.entry?.lifecycleRevision === params.entry.lifecycleRevision &&
-      current.entry?.archivedAt === params.entry.archivedAt &&
-      current.entry?.repositoryWorkspaceId === params.entry.repositoryWorkspaceId &&
-      !current.entry.worktree &&
-      repository &&
-      repository.agentId === params.agentId &&
-      repository.sessionKey === params.sessionKey &&
-      !params.entry.worktree
-    ) {
-      return { kind: "repository", repository };
+  const article = params.method === "sessions.dispatch" ? "a" : "the";
+  try {
+    const resolved = await resolveWorkerPlacementSessionTarget({
+      sessionRuntime: await loadWorkerPlacementSessionRuntimeModule(),
+      config: params.config,
+      sessionId: params.entry.sessionId,
+      sessionKey: params.sessionKey,
+      agentId: params.agentId,
+      expectedEntry: params.entry,
+      errorMessage: `${params.method} requires ${article} session-owned worktree or repository workspace`,
+    });
+    params.assertCurrent?.();
+    return resolved.workspace;
+  } catch (error) {
+    if (error instanceof SessionMutationAuthorizationChangedError) {
+      throw error;
     }
-    respondInvalidWorkerSession(params.respond, "The session repository workspace owner changed.");
+    respondInvalidWorkerSession(params.respond, formatErrorMessage(error));
     return undefined;
   }
-  const worktree = await readLiveRegistryWorktreeByOwner(
-    worktreeContext,
-    "session",
-    params.sessionKey,
-  );
-  params.assertCurrent?.();
-  if (
-    params.entry.worktree?.id &&
-    worktree &&
-    worktree.id === params.entry.worktree.id &&
-    worktree.ownerId === params.sessionKey
-  ) {
-    return { kind: "local", path: worktree.path };
-  }
-  const article = params.method === "sessions.dispatch" ? "a" : "the";
-  respondInvalidWorkerSession(
-    params.respond,
-    `${params.method} requires ${article} session-owned worktree or repository workspace`,
-  );
-  return undefined;
 }
 
 function respondWorkerPlacement(params: {
@@ -256,11 +239,17 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSessionsDispatchParams, "sessions.dispatch", respond)) {
       return;
     }
+    try {
+      assertRequiredWorkerSelection(context.getRuntimeConfig(), params);
+    } catch (error) {
+      respondWorkerDispatchError(error, respond);
+      return;
+    }
     const resolved = resolveWorkerSessionTarget("dispatch", params, context, respond);
     if (!resolved) {
       return;
     }
-    const { cfg, entry, session, service: dispatchService, reader: placementReader } = resolved;
+    const { cfg, entry, session, service: dispatchService } = resolved;
     const { sessionId, sessionKey, agentId } = session;
     let { dispatchTarget } = resolved;
     const autoDevice = params.autoDevice === true;
@@ -355,7 +344,8 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     if (!autoDevice && dispatchTarget && !(await validateExecutionMode(dispatchTarget))) {
       return;
     }
-    const existingPlacement = placementReader.getMany([sessionId]).get(sessionId);
+    const existingPlacement = await readSessionWorkerPlacementAsync({ context, sessionId });
+    sessionMutationAuthorization?.assertCurrent();
     if (
       existingPlacement?.state === "failed" &&
       !isFailedWorkerPlacementEnvironmentGone({
@@ -394,6 +384,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       return;
     }
     const workspace = await resolveSessionWorkspace({
+      config: context.getRuntimeConfig(),
       entry,
       ...session,
       method: "sessions.dispatch",
@@ -503,7 +494,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
                 deviceId: candidateTarget.deviceId,
                 ...session,
                 attempted: attemptedPlacement,
-                current: placementReader.getMany([sessionId]).get(sessionId),
+                current: await readSessionWorkerPlacementAsync({ context, sessionId }),
                 environments: context.workerEnvironmentService,
               })
             ) {
@@ -539,13 +530,14 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { entry, session, service: placementService, reader: placementReader } = resolved;
+    const { entry, session, service: placementService } = resolved;
     const { sessionId, sessionKey } = session;
     if (entry.archivedAt !== undefined) {
       respondInvalidWorkerSession(respond, "cannot move an archived session");
       return;
     }
-    const existingPlacement = placementReader.getMany([sessionId]).get(sessionId);
+    const existingPlacement = await readSessionWorkerPlacementAsync({ context, sessionId });
+    sessionMutationAuthorization?.assertCurrent();
     const retryAbandonment =
       "abandonSource" in params && isForceAbandonedWorkerPlacement(existingPlacement);
     if (
@@ -561,6 +553,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     }
     if (
       !(await resolveSessionWorkspace({
+        config: context.getRuntimeConfig(),
         entry,
         ...session,
         method: "sessions.move",
@@ -619,9 +612,10 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     if (!resolved) {
       return;
     }
-    const { entry, session, service: placementService, reader: placementReader } = resolved;
+    const { entry, session, service: placementService } = resolved;
     const { sessionId, sessionKey } = session;
-    const existingPlacement = placementReader.getMany([sessionId]).get(sessionId);
+    const existingPlacement = await readSessionWorkerPlacementAsync({ context, sessionId });
+    sessionMutationAuthorization?.assertCurrent();
     const reportPlacementChange = (placement: WorkerSessionPlacementRecord | undefined): void => {
       if (
         !placement ||
@@ -641,6 +635,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
     if (
       existingPlacement?.state !== "failed" &&
       !(await resolveSessionWorkspace({
+        config: context.getRuntimeConfig(),
         entry,
         ...session,
         method: "sessions.reclaim",
@@ -663,7 +658,7 @@ export const sessionDispatchHandlers: GatewayRequestHandlers = {
       if (error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
       }
-      reportPlacementChange(placementReader.getMany([sessionId]).get(sessionId));
+      reportPlacementChange(await readSessionWorkerPlacementAsync({ context, sessionId }));
       respondWorkerDispatchError(error, respond);
       return;
     }

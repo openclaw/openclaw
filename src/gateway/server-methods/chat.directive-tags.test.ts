@@ -443,7 +443,7 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
     ...actual,
     getSessionBindingService: () => ({
       ...actual.getSessionBindingService(),
-      resolveByConversation: (ref: unknown) => bindingMocks.resolveByConversation(ref),
+      resolveByConversationAsync: async (ref: unknown) => bindingMocks.resolveByConversation(ref),
     }),
   };
 });
@@ -2068,15 +2068,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           cancel: successorCancel,
           queueMessage: vi.fn(async () => {}),
         });
-        delivery.resolve({
-          transcriptCommit: "unconfirmed",
-          errorMessage: "receipt timed out",
-        });
+        const errorMessage = "receipt timed out";
+        delivery.resolve({ transcriptCommit: "unconfirmed", errorMessage });
 
         await waitForAssertion(() => {
           expect(context.dedupe.get("chat:idem-steer-unconfirmed")?.payload).toEqual({
             runId: "idem-steer-unconfirmed",
-            status: "ok",
+            status: "error",
+            summary: errorMessage,
           });
         });
         expect(successor.result).toBeNull();

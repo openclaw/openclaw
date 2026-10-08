@@ -139,7 +139,7 @@ function createRouteState(params: {
   bound?: boolean;
 }): NativeRouteState {
   const agentId = params.agentId ?? "main";
-  const route: NativeRouteState["route"] = {
+  const route: NativeRouteState["effectiveRoute"] = {
     agentId,
     channel: "discord",
     accountId: params.accountId ?? "default",
@@ -149,10 +149,8 @@ function createRouteState(params: {
     matchedBy: params.bound ? "binding.channel" : "default",
   };
   return {
-    route,
     effectiveRoute: route,
     boundSessionKey: params.bound ? params.sessionKey : undefined,
-    configuredRoute: null,
     configuredBinding: null,
   };
 }

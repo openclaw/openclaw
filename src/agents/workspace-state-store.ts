@@ -28,7 +28,6 @@ import {
 import {
   assertCanonicalIntegerTimestamp,
   assertCanonicalTimestamp,
-  readWorkspaceStateSnapshotFromDatabase,
   deleteWorkspaceStateRowsInDatabase,
   resolveWorkspaceIdentityFromDatabase,
   WORKSPACE_SETUP_STATE_VERSION,
@@ -53,7 +52,6 @@ export {
   readWorkspaceStateSnapshotFromDatabase,
   registerWorkspaceStateAliasIdentitiesInTransaction,
   registerWorkspaceStateAliasesInTransaction,
-  WORKSPACE_ATTESTATION_RECENT_MS,
   WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND,
   WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
   WORKSPACE_SETUP_STATE_VERSION,
@@ -247,30 +245,6 @@ function deleteWorkspaceRows(
   );
 }
 
-/** The migration owner has verified the same workspace and every relocated byte before this commit. */
-export function retireWorkspaceRelocationAttestation(params: {
-  database: WorkspaceStateDatabaseHandle;
-  identity: WorkspaceStateIdentity;
-  attestedAtMs: number;
-}): boolean {
-  const snapshot = readWorkspaceStateSnapshotFromDatabase(params);
-  if (
-    snapshot.setupExists ||
-    snapshot.attestation?.attestedAtMs !== params.attestedAtMs ||
-    snapshot.attestation.generatedHashes.size > 0
-  ) {
-    return false;
-  }
-  executeSqliteQuerySync(
-    params.database.db,
-    getNodeSqliteKysely<WorkspaceStateDatabase>(params.database.db)
-      .updateTable("workspace_setup_state")
-      .set({ attested_at_ms: null, attestation_updated_at_ms: null })
-      .where("workspace_key", "=", params.identity.workspaceKey),
-  );
-  return true;
-}
-
 /** Clear expired state only when no concurrent writer refreshed the vanished workspace. */
 export async function clearExpiredWorkspaceStateForVanishedWorkspace(
   workspaceDir: string,
@@ -327,7 +301,7 @@ export async function deleteWorkspaceState(
     if (storedAlias && storedAlias.alias_path !== lexicalAlias.workspacePath) {
       throw new Error("workspace path alias key collision");
     }
-    const storedIdentity = storedAlias
+    let storedIdentity = storedAlias
       ? createWorkspaceStateIdentity(storedAlias.workspace_path)
       : undefined;
     if (storedIdentity && storedIdentity.workspaceKey !== storedAlias?.workspace_key) {
@@ -346,19 +320,15 @@ export async function deleteWorkspaceState(
           .deleteFrom("workspace_path_aliases")
           .where("alias_key", "=", lexicalAlias.workspaceKey),
       );
-      const currentResolution = resolveWorkspaceIdentityFromDatabase({
-        workspaceDir: currentCanonicalIdentity.workspacePath,
-        database,
-      });
-      return deleteWorkspaceRows(database, currentResolution.identity);
+      storedIdentity = undefined;
     }
-    if (storedIdentity) {
-      return deleteWorkspaceRows(database, storedIdentity);
-    }
-    const resolution = resolveWorkspaceIdentityFromDatabase({
-      workspaceDir: currentCanonicalIdentity.workspacePath,
+    return deleteWorkspaceRows(
       database,
-    });
-    return deleteWorkspaceRows(database, resolution.identity);
+      storedIdentity ??
+        resolveWorkspaceIdentityFromDatabase({
+          workspaceDir: currentCanonicalIdentity.workspacePath,
+          database,
+        }).identity,
+    );
   });
 }

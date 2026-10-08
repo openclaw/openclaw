@@ -37,6 +37,8 @@ export type PreparedModelCatalogRefreshOptions = {
   refresh?: boolean;
   providerIds?: readonly string[];
   changedOnly?: boolean;
+  /** Await acquisition instead of returning published rows after the foreground deadline. */
+  wait?: boolean;
 };
 
 export type PreparedNativeModelSelection = {
@@ -93,6 +95,8 @@ export type PreparedModelRuntimeSnapshot = Omit<PublishedModelCatalogOwnerCandid
     readFullModelCatalog?: () => ModelCatalogSnapshot | undefined;
     /** Inventory demand may renew expired providers without waiting or replacing saved rows. */
     refreshExpiredModelCatalog?: () => void;
+    /** Rechecks native CLI login availability without refreshing provider inventory. */
+    recheckNativeLogin?: () => void;
     /** Reads validated executable rows from this owner's accepted provider publication. */
     readPublishedModels?: () => ReadonlyMap<string, readonly Model[]> | undefined;
     /** Builds this generation's full control-plane catalog without replacing turn facts. */

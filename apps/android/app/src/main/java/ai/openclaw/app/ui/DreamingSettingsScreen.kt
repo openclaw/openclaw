@@ -5,8 +5,7 @@ import ai.openclaw.app.GatewayDreamingSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.resolveNativeText
-import ai.openclaw.app.ui.design.ClawPanel
-import ai.openclaw.app.ui.design.ClawSeparatedColumn
+import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawStatusRow
 import ai.openclaw.app.ui.design.ClawTheme
 import androidx.compose.foundation.BorderStroke
@@ -19,7 +18,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -65,26 +63,14 @@ internal fun DreamingSettingsScreen(
 @Composable
 private fun DreamingPanel(summary: GatewayDreamingSummary) {
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-    ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-      Column {
-        ClawStatusRow(
-          title = nativeString("Memory Store"),
-          value = if (summary.storeHealthy) nativeString("Healthy") else nativeString("Needs attention"),
-          healthy = summary.storeHealthy,
-        )
-        HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-        ClawStatusRow(
-          title = nativeString("Signal Index"),
-          value = if (summary.phaseSignalHealthy) nativeString("Healthy") else nativeString("Needs attention"),
-          healthy = summary.phaseSignalHealthy,
-        )
-        HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
-        ClawStatusRow(
-          title = nativeString("Promoted"),
-          value = nativeString("\${summary.promotedToday} today · \${summary.promotedTotal} total", summary.promotedToday, summary.promotedTotal),
-          healthy = true,
-        )
-      }
+    val healthRows =
+      listOf(
+        HealthStatus(nativeString("Memory Store"), if (summary.storeHealthy) nativeString("Healthy") else nativeString("Needs attention"), summary.storeHealthy),
+        HealthStatus(nativeString("Signal Index"), if (summary.phaseSignalHealthy) nativeString("Healthy") else nativeString("Needs attention"), summary.phaseSignalHealthy),
+        HealthStatus(nativeString("Promoted"), nativeString("\${summary.promotedToday} today · \${summary.promotedTotal} total", summary.promotedToday, summary.promotedTotal), true),
+      )
+    ClawListPanel(items = healthRows, contentPadding = PaddingValues(0.dp), dividerColor = ClawTheme.colors.border) { row ->
+      ClawStatusRow(title = row.title, value = row.value, healthy = row.healthy)
     }
     DreamDiaryPanel(summary = summary)
   }
@@ -105,10 +91,8 @@ private fun DreamDiaryPanel(summary: GatewayDreamingSummary) {
       SettingsMessagePanel(text = nativeString("The diary is waiting for its first entry."))
       return
     }
-    ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
-      ClawSeparatedColumn(items = summary.diaryEntries, dividerColor = ClawTheme.colors.border) { entry ->
-        DreamDiaryRow(entry = entry)
-      }
+    ClawListPanel(items = summary.diaryEntries, contentPadding = PaddingValues(0.dp), dividerColor = ClawTheme.colors.border) { entry ->
+      DreamDiaryRow(entry = entry)
     }
   }
 }

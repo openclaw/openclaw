@@ -541,7 +541,7 @@ async function probeMediaDurationMs(params: FeishuMedia): Promise<number | undef
       },
     );
   } catch (err) {
-    console.warn("[feishu] failed to probe media duration; upload will omit it:", err);
+    console.warn("[feishu] failed to check media duration; upload will omit it:", err);
     return undefined;
   }
 }

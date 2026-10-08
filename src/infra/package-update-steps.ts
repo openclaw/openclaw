@@ -359,30 +359,39 @@ export async function runGlobalPackageUpdateSteps(params: {
             installCommandTarget.manager,
           )
         : preparedSpec.installSpec;
-    const updateStep = await classifyPackageUpdatePermissionFailure(
-      await params.runStep({
-        name: "package-install",
-        argv: [
-          ...globalInstallArgs(
-            installCommandTarget,
-            updateInstallSpec,
-            undefined,
-            stagedInstall.prefix,
-            preparedSpec.installCwd,
-            npmPreflight.policy ?? undefined,
-          ),
-          ...(stagedInstall.native?.configArgs ?? []),
-        ],
-        ...(updateCwd ? { cwd: updateCwd } : {}),
-        ...installEnv,
-        timeoutMs: workTimeoutMs,
-        // Output is captured, so pnpm's build-approval prompt cannot use the terminal.
-        // EOF keeps the install noninteractive without approving additional scripts.
-        ...(installCommandTarget.manager === "pnpm" ? { input: "" } : {}),
-      }),
-      params.installTarget,
-      params.env,
-    );
+    const runInstallStep = async (
+      stage: StagedPackageInstall,
+      name: string,
+      options: Pick<Parameters<PackageUpdateStepRunner>[0], "cwd" | "env" | "input">,
+      extraArgs: string[] = [],
+    ) =>
+      classifyPackageUpdatePermissionFailure(
+        await params.runStep({
+          name,
+          argv: [
+            ...globalInstallArgs(
+              stage.installTarget,
+              updateInstallSpec,
+              undefined,
+              stage.prefix,
+              preparedSpec.installCwd,
+              npmPreflight.policy ?? undefined,
+            ),
+            ...(stage.native?.configArgs ?? []),
+            ...extraArgs,
+          ],
+          ...options,
+          timeoutMs: workTimeoutMs,
+        }),
+        params.installTarget,
+        params.env,
+      );
+    const updateStep = await runInstallStep(stagedInstall, "package-install", {
+      ...(updateCwd ? { cwd: updateCwd } : {}),
+      ...installEnv,
+      // Output is captured, so EOF keeps pnpm noninteractive without approving scripts.
+      ...(installCommandTarget.manager === "pnpm" ? { input: "" } : {}),
+    });
 
     steps.push(updateStep);
     let finalInstallStep = updateStep;
@@ -417,31 +426,18 @@ export async function runGlobalPackageUpdateSteps(params: {
         return await packageUpdateFailure(preparedFallbackInstall.failedStep, steps);
       }
       stagedInstall = preparedFallbackInstall.stagedInstall;
-      const fallbackStep = await classifyPackageUpdatePermissionFailure(
-        await params.runStep({
-          name: preferOnline ? "package-install-prefer-online" : "package-install-omit-optional",
-          argv: [
-            ...globalInstallArgs(
-              stagedInstall.installTarget,
-              updateInstallSpec,
-              undefined,
-              stagedInstall.prefix,
-              preparedSpec.installCwd,
-              npmPreflight.policy ?? undefined,
-            ),
-            ...(stagedInstall.native?.configArgs ?? []),
-            ...(preferOnline
-              ? installCommandTarget.manager === "bun"
-                ? ["--no-cache"]
-                : ["--prefer-online", "--prefer-offline=false", "--offline=false"]
-              : ["--omit=optional"]),
-          ],
+      const fallbackStep = await runInstallStep(
+        stagedInstall,
+        preferOnline ? "package-install-prefer-online" : "package-install-omit-optional",
+        {
           cwd: stagedInstall.native?.projectRoot ?? preparedSpec.installCwd ?? undefined,
           env: stagedInstall.native?.env ?? commandEnv,
-          timeoutMs: workTimeoutMs,
-        }),
-        params.installTarget,
-        params.env,
+        },
+        preferOnline
+          ? installCommandTarget.manager === "bun"
+            ? ["--no-cache"]
+            : ["--prefer-online", "--prefer-offline=false", "--offline=false"]
+          : ["--omit=optional"],
       );
       if (preferOnline && !isFailedUpdateStep(fallbackStep)) {
         updateStep.advisory = {

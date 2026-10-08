@@ -10,7 +10,7 @@ import {
   replacePendingDeliveryQueueEntry,
 } from "../delivery-queue-sqlite-namespace.js";
 import {
-  countPendingDeliveryQueueEntries,
+  countPendingDeliveryQueueEntriesForMaintenance,
   terminalizePendingDeliveryQueueEntry,
 } from "../delivery-queue-sqlite.js";
 import {
@@ -527,7 +527,7 @@ async function migrateLegacyPendingOutboundDeliveriesOwned(params: {
   if (moved > 0 || skipped > 0) {
     params.log.info(`Legacy delivery migration settled moved=${moved} skipped=${skipped}`);
   }
-  const remaining = countPendingDeliveryQueueEntries(
+  const remaining = countPendingDeliveryQueueEntriesForMaintenance(
     [
       OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME,
       LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,

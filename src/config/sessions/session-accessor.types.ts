@@ -343,7 +343,7 @@ export type TranscriptMessageAppendResult<TMessage> = {
 
 /** Transcript update fields supplied by callers; the target is resolved here. */
 export type TranscriptUpdatePayload = Partial<SessionTranscriptUpdate> &
-  Pick<InternalSessionTranscriptUpdate, "lifecycleRevision">;
+  Pick<InternalSessionTranscriptUpdate, "lifecycleRevision" | "assistantItemIds">;
 
 export type LatestTranscriptAssistantText = {
   id?: string;
@@ -353,6 +353,7 @@ export type LatestTranscriptAssistantText = {
 };
 
 export type SessionTranscriptWriteLockAccessorContext = {
+  publishUpdate: (update?: TranscriptUpdatePayload) => Promise<void>;
   appendMessage: <TMessage>(
     options: LockedTranscriptMessageAppendOptions<TMessage>,
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;

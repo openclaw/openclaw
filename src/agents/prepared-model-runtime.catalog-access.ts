@@ -156,11 +156,15 @@ export async function createFullModelCatalogAccess(
       provider,
       normalizeProvider,
     );
+  // Full acquisition also discovers providers outside eligibleProviders; only a full refresh
+  // reacquires them, so every provider whose own identity is unchanged keeps its rows.
   const providerSources = new Map(
-    eligibleProviders.map((provider) => [provider, providerSource(provider)]),
+    [...new Set([...eligibleProviders, ...(previousInventory?.providers.keys() ?? [])])].map(
+      (provider) => [provider, providerSource(provider)],
+    ),
   );
   const retainedProviders = new Set(
-    eligibleProviders.filter(
+    [...providerSources.keys()].filter(
       (provider) =>
         previousInventory?.pluginFingerprint === pluginFingerprint &&
         previousInventory.providers.get(provider)?.source === providerSources.get(provider) &&
@@ -336,11 +340,8 @@ export async function createFullModelCatalogAccess(
         runtimeModels,
         providerExpiries,
         hookRows,
-      } = await worker.loadCatalog(
-        providerIds,
-        (providerIds ?? providers).some((provider) => published.inventory?.providers.has(provider))
-          ? (error) => attempt.failed(error, providerIds ?? providers, "provider")
-          : undefined,
+      } = await worker.loadCatalog(providerIds, (error) =>
+        attempt.failed(error, providerIds ?? providers, "provider"),
       );
       assertCurrent();
       const scope = new Set(
@@ -697,6 +698,7 @@ export async function createFullModelCatalogAccess(
       return published.catalog;
     },
     refreshExpiredModelCatalog,
+    recheckNativeLogin,
     readPublishedModels: () => {
       assertCurrent();
       return published.inventory?.runtimeModels;
@@ -705,7 +707,7 @@ export async function createFullModelCatalogAccess(
       await acquireNativeCatalog([normalizeProvider(selection.provider)], selection),
     loadFullModelCatalog: async (options) => {
       // Standalone commands cannot publish background discovery after their process exits.
-      if (options?.refresh && params.inventoryOwner.provenance === "standalone") {
+      if (options?.refresh && (options.wait || params.inventoryOwner.provenance === "standalone")) {
         return await acquireCatalog(options);
       }
       return await raceWithTimeout(

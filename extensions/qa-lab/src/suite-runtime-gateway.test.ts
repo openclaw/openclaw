@@ -61,7 +61,7 @@ function createConfigMutationEnv(
 describe("qa suite gateway helpers", () => {
   it("classifies transport readiness failures without replacing typed infrastructure errors", async () => {
     const readinessError = new Error(
-      'telegram account "sut" did not become ready; last probe error: proxy returned 502',
+      'telegram account "sut" did not become ready; last check error: proxy returned 502',
     );
     const failedEnv = createRestartSettleEnv(async () => {
       throw readinessError;

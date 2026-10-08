@@ -40,10 +40,7 @@ import {
   type ReusedOpenClawStateReadOnlyDatabase,
 } from "./openclaw-state-db-readonly-reuse.js";
 import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
-import {
-  existingPathOrUndefined,
-  resolveOpenClawStateSqlitePath,
-} from "./openclaw-state-db.paths.js";
+import { existingPathOrUndefined, resolveDatabasePath } from "./openclaw-state-db.paths.js";
 import {
   getOpenClawDatabaseMaintenanceScope,
   maintenanceOwnerMayCopySourcesInProcess,
@@ -252,6 +249,10 @@ export function withSynchronousArtifactPreservingStateSnapshot<T>(
     const pathname = resolveReadOnlyPath(options.current);
     const inherited = synchronousReadSnapshots.current;
     const inheritedAuthority = synchronousReadSnapshots.currentAuthorityPath;
+    if (inherited && inheritedAuthority === pathname) {
+      // A composite assertion already selected fresh bytes for this database.
+      return operation();
+    }
     return stateSnapshotReads.exit(() => {
       synchronousReadSnapshots.current = undefined;
       synchronousReadSnapshots.currentAuthorityPath = pathname;
@@ -282,9 +283,7 @@ export function withSynchronousArtifactPreservingStateSnapshot<T>(
 }
 
 function resolveReadOnlyPath(options: OpenClawStateDatabaseOptions): string {
-  const pathname = path.resolve(
-    options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
-  );
+  const pathname = resolveDatabasePath(options);
   assertRetainedReadScopeAdmission(pathname, [
     stateSnapshotReads.getStore(),
     ...(disposableStateReads.getStore() ?? []),

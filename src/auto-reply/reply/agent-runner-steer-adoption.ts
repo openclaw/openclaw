@@ -146,22 +146,15 @@ export async function runActiveReplySteer(
   ): Promise<"handled"> => {
     assertReadCurrent();
     parked.fallback();
-    if (
-      replyOperationRunState &&
-      !(
-        replyOperationRunState.admission?.status === "skipped" &&
-        replyOperationRunState.admission.reason === "queue-cap"
-      )
-    ) {
+    const queueCapRejected =
+      replyOperationRunState?.admission?.status === "skipped" &&
+      replyOperationRunState.admission.reason === "queue-cap";
+    if (replyOperationRunState && !queueCapRejected) {
       replyOperationRunState.admission = { status: "accepted", mode: "followup" };
     }
     diagnosticLogger.warn("steering rejected; applying follow-up policy", {
       reason,
-      disposition:
-        replyOperationRunState?.admission?.status === "skipped" &&
-        replyOperationRunState.admission.reason === "queue-cap"
-          ? "skipped-queue-cap"
-          : "followup-policy",
+      disposition: queueCapRejected ? "skipped-queue-cap" : "followup-policy",
       channel:
         followupRun.originatingChannel ??
         followupRun.run.messageProvider ??
@@ -338,15 +331,11 @@ export async function runActiveReplySteer(
         isError: true,
       });
     }
-    const transcriptCommitUnconfirmed =
-      finalization.outcome.result?.transcriptCommit === "unconfirmed";
     if (finalization.aborted) {
       if (replyOperationRunState) {
         replyOperationRunState.messageInjectionAborted = true;
       }
-      const reason = transcriptCommitUnconfirmed
-        ? (finalization.outcome.result?.errorMessage ?? "transcript commitment unconfirmed")
-        : `adoption lost: ${formatErrorMessage(finalization.adoptionError)}`;
+      const reason = `adoption lost: ${formatErrorMessage(finalization.adoptionError)}`;
       logVerbose(
         `queue: active session ${steerSessionId} aborted exact steered target without replay (${reason})`,
       );
@@ -357,11 +346,9 @@ export async function runActiveReplySteer(
         `queue: active session ${steerSessionId} adoption finalizer failed: ${formatErrorMessage(finalization.adoptionError)}`,
       );
     }
-    if (activeReplyOperation) {
-      await refreshReplyOperationTyping(activeReplyOperation, {
-        startIfIdle: typingSignals.shouldStartImmediately,
-      });
-    }
+    await refreshReplyOperationTyping(activeReplyOperation, {
+      startIfIdle: typingSignals.shouldStartImmediately,
+    });
     await touchActiveSessionEntry();
     return "handled";
   } finally {

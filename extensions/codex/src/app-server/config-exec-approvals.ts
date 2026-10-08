@@ -15,22 +15,6 @@ import type {
 } from "./config-contracts.js";
 import { readExecAsk, readExecSecurity, readRecord } from "./config-utils.js";
 
-function resolveOpenClawExecPolicyFromConfig(params: {
-  config?: OpenClawConfig;
-  agentId?: string;
-}): OpenClawExecPolicyForCodexAppServer {
-  const globalExec = readRecord(params.config?.tools?.exec);
-  const globalPolicy = applyOpenClawExecPolicyLayer(
-    resolveOpenClawExecPolicy({ mode: "full" }, false),
-    globalExec,
-  );
-  const agentId = params.agentId?.trim();
-  const agentExec = agentId
-    ? readRecord(resolveAgentConfig(params.config ?? {}, agentId)?.tools?.exec)
-    : undefined;
-  return applyOpenClawExecPolicyLayer(globalPolicy, agentExec);
-}
-
 export function resolveOpenClawExecPolicyForCodexAppServer(params: {
   permissionMode?: EmbeddedRunAttemptParamsV2["permissionMode"];
   execOverrides?: {
@@ -45,7 +29,16 @@ export function resolveOpenClawExecPolicyForCodexAppServer(params: {
   if (params.permissionMode === "full") {
     return resolveOpenClawExecPolicy({ mode: "full" });
   }
-  const basePolicy = resolveOpenClawExecPolicyFromConfig(params);
+  const globalExec = readRecord(params.config?.tools?.exec);
+  const globalPolicy = applyOpenClawExecPolicyLayer(
+    resolveOpenClawExecPolicy({ mode: "full" }, false),
+    globalExec,
+  );
+  const agentId = params.agentId?.trim();
+  const agentExec = agentId
+    ? readRecord(resolveAgentConfig(params.config ?? {}, agentId)?.tools?.exec)
+    : undefined;
+  const basePolicy = applyOpenClawExecPolicyLayer(globalPolicy, agentExec);
   const overridePolicy = applyOpenClawExecPolicyLayer(basePolicy, params.execOverrides);
   const approvalFloors = params.approvals
     ? resolveExecApprovalsFromFile({
@@ -54,7 +47,19 @@ export function resolveOpenClawExecPolicyForCodexAppServer(params: {
         overrides: { security: overridePolicy.security, ask: overridePolicy.ask },
       }).agent
     : undefined;
-  return applyOpenClawExecApprovalFloors(overridePolicy, approvalFloors);
+  if (!approvalFloors) {
+    return overridePolicy;
+  }
+  const nextSecurity = approvalFloors.security
+    ? execPolicy.minSecurity(overridePolicy.security, approvalFloors.security)
+    : overridePolicy.security;
+  const nextAsk = approvalFloors.ask
+    ? execPolicy.maxAsk(overridePolicy.ask, approvalFloors.ask)
+    : overridePolicy.ask;
+  if (nextSecurity === overridePolicy.security && nextAsk === overridePolicy.ask) {
+    return overridePolicy;
+  }
+  return resolveOpenClawExecPolicy({ security: nextSecurity, ask: nextAsk });
 }
 
 function applyOpenClawExecPolicyLayer(
@@ -74,23 +79,6 @@ function applyOpenClawExecPolicyLayer(
     return base;
   }
   return resolveOpenClawExecPolicy({ security: security ?? base.security, ask: ask ?? base.ask });
-}
-
-function applyOpenClawExecApprovalFloors(
-  base: OpenClawExecPolicyForCodexAppServer,
-  approvalFloors?: OpenClawExecApprovalFloorsForCodexAppServer,
-): OpenClawExecPolicyForCodexAppServer {
-  if (!approvalFloors) {
-    return base;
-  }
-  const nextSecurity = approvalFloors.security
-    ? execPolicy.minSecurity(base.security, approvalFloors.security)
-    : base.security;
-  const nextAsk = approvalFloors.ask ? execPolicy.maxAsk(base.ask, approvalFloors.ask) : base.ask;
-  if (nextSecurity === base.security && nextAsk === base.ask) {
-    return base;
-  }
-  return resolveOpenClawExecPolicy({ security: nextSecurity, ask: nextAsk });
 }
 
 function resolveOpenClawExecPolicy(

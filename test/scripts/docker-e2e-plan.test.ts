@@ -455,16 +455,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(supported.lanes.map((lane) => lane.name)).toEqual(["update-corrupt-plugin"]);
   });
 
-  it("runs Fleet host proof only when explicitly selected", () => {
-    expect(planFor().lanes.map((lane) => lane.name)).not.toContain("fleet-cache");
-    const selected = planFor({ selectedLaneNames: ["fleet-cache"] });
-    expect(selected.lanes.map((lane) => lane.name)).toEqual(["fleet-cache"]);
-    expect(selected.needs.package).toBe(true);
-    expect(selected.needs.e2eImage).toBe(false);
-    expect(selected.needs.prepublishPluginRegistry).toBe(false);
-    expect(findLaneByName("fleet-cache")?.name).toBe("fleet-cache");
-  });
-
   it("routes trusted Docker scripts through the nested release harness", () => {
     const trustedScripts = new Map([
       ["live-codex-npm-plugin", "e2e/codex-npm-plugin-live-docker.sh"],
@@ -674,9 +664,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
 
   it("retains the measured restart-auth update budgets", () => {
     const lane = requireFirstLane(planFor({ selectedLaneNames: ["update-restart-auth"] }));
-    expect(lane.timeoutMs).toBe(2_580_000);
+    expect(lane.timeoutMs).toBe(3_720_000);
     expect(lane.command).toContain("OPENCLAW_UPGRADE_SURVIVOR_COMMAND_TIMEOUT=1500s");
-    expect(lane.command).toContain("OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-2280s");
+    expect(lane.command).toContain("OPENCLAW_UPGRADE_SURVIVOR_DOCKER_RUN_TIMEOUT:-3420s");
   });
 
   it("rejects pre-June baselines before scheduling against the target", () => {

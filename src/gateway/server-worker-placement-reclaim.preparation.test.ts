@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -39,191 +39,6 @@ afterEach(async () => {
   await closeStateDatabaseForTest();
   lookup.value = undefined;
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
-});
-
-function fixture(name: string, state: "active" | "failed" | "local" | "reclaimed" = "active") {
-  const request = {
-    sessionId: `session-${name}`,
-    sessionKey: `agent:main:${name}`,
-    agentId: "main",
-  };
-  const entry = { sessionId: request.sessionId, lifecycleRevision: "original", updatedAt: 1 };
-  const target = {
-    storePath: `/fixture/reclaim-preparation-${name}.sqlite`,
-    canonicalKey: request.sessionKey,
-    storeKeys: [request.sessionKey],
-    agentId: request.agentId,
-    store: { [request.sessionKey]: entry },
-  };
-  const placement = {
-    ...request,
-    state,
-    generation: 4,
-    environmentId: "worker",
-    activeOwnerEpoch: 7,
-  };
-  const cancel = vi.fn(async (input: { assertCurrent: () => void }) => input.assertCurrent());
-  const barriers = createGatewayWorkerPlacementReclaimBarriers({
-    placements: { get: () => ({ ...placement }) as never, waitForTurnClaimRelease: async () => {} },
-    loadSessionRuntime: async () => ({
-      managedWorktrees: { findLiveByOwner: async () => undefined },
-      resolveGatewaySessionStoreTargetWithStore: () => target,
-      resolveCanonicalSessionEntryFromStoreKeys: () => entry,
-    }),
-    cancelSessionWork: cancel,
-    revokeSessionAuthority: vi.fn(),
-  });
-  const run = vi.fn(async () => ({ ...placement, state: "reclaimed" as const }) as never);
-  const admit = (onInterrupt?: () => void) =>
-    beginSessionWorkAdmission({
-      scope: target.storePath,
-      identities: [request.sessionKey, request.sessionId],
-      assertAllowed: () => {},
-      onInterrupt,
-    });
-  return {
-    ...request,
-    entry,
-    placement,
-    cancel,
-    run,
-    admit,
-    prepare: (options: Partial<Parameters<typeof barriers.runReclaimPreparation>[0]> = {}) =>
-      barriers.runReclaimPreparation({ ...request, run, ...options }),
-  };
-}
-
-it("one failed Stop cannot reopen ingress while another Stop still owns its closure", async () => {
-  const f = fixture("overlap");
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  let calls = 0;
-  f.cancel.mockImplementation(async ({ assertCurrent }) => {
-    assertCurrent();
-    if (++calls === 1) {
-      entered.resolve();
-      await release.promise;
-    } else {
-      throw new Error("second cancellation failed");
-    }
-  });
-  const first = f.prepare();
-  await entered.promise;
-  try {
-    await expect(f.prepare()).rejects.toThrow("second cancellation failed");
-    await expect(f.admit()).rejects.toThrow();
-    expect(f.run).not.toHaveBeenCalled();
-  } finally {
-    release.resolve();
-    await first;
-  }
-  (await f.admit()).release();
-});
-
-it.each(["authorization", "incarnation"] as const)(
-  "rejects changed %s after cancellation and reopens admission on failure",
-  async (change) => {
-    const f = fixture(`changed-${change}`);
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    let authorized = true;
-    const interrupted = vi.fn();
-    const acquired = await f.admit(() => {
-      interrupted();
-      acquired.release();
-    });
-    f.cancel.mockImplementation(async ({ assertCurrent }) => {
-      assertCurrent();
-      entered.resolve();
-      await release.promise;
-    });
-    try {
-      const stop = f.prepare({
-        authorize: () => {
-          if (!authorized) {
-            throw new Error("access revoked");
-          }
-        },
-      });
-      const rejected = expect(stop).rejects.toThrow(
-        change === "authorization" ? "access revoked" : "Session",
-      );
-      await entered.promise;
-      if (change === "authorization") {
-        authorized = false;
-      } else {
-        f.entry.lifecycleRevision = "replacement-with-same-session-id";
-      }
-      release.resolve();
-      await rejected;
-      expect(interrupted).not.toHaveBeenCalled();
-      expect(f.run).not.toHaveBeenCalled();
-      (await f.admit()).release();
-    } finally {
-      release.resolve();
-      acquired.release();
-    }
-  },
-);
-
-it("rechecks the exact worker owner after asynchronous cancellation setup", async () => {
-  const f = fixture("changed-worker");
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const signalled = vi.fn();
-  f.cancel.mockImplementation(async ({ assertCurrent }) => {
-    entered.resolve();
-    await release.promise;
-    assertCurrent();
-    signalled();
-  });
-  const stop = f.prepare();
-  const rejected = expect(stop).rejects.toThrow("worker changed before cancellation");
-  await entered.promise;
-  // The store returns immutable snapshots; replacement must not mutate the captured owner.
-  const priorGeneration = f.placement.generation;
-  f.placement.generation = priorGeneration + 1;
-  release.resolve();
-  await rejected;
-  expect(signalled).not.toHaveBeenCalled();
-  expect(f.run).not.toHaveBeenCalled();
-});
-
-it("auto-suspend eligibility rejects before closing admission or signalling cancellation", async () => {
-  const f = fixture("auto-suspend");
-  await expect(
-    f.prepare({
-      beforeDrain: () => {
-        throw new Error("session is busy");
-      },
-    }),
-  ).rejects.toThrow("session is busy");
-  expect(f.cancel).not.toHaveBeenCalled();
-  expect(f.run).not.toHaveBeenCalled();
-  (await f.admit()).release();
-});
-
-it("keeps admissions closed while serialized teardown is queued, then revalidates the incarnation", async () => {
-  const f = fixture("queued-teardown");
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const teardown = vi.fn();
-  const stop = f.prepare({
-    run: async (authorize) => {
-      entered.resolve();
-      await release.promise;
-      authorize?.();
-      teardown();
-      return await f.run();
-    },
-  });
-  const rejected = expect(stop).rejects.toThrow("Session");
-  await entered.promise;
-  await expect(f.admit()).rejects.toThrow();
-  f.entry.lifecycleRevision = "new-incarnation";
-  release.resolve();
-  await rejected;
-  expect(teardown).not.toHaveBeenCalled();
 });
 
 async function cancellationLoadFixture(
@@ -966,6 +781,89 @@ it.each([
       cleaned.resolve();
       f.loaded.resolve();
       await Promise.all([moving, stopping]);
+      f.context.chatRunState.clear();
+    }
+  },
+);
+
+it.each([
+  { stage: "transaction", change: "caller" },
+  { stage: "commit", change: "caller" },
+  { stage: "transaction", change: "incarnation" },
+  { stage: "commit", change: "incarnation" },
+] as const)(
+  "retains the abandoned Stop decision when $change changes at $stage completion admission",
+  async ({ stage, change }) => {
+    let destroyed = false;
+    const f = await cancellationLoadFixture({
+      afterDestroy: () => {
+        destroyed = true;
+      },
+    });
+    const active = await f.coordinated.dispatch(REQUEST);
+    f.harness.markEnvironmentNodeDeviceId("device-1");
+    f.database.db
+      .prepare("UPDATE worker_environments SET profile_id = ? WHERE environment_id = ?")
+      .run("device:device-1", active.environmentId);
+    const begun = await f.placements.beginPlacementMove({
+      sessionId: active.sessionId,
+      source: {
+        generation: active.generation,
+        environmentId: active.environmentId,
+        ownerEpoch: active.activeOwnerEpoch,
+      },
+      target: { kind: "gateway" },
+      abandonSource: true,
+    });
+    let allowed = true;
+    let admissionReached = false;
+    let connected = true;
+    const assertLifetime = () => {
+      if (!connected) {
+        throw new Error("Stop connection closed");
+      }
+    };
+    const assertCaller = () => {
+      assertLifetime();
+      if (!allowed) {
+        throw new Error("Stop caller revoked at completion");
+      }
+    };
+    const authorize = Object.assign(assertCaller, {
+      assertWorkerLifetime: assertLifetime,
+      assertWorkerGrant: assertCaller,
+    });
+    const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
+    const admission = vi
+      .spyOn(operationAdmission, "createSqliteWorkerOperationAdmission")
+      .mockImplementation((admit, attachment) =>
+        createAdmission((request, grant) => {
+          if (destroyed && request.stage === stage) {
+            admissionReached = true;
+            if (change === "caller") {
+              allowed = false;
+            } else {
+              f.entry.lifecycleRevision = "replacement";
+            }
+          }
+          admit(request, grant);
+        }, attachment),
+      );
+    try {
+      await expect(f.coordinated.reclaim(REQUEST, authorize)).rejects.toThrow(
+        change === "caller"
+          ? "Stop caller revoked at completion"
+          : "changed before cloud worker stop",
+      );
+      expect(admissionReached).toBe(true);
+      expect(f.harness.environments.destroy).toHaveBeenCalledOnce();
+      expect(f.placements.get(REQUEST.sessionId)).toMatchObject({ state: "failed" });
+      expect(f.placements.getPlacementMove(REQUEST.sessionId)?.operationId).toBe(
+        begun.intent.operationId,
+      );
+    } finally {
+      connected = false;
+      admission.mockRestore();
       f.context.chatRunState.clear();
     }
   },

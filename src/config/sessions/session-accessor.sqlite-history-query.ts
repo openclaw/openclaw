@@ -57,6 +57,7 @@ import {
 } from "./session-accessor.sqlite-reset-window.js";
 import { MAX_VISIBLE_MESSAGE_MAX_MESSAGES } from "./session-accessor.sqlite-visible-cursor.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import { readTranscriptPayload } from "./transcript-payload.js";
 
 const recentHistoryWindows = new Map<
   string,
@@ -78,7 +79,7 @@ function readBoundaryEvents(
   return new Map(
     readSnapshotEventRows(projection, eventSeqs).map((row) => [
       row.seq,
-      parseStoredTranscriptEvent(row.event_json),
+      parseStoredTranscriptEvent(readTranscriptPayload(row)),
     ]),
   );
 }

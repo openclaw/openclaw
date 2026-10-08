@@ -1,4 +1,7 @@
+import assert from "node:assert/strict";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -13,6 +16,10 @@ import {
   replaceSessionEntry,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
+import * as entryPatch from "../../config/sessions/session-entry-patch.js";
+import { SqliteSessionMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
 import * as placementContext from "../../gateway/session-worker-placement-context.js";
@@ -23,6 +30,7 @@ import {
 } from "../../infra/agent-events.js";
 import { isAgentRunStaleLifecycleError } from "../../infra/agent-lifecycle-error.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
+import { invalidateRegisteredAgentDatabasesMemo } from "../../state/openclaw-agent-db-registry-listing.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
@@ -76,8 +84,38 @@ async function createTrackedClaim(
   });
   return {
     controller,
+    scope,
+    current: () => entry,
     read: () => loadSessionEntry(scope),
   };
+}
+
+async function createAcknowledgedClaim() {
+  const sourceTurnId = "acknowledged-source";
+  const fixture = await createTrackedClaim(
+    {
+      lifecycleRunId: "recovery-run",
+      restartRecoveryDeliveryRequestFingerprint: "acknowledged-fingerprint",
+      restartRecoveryDeliverySourceRunId: sourceTurnId,
+      startedAt: 1,
+    },
+    { sourceTurnId },
+  );
+  const entry = fixture.current();
+  const transcriptScope = { ...fixture.scope, sessionId: entry.sessionId };
+  const recorder = createUserTurnTranscriptRecorder({
+    message: {
+      role: "user",
+      content: "Synthetic acknowledged input",
+      timestamp: 1,
+      idempotencyKey: `${sourceTurnId}:user`,
+    },
+    target: { ...transcriptScope, sessionEntry: entry },
+    updateMode: "none",
+  });
+  await recorder.persistApproved();
+  expect(recorder.hasPersisted()).toBe(true);
+  return { ...fixture, recorder, sourceTurnId, transcriptScope };
 }
 
 describe("createReplyRestartRecoveryClaimController", () => {
@@ -533,6 +571,110 @@ describe("createReplyRestartRecoveryClaimController", () => {
       restartRecoveryDeliveryToolCallId: "message-call",
     });
     expect(persisted?.status).toBeUndefined();
+  });
+
+  it("adopts and settles acknowledged input through hook checkpoints without caller-thread SQL", async () => {
+    const fixture = await createAcknowledgedClaim();
+    const persistApproved = vi.spyOn(fixture.recorder, "persistApproved");
+    const sql = observeHostDataSql();
+    try {
+      await expect(fixture.controller.admitUserTurn(fixture.recorder)).resolves.toBe("admitted");
+      expect(sql.queries).toEqual([]);
+      expect(fixture.current().restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
+      invalidateRegisteredAgentDatabasesMemo({});
+      await expect(fixture.controller.beginBeforeAgentReply()).resolves.toBe(true);
+      expect(fixture.current().restartRecoveryBeforeAgentReplyState).toBe("pending");
+      await fixture.controller.checkpointBeforeAgentReply({ state: "handled-silent" });
+      expect(fixture.current().restartRecoveryBeforeAgentReplyState).toBe("handled-silent");
+      invalidateRegisteredAgentDatabasesMemo({});
+      await fixture.controller.clear();
+      expect(sql.queries).toEqual([]);
+      expect(persistApproved).not.toHaveBeenCalled();
+    } finally {
+      sql.restore();
+      persistApproved.mockRestore();
+    }
+    const persisted = fixture.read();
+    expect(persisted).toMatchObject({
+      sessionId: fixture.transcriptScope.sessionId,
+      status: "done",
+      restartRecoveryTerminalRunIds: [fixture.sourceTurnId],
+    });
+    expect(persisted?.restartRecoveryDeliveryRunId).toBeUndefined();
+    expect(persisted?.restartRecoveryDeliverySourceRunId).toBeUndefined();
+    expect(persisted?.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
+    expect(
+      loadTranscriptEventsSync(fixture.transcriptScope).filter(
+        (event) => isRecord(event) && event.type === "message",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        message: expect.objectContaining({
+          role: "user",
+          content: "Synthetic acknowledged input",
+          idempotencyKey: `${fixture.sourceTurnId}:user`,
+        }),
+      }),
+    ]);
+  });
+
+  it("preserves a foreign source claim that changes after acknowledged-input adoption preparation", async () => {
+    const fixture = await createAcknowledgedClaim();
+    const databasePath = resolveSqliteTargetFromSessionStorePath(fixture.scope.storePath, {
+      agentId: fixture.scope.agentId,
+    }).path;
+    const foreign = new DatabaseSync(databasePath);
+    const patch = entryPatch.patchSessionEntryInWorker;
+    const intervened = vi.fn();
+    const spy = vi.spyOn(entryPatch, "patchSessionEntryInWorker").mockImplementation((params) => {
+      if (
+        params.selection.kind !== "target" ||
+        params.selection.target.canonicalKey !== fixture.scope.sessionKey
+      ) {
+        return patch(params);
+      }
+      return patch({
+        ...params,
+        async prepare(snapshot) {
+          const prepared = await params.prepare(snapshot);
+          assert(prepared);
+          foreign
+            .prepare(
+              `UPDATE session_nodes SET entry_json =
+               json_set(entry_json, '$.restartRecoveryDeliverySourceRunId', 'foreign-source')
+               WHERE session_key = ?`,
+            )
+            .run(fixture.scope.sessionKey);
+          intervened();
+          return prepared;
+        },
+      });
+    });
+    try {
+      await expect(fixture.controller.admitUserTurn(fixture.recorder)).rejects.toBeInstanceOf(
+        SqliteSessionMutationConflictError,
+      );
+      expect(intervened).toHaveBeenCalledOnce();
+      expect(
+        foreign
+          .prepare(
+            `SELECT status,
+              json_extract(entry_json, '$.restartRecoveryDeliveryRunId') AS runId,
+              json_extract(entry_json, '$.restartRecoveryDeliverySourceRunId') AS sourceRunId,
+              json_extract(entry_json, '$.restartRecoveryDeliveryRequestFingerprint') AS fingerprint
+             FROM session_nodes WHERE session_key = ?`,
+          )
+          .get(fixture.scope.sessionKey),
+      ).toEqual({
+        status: null,
+        runId: "recovery-run",
+        sourceRunId: "foreign-source",
+        fingerprint: "acknowledged-fingerprint",
+      });
+    } finally {
+      spy.mockRestore();
+      foreign.close();
+    }
   });
 
   it("retargets durable user-turn admission to the prepared reply session", async () => {

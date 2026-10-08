@@ -53,9 +53,10 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
     : "n/a";
   const taskText = sanitizeRunStatusText(run.task) || "n/a";
   const progressText = sanitizeRunStatusText(run.completion?.resultText);
-  const taskSummaryText = sanitizeRunStatusText(run.delivery?.lastError, {
-    errorContext: true,
-  });
+  const taskSummaryText = sanitizeRunStatusText(
+    run.delivery?.lastError ?? run.delivery?.discardedPayloadSummary?.lastError,
+    { errorContext: true },
+  );
 
   const lines = [
     "ℹ️ Subagent info",

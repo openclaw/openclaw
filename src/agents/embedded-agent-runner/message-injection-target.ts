@@ -331,6 +331,11 @@ export async function prepareEmbeddedInjectionAuthority(
   };
 }
 
+type EmbeddedMessageInjection = Pick<
+  EmbeddedAgentQueueHandle,
+  "queueMessage" | "claimPendingUserInputAnswer" | "cancelPendingUserInput"
+> & { prepareQueueMessage?: () => Promise<void> };
+
 function bindEmbeddedMessageInjection(
   sessionId: string,
   handle: EmbeddedAgentQueueHandle,
@@ -338,12 +343,7 @@ function bindEmbeddedMessageInjection(
   sourceCanInject?: () => boolean,
   preparation?: EmbeddedInjectionPreparation,
   options?: ReplyMessageInjectionOptions,
-):
-  | (Pick<
-      EmbeddedAgentQueueHandle,
-      "queueMessage" | "claimPendingUserInputAnswer" | "cancelPendingUserInput"
-    > & { prepareQueueMessage?: () => Promise<void> })
-  | undefined {
+): EmbeddedMessageInjection | undefined {
   const registration = ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle);
   const operation = resolveReplyRunForCurrentSessionId(sessionId);
   const ownedOperation =
@@ -435,12 +435,7 @@ export function resolveEmbeddedInjection(
   sourceCanInject?: () => boolean,
   preparation?: EmbeddedInjectionPreparation,
   injectionOptions?: ReplyMessageInjectionOptions,
-):
-  | (Pick<
-      EmbeddedAgentQueueHandle,
-      "queueMessage" | "claimPendingUserInputAnswer" | "cancelPendingUserInput"
-    > & { prepareQueueMessage?: () => Promise<void> })
-  | undefined {
+): EmbeddedMessageInjection | undefined {
   try {
     const guarded = handle.messageInjectionV2;
     if (guarded?.version === 2) {
@@ -464,28 +459,20 @@ export function resolveEmbeddedInjection(
         compatAssertCurrent: preparation.compatAssertCurrent ?? preparation.assertCurrent,
       });
     const injection = handle.messageInjection;
-    if (injection) {
-      return injection.isAvailable()
-        ? {
-            prepareQueueMessage: legacy?.prepareQueueMessage,
-            queueMessage: (text, options) => {
-              legacy?.assertQueueCurrent();
-              return injection.queueMessage(text, options);
-            },
-            claimPendingUserInputAnswer: handle.claimPendingUserInputAnswer?.bind(handle),
-            cancelPendingUserInput: handle.cancelPendingUserInput?.bind(handle),
-          }
-        : undefined;
-    }
     // Legacy handles predate explicit injection capability. Preserve their
     // shipped eligibility probe while modern backends use messageInjection.
-    const isAvailable = handle.isStopped ? !handle.isStopped() : handle.isStreaming();
+    const isAvailable = injection
+      ? injection.isAvailable()
+      : handle.isStopped
+        ? !handle.isStopped()
+        : handle.isStreaming();
+    const target = injection || handle;
     return isAvailable
       ? {
           prepareQueueMessage: legacy?.prepareQueueMessage,
           queueMessage: (text, options) => {
             legacy?.assertQueueCurrent();
-            return handle.queueMessage(text, options);
+            return target.queueMessage(text, options);
           },
           claimPendingUserInputAnswer: handle.claimPendingUserInputAnswer?.bind(handle),
           cancelPendingUserInput: handle.cancelPendingUserInput?.bind(handle),

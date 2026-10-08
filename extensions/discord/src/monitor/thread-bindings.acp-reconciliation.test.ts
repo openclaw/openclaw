@@ -12,7 +12,6 @@ import {
   hoisted,
   installThreadBindingLifecycleTestHooks,
 } from "./thread-bindings.lifecycle.test-support.js";
-import { THREAD_BINDINGS_MAX_ENTRIES, THREAD_BINDINGS_NAMESPACE } from "./thread-bindings.state.js";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
 const { reconcileAcpThreadBindingsOnStartup } = await import("./thread-bindings.lifecycle.js");
@@ -154,8 +153,8 @@ describe("thread binding ACP startup reconciliation", () => {
       const runtime = getDiscordRuntime();
       const open = runtime.state.openKeyedStore.bind(runtime.state);
       const persisted = open<ThreadBindingRecord>({
-        namespace: THREAD_BINDINGS_NAMESPACE,
-        maxEntries: THREAD_BINDINGS_MAX_ENTRIES,
+        namespace: "thread-bindings",
+        maxEntries: 10_000,
       });
       const orphanKey = "zz-orphan";
       if (phase === "after-commit") {

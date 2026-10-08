@@ -41,6 +41,7 @@ describe("worker placement session events", () => {
       placements: {
         workspaceResultInstanceId: () => "gateway-test",
         getAsync: async () => undefined,
+        getManyAsync: async () => new Map(),
         listAsync: async () => [],
         retireSessionPlacementAsync: vi.fn(async () => {}),
         pruneOrphanedWorkspaceReconciliations: async () => [],
@@ -65,6 +66,7 @@ describe("worker placement session events", () => {
     let scheduledWake: void | Promise<void> = undefined;
     try {
       await time.advanceBy(60_000);
+      expect(warn).not.toHaveBeenCalled();
       reconcileActive.mockClear();
       reconcileActive
         .mockImplementationOnce(() => {

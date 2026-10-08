@@ -356,10 +356,11 @@ internal fun <T> ClawListPanel(
   items: List<T>,
   modifier: Modifier = Modifier,
   contentPadding: PaddingValues = PaddingValues(horizontal = ClawTheme.spacing.xs, vertical = 4.dp),
+  dividerColor: Color = ClawTheme.colors.border.copy(alpha = 0.82f),
   row: @Composable (T) -> Unit,
 ) {
   ClawPanel(modifier = modifier, contentPadding = contentPadding) {
-    ClawSeparatedColumn(items = items, row = row)
+    ClawSeparatedColumn(items = items, dividerColor = dividerColor, row = row)
   }
 }
 

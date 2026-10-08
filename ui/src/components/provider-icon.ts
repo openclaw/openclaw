@@ -263,7 +263,6 @@ export function renderProviderFallbackIcon(label: string, options?: { className?
 }
 
 export function renderProviderBrandIcon(provider: string, options?: { className?: string }) {
-  const surfaceClass = options?.className ? ` ${options.className}` : "";
   const icon = resolveProviderIconName(provider);
   if (!icon) {
     return renderProviderFallbackIcon(provider, options);
@@ -271,6 +270,6 @@ export function renderProviderBrandIcon(provider: string, options?: { className?
   return renderBrandIcon(
     inferControlUiPublicAssetPath(`provider-icons/ProviderIcon-${icon}.svg`),
     icon,
-    surfaceClass.trim(),
+    options?.className?.trim() ?? "",
   );
 }

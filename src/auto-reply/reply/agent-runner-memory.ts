@@ -61,6 +61,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { formatTokenCount } from "../../utils/token-format.js";
 import type { VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { createPreflightCompactionError } from "./agent-runner-failure-reply.js";
 import {
   readPreflightTranscriptContextMessages,
   readSessionLogSnapshot,
@@ -295,45 +296,28 @@ async function estimatePromptTokensFromSessionTranscript({
     }
     const normalizedOutputTokens =
       usage?.outputTokens === undefined ? undefined : Math.ceil(usage.outputTokens);
-    if (hasUsableProviderPromptUsage(usage)) {
-      const promptTokens = await estimateProviderPromptTokens(
-        usage.trailingMessages,
-        params.contextWindowTokens,
-        usage.promptTokens,
-      );
-      if (promptTokens === undefined) {
-        return undefined;
-      }
-      return {
-        promptTokens,
-        promptTokenSource:
-          usage.trailingMessages.length > 0
-            ? "provider_usage_plus_prompt_projection"
-            : "provider_usage",
-        outputTokens: normalizedOutputTokens,
-        transcriptByteSize: snapshot.byteSize,
-      };
-    }
-    const messages = await readPreflightTranscriptContextMessages(
-      {
-        ...params,
-        sessionId,
-      },
-      abortSignal,
-    );
-    const estimatedTokens = await estimateProviderPromptTokens(
+    const providerUsage = hasUsableProviderPromptUsage(usage) ? usage : undefined;
+    const messages = providerUsage
+      ? providerUsage.trailingMessages
+      : await readPreflightTranscriptContextMessages({ ...params, sessionId }, abortSignal);
+    const promptTokens = await estimateProviderPromptTokens(
       messages,
       params.contextWindowTokens,
+      providerUsage?.promptTokens,
     );
-    if (estimatedTokens === undefined) {
+    if (promptTokens === undefined) {
       return undefined;
     }
     return {
-      promptTokens: estimatedTokens,
-      promptTokenSource: "prompt_projection",
+      promptTokens,
+      promptTokenSource: providerUsage
+        ? messages.length > 0
+          ? "provider_usage_plus_prompt_projection"
+          : "provider_usage"
+        : "prompt_projection",
       // Full-message estimation already includes assistant content. Preserve
       // output only for projection against a separate persisted prompt fact.
-      promptIncludesOutput: true,
+      ...(!providerUsage ? { promptIncludesOutput: true } : {}),
       outputTokens: normalizedOutputTokens,
       transcriptByteSize: snapshot.byteSize,
     };
@@ -578,8 +562,7 @@ export async function runSessionCompactionIfNeeded(params: {
       tokenCount: tokenCountForCompaction,
       threshold,
     });
-  const shouldCompact = shouldCompactByTokens || shouldCompactByTranscriptBytes;
-  if (!shouldCompact) {
+  if (!shouldCompactByTokens && !shouldCompactByTranscriptBytes) {
     return entry;
   }
 
@@ -605,7 +588,9 @@ export async function runSessionCompactionIfNeeded(params: {
 
   assertActive();
   params.onCompactionStart?.();
+  let terminalCompactionNoticeSent = false;
   const notifyCompaction = async (phase: CompactionNoticePhase, text?: string) => {
+    terminalCompactionNoticeSent ||= phase !== "start";
     try {
       if (text) {
         await params.onCompactionNotice?.(phase, text);
@@ -615,14 +600,6 @@ export async function runSessionCompactionIfNeeded(params: {
     } catch (err) {
       logVerbose(`preflightCompaction notice delivery failed: ${String(err)}`);
     }
-  };
-  let terminalCompactionNoticeSent = false;
-  const notifyTerminalCompaction = async (
-    phase: "end" | "incomplete" | "skipped",
-    text?: string,
-  ) => {
-    terminalCompactionNoticeSent = true;
-    await notifyCompaction(phase, text);
   };
   // Provider work can outlive the caller; never account against a replacement session row.
   let expectedSession = entry;
@@ -797,13 +774,13 @@ export async function runSessionCompactionIfNeeded(params: {
       const reason =
         (result?.ok ? normalizeOptionalString(result.reason) : result?.reason) ?? "not_compacted";
       if (result && isBenignCompactionSkipResult(result)) {
-        await notifyTerminalCompaction("skipped");
+        await notifyCompaction("skipped");
         logVerbose(`preflightCompaction skipped: sessionKey=${params.sessionKey} reason=${reason}`);
         return entry;
       }
-      await notifyTerminalCompaction("incomplete");
-      logVerbose(`preflightCompaction failed: sessionKey=${params.sessionKey} reason=${reason}`);
-      throw new Error(`Preflight compaction required but failed: ${reason}`);
+      await notifyCompaction("incomplete");
+      preflightCompactionLog.warn(`preflight compaction failed: ${reason}`);
+      throw createPreflightCompactionError(reason, isCodexRuntime);
     }
 
     if (!hostAccountingCommitted) {
@@ -837,7 +814,7 @@ export async function runSessionCompactionIfNeeded(params: {
       typeof result.result.tokensAfter === "number"
         ? `🧹 Server-side compaction complete (${formatTokenCount(result.result.tokensBefore)} → ${formatTokenCount(result.result.tokensAfter)})`
         : undefined;
-    await notifyTerminalCompaction("end", serverNotice);
+    await notifyCompaction("end", serverNotice);
     assertActive();
     entry = compactionStore[compactionSessionKey] ?? entry;
     const previousSessionId = params.followupRun.run.sessionId;
@@ -938,9 +915,7 @@ export async function runMemoryFlushIfNeeded(params: {
 
   const flushRunId = crypto.randomUUID();
   let flushRunRegistered = false;
-  let activeSessionEntry = entry;
-  const recordFailure = (error: unknown) =>
-    recordMemoryFlushFailure(error, params, activeSessionEntry);
+  const recordFailure = (error: unknown) => recordMemoryFlushFailure(error, params, entry);
   const contextWindowTokens = resolveFollowupContextTokens(params, runtimeId);
   let memoryFlushResolution: MemoryFlushPlanForRunResolution | null;
   try {
@@ -949,11 +924,11 @@ export async function runMemoryFlushIfNeeded(params: {
     return await recordFailure(error);
   }
   if (!memoryFlushResolution) {
-    return { sessionEntry: activeSessionEntry, outcome: "skipped" };
+    return { sessionEntry: entry, outcome: "skipped" };
   }
   const memoryFlushPlan = memoryFlushResolution.plan;
   if (!isToolsMemoryFlushPlan(memoryFlushPlan) && !memoryFlushWritable) {
-    return { sessionEntry: activeSessionEntry, outcome: "skipped" };
+    return { sessionEntry: entry, outcome: "skipped" };
   }
 
   const promptTokenEstimate = estimatePromptTokensForMemoryFlush(
@@ -1106,10 +1081,9 @@ export async function runMemoryFlushIfNeeded(params: {
     `memoryFlush triggered: sessionKey=${params.sessionKey} tokenCount=${tokenCountForFlush ?? "undefined"} threshold=${flushThreshold}`,
   );
 
-  activeSessionEntry = entry;
   params.replyOperation?.setPhase("memory_flushing");
   let bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
-    activeSessionEntry?.systemPromptReport ??
+    entry?.systemPromptReport ??
       (params.sessionKey
         ? params.sessionStore?.[params.sessionKey]?.systemPromptReport
         : undefined),
@@ -1123,7 +1097,7 @@ export async function runMemoryFlushIfNeeded(params: {
     const runtime = await memoryFlushPreparationLoader.load();
     preparedAttempt = await runtime.prepareMemoryFlushAttempt({
       ...params,
-      sessionEntry: activeSessionEntry,
+      sessionEntry: entry,
       flushRunId,
       contextWindowTokens,
       memoryFlushWritable,
@@ -1137,7 +1111,7 @@ export async function runMemoryFlushIfNeeded(params: {
     return await recordFailure(error);
   }
   if (!preparedAttempt) {
-    return { sessionEntry: activeSessionEntry, outcome: "skipped" };
+    return { sessionEntry: entry, outcome: "skipped" };
   }
   const {
     plan: activeMemoryFlushPlan,
@@ -1171,7 +1145,7 @@ export async function runMemoryFlushIfNeeded(params: {
     sessionFile: memorySession.sessionFile,
     abortSignal,
   });
-  const flushedCompactionCount = activeSessionEntry?.compactionCount ?? 0;
+  const flushedCompactionCount = entry?.compactionCount ?? 0;
   let visibleErrorPayloads: ReplyPayload[] = [];
   // Only the bounded phase belongs to the parent turn; maintenance content stays private.
   const parentRunId = params.opts?.runId;
@@ -1205,7 +1179,7 @@ export async function runMemoryFlushIfNeeded(params: {
       sessionKey: memorySession.sessionKey,
       sessionId: memorySession.sessionId,
       sourceSessionKey: params.sessionKey,
-      sourceSessionId: activeSessionEntry?.sessionId,
+      sourceSessionId: entry?.sessionId,
     });
     const flushExecution = await runEmbeddedAgentEntry({
       preparedRunAdmission,
@@ -1238,7 +1212,7 @@ export async function runMemoryFlushIfNeeded(params: {
         resolveRuntimeOverride: (provider) =>
           resolveSessionRuntimeOverrideForProvider({
             provider,
-            entry: activeSessionEntry,
+            entry,
             cfg: params.cfg,
           }),
       },
@@ -1258,7 +1232,7 @@ export async function runMemoryFlushIfNeeded(params: {
             params.runtimePolicySessionKey ??
             params.followupRun.run.runtimePolicySessionKey ??
             params.sessionKey,
-          sessionEntry: activeSessionEntry,
+          sessionEntry: entry,
           agentRuntime: sessionRuntimeOverride,
         });
         const { embeddedContext, senderContext, runBaseParams } =
@@ -1282,7 +1256,7 @@ export async function runMemoryFlushIfNeeded(params: {
           ...senderContext,
           ...runBaseParams,
           ...memorySession,
-          agentHarnessId: resolveSessionPinnedHarnessId(activeSessionEntry),
+          agentHarnessId: resolveSessionPinnedHarnessId(entry),
           agentHarnessRuntimeOverride: sessionRuntimeOverride,
           sandboxSessionKey: sourcePolicySessionKey,
           memoryAudience: flushMemoryAudience,
@@ -1340,17 +1314,17 @@ export async function runMemoryFlushIfNeeded(params: {
           { skipMaintenance: true, takeCacheOwnership: true },
         );
         if (updatedEntry) {
-          activeSessionEntry = updatedEntry;
+          entry = updatedEntry;
         }
       } catch (err) {
         logVerbose(`failed to persist memory flush metadata: ${String(err)}`);
       }
     }
-    return { sessionEntry: activeSessionEntry, outcome: "completed" };
+    return { sessionEntry: entry, outcome: "completed" };
   } catch (error) {
     if (error instanceof MemoryFlushToolsUnavailableError) {
       memoryFlushLog.warn(error.message);
-      return { sessionEntry: activeSessionEntry, outcome: "skipped" };
+      return { sessionEntry: entry, outcome: "skipped" };
     }
     return await recordFailure(error);
   } finally {

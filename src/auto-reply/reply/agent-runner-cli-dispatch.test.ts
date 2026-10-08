@@ -399,17 +399,31 @@ describe("runCliAgentWithLifecycle", () => {
     });
     const onActivity = vi.fn();
     const onAssistantText = vi.fn<(text: string) => Promise<void>>(async () => undefined);
-
-    await runCliAgentWithLifecycle({
-      runId: "run-activity-assistant",
-      onActivity,
-      onAssistantText,
-      runParams: createRunParams("run-activity-assistant"),
+    const assistantEvents: Record<string, unknown>[] = [];
+    const stop = onAgentEvent((event) => {
+      if (event.runId === "run-activity-assistant" && event.stream === "assistant") {
+        assistantEvents.push(event.data);
+      }
     });
+
+    try {
+      await runCliAgentWithLifecycle({
+        runId: "run-activity-assistant",
+        onActivity,
+        onAssistantText,
+        runParams: createRunParams("run-activity-assistant"),
+      });
+    } finally {
+      stop();
+    }
 
     // Every real event stamps, independent of which callbacks are registered.
     expect(onAssistantText).toHaveBeenCalledTimes(1);
     expect(onActivity).toHaveBeenCalledTimes(2);
+    expect(assistantEvents).toEqual([
+      { text: "Visible answer", delta: "Visible answer" },
+      { itemId: "cli-assistant:run-activity-assistant", text: "Visible answer" },
+    ]);
   });
 
   it("keeps the captured lifecycle generation on the start event", async () => {

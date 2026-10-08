@@ -77,6 +77,7 @@ type MessageSendParams = Pick<
   | "completionRetention"
   | "requireUnknownSendReconciliation"
   | "onDeliveryAttempt"
+  | "withDirectAdapterHandoff"
   | "onDeliveryResult"
   | "onPlatformSendDispatch"
   | "assertDirectAdapterHandoff"
@@ -241,13 +242,32 @@ async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<st
   return randomIdempotencyKey();
 }
 
+function resolveDirectMessageTarget(
+  params: Pick<MessageSendParams, "to" | "accountId">,
+  cfg: OpenClawConfig,
+  channel: ChannelPlugin["id"],
+  plugin: ChannelPlugin,
+) {
+  const target = resolveOutboundTarget({
+    channel,
+    plugin,
+    to: params.to,
+    cfg,
+    accountId: params.accountId,
+    mode: "explicit",
+  });
+  if (!target.ok) {
+    throw target.error;
+  }
+  return target;
+}
+
 export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
   const cfg = await resolveMessageConfig(params.cfg);
   const reply = normalizeOutboundReplyFacts({ reply: params.reply, replyToId: params.replyToId });
-  const prepared = params.preparedPlugin
+  const { channel, plugin } = params.preparedPlugin
     ? { channel: params.preparedPlugin.id, plugin: params.preparedPlugin }
     : await resolveMessageChannelSelection({ cfg, channel: params.channel });
-  const { channel, plugin } = prepared;
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
   const mediaSources = [params.mediaUrl, ...(params.mediaUrls ?? [])].filter(
     (source): source is string => Boolean(source),
@@ -287,17 +307,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
   }
 
   if (deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true) {
-    const resolvedTarget = resolveOutboundTarget({
-      channel,
-      plugin,
-      to: params.to,
-      cfg,
-      accountId: params.accountId,
-      mode: "explicit",
-    });
-    if (!resolvedTarget.ok) {
-      throw resolvedTarget.error;
-    }
+    const resolvedTarget = resolveDirectMessageTarget(params, cfg, channel, plugin);
 
     const outboundSession = buildOutboundSessionContext({
       cfg,
@@ -370,6 +380,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
         completionRetention: params.completionRetention,
         ...(params.onDeliveryIntent ? { onDeliveryIntent: params.onDeliveryIntent } : {}),
         ...(params.onDeliveryAttempt ? { onDeliveryAttempt: params.onDeliveryAttempt } : {}),
+        withDirectAdapterHandoff: params.withDirectAdapterHandoff,
         ...(params.onDeliveryResult ? { onDeliveryResult: params.onDeliveryResult } : {}),
         ...(params.onPlatformSendDispatch
           ? { onPlatformSendDispatch: params.onPlatformSendDispatch }
@@ -466,10 +477,9 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
 
 export async function sendPoll(params: MessagePollParams): Promise<MessagePollResult> {
   const cfg = await resolveMessageConfig(params.cfg);
-  const prepared = params.preparedPlugin
+  const { channel, plugin } = params.preparedPlugin
     ? { channel: params.preparedPlugin.id, plugin: params.preparedPlugin }
     : await resolveMessageChannelSelection({ cfg, channel: params.channel });
-  const { channel, plugin } = prepared;
 
   const outbound = plugin.outbound;
   if (!outbound?.sendPoll) {
@@ -506,17 +516,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
   }
 
   if (deliveryMode !== "gateway" || params.gatewayOwnedDelivery === true) {
-    const resolvedTarget = resolveOutboundTarget({
-      channel,
-      plugin,
-      to: params.to,
-      cfg,
-      accountId: params.accountId,
-      mode: "explicit",
-    });
-    if (!resolvedTarget.ok) {
-      throw resolvedTarget.error;
-    }
+    const resolvedTarget = resolveDirectMessageTarget(params, cfg, channel, plugin);
 
     params.assertDirectAdapterHandoff?.();
     const result = await outbound.sendPoll({

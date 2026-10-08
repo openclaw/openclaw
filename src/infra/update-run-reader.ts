@@ -169,20 +169,7 @@ export function createUpdateRunAdmissionReader(
 export async function getUpdateRunStatusAsync(
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<{ activeRun?: UpdateRunRecord; lastRun?: UpdateRunRecord }> {
-  const reply = await withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(
-      options,
-      { type: "updateRuns.status" },
-      { preferIndependentWarmRead: true },
-    ),
-  );
-  if (!reply) {
-    return {};
-  }
-  if (!reply.ok || reply.type !== "updateRuns.status") {
-    throw new Error("Unexpected update run status result");
-  }
-  return reply.status;
+  return readUpdateRunStatusAsync("updateRuns.status", options);
 }
 
 export async function getUpdateRunHistoryStatusAsync(
@@ -192,18 +179,25 @@ export async function getUpdateRunHistoryStatusAsync(
   lastRun?: UpdateRunRecord;
   expiredRun?: UpdateRunRecord;
 }> {
+  return readUpdateRunStatusAsync("updateRuns.historyStatus", options);
+}
+
+async function readUpdateRunStatusAsync(
+  type: "updateRuns.status" | "updateRuns.historyStatus",
+  options: OpenClawStateDatabaseOptions,
+) {
   const reply = await withArtifactPreservingStateReads(() =>
-    executeExistingOpenClawStateRead(
-      options,
-      { type: "updateRuns.historyStatus" },
-      { preferIndependentWarmRead: true },
-    ),
+    executeExistingOpenClawStateRead(options, { type }, { preferIndependentWarmRead: true }),
   );
   if (!reply) {
     return {};
   }
-  if (!reply.ok || reply.type !== "updateRuns.historyStatus") {
-    throw new Error("Unexpected update run history status result");
+  if (!reply.ok || reply.type !== type) {
+    throw new Error(
+      type === "updateRuns.status"
+        ? "Unexpected update run status result"
+        : "Unexpected update run history status result",
+    );
   }
   return reply.status;
 }

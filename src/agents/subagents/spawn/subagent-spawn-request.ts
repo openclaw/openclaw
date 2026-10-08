@@ -13,10 +13,10 @@ import { resolveSwarmConfig } from "../swarm/swarm-config.js";
 import { validateStructuredOutputSchema } from "../swarm/swarm-output-schema.js";
 import { holdQueuedSwarmRun, reserveSwarmRun } from "../swarm/swarm-scheduler.js";
 import { resolveSubagentContextMode } from "./subagent-spawn-context.js";
-import type {
-  SpawnSubagentContext,
-  SpawnSubagentParams,
-  SpawnSubagentResult,
+import {
+  rejectSubagentSpawnRequest,
+  type SpawnSubagentContext,
+  type SpawnSubagentParams,
 } from "./subagent-spawn-contract.js";
 import { resolveSubagentSpawnOwnership } from "./subagent-spawn-ownership.js";
 import { resolveConfiguredSubagentRunTimeoutSeconds } from "./subagent-spawn-plan.js";
@@ -26,10 +26,6 @@ import {
   resolveGatewaySessionStoreTargetInWorker,
 } from "./subagent-spawn.runtime.js";
 import { normalizeSubagentTaskName } from "./subagent-task-name.js";
-
-function rejectSubagentSpawnRequest(status: "error" | "forbidden", error: string) {
-  return { ok: false as const, result: { status, error } satisfies SpawnSubagentResult };
-}
 
 export async function resolveSubagentSpawnRequest(
   params: SpawnSubagentParams,
@@ -327,40 +323,32 @@ export async function resolveSubagentSpawnRequest(
   return {
     ok: true as const,
     resolved: {
-      request: {
-        taskName,
-        spawnMode,
-        cleanup,
-        expectsCompletionMessage,
-        completionRequesterSessionId,
-        completionRequesterLifecycleRevision,
-      },
-      runtime: {
-        hookRunner,
-        cfg,
-        runTimeoutSeconds,
-        contextMode,
-        requesterInternalKey,
-        ownership,
-        requesterAgentId,
-        targetAgentId,
-      },
-      swarm: {
-        config: swarmConfig,
-        groupId: swarmGroupId,
-        schedulerGroupKey: swarmSchedulerGroupKey,
-        launchReplayKey: swarmLaunchReplayKey,
-        soleImplicitMember,
-        reservationPending,
-        reservation,
-      },
-      admission: {
-        resolve: resolveAdmission,
-        initial: admission,
-        reservation: admissionReservation?.ok ? admissionReservation : undefined,
-        childDepth,
-        maxSpawnDepth,
-      },
+      taskName,
+      spawnMode,
+      cleanup,
+      expectsCompletionMessage,
+      completionRequesterSessionId,
+      completionRequesterLifecycleRevision,
+      hookRunner,
+      cfg,
+      runTimeoutSeconds,
+      contextMode,
+      requesterInternalKey,
+      ownership,
+      requesterAgentId,
+      targetAgentId,
+      swarmConfig,
+      swarmGroupId,
+      swarmSchedulerGroupKey,
+      swarmLaunchReplayKey,
+      soleImplicitMember,
+      reservationPending,
+      swarmReservation: reservation,
+      resolveAdmission,
+      admission,
+      admissionReservation: admissionReservation?.ok ? admissionReservation : undefined,
+      childDepth,
+      maxSpawnDepth,
       childIdem,
     },
   };

@@ -141,10 +141,7 @@ function assertSupportedProcessSandbox(execServer: OpenClawExecServer, record: J
   }
   const sandbox = requireObject(record.sandbox, "process sandbox context");
   const permissions = requireObject(sandbox.permissions, "process sandbox permissions");
-  if (permissions.network !== "restricted") {
-    return;
-  }
-  if (!execServer.networkIsolated) {
+  if (permissions.network === "restricted" && !execServer.networkIsolated) {
     throw new Error("Codex network restrictions cannot be enforced by the sandbox backend.");
   }
 }
@@ -309,26 +306,6 @@ function emitProcessClosed(managed: ManagedProcess, exitCode: number | null): vo
   notifyProcessWaiters(managed);
 }
 
-function limitProcessChunks(chunks: ProcessChunk[], maxBytes: number | undefined): ProcessChunk[] {
-  if (!maxBytes) {
-    return chunks;
-  }
-  const retained: ProcessChunk[] = [];
-  let retainedBytes = 0;
-  for (const chunk of chunks) {
-    const byteLength = Buffer.from(chunk.chunk, "base64").byteLength;
-    if (retained.length > 0 && retainedBytes + byteLength > maxBytes) {
-      break;
-    }
-    retained.push(chunk);
-    retainedBytes += byteLength;
-    if (retainedBytes >= maxBytes) {
-      break;
-    }
-  }
-  return retained;
-}
-
 export async function readProcess(
   processes: Map<string, ManagedProcess>,
   params: JsonValue | undefined,
@@ -344,10 +321,24 @@ export async function readProcess(
   if (!managed.closed && managed.nextSeq - 1 <= afterSeq && waitMs > 0) {
     await waitForProcessUpdate(managed, waitMs);
   }
-  const chunks = limitProcessChunks(
-    managed.chunks.filter((chunk) => chunk.seq > afterSeq),
-    typeof record.maxBytes === "number" && record.maxBytes > 0 ? record.maxBytes : undefined,
-  );
+  const maxBytes =
+    typeof record.maxBytes === "number" && record.maxBytes > 0 ? record.maxBytes : undefined;
+  const chunks: ProcessChunk[] = [];
+  let retainedBytes = 0;
+  for (const chunk of managed.chunks) {
+    if (!(chunk.seq > afterSeq)) {
+      continue;
+    }
+    const byteLength = maxBytes ? Buffer.from(chunk.chunk, "base64").byteLength : 0;
+    if (maxBytes && chunks.length > 0 && retainedBytes + byteLength > maxBytes) {
+      break;
+    }
+    chunks.push(chunk);
+    retainedBytes += byteLength;
+    if (maxBytes && retainedBytes >= maxBytes) {
+      break;
+    }
+  }
   const lastChunk = chunks.at(-1);
   return {
     chunks,
@@ -412,10 +403,7 @@ export async function terminateProcess(
   const record = requireObject(params, "process/terminate params");
   const processId = requireString(record.processId, "processId");
   const managed = processes.get(processId);
-  if (!managed) {
-    return { running: false };
-  }
-  return await terminateManagedProcess(managed);
+  return managed ? await terminateManagedProcess(managed) : { running: false };
 }
 
 async function terminateManagedProcess(managed: ManagedProcess): Promise<JsonObject> {

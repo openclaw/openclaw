@@ -1,5 +1,9 @@
 // Public descriptions are fixed text: registry responses and local paths stay local.
 export const UPDATE_PREFLIGHT_DETAILS = {
+  "windows-task-elevation-required":
+    "Windows Task Scheduler requires elevated access for this Gateway task. Rerun openclaw update from an elevated terminal (Run as administrator).",
+  "windows-task-inspection-timeout":
+    "Windows Task Scheduler task lookup/elevation check timed out before update staging. Check Task Scheduler, then retry openclaw update from an elevated terminal (Run as administrator).",
   "handoff-permission-denied":
     "Update handoff permission was denied. Run openclaw gateway status --deep and check access to the installation and state directory as the service owner.",
   "handoff-runtime-unavailable":

@@ -7,6 +7,7 @@ import {
   closeCodexCatalogClientSource,
   codexCatalogSourceForClient,
 } from "../session-catalog-source.js";
+import type { CodexClientRequestAttempt } from "./client-catalog-response.js";
 import { CodexCatalogWorker, codexCatalogRequestId } from "./client-catalog-worker.js";
 import {
   appendBoundedTail,
@@ -47,7 +48,7 @@ import {
   type RpcRequest,
 } from "./protocol.js";
 import { dispatchCodexRequestAttempt } from "./request-admission.js";
-import { createCodexRequestAttempt, type CodexRequestAttempt } from "./request-attempt.js";
+import { createCodexRequestAttempt } from "./request-attempt.js";
 import type { CodexRequestWaiterFinished } from "./request-observation.js";
 import {
   isCodexAppServerOverloadError,
@@ -140,26 +141,14 @@ class CodexAppServerIndeterminateTransportError extends Error {
 export function isCodexAppServerIndeterminateRequestCancellationError(
   error: unknown,
 ): error is Error & { code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED"; mayHaveWritten: true } {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    error.code === "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED" &&
-    "mayHaveWritten" in error &&
-    error.mayHaveWritten === true
-  );
+  return hasRequestWriteState(error, "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED", true);
 }
 
 /** True when local cancellation happened before a request write was attempted. */
 export function isCodexAppServerPrewriteRequestCancellationError(
   error: unknown,
 ): error is Error & { code: "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED"; mayHaveWritten: false } {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    error.code === "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED" &&
-    "mayHaveWritten" in error &&
-    error.mayHaveWritten === false
-  );
+  return hasRequestWriteState(error, "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED", false);
 }
 
 /** True when transport failure cannot prove a written request stopped running. */
@@ -167,12 +156,16 @@ export function isCodexAppServerIndeterminateTransportError(error: unknown): err
   code: "CODEX_APP_SERVER_REQUEST_TRANSPORT_INDETERMINATE";
   mayHaveWritten: true;
 } {
+  return hasRequestWriteState(error, "CODEX_APP_SERVER_REQUEST_TRANSPORT_INDETERMINATE", true);
+}
+
+function hasRequestWriteState(error: unknown, code: string, written: boolean): boolean {
   return (
     error instanceof Error &&
     "code" in error &&
-    error.code === "CODEX_APP_SERVER_REQUEST_TRANSPORT_INDETERMINATE" &&
+    error.code === code &&
     "mayHaveWritten" in error &&
-    error.mayHaveWritten === true
+    error.mayHaveWritten === written
   );
 }
 
@@ -201,11 +194,7 @@ export class CodexAppServerClient {
   private readonly catalogWorker = new CodexCatalogWorker();
   private catalogWorkerClosed: Promise<void> | undefined;
   private serverRequestsClosed: Promise<void> | undefined;
-  private readonly pending = new Map<number | string, CodexRequestAttempt>();
-  private readonly catalogResponses = new WeakMap<
-    CodexRequestAttempt,
-    { preview?: CodexCatalogPreviewCache; remainingRows?: number }
-  >();
+  private readonly pending = new Map<number | string, CodexClientRequestAttempt>();
   private readonly serverRequests = new CodexServerRequests((response) =>
     this.writeMessage(response),
   );
@@ -624,7 +613,7 @@ export class CodexAppServerClient {
       method === "initialize"
         ? this.initializeObservation?.attempt(overloadAttemptOrdinal)
         : undefined;
-    const attempt = createCodexRequestAttempt({
+    const attempt: CodexClientRequestAttempt = createCodexRequestAttempt({
       method,
       retainWritten: onResponse !== undefined,
       observe: initialize?.observe,
@@ -654,10 +643,10 @@ export class CodexAppServerClient {
     });
     this.pending.set(id, attempt);
     if (options.catalogPreview) {
-      this.catalogResponses.set(attempt, {
+      attempt.catalogProjection = {
         preview: options.catalogPreviewCache,
         remainingRows: options.catalogRows,
-      });
+      };
     }
     // Stateful ownership assertions remain pre-write checks.
     const result = attempt.wait<T>(
@@ -807,7 +796,6 @@ export class CodexAppServerClient {
         dispatchCodexAppServerResponse(
           message,
           this.pending,
-          this.catalogResponses,
           codexCatalogSourceForClient(this),
           previewStates,
         ) || this.nativeExecutionObserved;
@@ -831,12 +819,7 @@ export class CodexAppServerClient {
   }
 
   private async decodeCatalogLine(line: Buffer, route: CodexCatalogDecodeRoute): Promise<void> {
-    const decoded = await this.catalogWorker.decode(
-      line,
-      route,
-      this.pending,
-      this.catalogResponses,
-    );
+    const decoded = await this.catalogWorker.decode(line, route, this.pending);
     if (!decoded || this.closed) {
       return;
     }

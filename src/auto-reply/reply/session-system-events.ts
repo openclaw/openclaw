@@ -80,11 +80,11 @@ function formatSystemEventTimestamp(ts: number, cfg: OpenClawConfig) {
   if (zone.mode === "utc") {
     return formatUtcTimestamp(date, { displaySeconds: true });
   }
-  if (zone.mode === "local") {
-    return formatZonedTimestamp(date, { displaySeconds: true }) ?? "unknown-time";
-  }
   return (
-    formatZonedTimestamp(date, { timeZone: zone.timeZone, displaySeconds: true }) ?? "unknown-time"
+    formatZonedTimestamp(date, {
+      ...(zone.mode === "iana" ? { timeZone: zone.timeZone } : {}),
+      displaySeconds: true,
+    }) ?? "unknown-time"
   );
 }
 
@@ -97,6 +97,7 @@ export async function drainFormattedSystemEvents(params: {
   isNewSession: boolean;
   events?: readonly SystemEvent[];
   deferredEventIds?: readonly string[];
+  onEventsAdmitted?: (events: readonly SystemEvent[]) => void;
 }): Promise<string | undefined> {
   const systemLines: string[] = [];
   const queueKey = resolveSystemEventQueueKey(params.sessionKey, params.agentId);
@@ -109,6 +110,7 @@ export async function drainFormattedSystemEvents(params: {
     ),
     { deferredEventIds: params.deferredEventIds },
   );
+  params.onEventsAdmitted?.(queued);
   const sessionStateNotices = queued.flatMap((event) => {
     const targetSessionKey = event.contextKey
       ? decodeSessionStateNoticeContextKey(event.contextKey)

@@ -72,6 +72,15 @@ it("withholds a watermark receipt after a synchronous transcript append publishe
       ),
       membership: new Set(),
     });
+    const acquiring = retainPreparedSessionSharingFacts({
+      databaseIdentity: `file:${source.identity}`,
+      sessionKey: scope.sessionKey,
+      acquiring: true,
+    });
+    const sharingSnapshot = sharing.readCurrent();
+    if (!sharingSnapshot) {
+      throw new Error("Expected prepared sharing snapshot");
+    }
     let published: ReturnType<typeof readPreparedSessionEntryChange>;
     const stop = sessionChanges.subscribeFacts((change) => {
       if ("sessionKey" in change && change.sessionKey === scope.sessionKey) {
@@ -104,10 +113,13 @@ it("withholds a watermark receipt after a synchronous transcript append publishe
         entry: { sessionId: scope.sessionId },
         membership: new Set(),
       });
+      acquiring.initialize(sharingSnapshot);
+      expect(acquiring.readCurrent()).toEqual(sharing.readCurrent());
       expect(readSessionTranscriptWatermarkInDatabase(database, scope.sessionId).maxSeq).toBe(0);
     } finally {
       delivery.afterResult = undefined;
       sharing.release();
+      acquiring.release();
       stop();
     }
   });

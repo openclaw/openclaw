@@ -16,7 +16,7 @@ import {
 } from "../../tool-allowlist-guard.js";
 import {
   createToolExecutionMatcher,
-  TOOL_EXECUTION_GATED_MESSAGE,
+  formatToolExecutionGatedMessage,
 } from "../../tool-policy-shared.js";
 import {
   withRuntimeToolSchemaQuarantine,
@@ -30,6 +30,7 @@ import {
   type ToolSearchCatalogToolExecutor,
 } from "../../tool-search.js";
 import type { AnyAgentTool } from "../../tools/common.js";
+import { textResult } from "../../tools/tool-results.js";
 import { log } from "../logger.js";
 import type { prepareEmbeddedAttemptBundleTools } from "./attempt-bundle-tools.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
@@ -129,19 +130,12 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
       subagentPolicy,
       inheritedToolPolicy,
     } = runtimeCapabilityProfile.policy;
+    const agentToolLabel = agentId ? `agents.${agentId}.tools` : "agent tools";
     const explicitToolAllowlistSources = collectExplicitToolAllowlistSources([
       { label: "tools.allow", allow: globalPolicy?.allow },
       { label: "tools.byProvider.allow", allow: globalProviderPolicy?.allow },
-      {
-        label: agentId ? `agents.${agentId}.tools.allow` : "agent tools.allow",
-        allow: agentPolicy?.allow,
-      },
-      {
-        label: agentId
-          ? `agents.${agentId}.tools.byProvider.allow`
-          : "agent tools.byProvider.allow",
-        allow: agentProviderPolicy?.allow,
-      },
+      { label: `${agentToolLabel}.allow`, allow: agentPolicy?.allow },
+      { label: `${agentToolLabel}.byProvider.allow`, allow: agentProviderPolicy?.allow },
       { label: "group tools.allow", allow: groupPolicy?.allow },
       { label: "sandbox tools.allow", allow: sandboxPolicy?.allow },
       { label: "subagent tools.allow", allow: subagentPolicy?.allow },
@@ -232,12 +226,7 @@ export async function prepareEmbeddedAttemptToolCatalog(input: {
     refreshTools: (recordQuarantine: RuntimeToolSchemaQuarantineRecorder) => {
       const next = buildCatalog(recordQuarantine);
       current.effectiveTools.splice(0, current.effectiveTools.length, ...next.effectiveTools);
-      for (const key of [
-        "visibleAllowedToolNames",
-        "liveAllowedToolNames",
-        "capabilityToolNames",
-        "replayAllowedToolNames",
-      ] as const) {
+      for (const key of [...promptPlanKeys, "replayAllowedToolNames"] as const) {
         const target = current.toolSearchRunPlan[key];
         // Earlier tool calls remain valid history, even after their live authority is revoked.
         if (key !== "replayAllowedToolNames") {
@@ -272,9 +261,10 @@ function gateToolExecution(
             prepareArguments: undefined,
             prepareBeforeToolCallParams: undefined,
             finalizeBeforeToolCallParams: undefined,
-            execute: async () => {
-              throw new Error(TOOL_EXECUTION_GATED_MESSAGE);
-            },
+            // A denial is guidance for the model, not a tool failure that fails the run;
+            // a failure-like `status` detail would reclassify it as an error.
+            execute: async () =>
+              textResult(formatToolExecutionGatedMessage(tool.name, allowNames), { gated: true }),
           }),
         ),
   );

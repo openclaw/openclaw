@@ -99,12 +99,8 @@ function createReplyMediaFailure(media: string, index: number, error: unknown): 
 function isLikelyLocalMediaSource(media: string): boolean {
   return (
     FILE_URL_RE.test(media) ||
-    media.startsWith("/") ||
-    media.startsWith("./") ||
-    media.startsWith("../") ||
     media.startsWith("~") ||
     WINDOWS_DRIVE_RE.test(media) ||
-    media.startsWith("\\\\") ||
     (!SCHEME_RE.test(media) &&
       (media.includes("/") || media.includes("\\") || HAS_FILE_EXT_RE.test(media)))
   );
@@ -208,9 +204,6 @@ export function createReplyMediaSourcePreparer(params: {
     sessionWorkspaceDir?: string,
     workspaceDir?: string,
   ): Promise<{ path: string; contentType?: string }> => {
-    if (!isLikelyLocalMediaSource(media)) {
-      return { path: media };
-    }
     const managedMediaPath = await resolveAllowedManagedMediaPath(media);
     if (managedMediaPath) {
       return {

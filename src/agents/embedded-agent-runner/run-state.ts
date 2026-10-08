@@ -313,6 +313,16 @@ export function registerActiveEmbeddedRunHumanInputWait(
   };
 }
 
+/** Tool-side waits know only their run id; the live registration supplies its authority. */
+export function registerActiveEmbeddedRunHumanInputWaitForRun(
+  runId: string,
+  isPending: () => boolean,
+): ((resolved: boolean) => void) | undefined {
+  const handle = ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(runId);
+  const authority = handle && ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle)?.delegatedAuthority;
+  return authority ? registerActiveEmbeddedRunHumanInputWait(authority, isPending) : undefined;
+}
+
 /** Re-read at the recovery action, including after queued/lazy recovery dispatch. */
 export function resolveActiveEmbeddedRunRecoveryBlocker(
   sessionId: string,
@@ -392,31 +402,30 @@ export const EMBEDDED_RUN_WAITERS = embeddedRunState.waiters;
 
 function evictPriorLifecycleEmbeddedRuns(): void {
   const staleHandles = new Set<EmbeddedAgentQueueHandle>();
-  for (const [sessionId, handle] of ACTIVE_EMBEDDED_RUNS) {
-    const lifecycleGeneration = ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS.get(handle);
-    if (lifecycleGeneration && isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
-      continue;
-    }
-    handle.closeDiagnostics?.();
-    ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle)?.humanInputWaits?.clear();
-    staleHandles.add(handle);
-    if (ACTIVE_EMBEDDED_RUNS.get(sessionId) === handle) {
-      ACTIVE_EMBEDDED_RUNS.delete(sessionId);
-    }
-    ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(sessionId);
-  }
-  for (const [runId, handle] of ACTIVE_EMBEDDED_RUNS_BY_RUN_ID) {
-    const lifecycleGeneration = ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS.get(handle);
-    if (lifecycleGeneration && isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
-      continue;
-    }
-    handle.closeDiagnostics?.();
-    staleHandles.add(handle);
-    // This index only gates the separately owned chat abort controller; absence
-    // is abortable. Keeping it would let stale ownership influence new work.
-    if (ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(runId) === handle) {
-      ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.delete(runId);
-      RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS.delete(runId);
+  for (const [index, bySession] of [
+    [ACTIVE_EMBEDDED_RUNS, true],
+    [ACTIVE_EMBEDDED_RUNS_BY_RUN_ID, false],
+  ] as const) {
+    for (const [id, handle] of index) {
+      const lifecycleGeneration = ACTIVE_EMBEDDED_RUN_LIFECYCLE_GENERATIONS.get(handle);
+      if (lifecycleGeneration && isAgentEventLifecycleGenerationCurrent(lifecycleGeneration)) {
+        continue;
+      }
+      handle.closeDiagnostics?.();
+      if (bySession) {
+        ACTIVE_EMBEDDED_RUN_REGISTRATIONS.get(handle)?.humanInputWaits?.clear();
+      }
+      staleHandles.add(handle);
+      if (index.get(id) === handle) {
+        index.delete(id);
+        if (!bySession) {
+          // An absent run-ID entry leaves the separately owned chat controller abortable.
+          RETAINED_EMBEDDED_RUN_ABORTABILITY_RUN_IDS.delete(id);
+        }
+      }
+      if (bySession) {
+        ACTIVE_EMBEDDED_RUN_SNAPSHOTS.delete(id);
+      }
     }
   }
   for (const [sessionId, claim] of EMBEDDED_RUN_COMPLETION_CLAIMS) {

@@ -21,10 +21,7 @@ export function isCodexNotificationForTurn(
  */
 export function readCodexNotificationThreadId(record: JsonObject): string | undefined {
   const thread = isJsonObject(record.thread) ? record.thread : undefined;
-  return (
-    normalizeOptionalString(record.threadId) ??
-    (thread ? normalizeOptionalString(thread.id) : undefined)
-  );
+  return normalizeOptionalString(record.threadId) ?? (thread && normalizeOptionalString(thread.id));
 }
 
 export function readCodexNotificationTurnId(record: JsonObject): string | undefined {

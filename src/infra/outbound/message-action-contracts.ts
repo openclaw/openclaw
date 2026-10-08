@@ -56,6 +56,7 @@ export type MessageActionInput = Pick<
   | "deliveryIntentId"
   | "deliveryCompletion"
   | "onDeliveryAttempt"
+  | "withDirectAdapterHandoff"
   | "onDeliveryResult"
   | "onPlatformSendDispatch"
   | "assertDirectAdapterHandoff"

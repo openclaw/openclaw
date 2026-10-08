@@ -540,8 +540,6 @@ class TalkModeManager internal constructor(
   )
 
   private enum class RealtimeCaptureResume {
-    Skipped,
-    Resumed,
     Restart,
     Disconnected,
   }
@@ -619,10 +617,7 @@ class TalkModeManager internal constructor(
             retireRecognizer()
             closePushToTalkRung()
             pttReleaseCompletion = null
-            pttFinalSegments.clear()
-            pttLivePartial = ""
-            lastTranscript = ""
-            lastHeardAtMs = null
+            clearRecognizedTranscript()
             activePttCaptureId = captureId
             pttCompletion = completion
             prepareRealtimeCapturePause(captureId, lease)
@@ -847,17 +842,10 @@ class TalkModeManager internal constructor(
     event: String,
     payloadJson: String?,
   ) {
-    if (event == "config.changed") {
-      invalidateConfig()
-      return
-    }
-    if (event == "talk.event") {
-      handleRealtimeTalkEvent(payloadJson)
-      return
-    }
-    if (event == "talk.voice.change") {
-      handleRealtimeVoiceChange(payloadJson)
-      return
+    when (event) {
+      "config.changed" -> return invalidateConfig()
+      "talk.event" -> return handleRealtimeTalkEvent(payloadJson)
+      "talk.voice.change" -> return handleRealtimeVoiceChange(payloadJson)
     }
     if (ttsOnAllResponses) {
       Log.d(tag, "gateway event: $event")
@@ -1036,10 +1024,7 @@ class TalkModeManager internal constructor(
         restartJob = null
         silenceJob = null
         closePushToTalkRung()
-        pttFinalSegments.clear()
-        pttLivePartial = ""
-        lastTranscript = ""
-        lastHeardAtMs = null
+        clearRecognizedTranscript()
         _isListening.value = false
         setStatus(nativeText("Off"), state = TalkStatusState.Off)
         stopRealtimeRelay()
@@ -1884,13 +1869,13 @@ class TalkModeManager internal constructor(
     val generation = startGeneration.get()
     val outcome =
       synchronized(realtimeCapturePauseLock) {
-        val current = realtimeCapturePause ?: return@synchronized RealtimeCaptureResume.Skipped
+        val current = realtimeCapturePause ?: return@synchronized null
         if (current.pttCaptureId != captureId || activePttCaptureId != null) {
-          return@synchronized RealtimeCaptureResume.Skipped
+          return@synchronized null
         }
         if (!_isEnabled.value || stopRequested) {
           realtimeCapturePause = null
-          return@synchronized RealtimeCaptureResume.Skipped
+          return@synchronized null
         }
         // Native Talk has no relay ID. A completed PTT turn may have already
         // restarted it; cancellation and empty turns still need that restart.
@@ -1901,22 +1886,22 @@ class TalkModeManager internal constructor(
         val sessionId = current.sessionId
         if (sessionId == null || realtimeSessionId != sessionId) {
           realtimeCapturePause = null
-          return@synchronized RealtimeCaptureResume.Skipped
+          return@synchronized null
         }
         if (!isConnected()) return@synchronized RealtimeCaptureResume.Disconnected
         if (realtimeCaptureJob?.isActive == true || realtimeAppendJob?.isActive == true) {
           realtimeCapturePause = null
-          return@synchronized RealtimeCaptureResume.Skipped
+          return@synchronized null
         }
         realtimeCapturePause = null
         listeningMode = true
         _isListening.value = true
         setStatus(nativeText("Listening"))
         startRealtimeCaptureLocked(sessionId)
-        RealtimeCaptureResume.Resumed
+        null
       }
     when (outcome) {
-      RealtimeCaptureResume.Skipped, RealtimeCaptureResume.Resumed -> {
+      null -> {
         return
       }
 
@@ -2537,14 +2522,18 @@ class TalkModeManager internal constructor(
         listeningMode = false
         retireRecognizer()
         closePushToTalkRung()
-        pttFinalSegments.clear()
-        pttLivePartial = ""
-        lastTranscript = ""
-        lastHeardAtMs = null
+        clearRecognizedTranscript()
         ClearedPushToTalkCapture(transcript = transcript, completion = completion) to release
       }
     release?.cancel()
     return cleared
+  }
+
+  private fun clearRecognizedTranscript() {
+    pttFinalSegments.clear()
+    pttLivePartial = ""
+    lastTranscript = ""
+    lastHeardAtMs = null
   }
 
   private fun finishPushToTalk(

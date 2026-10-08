@@ -112,16 +112,13 @@ export class CodexNativeSubagentCompletionDelivery {
         this.dependencies.unregisterChild(childState);
         return;
       }
-      if (delivery.recoveryPending) {
-        this.scheduleRetry(
-          childState,
-          delivery.error ?? "requester recovery owns completion",
-          false,
-        );
-        return;
-      }
-      const error = delivery.error ?? "completion delivery did not produce a parent response";
-      this.scheduleRetry(childState, error);
+      const recoveryPending = delivery.recoveryPending;
+      const error =
+        delivery.error ??
+        (recoveryPending
+          ? "requester recovery owns completion"
+          : "completion delivery did not produce a parent response");
+      this.scheduleRetry(childState, error, !recoveryPending);
     } catch (error) {
       if (!this.isCurrent(state, childState)) {
         return;
@@ -148,10 +145,8 @@ export class CodexNativeSubagentCompletionDelivery {
   }
 
   finish(state: ParentState, child: ChildState): void {
-    if (child.completionDeliveryTimer) {
-      clearTimeout(child.completionDeliveryTimer);
-      child.completionDeliveryTimer = undefined;
-    }
+    clearTimeout(child.completionDeliveryTimer);
+    child.completionDeliveryTimer = undefined;
     void this.deliverPending(state, child);
   }
 
@@ -208,9 +203,7 @@ export class CodexNativeSubagentCompletionDelivery {
 
   release(childState: ChildState): void {
     childState.completionCustody?.release();
-    if (childState.completionDeliveryTimer) {
-      clearTimeout(childState.completionDeliveryTimer);
-    }
+    clearTimeout(childState.completionDeliveryTimer);
     const deliveryOwnerKey = childState.deliveryOwnerKey;
     if (deliveryOwnerKey && completionDeliveryOwners.get(deliveryOwnerKey) === childState) {
       completionDeliveryOwners.delete(deliveryOwnerKey);

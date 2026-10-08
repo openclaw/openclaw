@@ -160,7 +160,11 @@ export function inferCodexAppServerConnectionClass(params: {
   if (params.transport !== "websocket") {
     return "local-loopback";
   }
-  return params.url && isLoopbackWebSocketUrl(params.url) ? "local-loopback" : "remote";
+  const parsed = params.url ? URL.parse(params.url) : null;
+  return (parsed?.protocol === "ws:" || parsed?.protocol === "wss:") &&
+    isLoopbackHost(parsed.hostname)
+    ? "local-loopback"
+    : "remote";
 }
 
 /** Applies the canonical remote-auth boundary to any Codex AppServer transport. */
@@ -182,14 +186,6 @@ export function assertCodexAppServerConnectionSecurity(params: {
       "remote Codex app-server WebSocket URLs require appServer.authToken or an Authorization header",
     );
   }
-}
-
-function isLoopbackWebSocketUrl(value: string): boolean {
-  const parsed = URL.parse(value);
-  if (parsed?.protocol !== "ws:" && parsed?.protocol !== "wss:") {
-    return false;
-  }
-  return isLoopbackHost(parsed.hostname);
 }
 
 export function resolvePolicyMode(value: unknown): CodexAppServerPolicyMode | undefined {

@@ -125,16 +125,17 @@ function formatPromptTextValue(text: string | undefined): string {
   return JSON.stringify(truncatePromptText(text));
 }
 
-function compareCommentTimelineEntries(
-  left: { createTime?: number; stableId?: string },
-  right: { createTime?: number; stableId?: string },
+function compareCommentTimelineEntries<T extends { createTime?: number }>(
+  left: T,
+  right: T,
+  stableId: (entry: T) => string | undefined,
 ): number {
   const leftTime = left.createTime ?? Number.MAX_SAFE_INTEGER;
   const rightTime = right.createTime ?? Number.MAX_SAFE_INTEGER;
   if (leftTime !== rightTime) {
     return leftTime - rightTime;
   }
-  return (left.stableId ?? "").localeCompare(right.stableId ?? "");
+  return (stableId(left) ?? "").localeCompare(stableId(right) ?? "");
 }
 
 function formatLinkedDocumentInline(link: ParsedCommentLinkedDocument): string {
@@ -708,16 +709,7 @@ async function fetchDriveCommentContext(
     }),
   );
   resolvedReplies.sort((left, right) =>
-    compareCommentTimelineEntries(
-      {
-        createTime: left.createTime,
-        stableId: left.replyId,
-      },
-      {
-        createTime: right.createTime,
-        stableId: right.replyId,
-      },
-    ),
+    compareCommentTimelineEntries(left, right, (reply) => reply.replyId),
   );
   const rootReplyContext =
     resolvedReplies.find((reply) => reply.replyId === normalizeString(rootReply?.reply_id)) ??
@@ -759,16 +751,7 @@ async function fetchDriveCommentContext(
     wholeCommentTimeline = wholeCommentTimeline
       .filter((entry) => Boolean(entry.commentId))
       .toSorted((left, right) =>
-        compareCommentTimelineEntries(
-          {
-            createTime: left.createTime,
-            stableId: left.commentId,
-          },
-          {
-            createTime: right.createTime,
-            stableId: right.commentId,
-          },
-        ),
+        compareCommentTimelineEntries(left, right, (entry) => entry.commentId),
       );
   }
 
@@ -908,21 +891,17 @@ function buildDriveCommentSurfacePrompt(
         currentCommentId: params.commentId,
       }),
     );
-    if (params.nearestBotWholeCommentAfter) {
-      lines.push(
-        `Nearest bot-authored whole-comment after the current comment: comment_id=${params.nearestBotWholeCommentAfter.commentId} text=${formatPromptTextValue(
-          params.nearestBotWholeCommentAfter.content.semanticText ??
-            params.nearestBotWholeCommentAfter.content.plainText,
-        )}`,
-      );
-    }
-    if (params.nearestBotWholeCommentBefore) {
-      lines.push(
-        `Nearest bot-authored whole-comment before the current comment: comment_id=${params.nearestBotWholeCommentBefore.commentId} text=${formatPromptTextValue(
-          params.nearestBotWholeCommentBefore.content.semanticText ??
-            params.nearestBotWholeCommentBefore.content.plainText,
-        )}`,
-      );
+    for (const [direction, entry] of [
+      ["after", params.nearestBotWholeCommentAfter],
+      ["before", params.nearestBotWholeCommentBefore],
+    ] as const) {
+      if (entry) {
+        lines.push(
+          `Nearest bot-authored whole-comment ${direction} the current comment: comment_id=${entry.commentId} text=${formatPromptTextValue(
+            entry.content.semanticText ?? entry.content.plainText,
+          )}`,
+        );
+      }
     }
     lines.push(
       "For this whole-document comment, use the whole-comment timeline above as the primary source for phrases like 'just now', 'previous result', 'that summary', or 'write it back'.",
@@ -1091,8 +1070,14 @@ export function parseFeishuDriveCommentNoticeEventPayload(
     return null;
   }
   const noticeMeta = value.notice_meta;
-  const fromUserId = isRecord(noticeMeta.from_user_id) ? noticeMeta.from_user_id : undefined;
-  const toUserId = isRecord(noticeMeta.to_user_id) ? noticeMeta.to_user_id : undefined;
+  const readUserId = (userIdValue: unknown): FeishuDriveCommentUserId | undefined =>
+    isRecord(userIdValue)
+      ? {
+          open_id: readString(userIdValue.open_id),
+          user_id: readString(userIdValue.user_id),
+          union_id: readString(userIdValue.union_id),
+        }
+      : undefined;
   return {
     comment_id: readString(value.comment_id),
     event_id: readString(value.event_id),
@@ -1100,21 +1085,9 @@ export function parseFeishuDriveCommentNoticeEventPayload(
     notice_meta: {
       file_token: readString(noticeMeta.file_token),
       file_type: readString(noticeMeta.file_type),
-      from_user_id: fromUserId
-        ? {
-            open_id: readString(fromUserId.open_id),
-            user_id: readString(fromUserId.user_id),
-            union_id: readString(fromUserId.union_id),
-          }
-        : undefined,
+      from_user_id: readUserId(noticeMeta.from_user_id),
       notice_type: readString(noticeMeta.notice_type),
-      to_user_id: toUserId
-        ? {
-            open_id: readString(toUserId.open_id),
-            user_id: readString(toUserId.user_id),
-            union_id: readString(toUserId.union_id),
-          }
-        : undefined,
+      to_user_id: readUserId(noticeMeta.to_user_id),
     },
     reply_id: readString(value.reply_id),
     timestamp: readString(value.timestamp),

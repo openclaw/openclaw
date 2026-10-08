@@ -71,11 +71,8 @@ export function createEventHandlers(context: EventHandlerContext) {
     loadHistory,
     noteLocalRunId,
     isLocalRunId,
-    forgetLocalRunId,
-    clearLocalRunIds,
     isLocalBtwRunId,
     forgetLocalBtwRunId,
-    clearLocalBtwRunIds,
     localMode,
   } = context;
   const runCoordinator = new TuiSessionRunCoordinator({
@@ -123,21 +120,7 @@ export function createEventHandlers(context: EventHandlerContext) {
     scheduleTerminalLifecycleError,
     syncSessionKey,
     terminateRun,
-  } = createTuiRunLifecycle({
-    state,
-    runCoordinator,
-    chatLog,
-    btw,
-    tui,
-    setActivityStatus,
-    refreshSessionInfo,
-    isLocalRunId,
-    forgetLocalRunId,
-    clearLocalRunIds,
-    clearLocalBtwRunIds,
-    streamingWatchdogMs: context.streamingWatchdogMs,
-    localMode,
-  });
+  } = createTuiRunLifecycle({ ...context, runCoordinator });
 
   const handleChatEvent = (payload: unknown) => {
     if (!payload || typeof payload !== "object") {

@@ -11,6 +11,7 @@ import {
 } from "./plugin-sdk-subpath-records.js";
 import { PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD } from "./progress-receipt-handoff-record.js";
 import { SESSION_PERSISTENCE_COMPAT_RECORDS } from "./session-persistence-records.js";
+import { SKILL_PROPOSAL_HOOKS_COMPAT_RECORD } from "./skill-proposal-hooks-record.js";
 import { TTS_PREFERENCES_COMPAT_RECORD } from "./tts-preferences-record.js";
 import type { PluginCompatRecord } from "./types.js";
 import { WATCHED_SESSIONS_COMPAT_RECORD } from "./watched-sessions.js";
@@ -93,7 +94,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     tests: [
       "src/plugin-sdk/memory-core-host-engine-sessions.test.ts",
       "src/plugins/compat/registry.test.ts",
-      "extensions/memory-core/src/memory-forget.participants.test.ts",
+      "extensions/memory-core/src/memory-forget.sources.test.ts",
     ],
     releaseNote:
       "Memory archive discovery and forget target selection can be awaited through worker-backed SDK readers; synchronous readers remain compatible until the next Plugin SDK major.",
@@ -137,7 +138,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     warningStarts: "2026-09-20",
     removalGate: "next-plugin-sdk-major",
     replacement:
-      "Await getSessionBindingService().inspectByConversationAsync, resolveByConversationAsync, touchAsync, resolveRuntimeConversationBindingRouteAsync, and the Async-suffixed thread-binding lifecycle setters. Project prepared inspection facts with inspectRuntimeConversationBindingRoute. Async dispatch retains an explicit synchronous fallback for legacy external adapters; remaining bind/unbind and other storage operations are separate migration work.",
+      "Await getSessionBindingService().bind, unbind, inspectByConversationAsync, resolveByConversationAsync, touchAsync, resolveRuntimeConversationBindingRouteAsync, and the Async-suffixed thread-binding lifecycle setters. Bundled current-conversation mutations and session listings use the existing worker owner. Project prepared inspection facts with inspectRuntimeConversationBindingRoute. Legacy external adapters retain their synchronous projection contract.",
     docsPath: "/plugins/sdk-runtime/channel#awaited-conversation-binding-mutations",
     surfaces: [
       "SessionBindingService.touch",
@@ -299,6 +300,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     releaseNote:
       '`api.on("subagent_spawning", ...)` was removed; core now owns thread-bound subagent routing, and `subagent_spawned` remains available for observation.',
   },
+  SKILL_PROPOSAL_HOOKS_COMPAT_RECORD,
   {
     code: "hook-only-plugin-shape",
     status: "active",

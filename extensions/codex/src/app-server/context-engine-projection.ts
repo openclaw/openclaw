@@ -492,14 +492,13 @@ async function renderMessagesForCodexContext(
   };
 }
 
-function renderMessageBody(
-  message: AgentMessage,
-  options: {
-    maxTextPartChars: number;
-    toolPayloadMode: "elide" | "preserve";
-    mediaPrepared?: boolean;
-  },
-): string {
+type MessageRenderOptions = {
+  maxTextPartChars: number;
+  toolPayloadMode: "elide" | "preserve";
+  mediaPrepared?: boolean;
+};
+
+function renderMessageBody(message: AgentMessage, options: MessageRenderOptions): string {
   // Canonical summaries carry `summary`, not `content`; keep them in the quoted history.
   if (message.role === "compactionSummary" || message.role === "branchSummary") {
     return message.summary.trim();
@@ -533,11 +532,7 @@ function renderMessageBody(
 
 function renderMessagePart(
   part: unknown,
-  options: {
-    maxTextPartChars: number;
-    toolPayloadMode: "elide" | "preserve";
-    mediaPrepared?: boolean;
-  },
+  options: MessageRenderOptions,
   toolResultBody: boolean,
 ): string {
   if (!part || typeof part !== "object") {
@@ -552,26 +547,19 @@ function renderMessagePart(
   if (type === "image") {
     return options.mediaPrepared ? "" : "[image omitted]";
   }
-  if (type === "toolCall" || type === "tool_use") {
-    const label = `tool call${typeof record.name === "string" ? `: ${record.name}` : ""}`;
-    if (options.toolPayloadMode === "preserve") {
-      return truncateText(
-        `${label}\n${stableJson(renderToolCallPayload(record))}`,
-        options.maxTextPartChars,
-      );
+  const toolCall = type === "toolCall" || type === "tool_use";
+  if (toolCall || type === "toolResult" || type === "tool_result") {
+    const label = toolCall
+      ? `tool call${typeof record.name === "string" ? `: ${record.name}` : ""}`
+      : typeof record.toolUseId === "string"
+        ? `tool result: ${record.toolUseId}`
+        : "tool result";
+    if (options.toolPayloadMode !== "preserve") {
+      return `${label} [${toolCall ? "input" : "content"} omitted]`;
     }
-    return `${label} [input omitted]`;
-  }
-  if (type === "toolResult" || type === "tool_result") {
-    const label =
-      typeof record.toolUseId === "string" ? `tool result: ${record.toolUseId}` : "tool result";
-    if (options.toolPayloadMode === "preserve") {
-      return truncateText(
-        `${toolResultBody ? "" : `${label}\n`}${stableJson(renderToolResultPayload(record))}`,
-        options.maxTextPartChars,
-      );
-    }
-    return `${label} [content omitted]`;
+    const renderPayload = toolCall ? renderToolCallPayload : renderToolResultPayload;
+    const prefix = !toolCall && toolResultBody ? "" : `${label}\n`;
+    return truncateText(`${prefix}${stableJson(renderPayload(record))}`, options.maxTextPartChars);
   }
   return `[${type ?? "non-text"} content omitted]`;
 }

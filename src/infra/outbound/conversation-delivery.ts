@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveMessageReceiptPrimaryId } from "../../channels/message/receipt.js";
+import type { ConversationAuthority } from "../../config/sessions/conversation-authority.types.js";
 import {
   beginConversationDeliveryOperation,
   getConversationDeliveryOperation,
@@ -15,6 +16,7 @@ import type {
   PreparedConversationRegistryScope,
 } from "../../config/sessions/conversation-registry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { OutboundHandoff } from "./deliver-contracts.js";
 import { captureConversationDeliveryTarget } from "./delivery-completion.js";
 import type { MessageActionResult } from "./message-action-contracts.js";
 import { runMessageAction } from "./message-action-runner.js";
@@ -106,7 +108,9 @@ export async function sendGatewayConversationMessage(params: {
   operation?: ConversationDeliveryRecord;
   preparedMessageId?: string;
   routeFingerprint: string;
+  authority: ConversationAuthority;
   assertCurrent: () => void;
+  withDirectAdapterHandoff: OutboundHandoff;
   signal?: AbortSignal;
 }): Promise<ConversationMessageDeliveryResult> {
   const scope = params.scope;
@@ -123,6 +127,7 @@ export async function sendGatewayConversationMessage(params: {
             ? { sourceSessionKey: params.context.sourceSessionKey }
             : {}),
           message: params.message,
+          authority: params.authority,
           ...(params.preparedMessageId ? { preparedMessageId: params.preparedMessageId } : {}),
         },
         params.assertCurrent,
@@ -168,7 +173,7 @@ export async function sendGatewayConversationMessage(params: {
         routeFingerprint: params.routeFingerprint,
       },
       conversationDeliveryTarget,
-      onDeliveryAttempt: async () => params.assertCurrent(),
+      withDirectAdapterHandoff: params.withDirectAdapterHandoff,
       ...(begun.record.preparedMessageId
         ? { preparedMessageId: begun.record.preparedMessageId }
         : {}),

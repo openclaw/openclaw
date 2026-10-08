@@ -418,11 +418,6 @@ async function forgetWorkspaceMemory(
     }
     // Keep observed selected keys even if another workspace later removes their rows.
     context.origins = lineage.origins;
-    for (const origin of lineage.origins) {
-      if (sessionIds.has(origin.sessionId)) {
-        context.selectedEntryKeys.add(origin.entryKey);
-      }
-    }
     return false;
   };
   const chunkIds = indexPlan.chunks.map((chunk) => chunk.id);

@@ -26,11 +26,13 @@ export type InternalSessionTranscriptUpdate = {
   messageId?: string;
   messageSeq?: number;
   runId?: string;
+  /** Exact native display occurrences retired by this commit; never run authority. */
+  assistantItemIds?: readonly string[];
 };
 
 export type SessionTranscriptUpdate = Omit<
   InternalSessionTranscriptUpdate,
-  "sessionFile" | "lifecycleRevision" | "target"
+  "sessionFile" | "lifecycleRevision" | "target" | "assistantItemIds"
 > & {
   target: Omit<SessionTranscriptUpdateTarget, "storePath">;
 };
@@ -170,6 +172,7 @@ function normalizeSessionTranscriptUpdate(
     ...(messageId ? { messageId } : {}),
     ...(messageSeq !== undefined ? { messageSeq } : {}),
     ...(runId ? { runId } : {}),
+    ...(update.assistantItemIds ? { assistantItemIds: update.assistantItemIds } : {}),
   };
 }
 

@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { inspectCronRowsForDoctor } from "../../commands/doctor/cron/store-inventory.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
@@ -8,11 +9,69 @@ import {
   openOpenClawStateReadConnection,
 } from "../../state/openclaw-state-db-read-connection.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
-import { cronRunRecordStoreKey } from "../run-history-detail.js";
+import { cronRunRecordStoreKey, cronRunRecordToRunLogEntry } from "../run-history-detail.js";
 import { serializeCronLoadError } from "./load-error.js";
 import { loadCronStoreFromDatabase } from "./load.kernel.js";
-import type { CronReadOnlyResult } from "./read-only.types.js";
+import type {
+  CronReadOnlyResult,
+  CronRunHistoryBinding,
+  CronRunHistorySelector,
+} from "./read-only.types.js";
 import { readCronRunRecordsInDatabase } from "./run-history.kernel.js";
+import type { CronRunRecord } from "./run-history.types.js";
+
+function selectTranscriptBinding(
+  records: CronRunRecord[],
+  storeKey: string,
+  selector: CronRunHistorySelector,
+): CronRunHistoryBinding | undefined {
+  let selected:
+    | { record: CronRunRecord; entry: NonNullable<ReturnType<typeof cronRunRecordToRunLogEntry>> }
+    | undefined;
+  for (const record of records) {
+    const entry = cronRunRecordToRunLogEntry(record);
+    if (
+      !entry ||
+      (selector.runId && entry.runId !== selector.runId) ||
+      (selector.runAtMs !== undefined && entry.runAtMs !== selector.runAtMs)
+    ) {
+      continue;
+    }
+    // A matching row without transcript identity still makes the selector ambiguous.
+    if (selected) {
+      return undefined;
+    }
+    selected = { record, entry };
+  }
+  if (!selected) {
+    return undefined;
+  }
+  const { record, entry } = selected;
+  if (!entry.sessionKey || !entry.sessionId) {
+    return undefined;
+  }
+  return {
+    // Keep cursor identity bytes stable, including both internal and public run IDs.
+    binding: createHash("sha256")
+      .update(
+        JSON.stringify([
+          storeKey,
+          record.id,
+          record.runId,
+          entry.jobId,
+          entry.runId,
+          entry.runAtMs,
+          entry.sessionKey,
+          entry.sessionId,
+          record.agentId,
+        ]),
+      )
+      .digest("base64url"),
+    sessionKey: entry.sessionKey,
+    sessionId: entry.sessionId,
+    agentId: record.agentId,
+  };
+}
 
 serveWorkerTasks(async (input, _channel, control): Promise<CronReadOnlyResult> => {
   try {
@@ -24,7 +83,14 @@ serveWorkerTasks(async (input, _channel, control): Promise<CronReadOnlyResult> =
       (input.history !== undefined &&
         (typeof input.storeKey !== "string" ||
           !isRecord(input.history) ||
-          (input.history.jobId !== undefined && typeof input.history.jobId !== "string")))
+          (input.history.jobId !== undefined && typeof input.history.jobId !== "string") ||
+          (input.history.transcript !== undefined &&
+            (typeof input.history.jobId !== "string" ||
+              !isRecord(input.history.transcript) ||
+              (input.history.transcript.runId !== undefined &&
+                typeof input.history.transcript.runId !== "string") ||
+              (input.history.transcript.runAtMs !== undefined &&
+                typeof input.history.transcript.runAtMs !== "number")))))
     ) {
       throw new Error(
         "Cron read-only worker requires a database location and an optional store key",
@@ -47,12 +113,28 @@ serveWorkerTasks(async (input, _channel, control): Promise<CronReadOnlyResult> =
         if (isRecord(input.history)) {
           // History consumes the canonical released table only after read admission.
           assertStateReadSchema(db, location);
+          const history = readCronRunRecordsInDatabase(
+            db,
+            typeof input.history.jobId === "string" ? input.history.jobId : undefined,
+          ).filter((row) => cronRunRecordStoreKey(row) === storeKey);
+          if (isRecord(input.history.transcript) && typeof storeKey === "string") {
+            return {
+              ok: true,
+              binding: selectTranscriptBinding(history, storeKey, {
+                runId:
+                  typeof input.history.transcript.runId === "string"
+                    ? input.history.transcript.runId
+                    : undefined,
+                runAtMs:
+                  typeof input.history.transcript.runAtMs === "number"
+                    ? input.history.transcript.runAtMs
+                    : undefined,
+              }),
+            } satisfies CronReadOnlyResult;
+          }
           return {
             ok: true,
-            history: readCronRunRecordsInDatabase(
-              db,
-              typeof input.history.jobId === "string" ? input.history.jobId : undefined,
-            ).filter((row) => cronRunRecordStoreKey(row) === storeKey),
+            history,
           } satisfies CronReadOnlyResult;
         }
         return {

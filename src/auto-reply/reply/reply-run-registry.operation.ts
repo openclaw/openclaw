@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
   createAgentRunSupersededAbortError as createSupersededError,
   isAgentRunRestartAbortReason,
@@ -176,6 +177,13 @@ export function createReplyOperation(params: {
       sessionKey: currentSessionKey,
       reason,
     });
+  };
+  const warnForcedRelease = (label: string, reason?: string) => {
+    diag.warn(
+      `reply run ${label}: forced release sessionKey=${currentSessionKey}${reason === undefined ? "" : ` reason=${reason}`} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
+        result,
+      )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
+    );
   };
 
   const clearState = (
@@ -529,11 +537,7 @@ export function createReplyOperation(params: {
       if (!isReplyOperationAbortable(operation)) {
         return false;
       }
-      abortOperation(
-        "user_abort",
-        createAbortError("Reply operation aborted by user"),
-        "aborted_by_user",
-      );
+      abortOperation("user_abort", createAgentRunDirectAbortError(), "aborted_by_user");
       return true;
     },
     abortForRestart() {
@@ -601,11 +605,7 @@ export function createReplyOperation(params: {
     }
     controller.abort(createAbortError("Reply operation expired as stale"));
     if (stateCleared) {
-      diag.warn(
-        `reply run stale takeover: forced release sessionKey=${currentSessionKey} reason=${reason} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
-          result,
-        )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
-      );
+      warnForcedRelease("stale takeover", reason);
       return true;
     }
     // cancel() only requests shutdown. A missing backend can also be a live
@@ -627,11 +627,7 @@ export function createReplyOperation(params: {
     onActivity: recordActivity,
     onFinalizationProgress: () => markProgress("reply_operation:finalizing_progress"),
     onExpire: () => {
-      diag.warn(
-        `reply run finalization settle: forced release sessionKey=${currentSessionKey} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
-          result,
-        )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
-      );
+      warnForcedRelease("finalization settle");
       const expired = expireReplyOperationByOperation.get(operation)?.("finalization_stalled");
       if (expired === false && replyRunState.activeRunsByKey.get(currentSessionKey) === operation) {
         // This lease is the finalization owner's bounded shutdown deadline.
@@ -644,11 +640,7 @@ export function createReplyOperation(params: {
     canExpire: () => replyRunState.activeRunsByKey.get(currentSessionKey) === operation,
     onExpire: () => {
       // Retained terminal results get one delivery grace window, not a second lifetime.
-      diag.warn(
-        `reply run terminal settle: forced release sessionKey=${currentSessionKey} phase=${phase} result=${replyRunSettle.formatReplyOperationResult(
-          result,
-        )} ageMs=${Date.now() - lastActivityAtMs} ranForMs=${Date.now() - startedAtMs}`,
-      );
+      warnForcedRelease("terminal settle");
       clearState();
     },
   });

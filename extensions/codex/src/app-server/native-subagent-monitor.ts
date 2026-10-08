@@ -245,7 +245,7 @@ class Monitor {
       prepareReceiver: (state, threadId) => this.prepareReceiverChild(state, threadId),
       registerChild: (state, assignment, childOptions) =>
         this.registerChildThread(state, assignment, childOptions),
-      admitFollowup: (known, id) => this.admitFollowupChild(known, id),
+      admitFollowup: (known) => this.admitFollowupChild(known),
       resumeChild: (child) => this.resumeChild(child),
       completeChild: (notification, child) => this.handleChildTurnCompletion(notification, child),
       retain: (state, threadId) => {
@@ -254,13 +254,8 @@ class Monitor {
           this.retainParentThread?.(state.parentThreadId),
           this.retainParentThread?.(threadId),
         ];
-        let retained = true;
         return () => {
-          if (!retained) {
-            return;
-          }
-          retained = false;
-          for (const release of releases) {
+          for (const release of releases.splice(0)) {
             release?.();
           }
         };
@@ -458,11 +453,7 @@ class Monitor {
     }
     this.admissionCustody.retainOnly(() => false);
     for (const [parentThreadId] of this.parentStates) {
-      if (
-        ![...this.childStates.values()].some(
-          (childState) => childState.parentThreadId === parentThreadId,
-        )
-      ) {
+      if (!this.hasChildrenForParent(parentThreadId)) {
         this.parentStates.delete(parentThreadId);
       }
     }
@@ -502,8 +493,8 @@ class Monitor {
       assertInputCurrent: (threadId, owner) =>
         this.submissions.modelInputs.assertModelInputCurrent(threadId, owner),
       hasPendingInput: (input) => this.submissions.modelInputs.hasPendingModelInput(input),
-      onExecutionAdmitted: (known, threadId) => {
-        this.admitFollowupChild(known, threadId);
+      onExecutionAdmitted: (known) => {
+        this.admitFollowupChild(known);
       },
       registerChildExecution: (state, modelRequest, agentPath, completionCustody) => {
         this.registerChildThread(
@@ -558,9 +549,7 @@ class Monitor {
       request.signal?.throwIfAborted();
       capture.assertCurrent();
       if (
-        this.disposed ||
-        this.retiredParentStates.has(state) ||
-        this.parentStates.get(state.parentThreadId) !== state ||
+        !this.isCurrentParent(state) ||
         this.knownChildren.get(request.threadId) !== known ||
         (current
           ? this.currentChild(request.threadId) !== current ||
@@ -1093,7 +1082,6 @@ class Monitor {
     const observedTurn = Boolean(child.nativeTurnId && child.nativeTurnId !== turnId);
     if (child.nativeTurnId !== turnId) {
       child.nativeTurnId = turnId;
-      child.nativeTurnState = undefined;
       child.activityWait = undefined;
     }
     child.nativeTurnState = recovery.nativeTurnState;
@@ -1122,10 +1110,10 @@ class Monitor {
       );
     }
     if (observedTurn && known.pendingTurns.length === 0) {
-      this.associatePendingChildInteraction(known, child.childThreadId, child.nativeTurnId);
+      this.associatePendingChildInteraction(known, child.nativeTurnId);
     }
     this.submissions.observeKnownChild(child.childThreadId);
-    return this.admitFollowupChild(known, child.childThreadId);
+    return this.admitFollowupChild(known);
   }
 
   private async processCompletion(
@@ -1495,9 +1483,9 @@ class Monitor {
       }
     }
     if (observedTurn) {
-      this.associatePendingChildInteraction(known, threadId, turnId);
+      this.associatePendingChildInteraction(known, turnId);
     }
-    this.admitFollowupChild(known, threadId);
+    this.admitFollowupChild(known);
     const startedChild = this.currentChild(threadId);
     if (startedChild && !known.pendingTurns.some((candidate) => candidate.turnId === turnId)) {
       // Reserve the new turn before persistence yields to a later completion receipt.
@@ -1507,14 +1495,9 @@ class Monitor {
     return true;
   }
 
-  private associatePendingChildInteraction(
-    known: KnownChild,
-    threadId: string,
-    nativeTurnId: string,
-  ): void {
+  private associatePendingChildInteraction(known: KnownChild, nativeTurnId: string): void {
     associateNativeChildInteraction(
       known,
-      threadId,
       nativeTurnId,
       this.admissionCustody.entries,
       (owner, turnId) => this.drainPendingChildAdmissionEvidence(known.parent, owner, turnId),
@@ -1570,11 +1553,8 @@ class Monitor {
     }
   }
 
-  private admitFollowupChild(
-    known: KnownChild,
-    threadId: string,
-    owner?: ParentOwner,
-  ): ChildState | undefined {
+  private admitFollowupChild(known: KnownChild, owner?: ParentOwner): ChildState | undefined {
+    const threadId = known.assignment.childThreadId;
     if (
       this.parentStates.get(known.parent.parentThreadId) !== known.parent ||
       this.retiredParentStates.has(known.parent)
@@ -1746,8 +1726,7 @@ class Monitor {
       registerAgentPath: (parent, threadId, path) => this.registerAgentPath(parent, threadId, path),
       registerChildThread: (parent, threadId, options) =>
         this.registerChildThread(parent, threadId, options),
-      admitFollowupChild: (known, threadId, admittedOwner) =>
-        this.admitFollowupChild(known, threadId, admittedOwner),
+      admitFollowupChild: (known, admittedOwner) => this.admitFollowupChild(known, admittedOwner),
       observeActivity: (child) =>
         this.turnObservation.emitChildTaskActivity(
           {
@@ -1806,11 +1785,7 @@ class Monitor {
     if (this.childStates.get(childState.runId) === childState) {
       this.childStates.delete(childState.runId);
     }
-    if (
-      ![...this.childStates.values()].some(
-        (remainingChild) => remainingChild.parentThreadId === childState.parentThreadId,
-      )
-    ) {
+    if (!this.hasChildrenForParent(childState.parentThreadId)) {
       const releaseParentThread = this.parentThreadRetentions.get(childState.parentThreadId);
       this.parentThreadRetentions.delete(childState.parentThreadId);
       releaseParentThread?.();
@@ -1903,26 +1878,26 @@ class Monitor {
   private hasParentWork(state: ParentState): boolean {
     if (
       state.modelSourceReferences ||
-      (state.pendingRegistrations && !this.disposed && !this.retiredParentStates.has(state))
+      (state.pendingRegistrations && !this.disposed && !this.retiredParentStates.has(state)) ||
+      this.assignments.hasWrites(state) ||
+      this.submissions.hasCustody(state) ||
+      state.owners.size > 0 ||
+      this.childCloses.hasPending(state) ||
+      this.hasChildrenForParent(state.parentThreadId)
     ) {
       return true;
     }
-    if (this.assignments.hasWrites(state) || this.submissions.hasCustody(state)) {
-      return true;
-    }
-    if (state.owners.size > 0) {
-      return true;
-    }
-    if (this.childCloses.hasPending(state)) {
-      return true;
-    }
-    for (const childState of this.childStates.values()) {
-      if (childState.parentThreadId === state.parentThreadId) {
+    for (const known of this.knownChildren.values()) {
+      if (known.parent === state && this.currentChild(known.assignment.childThreadId)) {
         return true;
       }
     }
-    for (const known of this.knownChildren.values()) {
-      if (known.parent === state && this.currentChild(known.assignment.childThreadId)) {
+    return false;
+  }
+
+  private hasChildrenForParent(parentThreadId: string): boolean {
+    for (const childState of this.childStates.values()) {
+      if (childState.parentThreadId === parentThreadId) {
         return true;
       }
     }

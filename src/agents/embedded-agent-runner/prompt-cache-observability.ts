@@ -83,11 +83,9 @@ function fingerprintBlock(block: object): string {
   const nested: [string, unknown][] = [];
   for (const entry of Object.entries(block)) {
     const value = entry[1];
-    if (value === null || ["string", "number", "boolean", "undefined"].includes(typeof value)) {
-      primitives.push(entry);
-    } else {
-      nested.push(entry);
-    }
+    const primitive =
+      value === null || ["string", "number", "boolean", "undefined"].includes(typeof value);
+    (primitive ? primitives : nested).push(entry);
   }
   const previous = blockFingerprints.get(block);
   const unchanged =

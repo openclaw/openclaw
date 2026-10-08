@@ -445,17 +445,11 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
             assertNoCronShellExecution(canonicalJob);
             assertCronDeliveryInputNonBlankFields(canonicalJob.delivery);
             assertCronPacingInput(canonicalJob.pacing);
-            if (
-              typeof canonicalJob.declarationKey === "string" &&
-              canonicalJob.declarationKey.trim().length === 0
-            ) {
-              throw new Error("declarationKey must be a non-empty string");
-            }
-            if (
-              typeof canonicalJob.displayName === "string" &&
-              canonicalJob.displayName.trim().length === 0
-            ) {
-              throw new Error("displayName must be a non-empty string");
+            for (const key of ["declarationKey", "displayName"]) {
+              const value = canonicalJob[key];
+              if (typeof value === "string" && value.trim().length === 0) {
+                throw new Error(`${key} must be a non-empty string`);
+              }
             }
             const enabledExplicit = typeof canonicalJob.enabled === "boolean";
             const job =

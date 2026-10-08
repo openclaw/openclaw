@@ -18,32 +18,6 @@ const MAX_TEXT_BYTES = 64 * 1024;
 const TOOL_NAME_PATTERN = /^[a-zA-Z0-9._-]{1,128}$/u;
 const TOOL_ERROR_STATUS_PREFIX = "[Tool result status: error]\n";
 
-function readBoundedText(
-  value: unknown,
-  projection: HistoryProjection,
-  maxBytes = MAX_TEXT_BYTES,
-): string | undefined {
-  if (typeof value !== "string" || !value.trim()) {
-    return undefined;
-  }
-  if (Buffer.byteLength(value, "utf8") > maxBytes) {
-    projection.exceedLimit("field_limit");
-  }
-  return value;
-}
-
-function requireBoundedText(
-  value: unknown,
-  projection: HistoryProjection,
-  maxBytes = MAX_TEXT_BYTES,
-): string {
-  const text = readBoundedText(value, projection, maxBytes);
-  if (!text) {
-    throw new CodexHistoryRejection("invalid_content");
-  }
-  return text;
-}
-
 function responseItemBytes(item: JsonValue): number {
   return Buffer.byteLength(JSON.stringify(item), "utf8");
 }
@@ -64,200 +38,6 @@ function requireToolName(value: unknown): string {
   return name;
 }
 
-function serializeToolArguments(value: unknown, projection: HistoryProjection): string {
-  let serialized: string;
-  try {
-    const parsed: unknown = typeof value === "string" ? JSON.parse(value) : value;
-    if (!isRecord(parsed)) {
-      throw new CodexHistoryRejection("invalid_content");
-    }
-    serialized = typeof value === "string" ? value : JSON.stringify(value);
-  } catch {
-    throw new CodexHistoryRejection("invalid_content");
-  }
-  return requireBoundedText(serialized, projection);
-}
-
-function projectUserMessage(
-  message: Extract<AgentMessage, { role: "user" }>,
-  projection: HistoryProjection,
-): void {
-  const upstreamUserText = readUpstreamUserText(message);
-  if (typeof message.content === "string") {
-    const text = upstreamUserText
-      ? requireBoundedText(upstreamUserText, projection, MAX_PROJECTION_BYTES)
-      : requireBoundedText(message.content, projection);
-    if (!projection.omitted) {
-      projection.appendItem({
-        type: "message",
-        role: "user",
-        content: [{ type: "input_text", text }],
-      });
-    }
-    return;
-  }
-  if (!Array.isArray(message.content)) {
-    throw new CodexHistoryRejection("unsupported_content");
-  }
-  const content: JsonValue[] = [];
-  let hasText = false;
-  let bytes = responseItemBytes({ type: "message", role: "user", content });
-  for (const value of message.content) {
-    if (!isRecord(value)) {
-      throw new CodexHistoryRejection("invalid_content");
-    }
-    if (value.type !== "text") {
-      throw new CodexHistoryRejection(
-        value.type === "image" ? "unsupported_user_image" : "unsupported_content",
-      );
-    }
-    const text = readBoundedText(value.text, projection);
-    if (text) {
-      hasText = true;
-      if (projection.omitted) {
-        content.length = 0;
-        continue;
-      }
-      const part = { type: "input_text", text };
-      bytes += responseItemBytes(part) + (content.length > 0 ? 1 : 0);
-      if (bytes > MAX_PROJECTION_BYTES) {
-        projection.exceedLimit("byte_limit");
-      }
-      if (projection.omitted) {
-        content.length = 0;
-      } else {
-        content.push(part);
-      }
-    }
-  }
-  if (!hasText) {
-    throw new CodexHistoryRejection("invalid_content");
-  }
-  if (!projection.omitted) {
-    projection.appendItem({ type: "message", role: "user", content });
-  }
-}
-
-function projectAssistantMessage(
-  message: Extract<AgentMessage, { role: "assistant" }>,
-  projection: HistoryProjection,
-): void {
-  const values: unknown =
-    typeof message.content === "string"
-      ? [{ type: "text", text: message.content }]
-      : message.content;
-  if (!Array.isArray(values)) {
-    throw new CodexHistoryRejection("unsupported_content");
-  }
-  for (const value of values) {
-    if (!isRecord(value)) {
-      throw new CodexHistoryRejection("invalid_content");
-    }
-    if (value.type === "text") {
-      const text = readBoundedText(value.text, projection);
-      if (text && !projection.omitted) {
-        projection.appendItem({
-          type: "message",
-          role: "assistant",
-          content: [{ type: "output_text", text }],
-        });
-      }
-      continue;
-    }
-    if (value.type === "toolCall") {
-      const id = requireCallId(value.id ?? value.toolCallId);
-      const name = requireToolName(value.name ?? value.toolName);
-      const args = serializeToolArguments(value.arguments ?? value.input, projection);
-      projection.recordCall(id, name);
-      if (!projection.omitted) {
-        projection.appendItem({
-          type: "function_call",
-          call_id: id,
-          name,
-          arguments: args,
-        });
-      }
-      continue;
-    }
-    if (value.type === "thinking" || value.type === "reasoning") {
-      // Private/non-visible reasoning is deliberately outside the application transcript.
-      continue;
-    }
-    throw new CodexHistoryRejection("unsupported_content");
-  }
-}
-
-function projectToolResult(
-  message: Extract<AgentMessage, { role: "toolResult" }>,
-  projection: HistoryProjection,
-): void {
-  const id = requireCallId(message.toolCallId);
-  const name = requireToolName(message.toolName);
-  if (!Array.isArray(message.content)) {
-    throw new CodexHistoryRejection("unsupported_content");
-  }
-  const isErrorValue: unknown = message.isError;
-  if (isErrorValue !== undefined && typeof isErrorValue !== "boolean") {
-    throw new CodexHistoryRejection("invalid_content");
-  }
-  const isError = isErrorValue === true;
-  const parts: string[] = [];
-  let bytes = 0;
-  const appendText = (text: string) => {
-    if (projection.omitted) {
-      parts.length = 0;
-      return;
-    }
-    bytes += Buffer.byteLength(text, "utf8") + (parts.length > 0 ? 1 : 0);
-    if (bytes > MAX_TEXT_BYTES) {
-      projection.exceedLimit("field_limit");
-    }
-    if (projection.omitted) {
-      parts.length = 0;
-    } else {
-      parts.push(text);
-    }
-  };
-  for (const value of message.content) {
-    if (!isRecord(value)) {
-      throw new CodexHistoryRejection("invalid_content");
-    }
-    if (value.type === "image") {
-      const mimeType = normalizeOptionalString(value.mimeType) ?? "unknown type";
-      // The finalizer selects by text capability. Preserve image evidence as
-      // metadata without embedding an executable or oversized multimodal payload.
-      appendText(`[Image tool result: ${mimeType}]`);
-      continue;
-    }
-    if (value.type !== "text" && value.type !== "toolResult") {
-      throw new CodexHistoryRejection("invalid_content");
-    }
-    const text =
-      value.type === "text"
-        ? readBoundedText(value.text, projection)
-        : readBoundedText(value.content ?? value.text, projection);
-    if (text) {
-      appendText(text);
-    }
-  }
-  if (projection.omitted) {
-    projection.recordResult(id, name);
-    return;
-  }
-  const resultText =
-    parts.join("\n") ||
-    (isError ? "Tool failed without textual output." : "Tool completed without textual output.");
-  // Codex function-call output has no status field. Preserve failure truth in
-  // the text boundary so the final answer cannot reinterpret errors as success.
-  const output = requireBoundedText(
-    isError ? `${TOOL_ERROR_STATUS_PREFIX}${resultText}` : resultText,
-    projection,
-    isError ? MAX_TEXT_BYTES + Buffer.byteLength(TOOL_ERROR_STATUS_PREFIX, "utf8") : MAX_TEXT_BYTES,
-  );
-  projection.recordResult(id, name);
-  projection.appendItem({ type: "function_call_output", call_id: id, output });
-}
-
 class HistoryProjection {
   readonly items: JsonValue[] = [];
   readonly pending = new Map<string, string>();
@@ -270,13 +50,207 @@ class HistoryProjection {
     private readonly oversized: "reject" | "omit",
   ) {}
 
+  private readBoundedText(value: unknown, maxBytes = MAX_TEXT_BYTES): string | undefined {
+    if (typeof value !== "string" || !value.trim()) {
+      return undefined;
+    }
+    if (Buffer.byteLength(value, "utf8") > maxBytes) {
+      this.exceedLimit("field_limit");
+    }
+    return value;
+  }
+
+  private requireBoundedText(value: unknown, maxBytes = MAX_TEXT_BYTES): string {
+    const text = this.readBoundedText(value, maxBytes);
+    if (!text) {
+      throw new CodexHistoryRejection("invalid_content");
+    }
+    return text;
+  }
+
+  private serializeToolArguments(value: unknown): string {
+    let serialized: string;
+    try {
+      const parsed: unknown = typeof value === "string" ? JSON.parse(value) : value;
+      if (!isRecord(parsed)) {
+        throw new CodexHistoryRejection("invalid_content");
+      }
+      serialized = typeof value === "string" ? value : JSON.stringify(value);
+    } catch {
+      throw new CodexHistoryRejection("invalid_content");
+    }
+    return this.requireBoundedText(serialized);
+  }
+
+  private projectUserMessage(message: Extract<AgentMessage, { role: "user" }>): void {
+    const upstreamUserText = readUpstreamUserText(message);
+    if (typeof message.content === "string") {
+      const text = upstreamUserText
+        ? this.requireBoundedText(upstreamUserText, MAX_PROJECTION_BYTES)
+        : this.requireBoundedText(message.content);
+      this.appendItem({
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text }],
+      });
+      return;
+    }
+    if (!Array.isArray(message.content)) {
+      throw new CodexHistoryRejection("unsupported_content");
+    }
+    const content: JsonValue[] = [];
+    let hasText = false;
+    let bytes = responseItemBytes({ type: "message", role: "user", content });
+    for (const value of message.content) {
+      if (!isRecord(value)) {
+        throw new CodexHistoryRejection("invalid_content");
+      }
+      if (value.type !== "text") {
+        throw new CodexHistoryRejection(
+          value.type === "image" ? "unsupported_user_image" : "unsupported_content",
+        );
+      }
+      const text = this.readBoundedText(value.text);
+      if (text) {
+        hasText = true;
+        if (this.omitted) {
+          content.length = 0;
+          continue;
+        }
+        const part = { type: "input_text", text };
+        bytes += responseItemBytes(part) + (content.length > 0 ? 1 : 0);
+        if (bytes > MAX_PROJECTION_BYTES) {
+          this.exceedLimit("byte_limit");
+        }
+        if (this.omitted) {
+          content.length = 0;
+        } else {
+          content.push(part);
+        }
+      }
+    }
+    if (!hasText) {
+      throw new CodexHistoryRejection("invalid_content");
+    }
+    this.appendItem({ type: "message", role: "user", content });
+  }
+
+  private projectAssistantMessage(message: Extract<AgentMessage, { role: "assistant" }>): void {
+    const values: unknown =
+      typeof message.content === "string"
+        ? [{ type: "text", text: message.content }]
+        : message.content;
+    if (!Array.isArray(values)) {
+      throw new CodexHistoryRejection("unsupported_content");
+    }
+    for (const value of values) {
+      if (!isRecord(value)) {
+        throw new CodexHistoryRejection("invalid_content");
+      }
+      if (value.type === "text") {
+        const text = this.readBoundedText(value.text);
+        if (text) {
+          this.appendItem({
+            type: "message",
+            role: "assistant",
+            content: [{ type: "output_text", text }],
+          });
+        }
+        continue;
+      }
+      if (value.type === "toolCall") {
+        const id = requireCallId(value.id ?? value.toolCallId);
+        const name = requireToolName(value.name ?? value.toolName);
+        const args = this.serializeToolArguments(value.arguments ?? value.input);
+        this.recordCall(id, name);
+        this.appendItem({
+          type: "function_call",
+          call_id: id,
+          name,
+          arguments: args,
+        });
+        continue;
+      }
+      if (value.type === "thinking" || value.type === "reasoning") {
+        // Private/non-visible reasoning is deliberately outside the application transcript.
+        continue;
+      }
+      throw new CodexHistoryRejection("unsupported_content");
+    }
+  }
+
+  private projectToolResult(message: Extract<AgentMessage, { role: "toolResult" }>): void {
+    const id = requireCallId(message.toolCallId);
+    const name = requireToolName(message.toolName);
+    if (!Array.isArray(message.content)) {
+      throw new CodexHistoryRejection("unsupported_content");
+    }
+    const isErrorValue: unknown = message.isError;
+    if (isErrorValue !== undefined && typeof isErrorValue !== "boolean") {
+      throw new CodexHistoryRejection("invalid_content");
+    }
+    const isError = isErrorValue === true;
+    const parts: string[] = [];
+    let bytes = 0;
+    for (const value of message.content) {
+      if (!isRecord(value)) {
+        throw new CodexHistoryRejection("invalid_content");
+      }
+      let text: string | undefined;
+      if (value.type === "image") {
+        const mimeType = normalizeOptionalString(value.mimeType) ?? "unknown type";
+        // The finalizer selects by text capability. Preserve image evidence as
+        // metadata without embedding an executable or oversized multimodal payload.
+        text = `[Image tool result: ${mimeType}]`;
+      } else {
+        if (value.type !== "text" && value.type !== "toolResult") {
+          throw new CodexHistoryRejection("invalid_content");
+        }
+        text = this.readBoundedText(
+          value.type === "text" ? value.text : (value.content ?? value.text),
+        );
+      }
+      if (!text) {
+        continue;
+      }
+      if (!this.omitted) {
+        bytes += Buffer.byteLength(text, "utf8") + (parts.length > 0 ? 1 : 0);
+        if (bytes > MAX_TEXT_BYTES) {
+          this.exceedLimit("field_limit");
+        }
+      }
+      if (this.omitted) {
+        parts.length = 0;
+      } else {
+        parts.push(text);
+      }
+    }
+    if (this.omitted) {
+      this.recordResult(id, name);
+      return;
+    }
+    const resultText =
+      parts.join("\n") ||
+      (isError ? "Tool failed without textual output." : "Tool completed without textual output.");
+    // Codex function-call output has no status field. Preserve failure truth in
+    // the text boundary so the final answer cannot reinterpret errors as success.
+    const output = this.requireBoundedText(
+      isError ? `${TOOL_ERROR_STATUS_PREFIX}${resultText}` : resultText,
+      isError
+        ? MAX_TEXT_BYTES + Buffer.byteLength(TOOL_ERROR_STATUS_PREFIX, "utf8")
+        : MAX_TEXT_BYTES,
+    );
+    this.recordResult(id, name);
+    this.appendItem({ type: "function_call_output", call_id: id, output });
+  }
+
   append(message: AgentMessage): void {
     if (message.role === "user") {
-      projectUserMessage(message, this);
+      this.projectUserMessage(message);
     } else if (message.role === "assistant") {
-      projectAssistantMessage(message, this);
+      this.projectAssistantMessage(message);
     } else if (message.role === "toolResult") {
-      projectToolResult(message, this);
+      this.projectToolResult(message);
     } else if (
       message.role === "custom" ||
       message.role === "bashExecution" ||
@@ -296,7 +270,7 @@ class HistoryProjection {
     }
   }
 
-  recordCall(id: string, name: string): void {
+  private recordCall(id: string, name: string): void {
     if (this.seenCallIds.has(id)) {
       throw new CodexHistoryRejection("invalid_pairing");
     }
@@ -304,7 +278,7 @@ class HistoryProjection {
     this.pending.set(id, name);
   }
 
-  recordResult(id: string, name: string): void {
+  private recordResult(id: string, name: string): void {
     if (this.pending.get(id) !== name) {
       throw new CodexHistoryRejection("invalid_pairing");
     }
@@ -312,7 +286,7 @@ class HistoryProjection {
     this.completedResults += 1;
   }
 
-  exceedLimit(reason: "item_limit" | "byte_limit" | "field_limit"): void {
+  private exceedLimit(reason: "item_limit" | "byte_limit" | "field_limit"): void {
     if (this.oversized === "reject") {
       throw new CodexHistoryRejection(reason);
     }
@@ -322,7 +296,7 @@ class HistoryProjection {
     this.bytes = 0;
   }
 
-  appendItem(item: JsonValue): void {
+  private appendItem(item: JsonValue): void {
     if (this.omitted) {
       return;
     }

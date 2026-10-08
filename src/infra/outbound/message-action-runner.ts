@@ -56,7 +56,6 @@ import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaParams,
-  parseInteractiveParam,
   parseJsonMessageParam,
   resolveAttachmentMediaPolicy,
   resolveExtraActionMediaSourceParamKeys,
@@ -378,7 +377,7 @@ async function handleInternalSourceReplySendAction(
       throw new Error("Current-source media requires an agent workspace.");
     }
     const { createReplyMediaPathNormalizer } =
-      await import("../../auto-reply/reply/reply-media-paths.runtime.js");
+      await import("../../auto-reply/reply/reply-media-paths.js");
     sourceReplyPayload = await createReplyMediaPathNormalizer({
       cfg: input.cfg,
       sessionKey: input.sessionKey,
@@ -525,7 +524,7 @@ async function runMessageActionWithAuthority(
       : undefined);
   parseJsonMessageParam(params, "presentation");
   parseJsonMessageParam(params, "delivery");
-  parseInteractiveParam(params);
+  parseJsonMessageParam(params, "interactive");
 
   const action = input.action;
   enforceMessageActionAllowlist({

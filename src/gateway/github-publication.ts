@@ -147,11 +147,11 @@ export function createGitHubPublicationCoordinator(params: {
   ): Promise<SessionGitHubPublicationResult> => {
     ensureSchema();
     const assertRequester = request.requester.assertCurrent;
+    const placement = await params.placements.getAsync(request.claim.sessionId);
     assertRequester();
     if (!params.placements.validateTurnClaim(request.claim)) {
       throw new Error("GitHub publication lost the live session turn claim.");
     }
-    const placement = params.placements.get(request.claim.sessionId);
     if (
       !placement ||
       placement.sessionKey !== request.sessionKey ||

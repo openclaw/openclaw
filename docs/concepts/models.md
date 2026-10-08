@@ -113,14 +113,20 @@ model still updates the preference.
 
 The Gateway prepares one model catalog for the CLI, `/models`, the Control UI,
 and native apps. Chat and session metadata read published rows without starting
-provider discovery. Model-inventory requests return those rows immediately and
-can renew expired provider inventory in the background. A selected native model
-can load its own metadata while that renewal is still running.
+provider discovery. Ordinary `models.list` requests reuse the published catalog;
+provider response-cache expiry alone does not rebuild it. Startup, changed
+configuration or credentials, plugin and hosted metadata updates, and explicit
+**Refresh** own catalog acquisition. A selected native model can load its own
+metadata while that acquisition is still running.
 
 In chat apps, `/models` and model picker buttons return the newest completed list
 without waiting for discovery. Pending providers show `checking models…`.
 Open the menu again to see newly discovered models; completing discovery does not
 edit a list that was already sent.
+
+Refreshing a selected account also keeps its last completed catalog available to
+other readers until discovery succeeds. Failed refreshes retain that catalog;
+replacing the account credentials invalidates it immediately.
 
 If preparing a large fleet takes longer than the two-minute startup budget, the
 Gateway starts with the agent model runtimes that have finished preparing. A
@@ -450,10 +456,12 @@ no prompts, credentials, model usage, or configuration payload beyond the
 normal HTTP user agent and conditional cache headers.
 
 The downloaded bundle is stored in the shared SQLite state database. The Gateway
-prepares a new catalog generation in the background, then publishes its model
-rows and prices together without restarting. Picker reads keep using the current
-generation during preparation; a failed or superseded preparation leaves it in
-place. Admitted runs retain their captured generation, and each usage-estimation
+prepares a new catalog generation in the background, including each agent's
+provider model discovery, then publishes its model rows and prices together
+without restarting. Picker reads keep using the current generation during
+preparation; a failed or superseded preparation leaves it in place. A provider
+whose discovery fails publishes with the new generation's built-in rows.
+Admitted runs retain their captured generation, and each usage-estimation
 operation uses one pricing context.
 
 Catalog reads and refresh writes run through the shared-state worker. If a
@@ -492,8 +500,10 @@ the rest. Hydration runs at publication time, not in the Gateway. Downloaded
 metadata follows the shared catalog generation publication described above.
 Its scheduled workflow checks OpenClaw's default-branch plugin manifests and
 public pricing sources every four hours. Every catalog content change is
-preserved as a public commit. Provider-owned policies select complete price
-schedules, including context tiers, without mixing rates from different sources.
+preserved as a public commit. Catalog v2 also lists each provider's matches from
+the [curated recommended models list](/concepts/recommended-models). Provider-owned
+policies select complete price schedules, including context tiers, without
+mixing rates from different sources.
 Declared native sources read the public Cerebras, Chutes, DeepInfra, OpenCode, and Venice
 catalogs, so connected installations can receive advertised price changes without
 a new OpenClaw release. When a valid native feed no longer supplies a model's
@@ -566,5 +576,6 @@ Marker persistence is source-authoritative. OpenClaw writes markers from the act
 - [Model providers](/concepts/model-providers) — provider routing and auth
 - [Models CLI reference](/cli/models) — full command and flag reference
 - [Music generation](/tools/music-generation) — music model configuration
+- [Recommended models](/concepts/recommended-models) — curated list rules and publication
 - [Video generation](/tools/video-generation) — video model configuration
 - [`openclaw infer`](/cli/infer) — infer-first CLI for provider-backed model, media, and embedding workflows

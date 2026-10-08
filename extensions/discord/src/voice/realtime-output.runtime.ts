@@ -11,7 +11,7 @@ import {
   retireDiscordAudioOutput,
   setDiscordAudioOutputStatus,
 } from "./audio-worker-protocol.js";
-import { createDiscordOpusEncodeStream, createRealtimePcmToDiscordConverter } from "./audio.js";
+import { DiscordOpusEncodeStream, createRealtimePcmToDiscordConverter } from "./audio.js";
 import {
   DISCORD_REALTIME_PLAYBACK_IDLE_MS,
   type DiscordRealtimePlayer,
@@ -110,7 +110,7 @@ export class DiscordRealtimeOutput {
       sinkAudioBytes: sinkBytes - previous.sinkAudioBytes,
     });
     if (audible) {
-      this.clearSilenceTimer();
+      this.clearTimer("silenceTimer");
       this.silentSince = undefined;
       this.lastAudiblePcmEndBytes = this.activity.snapshot().sinkAudioBytes;
     }
@@ -162,7 +162,7 @@ export class DiscordRealtimeOutput {
       return;
     }
     this.publishRetiring();
-    this.clearSilenceTimer();
+    this.clearTimer("silenceTimer");
     if (playBuffered) {
       this.writeConverted(this.converter.flush());
     }
@@ -199,11 +199,10 @@ export class DiscordRealtimeOutput {
       playbackRetirement && this.playbackMarks.some((mark) => mark.endBytes > this.playedPcmBytes);
     this.closed = true;
     setDiscordAudioOutputStatus(this.params.clock, DiscordAudioOutputStatus.Closed);
-    this.clearSilenceTimer();
-    clearTimeout(this.startupTimer);
-    this.startupTimer = undefined;
+    this.clearTimer("silenceTimer");
+    this.clearTimer("startupTimer");
     this.playbackMarks = [];
-    this.clearWatchdog();
+    this.clearTimer("watchdog");
     const activity = this.activity.snapshot();
     logger.info(
       `discord voice: realtime audio playback stopped reason=${reason} ${this.params.logContext} audioMs=${Math.floor(activity.audioMs)} elapsedMs=${this.activity.elapsedPlaybackMs()} chunks=${activity.chunks} discordBytes=${activity.sinkAudioBytes} realtimeBytes=${activity.sourceAudioBytes}`,
@@ -242,8 +241,7 @@ export class DiscordRealtimeOutput {
     if (this.closed || this.ready) {
       return;
     }
-    clearTimeout(this.startupTimer);
-    this.startupTimer = undefined;
+    this.clearTimer("startupTimer");
     if (this.bufferedBytes < DISCORD_RAW_PCM_FRAME_BYTES) {
       this.writeConverted(this.converter.drain());
     }
@@ -289,7 +287,7 @@ export class DiscordRealtimeOutput {
 
   private createResource() {
     const voiceSdk = loadDiscordVoiceSdk();
-    const opusStream = createDiscordOpusEncodeStream();
+    const opusStream = new DiscordOpusEncodeStream();
     // The SDK emits Idle on error before the pipeline completion callback runs.
     opusStream.once("error", () => {
       this.failed = true;
@@ -415,9 +413,9 @@ export class DiscordRealtimeOutput {
     this.silenceTimer.unref?.();
   }
 
-  private clearSilenceTimer(): void {
-    clearTimeout(this.silenceTimer);
-    this.silenceTimer = undefined;
+  private clearTimer(timer: "silenceTimer" | "startupTimer" | "watchdog"): void {
+    clearTimeout(this[timer]);
+    this[timer] = undefined;
   }
 
   private waitForDrain(): void {
@@ -453,7 +451,7 @@ export class DiscordRealtimeOutput {
   }
 
   private scheduleWatchdog(reason: string): void {
-    this.clearWatchdog();
+    this.clearTimer("watchdog");
     const timeoutMs = this.activity.playbackWatchdogDelayMs({
       marginMs: DISCORD_REALTIME_OUTPUT_PLAYBACK_WATCHDOG_MARGIN_MS,
       minMs: DISCORD_REALTIME_OUTPUT_PLAYBACK_WATCHDOG_MARGIN_MS,
@@ -468,10 +466,5 @@ export class DiscordRealtimeOutput {
       );
       this.close("playback-watchdog");
     }, timeoutMs);
-  }
-
-  private clearWatchdog(): void {
-    clearTimeout(this.watchdog);
-    this.watchdog = undefined;
   }
 }

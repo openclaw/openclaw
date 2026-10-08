@@ -45,27 +45,6 @@ function hasAcceptedSteeringCustody(error: unknown): boolean {
   );
 }
 
-function isQueuedUserMessageEnd(event: unknown, queueIdentity: string): boolean {
-  if (!event || typeof event !== "object") {
-    return false;
-  }
-  const record = event as { message?: unknown; type?: unknown };
-  return (
-    record.type === "message_end" && getSteeringMessageIdentity(record.message) === queueIdentity
-  );
-}
-
-function getTerminalActiveSessionEvent(event: unknown): "settled" | "handoff" | undefined {
-  if (!event || typeof event !== "object") {
-    return undefined;
-  }
-  const type = (event as { type?: unknown }).type;
-  if (type === "agent_settled") {
-    return "settled";
-  }
-  return type === "agent_handoff" ? "handoff" : undefined;
-}
-
 /**
  * Removes one pending steered user message from both the runtime queue and its
  * exact identity-owned display entry.
@@ -144,6 +123,11 @@ async function steerWithTranscriptLifecycle(
       acceptanceReported = true;
       notifyObserver(() => onQueueAccepted?.(value));
     };
+    const reportRejection = () => {
+      if (!accepted) {
+        reportAcceptance(false);
+      }
+    };
     const finish = (err?: unknown) => {
       if (settled) {
         return;
@@ -199,18 +183,14 @@ async function steerWithTranscriptLifecycle(
       );
       void cancellation.then(
         (removed) => {
-          if (!accepted) {
-            reportAcceptance(false);
-          }
+          reportRejection();
           finish(removed ? new MessageInjectionWithdrawnError(message) : new Error(message));
         },
         (error: unknown) => {
           if (!(error instanceof EmbeddedSteeringAcceptedUnconfirmedError)) {
             log.warn(`failed to cancel queued steering message: ${String(error)}`);
           }
-          if (!accepted) {
-            reportAcceptance(false);
-          }
+          reportRejection();
           finish(
             error instanceof EmbeddedSteeringAcceptedUnconfirmedError
               ? error
@@ -221,29 +201,30 @@ async function steerWithTranscriptLifecycle(
         },
       );
     };
-    const rejectBeforeAcceptance = (message: string) => {
-      acceptanceOpen = false;
-      reportAcceptance(false);
-      finish(new Error(message));
-    };
     const timer = setTimeout(
-      () => {
-        const message =
-          "queued steering message was not committed to the transcript before timeout";
-        rejectAfterCancellation(message);
-      },
+      () =>
+        rejectAfterCancellation(
+          "queued steering message was not committed to the transcript before timeout",
+        ),
       Math.max(1, timeoutMs),
     );
     timer.unref?.();
     const unsubscribe: (() => void) | undefined = activeSession.subscribe((event) => {
-      if (isQueuedUserMessageEnd(event, queueIdentity)) {
+      if (!event || typeof event !== "object") {
+        return;
+      }
+      const record = event as { message?: unknown; type?: unknown };
+      if (
+        record.type === "message_end" &&
+        getSteeringMessageIdentity(record.message) === queueIdentity
+      ) {
         accepted = true;
         finish();
         return;
       }
-      const terminalEvent = getTerminalActiveSessionEvent(event);
-      if (terminalEvent) {
-        const handedOff = terminalEvent === "handoff";
+      const type = record.type;
+      if (type === "agent_settled" || type === "agent_handoff") {
+        const handedOff = type === "agent_handoff";
         const message = `active session ${handedOff ? "handed off" : "ended"} before queued steering message was committed to the transcript`;
         // Terminal state closes admission and owns exact queue cleanup even when
         // steer() enqueued synchronously but its Promise has not settled yet.
@@ -269,9 +250,7 @@ async function steerWithTranscriptLifecycle(
             }
             accepted ||=
               hasAcceptedSteeringCustody(admissionError) || hasAcceptedSteeringCustody(error);
-            if (!accepted) {
-              reportAcceptance(false);
-            }
+            reportRejection();
             finish(
               new AggregateError(
                 [error, admissionError],
@@ -284,7 +263,9 @@ async function steerWithTranscriptLifecycle(
       },
     );
     if (abortRequested) {
-      rejectBeforeAcceptance("queued steering message was cancelled before acceptance");
+      acceptanceOpen = false;
+      reportAcceptance(false);
+      finish(new Error("queued steering message was cancelled before acceptance"));
       return;
     }
     const steering = activeSession.steer(
@@ -326,9 +307,7 @@ async function steerWithTranscriptLifecycle(
         if (!acceptanceOpen) {
           return;
         }
-        if (!accepted) {
-          reportAcceptance(false);
-        }
+        reportRejection();
         finish(err);
       },
     );

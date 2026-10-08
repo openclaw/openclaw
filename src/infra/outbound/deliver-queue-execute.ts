@@ -155,30 +155,24 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     flushMessageSentEvents();
     await runOutboundDeliveryCommitHooks(deliveredResults);
   };
+  const auditBatch = () => ({ payloadCount, results: deliveredResults, payloadOutcomes });
   const failedTerminals = (failureStage: AuditMessageFailureStage) =>
-    failedOutboundAuditTerminals({
-      payloadCount,
-      results: deliveredResults,
-      payloadOutcomes,
-      failureStage,
-    });
+    failedOutboundAuditTerminals({ ...auditBatch(), failureStage });
   const emitFailedTerminals = (failureStage: AuditMessageFailureStage) =>
     emitTerminals(() => failedTerminals(failureStage));
-  const completedTerminals = () =>
-    completedOutboundAuditTerminals({
-      payloadCount,
-      results: deliveredResults,
-      payloadOutcomes,
-    });
+  const completedTerminals = () => completedOutboundAuditTerminals(auditBatch());
+  const finishAck = async (terminals: Parameters<typeof emitTerminals>[0]): Promise<void> => {
+    queuedPostSendState = "acked";
+    await runCommitHooksAfterAck();
+    emitTerminals(terminals);
+  };
   const finishPermanentRejection = async (
     owner: QueuedDeliveryOwner,
     rejection: PlatformMessageNotDispatchedError,
   ): Promise<void> => {
     const terminals = failedTerminals("platform_send");
     if (await rejectQueuedDelivery(owner, rejection, params, terminals)) {
-      queuedPostSendState = "acked";
-      await runCommitHooksAfterAck();
-      emitTerminals(() => terminals);
+      await finishAck(() => terminals);
     }
   };
   let releaseCancelledPreparation: (() => Promise<void>) | undefined;
@@ -365,15 +359,18 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
     if (conversationAttemptAuthority) {
       // Conversation delivery was not stable-shipped before route fingerprints. An unfinished
       // legacy intent cannot be rebound safely after upgrade, so missing authority fails closed.
-      if (!conversationAttemptAuthority.routeFingerprint || !params.onDeliveryAttempt) {
+      if (
+        !conversationAttemptAuthority.routeFingerprint ||
+        (!params.onDeliveryAttempt && !params.withDirectAdapterHandoff)
+      ) {
         throw new PlatformMessageNotDispatchedError(
           "Conversation delivery is missing its current route authorization",
           { cause: undefined, retryable: false },
         );
       }
-      // One durable attempt admits its bounded adapter fanout/retries. A later queue or recovery
-      // attempt rechecks from the serialized fingerprint; in-flight revocation is not promised.
-      await params.onDeliveryAttempt();
+      // Released callbacks retain their attempt boundary. Bundled conversations also fence each
+      // concrete platform invocation after asynchronous preparation through the handoff owner.
+      await params.onDeliveryAttempt?.();
       throwIfProducerLeaseLost();
     }
     const results = await deliverOutboundPayloadsCore(wrappedParams);
@@ -456,9 +453,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
         } else if (postSendState === "acked") {
           // Direct ack is the fallback when the post-send marker cannot be
           // written. Once the row is gone, recovery cannot run these hooks.
-          queuedPostSendState = postSendState;
-          await runCommitHooksAfterAck();
-          emitFailedTerminals("platform_send");
+          await finishAck(() => failedTerminals("platform_send"));
         }
       } else {
         const postSendState =
@@ -522,9 +517,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
                     return false;
                   });
         if (acked) {
-          queuedPostSendState = "acked";
-          await runCommitHooksAfterAck();
-          emitTerminals(completedTerminals);
+          await finishAck(completedTerminals);
         }
       }
     }
@@ -597,9 +590,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
               .then(() => true)
               .catch(() => false)
           ) {
-            queuedPostSendState = "acked";
-            await runCommitHooksAfterAck();
-            emitFailedTerminals("queue");
+            await finishAck(() => failedTerminals("queue"));
           }
         } else if (!platformResultsReturned) {
           const sendEvidence =
