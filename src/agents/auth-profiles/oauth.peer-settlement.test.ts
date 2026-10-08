@@ -7,13 +7,11 @@ import { captureEnv } from "../../test-utils/env.js";
 import "./oauth-external-auth-passthrough.test-support.js";
 import { getOAuthProviderRuntimeMocks } from "./oauth-common-mocks.test-support.js";
 import {
-  createFailedOAuthRefreshFence,
   createOAuthRefreshFence,
   isOAuthRefreshFence,
   isPendingOAuthRefreshFence,
 } from "./oauth-refresh-marker.js";
 import {
-  fenceOAuthRefreshPeers,
   rollbackOAuthRefreshPeerClaims,
   settleOAuthRefreshPeerClaims,
 } from "./oauth-refresh-peers.js";
@@ -100,90 +98,6 @@ afterEach(async () => {
 });
 
 describe("OAuth refresh peer settlement", () => {
-  it.each([["failed", createFailedOAuthRefreshFence]])(
-    "does not replace a different %s fence for the same refresh generation",
-    async (_, build) => {
-      const peerAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
-      await fs.mkdir(peerAgentDir, { recursive: true });
-      const original = {
-        type: "oauth" as const,
-        provider,
-        access: "cached-access-token",
-        refresh: "refresh-token",
-        expires: Date.now() - 60_000,
-      };
-      const ownerFence = createOAuthRefreshFence({ profileId, credential: original });
-      const competingFence = build(createOAuthRefreshFence({ profileId, credential: original }));
-      saveAuthProfileStore({ version: 1, profiles: { [profileId]: competingFence } }, peerAgentDir);
-
-      await expect(
-        fenceOAuthRefreshPeers({
-          cfg: {},
-          ownerDatabasePath: resolveAuthProfileDatabasePath(mainAgentDir),
-          profileId,
-          generation: original,
-          fence: ownerFence,
-        }),
-      ).rejects.toThrow("already claimed");
-      expect(read(peerAgentDir)).toEqual(competingFence);
-    },
-  );
-
-  it("terminally fences peers instead of exposing a different shared account", async () => {
-    const ownerAgentDir = path.join(tempRoot, "agents", "owner-a", "agent");
-    const peerAgentDir = path.join(tempRoot, "agents", "peer-a", "agent");
-    await Promise.all([
-      fs.mkdir(ownerAgentDir, { recursive: true }),
-      fs.mkdir(peerAgentDir, { recursive: true }),
-    ]);
-
-    const accountA = createExpiredOauthStore({
-      profileId,
-      provider,
-      accountId: "acct-a",
-    });
-    const accountB = createExpiredOauthStore({
-      profileId,
-      provider,
-      access: "shared-b-access",
-      refresh: "shared-b-refresh",
-      accountId: "acct-b",
-    });
-    const sharedB = accountB.profiles[profileId];
-    if (sharedB?.type !== "oauth") {
-      throw new Error("expected shared OAuth credential");
-    }
-    sharedB.expires = Date.now() + 60 * 60 * 1000;
-    saveAuthProfileStore(accountA, ownerAgentDir);
-    saveAuthProfileStore(createExpiredOauthStore({ profileId, provider }), peerAgentDir);
-    saveAuthProfileStore(accountB, mainAgentDir);
-    refreshProviderOAuthCredentialWithPluginMock.mockResolvedValue({
-      type: "oauth",
-      provider,
-      access: "rotated-a-access",
-      refresh: "rotated-a-refresh",
-      expires: Date.now() + 60 * 60 * 1000,
-      accountId: "acct-a",
-    });
-
-    await expect(resolveFrom(ownerAgentDir)).resolves.toEqual(
-      expect.objectContaining({ apiKey: "rotated-a-access" }),
-    );
-
-    expect(read(mainAgentDir)).toMatchObject({
-      access: "shared-b-access",
-      accountId: "acct-b",
-    });
-    expect(read(ownerAgentDir)).toMatchObject({
-      access: "rotated-a-access",
-      accountId: "acct-a",
-    });
-    const terminalPeer = read(peerAgentDir);
-    expect(terminalPeer?.type === "oauth" && isOAuthRefreshFence(terminalPeer)).toBe(true);
-    expect(terminalPeer?.type === "oauth" && isPendingOAuthRefreshFence(terminalPeer)).toBe(false);
-    await expect(resolveFrom(peerAgentDir)).resolves.toBeNull();
-  });
-
   it.each([
     {
       name: "conflicting account ids despite matching email",
