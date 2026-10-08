@@ -17,6 +17,7 @@ export function readPluginSourceDirectory(source: string) {
   const content = entries.map((entry) => [
     entry.name,
     entry.isSymbolicLink() ? fs.readlinkSync(path.join(source, entry.name)) : null,
+    entry.isSymbolicLink() ? fs.realpathSync(path.join(source, entry.name)) : null,
   ]);
   return {
     names: entries.map((entry) => entry.name),
@@ -28,6 +29,13 @@ export function readPluginSourceDirectory(source: string) {
 // entries. Their retirement changes directory timestamps, not plugin source.
 export const pluginSourceInputIdentity = (stat: fs.BigIntStats): string =>
   stat.isDirectory() ? `${stat.dev}:${stat.ino}:${stat.mode}` : pluginSourceStatIdentity(stat);
+
+/** Legacy entry selection depends on file presence and its canonical containment target. */
+export function pluginSourceFileProbe(source: string): string | undefined {
+  return fs.statSync(source, { throwIfNoEntry: false })?.isFile()
+    ? fs.realpathSync(source)
+    : undefined;
+}
 
 export type PluginSourceInput = {
   identity: string;
