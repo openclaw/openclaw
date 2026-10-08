@@ -11,12 +11,14 @@ import type { ModelProviderConfig as ProviderConfig } from "../config/types.mode
 import {
   normalizeModelCostForCatalog,
   type ProviderCatalogModelConfig,
+  type ProviderCatalogModelsConfig,
 } from "./model-cost-normalization.js";
 import {
   createConfiguredProviderCatalogModelIdNormalizer,
   type ModelManifestNormalizationContext,
 } from "./model-ref-shared.js";
 
+type ModelsConfig = ProviderCatalogModelsConfig;
 type ProviderModelConfig = ProviderCatalogModelConfig;
 
 function normalizeProviderModelsForConfig(

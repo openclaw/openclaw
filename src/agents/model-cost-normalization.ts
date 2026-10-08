@@ -1,9 +1,9 @@
 /** Leaf catalog cost rule shared by the catalog writer and the persisted-catalog repair owner. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
+export type ProviderCatalogModelsConfig = NonNullable<OpenClawConfig["models"]>;
 export type ProviderCatalogModelConfig = NonNullable<
-  NonNullable<ModelsConfig["providers"]>[string]["models"]
+  NonNullable<ProviderCatalogModelsConfig["providers"]>[string]["models"]
 >[number];
 
 /** Completes a partial cost with zeroed rates; an absent cost stays absent. */
