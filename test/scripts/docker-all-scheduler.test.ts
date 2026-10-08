@@ -922,7 +922,7 @@ describe("scripts/test-docker-all scheduler", () => {
       const summary = JSON.parse(readFileSync(path.join(logDir, "summary.json"), "utf8"));
       expect(summary.status).toBe("passed");
       expect(summary.lanes).toEqual([]);
-      expect(summary.omittedUnsupportedLanes).toHaveLength(14);
+      expect(summary.omittedUnsupportedLanes).toHaveLength(19); // Includes five pinned recovery cells.
       expect(summary.omittedUnsupportedLanes).toContain("published-upgrade-survivor");
       expect(summary.omittedUnsupportedLanes).toContain(
         "published-upgrade-survivor-custom-plugin-siblings",
@@ -972,7 +972,7 @@ describe("scripts/test-docker-all scheduler", () => {
       } else {
         const plan = JSON.parse(result.stdout);
         expect(plan.lanes).toEqual([]);
-        expect(plan.omittedUnsupportedLanes).toHaveLength(14);
+        expect(plan.omittedUnsupportedLanes).toHaveLength(19); // Includes five pinned recovery cells.
         expect(plan.omittedUnsupportedLanes).toContain(
           "published-upgrade-survivor-custom-plugin-siblings",
         );
