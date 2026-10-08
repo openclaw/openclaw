@@ -307,8 +307,8 @@ it("resolves resume ownership off-thread, preserving backend, order, and lifecyc
         cancel: async () => {},
         close: async () => {},
       };
-      const prepared = createDeferred<void>();
-      const release = createDeferred<void>();
+      const prepared = createDeferred();
+      const release = createDeferred();
       const runtimeHandles = new ManagerRuntimeHandleCache();
       const operation = withAcpSpawnResumeOwnership(authorization, () =>
         runManagerInitializeSession({
