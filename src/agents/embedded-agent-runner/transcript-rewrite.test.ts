@@ -23,6 +23,10 @@ import { replaceTranscriptEventsSync } from "../../config/sessions/session-acces
 import { waitForSessionTranscriptProjection } from "../../config/sessions/session-transcript-reconcile.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import {
+  readSessionTranscriptVisibleMessageDelta,
+  readVisibleSessionTranscriptMessageEntries,
+} from "../../plugin-sdk/session-transcript-runtime.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { installSessionToolResultGuard } from "../session-tool-result-guard.js";
 import { textToolResult } from "../test-helpers/sparse-transcript.test-support.js";
@@ -676,5 +680,66 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     expect(getBranchMessages(reopened)).toHaveLength(originalMessages.length);
     expect(getBranchMessages(reopened).at(-1)).toEqual(originalMessages.at(-1));
     expect(reopened.getBranch()).toEqual(sessionManager.getBranch());
+  });
+
+  it("marks re-appended messages with the entry id they supersede", async () => {
+    const { directory, target } = await persistedTarget("supersedes-rewrite");
+    const readMarkers = async () => {
+      await waitForSessionTranscriptProjection(target);
+      const visible = await readVisibleSessionTranscriptMessageEntries(target);
+      const delta = await readSessionTranscriptVisibleMessageDelta(target);
+      if (delta.kind !== "page") {
+        throw new Error(`expected visible delta page, got ${delta.kind}`);
+      }
+      const markers = (entries: typeof visible) =>
+        entries.map((entry) => [entry.entryId, entry.supersedesEntryId]);
+      // Both plugin read paths project the same marker; seq differs by read contract.
+      expect(markers(delta.entries)).toEqual(markers(visible));
+      return markers(visible);
+    };
+    const manager = SessionManager.open(target, directory);
+    const [userId, callId, toolId, tailId] = appendMessages(manager, [
+      makeUserMessage("read file", 1),
+      asAppendMessage({
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        timestamp: 2,
+      }),
+      toolResult("read", "large original result", 3),
+      assistant("summary", 4),
+    ]);
+    await rewrite(manager, expectDefined(toolId, "tool result entry id"), toolResult("read", "short", 3));
+    const [toolCopyId, tailCopyId] = manager
+      .getBranch()
+      .slice(2)
+      .map((entry) => entry.id);
+    const plainId = manager.appendMessage(makeUserMessage("after rewrite", 5));
+    expect(await readMarkers()).toEqual([
+      [userId, undefined],
+      [callId, undefined],
+      [toolCopyId, toolId],
+      [tailCopyId, tailId],
+      [plainId, undefined],
+    ]);
+
+    // A reloaded copy must match its committed row so a later rewrite can chain from it.
+    const reopened = SessionManager.open(target, directory);
+    await rewrite(
+      reopened,
+      expectDefined(toolCopyId, "tool result copy id"),
+      toolResult("read", "shorter", 3),
+    );
+    const [toolSecondCopyId, tailSecondCopyId, plainCopyId] = reopened
+      .getBranch()
+      .slice(2)
+      .map((entry) => entry.id);
+    expect(await readMarkers()).toEqual([
+      [userId, undefined],
+      [callId, undefined],
+      [toolSecondCopyId, toolCopyId],
+      [tailSecondCopyId, tailCopyId],
+      [plainCopyId, plainId],
+    ]);
+    expect(SessionManager.open(target, directory).getBranch()).toEqual(reopened.getBranch());
   });
 });
