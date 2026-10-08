@@ -400,8 +400,9 @@ describe("worker session placement moves", () => {
     ["gateway", "os-a", "operating system requires a profile target"],
     ["profile", " ", /move operating system/u],
     ["profile", "a".repeat(65), /move operating system/u],
-  ] as const)("rejects invalid %s move OS %j before creating storage", async (kind, os, error) => {
-    const target = kind === "gateway" ? { kind, os } : { kind, profileId: "cloud", os };
+  ] as const)("rejects invalid %s OS %j before creating storage", async (kind, targetOs, error) => {
+    const target =
+      kind === "gateway" ? { kind, os: targetOs } : { kind, profileId: "cloud", os: targetOs };
     database.db.exec("DROP TABLE worker_session_placement_moves");
     await expect(
       store.beginPlacementMove({
