@@ -233,18 +233,14 @@ export function buildReplyPromptEnvelope(
         sourceContext.map((text) => ({ kind: "conversation-data", text })),
       )
     : base.currentInboundContext;
+  const annotateBody = (body: string) =>
+    annotateInterSessionPromptText(prependMediaNote(body), params.sessionCtx.InputProvenance);
   return {
     mediaNote,
     inboundMediaIndexes: generatedMedia.mediaIndexes,
     ...(media.length > 0 ? { media } : {}),
-    prefixedCommandBody: annotateInterSessionPromptText(
-      prependMediaNote(params.prefixedBody ?? base.effectiveBaseBody),
-      params.sessionCtx.InputProvenance,
-    ),
-    queuedBody: annotateInterSessionPromptText(
-      prependMediaNote(base.effectiveBaseBody),
-      params.sessionCtx.InputProvenance,
-    ),
+    prefixedCommandBody: annotateBody(params.prefixedBody ?? base.effectiveBaseBody),
+    queuedBody: annotateBody(base.effectiveBaseBody),
     transcriptCommandBody,
     ...base,
     currentInboundContext,

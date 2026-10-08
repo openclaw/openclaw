@@ -19,6 +19,7 @@ import type { ReplyPayload } from "../types.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
+import { resolveFollowupCurrentMessageId } from "./agent-runner-utils.js";
 import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.js";
 import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
@@ -47,11 +48,7 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
   const run = queued.run;
   const surface = queued.originatingChannel ?? run.messageProvider;
   const sessionKey = turn.session.kind === "session" ? turn.session.key : run.sessionKey;
-  const currentMessageId =
-    run.inputProvenance?.kind === "internal_system" &&
-    run.inputProvenance.sourceTool === "restart-sentinel"
-      ? queued.originatingReplyToId
-      : queued.messageId;
+  const currentMessageId = resolveFollowupCurrentMessageId(queued);
   return {
     Provider: run.messageProvider,
     Surface: surface,
@@ -266,12 +263,12 @@ export async function executeFollowupTurn(params: {
       : undefined;
   const wrapVisibility = <Args extends unknown[]>(
     callback: ((...args: Args) => Promise<boolean | void> | boolean | void) | undefined,
-    allowed = progressAllowed,
+    allowed: (...args: Args) => boolean = progressAllowed,
   ) =>
     callback
       ? (...args: Args) =>
           enqueueProgressResult(async () => {
-            if (!allowed()) {
+            if (!allowed(...args)) {
               return false;
             }
             return (await settleProgressVisibilityCallbackResult(callback(...args))).visible;
@@ -316,20 +313,13 @@ export async function executeFollowupTurn(params: {
     onAssistantMessageStart: undefined,
     onToolStart: wrapVisibility(sourceOpts?.onToolStart, shouldEmitToolLifecycle),
     onCommandOutput: wrapVisibility(sourceOpts?.onCommandOutput, shouldEmitStructuredProgress),
-    onItemEvent: sourceOpts?.onItemEvent
-      ? (item) =>
-          enqueueProgressResult(async () => {
-            // Only an explicit draft-vs-durable owner contract may bypass hidden
-            // tool-progress filtering for queued preambles.
-            const draftOwnsPreamble =
-              progressAllowed() && item.kind === "preamble" && draftOwnsCommentaryProgress;
-            if (!draftOwnsPreamble && !shouldEmitStructuredProgress()) {
-              return false;
-            }
-            return (await settleProgressVisibilityCallbackResult(sourceOpts.onItemEvent!(item)))
-              .visible;
-          })
-      : undefined,
+    onItemEvent: wrapVisibility<Parameters<NonNullable<InternalGetReplyOptions["onItemEvent"]>>>(
+      sourceOpts?.onItemEvent ? (item) => sourceOpts.onItemEvent!(item) : undefined,
+      (item) =>
+        // Only the explicit draft owner may bypass hidden tool-progress filtering for preambles.
+        (progressAllowed() && item.kind === "preamble" && draftOwnsCommentaryProgress) ||
+        shouldEmitStructuredProgress(),
+    ),
     onNarrationUpdate: wrap(sourceOpts?.onNarrationUpdate),
     onPlanUpdate: wrapVisibility(sourceOpts?.onPlanUpdate),
     onApprovalEvent: wrapVisibility(sourceOpts?.onApprovalEvent, shouldEmitStructuredProgress),

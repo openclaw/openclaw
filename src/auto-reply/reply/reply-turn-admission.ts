@@ -332,15 +332,16 @@ export async function admitReplyTurn(
                     assertCurrent,
                   },
                 );
-                if (
-                  !admitting ||
-                  interruptedBeforeOperation ||
-                  params.upstreamAbortSignal?.aborted
-                ) {
-                  await current.databaseClaim.release();
-                  throw new SessionWorkStartChangedError("Session changed during state admission.");
-                }
                 try {
+                  if (
+                    !admitting ||
+                    interruptedBeforeOperation ||
+                    params.upstreamAbortSignal?.aborted
+                  ) {
+                    throw new SessionWorkStartChangedError(
+                      "Session changed during state admission.",
+                    );
+                  }
                   params.assertRequestCurrent?.();
                 } catch (error) {
                   await current.databaseClaim.release();

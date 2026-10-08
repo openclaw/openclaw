@@ -3,6 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import {
   getLoadedChannelPlugin,
   listChannelPlugins,
@@ -165,6 +166,27 @@ function readCommandDeliveryTarget(params: HandleCommandsParams): string | undef
     normalizeOptionalString(params.command.to) ??
     normalizeOptionalString(params.command.from)
   );
+}
+
+export function buildCommandExecApprovalDefaults(
+  commandParams: HandleCommandsParams,
+  privateApprovalTarget?: PrivateCommandRouteTarget,
+): ExecToolDefaults {
+  return {
+    host: "gateway",
+    security: "allowlist",
+    ask: "always",
+    allowBackground: true,
+    cwd: commandParams.workspaceDir,
+    sessionKey: commandParams.sessionKey,
+    eventRouting: {
+      mainKey: commandParams.cfg.session?.mainKey,
+      sessionScope: commandParams.cfg.session?.scope,
+    },
+    ...resolveCommandExecApprovalRoute({ commandParams, privateApprovalTarget }),
+    notifyOnExit: commandParams.cfg.tools?.exec?.notifyOnExit,
+    notifyOnExitEmptySuccess: commandParams.cfg.tools?.exec?.notifyOnExitEmptySuccess,
+  };
 }
 
 /**
