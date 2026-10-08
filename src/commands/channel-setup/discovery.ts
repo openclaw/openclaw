@@ -94,10 +94,11 @@ export function resolveChannelSetupEntries(params: {
             !isStaticallyChannelConfigured(params.cfg, entry.id, params.env ?? process.env)) &&
           shouldShowChannelInSetup(entry.meta),
       )
-      .map((entry) => ({
-        ...entry,
-        meta: normalizeChannelMeta({ id: entry.id as ChannelChoice, meta: entry.meta }),
-      }));
+      .map((entry) =>
+        Object.assign({}, entry, {
+          meta: normalizeChannelMeta({ id: entry.id as ChannelChoice, meta: entry.meta }),
+        }),
+      );
   const installedCatalogEntries = catalogEntries(installedCatalogEntriesSource, true);
   const installableCatalogEntries = catalogEntries(installableCatalogEntriesSource, false);
 
