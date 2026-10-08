@@ -16,6 +16,8 @@
     "../../src/agents/bootstrap-files.remote.test.ts",
     "../../src/agents/code-mode*.test.ts",
     "../../src/agents/code-mode*.test.tsx",
+    "../../src/agents/embedded-*.test.ts",
+    "../../src/agents/embedded-*.test.tsx",
     "../../src/agents/model-*.test.ts",
     "../../src/agents/model-*.test.tsx",
     "../../src/agents/prepared-model-runtime*.test.ts",

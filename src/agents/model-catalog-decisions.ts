@@ -21,6 +21,7 @@ import { captureUserProfileModelAccountLinksAuthority } from "../state/user-prof
 import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
 import { isDefaultAgentRuntimeId } from "./agent-runtime-id.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope.js";
+import { listAppServerRuntimeModelBackendBindings } from "./app-server-runtime-bindings.js";
 import { resolveExternalCliAuthScopeFromConfig } from "./auth-profiles/external-cli-scope.js";
 import { materializePreparedPersonalAuthProfile } from "./auth-profiles/personal-profiles.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
@@ -535,6 +536,14 @@ export function createModelCatalogDecisions(params: ModelCatalogDecisionParams) 
               (route) => route.runtimePolicy?.compatibleIds ?? [],
             )
           : []),
+        // Discover alternate app-server runtimes without bypassing the captured
+        // auth, route, and harness checks below.
+        ...listAppServerRuntimeModelBackendBindings()
+          .filter(
+            (binding) =>
+              normalizeProviderId(binding.provider) === normalizeProviderId(entry.provider),
+          )
+          .map((binding) => binding.runtime),
         ...cliRuntimeBindings
           .filter(
             (binding) =>

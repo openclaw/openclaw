@@ -13,6 +13,10 @@ import {
 } from "../plugins/manifest-contract-eligibility.js";
 import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session-key.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
+import {
+  isAppServerRuntimeModelBackendBinding,
+  listAppServerRuntimeModelBackendBindings,
+} from "./app-server-runtime-bindings.js";
 import { getRegisteredAgentHarness } from "./harness/registry.js";
 import { isCliRuntimeAliasForProvider } from "./model-runtime-aliases.js";
 
@@ -65,8 +69,29 @@ export function resolveCompatibleAgentRuntimeForProvider(params: {
     return runtime;
   }
   const provider = params.provider?.trim().toLowerCase() ?? "";
-  if (runtime === "codex") {
-    return provider === "codex" || provider === "openai" ? runtime : undefined;
+  // App-server harnesses are bound to their providers in ONE place
+  // (app-server-runtime-bindings.ts), shared with the /models runtime chooser.
+  // This answers compatibility only: the binding table is static, so an owner
+  // plugin can still be disabled. Callers that ACCEPT a new selection also gate
+  // on owner availability (directive-handling.model-runtime.ts); recovery of an
+  // already-persisted override deliberately does not, so a temporarily
+  // unavailable plugin cannot silently reroute a locked transcript.
+  // This used to hardcode Codex alone, which silently rejected every other
+  // bridge harness: `/model zai/glm-5.3 --runtime glm-bridge` returned
+  // 'Runtime "glm-bridge" is not supported for zai' and the model never changed,
+  // even though the picker offered that exact combination (openclaw-vgx7).
+  if (isAppServerRuntimeModelBackendBinding({ provider, runtime })) {
+    return runtime;
+  }
+  if (
+    runtime === "codex" ||
+    listAppServerRuntimeModelBackendBindings().some((binding) => binding.runtime === runtime)
+  ) {
+    // This runtime owns a dedicated single-provider binding above (Codex's
+    // virtual `codex` provider included); it must never fall through to the
+    // generic ACP harness discovery below just because its plugin happens to
+    // be registered for an unrelated provider.
+    return undefined;
   }
   if (getRegisteredAgentHarness(runtime)) {
     return runtime;
