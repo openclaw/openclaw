@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { BroadcastChannel, getEnvironmentData } from "node:worker_threads";
-import { CodeModeNodeProgress } from "./code-mode-node-progress.js";
+import { CodeModeNodeProgress } from "../../src/agents/code-mode-node-progress.js";
 
 const name: unknown = getEnvironmentData("openclaw.codeModeTimeoutOutputTest");
 assert.ok(typeof name === "string", "The timeout fixture requires its output notification channel");
@@ -19,4 +19,4 @@ CodeModeNodeProgress.prototype.append = function (json) {
   channel.postMessage(++count);
 };
 
-await import("./code-mode-node.worker.js");
+await import("../../src/agents/code-mode-node.worker.js");
