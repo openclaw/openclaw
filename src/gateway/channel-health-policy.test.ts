@@ -216,7 +216,11 @@ describe("evaluateChannelHealth", () => {
   });
 
   it("treats recorded blocked lifecycle as unhealthy", () => {
-    expect(evaluateHealth(connectedAccount({ lifecycle: "blocked" }))).toEqual({
+    expect(
+      evaluateHealth(
+        connectedAccount({ lifecycle: "blocked", linked: false, ingressUnavailable: true }),
+      ),
+    ).toEqual({
       healthy: false,
       reason: "blocked",
     });
@@ -348,7 +352,7 @@ describe("evaluateChannelHealth", () => {
   it.each([
     {
       name: "distinguishes a stopped terminal channel",
-      snapshot: { running: false, terminalDisconnect: true },
+      snapshot: { running: false, terminalDisconnect: true, linked: false },
       expected: { healthy: false, reason: "terminal-disconnect" },
     },
     {
@@ -397,6 +401,7 @@ describe("evaluateChannelHealth", () => {
         running: false,
         enabled: true,
         configured: true,
+        linked: false,
         restartPending: true,
         ingressUnavailable: true,
       });
@@ -426,15 +431,22 @@ describe("evaluateChannelHealth", () => {
       expect(evaluation).toEqual({ healthy: true, reason: "healthy" });
     });
 
-    it("stays healthy for a disabled account so unmanaged still wins", () => {
-      const evaluation = evaluateHealth({
-        running: false,
-        enabled: false,
-        configured: true,
-        ingressUnavailable: true,
-      });
-      expect(evaluation).toEqual({ healthy: true, reason: "unmanaged" });
-    });
+    it.each([{ enabled: false }, { configured: false }])(
+      "keeps disabled or unconfigured accounts unmanaged (%j)",
+      (unmanaged) => {
+        const evaluation = evaluateHealth({
+          running: false,
+          enabled: true,
+          configured: true,
+          linked: false,
+          terminalDisconnect: true,
+          lifecycle: "blocked",
+          ingressUnavailable: true,
+          ...unmanaged,
+        });
+        expect(evaluation).toEqual({ healthy: true, reason: "unmanaged" });
+      },
+    );
   });
 });
 

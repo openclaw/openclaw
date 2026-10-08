@@ -11,7 +11,10 @@ import {
   type OpenClawAgentReadOnlyDatabase,
 } from "../../state/openclaw-agent-db-readonly.js";
 import { resolveSessionLifecycleTimestampsWithHeader } from "./lifecycle-timestamps.js";
-import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
+import {
+  readSessionEntryRow,
+  readSessionKeyBySessionIdInDatabase,
+} from "./session-accessor.sqlite-entry-read.js";
 import { readActiveTranscriptEntryAnchorInTransaction } from "./session-accessor.sqlite-transcript-anchor.js";
 import { readTranscriptHeaderFromDatabase } from "./session-accessor.sqlite-transcript-metadata-read.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
@@ -59,11 +62,12 @@ export function readSessionEntryCohort(
   input: SessionEntryCohortRequest,
   readEntries: (request: SessionExactEntriesWorkerInput) => SessionExactEntriesWorkerResult,
 ): SessionEntryCohortResult {
-  const { expected, transcript, ...selection } = input;
+  const { expected, transcript, runtimeTarget, ...selection } = input;
   const count =
     input.sessionKeys.length +
     (input.replyInitializationSessionKey ? 1 : 0) +
-    (transcript?.entryIds.length ?? 0);
+    (transcript?.entryIds.length ?? 0) +
+    (runtimeTarget ? 1 : 0);
   if (
     count > MAX_SESSION_ROW_FACTS_KEYS ||
     (expected?.sessions.length ?? 0) > MAX_SESSION_ROW_FACTS_KEYS
@@ -71,6 +75,9 @@ export function readSessionEntryCohort(
     throw new Error(
       `Session entry cohorts support at most ${MAX_SESSION_ROW_FACTS_KEYS} selected facts`,
     );
+  }
+  if (runtimeTarget && !input.sessionKeys.includes(runtimeTarget.sessionKey)) {
+    throw new Error("Session runtime target must belong to its entry cohort");
   }
   const source = readOpenClawAgentDatabaseIdentity(database);
   if (typeof source.identity !== "string" || !isOpenClawAgentDatabasePathCurrent(database)) {
@@ -141,9 +148,17 @@ export function readSessionEntryCohort(
               }) ?? [],
           )
         : [];
+    const preparedRuntimeTarget = runtimeTarget && {
+      ...runtimeTarget,
+      sessionKey:
+        readSessionKeyBySessionIdInDatabase(database, runtimeTarget.sessionId) ??
+        runtimeTarget.sessionKey,
+      storePath: database.path,
+    };
     assertSource();
     return {
       ...result,
+      ...(preparedRuntimeTarget ? { runtimeTarget: preparedRuntimeTarget } : {}),
       source: {
         agentId: database.agentId,
         path: database.path,
