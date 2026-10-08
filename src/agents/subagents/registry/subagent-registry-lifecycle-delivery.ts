@@ -103,7 +103,17 @@ export const recordAnnounceDeliveryResult = (
     }
   }
   deliveryState.disposition =
-    delivery.disposition ?? (delivery.delivered ? "delivered" : "retryable");
+    delivery.disposition ??
+    (delivery.delivered
+      ? "delivered"
+      : // A `none` path selected no transport at all: there is no sink left to
+        // retry against, so the result is an intentional non-delivery rather
+        // than a failed obligation. Without this a no-route attempt stays
+        // `retryable`, retries exhaust, and the give-up terminaliser writes a
+        // bare `failed` row that re-renders as outstanding forever (#154834).
+        delivery.path === "none"
+        ? "intentional_non_delivery"
+        : "retryable");
 };
 
 export const hasPriorRequesterDeliveryMirror = async (

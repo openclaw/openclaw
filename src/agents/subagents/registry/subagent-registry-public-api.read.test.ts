@@ -46,6 +46,7 @@ function createReadApi(runs = new Map<string, SubagentRunRecord>()) {
     startAnnounceCleanup: unexpectedMutation,
     settleRequesterTurn: unexpectedMutation,
     markRequesterYielded: unexpectedMutation,
+    discardTerminalDelivery: unexpectedMutation,
   });
 }
 

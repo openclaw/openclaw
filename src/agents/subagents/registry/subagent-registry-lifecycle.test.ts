@@ -5457,6 +5457,59 @@ describe("requester settle wake trigger", () => {
     },
   );
 
+  it("keeps a no-route give-up an intentional non-delivery instead of a bare failed row", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      cleanup: "keep",
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      outcome: { status: "timeout" },
+      delivery: {
+        status: "pending",
+        disposition: "intentional_non_delivery",
+        lastDropReason: "sink_unavailable",
+      },
+    });
+    const settleWake = vi.fn<
+      LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
+    >(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    await controller.finalizeResumedAnnounceGiveUp({ entry, reason: "expiry" });
+
+    // The transport closed as failed, but the obligation was already a deliberate
+    // non-delivery, so the terminaliser must not re-render it as outstanding.
+    expect(readLifecycleRun(entry).delivery).toMatchObject({
+      status: "failed",
+      disposition: "intentional_non_delivery",
+    });
+  });
+
+  it("leaves an ordinary transport give-up as a bare failed row", async () => {
+    const entry = createRunEntry({
+      endedAt: 4_000,
+      expectsCompletionMessage: true,
+      cleanup: "keep",
+      endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+      outcome: { status: "timeout" },
+    });
+    const settleWake = vi.fn<
+      LifecycleControllerParams["maybeWakeRequesterAfterAllChildrenSettled"]
+    >(async () => false);
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled: settleWake,
+    });
+
+    await controller.finalizeResumedAnnounceGiveUp({ entry, reason: "expiry" });
+
+    expect(readLifecycleRun(entry).delivery?.status).toBe("failed");
+    expect(readLifecycleRun(entry).delivery?.disposition).toBeUndefined();
+  });
+
   registerRequesterDatabaseAdmissionTests({ createLifecycleController, waitForLifecycleState });
 
   it.each(["yielded", "replacement"])(
