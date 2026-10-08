@@ -1,5 +1,6 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { openLocalFileSafely, readLocalFileSafely } from "../infra/fs-safe.js";
+import type { SkillDeliveredIdentityAcquirer } from "./agent-tools.read.js";
 import { readCodeModeSkill, type CodeModeSkill } from "./code-mode-skills.js";
 import type { SkillInstructionResult } from "./skill-instruction-result.js";
 import { getTextLexicalIndex } from "./tool-search-index.js";
@@ -12,6 +13,20 @@ export type InstalledSkill = CodeModeSkill & {
   assertCurrent?: () => void;
   /** The owner must bound I/O before allocating the returned content. */
   readSearchContent?: (maxBytes: number, signal?: AbortSignal) => Promise<string>;
+  /**
+   * Delivery-time identity acquisition for instructions a live tree serves:
+   * the acquirer receives the served text and attributes the acquired tree's
+   * identity only when that tree contains those exact bytes.
+   */
+  acquireDeliveredFingerprint?: SkillDeliveredIdentityAcquirer;
+  /**
+   * Attributable retained bundle identity for instruction bytes a serving read
+   * provably returns: entries that carry retained identified content (remote
+   * transfers) and pinned library revisions backed by an immutable
+   * revision-keyed store. A live-tree entry leaves this unset; its identity
+   * comes from verified delivery-time acquisition instead.
+   */
+  attributableBundleFingerprint?: string;
 };
 
 const MAX_QUERY_CHARS = 1_000;

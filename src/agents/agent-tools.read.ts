@@ -7,6 +7,7 @@ import { detectMime } from "@openclaw/media-core/mime";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { Static, TSchema } from "typebox";
 import { Value } from "typebox/value";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveRootPath } from "../infra/boundary-path.js";
 import { toErrorObject } from "../infra/errors.js";
 import {
@@ -15,6 +16,7 @@ import {
   root as fsRoot,
   FsSafeError,
 } from "../infra/fs-safe.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
 import {
   classifyMediaReferenceSource,
@@ -93,12 +95,92 @@ type OpenClawReadToolOptions = {
 type SkillReadContent = {
   filePath: string;
   readContent?: string;
+  /** Retained bundle identity of the delivery that prepared these instructions. */
+  bundleFingerprint?: string;
+  /**
+   * Delivery-time identity acquisition for entries a live tree serves: the
+   * ordinary-local producer arms it so the settled identity describes the
+   * bytes this delivery actually serves, never a preparation-time hash. The
+   * acquirer receives the delivered instruction text and attributes an
+   * identity only when the acquired tree contains those exact bytes.
+   */
+  acquireDeliveredFingerprint?: SkillDeliveredIdentityAcquirer;
 };
+
+/**
+ * Acquires the retained bundle identity of the bytes a delivery actually
+ * serves; `deliveredText` is the instruction text that delivery read, and the
+ * acquirer omits when the acquired tree cannot be shown to contain it.
+ */
+export type SkillDeliveredIdentityAcquirer = (
+  deliveredText: string | undefined,
+) => Promise<string | undefined>;
+
+/** Per-preparation delivery acquirers keyed by the resource-candidate entry they arm. */
+export type SkillDeliveredIdentityAcquirers = WeakMap<object, SkillDeliveredIdentityAcquirer>;
 
 export type SkillInstructionDeliveryCache = Map<string, Promise<boolean>>;
 
 export function createSkillInstructionDeliveryCache(): SkillInstructionDeliveryCache {
   return new Map();
+}
+
+/**
+ * Per-attempt retained bundle identities and per-invocation emission markers that
+ * ride a run's instruction deliveries. This is owner-managed state created
+ * alongside each per-attempt/per-compaction cache instance: the public
+ * delivery-cache option keeps its Map contract, and marker state is never
+ * required on the plugin-supplied Map. The compaction owner clears the cache and
+ * these markers together: an epoch clear drops settled identities and unconsumed
+ * markers, so an in-flight settlement cannot attribute a cleared generation.
+ */
+export type SkillInstructionDeliveryMarkers = {
+  /** Bundle identity of the retained generation that settled this path's qualifying delivery. */
+  settledFingerprint(path: string): string | undefined;
+  /** Bind a retained bundle identity to a delivery as it settles as qualifying. */
+  settleFingerprint(path: string, fingerprint: string): void;
+  /** Drop a path's settled identity together with its deleted delivery. */
+  deletePathFingerprint(path: string): void;
+  /** Capture this invocation's skill.used emission marker from a settled delivery. */
+  captureInvocationFingerprint(toolCallId: string, fingerprint: string): void;
+  /** Consume this invocation's emission marker; absent when unestablishable. */
+  takeInvocationFingerprint(toolCallId: string): string | undefined;
+  /** Drop an invocation's marker when its delivery failed or was reset. */
+  deleteInvocationFingerprint(toolCallId: string): void;
+  /** Epoch clear: drop settled identities and unconsumed markers together. */
+  clear(): void;
+};
+
+const MAX_INVOCATION_FINGERPRINTS = 1_024;
+
+export function createSkillInstructionDeliveryMarkers(): SkillInstructionDeliveryMarkers {
+  const settledFingerprints = new Map<string, string>();
+  const invocationFingerprints = new Map<string, string>();
+  return {
+    settledFingerprint: (path) => settledFingerprints.get(path),
+    settleFingerprint: (path, fingerprint) => {
+      settledFingerprints.set(path, fingerprint);
+    },
+    deletePathFingerprint: (path) => {
+      settledFingerprints.delete(path);
+    },
+    captureInvocationFingerprint: (toolCallId, fingerprint) => {
+      invocationFingerprints.set(toolCallId, fingerprint);
+      pruneMapToMaxSize(invocationFingerprints, MAX_INVOCATION_FINGERPRINTS);
+    },
+    takeInvocationFingerprint: (toolCallId) => {
+      const fingerprint = invocationFingerprints.get(toolCallId);
+      invocationFingerprints.delete(toolCallId);
+      return fingerprint;
+    },
+    deleteInvocationFingerprint: (toolCallId) => {
+      invocationFingerprints.delete(toolCallId);
+    },
+    clear: () => {
+      settledFingerprints.clear();
+      invocationFingerprints.clear();
+    },
+  };
 }
 
 /** Erase a schema-specific session tool only after its input passes that owned schema. */
@@ -987,6 +1069,7 @@ export function wrapReadToolWithSkillContent(
     containerWorkdir?: string;
     instructionPaths?: readonly string[];
     instructionDeliveryCache?: SkillInstructionDeliveryCache;
+    instructionDeliveryMarkers?: SkillInstructionDeliveryMarkers;
   },
 ): AnyAgentTool<ReadToolDetails> {
   const cwd = options?.cwd ?? process.cwd();
@@ -1017,6 +1100,28 @@ export function wrapReadToolWithSkillContent(
     return tool;
   }
   const instructionDeliveryCache = options?.instructionDeliveryCache;
+  const instructionDeliveryMarkers = options?.instructionDeliveryMarkers;
+  // Retained delivery identities travel with the served instruction bytes; a
+  // settlement or already-served short-circuit attributes only the generation
+  // that actually delivered them, never the current snapshot.
+  const instructionFingerprints = new Map<string, string | undefined>();
+  const deliveredIdentityAcquirers = new Map<string, SkillDeliveredIdentityAcquirer>();
+  for (const skill of skills ?? []) {
+    if (skill.bundleFingerprint) {
+      instructionFingerprints.set(resolveInstructionPath(skill.filePath), skill.bundleFingerprint);
+    }
+    if (skill.acquireDeliveredFingerprint) {
+      deliveredIdentityAcquirers.set(
+        resolveInstructionPath(skill.filePath),
+        skill.acquireDeliveredFingerprint,
+      );
+    }
+  }
+  const captureDeliveryMarker = (toolCallId: unknown, fingerprint: string | undefined) => {
+    if (typeof toolCallId === "string" && fingerprint && instructionDeliveryMarkers) {
+      instructionDeliveryMarkers.captureInvocationFingerprint(toolCallId, fingerprint);
+    }
+  };
   const alreadyDeliveredResult = (): AgentToolResult<ReadToolDetails> => {
     const text =
       "Skill instructions were already served whole earlier in the current model context. Reuse that content; the full document will be served again if compaction removes it.";
@@ -1056,9 +1161,14 @@ export function wrapReadToolWithSkillContent(
           continue;
         }
         if (delivered) {
+          captureDeliveryMarker(
+            toolCallId,
+            instructionDeliveryMarkers?.settledFingerprint(instructionPath),
+          );
           return alreadyDeliveredResult();
         }
         instructionDeliveryCache?.delete(instructionPath);
+        instructionDeliveryMarkers?.deletePathFingerprint(instructionPath);
       }
       let settleDelivery = (_delivered: boolean): void => undefined;
       let delivery: Promise<boolean> | undefined;
@@ -1074,6 +1184,11 @@ export function wrapReadToolWithSkillContent(
         settleDelivery(false);
         if (delivery && instructionDeliveryCache?.get(instructionPath) === delivery) {
           instructionDeliveryCache.delete(instructionPath);
+          // Shared path state: a reset delivery drops its settled identity with it.
+          instructionDeliveryMarkers?.deletePathFingerprint(instructionPath);
+        }
+        if (typeof toolCallId === "string") {
+          instructionDeliveryMarkers?.deleteInvocationFingerprint(toolCallId);
         }
       };
       const instructionTool =
@@ -1115,6 +1230,56 @@ export function wrapReadToolWithSkillContent(
         if (detailsKind !== "text") {
           resetDelivery();
           return result;
+        }
+        // Bind the retained identity with this delivery so resumed concurrent
+        // readers can never observe an unbound or later generation. Entries a
+        // live tree serves acquire the identity of the bytes this delivery
+        // actually serves — settling before the delivery promise resolves so
+        // concurrent waiters find it — while retained-generation entries bind
+        // their producer-stamped identity. Live-tree acquisition verifies the
+        // acquired tree contains the delivered instruction text itself, so a
+        // tree that changed between the delivery read and the acquisition can
+        // never be attributed to the bytes that were served. Acquisition is
+        // telemetry-only: a failure or unprovable association omits and never
+        // fails the delivery.
+        const acquirer = deliveredIdentityAcquirers.get(instructionPath);
+        let fingerprint: string | undefined;
+        if (acquirer) {
+          try {
+            // Telemetry acquisition never holds a completed read: it is
+            // bound to this invocation's abort signal, and an aborted or
+            // already-aborted signal omits the identity instead of stalling
+            // the returned result or settling a marker for a canceled read.
+            fingerprint = await racePromiseWithAbortSignal(
+              acquirer(getReadResultContent(result)),
+              signal,
+            );
+          } catch {
+            fingerprint = undefined;
+          }
+        } else {
+          fingerprint = instructionFingerprints.get(instructionPath);
+        }
+        // Cancellation recheck after acquisition: an aborted invocation never
+        // settles a marker or a qualifying delivery — its instructions may
+        // never reach the model, so it cannot count as skill use. The reset
+        // path mirrors thrown reads: concurrent waiters fall through to a
+        // fresh delivery instead of inheriting a canceled one.
+        if (signal?.aborted) {
+          resetDelivery();
+          return result;
+        }
+        if (
+          fingerprint &&
+          instructionDeliveryMarkers &&
+          // An epoch clear during this delivery treats the settlement as
+          // cleared: a fresh generation owns the path now, so neither a settled
+          // identity nor this invocation's marker is written back over the
+          // cleared generation.
+          (!instructionDeliveryCache || instructionDeliveryCache.get(instructionPath) === delivery)
+        ) {
+          instructionDeliveryMarkers.settleFingerprint(instructionPath, fingerprint);
+          captureDeliveryMarker(toolCallId, fingerprint);
         }
         settleDelivery(true);
         return result;

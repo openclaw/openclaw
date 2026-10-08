@@ -12,7 +12,10 @@ import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { createBundleLspToolRuntime } from "../agent-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../agent-bundle-mcp-tools.js";
 import { createOpenClawCodingToolsInternalAsync } from "../agent-tools.js";
-import { createSkillInstructionDeliveryCache } from "../agent-tools.read.js";
+import {
+  createSkillInstructionDeliveryCache,
+  createSkillInstructionDeliveryMarkers,
+} from "../agent-tools.read.js";
 import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "../auth-profiles/store-runtime.js";
 import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import { resolveProcessToolScopeKey } from "../bash-process-scope.js";
@@ -144,8 +147,13 @@ export async function buildPreparedCompactionRuntime(
       includeCodeModeSkills: false,
     });
     restoreSkillEnv = preparedSkills.restoreSkillEnv;
-    const { skillsSnapshotForRun, skillReadResources, skillUsagePaths, skillsPrompt } =
-      preparedSkills;
+    const {
+      skillsSnapshotForRun,
+      skillReadResources,
+      skillDeliveredIdentityAcquirers,
+      skillUsagePaths,
+      skillsPrompt,
+    } = preparedSkills;
 
     const sessionLabel = params.sessionKey ?? params.sessionId;
     const resolvedMessageProvider = params.messageChannel ?? params.messageProvider;
@@ -288,6 +296,7 @@ export async function buildPreparedCompactionRuntime(
       : undefined;
     params.abortSignal?.throwIfAborted();
     const skillInstructionDeliveryCache = createSkillInstructionDeliveryCache();
+    const skillInstructionDeliveryMarkers = createSkillInstructionDeliveryMarkers();
     const toolsRaw = toolsEnabled
       ? await createOpenClawCodingToolsInternalAsync(
           {
@@ -313,6 +322,8 @@ export async function buildPreparedCompactionRuntime(
             modelCompat: extractModelCompat(effectiveModel),
             skillUsagePaths,
             skillInstructionDeliveryCache,
+            skillInstructionDeliveryMarkers,
+            skillDeliveredIdentityAcquirers,
             conversationCapabilityProfile: runtimeCapabilityProfile,
             preparedModelRuntime: params.preparedModelRuntime,
             modelAuthMode: await resolveModelAuthModeAsync(

@@ -1,9 +1,11 @@
 import { Type } from "typebox";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import {
   bindAgentToolAvailability,
   getAgentToolAvailabilityBinding,
   type AgentToolAvailabilityBinding,
 } from "../agent-tool-availability.js";
+import type { SkillInstructionDeliveryMarkers } from "../agent-tools.read.js";
 import {
   readInstalledSkill,
   searchInstalledSkills,
@@ -24,12 +26,41 @@ const SkillsSearchSchema = Type.Object({
 });
 const SkillsReadSchema = Type.Object({ name: Type.String({ minLength: 1 }) });
 
-export function createInstalledSkillTools(skills: readonly InstalledSkill[]): AnyAgentTool[] {
+export function createInstalledSkillTools(
+  skills: readonly InstalledSkill[],
+  delivery?: {
+    /** Attempt-local per-invocation skill.used emission markers. */
+    skillInstructionDeliveryMarkers?: SkillInstructionDeliveryMarkers;
+  },
+): AnyAgentTool[] {
   if (skills.length === 0) {
     return [];
   }
   const readerBinding: AgentToolAvailabilityBinding = { prepare() {} };
   let readAuthority: object | undefined;
+  /** Resolve the delivery receipt for the bytes this invocation actually serves. */
+  const resolveDeliveredFingerprint = async (
+    name: string,
+    content: string,
+  ): Promise<string | undefined> => {
+    const skill = skills.find((entry) => entry.name === name);
+    if (!skill) {
+      return undefined;
+    }
+    // A live-tree entry acquires the identity of the bytes this serving read
+    // returned and attributes it only when the acquired tree contains those
+    // exact bytes. A retained or pinned entry provably serves its producer's
+    // stamped bytes, so its stamp is the receipt. Anything else omits: the
+    // serving boundary never borrows a preparation-time identity.
+    if (skill.acquireDeliveredFingerprint) {
+      try {
+        return await skill.acquireDeliveredFingerprint(content);
+      } catch {
+        return undefined;
+      }
+    }
+    return skill.attributableBundleFingerprint;
+  };
   return [
     bindAgentToolAvailability<AnyAgentTool>(
       {
@@ -72,10 +103,31 @@ export function createInstalledSkillTools(skills: readonly InstalledSkill[]): An
         description:
           "Load complete SKILL.md instructions for an exact installed skill name. Use a known name directly; search is not required first. Does not execute the skill or grant additional tool permissions.",
         parameters: SkillsReadSchema,
-        execute: async (_id, args, signal) => {
+        execute: async (toolCallId, args, signal) => {
           const params = asToolParamsRecord(args);
           const name = readToolStringParam(params, "name", { required: true });
           const instructions = await readInstalledSkill(skills, name, signal);
+          const markers = delivery?.skillInstructionDeliveryMarkers;
+          // Telemetry acquisition never holds a completed read: it is bound to
+          // this invocation's abort signal — an abort omits the receipt — and
+          // the serving read's cancellation and currency checks are revalidated
+          // after it, mirroring readInstalledSkill's own post-await gate.
+          let fingerprint: string | undefined;
+          try {
+            fingerprint = await racePromiseWithAbortSignal(
+              resolveDeliveredFingerprint(name, instructions.content),
+              signal,
+            );
+          } catch {
+            fingerprint = undefined;
+          }
+          signal?.throwIfAborted();
+          skills.find((entry) => entry.name === name)?.assertCurrent?.();
+          if (markers && fingerprint && typeof toolCallId === "string") {
+            // The receipt rides the invocation: the matcher consumes it at
+            // emission instead of borrowing a preparation-time snapshot stamp.
+            markers.captureInvocationFingerprint(toolCallId, fingerprint);
+          }
           return {
             content: [{ type: "text", text: formatSkillInstructions(instructions) }],
             details: instructions,

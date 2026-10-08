@@ -8,11 +8,13 @@ import {
   skillCommandsToExplicitSelections,
 } from "../discovery/chat-command-invocation.js";
 import { buildWorkspaceSkillCommandSpecs } from "../discovery/command-specs.js";
+import { prepareSkillBundle } from "../library/bundle.js";
 import type { Skill } from "../loading/skill-contract.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
 import { recordSkillFileHost } from "../skill-file-host.js";
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
+import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { ExplicitSkillSelection } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import {
@@ -20,6 +22,8 @@ import {
   prepareSkillResourceDelivery,
   readSkillResourceFiles,
   resolveExplicitSkillResource,
+  stampLocalSkillBundleIdentities,
+  SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS,
 } from "./resources.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
@@ -338,3 +342,263 @@ it.each([true])(
     }
   },
 );
+
+it("stamps each host's bundle identity when Gateway and workspace skills share one path", async () => {
+  const f = await fixture();
+  try {
+    const workspaceSkill = f.snapshot.resolvedSkills?.[0];
+    if (!workspaceSkill) {
+      throw new Error("missing workspace skill fixture");
+    }
+    recordSkillFileHost(workspaceSkill, "workspace");
+    const gatewaySkill = recordSkillFileHost(
+      { ...workspaceSkill, name: "zeta-gateway-guide" },
+      "gateway",
+    );
+    f.snapshot.skills.push({ name: gatewaySkill.name });
+    f.snapshot.resolvedSkills?.push(gatewaySkill);
+    f.skillResources.readSkillFiles.mockClear();
+    const stamped = await stampLocalSkillBundleIdentities({
+      snapshot: f.snapshot,
+      libraryEntries: [],
+      workspaceDir: f.gateway,
+    });
+    const gatewayEntry = stamped.snapshot?.resolvedSkills?.find(
+      (skill) => skill.name === gatewaySkill.name,
+    );
+    const workspaceEntry = stamped.snapshot?.resolvedSkills?.find(
+      (skill) => skill.name === workspaceSkill.name,
+    );
+    if (!gatewayEntry || !workspaceEntry) {
+      throw new Error("missing stamped collision fixture");
+    }
+    const gatewayIdentity = prepareSkillBundle(
+      (await readSkillResourceFiles(gatewaySkill, { allowMissingRoot: false }))!,
+    ).revision;
+    const hostBaseDir = path.join(f.host, "skills", "guide");
+    const workspaceIdentity = prepareSkillBundle(
+      (await readSkillResourceFiles(
+        { ...workspaceSkill, baseDir: hostBaseDir, filePath: path.join(hostBaseDir, "SKILL.md") },
+        { allowMissingRoot: false },
+      ))!,
+    ).revision;
+    // Same absolute path, different hosts and bytes: each entry carries its own
+    // host's identity, and the workspace bundle was hashed through the owning
+    // remote reader rather than the Gateway-local filesystem.
+    expect(gatewayEntry.bundleFingerprint).toBe(gatewayIdentity);
+    expect(workspaceEntry.bundleFingerprint).toBe(workspaceIdentity);
+    expect(workspaceEntry.bundleFingerprint).not.toBe(gatewayEntry.bundleFingerprint);
+    expect(f.skillResources.readSkillFiles).toHaveBeenCalledTimes(1);
+    // Delivery-time acquisition verifies at acquire: each entry's acquirer
+    // attributes its own host's identity only when the acquired tree contains
+    // the delivered instruction text itself, and omits on any other bytes.
+    const guideInstructions = await fs.readFile(
+      path.join(f.gateway, "skills", "guide", "SKILL.md"),
+      "utf8",
+    );
+    expect(await stamped.deliveredIdentityAcquirers.get(gatewayEntry)?.(guideInstructions)).toBe(
+      gatewayIdentity,
+    );
+    expect(await stamped.deliveredIdentityAcquirers.get(workspaceEntry)?.(guideInstructions)).toBe(
+      workspaceIdentity,
+    );
+    expect(
+      await stamped.deliveredIdentityAcquirers.get(gatewayEntry)?.("changed instructions"),
+    ).toBeUndefined();
+  } finally {
+    f.release();
+  }
+});
+
+it("reads remote-hosted bundle identities through the owning reader when the path is absent on the Gateway", async () => {
+  const f = await fixture();
+  try {
+    const hostOnlyDir = path.join(f.host, "skills", "hostonly");
+    await fs.mkdir(hostOnlyDir, { recursive: true });
+    await fs.writeFile(
+      path.join(hostOnlyDir, "SKILL.md"),
+      "---\nname: hostonly\ndescription: Host only\n---\nRemote instructions.\n",
+    );
+    await fs.writeFile(path.join(hostOnlyDir, "run.sh"), "echo remote");
+    const gatewayPath = path.join(f.gateway, "skills", "hostonly", "SKILL.md");
+    const remoteSkill = recordSkillFileHost(
+      createCanonicalFixtureSkill({
+        name: "hostonly",
+        description: "Host only",
+        filePath: gatewayPath,
+        baseDir: path.dirname(gatewayPath),
+        source: "openclaw-workspace",
+      }),
+      "workspace",
+    );
+    f.snapshot.skills.push({ name: "hostonly" });
+    f.snapshot.resolvedSkills?.push(remoteSkill);
+    f.skillResources.readSkillFiles.mockClear();
+    const stamped = await stampLocalSkillBundleIdentities({
+      snapshot: f.snapshot,
+      libraryEntries: [],
+      workspaceDir: f.gateway,
+    });
+    const entry = stamped.snapshot?.resolvedSkills?.find((skill) => skill.name === "hostonly");
+    expect(entry?.bundleFingerprint).toBe(
+      prepareSkillBundle(
+        (await readSkillResourceFiles(
+          {
+            ...remoteSkill,
+            baseDir: hostOnlyDir,
+            filePath: path.join(hostOnlyDir, "SKILL.md"),
+          },
+          { allowMissingRoot: false },
+        ))!,
+      ).revision,
+    );
+    expect(
+      f.skillResources.readSkillFiles.mock.calls.filter(([skill]) => skill.name === "hostonly"),
+    ).toHaveLength(1);
+  } finally {
+    f.release();
+  }
+});
+
+it("omits remote-hosted identities without failing when the owning reader is unavailable", async () => {
+  const gateway = temps.make("fingerprint-reader-unavailable-");
+  await fs.mkdir(path.join(gateway, "skills", "guide"), { recursive: true });
+  await fs.writeFile(
+    path.join(gateway, "skills", "guide", "SKILL.md"),
+    "---\nname: guide\ndescription: Guide\n---\nLocal guide.\n",
+  );
+  const release = registerAgentWorkspaceAccess(gateway, {
+    bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
+    loadSkills: async () => ({
+      entries: [],
+      executionEntries: [],
+      runtime: { platform: process.platform, bins: [] },
+    }),
+  });
+  try {
+    const snapshot = await buildSkillSnapshot(gateway, {
+      entries: loadWorkspaceSkills(gateway, { workspaceOnly: true }),
+    });
+    const remote = recordSkillFileHost({ ...snapshot.resolvedSkills![0]! }, "workspace");
+    snapshot.resolvedSkills![0] = remote;
+    // Resource delivery fails hard here (WorkspaceAccessUnavailableError); the
+    // telemetry-only producer degrades to omit instead.
+    const stamped = await stampLocalSkillBundleIdentities({
+      snapshot,
+      libraryEntries: [],
+      workspaceDir: gateway,
+    });
+    const entry = stamped.snapshot?.resolvedSkills?.[0];
+    expect(entry?.bundleFingerprint).toBeUndefined();
+    // The owning reader is unavailable, so no delivered text can be proven to
+    // come from the acquired tree: the acquirer omits instead of guessing.
+    const guideText = await fs.readFile(path.join(gateway, "skills", "guide", "SKILL.md"), "utf8");
+    expect(await stamped.deliveredIdentityAcquirers.get(entry!)?.(guideText)).toBeUndefined();
+    expect(await stamped.deliveredIdentityAcquirers.get(entry!)?.(undefined)).toBeUndefined();
+  } finally {
+    release();
+  }
+});
+
+it("keeps a workspace entry acquirable when a library selection shares its name", async () => {
+  const f = await fixture();
+  try {
+    const workspaceSkill = f.snapshot.resolvedSkills?.[0];
+    if (!workspaceSkill) {
+      throw new Error("missing workspace skill fixture");
+    }
+    recordSkillFileHost(workspaceSkill, "workspace");
+    const snapshot = {
+      ...f.snapshot,
+      librarySelections: [
+        {
+          skillId: "lib-guide",
+          revision: "rev-1",
+          name: workspaceSkill.name,
+          ownerProfileId: null,
+        },
+      ],
+    };
+    f.skillResources.readSkillFiles.mockClear();
+    const stamped = await stampLocalSkillBundleIdentities({
+      snapshot,
+      libraryEntries: [],
+      workspaceDir: f.gateway,
+    });
+    const entry = stamped.snapshot?.resolvedSkills?.find(
+      (skill) => skill.name === workspaceSkill.name,
+    );
+    if (!entry) {
+      throw new Error("missing stamped workspace entry");
+    }
+    // A same-name library selection is no pin: the workspace entry keeps its
+    // delivery-time acquisition and stamps through its owning workspace
+    // reader, so the served tree's identity can never go stale behind the
+    // pin's name.
+    const hostBaseDir = path.join(f.host, "skills", "guide");
+    const hostIdentity = prepareSkillBundle(
+      (await readSkillResourceFiles(
+        { ...workspaceSkill, baseDir: hostBaseDir, filePath: path.join(hostBaseDir, "SKILL.md") },
+        { allowMissingRoot: false },
+      ))!,
+    ).revision;
+    expect(stamped.deliveredIdentityAcquirers.get(entry)).toBeDefined();
+    expect(entry.bundleFingerprint).toBe(hostIdentity);
+    expect(f.skillResources.readSkillFiles).toHaveBeenCalled();
+    // The armed acquirer attributes the workspace tree's own bytes and omits
+    // any other delivered text.
+    const guideText = await fs.readFile(path.join(hostBaseDir, "SKILL.md"), "utf8");
+    expect(await stamped.deliveredIdentityAcquirers.get(entry)?.(guideText)).toBe(hostIdentity);
+    expect(
+      await stamped.deliveredIdentityAcquirers.get(entry)?.("changed instructions"),
+    ).toBeUndefined();
+  } finally {
+    f.release();
+  }
+});
+
+it("omits an identity whose resource-reader walk cannot be established promptly", async () => {
+  const f = await fixture();
+  try {
+    const workspaceSkill = f.snapshot.resolvedSkills?.[0];
+    if (!workspaceSkill) {
+      throw new Error("missing workspace skill fixture");
+    }
+    recordSkillFileHost(workspaceSkill, "workspace");
+    // The owning reader's tree walk never settles: preparation and delivery
+    // acquisitions observe the resource-reader deadline and omit instead of
+    // holding up the turn.
+    f.skillResources.readSkillFiles.mockImplementationOnce(() => new Promise<never>(() => {}));
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const pending = stampLocalSkillBundleIdentities({
+        snapshot: f.snapshot,
+        libraryEntries: [],
+        workspaceDir: f.gateway,
+      });
+      await vi.advanceTimersByTimeAsync(SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS + 1);
+      const stamped = await pending;
+      const entry = stamped.snapshot?.resolvedSkills?.find(
+        (skill) => skill.name === workspaceSkill.name,
+      );
+      if (!entry) {
+        throw new Error("missing stamped workspace entry");
+      }
+      // The stale identity is omitted, never guessed: the entry ships
+      // unstamped and still arms delivery-time acquisition for its live tree.
+      expect(entry.bundleFingerprint).toBeUndefined();
+      expect(stamped.deliveredIdentityAcquirers.get(entry)).toBeDefined();
+      // The armed acquirer observes the same deadline: a second hung walk
+      // omits the delivered identity instead of stalling the settlement.
+      f.skillResources.readSkillFiles.mockImplementationOnce(() => new Promise<never>(() => {}));
+      const guideText = await fs.readFile(path.join(f.host, "skills", "guide", "SKILL.md"), "utf8");
+      const acquired = stamped.deliveredIdentityAcquirers.get(entry)!(guideText);
+      await vi.advanceTimersByTimeAsync(SKILL_BUNDLE_IDENTITY_ACQUISITION_TIMEOUT_MS + 1);
+      expect(await acquired).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  } finally {
+    f.release();
+  }
+});

@@ -531,8 +531,16 @@ export function wrapToolWithBeforeToolCallHook(
           toolName: normalizedToolName,
           toolParams: executeParams,
           ctx,
+          toolCallId,
         });
-        if (skillMatch && terminalDiagnostic.type === "tool.execution.completed") {
+        // An aborted invocation's completed result may never reach the model,
+        // so it never records skill use — the same cancellation boundary as
+        // the progress gate above.
+        if (
+          skillMatch &&
+          terminalDiagnostic.type === "tool.execution.completed" &&
+          !signal?.aborted
+        ) {
           recordSkillUsed({ ctx, match: skillMatch, toolName: normalizedToolName, toolCallId });
         }
         if (hookOptions.emitDiagnostics) {

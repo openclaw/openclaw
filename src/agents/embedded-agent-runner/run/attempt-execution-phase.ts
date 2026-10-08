@@ -50,6 +50,7 @@ export async function runEmbeddedAttemptExecutionPhase(
   activeSession[agentSessionSetContextReplacementHook]((tokensAfter) => {
     declarePromptHistoryRewrite({ ...attempt, reason: "compaction" });
     toolBase.skillInstructionDeliveryCache.clear();
+    toolBase.skillInstructionDeliveryMarkers.clear();
     attempt.onContextAccountingEvent?.({ kind: "compaction", tokensAfter });
   }, assertActive);
   let repairedRejectedProviderReplay = false;

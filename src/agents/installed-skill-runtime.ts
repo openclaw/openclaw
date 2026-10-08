@@ -5,6 +5,7 @@ import {
 import { resolveSkillFileHost } from "../skills/skill-file-host.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { resolveSkillReadPath } from "../skills/workspace-skill-read-path.js";
+import type { SkillDeliveredIdentityAcquirers } from "./agent-tools.read.js";
 import { resolveCodeModeSkills, type CodeModeSkillReader } from "./code-mode-skills.js";
 import { MAX_SKILL_INSTRUCTION_BYTES, type InstalledSkill } from "./installed-skill-catalog.js";
 import type { SandboxContext } from "./sandbox/types.js";
@@ -16,6 +17,11 @@ export function prepareInstalledSkillCatalog(params: {
   workspaceDir: string;
   sandbox?: SandboxContext | null;
   assertCurrent?: () => void;
+  /**
+   * Per-preparation delivery identity acquirers keyed by the snapshot entry
+   * they arm; the ordinary-local producer arms them while active tracing runs.
+   */
+  deliveredIdentityAcquirers?: SkillDeliveredIdentityAcquirers;
 }): InstalledSkill[] {
   const { snapshot, sandbox } = params;
   if (!snapshot) {
@@ -86,6 +92,21 @@ export function prepareInstalledSkillCatalog(params: {
         // This resource owner supports whole reads only. Its document bridge
         // is not a substitute for bounded skill-resource authority.
       }
+      // A pinned revision serves its bytes from the immutable revision-keyed
+      // library store, and an entry carrying retained identified content
+      // (remote transfers) serves it verbatim: both provably serve the bytes
+      // their producer stamped, so those stamps are attributable at delivery.
+      // Every other entry serves a live tree and acquires at delivery instead.
+      // Pins are identified by their exclusive library source, never by name:
+      // a workspace skill can share a selection's name and still serve a
+      // mutable tree that is no pin.
+      const pinned = skill.source === "openclaw-library";
+      const attributableBundleFingerprint =
+        !sandbox?.enabled &&
+        skill.bundleFingerprint &&
+        (pinned || typeof skill.readContent === "string")
+          ? skill.bundleFingerprint
+          : undefined;
       return {
         name: skill.name,
         promptListed: promptListed.has(skill.name),
@@ -99,6 +120,11 @@ export function prepareInstalledSkillCatalog(params: {
         reader,
         assertCurrent: params.assertCurrent,
         readSearchContent,
+        // The skills_read route carries what it serves into its delivery
+        // receipt: a live-tree entry acquires the identity of the bytes the
+        // invocation's reader actually serves, verified against that tree.
+        acquireDeliveredFingerprint: params.deliveredIdentityAcquirers?.get(skill),
+        attributableBundleFingerprint,
       };
     });
 }

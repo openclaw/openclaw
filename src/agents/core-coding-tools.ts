@@ -21,6 +21,8 @@ import {
   createSandboxedWriteTool,
   resolveAdaptiveReadMaxBytes,
   type SkillInstructionDeliveryCache,
+  type SkillInstructionDeliveryMarkers,
+  type SkillDeliveredIdentityAcquirers,
   wrapReadToolWithSkillContent,
   wrapToolWorkspaceRootGuardWithOptions,
   wrapSandboxFileToolPath,
@@ -187,6 +189,8 @@ type CoreCodingToolsOptions = {
   skillReadResources?: SkillSnapshot["resolvedSkills"];
   skillInstructionPaths?: readonly string[];
   skillInstructionDeliveryCache?: SkillInstructionDeliveryCache;
+  skillInstructionDeliveryMarkers?: SkillInstructionDeliveryMarkers;
+  skillDeliveredIdentityAcquirers?: SkillDeliveredIdentityAcquirers;
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
   modelHasVision?: boolean;
@@ -353,6 +357,8 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
         skillReadResources?.map((skill) => ({
           filePath: resolveSkillReadPath(skill),
           readContent: skill.readContent,
+          bundleFingerprint: skill.bundleFingerprint,
+          acquireDeliveredFingerprint: options.skillDeliveredIdentityAcquirers?.get(skill),
         })),
         {
           modelContextWindowTokens: options.modelContextWindowTokens,
@@ -361,6 +367,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
           containerWorkdir: sandbox?.containerWorkdir,
           instructionPaths: options.skillInstructionPaths,
           instructionDeliveryCache: options.skillInstructionDeliveryCache,
+          instructionDeliveryMarkers: options.skillInstructionDeliveryMarkers,
         },
       ),
     );
