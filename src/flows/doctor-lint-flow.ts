@@ -1,7 +1,7 @@
 import { formatCliCommand } from "../cli/command-format.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
-import { readStateSchemaMigrationVersion } from "../state/openclaw-state-db-schema-version.js";
+import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import { OpenClawStateLeaseAcquisitionError } from "../state/openclaw-state-lease-error.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { listHealthChecks } from "./health-check-registry.js";
@@ -21,7 +21,7 @@ export const stateSchemaHealthCheck: HealthCheck = {
   description: "Shared state migrations require explicit repair.",
   async detect(ctx) {
     const state = withExistingOpenClawStateDatabaseReadOnly(
-      ({ db, path }) => ({ version: readStateSchemaMigrationVersion(db), path }),
+      ({ db, path }) => ({ version: readStateSchemaContentVersion(db), path }),
       { env: ctx.env },
     );
     if (!state || state.version >= OPENCLAW_STATE_SCHEMA_VERSION) {
