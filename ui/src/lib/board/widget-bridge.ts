@@ -166,28 +166,21 @@ export class BoardWidgetBridgeController {
       }
       case "state.emit":
         return await this.emitState(params.payload);
-      case "data.read": {
-        const bindingId = requiredString(params, "bindingId");
-        const bindingParams = params.params;
-        if (bindingParams !== undefined && !isRecord(bindingParams)) {
-          throw new Error("widget data binding params are invalid");
-        }
-        return await this.client.request("board.data.read", {
-          ticket: this.ticket,
-          bindingId,
-          ...(bindingParams ? { params: bindingParams } : {}),
-        });
-      }
+      case "data.read":
       case "action.run": {
-        const action = requiredString(params, "action");
-        const actionParams = params.params;
-        if (actionParams !== undefined && !isRecord(actionParams)) {
-          throw new Error("widget action params are invalid");
+        const read = request.method === "data.read";
+        const key = read ? "bindingId" : "action";
+        const target = requiredString(params, key);
+        const callParams = params.params;
+        if (callParams !== undefined && !isRecord(callParams)) {
+          throw new Error(
+            read ? "widget data binding params are invalid" : "widget action params are invalid",
+          );
         }
-        return await this.client.request("board.action", {
+        return await this.client.request(read ? "board.data.read" : "board.action", {
           ticket: this.ticket,
-          action,
-          params: actionParams ?? {},
+          [key]: target,
+          ...(read && callParams === undefined ? {} : { params: callParams ?? {} }),
         });
       }
       case "cron.trigger":

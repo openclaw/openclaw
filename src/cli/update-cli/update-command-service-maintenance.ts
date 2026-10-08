@@ -43,6 +43,7 @@ import {
   assertGatewayServiceAdmissionUnchanged,
   GATEWAY_SERVICE_INSPECTION_WARNING,
   GatewayServiceUpdateOwnershipError,
+  isUpdateServiceManagerAvailable,
   observedSystemdManagerUid,
   readGatewayServiceStateForUpdate,
   resolveGatewayServiceManagementBlockMessageForUpdate,
@@ -362,16 +363,10 @@ async function stopManagedServiceBeforeMutableUpdate(
     assertCurrent();
     if (err instanceof GatewayServiceUpdateOwnershipError && service) {
       const inspectedService = service;
-      const available = await withCommandProcessScope(() =>
-        inspectedService.isLoaded({ env: serviceEnv, timeoutMs: params.timeoutMs }),
-      ).then(
-        () => true,
-        (error: unknown) => {
-          if (hasCommandProcessCleanupError(error)) {
-            throw error;
-          }
-          return false;
-        },
+      const available = await isUpdateServiceManagerAvailable(
+        withCommandProcessScope(() =>
+          inspectedService.isLoaded({ env: serviceEnv, timeoutMs: params.timeoutMs }),
+        ),
       );
       assertCurrent();
       if (available) {

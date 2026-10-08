@@ -377,6 +377,32 @@ export const getRuntimeAuthProfileStoreSnapshot: (
   agentDir?: string,
 ) => AuthProfileStore | undefined = getRuntimeAuthProfileStoreSnapshotCore;
 
+type RuntimeSnapshotRevision = {
+  databasePath: string;
+  agentDir: string;
+  runtimeRevision: number;
+};
+
+function snapshotRevisions(entries: readonly RuntimeSnapshotRevision[]): RuntimeSnapshotRevision[] {
+  return entries.map(({ databasePath, agentDir, runtimeRevision }) => ({
+    databasePath,
+    agentDir,
+    runtimeRevision,
+  }));
+}
+
+function indexSnapshots<T extends { databasePath: string }>(
+  entries: readonly T[] | undefined,
+): Map<string, T> {
+  return new Map((entries ?? []).map((entry) => [entry.databasePath, entry]));
+}
+
+function captureSnapshotRevision(entry: OwnedRuntimeAuthProfileStoreSnapshotEntry) {
+  return Object.assign(entry, {
+    runtimeRevision: getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(entry.databasePath),
+  });
+}
+
 type AuthProfileStorePersistenceSnapshot = {
   owner: PreparedAuthProfileStoreOwner;
   credentialsRaw: unknown;
@@ -389,16 +415,8 @@ type AuthProfileStorePersistenceSnapshot = {
   derivedRuntimeStores?: Array<
     OwnedRuntimeAuthProfileStoreSnapshotEntry & { runtimeRevision: number }
   >;
-  derivedRuntimeRevisionsAtSaveEdge?: Array<{
-    databasePath: string;
-    agentDir: string;
-    runtimeRevision: number;
-  }>;
-  derivedRuntimeRevisionsBeforePublication?: Array<{
-    databasePath: string;
-    agentDir: string;
-    runtimeRevision: number;
-  }>;
+  derivedRuntimeRevisionsAtSaveEdge?: RuntimeSnapshotRevision[];
+  derivedRuntimeRevisionsBeforePublication?: RuntimeSnapshotRevision[];
 };
 
 type CommittedAuthProfileStoreSave = {
@@ -433,13 +451,7 @@ function captureRuntimeAuthProfileStorePersistenceSnapshot(owner: AuthProfileSto
     runtimeEntry: getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath(capturedAuthPath),
     derivedRuntimeStores:
       capturedAuthPath === mainAuthPath
-        ? listRuntimeAuthProfileStoreSnapshotsForSharedOwner(owner).map((entry) =>
-            Object.assign(entry, {
-              runtimeRevision: getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(
-                entry.databasePath,
-              ),
-            }),
-          )
+        ? listRuntimeAuthProfileStoreSnapshotsForSharedOwner(owner).map(captureSnapshotRevision)
         : [],
   };
 }
@@ -463,13 +475,7 @@ function recordRuntimeAuthProfileStorePublicationEdge(
   runtime: ReturnType<typeof captureRuntimeAuthProfileStorePersistenceSnapshot>,
 ): void {
   owned.runtimeRevisionBeforePublication = runtime.runtimeRevision;
-  owned.derivedRuntimeRevisionsBeforePublication = runtime.derivedRuntimeStores.map(
-    ({ databasePath, agentDir, runtimeRevision }) => ({
-      databasePath,
-      agentDir,
-      runtimeRevision,
-    }),
-  );
+  owned.derivedRuntimeRevisionsBeforePublication = snapshotRevisions(runtime.derivedRuntimeStores);
 }
 
 function replaceRuntimeAuthProfileStoreSnapshot(
@@ -631,9 +637,7 @@ function reconcileRuntimeAuthProfileStorePersistenceSnapshot(params: {
 
   const restoredAuthPath = params.owner.databasePath;
   const mainAuthPath = params.owner.sharedDatabasePath;
-  const currentRuntimeStores = new Map(
-    params.currentRuntimeStores.map((entry) => [entry.databasePath, entry]),
-  );
+  const currentRuntimeStores = indexSnapshots(params.currentRuntimeStores);
   let converged = reconcileOne(
     restoredAuthPath,
     params.agentDir,
@@ -649,23 +653,11 @@ function reconcileRuntimeAuthProfileStorePersistenceSnapshot(params: {
   if (restoredAuthPath !== mainAuthPath) {
     return converged;
   }
-  const snapshotDerived = new Map(
-    (params.snapshot.derivedRuntimeStores ?? []).map((entry) => [entry.databasePath, entry]),
-  );
-  const ownedDerived = new Map(
-    (params.owned.derivedRuntimeStores ?? []).map((entry) => [entry.databasePath, entry]),
-  );
-  const saveEdgeDerivedRevisions = new Map(
-    (params.owned.derivedRuntimeRevisionsAtSaveEdge ?? []).map((entry) => [
-      entry.databasePath,
-      entry.runtimeRevision,
-    ]),
-  );
-  const publicationEdgeDerivedRevisions = new Map(
-    (params.owned.derivedRuntimeRevisionsBeforePublication ?? []).map((entry) => [
-      entry.databasePath,
-      entry.runtimeRevision,
-    ]),
+  const snapshotDerived = indexSnapshots(params.snapshot.derivedRuntimeStores);
+  const ownedDerived = indexSnapshots(params.owned.derivedRuntimeStores);
+  const saveEdgeDerivedRevisions = indexSnapshots(params.owned.derivedRuntimeRevisionsAtSaveEdge);
+  const publicationEdgeDerivedRevisions = indexSnapshots(
+    params.owned.derivedRuntimeRevisionsBeforePublication,
   );
   for (const [pathname, currentEntry] of currentRuntimeStores) {
     if (pathname === mainAuthPath) {
@@ -679,8 +671,8 @@ function reconcileRuntimeAuthProfileStorePersistenceSnapshot(params: {
         currentEntry.agentDir,
         snapshotEntry,
         snapshotEntry?.runtimeRevision,
-        saveEdgeDerivedRevisions.get(pathname),
-        publicationEdgeDerivedRevisions.get(pathname),
+        saveEdgeDerivedRevisions.get(pathname)?.runtimeRevision,
+        publicationEdgeDerivedRevisions.get(pathname)?.runtimeRevision,
         ownedEntry,
         ownedEntry?.runtimeRevision,
         currentEntry,
@@ -756,13 +748,7 @@ export function restoreAuthProfileStorePersistenceSnapshot(
             ...(owner.databasePath === owner.sharedDatabasePath
               ? listRuntimeAuthProfileStoreSnapshotsForSharedOwner(owner)
               : []),
-          ].map((entry) =>
-            Object.assign(entry, {
-              runtimeRevision: getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(
-                entry.databasePath,
-              ),
-            }),
-          );
+          ].map(captureSnapshotRevision);
           const currentRuntimePath = owner.databasePath;
           const currentRuntimeRevision =
             getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(currentRuntimePath);
@@ -1559,12 +1545,8 @@ export function createAuthProfileStoreRuntime(
           throw new Error("auth profile store changed after secrets apply captured it");
         }
         const runtimeAtSaveEdge = captureRuntimeAuthProfileStorePersistenceSnapshot(owner);
-        const derivedRuntimeRevisionsAtSaveEdge = runtimeAtSaveEdge.derivedRuntimeStores.map(
-          ({ databasePath, agentDir: derivedAgentDir, runtimeRevision }) => ({
-            databasePath,
-            agentDir: derivedAgentDir,
-            runtimeRevision,
-          }),
+        const derivedRuntimeRevisionsAtSaveEdge = snapshotRevisions(
+          runtimeAtSaveEdge.derivedRuntimeStores,
         );
         const committedPublication = saveAuthProfileStoreInTransaction(
           params.store,

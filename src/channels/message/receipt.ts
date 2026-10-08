@@ -93,45 +93,35 @@ export function createMessageReceiptFromOutboundResults(params: {
   const aggregateThreadId =
     providerThreadIds.length > 1 ? undefined : (providerThreadIds[0] ?? requestedThreadId);
   const parts = sentResults.flatMap((result, resultIndex) => {
-    if (result.receipt) {
-      const receiptThreadId = normalizeOptionalString(result.receipt.threadId) ?? requestedThreadId;
-      if (result.receipt.parts.length === 0) {
-        return result.receipt.platformMessageIds.map((platformMessageId, partIndex) => ({
-          platformMessageId,
-          kind: params.kind ?? "unknown",
-          index: partIndex,
-          ...(receiptThreadId ? { threadId: receiptThreadId } : {}),
-          ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-        }));
-      }
+    const receipt = result.receipt;
+    const threadId = normalizeOptionalString(receipt?.threadId) ?? requestedThreadId;
+    if (receipt?.parts.length) {
       // Mixed adapter-supplied reply metadata is authoritative: missing entries mean
       // those physical messages were not native replies and must not inherit the route reply.
-      const hasPartReplyMetadata = result.receipt.parts.some((part) => part.replyToId);
-      return result.receipt.parts.map((part, partIndex) => ({
+      const hasPartReplyMetadata = receipt.parts.some((part) => part.replyToId);
+      return receipt.parts.map((part, partIndex) => ({
         ...part,
         index: part.index ?? partIndex,
-        ...(normalizeOptionalString(part.threadId) || !receiptThreadId
-          ? {}
-          : { threadId: receiptThreadId }),
+        ...(normalizeOptionalString(part.threadId) || !threadId ? {} : { threadId }),
         ...(part.replyToId || !params.replyToId || hasPartReplyMetadata
           ? {}
           : { replyToId: params.replyToId }),
       }));
     }
-    const platformMessageId = resolveReceiptSourceId(result);
-    if (!platformMessageId) {
-      return [];
-    }
-    return [
-      {
-        platformMessageId,
-        kind: params.kind ?? "unknown",
-        index: resultIndex,
-        ...(requestedThreadId ? { threadId: requestedThreadId } : {}),
-        ...(params.replyToId ? { replyToId: params.replyToId } : {}),
-        raw: result,
-      },
-    ];
+    const sourceId = receipt ? undefined : resolveReceiptSourceId(result);
+    const ids = receipt ? receipt.platformMessageIds : sourceId ? [sourceId] : [];
+    return ids.map((platformMessageId, partIndex) =>
+      Object.assign(
+        {
+          platformMessageId,
+          kind: params.kind ?? "unknown",
+          index: receipt ? partIndex : resultIndex,
+        },
+        threadId ? { threadId } : {},
+        params.replyToId ? { replyToId: params.replyToId } : {},
+        receipt ? {} : { raw: result },
+      ),
+    );
   });
   const platformMessageIds = normalizeUniqueTrimmedStringList(
     sentResults.flatMap((result) =>

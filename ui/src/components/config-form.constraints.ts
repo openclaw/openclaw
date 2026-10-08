@@ -117,6 +117,28 @@ function effectiveNumericBound(schemas: JsonSchema[], direction: "lower" | "uppe
   return { value, exclusive };
 }
 
+function alignedNumericBound(
+  bound: ReturnType<typeof effectiveNumericBound>,
+  step: number | undefined,
+  direction: "ceil" | "floor",
+): number | undefined {
+  const { value, exclusive } = bound;
+  if (value === undefined || !step) {
+    return value;
+  }
+  const aligned = alignToStep(value, step, direction);
+  if (!exclusive || (direction === "ceil" ? aligned > value : aligned < value)) {
+    return aligned;
+  }
+  const exclusiveAligned = normalizePrecision(
+    aligned + (direction === "ceil" ? step : -step),
+    step,
+  );
+  return direction === "ceil"
+    ? Math.max(aligned, exclusiveAligned)
+    : Math.min(aligned, exclusiveAligned);
+}
+
 function combinedMultipleOf(schemas: JsonSchema[]): number | undefined {
   let numerator: bigint | undefined;
   let denominator: bigint | undefined;
@@ -372,41 +394,11 @@ export function numericInputConstraints(schema: JsonSchema): NumericInputConstra
       : multipleOf;
   const lowerBound = effectiveNumericBound(schemas, "lower");
   const upperBound = effectiveNumericBound(schemas, "upper");
-  const exclusiveMinimum = lowerBound.exclusive ? lowerBound.value : undefined;
-  const exclusiveMaximum = upperBound.exclusive ? upperBound.value : undefined;
-
-  let min = lowerBound.value;
-  let max = upperBound.value;
-  if (numericStep) {
-    if (min !== undefined) {
-      min = alignToStep(min, numericStep, "ceil");
-    }
-    if (max !== undefined) {
-      max = alignToStep(max, numericStep, "floor");
-    }
-    if (exclusiveMinimum !== undefined) {
-      const aligned = alignToStep(exclusiveMinimum, numericStep, "ceil");
-      const exclusiveAligned =
-        aligned <= exclusiveMinimum
-          ? normalizePrecision(aligned + numericStep, numericStep)
-          : aligned;
-      min = min === undefined ? exclusiveAligned : Math.max(min, exclusiveAligned);
-    }
-    if (exclusiveMaximum !== undefined) {
-      const aligned = alignToStep(exclusiveMaximum, numericStep, "floor");
-      const exclusiveAligned =
-        aligned >= exclusiveMaximum
-          ? normalizePrecision(aligned - numericStep, numericStep)
-          : aligned;
-      max = max === undefined ? exclusiveAligned : Math.min(max, exclusiveAligned);
-    }
-  }
-
   return {
-    min,
-    max,
-    exclusiveMin: exclusiveMinimum,
-    exclusiveMax: exclusiveMaximum,
+    min: alignedNumericBound(lowerBound, numericStep, "ceil"),
+    max: alignedNumericBound(upperBound, numericStep, "floor"),
+    exclusiveMin: lowerBound.exclusive ? lowerBound.value : undefined,
+    exclusiveMax: upperBound.exclusive ? upperBound.value : undefined,
     step: numericStep ?? "any",
   };
 }

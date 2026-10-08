@@ -4,8 +4,10 @@ import type { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import packageJson from "../../package.json" with { type: "json" };
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { SQLITE_STAGING_TOKEN_FILES } from "../infra/sqlite-staging-token.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import {
@@ -62,6 +64,60 @@ describe("OpenClaw database schema preflight", () => {
       state: OPENCLAW_STATE_SCHEMA_VERSION,
       agent: OPENCLAW_AGENT_SCHEMA_VERSION,
     });
+  });
+
+  it("keeps restart discovery off the caller thread and observes changed retained-deletion facts", async () => {
+    const { env, statePath } = createState();
+    const agent = openOpenClawAgentDatabase({ agentId: "retained", env });
+    closeDatabases();
+    withDatabase(agent.path, (database) => {
+      database.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION + 1};`);
+    });
+    withDatabase(statePath, (database) => {
+      database
+        .prepare(`INSERT INTO agent_deletion_journal
+        (agent_id, agent_dir, workspace_dir, sessions_dir, database_paths_json,
+          created_at, cleanup_completed, delete_files)
+        VALUES ('retained', ?, '', '', ?, 1, 1, 0)`)
+        .run(path.dirname(agent.path), JSON.stringify([agent.path]));
+    });
+    for (const retained of [true, false]) {
+      if (!retained) {
+        withDatabase(statePath, (database) => {
+          database.exec("DELETE FROM agent_deletion_journal WHERE agent_id = 'retained';");
+        });
+      }
+      const callerSql: string[] = [];
+      const observer = observeHostDataSql((sql, database) => {
+        // Snapshot staging locks retain their native owner; payload inspection must move.
+        if (
+          database &&
+          path.basename(database.location() ?? "") !== SQLITE_STAGING_TOKEN_FILES[0]
+        ) {
+          callerSql.push(sql);
+        }
+      });
+      try {
+        const readiness = assertOpenClawDatabasesReady({ env, operation: "gateway-restart" });
+        if (retained) {
+          await expect(readiness).resolves.toBeUndefined();
+        } else {
+          await expect(readiness).rejects.toMatchObject({
+            incompatibleDatabases: [
+              {
+                kind: "agent",
+                agentId: "retained",
+                path: agent.path,
+                foundVersion: OPENCLAW_AGENT_SCHEMA_VERSION + 1,
+              },
+            ],
+          });
+        }
+        expect(callerSql).toEqual([]);
+      } finally {
+        observer.restore();
+      }
+    }
   });
 
   function createReleasedStateDatabase() {
@@ -192,6 +248,30 @@ describe("OpenClaw database schema preflight", () => {
         }),
       ]);
       expect(result.indeterminate).toEqual(
+        damaged
+          ? [
+              expect.objectContaining({
+                kind: "state",
+                reason: expect.stringContaining("column definitions differ for worktrees"),
+              }),
+            ]
+          : [],
+      );
+      const olderTarget = await preflightOpenClawDatabaseSchemas(
+        {
+          env,
+          verifyCurrentSchemaShape: true,
+          supportedVersions: {
+            state: OPENCLAW_STATE_SCHEMA_VERSION - 2,
+            agent: OPENCLAW_AGENT_SCHEMA_VERSION,
+          },
+        },
+        "runtime",
+      );
+      expect(olderTarget.incompatible).toEqual([
+        expect.objectContaining({ foundVersion: OPENCLAW_STATE_SCHEMA_VERSION - 1 }),
+      ]);
+      expect(olderTarget.indeterminate).toEqual(
         damaged
           ? [
               expect.objectContaining({

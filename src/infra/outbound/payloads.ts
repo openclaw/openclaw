@@ -76,23 +76,15 @@ function appendBlockMirrorText(lines: string[], blocks: readonly MirrorTextBlock
   for (const block of blocks) {
     if ((block.type === "text" || block.type === "context") && block.text.trim()) {
       lines.push(block.text.trim());
-      continue;
-    }
-    if (block.type === "buttons") {
+    } else if (block.type === "buttons") {
       for (const button of block.buttons) {
         lines.push(button.label);
       }
-      continue;
-    }
-    if (block.type === "chart") {
+    } else if (block.type === "chart") {
       lines.push(renderMessagePresentationChartFallbackText(block));
-      continue;
-    }
-    if (block.type === "table") {
+    } else if (block.type === "table") {
       lines.push(renderMessagePresentationTableFallbackText(block));
-      continue;
-    }
-    if (block.type === "select") {
+    } else if (block.type === "select") {
       if (block.placeholder) {
         lines.push(block.placeholder);
       }

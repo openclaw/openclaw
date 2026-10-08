@@ -6,6 +6,7 @@ import {
 } from "./kysely-sync-cache-state.js";
 import {
   getSqlitePinnedReadSnapshot,
+  readSqliteVersionObservation,
   runSqlitePinnedReadSnapshotSync,
 } from "./sqlite-pinned-read-snapshot.js";
 import { findSqlCharacter } from "./sqlite-schema-sql.js";
@@ -557,7 +558,19 @@ export function readSqliteDataVersion(database: DatabaseSync): number {
 function readChangedSqliteSchemaMarkers(
   database: DatabaseSync,
   facts: SqliteSchemaFacts,
+  observation?: ReturnType<typeof readSqliteVersionObservation>,
 ): SqliteSchemaMarkers | undefined {
+  if (observation) {
+    const matches =
+      facts.schemaVersion === observation.schemaVersion &&
+      facts.userVersion === observation.userVersion;
+    return matches
+      ? undefined
+      : {
+          schemaVersion: Number(observation.schemaVersion),
+          userVersion: Number(observation.userVersion),
+        };
+  }
   return runSqlitePinnedReadSnapshotSync(database, (schemaVersion) => {
     const userVersion = executeWithCachedStatement(database, "PRAGMA user_version", [], (s) =>
       s.get(),
@@ -586,12 +599,17 @@ export function readSqliteCacheDataVersion(
   ) {
     return owner.readDataVersion;
   }
-  const dataVersion = readSqliteDataVersion(database);
+  const observation =
+    owner?.facts && owner.dataVersion !== undefined && !owner.authorizerActive
+      ? readSqliteVersionObservation(database, owner.dataVersion)
+      : undefined;
+  const dataVersion = observation?.dataVersion ?? readSqliteDataVersion(database);
   if (owner) {
+    owner.observedDataVersion = dataVersion;
     if (owner.dataVersion !== dataVersion) {
       const facts = owner.facts;
       // Data commits preserve schema-derived caches; compare both markers in one snapshot.
-      const changed = facts && readChangedSqliteSchemaMarkers(database, facts);
+      const changed = facts && readChangedSqliteSchemaMarkers(database, facts, observation);
       if (!facts || changed) {
         if (changed) {
           notifySchemaMutation(owner, changed);
@@ -626,15 +644,18 @@ export function trackSqliteSchema(database: DatabaseSync, native: NativeSqlite):
   }
 }
 
-/** Only database admission opts a connection into retained schema facts. */
-export function admitSqliteSchema(database: DatabaseSync): void {
+/** Admission retains schema facts; its header validator must stay synchronous and read-free. */
+export function admitSqliteSchema(
+  database: DatabaseSync,
+  validateUserVersion?: (userVersion: number) => void,
+): void {
   const owner = owners.get(database);
   if (!owner) {
     throw new Error("SQLite schema admission requires a connection tracked from native open");
   }
   owner.admitted = true;
   readSqliteCacheDataVersion(database);
-  getAdmittedSqliteSchemaFacts(database);
+  getAdmittedSqliteSchemaFacts(database, validateUserVersion);
 }
 
 /** A sibling's facts require this connection's committed schema markers, never its data_version. */
@@ -692,6 +713,7 @@ function observeSchemaLifetime(
 /** Consume admitted facts; operation admission owns foreign-commit freshness. */
 export function getAdmittedSqliteSchemaFacts(
   database: DatabaseSync,
+  validateUserVersion?: (userVersion: number) => void,
 ): SqliteSchemaFacts | undefined {
   const owner = owners.get(database);
   // Dynamic authorizer decisions cannot be represented by a cached schema result.
@@ -706,9 +728,12 @@ export function getAdmittedSqliteSchemaFacts(
     // sibling publications observed inside a transaction cannot outlive that snapshot.
     owner.transactionalFacts ||= database.isTransaction && (owner.readDepth === 0 || scopeChanged);
     owner.facts = runSqlitePinnedReadSnapshotSync(database, (schemaVersion) => {
-      const userVersion = executeWithCachedStatement(database, "PRAGMA user_version", [], (s) =>
+      const version = executeWithCachedStatement(database, "PRAGMA user_version", [], (s) =>
         s.get(),
       );
+      const userVersion = Number(version?.user_version ?? 0);
+      // Validate the captured header before catalog errors can mask its refusal.
+      validateUserVersion?.(userVersion);
       const objects = executeWithCachedStatement(
         database,
         "SELECT type, name, tbl_name, sql FROM main.sqlite_schema WHERE type IN ('table', 'index', 'trigger')",
@@ -718,7 +743,7 @@ export function getAdmittedSqliteSchemaFacts(
       const tables = objects.filter((row) => row.type === "table");
       return {
         revision: owner.revision,
-        userVersion: Number(userVersion?.user_version ?? 0),
+        userVersion,
         schemaVersion,
         tables: new Set(tables.flatMap((row) => (typeof row.name === "string" ? [row.name] : []))),
         tableSql: new Map(
@@ -749,6 +774,8 @@ export function getAdmittedSqliteSchemaFacts(
         ),
       };
     });
+  } else {
+    validateUserVersion?.(owner.facts.userVersion);
   }
   return owner.facts;
 }

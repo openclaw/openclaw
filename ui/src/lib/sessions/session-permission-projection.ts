@@ -1,5 +1,5 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { projectSessionResultRows, type readSessionChangedEvent } from "./reconcile.ts";
+import { mapSessionResultRows, type readSessionChangedEvent } from "./reconcile.ts";
 import type { SessionGateway } from "./session-capability.ts";
 import { resolveUiConversationIdentity } from "./session-key.ts";
 import type { createSessionRosterObservations } from "./session-roster-observations.ts";
@@ -170,9 +170,8 @@ export function createSessionPermissionProjection(
     if (!result || permissionProjections.size === 0) {
       return result;
     }
-    return projectSessionResultRows(
-      result,
-      result.sessions.map((row) => projectPermissionRow(row, readRevision, agentId, observe)),
+    return mapSessionResultRows(result, (row) =>
+      projectPermissionRow(row, readRevision, agentId, observe),
     );
   };
   const observeEventRow = (

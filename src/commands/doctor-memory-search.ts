@@ -120,39 +120,26 @@ function hasActiveAlternateMemoryPluginSlot(cfg: OpenClawConfig): boolean {
   return entry.enabled === true || entry.config !== undefined;
 }
 
-function isActiveMemoryPluginAvailable(cfg: OpenClawConfig): boolean {
+function resolveActiveMemoryConversationRecallSupport(cfg: OpenClawConfig) {
   const plugins = normalizePluginsConfig(cfg.plugins);
-  if (!plugins.enabled || plugins.deny.includes("active-memory")) {
-    return false;
-  }
-  if (plugins.allow.length > 0 && !plugins.allow.includes("active-memory")) {
-    return false;
-  }
   const entry = plugins.entries["active-memory"];
-  if (entry?.enabled === false) {
-    return false;
-  }
   const pluginConfig = isRecord(entry?.config) ? entry.config : undefined;
-  return pluginConfig?.enabled !== false;
-}
-
-function resolveActiveMemoryConversationRecallSupport(cfg: OpenClawConfig): {
-  providerSupported: boolean;
-  memorySearchAllowed: boolean;
-} {
-  const plugins = normalizePluginsConfig(cfg.plugins);
-  const providerSupported = plugins.slots.memory === defaultSlotIdForKey("memory");
-  const entry = cfg.plugins?.entries?.["active-memory"];
-  const config = isRecord(entry?.config) ? entry.config : undefined;
-  if (!Array.isArray(config?.toolsAllow)) {
-    return { providerSupported, memorySearchAllowed: true };
-  }
+  const rawConfig = cfg.plugins?.entries?.["active-memory"]?.config;
+  const config = isRecord(rawConfig) ? rawConfig : undefined;
   return {
-    providerSupported,
-    memorySearchAllowed: config.toolsAllow.some(
-      (toolName) =>
-        typeof toolName === "string" && toolName.trim().toLowerCase() === "memory_search",
-    ),
+    available:
+      plugins.enabled &&
+      !plugins.deny.includes("active-memory") &&
+      (plugins.allow.length === 0 || plugins.allow.includes("active-memory")) &&
+      entry?.enabled !== false &&
+      pluginConfig?.enabled !== false,
+    providerSupported: plugins.slots.memory === defaultSlotIdForKey("memory"),
+    memorySearchAllowed:
+      !Array.isArray(config?.toolsAllow) ||
+      config.toolsAllow.some(
+        (toolName) =>
+          typeof toolName === "string" && toolName.trim().toLowerCase() === "memory_search",
+      ),
   };
 }
 
@@ -177,8 +164,8 @@ function inspectRememberAcrossConversationsHealth(params: {
   if (!resolveRememberAcrossConversations(params.cfg, params.agentId)) {
     return false;
   }
-  const activeMemoryAvailable = isActiveMemoryPluginAvailable(params.cfg);
   const conversationRecallSupport = resolveActiveMemoryConversationRecallSupport(params.cfg);
+  const activeMemoryAvailable = conversationRecallSupport.available;
   if (!activeMemoryAvailable) {
     params.report(
       `Remember across conversations is effectively enabled for agent "${params.agentId}", but the Active Memory plugin is disabled. Enable the plugin or set memory.search.rememberAcrossConversations to false.`,

@@ -22,7 +22,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
-it("reports context queue overload without losing context and recovers in admission order", async () => {
+it("reports context queue overload without losing context and completes every admitted read", async () => {
   await withOpenClawTestState({ label: "model-context-pressure" }, async (state) => {
     const scope = {
       agentId: "main",
@@ -68,7 +68,10 @@ it("reports context queue overload without losing context and recovers in admiss
       expect(source.buildSessionContext()).toEqual(expected);
       release.resolve();
       expect(await Promise.all(accepted)).toEqual(Array.from({ length: 128 }, () => expected));
-      expect(completed).toEqual(Array.from({ length: 128 }, (_, index) => index));
+      // Foreground reads run on a worker pool, so completion order is not FIFO.
+      expect([...completed].sort((a, b) => a - b)).toEqual(
+        Array.from({ length: 128 }, (_, index) => index),
+      );
       expect((await SessionManager.openModelContextAsync(scope)).buildSessionContext()).toEqual(
         expected,
       );
