@@ -231,7 +231,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/run-attempt.compaction-closeout.test.ts",
   "extensions/codex/src/app-server/run-attempt.computer-use.test.ts",
   "extensions/codex/src/app-server/run-attempt.configured-mcp.test.ts",
-  "extensions/codex/src/app-server/run-attempt.configured-mcp-authority.test.ts",
   "extensions/codex/src/app-server/run-attempt.context-engine.test.ts",
   "extensions/codex/src/app-server/run-attempt.context-engine-overflow.test.ts",
   "extensions/codex/src/app-server/run-attempt.continuity-media.test.ts",
