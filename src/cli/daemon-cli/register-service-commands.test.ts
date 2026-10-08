@@ -108,16 +108,78 @@ describe("addGatewayServiceCommands", () => {
         } else {
           registerDaemonCli(program);
         }
-        await program.parseAsync([parent, "install", "--runtime-path", pin, "--force"], {
-          from: "user",
+        const expectedRuntimePin = JSON.stringify({ revision: "observed-pin", definition: null });
+        const restoreServiceCli = JSON.stringify({
+          executable: pin,
+          entrypoint: "/retained/openclaw.mjs",
+          sqliteLibrary: null,
         });
+        await program.parseAsync(
+          [
+            parent,
+            "install",
+            "--runtime-path",
+            pin,
+            "--force",
+            "--expected-runtime-pin",
+            expectedRuntimePin,
+            "--restore-service-cli",
+            restoreServiceCli,
+          ],
+          {
+            from: "user",
+          },
+        );
         expect(expectSingleDaemonCall(runDaemonInstall)).toMatchObject({
           runtimePath: pin,
+          expectedRuntimePin,
+          restoreServiceCli,
           force: true,
         });
+        const install = program.commands
+          .find((command) => command.name() === parent)
+          ?.commands.find((command) => command.name() === "install");
+        expect(install?.helpInformation()).not.toContain("--restore-service-cli");
       }
     },
   );
+
+  it.each(
+    ["gateway", "daemon"].flatMap((parent) =>
+      ["--expected-runtime-pin", "--restore-service-cli"].map((option) => ({ parent, option })),
+    ),
+  )("defers $parent install startup until $option is checked", async ({ parent, option }) => {
+    const program = new Command().name("openclaw");
+    addGatewayServiceCommands(program.command(parent));
+    registerPreActionHooks(program, "9.9.9-test");
+    const previousArgv = process.argv;
+    const previousTitle = process.title;
+    const previousVerbose = isVerbose();
+    const startupEnv = captureEnv(["NODE_NO_WARNINGS"]);
+    process.argv = [
+      "node",
+      "openclaw",
+      parent,
+      "install",
+      "--json",
+      option,
+      JSON.stringify({ revision: "observed-pin", definition: null }),
+    ];
+    try {
+      await withConsoleLogsRoutedToStderrForJson(
+        process.argv,
+        () => program.parseAsync(process.argv),
+        { restoreChanges: true },
+      );
+    } finally {
+      process.argv = previousArgv;
+      process.title = previousTitle;
+      setVerbose(previousVerbose);
+      startupEnv.restore();
+    }
+    expect(ensureConfigReady).not.toHaveBeenCalled();
+    expect(runDaemonInstall).toHaveBeenCalledOnce();
+  });
 
   it.each(
     ["gateway", "daemon"].flatMap((parent) =>

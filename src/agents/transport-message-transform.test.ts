@@ -1,5 +1,6 @@
 // Transport message transform tests cover replay cleanup for provider-specific
 // tool-call/result sequencing before messages are sent back to transports.
+import { DEFAULT_MISSING_TOOL_RESULT_TEXT } from "@openclaw/llm-core/types";
 import type { Api, Context, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
@@ -803,7 +804,7 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     expect(requireToolResultMessage(result[1])).toMatchObject({
       toolCallId: "call_repeated",
       isError: true,
-      content: [{ type: "text", text: "No result provided" }],
+      content: [{ type: "text", text: DEFAULT_MISSING_TOOL_RESULT_TEXT }],
     });
     expect(JSON.stringify(result)).not.toContain("failed turn output");
   });
@@ -843,7 +844,9 @@ describe("transformTransportMessages synthetic tool-result policy", () => {
     );
     expect(googleAlias.map((msg) => msg.role)).toEqual(["assistant", "toolResult", "user"]);
     const googleToolResult = requireToolResultMessage(googleAlias[1]);
-    expect(googleToolResult.content).toEqual([{ type: "text", text: "No result provided" }]);
+    expect(googleToolResult.content).toEqual([
+      { type: "text", text: DEFAULT_MISSING_TOOL_RESULT_TEXT },
+    ]);
 
     const bedrockCanonical = transformTransportMessages(
       messages,

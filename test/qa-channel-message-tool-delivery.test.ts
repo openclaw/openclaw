@@ -65,7 +65,7 @@ async function withQaMessageTool(
     });
     try {
       const config = {
-        agents: { entries: { main: { default: true, workspace: state.workspaceDir } } },
+        agents: { entries: { main: { workspace: state.workspaceDir } } },
         session: { dmScope: "per-channel-peer" },
         channels: {
           "qa-channel": { baseUrl: bus.baseUrl, accounts: { secondary: {} } },

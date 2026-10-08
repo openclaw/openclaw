@@ -1,15 +1,17 @@
 // NEVER convert to top-level imports - breaks browser/Vite builds
-let existsSync: typeof import("node:fs").existsSync | null = null;
-let homedir: typeof import("node:os").homedir | null = null;
-let join: typeof import("node:path").join | null = null;
+type NodeHelpers = {
+  existsSync: typeof import("node:fs").existsSync;
+  homedir: typeof import("node:os").homedir;
+  join: typeof import("node:path").join;
+};
+let nodeHelpers: NodeHelpers | undefined;
 
-type DynamicImport = (specifier: string) => Promise<unknown>;
 type NodeBuiltinModule =
   | typeof import("node:fs")
   | typeof import("node:os")
   | typeof import("node:path");
 
-const dynamicImport: DynamicImport = (specifier) => import(specifier);
+const dynamicImport = (specifier: string): Promise<unknown> => import(specifier);
 const NODE_FS_SPECIFIER = "node:fs";
 const NODE_OS_SPECIFIER = "node:os";
 const NODE_PATH_SPECIFIER = "node:path";
@@ -27,36 +29,39 @@ function loadNodeBuiltinModule(specifier: string): NodeBuiltinModule | null {
   return null;
 }
 
-function loadNodeHelpersSync(): boolean {
+function loadNodeHelpersSync(): NodeHelpers | undefined {
   try {
     const fsModule = loadNodeBuiltinModule(NODE_FS_SPECIFIER) as typeof import("node:fs") | null;
     const osModule = loadNodeBuiltinModule(NODE_OS_SPECIFIER) as typeof import("node:os") | null;
     const pathModule = loadNodeBuiltinModule(NODE_PATH_SPECIFIER) as
       | typeof import("node:path")
       | null;
-    existsSync ??= fsModule?.existsSync ?? null;
-    homedir ??= osModule?.homedir ?? null;
-    join ??= pathModule?.join ?? null;
-    if (!existsSync || !homedir || !join) {
-      return false;
+    if (fsModule && osModule && pathModule) {
+      nodeHelpers = {
+        existsSync: fsModule.existsSync,
+        homedir: osModule.homedir,
+        join: pathModule.join,
+      };
     }
-    return true;
   } catch {
-    return false;
+    // Browser environments may expose process without Node builtins.
   }
+  return nodeHelpers;
 }
 
 // Eagerly load in Node.js/Bun environment only
 if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
   if (!loadNodeHelpersSync()) {
-    void dynamicImport(NODE_FS_SPECIFIER).then((m) => {
-      existsSync = (m as typeof import("node:fs")).existsSync;
-    });
-    void dynamicImport(NODE_OS_SPECIFIER).then((m) => {
-      homedir = (m as typeof import("node:os")).homedir;
-    });
-    void dynamicImport(NODE_PATH_SPECIFIER).then((m) => {
-      join = (m as typeof import("node:path")).join;
+    void Promise.all([
+      dynamicImport(NODE_FS_SPECIFIER),
+      dynamicImport(NODE_OS_SPECIFIER),
+      dynamicImport(NODE_PATH_SPECIFIER),
+    ]).then(([fsModule, osModule, pathModule]) => {
+      nodeHelpers = {
+        existsSync: (fsModule as typeof import("node:fs")).existsSync,
+        homedir: (osModule as typeof import("node:os")).homedir,
+        join: (pathModule as typeof import("node:path")).join,
+      };
     });
   }
 }
@@ -76,13 +81,8 @@ function getProcEnv(key: string): string | undefined {
   if (typeof process === "undefined" || !process.versions?.bun) {
     return undefined;
   }
-  const env = getProcessEnv();
-  if (!env) {
-    return undefined;
-  }
-
   // If process.env already has entries, the bug is not triggered.
-  if (Object.keys(env).length > 0) {
+  if (Object.keys(process.env).length > 0) {
     return undefined;
   }
 
@@ -116,32 +116,19 @@ let cachedVertexAdcCredentialsExists: true | null = null;
 
 function hasVertexAdcCredentials(): boolean {
   if (cachedVertexAdcCredentialsExists === null) {
-    if (!existsSync || !homedir || !join) {
-      const isNode =
-        typeof process !== "undefined" && (process.versions?.node || process.versions?.bun);
-      if (!isNode || !loadNodeHelpersSync()) {
-        return false;
-      }
-    }
-    const nodeExistsSync = existsSync;
-    const nodeHomedir = homedir;
-    const nodeJoin = join;
-    if (!nodeExistsSync || !nodeHomedir || !nodeJoin) {
+    const helpers =
+      nodeHelpers ??
+      (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)
+        ? loadNodeHelpersSync()
+        : undefined);
+    if (!helpers) {
       return false;
     }
-
-    // Check GOOGLE_APPLICATION_CREDENTIALS env var first (standard way)
-    const gacPath = getEnvValue("GOOGLE_APPLICATION_CREDENTIALS");
-    if (gacPath) {
-      cachedVertexAdcCredentialsExists = nodeExistsSync(gacPath) ? true : null;
-    } else {
-      // Fall back to default ADC path (lazy evaluation)
-      cachedVertexAdcCredentialsExists = nodeExistsSync(
-        nodeJoin(nodeHomedir(), ".config", "gcloud", "application_default_credentials.json"),
-      )
-        ? true
-        : null;
-    }
+    const { existsSync, homedir, join } = helpers;
+    const path =
+      getEnvValue("GOOGLE_APPLICATION_CREDENTIALS") ??
+      join(homedir(), ".config", "gcloud", "application_default_credentials.json");
+    cachedVertexAdcCredentialsExists = existsSync(path) ? true : null;
   }
   return cachedVertexAdcCredentialsExists === true;
 }

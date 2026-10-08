@@ -5,7 +5,7 @@ import { expect, it, vi } from "vitest";
 import { renderChatModelPicker } from "./chat-model-picker.ts";
 
 it.each([false, true])(
-  "expands the selected provider on every open (inherited=%s)",
+  "initially expands the selected provider and retains toggles on reopen (inherited=%s)",
   async (inherited) => {
     const container = document.createElement("div");
     const params: Parameters<typeof renderChatModelPicker>[0] = {
@@ -50,7 +50,7 @@ it.each([false, true])(
     expect(selected.hidden).toBe(false);
     expect(other.hidden).toBe(true);
 
-    // A deliberate collapse lasts only for this visit to the picker.
+    // A deliberate collapse survives closing and reopening the picker.
     toggle.click();
     expect(selected.hidden).toBe(true);
     details.open = false;
@@ -58,8 +58,8 @@ it.each([false, true])(
     details.open = true;
     details.dispatchEvent(new Event("toggle"));
     await Promise.resolve();
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect(selected.hidden).toBe(false);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(selected.hidden).toBe(true);
     expect(other.hidden).toBe(true);
 
     // The next selection, including a change while closed, owns the open group.

@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { registerListener } from "../shared/listeners.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
+import { supportsNodeSqliteWalCheckpointNoop } from "./node-sqlite.js";
 import { normalizeSqliteNumber, readFiniteSqliteNumber } from "./sqlite-number.js";
 import {
   readSqliteReaderDiagnosticsForPath,
@@ -12,6 +14,13 @@ import {
 } from "./sqlite-reader-lifecycle.js";
 
 export type SqliteWalCheckpointMode = "PASSIVE" | "FULL" | "RESTART" | "TRUNCATE";
+
+/** Unknown modes backfill on older SQLite; never issue NOOP without native support. */
+export function readSqliteWalState(database: DatabaseSync) {
+  return supportsNodeSqliteWalCheckpointNoop()
+    ? database.prepare("PRAGMA main.wal_checkpoint(NOOP)").get() // sqlite-allow-raw -- Observe without copying WAL pages.
+    : undefined;
+}
 
 export type SqliteWalCheckpointOptions = {
   databaseLabel?: string;
@@ -49,10 +58,7 @@ const checkpointListeners = resolveGlobalSingleton(
 export function onSqliteWalCheckpoint(
   listener: (observation: SqliteWalCheckpointObservation) => void,
 ): () => void {
-  checkpointListeners.add(listener);
-  return () => {
-    checkpointListeners.delete(listener);
-  };
+  return registerListener(checkpointListeners, listener);
 }
 
 /** A relayed worker result adds host observations without claiming visibility into other threads. */
@@ -139,6 +145,8 @@ function checkpoint(database: DatabaseSync, mode: SqliteWalCheckpointMode) {
 }
 
 /** Offline maintenance must stop before compaction or recovery if truncation remains busy. */
+export class SqliteWalCheckpointBusyError extends Error {}
+
 export function truncateSqliteWal(database: DatabaseSync, sqlitePath: string): void {
   const row = checkpoint(database, "TRUNCATE");
   const busy = readFiniteSqliteNumber(row?.busy ?? (row ? Object.values(row)[0] : undefined));
@@ -146,7 +154,9 @@ export function truncateSqliteWal(database: DatabaseSync, sqlitePath: string): v
     throw new Error(`SQLite checkpoint returned an invalid result for ${sqlitePath}.`);
   }
   if (busy !== 0) {
-    throw new Error(`SQLite checkpoint remained busy for ${sqlitePath}. Stop OpenClaw and retry.`);
+    throw new SqliteWalCheckpointBusyError(
+      `SQLite checkpoint remained busy for ${sqlitePath}. Stop OpenClaw and retry.`,
+    );
   }
 }
 

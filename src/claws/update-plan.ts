@@ -89,18 +89,11 @@ export async function buildClawUpdatePlan(params: {
   const ownsDatabase = !params.stateOptions?.database;
   const database =
     params.stateOptions?.database ??
-    (await openExistingOpenClawStateDatabaseReadOnly(params.stateOptions));
+    (await openExistingOpenClawStateDatabaseReadOnly({
+      ...params.stateOptions,
+      requireCanonicalSchema: true,
+    }));
   if (!database) {
-    return notFound();
-  }
-  if (
-    !database.db /* sqlite-allow-raw: read-only Claw install table-existence probe. */
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'claw_installs'")
-      .get()
-  ) {
-    if (ownsDatabase) {
-      database.walMaintenance.close();
-    }
     return notFound();
   }
   const readOnlyStateOptions: OpenClawStateDatabaseOptions & {

@@ -39,7 +39,6 @@ import type { SessionOwnerOption } from "./session-owner-chip.ts";
 export type { SessionOrganizerControllerHost } from "./session-organizer-controller-types.ts";
 
 type SessionOrganizerOperations = typeof import("./session-organizer-operations.runtime.ts");
-/** Custom session groups, collapse state, and drag-and-drop assignment. */
 export class SessionOrganizerController {
   collapsedSessionSections = loadStoredCollapsedSessionSections();
   draggingSessionKey: string | null = null;
@@ -52,20 +51,15 @@ export class SessionOrganizerController {
     position: "before" | "after";
   } | null = null;
   sessionListRemovalDrop = false;
-  private operationsLoad: Promise<SessionOrganizerOperations> | null = null;
 
   constructor(private readonly host: SessionOrganizerControllerHost) {}
 
   private async loadOperations(
     scope: SidebarSessionMutationScope,
   ): Promise<SessionOrganizerOperations | null> {
-    const load = (this.operationsLoad ??= import("./session-organizer-operations.runtime.ts"));
     try {
-      return await load;
+      return await import("./session-organizer-operations.runtime.ts");
     } catch (error) {
-      if (this.operationsLoad === load) {
-        this.operationsLoad = null;
-      }
       this.host.sessionData.publishSessionMutationError(scope, error);
       return null;
     }
@@ -102,14 +96,14 @@ export class SessionOrganizerController {
     return operations.patchSession(this.host, session, patch, scope, options);
   };
 
-  async snoozeSessionWithUndo(session: SidebarRecentSession, snoozedUntil: number): Promise<void> {
-    await this.runOperation((operations, scope) =>
+  snoozeSessionWithUndo(session: SidebarRecentSession, snoozedUntil: number): Promise<void> {
+    return this.runOperation((operations, scope) =>
       operations.snoozeSessionWithUndo(this.host, session, snoozedUntil, scope),
     );
   }
 
-  async archiveSessionWithUndo(session: SidebarRecentSession): Promise<void> {
-    await this.runOperation((operations, scope) =>
+  archiveSessionWithUndo(session: SidebarRecentSession): Promise<void> {
+    return this.runOperation((operations, scope) =>
       operations.archiveSessionWithUndo(this.host, session, scope),
     );
   }
@@ -128,37 +122,37 @@ export class SessionOrganizerController {
     );
   }
 
-  async forkSession(session: SidebarRecentSession): Promise<void> {
-    await this.runOperation((operations, scope) =>
+  forkSession(session: SidebarRecentSession): Promise<void> {
+    return this.runOperation((operations, scope) =>
       operations.forkSession(this.host, session, scope),
     );
   }
 
-  async stopCloudWorker(session: SidebarRecentSession): Promise<void> {
-    await this.runOperation((operations, scope) =>
+  stopCloudWorker(session: SidebarRecentSession): Promise<void> {
+    return this.runOperation((operations, scope) =>
       operations.stopCloudWorker(this.host, session, scope),
     );
   }
 
-  async setSessionInvolvement(session: SidebarRecentSession, hidden: boolean): Promise<void> {
-    await this.runOperation((operations, scope) =>
+  setSessionInvolvement(session: SidebarRecentSession, hidden: boolean): Promise<void> {
+    return this.runOperation((operations, scope) =>
       operations.setSessionInvolvement(this.host, session, hidden, scope),
     );
   }
 
-  async assignSessionOwner(
+  assignSessionOwner(
     session: SidebarRecentSession,
     owner: Pick<SessionOwnerOption, "type" | "id">,
   ): Promise<void> {
-    await this.runOperation((operations, scope) =>
+    return this.runOperation((operations, scope) =>
       operations.assignSessionOwner(this.host, session, owner, scope),
     );
   }
 
-  async deleteSession(session: SidebarRecentSession): Promise<void> {
+  deleteSession(session: SidebarRecentSession): Promise<void> {
     // Sidebar is the surface the delete-confirm setting names, so it is the one
     // caller allowed to offer the opt-out.
-    await this.runOperation((operations, scope) =>
+    return this.runOperation((operations, scope) =>
       operations.deleteSession(this.host, session, scope, { offerSkip: true }),
     );
   }
@@ -391,8 +385,8 @@ export class SessionOrganizerController {
     }
   }
 
-  async renameSession(session: SidebarRecentSession): Promise<void> {
-    await this.runOperation((operations, scope) =>
+  renameSession(session: SidebarRecentSession): Promise<void> {
+    return this.runOperation((operations, scope) =>
       operations.renameSession(this.host, session, scope),
     );
   }
@@ -470,8 +464,8 @@ export class SessionOrganizerController {
     });
   }
 
-  async deleteSessionGroupFromMenu(group: string): Promise<void> {
-    await this.runOperation(async (operations, scope) => {
+  deleteSessionGroupFromMenu(group: string): Promise<void> {
+    return this.runOperation(async (operations, scope) => {
       if (!(await operations.deleteSessionGroup(this.host, group, scope))) {
         return;
       }
@@ -533,12 +527,12 @@ export class SessionOrganizerController {
     this.saveCollapsedSessionSections(collapsed);
   }
 
-  async reorderSidebarSection(
+  reorderSidebarSection(
     sourceSectionId: string,
     targetSectionId: string,
     position: "before" | "after",
   ): Promise<void> {
-    await this.runOperation((operations, scope) =>
+    return this.runOperation((operations, scope) =>
       operations.reorderSidebarSection(
         this.host,
         sourceSectionId,
@@ -549,12 +543,12 @@ export class SessionOrganizerController {
     );
   }
 
-  async assignSessionCategory(
+  assignSessionCategory(
     session: SidebarRecentSession,
     category: string | null,
     patch: { pinned?: boolean } = {},
   ): Promise<void> {
-    await this.runOperation((operations, scope) =>
+    return this.runOperation((operations, scope) =>
       operations.assignSessionCategory(this.host, session, category, scope, patch),
     );
   }

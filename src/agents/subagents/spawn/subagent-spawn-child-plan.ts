@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { inheritSessionCreationPolicy } from "../../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
@@ -7,14 +8,14 @@ import { resolveSpawnSandboxError, mintSpawnSessionKey } from "../../spawn-plan.
 import { resolveRequesterOriginForChild } from "../../spawn-requester-origin.js";
 import {
   mapToolContextToSpawnedRunMetadata,
-  resolveExplicitSpawnedCwd,
   resolveSpawnedWorkspaceInheritance,
 } from "../../spawned-context.js";
 import type { SubagentLaunchAuthorization } from "./subagent-launch-authorization.js";
-import type {
-  SpawnSubagentContext,
-  SpawnSubagentParams,
-  SpawnSubagentResult,
+import {
+  rejectSubagentSpawnRequest,
+  type SpawnSubagentContext,
+  type SpawnSubagentParams,
+  type SpawnSubagentResult,
 } from "./subagent-spawn-contract.js";
 import { resolveSubagentModelAndThinkingPlan } from "./subagent-spawn-plan.js";
 import {
@@ -40,13 +41,22 @@ export async function resolveSubagentChildPlan(params: {
    * status so durable-lineage key substitution does not weaken sandbox admission. */
   requesterSandboxed?: boolean;
 }) {
-  const spawnedCwd = resolveExplicitSpawnedCwd(params.request.cwd);
-  const toolSpawnMetadata = mapToolContextToSpawnedRunMetadata({
-    agentGroupId: params.ctx.agentGroupId,
-    agentGroupChannel: params.ctx.agentGroupChannel,
-    agentGroupSpace: params.ctx.agentGroupSpace,
-    workspaceDir: params.ctx.workspaceDir,
-  });
+  const requestedCwd = normalizeOptionalString(params.request.cwd);
+  const senderRestricted = params.ctx.inheritedToolPolicySource === "sender";
+  const requesterRoot = params.ctx.sessionPermissionPolicy?.root ?? params.ctx.workspaceDir;
+  if (
+    senderRestricted &&
+    (params.request.worktree ||
+      params.request.projectId ||
+      (requestedCwd &&
+        (!requesterRoot || resolveUserPath(requestedCwd) !== resolveUserPath(requesterRoot))))
+  ) {
+    return rejectSubagentSpawnRequest(
+      "forbidden",
+      "This sender's helpers must keep the requester's workspace and session root. Omit cwd, projectId, and worktree.",
+    );
+  }
+  const toolSpawnMetadata = mapToolContextToSpawnedRunMetadata(params.ctx);
   const inheritedWorkspaceDir =
     params.targetAgentId !== params.requesterAgentId ? undefined : toolSpawnMetadata.workspaceDir;
   const spawnedWorkspaceDir = resolveSpawnedWorkspaceInheritance({
@@ -97,6 +107,9 @@ export async function resolveSubagentChildPlan(params: {
   const childRuntimeSandboxed =
     creationPolicy.sandbox === "required" ||
     resolveSandboxRuntimeStatus({ cfg: params.cfg, sessionKey: childSessionKey }).sandboxed;
+  const childCwd =
+    requestedCwd ?? (senderRestricted && !childRuntimeSandboxed ? requesterRoot : undefined);
+  const spawnedCwd = childCwd ? resolveUserPath(childCwd) : undefined;
   const sandboxError = resolveSpawnSandboxError({
     backend: "subagent",
     // Prefer the explicit active classification from the spawn tool; fall back to key-derived
@@ -107,23 +120,16 @@ export async function resolveSubagentChildPlan(params: {
     sandbox: params.sandboxMode,
   });
   if (sandboxError) {
-    return {
-      ok: false as const,
-      result: { status: "forbidden", error: sandboxError } satisfies SpawnSubagentResult,
-    };
+    return rejectSubagentSpawnRequest("forbidden", sandboxError);
   }
   const spawnedWorkspaceCwd = spawnedWorkspaceDir
     ? resolveUserPath(spawnedWorkspaceDir)
     : undefined;
   if (childRuntimeSandboxed && spawnedCwd && spawnedCwd !== spawnedWorkspaceCwd) {
-    return {
-      ok: false as const,
-      result: {
-        status: "forbidden",
-        error:
-          "cwd override is not supported for sandboxed subagent runs; omit cwd or use the target agent workspace as cwd",
-      } satisfies SpawnSubagentResult,
-    };
+    return rejectSubagentSpawnRequest(
+      "forbidden",
+      "cwd override is not supported for sandboxed subagent runs; omit cwd or use the target agent workspace as cwd",
+    );
   }
   const targetAgentDir = resolveAgentDir(params.cfg, params.targetAgentId);
   const requesterAgentConfig = resolveAgentConfig(params.cfg, params.requesterAgentId);
@@ -132,9 +138,7 @@ export async function resolveSubagentChildPlan(params: {
     params.ctx.requesterThinkingLevel === undefined ||
     (params.targetAgentId === params.requesterAgentId && !params.ctx.requesterModel)
       ? await readRequesterPreferences({
-          cfg: params.cfg,
-          requesterInternalKey: params.requesterInternalKey,
-          requesterAgentId: params.requesterAgentId,
+          ...params,
           assertActive: params.ctx.assertActive,
         })
       : undefined;
@@ -173,9 +177,7 @@ export async function resolveSubagentChildPlan(params: {
   const { resolvedModel } = modelPlan;
   if (params.swarmEnabled && params.request.fastMode === undefined) {
     const fastMode = await readRequesterFastMode({
-      cfg: params.cfg,
-      requesterInternalKey: params.requesterInternalKey,
-      requesterAgentId: params.requesterAgentId,
+      ...params,
       requesterModel: params.ctx.requesterModel,
       childModel: resolvedModel,
       assertActive: params.ctx.assertActive,

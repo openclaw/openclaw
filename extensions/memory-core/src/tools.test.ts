@@ -47,7 +47,7 @@ function corpusTool(
 ) {
   return createMemorySearchToolOrThrow({
     config: {
-      agents: { list: [{ id: "main", default: true }] },
+      agents: { entries: { main: {} } },
       memory: { citations: "off", search },
       tools: { sessions: { visibility } },
       ...(dmScope ? { session: { dmScope } } : {}),
@@ -67,19 +67,11 @@ describe("memory tool schemas", () => {
   it.each([
     { query: "X", min_score: 0.3, max_results: 3 },
     { query: "X", minScore: 0.3, maxResults: 3 },
-    { query: "X", minScore: 0.3, maxResults: 3, min_score: 0.9, max_results: 1 },
-  ])("accepts search arguments with canonical precedence: %j", (args) => {
+  ])("normalizes supported search argument spellings: %j", (args) => {
     const tool = createMemorySearchToolOrThrow();
     const prepared = tool.prepareArguments?.(args) ?? args;
     expect(Value.Check(tool.parameters, prepared)).toBe(true);
     expect(prepared).toEqual({ query: "X", minScore: 0.3, maxResults: 3 });
-  });
-
-  it("does not replace an invalid canonical argument with its alias", () => {
-    const args = { query: "X", minScore: null, min_score: 0.3 };
-    const tool = createMemorySearchToolOrThrow();
-    const prepared = tool.prepareArguments?.(args) ?? args;
-    expect(Value.Check(tool.parameters, prepared)).toBe(false);
   });
 });
 

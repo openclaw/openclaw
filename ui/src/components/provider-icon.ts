@@ -1,5 +1,3 @@
-// Shared model-provider brand icon resolution and rendering for surfaces
-// that show provider rows (chat model picker, model providers settings page).
 // Icon assets live in ui/public/provider-icons/ProviderIcon-<name>.svg;
 // shared styles live under .provider-brand-icon in styles/components.css.
 import { html } from "lit";
@@ -157,7 +155,9 @@ export function formatRawProviderLabel(provider: string): string {
 
 /** Brand display name for a (normalized, lowercase) provider id. */
 export function providerDisplayLabel(provider: string): string {
-  return PROVIDER_DISPLAY_LABELS[provider] ?? formatRawProviderLabel(provider);
+  return Object.hasOwn(PROVIDER_DISPLAY_LABELS, provider)
+    ? PROVIDER_DISPLAY_LABELS[provider]!
+    : formatRawProviderLabel(provider);
 }
 
 /** Provider id from a canonical `provider/model` reference, or null when absent. */
@@ -174,7 +174,6 @@ function resolveProviderIconName(provider: string): string | null {
   return PROVIDER_ICON_NAMES.has(icon) ? icon : null;
 }
 
-/** Whether a provider identity has a bundled brand mark. */
 export function hasProviderBrandIcon(provider: string): boolean {
   return resolveProviderIconName(provider) !== null;
 }
@@ -263,12 +262,7 @@ export function renderProviderFallbackIcon(label: string, options?: { className?
   `;
 }
 
-/**
- * Brand icon span for a provider id; falls back to a lettered badge when no
- * brand mark ships. `className` lets surfaces attach their sizing class.
- */
 export function renderProviderBrandIcon(provider: string, options?: { className?: string }) {
-  const surfaceClass = options?.className ? ` ${options.className}` : "";
   const icon = resolveProviderIconName(provider);
   if (!icon) {
     return renderProviderFallbackIcon(provider, options);
@@ -276,6 +270,6 @@ export function renderProviderBrandIcon(provider: string, options?: { className?
   return renderBrandIcon(
     inferControlUiPublicAssetPath(`provider-icons/ProviderIcon-${icon}.svg`),
     icon,
-    surfaceClass.trim(),
+    options?.className?.trim() ?? "",
   );
 }

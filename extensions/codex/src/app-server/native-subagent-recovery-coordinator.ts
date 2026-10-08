@@ -19,7 +19,6 @@ type NativeSubagentRecoveryDependencies = {
     completion: CodexNativeSubagentCompletion,
     eventAt: number,
   ) => Promise<void>;
-  now: () => number;
   recoveryPollDelaysMs?: readonly number[];
 };
 
@@ -144,7 +143,7 @@ export class CodexNativeSubagentRecoveryCoordinator {
               state,
               childState,
               fallback,
-              fallback.completedAt ?? this.dependencies.now(),
+              fallback.completedAt ?? Date.now(),
             );
             return;
           }
@@ -207,10 +206,8 @@ export class CodexNativeSubagentRecoveryCoordinator {
   }
 
   clearRecoveryTimers(childState: ChildState): void {
-    if (childState.recoveryTimer) {
-      clearTimeout(childState.recoveryTimer);
-      childState.recoveryTimer = undefined;
-    }
+    clearTimeout(childState.recoveryTimer);
+    childState.recoveryTimer = undefined;
   }
 }
 

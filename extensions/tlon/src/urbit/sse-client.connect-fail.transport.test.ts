@@ -34,7 +34,6 @@ describe("UrbitSSEClient connect-fail body cleanup", () => {
 
     const baseUrl = await listen(server);
     const client = new UrbitSSEClient(baseUrl, "urbauth-~zod=proof", {
-      autoReconnect: false,
       ship: "zod",
       ssrfPolicy: { allowPrivateNetwork: true },
       lookupFn: lookupLoopback,
@@ -75,7 +74,6 @@ describe("UrbitSSEClient connect-fail body cleanup", () => {
     });
     const baseUrl = await listen(server);
     const client = new UrbitSSEClient(baseUrl, "urbauth-~zod=proof", {
-      autoReconnect: false,
       ship: "zod",
       ssrfPolicy: { allowPrivateNetwork: true },
       lookupFn: lookupLoopback,
@@ -126,7 +124,6 @@ describe("UrbitSSEClient connect-fail body cleanup", () => {
     });
     const baseUrl = await listen(server);
     const client = new UrbitSSEClient(baseUrl, "urbauth-~zod=proof", {
-      autoReconnect: false,
       ship: "zod",
       ssrfPolicy: { allowPrivateNetwork: true },
       lookupFn: lookupLoopback,

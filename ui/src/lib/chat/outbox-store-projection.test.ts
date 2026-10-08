@@ -8,7 +8,7 @@ import type { StoredComposerSession } from "./outbox-store-codec.ts";
 import { createStoredChatOutboxReader } from "./outbox-store-projection.ts";
 import {
   storedChatOutboxScopeKey,
-  storageTargetForGateway,
+  storageTargetForComposer,
   subscribeStoredChatOutboxChanges,
   writeStoredOutboxStore,
 } from "./outbox-store.ts";
@@ -42,7 +42,7 @@ function subscribe(reader: ReturnType<typeof createStoredChatOutboxReader>) {
 }
 
 function seedTab(rows: Record<string, StoredComposerSession>) {
-  writeStoredOutboxStore(sessionStorage, storageTargetForGateway(gatewayUrl), {
+  writeStoredOutboxStore(sessionStorage, storageTargetForComposer(state()), {
     version: 4,
     gatewayOwner: gatewayUrl,
     recovery: {},
@@ -80,6 +80,23 @@ afterEach(async () => {
 });
 
 describe("stored draft projection", () => {
+  it("retires a cached tab summary when the same offline client loses local admission", () => {
+    seedTab({ a: { draft: "offline input", draftRevision: 10, updatedAt: 1 } });
+    const host = {
+      ...state(),
+      connected: false,
+      client: {
+        recoveryScope: "",
+        recoveryScopeReady: false,
+        offlineRecoveryScope: owner.recoveryScope,
+      },
+    };
+    const reader = createStoredChatOutboxReader();
+    expect(reader.read(host).hasSessionDraft(key("a"))).toBe(true);
+    host.client.offlineRecoveryScope = "";
+    expect(reader.read(host).hasSessionDraft(key("a"))).toBe(false);
+  });
+
   it.each(["read", "sweep"])(
     "clears a cached attachment-only draft badge after expiry through %s",
     async (path) => {
@@ -111,62 +128,116 @@ describe("stored draft projection", () => {
     },
   );
 
-  it("preserves the summary and stays silent when a durable write leaves badges unchanged", async () => {
-    seedTab({ a: { draft: "tab input", draftRevision: 10, updatedAt: 1 } });
-    const list = vi.spyOn(drafts, "listDurableChatDraftPresence");
-    const reader = createStoredChatOutboxReader();
-    const changes = subscribe(reader);
-    const host = state();
-    reader.read(host);
-    await vi.dynamicImportSettled();
-    expect(list).toHaveBeenCalledTimes(1);
-    await list.mock.results[0]?.value;
-    const initial = reader.read(host);
-    expect(initial.hasSessionDraft(key("a"))).toBe(true);
-    changes.listener.mockClear();
+  it.each(["unchanged", "unavailable"] as const)(
+    "keeps the initial %s projection silent and reloads on a durable change",
+    async (initialLoad) => {
+      if (initialLoad === "unchanged") {
+        seedTab({ a: { draft: "tab input", draftRevision: 10, updatedAt: 1 } });
+      }
+      const list = vi.spyOn(drafts, "listDurableChatDraftPresence");
+      if (initialLoad === "unavailable") {
+        list.mockResolvedValueOnce({ status: "storage-failed" });
+      }
+      const reader = createStoredChatOutboxReader();
+      const changes = subscribe(reader);
+      const host = state();
+      const initial = reader.read(host);
+      await vi.dynamicImportSettled();
+      expect(list).toHaveBeenCalledTimes(1);
+      await list.mock.results[0]?.value;
+      expect(changes.listener).not.toHaveBeenCalled();
+      expect(reader.read(host)).toBe(initial);
+      expect(initial.hasSessionDraft(key("a"))).toBe(initialLoad === "unchanged");
 
-    await writeDraft("a");
-    expect(list).toHaveBeenCalledTimes(2);
-    await list.mock.results[1]?.value;
-    expect(changes.listener).not.toHaveBeenCalled();
-    expect(reader.read(host)).toBe(initial);
+      if (initialLoad === "unchanged") {
+        await writeDraft("a");
+        expect(list).toHaveBeenCalledTimes(2);
+        await list.mock.results[1]?.value;
+        expect(changes.listener).not.toHaveBeenCalled();
+        expect(reader.read(host)).toBe(initial);
+      }
+      const changed = changes.next();
+      await writeDraft("b");
+      await changed;
+      const summary = reader.read(host);
+      expect(changes.listener).toHaveBeenCalledOnce();
+      expect(summary).not.toBe(initial);
+      expect(summary.hasSessionDraft(key("b"))).toBe(true);
+      if (initialLoad === "unchanged") {
+        expect(summary.hasSessionDraft(key("a"))).toBe(true);
+      } else {
+        cleanups.splice(0).forEach((cleanup) => cleanup());
+        await writeDraft("c");
+        expect(list).toHaveBeenCalledTimes(2);
+        const reattached = subscribe(reader);
+        await reattached.changed;
+        expect(reader.read(host).hasSessionDraft(key("c"))).toBe(true);
+      }
+    },
+  );
 
-    const changed = changes.next();
-    await writeDraft("b");
-    await changed;
-    const summary = reader.read(host);
-    expect(changes.listener).toHaveBeenCalledOnce();
-    expect(summary).not.toBe(initial);
-    expect(summary.hasSessionDraft(key("a"))).toBe(true);
-    expect(summary.hasSessionDraft(key("b"))).toBe(true);
-  });
-
-  it("loads unopened attachment drafts, reloads local writes, and drops a replaced owner", async () => {
-    await writeDraft("b");
-    const list = vi.spyOn(drafts, "listDurableChatDraftPresence");
-    const reader = createStoredChatOutboxReader();
-    const changes = subscribe(reader);
-    const globalListener = vi.fn();
-    cleanups.push(subscribeStoredChatOutboxChanges(globalListener));
-    const host = state();
-    expect(reader.read(host).hasSessionDraft(key("b"))).toBe(false);
-    await changes.changed;
-    expect(reader.read(host).hasSessionDraft(key("b"))).toBe(true);
-    expect(globalListener).not.toHaveBeenCalled();
-
-    const written = changes.next();
-    await writeDraft("c");
-    await written;
-    expect(reader.read(host).hasSessionDraft(key("c"))).toBe(true);
-
-    changes.listener.mockClear();
-    host.client = { recoveryScope: "principal-b", recoveryScopeReady: true };
-    expect(reader.read(host).hasSessionDraft(key("b"))).toBe(false);
-    expect(list).toHaveBeenCalledTimes(3);
-    await list.mock.results[2]?.value;
-    expect(changes.listener).not.toHaveBeenCalled();
-    expect(reader.read(host).hasSessionDraft(key("c"))).toBe(false);
-  });
+  it.each(["loaded", "pending"] as const)(
+    "drops a replaced owner's %s attachment projection",
+    async (phase) => {
+      const pending =
+        Promise.withResolvers<Awaited<ReturnType<typeof drafts.listDurableChatDraftPresence>>>();
+      const started = Promise.withResolvers<void>();
+      if (phase === "loaded") {
+        await writeDraft("b");
+      }
+      const list = vi.spyOn(drafts, "listDurableChatDraftPresence");
+      if (phase === "pending") {
+        list
+          .mockImplementationOnce(() => {
+            started.resolve();
+            return pending.promise;
+          })
+          .mockResolvedValue({ status: "ready", presence: new Map() });
+      }
+      const reader = createStoredChatOutboxReader();
+      const changes = subscribe(reader);
+      const globalListener = vi.fn();
+      cleanups.push(subscribeStoredChatOutboxChanges(globalListener));
+      const host = state();
+      expect(reader.read(host).hasSessionDraft(key("b"))).toBe(false);
+      if (phase === "pending") {
+        await started.promise;
+      } else {
+        await changes.changed;
+        expect(reader.read(host).hasSessionDraft(key("b"))).toBe(true);
+        expect(reader.read(host).sessions).toEqual([
+          {
+            agentId: "main",
+            sessionKey: key("b"),
+            hasComposerDraft: true,
+            outboxAttentionCount: 0,
+          },
+        ]);
+        expect(globalListener).not.toHaveBeenCalled();
+        const written = changes.next();
+        await writeDraft("c");
+        await written;
+        expect(reader.read(host).hasSessionDraft(key("c"))).toBe(true);
+      }
+      changes.listener.mockClear();
+      host.client = { recoveryScope: "principal-b", recoveryScopeReady: true };
+      expect(reader.read(host).hasSessionDraft(key("b"))).toBe(false);
+      expect(list).toHaveBeenCalledTimes(phase === "pending" ? 1 : 3);
+      if (phase === "pending") {
+        pending.resolve({
+          status: "ready",
+          presence: new Map([[storedKey("b"), { revision: 10, active: true }]]),
+        });
+        await pending.promise;
+        expect(list).toHaveBeenCalledTimes(2);
+      }
+      await list.mock.results.at(-1)?.value;
+      expect(changes.listener).not.toHaveBeenCalled();
+      expect(reader.read(host).hasSessionDraft(key("b"))).toBe(false);
+      expect(reader.read(host).hasSessionDraft(key("c"))).toBe(false);
+      expect(reader.read(host).sessions).toEqual([]);
+    },
+  );
 
   it("merges revision fences and all tab input kinds while excluding Incognito keys", async () => {
     await writeDraft("tab-cleared");
@@ -196,6 +267,14 @@ describe("stored draft projection", () => {
     ]) {
       expect(summary.hasSessionDraft(key(name)), name).toBe(false);
     }
+    expect(summary.sessions).toEqual(
+      ["goal", "reply"].map((name) => ({
+        agentId: "main",
+        sessionKey: key(name),
+        hasComposerDraft: true,
+        outboxAttentionCount: 0,
+      })),
+    );
   });
 
   it("does not open IndexedDB without subscribers or a ready recovery owner", async () => {
@@ -215,61 +294,6 @@ describe("stored draft projection", () => {
     await list.mock.results[0]?.value;
     expect(attached.listener).not.toHaveBeenCalled();
     expect(open).toHaveBeenCalledOnce();
-  });
-
-  it("discards an old owner's in-flight result and serializes its replacement", async () => {
-    const pending =
-      Promise.withResolvers<Awaited<ReturnType<typeof drafts.listDurableChatDraftPresence>>>();
-    const started = Promise.withResolvers<void>();
-    const list = vi
-      .spyOn(drafts, "listDurableChatDraftPresence")
-      .mockImplementationOnce(() => {
-        started.resolve();
-        return pending.promise;
-      })
-      .mockResolvedValue({ status: "ready", presence: new Map() });
-    const reader = createStoredChatOutboxReader();
-    const changes = subscribe(reader);
-    const host = state();
-    reader.read(host);
-    await started.promise;
-    host.client = { recoveryScope: "principal-b", recoveryScopeReady: true };
-    reader.read(host);
-    expect(list).toHaveBeenCalledTimes(1);
-    pending.resolve({
-      status: "ready",
-      presence: new Map([[storedKey("b"), { revision: 10, active: true }]]),
-    });
-    await pending.promise;
-    expect(list).toHaveBeenCalledTimes(2);
-    await list.mock.results[1]?.value;
-    expect(changes.listener).not.toHaveBeenCalled();
-    expect(reader.read(host).hasSessionDraft(key("b"))).toBe(false);
-  });
-
-  it("keeps storage failure tab-only until a change and releases its durable subscription", async () => {
-    const list = vi
-      .spyOn(drafts, "listDurableChatDraftPresence")
-      .mockResolvedValueOnce({ status: "storage-failed" });
-    const reader = createStoredChatOutboxReader();
-    const changes = subscribe(reader);
-    const host = state();
-    const initial = reader.read(host);
-    await vi.dynamicImportSettled();
-    expect(list).toHaveBeenCalledTimes(1);
-    await list.mock.results[0]?.value;
-    expect(changes.listener).not.toHaveBeenCalled();
-    expect(reader.read(host)).toBe(initial);
-    const changed = changes.next();
-    await writeDraft("b");
-    await changed;
-    expect(reader.read(host).hasSessionDraft(key("b"))).toBe(true);
-    cleanups.splice(0).forEach((cleanup) => cleanup());
-    await writeDraft("c");
-    expect(list).toHaveBeenCalledTimes(2);
-    const reattached = subscribe(reader);
-    await reattached.changed;
-    expect(reader.read(host).hasSessionDraft(key("c"))).toBe(true);
   });
 
   it.each(["storage-failed", "exception"] as const)(

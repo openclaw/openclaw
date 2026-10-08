@@ -2,6 +2,7 @@ import { capturePluginLifecycleAuthority } from "../../plugins/registry-lifecycl
 import { getPluginRegistryState } from "../../plugins/runtime-state.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeGenerationRegistry } from "../../plugins/runtime/generation-scope.js";
+import { wrapNativeSessionDeletionMutation } from "./native-session/deletion-participant.js";
 import type {
   AgentHarnessSessionDeletionMutation,
   AgentHarnessSessionDeletionParams,
@@ -93,17 +94,16 @@ function captureAgentHarnessSessionMutations(
               async (mutation) => {
                 assertCurrent();
                 const mutations = prepared.get(target.sessionKey) ?? [];
-                mutations.push({
-                  assertCurrent,
-                  commit: () => {
-                    assertCurrent();
-                    mutation.commit();
-                  },
-                  rollback: () => {
-                    assertCurrent();
-                    mutation.rollback();
-                  },
-                });
+                mutations.push(
+                  Object.assign(
+                    wrapNativeSessionDeletionMutation(mutation, {
+                      assertCurrent,
+                      committed() {},
+                      rolledBack() {},
+                    }),
+                    { assertCurrent },
+                  ),
+                );
                 prepared.set(target.sessionKey, mutations);
                 return await prepareNext(index + 1);
               },

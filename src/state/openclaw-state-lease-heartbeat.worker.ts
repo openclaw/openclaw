@@ -16,6 +16,7 @@ import {
   leaseHeartbeatStartupPhase as startupPhase,
   LEASE_HEARTBEAT_START_TIMEOUT_MS,
   LEASE_CONTENTION_RETRY_MS,
+  type LeaseHeartbeatLoss,
   type LeaseHeartbeatRenewalFailure,
   type LeaseHeartbeatReply,
   type LeaseHeartbeatParentMessage,
@@ -67,15 +68,24 @@ Atomics.store(shared, state.startupPhase, startupPhase["open-complete"]);
 let processOwner = params.processOwner;
 let heartbeat: ReturnType<typeof setTimeout> | undefined;
 let attempt = 0;
-const lose = () => {
+let firstLoss: LeaseHeartbeatLoss | undefined;
+const recordLoss = (loss: LeaseHeartbeatLoss) => {
+  if (firstLoss || Atomics.load(shared, state.status) === state.closed) {
+    return;
+  }
+  firstLoss = loss;
+  parentPort?.postMessage({ loss } satisfies LeaseHeartbeatReply, []);
+};
+const lose = (loss: LeaseHeartbeatLoss) => {
   Atomics.compareExchange(shared, state.status, state.starting, state.lost);
   Atomics.compareExchange(shared, state.status, state.ready, state.lost);
+  recordLoss(loss);
   Atomics.notify(shared, state.ack);
   clearTimeout(heartbeat);
   closeTrackedStateDatabase(db);
   parentPort?.close();
 };
-const renewInWorker = (explicit: boolean): number | undefined => {
+const renewInWorker = (explicit: boolean, path: LeaseHeartbeatLoss["path"]): number | undefined => {
   if (Atomics.load(shared, state.status) >= state.closed) {
     return undefined;
   }
@@ -111,7 +121,7 @@ const renewInWorker = (explicit: boolean): number | undefined => {
               processOwner?.identity,
             );
           },
-          { logger: { warn() {} } },
+          { operationLabel: "state.lease.renew", logger: { warn() {} } },
         ),
       { lockFailureReporting: "suppress" },
     );
@@ -137,7 +147,7 @@ const renewInWorker = (explicit: boolean): number | undefined => {
       if (explicit) {
         throw error;
       }
-      lose();
+      lose({ path, outcome: "operation-error" });
       return undefined;
     }
     contentionError = error;
@@ -146,7 +156,7 @@ const renewInWorker = (explicit: boolean): number | undefined => {
   observeDurableExpiry(expiresAt);
   if (expiresAt === undefined) {
     if (!explicit) {
-      lose();
+      lose({ path, outcome: "no-current-owned-unexpired-row" });
     }
     return undefined;
   }
@@ -178,11 +188,14 @@ const renewInWorker = (explicit: boolean): number | undefined => {
 
 // SQLite and native process lookup are synchronous on this worker. Publish only
 // occupancy; callers still require a fresh reply and check the durable owner.
-const renew = (explicit = false): number | undefined => {
+const renew = (
+  explicit = false,
+  path: LeaseHeartbeatLoss["path"] = "automatic-renewal",
+): number | undefined => {
   Atomics.add(renewalProgress, 0, 1n);
   Atomics.notify(shared, state.ack);
   try {
-    return renewInWorker(explicit);
+    return renewInWorker(explicit, path);
   } finally {
     Atomics.add(renewalProgress, 0, 1n);
     Atomics.notify(shared, state.ack);
@@ -193,7 +206,7 @@ function activateHeartbeat(): void {
   let expiresAt: number | undefined;
   try {
     Atomics.store(shared, state.startupPhase, startupPhase["initial-renew-start"]);
-    expiresAt = renew(params.deferActivation === true);
+    expiresAt = renew(params.deferActivation === true, "activation");
     Atomics.store(shared, state.startupPhase, startupPhase["initial-renew-returned"]);
   } catch (error) {
     if (params.deferActivation && isSqliteLockError(error)) {
@@ -210,11 +223,11 @@ function activateHeartbeat(): void {
       );
       return;
     }
-    lose();
+    lose({ path: "activation", outcome: "operation-error" });
     throw error;
   }
   if (expiresAt === undefined) {
-    lose();
+    lose({ path: "activation", outcome: "no-current-owned-unexpired-row" });
     return;
   }
   if (
@@ -236,12 +249,15 @@ parentPort?.on("message", (request: LeaseHeartbeatParentMessage) => {
   if (request !== null) {
     let reply: LeaseHeartbeatReply;
     let lost = false;
+    let outcome: LeaseHeartbeatLoss["outcome"] = "operation-error";
+    const path = request.operation === "renew" ? "explicit-renew" : "explicit-verify";
     try {
       const expiresAt =
         request.operation === "renew"
-          ? renew(true)
+          ? renew(true, path)
           : observeDurableExpiry(readOpenClawStateLeaseExpiry(db, params.identity));
       if (expiresAt === undefined) {
+        outcome = "no-current-owned-unexpired-row";
         throw new OpenClawStateLeaseError("state lease heartbeat no longer owns its lease", {
           code: "OPENCLAW_STATE_LEASE_LOST",
         });
@@ -263,9 +279,13 @@ parentPort?.on("message", (request: LeaseHeartbeatParentMessage) => {
         payload: encodeOpenClawStateWorkerError(error),
       };
     }
+    if (lost) {
+      // Preserve the first loss before the existing request rejection can escape.
+      recordLoss({ path, outcome });
+    }
     parentPort?.postMessage(reply, []);
     if (lost) {
-      lose();
+      lose({ path, outcome });
     }
     return;
   }

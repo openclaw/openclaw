@@ -4,7 +4,6 @@ import {
   prepareCodeModeSourceAppend,
   type CodeModeSourceAppend,
 } from "../transcript-code-mode-source.js";
-import { withSessionManagerWrite } from "./session-manager-write-admission.js";
 import type { SessionManager } from "./session-manager.js";
 
 /** Persist completed model messages through their existing custody owner. */
@@ -20,7 +19,5 @@ export async function persistAgentSessionMessage(
     invalidateSerializedPrefixCache: options.invalidateSerializedPrefixCache,
   };
   prepareCodeModeSourceAppend(appendOptions, message, options.sourceAppend);
-  return message.role === "user"
-    ? await withSessionManagerWrite(manager, () => manager.appendMessage(message, appendOptions))
-    : await manager.appendMessageAsync(message, appendOptions);
+  return await manager.appendMessageAsync(message, appendOptions);
 }

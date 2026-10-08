@@ -80,7 +80,6 @@ function commandArgvAt(index: number): string[] {
 function firstInstallOptions():
   | {
       expectedPluginId?: string;
-      emitSuccessSecurityEvent?: boolean;
       packageDir?: string;
       mode?: string;
       installPolicyRequest?: { kind?: string; requestedSpecifier?: string };
@@ -89,7 +88,6 @@ function firstInstallOptions():
   return installPluginFromInstalledPackageDirMock.mock.calls[0]?.[0] as
     | {
         expectedPluginId?: string;
-        emitSuccessSecurityEvent?: boolean;
         packageDir?: string;
         mode?: string;
         installPolicyRequest?: { kind?: string; requestedSpecifier?: string };
@@ -284,7 +282,6 @@ describe("installPluginFromGitSpec", () => {
       expect(installOptions?.installPolicyRequest?.requestedSpecifier).toBe(
         "git:github.com/acme/demo@v1.2.3",
       );
-      expect(installOptions?.emitSuccessSecurityEvent).toBe(false);
       expect(captured.events).toHaveLength(1);
       expect(captured.events[0]).toMatchObject({
         action: "plugin.installed",
@@ -338,7 +335,6 @@ describe("installPluginFromGitSpec", () => {
       if (!result.ok) {
         expect(result.error).toContain("failed to replace managed git plugin repository");
       }
-      expect(firstInstallOptions()?.emitSuccessSecurityEvent).toBe(false);
       expect(captured.events).toHaveLength(0);
     } finally {
       await fs.rm(gitRoot, { recursive: true, force: true });

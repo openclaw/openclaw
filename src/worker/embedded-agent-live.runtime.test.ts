@@ -6,6 +6,41 @@ import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-
 import { createWorkerLiveRuntime } from "./embedded-agent-live.runtime.js";
 
 describe("createWorkerLiveRuntime", () => {
+  it("publishes attachment references only when the assistant message is complete", () => {
+    const emitted: WorkerLiveEvent[] = [];
+    const runtime = createWorkerLiveRuntime({
+      enqueuePreview: (event) => {
+        emitted.push(event);
+        return true;
+      },
+      emitTerminal: async () => {},
+    });
+    const message = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "MEDIA:./report.txt" }],
+    });
+    runtime.handleSessionEvent({ type: "message_start", message });
+    runtime.handleSessionEvent({
+      type: "message_update",
+      message,
+      assistantMessageEvent: { type: "text_delta", contentIndex: 0, delta: "MEDIA:./report.txt" },
+    });
+    expect(emitted).toEqual([
+      expect.objectContaining({
+        payload: expect.not.objectContaining({ mediaUrls: expect.anything() }),
+      }),
+    ]);
+    runtime.handleSessionEvent({ type: "message_end", message });
+    expect(emitted.at(-1)).toMatchObject({
+      kind: "assistant",
+      payload: {
+        text: "MEDIA:./report.txt",
+        delta: "",
+        mediaUrls: ["./report.txt"],
+      },
+    });
+    expect(message.content).toEqual([{ type: "text", text: "MEDIA:./report.txt" }]);
+  });
+
   it("redacts media payloads from tool diagnostics before cloud egress", () => {
     const emitted: WorkerLiveEvent[] = [];
     const runtime = createWorkerLiveRuntime({

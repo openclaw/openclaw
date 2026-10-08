@@ -155,16 +155,28 @@ export function collectCurrentAssertionSafetyCounts(
         fs.readFileSync(path.join(root, filePath), "utf8"),
       ]);
   const counts = new Map<string, number>();
-  for (const [filePath, source] of sources) {
-    const count = countUnsafeAssertions(
-      source,
-      filePath,
-      parser.parseSourceFile(filePath, source),
-      parser,
-    );
-    if (count > 0) {
-      counts.set(filePath, count);
+  const batchSize = 32;
+  for (let offset = 0; offset < sources.length;) {
+    const batch: Array<{ fileName: string; text: string }> = [];
+    const names = new Set<string>();
+    while (batch.length < batchSize && offset + batch.length < sources.length) {
+      const [filePath, text] = sources[offset + batch.length]!;
+      const fileName = path.resolve(root, filePath).split(path.sep).join("/");
+      // An unmerged index repeats paths; preserve each visit without duplicating a parser root.
+      if (names.has(fileName)) {
+        break;
+      }
+      names.add(fileName);
+      batch.push({ fileName, text });
     }
+    for (const [index, sourceFile] of parser.parseSourceFiles(batch).entries()) {
+      const [filePath, source] = sources[offset + index]!;
+      const count = countUnsafeAssertions(source, filePath, sourceFile, parser);
+      if (count > 0) {
+        counts.set(filePath, count);
+      }
+    }
+    offset += batch.length;
   }
   return counts;
 }

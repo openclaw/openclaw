@@ -34,6 +34,7 @@ import type {
   AcpSessionMutationDecision,
   AcpSessionMutationPreparation,
   AcpSessionMutationPrepareInput,
+  AcpSessionMutationSource,
 } from "./session-meta-write.types.js";
 
 export const acpSessionOperations = {
@@ -63,6 +64,26 @@ function readControlledAcpSessionMutation(
   return { entry, row };
 }
 
+function readMutationSource(
+  input: Omit<Parameters<typeof readAcpSessionSourceInWorker>[0], "source"> & {
+    source: AcpSessionMutationSource;
+  },
+  phase: "metadata preparation" | "legacy source consumption",
+) {
+  if ("kind" in input.source) {
+    // The host grant revalidates this exact actor snapshot; never reopen its sentinel.
+    const current = input.source.snapshot;
+    assertAcpSessionMutationEntry(
+      current.entry,
+      input.entry ?? null,
+      input.expectedControlBinding,
+      phase,
+    );
+    return current;
+  }
+  return readAcpSessionSourceInWorker({ ...input, source: input.source }, phase);
+}
+
 function prepareAcpSessionMutationInWorker(
   database: OpenClawStateDatabase,
   input: AcpSessionMutationPrepareInput,
@@ -72,7 +93,7 @@ function prepareAcpSessionMutationInWorker(
       const controlled = input.control
         ? readControlledAcpSessionMutation(database, input.control)
         : undefined;
-      const { entry } = controlled ?? readAcpSessionSourceInWorker(input, "metadata preparation");
+      const { entry } = controlled ?? readMutationSource(input, "metadata preparation");
       if (controlled) {
         assertAcpSessionMutationEntry(
           entry,
@@ -121,7 +142,7 @@ function prepareAcpSessionMutationInWorker(
 }
 
 function consumeSources(database: OpenClawStateDatabase, input: AcpSessionMutationCommit) {
-  const current = readAcpSessionSourceInWorker(input, "legacy source consumption");
+  const current = readMutationSource(input, "legacy source consumption");
   for (const source of current.sources) {
     if (legacyAcpMigrationBindingMatches(source, current.entry)) {
       recordLegacyAcpMigrationCompletion(database.db, source, input.updatedAt);
@@ -150,8 +171,8 @@ function commitAcpSessionMutationInWorker(
       }
       consumeSources(current, input);
       const db = current.db;
-      applyAcpSessionMutation(db, input);
-      const receipt = { nonce: input.nonce };
+      const facts = applyAcpSessionMutation(db, input);
+      const receipt = { nonce: input.nonce, facts };
       deferSqliteWorkerCommitReceipt(db, receipt);
       requestSqliteWorkerOperationAdmission({ stage: "commit", facts: receipt });
       return receipt;

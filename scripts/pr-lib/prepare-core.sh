@@ -32,6 +32,7 @@ resolve_pr_author_access_at_prepare() {
 
 retire_prep_evidence() {
   local archive="" artifact
+  PREP_RETIRED_EVIDENCE=""
   for artifact in \
     .local/prep-context.env \
     .local/prep.env \
@@ -43,6 +44,7 @@ retire_prep_evidence() {
     .local/correction-review.md \
     .local/correction-incoming-review.json \
     .local/correction-incoming-review.md \
+    .local/prepare-baseline.json \
     .local/gates-*.log; do
     if [ ! -e "$artifact" ] && [ ! -L "$artifact" ]; then
       continue
@@ -55,8 +57,11 @@ retire_prep_evidence() {
       archive=$(mktemp -d .local/prep-evidence.XXXXXX) || return 1
     fi
     cp -p "$artifact" "$archive/" || return 1
+    cmp -s "$artifact" "$archive/${artifact##*/}" || return 1
   done
   [ -n "$archive" ] || return 0
+  PREP_RETIRED_EVIDENCE="$archive"
+  [ "${1:-}" != retain ] || return 0
 
   # Retire active authority only after every prior artifact has been retained.
   # The caller replaces prep-context.env with its validated preparation source.
@@ -67,11 +72,64 @@ retire_prep_evidence() {
     .local/correction-review.md \
     .local/correction-incoming-review.json \
     .local/correction-incoming-review.md \
+    .local/prepare-baseline.json \
     .local/prepare-push-result.env \
     .local/prepare-sync-result.env || return 1
   printf '%s\n' "- Prior preparation evidence retained at $archive." >> .local/prep.md || return 1
   echo "Prior preparation evidence retained at $archive."
 }
+
+prepare_baseline_refresh() (
+  local pr="$1" expected="" baseline="" resolutions="" option
+  shift
+  while [ "$#" -gt 0 ]; do
+    option="$1"
+    [ "$#" -ge 2 ] && [ -n "$2" ] || return 2
+    case "$option" in
+      --expected-head) [ -z "$expected" ] || return 2; expected="$2" ;;
+      --baseline) [ -z "$baseline" ] || return 2; baseline="$2" ;;
+      --resolutions) [ -z "$resolutions" ] || return 2; resolutions="$2" ;;
+      *) return 2 ;;
+    esac
+    shift 2
+  done
+  [[ "$expected" =~ ^[0-9a-f]{40}$ ]] && [[ "$baseline" =~ ^[0-9a-f]{40}$ ]] || return 2
+  enter_worktree "$pr" false || return 1
+  local PREP_BRANCH="" PREP_REVIEW_MODE="" PR_NUMBER=""
+  source .local/prep-context.env || return 1
+  [ "$PREP_REVIEW_MODE" = correction ] && [ "$PR_NUMBER" = "$pr" ] &&
+    [ "$PREP_BRANCH" = "pr-$pr-prep" ] || return 1
+  local snapshot target helper root observation prepared binding
+  root=$(repo_root) || return 1
+  helper="$(dirname "$(review_artifacts_helper_path)")/baseline-refresh.mjs"
+  snapshot=$(correction_review_snapshot "$pr") || return 1
+  observation=$(cat .local/pr-meta.json) || return 1
+  [ -n "$snapshot" ] && [ -n "$PR_MAIN_SHA" ] || return 1
+  require_baseline_source() {
+    revalidate_pr_publication "$pr" "$observation" "$PR_HEAD" \
+      "$PR_HEAD_SHA_BEFORE" "$PR_HEAD_SHA_BEFORE" || return 1
+    pr_operation_lock_owner_is_current "$root" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID" &&
+      [ "$(pr_git symbolic-ref --short HEAD)" = "$PREP_BRANCH" ] &&
+      [ "$(pr_git rev-parse HEAD)" = "$expected" ] &&
+      pr_git diff --quiet && pr_git diff --cached --quiet && require_no_foreign_untracked "$pr" &&
+      verify_correction_review_snapshot "$pr" "$snapshot"
+  }
+  require_baseline_source || return 1
+  pr_git merge-base --is-ancestor "$baseline" "$PR_MAIN_SHA" || return 1
+  mark_pr_operation_side_effects_started
+  retire_prep_evidence retain || return 1
+  prepared=$(node "$helper" create "$pr" "$expected" "$baseline" "$PR_MAIN_SHA" \
+    "$PREP_RETIRED_EVIDENCE" "$snapshot" "$resolutions") || return 1
+  target=$(printf '%s' "$prepared" | jq -er .target) || return 1
+  binding=$(printf '%s' "$prepared" | jq -er .binding) || return 1
+  require_no_ignored_transition_paths "$pr" "$expected" "$target" || return 1
+  require_baseline_source || return 1
+  write_review_transition_journal "$pr" "$expected" "$target" prep "$PREP_BRANCH" "$binding" || return 1
+  recover_review_transition "$pr" || return 1
+  echo "Refreshed candidate $target; prior proof retained at $PREP_RETIRED_EVIDENCE."
+  printf '%s' "$prepared" | jq -r '.resolutions[] | "Resolved \(.path): \(if .resolved == null then "deleted" else .resolved.mode + " " + .resolved.oid end)"' || return 1
+  echo "Fresh exact-candidate correction review and completed native gates are required."
+)
 
 refresh_prep_branch_for_reviewed_head() {
   local pr="$1"

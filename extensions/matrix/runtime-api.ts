@@ -1,4 +1,3 @@
-// Matrix API module exposes the plugin public contract.
 import { chunkTextForOutbound as chunkTextForOutboundSdk } from "openclaw/plugin-sdk/text-chunking";
 
 export {
@@ -58,8 +57,8 @@ export type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 // This facade shipped distinct empty and whitespace behavior. Preserve that
 // contract while delegating fractional limits to the progress-safe SDK owner.
 export function chunkTextForOutbound(text: string, limit: number): string[] {
-  if (text.length === 0) {
-    return [""];
+  if (text.length === 0 || limit <= 0) {
+    return [text];
   }
   if (Number.isFinite(limit) && limit > 0 && !Number.isInteger(limit)) {
     return chunkTextForOutboundSdk(text, limit);

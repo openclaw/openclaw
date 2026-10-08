@@ -29,7 +29,7 @@ title: "Thinking levels"
   - Anthropic Claude Opus 4.7+ also exposes `/think max`; it maps to the same provider-owned max effort path.
   - Direct DeepSeek V4 models expose `/think xhigh|max`; both map to DeepSeek `reasoning_effort: "max"` while lower non-off levels map to `high`.
   - OpenRouter-routed DeepSeek V4 models expose `/think xhigh` and send OpenRouter-supported `reasoning.effort` values instead of DeepSeek-native top-level `reasoning_effort`. Lower non-off levels map to `high`, and stored `max` overrides fall back to `xhigh`.
-  - Ollama thinking-capable models expose `/think low|medium|high|max`. Verified full-effort Ollama Cloud families such as GLM 5.2 and DeepSeek V4 send each matching native `think` effort, including `max`; other models and local Ollama keep the compatible `high` mapping for `/think max`.
+  - Ollama thinking-capable models expose `/think low|medium|high|max`. Verified full-effort Ollama Cloud families such as GLM 5.2, GLM 5.3, GLM 5.3 Flash, Kimi K3, DeepSeek V4, and DeepSeek V4.1 Flash send native `think: "max"` for `/think max`; other models and local Ollama keep the compatible `high` mapping.
   - OpenAI GPT models map `/think` through the selected model and auth route's effort support. On supported OpenAI Platform/API-key routes, `/think off` sends explicit `reasoning.effort: "none"`, including when using the Codex runtime. Subscription routes that do not support `none` retain the provider or native runtime's default reasoning behavior; `off` does not guarantee zero reasoning there. Supervised native Codex threads keep their own thinking settings.
   - GPT-6 Astra and GPT-5.6 Sol and Terra expose native `/think ultra` through the Codex runtime with either Platform API-key or ChatGPT subscription auth. OpenClaw preserves Ultra for ordinary turns; `/btw` intentionally runs at `off`. Codex owns proactive delegation and the model-specific inference effort (Astra uses `xhigh`). Ultra is not sent as a raw Responses API reasoning effort. Other Codex models with a native reasoning effort can also use Ultra: Codex selects their supported inference effort while retaining its native delegation policy. Models with no native effort choices can use host-bootstrapped Ultra through the OpenClaw runtime.
   - The OpenClaw and Claude Code runtimes expose logical `/think ultra` for all models. They select the highest supported native effort and add run-scoped planning and verification guidance. Delegation guidance appears only when `sessions_spawn` is available; Ultra does not grant tools or bypass their policy. Nonreasoning models remain nonreasoning, and models without an effort control retain the provider default.
@@ -101,11 +101,11 @@ check the per-agent setting if the model default still does not take effect.
 
 ## Fast mode (/fast)
 
-- Levels: `auto|on|off|default`.
+- Levels: `auto|on|off|ultrafast|default`.
 - Directive-only message toggles a session fast-mode override and replies `Fast mode set to auto.`, `Fast mode enabled.`, or `Fast mode disabled.`. Use `/fast default` to clear the session override and inherit the configured default; aliases include `inherit`, `clear`, `reset`, and `unpin`.
 - Send `/fast` (or `/fast status`) with no mode to see the current effective fast-mode state.
 - OpenClaw resolves fast mode in this order:
-  1. Inline `/fast auto|on|off` override on the current message
+  1. Inline `/fast auto|on|off|ultrafast` override on the current message
   2. Stored session override from a directive-only message (`/fast default` clears this layer)
   3. Per-agent default (`agents.entries.*.fastModeDefault`)
   4. Global default (`agents.defaults.fastModeDefault`)
@@ -113,9 +113,9 @@ check the per-agent setting if the model default still does not take effect.
   6. Fallback: `off`
 - Valid model-scoped `params.fastMode` / `params.fast_mode` values and valid cutoff keys are typed agent-runtime controls. They do not count as authored provider request params and do not select OpenClaw or Codex by themselves. Pin `agentRuntime.id: "openclaw"` or `agentRuntime.id: "codex"` when a recipe depends on one runtime.
 - `auto` keeps the session/config mode as auto but resolves each new model call independently. Calls that start before the auto cutoff have fast mode enabled; later retry, fallback, tool-result, or continuation calls start with fast mode disabled. The cutoff defaults to 60 seconds; set `agents.defaults.models["<provider>/<model>"].params.fastAutoOnSeconds` on the active model to change it.
-- For `openai/*`, fast mode maps to OpenAI API Fast mode (formerly Priority processing). OpenClaw currently sends `service_tier=priority` on supported Responses requests.
-- The Control UI stores Standard as `fastMode: false`, Fast as `true`, and Ultrafast as `"ultrafast"` in the same session preference. Ultrafast is offered only when support is confirmed for the selected model and account. Codex rechecks that support at each turn request and falls back to Fast when support is unavailable; a saved preference never grants access.
-- On Codex harness turns, the shared runtime control supersedes a configured native app-server tier: Fast on sends `priority`, Fast off sends `null` to clear the OpenClaw-owned tier, and auto decides for each model call. A configured Codex tier is used only when no shared Fast-mode run control is supplied. The existing `appServer.enableUltrafast: true` opt-in can upgrade Fast or active Auto to supported Ultrafast; Standard still clears the tier. See [Codex harness](/plugins/codex-harness/commands#shared-fast-mode-and-codex-fast-mode).
+- For `openai/*`, fast mode maps to OpenAI API Fast mode (formerly Priority processing). OpenClaw sends `service_tier=priority` for ordinary Fast and `service_tier=ultrafast` for explicit Ultrafast on supported Responses requests, including the OpenClaw runtime. The provider decides whether the selected account and model can use that tier; sending it does not guarantee faster service.
+- The Control UI stores Standard as `fastMode: false`, Fast as `true`, and Ultrafast as `"ultrafast"` in the same session preference. On the embedded OpenClaw runtime, Ultrafast availability comes from the selected available API-key OpenAI Responses route, whether the key comes from an auth profile, environment, or provider config (including SecretRefs), without requiring catalog metadata. A response that echoes a different tier suppresses Ultrafast for that selected credential, model, and route while the recorded observation remains current. Changing a direct credential's configured binding clears its observation. ChatGPT accounts still require authenticated catalog support. For an explicit Ultrafast selection with `appServer.enableUltrafast` unset or `true`, Codex rechecks its native catalog at each turn request and falls back to Fast when support is unavailable; a saved preference never grants access.
+- On Codex harness turns, the shared runtime control supersedes a configured native app-server tier: Fast on starts from `priority`, Fast off sends `null` to clear the OpenClaw-owned tier, and auto decides for each model call. A configured Codex tier is used only when no shared Fast-mode run control is supplied. Ultrafast requires an effective shared `"ultrafast"` selection, including an authored `fastModeDefault: "ultrafast"`, and an authenticated app-server catalog that advertises it for the selected native model. Fast, active Auto, and unspecified controls never automatically upgrade or request the Ultrafast catalog. A native `serviceTier: "ultrafast"` starts from `priority` until the shared selection requests it. An unset `appServer.enableUltrafast` or `true` permits explicit selection; `false` hides Ultrafast for the Codex runtime in the picker, sends ordinary Fast (`priority`) even for explicit Ultrafast, and skips the catalog check. Standard and inactive Auto still clear the tier. See [Codex harness](/plugins/codex-harness/commands#shared-fast-mode-and-codex-fast-mode).
 - For direct API-key `anthropic/*` requests, Opus 5 and Opus 4.8 use native `speed=fast`. Other supported models use Priority Tier: on sets `service_tier=auto`, off sets `service_tier=standard_only`. Sonnet 5 supports neither mapping; OAuth requests receive neither field.
 - For `minimax/*` on the Anthropic-compatible path, `/fast on` (or `params.fastMode: true`) rewrites `MiniMax-M2.7` to `MiniMax-M2.7-highspeed`.
 - Explicit Anthropic `serviceTier` / `service_tier` model params override the fast-mode default when both are set. OpenClaw still skips Anthropic service-tier injection for non-Anthropic proxy base URLs.
@@ -134,9 +134,9 @@ check the per-agent setting if the model default still does not take effect.
 - Tool failure summaries remain visible in normal mode, but raw error detail suffixes are hidden unless verbose is `full`.
 - When verbose is `full`, tool outputs are also forwarded after completion (separate bubble, truncated to a safe length). If you toggle `/verbose on|full|off` while a run is in-flight, subsequent tool bubbles honor the new setting.
 - `agents.defaults.toolProgressDetail` controls the shape of `/verbose` tool summaries and progress-draft tool lines. Use `"explain"` (default) for compact human labels and `"raw"` for unabridged non-shell detail. Standalone shell summaries require `/verbose full` for command text; progress drafts require the channel's explicit `streaming.*.commandText: "raw"` opt-in. Per-agent `agents.entries.*.toolProgressDetail` overrides the default.
-  - `/verbose on`: `🛠️ Exec`
-  - `/verbose full` + `explain`: `🛠️ Exec: check JS syntax for /tmp/app.js`
-  - `/verbose full` + `raw`: `🛠️ Exec: check JS syntax for /tmp/app.js, node --check /tmp/app.js`
+  - `/verbose on`: `Exec`
+  - `/verbose full` + `explain`: `check JS syntax for /tmp/app.js`
+  - `/verbose full` + `raw`: `check JS syntax for /tmp/app.js, node --check /tmp/app.js`
 
 ## Plugin trace directives (/trace)
 
@@ -169,7 +169,7 @@ Malformed local-model reasoning tags are handled conservatively. Closed `<think>
 
 ## Heartbeats
 
-- Heartbeat probe body is the configured heartbeat prompt (default: `Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply NO_REPLY.`). Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).
+- Heartbeat check body is the configured heartbeat prompt (default: `Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply NO_REPLY.`). Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).
 - Heartbeat delivery uses the last outbound-capable non-reasoning payload. Separate reasoning or `Thinking` payloads remain internal, and a reasoning-only heartbeat result produces no alert.
 
 ## Web chat UI

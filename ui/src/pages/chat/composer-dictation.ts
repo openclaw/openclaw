@@ -465,7 +465,7 @@ export class ComposerDictationController {
     this.pointerTarget = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
     this.pointerBounds = this.pointerTarget?.getBoundingClientRect() ?? null;
     this.pointerTarget?.setPointerCapture?.(event.pointerId);
-    this.pointerTarget?.addEventListener("lostpointercapture", this.handleLostPointerCapture);
+    this.pointerTarget?.addEventListener("lostpointercapture", this.handleDocumentPointerCancel);
     this.suppressClick = true;
     this.suppressedPointerId = event.pointerId;
     this.setPhase("pressing");
@@ -570,16 +570,9 @@ export class ComposerDictationController {
     void this.stop({ commit: false });
   };
 
-  private readonly handleLostPointerCapture = (event: Event): void => {
-    if ((event as PointerEvent).pointerId === this.pointerId) {
-      void this.stop({ commit: false });
-    }
-  };
-
   private readonly handleVisibilityChange = (): void => {
     if (document.visibilityState === "hidden") {
-      this.clearClickSuppression();
-      void this.stop({ commit: false });
+      this.handleWindowBlur();
     }
   };
 
@@ -714,7 +707,10 @@ export class ComposerDictationController {
       this.holdTimer = null;
     }
     if (this.pointerId !== null) {
-      this.pointerTarget?.removeEventListener("lostpointercapture", this.handleLostPointerCapture);
+      this.pointerTarget?.removeEventListener(
+        "lostpointercapture",
+        this.handleDocumentPointerCancel,
+      );
       try {
         this.pointerTarget?.releasePointerCapture?.(this.pointerId);
       } catch {

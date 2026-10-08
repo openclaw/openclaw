@@ -8,6 +8,7 @@ import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import * as processSpawner from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
+import { createCommandResult as commandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
 import { addGatewayServiceCommands } from "../daemon-cli/register-service-commands.js";
@@ -19,6 +20,7 @@ import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import {
   type createServiceActivationFixture,
   readyRecoveryHealth,
+  serviceUpdateResult,
 } from "./update-command-service-recovery.test-support.js";
 import type { InstallRootTransitionFixture } from "./update-command-service-transition.test-support.js";
 import {
@@ -59,13 +61,7 @@ export function registerRestartOutcomeTests(
         shouldRestart: true,
         jsonMode: true,
       });
-      const result: UpdateRunResult = {
-        status: "ok",
-        mode: "npm",
-        root,
-        steps: [],
-        durationMs: 0,
-      };
+      const result: UpdateRunResult = serviceUpdateResult(root);
       const prepared = await prepareUpdateRestart(
         {
           root,
@@ -97,16 +93,11 @@ export function registerRestartOutcomeTests(
         } else {
           expect(argv).toContain("install");
         }
-        return {
-          code: 0,
+        return commandResult({
           stdout: argv.includes("restart")
             ? JSON.stringify(mocks.writeJson.mock.lastCall?.[0])
             : JSON.stringify({ action: "install", ok: true }),
-          stderr: "",
-          signal: null,
-          killed: false,
-          termination: "exit",
-        };
+        });
       });
       const onVerified = vi.fn();
       const activation = maybeRestartService({
@@ -209,24 +200,14 @@ export function registerRestartOutcomeTests(
             programArguments: [process.execPath, packageEntry, "gateway", "--port", "19305"],
           };
           mocks.running = true;
-          return {
-            code: 0,
+          return commandResult({
             stdout: JSON.stringify({ action: "install", ok: true }),
-            stderr: "",
-            signal: null,
-            killed: false,
-            termination: "exit",
-          };
+          });
         });
-        const result: UpdateRunResult = {
-          status: "ok",
-          mode: "npm",
-          root: packageRoot,
+        const result: UpdateRunResult = serviceUpdateResult(packageRoot, {
           before: { version: VERSION },
           after: { version: VERSION },
-          steps: [],
-          durationMs: 0,
-        };
+        });
         const prepared = await prepareUpdateRestart(
           {
             root,
@@ -324,6 +305,7 @@ export function registerRestartOutcomeTests(
           .mockRejectedValueOnce(new Error("later native refusal"));
       }
       mocks.health.mockResolvedValue({
+        outcome: "failed",
         healthy: false,
         staleGatewayPids:
           scenario === "retry refusal" || scenario === "writable retry health" ? [4242] : [],
@@ -333,6 +315,7 @@ export function registerRestartOutcomeTests(
       if (progressing) {
         const health = {
           ...readyRecoveryHealth(19305, true),
+          outcome: "starting" as const,
           healthy: false,
           waitOutcome: "still-starting" as const,
           elapsedMs: 300_000,
@@ -371,14 +354,7 @@ export function registerRestartOutcomeTests(
         );
         return actual.runCommandWithTimeout(argv, options);
       });
-      const result: UpdateRunResult = {
-        status: "ok",
-        mode: "npm",
-        root,
-        steps: [],
-        durationMs: 0,
-        ...(progressing ? { after: { version: VERSION } } : {}),
-      };
+      const result = serviceUpdateResult(root, progressing ? { after: { version: VERSION } } : {});
       expect(
         await maybeRestartService({
           shouldRestart: true,
@@ -488,16 +464,14 @@ export function registerRestartOutcomeTests(
     "classifies only the complete owned restart health response ($scenario)",
     async ({ scenario, response, action = "restart" }) => {
       const { root, mocks } = getFixture();
-      mocks.child.mockResolvedValueOnce({
-        code: 1,
-        stdout: json,
-        stderr: "",
-        signal: null,
-        killed: false,
-        termination: "exit",
-        cleanup: "normal",
-        ...response,
-      });
+      mocks.child.mockResolvedValueOnce(
+        commandResult({
+          code: 1,
+          stdout: json,
+          cleanup: "normal",
+          ...response,
+        }),
+      );
       await expect(
         runUpdatedInstallGatewayCommand(
           {

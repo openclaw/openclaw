@@ -189,7 +189,6 @@ const options = ${JSON.stringify(options)};
 options.platforms = new Set(["macos"]);
 await new NpmUpdateSmoke(options)["guestMacos"]("echo update", 30_000, {
   append() {},
-  logPath: ${JSON.stringify(path.join(root, "update.log"))},
   signal: new AbortController().signal,
 });`,
               ],
@@ -206,7 +205,6 @@ await new NpmUpdateSmoke(options)["guestMacos"]("echo update", 30_000, {
           const result = smoke["guestMacos"]("echo update", 30_000, {
             append: (chunk) =>
               output.push(typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8")),
-            logPath: path.join(root, "update.log"),
             signal: new AbortController().signal,
           });
           if (exitCode === 0) {
@@ -253,15 +251,10 @@ await new NpmUpdateSmoke(options)["guestMacos"]("echo update", 30_000, {
     },
   );
 
-  it("selects macOS desktop users with homes on spaced mounted volumes", () => {
-    const root = tempDirs.make("openclaw-parallels-npm-update-");
-    const prlctlPath = path.join(root, "prlctl");
-    writeFileSync(
-      prlctlPath,
-      `#!/usr/bin/env bash
-set -euo pipefail
-args=" $* "
-if [[ "$args" == *" /usr/bin/stat -f %Su /dev/console"* ]]; then
+  it.each([
+    {
+      field: "user",
+      script: `if [[ "$args" == *" /usr/bin/stat -f %Su /dev/console"* ]]; then
   printf '%s\\n' 'loginwindow'
   exit 0
 fi
@@ -269,54 +262,47 @@ if [[ "$args" == *" /usr/bin/dscl . -list /Users NFSHomeDirectory"* ]]; then
   printf '%s\\n' '_daemon /var/root'
   printf '%s\\n' 'clawuser /Volumes/Macintosh HD/Users/clawuser'
   exit 0
-fi
-exit 7
-`,
-    );
-    chmodSync(prlctlPath, 0o755);
-
-    withEnv(
-      {
-        OPENAI_API_KEY: "test-key",
-        PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
-      },
-      () => {
-        const smoke = new NpmUpdateSmoke(smokeOptions("macos"));
-
-        expect(smoke["resolveMacosDesktopUser"]()).toBe("clawuser");
-      },
-    );
-  });
-
-  it("keeps spaces in macOS sudo fallback desktop homes", () => {
-    const root = tempDirs.make("openclaw-parallels-npm-update-");
-    const prlctlPath = path.join(root, "prlctl");
-    writeFileSync(
-      prlctlPath,
-      `#!/usr/bin/env bash
-set -euo pipefail
-args=" $* "
-if [[ "$args" == *" /usr/bin/dscl . -read /Users/clawuser NFSHomeDirectory"* ]]; then
+fi`,
+      expected: "clawuser",
+    },
+    {
+      field: "home",
+      script: `if [[ "$args" == *" /usr/bin/dscl . -read /Users/clawuser NFSHomeDirectory"* ]]; then
   printf '%s\\n' 'NFSHomeDirectory: /Volumes/Macintosh HD/Users/clawuser'
   exit 0
-fi
+fi`,
+      expected: "/Volumes/Macintosh HD/Users/clawuser",
+    },
+  ] as const)(
+    "resolves macOS desktop $field on spaced mounted volumes",
+    ({ field, script, expected }) => {
+      const root = tempDirs.make("openclaw-parallels-npm-update-");
+      const prlctlPath = path.join(root, "prlctl");
+      writeFileSync(
+        prlctlPath,
+        `#!/usr/bin/env bash
+set -euo pipefail
+args=" $* "
+${script}
 exit 7
 `,
-    );
-    chmodSync(prlctlPath, 0o755);
+      );
+      chmodSync(prlctlPath, 0o755);
 
-    withEnv(
-      {
-        OPENAI_API_KEY: "test-key",
-        PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
-      },
-      () => {
-        const smoke = new NpmUpdateSmoke(smokeOptions("macos"));
-
-        expect(smoke["resolveMacosDesktopHome"]("clawuser")).toBe(
-          "/Volumes/Macintosh HD/Users/clawuser",
-        );
-      },
-    );
-  });
+      withEnv(
+        {
+          OPENAI_API_KEY: "test-key",
+          PATH: `${root}${path.delimiter}${process.env.PATH ?? ""}`,
+        },
+        () => {
+          const smoke = new NpmUpdateSmoke(smokeOptions("macos"));
+          const actual =
+            field === "user"
+              ? smoke["resolveMacosDesktopUser"]()
+              : smoke["resolveMacosDesktopHome"]("clawuser");
+          expect(actual).toBe(expected);
+        },
+      );
+    },
+  );
 });

@@ -102,6 +102,106 @@ describe("markdownToStory inline formatting", () => {
       },
     ]);
   });
+
+  it("links a bare URL that follows text", () => {
+    expect(markdownToStory("Docs: see https://docs.example.com/guide for details")).toEqual([
+      {
+        inline: [
+          "Docs: see ",
+          {
+            link: {
+              href: "https://docs.example.com/guide",
+              content: "https://docs.example.com/guide",
+            },
+          },
+          " for details",
+        ],
+      },
+    ]);
+  });
+
+  it("keeps sentence punctuation after a bare URL out of the link", () => {
+    const link = { link: { href: "https://example.com/a", content: "https://example.com/a" } };
+    expect(markdownToStory("see https://example.com/a. Or (https://example.com/a)!")).toEqual([
+      { inline: ["see ", link, ". Or (", link, ")!"] },
+    ]);
+  });
+
+  it("keeps balanced parentheses inside a bare URL", () => {
+    const url = "https://en.wikipedia.org/wiki/Function_(mathematics)";
+    const link = { link: { href: url, content: url } };
+    expect(markdownToStory(`see ${url}. Or (${url})!`)).toEqual([
+      { inline: ["see ", link, ". Or (", link, ")!"] },
+    ]);
+  });
+
+  it("keeps nested balanced parentheses inside a bare URL", () => {
+    const url = "https://example.com/a(b(c)d)";
+    const link = { link: { href: url, content: url } };
+    expect(markdownToStory(`${url} and see ${url}.`)).toEqual([
+      { inline: [link, " and see ", link, "."] },
+    ]);
+  });
+
+  it("keeps balanced parentheses nested at any depth inside a bare URL", () => {
+    const url = "https://example.com/a(b(c(d)e)f)";
+    const link = { link: { href: url, content: url } };
+    expect(markdownToStory(`${url} and see ${url}. Or (${url})!`)).toEqual([
+      { inline: [link, " and see ", link, ". Or (", link, ")!"] },
+    ]);
+  });
+
+  it("trims an unbalanced closing paren after a bare URL", () => {
+    const link = { link: { href: "https://example.com/a", content: "https://example.com/a" } };
+    expect(markdownToStory("(see https://example.com/a)")).toEqual([
+      { inline: ["(see ", link, ")"] },
+    ]);
+  });
+
+  it("keeps punctuation before a stray paren out of a bare URL", () => {
+    const link = { link: { href: "https://example.com/a", content: "https://example.com/a" } };
+    expect(markdownToStory("see https://example.com/a:( sad")).toEqual([
+      { inline: ["see ", link, ":( sad"] },
+    ]);
+  });
+
+  it("keeps an unmatched closing paren inside a bare URL", () => {
+    const url = "https://example.com/?q=a)b";
+    expect(markdownToStory(url)).toEqual([{ inline: [{ link: { href: url, content: url } }] }]);
+  });
+
+  const chart = {
+    block: { image: { src: "https://example.com/chart.png", alt: "chart", height: 0, width: 0 } },
+  };
+
+  it.each([
+    {
+      markdown: "Here is the chart ![chart](https://example.com/chart.png)",
+      expected: [{ inline: ["Here is the chart "] }, chart],
+    },
+    {
+      markdown: "## Results ![chart](https://example.com/chart.png)",
+      expected: [{ block: { header: { tag: "h2", content: ["Results "] } } }, chart],
+    },
+    {
+      markdown: "## ![chart](https://example.com/chart.png)",
+      expected: [chart],
+    },
+    {
+      markdown: "> see ![chart](https://example.com/chart.png)",
+      expected: [{ inline: [{ blockquote: ["see "] }] }, chart],
+    },
+    {
+      markdown: "**look ![chart](https://example.com/chart.png)** now",
+      expected: [{ inline: [{ bold: ["look "] }, " now"] }, chart],
+    },
+    {
+      markdown: "- see **![chart](https://example.com/chart.png)**",
+      expected: [{ inline: ["- see "] }, chart],
+    },
+  ])("hoists the image in $markdown to a native image block", ({ markdown, expected }) => {
+    expect(markdownToStory(markdown)).toEqual(expected);
+  });
 });
 
 describe("markdownToStory paragraph boundaries", () => {
@@ -203,11 +303,11 @@ describe("markdownToStory list rendering", () => {
       name: "images inside list items",
       markdown: "- ![diagram](https://example.com/diagram.png)",
       expected: [
+        { inline: ["- "] },
         {
-          inline: [
-            "- !",
-            { link: { href: "https://example.com/diagram.png", content: "diagram" } },
-          ],
+          block: {
+            image: { src: "https://example.com/diagram.png", alt: "diagram", height: 0, width: 0 },
+          },
         },
       ],
     },

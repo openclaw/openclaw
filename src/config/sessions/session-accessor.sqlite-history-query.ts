@@ -1,6 +1,8 @@
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
-import { sql } from "kysely";
-import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
+import type {
+  SessionTranscriptDisplayDeltaResult,
+  SessionTranscriptMessageByIdOptions,
+} from "../../gateway/session-transcript-read.types.js";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { hasSqlitePostCommitScope } from "../../infra/sqlite-post-commit.js";
@@ -13,12 +15,7 @@ import {
 import type { TranscriptReadWindowOptions } from "../../sessions/transcript-read-window.js";
 import { isVisibleTranscriptRecord } from "../../sessions/transcript-visible-record.js";
 import type {
-  SessionTranscriptMessageAnchorPage,
-  SessionTranscriptMessageEventPage,
-} from "./session-accessor.sqlite-active-events.js";
-import type {
   SessionTranscriptRawDeltaLimits,
-  SessionTranscriptRawDeltaResult,
   TranscriptEvent,
 } from "./session-accessor.sqlite-contract.js";
 import { positionTranscriptDisplayEvents } from "./session-accessor.sqlite-display-position.js";
@@ -27,6 +24,7 @@ import {
   readDisplayableActiveEventById,
   readDisplayableActiveResetMetadataById,
   readHistoricalHistoryAnchorPage,
+  readHistoricalHistoryPrecedingEvent,
   resolveHistoricalHistoryEvent,
 } from "./session-accessor.sqlite-history-interval.js";
 import {
@@ -40,6 +38,9 @@ import {
 } from "./session-accessor.sqlite-history-projection.js";
 import {
   getActiveTranscriptKysely,
+  readSnapshotEventRows,
+  type SessionTranscriptMessageAnchorPage,
+  type SessionTranscriptMessageEventPage,
   type CurrentTranscriptProjection,
   type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-projection-read.js";
@@ -48,7 +49,6 @@ import {
   readTranscriptRawDeltaFromProjection,
 } from "./session-accessor.sqlite-raw-delta-read.js";
 import {
-  assertVisibleMessageRangeJson,
   hasUnindexedVisibleMessages,
   iterateVisibleMessageRange,
   iterateVisibleMessageMetadata,
@@ -57,7 +57,7 @@ import {
 } from "./session-accessor.sqlite-reset-window.js";
 import { MAX_VISIBLE_MESSAGE_MAX_MESSAGES } from "./session-accessor.sqlite-visible-cursor.js";
 import { resolveSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
-import { transcriptEventJsonSql } from "./transcript-payload.js";
+import { readTranscriptPayload } from "./transcript-payload.js";
 
 const recentHistoryWindows = new Map<
   string,
@@ -76,24 +76,11 @@ function readBoundaryEvents(
   if (eventSeqs.length === 0) {
     return new Map();
   }
-  const db = getActiveTranscriptKysely(projection.database);
   return new Map(
-    executeSqliteQuerySync(
-      projection.database.db,
-      db
-        .selectFrom("transcript_events as event")
-        .select([
-          "event.seq",
-          transcriptEventJsonSql(projection.database.db, "event").as("event_json"),
-        ])
-        .where("event.session_id", "=", projection.resolved.sessionId)
-        .where(
-          "event.seq",
-          "in",
-          /* kysely-allow-raw: boundaries were selected in this snapshot; bind their physical rows once. */
-          sql<number>`(SELECT value FROM json_each(${JSON.stringify(eventSeqs)}))`,
-        ),
-    ).rows.map((row) => [row.seq, parseStoredTranscriptEvent(row.event_json)]),
+    readSnapshotEventRows(projection, eventSeqs).map((row) => [
+      row.seq,
+      parseStoredTranscriptEvent(readTranscriptPayload(row)),
+    ]),
   );
 }
 
@@ -101,7 +88,7 @@ function readVisibleHistoryRange(
   projection: CurrentTranscriptProjection,
   start: number,
   endExclusive: number,
-  history = resolveVisibleHistoryProjection(projection),
+  history: VisibleHistoryProjection,
 ): SessionTranscriptMessageEvent[] {
   const range = resolveVisibleHistoryRange(history, start, endExclusive);
   if (range.boundedEnd <= range.boundedStart) {
@@ -207,14 +194,12 @@ type SessionTranscriptMessageById = SessionTranscriptMessageEvent & {
 type HistoryEventById =
   | SessionTranscriptMessageById
   | { historical: NonNullable<ReturnType<typeof readDisplayableActiveEventById>> };
-export type SessionTranscriptMessageByIdOptions =
-  | { currentOnly?: false; maxBytes?: never }
-  | { currentOnly: true; maxBytes: number };
+export type { SessionTranscriptMessageByIdOptions } from "../../gateway/session-transcript-read.types.js";
 
 function resolveHistoryEventById(
   projection: CurrentTranscriptProjection,
   eventId: string,
-  history = resolveVisibleHistoryProjection(projection),
+  history: VisibleHistoryProjection,
   maxBytes?: number,
 ): HistoryEventById | undefined {
   const boundary = history.boundaries.find((candidate) => candidate.eventId === eventId);
@@ -256,19 +241,7 @@ function resolveHistoryEventById(
       };
 }
 
-type SessionTranscriptRawDeltaPage = Extract<SessionTranscriptRawDeltaResult, { kind: "page" }>;
-
-export type SessionTranscriptDisplayDeltaResult =
-  | (Omit<SessionTranscriptRawDeltaPage, "events"> & {
-      activeLeafEntryId: string | null;
-      events: Array<
-        SessionTranscriptRawDeltaPage["events"][number] & {
-          messageSeq?: number;
-          displayPosition?: TranscriptDisplayPosition;
-        }
-      >;
-    })
-  | Exclude<SessionTranscriptRawDeltaResult, { kind: "page" }>;
+export type { SessionTranscriptDisplayDeltaResult } from "../../gateway/session-transcript-read.types.js";
 
 /** Raw cursor progress carries the same reset-relative ordinals as pages and live messages. */
 export function readTranscriptDisplayDeltaFromProjection(
@@ -320,13 +293,6 @@ export function readTranscriptDisplayDeltaFromProjection(
   return { ...result, activeLeafEntryId: projection.state.leafEventId, events };
 }
 
-export function readSessionTranscriptHistoryEventsFromProjection(
-  projection: CurrentTranscriptProjection,
-): SessionTranscriptMessageEvent[] {
-  const history = resolveVisibleHistoryProjection(projection);
-  return readVisibleHistoryRange(projection, 0, history.total, history);
-}
-
 function readRecentHistoryInSnapshot(
   projection: CurrentTranscriptProjection,
   history: VisibleHistoryProjection,
@@ -353,27 +319,18 @@ function readRecentHistoryInSnapshot(
     max: MAX_VISIBLE_MESSAGE_MAX_MESSAGES,
   });
   const maxLines = resolveIntegerOption(options.maxLines, 0, { min: 0 });
-  if (maxMessages === 0 || maxLines === 0) {
-    return {
-      activeLeafEntryId: projection.state.leafEventId,
-      ...(deltaCursor ? { deltaCursor } : {}),
-      events: [],
-      displaySource: history.displaySource,
-      totalMessages: history.total,
-      ...(captureReadWindow ? { readWindow: captureHistoryReadWindow(history, []) } : {}),
-      ...(windowChange ? { windowReset: true } : {}),
-    };
-  }
-  const maxBytes = resolveIntegerOption(options.maxBytes, 8 * 1024 * 1024, { min: 1024 });
-  const { start: selectedStart, bytes } = resolveRecentHistoryStart(
-    projection,
-    Math.max(0, history.total - maxLines),
-    history.total,
-    history,
-    maxBytes,
-    maxMessages,
-  );
-  const events = readVisibleHistoryRange(projection, selectedStart, history.total, history);
+  const empty = maxMessages === 0 || maxLines === 0;
+  const { start, bytes } = empty
+    ? { start: history.total, bytes: 0 }
+    : resolveRecentHistoryStart(
+        projection,
+        Math.max(0, history.total - maxLines),
+        history.total,
+        history,
+        resolveIntegerOption(options.maxBytes, 8 * 1024 * 1024, { min: 1024 }),
+        maxMessages,
+      );
+  const events = empty ? [] : readVisibleHistoryRange(projection, start, history.total, history);
   const page: SessionTranscriptMessageEventPage = {
     activeLeafEntryId: projection.state.leafEventId,
     ...(deltaCursor ? { deltaCursor } : {}),
@@ -383,7 +340,9 @@ function readRecentHistoryInSnapshot(
     ...(captureReadWindow ? { readWindow: captureHistoryReadWindow(history, events) } : {}),
     ...(windowChange ? { windowReset: true } : {}),
   };
-  remember?.(page, bytes);
+  if (!empty) {
+    remember?.(page, bytes);
+  }
   return page;
 }
 
@@ -529,7 +488,8 @@ export function readSessionTranscriptHistoryEventByIdFromProjection(
   projection: CurrentTranscriptProjection,
   eventId: string,
   options: SessionTranscriptMessageByIdOptions = {},
-): SessionTranscriptMessageById | undefined {
+  needsPreceding?: (event: SessionTranscriptMessageEvent) => boolean,
+): (SessionTranscriptMessageById & { preceding?: SessionTranscriptMessageEvent }) | undefined {
   const history = resolveVisibleHistoryProjection(projection);
   const resolved = resolveHistoryEventById(projection, eventId, history, options.maxBytes);
   const event: SessionTranscriptMessageById | undefined =
@@ -542,10 +502,17 @@ export function readSessionTranscriptHistoryEventByIdFromProjection(
   if (!event) {
     return undefined;
   }
-  return positionTranscriptDisplayEvents(projection, history.displaySource, [event])[0];
+  const preceding = needsPreceding?.(event)
+    ? resolved && "historical" in resolved
+      ? readHistoricalHistoryPrecedingEvent(projection, resolved.historical, event)
+      : readVisibleHistoryRange(projection, Math.max(0, event.seq - 2), event.seq - 1, history)[0]
+    : undefined;
+  return positionTranscriptDisplayEvents(projection, history.displaySource, [
+    { ...event, ...(preceding ? { preceding } : {}) },
+  ])[0];
 }
 
-/** Select ID candidates and projected-history presence from one validated snapshot. */
+/** Select ID candidates and projected-history presence from one admitted snapshot. */
 export function readSessionTranscriptHistoryEventLookupFromProjection(
   projection: CurrentTranscriptProjection,
   eventId: string,
@@ -564,7 +531,6 @@ export function readSessionTranscriptHistoryEventLookupFromProjection(
       hasDisplayMessages: events.some((row) => isVisibleTranscriptRecord(row.event)),
     };
   }
-  assertVisibleMessageRangeJson(projection, range.messageStart, range.messageEnd);
   const boundaryEvents = readBoundaryEvents(projection, range.boundaries.values());
   let first: SessionTranscriptMessageEvent | undefined;
   let hasDisplayMessages = false;

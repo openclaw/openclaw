@@ -3,7 +3,6 @@ import { formatErrorMessage } from "./error-utils.js";
 import {
   buildMemoryIndexStrictSchema,
   MEMORY_EMBEDDING_CACHE_TABLE,
-  MEMORY_INDEX_META_TABLE,
   MEMORY_INDEX_STATE_TABLE,
 } from "./memory-schema-base.js";
 import {
@@ -17,20 +16,15 @@ import {
   MEMORY_INDEX_FTS_TABLE,
   MEMORY_INDEX_PATHS_FTS_TABLE,
   MEMORY_INDEX_SOURCES_TABLE,
-  rebuildMemoryChunkFts,
 } from "./memory-schema-fts.js";
-import {
-  assertLegacyMemoryRowsCopied,
-  ensureLegacyMemoryMigrationIndexes,
-} from "./memory-schema-migration.js";
 import * as provenanceSchema from "./memory-schema-provenance.js";
 import { ensureMemoryRecallMetadataSchema } from "./memory-schema-recall.js";
+import { migrateMemoryIndexStorage } from "./memory-schema-storage-migration.js";
 import {
-  markInvalidImportedMemoryEmbeddings,
-  migrateMemoryIndexStorage,
-  registerMemoryEmbeddingMigrationFunctions,
-} from "./memory-schema-storage-migration.js";
-import { migrateSqliteSchemaToStrict } from "./openclaw-runtime-sqlite.js";
+  canReuseSqliteSchemaInTransaction,
+  migrateSqliteSchemaToStrict,
+  migrateSqliteSchemaToStrictInTransaction,
+} from "./openclaw-runtime-sqlite.js";
 export {
   markInvalidImportedMemoryEmbeddings,
   migrateMemoryIndexStorage,
@@ -69,15 +63,6 @@ export {
 
 // SQLite schema setup for builtin memory index, embedding cache, and FTS.
 
-const LEGACY_MEMORY_INDEX_TRIGGERS = [
-  "memory_files_revision_after_insert",
-  "memory_files_revision_after_update",
-  "memory_files_revision_after_delete",
-  "memory_chunks_revision_after_insert",
-  "memory_chunks_revision_after_update",
-  "memory_chunks_revision_after_delete",
-] as const;
-
 const LEGACY_MEMORY_INDEX_SOURCE_COLUMNS = ["path", "source", "hash", "mtime", "size"] as const;
 const MEMORY_INDEX_SOURCE_COLUMNS = ["id", ...LEGACY_MEMORY_INDEX_SOURCE_COLUMNS] as const;
 const MEMORY_INDEX_SOURCE_COLUMN_TYPES = new Map<string, string>([
@@ -98,8 +83,8 @@ type TableColumnInfo = {
   hidden: number;
 };
 
-function tableColumnInfo(db: DatabaseSync, tableName: string, schema = "main"): TableColumnInfo[] {
-  const rows = db.prepare(`PRAGMA ${schema}.table_xinfo(${tableName})`).all() as Array<{
+function tableColumnInfo(db: DatabaseSync, tableName: string): TableColumnInfo[] {
+  const rows = db.prepare(`PRAGMA main.table_xinfo(${tableName})`).all() as Array<{
     name?: unknown;
     type?: unknown;
     notnull?: unknown;
@@ -123,22 +108,24 @@ function tableColumnInfo(db: DatabaseSync, tableName: string, schema = "main"): 
   );
 }
 
-function tableColumns(db: DatabaseSync, tableName: string, schema = "main"): Set<string> {
-  return new Set(tableColumnInfo(db, tableName, schema).map((row) => row.name));
-}
-
 function tableHasExactColumns(
   db: DatabaseSync,
   tableName: string,
   expected: readonly string[],
-  schema = "main",
+  preparedColumns?: TableColumnInfo[],
 ): boolean {
-  const columns = tableColumns(db, tableName, schema);
+  const columns = new Set(
+    (preparedColumns ?? tableColumnInfo(db, tableName)).map((row) => row.name),
+  );
   return columns.size === expected.length && expected.every((column) => columns.has(column));
 }
 
-function tablePrimaryKeyColumns(db: DatabaseSync, tableName: string): string[] {
-  return tableColumnInfo(db, tableName)
+function tablePrimaryKeyColumns(
+  db: DatabaseSync,
+  tableName: string,
+  preparedColumns?: TableColumnInfo[],
+): string[] {
+  return (preparedColumns ?? tableColumnInfo(db, tableName))
     .filter((row) => row.pk > 0)
     .toSorted((left, right) => left.pk - right.pk)
     .map((row) => row.name);
@@ -148,8 +135,9 @@ function tableHasPrimaryKey(
   db: DatabaseSync,
   tableName: string,
   expectedColumns: readonly string[],
+  preparedColumns?: TableColumnInfo[],
 ): boolean {
-  const columns = tablePrimaryKeyColumns(db, tableName);
+  const columns = tablePrimaryKeyColumns(db, tableName, preparedColumns);
   return (
     columns.length === expectedColumns.length &&
     columns.every((column, index) => column === expectedColumns[index])
@@ -202,45 +190,32 @@ function tableHasNoDeclaredCollations(db: DatabaseSync, tableName: string): bool
   return typeof row?.sql === "string" && !/\bCOLLATE\b/iu.test(row.sql);
 }
 
-function tableHasCanonicalSourceColumnTypes(db: DatabaseSync): boolean {
-  const columns = tableColumnInfo(db, MEMORY_INDEX_SOURCES_TABLE);
-  return columns.every((column) => {
-    const expectedType = MEMORY_INDEX_SOURCE_COLUMN_TYPES.get(column.name);
-    const expectedDefault = column.name === "source" ? "'memory'" : null;
-    if (
-      (column.type !== expectedType && !(column.name === "mtime" && column.type === "INTEGER")) ||
-      column.defaultValue !== expectedDefault ||
-      column.hidden !== 0
-    ) {
-      return false;
-    }
-    return true;
-  });
-}
-
-function tableHasCanonicalSourceColumns(db: DatabaseSync): boolean {
-  return (
-    tableHasCanonicalSourceColumnTypes(db) &&
-    tableColumnInfo(db, MEMORY_INDEX_SOURCES_TABLE).every((column) => {
-      return column.name === "id" || column.notnull === 1;
-    })
+function tableHasSourceColumnContract(
+  db: DatabaseSync,
+  nullableColumn?: string,
+  preparedColumns?: TableColumnInfo[],
+): boolean {
+  return (preparedColumns ?? tableColumnInfo(db, MEMORY_INDEX_SOURCES_TABLE)).every(
+    (column) =>
+      (column.type === MEMORY_INDEX_SOURCE_COLUMN_TYPES.get(column.name) ||
+        (column.name === "mtime" && column.type === "INTEGER")) &&
+      column.defaultValue === (column.name === "source" ? "'memory'" : null) &&
+      column.hidden === 0 &&
+      (column.name === nullableColumn || column.notnull === 1),
   );
 }
 
-function tableHasLegacySourceColumns(db: DatabaseSync, hasPathPrimaryKey: boolean): boolean {
-  return (
-    tableHasCanonicalSourceColumnTypes(db) &&
-    tableColumnInfo(db, MEMORY_INDEX_SOURCES_TABLE).every((column) => {
-      return (hasPathPrimaryKey && column.name === "path") || column.notnull === 1;
-    })
-  );
-}
-
-function tableHasIntegerRowIdPrimaryKey(db: DatabaseSync): boolean {
-  const idColumn = tableColumnInfo(db, MEMORY_INDEX_SOURCES_TABLE).find(
+function tableHasIntegerRowIdPrimaryKey(
+  db: DatabaseSync,
+  preparedColumns?: TableColumnInfo[],
+): boolean {
+  const idColumn = (preparedColumns ?? tableColumnInfo(db, MEMORY_INDEX_SOURCES_TABLE)).find(
     (column) => column.name === "id",
   );
-  if (idColumn?.type !== "INTEGER" || !tableHasPrimaryKey(db, MEMORY_INDEX_SOURCES_TABLE, ["id"])) {
+  if (
+    idColumn?.type !== "INTEGER" ||
+    !tableHasPrimaryKey(db, MEMORY_INDEX_SOURCES_TABLE, ["id"], preparedColumns)
+  ) {
     return false;
   }
   // INTEGER PRIMARY KEY DESC and WITHOUT ROWID tables expose a PK index;
@@ -263,10 +238,14 @@ export function migrateMemoryIndexSourcesIdentity(db: DatabaseSync): void {
   if (!tableExists(db, MEMORY_INDEX_SOURCES_TABLE)) {
     return;
   }
-  if (tableHasExactColumns(db, MEMORY_INDEX_SOURCES_TABLE, MEMORY_INDEX_SOURCE_COLUMNS)) {
+  // These predicates precede all migration writes and share the same transaction snapshot.
+  const columns = canReuseSqliteSchemaInTransaction(db)
+    ? tableColumnInfo(db, MEMORY_INDEX_SOURCES_TABLE)
+    : undefined;
+  if (tableHasExactColumns(db, MEMORY_INDEX_SOURCES_TABLE, MEMORY_INDEX_SOURCE_COLUMNS, columns)) {
     if (
-      tableHasCanonicalSourceColumns(db) &&
-      tableHasIntegerRowIdPrimaryKey(db) &&
+      tableHasSourceColumnContract(db, "id", columns) &&
+      tableHasIntegerRowIdPrimaryKey(db, columns) &&
       tableHasNoDeclaredCollations(db, MEMORY_INDEX_SOURCES_TABLE) &&
       tableHasUniqueIndex(db, MEMORY_INDEX_SOURCES_TABLE, ["path", "source"])
     ) {
@@ -274,18 +253,27 @@ export function migrateMemoryIndexSourcesIdentity(db: DatabaseSync): void {
     }
     throw new Error("canonical memory source identity schema is invalid");
   }
-  if (!tableHasExactColumns(db, MEMORY_INDEX_SOURCES_TABLE, LEGACY_MEMORY_INDEX_SOURCE_COLUMNS)) {
+  if (
+    !tableHasExactColumns(
+      db,
+      MEMORY_INDEX_SOURCES_TABLE,
+      LEGACY_MEMORY_INDEX_SOURCE_COLUMNS,
+      columns,
+    )
+  ) {
     throw new Error("canonical memory source identity schema is invalid");
   }
-  const hasPathPrimaryKey = tableHasPrimaryKey(db, MEMORY_INDEX_SOURCES_TABLE, ["path"]);
-  const hasPathSourcePrimaryKey = tableHasPrimaryKey(db, MEMORY_INDEX_SOURCES_TABLE, [
-    "path",
-    "source",
-  ]);
+  const hasPathPrimaryKey = tableHasPrimaryKey(db, MEMORY_INDEX_SOURCES_TABLE, ["path"], columns);
+  const hasPathSourcePrimaryKey = tableHasPrimaryKey(
+    db,
+    MEMORY_INDEX_SOURCES_TABLE,
+    ["path", "source"],
+    columns,
+  );
   if (!hasPathPrimaryKey && !hasPathSourcePrimaryKey) {
     throw new Error("canonical memory source identity schema is invalid");
   }
-  if (!tableHasLegacySourceColumns(db, hasPathPrimaryKey)) {
+  if (!tableHasSourceColumnContract(db, hasPathPrimaryKey ? "path" : undefined, columns)) {
     throw new Error("canonical memory source identity schema is invalid");
   }
 
@@ -330,284 +318,6 @@ export function migrateMemoryIndexSourcesIdentity(db: DatabaseSync): void {
   }
 }
 
-function hasLegacyMemoryIndexTables(db: DatabaseSync, schema = "main"): boolean {
-  return (
-    tableHasExactColumns(db, "meta", ["key", "value"], schema) &&
-    tableHasExactColumns(db, "files", ["path", "source", "hash", "mtime", "size"], schema) &&
-    tableHasExactColumns(
-      db,
-      "chunks",
-      [
-        "id",
-        "path",
-        "source",
-        "start_line",
-        "end_line",
-        "hash",
-        "model",
-        "text",
-        "embedding",
-        "updated_at",
-      ],
-      schema,
-    )
-  );
-}
-
-function hasLegacyEmbeddingCacheTable(db: DatabaseSync, schema = "main"): boolean {
-  return tableHasExactColumns(
-    db,
-    "embedding_cache",
-    ["provider", "model", "provider_key", "hash", "embedding", "dims", "updated_at"],
-    schema,
-  );
-}
-
-function copyLegacyMemoryIndexRows(
-  db: DatabaseSync,
-  schema: string,
-  preservedEmbeddingCacheTable?: string,
-): void {
-  ensureLegacyMemoryMigrationIndexes(db, schema);
-  registerMemoryEmbeddingMigrationFunctions(db);
-  // Canonical-owned chunk sets stay intact; any extra legacy identity invalidates
-  // the source for rebuild. Chunkless sources import only when metadata matches.
-  // Keep invalidated rows for deleted-file cleanup; snapshot before inserts.
-  db.exec(`
-    CREATE TEMP TABLE legacy_import_chunk_excluded_sources AS
-    SELECT DISTINCT owned.path, owned.source,
-      CASE WHEN EXISTS (
-        SELECT 1 FROM ${schema}.chunks AS legacy_chunk
-        WHERE legacy_chunk.path = owned.path AND legacy_chunk.source IS owned.source
-          AND NOT EXISTS (
-            SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS canonical_chunk
-            WHERE canonical_chunk.id = legacy_chunk.id
-              AND canonical_chunk.path IS legacy_chunk.path AND canonical_chunk.source IS legacy_chunk.source
-          )
-      ) THEN 1 ELSE 0 END AS force_reindex
-    FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS owned
-    WHERE EXISTS (
-      SELECT 1 FROM ${schema}.files AS legacy_file
-      WHERE legacy_file.path = owned.path AND legacy_file.source IS owned.source
-    )
-    UNION ALL
-    SELECT canonical.path, canonical.source, 1 AS force_reindex
-    FROM main.${MEMORY_INDEX_SOURCES_TABLE} AS canonical
-    JOIN ${schema}.files AS legacy
-      ON legacy.path = canonical.path AND legacy.source IS canonical.source
-    WHERE (
-      canonical.hash IS NOT legacy.hash
-      OR canonical.mtime IS NOT legacy.mtime
-      OR canonical.size IS NOT legacy.size
-    )
-      AND NOT EXISTS (
-        SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS chunk
-        WHERE chunk.path = canonical.path AND chunk.source IS canonical.source
-      );
-
-    CREATE TEMP TABLE legacy_import_dirty_sources AS
-    SELECT legacy.path, legacy.source
-    FROM ${schema}.files AS legacy
-    WHERE NOT EXISTS (
-      SELECT 1 FROM main.${MEMORY_INDEX_SOURCES_TABLE} AS canonical
-      WHERE canonical.path = legacy.path AND canonical.source IS legacy.source
-    )
-    UNION
-    SELECT legacy.path, legacy.source
-    FROM ${schema}.chunks AS legacy
-    WHERE EXISTS (
-      SELECT 1 FROM ${schema}.files AS owner
-      WHERE owner.path = legacy.path AND owner.source IS legacy.source
-    )
-      AND NOT EXISTS (
-        SELECT 1 FROM temp.legacy_import_chunk_excluded_sources AS excluded
-        WHERE excluded.path = legacy.path AND excluded.source IS legacy.source
-      )
-      AND NOT EXISTS (
-        SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS canonical
-        WHERE canonical.id = legacy.id
-      )
-    UNION
-    SELECT excluded.path, excluded.source
-    FROM temp.legacy_import_chunk_excluded_sources AS excluded
-    WHERE excluded.force_reindex = 1;
-  `);
-  try {
-    db.exec(`
-      INSERT OR IGNORE INTO main.${MEMORY_INDEX_META_TABLE} (key, value)
-      SELECT key, value FROM ${schema}.meta;
-
-      INSERT OR IGNORE INTO main.${MEMORY_INDEX_SOURCES_TABLE} (path, source, hash, mtime, size)
-      SELECT path, source, hash, mtime, size
-      FROM ${schema}.files;
-
-      INSERT OR IGNORE INTO main.${MEMORY_INDEX_CHUNKS_TABLE} (
-        id, path, source, start_line, end_line, hash, model, text, embedding, updated_at
-      )
-      -- Chunks are derived from source rows. Shipped cleanup could leave an
-      -- ownerless legacy chunk, which must not become permanently searchable.
-      SELECT id, path, source, start_line, end_line, hash, model, text,
-             openclaw_memory_embedding_from_json(embedding), updated_at
-      FROM ${schema}.chunks AS legacy
-      WHERE EXISTS (
-        SELECT 1 FROM ${schema}.files AS owner
-        WHERE owner.path = legacy.path AND owner.source IS legacy.source
-      )
-        AND NOT EXISTS (
-          SELECT 1 FROM temp.legacy_import_chunk_excluded_sources AS excluded
-          WHERE excluded.path = legacy.path AND excluded.source IS legacy.source
-        );
-
-      -- Content hashes are SHA-256 hex, so an empty hash cannot match a file.
-      -- Imported sources or chunks may be absent from runtime-owned vector
-      -- indexes, while excluded sources need a canonical rebuild. Retaining the
-      -- dirty source lets sync rebuild every derived row or clean up a deleted file.
-      UPDATE main.${MEMORY_INDEX_SOURCES_TABLE}
-      SET hash = ''
-      WHERE EXISTS (
-        SELECT 1 FROM temp.legacy_import_dirty_sources AS dirty
-        WHERE dirty.path = main.${MEMORY_INDEX_SOURCES_TABLE}.path
-          AND dirty.source IS main.${MEMORY_INDEX_SOURCES_TABLE}.source
-      );
-    `);
-    assertLegacyMemoryRowsCopied(
-      db,
-      `SELECT COUNT(*) AS missing
-       FROM ${schema}.meta AS legacy
-       WHERE NOT EXISTS (
-         SELECT 1 FROM main.${MEMORY_INDEX_META_TABLE} AS canonical
-         WHERE canonical.key = legacy.key
-       )`,
-      "meta",
-    );
-    assertLegacyMemoryRowsCopied(
-      db,
-      `SELECT COUNT(*) AS missing
-       FROM ${schema}.files AS legacy
-       WHERE NOT EXISTS (
-         SELECT 1 FROM main.${MEMORY_INDEX_SOURCES_TABLE} AS canonical
-         WHERE canonical.path = legacy.path
-           AND canonical.source IS legacy.source
-       )
-       AND NOT EXISTS (
-         SELECT 1 FROM temp.legacy_import_chunk_excluded_sources AS excluded
-         WHERE excluded.force_reindex = 1
-           AND excluded.path = legacy.path
-           AND excluded.source IS legacy.source
-       )`,
-      "files",
-    );
-    assertLegacyMemoryRowsCopied(
-      db,
-      `SELECT COUNT(*) AS missing
-       FROM ${schema}.chunks AS legacy
-       WHERE EXISTS (
-         SELECT 1 FROM ${schema}.files AS owner
-         WHERE owner.path = legacy.path AND owner.source IS legacy.source
-       )
-       AND NOT EXISTS (
-         SELECT 1 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS canonical
-         WHERE canonical.id = legacy.id
-           AND canonical.path IS legacy.path
-           AND canonical.source IS legacy.source
-       )
-       AND NOT EXISTS (
-         SELECT 1 FROM temp.legacy_import_chunk_excluded_sources AS excluded
-         WHERE excluded.path = legacy.path AND excluded.source IS legacy.source
-       )`,
-      "chunks",
-    );
-    // Repair derived orphans only after authoritative copy assertions pass;
-    // otherwise a synthetic owner could mask an uncopyable legacy source row.
-    db.exec(`
-      INSERT OR IGNORE INTO main.${MEMORY_INDEX_SOURCES_TABLE} (path, source, hash, mtime, size)
-      SELECT DISTINCT orphan.path, orphan.source, '', 0, 0 FROM main.${MEMORY_INDEX_CHUNKS_TABLE} AS orphan
-      WHERE NOT EXISTS (
-        SELECT 1 FROM main.${MEMORY_INDEX_SOURCES_TABLE} AS owner
-        WHERE owner.path = orphan.path AND owner.source IS orphan.source
-      );
-    `);
-  } finally {
-    db.exec("DROP TABLE temp.legacy_import_dirty_sources");
-    db.exec("DROP TABLE temp.legacy_import_chunk_excluded_sources");
-  }
-  if (
-    preservedEmbeddingCacheTable !== "embedding_cache" &&
-    hasLegacyEmbeddingCacheTable(db, schema)
-  ) {
-    db.exec(`
-      CREATE TABLE IF NOT EXISTS main.${MEMORY_EMBEDDING_CACHE_TABLE} (
-        provider TEXT NOT NULL,
-        model TEXT NOT NULL,
-        provider_key TEXT NOT NULL,
-        hash TEXT NOT NULL,
-        embedding BLOB NOT NULL,
-        dims INTEGER,
-        updated_at INTEGER NOT NULL,
-        PRIMARY KEY (provider, model, provider_key, hash)
-      ) STRICT;
-      INSERT OR IGNORE INTO main.${MEMORY_EMBEDDING_CACHE_TABLE} (
-        provider, model, provider_key, hash, embedding, dims, updated_at
-      )
-      SELECT provider, model, provider_key, hash, openclaw_memory_embedding_from_json(embedding), dims, updated_at
-      FROM ${schema}.embedding_cache;
-    `);
-    assertLegacyMemoryRowsCopied(
-      db,
-      `SELECT COUNT(*) AS missing
-       FROM ${schema}.embedding_cache AS legacy
-       WHERE NOT EXISTS (
-         SELECT 1 FROM main.${MEMORY_EMBEDDING_CACHE_TABLE} AS canonical
-         WHERE canonical.provider = legacy.provider
-           AND canonical.model = legacy.model
-           AND canonical.provider_key = legacy.provider_key
-           AND canonical.hash = legacy.hash
-       )`,
-      "embedding_cache",
-    );
-  }
-  markInvalidImportedMemoryEmbeddings(db, schema);
-}
-
-function migrateLegacyMemoryIndexTables(
-  db: DatabaseSync,
-  preservedEmbeddingCacheTable?: string,
-  ftsTable = MEMORY_INDEX_FTS_TABLE,
-): void {
-  if (!hasLegacyMemoryIndexTables(db)) {
-    return;
-  }
-
-  db.exec("SAVEPOINT migrate_legacy_memory_index_tables");
-  try {
-    copyLegacyMemoryIndexRows(db, "main", preservedEmbeddingCacheTable);
-    // `chunks_fts` belongs to the legacy schema and is dropped below even when
-    // a deprecated caller also supplied that name as its preferred FTS table.
-    if (ftsTable !== "chunks_fts" && tableExists(db, ftsTable)) {
-      // FTS is derived from canonical chunks. Rebuild inside the migration
-      // savepoint so imported rows and removed stale rows publish atomically.
-      rebuildMemoryChunkFts(db, ftsTable);
-    }
-    if (preservedEmbeddingCacheTable !== "embedding_cache" && hasLegacyEmbeddingCacheTable(db)) {
-      db.exec("DROP TABLE embedding_cache");
-    }
-    for (const trigger of LEGACY_MEMORY_INDEX_TRIGGERS) {
-      db.exec(`DROP TRIGGER IF EXISTS ${trigger}`);
-    }
-    db.exec(`
-      DROP TABLE IF EXISTS chunks_fts;
-      DROP TABLE chunks;
-      DROP TABLE files;
-      DROP TABLE meta;
-      RELEASE migrate_legacy_memory_index_tables;
-    `);
-  } catch (err) {
-    db.exec("ROLLBACK TO migrate_legacy_memory_index_tables");
-    db.exec("RELEASE migrate_legacy_memory_index_tables");
-    throw err;
-  }
-}
-
 /** Ensure canonical memory index tables and the optional FTS table exist. */
 export function ensureMemoryIndexSchema(params: {
   db: DatabaseSync;
@@ -619,6 +329,26 @@ export function ensureMemoryIndexSchema(params: {
   ftsEnabled: boolean;
   ftsTokenizer?: "unicode61" | "trigram";
 }): { ftsAvailable: boolean; ftsError?: string } {
+  if (
+    tableHasExactColumns(params.db, "meta", ["key", "value"]) &&
+    tableHasExactColumns(params.db, "files", ["path", "source", "hash", "mtime", "size"]) &&
+    tableHasExactColumns(params.db, "chunks", [
+      "id",
+      "path",
+      "source",
+      "start_line",
+      "end_line",
+      "hash",
+      "model",
+      "text",
+      "embedding",
+      "updated_at",
+    ])
+  ) {
+    throw new Error(
+      "Retired memory index format detected. Preserve a complete copy of your state and configuration, then use OpenClaw 2026.9.7 to migrate a compatible copy of this index before retrying the upgrade.",
+    );
+  }
   const embeddingCacheTable = params.embeddingCacheTable ?? MEMORY_EMBEDDING_CACHE_TABLE;
   const ftsTable = params.ftsTable ?? MEMORY_INDEX_FTS_TABLE;
   params.db.exec(
@@ -634,49 +364,26 @@ export function ensureMemoryIndexSchema(params: {
   `);
   migrateMemoryIndexSourcesIdentity(params.db);
   params.db.exec(`
-
-    CREATE TRIGGER IF NOT EXISTS memory_index_sources_revision_after_insert
-    AFTER INSERT ON ${MEMORY_INDEX_SOURCES_TABLE}
-    BEGIN
-      UPDATE ${MEMORY_INDEX_STATE_TABLE} SET revision = revision + 1 WHERE id = 1;
-    END;
-    CREATE TRIGGER IF NOT EXISTS memory_index_sources_revision_after_update
-    AFTER UPDATE ON ${MEMORY_INDEX_SOURCES_TABLE}
-    BEGIN
-      UPDATE ${MEMORY_INDEX_STATE_TABLE} SET revision = revision + 1 WHERE id = 1;
-    END;
-    CREATE TRIGGER IF NOT EXISTS memory_index_sources_revision_after_delete
-    AFTER DELETE ON ${MEMORY_INDEX_SOURCES_TABLE}
-    BEGIN
-      UPDATE ${MEMORY_INDEX_STATE_TABLE} SET revision = revision + 1 WHERE id = 1;
-    END;
-
-    CREATE TRIGGER IF NOT EXISTS memory_index_chunks_revision_after_insert
-    AFTER INSERT ON ${MEMORY_INDEX_CHUNKS_TABLE}
-    BEGIN
-      UPDATE ${MEMORY_INDEX_STATE_TABLE} SET revision = revision + 1 WHERE id = 1;
-    END;
-    CREATE TRIGGER IF NOT EXISTS memory_index_chunks_revision_after_update
-    AFTER UPDATE ON ${MEMORY_INDEX_CHUNKS_TABLE}
-    BEGIN
-      UPDATE ${MEMORY_INDEX_STATE_TABLE} SET revision = revision + 1 WHERE id = 1;
-    END;
-    CREATE TRIGGER IF NOT EXISTS memory_index_chunks_revision_after_delete
-    AFTER DELETE ON ${MEMORY_INDEX_CHUNKS_TABLE}
-    BEGIN
-      UPDATE ${MEMORY_INDEX_STATE_TABLE} SET revision = revision + 1 WHERE id = 1;
-    END;
+    ${[MEMORY_INDEX_SOURCES_TABLE, MEMORY_INDEX_CHUNKS_TABLE]
+      .flatMap((table) =>
+        ["insert", "update", "delete"].map(
+          (event) => `CREATE TRIGGER IF NOT EXISTS ${table}_revision_after_${event}
+            AFTER ${event.toUpperCase()} ON ${table}
+            BEGIN
+              UPDATE ${MEMORY_INDEX_STATE_TABLE} SET revision = revision + 1 WHERE id = 1;
+            END;`,
+        ),
+      )
+      .join("\n")}
 
     CREATE INDEX IF NOT EXISTS idx_memory_index_sources_source
       ON ${MEMORY_INDEX_SOURCES_TABLE}(source);
     CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path_source
       ON ${MEMORY_INDEX_CHUNKS_TABLE}(path, source);
-    CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path
-      ON ${MEMORY_INDEX_CHUNKS_TABLE}(path);
+    DROP INDEX IF EXISTS idx_memory_index_chunks_path;
     CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source
       ON ${MEMORY_INDEX_CHUNKS_TABLE}(source);
   `);
-  migrateLegacyMemoryIndexTables(params.db, params.embeddingCacheTable, ftsTable);
   provenanceSchema.ensureMemoryChunkProvenance(params.db);
   dropDisabledMemoryFts(params.db, ftsTable, params.ftsEnabled);
   if (params.cacheEnabled) {
@@ -689,7 +396,11 @@ export function ensureMemoryIndexSchema(params: {
         ON ${embeddingCacheTable}(updated_at);
     `);
   }
-  migrateSqliteSchemaToStrict(
+  // Worker admission owns BEGIN, foreign-key policy, and the guarded commit.
+  const migrateStrict = params.db.isTransaction
+    ? migrateSqliteSchemaToStrictInTransaction
+    : migrateSqliteSchemaToStrict;
+  migrateStrict(
     params.db,
     buildMemoryIndexStrictSchema({
       embeddingCacheTable,
@@ -716,9 +427,7 @@ export function ensureMemoryIndexSchema(params: {
         dropMemoryChunkFtsTriggers(params.db);
         dropMemoryPathFtsTriggers(params.db);
       }
-      const message = formatErrorMessage(err);
-      ftsAvailable = false;
-      ftsError = message;
+      ftsError = formatErrorMessage(err);
     }
   }
 

@@ -1,4 +1,3 @@
-// Irc plugin module implements probe behavior.
 import { resolveIrcAccount } from "./accounts.js";
 import { connectIrcClient } from "./client.js";
 import { buildIrcConnectOptions } from "./connect-options.js";

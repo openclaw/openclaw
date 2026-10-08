@@ -1,22 +1,9 @@
-/**
- * Agent image resize helpers.
- *
- * Prepares image bytes for provider payload limits using the configured image processor.
- */
 import type { ImageContent } from "../../llm/types.js";
 import { convertImageToPng, createImageProcessor, type ImageProbe } from "../../media/image-ops.js";
 
 interface ImageBytes {
   data: Buffer;
   mimeType: string;
-}
-
-interface ResizedImage extends ImageBytes {
-  originalWidth: number;
-  originalHeight: number;
-  width: number;
-  height: number;
-  wasResized: boolean;
 }
 
 type ProcessImageResult =
@@ -74,11 +61,10 @@ export async function processImage(
         message: "[Image omitted: could not be resized below the inline image size limit.]",
       };
     }
-    const dimensionNote = formatDimensionNote(resized);
-    if (dimensionNote) {
-      hints.push(dimensionNote);
+    if (resized.hint) {
+      hints.push(resized.hint);
     }
-    prepared = resized;
+    prepared = resized.image;
   }
   return {
     ok: true,
@@ -100,7 +86,7 @@ function orientedDimensions(probe: ImageProbe): { width: number; height: number 
 }
 
 /** Returns null when the image processor cannot meet the inline dimensions and payload limit. */
-async function resizeImage(img: ImageBytes): Promise<ResizedImage | null> {
+async function resizeImage(img: ImageBytes): Promise<{ image: ImageBytes; hint?: string } | null> {
   const inputBuffer = img.data;
   const inputBase64Size = 4 * Math.ceil(inputBuffer.byteLength / 3);
   const processor = createImageProcessor();
@@ -117,15 +103,7 @@ async function resizeImage(img: ImageBytes): Promise<ResizedImage | null> {
       originalHeight <= MAX_IMAGE_HEIGHT &&
       inputBase64Size <= MAX_IMAGE_BASE64_BYTES
     ) {
-      return {
-        data: img.data,
-        mimeType: img.mimeType,
-        originalWidth,
-        originalHeight,
-        width: originalWidth,
-        height: originalHeight,
-        wasResized: false,
-      };
+      return { image: img };
     }
 
     const qualitySteps = [JPEG_QUALITY, 85, 70, 55, 40, 35];
@@ -148,24 +126,12 @@ async function resizeImage(img: ImageBytes): Promise<ResizedImage | null> {
     }
 
     return {
-      data: output.data,
-      mimeType: output.mimeType,
-      originalWidth,
-      originalHeight,
-      width: output.width,
-      height: output.height,
-      wasResized: output.resized,
+      image: output,
+      hint: output.resized
+        ? `[Image: original ${originalWidth}x${originalHeight}, displayed at ${output.width}x${output.height}. Multiply coordinates by ${(originalWidth / output.width).toFixed(2)} to map to original image.]`
+        : undefined,
     };
   } catch {
     return null;
   }
-}
-
-function formatDimensionNote(result: ResizedImage): string | undefined {
-  if (!result.wasResized) {
-    return undefined;
-  }
-
-  const scale = result.originalWidth / result.width;
-  return `[Image: original ${result.originalWidth}x${result.originalHeight}, displayed at ${result.width}x${result.height}. Multiply coordinates by ${scale.toFixed(2)} to map to original image.]`;
 }

@@ -101,6 +101,21 @@ async function memoryHostEventSourceNeedsMigration(params: {
   );
 }
 
+async function moveLegacyMemoryHostEventFile(
+  source: ReadyLegacyMemoryHostEventSource,
+  target: string,
+) {
+  const { statRegularFileSync } = await import("openclaw/plugin-sdk/file-access-runtime");
+  return source.root.move(source.relativePath, target, {
+    assertBeforeMutation: () => {
+      // Discovery and reads precede awaited work; every move still requires a regular file.
+      if (statRegularFileSync(source.filePath).missing) {
+        throw new Error("Memory Core host event file no longer exists");
+      }
+    },
+  });
+}
+
 async function finalizeLegacyMemoryHostEventSource(params: {
   source: ReadyLegacyMemoryHostEventSource;
   changes: string[];
@@ -114,7 +129,7 @@ async function finalizeLegacyMemoryHostEventSource(params: {
     throw new Error(`Missing Memory Core host event archive path for ${params.source.filePath}`);
   }
   try {
-    await params.source.root.move(params.source.relativePath, archivedRelativePath);
+    await moveLegacyMemoryHostEventFile(params.source, archivedRelativePath);
     params.changes.push(
       `Archived Memory Core host events legacy source -> ${path.join(params.source.workspaceDir, archivedRelativePath)}`,
     );
@@ -137,7 +152,7 @@ async function restoreClaimedMemoryHostEventSource(params: {
       return;
     }
     if (!(await params.source.root.exists(params.activeRelativePath))) {
-      await params.source.root.move(params.source.relativePath, params.activeRelativePath);
+      await moveLegacyMemoryHostEventFile(params.source, params.activeRelativePath);
       return;
     }
     params.warnings.push(
@@ -156,6 +171,10 @@ async function migrateLegacyMemoryHostEventSource(params: {
   changes: string[];
   warnings: string[];
 }): Promise<"completed" | "blocked" | "warning"> {
+  const blocked = (warning: string): "blocked" => {
+    params.warnings.push(warning);
+    return "blocked";
+  };
   const { normalizeMemoryHostEventRecordForStorage, resolveMemoryHostEventLogPath } =
     await import("openclaw/plugin-sdk/memory-host-events");
   const activeRelativePath = path.relative(
@@ -167,7 +186,7 @@ async function migrateLegacyMemoryHostEventSource(params: {
   let claimFinalized = source.storage === "archive";
   if (source.storage === "active") {
     const generation = await resolveMemoryHostEventArchivePath(source);
-    await source.root.move(source.relativePath, generation.claimRelativePath);
+    await moveLegacyMemoryHostEventFile(source, generation.claimRelativePath);
     source = {
       ...source,
       filePath: path.join(source.workspaceDir, generation.claimRelativePath),
@@ -240,10 +259,9 @@ async function migrateLegacyMemoryHostEventSource(params: {
       });
     }
     if (params.warnings.length > warningStart) {
-      params.warnings.push(
+      return blocked(
         "Left Memory Core host events legacy source in place because invalid rows still require repair",
       );
-      return "blocked";
     }
 
     const checkpointStore =
@@ -319,10 +337,9 @@ async function migrateLegacyMemoryHostEventSource(params: {
       existingSourceBase === undefined &&
       laterGenerationExists
     ) {
-      params.warnings.push(
+      return blocked(
         `Skipped Memory Core host event recovery because ${source.filePath} has no durable checkpoint and later generations are already imported; left the archive in place`,
       );
-      return "blocked";
     }
     const sourceSequenceBase =
       previousCheckpoint?.sequenceBase ?? existingSourceBase ?? latestLegacySequence;
@@ -356,10 +373,9 @@ async function migrateLegacyMemoryHostEventSource(params: {
         (record) => !Number.isSafeInteger(record.value.sequence) || record.value.sequence >= 0,
       )
     ) {
-      params.warnings.push(
+      return blocked(
         "Skipped Memory Core host event migration because legacy sequence capacity is exhausted; left legacy source in place",
       );
-      return "blocked";
     }
     const nativeCount = existingEntries.filter((entry) => entry.value.sequence >= 0).length;
     const legacyRetentionLimit = Math.max(0, MAX_MEMORY_HOST_EVENTS - nativeCount);
@@ -382,10 +398,9 @@ async function migrateLegacyMemoryHostEventSource(params: {
     let retainedRecords = sequencedRecords.filter((record) => desiredLegacyKeys.has(record.key));
     const capacity = params.context.getPluginStateCapacity?.();
     if (!capacity) {
-      params.warnings.push(
+      return blocked(
         "Skipped Memory Core host event migration because plugin-wide SQLite capacity is unavailable; left legacy source in place",
       );
-      return "blocked";
     }
     const pluginRemainingCapacity = Math.max(0, capacity.maxEntries - capacity.liveEntries);
     const cursorStore = params.context.openPluginStateKeyedStore<StoredMemoryHostCursor>({
@@ -396,10 +411,9 @@ async function migrateLegacyMemoryHostEventSource(params: {
     const existingCursor = await cursorStore.lookup(cursorKey);
     const cursorCapacity = candidateRecords.length > 0 && existingCursor?.kind !== "cursor" ? 1 : 0;
     if (cursorCapacity > pluginRemainingCapacity) {
-      params.warnings.push(
+      return blocked(
         "Skipped Memory Core host event migration because SQLite plugin state has no room for its workspace cursor; left legacy source in place",
       );
-      return "blocked";
     }
     const checkpointCapacity = checkpointValue ? 0 : 1;
     if (
@@ -410,23 +424,20 @@ async function migrateLegacyMemoryHostEventSource(params: {
     ) {
       // Checkpoints use reject-new and never expire while their raw archives remain.
       // Stop before import/archive once durable processed-generation capacity is full.
-      params.warnings.push(
+      return blocked(
         "Skipped Memory Core host event migration because durable raw-archive checkpoint capacity is exhausted; left legacy source in place",
       );
-      return "blocked";
     }
     if (cursorCapacity + checkpointCapacity > pluginRemainingCapacity) {
-      params.warnings.push(
+      return blocked(
         "Skipped Memory Core host event migration because SQLite plugin state has no room for its raw-archive checkpoint; left legacy source in place",
       );
-      return "blocked";
     }
     const importEntries = params.context.importPluginStateEntries;
     if (candidateRecords.length > 0 && !importEntries) {
-      params.warnings.push(
+      return blocked(
         "Skipped Memory Core host event migration because retention-aware SQLite import is unavailable; left legacy source in place",
       );
-      return "blocked";
     }
     let retainedKeys = new Set(retainedRecords.map((record) => record.key));
     let missing = retainedRecords.filter((record) => !existingKeys.has(record.key));
@@ -447,10 +458,9 @@ async function migrateLegacyMemoryHostEventSource(params: {
     const availableEventCapacity =
       pluginRemainingCapacity - reservedCapacity + replaceableLegacyRows;
     if (missing.length > availableEventCapacity) {
-      params.warnings.push(
+      return blocked(
         `Skipped Memory Core host event migration because SQLite plugin state has room for ${availableEventCapacity} of ${missing.length} missing rows after reserving its cursor and raw-archive checkpoint; left legacy source in place`,
       );
-      return "blocked";
     }
     if (cursorCapacity > 0) {
       const lastSequence = existingEntries.reduce(
@@ -463,10 +473,9 @@ async function migrateLegacyMemoryHostEventSource(params: {
       await cursorStore.register(cursorKey, { kind: "cursor", lastSequence });
       const registeredCursor = await cursorStore.lookup(cursorKey);
       if (registeredCursor?.kind !== "cursor") {
-        params.warnings.push(
+        return blocked(
           "Skipped Memory Core host event migration because its workspace cursor could not be verified; left legacy source in place",
         );
-        return "blocked";
       }
     }
     importEntries?.(
@@ -481,10 +490,9 @@ async function migrateLegacyMemoryHostEventSource(params: {
     const importedKeys = new Set((await store.entries()).map((entry) => entry.key));
     const missingKey = retainedRecords.find((record) => !importedKeys.has(record.key))?.key;
     if (missingKey) {
-      params.warnings.push(
+      return blocked(
         `Skipped archiving Memory Core host events because SQLite verification missed ${missingKey}`,
       );
-      return "blocked";
     }
 
     if (source.storage === "archive") {
@@ -519,10 +527,9 @@ async function migrateLegacyMemoryHostEventSource(params: {
       registeredCheckpoint.sequenceBase !== checkpoint.sequenceBase ||
       registeredCheckpoint.size !== checkpoint.size
     ) {
-      params.warnings.push(
+      return blocked(
         `Failed verifying Memory Core host event raw-archive checkpoint for ${source.filePath}`,
       );
-      return "blocked";
     }
     if (source.storage !== "archive" && (await source.root.exists(activeRelativePath))) {
       params.warnings.push(

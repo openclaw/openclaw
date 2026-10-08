@@ -29,8 +29,8 @@ openclaw storage test archive --json
 ## List
 
 `storage list` shows each configured location, its provider, its display target
-when available, and its probe state.
-Probing reads the location marker and checks access and the encryption key. It
+when available, and its check state.
+Checking reads the location marker and checks access and the encryption key. It
 does not initialize locations or write test objects. Providers that report
 capacity include free and total bytes in JSON output.
 
@@ -56,11 +56,11 @@ only if it is new. For example:
 `storage test <name>` writes a small, unique `.openclaw-probe-<uuid>` object at the location root, reads
 it back through the configured encryption layer, verifies every byte, and deletes
 the object. It requires an initialized location and never initializes one.
-No probe directory is created on filesystem locations.
+No check directory is created on filesystem locations.
 
 A successful JSON result includes `state: "ok"` and `sizeBytes`. A failed write,
 read-back verification, or cleanup fails the command. If a provider is unreachable
-during cleanup, reconnect it before removing any leftover probe objects.
+during cleanup, reconnect it before removing any leftover check objects.
 
 Storage locations can contain credentials and private conversations. Use
 encryption unless the destination is already protected and you deliberately

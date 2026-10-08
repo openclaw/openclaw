@@ -53,6 +53,8 @@ describe("transactional runtime pin state", () => {
       expect(readDaemonRuntimePin(scope, null).pin).toBeUndefined();
       const explicit = readDaemonRuntimePinForInstall(scope, override, true);
       expect(explicit.pin).toBeUndefined();
+      expect(explicit.revision).toBe(readDaemonRuntimePin(scope, override).revision);
+      expect(explicit.definition).toBe(readDaemonRuntimePin(scope, override).definition);
       commitDaemonRuntimePin(scope, { expected: explicit }, null);
       expect(readDaemonRuntimePin(scope, command).stored).toBe(false);
     });

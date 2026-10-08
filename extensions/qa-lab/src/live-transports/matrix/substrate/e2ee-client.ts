@@ -48,14 +48,10 @@ type MatrixQaPluginStateValue = {
 
 const matrixQaPluginStateNamespaces = new Map<string, Map<string, MatrixQaPluginStateValue>>();
 
-function resolveMatrixQaPluginStateNamespaceKey(options: OpenKeyedStoreOptions): string {
-  return `${options.env?.OPENCLAW_STATE_DIR ?? ""}\0${options.namespace}`;
-}
-
 function resolveMatrixQaPluginStateRows(
   options: OpenKeyedStoreOptions,
 ): Map<string, MatrixQaPluginStateValue> {
-  const namespaceKey = resolveMatrixQaPluginStateNamespaceKey(options);
+  const namespaceKey = `${options.env?.OPENCLAW_STATE_DIR ?? ""}\0${options.namespace}`;
   let rows = matrixQaPluginStateNamespaces.get(namespaceKey);
   if (!rows) {
     rows = new Map();
@@ -269,6 +265,7 @@ export async function createMatrixQaE2eeScenarioClient(
 
   const shutdownTimeoutMs = Math.max(1, Math.min(10_000, params.timeoutMs));
   const lifecycle = createMatrixQaE2eeClientLifecycle({
+    abortPendingRequests: () => client.abortPendingRequests(),
     detachListeners: () => {
       client.off("room.message", recordEvent);
       client.off("verification.summary", recordVerificationSummary);
@@ -332,10 +329,15 @@ export async function createMatrixQaE2eeScenarioClient(
     }
     return client.crypto;
   };
-  const runClientOperation = <T>(label: string, run: () => Promise<T>) =>
+  const runClientOperation = <T>(
+    label: string,
+    roomId: string,
+    run: (assertCurrent: () => void) => Promise<T>,
+  ) =>
     lifecycle.runOperation({
       label,
-      run,
+      run: (assertActive) =>
+        client.withLiveEncryptedRoom(roomId, run, { assertCurrent: assertActive }),
       timeoutMs: params.timeoutMs,
     });
 
@@ -391,7 +393,7 @@ export async function createMatrixQaE2eeScenarioClient(
         roomId: string;
       },
     ) {
-      return await runClientOperation("Matrix E2EE text send", () =>
+      return await runClientOperation("Matrix E2EE text send", opts.roomId, () =>
         client.sendMessage(opts.roomId, buildMatrixQaMessageContent(opts) as MessageEventContent),
       );
     },
@@ -400,7 +402,7 @@ export async function createMatrixQaE2eeScenarioClient(
         roomId: string;
       },
     ) {
-      return await runClientOperation("Matrix E2EE notice send", () =>
+      return await runClientOperation("Matrix E2EE notice send", opts.roomId, () =>
         client.sendMessage(opts.roomId, {
           ...buildMatrixQaMessageContent(opts),
           msgtype: "m.notice",
@@ -415,27 +417,33 @@ export async function createMatrixQaE2eeScenarioClient(
       mentionUserIds?: string[];
       roomId: string;
     }) {
-      const encrypted = await requireCrypto().encryptMedia(opts.buffer);
-      const contentUri = await client.uploadContent(
-        encrypted.buffer,
-        opts.contentType,
-        opts.fileName,
-      );
-      const file: EncryptedFile = { url: contentUri, ...encrypted.file };
-      return await runClientOperation("Matrix E2EE image send", () =>
-        client.sendMessage(opts.roomId, {
-          ...buildMatrixQaMessageContent({
-            body: opts.body,
-            mentionUserIds: opts.mentionUserIds,
-          }),
-          file,
-          filename: opts.fileName,
-          info: {
-            mimetype: opts.contentType,
-            size: opts.buffer.byteLength,
-          },
-          msgtype: "m.image",
-        } as MessageEventContent),
+      return await runClientOperation(
+        "Matrix E2EE image send",
+        opts.roomId,
+        async (assertCurrent) => {
+          const encrypted = await requireCrypto().encryptMedia(opts.buffer);
+          assertCurrent();
+          const contentUri = await client.uploadContent(
+            encrypted.buffer,
+            opts.contentType,
+            opts.fileName,
+          );
+          assertCurrent();
+          const file: EncryptedFile = { url: contentUri, ...encrypted.file };
+          return await client.sendMessage(opts.roomId, {
+            ...buildMatrixQaMessageContent({
+              body: opts.body,
+              mentionUserIds: opts.mentionUserIds,
+            }),
+            file,
+            filename: opts.fileName,
+            info: {
+              mimetype: opts.contentType,
+              size: opts.buffer.byteLength,
+            },
+            msgtype: "m.image",
+          } as MessageEventContent);
+        },
       );
     },
     async startVerification(

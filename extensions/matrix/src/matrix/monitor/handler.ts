@@ -1,6 +1,6 @@
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
-  createChannelInboundEnvelopeBuilder,
+  createChannelInboundEnvelopeBuilderAsync,
   hasFinalInboundReplyDispatch,
   resolveInboundReplyDispatchCounts,
 } from "openclaw/plugin-sdk/channel-inbound";
@@ -66,15 +66,14 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     blockStreamingEnabled,
     historyLimit,
     startupMs,
-    startupGraceMs,
     dropPreStartupMessages,
     inboundDeduper,
     directTracker,
     getMemberDisplayName,
     resolveLiveUserAllowlist = resolveMatrixMonitorLiveUserAllowlist,
     resolveStorePath: resolveStorePathImpl = resolveStorePath,
-    createChannelInboundEnvelopeBuilder:
-      createChannelInboundEnvelopeBuilderImpl = createChannelInboundEnvelopeBuilder,
+    createChannelInboundEnvelopeBuilderAsync:
+      createChannelInboundEnvelopeBuilderImpl = createChannelInboundEnvelopeBuilderAsync,
     resolveHumanDelayConfig: resolveHumanDelayConfigImpl = resolveHumanDelayConfig,
   } = params;
   const handlerConfig: MatrixHandlerRuntimeConfig = {
@@ -84,7 +83,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     configuredBotUserIds,
     resolveLiveUserAllowlist,
     resolveStorePath: resolveStorePathImpl,
-    createChannelInboundEnvelopeBuilder: createChannelInboundEnvelopeBuilderImpl,
+    createChannelInboundEnvelopeBuilderAsync: createChannelInboundEnvelopeBuilderImpl,
     resolveHumanDelayConfig: resolveHumanDelayConfigImpl,
   };
   const handlerState = createMatrixHandlerState({
@@ -168,7 +167,6 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           eventTs: eventTs ?? undefined,
           eventAge: eventAge ?? undefined,
           startupMs,
-          startupGraceMs,
           event,
           eventType,
           eventId,
@@ -180,37 +178,34 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             inboundReplayClaim = handle;
           },
         });
+      const ingressContext = {
+        handler: handlerConfig,
+        roomId,
+        event,
+        eventTs: eventTs ?? undefined,
+        senderId,
+        roomHistoryTracker,
+        commitInboundEventIfClaimed,
+      };
       const continueIngress = async (paramsLocal: MatrixIngressAccessParams) => {
         const access = await resolveMatrixIngressAccess({
-          handler: handlerConfig,
+          ...ingressContext,
           params: paramsLocal,
-          roomId,
-          event,
-          eventTs: eventTs ?? undefined,
-          senderId,
           isReactionEvent,
           readStoreAllowFrom: handlerState.readStoreAllowFrom,
           shouldSendPairingReply: handlerState.shouldSendPairingReply,
           resolveLiveAccountAllowlists: handlerState.resolveLiveAccountAllowlists,
-          roomHistoryTracker,
-          commitInboundEventIfClaimed,
         });
         if (!access) {
           return undefined;
         }
         return await resolveMatrixIngressContent({
-          handler: handlerConfig,
+          ...ingressContext,
           params: paramsLocal,
           access,
-          roomId,
-          event,
           eventType,
           isPollEvent,
-          eventTs: eventTs ?? undefined,
-          senderId,
-          roomHistoryTracker,
           resolveThreadContext,
-          commitInboundEventIfClaimed,
         });
       };
       const ingressResult =
@@ -274,14 +269,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       // Keep the per-room ingress gate focused on ordering-sensitive state updates.
       // Prompt/session enrichment below can run concurrently after the history snapshot is fixed.
       const inboundContext = await resolveMatrixInboundContext({
-        handler: handlerConfig,
+        ...ingressContext,
         ingress: resolvedIngressResult,
-        roomId,
-        event,
-        eventTs: eventTs ?? undefined,
         resolveThreadContext,
         resolveReplyContext,
-        senderId,
         sharedDmContextNoticeRooms,
       });
       if (!inboundContext) {

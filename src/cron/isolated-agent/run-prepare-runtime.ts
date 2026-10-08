@@ -1,12 +1,11 @@
 /** Lazy preparation runtimes and session lifecycle helpers for cron runs. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
-import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "../../agents/auth-profiles/source-check.js";
 import { AUTOMATION_FAILED_TOKEN, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { SkillSnapshot } from "../../skills/types.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
 import type {
   CronAgentExecutionPhaseUpdate,
@@ -34,10 +33,6 @@ export type RunCronAgentTurnParams = {
   agentId?: string;
   lane?: string;
   executionIdentity?: import("../service/state.js").CronExecutionIdentityAdmission;
-  /** Host-only root for system-owned turns; never persisted in cron state. */
-  executionRoot?: string;
-  /** Explicit instruction set for a host-owned turn, including an empty review context. */
-  skillsSnapshot?: SkillSnapshot;
 };
 
 export type WithRunSession = (
@@ -92,7 +87,7 @@ export async function resolveCronAuthSelection(params: {
   if (
     !hasSessionOverride &&
     !hasConfiguredAuthProfiles(params.cfg) &&
-    !hasAnyAuthProfileStoreSource(params.agentDir)
+    !(await hasAnyAuthProfileStoreSourceAsync(params.agentDir))
   ) {
     return undefined;
   }

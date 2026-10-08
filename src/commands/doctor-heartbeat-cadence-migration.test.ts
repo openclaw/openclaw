@@ -51,7 +51,7 @@ async function createFixture(every = "15m") {
   const cfg = {
     agents: {
       defaults: { heartbeat: { every } },
-      list: [{ id: "main" }],
+      entries: { main: {} },
     },
   } as OpenClawConfig;
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
@@ -169,10 +169,10 @@ describe("heartbeat cadence cron migration", () => {
     const fixture = await createFixture();
     const initialCfg = {
       agents: {
-        list: [
-          { id: "alpha", heartbeat: { every: "15m" } },
-          { id: "beta", heartbeat: { every: "20m" } },
-        ],
+        entries: {
+          alpha: { heartbeat: { every: "15m" } },
+          beta: { heartbeat: { every: "20m" } },
+        },
       },
     } as OpenClawConfig;
     await maybeMigrateHeartbeatCadenceToCron({
@@ -185,10 +185,10 @@ describe("heartbeat cadence cron migration", () => {
 
     const updatedCfg = {
       agents: {
-        list: [
-          { id: "alpha", heartbeat: { every: "45m" } },
-          { id: "gamma", heartbeat: { every: "30m" } },
-        ],
+        entries: {
+          alpha: { heartbeat: { every: "45m" } },
+          gamma: { heartbeat: { every: "30m" } },
+        },
       },
     } as OpenClawConfig;
     const result = await maybeMigrateHeartbeatCadenceToCron({
@@ -264,7 +264,7 @@ describe("heartbeat cadence cron migration", () => {
     const cfg = {
       agents: {
         defaults: { heartbeat: { every: "15m" } },
-        list: [{ id: agentId }],
+        entries: { [agentId]: {} },
       },
     } as OpenClawConfig;
     const storePath = resolveCronJobsStorePathFromConfig(cfg, suppliedEnv);

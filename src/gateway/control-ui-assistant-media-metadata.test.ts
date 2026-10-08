@@ -204,109 +204,105 @@ it("retains exotic playback metadata while distinct files fill the inspection sl
   expect(probes.peak).toBe(2);
 });
 
-it("bounds pending distinct inspections and returns retryable busy metadata on overflow", async () => {
-  await using batch = await createBlockedMedia(35);
-  const { paths, requests, probes } = batch;
-  await batch.occupySlots();
-  const observed = observeMetadataRequests();
-  requests.push(...paths.slice(2, 34).map((filePath) => startMediaRequest(filePath)));
-  await observed(32);
-  const shared = startMediaRequest(paths[2]!);
-  const overflow = startMediaRequest(paths[34]!);
-  requests.push(shared, overflow);
-  await observed(34);
-  expect(runFfprobe).toHaveBeenCalledTimes(2);
-  probes.release();
-  const metadata = await Promise.all(requests.map(readMetadataResponse));
-  expect(metadata.at(-1)).toMatchObject({
-    available: false,
-    code: "attachment-unavailable",
-    retryable: true,
-    reason: expect.stringMatching(/busy/i),
-  });
-  for (const entry of metadata.slice(0, -1)) {
-    expect(entry).toMatchObject({ available: true, playback: "transcode", durationMs: 1000 });
-  }
-  expect(runFfprobe).toHaveBeenCalledTimes(34);
-  expect(await readMetadata(paths[34]!)).toMatchObject({
-    available: true,
-    playback: "transcode",
-    durationMs: 1000,
-  });
-  expect(runFfprobe).toHaveBeenCalledTimes(35);
-});
+it.each(["overflow", "abandoned"] as const)(
+  "bounds and reclaims a full %s inspection queue",
+  async (queue) => {
+    await using batch = await createBlockedMedia(35);
+    const { paths, requests, probes } = batch;
+    await batch.occupySlots();
+    const observed = observeMetadataRequests();
+    const queued = paths.slice(2, 34).map((filePath) => startMediaRequest(filePath));
+    requests.push(...queued);
+    await observed(32);
+    if (queue === "abandoned") {
+      const closed = Promise.all(queued.map(({ res }) => once(res, "close")));
+      for (const { res } of queued) {
+        res.destroy();
+      }
+      await closed;
+      await Promise.all(queued.map(({ handled }) => handled));
+    } else {
+      requests.push(startMediaRequest(paths[2]!));
+    }
+    const later = startMediaRequest(paths[34]!);
+    requests.push(later);
+    await observed(queue === "abandoned" ? 33 : 34);
+    expect(runFfprobe).toHaveBeenCalledTimes(2);
+    probes.release();
+    if (queue === "abandoned") {
+      await expectPlaybackResponses([...requests.slice(0, 2), later]);
+      expect(runFfprobe).toHaveBeenCalledTimes(3);
+    } else {
+      const metadata = await Promise.all(requests.map(readMetadataResponse));
+      expect(metadata.at(-1)).toMatchObject({
+        available: false,
+        code: "attachment-unavailable",
+        retryable: true,
+        reason: expect.stringMatching(/busy/i),
+      });
+      for (const entry of metadata.slice(0, -1)) {
+        expect(entry).toMatchObject({ available: true, playback: "transcode", durationMs: 1000 });
+      }
+      expect(runFfprobe).toHaveBeenCalledTimes(34);
+      expect(await readMetadata(paths[34]!)).toMatchObject({
+        available: true,
+        playback: "transcode",
+        durationMs: 1000,
+      });
+      expect(runFfprobe).toHaveBeenCalledTimes(35);
+    }
+  },
+);
 
-it("skips abandoned queued inspections while retaining shared and later live requests", async () => {
-  await using batch = await createBlockedMedia(5);
-  const { paths, requests, probes } = batch;
-  await batch.occupySlots();
-  const observed = observeMetadataRequests();
-  const abandoned = startMediaRequest(paths[2]!);
-  const sharedAbandoned = startMediaRequest(paths[3]!);
-  const sharedLive = startMediaRequest(paths[3]!);
-  const later = startMediaRequest(paths[4]!);
-  requests.push(abandoned, sharedAbandoned, sharedLive, later);
-  await observed(4);
-  const closed = Promise.all([once(abandoned.res, "close"), once(sharedAbandoned.res, "close")]);
-  abandoned.res.destroy();
-  sharedAbandoned.res.destroy();
-  await closed;
-  probes.release();
-  await expectPlaybackResponses([...requests.slice(0, 2), sharedLive, later]);
-  await Promise.all([abandoned.handled, sharedAbandoned.handled]);
-  expect(runFfprobe).toHaveBeenCalledTimes(4);
-});
-
-it("skips a disconnected byte-playback inspection and serves later metadata", async () => {
-  await using batch = await createBlockedMedia(4, "mp3");
-  const { paths, requests, probes } = batch;
-  await batch.occupySlots();
-  const playbackRequested = createDeferred();
-  const resolveTranscode = playback.resolvePlaybackTranscode;
-  vi.spyOn(playback, "resolvePlaybackTranscode").mockImplementation((params) => {
-    const result = resolveTranscode(params);
-    playbackRequested.resolve();
-    return result;
-  });
-  const abandoned = startMediaRequest(paths[2]!, "playback");
-  requests.push(abandoned);
-  await playbackRequested.promise;
-  const observed = observeMetadataRequests();
-  const later = startMediaRequest(paths[3]!);
-  requests.push(later);
-  await observed(1);
-  const closed = once(abandoned.res, "close");
-  abandoned.res.destroy();
-  await closed;
-  probes.release();
-  await expectPlaybackResponses([...requests.slice(0, 2), later], "native");
-  expect(await abandoned.handled).toBe(true);
-  expect(abandoned.end).not.toHaveBeenCalled();
-  expect(runFfprobe).toHaveBeenCalledTimes(3);
-});
-
-it("reclaims a full abandoned queue before active inspections finish", async () => {
-  await using batch = await createBlockedMedia(35);
-  const { paths, requests, probes } = batch;
-  await batch.occupySlots();
-  const observed = observeMetadataRequests();
-  const abandoned = paths.slice(2, 34).map((filePath) => startMediaRequest(filePath));
-  requests.push(...abandoned);
-  await observed(32);
-  const closed = Promise.all(abandoned.map(({ res }) => once(res, "close")));
-  for (const { res } of abandoned) {
-    res.destroy();
-  }
-  await closed;
-  await Promise.all(abandoned.map(({ handled }) => handled));
-  const later = startMediaRequest(paths[34]!);
-  requests.push(later);
-  await observed(33);
-  expect(runFfprobe).toHaveBeenCalledTimes(2);
-  probes.release();
-  await expectPlaybackResponses([...requests.slice(0, 2), later]);
-  expect(runFfprobe).toHaveBeenCalledTimes(3);
-});
+it.each(["meta", "playback"] as const)(
+  "skips abandoned %s inspections while serving later requests",
+  async (mode) => {
+    const metadata = mode === "meta";
+    await using batch = await createBlockedMedia(metadata ? 5 : 4, metadata ? "pcm_s16le" : "mp3");
+    const { paths, requests, probes } = batch;
+    await batch.occupySlots();
+    const playbackRequested = createDeferred();
+    if (!metadata) {
+      const resolveTranscode = playback.resolvePlaybackTranscode;
+      vi.spyOn(playback, "resolvePlaybackTranscode").mockImplementation((params) => {
+        const result = resolveTranscode(params);
+        playbackRequested.resolve();
+        return result;
+      });
+    }
+    const observed = observeMetadataRequests();
+    const abandoned = startMediaRequest(paths[2]!, mode);
+    const retired = [abandoned];
+    requests.push(abandoned);
+    const live = requests.slice(0, 2);
+    if (metadata) {
+      const sharedAbandoned = startMediaRequest(paths[3]!);
+      const sharedLive = startMediaRequest(paths[3]!);
+      retired.push(sharedAbandoned);
+      live.push(sharedLive);
+      requests.push(sharedAbandoned, sharedLive);
+    } else {
+      await playbackRequested.promise;
+    }
+    const later = startMediaRequest(paths.at(-1)!);
+    requests.push(later);
+    live.push(later);
+    await observed(metadata ? 4 : 1);
+    const closed = Promise.all(retired.map(({ res }) => once(res, "close")));
+    for (const { res } of retired) {
+      res.destroy();
+    }
+    await closed;
+    probes.release();
+    await expectPlaybackResponses(live, metadata ? "transcode" : "native");
+    await Promise.all(retired.map(({ handled }) => handled));
+    if (!metadata) {
+      expect(await abandoned.handled).toBe(true);
+      expect(abandoned.end).not.toHaveBeenCalled();
+    }
+    expect(runFfprobe).toHaveBeenCalledTimes(metadata ? 4 : 3);
+  },
+);
 
 it.each(["while queued", "during safe-open"] as const)(
   "rechecks reader authority %s and retains work for an authorized shared viewer",

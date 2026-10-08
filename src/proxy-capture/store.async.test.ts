@@ -169,37 +169,34 @@ describe("async capture store", () => {
     }
   });
 
-  it.each(["close", "release"] as const)(
-    "%s joins accepted writes and leaves their durable result readable",
-    async (mode) => {
-      const env = { OPENCLAW_STATE_DIR: tempDirs.make("capture-async-close-") };
-      const lease = await acquireDebugProxyCaptureStoreAsync({ env });
-      const dbPath = path.join(env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite");
+  it("release joins accepted writes and leaves their durable result readable", async () => {
+    const env = { OPENCLAW_STATE_DIR: tempDirs.make("capture-async-close-") };
+    const lease = await acquireDebugProxyCaptureStoreAsync({ env });
+    const dbPath = path.join(env.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite");
+    try {
+      let writeSettled = false;
+      const writing = lease.store
+        .recordEventWithPayload(event("accepted", "before-close"), { data: "accepted bytes" })
+        .then(() => {
+          writeSettled = true;
+        });
+      const closing = lease.release();
+      expect(lease.store.close()).toBe(closing);
+      await closing;
+      expect(writeSettled).toBe(true);
+      expect(lease.store.isClosed).toBe(true);
+      await writing;
+      const reopened = await acquireDebugProxyCaptureStoreAsync({ env });
       try {
-        let writeSettled = false;
-        const writing = lease.store
-          .recordEventWithPayload(event("accepted", "before-close"), { data: "accepted bytes" })
-          .then(() => {
-            writeSettled = true;
-          });
-        const closing = mode === "close" ? lease.store.close() : lease.release();
-        expect(lease.store.close()).toBe(closing);
-        await closing;
-        expect(writeSettled).toBe(true);
-        expect(lease.store.isClosed).toBe(true);
-        await writing;
-        const reopened = await acquireDebugProxyCaptureStoreAsync({ env });
-        try {
-          expect(await reopened.store.getSessionEvents("accepted")).toEqual([
-            expect.objectContaining({ flowId: "before-close", dataText: "accepted bytes" }),
-          ]);
-        } finally {
-          await reopened.release();
-        }
+        expect(await reopened.store.getSessionEvents("accepted")).toEqual([
+          expect.objectContaining({ flowId: "before-close", dataText: "accepted bytes" }),
+        ]);
       } finally {
-        await lease.release();
-        await closeOpenClawStateDatabaseByPathAsync(dbPath);
+        await reopened.release();
       }
-    },
-  );
+    } finally {
+      await lease.release();
+      await closeOpenClawStateDatabaseByPathAsync(dbPath);
+    }
+  });
 });

@@ -30,6 +30,10 @@ const SLACK_SOCKET_PONG_TIMEOUT_WARNING_PREFIX = "A pong wasn't received from th
 const SLACK_SOCKET_PING_TIMEOUT_WARNING_PREFIX = "A ping wasn't received from the server";
 const SLACK_SOCKET_LOG_LEVEL_IGNORED_WARNING_RE =
   /^The logLevel given to .+ was ignored as you also gave logger$/;
+// Socket Mode subscribes to undici's process-wide ping/pong diagnostics channels and warns on
+// every frame from a WebSocket built by another undici copy, such as core's.
+const SLACK_SOCKET_FOREIGN_DIAGNOSTICS_WARNING_RE =
+  /^Received unexpected (?:ping|pong) diagnostics message format$/;
 
 export type SlackBoltResolvedExports = {
   App: SlackAppConstructor;
@@ -256,6 +260,10 @@ function isSlackSocketSelfInflictedLoggerWarning(args: readonly unknown[]) {
   return typeof args[0] === "string" && SLACK_SOCKET_LOG_LEVEL_IGNORED_WARNING_RE.test(args[0]);
 }
 
+function isSlackSocketForeignDiagnosticsWarning(args: readonly unknown[]) {
+  return typeof args[0] === "string" && SLACK_SOCKET_FOREIGN_DIAGNOSTICS_WARNING_RE.test(args[0]);
+}
+
 function formatSlackSdkLogArgs(args: readonly unknown[]) {
   return args
     .map((arg) => formatSlackError(arg, ""))
@@ -263,9 +271,7 @@ function formatSlackSdkLogArgs(args: readonly unknown[]) {
     .join(" ");
 }
 
-function createSlackSocketModeLogger(
-  sink: Pick<typeof console, "debug" | "info" | "warn" | "error"> = console,
-): SlackSocketModeLogger {
+function createSlackSocketModeLogger(): SlackSocketModeLogger {
   let level = "info" as SlackSdkLogLevel;
   let name = "socket-mode";
   const prefix = () => `socket-mode:${name}`;
@@ -282,16 +288,17 @@ function createSlackSocketModeLogger(
     warn: (...args: unknown[]) => {
       if (
         isSlackSocketHeartbeatTimeoutWarning(args) ||
-        isSlackSocketSelfInflictedLoggerWarning(args)
+        isSlackSocketSelfInflictedLoggerWarning(args) ||
+        isSlackSocketForeignDiagnosticsWarning(args)
       ) {
         return;
       }
       remember(args);
-      sink.warn(prefix(), ...args);
+      console.warn(prefix(), ...args);
     },
     error: (...args: unknown[]) => {
       remember(args);
-      sink.error(prefix(), ...args);
+      console.error(prefix(), ...args);
     },
     setLevel: (nextLevel) => {
       level = nextLevel;

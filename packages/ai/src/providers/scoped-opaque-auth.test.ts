@@ -82,23 +82,39 @@ function runtime(transportHost: Partial<AiTransportHost> = {}) {
 const context = { messages: [{ role: "user" as const, content: "hello", timestamp: 1 }] };
 
 describe("scoped native auth at provider boundaries", () => {
-  it.each(["google-generative-ai", "google-vertex"])(
-    "preserves external opaque values at %s SDK construction",
-    async (api) => {
+  it.each([
+    {
+      api: "google-generative-ai",
+      provider: "google",
+      sdk: "google",
+      expected: { apiKey: opaque, httpOptions: { headers: { "X-Provider-Token": opaque } } },
+    },
+    {
+      api: "google-vertex",
+      provider: "google-vertex",
+      sdk: "google",
+      expected: { apiKey: opaque, httpOptions: { headers: { "X-Provider-Token": opaque } } },
+    },
+    {
+      api: "mistral-conversations",
+      provider: "mistral",
+      sdk: "mistral",
+      expected: { apiKey: opaque },
+    },
+  ] as const)(
+    "preserves external opaque values at $api SDK construction",
+    async ({ api, provider, sdk, expected }) => {
       const result = await runtime().completeSimple(
         {
-          ...model(api, api === "google-vertex" ? "google-vertex" : "google"),
+          ...model(api, provider),
           headers: { "X-Provider-Token": opaque },
         },
         context,
         { apiKey: opaque },
       );
       expect(result.errorMessage).toContain("fixture constructor reached");
-      expect(captured.google).toHaveLength(1);
-      expect(captured.google[0]).toMatchObject({
-        apiKey: opaque,
-        httpOptions: { headers: { "X-Provider-Token": opaque } },
-      });
+      expect(captured[sdk]).toHaveLength(1);
+      expect(captured[sdk][0]).toMatchObject(expected);
       expect(gatewayResolve).not.toHaveBeenCalled();
       expect(gatewayFetch).not.toHaveBeenCalled();
     },
@@ -125,18 +141,6 @@ describe("scoped native auth at provider boundaries", () => {
       expect(gatewayFetch).not.toHaveBeenCalled();
     },
   );
-  it("preserves Mistral auth while selecting the native custom-fetch owner", async () => {
-    const result = await runtime().completeSimple(
-      model("mistral-conversations", "mistral"),
-      context,
-      { apiKey: opaque },
-    );
-    expect(result.errorMessage).toContain("fixture constructor reached");
-    expect(captured.mistral).toHaveLength(1);
-    expect(captured.mistral[0]).toMatchObject({ apiKey: opaque });
-    expect(gatewayResolve).not.toHaveBeenCalled();
-    expect(gatewayFetch).not.toHaveBeenCalled();
-  });
   it.each(["anthropic-messages", "google-interactions"])(
     "keeps %s auth opaque through every resolver stage and HTTP construction",
     async (api) => {

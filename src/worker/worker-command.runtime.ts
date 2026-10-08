@@ -3,6 +3,10 @@ import type { Readable, Writable } from "node:stream";
 import { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
 import { WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import {
+  readBackgroundProcesses,
+  stopBackgroundProcess,
+} from "../agents/bash-process-observation.js";
+import {
   getActiveBackgroundExecSessionCount,
   waitForExecScope,
 } from "../agents/bash-process-registry.js";
@@ -10,6 +14,10 @@ import { toErrorObject } from "../infra/errors.js";
 import { createBoundedLineFramer } from "../process/bounded-line-framer.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
 import { parseWorkerLaunchDescriptor, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
+import {
+  takeNativeInferenceStartup,
+  type NativeInferenceStartup,
+} from "./native-inference-startup.js";
 import {
   parseWorkerProcessRequest,
   type WorkerProcessMessage,
@@ -23,6 +31,7 @@ type RunWorkerCommandOptions = {
   output: Writable;
   browserRuntime?: WorkerBrowserRuntime;
   managed?: boolean;
+  nativeInference?: NativeInferenceStartup;
 };
 
 export type WorkerCommandLifetime = {
@@ -46,6 +55,9 @@ async function runManagedWorkerCommand(
 ): Promise<void> {
   let environment: Awaited<ReturnType<typeof createWorkerRuntimeEnvironment>> | undefined;
   let binding: string | undefined;
+  let processBinding:
+    | { environmentId: string; sessionId: string; ownerEpoch: number; agentId: string }
+    | undefined;
   let lastTurnId: string | undefined;
   let active: { turnId: string; controller: AbortController } | undefined;
   let running: Promise<void> | undefined;
@@ -102,6 +114,33 @@ async function runManagedWorkerCommand(
           throw new Error("managed worker request is not valid JSON");
         }
         const request = parseWorkerProcessRequest(value);
+        if (request.type === "process") {
+          const owner = processBinding;
+          const matches =
+            owner &&
+            owner.environmentId === request.environmentId &&
+            owner.sessionId === request.sessionId &&
+            owner.ownerEpoch === request.ownerEpoch;
+          // Observation serves idle retained workers without creating a model turn or
+          // consuming the output and completion notifications still owed to the agent.
+          const scope = owner && {
+            scopeKeys: ["worker:" + owner.sessionId],
+            agentId: owner.agentId,
+          };
+          const response =
+            matches && scope
+              ? {
+                  result:
+                    request.operation.action === "list"
+                      ? { sessionId: owner.sessionId, ...readBackgroundProcesses(scope) }
+                      : stopBackgroundProcess(scope, request.operation),
+                }
+              : { error: "Worker process owner changed; refresh the process list." };
+          void write({ type: "process-result", requestId: request.requestId, ...response }).catch(
+            finish,
+          );
+          return;
+        }
         if (request.type === "cancel") {
           if (active?.turnId === request.turnId) {
             active.controller.abort(new Error("worker turn cancelled"));
@@ -126,6 +165,7 @@ async function runManagedWorkerCommand(
             sessionId: descriptor.admission.sessionId,
             ownerEpoch: descriptor.admission.ownerEpoch,
             agentId: descriptor.assignment.agentId,
+            inference: descriptor.assignment.inference,
             permissionMode: descriptor.assignment.permissionMode,
             workspaceDir,
             workerContainmentRoot,
@@ -134,6 +174,12 @@ async function runManagedWorkerCommand(
             throw new Error("managed worker environment binding changed; relaunch required");
           }
           binding = nextBinding;
+          processBinding = {
+            environmentId: descriptor.admission.environmentId,
+            sessionId: descriptor.admission.sessionId,
+            ownerEpoch: descriptor.admission.ownerEpoch,
+            agentId: descriptor.assignment.agentId,
+          };
           if (closed) {
             return;
           }
@@ -152,6 +198,7 @@ async function runManagedWorkerCommand(
             },
             {
               environmentStateDir: environment.stateDir,
+              nativeInference: options.nativeInference,
               signal: current.controller.signal,
               ...(options.lifetime
                 ? { onConnectionFailure: options.lifetime.reportConnectionFailure }
@@ -286,7 +333,9 @@ async function readLaunchDescriptor(input: Readable): Promise<WorkerLaunchDescri
 }
 
 /** Process shell for `openclaw worker`: stdin descriptor in, JSON result out, signals abort the run. */
-export async function runWorkerCommand(options: RunWorkerCommandOptions): Promise<void> {
+export async function runWorkerCommand(input: RunWorkerCommandOptions): Promise<void> {
+  const startup = takeNativeInferenceStartup();
+  const options = { ...input, nativeInference: input.nativeInference ?? startup };
   const abortController = new AbortController();
   const stop = () => abortController.abort(new Error("worker interrupted"));
   let lifetimeEnded = false;
@@ -319,6 +368,7 @@ export async function runWorkerCommand(options: RunWorkerCommandOptions): Promis
       return;
     }
     const result = await runWorkerDescriptor(descriptor, {
+      nativeInference: options.nativeInference,
       signal: abortController.signal,
       ...(options.lifetime
         ? { onConnectionFailure: options.lifetime.reportConnectionFailure }

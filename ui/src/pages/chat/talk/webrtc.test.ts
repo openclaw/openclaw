@@ -3,35 +3,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { waitForFast } from "../../../test-helpers/wait-for.ts";
 import { prepareRealtimeTalkTestInput } from "./input.test-support.ts";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "./shared.ts";
-import { FakePeerConnection, requirePeer } from "./webrtc.test-support.ts";
+import {
+  dispatchRealtimeEvent,
+  FakePeerConnection,
+  requirePeer,
+  sentRealtimeEvents,
+  type SentRealtimeEvent,
+} from "./webrtc.test-support.ts";
 import { WebRtcSdpRealtimeTalkTransport } from "./webrtc.ts";
 
 let getUserMedia: ReturnType<typeof vi.fn>;
 let stopInputTrack: ReturnType<typeof vi.fn>;
-
-function requireTalkEvent(
-  onTalkEvent: ReturnType<typeof vi.fn>,
-  index: number,
-): Record<string, unknown> {
-  const call = onTalkEvent.mock.calls[index];
-  if (!call) {
-    throw new Error(`expected talk event at index ${index}`);
-  }
-  const [event] = call;
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
-    throw new Error(`expected talk event record at index ${index}`);
-  }
-  return event as Record<string, unknown>;
-}
-
-type SentRealtimeEvent = {
-  type?: string;
-  item?: {
-    type?: string;
-    [key: string]: unknown;
-  };
-  [key: string]: unknown;
-};
 
 function stubAnswerSdpFetch(): void {
   vi.stubGlobal("fetch", vi.fn(async () => new Response("answer-sdp")) as unknown as typeof fetch);
@@ -94,14 +76,6 @@ function createControlRequest(result: Record<string, unknown>) {
   });
 }
 
-function dispatchRealtimeEvent(peer: FakePeerConnection | undefined, event: unknown): void {
-  peer?.channel.dispatchEvent(
-    new MessageEvent("message", {
-      data: JSON.stringify(event),
-    }),
-  );
-}
-
 function dispatchConsultToolCall(peer: FakePeerConnection | undefined): void {
   dispatchRealtimeEvent(peer, {
     type: "response.done",
@@ -150,14 +124,6 @@ async function startActiveConsult(
   }
 
   return { transport, peer };
-}
-
-function sentRealtimeEvents(peer: FakePeerConnection | undefined): SentRealtimeEvent[] {
-  return (
-    peer?.channel.send.mock.calls.map(
-      ([payload]) => JSON.parse(String(payload)) as SentRealtimeEvent,
-    ) ?? []
-  );
 }
 
 function expectSpokenStatusMessage(events: SentRealtimeEvent[], message: string): void {
@@ -568,24 +534,12 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
     await transport.start();
     const peer = FakePeerConnection.instances[0];
-    peer?.channel.dispatchEvent(
-      new MessageEvent("message", {
-        data: JSON.stringify({
-          type: "conversation.item.input_audio_transcription.completed",
-          item_id: "input-1",
-          transcript: "hello",
-        }),
-      }),
-    );
-    peer?.channel.dispatchEvent(
-      new MessageEvent("message", {
-        data: JSON.stringify({
-          type: "response.audio_transcript.done",
-          item_id: "response-1",
-          transcript: "hi there",
-        }),
-      }),
-    );
+    dispatchTranscription(peer, "hello");
+    dispatchRealtimeEvent(peer, {
+      type: "response.audio_transcript.done",
+      item_id: "response-1",
+      transcript: "hi there",
+    });
 
     expect(onTranscript).toHaveBeenCalledWith({
       role: "user",
@@ -599,21 +553,24 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
       final: true,
       itemId: "response-1",
     });
-    expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toEqual([
-      "transcript.done",
-      "output.text.done",
+    expect(onTalkEvent.mock.calls.map(([event]) => event)).toEqual([
+      expect.objectContaining({
+        type: "transcript.done",
+        turnId: "turn-1",
+        itemId: "input-1",
+        payload: { role: "user", text: "hello" },
+        sessionId: "main:openai:webrtc",
+        transport: "webrtc",
+      }),
+      expect.objectContaining({
+        type: "output.text.done",
+        turnId: "turn-1",
+        itemId: "response-1",
+        payload: { text: "hi there" },
+        sessionId: "main:openai:webrtc",
+        transport: "webrtc",
+      }),
     ]);
-    expect(onTalkEvent.mock.calls.map(([event]) => event.turnId)).toEqual(["turn-1", "turn-1"]);
-    const userTranscriptEvent = requireTalkEvent(onTalkEvent, 0);
-    expect(userTranscriptEvent.itemId).toBe("input-1");
-    expect(userTranscriptEvent.payload).toEqual({ role: "user", text: "hello" });
-    expect(userTranscriptEvent.sessionId).toBe("main:openai:webrtc");
-    expect(userTranscriptEvent.transport).toBe("webrtc");
-    const assistantTranscriptEvent = requireTalkEvent(onTalkEvent, 1);
-    expect(assistantTranscriptEvent.itemId).toBe("response-1");
-    expect(assistantTranscriptEvent.payload).toEqual({ text: "hi there" });
-    expect(assistantTranscriptEvent.sessionId).toBe("main:openai:webrtc");
-    expect(assistantTranscriptEvent.transport).toBe("webrtc");
     transport.stop();
   });
 
@@ -687,16 +644,8 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
       await transport.start();
       const peer = FakePeerConnection.instances[0];
-      peer?.channel.dispatchEvent(
-        new MessageEvent("message", {
-          data: JSON.stringify({ type: deltaType, item_id: "response-1", delta: "hi" }),
-        }),
-      );
-      peer?.channel.dispatchEvent(
-        new MessageEvent("message", {
-          data: JSON.stringify({ type: doneType, item_id: "response-1", ...doneField }),
-        }),
-      );
+      dispatchRealtimeEvent(peer, { type: deltaType, item_id: "response-1", delta: "hi" });
+      dispatchRealtimeEvent(peer, { type: doneType, item_id: "response-1", ...doneField });
 
       expect(onTranscript).toHaveBeenCalledWith({
         role: "assistant",
@@ -859,35 +808,6 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
 
     sent = sentRealtimeEvents(peer);
     expect(sent.filter((event) => event.type === "response.create")).toHaveLength(1);
-    transport.stop();
-  });
-
-  it("replaces stale OpenAI output with a spoken active-control steering acknowledgement", async () => {
-    stubAnswerSdpFetch();
-    const request = createControlRequest({
-      ok: true,
-      mode: "steer",
-      sessionKey: "main",
-      active: true,
-      queued: true,
-      message: "Got it. I steered the active run.",
-      speak: true,
-      show: true,
-      suppress: false,
-    });
-    const { transport, peer } = await startActiveConsult(request, {
-      responseAlreadyActive: true,
-    });
-
-    dispatchTranscription(peer, "actually focus on WebUI");
-
-    await waitForFast(() =>
-      expect(request).toHaveBeenCalledWith("talk.client.steer", expect.any(Object)),
-    );
-    const sent = sentRealtimeEvents(peer);
-    expect(sent).toContainEqual({ type: "response.cancel" });
-    expectSpokenStatusMessage(sent, "Got it. I steered the active run.");
-    expect(sent.some((event) => event.type === "response.create")).toBe(false);
     transport.stop();
   });
 

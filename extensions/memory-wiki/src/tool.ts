@@ -1,7 +1,9 @@
 import path from "node:path";
 import { optionalFiniteNumberSchema } from "openclaw/plugin-sdk/channel-actions";
+import type { MemoryCallerContext } from "openclaw/plugin-sdk/memory-host-search";
 import type { OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
 import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { Type, type Static } from "typebox";
 import type { AnyAgentTool, OpenClawConfig } from "../api.js";
@@ -16,6 +18,8 @@ import { renderWikiMutationSummary, renderWikiSearchResults } from "./presentati
 import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { renderMemoryWikiStatus, resolveMemoryWikiStatus } from "./status.js";
+
+const WIKI_SEARCH_TIMEOUT_MS = 30_000;
 
 function formatWikiToolReportPath(config: ResolvedMemoryWikiConfig, reportPath: string): string {
   const vaultRoot = path.resolve(config.vault.path);
@@ -32,7 +36,6 @@ function formatWikiToolReportPath(config: ResolvedMemoryWikiConfig, reportPath: 
 }
 
 const WikiStatusSchema = Type.Object({}, { additionalProperties: false });
-const WikiLintSchema = Type.Object({}, { additionalProperties: false });
 const WikiSearchBackendSchema = Type.Union(
   WIKI_SEARCH_BACKENDS.map((value) => Type.Literal(value)),
 );
@@ -110,6 +113,7 @@ type WikiToolMemoryContext = {
   sandboxed?: boolean;
   conversationRecall?: OpenClawPluginToolContext["conversationRecall"];
   signal?: AbortSignal;
+  memoryContext?: MemoryCallerContext;
 };
 
 export function createWikiStatusTool(
@@ -145,23 +149,53 @@ export function createWikiSearchTool(
     description:
       "Search wiki pages and, when shared search is enabled, the active memory corpus by title, path, id, or body text.",
     parameters: WikiSearchSchema,
-    execute: async (_toolCallId, rawParams) => {
+    execute: async (_toolCallId, rawParams, callerSignal) => {
       const params = rawParams as Static<typeof WikiSearchSchema>;
-      await syncMemoryWikiImportedSources({ config, appConfig, signal: memoryContext.signal });
-      const results = await searchMemoryWiki({
-        config,
-        appConfig,
-        agentId: memoryContext.agentId,
-        agentSessionKey: memoryContext.agentSessionKey,
-        sandboxed: memoryContext.sandboxed,
-        conversationRecall: memoryContext.conversationRecall,
-        query: params.query,
-        maxResults: params.maxResults,
-        ...(params.backend ? { searchBackend: params.backend } : {}),
-        ...(params.corpus ? { searchCorpus: params.corpus } : {}),
-        ...(params.mode ? { mode: params.mode } : {}),
-      });
-      return textResult(renderWikiSearchResults(results), { results });
+      const deadline = new AbortController();
+      const timer = setTimeout(
+        () =>
+          deadline.abort(
+            new Error(`wiki_search timed out after ${WIKI_SEARCH_TIMEOUT_MS / 1000}s`),
+          ),
+        WIKI_SEARCH_TIMEOUT_MS,
+      );
+      timer.unref?.();
+      const signal = AbortSignal.any(
+        [callerSignal, memoryContext.signal, deadline.signal].filter(
+          (candidate): candidate is AbortSignal => candidate !== undefined,
+        ),
+      );
+      try {
+        return await racePromiseWithAbortSignal(
+          async () => {
+            await syncMemoryWikiImportedSources({ config, appConfig, signal });
+            signal.throwIfAborted();
+            const results = await searchMemoryWiki({
+              config,
+              appConfig,
+              ...memoryContext,
+              signal,
+              ...(memoryContext.memoryContext
+                ? { memoryContext: { ...memoryContext.memoryContext, signal } }
+                : {}),
+              query: params.query,
+              maxResults: params.maxResults,
+              ...(params.backend ? { searchBackend: params.backend } : {}),
+              ...(params.corpus ? { searchCorpus: params.corpus } : {}),
+              ...(params.mode ? { mode: params.mode } : {}),
+            });
+            signal.throwIfAborted();
+            return textResult(renderWikiSearchResults(results), { results });
+          },
+          signal,
+          (abortedSignal) =>
+            abortedSignal.reason instanceof Error
+              ? abortedSignal.reason
+              : new Error("wiki_search aborted"),
+        );
+      } finally {
+        clearTimeout(timer);
+      }
     },
   };
 }
@@ -176,7 +210,7 @@ export function createWikiLintTool(
     label: "Wiki Lint",
     description:
       "Lint the wiki vault and surface structural issues, provenance gaps, contradictions, and open questions.",
-    parameters: WikiLintSchema,
+    parameters: WikiStatusSchema,
     execute: async () => {
       await syncMemoryWikiImportedSources({ config, appConfig, signal });
       const result = await lintMemoryWikiVault(config, signal ? { signal } : undefined);
@@ -251,10 +285,7 @@ export function createWikiGetTool(
       const result = await getMemoryWikiPage({
         config,
         appConfig,
-        agentId: memoryContext.agentId,
-        agentSessionKey: memoryContext.agentSessionKey,
-        sandboxed: memoryContext.sandboxed,
-        conversationRecall: memoryContext.conversationRecall,
+        ...memoryContext,
         lookup,
         fromLine: params.fromLine,
         lineCount: params.lineCount,

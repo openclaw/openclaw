@@ -105,6 +105,7 @@ describe("rewind composer ownership", () => {
       const response = createDeferred<{ editorText: string }>();
       const source = createRewindHost(response.promise);
       const peer = {
+        client: source.client,
         settings: source.settings,
         sessionKey: session === "same" ? source.sessionKey : "agent:main:session-b",
         chatMessage: "",
@@ -159,6 +160,7 @@ describe("rewind composer ownership", () => {
       const response = createDeferred<{ editorText: string }>();
       const source = createRewindHost(response.promise);
       const peer = {
+        client: source.client,
         settings: source.settings,
         sessionKey: session === "same" ? source.sessionKey : "agent:main:session-b",
         chatMessage: "",

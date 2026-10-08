@@ -1,12 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { codeModeFailureCode } from "./code-mode-errors.js";
 import * as worker from "./code-mode-executor.js";
-import {
-  resolveCodeModeConfig,
-  addClientToolsToCodeModeCatalog,
-  applyCodeModeCatalog,
-} from "./code-mode.js";
+import { applyCodeModeCatalog } from "./code-mode.js";
 import {
   resetCodeModeTestState,
   pluginToolWithExecute,
@@ -18,6 +13,7 @@ import {
   runUntilCompleted,
   testing,
 } from "./code-mode.test-support.js";
+import { addClientToolsToToolCatalog } from "./tool-search-catalog.js";
 import { jsonResult } from "./tools/common.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -44,7 +40,11 @@ describe("Code Mode guest execution", () => {
     const details = await run(
       codeModeTools,
       `
-        const result = { invoked: false, value: null };
+        const result = {
+          invoked: false,
+          value: null,
+          hostGlobals: [typeof process, typeof module, typeof require, typeof globalThis.__openclawHostRequest],
+        };
         result.value = {
           toJSON() {
             result.invoked = true;
@@ -58,7 +58,7 @@ describe("Code Mode guest execution", () => {
 
     expect(details).toMatchObject({
       status: "completed",
-      value: { invoked: false },
+      value: { invoked: false, hostGlobals: ["undefined", "undefined", "undefined", "undefined"] },
       telemetry: { searchCount: 0, describeCount: 0, callCount: 0 },
     });
     expect(noop.execute).not.toHaveBeenCalled();
@@ -71,6 +71,8 @@ describe("Code Mode guest execution", () => {
       pluginTool("llm-task", "Run an LLM task"),
       pluginTool("llm_task", "Run the exact-name task"),
       pluginTool("catalog", "Collide with discovery"),
+      pluginTool("store", "Collide with session store"),
+      pluginTool("load", "Collide with session load"),
       pluginTool("TextEncoder", "Collide with text encoding"),
       pluginTool("TextDecoder", "Collide with text decoding"),
       pluginTool("class", "Use a reserved word"),
@@ -104,6 +106,8 @@ describe("Code Mode guest execution", () => {
       expect.arrayContaining([
         expect.stringMatching(/^llm_task_[a-f0-9]{8}$/u),
         expect.stringMatching(/^catalog_[a-f0-9]{8}$/u),
+        expect.stringMatching(/^store_[a-f0-9]{8}$/u),
+        expect.stringMatching(/^load_[a-f0-9]{8}$/u),
         expect.stringMatching(/^TextEncoder_[a-f0-9]{8}$/u),
         expect.stringMatching(/^TextDecoder_[a-f0-9]{8}$/u),
         expect.stringMatching(/^class_[a-f0-9]{8}$/u),
@@ -124,7 +128,8 @@ describe("Code Mode guest execution", () => {
     const plugin = pluginTool("shared_action", "Plugin action");
     const { ctx, tools: codeModeTools } = createGuestHarness([plugin]);
     const client = pluginTool("shared_action", "Client action");
-    addClientToolsToCodeModeCatalog({
+    addClientToolsToToolCatalog({
+      enabled: true,
       tools: [client as never],
       ...ctx,
     });
@@ -197,21 +202,6 @@ describe("Code Mode guest execution", () => {
     },
   );
 
-  it("never exposes Node module-loader globals to the real guest worker", async () => {
-    const { tools: codeModeTools } = createGuestHarness([pluginTool("fake_noop", "Noop")]);
-
-    const details = await run(
-      codeModeTools,
-      "return [typeof process, typeof module, typeof require];",
-    );
-
-    expect(details).toMatchObject({
-      status: "completed",
-      value: ["undefined", "undefined", "undefined"],
-    });
-    expect(testing.activeRuns.size).toBe(0);
-  });
-
   it.each(["node", "quickjs"] as const)(
     "%s rejects malformed commands before dispatch and accepts a corrected follow-up",
     async (executor) => {
@@ -258,10 +248,17 @@ describe("Code Mode guest execution", () => {
     },
   );
 
-  it.each(["node", "quickjs"] as const)(
-    "%s surfaces guest errors at the submitted source line",
-    async (executor) => {
-      const code = "const valid = 1;\nreturn missingFn();";
+  it.each([
+    {
+      executor: "quickjs",
+      source: "return missingFn();",
+      error: "ReferenceError: missingFn is not defined",
+    },
+    { executor: "node", source: 'throw new Error("interrupted");', error: "Error: interrupted" },
+  ] as const)(
+    "$executor preserves guest error classification and source lines: $error",
+    async ({ executor, source, error }) => {
+      const code = "const valid = 1;\n" + source;
       const { ctx, tools: codeModeTools } = createCodeModeHarness({ codeMode: { executor } });
       applyCodeModeCatalog({
         tools: [...codeModeTools, pluginTool("fake_noop", "Noop")],
@@ -276,31 +273,15 @@ describe("Code Mode guest execution", () => {
       );
 
       expect(details.status).toBe("failed");
-      const error = String(details.error);
+      const diagnostic = String(details.error);
       expect(details).toMatchObject({ code: "internal_error", failurePhase: "guest" });
-      expect(error).toContain("ReferenceError");
-      expect(error).toContain("missingFn is not defined");
-      expect(error).toMatch(/openclaw-code-mode:user\.js:2:\d+/);
-      expect(error).not.toContain("<eval>");
-      expect(error.startsWith("at ")).toBe(false);
+      expect(diagnostic).toContain(error);
+      expect(diagnostic).toMatch(/openclaw-code-mode:user\.js:2:\d+/);
+      expect(diagnostic).not.toContain("<eval>");
+      expect(diagnostic.startsWith("at ")).toBe(false);
     },
   );
 
-  it("does not expose the raw host request callback", async () => {
-    const { tools: codeModeTools } = createGuestHarness([pluginTool("fake_noop", "Noop")]);
-
-    const details = resultDetails(
-      await expectDefined(codeModeTools[0], "codeModeTools[0] test invariant").execute(
-        "code-hidden-host-request",
-        { code: "return typeof globalThis.__openclawHostRequest;" },
-      ),
-    );
-
-    expect(details).toMatchObject({
-      status: "completed",
-      value: "undefined",
-    });
-  });
   it.each([false, true])(
     "refuses a new host effect after the boundary deadline (resume=%s)",
     async (resume) => {
@@ -394,37 +375,75 @@ describe("Code Mode guest execution", () => {
     },
   );
 
-  it("normalizes only transport interrupt errors as timeouts", () => {
-    expect(codeModeFailureCode(new Error("interrupted"))).toBe("timeout");
-    const timeout = { status: "failed", code: "timeout", error: "interrupted" };
-    expect(testing.normalizeCodeModeTimeoutResult(timeout)).toEqual({
-      ...timeout,
-      error: "code mode timeout exceeded",
-    });
-    const guestError = { ...timeout, code: "internal_error" };
-    expect(testing.normalizeCodeModeTimeoutResult(guestError)).toEqual(guestError);
+  it("keeps an explicit tool error's text when its details carry no message", async () => {
+    const h = createCodeModeHarness();
+    const reason = "Start the Gateway with visitor-access enabled before managing visitors.";
+    const errorTool = (name: string, text: string, details: unknown) =>
+      pluginToolWithExecute(name, "Fail", async () => ({
+        content: [{ type: "text" as const, text }],
+        details,
+        isError: true,
+      }));
+    const tools = [
+      errorTool("flag_only", reason, { error: true }),
+      errorTool("no_details", "Gateway unavailable.", undefined),
+      errorTool("blank_message", "Visitor store is locked.", { error: true, message: " " }),
+      errorTool("structured", "Rendered failure.", { status: "failed", error: "structured" }),
+    ];
+    applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...tools] });
+    const result = resultDetails(
+      await expectDefined(h.tools[0], "exec").execute("tool-error-text", {
+        code: "return [await flag_only(), await no_details(), await blank_message(), await structured()];",
+      }),
+    );
+    expect(result.status, JSON.stringify(result)).toBe("completed");
+    expect(result.value).toEqual([
+      { error: true, message: reason },
+      { message: "Gateway unavailable." },
+      { error: true, message: "Visitor store is locked." },
+      { status: "failed", error: "structured" },
+    ]);
   });
 
-  it("does not classify guest interrupted errors as timeouts", async () => {
-    const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
+  async function executeSource(args: Record<string, unknown>) {
+    const { tools } = createGuestHarness();
+    return resultDetails(await tools[0]!.execute("source", args));
+  }
 
-    const result = await testing.runCodeModeExecutor(
-      {
-        kind: "exec",
-        source: 'throw new Error("interrupted");',
-        config,
-        catalog: [],
-        namespaces: [],
-      },
-      { timeoutMs: 10_000, executor: config.executor },
-    );
+  describe("Code Mode source validation", () => {
+    it.each([
+      { code: " ", command: "return 7;" },
+      { code: "return 7;", command: " \n " },
+    ])("executes the populated alias: %j", async (args) => {
+      expect(await executeSource(args)).toMatchObject({ status: "completed", value: 7 });
+    });
 
-    expect(result.status).toBe("failed");
-    // A guest error whose message happens to be "interrupted" must stay
-    // internal_error and not be misclassified as a QuickJS interrupt/timeout.
-    expect(result).toMatchObject({ code: "internal_error" });
-    if (result.status === "failed") {
-      expect(result.error).toContain("interrupted");
-    }
+    it.each([
+      { args: { code: "return 1;", command: "return 2;" }, error: "code and command must match" },
+      { args: { code: "", command: "   " }, error: "code or command must be a non-empty string" },
+      { args: { code: "return 1;", language: "typescript" }, error: "JavaScript only" },
+      { args: { code: "return 1;", typecheck: false }, error: "JavaScript only" },
+    ])("rejects invalid control arguments: $args", async ({ args, error }) => {
+      await expect(executeSource(args)).rejects.toThrow(error);
+      expect(testing.activeRuns.size).toBe(0);
+    });
+
+    it.each([
+      String.raw`return r\u0065quire('node:fs');`,
+      "return require?.('node:fs');",
+      "return (0, require)('node:fs');",
+      "return module.require('node:fs');",
+      "return `${({ value: import('node:fs') }).value}`;",
+    ])("rejects module access before dispatch: %s", async (code) => {
+      expect(await executeSource({ code })).toMatchObject({
+        status: "failed",
+        code: "invalid_input",
+        failurePhase: "input",
+        bridgeDispatchStarted: false,
+        telemetry: { callCount: 0 },
+        error: expect.stringContaining("module access is disabled"),
+      });
+      expect(testing.activeRuns.size).toBe(0);
+    });
   });
 });

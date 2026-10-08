@@ -32,11 +32,21 @@ Entries in `env.vars` are ignored, including differently cased spellings; flat
 or change the host-selected read-only mode. Only the host value `1` enables
 this switch. Existing `OPENCLAW_NIX_MODE` behavior is unchanged.
 
-Config writes are blocked, including setup, onboarding, doctor repairs, plugin
+Config writes are blocked, including setup, onboarding, Doctor config repairs, plugin
 install/update/uninstall/enable/disable, and mutating `openclaw update` flows.
 Startup-derived defaults stay runtime-only. Change the config through your
 external deployment system, then let the Gateway reload it or restart the Gateway
 as needed. Runtime state still needs a writable `OPENCLAW_STATE_DIR`.
+
+Doctor's `--fix --non-interactive` pass, including the official Docker image's
+startup pass, still repairs writable SQLite, session, and plugin state in this
+mode. Pending config repairs are printed as a redacted merge patch to apply in
+your external deployment source; the mounted config and its includes stay
+unchanged. Valid config permits Gateway startup even with optional repairs
+pending. If legacy or invalid config prevents startup, Doctor exits nonzero and
+names the required edits. State schema migration runs before config repair so
+plugin and session migrations can use the current schema; keep a matched
+pre-upgrade state backup when reverting to an older image.
 
 `OPENCLAW_CONFIG_READONLY=1` uses generic externally managed config messages and
 does not enable Nix-specific installation or service behavior. `OPENCLAW_NIX_MODE=1`
@@ -121,9 +131,17 @@ Reads a value from the redacted config snapshot (secrets never print). `--json` 
 Pass exactly one config path. Extra arguments, including an empty quoted argument (`""`),
 are rejected; they do not suppress validation of later options.
 
-A schema-valid but unset path explains that the runtime default applies; an unknown path suggests
-`openclaw config schema`. With `--json`, both use the standard [CLI JSON failure envelope](/cli#json-failures)
-on stdout and exit with status 1. Without `--json`, diagnostics remain on stderr.
+A schema-valid but unset authorable path explains that the runtime default applies and suggests
+`openclaw config set`. For automatically managed metadata, such as `meta.lastTouchedVersion`,
+`meta.migrations.modelPolicyAllowlist`, and `meta.migrations.utilityModelSeparation`, the message
+instead explains that OpenClaw manages the values on config writes. Reading their unset parent
+paths (`meta` or `meta.migrations`) gives the same explanation, not a refused set command.
+An unknown path suggests `openclaw config schema`. With `--json`, unset and unknown paths use
+the standard [CLI JSON failure envelope](/cli#json-failures) on stdout and exit with status 1.
+Without `--json`, diagnostics remain on stderr.
+
+Nested paths inside open-ended parameter bags, such as `agents.defaults.params.custom.nested`,
+are schema-valid even before they are set. This does not confirm that a provider supports the parameter.
 
 Explicit `null`, `false`, `0`, and empty strings remain readable values in both modes;
 `--json` preserves their types. Optional fields with no runtime value are reported as unset.
@@ -171,6 +189,8 @@ machine-output spelling and keeps stdout reserved for the schema document.
 
 Schema refusals from `config set`, `config patch`, and `config unset` explain the affected setting and confirm that no settings were saved. Correct the reported value or use `openclaw config schema` to inspect supported settings, then retry. These refusals still exit with status 1. Explicit validation reports settings that need correction without changing the file; `config validate --json` retains its `valid: false`, `error`, and `issues` fields for scripts.
 
+Config read failures name the file being read and preserve the underlying error. Resolve the reported file-access or runtime problem, then retry; a read failure alone does not mean the settings need repair.
+
 Human validation diagnostics quote literal record keys, such as `agents.defaults.models["provider/model.v1"].alias`, instead of displaying the dot inside a key as nested traversal. Numeric array positions use brackets, such as `agents.entries.main.skills[0]`. The `issues[].path` field in `config validate --json` keeps its existing dot-joined representation.
 
 Validates the current config against the active schema without starting the gateway. It also checks provider/source compatibility for every registry-declared SecretRef, including disabled plugin or channel configuration. This strict command can report an inactive mismatch that does not block normal Gateway startup, where SecretRef resolution remains limited to effectively active surfaces.
@@ -215,6 +235,8 @@ openclaw config set channels.whatsapp.groups '{"*":{"requireMention":true}}' --s
 For structured values that are awkward to quote in your shell, put a config-shaped JSON5 object in a file and use [`config patch --file <path> --dry-run`](/cli/config#config-patch). The file contains config keys and their values, not a bare array.
 
 `config get <path> --json` prints the redacted value as JSON instead of terminal-formatted text.
+
+When a model uses string shorthand, setting its `fallbacks` or a supported tool-model `timeoutMs` preserves that string as `primary`. This also applies to chat `/config set`. Setting `primary` explicitly replaces the primary, and setting the whole model still replaces the whole value.
 
 When a write changes `agents.defaults.model` or a per-agent `agents.entries.*.model`, OpenClaw resolves each changed primary or fallback through the configured catalogs and the selected provider's model resolver before writing. Provider-supported exact `provider/model` pins are accepted even when absent from the curated picker; validation does not replace the selected model. Unknown model references are rejected without changing the active config. Run `openclaw models list` to browse the picker, or check the provider's documentation for an exact model ID. Successful validation does not prove that your account can call the model. [`openclaw models set`](/cli/models#common-commands) is deliberately more permissive for the same setting: it saves a model the local catalog cannot confirm and prints a warning instead of rejecting the write.
 

@@ -11,6 +11,7 @@ import {
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { acquireTestPortBlock } from "../../../test-utils/port-claims.js";
+import { createPluginGatewayMethodDescriptor } from "../../methods/descriptor.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
 import {
   connectOk,
@@ -133,6 +134,13 @@ describe("authenticated operator request starts", () => {
       completed.push(req.id);
       respond(true);
     };
+    registry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "request-start-proof",
+        name: "test.trace",
+        handler: registry.gatewayHandlers["test.trace"],
+      }),
+    );
     setTestPluginRegistry(registry);
     const token = "gateway-operator-start-fairness-test-token";
     let capture: ReturnType<typeof captureGatewayConnection> | undefined;
@@ -222,6 +230,13 @@ describe("authenticated operator request starts", () => {
       }
       respond(true);
     };
+    registry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "request-start-proof",
+        name: "test.trace",
+        handler: registry.gatewayHandlers["test.trace"],
+      }),
+    );
     setTestPluginRegistry(registry);
     const token = "gateway-operator-control-test-token";
     const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
@@ -288,6 +303,13 @@ describe("authenticated operator request starts", () => {
       }
       respond(true);
     };
+    registry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "request-start-proof",
+        name: "test.trace",
+        handler: registry.gatewayHandlers["test.trace"],
+      }),
+    );
     setTestPluginRegistry(registry);
     const token = "gateway-operator-close-test-token";
     const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
@@ -405,6 +427,13 @@ describe("authenticated operator request starts", () => {
     registry.gatewayHandlers["test.echo"] = async ({ req, respond }) => {
       respond(true, { echoed: (req.params as { text: string }).text });
     };
+    registry.gatewayMethodDescriptors.push(
+      createPluginGatewayMethodDescriptor({
+        pluginId: "request-start-proof",
+        name: "test.echo",
+        handler: registry.gatewayHandlers["test.echo"],
+      }),
+    );
     setTestPluginRegistry(registry);
     const token = "gateway-frame-limit-test-token";
     let capture: ReturnType<typeof captureGatewayConnection> | undefined;

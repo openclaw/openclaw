@@ -22,7 +22,6 @@ const {
   evaluateSkillInstallPolicyRuntime,
   preflightPluginNpmInstallPolicyRuntime,
   scanBundleInstallSourceRuntime,
-  scanFileInstallSourceRuntime,
   scanInstalledPackageDependencyTreeRuntime,
   scanPackageInstallSourceRuntime,
 } = await import("./install-security-scan.runtime.js");
@@ -405,7 +404,7 @@ describe("package dependency boundaries", () => {
   });
 });
 
-describe("legacy file install scan compatibility", () => {
+describe("plugin install policy warnings", () => {
   it("continues after one acknowledgement and a fresh evaluation of the same warning", async () => {
     const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
     runInstallPolicyMock
@@ -416,8 +415,9 @@ describe("legacy file install scan compatibility", () => {
         warning: { reason: "review this plugin", fingerprint: "warning-a" },
       });
 
-    const result = await scanFileInstallSourceRuntime({
-      filePath: "/tmp/payload.js",
+    const result = await scanPackageInstallSourceRuntime({
+      packageDir: makeTempDir(),
+      extensions: ["payload.js"],
       logger: {},
       onInstallPolicyWarning,
       pluginId: "payload",
@@ -458,8 +458,9 @@ describe("legacy file install scan compatibility", () => {
       ],
     });
 
-    const result = await scanFileInstallSourceRuntime({
-      filePath: "/tmp/payload.js",
+    const result = await scanPackageInstallSourceRuntime({
+      packageDir: makeTempDir(),
+      extensions: ["payload.js"],
       logger: {},
       onInstallPolicyWarning,
       pluginId: "payload",
@@ -481,8 +482,9 @@ describe("legacy file install scan compatibility", () => {
       warning: { reason: "review this plugin", fingerprint: "warning-a" },
     });
 
-    const result = await scanFileInstallSourceRuntime({
-      filePath: "/tmp/payload.js",
+    const result = await scanPackageInstallSourceRuntime({
+      packageDir: makeTempDir(),
+      extensions: ["payload.js"],
       logger: {},
       pluginId: "payload",
     });
@@ -522,8 +524,9 @@ describe("legacy file install scan compatibility", () => {
         blocked: { code: "security_scan_blocked", reason: "now blocked" },
       });
 
-    const result = await scanFileInstallSourceRuntime({
-      filePath: "/tmp/payload.js",
+    const result = await scanPackageInstallSourceRuntime({
+      packageDir: makeTempDir(),
+      extensions: ["payload.js"],
       logger: {},
       onInstallPolicyWarning: vi.fn().mockResolvedValue({ status: "approved" }),
       pluginId: "payload",
@@ -540,8 +543,9 @@ describe("legacy file install scan compatibility", () => {
       findings: [{ ruleId: "context", severity: "info", message: "Informational context." }],
     });
 
-    await scanFileInstallSourceRuntime({
-      filePath: "/tmp/payload.js",
+    await scanPackageInstallSourceRuntime({
+      packageDir: makeTempDir(),
+      extensions: ["payload.js"],
       logger: { warn: (message) => warnings.push(message) },
       onInstallPolicyWarning: vi.fn().mockResolvedValue({ status: "declined" }),
       pluginId: "payload",
@@ -567,8 +571,9 @@ describe("legacy file install scan compatibility", () => {
       findings: [{ ruleId: "blocked", severity: "critical", message: "Unsafe package." }],
     });
 
-    const result = await scanFileInstallSourceRuntime({
-      filePath: "/tmp/payload.js",
+    const result = await scanPackageInstallSourceRuntime({
+      packageDir: makeTempDir(),
+      extensions: ["payload.js"],
       logger: {},
       pluginId: "payload",
     });
@@ -610,8 +615,9 @@ describe("legacy file install scan compatibility", () => {
     const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
     const warnings: string[] = [];
 
-    const result = await scanFileInstallSourceRuntime({
-      filePath: "/tmp/payload.js",
+    const result = await scanPackageInstallSourceRuntime({
+      packageDir: makeTempDir(),
+      extensions: ["payload.js"],
       logger: { warn: (message) => warnings.push(message) },
       onInstallPolicyWarning,
       pluginId: "payload",
@@ -647,8 +653,9 @@ describe("legacy file install scan compatibility", () => {
     const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
     const warnings: string[] = [];
 
-    const result = await scanFileInstallSourceRuntime({
-      filePath: "/tmp/payload.js",
+    const result = await scanPackageInstallSourceRuntime({
+      packageDir: makeTempDir(),
+      extensions: ["payload.js"],
       logger: { warn: (message) => warnings.push(message) },
       onInstallPolicyWarning,
       pluginId: "payload",
@@ -701,8 +708,9 @@ describe("legacy file install scan compatibility", () => {
         findings: [{ ruleId, severity: "critical", message, file, evidence }],
       });
 
-      const result = await scanFileInstallSourceRuntime({
-        filePath: "/tmp/payload.js",
+      const result = await scanPackageInstallSourceRuntime({
+        packageDir: makeTempDir(),
+        extensions: ["payload.js"],
         logger: {},
         pluginId: "payload",
       });
@@ -725,8 +733,9 @@ describe("legacy file install scan compatibility", () => {
     });
     const onInstallPolicyWarning = vi.fn().mockResolvedValue({ status: "approved" });
 
-    const result = await scanFileInstallSourceRuntime({
-      filePath: "/tmp/payload.js",
+    const result = await scanPackageInstallSourceRuntime({
+      packageDir: makeTempDir(),
+      extensions: ["payload.js"],
       logger: {},
       onInstallPolicyWarning,
       pluginId: "payload",
@@ -743,8 +752,9 @@ describe("legacy file install scan compatibility", () => {
     runInstallPolicyMock.mockResolvedValue({ findings });
     const warnings: string[] = [];
 
-    const result = await scanFileInstallSourceRuntime({
-      filePath: "/tmp/payload.js",
+    const result = await scanPackageInstallSourceRuntime({
+      packageDir: makeTempDir(),
+      extensions: ["payload.js"],
       logger: { warn: (message) => warnings.push(message) },
       pluginId: "payload",
     });
@@ -762,9 +772,10 @@ describe("legacy file install scan compatibility", () => {
         blocked: { code, reason: "blocked by operator policy" },
       });
 
-      const result = await scanFileInstallSourceRuntime({
+      const result = await scanPackageInstallSourceRuntime({
         onInstallPolicyWarning,
-        filePath: "/tmp/payload.js",
+        packageDir: makeTempDir(),
+        extensions: ["payload.js"],
         logger: {},
         pluginId: "payload",
       });
@@ -774,88 +785,6 @@ describe("legacy file install scan compatibility", () => {
     },
   );
 
-  it("preserves policy and hook metadata for published lazy install chunks", async () => {
-    const warnings: string[] = [];
-    const hasHooks = vi.fn().mockReturnValue(true);
-    const runBeforeInstall = vi.fn().mockResolvedValue(undefined);
-    getGlobalHookRunnerMock.mockReturnValue({ hasHooks, runBeforeInstall });
-    runInstallPolicyMock.mockResolvedValueOnce({
-      findings: [
-        {
-          ruleId: "registry-review",
-          severity: "warn",
-          message: "Registry requires review.",
-        },
-      ],
-    });
-
-    const result = await scanFileInstallSourceRuntime({
-      filePath: "/tmp/payload.js",
-      logger: { warn: (message) => warnings.push(message) },
-      mode: "update",
-      pluginId: "payload",
-      requestedSpecifier: "./payload.js",
-    });
-
-    expect(result).toBeUndefined();
-    expect(warnings).toEqual(["Install policy: [WARN] registry-review: Registry requires review."]);
-    expect(runInstallPolicyMock).toHaveBeenCalledWith({
-      config: undefined,
-      logger: expect.any(Object),
-      request: {
-        targetName: "payload",
-        targetType: "plugin",
-        sourcePath: "/tmp/payload.js",
-        sourcePathKind: "file",
-        source: { kind: "file", authority: "user", mutable: true, network: false },
-        origin: { type: "plugin-file" },
-        request: {
-          kind: "plugin-file",
-          mode: "update",
-          requestedSpecifier: "./payload.js",
-        },
-        plugin: {
-          contentType: "file",
-          pluginId: "payload",
-          extensions: ["payload.js"],
-        },
-      },
-    });
-    expect(hasHooks).toHaveBeenCalledWith("before_install");
-    expect(runBeforeInstall).toHaveBeenCalledWith(
-      {
-        targetName: "payload",
-        targetType: "plugin",
-        origin: "plugin-file",
-        sourcePath: "/tmp/payload.js",
-        sourcePathKind: "file",
-        request: {
-          kind: "plugin-file",
-          mode: "update",
-          requestedSpecifier: "./payload.js",
-        },
-        builtinScan: {
-          status: "ok",
-          scannedFiles: 0,
-          critical: 0,
-          warn: 0,
-          info: 0,
-          findings: [],
-        },
-        plugin: {
-          contentType: "file",
-          pluginId: "payload",
-          extensions: ["payload.js"],
-        },
-      },
-      {
-        origin: "plugin-file",
-        targetType: "plugin",
-        requestKind: "plugin-file",
-      },
-    );
-  });
-
   it("returns operator policy blocks before invoking hooks", async () => {
     runInstallPolicyMock.mockResolvedValueOnce({
       blocked: {
@@ -864,8 +793,9 @@ describe("legacy file install scan compatibility", () => {
       },
     });
 
-    const result = await scanFileInstallSourceRuntime({
-      filePath: "/tmp/payload.js",
+    const result = await scanPackageInstallSourceRuntime({
+      packageDir: makeTempDir(),
+      extensions: ["payload.js"],
       logger: {},
       pluginId: "payload",
     });

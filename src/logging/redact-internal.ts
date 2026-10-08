@@ -23,7 +23,7 @@ export function copyPreparedModelVisibleToolText(
   target: { text?: unknown },
 ): void {
   const text = source.text;
-  if (typeof text === "string" && text === target.text) {
-    modelVisibleToolTextRedactionState.copy(source, target, text);
+  if (typeof text === "string" && typeof target.text === "string" && text === target.text) {
+    modelVisibleToolTextRedactionState.copy(source, target, target.text);
   }
 }

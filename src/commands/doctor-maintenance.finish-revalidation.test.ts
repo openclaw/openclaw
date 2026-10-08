@@ -33,8 +33,13 @@ import {
   finishUpdateRun,
 } from "../infra/update-run-ledger.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import {
+  snapshotSourceFamily,
+  writeUnreadableNewerStateSchema,
+} from "../state/openclaw-database-preflight.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -79,7 +84,7 @@ vi.mock("./doctor-service-repair-policy.js", async (importOriginal) => ({
 
 vi.mock("../cli/daemon-cli/restart-health.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../cli/daemon-cli/restart-health.js")>()),
-  waitForGatewayHealthyRestart: vi.fn(async () => ({ healthy: true })),
+  waitForGatewayHealthyRestart: vi.fn(async () => ({ outcome: "ready", healthy: true })),
 }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -263,6 +268,7 @@ async function runDoctorFinishForStoppedUnit(
       }
       let assertCatalogUnchanged = () => {};
       let assertPreStopArtifactsUnchanged = () => {};
+      let releaseServingLease = () => {};
       let activateCompetingUpdate: (() => void) | undefined;
       if (legacyCatalog) {
         const lateRun =
@@ -277,7 +283,7 @@ async function runDoctorFinishForStoppedUnit(
         const db = openNodeSqliteDatabase(pathname);
         try {
           db.exec(
-            "CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
+            "CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (review_id TEXT NOT NULL PRIMARY KEY, owner_agent_id TEXT NOT NULL, backup_id TEXT NOT NULL, create_time INTEGER NOT NULL, kept_names_json TEXT NOT NULL, written_names_json TEXT NOT NULL, dropped_json TEXT NOT NULL) STRICT; CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
           );
           if (legacyCatalog === "future-version") {
             db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
@@ -326,11 +332,34 @@ async function runDoctorFinishForStoppedUnit(
         const readArtifacts = () =>
           [pathname, `${pathname}-wal`, `${pathname}-shm`].map((file) =>
             fs.existsSync(file)
-              ? createHash("sha256").update(fs.readFileSync(file)).digest("hex")
+              ? {
+                  hash: createHash("sha256").update(fs.readFileSync(file)).digest("hex"),
+                  mtimeNs: fs.statSync(file, { bigint: true }).mtimeNs,
+                }
               : undefined,
           );
         const beforeArtifacts = readArtifacts();
-        const beforeCatalog = fs.readFileSync(pathname);
+        let beforeCatalog = fs.readFileSync(pathname);
+        if (scenario === "gateway-lifecycle-contended") {
+          releaseServingLease = () => {
+            const writer = openNodeSqliteDatabase(pathname);
+            try {
+              writer.enableDefensive?.(false);
+              writer.exec("PRAGMA writable_schema = ON");
+              expect(
+                writer
+                  .prepare(
+                    "DELETE FROM state_leases WHERE scope = 'gateway-owner' AND lease_key = 'global' AND owner = 'test-gateway'",
+                  )
+                  .run().changes,
+              ).toBe(1);
+            } finally {
+              writer.close();
+            }
+            // Only the simulated Gateway's shutdown writes; Doctor must preserve its result.
+            beforeCatalog = fs.readFileSync(pathname);
+          };
+        }
         assertCatalogUnchanged = () =>
           expect(fs.readFileSync(pathname).equals(beforeCatalog)).toBe(true);
         assertPreStopArtifactsUnchanged = () => expect(readArtifacts()).toEqual(beforeArtifacts);
@@ -537,6 +566,7 @@ async function runDoctorFinishForStoppedUnit(
               scenario === "gateway-lifecycle-contended" ||
               scenario === "legacy-gateway-lifecycle-contended"
             ) {
+              releaseServingLease();
               otherOwner?.release();
               otherOwner = undefined;
             }
@@ -720,49 +750,72 @@ it.each([
   },
 );
 
-it("preserves the existing malformed continuation writer refusal before stopping the service", async () => {
-  await expect(runDoctorFinishForStoppedUnit("retained", "own", "exact")).rejects.toThrow(
-    "schema migration required",
-  );
+it("refuses offline Doctor repair of a newer schema without recommending repair or changing files", async () => {
+  const stateDir = tempDirs.make("openclaw-doctor-newer-schema-");
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+  const databasePath = openOpenClawStateDatabase().path;
+  await closeOpenClawStateDatabaseAsync();
+  writeUnreadableNewerStateSchema(databasePath);
+  const before = snapshotSourceFamily(databasePath);
+
+  const admission = beginDoctorMaintenance({
+    root: null,
+    options: { repair: true, nonInteractive: true },
+    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+  });
+  await expect(admission).rejects.toThrow("newer schema version");
+  await expect(admission).rejects.toThrow(/restore.*backup/);
+  await expect(admission).rejects.not.toThrow(/doctor --fix/);
+  expect(snapshotSourceFamily(databasePath)).toEqual(before);
   expect(mocks.stops).toBe(0);
 });
 
-it("refuses a foreign lifecycle holder before stopping the service", async () => {
-  await expect(runDoctorFinishForStoppedUnit("lifecycle-contended")).rejects.toThrow(
-    "is undergoing offline maintenance; retry when it finishes.",
-  );
-  expect(mocks.stops).toBe(0);
-});
-
-it.each([
+it.each<{
+  scenario?: StoppedUnitState;
+  catalog?: LegacyCatalog;
+  continuation?: Continuation;
+  message: string | RegExp;
+}>([
+  { catalog: "exact", continuation: "own", message: "schema migration required" },
+  {
+    scenario: "lifecycle-contended",
+    message: "is undergoing offline maintenance; retry when it finishes.",
+  },
   { catalog: "exact", continuation: "manual", message: "remains recorded as running" },
   {
     catalog: "conflict-on-recheck",
-    continuation: undefined,
     message: "remains recorded as running",
   },
   {
     catalog: "future-version",
-    continuation: undefined,
     message: `uses newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
   },
   {
     catalog: "future-content",
-    continuation: undefined,
     message: `uses newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
   },
   {
     catalog: "different-state",
-    continuation: undefined,
     message: "non-default state dir or config path",
   },
-  { catalog: "unknown", continuation: undefined, message: "schema migration required" },
-] as const)(
-  "refuses $catalog/$continuation before stopping the service",
-  async ({ catalog, continuation, message }) => {
-    await expect(runDoctorFinishForStoppedUnit("retained", continuation, catalog)).rejects.toThrow(
-      message,
-    );
+  { catalog: "unknown", message: "schema migration required" },
+  { continuation: "manual", message: /remains recorded as running.*liveness: alive/ },
+  { continuation: "competing", message: /remains recorded as running.*liveness: alive/ },
+  { continuation: "foreign", message: "other-host.invalid" },
+  { continuation: "unrecorded", message: "update parent must stop the managed Gateway" },
+  { continuation: "unknown-adopter", message: "unrecorded adopter" },
+  { continuation: "own-child", message: "update parent must stop the managed Gateway" },
+  { continuation: "lost-before-stop", message: "remains recorded as running" },
+])(
+  "refuses admission before stopping the service (%j)",
+  async ({ scenario = "retained", catalog, continuation, message }) => {
+    const admission = runDoctorFinishForStoppedUnit(scenario, continuation, catalog);
+    await expect(admission).rejects.toThrow(message);
+    if (catalog === "future-version" || catalog === "future-content") {
+      await expect(admission).rejects.toThrow(/restore.*backup/);
+      await expect(admission).rejects.not.toThrow(/doctor --fix/);
+    }
     expect(mocks.stops).toBe(0);
   },
 );
@@ -784,52 +837,24 @@ it.each(["own", "unrecorded-parked"] as const)(
   },
 );
 
-it.each([
-  { continuation: "manual", name: "manual doctor --fix without update markers" },
-  { continuation: "competing", name: "an owning continuation alongside a different live driver" },
-] as const)("refuses $name while another update owns the service", async ({ continuation }) => {
-  await expect(runDoctorFinishForStoppedUnit("retained", continuation)).rejects.toThrow(
-    /remains recorded as running.*liveness: alive/,
-  );
-  expect(mocks.stops).toBe(0);
-});
-
-it.each(["foreign", "unrecorded", "unknown-adopter"] as const)(
-  "preserves parent activation without an owning repair continuation (%s)",
-  async (continuation) => {
-    await expect(runDoctorFinishForStoppedUnit("retained", continuation)).rejects.toThrow(
-      continuation === "foreign"
-        ? "other-host.invalid"
-        : continuation === "unknown-adopter"
-          ? "unrecorded adopter"
-          : "update parent must stop the managed Gateway",
+it.each<{ scenario: StoppedUnitState; continuation?: Continuation }>([
+  { scenario: "retained", continuation: "lost-before-restart" },
+  { scenario: "inspection-competing" },
+  { scenario: "competing-during-inspection" },
+])(
+  "rechecks update admission before restoring the service (%j)",
+  async ({ scenario, continuation }) => {
+    const { finishError, restartCalls, startCalls } = await runDoctorFinishForStoppedUnit(
+      scenario,
+      continuation,
     );
+    expect(finishError).toMatchObject({
+      message: expect.stringContaining("remains recorded as running"),
+    });
+    expect(restartCalls).toBe(0);
+    expect(startCalls).toBe(0);
   },
 );
-
-it("never lets the Doctor child stop or restart its parent's running service", async () => {
-  await expect(runDoctorFinishForStoppedUnit("retained", "own-child")).rejects.toThrow(
-    "update parent must stop the managed Gateway",
-  );
-  expect(mocks.stops).toBe(0);
-});
-
-it("rechecks continuation before stopping the service", async () => {
-  await expect(runDoctorFinishForStoppedUnit("retained", "lost-before-stop")).rejects.toThrow(
-    "remains recorded as running",
-  );
-});
-
-it("rechecks continuation before restoring the service", async () => {
-  const { finishError, restartCalls } = await runDoctorFinishForStoppedUnit(
-    "retained",
-    "lost-before-restart",
-  );
-  expect(finishError).toMatchObject({
-    message: expect.stringContaining("remains recorded as running"),
-  });
-  expect(restartCalls).toBe(0);
-});
 
 it.each(["inspection-error", "inspection-timeout", "runtime-timeout"] as const)(
   "starts and verifies the Gateway it stopped after %s",
@@ -843,15 +868,6 @@ it.each(["inspection-error", "inspection-timeout", "runtime-timeout"] as const)(
     expect(result.logs).toContain("Gateway restarted and verified after Doctor repair.");
   },
 );
-
-it("does not treat an inconclusive inspection as admission to a competing update", async () => {
-  const result = await runDoctorFinishForStoppedUnit("inspection-competing");
-  expect(result.finishError).toMatchObject({
-    message: expect.stringContaining("remains recorded as running"),
-  });
-  expect(result.startCalls).toBe(0);
-  expect(result.restartCalls).toBe(0);
-});
 
 it.each(["ownership-refused-wrapped", "runtime-ownership-refused", "launchd-owned"] as const)(
   "preserves the native ownership refusal without activation: %s",
@@ -884,16 +900,6 @@ it("reports both inspection and start failures without claiming recovery", async
   });
   expect(result.logs.join("\n")).toContain("inspection deadline expired");
   expect(result.logs).not.toContain("Gateway restarted and verified after Doctor repair.");
-});
-
-it("rechecks update admission after passive native inspection before restoring the Gateway", async () => {
-  const { finishError, restartCalls } = await runDoctorFinishForStoppedUnit(
-    "competing-during-inspection",
-  );
-  expect(finishError).toMatchObject({
-    message: expect.stringContaining("remains recorded as running"),
-  });
-  expect(restartCalls).toBe(0);
 });
 
 it.each([

@@ -47,3 +47,16 @@ export function formatMissingChildRuntimeWarning(
   const execPath = sanitizeTerminalText(viability.execPath);
   return `Gateway runtime is stale after Node upgrade: child workers are using ${execPath}, which no longer exists. Restart the Gateway.`;
 }
+
+/** Do not mislabel missing commands or working directories as a removed Node runtime. */
+export function formatChildRuntimeSpawnWarning(error: unknown): string | undefined {
+  if (
+    error instanceof Error &&
+    hasErrnoCode(error, "ENOENT") &&
+    "path" in error &&
+    error.path === process.execPath
+  ) {
+    return formatMissingChildRuntimeWarning(readChildRuntimeViability());
+  }
+  return undefined;
+}

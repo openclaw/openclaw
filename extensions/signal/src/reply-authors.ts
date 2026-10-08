@@ -41,11 +41,11 @@ function openSignalReplyAuthorStore() {
   }
 }
 
-function buildSignalReplyAuthorStoreKey(params: {
+function resolveSignalReplyIdentity(params: {
   accountId?: string | null;
   to: string;
   replyToId?: string | null;
-}): string | undefined {
+}) {
   const conversationKey = normalizeSignalMessagingTarget(params.to);
   const replyToId = normalizeOptionalString(params.replyToId);
   if (!conversationKey || !replyToId) {
@@ -54,7 +54,12 @@ function buildSignalReplyAuthorStoreKey(params: {
   const accountKey = normalizeLowercaseStringOrEmpty(
     normalizeOptionalString(params.accountId) ?? DEFAULT_ACCOUNT_ID,
   );
-  return `account=${accountKey}|to=${conversationKey}|id=${replyToId}`;
+  return {
+    key: `account=${accountKey}|to=${conversationKey}|id=${replyToId}`,
+    accountId: accountKey,
+    conversationKey,
+    replyToId,
+  };
 }
 
 function pruneMemoryReplyContexts(now = Date.now()): void {
@@ -118,31 +123,25 @@ export async function registerSignalReplyContext(params: {
   sourceTimestamp?: number | null;
 }): Promise<void> {
   const store = openSignalReplyAuthorStore();
-  const key = buildSignalReplyAuthorStoreKey(params);
+  const identity = resolveSignalReplyIdentity(params);
   const author = normalizeOptionalString(params.author);
   const body = normalizeOptionalString(params.body);
   const media = params.media?.map((entry) => ({
     contentType: normalizeOptionalString(entry.contentType),
     kind: entry.kind ?? undefined,
   }));
-  const conversationKey = normalizeSignalMessagingTarget(params.to);
-  const replyToId = normalizeOptionalString(params.replyToId);
-  const accountKey = normalizeLowercaseStringOrEmpty(
-    normalizeOptionalString(params.accountId) ?? DEFAULT_ACCOUNT_ID,
-  );
   const sourceTimestamp = asPositiveSafeInteger(params.sourceTimestamp) ?? Date.now();
-  if (!key || !author || !conversationKey || !replyToId) {
+  if (!identity || !author) {
     return;
   }
+  const { key, ...replyIdentity } = identity;
   const registeredAt = Date.now();
   const record = {
     kind: "resolved" as const,
     author,
     ...(body ? { body } : {}),
     ...(media?.length ? { media } : {}),
-    accountId: accountKey,
-    conversationKey,
-    replyToId,
+    ...replyIdentity,
     sourceTimestamp,
     registeredAt,
   };
@@ -234,7 +233,7 @@ export async function resolveSignalReplyContextWithPersistence(params: {
   replyToId?: string | null;
 }): Promise<SignalPersistedReplyContext | undefined> {
   const store = openSignalReplyAuthorStore();
-  const key = buildSignalReplyAuthorStoreKey(params);
+  const key = resolveSignalReplyIdentity(params)?.key;
   if (!key) {
     return undefined;
   }

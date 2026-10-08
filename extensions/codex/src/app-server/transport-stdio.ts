@@ -67,46 +67,28 @@ export function resolveCodexAppServerSpawnEnv(
   platform: NodeJS.Platform = process.platform,
 ): NodeJS.ProcessEnv {
   const env = Object.create(null) as NodeJS.ProcessEnv;
-  copySafeEnvironmentEntries(env, baseEnv);
-  copySafeEnvironmentEntries(env, options.env ?? {});
-  const keysToClear = (options.clearEnv ?? []).map((key) => key.trim()).filter(Boolean);
-  if (platform === "win32") {
-    const lowerCaseKeysToClear = new Set(keysToClear.map((key) => key.toLowerCase()));
-    for (const candidate of Object.keys(env)) {
-      if (lowerCaseKeysToClear.has(candidate.toLowerCase())) {
-        delete env[candidate];
+  for (const source of [baseEnv, options.env ?? {}]) {
+    for (const [key, value] of Object.entries(source)) {
+      if (!UNSAFE_ENVIRONMENT_KEYS.has(key)) {
+        env[key] = value;
       }
     }
-  } else {
-    for (const key of keysToClear) {
-      delete env[key];
-    }
   }
+  const normalizeKey = (key: string) => (platform === "win32" ? key.toLowerCase() : key);
+  const keysToClear = new Set(
+    (options.clearEnv ?? []).map((key) => normalizeKey(key.trim())).filter(Boolean),
+  );
   for (const key of Object.keys(env)) {
-    if (isCodexRuntimeInjectionEnvironmentKey(key)) {
+    const upperKey = key.toUpperCase();
+    const runtimeInjection =
+      RUNTIME_INJECTION_ENVIRONMENT_KEYS.has(upperKey) || upperKey.startsWith("DYLD_");
+    if (keysToClear.has(normalizeKey(key)) || runtimeInjection) {
       // Package managers and agent hosts may inject loader paths into their children. Codex does
       // not need them, so strip them before attestation and spawn instead of self-failing setup.
       delete env[key];
     }
   }
   return env;
-}
-
-function isCodexRuntimeInjectionEnvironmentKey(rawKey: string): boolean {
-  const key = rawKey.toUpperCase();
-  return RUNTIME_INJECTION_ENVIRONMENT_KEYS.has(key) || key.startsWith("DYLD_");
-}
-
-function copySafeEnvironmentEntries(
-  target: NodeJS.ProcessEnv,
-  source: NodeJS.ProcessEnv | Record<string, string | undefined>,
-): void {
-  for (const [key, value] of Object.entries(source)) {
-    if (UNSAFE_ENVIRONMENT_KEYS.has(key)) {
-      continue;
-    }
-    target[key] = value;
-  }
 }
 
 /** Spawns the Codex app-server process and returns the shared transport interface. */
