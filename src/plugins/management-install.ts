@@ -7,7 +7,7 @@ import { buildNpmResolutionFields, type NpmSpecResolution } from "../infra/insta
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import { normalizeUpdateChannel, resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { VERSION } from "../version.js";
+import { resolveCompatibilityHostVersion, VERSION } from "../version.js";
 import { installBundledPluginSource } from "./bundled-install.js";
 import type { BundledPluginSource } from "./bundled-sources.js";
 import {
@@ -27,6 +27,7 @@ import {
   NpmChannelResolutionError,
   type PluginInstallSource,
   resolveClawHubInstallSpecsForUpdateChannel,
+  resolveCompatibleClawHubInstallSpec,
   resolveNpmInstallSpecsForUpdateChannel,
 } from "./install-channel-specs.js";
 import type { ConfigSnapshotForInstallPersist } from "./install-config-mutation.js";
@@ -83,6 +84,8 @@ export type ManagedPluginSourceInstallRequest =
   | {
       source: "clawhub";
       spec: string;
+      /** A hosted catalog version is a default choice, not an operator pin. */
+      catalogVersionIsDefault?: true;
       /** Spec recorded for the install; keeps user intent when `spec` is channel-resolved. */
       recordSpec?: string;
       mode?: "install" | "update";
@@ -103,6 +106,7 @@ export type ManagedPluginSourceInstallRequest =
   | {
       source: "official";
       spec: string;
+      catalogVersionIsDefault?: true;
       installSources: PluginInstallSource[];
       expectedPluginId?: string;
       mode: "install" | "update";
@@ -152,22 +156,20 @@ type SourceInstallerResult =
  * chat command, and any future caller — on one answer instead of letting the
  * registry default land a plugin the gateway then reports as drifted.
  *
- * Beta and extended-stable resolve here. Version-bound stable tracks key off a
- * per-plugin `versionBoundToOpenClaw` descriptor that a managed install request
- * does not carry, and answering for them from this boundary would pin plugins
- * the policy never opted in.
+ * Stable ClawHub defaults prefer the host build, then compatible releases.
+ * Operator pins remain strict; catalog candidates may move with their own digest.
  */
 async function resolveOfficialManagedInstallSpec(params: {
   request: Extract<ManagedPluginSourceInstallRequest, { source: "npm" | "clawhub" }>;
   config: OpenClawConfig;
-}): Promise<string | null> {
+}): Promise<
+  | { installSpec: string; recordSpec: string }
+  | Extract<ManagedPluginSourceInstallResult, { ok: false }>
+  | null
+> {
   const { request } = params;
   const trustedSourceLinkedOfficialInstall = request.trustedSourceLinkedOfficialInstall === true;
   if (request.source === "npm" && !trustedSourceLinkedOfficialInstall) {
-    return null;
-  }
-  // An integrity pin identifies one exact artifact, so it outranks the channel.
-  if (request.expectedIntegrity) {
     return null;
   }
   const packageName =
@@ -185,7 +187,30 @@ async function resolveOfficialManagedInstallSpec(params: {
     configChannel: normalizeUpdateChannel(params.config.update?.channel),
     currentVersion: VERSION,
   });
-  if (updateChannel !== "beta" && updateChannel !== "extended-stable") {
+  if (updateChannel === "stable" && request.source === "clawhub") {
+    const parsed = parseClawHubPluginSpec(request.spec);
+    if (
+      request.catalogVersionIsDefault ||
+      (!request.expectedIntegrity &&
+        (!parsed?.version || parsed.version.toLowerCase() === "latest"))
+    ) {
+      const selected = await resolveCompatibleClawHubInstallSpec({
+        packageName,
+        coreVersion: resolveCompatibilityHostVersion(),
+      });
+      return typeof selected === "string"
+        ? {
+            installSpec: selected,
+            recordSpec: request.catalogVersionIsDefault ? `clawhub:${packageName}` : request.spec,
+          }
+        : selected;
+    }
+  }
+  // Operator integrity pins and catalog pins on strict release streams remain exact.
+  if (
+    request.expectedIntegrity ||
+    (updateChannel !== "beta" && updateChannel !== "extended-stable")
+  ) {
     return null;
   }
   const specs =
@@ -202,7 +227,7 @@ async function resolveOfficialManagedInstallSpec(params: {
           officialPackageName: packageName,
           coreVersion: VERSION,
         });
-  return specs.installSpec === request.spec ? null : specs.installSpec;
+  return specs.installSpec === request.spec ? null : specs;
 }
 
 type ManagedPluginSourceInstallParams = {
@@ -269,6 +294,9 @@ export async function installManagedPluginSource(
               mode: request.mode,
               expectedPluginId: request.expectedPluginId,
               trustedSourceLinkedOfficialInstall: true,
+              ...(source.source === "clawhub" && request.catalogVersionIsDefault
+                ? { catalogVersionIsDefault: true as const }
+                : {}),
               ...(source.expectedIntegrity ? { expectedIntegrity: source.expectedIntegrity } : {}),
               ...(source.source === "npm" && request.pin ? { pin: true } : {}),
             },
@@ -283,9 +311,9 @@ export async function installManagedPluginSource(
     if (request.source !== "npm" && request.source !== "clawhub") {
       return await installResolvedManagedPluginSource({ ...params, request }, assertOwned);
     }
-    let installSpec: string | null;
+    let specs: Awaited<ReturnType<typeof resolveOfficialManagedInstallSpec>>;
     try {
-      installSpec = await resolveOfficialManagedInstallSpec({
+      specs = await resolveOfficialManagedInstallSpec({
         request,
         config: params.snapshot.config,
       });
@@ -295,13 +323,23 @@ export async function installManagedPluginSource(
       }
       return { ok: false, error: error.message, code: error.code };
     }
-    if (!installSpec) {
+    if (!specs) {
       return await installResolvedManagedPluginSource({ ...params, request }, assertOwned);
     }
+    if ("ok" in specs) {
+      return specs;
+    }
+    const { installSpec } = specs;
     const result = await installResolvedManagedPluginSource(
       {
         ...params,
-        request: { ...request, spec: installSpec, recordSpec: request.recordSpec ?? request.spec },
+        request: {
+          ...request,
+          spec: installSpec,
+          recordSpec: request.recordSpec ?? specs.recordSpec,
+          // The catalog digest authenticates its candidate, never a different release.
+          expectedIntegrity: installSpec === request.spec ? request.expectedIntegrity : undefined,
+        },
       },
       assertOwned,
     );

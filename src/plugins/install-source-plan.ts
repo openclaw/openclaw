@@ -346,6 +346,7 @@ export function resolveManagedPluginInstallRequest(
         source: "official",
         spec: primary.spec,
         installSources,
+        ...(entry.install?.candidates?.length ? { catalogVersionIsDefault: true } : {}),
         expectedPluginId: resolveDeclaredOfficialPluginId(entry),
         mode,
         ...(request.pin ? { pin: true } : {}),
@@ -402,6 +403,9 @@ export function resolveManagedPluginInstallRequest(
         spec: `clawhub:${packageName}${version ? `@${version}` : ""}`,
         mode,
         ...(official ? { trustedSourceLinkedOfficialInstall: true } : {}),
+        ...(!request.version && !request.expectedIntegrity && hostedClawHub
+          ? { catalogVersionIsDefault: true }
+          : {}),
         expectedPluginId: expectedPluginId ?? request.expectedPluginId,
         expectedIntegrity: expectedIntegrity ?? request.expectedIntegrity,
       };
