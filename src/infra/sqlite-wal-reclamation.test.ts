@@ -9,7 +9,7 @@ import { configureSqlitePreSchemaPragmas, configureSqliteWalMaintenance } from "
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.useRealTimers());
 
-it("keeps passive ticks nonblocking without changing the connection lock policy", () => {
+it("keeps checkpoint-only reclamation nonblocking without changing the connection lock policy", () => {
   const pathname = path.join(dirs.make("openclaw-wal-passive-tick-"), "agent.sqlite");
   const { DatabaseSync } = requireNodeSqlite();
   const writer = new DatabaseSync(pathname);
@@ -27,13 +27,14 @@ it("keeps passive ticks nonblocking without changing the connection lock policy"
     const admission = vi.fn();
     const observation = observeHostDataSql();
     try {
-      const blocked = maintenance.maintainPeriodic!(
-        { checkpointMode: "PASSIVE", maxPages: 0 },
-        admission,
-      );
+      const blocked = maintenance.reclaimFreePages({
+        checkpointMode: "PASSIVE",
+        maxPages: 0,
+        beforeMutation: admission,
+      });
       expect(blocked.checkpoint?.health.state).toBe("blocked");
-      expect(blocked.reclaimedPages).toBe(0);
-      expect(admission.mock.calls).toEqual([["transaction"]]);
+      expect(blocked.vacuumPasses).toBe(0);
+      expect(admission).toHaveBeenCalledOnce();
       expect(observation.queries.filter((sql) => /busy_timeout/i.test(sql))).toEqual([]);
     } finally {
       observation.restore();
@@ -43,15 +44,19 @@ it("keeps passive ticks nonblocking without changing the connection lock policy"
     peer.exec("ROLLBACK; BEGIN IMMEDIATE;");
     // An active writer also cannot make PASSIVE wait for its lock to be released.
     expect(
-      maintenance.maintainPeriodic!({ checkpointMode: "PASSIVE", maxPages: 0 }).checkpoint?.health
+      maintenance.reclaimFreePages({ checkpointMode: "PASSIVE", maxPages: 0 }).checkpoint?.health
         .state,
     ).toBe("complete");
     peer.exec("ROLLBACK;");
     expect(() =>
-      maintenance.maintainPeriodic!({ checkpointMode: "PASSIVE", maxPages: 0 }, () => {
-        throw new Error("revoked");
+      maintenance.reclaimFreePages({
+        checkpointMode: "PASSIVE",
+        maxPages: 0,
+        beforeMutation: () => {
+          throw new Error("revoked");
+        },
       }),
-    ).not.toThrow();
+    ).toThrow("revoked");
     expect(maintenance.health).toMatchObject({ state: "error", error: "revoked" });
     expect(writer.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5_000);
     expect(writer.prepare("SELECT value FROM payload ORDER BY rowid").all()).toEqual([
