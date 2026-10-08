@@ -287,7 +287,7 @@ function capturePlacementObservation(pathname: string, sessionId?: string) {
 }
 
 /** Omit the session to fence non-local placements, including creations after an empty read. */
-export function observePlacementAuthority(pathname: string, sessionId?: string) {
+function observePlacementAuthority(pathname: string, sessionId?: string) {
   return capturePlacementObservation(pathname, sessionId).authority;
 }
 

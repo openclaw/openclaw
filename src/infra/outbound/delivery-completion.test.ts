@@ -22,6 +22,7 @@ vi.mock(
   "../../agents/main-session-recovery/main-session-recovery-owner-release.js",
   () => recoveryMocks,
 );
+// mock-isolation: Fixture seed writes must not schedule retention requests into this census.
 vi.mock("../../config/sessions/session-accessor.sqlite-maintenance-kick.js", () => ({
   kickSessionEntryMaintenanceAfterWrite() {},
 }));

@@ -21,6 +21,7 @@ import {
 import { retireTerminalRestartRecoverySourceClaim } from "./restart-recovery-claim.js";
 
 // Fixture writes must not schedule retention work into the cleanup request census.
+// mock-isolation: Fixture seed writes must not schedule retention requests into this census.
 vi.mock("../../config/sessions/session-accessor.sqlite-maintenance-kick.js", () => ({
   kickSessionEntryMaintenanceAfterWrite() {},
 }));
