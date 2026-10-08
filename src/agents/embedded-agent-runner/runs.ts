@@ -179,36 +179,6 @@ function clearEmbeddedRunAbandonment(params: {
   }
 }
 
-function markEmbeddedRunAbandoned(params: {
-  sessionId: string;
-  runId?: string;
-  sessionKey?: string;
-  sessionFile?: string;
-  reason: AbandonedEmbeddedRun["reason"];
-}): void {
-  const sessionId = params.sessionId.trim();
-  if (!sessionId) {
-    return;
-  }
-  clearEmbeddedRunAbandonment({ ...params, sessionId });
-  const normalizedSessionFile = normalizeSessionFileRegistryKey(params.sessionFile);
-  const abandonedRun: AbandonedEmbeddedRun = {
-    sessionId,
-    ...(params.runId?.trim() ? { runId: params.runId.trim() } : {}),
-    abandonedAtMs: Date.now(),
-    reason: params.reason,
-    ...(params.sessionKey?.trim() ? { sessionKey: params.sessionKey.trim() } : {}),
-    ...(normalizedSessionFile ? { sessionFile: normalizedSessionFile } : {}),
-  };
-  ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.set(sessionId, abandonedRun);
-  if (abandonedRun.sessionKey) {
-    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.set(abandonedRun.sessionKey, sessionId);
-  }
-  if (abandonedRun.sessionFile) {
-    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(abandonedRun.sessionFile, sessionId);
-  }
-}
-
 export function markActiveEmbeddedRunAbandoned(params: {
   sessionId: string;
   handle: EmbeddedAgentQueueHandle;
@@ -220,7 +190,26 @@ export function markActiveEmbeddedRunAbandoned(params: {
   if (!sessionId || ACTIVE_EMBEDDED_RUNS.get(sessionId) !== params.handle) {
     return false;
   }
-  markEmbeddedRunAbandoned({ ...params, runId: params.handle.runId });
+  const abandonedParams = { ...params, runId: params.handle.runId };
+  clearEmbeddedRunAbandonment({ ...abandonedParams, sessionId });
+  const normalizedSessionFile = normalizeSessionFileRegistryKey(abandonedParams.sessionFile);
+  const abandonedRun: AbandonedEmbeddedRun = {
+    sessionId,
+    ...(abandonedParams.runId?.trim() ? { runId: abandonedParams.runId.trim() } : {}),
+    abandonedAtMs: Date.now(),
+    reason: abandonedParams.reason,
+    ...(abandonedParams.sessionKey?.trim()
+      ? { sessionKey: abandonedParams.sessionKey.trim() }
+      : {}),
+    ...(normalizedSessionFile ? { sessionFile: normalizedSessionFile } : {}),
+  };
+  ABANDONED_EMBEDDED_RUNS_BY_SESSION_ID.set(sessionId, abandonedRun);
+  if (abandonedRun.sessionKey) {
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_KEY.set(abandonedRun.sessionKey, sessionId);
+  }
+  if (abandonedRun.sessionFile) {
+    ABANDONED_EMBEDDED_RUN_SESSION_IDS_BY_FILE.set(abandonedRun.sessionFile, sessionId);
+  }
   return true;
 }
 

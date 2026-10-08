@@ -1270,7 +1270,7 @@ src/agents/delegation-capability.ts	1
 src/agents/embedded-agent-helpers/bootstrap.ts	2
 src/agents/embedded-agent-helpers/images.ts	6
 src/agents/embedded-agent-helpers/openai.ts	17
-src/agents/embedded-agent-helpers/turns.ts	14
+src/agents/embedded-agent-helpers/turns.ts	8
 src/agents/embedded-agent-live-edit-diff.ts	3
 src/agents/embedded-agent-messaging-extraction.ts	1
 src/agents/embedded-agent-messaging.ts	1
@@ -1298,8 +1298,8 @@ src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts	4
 src/agents/embedded-agent-runner/run/attempt-client-tools.ts	1
 src/agents/embedded-agent-runner/run/attempt-context-summary.ts	2
 src/agents/embedded-agent-runner/run/attempt-execution-phase.ts	1
-src/agents/embedded-agent-runner/run/attempt-history.ts	10
-src/agents/embedded-agent-runner/run/attempt-llm-boundary.ts	10
+src/agents/embedded-agent-runner/run/attempt-history.ts	9
+src/agents/embedded-agent-runner/run/attempt-llm-boundary.ts	6
 src/agents/embedded-agent-runner/run/attempt-normalization.ts	1
 src/agents/embedded-agent-runner/run/attempt-prompt-build.ts	1
 src/agents/embedded-agent-runner/run/attempt-prompt-helpers.ts	4
@@ -1343,14 +1343,13 @@ src/agents/embedded-agent-runner/tool-result-truncation.ts	12
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	1
 src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	1
-src/agents/embedded-agent-subscribe.handlers.messages.stream.ts	3
-src/agents/embedded-agent-subscribe.handlers.messages.update.ts	3
-src/agents/embedded-agent-subscribe.handlers.tools.completion.ts	1
+src/agents/embedded-agent-subscribe.handlers.messages.stream.ts	1
+src/agents/embedded-agent-subscribe.handlers.messages.update.ts	2
 src/agents/embedded-agent-subscribe.handlers.tools.results.ts	1
 src/agents/embedded-agent-subscribe.handlers.tools.start.ts	6
 src/agents/embedded-agent-subscribe.tool-text-diagnostics.ts	6
 src/agents/embedded-agent-tool-media.ts	5
-src/agents/embedded-agent-tool-results.ts	9
+src/agents/embedded-agent-tool-results.ts	8
 src/agents/embedded-agent-utils.ts	3
 src/agents/exec-auto-reviewer.ts	1
 src/agents/exec-defaults.ts	2

@@ -128,10 +128,6 @@ export async function resolveAttemptTrajectorySessionFile(params: {
   ).sessionKey;
 }
 
-type ExistingAttemptTranscriptState = {
-  hasBootstrapTranscriptState: boolean;
-};
-
 export async function resolveExistingAttemptTranscriptState(params: {
   agentId: string;
   config?: OpenClawConfig;
@@ -140,7 +136,7 @@ export async function resolveExistingAttemptTranscriptState(params: {
   sessionId: string;
   sessionKey?: string;
   sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
-}): Promise<ExistingAttemptTranscriptState> {
+}) {
   // The supplied manager owns this transcript; a borrowed durable identity is not its history.
   if (params.sessionManager) {
     return {

@@ -237,16 +237,13 @@ export function createStreamRendering({
           continue;
         }
         processed += scanText.slice(lastIndex, idx);
+      }
+      if (!inThinking || isClose) {
         hiddenInlineState = createInlineCodeState();
         hiddenFenceState = undefined;
         hiddenPendingFenceFragment = undefined;
       }
       inThinking = !isClose;
-      if (!inThinking) {
-        hiddenInlineState = createInlineCodeState();
-        hiddenFenceState = undefined;
-        hiddenPendingFenceFragment = undefined;
-      }
       lastIndex = idx + match[0].length;
     }
     if (inThinking) {

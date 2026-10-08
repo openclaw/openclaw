@@ -81,16 +81,15 @@ function restoreTranscriptPromptText(
   if (typeof content === "string") {
     restoredMessage = Object.assign(messageRest, { content: transcriptText });
   } else if (Array.isArray(content)) {
-    let restored = false;
     const nextContent = content.map((block) => {
-      if (restored || !isToolResultTextBlock(block) || block.type !== "text") {
+      if (restoredMessage !== message || !isToolResultTextBlock(block) || block.type !== "text") {
         return block;
       }
-      restored = true;
+      restoredMessage = messageRest;
       return Object.assign({}, block, { text: transcriptText });
     });
-    if (restored) {
-      restoredMessage = Object.assign(messageRest, { content: nextContent });
+    if (restoredMessage !== message) {
+      Object.assign(restoredMessage, { content: nextContent });
     }
   }
   cache.set(message, restoredMessage);
