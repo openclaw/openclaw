@@ -85,7 +85,6 @@
 ["extensions/browser/src/browser-host-availability.test.ts","./browser/chrome.executables.js","94044b5728b4deb4bc29cff6abdaa597c1d47630dac6ea8d273c2e04acbbd682",1]
 ["extensions/browser/src/browser-host-availability.test.ts","./browser/chrome.js","bab1e38f5d0f33c70278817a90a8cabbc203d9975771b3057e51cbd32271fa8c",1]
 ["extensions/browser/src/browser-node-proxy.test.ts","./browser-proxy-upload.js","cd6b18cc166abbb0ccdfbeed8f1da642b3427035bf849c0da40770f3f252ad31",1]
-["extensions/browser/src/browser-tool.routing-guidance.test.ts","../register.runtime.js","97be0484f3c20304036cc7413c3ad40951c41284d626bf1460a61e0b9825b052",1]
 ["extensions/browser/src/browser-tool.test-support.ts","./browser-host-availability.js","76c4baa6ccd453a35ce4803b6adf0494ce18adbbfce2a9638a1421da01d740d6",1]
 ["extensions/browser/src/browser-tool.test-support.ts","./browser/config.js","16a6635f913f457faa9b005d01e12101b7cb2d99c363a26230bbabe48eb66c65",1]
 ["extensions/browser/src/browser-tool.test-support.ts","./browser/session-tab-registry.js","83f362bc35dadba19f1230b9b9967fef0aeb88600157dc94e57e59bbf065726f",1]
