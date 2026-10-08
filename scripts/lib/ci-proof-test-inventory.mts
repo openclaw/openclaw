@@ -803,7 +803,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/telegram/src/bot.test.ts",
   "extensions/telegram/src/bot/body-helpers.inbound.test.ts",
   "extensions/telegram/src/model-callback.loopback.integration.test.ts",
-  "extensions/telegram/src/outbound-adapter.sanitize.test.ts",
   "extensions/telegram/src/poll-registry.test.ts",
   "extensions/telegram/src/probe.response-body-timeout.integration.test.ts",
   "extensions/telegram/src/send.telegram-http.test.ts",

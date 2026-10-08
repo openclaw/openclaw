@@ -1647,7 +1647,6 @@
 ["extensions/telegram/src/monitor.test.ts","openclaw/plugin-sdk/runtime-config-snapshot","e550abe0d019dcdbefe8198269057fece3ca6c2e7909d94b323f4f305670dbce",1]
 ["extensions/telegram/src/monitor.webhook-identity.test.ts","./bot.js","d1d34ddc2bb357379d3f89b414d68d27bc43871adf7a59d840a407ddeea34434",1]
 ["extensions/telegram/src/monitor.webhook-identity.test.ts","./fetch.js","8609cfbeec1077c495592c2698db4e0ce148797563cffcbee071dc4e5724a3a9",1]
-["extensions/telegram/src/outbound-adapter.sanitize.test.ts","./send.js","a4cd89aa9b614e8dbe84eb8e5a9b4920a4841ae22cb90232917fa7c479993488",1]
 ["extensions/telegram/src/polling-session.test.ts","./api-logging.js","cbfe80f020dda7a2bdea8d82fbaa7e9b59686b39738b4f01d06f94508255f49c",1]
 ["extensions/telegram/src/polling-session.test.ts","./bot.js","241463ab4cd597f94a4d1c5225af411a3cd717fde948fc52611fcaeda362f584",1]
 ["extensions/telegram/src/polling-session.test.ts","./network-errors.js","2d27f9ba39cd19ef416b852e108f4589ac7708aa1cf194098075368a15b0c83b",1]
