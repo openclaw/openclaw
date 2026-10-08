@@ -181,21 +181,9 @@ export function assertManagedHandoffPath(stat: BigIntStats, kind: "directory" | 
   }
 }
 
-/**
- * Earlier writers created the file under the caller's umask and chmodded it
- * after schema creation. Excess read bits on a path we own can therefore be
- * that interrupted work. Restore the
- * invariant instead of refusing, which would otherwise lock the product out of its
- * own state for every install root until an operator deleted the file by hand.
- *
- * Excess bits here are defense in depth rather than a live exposure: assertManagedHandoffPath
- * enforces a 0700 owned directory on every read and every write, and a single
- * link, so no other user could traverse to this inode or hold a descriptor on it
- * whatever the file's own mode said. Write bits are still refused rather than
- * repaired, because chmod cannot revoke a descriptor and integrity is the one
- * thing the directory guarantee would not restore. Ownership, type and link count
- * are likewise not ours to repair; all of those still refuse in assertManagedHandoffPath.
- */
+// Earlier writers chmodded after schema creation. Repair their excess read bits
+// only inside the owned 0700 directory; write bits remain unsafe because chmod
+// cannot revoke an existing descriptor. Ownership, type and link checks still apply.
 function repairPrivateFileMode(databasePath: string, stat: BigIntStats): BigIntStats {
   if (
     process.platform === "win32" ||
@@ -282,13 +270,7 @@ function createMissingDatabaseFile(
   }
 }
 
-/**
- * Bytes we could never adopt: the path is not our regular single-linked file, or
- * it carries write bits, which mean a descriptor we cannot revoke may already
- * exist. Excess read bits are excluded — repairPrivateFileMode restores those in
- * place, because the store sets 0600 after every write and keeps its directory
- * private, so they are its own interrupted work.
- */
+// Excess read bits are repairable; writable or foreign files cannot be adopted.
 function isUnadoptableStore(stat: Stats): boolean {
   return (
     stat.isSymbolicLink() ||
@@ -384,17 +366,8 @@ export function createManagedHandoffLeaseDatabase(
     }
   }
 
-  /**
-   * Coordination state lives in a shared temp directory, so a store we cannot
-   * adopt used to end config mutation and native service operations for every
-   * install root on the host, permanently and with no in-product recovery.
-   * Retain it under a name recording the defect and leave a usable store behind.
-   *
-   * Repairers must not race: renaming on a stale observation lets one process
-   * retain the clean store another already opened, leaving two authoritative
-   * databases and defeating the lock this store exists to provide. The decision
-   * is therefore retaken under the lock, where the replacement is visible.
-   */
+  // Recheck under the lock: quarantining a store another repairer just replaced
+  // would leave two authoritative databases and defeat cross-install coordination.
   function recoverUnadoptableStore(target: string, parent: HandoffDirectoryReceipt): void {
     if (!observeUnadoptable(target)) {
       return;

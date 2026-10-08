@@ -267,36 +267,28 @@ export function createUpdateCanaryFailureFacts(params: {
 }): UpdateFailureFact[] {
   const { phase, signal, timedOut, exitWarning, failureMessage, diagnostic, findings, env } =
     params;
-  if (signal) {
-    return [
-      createUpdateFailureFact(
-        {
-          check: phase,
-          code: "signal",
-          message: `${phase === "doctor" ? "Checking data migrations" : params.name}: terminated by ${signal}`,
-        },
-        env,
-      ),
-      ...(findings ?? []).slice(0, 4),
-    ];
+  if (!signal && findings?.length) {
+    return findings;
   }
-  return findings?.length
-    ? findings
-    : [
-        createUpdateFailureFact(
-          {
-            check: phase,
-            code:
-              timedOut && !exitWarning
-                ? "candidate-checks-timeout"
-                : phase === "doctor" || phase === "lint"
-                  ? "doctor-failed"
-                  : `candidate-${phase}-failed`,
-            message: timedOut ? failureMessage : (diagnostic ?? failureMessage),
-          },
-          env,
-        ),
-      ];
+  const fact = createUpdateFailureFact(
+    {
+      check: phase,
+      code: signal
+        ? "signal"
+        : timedOut && !exitWarning
+          ? "candidate-checks-timeout"
+          : phase === "doctor" || phase === "lint"
+            ? "doctor-failed"
+            : `candidate-${phase}-failed`,
+      message: signal
+        ? `${phase === "doctor" ? "Checking data migrations" : params.name}: terminated by ${signal}`
+        : timedOut
+          ? failureMessage
+          : (diagnostic ?? failureMessage),
+    },
+    env,
+  );
+  return signal ? [fact, ...(findings ?? []).slice(0, 4)] : [fact];
 }
 
 /** Config validation issues are more specific than the CLI's failure envelope. */

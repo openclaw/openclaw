@@ -1765,7 +1765,7 @@ src/commands/docs.ts	2
 src/commands/doctor-agent-memory-schema.ts	1
 src/commands/doctor-auth-flat-profiles.ts	1
 src/commands/doctor-auth-migration-receipts.ts	3
-src/commands/doctor-auth-profile-config.ts	4
+src/commands/doctor-auth-profile-config.ts	2
 src/commands/doctor-config-preflight.cron.ts	4
 src/commands/doctor-gateway-services.ts	1
 src/commands/doctor-heartbeat-scratch-migration.ts	4
@@ -1773,14 +1773,12 @@ src/commands/doctor-main-session-recovery.ts	1
 src/commands/doctor-model-catalog-credentials.ts	1
 src/commands/doctor-post-upgrade.ts	1
 src/commands/doctor-prompter.ts	1
-src/commands/doctor-retired-phone-control.ts	1
 src/commands/doctor-sandbox.ts	4
 src/commands/doctor-security.ts	3
 src/commands/doctor-session-canonical-keys.ts	1
-src/commands/doctor-session-incognito-key-repair-state.ts	8
+src/commands/doctor-session-incognito-key-repair-state.ts	4
 src/commands/doctor-session-snapshots.ts	3
 src/commands/doctor-session-sqlite-recover-report.ts	1
-src/commands/doctor-session-state-providers.ts	3
 src/commands/doctor-session-transcript-headers.ts	4
 src/commands/doctor-session-transcript-labels.ts	1
 src/commands/doctor-session-transcripts.ts	1
@@ -1796,12 +1794,12 @@ src/commands/doctor/cron/legacy-repair.ts	4
 src/commands/doctor/cron/store-migration.ts	2
 src/commands/doctor/cron/warnings.ts	1
 src/commands/doctor/shared/allowfrom-fallback-migration.ts	1
-src/commands/doctor/shared/channel-doctor.ts	4
+src/commands/doctor/shared/channel-doctor.ts	2
 src/commands/doctor/shared/codex-native-assets.ts	1
 src/commands/doctor/shared/codex-route-session-repair.ts	1
 src/commands/doctor/shared/configured-channel-ids.ts	1
 src/commands/doctor/shared/empty-allowlist-policy.ts	12
-src/commands/doctor/shared/empty-allowlist-scan.ts	4
+src/commands/doctor/shared/empty-allowlist-scan.ts	3
 src/commands/doctor/shared/legacy-config-core-normalizers.ts	1
 src/commands/doctor/shared/legacy-config-issues.ts	1
 src/commands/doctor/shared/legacy-config-migrate.ts	2
@@ -1817,7 +1815,6 @@ src/commands/doctor/shared/stale-agent-model-ref-repair.ts	2
 src/commands/doctor/shared/stale-auth-order-store.ts	2
 src/commands/doctor/shared/stale-auth-order.ts	4
 src/commands/doctor/shared/stale-oauth-profile-shadows.ts	1
-src/commands/doctor/shared/stale-plugin-repair-preservation.ts	1
 src/commands/gateway-health-auth-diagnostic.ts	1
 src/commands/gateway-presence.ts	1
 src/commands/gateway-status/helpers.ts	11

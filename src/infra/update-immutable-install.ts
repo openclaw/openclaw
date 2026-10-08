@@ -406,13 +406,15 @@ export async function prepareImmutableUpdate(params: {
         assertOwner();
         assertImmutableDescriptorCurrent(descriptor);
       };
+      const verifyService = () =>
+        verifyImmutableService(
+          descriptor.service,
+          descriptor.root,
+          descriptor.current.path,
+          descriptor.runtime.path,
+        );
       assertCurrent();
-      await verifyImmutableService(
-        descriptor.service,
-        descriptor.root,
-        descriptor.current.path,
-        descriptor.runtime.path,
-      );
+      await verifyService();
       const current = await verifyImmutableGeneration(
         descriptor.current.path,
         descriptor.current.sha,
@@ -531,12 +533,7 @@ export async function prepareImmutableUpdate(params: {
             await verifyImmutableGeneration(candidate, selectedSha, runCommand, { sealed: false });
             await sealImmutableGeneration(candidate);
             const verified = await verifyImmutableGeneration(candidate, selectedSha, runCommand);
-            await verifyImmutableService(
-              descriptor.service,
-              descriptor.root,
-              descriptor.current.path,
-              descriptor.runtime.path,
-            );
+            await verifyService();
             assertCurrent();
             // Native publishers hold this lock; preexisting generations are never rebuilt.
             if (fsSync.existsSync(destination)) {

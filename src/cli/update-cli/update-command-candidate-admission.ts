@@ -27,6 +27,7 @@ import { inspectUpdateManagedServices } from "./update-command-database-context.
 import { handoffUpdateFromGateway } from "./update-command-handoff.js";
 import type { StagedUpdateCandidateAdmission } from "./update-command-initialization-types.js";
 import type { StagedPackageInstallUpdate } from "./update-command-package.js";
+import type { UpdateAdmissionReportParams } from "./update-command-result.js";
 import type { prepareUpdateCommand } from "./update-command-run.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
 import type { resolveUpdateCommandTarget } from "./update-command-target.js";
@@ -41,6 +42,25 @@ type CandidateAdmissionParams = {
   invocationCwd?: string;
   presentation: ReturnType<typeof createUpdateProgress>;
 };
+
+export function createUpdateCandidateAdmissionReport(
+  { target, opts, prepared }: Pick<CandidateAdmissionParams, "target" | "opts" | "prepared">,
+  error: UpdatePreMutationError,
+): UpdateAdmissionReportParams {
+  return {
+    root: target.root,
+    mode: target.mode,
+    installKind: target.updateInstallKind,
+    opts,
+    controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
+    reason: error.reason,
+    message: error.message,
+    nextAction: error.nextAction,
+    failureFacts: error.failureFacts,
+    stepResult: error.stepResult,
+    recoverySteps: error.recoverySteps,
+  };
+}
 
 function isUpdateAdmissionConfigUnchanged(
   before: ConfigFileSnapshot,
@@ -325,18 +345,6 @@ export async function withUpdateCandidateAdmission<T>(
     if (!(error instanceof UpdatePreMutationError)) {
       throw error;
     }
-    return await reportPreMutationUpdateResult({
-      root: target.root,
-      mode: target.mode,
-      installKind: target.updateInstallKind,
-      opts,
-      controlPlaneUpdateSentinelMeta: prepared.controlPlaneUpdateSentinelMeta,
-      reason: error.reason,
-      message: error.message,
-      nextAction: error.nextAction,
-      failureFacts: error.failureFacts,
-      stepResult: error.stepResult,
-      recoverySteps: error.recoverySteps,
-    });
+    return await reportPreMutationUpdateResult(createUpdateCandidateAdmissionReport(params, error));
   }
 }
