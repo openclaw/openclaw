@@ -347,6 +347,9 @@ export async function validateOllamaNonInteractive(
   const configuredBaseUrl =
     typeof ctx.opts.customBaseUrl === "string" ? ctx.opts.customBaseUrl.trim() : undefined;
   const baseUrl = resolveOllamaApiBase(configuredBaseUrl || resolveOllamaSetupDefaultBaseUrl());
+  if (isHostedOllamaCloud(baseUrl)) {
+    throw new Error(OLLAMA_HOSTED_BASE_URL_MESSAGE);
+  }
   const discovery = await fetchOllamaModels(baseUrl);
   if (!discovery.reachable) {
     throw new Error(
