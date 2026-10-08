@@ -146,68 +146,59 @@ private object SystemMotionDataSource : MotionDataSource {
     )
   }
 
-  @OptIn(InternalCoroutinesApi::class)
   private suspend fun readStepCounter(
     sensorManager: SensorManager,
     sensor: Sensor,
-  ): Int? {
-    val sample =
-      withTimeoutOrNull(1200L) {
-        suspendCancellableCoroutine<Float?> { cont ->
-          val listener =
-            object : SensorEventListener {
-              override fun onSensorChanged(event: SensorEvent?) {
-                val value = event?.values?.firstOrNull()
-                val token = cont.tryResume(value) ?: return
-                cont.completeResume(token)
-                sensorManager.unregisterListener(this)
-              }
+  ): Int? =
+    readSensorSample<Float>(sensorManager, sensor, 1200L, unregisterOnRejection = true) { event, complete ->
+      complete(event?.values?.firstOrNull())
+    }?.toInt()?.takeIf { it >= 0 }
 
-              override fun onAccuracyChanged(
-                sensor: Sensor?,
-                accuracy: Int,
-              ) = Unit
-            }
-          val registered = sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
-          if (!registered) {
-            sensorManager.unregisterListener(listener)
-            cont.resume(null) { _, _, _ -> }
-            return@suspendCancellableCoroutine
-          }
-          cont.invokeOnCancellation { sensorManager.unregisterListener(listener) }
-        }
-      }
-    return sample?.toInt()?.takeIf { it >= 0 }
-  }
-
-  @OptIn(InternalCoroutinesApi::class)
   private suspend fun readAccelerometerSample(
     sensorManager: SensorManager,
     sensor: Sensor,
-  ): Double? =
-    withTimeoutOrNull(ACCELEROMETER_SAMPLE_TIMEOUT_MS) {
-      suspendCancellableCoroutine<Double?> { cont ->
-        var count = 0
-        var sumDelta = 0.0
+  ): Double? {
+    var count = 0
+    var sumDelta = 0.0
+    return readSensorSample(sensorManager, sensor, ACCELEROMETER_SAMPLE_TIMEOUT_MS) { event, complete ->
+      val values = event?.values
+      if (values != null && values.size >= 3) {
+        val magnitude =
+          sqrt(
+            values[0] * values[0] +
+              values[1] * values[1] +
+              values[2] * values[2],
+          ).toDouble()
+        sumDelta += abs(magnitude - SensorManager.GRAVITY_EARTH.toDouble())
+        count += 1
+        if (count >= ACCELEROMETER_SAMPLE_TARGET) {
+          // Average gravity-adjusted magnitude across a short window so
+          // one noisy sensor event cannot decide the activity label.
+          complete(sumDelta / count)
+        }
+      }
+    }
+  }
+
+  @OptIn(InternalCoroutinesApi::class)
+  private suspend fun <T> readSensorSample(
+    sensorManager: SensorManager,
+    sensor: Sensor,
+    timeoutMs: Long,
+    unregisterOnRejection: Boolean = false,
+    sample: (event: SensorEvent?, complete: (T?) -> Unit) -> Unit,
+  ): T? =
+    withTimeoutOrNull(timeoutMs) {
+      suspendCancellableCoroutine<T?> { cont ->
         val listener =
           object : SensorEventListener {
             override fun onSensorChanged(event: SensorEvent?) {
-              val values = event?.values ?: return
-              if (values.size < 3) return
-              val magnitude =
-                sqrt(
-                  values[0] * values[0] +
-                    values[1] * values[1] +
-                    values[2] * values[2],
-                ).toDouble()
-              sumDelta += abs(magnitude - SensorManager.GRAVITY_EARTH.toDouble())
-              count += 1
-              if (count >= ACCELEROMETER_SAMPLE_TARGET) {
-                // Average gravity-adjusted magnitude across a short window so
-                // one noisy sensor event cannot decide the activity label.
-                val token = cont.tryResume(sumDelta / count) ?: return
-                cont.completeResume(token)
-                sensorManager.unregisterListener(this)
+              sample(event) { value ->
+                val token = cont.tryResume(value)
+                if (token != null) {
+                  cont.completeResume(token)
+                  sensorManager.unregisterListener(this)
+                }
               }
             }
 
@@ -218,6 +209,7 @@ private object SystemMotionDataSource : MotionDataSource {
           }
         val registered = sensorManager.registerListener(listener, sensor, SensorManager.SENSOR_DELAY_NORMAL)
         if (!registered) {
+          if (unregisterOnRejection) sensorManager.unregisterListener(listener)
           cont.resume(null) { _, _, _ -> }
           return@suspendCancellableCoroutine
         }

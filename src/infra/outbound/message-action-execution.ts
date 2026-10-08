@@ -425,28 +425,21 @@ export async function executeGatewayAction(
     return result;
   }
   const partialDelivery = asResultRecord(payload)?.deliveryStatus === "partial_failed";
-  if (result.kind === "send") {
+  if (result.kind === "send" || result.kind === "poll") {
     return {
       ...result,
       handledBy: "core",
       ...(partialDelivery
         ? {}
-        : {
-            // SAFETY: successful canonical Gateway sends return MessageSendResult payloads.
-            sendResult: payload as Extract<MessageActionResult, { kind: "send" }>["sendResult"],
-          }),
-    };
-  }
-  if (result.kind === "poll") {
-    return {
-      ...result,
-      handledBy: "core",
-      ...(partialDelivery
-        ? {}
-        : {
-            // SAFETY: successful canonical Gateway polls return MessagePollResult payloads.
-            pollResult: payload as Extract<MessageActionResult, { kind: "poll" }>["pollResult"],
-          }),
+        : result.kind === "send"
+          ? {
+              // SAFETY: successful canonical Gateway sends return MessageSendResult payloads.
+              sendResult: payload as Extract<MessageActionResult, { kind: "send" }>["sendResult"],
+            }
+          : {
+              // SAFETY: successful canonical Gateway polls return MessagePollResult payloads.
+              pollResult: payload as Extract<MessageActionResult, { kind: "poll" }>["pollResult"],
+            }),
     };
   }
   return result;

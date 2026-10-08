@@ -9,7 +9,6 @@ type TelegramPollingLeaseEntry = {
   accountId: string;
   abortSignal?: AbortSignal;
   done: Promise<void>;
-  owner: symbol;
   resolveDone: () => void;
   startedAt: number;
 };
@@ -90,29 +89,22 @@ function createLease(params: {
   const done = new Promise<void>((resolve) => {
     resolveDone = resolve;
   });
-  const owner = Symbol(`telegram-polling:${params.accountId}`);
   const entry: TelegramPollingLeaseEntry = {
     accountId: params.accountId,
     abortSignal: params.abortSignal,
     done,
-    owner,
     resolveDone,
     startedAt: Date.now(),
   };
   params.registry.set(params.tokenFingerprint, entry);
 
-  let released = false;
   return {
     tokenFingerprint: params.tokenFingerprint,
     waitedForPrevious: params.waitedForPrevious,
     replacedStoppingPrevious: params.replacedStoppingPrevious,
     release: () => {
-      if (released) {
-        return;
-      }
-      released = true;
       const current = params.registry.get(params.tokenFingerprint);
-      if (current?.owner === owner) {
+      if (current === entry) {
         params.registry.delete(params.tokenFingerprint);
       }
       resolveDone();
@@ -155,11 +147,7 @@ export async function acquireTelegramPollingLease(
       );
     }
 
-    const current = registry.get(fingerprint);
-    if (current !== existing) {
-      continue;
-    }
-    if (waitResult === "released") {
+    if (registry.get(fingerprint) !== existing || waitResult === "released") {
       continue;
     }
 

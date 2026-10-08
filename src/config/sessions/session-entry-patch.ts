@@ -32,6 +32,7 @@ import type {
   SessionEntryPatchCommit,
   SessionEntryPatchCommitted,
   SessionEntryPatchGuard,
+  SessionEntryPatchReduction,
   SessionEntryPatchSelection,
 } from "./session-entry-patch.types.js";
 import {
@@ -48,6 +49,7 @@ export async function patchSessionEntryInWorker(params: {
   assertCurrent: () => void;
   guard?: SessionEntryPatchGuard;
   preparedSource?: PreparedSessionSourceAuthority;
+  reduction?: SessionEntryPatchReduction;
   prepare(snapshot: SqliteLifecycleTargetSnapshot): Promise<SessionEntryPatchCommit | undefined>;
   onCommitted?: (entry: SessionEntry) => void;
 }): Promise<{ entry: SessionEntry | null; wrote: boolean }> {
@@ -58,7 +60,7 @@ export async function patchSessionEntryInWorker(params: {
     source = undefined;
     return held?.release?.();
   };
-  let input: SessionEntryPatchCommit | undefined;
+  let input: SessionEntryPatchCommit | SessionEntryPatchReduction | undefined = params.reduction;
   return await runSessionEntryWorkerOperation<
     SessionEntryPatchCommitted,
     { entry: SessionEntry | null; wrote: boolean }
@@ -80,29 +82,31 @@ export async function patchSessionEntryInWorker(params: {
         source?.assertCurrent();
       }
     },
-    prepareWorker: (execution, executionSource) => ({
-      async prepare() {
-        params.assertCurrent();
-        params.guard?.assertCurrent?.();
-        source?.assertCurrent();
-        const snapshot = await runOpenClawAgentWorkerWrite(params.database, () =>
-          execution.runExisting(executionSource, (worker) =>
-            worker.execute({ type: "session.entry.patch.prepare", input: params.selection }),
-          ),
-        );
-        if (!snapshot) {
-          throw new Error("Session database disappeared before patching");
-        }
-        params.assertCurrent();
-        params.guard?.assertCurrent?.();
-        // The foreground FIFO stays held; async planners may read through it before commit.
-        input = await params.prepare(snapshot);
-        params.assertCurrent();
-        params.guard?.assertCurrent?.();
-      },
-      beforeWrite() {},
-      async release() {},
-    }),
+    prepareWorker: params.reduction
+      ? undefined
+      : (execution, executionSource) => ({
+          async prepare() {
+            params.assertCurrent();
+            params.guard?.assertCurrent?.();
+            source?.assertCurrent();
+            const snapshot = await runOpenClawAgentWorkerWrite(params.database, () =>
+              execution.runExisting(executionSource, (worker) =>
+                worker.execute({ type: "session.entry.patch.prepare", input: params.selection }),
+              ),
+            );
+            if (!snapshot) {
+              throw new Error("Session database disappeared before patching");
+            }
+            params.assertCurrent();
+            params.guard?.assertCurrent?.();
+            // The foreground FIFO stays held; async planners may read through it before commit.
+            input = await params.prepare(snapshot);
+            params.assertCurrent();
+            params.guard?.assertCurrent?.();
+          },
+          beforeWrite() {},
+          async release() {},
+        }),
     async run(worker, commit) {
       const prepared = input;
       if (!prepared) {

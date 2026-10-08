@@ -618,11 +618,8 @@ private final class ChatInlineWidgetNavigationDelegate: NSObject, WKNavigationDe
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void)
     {
-        if navigationAction.targetFrame?.isMainFrame == false {
-            decisionHandler(.cancel)
-            return
-        }
-        guard navigationAction.request.httpMethod?.caseInsensitiveCompare("GET") == .orderedSame,
+        guard navigationAction.targetFrame?.isMainFrame != false,
+              navigationAction.request.httpMethod?.caseInsensitiveCompare("GET") == .orderedSame,
               let url = navigationAction.request.url,
               self.matchesExpectedDocument(url)
         else {
@@ -641,14 +638,11 @@ private final class ChatInlineWidgetNavigationDelegate: NSObject, WKNavigationDe
             let response = navigationResponse.response as? HTTPURLResponse
             self.allowsStaticResources = ChatInlineWidgetResourcePolicy.allowsStaticResources(
                 contentSecurityPolicy: response?.value(forHTTPHeaderField: "Content-Security-Policy"))
-        }
-        if navigationResponse.isForMainFrame,
-           let response = navigationResponse.response as? HTTPURLResponse,
-           response.statusCode >= 400
-        {
-            self.onFailure()
-            decisionHandler(.cancel)
-            return
+            if let response, response.statusCode >= 400 {
+                self.onFailure()
+                decisionHandler(.cancel)
+                return
+            }
         }
         decisionHandler(.allow)
     }

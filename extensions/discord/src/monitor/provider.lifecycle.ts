@@ -317,19 +317,14 @@ async function waitForGatewayReady(params: {
     return "stopped";
   };
 
-  if (!params.gateway) {
-    const attempt = await waitUntilReady();
-    if (attempt === "timeout") {
-      throw new Error(`discord gateway did not reach READY within ${params.readyTimeoutMs}ms`);
-    }
-    return;
-  }
-
   let attempt = 0;
   while (!params.abortSignal?.aborted) {
     const result = await waitUntilReady();
     if (result !== "timeout") {
       return;
+    }
+    if (!params.gateway) {
+      throw new Error(`discord gateway did not reach READY within ${params.readyTimeoutMs}ms`);
     }
 
     attempt += 1;

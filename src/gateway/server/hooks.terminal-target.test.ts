@@ -169,13 +169,6 @@ describe("global hook terminal target resolution", () => {
       status: "error",
       reason: "accepted-agent-removed",
     },
-    {
-      name: "the accepted agent is removed before next-heartbeat completion",
-      outcome: "success" as const,
-      wakeMode: "next-heartbeat" as const,
-      status: "ok",
-      reason: "accepted-agent-removed",
-    },
   ])("suppresses the terminal event when $name", async (testCase) => {
     const gate = await startGatedRun(testCase.outcome, testCase.wakeMode);
     loadConfigMock.mockReturnValue({

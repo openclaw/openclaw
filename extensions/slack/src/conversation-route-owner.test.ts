@@ -4,8 +4,11 @@ import {
   testing as sessionBindingTesting,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { inspectSlackConversationRouteOwner } from "./conversation-route-owner.js";
+import { slackConversationRouteOwners } from "./conversation-route-owner.js";
 import { registerSlackInstallationState } from "./installation-identity-state.js";
+
+const { resolveConversationRouteOwner: inspectSlackConversationRouteOwner } =
+  slackConversationRouteOwners;
 
 describe("inspectSlackConversationRouteOwner", () => {
   let releaseInstallation: (() => void) | undefined;
@@ -59,6 +62,7 @@ describe("inspectSlackConversationRouteOwner", () => {
       conversationId: "thread-1",
       parentConversationId: "channel-1",
     });
+    expect(resolveByConversation).toHaveBeenCalledTimes(1);
     expect(touch).not.toHaveBeenCalled();
   });
 

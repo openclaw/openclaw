@@ -26,14 +26,15 @@ extension GatewayNodeSession {
     fileprivate func connectThroughURLSessionForTest(
         _ url: URL,
         credentials: GatewayNodeSessionCredentials = .init(),
-        options: GatewayConnectOptions) async throws
+        options: GatewayConnectOptions,
+        onConnected: @escaping @Sendable () async -> Void = {}) async throws
     {
         try await self.connect(
             url: url,
             credentials: credentials,
             connectOptions: options,
             sessionBox: nil,
-            onConnected: {},
+            onConnected: onConnected,
             onDisconnected: { _ in },
             onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
     }
@@ -57,8 +58,14 @@ struct GatewayNativeTransportDeviceAuthTests {
             token: previousToken)
         let gateway = GatewayNodeSession()
         let options = nativeNodeConnectOptions(allowStoredDeviceAuth: true)
+        let connections = AsyncStream<Void>.makeStream()
+        var connectionEvents = connections.stream.makeAsyncIterator()
 
-        try await gateway.connectThroughURLSessionForTest(fixture.url(), options: options)
+        try await gateway.connectThroughURLSessionForTest(
+            fixture.url(),
+            options: options,
+            onConnected: { connections.continuation.yield() })
+        _ = await connectionEvents.next()
 
         #expect(fixture.capturedAuth(at: 0) == .init(
             token: previousToken,
@@ -71,18 +78,12 @@ struct GatewayNativeTransportDeviceAuthTests {
         let firstRoute = try #require(await gateway.currentRoute())
         #expect(await gateway.httpResourceAuthorization(ifCurrentRoute: firstRoute)?.bearer == rotatedToken)
         fixture.closeConnection(at: 0)
-        try await waitUntil("native legacy token rotation reconnect") {
-            await fixture.capturedAuth(at: 1) != nil
-        }
+        _ = await connectionEvents.next()
         #expect(fixture.capturedAuth(at: 1) == .init(
             token: rotatedToken,
             bootstrapToken: nil,
             deviceToken: nil))
 
-        try await waitUntil("native HTTP bearer reconnect admission") {
-            guard let route = await gateway.currentRoute() else { return false }
-            return route != firstRoute
-        }
         let reconnectedRoute = try #require(await gateway.currentRoute())
         #expect(reconnectedRoute != firstRoute)
         #expect(await gateway.httpResourceAuthorization(ifCurrentRoute: firstRoute) == nil)
@@ -105,8 +106,14 @@ struct GatewayNativeTransportDeviceAuthTests {
         let options = nativeNodeConnectOptions(
             allowStoredDeviceAuth: false,
             deviceAuthGatewayID: gatewayID)
+        let connections = AsyncStream<Void>.makeStream()
+        var connectionEvents = connections.stream.makeAsyncIterator()
 
-        try await gateway.connectThroughURLSessionForTest(fixture.url(), options: options)
+        try await gateway.connectThroughURLSessionForTest(
+            fixture.url(),
+            options: options,
+            onConnected: { connections.continuation.yield() })
+        _ = await connectionEvents.next()
 
         #expect(fixture.capturedAuth(at: 0) == .init(
             token: nil,
@@ -120,9 +127,7 @@ struct GatewayNativeTransportDeviceAuthTests {
         #expect(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "node") == nil)
 
         fixture.closeConnection(at: 0)
-        try await waitUntil("native owner-bound reconnect") {
-            await fixture.capturedAuth(at: 1) != nil
-        }
+        _ = await connectionEvents.next()
         #expect(fixture.capturedAuth(at: 1) == .init(
             token: issuedToken,
             bootstrapToken: nil,
@@ -170,7 +175,13 @@ struct GatewayNativeTransportDeviceAuthTests {
         await authenticatedGateway.disconnect()
 
         let gateway = GatewayNodeSession()
-        try await gateway.connectThroughURLSessionForTest(fixture.url(), options: options)
+        let connections = AsyncStream<Void>.makeStream()
+        var connectionEvents = connections.stream.makeAsyncIterator()
+        try await gateway.connectThroughURLSessionForTest(
+            fixture.url(),
+            options: options,
+            onConnected: { connections.continuation.yield() })
+        _ = await connectionEvents.next()
 
         #expect(fixture.capturedAuth(at: 1) == .init(
             token: gatewayAScopedToken,
@@ -181,9 +192,7 @@ struct GatewayNativeTransportDeviceAuthTests {
             role: "node")?.token == gatewayBLegacyToken)
 
         fixture.closeConnection(at: 1)
-        try await waitUntil("native gateway-scoped token reconnect") {
-            await fixture.capturedAuth(at: 2) != nil
-        }
+        _ = await connectionEvents.next()
         #expect(fixture.capturedAuth(at: 2) == .init(
             token: gatewayAScopedToken,
             bootstrapToken: nil,
@@ -254,8 +263,14 @@ struct GatewayNativeTransportDeviceAuthTests {
             token: previousToken)
         let gateway = GatewayNodeSession()
         let options = nativeNodeConnectOptions(allowStoredDeviceAuth: false)
+        let connections = AsyncStream<Void>.makeStream()
+        var connectionEvents = connections.stream.makeAsyncIterator()
 
-        try await gateway.connectThroughURLSessionForTest(fixture.url(), options: options)
+        try await gateway.connectThroughURLSessionForTest(
+            fixture.url(),
+            options: options,
+            onConnected: { connections.continuation.yield() })
+        _ = await connectionEvents.next()
 
         #expect(fixture.capturedAuth(at: 0) == .init(
             token: nil,
@@ -268,9 +283,7 @@ struct GatewayNativeTransportDeviceAuthTests {
             .token == previousToken)
 
         fixture.closeConnection(at: 0)
-        try await waitUntil("native ownerless reconnect") {
-            await fixture.capturedAuth(at: 1) != nil
-        }
+        _ = await connectionEvents.next()
         #expect(fixture.capturedAuth(at: 1) == .init(
             token: nil,
             bootstrapToken: nil,

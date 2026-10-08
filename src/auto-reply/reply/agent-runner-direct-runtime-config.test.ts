@@ -119,7 +119,7 @@ vi.mock("./queue.js", async () => {
   };
 });
 
-const { runReplyAgent } = await import("./agent-runner.js");
+const { runReplyAgent } = await import("./agent-runner-run.js");
 
 function createTelegramSessionCtx(): TemplateContext {
   return {

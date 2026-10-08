@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   WORKTREE_CREATE_LEASE_SCOPE,
@@ -94,17 +97,28 @@ it("keeps mutation preconditions small without trimming committed payloads", () 
 it("preserves the acknowledged row when a stale revision conflicts", async () => {
   const worktreeId = randomUUID();
   let committed: Awaited<ReturnType<typeof readLocalWorkspaceProjection>>;
+  let retainedGuard: (() => void) | undefined;
   await expect(
     withLocalWorkspaceStore({ worktreeId, env }, async (store) => {
+      retainedGuard = store.assertCurrent;
       const initial = await store.create(localWorkspaceProjectionFixture(worktreeId, root));
       committed = await store.update(initial, {
         baseline_ref: "sha256:accepted",
         baseline_json: "{}",
       });
       expect(store.get()).toEqual(committed);
+      const sql = observeHostDataSql();
+      try {
+        store.assertCurrent();
+        expect(sql.queries).toEqual([]);
+      } finally {
+        sql.restore();
+      }
       await store.update(initial, { baseline_ref: "sha256:stale", baseline_json: "{}" });
     }),
   ).rejects.toThrow("Local workspace binding changed");
+  assert(retainedGuard);
+  expect(retainedGuard).toThrow();
   expect(await readLocalWorkspaceProjection(worktreeId, env)).toEqual(committed);
   expect(committed).toMatchObject({ revision: 1, baseline_ref: "sha256:accepted" });
 });

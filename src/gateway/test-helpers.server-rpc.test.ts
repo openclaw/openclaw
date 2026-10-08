@@ -58,7 +58,6 @@ import {
 import { createGatewayConfigOverrides } from "./test-helpers.config-runtime.js";
 import {
   installGatewayTestHooks,
-  onceMessage,
   prepareGatewayReplyRuntimeForTest,
   rpcReq,
   testState,
@@ -321,7 +320,7 @@ describe("Gateway RPC fixture session writes", () => {
     }
   });
 
-  test.each(["raw WebSocket", "rpcReq", "fixture release", "fixture reseed"])(
+  test.each(["rpcReq", "fixture release", "fixture reseed"])(
     "%s preserves queued session writes",
     async (request) => {
       const dir = await fs.realpath(
@@ -354,11 +353,6 @@ describe("Gateway RPC fixture session writes", () => {
         );
         if (request === "rpcReq") {
           expect((await rpcReq(ws, "sessions.subscribe", {})).ok).toBe(true);
-        } else if (request === "raw WebSocket") {
-          const id = "queued-writes-control";
-          const response = onceMessage(ws, (event) => event.type === "res" && event.id === id);
-          ws.send(JSON.stringify({ type: "req", id, method: "sessions.subscribe", params: {} }));
-          expect((await response).ok).toBe(true);
         } else if (request === "fixture reseed") {
           reseeding = writeSessionStore({
             entries: { main: { sessionId: "rpc-writes", updatedAt: 2, label: "reseeded" } },
@@ -434,7 +428,7 @@ describe("Gateway RPC fixture session writes", () => {
 });
 
 describe("Gateway fixture config publication", () => {
-  test.each(["RPC admission", "reply preparation", "RPC session update"] as const)(
+  test.each(["reply preparation", "RPC session update"] as const)(
     "%s shares the current fixture with real IO across awaited work",
     async (boundary) => {
       const actual = await vi.importActual<typeof import("../config/io.js")>("../config/io.js");

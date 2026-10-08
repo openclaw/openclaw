@@ -5,12 +5,7 @@ import {
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveDiscordConversationIdentity } from "../conversation-identity.js";
-import type {
-  AutocompleteInteraction,
-  ButtonInteraction,
-  CommandInteraction,
-  StringSelectMenuInteraction,
-} from "../internal/discord.js";
+import type { BaseComponentInteraction, CommandInteraction } from "../internal/discord.js";
 import { getDiscordRuntime } from "../runtime.js";
 import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./allow-list.js";
 import { resolveDiscordChannelTopicSafe } from "./channel-access.js";
@@ -196,11 +191,7 @@ export async function buildDiscordNativeInteractionContext(
     | "commandAuthorized"
     | "buildContext"
   > & {
-    interaction:
-      | CommandInteraction
-      | ButtonInteraction
-      | StringSelectMenuInteraction
-      | AutocompleteInteraction;
+    interaction: CommandInteraction | BaseComponentInteraction;
     route: ResolvedAgentRoute;
     boundSessionKey?: string;
     sessionPrefix: string;

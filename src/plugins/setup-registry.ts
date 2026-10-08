@@ -171,11 +171,7 @@ function resolveRelevantSetupMigrationPluginIds(params: {
   const ids = new Set<string>(
     entries && typeof entries === "object" ? normalizeStringEntries(Object.keys(entries)) : [],
   );
-  const plugins = loadSetupManifestRecords({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-  });
+  const plugins = loadSetupManifestRecords(params);
   for (const plugin of plugins) {
     if (
       hasPluginConfigMigrationSource({

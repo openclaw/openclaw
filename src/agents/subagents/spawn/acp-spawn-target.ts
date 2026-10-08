@@ -85,34 +85,21 @@ export function resolveTargetAcpAgentId(params: {
 }
 
 function isExplicitlyAllowedAcpAgent(cfg: OpenClawConfig, agentId: string): boolean {
-  return (cfg.acp?.allowedAgents ?? []).some((entry) => {
-    if (entry.trim() === "*") {
-      return true;
-    }
-    const normalized = normalizeOptionalAgentId(entry);
-    return normalized === agentId;
-  });
+  return (cfg.acp?.allowedAgents ?? []).some(
+    (entry) => entry.trim() === "*" || normalizeOptionalAgentId(entry) === agentId,
+  );
 }
 
 export function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): string[] {
   const ids = new Set<string>(listAgentIds(cfg));
-  for (const agent of listAgentEntries(cfg)) {
-    if (agent.runtime?.type !== "acp") {
-      continue;
-    }
-    const acpAgent = normalizeOptionalAgentId(agent.runtime.acp?.agent);
-    if (acpAgent) {
-      ids.add(acpAgent);
-    }
-  }
-  const defaultAgent = normalizeOptionalAgentId(cfg.acp?.defaultAgent);
-  if (defaultAgent) {
-    ids.add(defaultAgent);
-  }
-  for (const entry of cfg.acp?.allowedAgents ?? []) {
-    if (entry.trim() === "*") {
-      continue;
-    }
+  const candidates = [
+    ...listAgentEntries(cfg).flatMap((agent) =>
+      agent.runtime?.type === "acp" ? [agent.runtime.acp?.agent] : [],
+    ),
+    cfg.acp?.defaultAgent,
+    ...(cfg.acp?.allowedAgents ?? []).filter((entry) => entry.trim() !== "*"),
+  ];
+  for (const entry of candidates) {
     const id = normalizeOptionalAgentId(entry);
     if (id) {
       ids.add(id);

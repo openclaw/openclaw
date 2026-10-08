@@ -26,6 +26,7 @@ import { resolveSkillCollectionReviewMonitorSpecs } from "../../cron/skill-colle
 import { cronStoreKey } from "../../cron/store/key.js";
 import { hasActiveCronRunReceiptsForAgent } from "../../cron/store/run-receipt-drain.js";
 import type { CronJob, CronJobCreate } from "../../cron/types.js";
+import { resolveHeartbeatSchedulerSeedAsync } from "../../infra/heartbeat-schedule.js";
 import { readAgentDeletionJournal } from "../../state/agent-deletion-journal.js";
 import { sleep } from "../../utils/sleep.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -72,11 +73,12 @@ function inspectMonitors(
   context: ClawMonitorContext,
   agentId: string,
   jobs: readonly CronJob[],
+  schedulerSeed: string,
 ): ClawMonitorSnapshot[] {
   const cfg = context.getRuntimeConfig();
   const specs = [
-    ...resolveHeartbeatMonitorPlan(cfg, jobs).specs,
-    ...resolveSkillCollectionReviewMonitorSpecs(cfg, jobs),
+    ...resolveHeartbeatMonitorPlan(cfg, jobs, { schedulerSeed }).specs,
+    ...resolveSkillCollectionReviewMonitorSpecs(cfg, jobs, { schedulerSeed }),
   ].filter((spec) => spec.agentId === agentId);
   const storeKey = cronStoreKey(context.cronStorePath);
   return readAttachedCronJobs(agentId, {}).flatMap((row) => {
@@ -214,9 +216,15 @@ export const clawsMonitorHandlers = {
       };
       assertBinding();
       if (input.phase === "inspect") {
+        const schedulerSeed = await resolveHeartbeatSchedulerSeedAsync();
+        assertBinding();
         const jobs = await cron.list({ includeDisabled: true });
         assertBinding();
-        respond(true, { monitors: inspectMonitors(context, input.agentId, jobs) }, undefined);
+        respond(
+          true,
+          { monitors: inspectMonitors(context, input.agentId, jobs, schedulerSeed) },
+          undefined,
+        );
         return;
       }
       readDeletionFenceJournal(input.agentId, input.operationId);
@@ -232,9 +240,11 @@ export const clawsMonitorHandlers = {
       };
       assertCurrent();
       if (input.phase === "quiesce") {
+        const schedulerSeed = await resolveHeartbeatSchedulerSeedAsync();
+        assertCurrent();
         const jobs = await cron.list({ includeDisabled: true });
         assertCurrent();
-        const monitors = inspectMonitors(context, input.agentId, jobs);
+        const monitors = inspectMonitors(context, input.agentId, jobs, schedulerSeed);
         if (!isDeepStrictEqual(monitors, input.monitors)) {
           throw new Error("Config-owned monitors changed after removal planning.");
         }

@@ -82,13 +82,9 @@ function resolveRuntimeTokenValue(params: {
       provider: resolved.ref.provider,
       id: resolved.ref.id,
     });
-    if (envValue) {
-      return {
-        status: "available",
-        value: envValue,
-      };
-    }
-    return { status: "configured_unavailable" };
+    return envValue
+      ? { status: "available", value: envValue }
+      : { status: "configured_unavailable" };
   }
   // Runtime resolution stays strict for non-env SecretRefs.
   resolveSecretInputString({

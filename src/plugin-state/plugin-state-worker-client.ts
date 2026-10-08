@@ -5,8 +5,13 @@ import type {
   SessionEntriesCurrentCheck,
 } from "../config/sessions/session-entry-current.types.js";
 import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
+import type {
+  SqliteWorkerAdmissionFactory,
+  SqliteWorkerAdmissionRequest,
+} from "../infra/sqlite-worker-operation-admission.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { wrapPluginStateError } from "./plugin-state-store.database.js";
 import type { PluginStateStoreError } from "./plugin-state-store.types.js";
 import {
@@ -21,6 +26,7 @@ import {
 
 type Scope = Pick<SqliteWorkerStore<PluginStateWorkerOperations>, "execute">;
 type HostAdmission = {
+  context?: OpenClawStateWorkerContext;
   env?: NodeJS.ProcessEnv;
   assertActive?: () => void;
   assertCurrent?: () => void;
@@ -33,7 +39,7 @@ type ObservationCheck<Key extends keyof PluginStateWorkerOperations> = (
 ) => boolean;
 
 async function execute<Key extends keyof PluginStateWorkerOperations>(
-  { env, assertActive, sessionEntryCurrent }: HostAdmission,
+  { env, assertActive, sessionEntryCurrent, context: capturedContext }: HostAdmission,
   command: { type: Key; input: PluginStateWorkerOperations[Key]["input"] },
   missing?: () => PluginStateWorkerRequests[Key]["output"],
   checks: {
@@ -57,17 +63,23 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       }
     : assertActive;
   assertAdmission?.();
-  const databasePath = resolveOpenClawStateSqlitePath(env ?? process.env);
+  const databasePath =
+    capturedContext?.admission.databasePath ?? resolveOpenClawStateSqlitePath(env ?? process.env);
   const description = pluginStateWorkerOperations[command.type];
   let dispatched = false;
   try {
-    const context = captureOpenClawStateWorkerContext({ path: databasePath, env });
+    const context =
+      capturedContext ?? captureOpenClawStateWorkerContext({ path: databasePath, env });
     // A write-only await here would let later reads overtake it before broker admission.
-    const [{ runOpenClawStateWorkerOperation }, { createSqliteWorkerWriteAdmission }] =
-      await Promise.all([
-        import("../state/openclaw-state-worker-store.js"),
-        import("../infra/sqlite-worker-store.js"),
-      ]);
+    const [
+      { runOpenClawStateWorkerOperation },
+      { createSqliteWorkerWriteAdmission },
+      { createSqliteWorkerOperationAdmission },
+    ] = await Promise.all([
+      import("../state/openclaw-state-worker-store.js"),
+      import("../infra/sqlite-worker-store.js"),
+      import("../infra/sqlite-worker-operation-admission.js"),
+    ]);
     const operation = async (scope: Scope) => {
       dispatched = true;
       const result = await scope.execute<Key>(
@@ -94,14 +106,32 @@ async function execute<Key extends keyof PluginStateWorkerOperations>(
       assertActive?.();
       return result === undefined ? missing() : result;
     }
-    const createAdmission = createSqliteWorkerWriteAdmission(
-      (request) => {
-        context.admission.assertCurrent();
-        assertAdmission?.();
-        assertSessionEntriesCurrentAdmission(request, currentEntries);
-      },
-      [databasePath],
-    );
+    const assertWriteCurrent = (request: SqliteWorkerAdmissionRequest) => {
+      context.admission.assertCurrent();
+      assertAdmission?.();
+      assertSessionEntriesCurrentAdmission(request, currentEntries);
+    };
+    const createAdmission: SqliteWorkerAdmissionFactory =
+      command.type === "pluginState.replaceEntry"
+        ? () => {
+            // Revocation commits before replacement; both transactions require fresh grants.
+            const stages = ["transaction", "commit", "transaction", "commit"] as const;
+            let next = 0;
+            return {
+              nativeLocations: [databasePath],
+              admission: createSqliteWorkerOperationAdmission((request, grant) => {
+                if (request.stage !== stages[next]) {
+                  throw new Error("Plugin state replacement authority requested out of order");
+                }
+                assertWriteCurrent(request);
+                if (!grant()) {
+                  throw new Error("Plugin state replacement authority expired");
+                }
+                next += 1;
+              }),
+            };
+          }
+        : createSqliteWorkerWriteAdmission(assertWriteCurrent, [databasePath]);
     // Writable operations, including comparison observations, must share the
     // host lifecycle owner before dispatch so sibling maintenance cannot overtake them.
     const result = await runOpenClawStateWorkerOperation(context, operation, {
@@ -137,12 +167,13 @@ function createOperation<
   return (params: Input<Key>): Promise<PluginStateWorkerRequests[Key]["output"]> => {
     // Host authority stays in the broker admission; only data crosses to the worker.
     const input = { ...params };
-    const { env, assertActive, assertCurrent, sessionEntryCurrent } = input;
+    const { env, assertActive, assertCurrent, sessionEntryCurrent, context } = input;
+    delete input.context;
     delete input.env;
     delete input.assertActive;
     delete input.assertCurrent;
     delete input.sessionEntryCurrent;
-    return execute({ env, assertActive, sessionEntryCurrent }, { type, input }, missing, {
+    return execute({ env, assertActive, sessionEntryCurrent, context }, { type, input }, missing, {
       assertCurrent,
       isObservation,
     });
@@ -150,6 +181,8 @@ function createOperation<
 }
 
 export const registerPluginStateInWorker = createOperation("pluginState.register");
+export const replacePluginStateInWorker = createOperation("pluginState.replace");
+export const replacePluginStateEntryInWorker = createOperation("pluginState.replaceEntry");
 
 export const observePluginStateInWorker = createOperation(
   "pluginState.observe",
@@ -173,13 +206,13 @@ export const lookupPluginStateInWorker = createOperation("pluginState.lookup", (
 export async function lookupManyPluginStateInWorker(
   params: Input<"pluginState.lookupMany">,
 ): Promise<Array<Result<unknown, PluginStateStoreError>>> {
-  const { env, assertActive, sessionEntryCurrent, ...input } = params;
+  const { env, assertActive, sessionEntryCurrent, context, ...input } = params;
   params.assertActive?.();
   if (input.keys.length === 0) {
     return [];
   }
   const results = await execute(
-    { env, assertActive, sessionEntryCurrent },
+    { env, assertActive, sessionEntryCurrent, context },
     { type: "pluginState.lookupMany", input },
     () => input.keys.map(() => ok<unknown, PluginStateWorkerFailure>(undefined)),
   );
@@ -198,9 +231,9 @@ export const clearPluginStateInWorker = createOperation("pluginState.clear");
 export function clearRuntimeHealthInWorker(
   params: Input<"pluginState.clearRuntimeHealth"> & { assertCurrent?: () => void },
 ): Promise<void> {
-  const { env, assertActive, assertCurrent, sessionEntryCurrent, ...input } = params;
+  const { env, assertActive, assertCurrent, sessionEntryCurrent, context, ...input } = params;
   return execute(
-    { env, assertActive, sessionEntryCurrent },
+    { env, assertActive, sessionEntryCurrent, context },
     { type: "pluginState.clearRuntimeHealth", input },
     undefined,
     { assertCurrent, existingOnly: { missing: () => undefined } },

@@ -18,6 +18,7 @@ export function broadcastChatMetadataChanged(
     modelSelectionChanged?: boolean;
     modelCatalogChanged?: boolean;
     authChanged?: boolean;
+    commandsChanged?: false;
   } = {},
 ): void {
   try {
@@ -89,6 +90,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
               agentId: event.agentId,
               modelCatalogChanged: true,
               authChanged: false,
+              commandsChanged: false,
             });
           }
           return;
@@ -166,6 +168,7 @@ export async function createGatewayChatMetadataLifecycle(params: {
           ...publication,
           modelCatalogChanged: false,
           authChanged: false,
+          commandsChanged: false,
         });
       });
       const unregisterRolePolicy = onOperatorRolePolicyChanged((change) => {
@@ -174,7 +177,10 @@ export async function createGatewayChatMetadataLifecycle(params: {
           const unchanged = modelSelectionPoliciesMatch(selectionConfig, config);
           selectionConfig = config;
           if (!unchanged) {
-            broadcastChatMetadataChanged(next, { modelSelectionChanged: true });
+            broadcastChatMetadataChanged(next, {
+              modelSelectionChanged: true,
+              commandsChanged: false,
+            });
           }
         }
       });

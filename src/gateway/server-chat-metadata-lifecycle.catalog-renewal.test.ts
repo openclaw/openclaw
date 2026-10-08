@@ -244,6 +244,7 @@ describe("catalog renewal metadata broadcasts", () => {
             {
               modelCatalogChanged: true,
               authChanged: change !== "usage" && change !== "failed",
+              commandsChanged: false,
             },
             { dropIfSlow: true },
           ],

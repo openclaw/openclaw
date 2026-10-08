@@ -54,6 +54,9 @@ export type WorkerDispatchPlacementStore = Pick<
   | "recordPlacementMoveError"
   | "fail"
   | "get"
+  | "getAsync"
+  | "getWithMoveAsync"
+  | "getPlacementMoveAsync"
   | "readProjection"
   | "readRecoveryCandidates"
   | "readChangeSnapshot"
@@ -77,7 +80,7 @@ export type WorkerDispatchPlacementStore = Pick<
   | "completeWorkspaceResultAndReleaseTurn"
   | "failWorkspaceResultAndReleaseTurn"
   | "abandonWorkspaceResult"
-  | "listForReconcile"
+  | "listForReconcileAsync"
   | "releaseTurn"
   | "retainInterruptedTurnWorkspace"
   | "bindPreparedEnvironment"
@@ -367,7 +370,7 @@ export function createPlacementFailureActions(deps: {
       // reconciliation; startup recovery explicitly fences stale claims.
       return;
     }
-    const current = placements.get(placement.sessionId);
+    const current = await placements.getAsync(placement.sessionId);
     if (current?.state !== "draining") {
       return;
     }

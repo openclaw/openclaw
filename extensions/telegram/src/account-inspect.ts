@@ -89,18 +89,11 @@ function inspectTokenValue(params: { cfg: OpenClawConfig; value: unknown }): {
     };
   }
   const token = normalizeSecretInputString(params.value);
-  if (token) {
+  if (token || hasConfiguredSecretInput(params.value, params.cfg.secrets?.defaults)) {
     return {
-      token,
+      token: token || "",
       tokenSource: "config",
-      tokenStatus: "available",
-    };
-  }
-  if (hasConfiguredSecretInput(params.value, params.cfg.secrets?.defaults)) {
-    return {
-      token: "",
-      tokenSource: "config",
-      tokenStatus: "configured_unavailable",
+      tokenStatus: token ? "available" : "configured_unavailable",
     };
   }
   return null;

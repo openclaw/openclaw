@@ -30,6 +30,7 @@ import {
 } from "../../local-model-lean.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { supportsModelTools } from "../../model-tool-support.js";
+import { resolveNativeWebSearchRoute } from "../../native-web-search.js";
 import { recordAgentCleanupFailure, runOwnedAgentCleanup } from "../../run-cleanup-timeout.js";
 import { resolveSessionPlacementComputer } from "../../session-placement-computer.js";
 import {
@@ -223,13 +224,13 @@ export async function prepareEmbeddedAttemptToolBase(params: {
   const computerTransport = resolveSessionPlacementComputer(
     attempt.admittedRunContext.operationalRunInstance,
   );
-  const computerAllowed =
-    shouldConstructTools &&
+  const allowsConversationTool = (name: string) =>
     projectConversationToolNames({
       capabilityProfile: runtimeCapabilityProfile,
-      toolNames: ["computer"],
+      toolNames: [name],
       warn: () => undefined,
     }).length === 1;
+  const computerAllowed = shouldConstructTools && allowsConversationTool("computer");
   const pairedNodeComputerUse = (
     await loadPairedComputerUseAvailabilityForSurface({
       computerAllowed,
@@ -267,114 +268,126 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       return replaySafetyOptions.declaredReplaySafe(candidate);
     },
   };
+  let webSearchUnconfigured = false;
   const constructTools = async (
     sessionPermissionPolicy: PreparedSessionPermissionPolicy | undefined,
     abortSignal: AbortSignal,
   ) => {
-    const constructedToolsRaw = !shouldConstructTools
-      ? []
-      : await (async () => {
-          const codingToolOptions: OpenClawCodingToolsOptions = {
-            agentId: params.setup.sessionAgentId,
-            ...buildConversationContext(),
-            exec: {
-              ...attempt.execOverrides,
-              ...(sessionPermissionPolicy
-                ? { mode: resolveSessionPermissionExecMode(sessionPermissionPolicy) }
-                : {}),
-              config: attempt.config,
-              elevated: attempt.bashElevated,
-              reviewTranscript: params.reviewTranscript,
-            },
-            sandbox: params.setup.sandbox,
-            stagedMediaPaths: resolveStagedInputMediaPaths(attempt.media),
-            sessionPermissionPolicy,
-            channelContext: attempt.channelContext,
-            allowGatewaySubagentBinding: attempt.allowGatewaySubagentBinding,
-            operationalRunInstance: attempt.admittedRunContext.operationalRunInstance,
-            computerTransport,
-            pairedNodeComputerUse,
-            conversationRecall: attempt.conversationRecall,
-            memoryAudience: attempt.memoryAudience,
-            oneShotCliRun: attempt.oneShotCliRun,
-            toolSearchCatalogRef,
-            codeModeSkills,
-            installedSkills: params.installedSkills,
-            preparedModelRuntime: attempt.preparedModelRuntime,
-            requireWorkspaceOnly: attempt.requireWorkspaceOnly,
-            sessionReadScopeKey: attempt.sessionReadScopeKey,
-            sessionConfigSource: attempt.oneShotCliRun ? "pinned" : "runtime",
-            webSearchEnabled: attempt.toolOverrides?.webSearch !== false,
-            githubPublicationAvailable: attempt.githubPublicationAvailable,
-            abortSignal,
-            skillWorkshop: {
-              env: attempt.skillWorkshopProposalEnv,
-              proposalOnly: attempt.skillWorkshopProposalOnly,
-              ...(attempt.skillWorkshopUpdateProposals ? { updateProposals: true } : {}),
-              ...(attempt.skillWorkshopAutonomousCapture ? { autonomousCapture: true } : {}),
-              origin: attempt.skillWorkshopOrigin,
-              proposalMutationBudget: attempt.skillWorkshopProposalMutationBudget,
-              proposalRevision: attempt.skillWorkshopProposalRevision,
-              libraryAuthoring: attempt.skillLibraryAuthoring,
-            },
-            modelCompat: extractModelCompat(attempt.model),
-            delegationCapability: attempt.delegationCapability,
-            modelAuthMode: resolveModelAuthMode(attempt.model.provider, attempt.config, undefined, {
-              workspaceDir: params.setup.effectiveWorkspace,
-            }),
-            includeCoreTools: toolConstructionPlan.includeCoreTools,
-            includeToolSearchControls: toolSearchControlsEnabledForRun,
-            toolSearchCatalogExecutor: params.toolSearchCatalogExecutor,
-            toolConstructionPlan: toolConstructionPlan.codingToolConstructionPlan,
-            computerContextEpoch,
-            skillInstructionDeliveryCache,
-            registerRunCleanup: (cleanup) => generationCleanups.push(cleanup),
-            inboundEventKind: attempt.currentInboundEventKind,
-            disableMessageTool: attempt.disableMessageTool,
-            forceMessageTool: attempt.forceMessageTool,
-            enableHeartbeatTool: attempt.enableHeartbeatTool,
-            forceHeartbeatTool: attempt.forceHeartbeatTool,
-            inheritedToolAllowlistRef: inheritedToolAllowlist,
-            cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
-            cronCreatorToolAllowlistCaptureRef,
-            authProfileStore: attempt.authProfileStore,
-            recordToolPrepStage: params.markCoreToolStage,
-            onToolOutcome: attempt.onToolOutcome,
-            isTurnTainted: attempt.isTurnTainted,
-            allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
-            skillUsagePaths: params.skillUsagePaths,
-            conversationCapabilityProfile: runtimeCapabilityProfile,
-            onProgressCardPlanSaved: completionCheck
-              ? (unfinished) => {
-                  completionCheck.unfinishedPlan = unfinished;
-                }
-              : undefined,
-            onYield: params.onYield,
-          };
-          const allTools = await createOpenClawCodingToolsInternalAsync(
-            codingToolOptions,
-            params.skillReadResources,
-            undefined,
-            undefined,
-            {
-              assertCurrent: resolveAdmittedRunActiveAssertion(
-                attempt.admittedRunContext,
-                abortSignal,
-              ),
-            },
-          );
-          // The built-in harness retains its existing authoritative wrappers.
-          // Only plugin harnesses receive and require the projected host capability.
-          const boundTools = attempt.hostCapabilities
-            ? attempt.hostCapabilities.bindToolSurface(allTools)
-            : allTools;
-          params.markCoreToolStage("attempt:create-openclaw-coding-tools");
-          const filteredTools = applyEmbeddedAttemptToolsAllow(boundTools, effectiveToolsAllow, {
-            toolMeta: (tool) => getPluginToolMeta(tool),
-          });
-          params.markCoreToolStage("attempt:tools-allow");
-          return filteredTools;
-        })();
+    webSearchUnconfigured = false;
+    let constructedToolsRaw: Awaited<ReturnType<typeof createOpenClawCodingToolsInternalAsync>> =
+      [];
+    if (shouldConstructTools) {
+      const codingToolOptions: OpenClawCodingToolsOptions = {
+        agentId: params.setup.sessionAgentId,
+        ...buildConversationContext(),
+        exec: {
+          ...attempt.execOverrides,
+          ...(sessionPermissionPolicy
+            ? { mode: resolveSessionPermissionExecMode(sessionPermissionPolicy) }
+            : {}),
+          config: attempt.config,
+          elevated: attempt.bashElevated,
+          reviewTranscript: params.reviewTranscript,
+        },
+        sandbox: params.setup.sandbox,
+        stagedMediaPaths: resolveStagedInputMediaPaths(attempt.media),
+        sessionPermissionPolicy,
+        channelContext: attempt.channelContext,
+        allowGatewaySubagentBinding: attempt.allowGatewaySubagentBinding,
+        operationalRunInstance: attempt.admittedRunContext.operationalRunInstance,
+        computerTransport,
+        pairedNodeComputerUse,
+        conversationRecall: attempt.conversationRecall,
+        memoryAudience: attempt.memoryAudience,
+        oneShotCliRun: attempt.oneShotCliRun,
+        toolSearchCatalogRef,
+        codeModeSkills,
+        installedSkills: params.installedSkills,
+        preparedModelRuntime: attempt.preparedModelRuntime,
+        requireWorkspaceOnly: attempt.requireWorkspaceOnly,
+        sessionReadScopeKey: attempt.sessionReadScopeKey,
+        sessionConfigSource: attempt.oneShotCliRun ? "pinned" : "runtime",
+        webSearchEnabled: attempt.toolOverrides?.webSearch !== false,
+        onWebSearchConfiguration: (configured) => {
+          webSearchUnconfigured =
+            !configured &&
+            allowsConversationTool("web_search") &&
+            resolveNativeWebSearchRoute({
+              ...buildConversationContext(),
+              agentId: params.setup.sessionAgentId,
+              webSearchEnabled: attempt.toolOverrides?.webSearch !== false,
+              sandboxToolPolicy: params.setup.sandbox?.tools,
+              authStore: attempt.authProfileStore,
+              pluginMetadataSnapshot: attempt.preparedModelRuntime?.metadataSnapshot,
+            }).kind === "managed";
+        },
+        githubPublicationAvailable: attempt.githubPublicationAvailable,
+        abortSignal,
+        skillWorkshop: {
+          env: attempt.skillWorkshopProposalEnv,
+          proposalOnly: attempt.skillWorkshopProposalOnly,
+          ...(attempt.skillWorkshopUpdateProposals ? { updateProposals: true } : {}),
+          ...(attempt.skillWorkshopAutonomousCapture ? { autonomousCapture: true } : {}),
+          origin: attempt.skillWorkshopOrigin,
+          proposalMutationBudget: attempt.skillWorkshopProposalMutationBudget,
+          proposalRevision: attempt.skillWorkshopProposalRevision,
+          libraryAuthoring: attempt.skillLibraryAuthoring,
+        },
+        modelCompat: extractModelCompat(attempt.model),
+        delegationCapability: attempt.delegationCapability,
+        modelAuthMode: resolveModelAuthMode(attempt.model.provider, attempt.config, undefined, {
+          workspaceDir: params.setup.effectiveWorkspace,
+        }),
+        includeCoreTools: toolConstructionPlan.includeCoreTools,
+        includeToolSearchControls: toolSearchControlsEnabledForRun,
+        toolSearchCatalogExecutor: params.toolSearchCatalogExecutor,
+        toolConstructionPlan: toolConstructionPlan.codingToolConstructionPlan,
+        computerContextEpoch,
+        skillInstructionDeliveryCache,
+        registerRunCleanup: (cleanup) => generationCleanups.push(cleanup),
+        inboundEventKind: attempt.currentInboundEventKind,
+        inputProvenance: attempt.inputProvenance,
+        disableMessageTool: attempt.disableMessageTool,
+        forceMessageTool: attempt.forceMessageTool,
+        enableHeartbeatTool: attempt.enableHeartbeatTool,
+        forceHeartbeatTool: attempt.forceHeartbeatTool,
+        inheritedToolAllowlistRef: inheritedToolAllowlist,
+        cronCreatorToolAllowlistRef: cronCreatorToolAllowlist,
+        cronCreatorToolAllowlistCaptureRef,
+        authProfileStore: attempt.authProfileStore,
+        recordToolPrepStage: params.markCoreToolStage,
+        onToolOutcome: attempt.onToolOutcome,
+        isTurnTainted: attempt.isTurnTainted,
+        allocateToolOutcomeOrdinal: attempt.allocateToolOutcomeOrdinal,
+        skillUsagePaths: params.skillUsagePaths,
+        conversationCapabilityProfile: runtimeCapabilityProfile,
+        onProgressCardPlanSaved: completionCheck
+          ? (unfinished) => {
+              completionCheck.unfinishedPlan = unfinished;
+            }
+          : undefined,
+        onYield: params.onYield,
+      };
+      const allTools = await createOpenClawCodingToolsInternalAsync(
+        codingToolOptions,
+        params.skillReadResources,
+        undefined,
+        undefined,
+        {
+          assertCurrent: resolveAdmittedRunActiveAssertion(attempt.admittedRunContext, abortSignal),
+        },
+      );
+      // The built-in harness retains its existing authoritative wrappers.
+      // Only plugin harnesses receive and require the projected host capability.
+      const boundTools = attempt.hostCapabilities
+        ? attempt.hostCapabilities.bindToolSurface(allTools)
+        : allTools;
+      params.markCoreToolStage("attempt:create-openclaw-coding-tools");
+      constructedToolsRaw = applyEmbeddedAttemptToolsAllow(boundTools, effectiveToolsAllow, {
+        toolMeta: (tool) => getPluginToolMeta(tool),
+      });
+      params.markCoreToolStage("attempt:tools-allow");
+    }
     const toolsRaw = attempt.forceRestartSafeTools
       ? constructedToolsRaw.filter((tool) => isAgentToolRestartSafe(tool, restartSafetyOptions))
       : constructedToolsRaw;
@@ -447,6 +460,9 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         const policy = mode ? { root: params.setup.sessionPermissionRoot, mode } : undefined;
         const nextTools = await constructTools(policy, toolAbortSignal);
         toolsRaw.splice(0, toolsRaw.length, ...nextTools);
+      },
+      get webSearchUnconfigured() {
+        return webSearchUnconfigured;
       },
       codeModeControlsEnabledForRun,
       codeModeSkills,

@@ -199,16 +199,13 @@ export async function completeReplyAgentRun(input: {
     const recoverablePendingFinalText = buildRecoverablePendingFinalDeliveryText(
       normalizePendingFinalRecoveryPayloads(finalPayloads),
     );
-    const pendingText = sourceReplyPolicy.suppressDelivery
-      ? ""
-      : (recoverablePendingFinalText ?? "");
-    let resolvedPendingText = pendingText;
+    let pendingText = sourceReplyPolicy.suppressDelivery ? "" : (recoverablePendingFinalText ?? "");
     if (isHeartbeat) {
       const stripped = stripHeartbeatToken(pendingText, {
         mode: "heartbeat",
         maxAckChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
       });
-      resolvedPendingText = stripped.shouldSkip ? "" : stripped.text || pendingText;
+      pendingText = stripped.shouldSkip ? "" : stripped.text || pendingText;
     }
     const sendableFinalPayloads = sourceReplyPolicy.suppressDelivery
       ? []
@@ -256,8 +253,8 @@ export async function completeReplyAgentRun(input: {
           entry.sessionId === expectedSessionId
             ? {
                 pendingFinalDelivery: {
-                  ...(resolvedPendingText && commandOwnerReference === undefined
-                    ? { kind: "replayable" as const, text: resolvedPendingText }
+                  ...(pendingText && commandOwnerReference === undefined
+                    ? { kind: "replayable" as const, text: pendingText }
                     : { kind: "transport-only" as const }),
                   intentId: pendingFinalDeliveryIntentId,
                   deliveries: pendingFinalDeliveries,

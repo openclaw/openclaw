@@ -545,7 +545,7 @@ describe("DraftSubmissionFlow", () => {
     expect(getChatAttachmentDataUrl(displaced)).toBeNull();
     expect(noteUserMutation).not.toHaveBeenCalled();
     expect(requestUpdate).toHaveBeenCalledOnce();
-    flow.attachmentDraft.reset({ release: true });
+    flow.attachmentDraft.reset();
   });
 
   it("releases the displaced payload and renders placement recovery once without a user mutation", () => {
@@ -602,7 +602,7 @@ describe("DraftSubmissionFlow", () => {
         content: "cmVjb3ZlcmVk",
       },
     ]);
-    flow.attachmentDraft.reset({ release: true });
+    flow.attachmentDraft.reset();
   });
 
   it.each([

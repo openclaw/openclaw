@@ -1,4 +1,5 @@
 import type { UiCommandParams } from "@openclaw/gateway-protocol";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
 import type { GatewayAgentRow } from "../api/types.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
@@ -179,11 +180,23 @@ export class ShellGatewayOwner {
       });
     }
     const modelInvalidation = modelCatalogEventInvalidation(event);
+    const commandsChanged =
+      event.event !== "chat.metadata.changed" ||
+      asNullableRecord(event.payload)?.commandsChanged !== false;
     if (client && modelAuthEventInvalidates(event)) {
       invalidateModelAuthStatusRequests(client);
     }
-    if (client && (modelInvalidation || event.event === "chat.metadata.changed")) {
-      invalidateChatMetadataStore(client, undefined, undefined, modelInvalidation ?? "preserve");
+    if (
+      client &&
+      (modelInvalidation || (event.event === "chat.metadata.changed" && commandsChanged))
+    ) {
+      invalidateChatMetadataStore(
+        client,
+        undefined,
+        undefined,
+        modelInvalidation ?? "preserve",
+        commandsChanged,
+      );
     }
     if (event.event === "sessions.changed") {
       this.host.recoverDeletedActiveSession();

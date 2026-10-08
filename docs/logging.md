@@ -619,13 +619,48 @@ Gateway `status` responses include `workerPools.transcriptReconciliation` and
 `workerPools.modelCatalog`. Each reports `maxWorkers`, `workers`, `workersCreated`,
 `activeTasks`, and `pendingTasks` from the pool owner. Both Gateway pools admit one
 worker at a time. Pending tasks include queued and executing work; creation counts
-belong to the current pool lifetime. The startup trace's `memory.ready` record also
-includes these pool counts.
+belong to the current pool lifetime. `workerPools.modelCatalog` also reports
+`workerFailures`: how many model-catalog workers have failed (run out of memory,
+exited, or timed out) since the Gateway started. A failed pool is replaced, so this
+count survives replacement. Each failure also logs one
+`model catalog worker failed` warning when it happens, with the worker's reason and
+the number of agent catalogs to republish on a new worker. A worker that exits while
+idle is counted and logged at once; the next catalog request replaces it.
+Shutdown and plugin retirement are not counted. The startup trace's `memory.ready`
+record also includes these pool counts.
 
 These figures describe worker and task counts. Process RSS includes every isolate
 and native allocation; Node's process heap flags can override a worker's requested
 heap limits. Use constructor or per-isolate measurements when attributing memory
 growth to a particular worker.
+
+### Slow Git content reads
+
+With process diagnostics and info-level logging enabled, `git/worker` emits
+`slow Git content read` after a diff, diff-baseline, or PR branch-facts operation
+lasting at least one second. The journal message includes the same fields as the
+structured file log. Records are limited to 60 per minute.
+
+`operation` identifies the caller family. `checkoutId` is a truncated SHA-256 of
+the absolute checkout path; linked checkouts have different IDs. `checkoutClass`
+is `managed` when the caller supplies managed-index ownership, otherwise
+`unspecified`. Paths, refs, command arguments, and output contents are not logged.
+
+`workerQueueWaitMs` measures admission wait (null if never dispatched).
+`firstHostRequestMs` includes that wait plus worker startup and work before the
+first host request. `workerMs` covers subsequent worker and host work;
+`settlementMs` covers final cleanup. `summedGitQueueWaitMs` measures waiting for
+shared content-process slots, while `summedGitWallMs` sums command execution
+including process settlement. Concurrent commands overlap, so their sum can
+exceed operation duration; these are wall times, not CPU times.
+
+`gitCommandCount` counts started host command requests, not Git's own subprocesses.
+`gitStdoutBytes` and `gitStderrBytes` count captured bytes, excluding any truncated
+output. `gitTimeoutCount` counts returned timeouts; `slowestGitCommand` records
+the longest command's allowlisted name, diff mode when applicable, duration, and
+termination. An operation can return successfully after a command times out
+because optional statistics fall back to unknown. Artifact and maintenance
+operations contribute to aggregate Git worker metrics but do not emit this log.
 
 ### Slow worktree cleanup
 

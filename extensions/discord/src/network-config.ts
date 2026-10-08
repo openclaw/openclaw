@@ -1,15 +1,12 @@
 import * as dns from "node:dns";
 import type { LookupFunction } from "node:net";
 import { resolvePinnedHostnameWithPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const DISCORD_DNS_HOSTS = ["discord.com", "discord.gg", "gateway.discord.gg"];
 
-function normalizeHostname(hostname: string): string {
-  return hostname.trim().toLowerCase();
-}
-
 function isDiscordTransportHostname(hostname: string): boolean {
-  const normalized = normalizeHostname(hostname);
+  const normalized = normalizeLowercaseStringOrEmpty(hostname);
   if (!normalized) {
     return false;
   }
@@ -74,7 +71,7 @@ export function createDiscordDnsLookup(): LookupFunction {
 }
 
 export function createDiscordEndpointDnsLookup(endpointHostname: string): LookupFunction {
-  const normalizedEndpointHostname = normalizeHostname(endpointHostname);
+  const normalizedEndpointHostname = normalizeLowercaseStringOrEmpty(endpointHostname);
   if (!normalizedEndpointHostname) {
     throw new Error("Discord endpoint Gateway hostname is required");
   }

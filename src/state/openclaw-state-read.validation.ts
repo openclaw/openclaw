@@ -12,6 +12,22 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
+function isAcpSessionReadInput(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    Array.isArray(value.keys) &&
+    value.keys.length <= 3 &&
+    value.keys.every((key) => typeof key === "string") &&
+    (value.entry === undefined ||
+      (isRecord(value.entry) &&
+        (value.entry.lifecycleRevision === undefined ||
+          typeof value.entry.lifecycleRevision === "string") &&
+        (value.entry.sessionId === undefined || typeof value.entry.sessionId === "string") &&
+        (value.entry.sessionStartedAt === undefined ||
+          typeof value.entry.sessionStartedAt === "number")))
+  );
+}
+
 export function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
   if (!isRecord(input) || !isRecord(input.context) || !isRecord(input.command)) {
     return false;
@@ -46,6 +62,9 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         isRecord(input.command.input) &&
         typeof input.command.input.channel === "string" &&
         typeof input.command.input.accountId === "string") ||
+      (input.command.type === "gatewayBoot.breaker" &&
+        typeof input.command.input === "number" &&
+        Number.isSafeInteger(input.command.input)) ||
       ((input.command.type === "localWorkspace.get" ||
         input.command.type === "localWorkspace.exists") &&
         isRecord(input.command.input) &&
@@ -118,20 +137,19 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       (input.command.type === "acpSessions.metadata" &&
         Array.isArray(input.command.entries) &&
         input.command.entries.length <= 64 &&
+        input.command.entries.every(isAcpSessionReadInput)) ||
+      (input.command.type === "sessionRows.sharedFacts" &&
+        Array.isArray(input.command.entries) &&
+        input.command.entries.length <= 64 &&
         input.command.entries.every(
           (entry) =>
             isRecord(entry) &&
-            Array.isArray(entry.keys) &&
-            entry.keys.length <= 3 &&
-            entry.keys.every((key) => typeof key === "string") &&
-            (entry.entry === undefined ||
-              (isRecord(entry.entry) &&
-                (entry.entry.lifecycleRevision === undefined ||
-                  typeof entry.entry.lifecycleRevision === "string") &&
-                (entry.entry.sessionId === undefined ||
-                  typeof entry.entry.sessionId === "string") &&
-                (entry.entry.sessionStartedAt === undefined ||
-                  typeof entry.entry.sessionStartedAt === "number"))),
+            (entry.acp === undefined || isAcpSessionReadInput(entry.acp)) &&
+            (entry.repositoryWorkspace === undefined ||
+              (isRecord(entry.repositoryWorkspace) &&
+                typeof entry.repositoryWorkspace.agentId === "string" &&
+                typeof entry.repositoryWorkspace.sessionKey === "string" &&
+                typeof entry.repositoryWorkspace.workspaceId === "string")),
         )) ||
       (input.command.type === "mcpOAuth.statuses" && isStringArray(input.command.input)) ||
       ((input.command.type === "mcpOAuth.readOnly" ||
@@ -363,7 +381,8 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         (input.command.input.includeRunId === undefined ||
           typeof input.command.input.includeRunId === "string")) ||
       input.command.type === "fleet.list" ||
-      ((input.command.type === "operatorApprovals.history" ||
+      ((input.command.type === "operatorApprovals.placementGrant" ||
+        input.command.type === "operatorApprovals.history" ||
         input.command.type === "operatorApprovals.listCronGrants" ||
         input.command.type === "operatorApprovals.validateCronGrant") &&
         isRecord(input.command.input)) ||
@@ -383,6 +402,7 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
         typeof input.command.scopeKey === "string") ||
       (input.command.type === "fleet.get" && typeof input.command.tenantId === "string") ||
       input.command.type === "worktrees.cleanupState" ||
+      input.command.type === "worktrees.list" ||
       (input.command.type === "workerPlacements.changeSnapshot" &&
         (input.command.profileIds === undefined || isStringArray(input.command.profileIds))) ||
       isWorkspaceJournalReadCommand(input.command) ||

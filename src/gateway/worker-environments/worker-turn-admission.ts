@@ -69,11 +69,11 @@ export async function waitForPendingWorkerResult(params: {
   );
   // Restart clears local claims without discarding durable results. A claimless result cannot
   // make progress through this wait; keep its fence and let recovery retain control of the files.
-  const pendingResults = await params.placements.listPendingWorkspaceResultsAsync(params.sessionId);
+  const facts = await params.placements.readProjection([params.sessionId], { current: true });
   params.signal?.throwIfAborted();
   if (
-    !params.placements.get(params.sessionId)?.turnClaim &&
-    pendingResults.some((pending) => pending.sessionId === params.sessionId)
+    !facts.placements.get(params.sessionId)?.turnClaim &&
+    facts.pendingResults.has(params.sessionId)
   ) {
     throw new Error(
       "Workspace recovery is still pending after its turn ended. " +
@@ -124,6 +124,7 @@ export async function waitForInitialWorkerPlacement(params: {
   const completed = await params.wait(params.placement, params.turn.abortSignal);
   // Setup completion is a notification, not authority: read the durable owner again.
   assertSessionCurrent();
+  let placement = completed;
   const assertCurrent = composeSessionSourceAssertion([assertSessionCurrent], (assertSession) => {
     assertSession();
     const current = params.placements.get(identity.sessionId);
@@ -136,10 +137,11 @@ export async function waitForInitialWorkerPlacement(params: {
     ) {
       throw createAbortError("Worker placement changed while waiting for setup");
     }
+    placement = current;
   });
   assertCurrent();
   return {
-    placement: requireActivePlacement(params.placements.get(identity.sessionId)!),
+    placement: requireActivePlacement(placement),
     assertCurrent,
   };
 }
@@ -370,17 +372,17 @@ export async function claimWorkerTurn(params: {
     ) {
       throw error;
     }
-    const pendingResults = await params.placements.listPendingWorkspaceResultsAsync(
-      params.identity.sessionId,
-    );
+    const facts = await params.placements.readProjection([params.identity.sessionId], {
+      current: true,
+    });
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
-    const activePlacement = params.placements.get(params.identity.sessionId);
+    const activePlacement = facts.placements.get(params.identity.sessionId);
     const activeClaim = activePlacement?.turnClaim;
     if (activeClaim?.runId === params.runId) {
       throw error;
     }
-    const resultIsReconciling = pendingResults.some(
+    const resultIsReconciling = [...facts.pendingResults.values()].some(
       (pending) =>
         activeClaim?.owner === "worker" &&
         pending.sessionId === params.identity.sessionId &&
@@ -397,7 +399,9 @@ export async function claimWorkerTurn(params: {
       return null;
     }
     if (!(cancelledClaim && params.isCancellationRequested(cancelledClaim))) {
-      const refreshed = params.placements.get(params.identity.sessionId);
+      const refreshed = await params.placements.getAsync(params.identity.sessionId);
+      params.signal?.throwIfAborted();
+      params.assertCurrent?.();
       if (
         refreshed?.state !== "active" ||
         !matchesWorkerPlacementTarget(refreshed, params.placement) ||
@@ -412,7 +416,9 @@ export async function claimWorkerTurn(params: {
     timeoutMs: SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
     ...(params.signal ? { signal: params.signal } : {}),
   });
-  const refreshed = params.placements.get(params.identity.sessionId);
+  const refreshed = await params.placements.getAsync(params.identity.sessionId);
+  params.signal?.throwIfAborted();
+  params.assertCurrent?.();
   if (refreshed?.state !== "active" || !matchesWorkerPlacementTarget(refreshed, params.placement)) {
     throw new Error("Cloud worker placement changed while waiting for the previous turn");
   }

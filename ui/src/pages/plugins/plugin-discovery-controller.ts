@@ -44,19 +44,6 @@ function rankedOverviewShelf(
     .slice(0, CATALOG_SECTION_SIZE);
 }
 
-function appendUniqueEntries(
-  existing: readonly PluginDiscoveryEntry[],
-  incoming: readonly PluginDiscoveryEntry[],
-): PluginDiscoveryEntry[] {
-  const entries = new Map(existing.map((item) => [item.id, item]));
-  for (const item of incoming) {
-    // Cursor pages contain remote catalog projections, so they replace any first-page local
-    // placeholder while carrying forward the Gateway's latest authoritative local state.
-    entries.set(item.id, item);
-  }
-  return [...entries.values()];
-}
-
 export class PluginDiscoveryController {
   result: PluginDiscoveryResult | null = null;
   private overview: CatalogPageLoad | null = null;
@@ -141,7 +128,12 @@ export class PluginDiscoveryController {
         if (!this.result || this.result.nextCursor !== page.requestedCursor) {
           return;
         }
-        const items = appendUniqueEntries(this.result.items, page.items);
+        const entries = new Map(this.result.items.map((item) => [item.id, item]));
+        for (const item of page.items) {
+          // Cursor projections replace first-page placeholders with current Gateway local state.
+          entries.set(item.id, item);
+        }
+        const items = [...entries.values()];
         this.result = {
           items:
             this.intent === "all" && !this.committedQuery

@@ -43,14 +43,12 @@ export function createInterruptedRecoveryCoordinator(params: {
   };
   const observe = () => {
     unsubscribe ??= sessionChanges.subscribe((change) => {
-      if ("sessionKey" in change) {
-        for (const entry of params.getRunsForChildSession(change.sessionKey, change.agentId)) {
-          invalidate(entry);
-        }
-      } else {
-        for (const entry of params.runs.values()) {
-          invalidate(entry);
-        }
+      const entries =
+        "sessionKey" in change
+          ? params.getRunsForChildSession(change.sessionKey, change.agentId)
+          : params.runs.values();
+      for (const entry of entries) {
+        invalidate(entry);
       }
     });
   };

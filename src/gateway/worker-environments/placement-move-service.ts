@@ -1,3 +1,4 @@
+import { composePlacementAuthorization } from "./placement-authorization.js";
 import type {
   WorkerActiveDispatchPlacement,
   WorkerDispatchEnvironmentService,
@@ -65,7 +66,10 @@ export function createWorkerPlacementMoveService(options: {
     authorize?: WorkerPlacementAuthorization,
     onTransition?: (placement: WorkerDispatchPlacement) => void,
   ) => Promise<WorkerReclaimPlacement>;
-  validateAbandonSource: (request: WorkerPlacementMoveRequest) => void;
+  validateAbandonSource: (
+    request: WorkerPlacementMoveRequest,
+    placement: WorkerDispatchPlacement | undefined,
+  ) => void;
   abandonSource: (
     request: WorkerPlacementReclaimRequest,
     intent: WorkerPlacementMoveIntent,
@@ -79,8 +83,8 @@ export function createWorkerPlacementMoveService(options: {
     params: WorkerSessionPlacementIdentity & { assertCurrent: () => void },
   ) => Promise<void>;
 }) {
-  const recordError = (intent: WorkerPlacementMoveIntent, error: unknown): void => {
-    options.placements.recordPlacementMoveError({
+  const recordError = async (intent: WorkerPlacementMoveIntent, error: unknown): Promise<void> => {
+    await options.placements.recordPlacementMoveError({
       operationId: intent.operationId,
       sessionId: intent.sessionId,
       error: error instanceof Error ? error.message : String(error),
@@ -93,12 +97,9 @@ export function createWorkerPlacementMoveService(options: {
     authorize?: WorkerPlacementAuthorization,
     signal?: AbortSignal,
   ): Promise<WorkerMovePlacement> => {
-    const assertCurrent = signal
-      ? () => {
-          signal.throwIfAborted();
-          authorize?.();
-        }
-      : authorize;
+    const assertCurrent = composePlacementAuthorization(authorize, () => {
+      signal?.throwIfAborted();
+    });
     let intent: WorkerPlacementMoveIntent | undefined;
     let local: WorkerReclaimPlacement | undefined;
     try {
@@ -129,22 +130,33 @@ export function createWorkerPlacementMoveService(options: {
           };
           // Existing durable decisions own retries. Prepare only a new intent, outside
           // the synchronous commit, so both branches publish their owner before yielding.
-          if (request.abandonSource && !options.placements.getPlacementMove(request.sessionId)) {
-            options.validateAbandonSource(request);
-            const placement = options.placements.get(request.sessionId);
-            const claim = placement ? projectWorkerSessionTurnClaim(placement) : undefined;
-            if (claim && prepareNew) {
-              await prepareNew(claim.runId);
-              const current = options.placements.get(request.sessionId);
-              if (!current || !isCurrentPlacementTurnClaim(current, claim)) {
-                throw new Error(
-                  `Session ${request.sessionKey} abandonment worker turn changed; retry`,
-                );
+          if (request.abandonSource) {
+            const { placement, move: existingMove } = await options.placements.getWithMoveAsync(
+              request.sessionId,
+            );
+            if (!existingMove) {
+              options.validateAbandonSource(request, placement);
+              const claim = placement ? projectWorkerSessionTurnClaim(placement) : undefined;
+              if (claim && prepareNew) {
+                await prepareNew(claim.runId);
+                const current = await options.placements.getAsync(request.sessionId);
+                if (!current || !isCurrentPlacementTurnClaim(current, claim)) {
+                  throw new Error(
+                    `Session ${request.sessionKey} abandonment worker turn changed; retry`,
+                  );
+                }
+                options.validateAbandonSource(request, current);
               }
-              options.validateAbandonSource(request);
             }
           }
-          const started = options.placements.beginPlacementMove(moveRequest);
+          const started = await options.placements.beginPlacementMove(moveRequest, {
+            assertCurrent,
+            ...(request.abandonSource
+              ? {
+                  assertNewSource: (placement) => options.validateAbandonSource(request, placement),
+                }
+              : {}),
+          });
           if (
             started.placement.state !== "draining" &&
             !(request.abandonSource && isForceAbandonedWorkerPlacement(started.placement))
@@ -182,13 +194,16 @@ export function createWorkerPlacementMoveService(options: {
         assertCurrent,
         signal,
       );
-      const completed = options.placements.completePlacementMoveToWorker({
-        operationId: intent.operationId,
-        sessionId: request.sessionId,
-        expectedGeneration: active.generation,
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-      });
+      const completed = await options.placements.completePlacementMoveToWorker(
+        {
+          operationId: intent.operationId,
+          sessionId: request.sessionId,
+          expectedGeneration: active.generation,
+          environmentId: active.environmentId,
+          ownerEpoch: active.activeOwnerEpoch,
+        },
+        { assertCurrent },
+      );
       if (completed.state !== "active") {
         throw new Error(`Session ${request.sessionKey} move did not finish active`);
       }
@@ -196,22 +211,20 @@ export function createWorkerPlacementMoveService(options: {
     } catch (error) {
       // Source cleanup is settled. A canceled, unpublished destination leaves this
       // exact local completion for Stop; unrelated errors or replacements still fail.
-      if (
-        intent &&
-        local?.state === "local" &&
-        signal?.aborted &&
-        error === signal.reason &&
-        matchesWorkerPlacementTarget(options.placements.get(request.sessionId), local)
-      ) {
-        options.placements.cancelPlacementMove({
+      if (intent && local?.state === "local" && signal?.aborted && error === signal.reason) {
+        const cancelled = await options.placements.cancelPlacementMove({
           operationId: intent.operationId,
           sessionId: request.sessionId,
+          expectedLocalGeneration: local.generation,
         });
-        return local;
+        if (cancelled) {
+          return local;
+        }
       }
-      const durableIntent = intent ?? options.placements.getPlacementMove(request.sessionId);
+      const durableIntent =
+        intent ?? (await options.placements.getPlacementMoveAsync(request.sessionId));
       if (durableIntent) {
-        recordError(durableIntent, error);
+        await recordError(durableIntent, error);
       }
       throw error;
     }
@@ -238,7 +251,7 @@ export function createWorkerPlacementMoveService(options: {
           );
         }
         if (placement.state === "local") {
-          options.placements.cancelPlacementMove(intent);
+          await options.placements.cancelPlacementMove(intent);
           return;
         }
         await options.abandonSource(identity, intent);
@@ -255,7 +268,7 @@ export function createWorkerPlacementMoveService(options: {
             `Session ${identity.sessionKey} failed move environment must finish teardown before retry`,
           );
         }
-        options.placements.cancelPlacementMove(intent);
+        await options.placements.cancelPlacementMove(intent);
         return;
       } else if (placement.state === "draining") {
         const local = await options.reclaimSource(identity, intent);
@@ -285,7 +298,7 @@ export function createWorkerPlacementMoveService(options: {
           await options.prepareGatewayMove?.({ ...identity, assertCurrent });
           assertCurrent();
         }
-        placement = options.placements.completePlacementMoveSourceToLocal({
+        placement = await options.placements.completePlacementMoveSourceToLocal({
           operationId: intent.operationId,
           sessionId: intent.sessionId,
           expectedGeneration: placement.generation,
@@ -297,7 +310,7 @@ export function createWorkerPlacementMoveService(options: {
         if (stillSource) {
           throw new Error(`Session ${identity.sessionKey} move recovery found an active source`);
         }
-        options.placements.completePlacementMoveToWorker({
+        await options.placements.completePlacementMoveToWorker({
           operationId: intent.operationId,
           sessionId: intent.sessionId,
           expectedGeneration: placement.generation,
@@ -311,8 +324,8 @@ export function createWorkerPlacementMoveService(options: {
         return;
       }
       if (intent.target.kind === "gateway") {
-        if (options.placements.getPlacementMove(intent.sessionId)) {
-          options.placements.cancelPlacementMove(intent);
+        if (await options.placements.getPlacementMoveAsync(intent.sessionId)) {
+          await options.placements.cancelPlacementMove(intent);
         }
         return;
       }
@@ -321,9 +334,9 @@ export function createWorkerPlacementMoveService(options: {
         expectedGeneration: placement.generation,
         recoveryError: RESTART_AUTHORITY_EXPIRED,
       });
-      options.placements.cancelPlacementMove(intent);
+      await options.placements.cancelPlacementMove(intent);
     } catch (error) {
-      recordError(intent, error);
+      await recordError(intent, error);
       throw error;
     }
   };

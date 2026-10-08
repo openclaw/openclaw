@@ -482,12 +482,14 @@ private actor LocalFixtureChatStore {
             sessionInfo: OpenClawChatSessionInfo(
                 hasActiveRun: self.activeRunID != nil,
                 activeRunIds: self.activeRunID.map { [$0] }),
-            inFlightRun: ProcessInfo.processInfo.arguments.contains("--openclaw-streaming-layout-fixture")
+            inFlightRun: self.duplicateReplaySessionKey.flatMap { _ in
+                self.activeRunID.map { OpenClawChatInFlightRun(runId: $0, text: "") }
+            } ?? (ProcessInfo.processInfo.arguments.contains("--openclaw-streaming-layout-fixture")
                 ? self.activeRunID.map {
                     OpenClawChatInFlightRun(
                         runId: $0,
                         text: String(repeating: "Streaming layout response. ", count: 12))
-                } : nil)
+                } : nil))
     }
 
     func sendMessage(
@@ -504,6 +506,14 @@ private actor LocalFixtureChatStore {
             idempotencyKey: "\(runId):user")
         self.messages.append(userMessage)
         self.publishReactions(for: userMessage, sessionKey: sessionKey)
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-dup-filter-fixture"),
+           self.fixture.sessionIDPrefix == "screenshot-fixture"
+        {
+            self.activeRunID = runId
+            self.duplicateReplaySessionKey = sessionKey
+            self.duplicateReplayStarted = false
+            return OpenClawChatSendResponse(runId: runId, status: "pending")
+        }
         let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
         let subject = trimmed.isEmpty ? "that request" : "\"\(trimmed)\""
         if ScreenshotFixtureMode.holdsInitialChatRun,
@@ -527,6 +537,57 @@ private actor LocalFixtureChatStore {
         return OpenClawChatSendResponse(runId: runId, status: "ok")
     }
 
+    private var duplicateReplaySessionKey: String?
+    private var duplicateReplayStarted = false
+
+    /// Replay begins from the run owner, after the send acknowledgment/history refresh.
+    /// History carries no live text: only the assistant event can supply the second copy.
+    private func replayDuplicateReply(sessionKey: String, runId: String, timestamp: Double) {
+        let text = "The cobalt lighthouse is ready."
+        let saved = Self.message(
+            role: "assistant",
+            text: text,
+            timestamp: timestamp + 1,
+            transcriptMessageID: "\(runId):assistant")
+        self.messages.append(saved)
+        self.eventContinuation?.yield(.sessionMessage(OpenClawSessionMessageEventPayload(
+            sessionKey: sessionKey, message: saved, messageId: saved.transcriptMessageID, messageSeq: nil)))
+        self.emitDuplicateAgentEvent(
+            runId: runId,
+            seq: 1,
+            stream: "assistant",
+            timestamp: timestamp + 2,
+            data: ["text": text])
+        self.emitDuplicateAgentEvent(
+            runId: runId,
+            seq: 2,
+            stream: "tool",
+            timestamp: timestamp + 3,
+            data: [
+                "phase": "start", "name": "read", "toolCallId": "dup-filter-receipt",
+                "args": ["path": "dup-filter-inputs-received"],
+            ])
+    }
+
+    private func emitDuplicateAgentEvent(
+        runId: String,
+        seq: Int,
+        stream: String,
+        timestamp: Double,
+        data: [String: Any])
+    {
+        let frame = EventFrame(
+            type: "event",
+            event: "agent",
+            payload: AnyCodable([
+                "runId": runId, "seq": seq, "stream": stream, "ts": Int(timestamp), "data": data,
+            ]))
+        guard let event = OpenClawChatGatewayPayloadCodec.event(from: frame) else {
+            preconditionFailure("Invalid duplicate reply fixture event")
+        }
+        self.eventContinuation?.yield(event)
+    }
+
     private var heldInitialRun = false
     private var activeRunID: String?
     private var eventContinuation: AsyncStream<OpenClawChatTransportEvent>.Continuation?
@@ -536,12 +597,23 @@ private actor LocalFixtureChatStore {
     }
 
     func runObservation(runId: String) -> OpenClawChatRunObservation {
-        self.activeRunID == runId ? .checkAgain : .terminal(.completed)
+        if self.activeRunID == runId,
+           let sessionKey = self.duplicateReplaySessionKey,
+           !self.duplicateReplayStarted,
+           self.eventContinuation != nil
+        {
+            self.duplicateReplayStarted = true
+            self.replayDuplicateReply(
+                sessionKey: sessionKey, runId: runId, timestamp: Date().timeIntervalSince1970 * 1000)
+        }
+        return self.activeRunID == runId ? .checkAgain : .terminal(.completed)
     }
 
     func abortRun(sessionKey: String, runId: String) {
         guard self.activeRunID == runId else { return }
         self.activeRunID = nil
+        self.duplicateReplaySessionKey = nil
+        self.duplicateReplayStarted = false
         self.eventContinuation?.yield(.chat(OpenClawChatEventPayload(
             runId: runId,
             sessionKey: sessionKey,
@@ -602,6 +674,8 @@ private actor LocalFixtureChatStore {
     }
 
     func reset() {
+        self.duplicateReplaySessionKey = nil
+        self.duplicateReplayStarted = false
         self.messages = Self.seedMessages(fixture: self.fixture)
         self.reactionOverrides.removeAll()
         self.modelID = self.fixture.modelID

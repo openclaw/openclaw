@@ -205,18 +205,17 @@ export function createDiscordMessageReactionRuntime(params: {
     dispatchError: boolean;
     finalDeliveryFailed: boolean;
   }) => {
-    if (statusReactionsActive) {
-      if (result.dispatchAborted) {
-        void statusReactions.restoreInitial();
-        return;
-      }
+    if (!statusReactionsActive) {
+      return;
+    }
+    if (!result.dispatchAborted) {
       if (result.dispatchError || result.finalDeliveryFailed) {
         await statusReactions.setError();
       } else {
         await statusReactions.setDone();
       }
-      void statusReactions.restoreInitial();
     }
+    void statusReactions.restoreInitial();
   };
 
   return {

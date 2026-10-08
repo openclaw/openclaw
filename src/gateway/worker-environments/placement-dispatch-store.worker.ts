@@ -8,7 +8,14 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import type { WorkerOperationHandlers } from "../../state/worker-operation-registry.js";
+import type {
+  WorkerOperationHandlers,
+  WorkerWriteOperationContext,
+} from "../../state/worker-operation-registry.js";
+import {
+  placementLifecycleOperations,
+  placementReadOperations,
+} from "./placement-lifecycle.worker.js";
 import { readWorkerPlacementMovesReadOnly } from "./placement-move-intent.js";
 import {
   nextGeneration,
@@ -130,8 +137,10 @@ function startWorkerPlacementDispatchInWorker(
 }
 
 export const workerPlacementOperations = {
+  ...placementLifecycleOperations,
+  ...placementReadOperations,
   "workerPlacements.startDispatch": (
     input: Parameters<typeof startWorkerPlacementDispatchInWorker>[0],
     { open },
   ) => startWorkerPlacementDispatchInWorker(input, open()),
-} satisfies WorkerOperationHandlers;
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

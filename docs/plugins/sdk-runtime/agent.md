@@ -361,6 +361,22 @@ Catalog list publishers use `createSessionCatalogSourceActorProjector({ pluginId
     ```
 
   </Accordion>
+  <Accordion title="api.runtime.worktrees">
+    Managed worktree creation, release, and lossless removal retain the selected
+    state root's ownership through their Git and registry effects. Calls inside
+    the owning Gateway stay in-process. When no process owns the state, these
+    methods acquire exclusive offline custody and release it after accepted
+    work settles.
+
+    A foreign live Gateway or embedded owner rejects these mutations with
+    `code: "OWNER_UNAVAILABLE"` before local effects. Run the plugin operation
+    inside the owning Gateway, or stop the Gateway through its service owner
+    and wait for embedded runs to finish before retrying offline. The SDK's
+    synchronous commit guard for `create` remains local and cannot cross RPC.
+    Checkout-root and metadata inspection remain read-only. Method signatures
+    are unchanged; no migration is required.
+
+  </Accordion>
   <Accordion title="api.runtime.sandbox">
     Inspect the effective sandbox workspace authority for an agent session.
 

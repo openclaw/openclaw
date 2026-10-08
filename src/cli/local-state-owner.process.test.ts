@@ -51,6 +51,7 @@ import {
 } from "../test-utils/port-claims.js";
 import { localStateOwnerFixtureEntrypoint } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
+import { registerWorktreeListingOwnerTests } from "./local-state-owner-listing.test-support.js";
 
 const execFileAsync = promisify(execFile);
 const roots = useAutoCleanupTempDirTracker(afterAll);
@@ -266,6 +267,24 @@ describe("same-root local mutation routing", () => {
       // A configured remote URL must not redirect this same-root operation.
       env: { ...env, OPENCLAW_GATEWAY_URL: "ws://127.0.0.1:1" },
     });
+
+  registerWorktreeListingOwnerTests(
+    () => ({
+      root,
+      repo,
+      env,
+      service,
+      methods,
+      port: claim.port,
+      get owner() {
+        return owner;
+      },
+      set owner(value: GatewayLockHandle | null) {
+        owner = value;
+      },
+    }),
+    entrypoint,
+  );
 
   it("runs the CLI create in the live owner and exposes committed profile results", async () => {
     const result = await create(
@@ -816,6 +835,7 @@ describe("offline local mutation custody", () => {
       nodeArgs: [...entrypoint, "exec-policy", "preset", "cautious", "--json"],
       env,
     });
+
     expect(result.code, result.stderr).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({
       preset: "cautious",

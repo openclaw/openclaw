@@ -11,6 +11,8 @@ type DurableHistoryReadOperationRequest = Extract<
   SessionTranscriptWorkerInput,
   {
     kind:
+      | "board-snapshot"
+      | "board-widget-document"
       | "transcript-match"
       | "transcript-search"
       | "transcript-search-current"
@@ -43,6 +45,8 @@ export function isSessionHistoryReadOperation(
   request: SessionTranscriptWorkerInput,
 ): request is DurableHistoryReadOperationRequest {
   switch (request.kind) {
+    case "board-snapshot":
+    case "board-widget-document":
     case "transcript-match":
     case "transcript-search":
     case "transcript-search-current":
@@ -97,6 +101,41 @@ async function prepareHistoryRead(
   retainedDatabase?: OpenClawAgentReadOnlyDatabase,
 ): Promise<() => SessionTranscriptWorkerValues[SessionHistoryReadOperationRequest["kind"]]> {
   switch (request.kind) {
+    case "board-snapshot":
+    case "board-widget-document": {
+      const [
+        { withOpenClawAgentDatabaseReadOnly },
+        { runSqliteDeferredTransactionSync },
+        { readBoardSnapshotWithHtmlViewMetadata, readBoardWidgetDocument },
+      ] = await Promise.all([
+        import("../../state/openclaw-agent-db-readonly.js"),
+        import("../../infra/sqlite-transaction.js"),
+        import("../../boards/sqlite-board-store.kernel.js"),
+      ]);
+      return () => {
+        const read = withOpenClawAgentDatabaseReadOnly(
+          (database) =>
+            runSqliteDeferredTransactionSync(database.db, () =>
+              request.kind === "board-snapshot"
+                ? {
+                    kind: request.kind,
+                    value: readBoardSnapshotWithHtmlViewMetadata(database, request.sessionKey),
+                  }
+                : {
+                    kind: request.kind,
+                    value: readBoardWidgetDocument(
+                      database,
+                      request.sessionKey,
+                      request.name,
+                      request.contentKind,
+                    ),
+                  },
+            ),
+          { ...request.database, env: request.env },
+        );
+        return read.found ? read.value : { kind: request.kind, value: undefined };
+      };
+    }
     case "transcript-anchors": {
       const [
         { withOpenClawAgentDatabaseReadOnly },

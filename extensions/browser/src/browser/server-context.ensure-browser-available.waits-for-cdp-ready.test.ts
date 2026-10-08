@@ -19,14 +19,6 @@ import type { ProfileRuntimeState } from "./server-context.types.js";
 
 const PROFILE_HTTP_REACHABILITY_TIMEOUT_MS = 300;
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
-    resolve = done;
-  });
-  return { promise, resolve };
-}
-
 function fakeRunning(pid: number): RunningChrome {
   return {
     pid,
@@ -91,8 +83,8 @@ describe("browser server-context ensureBrowserAvailable", () => {
       setupEnsureBrowserAvailableHarness();
     const controller = new AbortController();
     const reason = new Error("caller cancelled");
-    const entered = deferred<void>();
-    const launch = deferred<RunningChrome>();
+    const entered = Promise.withResolvers<void>();
+    const launch = Promise.withResolvers<RunningChrome>();
     const running = fakeRunning(1200);
     launchOpenClawChrome.mockImplementationOnce(async () => {
       entered.resolve();
@@ -119,8 +111,8 @@ describe("browser server-context ensureBrowserAvailable", () => {
   it("rejects and cleans a deferred launch before stop returns, then allows restart", async () => {
     const { launchOpenClawChrome, stopOpenClawChrome, isChromeCdpReady, profile, state } =
       setupEnsureBrowserAvailableHarness();
-    const deferredLaunch = deferred<RunningChrome>();
-    const launchEntered = deferred<void>();
+    const deferredLaunch = Promise.withResolvers<RunningChrome>();
+    const launchEntered = Promise.withResolvers<void>();
     const late = fakeRunning(1201);
     const replacement = fakeRunning(1202);
     launchOpenClawChrome
@@ -162,8 +154,8 @@ describe("browser server-context ensureBrowserAvailable", () => {
       lastError: "earlier launch failure",
     };
     runtime.managedLaunchFailure = previousFailure;
-    const launchEntered = deferred<void>();
-    const deferredLaunch = deferred<RunningChrome>();
+    const launchEntered = Promise.withResolvers<void>();
+    const deferredLaunch = Promise.withResolvers<RunningChrome>();
     launchOpenClawChrome.mockImplementationOnce(async () => {
       launchEntered.resolve();
       return await deferredLaunch.promise;
@@ -276,8 +268,8 @@ describe("browser server-context ensureBrowserAvailable", () => {
       state,
     } = setupEnsureBrowserAvailableHarness();
     const launched = fakeRunning(1235);
-    const ownershipEntered = deferred<void>();
-    const ownership = deferred<boolean>();
+    const ownershipEntered = Promise.withResolvers<void>();
+    const ownership = Promise.withResolvers<boolean>();
     launchOpenClawChrome.mockResolvedValue(launched);
     isChromeCdpReady.mockResolvedValue(true);
     isChromeCdpOwnedByPid.mockImplementationOnce(async () => {
@@ -658,8 +650,8 @@ describe("external browser mode availability", () => {
 
   it("keeps a shared observation alive when its first caller cancels", async () => {
     const { availability, runtime } = createAvailability();
-    const observation = deferred<boolean>();
-    const observing = deferred<AbortSignal | undefined>();
+    const observation = Promise.withResolvers<boolean>();
+    const observing = Promise.withResolvers<AbortSignal | undefined>();
     vi.mocked(chromeModule.inspectLocalChromeHeadlessMode).mockImplementation(({ signal }) => {
       observing.resolve(signal);
       return observation.promise;
@@ -685,7 +677,7 @@ describe("external browser mode availability", () => {
 
   it("aborts the observation and clears its cache on a profile transition", async () => {
     const { availability, runtime, state } = createAvailability();
-    const observing = deferred<void>();
+    const observing = Promise.withResolvers<void>();
     vi.mocked(chromeModule.inspectLocalChromeHeadlessMode).mockImplementation(({ signal }) => {
       observing.resolve();
       return new Promise((_resolve, reject) => {

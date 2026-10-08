@@ -8,6 +8,7 @@ import {
   getLatestLiveSubagentRunByChildSessionKey,
   isSubagentRunLive,
   isSubagentRunQueued,
+  listActiveSubagentSessionKeys,
 } from "../../agents/subagents/registry/subagent-registry-read.js";
 import { getSubagentRunRuntimeKey } from "../../agents/subagents/registry/subagent-run-generation.js";
 import { isSwarmRunWaitingForCapacity } from "../../agents/subagents/swarm/swarm-scheduler.js";
@@ -142,7 +143,6 @@ export function hasRegisteredChatRunForSessionKey(params: {
   );
 }
 
-/** Returns true when either requested or canonical session key has a visible active run. */
 export function hasTrackedActiveSessionRun(params: {
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
   requestedKey: string;
@@ -151,20 +151,11 @@ export function hasTrackedActiveSessionRun(params: {
   defaultAgentId?: string;
 }): boolean {
   const activeRuns = collectTrackedActiveSessionRuns(params.context);
-  return activeRuns.some(
-    (active) =>
-      isTrackedActiveSessionRunForKey(
-        active,
-        params.canonicalKey,
-        params.agentId,
-        params.defaultAgentId,
-      ) ||
-      isTrackedActiveSessionRunForKey(
-        active,
-        params.requestedKey,
-        params.agentId,
-        params.defaultAgentId,
-      ),
+  const sessionKeys = [params.canonicalKey, params.requestedKey];
+  return activeRuns.some((active) =>
+    sessionKeys.some((key) =>
+      isTrackedActiveSessionRunForKey(active, key, params.agentId, params.defaultAgentId),
+    ),
   );
 }
 
@@ -184,18 +175,10 @@ export function resolveVisibleActiveSessionRunState(params: {
     params.agentId ??
     parseAgentSessionKey(params.canonicalKey)?.agentId ??
     parseAgentSessionKey(params.requestedKey)?.agentId;
+  const sessionKeys = [params.canonicalKey, params.requestedKey];
   const matchesRequestedSession = (active: TrackedActiveSessionRun) =>
-    isTrackedActiveSessionRunForKey(
-      active,
-      params.canonicalKey,
-      resolvedAgentId,
-      params.defaultAgentId,
-    ) ||
-    isTrackedActiveSessionRunForKey(
-      active,
-      params.requestedKey,
-      resolvedAgentId,
-      params.defaultAgentId,
+    sessionKeys.some((key) =>
+      isTrackedActiveSessionRunForKey(active, key, resolvedAgentId, params.defaultAgentId),
     ) ||
     (sessionId !== undefined &&
       isTrackedActiveSessionRunForSessionId(
@@ -294,6 +277,13 @@ export function resolveVisibleActiveSessionRunState(params: {
   };
 }
 
+export type VisibleActiveSessionRunProjector = (
+  params: Omit<
+    Parameters<typeof resolveVisibleActiveSessionRunState>[0],
+    "context" | "trackedActiveRuns" | "projectedAgentRunIndex" | "includeTerminalPersistence"
+  >,
+) => VisibleActiveSessionRunState;
+
 /** Request-scoped index; candidate selection must not rescan all controllers per row. */
 export function createVisibleActiveSessionRunProjector(
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
@@ -326,12 +316,7 @@ export function createVisibleActiveSessionRunProjector(
       }
     }
   }
-  return (
-    params: Omit<
-      Parameters<typeof resolveVisibleActiveSessionRunState>[0],
-      "context" | "trackedActiveRuns" | "projectedAgentRunIndex" | "includeTerminalPersistence"
-    >,
-  ): VisibleActiveSessionRunState => {
+  const project: VisibleActiveSessionRunProjector = (params) => {
     const sessionId = params.sessionId?.trim() ?? "";
     // Inventory only excludes absent owners; positive matches retain the canonical agent policy.
     if (
@@ -360,4 +345,16 @@ export function createVisibleActiveSessionRunProjector(
       ],
     });
   };
+  // Empty identities request an unkeyed roster read from the selection owner.
+  const candidateSessionIdsOrKeys = (): ReadonlySet<string> =>
+    new Set(
+      [
+        ...candidateKeys,
+        ...candidateIds,
+        ...byKey.keys(),
+        ...byId.keys(),
+        ...listActiveSubagentSessionKeys(),
+      ].filter((identity) => identity.length > 0),
+    );
+  return Object.assign(project, { candidateSessionIdsOrKeys });
 }

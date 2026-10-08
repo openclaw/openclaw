@@ -25,6 +25,7 @@ import type {
   IncognitoSessionFacts,
 } from "../config/sessions/session-incognito-contract.js";
 import * as incognitoCorpus from "../config/sessions/session-incognito-memory-corpus.js";
+import { resolveMemorySessionTargetsInWorker } from "../config/sessions/session-transcript-inventory-runtime.js";
 import { createIncognitoSessionComputeReader } from "../gateway/session-history-snapshot.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
@@ -167,6 +168,30 @@ it("wires Memory callbacks, corpus and reset recall through the captured actor w
     ],
   });
   expect(entry?.content).toBe("Assistant: first Memory source\nAssistant: second Memory source");
+  expect(
+    await withEnvAsync(env, () =>
+      withIncognitoSessionActor(actor, () =>
+        resolveMemorySessionTargetsInWorker({
+          agentId: "main",
+          storePath: actor.path,
+          sessionIds: [scope.sessionId, "missing-memory-session"],
+        }),
+      ),
+    ),
+  ).toEqual([
+    expect.objectContaining({
+      sessionId: scope.sessionId,
+      sessionKey: scope.sessionKey,
+      resolution: "live",
+    }),
+    expect.objectContaining({ sessionId: "missing-memory-session", resolution: "unresolved" }),
+  ]);
+  expect(
+    await actor.sessions.history(authority, {
+      type: "session.history.memory-targets",
+      input: { sessions: [], selectors: { agentId: "main", sessionIds: [scope.sessionId] } },
+    }),
+  ).toEqual([]);
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
   try {

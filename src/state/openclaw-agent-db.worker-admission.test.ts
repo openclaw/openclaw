@@ -5,6 +5,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { readSessionNodesGeneration } from "../config/sessions/session-accessor.sqlite-entry-revision.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { runWithAgentCreationClaim } from "./agent-creation-claim.js";
@@ -18,6 +19,12 @@ import {
   releaseOpenClawAgentDatabaseLease,
 } from "./openclaw-agent-db-lease.js";
 import { closeCachedOpenClawAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
+import { refreshOpenClawAgentDatabaseSchema } from "./openclaw-agent-db-schema.js";
+import {
+  getOpenClawAgentDatabaseValidation,
+  getOpenClawAgentDatabaseValidationForTransfer,
+  invalidateOpenClawAgentDatabaseValidation,
+} from "./openclaw-agent-db-validation-cache.js";
 import { withOpenClawAgentDatabaseWrite } from "./openclaw-agent-db-write.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -73,6 +80,27 @@ function expectAdmittedSchemaObjects(database: DatabaseSync) {
   });
   return facts;
 }
+
+it("retains the schema receipt after first-use TEMP generation tracking", () => {
+  const options = {
+    agentId: "main",
+    env: { OPENCLAW_STATE_DIR: tempDirs.make("agent-temp-receipt-") },
+  };
+  const database = openOpenClawAgentDatabase(options);
+  const schema = getOpenClawAgentDatabaseValidation(database)?.schema;
+  expect(schema).toBeDefined();
+  expect(readSessionNodesGeneration(database.db)).toBe(0);
+  const observed = observeCallerSchemaInspections(database.path);
+  try {
+    refreshOpenClawAgentDatabaseSchema(database, () => {});
+    expect(readSessionNodesGeneration(database.db)).toBe(0);
+    openOpenClawAgentDatabase(options);
+    expect(observed.inspections).toEqual([]);
+    expect(Atomics.load(new Int32Array(schema!.valid), 0)).toBe(1);
+  } finally {
+    observed.restore();
+  }
+});
 
 it("keeps a worker recreation private until its host creation claim joins native close", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-admit-creation-") };
@@ -187,23 +215,44 @@ it.each([
   "alias",
   "warm-additive-table",
   "warm-missing-index",
+  "warm-rollback",
+  "foreign-missing-index",
+  "idle-missing-index",
+  "idle-revoked",
 ] as const)("readmits a host handle with its retained worker after %s", async (change) => {
   const options = {
     agentId: "main",
     env: { OPENCLAW_STATE_DIR: tempDirs.make("agent-retained-readmission-") },
   };
   openOpenClawStateDatabase({ env: options.env });
-  const retainedExecution = captureOpenClawAgentDatabaseExecution(options);
+  let retainedExecution = captureOpenClawAgentDatabaseExecution(options);
   try {
     const database = await withOpenClawAgentDatabaseWrite(options, (opened) => {
       if (change.endsWith("additive-table")) {
         opened.db.exec("CREATE TABLE coldadmit_fixture(value TEXT)");
-      } else if (change.endsWith("missing-index")) {
+      } else if (change.endsWith("missing-index") && !change.startsWith("foreign-")) {
         opened.db.exec("DROP INDEX idx_agent_cache_expiry");
+      } else if (change === "warm-rollback") {
+        opened.db.exec("BEGIN; CREATE TABLE rolled_back_fixture(value TEXT); ROLLBACK;");
       }
       return opened;
     });
-    const nativeClaim = retainedExecution.captureGenerationClaim();
+    let nativeClaim = retainedExecution.captureGenerationClaim();
+    const revokedProof =
+      change === "idle-revoked" ? getOpenClawAgentDatabaseValidation(database) : undefined;
+    if (change.startsWith("idle-")) {
+      const incarnation = nativeClaim.incarnation;
+      await retainedExecution.release();
+      await withOpenClawAgentDatabaseWrite({ ...options, agentId: "sibling" }, () => undefined);
+      if (change === "idle-revoked") {
+        expect(revokedProof).toBeDefined();
+        invalidateOpenClawAgentDatabaseValidation(database.path);
+        expect(getOpenClawAgentDatabaseValidation(database)).toBeUndefined();
+      }
+      retainedExecution = captureOpenClawAgentDatabaseExecution(options);
+      nativeClaim = retainedExecution.captureGenerationClaim();
+      expect(nativeClaim.incarnation).toBe(incarnation);
+    }
     const acquisitionPath =
       change === "alias"
         ? path.join(options.env.OPENCLAW_STATE_DIR, "alias.sqlite")
@@ -215,6 +264,14 @@ it.each([
       closeCachedOpenClawAgentDatabase(database, { eviction: true });
     }
     expect(database.db.isOpen).toBe(change.startsWith("warm-"));
+    if (change === "foreign-missing-index") {
+      const foreign = openNodeSqliteDatabase(database.path);
+      try {
+        foreign.exec("DROP INDEX idx_agent_cache_expiry");
+      } finally {
+        foreign.close();
+      }
+    }
     nativeClaim.assertCurrent();
     const observed = observeCallerSchemaInspections(database.path, acquisitionPath);
     try {
@@ -224,11 +281,22 @@ it.each([
           const facts = expectAdmittedSchemaObjects(reopened.db);
           expect(facts?.tables.has("coldadmit_fixture")).toBe(change.endsWith("additive-table"));
           expect(facts?.tables.has("session_key_contract")).toBe(true);
+          expect(facts?.tables.has("rolled_back_fixture")).toBe(false);
           expect(facts?.indexes).toContain("idx_agent_cache_expiry");
           return reopened.db.prepare("SELECT COUNT(*) AS count FROM session_nodes").get()?.count;
         },
       );
       expect(count).toBe(0);
+      if (revokedProof) {
+        expect(Atomics.load(new Int32Array(revokedProof.valid), 0)).toBe(0);
+        const readmitted = getOpenClawAgentDatabaseValidationForTransfer({
+          agentId: options.agentId,
+          path: database.path,
+        });
+        expect(readmitted).toBeDefined();
+        expect(Atomics.load(new Int32Array(readmitted!.valid), 0)).toBe(1);
+        expect(readmitted!.valid).not.toBe(revokedProof.valid);
+      }
       nativeClaim.assertCurrent();
       expect(observed.inspections).toEqual([]);
     } finally {

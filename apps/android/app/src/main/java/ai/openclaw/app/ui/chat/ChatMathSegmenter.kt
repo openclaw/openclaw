@@ -88,10 +88,7 @@ internal fun segmentChatMarkdown(
     lineIndex = extractionEnd + 1
   }
 
-  if (extractions.isEmpty()) {
-    return listOf(ChatMarkdownSourceBlock.Markdown(source))
-  }
-  if (containsReferenceStyleLink(document, source)) {
+  if (extractions.isEmpty() || containsReferenceStyleLink(document, source)) {
     // Splitting would separate a reference link from its definition and change CommonMark semantics.
     return listOf(ChatMarkdownSourceBlock.Markdown(source))
   }

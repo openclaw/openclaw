@@ -33,17 +33,9 @@ type AnchoredResetCommand = SessionResetCommandContext & {
   commandText: string;
 };
 
-function skipWhitespace(source: string, start: number): number {
+function skipWhitespace(source: string, start: number, whitespace = /\s/): number {
   let cursor = start;
-  while (/\s/.test(source[cursor] ?? "")) {
-    cursor += 1;
-  }
-  return cursor;
-}
-
-function skipHorizontalWhitespace(source: string, start: number): number {
-  let cursor = start;
-  while (source[cursor] === " " || source[cursor] === "\t") {
+  while (whitespace.test(source[cursor] ?? "")) {
     cursor += 1;
   }
   return cursor;
@@ -92,7 +84,7 @@ function resolveExplicitMessageStart(source: string, ctx: MsgContext): number | 
     if (startsWithHistoryMarker(source, cursor)) {
       return undefined;
     }
-    cursor = skipHorizontalWhitespace(source, envelopeEnd + 1);
+    cursor = skipWhitespace(source, envelopeEnd + 1, /[ \t]/);
   }
 
   const lineEnd = source.indexOf("\n", cursor);
@@ -101,7 +93,7 @@ function resolveExplicitMessageStart(source: string, ctx: MsgContext): number | 
   if (senderPrefixEnd !== -1 && senderPrefixEnd < effectiveLineEnd) {
     const senderPrefix = source.slice(cursor, senderPrefixEnd).trim();
     if (senderPrefix && senderPrefix.length <= 120 && matchesKnownSenderPrefix(senderPrefix, ctx)) {
-      cursor = skipHorizontalWhitespace(source, senderPrefixEnd + 1);
+      cursor = skipWhitespace(source, senderPrefixEnd + 1, /[ \t]/);
     }
   }
 
@@ -110,11 +102,10 @@ function resolveExplicitMessageStart(source: string, ctx: MsgContext): number | 
 
 function stripLeadingMention(params: AnchoredResetCommand & { start: number }): number | undefined {
   const triggerLower = normalizeLowercaseStringOrEmpty(params.trigger);
-  if (
-    normalizeLowercaseStringOrEmpty(
-      params.source.slice(params.start, params.start + params.trigger.length),
-    ) === triggerLower
-  ) {
+  const matchesTriggerAt = (index: number) =>
+    normalizeLowercaseStringOrEmpty(params.source.slice(index, index + params.trigger.length)) ===
+    triggerLower;
+  if (matchesTriggerAt(params.start)) {
     return params.start;
   }
   if (!params.isGroup) {
@@ -123,10 +114,7 @@ function stripLeadingMention(params: AnchoredResetCommand & { start: number }): 
 
   let triggerStart = -1;
   for (let index = params.start; index < params.source.length; index += 1) {
-    if (
-      normalizeLowercaseStringOrEmpty(params.source.slice(index, index + params.trigger.length)) ===
-      triggerLower
-    ) {
+    if (matchesTriggerAt(index)) {
       triggerStart = index;
       break;
     }

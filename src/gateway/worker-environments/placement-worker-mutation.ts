@@ -16,6 +16,7 @@ export function createPlacementWorkerMutation<Receipt>(params: {
   nativeLocation: string;
   orderedAdmission?: boolean;
   assertCurrent?: () => void;
+  assertGrantCurrent?: () => void;
   admissionFacts?(request: SqliteWorkerAdmissionRequest): unknown;
   stageCommit(facts: unknown): Publication | undefined;
   readReceipt(facts: unknown, publication: Publication | undefined): Receipt | undefined;
@@ -61,7 +62,8 @@ export function createPlacementWorkerMutation<Receipt>(params: {
                 if (params.orderedAdmission && request.stage !== stage) {
                   throw new Error(`${params.label} admission is out of order`);
                 }
-                check();
+                params.context.admission.assertCurrent();
+                (params.assertGrantCurrent ?? params.assertCurrent)?.();
                 const facts = params.admissionFacts
                   ? params.admissionFacts(request)
                   : request.facts;

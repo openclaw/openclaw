@@ -42,7 +42,7 @@ const DASHBOARD_SESSION_TITLE_MAX_CHARS = 60;
 const DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS = 1_000;
 const WORKTREE_SESSION_TITLE_WAIT_MS = 30_000;
 const DASHBOARD_SESSION_TITLE_PROMPT =
-  "Generate a concise session title (3-6 words, max 60 characters) from the user's first message. Use the same language as the message, in sentence case: capitalize only the first word and words that language always capitalizes. No emoji. Return only the title.";
+  "Generate a concise session title (3-6 words, max 60 characters) from the supplied source message. Use the same language as the message, in sentence case: capitalize only the first word and words that language always capitalizes. No emoji. Return only the title.";
 
 function decodeTextAttachmentPrefix(attachment: ChatAttachment, maxChars: number): string | null {
   const mimeType = attachment.mimeType?.trim().toLowerCase();

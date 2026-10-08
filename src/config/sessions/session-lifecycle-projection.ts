@@ -67,6 +67,14 @@ export async function projectSessionEntryLifecycleMutationInWorker(params: {
     params.upserts,
   );
   params.execution.assertCurrent();
+  if (prepared.selected.projectedRemovals.length === 0) {
+    return {
+      deletePlans: [],
+      removals: [],
+      upsertedEntries,
+      archiveRecovery: prepared.archiveRecovery,
+    };
+  }
   return run("finish", {
     ...prepared,
     upsertedEntries,

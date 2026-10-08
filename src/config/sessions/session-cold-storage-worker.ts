@@ -20,7 +20,6 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
 import { readSessionGoalOperationInDatabase } from "./goals-operations.js";
-import type { SessionGoalOperation } from "./goals-operations.types.js";
 import { publishEncodedSessionTranscriptArchive } from "./session-accessor.sqlite-archive-artifact.js";
 import {
   readSessionStateDeleteSnapshot,
@@ -34,16 +33,20 @@ import {
   type SessionColdRecord,
 } from "./session-cold-storage-codec.js";
 import { readSessionColdStorageProtection } from "./session-cold-storage-eligibility.js";
+import type { SessionColdTurnGuard } from "./session-cold-storage-guard.types.js";
 import { readSessionColdStorageInventory } from "./session-cold-storage-inventory.js";
 import {
   readSessionAdmissionProtectionKeys,
   selectSessionColdBatch,
   type SessionColdBatchInput,
 } from "./session-cold-storage-selection.js";
+import type { prepareSessionColdSourceGuard } from "./session-cold-storage-source-guard.worker.js";
 import {
   readSessionColdTranscript,
   type SessionColdArchive,
 } from "./session-cold-storage-state.js";
+import type { SessionSourcePredicateFacts } from "./session-source-authority.js";
+import { readRefusedSessionSource } from "./session-source-predicate.worker.js";
 import {
   createSessionTranscriptFtsInserter,
   deleteSessionTranscriptFtsRowsInTransaction,
@@ -53,11 +56,10 @@ import {
   createSessionTranscriptTurnKernel,
   sqliteSessionTranscriptTurnRebound,
 } from "./session-turn.kernel.js";
-import type {
-  SqliteExpectedSessionTranscriptTurnResult,
-  SqliteSessionTurnOptions,
-} from "./session-turn.types.js";
+import type { SqliteExpectedSessionTranscriptTurnResult } from "./session-turn.types.js";
+import { resolveSessionWorkStartError } from "./session-work-start.js";
 import { prepareTranscriptPayload, transcriptEventJsonSql } from "./transcript-payload.js";
+export type { SessionColdTurnGuard } from "./session-cold-storage-guard.types.js";
 
 const MAX_COLD_ARCHIVE_BYTES = 64 * 1024 * 1024;
 
@@ -94,22 +96,7 @@ export type SessionColdMutationResult = {
   restored: boolean;
   sessionKey?: string;
   turnRebound?: SqliteExpectedSessionTranscriptTurnResult;
-};
-export type SessionColdTurnGuard = {
-  agentId: string;
-  sessionKey: string;
-  options: Pick<
-    SqliteSessionTurnOptions,
-    | "keyFormat"
-    | "expectedSessionId"
-    | "selectedSessionId"
-    | "selectedLifecycleRevision"
-    | "expectedLifecycleRevision"
-    | "expectedWriterRunId"
-    | "expectedSessionState"
-    | "initialSessionEntry"
-  >;
-  goalOperation?: SessionGoalOperation;
+  refusedSource?: { index: number; facts: SessionSourcePredicateFacts };
 };
 export type SessionColdMutationPlan = { databaseOptions: SessionColdPlan["databaseOptions"] } & (
   | { kind: "cold-maintain" }
@@ -509,6 +496,7 @@ export function mutateSessionColdTranscriptInWorker(
   plan: SessionColdMutationPlan,
   records: SessionColdRecord[] | undefined,
   onCommit: (database: OpenClawAgentDatabase) => void,
+  sourceGuard?: ReturnType<typeof prepareSessionColdSourceGuard>,
 ): SessionColdMutationResult {
   return runOpenClawAgentWriteTransaction(
     (database) => {
@@ -601,17 +589,26 @@ export function mutateSessionColdTranscriptInWorker(
             { ...options, messages: [], sessionFile: "" },
           );
           const selected = kernel.readEntry(database);
+          const entries = new Map([[sessionKey, selected?.entry]]);
+          const refusedSource = sourceGuard
+            ? sourceGuard.read(database, entries)
+            : readRefusedSessionSource(database, plan.turnGuard.sources, undefined, entries);
+          if (refusedSource) {
+            return { ...result, refusedSource };
+          }
           if (
-            !kernel.resolveExpectedEntry(selected) &&
-            !(
-              selected?.entry.sessionId === options.expectedSessionId &&
-              goalOperation &&
-              readSessionGoalOperationInDatabase(database, {
-                sessionKey,
-                expectedSessionId: options.expectedSessionId,
-                operation: goalOperation,
-              })
-            )
+            (plan.turnGuard.requireActive &&
+              resolveSessionWorkStartError(sessionKey, selected?.entry)) ||
+            (!kernel.resolveExpectedEntry(selected) &&
+              !(
+                selected?.entry.sessionId === options.expectedSessionId &&
+                goalOperation &&
+                readSessionGoalOperationInDatabase(database, {
+                  sessionKey,
+                  expectedSessionId: options.expectedSessionId,
+                  operation: goalOperation,
+                })
+              ))
           ) {
             return { ...result, turnRebound: sqliteSessionTranscriptTurnRebound(selected, "") };
           }
@@ -690,6 +687,7 @@ export function mutateSessionColdTranscriptInWorker(
         )?.session_key;
       }
       onCommit(database);
+      sourceGuard?.assertForeign();
       return result;
     },
     plan.databaseOptions,

@@ -33,6 +33,41 @@ const { resolveIsolatedCompletionRuntime } = await import("./isolated-completion
 beforeEach(resetIsolatedCompletionTestState);
 
 describe("runIsolatedCompletion", () => {
+  it.each(["cli", "host-v2", "harness-v2", "v1"] as const)(
+    "blocks required worker policy before isolated %s execution using the admitted config",
+    async (route) => {
+      const dispatch = vi.fn(async () => ({
+        assistant: isolatedAssistant([{ type: "text", text: "must not run" }]),
+      }));
+      if (route === "cli") {
+        mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+        mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "must not run" }] });
+      } else {
+        registerIsolatedHarness({
+          authBootstrap: route === "harness-v2" ? "harness" : undefined,
+          ...(route === "v1"
+            ? { runIsolatedCompletion: dispatch }
+            : { runIsolatedCompletionV2: dispatch }),
+        });
+      }
+      mocks.acquireAgentRunPreparedModelRuntime.mockImplementationOnce(async () => {
+        Object.assign(preparedModelRuntime, {
+          config: { cloudWorkers: { requiredProfile: "dedicated" } },
+        });
+        return { snapshot: preparedModelRuntime, [Symbol.asyncDispose]: releaseRuntimeLease };
+      });
+      await expect(runIsolatedCompletion(isolatedRequest())).rejects.toMatchObject({
+        code: "unsupported",
+        message: expect.stringContaining("requiredProfile"),
+      });
+      expect(mocks.runCliAgent).not.toHaveBeenCalled();
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
+      expect(mocks.resolveModelAsync).not.toHaveBeenCalled();
+      expect(releaseRuntimeLease).toHaveBeenCalledOnce();
+    },
+  );
+
   function prepareQuotaProfiles() {
     const profileIds = ["openai:first", "openai:backup"];
     mocks.ensureAuthProfileStore.mockReturnValue({
@@ -676,6 +711,61 @@ describe("runIsolatedCompletion", () => {
           disableTools: true,
           cliToolAvailability: { native: [], openClaw: [] },
         }),
+      );
+    },
+  );
+
+  it.each([
+    {
+      description: "ordered managed profile",
+      requestedProfile: undefined,
+      selectedProfile: "anthropic:ordered",
+    },
+    {
+      description: "native-login control",
+      requestedProfile: undefined,
+      selectedProfile: undefined,
+    },
+    {
+      description: "explicit managed profile",
+      requestedProfile: "anthropic:locked",
+      selectedProfile: "anthropic:locked",
+    },
+    {
+      description: "explicit native login",
+      requestedProfile: "anthropic:claude-cli",
+      selectedProfile: undefined,
+    },
+  ])(
+    "forwards the shared CLI auth selection for $description",
+    async ({ requestedProfile, selectedProfile }) => {
+      mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+      mocks.cliBackendAcceptsAuthProfileForwarding.mockReturnValue(true);
+      mocks.resolveCliExecutionAuthProfileId.mockReturnValue(selectedProfile);
+      mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "isolated result" }] });
+
+      await expect(
+        runIsolatedCompletion({
+          ...isolatedRequest(),
+          provider: "anthropic",
+          model: "claude-test",
+          agentHarnessRuntimeOverride: "claude-cli",
+          authProfileId: requestedProfile,
+        }),
+      ).resolves.toMatchObject({
+        text: "isolated result",
+        owner: { kind: "cli", id: "claude-cli" },
+      });
+
+      expect(mocks.resolveCliExecutionAuthProfileId).toHaveBeenCalledWith({
+        cliExecutionProvider: "claude-cli",
+        authProfileProvider: "anthropic",
+        config: expect.any(Object),
+        agentDir: "/tmp/agent",
+        selected: { authProfileId: requestedProfile },
+      });
+      expect(mocks.runCliAgent).toHaveBeenCalledWith(
+        expect.objectContaining({ authProfileId: selectedProfile }),
       );
     },
   );

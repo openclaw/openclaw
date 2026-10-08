@@ -13,6 +13,7 @@ import {
 } from "./config-mutation.ts";
 import type { ModelProviderLogoutTarget } from "./data.ts";
 import type { ModelProvidersData } from "./load.ts";
+import { showProfileActionError, showProfileLogoutSuccess } from "./profiles-view.ts";
 import { updateRecordEntry } from "./record-state.ts";
 
 type PendingProfileOrder = {
@@ -35,8 +36,6 @@ type ProfileActionsControllerOptions = {
   setProbeResult: (cardId: string, result: ModelsProbeResult | null) => void;
   setProbeError: (cardId: string, message: string) => void;
   clearMessage: (cardId: string) => void;
-  setError: (error: unknown) => void;
-  setLogoutSuccess: (warning?: string) => void;
   cancelRefresh: () => void;
   refresh: () => Promise<void>;
   getConfig: () => RuntimeConfigCapability;
@@ -158,7 +157,7 @@ export class ModelProviderProfileActionsController {
       if (!result.ok) {
         await this.options.refresh();
         if (isCurrentScope()) {
-          this.options.setError(result.error);
+          showProfileActionError(result.error);
         }
         return;
       }
@@ -167,11 +166,11 @@ export class ModelProviderProfileActionsController {
         return this.options.getData()?.error;
       });
       if (isCurrentScope()) {
-        this.options.setLogoutSuccess(warning || undefined);
+        showProfileLogoutSuccess(warning || undefined);
       }
     } catch (error) {
       if (isCurrentScope()) {
-        this.options.setError(error);
+        showProfileActionError(error);
       }
     } finally {
       if (isCurrentScope()) {
@@ -220,14 +219,14 @@ export class ModelProviderProfileActionsController {
             }
           }
           if (this.clearOptimisticOrder(provider, pending.optimisticOrder) && result.warning) {
-            this.options.setError(result.warning);
+            showProfileActionError(result.warning);
           }
         } catch (error) {
           if (!this.isCurrentScope(client, clientEpoch, agentEpoch, agentId)) {
             return;
           }
           if (this.clearOptimisticOrder(provider, pending.optimisticOrder)) {
-            this.options.setError(error);
+            showProfileActionError(error);
           }
         }
       }

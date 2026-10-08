@@ -61,7 +61,7 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
     } as unknown as OpenClawConfig;
     expect(
       Array.from(
-        resolveSkillCollectionReviewMonitorSpecs(explicitFleet, []),
+        resolveSkillCollectionReviewMonitorSpecs(explicitFleet, [], { schedulerSeed: "test-seed" }),
         ({ agentId }) => agentId,
       ),
     ).toEqual(["ops", "research"]);
@@ -75,7 +75,9 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
     } as unknown as OpenClawConfig;
     expect(
       Array.from(
-        resolveSkillCollectionReviewMonitorSpecs(systemAgentFleet, []),
+        resolveSkillCollectionReviewMonitorSpecs(systemAgentFleet, [], {
+          schedulerSeed: "test-seed",
+        }),
         ({ agentId }) => agentId,
       ),
     ).toEqual(["ops", "research"]);
@@ -131,10 +133,10 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
     } as OpenClawConfig;
 
     const byAgent = new Map(
-      Array.from(resolveSkillCollectionReviewMonitorSpecs(cfg, []), (spec) => [
-        spec.agentId,
-        spec.input,
-      ]),
+      Array.from(
+        resolveSkillCollectionReviewMonitorSpecs(cfg, [], { schedulerSeed: "test-seed" }),
+        (spec) => [spec.agentId, spec.input],
+      ),
     );
 
     expect(byAgent.get("blocked")).toMatchObject({
@@ -201,7 +203,9 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
       },
       skills: { workshop: { autonomous: { mode: "auto" } } },
     } as OpenClawConfig;
-    const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg, []);
+    const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg, [], {
+      schedulerSeed: "test-seed",
+    });
     expect(spec?.input.enabled).toBe(true);
     expect(spec?.input.displayName).not.toContain("no-rooted-runtime");
   });
@@ -220,7 +224,9 @@ describe("resolveSkillCollectionReviewMonitorSpecs", () => {
       },
       skills: { workshop: { autonomous: { mode: "auto" } } },
     } as OpenClawConfig;
-    const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg, []);
+    const [spec] = resolveSkillCollectionReviewMonitorSpecs(cfg, [], {
+      schedulerSeed: "test-seed",
+    });
     expect(spec?.input.enabled).toBe(true);
     expect(spec?.input.displayName).not.toContain("no-rooted-runtime");
   });

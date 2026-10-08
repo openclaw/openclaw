@@ -4,6 +4,7 @@ import {
   type SessionRowChange,
   type SessionRowFacts,
 } from "../../sessions/session-row-changes.js";
+import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
@@ -15,6 +16,7 @@ import {
   pendingSessionEntryPublications,
   preparedSharingReads,
   publishRetainedSessionEntryChange,
+  readCurrentSessionEntryProjection,
   recordCommittedSessionEntryPublication,
   recordCommittedSessionMetadataPublication,
   recordCommittedSessionOwnerPublication,
@@ -111,6 +113,7 @@ export function readPreparedSessionEntryChange(change: object, sessionKey: strin
     entry,
     sharing:
       prepared.sharing?.get(sessionKey) ?? (entry ? projectSessionSharingEntry(entry) : undefined),
+    projection: prepared.projection?.get(sessionKey),
   };
 }
 
@@ -336,6 +339,16 @@ function publishSessionSharingFieldChange(
     () => {
       if (change.kind === "owner") {
         recordCommittedSessionOwnerPublication(database, sessionKey, change);
+      } else {
+        const identity = findOpenClawAgentDatabaseIdentity(database)?.identity;
+        if (typeof identity === "string") {
+          for (const pending of pendingSessionEntryPublications.get(
+            `file:${identity}\0${sessionKey}`,
+          ) ?? []) {
+            // The delayed entry postimage predates this membership publication.
+            pending.projectionSuperseded.add(sessionKey);
+          }
+        }
       }
       for (const read of retainedSharingReads(database, sessionKey) ?? []) {
         if (change.kind === "owner" && read.predicate) {
@@ -469,6 +482,7 @@ export function retainSessionEntryWorkerPublication(params: {
   const owner: PendingSessionEntryPublication = {
     superseded: new Map(),
     metadataSuperseded: new Set(),
+    projectionSuperseded: new Set(),
     ownerChanges: new Map(),
     membershipInvalidated: new Set(),
     sharingUnchanged: new Set(),
@@ -478,6 +492,7 @@ export function retainSessionEntryWorkerPublication(params: {
   let keys: string[] = [];
   const identityKey = `file:${params.databaseIdentity}`;
   let pending = false;
+  let transcriptVersion: number | undefined;
   return {
     begin(
       sessionKeys: readonly string[],
@@ -488,6 +503,7 @@ export function retainSessionEntryWorkerPublication(params: {
         return;
       }
       keys = [...new Set(sessionKeys)];
+      transcriptVersion = readSessionTranscriptUpdateVersion();
       owner.membershipInvalidated = new Set(membershipInvalidatedKeys);
       owner.sharingUnchanged = new Set(sharingUnchangedKeys);
       pending = true;
@@ -551,8 +567,9 @@ export function retainSessionEntryWorkerPublication(params: {
       }
       const changes: SessionRowChange[] = [];
       const sharingUnchanged = new Set(replacement?.sharingUnchangedKeys);
+      const transcriptUnchanged = transcriptVersion === readSessionTranscriptUpdateVersion();
       const prepared: PreparedSessionEntryChanges | undefined =
-        replacement?.source?.identity === params.databaseIdentity
+        !unknown && replacement?.source?.identity === params.databaseIdentity
           ? {
               source: replacement.source,
               entries: new Map<string, SessionEntry>(
@@ -565,10 +582,25 @@ export function retainSessionEntryWorkerPublication(params: {
                   .filter(([key]) => current(key))
                   .map(([key, entry]) => [key, projectSessionSharingEntry(entry)]),
               ),
+              projection:
+                replacement.projection &&
+                new Map(
+                  [...replacement.projection]
+                    .filter(
+                      ([key, facts]) =>
+                        readCurrentSessionEntryProjection(owner, replacement, key) !== undefined &&
+                        (facts.activitySummaryWatermark === undefined || transcriptUnchanged),
+                    )
+                    .map(([key, facts]) => [key, freezeJsonSnapshot(facts)]),
+                ),
             }
           : undefined;
       for (const sessionKey of changed) {
         const entry = replacement?.current.get(sessionKey);
+        const projection = prepared?.projection?.get(sessionKey);
+        // A later transcript append retires its display watermark, not committed sharing facts.
+        const sharingProjection =
+          prepared && readCurrentSessionEntryProjection(owner, replacement, sessionKey);
         const sharingEntry = entry ? projectSessionSharingEntry(entry) : undefined;
         const placeholder =
           initialization?.sessionKey === sessionKey ? initialization.placeholder : undefined;
@@ -597,26 +629,35 @@ export function retainSessionEntryWorkerPublication(params: {
           publishRetainedSessionGeneration(
             read,
             sharingEntry,
-            replacement !== undefined || placeholder !== undefined,
+            !unknown && (replacement !== undefined || placeholder !== undefined),
           );
           const previous = read.facts;
-          read.facts = placeholder
-            ? { entry: undefined, placeholder, membership: new Set() }
-            : !membershipInvalidated.has(sessionKey) &&
-                sharingEntry &&
-                previous?.entry &&
-                previous.entry.sessionId === sharingEntry.sessionId &&
-                previous.entry.lifecycleRevision === sharingEntry.lifecycleRevision
-              ? { entry: sharingEntry, membership: previous.membership }
-              : undefined;
+          read.facts =
+            !unknown && placeholder
+              ? { entry: undefined, placeholder, membership: new Set() }
+              : !unknown &&
+                  sharingProjection &&
+                  sharingEntry &&
+                  previous?.entry &&
+                  previous.entry.sessionId === sharingEntry.sessionId &&
+                  previous.entry.lifecycleRevision === sharingEntry.lifecycleRevision
+                ? {
+                    entry: sharingEntry,
+                    membership: new Set(sharingProjection.membership[2]),
+                  }
+                : undefined;
         }
         const change: SessionRowChange = {
           agentId: params.agentId,
           storePath: ownsCreation ? creationSource.path : params.storePath,
           sessionKey,
-          ...(replacement?.previous.has(sessionKey) && !replacement.current.has(sessionKey)
+          ...(!unknown &&
+          replacement?.previous.has(sessionKey) &&
+          !replacement.current.has(sessionKey)
             ? { facts: { kind: "removed" } as const }
-            : { factsInvalidated: true as const }),
+            : projection
+              ? { facts: { kind: "replacement", membership: projection.membership } as const }
+              : { factsInvalidated: true as const }),
           ...(receipt && !unknown ? { scope: "session-entry" as const } : {}),
         };
         if (receipt) {
@@ -652,6 +693,15 @@ export function retainSessionEntryWorkerPublication(params: {
           });
         }
         changes.push(change);
+      }
+      // Unknown successors also retire older facts; a late receipt cannot resolve their outcome.
+      for (const sessionKey of changed) {
+        recordCommittedSessionEntryPublication(
+          params.databaseIdentity,
+          sessionKey,
+          undefined,
+          owner,
+        );
       }
       owner.settled = true;
       try {

@@ -279,3 +279,47 @@ it.each(["EIO", "EBADF"])("propagates fatal %s copy failures without retry", (co
     copies.mock.calls.filter(([options]) => options.source.absolutePath === source.filename),
   ).toHaveLength(1);
 });
+
+it.each([false, true])(
+  "preserves disk-full diagnostics when capture cleanup fails: %s",
+  (cleanupFails) => {
+    const source = fixture(Buffer.from("captured"), "fixture.js");
+    const copyRootFileSync = fsSafeAdvanced.copyRootFileSync;
+    const cause = Object.assign(new Error("capture filesystem is full"), { code: "ENOSPC" });
+    const primary = new FsSafeError("helper-failed", "guarded synchronous file copy failed", {
+      cause,
+    });
+    const failure = cleanupFails
+      ? new FsSafeError(primary.code, primary.message, {
+          cause: new AggregateError(
+            [primary, new Error("capture cleanup failed")],
+            "copy and cleanup failed",
+          ),
+        })
+      : primary;
+    const copies = vi.spyOn(fsSafeAdvanced, "copyRootFileSync").mockImplementation((options) => {
+      if (options.source.absolutePath === source.filename) {
+        throw failure;
+      }
+      return copyRootFileSync(options);
+    });
+
+    let reported: unknown;
+    try {
+      source.capture();
+    } catch (error) {
+      reported = error;
+    }
+    expect(reported).toMatchObject({
+      code: "ENOSPC",
+      message: expect.stringContaining("capture filesystem is full"),
+      cause: failure,
+    });
+    if (cleanupFails) {
+      expect(reported).toHaveProperty("message", expect.stringContaining("capture cleanup failed"));
+    }
+    expect(
+      copies.mock.calls.filter(([options]) => options.source.absolutePath === source.filename),
+    ).toHaveLength(1);
+  },
+);

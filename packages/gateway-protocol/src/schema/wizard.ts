@@ -4,7 +4,6 @@ import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { SetupInferenceActivationRejectionSchema } from "./setup-inference.js";
 
-/** Runtime state reported for gateway-driven setup wizard sessions. */
 const WizardRunStatusSchema = Type.Union([
   Type.Literal("running"),
   Type.Literal("done"),
@@ -12,7 +11,6 @@ const WizardRunStatusSchema = Type.Union([
   Type.Literal("error"),
 ]);
 
-/** Starts a setup wizard, optionally scoped to a local or remote workspace. */
 export const WizardStartParamsSchema = closedObject({
   mode: Type.Optional(Type.Union([Type.Literal("local"), Type.Literal("remote")])),
   workspace: Type.Optional(Type.String()),
@@ -29,7 +27,6 @@ export const McpAuthLoginParamsSchema = closedObject({
   serverName: NonEmptyString,
 });
 
-/** Client answer payload for the current wizard step. */
 export const WizardAnswerSchema = closedObject({
   stepId: NonEmptyString,
   value: Type.Optional(Type.Unknown()),
@@ -51,7 +48,6 @@ export const WizardStatusParamsSchema = closedObject({
   sessionId: NonEmptyString,
 });
 
-/** Selectable value shown in a choice-based wizard step. */
 const WizardStepOptionSchema = closedObject({
   value: Type.Unknown(),
   label: NonEmptyString,
@@ -64,7 +60,6 @@ const WizardDeviceCodeSchema = closedObject({
   message: Type.Optional(Type.String()),
 });
 
-/** UI contract for one wizard step rendered by gateway clients. */
 export const WizardStepSchema = closedObject({
   id: NonEmptyString,
   type: Type.Union([
@@ -94,7 +89,6 @@ const WizardConfiguredAccountSchema = closedObject({
   accountId: NonEmptyString,
 });
 
-/** Common response fields for start and next calls. */
 const WizardResultFields = {
   done: Type.Boolean(),
   step: Type.Optional(WizardStepSchema),
@@ -123,10 +117,8 @@ const WizardResultFields = {
   activationRejection: Type.Optional(SetupInferenceActivationRejectionSchema),
 };
 
-/** Result after advancing a wizard session. */
 export const WizardNextResultSchema = closedObject(WizardResultFields);
 
-/** Result returned when a wizard session is created. */
 export const WizardStartResultSchema = closedObject({
   sessionId: NonEmptyString,
   ...WizardResultFields,

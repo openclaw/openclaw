@@ -34,7 +34,10 @@ describe("chat admission authority", () => {
     "keeps caller authority current through admission callbacks (revoked: $revokeInCallback, scoped: $scoped)",
     async ({ revokeInCallback, scoped }) => {
       const fixture = await createBrowserFollowupFixture();
-      const request = normalizeChatSendRequest({ params: fixture.params, client: fixture.client });
+      const request = await normalizeChatSendRequest({
+        params: fixture.params,
+        client: fixture.client,
+      });
       if (!request.ok) {
         throw new Error(request.error);
       }
@@ -97,7 +100,10 @@ describe("chat admission authority", () => {
     const fixture = await createBrowserFollowupFixture();
     const sessions: Array<ReturnType<typeof qualifyChatSendSession>> = [];
     const prepare = async () => {
-      const request = normalizeChatSendRequest({ params: fixture.params, client: fixture.client });
+      const request = await normalizeChatSendRequest({
+        params: fixture.params,
+        client: fixture.client,
+      });
       if (!request.ok) {
         throw new Error(request.error);
       }
@@ -191,7 +197,10 @@ describe("chat admission authority", () => {
 
   it("retains callback custody after its real worker reader is revoked", async () => {
     const fixture = await createBrowserFollowupFixture();
-    const request = normalizeChatSendRequest({ params: fixture.params, client: fixture.client });
+    const request = await normalizeChatSendRequest({
+      params: fixture.params,
+      client: fixture.client,
+    });
     if (!request.ok) {
       throw new Error(request.error);
     }
@@ -322,7 +331,10 @@ describe("chat admission authority", () => {
       identityId: member.authenticatedUserProfile!.profileId,
       addedBy: "another-profile",
     });
-    const normalized = normalizeChatSendRequest({ params: fixture.params, client: fixture.client });
+    const normalized = await normalizeChatSendRequest({
+      params: fixture.params,
+      client: fixture.client,
+    });
     if (!normalized.ok) {
       throw new Error(normalized.error);
     }

@@ -74,16 +74,14 @@ export async function stripSessionsYieldArtifacts(activeSession: {
 
   // The tool-calling assistant turn and synthetic abort artifacts form one
   // non-continuable suffix after sessions_yield.
-  while (strippedMessages.length > 0) {
-    const last = strippedMessages.at(-1);
-    const removable =
-      last?.role === "assistant" ||
-      (last?.role === "custom" && last.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE);
-    if (!removable) {
-      break;
-    }
-    strippedMessages.pop();
-  }
+  strippedMessages.length =
+    strippedMessages.findLastIndex(
+      (message) =>
+        message?.role !== "assistant" &&
+        !(
+          message?.role === "custom" && message.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE
+        ),
+    ) + 1;
 
   const removedMessages = activeSession.messages.slice(strippedMessages.length);
   if (removedMessages.length === 0) {

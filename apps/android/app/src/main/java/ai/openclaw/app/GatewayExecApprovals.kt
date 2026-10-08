@@ -86,10 +86,26 @@ internal data class GatewayExecApprovalResolution(
     if (applied) GatewayExecApprovalResolutionAttribution.AppliedHere else GatewayExecApprovalResolutionAttribution.PriorResponse,
 )
 
-internal enum class GatewayExecApprovalResolutionAttribution {
-  AppliedHere,
-  PriorResponse,
-  Unknown,
+internal enum class GatewayExecApprovalResolutionAttribution(
+  val allowedOnce: NativeText.Resource,
+  val allowedAlways: NativeText.Resource,
+  val denied: NativeText.Resource,
+) {
+  AppliedHere(
+    nativeText("Approval allowed once."),
+    nativeText("Approval allowed and saved."),
+    nativeText("Approval denied."),
+  ),
+  PriorResponse(
+    nativeText("A prior response already allowed this command once."),
+    nativeText("A prior response already allowed this command and saved the choice."),
+    nativeText("A prior response already denied this approval."),
+  ),
+  Unknown(
+    nativeText("Gateway recorded approval once."),
+    nativeText("Gateway recorded approval and saved the choice."),
+    nativeText("Gateway recorded a denial."),
+  ),
 }
 
 private val execApprovalNoticePublications = AtomicLong()
@@ -112,14 +128,15 @@ internal fun gatewayExecApprovalResolutionNotice(
     message =
       when (resolution.approval.status) {
         GatewayApprovalTerminalStatus.Allowed -> {
-          gatewayExecApprovalAllowedMessage(
-            attribution = resolution.attribution,
-            saved = resolution.approval.decision == "allow-always",
-          )
+          if (resolution.approval.decision == "allow-always") {
+            resolution.attribution.allowedAlways.source
+          } else {
+            resolution.attribution.allowedOnce.source
+          }
         }
 
         GatewayApprovalTerminalStatus.Denied -> {
-          gatewayExecApprovalDeniedMessage(resolution.attribution)
+          resolution.attribution.denied.source
         }
 
         GatewayApprovalTerminalStatus.Expired -> {
@@ -132,29 +149,6 @@ internal fun gatewayExecApprovalResolutionNotice(
       },
     warning = resolution.approval.status != GatewayApprovalTerminalStatus.Allowed,
   )
-
-private fun gatewayExecApprovalAllowedMessage(
-  attribution: GatewayExecApprovalResolutionAttribution,
-  saved: Boolean,
-): String {
-  if (attribution == GatewayExecApprovalResolutionAttribution.AppliedHere) {
-    if (saved) return "Approval allowed and saved."
-    return "Approval allowed once."
-  }
-  if (attribution == GatewayExecApprovalResolutionAttribution.PriorResponse) {
-    if (saved) return "A prior response already allowed this command and saved the choice."
-    return "A prior response already allowed this command once."
-  }
-  if (saved) return "Gateway recorded approval and saved the choice."
-  return "Gateway recorded approval once."
-}
-
-private fun gatewayExecApprovalDeniedMessage(attribution: GatewayExecApprovalResolutionAttribution): String =
-  when (attribution) {
-    GatewayExecApprovalResolutionAttribution.AppliedHere -> "Approval denied."
-    GatewayExecApprovalResolutionAttribution.PriorResponse -> "A prior response already denied this approval."
-    GatewayExecApprovalResolutionAttribution.Unknown -> "Gateway recorded a denial."
-  }
 
 internal fun gatewayExecApprovalRemoteTerminalNotice(
   approval: GatewayExecApprovalSnapshot.Terminal,
@@ -177,13 +171,10 @@ internal fun parseGatewayExecApprovalResolvedEventTerminal(
   payloadJson: String,
   json: Json,
 ): GatewayExecApprovalSnapshot.Terminal? =
-  try {
-    val root = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return null
+  parseApprovalObject(payloadJson, json) { root ->
     val id = root.strictApprovalId("id") ?: return null
     val decision = root.strictString("decision")?.let(::normalizeGatewayExecApprovalDecision) ?: return null
     legacyGatewayExecApprovalTerminal(id, decision)
-  } catch (_: Throwable) {
-    null
   }
 
 internal enum class GatewayApprovalRpcFamily {
@@ -267,25 +258,19 @@ internal fun parseGatewayExecApprovalListEntry(
 }
 
 private val execApprovalDisplayTexts =
-  listOf(
-    nativeText("Approval allowed and saved."),
-    nativeText("Approval allowed once."),
-    nativeText("A prior response already allowed this command and saved the choice."),
-    nativeText("A prior response already allowed this command once."),
-    nativeText("Gateway recorded approval and saved the choice."),
-    nativeText("Gateway recorded approval once."),
-    nativeText("Approval denied."),
-    nativeText("A prior response already denied this approval."),
-    nativeText("Gateway recorded a denial."),
-    nativeText("This approval expired before it could be resolved."),
-    nativeText("This approval was cancelled before it could be resolved."),
-    nativeText("A prior response already resolved this approval."),
-    nativeText("Command request"),
-    nativeText("Resolution outcome unknown. Actions stay disabled until the Gateway record is verified."),
-    nativeText("The Gateway still shows this approval as pending. Review it before trying again."),
-    nativeText("Could not load approval details. Refresh and try again."),
-    nativeText("Could not load approvals."),
-    nativeText("Could not resolve approval. Refresh and try again."),
+  (
+    GatewayExecApprovalResolutionAttribution.entries.flatMap { listOf(it.allowedOnce, it.allowedAlways, it.denied) } +
+      listOf(
+        nativeText("This approval expired before it could be resolved."),
+        nativeText("This approval was cancelled before it could be resolved."),
+        nativeText("A prior response already resolved this approval."),
+        nativeText("Command request"),
+        nativeText("Resolution outcome unknown. Actions stay disabled until the Gateway record is verified."),
+        nativeText("The Gateway still shows this approval as pending. Review it before trying again."),
+        nativeText("Could not load approval details. Refresh and try again."),
+        nativeText("Could not load approvals."),
+        nativeText("Could not resolve approval. Refresh and try again."),
+      )
   ).associateBy(NativeText.Resource::source)
 
 internal fun gatewayExecApprovalTextForDisplay(text: String): String = execApprovalDisplayTexts[text]?.resolveNativeText() ?: text
@@ -295,13 +280,10 @@ internal fun parseGatewayExecApprovalGetPayload(
   json: Json,
   expectedId: String,
 ): GatewayExecApprovalSnapshot? =
-  try {
-    val root = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return null
+  parseApprovalObject(payloadJson, json) { root ->
     if (!root.hasExactKeys(APPROVAL_GET_RESULT_KEYS)) return null
     parseGatewayExecApprovalSnapshot(root["approval"].asObjectOrNull() ?: return null)
       ?.takeIf { it.id == expectedId }
-  } catch (_: Throwable) {
-    null
   }
 
 internal fun parseGatewayExecApprovalResolvePayload(
@@ -310,8 +292,7 @@ internal fun parseGatewayExecApprovalResolvePayload(
   expectedId: String,
   expectedDecision: String,
 ): GatewayExecApprovalResolution? =
-  try {
-    val root = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return null
+  parseApprovalObject(payloadJson, json) { root ->
     if (!root.hasExactKeys(APPROVAL_RESOLVE_RESULT_KEYS)) return null
     val applied = root.strictBoolean("applied") ?: return null
     val approval =
@@ -323,8 +304,6 @@ internal fun parseGatewayExecApprovalResolvePayload(
     // ambiguous write outcome, never evidence that the attempted approval applied.
     if (applied && approval.decision != expectedDecision) return null
     GatewayExecApprovalResolution(applied = applied, approval = approval)
-  } catch (_: Throwable) {
-    null
   }
 
 /** Parses the shipped pre-unified exec reviewer projection for old Gateway v4 peers. */
@@ -334,45 +313,29 @@ internal fun parseLegacyGatewayExecApprovalGetPayload(
   expectedId: String,
   createdAtMs: Long?,
 ): GatewayExecApprovalSnapshot.Pending? =
-  try {
-    val obj = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return null
+  parseApprovalObject(payloadJson, json) { obj ->
     val id = obj.strictApprovalId("id") ?: return null
     if (id != expectedId) return null
     val normalizedCreatedAtMs = createdAtMs?.takeIf { it >= 0 } ?: return null
     val expiresAtMs = obj.strictNonNegativeLong("expiresAtMs") ?: return null
-    val commandText = obj.strictNonEmptyString("commandText") ?: return null
-    val commandPreview = obj.optionalString("commandPreview") ?: return null
-    val host = obj.optionalString("host") ?: return null
-    val nodeId = obj.optionalString("nodeId", requireNonEmpty = true) ?: return null
-    val agentId = obj.optionalString("agentId", requireNonEmpty = true) ?: return null
-    val allowedDecisions = parseAllowedDecisions(obj["allowedDecisions"] as? JsonArray) ?: return null
-    GatewayExecApprovalSnapshot.Pending(
-      GatewayExecApprovalSummary(
-        id = id,
-        commandText = verbatimText(commandText),
-        commandPreview = commandPreview.value?.takeIf { it != commandText },
-        warningText = null,
-        allowedDecisions = allowedDecisions,
-        host = host.value,
-        nodeId = nodeId.value,
-        agentId = agentId.value,
-        createdAtMs = normalizedCreatedAtMs,
-        expiresAtMs = expiresAtMs,
-      ),
-    )
-  } catch (_: Throwable) {
-    null
+    parseExecApprovalCommand(obj, id, normalizedCreatedAtMs, expiresAtMs, includeWarning = false)
+      ?.let(GatewayExecApprovalSnapshot::Pending)
   }
 
 internal fun parseLegacyGatewayExecApprovalResolvePayload(
   payloadJson: String,
   json: Json,
-): Boolean =
+): Boolean = parseApprovalObject(payloadJson, json) { it.strictBoolean("ok") } == true
+
+private inline fun <T> parseApprovalObject(
+  payloadJson: String,
+  json: Json,
+  parse: (JsonObject) -> T?,
+): T? =
   try {
-    val root = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return false
-    root.strictBoolean("ok") == true
+    parse(json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return null)
   } catch (_: Throwable) {
-    false
+    null
   }
 
 internal fun legacyGatewayExecApprovalTerminal(
@@ -454,10 +417,20 @@ private fun parseGatewayExecApprovalPresentation(
   }
   if (!presentation.hasOnlyKeys(EXEC_APPROVAL_PRESENTATION_KEYS)) return null
   if (!presentation.keys.containsAll(EXEC_APPROVAL_PRESENTATION_REQUIRED_KEYS)) return null
+  return parseExecApprovalCommand(presentation, id, createdAtMs, expiresAtMs, includeWarning = true)
+}
+
+private fun parseExecApprovalCommand(
+  presentation: JsonObject,
+  id: String,
+  createdAtMs: Long,
+  expiresAtMs: Long,
+  includeWarning: Boolean,
+): GatewayExecApprovalSummary? {
   val commandText = presentation.strictNonEmptyString("commandText") ?: return null
   val allowedDecisions = parseAllowedDecisions(presentation["allowedDecisions"] as? JsonArray) ?: return null
   val commandPreview = presentation.optionalString("commandPreview") ?: return null
-  val warningText = presentation.optionalString("warningText") ?: return null
+  val warningText = if (includeWarning) presentation.optionalString("warningText") ?: return null else OptionalString(null)
   val host = presentation.optionalString("host") ?: return null
   val nodeId = presentation.optionalString("nodeId", requireNonEmpty = true) ?: return null
   val agentId = presentation.optionalString("agentId", requireNonEmpty = true) ?: return null
@@ -541,28 +514,10 @@ private fun JsonObject.hasExactKeys(expected: Set<String>): Boolean = keys == ex
 
 private fun JsonObject.hasOnlyKeys(allowed: Set<String>): Boolean = keys.all(allowed::contains)
 
-internal fun isWellFormedGatewayApprovalId(value: String): Boolean {
-  if (value.isEmpty() || value == "." || value == "..") return false
-  var index = 0
-  while (index < value.length) {
-    val current = value[index]
-    when {
-      Character.isHighSurrogate(current) -> {
-        if (index + 1 >= value.length || !Character.isLowSurrogate(value[index + 1])) return false
-        index += 2
-      }
-
-      Character.isLowSurrogate(current) -> {
-        return false
-      }
-
-      else -> {
-        index += 1
-      }
-    }
-  }
-  return true
-}
+internal fun isWellFormedGatewayApprovalId(value: String): Boolean =
+  value.isNotEmpty() && value != "." && value != ".." &&
+    // Valid UTF-16 pairs become supplementary code points; unmatched surrogates stay in this range.
+    value.codePoints().noneMatch { it in 0xD800..0xDFFF }
 
 private val APPROVAL_GET_RESULT_KEYS = setOf("approval")
 

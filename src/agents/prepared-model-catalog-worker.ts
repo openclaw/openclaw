@@ -5,12 +5,11 @@ import {
   serializeConfigResolutionFacts,
 } from "../config/resolution-facts.js";
 import { projectConfigOntoRuntimeSourceSnapshot } from "../config/runtime-source-projection.js";
-import { resolveStateDir } from "../config/state-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { WorkerTaskError, WorkerTaskPool } from "../infra/worker-task-pool.js";
 import type { Model } from "../llm/types.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   captureRemoteModelCatalogSnapshot,
   type ActiveRemoteModelCatalog,
@@ -22,7 +21,6 @@ import {
 } from "../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { overlayPluginNativeAdmissions } from "../plugins/plugin-native-admission-state.js";
-import { createPluginSourceCaptureRoot } from "../plugins/plugin-source-capture-directory.js";
 import { captureProviderSyntheticAuthFacts } from "../plugins/provider-runtime.js";
 import type { PreparedSyntheticAuthFacts } from "../plugins/provider-synthetic-auth.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
@@ -34,6 +32,10 @@ import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { ModelCatalogAuthLabels } from "./model-catalog-auth-labels.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import {
+  CatalogWorkerTaskPool,
+  GATEWAY_CATALOG_WORKERS,
+} from "./prepared-model-catalog-worker.pool.js";
 import {
   setPreparedModelFullCatalogAuth,
   type PreparedModelRuntimeAuth,
@@ -70,11 +72,6 @@ export type PreparedModelCatalogWorkerInput = Readonly<{
   preferBuiltPluginArtifacts: boolean;
   pluginMetadataSnapshot: Omit<PluginMetadataSnapshot, "normalizePluginId">;
 }>;
-
-export type PreparedModelCatalogWorkerData = {
-  sourceCaptureDirectory: string;
-  sourceCaptureManagedRoot?: string;
-};
 
 export type PreparedModelCatalogWorkerTask = {
   value: PreparedModelCatalogWorkerInput;
@@ -125,9 +122,7 @@ export type PreparedModelWorkerResult =
 // discovery while bounding a wedged provider; expiry rejects and never returns partial results.
 export const PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS = 180_000;
 
-const GATEWAY_CATALOG_WORKERS = 1;
-// Leave room for source loaders and overlapping generations without inheriting the host heap budget.
-const CATALOG_WORKER_HEAP_LIMIT_MB = 512;
+const log = createSubsystemLogger("agents/prepared-model-runtime");
 type CatalogPool = WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>;
 type CatalogPoolBorrower = {
   agentDir: string;
@@ -139,6 +134,8 @@ type GatewayCatalogPool = {
   cache: ReturnType<typeof getPluginMetadataSnapshotCache>;
   pool: CatalogPool;
   envFingerprint: string;
+  /** Set before the owner closes the pool; a close without it means the worker failed. */
+  closing?: true;
   close: (error?: Error) => Promise<void>;
   borrowers: Set<CatalogPoolBorrower>;
   recovery?: Promise<void>;
@@ -148,53 +145,35 @@ type GatewayCatalogPool = {
 const gatewayCatalog = resolveGlobalSingleton<{
   current?: GatewayCatalogPool;
   rotating?: Promise<void>;
+  // Process lifetime: a failed pool is replaced, so the replacement's own counters restart at zero.
+  workerFailures?: number;
 }>(Symbol.for("openclaw.gatewayModelCatalogPool"), () => ({}));
 
 export function getPreparedModelCatalogWorkerPoolSnapshot() {
-  return (
-    gatewayCatalog.current?.pool.getSnapshot() ?? {
+  return {
+    ...(gatewayCatalog.current?.pool.getSnapshot() ?? {
       maxWorkers: GATEWAY_CATALOG_WORKERS,
       workers: 0,
       workersCreated: 0,
       activeTasks: 0,
       pendingTasks: 0,
-    }
-  );
+    }),
+    workerFailures: gatewayCatalog.workerFailures ?? 0,
+  };
 }
 
 function createCatalogPool(
   env: NodeJS.ProcessEnv,
   validateResult: (result: PreparedModelWorkerResult) => void,
   assertCurrent?: () => void,
+  onClose?: (error?: Error) => void,
 ): CatalogPool {
-  return new WorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>({
-    workerUrl: resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.preparedModelCatalog),
-    workerOptions: { resourceLimits: { maxOldGenerationSizeMb: CATALOG_WORKER_HEAP_LIMIT_MB } },
-    maxWorkers: GATEWAY_CATALOG_WORKERS,
-    // Only the inventory owner can replace captured code; idle retirement or crash restart
-    // would import a different source generation into an existing publication.
-    idleTimeoutMs: 0,
-    restartOnError: false,
-    prepareWorker: () => {
-      assertCurrent?.();
-      const capture = createPluginSourceCaptureRoot(
-        resolveStateDir(env),
-        "openclaw-model-catalog-",
-      );
-      return {
-        releaseResources: capture.release,
-        options: {
-          workerData: {
-            sourceCaptureDirectory: capture.directory,
-            sourceCaptureManagedRoot: capture.managedRoot,
-          } satisfies PreparedModelCatalogWorkerData,
-          // Establish state/config before imported modules observe process.env.
-          env,
-        },
-      };
-    },
+  return new CatalogWorkerTaskPool<PreparedModelCatalogWorkerTask, PreparedModelWorkerResult>(
+    env,
     validateResult,
-  });
+    assertCurrent,
+    onClose,
+  );
 }
 
 async function getGatewayCatalogPool(
@@ -256,6 +235,7 @@ async function getGatewayCatalogPool(
           await recoverPreparedModelRuntimeCatalogWorker(borrowers);
         })()),
       close: async (error) => {
+        current.closing = true;
         signal.removeEventListener("abort", retire);
         await current.pool.close(error);
         current.validate = undefined;
@@ -270,6 +250,16 @@ async function getGatewayCatalogPool(
           validate?.(result);
         },
         () => signal.throwIfAborted(),
+        (error) => {
+          // Only the pool itself closes without its owner: its worker failed, exited or timed out.
+          // Record it now, once per pool; an idle worker's exit has no request to report it.
+          if (!current.closing && !signal.aborted) {
+            gatewayCatalog.workerFailures = (gatewayCatalog.workerFailures ?? 0) + 1;
+            log.warn(
+              `model catalog worker failed; ${[...current.borrowers].filter((borrower) => borrower.isCurrent()).length} agent catalog(s) will be republished on a new worker (failure ${gatewayCatalog.workerFailures} since start): ${formatErrorMessage(error)}`,
+            );
+          }
+        },
       ),
     };
     const retire = () => {

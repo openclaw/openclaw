@@ -29,6 +29,7 @@ export function formatUpdateStateInspectionError(error: unknown): string {
 const ProgressSchema = z.object({
   phase: z.string(),
   path: z.string().optional(),
+  completedIo: z.number().int().positive().optional(),
   snapshot: z
     .object({
       status: z.enum(["copying", "completed"]),
@@ -40,6 +41,25 @@ const ProgressSchema = z.object({
     .optional(),
 });
 export type UpdateStateInspectionProgress = z.infer<typeof ProgressSchema>;
+
+/** Report completed filesystem work, not timer heartbeats or distinct file counts. */
+export function createUpdateStateIoReporter(
+  path: string,
+  phase: string,
+  onProgress?: (progress: UpdateStateInspectionProgress) => void,
+) {
+  let completedIo = 0;
+  let emittedAt = -Infinity;
+  return () => {
+    completedIo++;
+    const now = performance.now();
+    if (!onProgress || now - emittedAt < 500) {
+      return;
+    }
+    emittedAt = now;
+    onProgress({ phase, path, completedIo });
+  };
+}
 
 export function createUpdateStateSnapshotReporter(
   path: string,
@@ -78,10 +98,14 @@ export function createUpdateStateSnapshotReporter(
 }
 
 /** Stderr leaves the released worker's stdout JSON contract unchanged. */
-export function createUpdateStateInspectionReporter(legacy = false) {
+export function createUpdateStateInspectionReporter(legacy = false, entryProgress = false) {
   let emittedBytes = 0;
   let exhausted = false;
   return (progress: UpdateStateInspectionProgress) => {
+    // Released parents did not opt into potentially long entry-progress streams.
+    if (progress.completedIo !== undefined && !entryProgress) {
+      return;
+    }
     if (exhausted) {
       return;
     }
@@ -163,9 +187,13 @@ export function createUpdateStateInspectionDiagnostics(params: {
       const scope = params.paths.slice(0, 3).join(", ");
       const source =
         progress.path ?? `source scope [${scope}${params.paths.length > 3 ? ", …" : ""}]`;
+      const advice =
+        termination === "signal" || termination?.startsWith("signal,")
+          ? "The worker was terminated by a signal during the reported step. Check the host crash report or process supervisor, then retry the update."
+          : "Check access to the reported source, free space, and storage performance, then retry the update.";
       // Path redaction discards raw detail; only the closed summary precedes source context.
       return new Error(
-        `${params.operation} failed${termination ? ` (${termination})` : ""}: ${summary}; after ${elapsed.toFixed(3)} seconds during ${progress.phase} for ${source} (scope: ${params.paths.length} source paths): ${detail}. Check access to the reported source, free space, and storage performance, then retry the update.`,
+        `${params.operation} failed${termination ? ` (${termination})` : ""}: ${summary}; after ${elapsed.toFixed(3)} seconds during ${progress.phase} for ${source} (scope: ${params.paths.length} source paths): ${detail}. ${advice}`,
         reason instanceof Error ? { cause: reason } : undefined,
       );
     },

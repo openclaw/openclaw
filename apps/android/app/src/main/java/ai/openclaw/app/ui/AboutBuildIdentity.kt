@@ -84,10 +84,7 @@ internal fun aboutBuildIdentity(
 internal fun aboutCommitAccessibilityValue(
   fullCommit: String?,
   unknownLabel: String,
-): String =
-  fullCommit?.let { commit ->
-    commit.toCharArray().joinToString(" ")
-  } ?: unknownLabel
+): String = fullCommit?.toCharArray()?.joinToString(" ") ?: unknownLabel
 
 @Composable
 internal fun AboutBuildIdentityPanel(

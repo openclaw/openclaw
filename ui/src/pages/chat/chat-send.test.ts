@@ -321,9 +321,10 @@ describe("refreshChat", () => {
     await expect(refresh).resolves.toBeUndefined();
     const joined = refreshChatMetadata(asChatPageHost(host), { automatic: true });
     const scope = { agentId: "main", sessionKey: host.sessionKey };
+    const metadataParams = { agentId: scope.agentId, includeModels: false };
 
     expect(host.chatMessages).toEqual([message]);
-    expect(host.request).toHaveBeenCalledWith("chat.metadata", { ...scope, includeModels: false });
+    expect(host.request).toHaveBeenCalledWith("chat.metadata", metadataParams);
     expect(asChatPageHost(host).chatModelsLoading).toBe(true);
 
     const model = {
@@ -345,7 +346,6 @@ describe("refreshChat", () => {
       expect(host.chatModelCatalog).toEqual([model]);
       expect(asChatPageHost(host).chatModelsLoading).toBe(false);
     });
-    metadata.resolve({ commands: [] });
     await Promise.all([reobserved, joined]);
     expect(requestCalls(host.request, "chat.metadata")).toHaveLength(1);
     expect(requestCalls(host.request, "models.list")).toHaveLength(1);

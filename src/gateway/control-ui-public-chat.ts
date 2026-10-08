@@ -20,6 +20,7 @@ import {
 import { resolveControlUiSessionPath } from "./control-ui-session-path-resolve.js";
 import { resolveControlUiShareOrigin } from "./control-ui-share.js";
 import type { GatewayAttributedIngress } from "./ingress-attribution.js";
+import { withReadySessionRows } from "./session-row-prepared-read.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
 const PROBE_HASH = createHash("sha256").update(PUBLIC_SESSION_ENTRY_SCRIPT).digest("base64");
@@ -108,9 +109,14 @@ export async function serveControlUiPublicChat(params: {
     if (!selected) {
       return unavailable();
     }
-    const current = projection.sharingTargetState({ key: selected.key, agentId: selected.agentId });
-    const share =
-      current.status === "ready" ? resolveSessionPublicShare(current.target.entry) : undefined;
+    const query = { key: selected.key, agentId: selected.agentId };
+    const queries = () => [query];
+    const share = await withReadySessionRows(projection, queries, () => {
+      const current = projection.sharingTargetState(query);
+      return current.status === "ready"
+        ? resolveSessionPublicShare(current.target.entry)
+        : undefined;
+    });
     if (!share) {
       return unavailable();
     }
@@ -151,20 +157,22 @@ export async function serveControlUiPublicChat(params: {
       res.setHeader("Retry-After", "1");
       return end(503, "This conversation is temporarily unavailable. Please retry.");
     }
-    if (!result.value || !isPublicSessionShareActive(config, locator, projection)) {
-      return unavailable();
-    }
-    if (!result.value.isCurrent()) {
-      res.setHeader("Retry-After", "1");
-      return end(503, "This conversation is temporarily unavailable. Please retry.");
-    }
-    res.setHeader("ETag", result.value.etag);
-    if (req.headers["if-none-match"] === result.value.etag) {
-      res.statusCode = 304;
-      res.end();
-      return true;
-    }
-    return end(200, result.value.body);
+    return await withReadySessionRows(projection, queries, () => {
+      if (!result.value || !isPublicSessionShareActive(config, locator, projection)) {
+        return unavailable();
+      }
+      if (!result.value.isCurrent()) {
+        res.setHeader("Retry-After", "1");
+        return end(503, "This conversation is temporarily unavailable. Please retry.");
+      }
+      res.setHeader("ETag", result.value.etag);
+      if (req.headers["if-none-match"] === result.value.etag) {
+        res.statusCode = 304;
+        res.end();
+        return true as const;
+      }
+      return end(200, result.value.body);
+    });
   } catch {
     res.setHeader("Retry-After", "1");
     return end(503, "This conversation is temporarily unavailable. Please retry.");

@@ -134,10 +134,7 @@ async function runBoundTurn(params: {
         binding.networkProxyProfileName !== permissionProfile ||
         binding.networkProxyConfigFingerprint !== networkProxyConfigFingerprint;
       const serviceTier = binding.serviceTier ?? runtime.serviceTier;
-      let useStickyNetworkProfile =
-        permissionProfile !== undefined &&
-        binding.networkProxyProfileName === permissionProfile &&
-        binding.networkProxyConfigFingerprint === networkProxyConfigFingerprint;
+      let useStickyNetworkProfile = permissionProfile !== undefined && !networkProxyBindingChanged;
       assertNativeConversationApprovalPolicySupported(runtime);
       const modelSelection = binding.model
         ? resolveCodexAppServerRequestModelSelection({
@@ -191,18 +188,25 @@ async function runBoundTurn(params: {
             ownsNativeSubscription = true;
           }
         }
-        if (networkProxyBindingChanged) {
-          const response = assertCodexThreadStartResponse(
-            await withLeasedCodexAppServerClientStartSelectionRetry({
-              lease: clientLease,
-              options: clientOptions,
-              run: async (requestClient, requestOptions) => {
-                const threadRequest = await buildConversationThreadRequestForClient(
-                  requestClient,
-                  threadRequestRuntime,
-                  serviceTier,
-                  requestOptions,
-                );
+        if (
+          networkProxyBindingChanged ||
+          binding.clientId !== client.getInstanceId() ||
+          (isCodexAppServerClientRuntimeLive(client) && !params.incognito && !liveThreadOwnership)
+        ) {
+          if (!networkProxyBindingChanged && binding.clientId === client.getInstanceId()) {
+            await assertResumeInputAllowed();
+          }
+          const result = await withLeasedCodexAppServerClientStartSelectionRetry({
+            lease: clientLease,
+            options: clientOptions,
+            run: async (requestClient, requestOptions) => {
+              const threadRequest = await buildConversationThreadRequestForClient(
+                requestClient,
+                threadRequestRuntime,
+                serviceTier,
+                requestOptions,
+              );
+              if (networkProxyBindingChanged) {
                 return await requestClient.request(
                   "thread/start",
                   {
@@ -213,16 +217,33 @@ async function runBoundTurn(params: {
                   },
                   requestOptions(),
                 );
-              },
-              onClientChange: (nextClient) => {
-                client = nextClient;
-              },
-            }),
-          );
+              }
+              return await resumeCodexAppServerThread({
+                client: requestClient,
+                onSubscriptionReleased: () => {
+                  isolatedSubscriptionClient = requestClient;
+                },
+                abandonClient: async () => {
+                  await closeCodexStartupClientBestEffort(requestClient);
+                  isolatedSubscriptionClient = requestClient;
+                },
+                request: { threadId, ...threadRequest },
+                requestResume: (request) =>
+                  requestClient.request("thread/resume", request, requestOptions()),
+              });
+            },
+            onClientChange: (nextClient) => {
+              client = nextClient;
+            },
+          });
+          const response = networkProxyBindingChanged
+            ? assertCodexThreadStartResponse(result)
+            : result;
           threadId = response.thread.id;
           ownsNativeSubscription = true;
           assertCodexThreadAcceptsDirectInput(response.thread);
           if (
+            networkProxyBindingChanged &&
             liveThreadOwnership &&
             (liveThreadOwnership.threadId !== threadId || liveThreadOwnership.client !== client)
           ) {
@@ -246,83 +267,13 @@ async function runBoundTurn(params: {
               throw error;
             }
             liveThreadOwnership = undefined;
-          } else if (binding.threadId !== threadId) {
-            await releaseCodexAppServerBindingSubscription(binding, {
-              retainedClientId: client.getInstanceId(),
-            });
-          }
-          const committed = await params.bindingStore.mutate(identity, {
-            kind: "set",
-            binding: {
-              threadId,
-              clientId: client.getInstanceId(),
-              cwd: response.thread.cwd ?? workspaceDir,
-              authProfileId: binding.authProfileId,
-              model: response.model ?? modelSelection?.model ?? binding.model,
-              modelProvider: normalizeCodexAppServerBindingModelProvider({
-                authProfileId: binding.authProfileId,
-                modelProvider:
-                  response.modelProvider ?? modelSelection?.modelProvider ?? binding.modelProvider,
-                ...agentLookup,
-              }),
-              serviceTier: serviceTier ?? undefined,
-              networkProxyProfileName: runtime.networkProxy?.profileName,
-              networkProxyConfigFingerprint: runtime.networkProxy?.configFingerprint,
-              conversationStartId: binding.conversationStartId,
-              conversationSourceTransferComplete: binding.conversationSourceTransferComplete,
-              historyCoveredThrough: binding.historyCoveredThrough,
-            },
-          });
-          if (!committed) {
-            throw new Error("Codex conversation binding changed while rotating its thread.");
-          }
-          useStickyNetworkProfile = runtime.networkProxy !== undefined;
-        } else if (
-          binding.clientId !== client.getInstanceId() ||
-          (isCodexAppServerClientRuntimeLive(client) && !params.incognito && !liveThreadOwnership)
-        ) {
-          if (binding.clientId === client.getInstanceId()) {
-            await assertResumeInputAllowed();
-          }
-          const response = await withLeasedCodexAppServerClientStartSelectionRetry({
-            lease: clientLease,
-            options: clientOptions,
-            run: async (requestClient, requestOptions) => {
-              const threadRequest = await buildConversationThreadRequestForClient(
-                requestClient,
-                threadRequestRuntime,
-                serviceTier,
-                requestOptions,
-              );
-              return await resumeCodexAppServerThread({
-                client: requestClient,
-                onSubscriptionReleased: () => {
-                  isolatedSubscriptionClient = requestClient;
-                },
-                abandonClient: async () => {
-                  await closeCodexStartupClientBestEffort(requestClient);
-                  isolatedSubscriptionClient = requestClient;
-                },
-                request: {
+          } else if (
+            networkProxyBindingChanged
+              ? binding.threadId !== threadId
+              : !isSameCodexAppServerThreadOwner(binding, {
                   threadId,
-                  ...threadRequest,
-                },
-                requestResume: (request) =>
-                  requestClient.request("thread/resume", request, requestOptions()),
-              });
-            },
-            onClientChange: (nextClient) => {
-              client = nextClient;
-            },
-          });
-          threadId = response.thread.id;
-          ownsNativeSubscription = true;
-          assertCodexThreadAcceptsDirectInput(response.thread);
-          if (
-            !isSameCodexAppServerThreadOwner(binding, {
-              threadId,
-              clientId: client.getInstanceId(),
-            })
+                  clientId: client.getInstanceId(),
+                })
           ) {
             // Keep the old physical owner authoritative until unsubscribe succeeds;
             // failed migration then rolls back only the newly resumed connection.
@@ -330,23 +281,45 @@ async function runBoundTurn(params: {
               retainedClientId: client.getInstanceId(),
             });
           }
-          const committed = await params.bindingStore.mutate(identity, {
-            kind: "patch",
-            threadId: binding.threadId,
-            patch: {
-              clientId: client.getInstanceId(),
-              cwd: response.thread.cwd ?? binding.cwd,
-              model: response.model ?? modelSelection?.model ?? binding.model,
-              modelProvider: normalizeCodexAppServerBindingModelProvider({
-                authProfileId: binding.authProfileId,
-                modelProvider:
-                  response.modelProvider ?? modelSelection?.modelProvider ?? binding.modelProvider,
-                ...agentLookup,
-              }),
-            },
-          });
+          const patch = {
+            clientId: client.getInstanceId(),
+            cwd: response.thread.cwd ?? (networkProxyBindingChanged ? workspaceDir : binding.cwd),
+            model: response.model ?? modelSelection?.model ?? binding.model,
+            modelProvider: normalizeCodexAppServerBindingModelProvider({
+              authProfileId: binding.authProfileId,
+              modelProvider:
+                response.modelProvider ?? modelSelection?.modelProvider ?? binding.modelProvider,
+              ...agentLookup,
+            }),
+          };
+          const committed = await params.bindingStore.mutate(
+            identity,
+            networkProxyBindingChanged
+              ? {
+                  kind: "set",
+                  binding: {
+                    threadId,
+                    ...patch,
+                    authProfileId: binding.authProfileId,
+                    serviceTier: serviceTier ?? undefined,
+                    networkProxyProfileName: runtime.networkProxy?.profileName,
+                    networkProxyConfigFingerprint: runtime.networkProxy?.configFingerprint,
+                    conversationStartId: binding.conversationStartId,
+                    conversationSourceTransferComplete: binding.conversationSourceTransferComplete,
+                    historyCoveredThrough: binding.historyCoveredThrough,
+                  },
+                }
+              : { kind: "patch", threadId: binding.threadId, patch },
+          );
           if (!committed) {
-            throw new Error("Codex conversation binding changed while resuming on a new client.");
+            throw new Error(
+              networkProxyBindingChanged
+                ? "Codex conversation binding changed while rotating its thread."
+                : "Codex conversation binding changed while resuming on a new client.",
+            );
+          }
+          if (networkProxyBindingChanged) {
+            useStickyNetworkProfile = runtime.networkProxy !== undefined;
           }
         }
         const turnCollector = createCodexConversationTurnCollector(threadId);

@@ -117,19 +117,10 @@ export async function resolveEmbeddedModelSelection(params: {
   let provider = defaultProvider;
   let model = defaultModel;
   let sessionEntry = params.sessionEntry;
-  const initialModelOverrideSource = sessionEntry?.modelOverrideSource;
-  const hasStoredOverride = Boolean(
-    initialModelOverrideSource !== "default" &&
+  let hasStoredOverride = Boolean(
+    sessionEntry?.modelOverrideSource !== "default" &&
     (sessionEntry?.modelOverride || sessionEntry?.providerOverride),
   );
-  let storedModelOverrideSource =
-    hasStoredOverride && initialModelOverrideSource !== "default"
-      ? initialModelOverrideSource
-      : undefined;
-  let hasStoredAutoFallbackProvenance =
-    hasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
-  let hasLegacyAutoFallbackOverrideWithoutOrigin =
-    hasStoredOverride && hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
   const explicitProviderOverride =
     typeof params.opts.provider === "string"
       ? normalizeExplicitOverrideInput(params.opts.provider, "provider")
@@ -175,13 +166,12 @@ export async function resolveEmbeddedModelSelection(params: {
     const initialEntry = sessionEntry;
     const entry = { ...sessionEntry };
     let entryUpdated = false;
-    if (hasLegacyAutoFallbackOverrideWithoutOrigin) {
+    if (hasLegacyAutoFallbackWithoutOrigin(entry)) {
       const { updated } = applyModelOverrideToSessionEntry({
         entry,
         selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
       });
       if (updated) {
-        storedModelOverrideSource = undefined;
         entryUpdated = true;
       }
     }
@@ -216,21 +206,22 @@ export async function resolveEmbeddedModelSelection(params: {
         entry,
         assertCommitAllowed: operatorAuthority?.assertCurrent,
       });
-      const adoptedModelOverrideSource = sessionEntry?.modelOverrideSource;
-      const adoptedHasStoredOverride =
-        adoptedModelOverrideSource !== "default" &&
+      hasStoredOverride =
+        sessionEntry?.modelOverrideSource !== "default" &&
         Boolean(sessionEntry?.modelOverride || sessionEntry?.providerOverride);
-      storedModelOverrideSource = adoptedHasStoredOverride ? adoptedModelOverrideSource : undefined;
-      hasStoredAutoFallbackProvenance =
-        adoptedHasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
-      hasLegacyAutoFallbackOverrideWithoutOrigin =
-        adoptedHasStoredOverride && hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
     }
   }
 
-  if (isModelSelectionLocked(sessionEntry)) {
-    hasLegacyAutoFallbackOverrideWithoutOrigin = false;
-  }
+  let storedModelOverrideSource =
+    hasStoredOverride && sessionEntry?.modelOverrideSource !== "default"
+      ? sessionEntry?.modelOverrideSource
+      : undefined;
+  let hasStoredAutoFallbackProvenance =
+    hasStoredOverride && hasSessionAutoModelFallbackProvenance(sessionEntry);
+  const hasLegacyAutoFallbackOverrideWithoutOrigin =
+    hasStoredOverride &&
+    !isModelSelectionLocked(sessionEntry) &&
+    hasLegacyAutoFallbackWithoutOrigin(sessionEntry);
 
   const effectiveStoredOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
     ? null

@@ -341,28 +341,19 @@ fn canonical_request(
     mut request: RemoteGatewayRequest,
 ) -> Result<(RemoteGatewayRequest, String), String> {
     remote_gateway::validate_request(&request)?;
-    request.token = request
-        .token
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
-    request.password = request
-        .password
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
+    request.token = remote_gateway::normalize_optional(request.token);
+    request.password = remote_gateway::normalize_optional(request.password);
     let url = request
         .url
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .map(remote_gateway::normalize_gateway_url)
         .transpose()?;
-    if request.tls_fingerprint.is_some() {
-        // Explicit pins use the pure validation branch; saved profiles never
-        // inherit credentials or pins from the primary Gateway configuration.
-        let validation_url = url
-            .clone()
-            .unwrap_or_else(|| tauri::Url::parse("ws://127.0.0.1:18789").expect("loopback URL"));
-        remote_gateway::resolve_remote_tls_fingerprint(&mut request, &validation_url)?;
-    }
+    request.tls_fingerprint = request
+        .tls_fingerprint
+        .as_deref()
+        .map(remote_gateway::normalize_tls_fingerprint)
+        .transpose()?;
     request.url = url.as_ref().map(ToString::to_string);
     let endpoint = if request.transport == "ssh" {
         let (target, port) = remote_gateway::validate_ssh_target(

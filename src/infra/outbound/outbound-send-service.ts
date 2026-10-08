@@ -161,10 +161,10 @@ export async function executeSendAction(params: SendActionParams): Promise<{
   const requiresCoreDelivery =
     params.ctx.input.forceCoreDelivery === true ||
     params.ctx.input.requireQueuePersistence === true;
-  const preparationPlugin = params.ctx.channelPlugin;
+  const channelPlugin = params.ctx.channelPlugin;
   const prepareSendPayload =
-    !requiresCoreDelivery && preparationPlugin?.outbound
-      ? preparationPlugin.actions?.prepareSendPayload
+    !requiresCoreDelivery && channelPlugin?.outbound
+      ? channelPlugin.actions?.prepareSendPayload
       : undefined;
   const preparedPayload = prepareSendPayload
     ? await prepareSendPayload({
@@ -176,7 +176,6 @@ export async function executeSendAction(params: SendActionParams): Promise<{
         threadId: params.threadId,
       })
     : undefined;
-  const channelPlugin = params.ctx.channelPlugin;
   const presentation = normalizeMessagePresentation(defaultPayload.presentation);
   // A hook that declines owns the plugin action path, including presentations.
   const corePayload = requiresCoreDelivery
@@ -209,10 +208,10 @@ export async function executeSendAction(params: SendActionParams): Promise<{
           if (partialDelivery || !params.ctx.mirror) {
             return;
           }
-          const materializedPresentationFallback = pluginMessage !== params.message;
-          const mirrorText = materializedPresentationFallback
-            ? pluginMessage
-            : params.ctx.mirror.text?.trim() || pluginMessage;
+          const mirrorText =
+            pluginMessage !== params.message
+              ? pluginMessage
+              : params.ctx.mirror.text?.trim() || pluginMessage;
           const mirrorMediaUrls =
             params.ctx.mirror.mediaUrls ??
             params.mediaUrls ??
@@ -320,6 +319,7 @@ export async function executeSendAction(params: SendActionParams): Promise<{
     requireUnknownSendReconciliation: params.ctx.input.requireQueuePersistence ? false : undefined,
     onDeliveryIntent: params.ctx.input.onDeliveryIntent,
     onDeliveryAttempt: params.ctx.input.onDeliveryAttempt,
+    withDirectAdapterHandoff: params.ctx.input.withDirectAdapterHandoff,
     onDeliveryResult: async (evidence) => {
       await params.ctx.onSendAccepted?.();
       await params.ctx.input.onDeliveryResult?.(evidence);

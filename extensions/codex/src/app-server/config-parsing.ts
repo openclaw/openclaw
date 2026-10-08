@@ -255,37 +255,30 @@ export function assertCodexAppServerCommandHasNoInlineArgs(params: {
 
 export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodexPluginsPolicy {
   const config = readCodexPluginConfig(pluginConfig).codexPlugins;
-  const configured = config !== undefined;
   const enabled = config?.enabled === true;
-  const destructivePolicy = resolveCodexPluginDestructivePolicy(
-    config?.allow_destructive_actions ?? true,
-  );
   const pluginPolicies = Object.entries(config?.plugins ?? {})
     .flatMap(([configKey, entry]): ResolvedCodexPluginPolicy[] => {
       if (!entry.marketplaceName || !entry.pluginName) {
         return [];
       }
-      const entryDestructivePolicy = resolveCodexPluginDestructivePolicy(
-        entry.allow_destructive_actions ?? config?.allow_destructive_actions ?? true,
-      );
       return [
         {
           configKey,
           marketplaceName: entry.marketplaceName,
           pluginName: entry.pluginName,
           enabled: enabled && entry.enabled !== false,
-          allowDestructiveActions: entryDestructivePolicy.allowDestructiveActions,
-          destructiveApprovalMode: entryDestructivePolicy.destructiveApprovalMode,
+          ...resolveCodexPluginDestructivePolicy(
+            entry.allow_destructive_actions ?? config?.allow_destructive_actions ?? true,
+          ),
         },
       ];
     })
     .toSorted((left, right) => left.configKey.localeCompare(right.configKey));
   return {
-    configured,
+    configured: config !== undefined,
     enabled,
     allowAllPlugins: enabled && config?.allow_all_plugins === true,
-    allowDestructiveActions: destructivePolicy.allowDestructiveActions,
-    destructiveApprovalMode: destructivePolicy.destructiveApprovalMode,
+    ...resolveCodexPluginDestructivePolicy(config?.allow_destructive_actions ?? true),
     pluginPolicies,
   };
 }

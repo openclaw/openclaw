@@ -377,7 +377,6 @@ export function toCodexDynamicToolProtocolResponse(
   };
 }
 
-/** Adds async-started progress details when a tool result continues out of band. */
 export function toCodexDynamicToolProgressResponse(
   response: CodexDynamicToolRuntimeResponse,
   protocolResponse: CodexDynamicToolCallResponse,
@@ -406,63 +405,6 @@ type TerminalToolExecutionDiagnostic = Extract<
   DiagnosticEventPayload,
   { type: "tool.execution.blocked" | "tool.execution.completed" | "tool.execution.error" }
 >;
-
-type TerminalDynamicToolReleaseState = {
-  completed: boolean;
-  aborted: boolean;
-  responseSuccess: boolean;
-  currentTurnHadNonTerminalDynamicToolResult: boolean;
-  activeAppServerTurnRequests: number;
-  activeTurnItemIdsCount: number;
-  pendingOpenClawDynamicToolCompletionIdsCount: number;
-};
-
-export function shouldReleaseTurnAfterTerminalDynamicTool(
-  state: TerminalDynamicToolReleaseState,
-): boolean {
-  return (
-    !state.completed &&
-    !state.aborted &&
-    state.responseSuccess &&
-    !state.currentTurnHadNonTerminalDynamicToolResult &&
-    state.activeAppServerTurnRequests === 0 &&
-    state.activeTurnItemIdsCount === 0 &&
-    state.pendingOpenClawDynamicToolCompletionIdsCount === 0
-  );
-}
-
-type TerminalDynamicToolBatchAction =
-  | "idle"
-  | "wait"
-  | "clear-nonterminal-batch"
-  | "release-pending-terminal";
-
-type TerminalDynamicToolBatchState = {
-  activeAppServerTurnRequests: number;
-  activeTurnItemIdsCount: number;
-  pendingOpenClawDynamicToolCompletionIdsCount: number;
-  currentTurnHadNonTerminalDynamicToolResult: boolean;
-  hasPendingTerminalDynamicToolRelease: boolean;
-};
-
-export function resolveTerminalDynamicToolBatchAction(
-  state: TerminalDynamicToolBatchState,
-): TerminalDynamicToolBatchAction {
-  if (
-    state.activeAppServerTurnRequests > 0 ||
-    state.activeTurnItemIdsCount > 0 ||
-    state.pendingOpenClawDynamicToolCompletionIdsCount > 0
-  ) {
-    return "wait";
-  }
-  if (state.currentTurnHadNonTerminalDynamicToolResult) {
-    return "clear-nonterminal-batch";
-  }
-  if (state.hasPendingTerminalDynamicToolRelease) {
-    return "release-pending-terminal";
-  }
-  return "idle";
-}
 
 export function isDynamicToolTerminalDiagnosticEvent(
   event: DiagnosticEventPayload,

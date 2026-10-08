@@ -137,7 +137,6 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     titleReady.resolve(duringTurn);
   };
 
-  const jobSessionBinding = admission.sessionBinding;
   let agentRunStarted = false;
   let replyDispatchRun: ReplyDispatchRun | undefined;
   const isRunCurrent = () =>
@@ -280,7 +279,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
           if (messageInjectionAttempt) {
             const injected = await finalizeAcceptedChatSendMessageInjection({
               attempt: messageInjectionAttempt,
-              sessionBinding: jobSessionBinding,
+              sessionBinding,
               context,
               ctx,
               persistUserTurnTranscriptBestEffort: async () => {
@@ -631,7 +630,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
             setGatewayDedupeEntry({
               dedupe: context.dedupe,
               key: `chat:${clientRunId}`,
-              session: captureAgentJobSession(jobSessionBinding),
+              session: captureAgentJobSession(sessionBinding),
               entry: {
                 ts: Date.now(),
                 ok: !shouldBroadcastAgentError,

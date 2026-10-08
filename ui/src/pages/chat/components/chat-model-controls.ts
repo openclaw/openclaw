@@ -201,19 +201,17 @@ function formatPickerModelLabel(label: string): string {
   return match?.[1] ?? label;
 }
 
+const MODEL_SELECTION_SCOPE_LABELS = new Map([
+  ["session", "chat.modelControls.selectionScopeSession"],
+  ["agent", "chat.modelControls.selectionScopeAgent"],
+  ["global", "chat.modelControls.selectionScopeGlobal"],
+]);
+
 function resolveModelSelectionScopeDescription(
   target: SessionsListResult["defaults"]["modelSelectionTarget"],
 ): string | undefined {
-  switch (target) {
-    case "session":
-      return t("chat.modelControls.selectionScopeSession");
-    case "agent":
-      return t("chat.modelControls.selectionScopeAgent");
-    case "global":
-      return t("chat.modelControls.selectionScopeGlobal");
-    default:
-      return undefined;
-  }
+  const label = MODEL_SELECTION_SCOPE_LABELS.get(target ?? "");
+  return label ? t(label) : undefined;
 }
 
 function resolveCatalogTriggerStatus(
@@ -566,7 +564,8 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         )
       : resolveCatalogTriggerStatus(catalogState, modelOptions.length, selectionKnown);
   const hasResolvableModel =
-    catalogState.status === "ready" &&
+    catalogState.hasSnapshot &&
+    (catalogState.status === "ready" || catalogState.status === "error") &&
     activeModelOption?.disabled !== true &&
     modelOptions.some((option) => !option.disabled);
   const busy = props.sending || Boolean(props.activeRunId) || props.stream !== null;

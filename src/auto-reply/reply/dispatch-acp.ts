@@ -258,27 +258,11 @@ export async function tryDispatchAcpReplyCore(
   });
   let queuedFinal = false;
   const delivery = createAcpDispatchDeliveryCoordinator({
+    ...params,
     preparedTtsPreferences,
-    cfg: params.cfg,
     agentId: acpAgentId,
-    ctx: params.ctx,
-    dispatcher: params.dispatcher,
-    inboundAudio: params.inboundAudio,
     sessionKey: canonicalSessionKey,
-    sessionTtsAuto: params.sessionTtsAuto,
-    ttsChannel: params.ttsChannel,
-    suppressUserDelivery: params.suppressUserDelivery,
     suppressBlockUserDelivery: shouldDeferVisibleTextForTts,
-    suppressReplyLifecycle: params.suppressReplyLifecycle,
-    shouldRouteToOriginating: params.shouldRouteToOriginating,
-    originatingChannel: params.originatingChannel,
-    originatingTo: params.originatingTo,
-    originatingAccountId: params.originatingAccountId,
-    originatingThreadId: params.originatingThreadId,
-    originatingChatType: params.originatingChatType,
-    onReplyStart: params.onReplyStart,
-    abortSignal: params.abortSignal,
-    runId: params.runId,
   });
   const pendingAnswerText = params.ctx.agentText.trim();
   const persistInput = inputRecorder
@@ -387,12 +371,17 @@ export async function tryDispatchAcpReplyCore(
   const auditRunId = existingRunId ?? generateSecureUuid();
   const auditRuntime = await loadDispatchAcpAuditRuntime();
   const auditToolTracker = auditRuntime.createAcpToolLifecycleTracker();
+  const auditContext = {
+    runId: auditRunId,
+    sessionKey: canonicalSessionKey,
+    agentId: acpAgentId,
+    auditOnly,
+  };
   let auditStarted = false;
   let auditFinished = false;
   let auditTerminalOutcome: "blocked" | undefined;
   let auditStopReason: string | undefined;
   let auditResultStatus: "completed" | "cancelled" | undefined;
-  let runtimeTurnWasCancelled = false;
   let assistantTranscript: ReplyDispatchAssistantTranscript | undefined;
   let terminalOutcome: ReturnType<ReplyDispatchRun["getResult"]>["terminalOutcome"];
   const notifyDispatchStart = await prepareAcpDispatchStart({
@@ -417,47 +406,30 @@ export async function tryDispatchAcpReplyCore(
     auditStarted = true;
     completionSource = notifyDispatchStart();
     auditRuntime.emitAcpLifecycleStart({
-      runId: auditRunId,
-      sessionKey: canonicalSessionKey,
-      agentId: acpAgentId,
+      ...auditContext,
       startedAt: Date.now(),
-      auditOnly,
       completionSource,
     });
   };
-  const emitAuditEnd = () => {
+  const emitAuditTerminal = (error?: AcpRuntimeError) => {
     if (auditFinished) {
       return;
     }
     emitAuditStart();
     auditFinished = true;
-    terminalOutcome = auditRuntime.emitAcpLifecycleEnd({
-      runId: auditRunId,
+    const lifecycle = {
+      ...auditContext,
       toolTracker: auditToolTracker,
-      sessionKey: canonicalSessionKey,
-      agentId: acpAgentId,
-      endFields: resolveAuditEndFields(),
-      auditOnly,
       completionSource,
-    });
-  };
-  const emitAuditError = (error: unknown) => {
-    if (auditFinished) {
-      return;
-    }
-    emitAuditStart();
-    auditFinished = true;
-    terminalOutcome = auditRuntime.emitAcpLifecycleError({
-      runId: auditRunId,
-      toolTracker: auditToolTracker,
-      sessionKey: canonicalSessionKey,
-      agentId: acpAgentId,
-      ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
-      ...(auditTerminalOutcome ? { terminalOutcome: auditTerminalOutcome } : {}),
-      auditOnly,
-      completionSource,
-      error,
-    });
+    };
+    terminalOutcome = error
+      ? auditRuntime.emitAcpLifecycleError({
+          ...lifecycle,
+          ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+          ...(auditTerminalOutcome ? { terminalOutcome: auditTerminalOutcome } : {}),
+          error,
+        })
+      : auditRuntime.emitAcpLifecycleEnd({ ...lifecycle, endFields: resolveAuditEndFields() });
   };
   // Hoisted so the failure path can persist the same user turn the success path
   // records: a bound ACP session must not silently diverge from the channel.
@@ -538,7 +510,7 @@ export async function tryDispatchAcpReplyCore(
       );
     }
     if (acpResolution.kind === "stale") {
-      emitAuditError(acpResolution.error);
+      emitAuditTerminal(acpResolution.error);
       await maybeUnbindStaleBoundConversations({
         targetSessionKey: canonicalSessionKey,
         error: acpResolution.error,
@@ -596,7 +568,6 @@ export async function tryDispatchAcpReplyCore(
           : [];
       },
     );
-    const mediaAttachments = mediaAttachmentEntries.map((entry) => entry.attachment);
     const recentHistoryImages =
       describedImageIndexes.size === 0 ? resolvedTurnAttachments.recentHistoryImages : [];
     const inlineAttachments = resolveInlineAgentImageAttachments(params.images);
@@ -604,9 +575,9 @@ export async function tryDispatchAcpReplyCore(
       extractedFileImages.map(stripExtractedFileImageMetadata),
     );
     const useMediaAttachments =
-      mediaAttachments.length > 0 &&
+      mediaAttachmentEntries.length > 0 &&
       !(
-        mediaAttachments.length === recentHistoryImages.length &&
+        mediaAttachmentEntries.length === recentHistoryImages.length &&
         (inlineAttachments.length > 0 || extractedAttachments.length > 0)
       );
     const attachments = [
@@ -697,18 +668,14 @@ export async function tryDispatchAcpReplyCore(
       onLifecycle: recordUnsupportedNativeActionEvidence,
       onEvent: async (event) => {
         auditRuntime.emitAcpRuntimeEvent({
-          runId: auditRunId,
+          ...auditContext,
           toolTracker: auditToolTracker,
-          sessionKey: canonicalSessionKey,
-          agentId: acpAgentId,
           ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
-          auditOnly,
           event,
         });
         if (event.type === "done") {
           auditStopReason = event.stopReason;
           auditResultStatus = event.status;
-          runtimeTurnWasCancelled = event.status === "cancelled";
         }
         await projector.onEvent(event);
       },
@@ -723,7 +690,7 @@ export async function tryDispatchAcpReplyCore(
 
     await projector.flush();
     await delivery.flushBlockText();
-    if (!runtimeTurnWasCancelled && !params.abortSignal?.aborted) {
+    if (auditResultStatus !== "cancelled" && !params.abortSignal?.aborted) {
       queuedFinal =
         (await finalizeAcpTurnOutput({
           preparedTtsPreferences,
@@ -742,7 +709,7 @@ export async function tryDispatchAcpReplyCore(
     }
     // Recheck cancellation after final delivery settles so a late abort keeps
     // only confirmed output in the cancelled turn's transcript.
-    if (runtimeTurnWasCancelled || params.abortSignal?.aborted) {
+    if (auditResultStatus === "cancelled" || params.abortSignal?.aborted) {
       queuedFinal = (await deliverDeferredTextFallback()) || queuedFinal;
       await persistTranscript(await delivery.resolveAccumulatedDeliveredTranscriptText());
       queuedFinal =
@@ -754,14 +721,14 @@ export async function tryDispatchAcpReplyCore(
       delivery.applyRoutedCounts(counts);
       params.recordProcessed("completed", { reason: "acp_aborted" });
       params.markIdle("message_aborted");
-      emitAuditEnd();
+      emitAuditTerminal();
       return { queuedFinal, counts };
     }
 
     await persistTranscript(delivery.getAccumulatedTranscriptText());
 
     const result = finishAttempt(queuedFinal);
-    emitAuditEnd();
+    emitAuditTerminal();
     return result;
   } catch (err) {
     const acpError = toAcpRuntimeError({
@@ -769,7 +736,7 @@ export async function tryDispatchAcpReplyCore(
       fallbackCode: "ACP_TURN_FAILED",
       fallbackMessage: "ACP turn failed before completion.",
     });
-    emitAuditError(acpError);
+    emitAuditTerminal(acpError);
     await projector.flush();
     await delivery.flushBlockText();
     queuedFinal = (await deliverDeferredTextFallback()) || queuedFinal;

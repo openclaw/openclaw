@@ -47,6 +47,45 @@ final class OpenClawSnapshotUITests: XCTestCase {
         self.captureReleaseScreenshot(Self.controlScreenshotTarget)
     }
 
+    func testStreamedReplyIsNotDuplicatedWithSavedRow() throws {
+        self.launchApp(
+            for: Self.chatScreenshotTarget,
+            additionalArguments: ["--openclaw-empty-chat-fixture", "--openclaw-dup-filter-fixture"])
+        let app = try XCTUnwrap(self.app)
+        let input = self.chatMessageInput(in: app)
+        XCTAssertTrue(input.waitForExistence(timeout: 8))
+        input.tap()
+        let prompt = "Show the fixture reply."
+        input.typeText(prompt)
+        XCTAssertEqual(input.value as? String, prompt, "Fixture prompt was not entered")
+        let send = app.buttons["chat-send-message"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5), "Fixture Send button is missing")
+        XCTAssertTrue(send.isEnabled, "Fixture Send button is disabled")
+        send.tap()
+        let userRow = app.staticTexts[prompt]
+        XCTAssertTrue(userRow.waitForExistence(timeout: 5), "The explicit fixture send was not accepted")
+        // Only dismiss after sending: the empty-chat starter buttons also send on tap.
+        app.scrollViews["chat-transcript"].coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.05)).tap()
+        XCTAssertTrue(app.keyboards.firstMatch.waitForNonExistence(timeout: 3), "Fixture keyboard stayed open")
+
+        // This tool row is emitted after both sources, not after deduplication succeeds.
+        let receipt = app.descendants(matching: .any).matching(NSPredicate(
+            format: "value CONTAINS %@", "dup-filter-inputs-received")).firstMatch
+        XCTAssertTrue(receipt.waitForExistence(timeout: 8), "FIFO receipt did not arrive after both reply sources")
+        let copies = app.staticTexts.matching(NSPredicate(
+            format: "label CONTAINS %@", "The cobalt lighthouse is ready."))
+        XCTAssertTrue(copies.firstMatch.waitForExistence(timeout: 5), "Fixture reply marker is missing")
+        self.attachScreenshot(named: "dup-filter-streaming")
+        XCTAssertEqual(copies.count, 1, "Saved and streaming reply render duplicate copies")
+
+        let stop = app.buttons["Stop response"]
+        XCTAssertTrue(stop.waitForExistence(timeout: 5))
+        stop.tap()
+        XCTAssertTrue(stop.waitForNonExistence(timeout: 8))
+        self.attachScreenshot(named: "dup-filter-settled")
+        XCTAssertEqual(copies.count, 1, "The saved reply must remain after stopping the run")
+    }
+
     func testReleaseChatScreenshot() {
         self.captureReleaseScreenshot(Self.chatScreenshotTarget) { app in
             let input = self.chatMessageInput(in: app)
@@ -568,7 +607,8 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertTrue(paste.waitForExistence(timeout: 5), "PASTE_MENU_MISSING")
         paste.tap()
         // Staging transcodes to JPEG, so the chip shows the converted name.
-        let attachment = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "pasted-image-1")).firstMatch
+        let attachment = app.staticTexts.matching(NSPredicate(
+            format: "label BEGINSWITH %@", "pasted-image-1")).firstMatch
         XCTAssertTrue(attachment.waitForExistence(timeout: 5), "PASTED_IMAGE_MISSING")
         self.attachScreenshot(named: "chat-composer-paste-image")
     }

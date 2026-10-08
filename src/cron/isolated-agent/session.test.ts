@@ -35,6 +35,7 @@ function resolveWithStoredEntry(params?: {
   targetEntry?: SessionEntry;
   forceNew?: boolean;
   fresh?: boolean;
+  exactRunSession?: boolean;
 }) {
   const sessionKey = params?.sessionKey ?? "webhook:stable-key";
   const sourceSessionKey = params?.sourceSessionKey;
@@ -56,6 +57,7 @@ function resolveWithStoredEntry(params?: {
     agentId: "main",
     nowMs: NOW_MS,
     forceNew: params?.forceNew,
+    exactRunSession: params?.exactRunSession,
     store,
     lifecycleTimestamps: {},
   });
@@ -153,6 +155,37 @@ describe("resolveCronSession", () => {
     expect(second.lifecycleRevision).toBe(second.sessionEntry.lifecycleRevision);
     expect(first.lifecycleRevision).not.toBe(second.lifecycleRevision);
   });
+
+  // Spawned children and memory-audience leases bind to the parent's exact
+  // revision, so a run that reuses an incarnation in place must not rotate it.
+  it.each([
+    { name: "fresh in-place reuse", keeps: true },
+    { name: "exact-run reuse", exactRunSession: true, keeps: false },
+    { name: "stale reset", fresh: false, keeps: false },
+    { name: "forced rollover", forceNew: true, keeps: false },
+    { name: "differing source session", sourceSessionKey: "agent:main:chat", keeps: false },
+    { name: "row without a revision", unrevisioned: true, keeps: false },
+  ])(
+    "mints a lifecycle revision only for a new run generation ($name)",
+    ({ keeps, unrevisioned, ...params }) => {
+      const result = resolveWithStoredEntry({
+        sessionKey: "agent:main:dashboard:chat",
+        ...params,
+        entry: {
+          sessionId: "existing-session",
+          updatedAt: NOW_MS - 1_000,
+          ...(unrevisioned ? {} : { lifecycleRevision: "existing-revision" }),
+        },
+      });
+      expect(result.sessionEntry.lifecycleRevision).toBe(result.lifecycleRevision);
+      if (keeps) {
+        expect(result.lifecycleRevision).toBe("existing-revision");
+      } else {
+        expect(result.lifecycleRevision).not.toBe("existing-revision");
+        expect(result.lifecycleRevision).toEqual(expect.any(String));
+      }
+    },
+  );
 
   it.each([
     {

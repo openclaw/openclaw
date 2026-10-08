@@ -39,22 +39,18 @@ export function resolveEmbeddedFullAccessState(params: {
       blockedReason: "host-policy",
     };
   }
-  if (params.execElevated?.fullAccessAvailable === true) {
-    return { available: true };
-  }
-  if (params.execElevated?.fullAccessAvailable === false) {
-    return {
-      available: false,
-      blockedReason: params.execElevated.fullAccessBlockedReason ?? "host-policy",
-    };
-  }
-  if (!params.execElevated?.enabled || !params.execElevated.allowed) {
-    return {
-      available: false,
-      blockedReason: "host-policy",
-    };
-  }
-  return { available: true };
+  const available =
+    params.execElevated?.fullAccessAvailable ??
+    Boolean(params.execElevated?.enabled && params.execElevated.allowed);
+  return available
+    ? { available }
+    : {
+        available,
+        blockedReason:
+          params.execElevated?.fullAccessAvailable === false
+            ? (params.execElevated.fullAccessBlockedReason ?? "host-policy")
+            : "host-policy",
+      };
 }
 
 export async function resolveEmbeddedSandboxInfoExecPolicy(

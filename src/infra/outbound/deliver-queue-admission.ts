@@ -24,6 +24,7 @@ import type { StableDeliveryPreparation } from "./delivery-queue-storage.types.j
 import {
   acceptedPreparedOutboundEntries,
   mapPreparedOutboundAcceptedPayloads,
+  preparedOutboundPayloads,
   type PreparedOutboundBatch,
 } from "./prepared-batch.js";
 import { normalizeOutboundReplyFacts } from "./reply-policy.js";
@@ -66,9 +67,7 @@ export function restoreQueuedDeliveryCustody(
       target,
     );
   }
-  const payloads = acceptedPreparedOutboundEntries(custody.preparedBatch).map(
-    (prepared) => prepared.payload,
-  );
+  const payloads = preparedOutboundPayloads(custody.preparedBatch);
   return { ...params, ...custody, payloads, sessionGeneration: entry.sessionGeneration };
 }
 

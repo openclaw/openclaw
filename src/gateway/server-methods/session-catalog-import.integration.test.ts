@@ -284,6 +284,34 @@ async function createCatalog(restricted: boolean) {
 }
 
 describe("sessions.catalog.import with durable Gateway owners", () => {
+  it("imports and re-imports without waiting on model catalog publication", async () => {
+    await withCatalog(async (fixture) => {
+      const loadCatalog = vi
+        .spyOn(fixture.context, "loadGatewayModelCatalogSnapshot")
+        .mockImplementation(() => new Promise(() => {}));
+      expect(await fixture.call()).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ created: true, importedItems: 2 }),
+      );
+      const selection = {
+        providerOverride: "openai",
+        modelOverride: "gpt-4.1",
+        thinkingLevel: "low",
+        contextWindow: "large",
+      };
+      await upsertSessionEntryCore({ agentId: "main", sessionKey: fixture.key }, selection);
+      expect(await fixture.call()).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ created: false, importedItems: 0 }),
+      );
+      expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey: fixture.key })).toMatchObject(
+        selection,
+      );
+      expect(loadCatalog).not.toHaveBeenCalled();
+      expect(JSON.stringify(await fixture.transcript())).toContain("Synthetic imported question");
+    });
+  });
+
   it("keeps a copied draft hidden from another viewer until publication and preserves publication on re-import", async () => {
     await withCatalog(async (fixture) => {
       await upsertSessionEntryCore(

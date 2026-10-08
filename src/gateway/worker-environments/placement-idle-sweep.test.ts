@@ -330,16 +330,19 @@ describe("worker placement idle suspension", () => {
       const active = await harness.service.dispatch(REQUEST);
       nowMs += 60_000;
       const createAdmission = operationAdmission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementationOnce(
+      let admissionReached = false;
+      vi.spyOn(operationAdmission, "createSqliteWorkerOperationAdmission").mockImplementation(
         (admit, attachment) =>
           createAdmission((request, grant) => {
             if (request.stage === stage) {
+              admissionReached = true;
               profile.suspendAfter = undefined;
             }
             admit(request, grant);
           }, attachment),
       );
       await idleSweep.sweep();
+      expect(admissionReached).toBe(true);
       expect(placements.get(REQUEST.sessionId)).toMatchObject({
         state: "active",
         generation: active.generation,

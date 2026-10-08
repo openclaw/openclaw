@@ -147,11 +147,7 @@ export function updateSkillMenu(
   requestUpdate: () => void,
   opts: { skipRefresh?: boolean } = {},
 ): void {
-  if (value.trimStart().startsWith("/")) {
-    closeSkillMenuIfNeeded(state, requestUpdate);
-    return;
-  }
-  const target = findSkillMentionTarget(value, caret);
+  const target = value.trimStart().startsWith("/") ? null : findSkillMentionTarget(value, caret);
   if (!target) {
     closeSkillMenuIfNeeded(state, requestUpdate);
     return;

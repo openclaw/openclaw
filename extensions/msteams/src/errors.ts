@@ -137,7 +137,6 @@ function extractRetryAfterMs(err: unknown): number | null {
     }
   }
 
-  // Fetch Headers-like interface
   if (
     typeof headers === "object" &&
     headers !== null &&

@@ -254,6 +254,8 @@ Options:
 
 Numeric scan options reject empty and whitespace-only values. Omit a flag to retain its default behavior.
 
+A probed scan writes config, even without `--set-default`. It replaces `agents.defaults.model.fallbacks` with the selected models, replaces `agents.defaults.imageModel.fallbacks` when image-capable models are selected, and adds the selected models to `agents.defaults.models`. `--set-default` and `--set-image` additionally set the matching primary. `--json` still writes. Use `--no-probe` to inspect candidates without changing config.
+
 `--set-default` and `--set-image` require live checks; metadata-only scan results are informational and are not applied to config.
 
 ## Aliases

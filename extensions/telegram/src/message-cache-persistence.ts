@@ -15,9 +15,7 @@ export const TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION = 1;
 export type TelegramMessageThreadBinding = {
   kind: "provider-observed-v1";
   threadSpec:
-    | { scope: "direct-messages"; id: number }
-    | { scope: "dm"; id: number }
-    | { scope: "forum"; id: number }
+    | { scope: "direct-messages" | "dm" | "forum"; id: number }
     | { scope: "none"; id?: never };
 };
 

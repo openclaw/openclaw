@@ -6,6 +6,7 @@ import {
   createEventManagerHarness,
   EVENT_MANAGER_REPLAY_KEY_LIMIT,
 } from "../manager.test-harness.js";
+import { MockProvider } from "../providers/mock.js";
 import type { AnswerCallInput, CallRecord, NormalizedEvent } from "../types.js";
 import { processEvent } from "./events.js";
 import { persistCallRecord } from "./store.js";
@@ -28,6 +29,51 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("processEvent (functional inbound calls)", () => {
+  function parseMockEvent(overrides: Partial<NormalizedEvent> = {}): NormalizedEvent {
+    const [event] = new MockProvider().parseWebhookEvent({
+      headers: {},
+      method: "POST",
+      url: "http://localhost/voice/webhook",
+      query: {},
+      rawBody: JSON.stringify({
+        event: {
+          ...createInboundInitiatedEvent({
+            id: "mock-inbound",
+            providerCallId: "mock-provider-inbound",
+            from: "+15552222222",
+          }),
+          to: "+15553333333",
+          ...overrides,
+        },
+      }),
+    }).events;
+    if (!event) {
+      throw new Error("expected a parsed mock event");
+    }
+    return event;
+  }
+
+  it.each([
+    ["call.initiated", "ringing"],
+    ["call.ringing", "ringing"],
+    ["call.answered", "answered"],
+    ["call.active", "active"],
+  ] as const)("admits mock %s webhooks with their caller and destination", async (type, state) => {
+    const ctx = createContext({ provider: new MockProvider() });
+    ctx.config.inboundPolicy = "open";
+
+    expect(await processEvent(ctx, parseMockEvent({ type }))).toEqual({ kind: "processed" });
+
+    expect(requireFirstActiveCall(ctx)).toMatchObject({
+      provider: "mock",
+      providerCallId: "mock-provider-inbound",
+      direction: "inbound",
+      from: "+15552222222",
+      to: "+15553333333",
+      state,
+    });
+  });
+
   it.each([
     {
       ageMinutes: 5,

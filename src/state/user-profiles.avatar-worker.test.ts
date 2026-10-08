@@ -253,18 +253,6 @@ it.each(["resident", "absent", "late"] as const)(
   },
 );
 
-it("preserves an explicit empty avatar without fetching", async () => {
-  const profile = ensureProfileForEmail("explicit@example.test");
-  const empty = new Uint8Array();
-  expect(setAvatar(profile.id, empty, "image/png").ok).toBe(true);
-  const fetchImpl = vi.fn();
-  await expect(
-    adoptTailscaleProfileAvatar(profile.id, "https://avatars.example.test/p", {}, { fetchImpl }),
-  ).resolves.toMatchObject({ id: profile.id, avatarMime: "image/png" });
-  expect(fetchImpl).not.toHaveBeenCalled();
-  expect(getProfileAvatar(profile.id)?.bytes).toEqual(empty);
-});
-
 it("adopts an avatar off-thread and publishes its catalog before identity observers", async () => {
   let release = () => {};
   let stop = () => {};

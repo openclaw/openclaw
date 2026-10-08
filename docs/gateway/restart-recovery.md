@@ -743,6 +743,11 @@ charge when a post-dispatch result is uncertain to avoid replaying work.
 Foreground work that already owns the session keeps automatic recovery out
 until that work settles.
 
+Cancelling a recovery reservation after foreground work finishes clears an empty,
+uncharged recovery record. Recovery reconciliation and foreground admission also
+clear this residue from older sessions, so it cannot block a completed subagent's
+requester turn. Interrupted work and pending delivery keep their recovery custody.
+
 After the durable budget is exhausted, the session is tombstoned instead of
 looping forever. Inspect the failed session and use `/new` or `/reset` to start a
 replacement. `openclaw doctor --fix` can repair a stale aborted flag that
@@ -948,6 +953,15 @@ existing restart delivery and continuation behavior.
   `channel autostart suppressed by crash-loop breaker; refusing automatic
 start for <channel>… Start a channel manually with: openclaw gateway call
 channels.start --params '{"channel":"<id>"}'`
+
+  Safe mode also pauses main-session restart recovery. Interrupted entries and
+  transcripts stay unchanged: the pause does not charge an attempt, settle a
+  turn, send a notice, or tombstone a session. The recovery log names the pause
+  and the breaker window end. Once the full window drains, the same healthy
+  process automatically re-arms its existing recovery scheduler and resumes the
+  interrupted work once, using the original startup cutoff and ownership checks.
+  A new unclean boot extends the pause; shutdown or lifecycle replacement cancels
+  the pending re-arm. No manual retry or extra Gateway restart is required.
 
   Operator recovery SOP:
 

@@ -306,7 +306,7 @@ async function deleteGatewaySessionInScope(
         finalize: async () => drain?.release(),
         run: async () => {
           const { entry, legacyKey, canonicalKey } = assertCurrent();
-          const retirement = prepareSessionWorkerPlacementRetirement({
+          const retirement = await prepareSessionWorkerPlacementRetirement({
             context,
             sessionId: entry?.sessionId,
           });
@@ -392,7 +392,7 @@ async function deleteGatewaySessionInScope(
           if (result.deleted) {
             // Retain cloud affinity on every precommit failure. The absent-session
             // reconciler covers a crash or artifact-publication failure after commit.
-            retirement.retire();
+            await retirement.retire();
             emitGatewaySessionEndPluginHook({
               cfg,
               sessionKey: target.canonicalKey ?? key,

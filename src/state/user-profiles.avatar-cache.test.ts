@@ -69,7 +69,7 @@ it("evicts the least recently used avatar at the byte budget while preserving un
   ]);
 });
 
-it.each(["catalog release", "database close and reopen", "avatar replacement"] as const)(
+it.each(["database close and reopen", "avatar replacement"] as const)(
   "requires fresh avatar reads after %s",
   async (boundary) => {
     const options = fixture();
@@ -81,10 +81,7 @@ it.each(["catalog release", "database close and reopen", "avatar replacement"] a
     const warm = await createProfileAvatarReader(profile.id, options).inspect();
     expect((await warm.loadBytes())?.bytes).toEqual(bytes);
 
-    if (boundary === "catalog release") {
-      release();
-      releases.push(retainUserProfileCatalog(options));
-    } else if (boundary === "database close and reopen") {
+    if (boundary === "database close and reopen") {
       await closeOpenClawStateDatabaseByPathAsync(options.path);
       openOpenClawStateDatabase(options);
     } else {

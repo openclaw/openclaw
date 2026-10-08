@@ -147,6 +147,7 @@ export function createMergeOutcomeFixtureHarness() {
       restPolicy: "classic",
       restReadFailure: "",
       restDispatchChange: "",
+      restMergeCommit: "",
       pooledMergeBlocked: false,
       restReadFailuresRemaining: 0,
       restReadFailureAtMainReads: [] as number[],
@@ -476,6 +477,8 @@ else if(args[0]==="api"&&args.includes("repos/fixture/repo/pulls/123")) {
     user:{id:1001,login:s.pr.author.login,type:s.pr.author.__typename},created_at:"2026-09-20T00:00:00Z",
     mergeable:pendingDispatchProjection?null:s.pr.mergeable==="UNKNOWN"?null:s.pr.mergeable==="MERGEABLE",
     mergeable_state:pendingDispatchProjection?"unknown":s.pooledMergeBlocked&&!args.includes("--include")?"blocked":s.pr.mergeStateStatus.toLowerCase()};
+  if(s.restMergeCommit==="missing") delete record.merge_commit_sha;
+  else if(s.restMergeCommit) record.merge_commit_sha=({null:null,empty:"",malformed:"not-a-commit"})[s.restMergeCommit];
   out(args.includes("--include")?"HTTP/2.0 200 OK\\n\\n"+JSON.stringify(record):record);
 }
 else if(args[0]==="api"&&args.includes("repos/fixture/repo/git/ref/heads/main")) {

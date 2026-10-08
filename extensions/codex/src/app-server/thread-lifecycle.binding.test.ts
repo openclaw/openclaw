@@ -54,7 +54,7 @@ import { registerRequiredRootThreadPolicyTests } from "./thread-lifecycle-rooted
 import { startOrResumeThread as startOrResumeThreadImpl } from "./thread-lifecycle-run.js";
 import {
   createLeasedCodexLifecycleHarness,
-  startOrResumeAttemptThread,
+  startOrResumeAttemptThreadWithoutSkills as startOrResumeAttemptThread,
   twoStartsThenResumeMethods,
   type CodexAttemptThreadInput as LifecycleInput,
 } from "./thread-lifecycle.test-fixtures.js";
@@ -548,7 +548,7 @@ async function createManualResumeFixture(
   };
 }
 
-setupRunAttemptTestHooks();
+setupRunAttemptTestHooks({ isolateNativeSkillHome: true });
 
 async function createLeasedLifecycleWireClient(
   agentDir: string,

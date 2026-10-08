@@ -156,7 +156,6 @@ export function prepareSessionsPatchEntry(
   };
 }
 
-/** Project a validated gateway session patch for one session entry. */
 export async function projectSessionsPatchEntry(
   params: SessionPatchProjectionParams & {
     loadGatewayModelCatalogSnapshot?: () => Promise<ModelCatalogSnapshot>;

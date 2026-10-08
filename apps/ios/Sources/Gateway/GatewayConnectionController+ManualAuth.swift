@@ -228,15 +228,15 @@ extension GatewayConnectionController {
             }
         }
 
-        let token: String?
+        private(set) var token: String?
         let bootstrapToken: String?
-        let password: String?
+        private(set) var password: String?
         let targetStableID: String?
         let tlsFingerprintSha256: String?
         let expiresAtMs: Int64?
         let isSetupCodeOrigin: Bool
         let suppressStoredDeviceAuth: Bool
-        private var handoff = OSAllocatedUnfairLock(initialState: false)
+        private let handoff = OSAllocatedUnfairLock(initialState: false)
 
         static func == (lhs: Self, rhs: Self) -> Bool {
             lhs.token == rhs.token &&
@@ -293,13 +293,10 @@ extension GatewayConnectionController {
             isSetupCodeOrigin: Bool = false,
             suppressStoredDeviceAuth: Bool) -> ManualAuthOverride
         {
-            let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let trimmedBootstrapToken = bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let trimmedPassword = password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            return ManualAuthOverride(
-                token: trimmedToken.isEmpty ? nil : trimmedToken,
-                bootstrapToken: trimmedBootstrapToken.isEmpty ? nil : trimmedBootstrapToken,
-                password: trimmedPassword.isEmpty ? nil : trimmedPassword,
+            ManualAuthOverride(
+                token: token?.trimmedNonEmpty,
+                bootstrapToken: bootstrapToken?.trimmedNonEmpty,
+                password: password?.trimmedNonEmpty,
                 targetStableID: targetStableID,
                 tlsFingerprintSha256: tlsFingerprintSha256,
                 expiresAtMs: expiresAtMs,
@@ -367,33 +364,22 @@ extension GatewayConnectionController {
             if let pendingTarget = pendingOverride.targetStableID,
                !GatewayStableIdentifier.matches(pendingTarget, targetStableID)
             {
-                let normalizedInput = ManualAuthOverride.explicit(
-                    token: token,
-                    bootstrapToken: nil,
-                    password: password,
-                    targetStableID: targetStableID,
-                    suppressStoredDeviceAuth: true)
+                let token = token?.trimmedNonEmpty
+                let password = password?.trimmedNonEmpty
                 // Setup-link fields retain their source provenance. When the endpoint changes,
                 // carry only values the user replaced instead of forwarding source credentials.
                 return ManualAuthOverride.explicit(
-                    token: normalizedInput.token == pendingOverride.token ? nil : normalizedInput.token,
+                    token: token == pendingOverride.token ? nil : token,
                     bootstrapToken: nil,
-                    password: normalizedInput.password == pendingOverride.password ? nil : normalizedInput.password,
+                    password: password == pendingOverride.password ? nil : password,
                     targetStableID: targetStableID,
                     tlsFingerprintSha256: nil,
                     expiresAtMs: nil,
                     suppressStoredDeviceAuth: true)
             }
-            var override = ManualAuthOverride.explicit(
-                token: token,
-                bootstrapToken: pendingOverride.bootstrapToken,
-                password: password,
-                targetStableID: pendingOverride.targetStableID,
-                tlsFingerprintSha256: pendingOverride.tlsFingerprintSha256,
-                expiresAtMs: pendingOverride.expiresAtMs,
-                isSetupCodeOrigin: pendingOverride.isSetupCodeOrigin,
-                suppressStoredDeviceAuth: pendingOverride.suppressStoredDeviceAuth)
-            override.handoff = pendingOverride.handoff
+            var override = pendingOverride
+            override.token = token?.trimmedNonEmpty
+            override.password = password?.trimmedNonEmpty
             return override
         }
 

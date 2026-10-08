@@ -20,6 +20,8 @@ import { closeToolStreamBoundary } from "./tool-stream-state.ts";
 export type StreamCausalBoundaryState = {
   chatMessages?: unknown[];
   chatRunId?: string | null;
+  chatStreamItemId?: string;
+  chatStreamItemStartOffset?: number;
   chatStreamSegments?: ChatStreamSegment[];
 };
 
@@ -27,6 +29,8 @@ type StreamRolloverState = Partial<Pick<ToolStreamHost, "toolStreamById" | "chat
   chatMessages?: unknown[];
   chatRunId: string | null;
   chatStream: string | null;
+  chatStreamItemId?: string;
+  chatStreamItemStartOffset?: number;
   chatStreamStartedAt: number | null;
   chatStreamSegments?: ChatStreamSegment[];
 };
@@ -558,6 +562,8 @@ export function rolloverChatStream(
     return;
   }
   host.chatStream = null;
+  host.chatStreamItemId = undefined;
+  host.chatStreamItemStartOffset = undefined;
   // The closed segment owns elapsed time; a later cumulative tail must not restart the run clock.
   host.chatStreamStartedAt = null;
 }

@@ -763,12 +763,9 @@ button:is(.chat-working-indicator__child, .chat-working-indicator__subagents):is
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chat-working-indicator {
-    animation: none;
-  }
-
   /* Includes the bubble itself: the southpaw surprise animates the bubble,
      not the svg, and must stay still under reduced motion too. */
+  .chat-working-indicator,
   .chat-reading-indicator,
   .chat-reading-indicator--neutral > span,
   .chat-reading-indicator svg,

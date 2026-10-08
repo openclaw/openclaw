@@ -267,9 +267,6 @@ export function createBlockReplyPipeline(params: {
   };
 
   const flushBuffered = () => {
-    if (!bufferedPayloads.length) {
-      return;
-    }
     for (const payload of bufferedPayloads) {
       const finalPayload = seenAudioAsVoice
         ? copyReplyPayloadMetadata(payload, { ...payload, audioAsVoice: true })
@@ -324,24 +321,15 @@ export function createBlockReplyPipeline(params: {
     }
     // Buffered audio is an ordering boundary, even when voice metadata arrives later.
     flushBuffered();
-    const reply = resolveSendableOutboundReplyParts(payload);
     const hasNonTextContent = hasOutboundReplyContent(
       { ...payload, text: undefined, mediaUrl: undefined, mediaUrls: undefined },
       { trimText: true },
     );
-    if (reply.hasMedia && coalescer && !hasNonTextContent) {
+    if (coalescer && !hasNonTextContent) {
       enqueueCoalescedPayload(payload);
       return;
     }
-    if (reply.hasMedia || hasNonTextContent) {
-      void coalescer?.flush({ force: true });
-      sendPayload(payload, /* bypassSeenCheck */ false);
-      return;
-    }
-    if (coalescer) {
-      enqueueCoalescedPayload(payload);
-      return;
-    }
+    void coalescer?.flush({ force: true });
     sendPayload(payload, /* bypassSeenCheck */ false);
   };
 

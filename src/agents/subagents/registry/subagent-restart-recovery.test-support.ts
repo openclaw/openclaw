@@ -28,17 +28,13 @@ import {
 } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-vi.mock("../announce/subagent-announce.js", async (importOriginal) => {
-  const { hasUsableSessionEntry } =
-    await importOriginal<typeof import("../announce/subagent-announce.js")>();
-  return {
-    hasUsableSessionEntry,
-    captureSubagentCompletionReply: vi.fn(async () => undefined),
-    runSubagentAnnounceFlow: vi.fn<
-      typeof import("../announce/subagent-announce.js").runSubagentAnnounceFlow
-    >(async () => "delivered"),
-  };
-});
+vi.mock("../announce/subagent-announce.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../announce/subagent-announce.js")>()),
+  captureSubagentCompletionReply: vi.fn(async () => undefined),
+  runSubagentAnnounceFlow: vi.fn<
+    typeof import("../announce/subagent-announce.js").runSubagentAnnounceFlow
+  >(async () => "delivered"),
+}));
 vi.mock("../../../infra/agent-events.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../infra/agent-events.js")>();
   return { ...actual, onAgentEvent: vi.fn(actual.onAgentEvent) };
@@ -65,6 +61,7 @@ export function makeRestartRecoveryRun(
 export function useSubagentRestartRecoveryFixture() {
   const dispatchAgent = vi.fn();
   const gatewayRuntime: GatewayRecoveryRuntime = {
+    prepareRestartRecovery: () => undefined,
     dispatchSessionMethod: vi.fn(),
     dispatchAgent: dispatchAgent as GatewayRecoveryRuntime["dispatchAgent"],
     waitForAgent: vi.fn(async () => ({

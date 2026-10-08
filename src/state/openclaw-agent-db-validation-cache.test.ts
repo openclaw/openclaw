@@ -2,6 +2,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  AgentDatabaseSchemaAdmissionChangedError,
+  AgentDatabaseSchemaAdmissionInvalidError,
+} from "./agent-database-admission-error.js";
 import { recordOpenClawAgentCanonicalValidation } from "./openclaw-agent-canonical-validation-receipt.js";
 import type {
   OpenClawAgentDatabase,
@@ -10,6 +14,7 @@ import type {
 import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
 import {
   adoptOpenClawAgentDatabaseValidation,
+  captureOpenClawAgentDatabaseAdmissionPublication,
   captureOpenClawAgentDatabaseValidationTransfer,
   clearOpenClawAgentDatabaseValidationCache,
   getOpenClawAgentDatabaseValidation,
@@ -117,6 +122,8 @@ describe("canonical proof on physical database validation", () => {
           { path: database.path, ...(selection === "sibling-family" ? { scope: selection } : {}) },
         ];
 
+        releaseOpenClawAgentDatabaseReadValidation(candidates, [database.path]);
+        expect(getOpenClawAgentDatabaseValidationForTransfer(database)?.valid).toBe(receipt.valid);
         releaseOpenClawAgentDatabaseReadValidation(candidates);
 
         expect(getOpenClawAgentDatabaseValidationForTransfer(database)).toBeUndefined();
@@ -146,6 +153,44 @@ describe("canonical proof on physical database validation", () => {
   );
 
   describe("native integrity proof handoff", () => {
+    it("distinguishes raced publication from malformed receipts even after revocation", async () => {
+      await withReceiptFixture(false, (database) => {
+        for (const race of ["capture", "captured proof", "received proof", "schema"] as const) {
+          setOpenClawAgentDatabaseValidation(database);
+          const original = getOpenClawAgentDatabaseValidation(database)!;
+          const received = independentWorkerReceipt(database);
+          const publish = captureOpenClawAgentDatabaseAdmissionPublication(database);
+          if (race === "capture") {
+            invalidateOpenClawAgentDatabaseValidation(database.path);
+          } else {
+            const cell =
+              race === "captured proof"
+                ? original.valid
+                : race === "received proof"
+                  ? received.valid
+                  : received.schema!.valid;
+            Atomics.store(new Int32Array(cell), 0, 0);
+          }
+          expect(() => publish(received.identity, received), race).toThrow(
+            AgentDatabaseSchemaAdmissionChangedError,
+          );
+          for (const malformed of [
+            undefined,
+            { ...received, agentId: "another-agent" },
+            { ...received, identity: "another-file" },
+            { ...received, valid: new SharedArrayBuffer(1) },
+            { ...received, canonicalReady: new SharedArrayBuffer(1) },
+            { ...received, schema: undefined },
+            { ...received, schema: { ...received.schema, facts: {} } },
+          ]) {
+            expect(() => publish(received.identity, malformed), race).toThrow(
+              AgentDatabaseSchemaAdmissionInvalidError,
+            );
+          }
+        }
+      });
+    });
+
     it.each(["current", "revoked"] as const)(
       "preserves a %s native handoff while a reader publishes durable canonical proof",
       async (state) => {

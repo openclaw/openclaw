@@ -400,6 +400,8 @@ export async function preflightOpenClawDatabaseSchemas(
       ) {
         assertSqliteIntegrity(stateDatabase, statePath);
         assertCanonicalStateSchemaShape(stateDatabase, statePath);
+        // Readiness must reject malformed ownership even when startup has no pending writes.
+        inspectOpenClawStateOwnershipFromDatabase(stateDatabase, statePath);
         if (migrationVersion === OPENCLAW_STATE_SCHEMA_VERSION) {
           const { blockingIssues } = inspectCurrentStateStartupSchema(
             stateDatabase,

@@ -52,6 +52,10 @@ export function truncateDiscordCommandDescriptionLocalizations(params: {
   );
 }
 
+function buildDiscordChoiceOptions(choices: ReturnType<typeof resolveCommandArgChoices>) {
+  return choices.slice(0, 25).map((choice) => ({ name: choice.label, value: choice.value }));
+}
+
 export function buildDiscordCommandOptions(params: {
   command: ChatCommandDefinition;
   cfg: OpenClawConfig;
@@ -136,17 +140,12 @@ export function buildDiscordCommandOptions(params: {
                 normalizeLowercaseStringOrEmpty(choice.label).includes(focusValue),
               )
             : choices;
-          await interaction.respond(
-            filtered.slice(0, 25).map((choice) => ({ name: choice.label, value: choice.value })),
-          );
+          await interaction.respond(buildDiscordChoiceOptions(filtered));
         }
       : undefined;
     const choices =
       resolvedChoices.length > 0 && !autocomplete
-        ? resolvedChoices.slice(0, 25).map((choice) => ({
-            name: choice.label,
-            value: choice.value,
-          }))
+        ? buildDiscordChoiceOptions(resolvedChoices)
         : undefined;
     return Object.assign(base, {
       type: ApplicationCommandOptionType.String,

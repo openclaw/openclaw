@@ -200,6 +200,8 @@ export function createFixture(groups: readonly string[], root: string) {
     recursive: true,
   });
   // Keep the generator's source owners and import.meta.url lookups inside the fixture.
+  // Plain paths are deliberate: owner edits do not select these suites in product PRs
+  // (see "Declaration-fixture owner selection" in .agents/skills/openclaw-ci-limits).
   const runtimeEntryOwners = new Set([
     ...Object.values(runtimeProcessDeclarationEntries),
     "scripts/lib/managed-windows-job-launcher.mts",

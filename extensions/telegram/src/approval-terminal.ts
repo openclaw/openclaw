@@ -1,4 +1,3 @@
-// Telegram plugin module renders terminal operator approval receipts.
 import type { ApprovalResolveResult } from "openclaw/plugin-sdk/approval-gateway-runtime";
 import type {
   ExpiredApprovalView,
@@ -55,20 +54,13 @@ function finalizeTerminalText(lines: string[]): string {
   return `${truncateUtf16Safe(text, TELEGRAM_APPROVAL_TERMINAL_MAX_CHARS - 1).trimEnd()}…`;
 }
 
-function appendCanonicalSubject(
+function appendApprovalSubject(
   lines: string[],
-  presentation: ApprovalResolveResult["approval"]["presentation"],
+  label: "Command:" | "Request:",
+  subject: string,
+  description?: string,
 ): void {
-  if (presentation.kind === "exec") {
-    lines.push(
-      "",
-      "Command:",
-      truncateDetail(presentation.commandPreview ?? presentation.commandText),
-    );
-    return;
-  }
-  lines.push("", "Request:", truncateDetail(presentation.title));
-  const description = presentation.description.trim();
+  lines.push("", label, truncateDetail(subject));
   if (description) {
     lines.push(truncateDetail(description));
   }
@@ -101,7 +93,13 @@ export function buildTelegramCanonicalApprovalTerminalText(params: {
     `ID: ${truncateApprovalId(approvalId)}`,
   ];
   if (approval.presentation) {
-    appendCanonicalSubject(lines, approval.presentation);
+    const subject = approval.presentation;
+    appendApprovalSubject(
+      lines,
+      subject.kind === "exec" ? "Command:" : "Request:",
+      subject.kind === "exec" ? (subject.commandPreview ?? subject.commandText) : subject.title,
+      subject.kind === "exec" ? undefined : subject.description.trim(),
+    );
   }
   return finalizeTerminalText(lines);
 }
@@ -133,21 +131,6 @@ export function buildTelegramInvalidApprovalTerminalText(): string {
   return "ℹ️ Approval action unavailable\nThis button is invalid or no longer actionable.";
 }
 
-function appendViewSubject(
-  lines: string[],
-  view: ResolvedApprovalView | ExpiredApprovalView,
-): void {
-  if (view.approvalKind === "exec") {
-    lines.push("", "Command:", truncateDetail(view.commandPreview ?? view.commandText));
-    return;
-  }
-  lines.push("", "Request:", truncateDetail(view.title));
-  const description = view.description?.trim();
-  if (description) {
-    lines.push(truncateDetail(description));
-  }
-}
-
 /** Render a canonical native resolved event while retaining safe request context. */
 export function buildTelegramNativeResolvedApprovalText(view: ResolvedApprovalView): string {
   if (view.approvalKind === "system-agent") {
@@ -165,7 +148,12 @@ export function buildTelegramNativeResolvedApprovalText(view: ResolvedApprovalVi
     lines.push(`Resolved by: ${formatResolvedBy(view.resolvedBy)}`);
   }
   lines.push(`ID: ${truncateApprovalId(view.approvalId)}`);
-  appendViewSubject(lines, view);
+  appendApprovalSubject(
+    lines,
+    view.approvalKind === "exec" ? "Command:" : "Request:",
+    view.approvalKind === "exec" ? (view.commandPreview ?? view.commandText) : view.title,
+    view.approvalKind === "exec" ? undefined : view.description?.trim(),
+  );
   return finalizeTerminalText(lines);
 }
 
@@ -180,6 +168,11 @@ export function buildTelegramNativeExpiredApprovalText(view: ExpiredApprovalView
     "Canonical result: Expired",
     `ID: ${truncateApprovalId(view.approvalId)}`,
   ];
-  appendViewSubject(lines, view);
+  appendApprovalSubject(
+    lines,
+    view.approvalKind === "exec" ? "Command:" : "Request:",
+    view.approvalKind === "exec" ? (view.commandPreview ?? view.commandText) : view.title,
+    view.approvalKind === "exec" ? undefined : view.description?.trim(),
+  );
   return finalizeTerminalText(lines);
 }

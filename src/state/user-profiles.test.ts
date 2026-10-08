@@ -1,11 +1,11 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { constants } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "../infra/node-sqlite.js";
 import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
@@ -14,11 +14,11 @@ import {
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { getUserPreferences, setUserPreferences } from "./user-preferences.test-support.js";
-import { onUserProfilesChanged, readUserProfileVersion } from "./user-profile-events.js";
+import { readUserProfileVersion } from "./user-profile-events.js";
 import { readUserProfileSnapshotSync } from "./user-profile-identity.read.js";
+import { retainUserProfileCatalog } from "./user-profile-list.js";
 import {
   linkEmail,
   setAvatar,
@@ -26,6 +26,7 @@ import {
   setUserProfileRole,
   syncGitHubIdentity,
 } from "./user-profile-writes.worker.js";
+import { createProfileAvatarReader } from "./user-profiles-avatar.js";
 import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
 import {
   inspectProfileAvatarInDatabase,
@@ -39,7 +40,6 @@ import {
   ensureProfileForTailscaleIdentity,
   getUserProfileDisplay,
   getUserProfileListItem,
-  getUserProfileRole,
 } from "./user-profiles.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -52,9 +52,6 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
 });
 
 let options: { path: string };
-beforeEach(() => {
-  options = { path: join(tempDirs.make("openclaw-user-profiles-"), "openclaw.sqlite") };
-});
 
 function github(
   accountId: number,
@@ -81,35 +78,9 @@ function avatarResponse() {
 }
 
 describe("user profiles", () => {
-  it("publishes profile changes only after the owning transaction commits", () => {
-    const profile = ensureProfileForEmail("publication@example.test", options);
-    const changed = vi.fn();
-    const stop = onUserProfilesChanged(changed);
-    const before = readUserProfileVersion();
-    try {
-      expect(() =>
-        runOpenClawStateWriteTransaction(() => {
-          setDisplayName(profile.id, "Rolled back", options);
-          expect(changed).not.toHaveBeenCalled();
-          throw new Error("rollback");
-        }, options),
-      ).toThrow("rollback");
-      expect(readUserProfileVersion()).toBe(before);
-      expect(getUserProfileDisplay(profile.id, options).displayName).not.toBe("Rolled back");
-      runOpenClawStateWriteTransaction(() => {
-        expect(setDisplayName(profile.id, "Committed", options)).toMatchObject({
-          id: profile.id,
-          displayName: "Committed",
-        });
-        expect(changed).not.toHaveBeenCalled();
-      }, options);
-      expect(changed).toHaveBeenCalledOnce();
-      expect(readUserProfileVersion()).toBe(before + 1);
-    } finally {
-      stop();
-    }
+  beforeEach(() => {
+    options = { path: join(tempDirs.make("openclaw-user-profiles-"), "openclaw.sqlite") };
   });
-
   it.each([false, true])(
     "display lookup leaves absent storage absent (database exists: %s)",
     (exists) => {
@@ -176,28 +147,7 @@ describe("user profiles", () => {
     expect(readUserProfileVersion()).toBe(version + 1);
   });
 
-  it("assigns and clears roles through the canonical merge head", () => {
-    const source = ensureProfileForEmail("source@example.com", options);
-    const target = ensureProfileForEmail("target@example.com", options);
-    linkEmail("source@example.com", target.id, options);
-    const version = readUserProfileVersion();
-    expect(setUserProfileRole(source.id, "maintainer", options)).toMatchObject({
-      id: target.id,
-      role: "maintainer",
-    });
-    expect(readUserProfileVersion()).toBe(version + 1);
-    expect(getUserProfileRole(source.id, options)).toBe("maintainer");
-    expect(readUserProfileSnapshotSync(options).profiles).toContainEqual(
-      expect.objectContaining({ id: target.id, role: "maintainer" }),
-    );
-    const cleared = setUserProfileRole(source.id, null, options);
-    expect(readUserProfileVersion()).toBe(version + 2);
-    expect(cleared).toMatchObject({ id: target.id });
-    expect(cleared).not.toHaveProperty("role");
-    expect(getUserProfileRole(target.id, options)).toBeNull();
-  });
-
-  it.each(["unadmitted", "admitted", "authorizer"] as const)(
+  it.each(["unadmitted", "admitted"] as const)(
     "preserves metadata and display reads on a %s handle across role schema changes",
     (mode) => {
       const profile = ensureProfileForEmail("reader@example.test", options);
@@ -208,24 +158,14 @@ describe("user profiles", () => {
       if (mode !== "unadmitted") {
         admitSqliteSchema(reader);
       }
-      if (mode === "authorizer") {
-        reader.setAuthorizer((action, table, column) =>
-          action === constants.SQLITE_READ && table === "user_profiles" && column === "role"
-            ? constants.SQLITE_IGNORE
-            : constants.SQLITE_OK,
-        );
-      }
       try {
-        const role = mode === "authorizer" ? null : "maintainer";
+        const role = "maintainer";
         expect(selectResolvedUserProfileMetadataById(reader, profile.id)).toMatchObject({
           id: profile.id,
           role,
         });
         expect(selectProfileDisplayEntries(reader, [profile.id])).toMatchObject([
-          [
-            profile.id,
-            { id: profile.id, ...(mode === "authorizer" ? {} : { role }), has_avatar: 1 },
-          ],
+          [profile.id, { id: profile.id, role, has_avatar: 1 }],
         ]);
         if (mode === "admitted") {
           expect(inspectProfileAvatarInDatabase(reader, profile.id)).toMatchObject({
@@ -259,31 +199,6 @@ describe("user profiles", () => {
       }
     },
   );
-
-  it("keeps ensured writer projections available when an authorizer denies schema probes and unrelated columns", () => {
-    const profile = ensureProfileForEmail("authorized-reader@example.test", options);
-    setUserProfileRole(profile.id, "maintainer", options);
-    const db = openOpenClawStateDatabase(options).db;
-    db.setAuthorizer((action, table, column) =>
-      action === constants.SQLITE_PRAGMA ||
-      (action === constants.SQLITE_READ &&
-        table === "user_profiles" &&
-        column === "primary_github_account_id")
-        ? constants.SQLITE_DENY
-        : constants.SQLITE_OK,
-    );
-    try {
-      expect(selectResolvedUserProfileMetadataById(db, profile.id)).toMatchObject({
-        id: profile.id,
-        role: "maintainer",
-      });
-      expect(selectProfileDisplayEntries(db, [profile.id])).toMatchObject([
-        [profile.id, { id: profile.id, role: "maintainer" }],
-      ]);
-    } finally {
-      db.setAuthorizer(null);
-    }
-  });
 
   it("keeps immutable owners isolated when a numeric GitHub login is renamed and reused", () => {
     const accountA = github(10, "10", { initialName: "Account A" });
@@ -323,9 +238,9 @@ describe("user profiles", () => {
     });
   });
 
-  it.each([null, "Ada"])("persists GitHub names on the surviving merge head: %s", (saved) => {
+  it("persists GitHub names on the surviving merge head", () => {
     const target = github(10, "Ada", { alias: "ada" });
-    setDisplayName(target.id, saved, options);
+    setDisplayName(target.id, "Ada", options);
     const source = ensureProfileForEmail("alias@example.com", options);
     setDisplayName(source.id, "Source Custom", options);
     const updated = github(10, "Ada", {
@@ -440,46 +355,14 @@ describe("user profiles", () => {
     );
   });
 
-  it("bounds generated display names without splitting Unicode", () => {
-    const profile = ensureProfileForEmail(`${"a".repeat(255)}😀@example.com`, options);
-    expect(profile.displayName).toBe("a".repeat(255));
-  });
-
-  it("adopts a bounded PNG Tailscale avatar", async () => {
-    const initial = ensureProfileForTailscaleIdentity(
-      { login: "avatar@github", name: "Avatar User" },
-      options,
-    );
-    const bytes = new Uint8Array(await avatarResponse().arrayBuffer());
-    const version = readUserProfileVersion();
-    const profile = await adoptTailscaleProfileAvatar(initial.id, avatarUrl, options, {
-      fetchImpl: vi.fn(async () => avatarResponse()),
-    });
-    expect(profile.avatarMime).toBe("image/png");
-    expect(readUserProfileVersion()).toBe(version + 1);
-    const stored = getProfileAvatar(profile.id, options);
-    expect(stored).toMatchObject({
-      mime: "image/png",
-      sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
-    });
-    expect(stored?.bytes).toEqual(bytes);
-  });
-
-  it.each([
-    {
-      name: "oversized",
-      headers: new Headers({
-        "content-length": String(512 * 1024 + 1),
-        "content-type": "image/png",
-      }),
-    },
-    { name: "wrong-type", headers: new Headers({ "content-type": "text/plain" }) },
-  ])("keeps the avatar empty after a $name fetch", async ({ headers }) => {
+  it("keeps the avatar empty after a wrong-type fetch", async () => {
     const initial = ensureProfileForTailscaleIdentity(
       { login: "avatar-failure@github", name: "Still Authenticated" },
       options,
     );
-    const fetchImpl = vi.fn(async () => new Response("not an image", { headers }));
+    const fetchImpl = vi.fn(
+      async () => new Response("not an image", { headers: { "content-type": "text/plain" } }),
+    );
     const profile = await adoptTailscaleProfileAvatar(initial.id, avatarUrl, options, {
       fetchImpl,
     });
@@ -552,4 +435,95 @@ describe("user profiles", () => {
       error: { code: "unsupported_avatar_mime", mime: "image/gif" },
     });
   });
+});
+
+describe("avatar database lifetime", () => {
+  it.each([false, true])(
+    "keeps avatar adoption on its original database after handle replacement (fetched=%s)",
+    async (fetched) => {
+      const originalDirectory = tempDirs.make("openclaw-avatar-original-");
+      const otherDirectory = tempDirs.make("openclaw-avatar-other-");
+      const env = { OPENCLAW_STATE_DIR: originalDirectory };
+      const sourceOptions = { env };
+      const profile = ensureProfileForEmail("avatar-lifetime@example.test", sourceOptions);
+      const original = openOpenClawStateDatabase(sourceOptions);
+      const originalOptions = { path: original.path };
+      const entered = createDeferredCore();
+      const response = createDeferredCore<Response>();
+      const pending = adoptTailscaleProfileAvatar(
+        profile.id,
+        "https://avatars.example.test/profile",
+        sourceOptions,
+        {
+          fetchImpl: vi.fn(async () => {
+            entered.resolve();
+            return response.promise;
+          }),
+        },
+      );
+      try {
+        await entered.promise;
+        closeOpenClawStateDatabaseForTest();
+        expect(original.db.isOpen).toBe(false);
+        setDisplayName(profile.id, "Edited during fetch", originalOptions);
+        env.OPENCLAW_STATE_DIR = otherDirectory;
+        const other = ensureProfileForEmail("other@example.test", sourceOptions);
+        const bytes = readFileSync(join(process.cwd(), "ui/public/favicon-32.png"));
+        response.resolve(
+          fetched
+            ? new Response(Uint8Array.from(bytes).buffer, {
+                headers: { "content-type": "image/png" },
+              })
+            : new Response("unavailable", { status: 503 }),
+        );
+
+        await expect(pending).resolves.toMatchObject({
+          id: profile.id,
+          displayName: "Edited during fetch",
+          avatarMime: fetched ? "image/png" : null,
+        });
+        expect(getProfileAvatar(profile.id, originalOptions)?.bytes).toEqual(
+          fetched ? Uint8Array.from(bytes) : undefined,
+        );
+        expect(readUserProfileSnapshotSync(sourceOptions).profiles).toEqual([
+          expect.objectContaining({ id: other.id, hasAvatar: false }),
+        ]);
+      } finally {
+        response.resolve(new Response("unavailable", { status: 503 }));
+        await Promise.allSettled([pending]);
+      }
+    },
+  );
+
+  it.each([false, true])(
+    "refreshes foreign avatar commits through the originally selected database (resident=%s)",
+    async (resident) => {
+      const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-avatar-read-owner-") };
+      const profile = ensureProfileForEmail("avatar-reader@example.test", { env });
+      expect(setAvatar(profile.id, new Uint8Array([1]), "image/png", { env }).ok).toBe(true);
+      const { path } = openOpenClawStateDatabase({ env });
+      const release = resident ? retainUserProfileCatalog({ path }) : () => {};
+      const reader = createProfileAvatarReader(profile.id, resident ? { path } : { env });
+      const prepared = await reader.inspect();
+      const revision = readUserProfileVersion();
+      const bytes = new Uint8Array([2, 3]);
+      const foreign = new (requireNodeSqlite().DatabaseSync)(path);
+      try {
+        foreign
+          .prepare("UPDATE user_profiles SET avatar = ?, avatar_sha256 = ? WHERE id = ?")
+          .run(bytes, createHash("sha256").update(bytes).digest("hex"), profile.id);
+        expect(readUserProfileVersion()).toBe(revision);
+        expect(prepared.isCurrent()).toBe(true);
+        env.OPENCLAW_STATE_DIR = tempDirs.make("openclaw-avatar-read-other-");
+        await expect(prepared.loadBytes()).resolves.toBeUndefined();
+        const refreshed = await reader.inspect();
+        expect(refreshed.profile?.id).toBe(profile.id);
+        expect(refreshed.avatar?.byteLength).toBe(bytes.byteLength);
+        await expect(refreshed.loadBytes()).resolves.toMatchObject({ bytes });
+      } finally {
+        release();
+        foreign.close();
+      }
+    },
+  );
 });

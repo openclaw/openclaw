@@ -236,8 +236,12 @@ export const migrationsHandlers: GatewayRequestHandlers = {
       });
       const dedupeKey = `${MEMORY_APPLY_DEDUPE_PREFIX}${params.idempotencyKey}`;
       const cached = context.dedupe.get(dedupeKey);
-      if (cached && isCachedMemoryApply(cached.payload)) {
-        if (cached.payload.requestFingerprint !== requestFingerprint) {
+      const previous =
+        cached && isCachedMemoryApply(cached.payload)
+          ? cached.payload
+          : memoryApplyInflightMap(context.dedupe).get(dedupeKey);
+      if (previous) {
+        if (previous.requestFingerprint !== requestFingerprint) {
           respond(
             false,
             undefined,
@@ -245,23 +249,11 @@ export const migrationsHandlers: GatewayRequestHandlers = {
           );
           return;
         }
-        respondMemoryApply(cached.payload.outcome, respond, true);
+        const outcome = "outcome" in previous ? previous.outcome : await previous.completion;
+        respondMemoryApply(outcome, respond, true);
         return;
       }
       const inFlightMap = memoryApplyInflightMap(context.dedupe);
-      const inFlight = inFlightMap.get(dedupeKey);
-      if (inFlight) {
-        if (inFlight.requestFingerprint !== requestFingerprint) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "memory import idempotency key was reused"),
-          );
-          return;
-        }
-        respondMemoryApply(await inFlight.completion, respond, true);
-        return;
-      }
       const completion = createDeferredCore<MemoryApplyOutcome>();
       // Reserve before acquisition. Once apply completes, even an unreadable result is terminal.
       inFlightMap.set(dedupeKey, { requestFingerprint, completion: completion.promise });

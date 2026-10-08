@@ -62,6 +62,7 @@ type GatewayInstanceRuntimeOptions = {
   getMethodRegistry: () => GatewayMethodRegistry;
   isDispatchAvailable: () => boolean;
   logError?: (message: string) => void;
+  prepareRestartRecovery?: GatewayRecoveryRuntime["prepareRestartRecovery"];
 };
 
 /** Creates closed internal principals bound to one concrete Gateway lifecycle. */
@@ -160,6 +161,15 @@ export function createGatewayInstanceRuntime(
     "sessions.delete",
   ]);
   const recovery: GatewayRecoveryRuntime = {
+    prepareRestartRecovery: (signal) => {
+      signal?.throwIfAborted();
+      assertDispatchAvailable("restart recovery");
+      return options.prepareRestartRecovery?.(signal)?.then((pausedUntilMs) => {
+        signal?.throwIfAborted();
+        assertDispatchAvailable("restart recovery");
+        return pausedUntilMs;
+      });
+    },
     dispatchSessionMethod: (method, payload, requestOptions = {}) =>
       dispatch({
         allowedMethods: recoverySessionMethods,
