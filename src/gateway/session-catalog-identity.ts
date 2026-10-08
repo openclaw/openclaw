@@ -277,7 +277,7 @@ export async function prepareSessionCatalogGitHubLinker(params: {
   ];
   if (accountIds.length === 0 && !params.owners?.length) {
     return {
-      assertCurrent() {},
+      assertCurrent(this: void) {},
       linkParticipant(this: void, participant: SessionParticipant): SessionParticipant {
         return participant;
       },
