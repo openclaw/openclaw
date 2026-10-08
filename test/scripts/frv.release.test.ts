@@ -34,14 +34,14 @@ describe("FRV protected gh evidence reads", () => {
     [
       "getAttemptJobs",
       ["101", 2],
-      "actions/runs/101/attempts/2/jobs?per_page=100",
-      [{ id: 1 }, { id: 2 }],
+      "actions/runs/101/attempts/2/jobs?per_page=25",
+      Array.from({ length: 26 }, (_, index) => ({ id: index + 1 })),
     ],
     [
       "getParentJobs",
       ["77"],
-      "actions/runs/77/jobs?filter=all&per_page=100",
-      [{ id: 1 }, { id: 2 }],
+      "actions/runs/77/jobs?filter=all&per_page=25",
+      Array.from({ length: 26 }, (_, index) => ({ id: index + 1 })),
     ],
     ["getJobLog", [1], "actions/jobs/1/logs", "job evidence"],
   ])("revalidates %s through the default protected route", (method, args, endpoint, expected) => {
@@ -59,7 +59,7 @@ describe("FRV protected gh evidence reads", () => {
           ? ["101", { operationDeadline: 15_000 }]
           : ["101", 2, { operationDeadline: 15_000 }];
       const endpoint =
-        method === "getRun" ? "actions/runs/101" : "actions/runs/101/attempts/2/jobs?per_page=100";
+        method === "getRun" ? "actions/runs/101" : "actions/runs/101/attempts/2/jobs?per_page=25";
       const result = runProtectedFrv(method, args, endpoint, "transient-deadline");
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("FRV operation timed out");
@@ -121,7 +121,7 @@ if (${endpoint.endsWith("/logs")} && failure === "unrelated") fail("unrelated lo
 if (${endpoint.endsWith("/logs")} && failure === "none" && !args.includes("--allow-escape-sequences")) fail("missing escape-sequence flag", 20);
 if (${endpoint.includes("/jobs?")}) {
   if (!args.includes("--paginate") || !args.includes(".jobs[] | @json")) fail("missing pagination", 17);
-  console.log('{"id":1}\\n{"id":2}');
+  console.log(Array.from({ length: 26 }, (_, index) => JSON.stringify({ id: index + 1 })).join("\\n"));
 } else console.log(${endpoint.endsWith("/logs") ? JSON.stringify("job evidence") : JSON.stringify('{"run_attempt":2}')});
 `,
   );
@@ -416,7 +416,9 @@ async function runPublicationCli(
       id: run.workflow_id,
       path: run.path,
     };
-    responses[endpoint(`actions/runs/${entry.runId}/attempts/1/jobs?per_page=100&page=1`)] = {
+    responses[
+      endpoint(`actions/runs/${entry.runId}/attempts/1/jobs?per_page=${legacy ? 25 : 100}&page=1`)
+    ] = {
       total_count: 1,
       jobs: [{ ...job("test"), id: Number(entry.runId) * 10, run_id: run.id, run_attempt: 1 }],
     };
@@ -459,7 +461,7 @@ if (legacy && args[0] === "run" && args[1] === "download" && args[2] === "77" &&
 if (args[0] !== "api" || (!legacy && (!args.includes("GET") || !args.includes("github.com"))) || !args.includes("Cache-Control: max-age=0")) reject();
 if (args.includes("--include") || (!legacy && args.includes("--paginate"))) reject();
 let path = args.find(a => a.startsWith("repos/"));
-if (legacy && path.endsWith("/jobs?per_page=100")) path += "&page=1";
+if (legacy && path.endsWith("/jobs?per_page=25")) path += "&page=1";
 const table = JSON.parse(fs.readFileSync("responses.json", "utf8"));
 if (!Object.hasOwn(table, path)) reject();
 let value = table[path];
@@ -1224,11 +1226,11 @@ describe("publication status real CLI", () => {
     },
   );
 
-  it.each(["unexpected-entry", "expanded"])(
+  it.each(["traversal", "unexpected-entry", "expanded", "truncated", "corrupt", "duplicate-entry"])(
     "refuses %s archives before projecting diagnostics",
     async (kind) => {
       const fixture = publicationFixture();
-      const result = await runPublicationCli(fixture, undefined, async (_responses, artifact) => {
+      const result = await runPublicationCli(fixture, undefined, async (responses, artifact) => {
         await artifact(
           3,
           fixture.publisher,
@@ -1236,14 +1238,41 @@ describe("publication status real CLI", () => {
           DIAGNOSTIC_FILE,
           fixture.diagnostic,
           (zip) => {
+            if (kind === "traversal") {
+              zip.file("../escape.json", "{}");
+            }
             if (kind === "unexpected-entry") {
               zip.file("extra.json", "{}");
             }
             if (kind === "expanded") {
               zip.file(DIAGNOSTIC_FILE, " ".repeat(128 * 1024 + 1));
             }
+            if (kind === "duplicate-entry") {
+              zip.file("x".repeat(DIAGNOSTIC_FILE.length), "{}");
+            }
           },
         );
+        const archive = responses[`repos/${REPOSITORY}/actions/artifacts/3/zip`] as {
+          binary: string;
+        };
+        let bytes = Buffer.from(archive.binary, "base64");
+        if (kind === "truncated") {
+          bytes = bytes.subarray(0, -10);
+        }
+        if (kind === "corrupt") {
+          bytes[0] = 0;
+        }
+        if (kind === "duplicate-entry") {
+          const needle = Buffer.from("x".repeat(DIAGNOSTIC_FILE.length));
+          for (let offset = bytes.indexOf(needle); offset !== -1; offset = bytes.indexOf(needle)) {
+            bytes.set(Buffer.from(DIAGNOSTIC_FILE), offset);
+          }
+        }
+        archive.binary = bytes.toString("base64");
+        Object.assign(responses[`repos/${REPOSITORY}/actions/artifacts/3`] as object, {
+          size_in_bytes: bytes.length,
+          digest: `sha256:${createHash("sha256").update(bytes).digest("hex")}`,
+        });
       });
       expect(result.status).toBe(1);
       expect(JSON.parse(result.stdout).publication.verification.state).toBe("unknown");

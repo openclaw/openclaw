@@ -1826,7 +1826,18 @@ describe("FRV watch completion", () => {
     await expect(poll()).resolves.toMatchObject({ complete: false });
     client.getAttemptJobs = async () => [];
     await expect(poll()).resolves.toMatchObject({ complete: false });
-    client.getAttemptJobs = async () => [{ ...job("late", "failure"), id: 7 }];
+    client.getAttemptJobs = async () => [
+      { ...job("late", "failure"), id: 7 },
+      {
+        ...job("late"),
+        conclusion: null,
+        id: 8,
+        status: "queued",
+        runner_id: null,
+        runner_name: null,
+        steps: [{ name: "mirrored step", status: "completed", conclusion: "success" }],
+      },
+    ];
     await expect(poll()).resolves.toMatchObject({ complete: true });
   });
 });

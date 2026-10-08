@@ -260,7 +260,7 @@ if (args[0] === "variable") {
     }
     if (query.has("status")) reject();
     value = { total_count: found.length, workflow_runs: found };
-  } else if (runs.some(run => resource === "actions/runs/" + run.id + "/attempts/1/jobs?per_page=100")) {
+  } else if (runs.some(run => resource === "actions/runs/" + run.id + "/attempts/1/jobs?per_page=25")) {
     if (!args.includes("--paginate") || !args.includes(".jobs[] | @json")) reject();
     value = ${JSON.stringify(deferredJobs)};
   } else {
