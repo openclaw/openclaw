@@ -1343,6 +1343,24 @@ postgres Created
     },
   );
 
+  posixIt.each([0, 7, 124, 137])(
+    "preserves inner timeout classification for shell exit %s",
+    async (status) => {
+      for (const run of [runShellCommand, runShellCaptureCommand]) {
+        const result = await run({
+          command: `exit ${status}`,
+          env: process.env,
+          label: "inner-timeout",
+          timeoutMs: 60_000,
+        });
+        expect(result).toMatchObject({ status, signal: null, timedOut: status === 124 });
+        if ("noOutputTimedOut" in result) {
+          expect(result.noOutputTimedOut).toBe(false);
+        }
+      }
+    },
+  );
+
   posixIt("clamps oversized shell command timers before scheduling", async () => {
     const result = await runShellCommand({
       command: `exec ${JSON.stringify(process.execPath)} -e ${JSON.stringify(
