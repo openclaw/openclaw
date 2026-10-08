@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -538,6 +539,32 @@ export function buildGatewayReloadPlan(
     restartChannelAccounts,
     noopPaths: [],
   };
+
+  const configuredDecisionProviders = (config: OpenClawConfig | undefined) =>
+    Object.fromEntries(
+      Object.entries(config?.models?.providers ?? {}).filter(
+        ([, provider]) => provider.type === "decision",
+      ),
+    );
+  const previousDecisions = configuredDecisionProviders(options.previousConfig);
+  const candidateDecisions = configuredDecisionProviders(options.candidateConfig);
+  if (
+    changedPaths.some((path) => matchesReloadPrefix(path, "models")) &&
+    !isDeepStrictEqual(previousDecisions, candidateDecisions)
+  ) {
+    plan.reloadPlugins = true;
+    plan.reloadPluginPaths = changedPaths.filter((path) => matchesReloadPrefix(path, "models"));
+    const adapters = new Set(
+      [...Object.values(previousDecisions), ...Object.values(candidateDecisions)].map(
+        (provider) => provider.decisionProvider,
+      ),
+    );
+    for (const plugin of getReloadPolicyCatalog().registry?.plugins ?? []) {
+      if (plugin.contracts?.decisionProviders?.some((id) => adapters.has(id))) {
+        (plan.reloadPluginIds ??= new Set()).add(plugin.id);
+      }
+    }
+  }
 
   for (const path of changedPaths) {
     if (

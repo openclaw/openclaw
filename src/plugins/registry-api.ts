@@ -120,6 +120,8 @@ export function createPluginApiFactory(
         ...(registrationCapabilities.capabilityHandlers
           ? {
               ...bound,
+              registerDecisionProvider: (provider) =>
+                bound.registerDecisionProvider(provider, params.config),
               registerHook: (events, handler, opts) =>
                 bound.registerHook(events, handler, opts, params.config, params.pluginConfig),
               registerSpeechProvider: bindCapabilityRegistrar(bound.registerSpeechProvider),

@@ -34,6 +34,19 @@ const localProvider = configuredProvider("http://127.0.0.1:9191/v1", [
 ]);
 
 describe("resolveConfiguredProviderFallback", () => {
+  it("skips decision endpoints when replacing an unavailable primary model", () => {
+    const providers = {
+      judge: { ...localProvider, type: "decision" as const, decisionProvider: "typesafe" },
+      chat: localProvider,
+    };
+    expect(
+      resolveConfiguredProviderFallback({
+        cfg: configuredProviders(providers),
+        defaultProvider: "judge",
+        defaultModel: "local-good",
+      }),
+    ).toEqual({ provider: "chat", model: "local-good" });
+  });
   it("preserves configured provider order when the default model is absent", () => {
     expect(
       resolveConfiguredProviderFallback({

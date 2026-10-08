@@ -6,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/fetch-runtime";
 import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { localBaseUrl } from "./config.js";
+import { configuredBaseUrl, localBaseUrl } from "./config.js";
 import { EvaluationError } from "./errors.js";
 import { MAX_JSON_BYTES, type EvaluationInput } from "./schema.js";
 
@@ -86,13 +86,32 @@ export async function requestEvaluation(params: {
   body: EvaluationInput & { model: string };
   apiKey?: string;
   baseUrl?: string;
+  endpointMode?: "configured";
+  headers?: Record<string, string>;
+  authHeader?: boolean;
   timeoutMs: number;
   signal?: AbortSignal;
   deadlineMonotonicMs?: number;
   isAdmissible?: () => boolean;
 }): Promise<unknown> {
-  const baseUrl = localBaseUrl(params.baseUrl);
-  const endpoint = baseUrl ? `${baseUrl}/v1/systemone` : ENDPOINT;
+  const configured = params.endpointMode === "configured";
+  const baseUrl = configured
+    ? configuredBaseUrl(params.baseUrl ?? "")
+    : localBaseUrl(params.baseUrl);
+  const endpoint = baseUrl ? `${baseUrl}/${configured ? "systemone" : "v1/systemone"}` : ENDPOINT;
+  const loopbackOrigin =
+    baseUrl && ["localhost", "127.0.0.1", "[::1]"].includes(new URL(baseUrl).hostname)
+      ? new URL(baseUrl).origin
+      : undefined;
+  const headers = new Headers({ Accept: "application/json", "Content-Type": "application/json" });
+  if ((!baseUrl || configured) && params.authHeader !== false && params.apiKey) {
+    headers.set("Authorization", `Bearer ${params.apiKey}`);
+  }
+  if (configured) {
+    for (const [name, value] of Object.entries(params.headers ?? {})) {
+      headers.set(name, value);
+    }
+  }
   const body = JSON.stringify(params.body);
   if (Buffer.byteLength(body) > MAX_JSON_BYTES) {
     throw new EvaluationError("TypeSafe request exceeds its limit.", "unsupported-input");
@@ -127,8 +146,8 @@ export async function requestEvaluation(params: {
     const request = {
       url: endpoint,
       fetchImpl: globalThis.fetch,
-      requireHttps: !baseUrl,
-      ...(baseUrl ? { policy: { allowedOrigins: [baseUrl] } } : {}),
+      requireHttps: !loopbackOrigin,
+      ...(loopbackOrigin ? { policy: { allowedOrigins: [loopbackOrigin] } } : {}),
       ...(baseUrl && new URL(baseUrl).hostname === "localhost"
         ? {
             // Keep localhost local even when system DNS or hosts entries override its meaning.
@@ -143,16 +162,12 @@ export async function requestEvaluation(params: {
       beforeRequest: assertActive,
       init: {
         method: "POST",
-        headers: {
-          ...(!baseUrl ? { Authorization: `Bearer ${params.apiKey}` } : {}),
-          Accept: "application/json",
-          "Content-Type": "application/json",
-        },
+        headers,
         body,
       },
     };
     const guarded = await fetchWithSsrFGuard(
-      !baseUrl && shouldUseEnvHttpProxyForUrl(endpoint)
+      !loopbackOrigin && shouldUseEnvHttpProxyForUrl(endpoint)
         ? withTrustedEnvProxyGuardedFetchMode(request)
         : request,
     );

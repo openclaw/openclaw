@@ -1,3 +1,11 @@
+import type { ModelProviderConfig } from "../config/types.models.js";
+
+/** Prepared transport settings for an explicitly configured decision endpoint. */
+type DecisionProviderConfig = Pick<
+  ModelProviderConfig,
+  "baseUrl" | "apiKey" | "headers" | "authHeader" | "timeoutSeconds"
+>;
+
 /** Typed decision contract, version 1. */
 export type JsonValue =
   | null
@@ -115,6 +123,14 @@ export interface DecisionProviderV1 {
   readonly contractVersion: 1;
   /** Prepared local credential availability only; must not perform I/O. */
   isReady?(): boolean;
+  /** Optional native wire adapter for models.providers entries selecting this provider.
+   * Construction is synchronous and network-free. Read only prepared settings;
+   * do not resolve SecretRefs or fall back to the adapter's own credentials.
+   */
+  createConfiguredProvider?(params: {
+    readonly id: string;
+    readonly getConfig: () => DecisionProviderConfig | undefined;
+  }): DecisionProviderV1;
   evaluate(
     batch: DecisionBatch,
     context: {

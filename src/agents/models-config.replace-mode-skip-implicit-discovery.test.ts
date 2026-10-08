@@ -27,6 +27,36 @@ function createExplicitProvider(): ProviderConfig {
 }
 
 describe("models-config plan: replace mode skips implicit discovery", () => {
+  it("publishes only chat endpoints when decision providers share the config map", async () => {
+    const explicitProvider = createExplicitProvider();
+    const cfg: OpenClawConfig = {
+      models: {
+        mode: "replace",
+        providers: {
+          explicit: explicitProvider,
+          judge: {
+            ...explicitProvider,
+            api: undefined,
+            type: "decision",
+            decisionProvider: "typesafe",
+          },
+        },
+      },
+    };
+    const plan = await planModelsJsonForTest({
+      cfg,
+      agentDir: "/tmp/openclaw-models-config-decision-test",
+      env: {},
+      pluginMetadataSnapshot: createPluginMetadataSnapshotFixture(),
+    });
+    expect(plan.action).toBe("write");
+    if (plan.action !== "write") {
+      throw new Error(`Expected write plan, got ${plan.action}`);
+    }
+    expect(JSON.parse(plan.contents).providers).toEqual({ explicit: explicitProvider });
+    expect(plan.contents).not.toContain("judge");
+  });
+
   it("skips implicit discovery in replace mode", async () => {
     const explicitProvider = createExplicitProvider();
     const cfg: OpenClawConfig = {

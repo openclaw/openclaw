@@ -4,6 +4,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import plugin from "../index.js";
+import type { DecisionProviderConfig } from "./config.js";
 
 vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
   getPreparedPluginSecretInput: vi.fn(),
@@ -98,6 +99,63 @@ it("preserves mixed answers, rounded estimates, and the selected model through r
     questions: { ...batch.questions, q: { ...batch.questions.q, type: "noul" } },
     model: "jev-agent-selected",
   });
+});
+
+it("routes configured aliases through native TypeSafe wire with their own endpoint, headers, and rotated key", async () => {
+  vi.mocked(getPreparedPluginSecretInput).mockClear();
+  const fetch = vi.fn(
+    async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify(response)),
+  );
+  vi.stubGlobal("fetch", fetch);
+  let config: DecisionProviderConfig = {
+    baseUrl: "http://127.0.0.1:8009/custom/v1/",
+    apiKey: "synthetic-custom-key",
+    headers: { "x-tenant": "synthetic-tenant" },
+  };
+  const provider = registeredProvider().createConfiguredProvider!({
+    id: "custom",
+    getConfig: () => config,
+  });
+  expect(provider.id).toBe("custom");
+  expect(provider.isReady?.()).toBe(true);
+  await expect(provider.evaluate(batch, context())).resolves.toHaveProperty("status", "ok");
+  expect(fetch.mock.lastCall?.[0]).toBe("http://127.0.0.1:8009/custom/v1/systemone");
+  expect(new Headers(fetch.mock.lastCall?.[1]?.headers).get("authorization")).toBe(
+    "Bearer synthetic-custom-key",
+  );
+  expect(new Headers(fetch.mock.lastCall?.[1]?.headers).get("x-tenant")).toBe("synthetic-tenant");
+  const requestBody = fetch.mock.lastCall?.[1]?.body;
+  if (typeof requestBody !== "string") {
+    throw new Error("Expected a JSON string request body");
+  }
+  expect(JSON.parse(requestBody)).toEqual({
+    ...batch,
+    questions: { ...batch.questions, q: { ...batch.questions.q, type: "noul" } },
+    model: "jev-agent-selected",
+  });
+  config = {
+    ...config,
+    apiKey: "synthetic-rotated",
+    authHeader: false,
+    headers: { Authorization: "synthetic-custom-authorization" },
+  };
+  await expect(provider.evaluate(batch, context())).resolves.toHaveProperty("status", "ok");
+  expect(new Headers(fetch.mock.lastCall?.[1]?.headers).get("authorization")).toBe(
+    "synthetic-custom-authorization",
+  );
+  config = { baseUrl: "http://127.0.0.1:8009/v1" };
+  await expect(provider.evaluate(batch, context())).resolves.toHaveProperty("status", "ok");
+  expect(new Headers(fetch.mock.lastCall?.[1]?.headers).has("authorization")).toBe(false);
+  const controller = new AbortController();
+  fetch.mockImplementationOnce(async (_url, init) => {
+    controller.abort(new Error("caller closed"));
+    init?.signal?.throwIfAborted();
+    return new Response();
+  });
+  await expect(provider.evaluate(batch, context(controller.signal))).rejects.toThrow(
+    "caller closed",
+  );
+  expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
 });
 
 it.each([

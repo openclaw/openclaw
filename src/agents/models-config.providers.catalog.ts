@@ -118,7 +118,13 @@ export function materializeConfiguredProviderCatalogModels(
   options: ModelManifestNormalizationContext = {},
 ): ModelsConfig["providers"] {
   const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer(options);
-  return normalizeProviderModelMap(providers, (providerKey, provider) =>
+  const chatProviders =
+    providers && Object.values(providers).some((provider) => provider.type === "decision")
+      ? Object.fromEntries(
+          Object.entries(providers).filter(([, provider]) => provider.type !== "decision"),
+        )
+      : providers;
+  return normalizeProviderModelMap(chatProviders, (providerKey, provider) =>
     materializeConfiguredProviderModelRows(provider, (id) => normalizeModelId(providerKey, id)),
   );
 }

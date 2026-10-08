@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPluginRecordActive, isPluginRegistryRetired } from "../plugins/registry-lifecycle.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
+import { resolveConfiguredDecisionProvider } from "./configured-providers.js";
 
 /** Prepared Gateway views borrow the exact provider owner, not another circuit or admission pool. */
 export function adoptRuntimeDecisionProviders(
@@ -34,6 +35,10 @@ export function adoptRuntimeDecisionProviders(
       !isDeepStrictEqual(
         sourceConfig.plugins?.entries?.[entry.pluginId]?.config,
         preparedConfig.plugins?.entries?.[entry.pluginId]?.config,
+      ) ||
+      !isDeepStrictEqual(
+        resolveConfiguredDecisionProvider(sourceConfig, entry.host.provider.id),
+        resolveConfiguredDecisionProvider(preparedConfig, entry.host.provider.id),
       )
     ) {
       return entry;

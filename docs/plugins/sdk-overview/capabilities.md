@@ -179,6 +179,30 @@ agent tools. Declare the ID in manifest `contracts.decisionProviders`; duplicate
 IDs are rejected. Registration and optional `isReady()` must be local, synchronous,
 and network-free. Import types from `openclaw/plugin-sdk/decisions`.
 
+An adapter can also implement optional
+`createConfiguredProvider({ id, getConfig }): DecisionProviderV1`. The host calls
+this synchronous, network-free factory for `models.providers.<id>` entries with
+`type: "decision"` and `decisionProvider` matching the adapter's declared provider
+ID. Return a provider with that exact configured `id` and `contractVersion: 1`.
+Configured aliases remain owned by the adapter's plugin instance and share its
+disablement, reload, disposal, and physical-settlement lifecycle. The host gives
+each alias its own admission and health state.
+
+`getConfig()` reads prepared transport fields: `baseUrl`,
+`apiKey`, `headers`, `authHeader`, and `timeoutSeconds`. It returns `undefined` when
+the entry is removed or selects another adapter. Read it again before dispatch;
+unresolved credentials make the provider unavailable. Never resolve SecretRefs,
+fall back to the adapter's normal credential, or retain configuration across
+generations. `isReady()` remains synchronous and network-free. Check the provided
+`context.isAdmissible()` at final synchronous I/O, after awaited preparation, so
+endpoint/key changes fence explicit evaluations as well as automatic consumers.
+
+The factory is additive: adapters without it continue to serve their own native
+provider IDs, while configured aliases cannot execute through them. Custom
+model IDs do not inherit another checkpoint's capabilities. The host publishes
+operator-authored model IDs and names in the separate decision catalog and
+validates model membership, the complete result, and provider provenance.
+
 Consumers call `api.runtime.decisions.evaluate(batch, { agentId?, purpose, rubricVersion,
 timeoutMs, signal })`. State and rubric entries are finite JSON. Use plain objects
 and arrays; custom prototypes, serialization hooks, and getters are rejected on

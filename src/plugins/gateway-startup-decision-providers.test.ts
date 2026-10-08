@@ -43,6 +43,32 @@ describe("decision provider startup", () => {
       expected: ["decision-plugin"],
     },
     {
+      name: "selected through a configured endpoint alias",
+      config: {
+        agents: { defaults: { decisionModel: "judge/fast" } },
+        models: {
+          providers: {
+            judge: {
+              type: "decision",
+              decisionProvider: "decision-provider",
+              baseUrl: "https://decision.example.test",
+              models: [
+                {
+                  id: "fast",
+                  name: "Fast",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  maxTokens: 1,
+                },
+              ],
+            },
+          },
+        },
+      },
+      expected: ["decision-plugin"],
+    },
+    {
       name: "explicitly disabled",
       config: {
         agents: { defaults: { decisionModel: "decision-provider/fast" } },
@@ -67,6 +93,29 @@ describe("decision provider startup", () => {
       resolveGatewayStartupMetadataPluginIds({
         config: {
           agents: { entries: { specialist: { decisionModel: "decision-provider/fast" } } },
+          plugins: { allow: ["allowed-plugin"], slots: { memory: "none" } },
+        },
+        env: {},
+        index: fixture().index,
+      }),
+    ).toEqual(["allowed-plugin", "decision-plugin"]);
+  });
+
+  it("maps configured endpoint aliases to adapter owners in metadata scopes", () => {
+    expect(
+      resolveGatewayStartupMetadataPluginIds({
+        config: {
+          agents: { defaults: { decisionModel: "judge/fast" } },
+          models: {
+            providers: {
+              judge: {
+                type: "decision",
+                decisionProvider: "decision-provider",
+                baseUrl: "https://decision.example.test",
+                models: [],
+              },
+            },
+          },
           plugins: { allow: ["allowed-plugin"], slots: { memory: "none" } },
         },
         env: {},

@@ -93,6 +93,18 @@ role or explicitly disabling the plugin prevents its use by those consumers.
 
 ## Local System One server
 
+For a private endpoint implementing the hosted TypeSafe wire protocol, declare
+`models.providers.<id>` with `type: "decision"`, `decisionProvider: "typesafe"`,
+your API prefix as `baseUrl`, and that endpoint's `apiKey` or SecretRef. The adapter
+appends `/systemone` to the prefix and sends the provider's own prepared key and
+headers. `authHeader: false` disables its default Bearer header. See the complete
+[custom decision provider example](/concepts/decision-models#custom-endpoints-and-model-ids).
+
+Configured endpoints use the hosted native wire protocol even on loopback; local
+Kev setup below keeps its separate System One translation. Remote endpoints must
+use HTTPS; explicit loopback HTTP is accepted. URLs cannot contain credentials,
+queries, or fragments, and redirects are refused.
+
 ### Run Kev
 
 [Kev](https://github.com/jaredpalmer/kev) is an Apache-2.0 family of decision

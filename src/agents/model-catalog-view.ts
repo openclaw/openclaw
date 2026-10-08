@@ -237,6 +237,9 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
   >();
   const providerEndpoints = new Map<string, { endpoint?: string; api?: string }>();
   for (const [id, configured] of Object.entries(params.cfg.models?.providers ?? {})) {
+    if (configured.type === "decision") {
+      continue;
+    }
     const provider = normalizeProviderId(id);
     if (!providerEndpoints.has(provider)) {
       // Status headers describe provider configuration, not private per-model route provenance.

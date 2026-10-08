@@ -340,8 +340,10 @@ export function collectValidationConfiguredRefs(config: OpenClawConfig) {
   }
   const providers = config.models?.providers;
   if (providers && typeof providers === "object") {
-    for (const providerId of Object.keys(providers)) {
-      pushProviderId(providerId);
+    for (const [providerId, provider] of Object.entries(providers)) {
+      if (provider.type !== "decision") {
+        pushProviderId(providerId);
+      }
     }
   }
   const shorthandModelRefs: string[] = [];

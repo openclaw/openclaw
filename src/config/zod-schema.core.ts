@@ -317,6 +317,17 @@ const ModelProviderLocalServiceSchema = z
   .optional();
 
 const ModelProviderSchema = z.strictObject({
+  /** Decision providers use a plugin adapter and a separate model catalog. */
+  type: z.enum(["chat", "decision"]).optional(),
+  decisionProvider: z
+    .string()
+    .trim()
+    .min(1)
+    .max(256)
+    .refine((id) => !id.includes("/"), {
+      message: "decisionProvider must identify a decision provider adapter, without a model path",
+    })
+    .optional(),
   // Bundled provider overlays are materialized with an empty-string sentinel.
   // ModelProvidersSchema below still rejects empty baseUrl values for custom providers.
   baseUrl: z.string().optional(),
@@ -353,6 +364,76 @@ const ModelProvidersSchema = z
   .record(z.string(), ModelProviderSchema)
   .superRefine((providers, ctx) => {
     for (const [providerId, provider] of Object.entries(providers)) {
+      if (provider.type === "decision") {
+        for (const field of [
+          "api",
+          "auth",
+          "maxTokens",
+          "region",
+          "injectNumCtxForOpenAICompat",
+          "params",
+          "agentRuntime",
+          "localService",
+          "request",
+        ] as const) {
+          if (provider[field] !== undefined) {
+            ctx.addIssue({
+              code: "custom",
+              path: [providerId, field],
+              message: `${field} is not supported for configured decision providers`,
+            });
+          }
+        }
+        for (const [index, model] of (provider.models ?? []).entries()) {
+          for (const field of [
+            "api",
+            "baseUrl",
+            "headers",
+            "params",
+            "agentRuntime",
+            "compat",
+            "thinkingLevelMap",
+            "mediaInput",
+          ] as const) {
+            if (model[field] !== undefined) {
+              ctx.addIssue({
+                code: "custom",
+                path: [providerId, "models", index, field],
+                message: `${field} is not supported for configured decision models`,
+              });
+            }
+          }
+        }
+        if (!provider.decisionProvider) {
+          ctx.addIssue({
+            code: "custom",
+            path: [providerId, "decisionProvider"],
+            message: "decision providers must declare decisionProvider",
+          });
+        }
+        if (!provider.baseUrl) {
+          ctx.addIssue({
+            code: "custom",
+            path: [providerId, "baseUrl"],
+            message: "decision providers must declare baseUrl",
+          });
+        }
+        if (!provider.models?.length) {
+          ctx.addIssue({
+            code: "custom",
+            path: [providerId, "models"],
+            message: "decision providers must declare at least one model",
+          });
+        }
+        continue;
+      }
+      if (provider.decisionProvider !== undefined) {
+        ctx.addIssue({
+          code: "custom",
+          path: [providerId, "decisionProvider"],
+          message: "decisionProvider requires type decision",
+        });
+      }
       if (isBuiltInModelProviderOverlayId(providerId)) {
         continue;
       }

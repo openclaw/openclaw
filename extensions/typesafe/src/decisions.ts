@@ -4,7 +4,7 @@ import type {
   DecisionProviderV1,
 } from "openclaw/plugin-sdk/decisions";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import type { RuntimeConfig } from "./config.js";
+import { configuredRuntimeConfig, type RuntimeConfig } from "./config.js";
 import { decisionFailure } from "./errors.js";
 
 const loadClient = createLazyRuntimeModule(() => import("./client.js"));
@@ -12,11 +12,22 @@ const loadClient = createLazyRuntimeModule(() => import("./client.js"));
 /** Translate the host-selected decision contract through the TypeSafe transport. */
 export function createDecisionProvider(getConfig: () => RuntimeConfig): DecisionProviderV1 {
   return {
-    id: "typesafe",
+    ...createProvider("typesafe", getConfig),
+    createConfiguredProvider: ({ id, getConfig: getConfiguredConfig }) =>
+      createProvider(id, () => configuredRuntimeConfig(getConfiguredConfig())),
+  };
+}
+
+function createProvider(
+  providerId: string,
+  getConfig: () => RuntimeConfig | undefined,
+): DecisionProviderV1 {
+  return {
+    id: providerId,
     contractVersion: 1,
     isReady: () => {
       const config = getConfig();
-      return Boolean(config.baseUrl || config.apiKey);
+      return Boolean(config && (config.baseUrl || config.apiKey));
     },
     async evaluate(batch: DecisionBatch, context) {
       context.signal.throwIfAborted();
@@ -25,7 +36,7 @@ export function createDecisionProvider(getConfig: () => RuntimeConfig): Decision
       const { evaluate: evaluateTypeSafe } = await loadClient();
       context.signal.throwIfAborted();
       const config = getConfig();
-      if (!config.baseUrl && !config.apiKey) {
+      if (!config || (!config.baseUrl && !config.apiKey)) {
         return { status: "unavailable", reason: "credentials-unavailable" };
       }
       const remaining = context.deadlineMonotonicMs - performance.now();

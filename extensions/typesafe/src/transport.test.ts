@@ -19,17 +19,53 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("never follows redirects to a credential sink", async () => {
-  const fetch = mockFetch(
-    async () =>
-      new Response(null, {
-        status: 302,
-        headers: { location: "https://other.example/credential-sink" },
-      }),
-  );
-  await expect(requestEvaluation(request)).rejects.toMatchObject({ reason: "transport" });
-  expect(fetch).toHaveBeenCalledOnce();
-  expect(fetch.mock.calls[0]?.[0]).toBe("https://api.typesafe.ai/v1/systemone");
+it.each([
+  { ...request, endpoint: "https://api.typesafe.ai/v1/systemone" },
+  {
+    ...request,
+    endpointMode: "configured" as const,
+    baseUrl: "http://127.0.0.1:8009/v1",
+    endpoint: "http://127.0.0.1:8009/v1/systemone",
+  },
+])(
+  "never follows redirects from $endpoint to a credential sink",
+  async ({ endpoint, ...params }) => {
+    const fetch = mockFetch(
+      async () =>
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://other.example/credential-sink" },
+        }),
+    );
+    await expect(requestEvaluation(params)).rejects.toMatchObject({ reason: "transport" });
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch.mock.calls[0]?.[0]).toBe(endpoint);
+  },
+);
+it("guards configured HTTPS transport and rechecks admission immediately before dispatch", async () => {
+  const guard = vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard");
+  const fetch = mockFetch(async () => new Response("{}"));
+  let admitted = true;
+  guard.mockImplementationOnce(async (params) => {
+    expect(params).toMatchObject({
+      url: "https://custom.example/v1/systemone",
+      requireHttps: true,
+      maxRedirects: 0,
+    });
+    expect(params.policy).toBeUndefined();
+    admitted = false;
+    params.beforeRequest?.();
+    throw new Error("unreachable");
+  });
+  await expect(
+    requestEvaluation({
+      ...request,
+      endpointMode: "configured",
+      baseUrl: "https://custom.example/v1",
+      isAdmissible: () => admitted,
+    }),
+  ).rejects.toMatchObject({ reason: "transport" });
+  expect(fetch).not.toHaveBeenCalled();
 });
 it("bounds the serialized request including its model field", async () => {
   const fetch = mockFetch(async () => new Response());

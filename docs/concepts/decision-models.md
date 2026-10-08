@@ -94,6 +94,50 @@ For local setup verification, `openclaw onnx models` lists the presets and
 `openclaw onnx probe gliclass-edge-v3.0` runs a Choice, Score, and Boolean smoke
 evaluation after the model has been downloaded.
 
+## Custom endpoints and model IDs
+
+Declare a custom decision provider in `models.providers` with `type: "decision"`.
+`decisionProvider` selects an installed plugin's native decision adapter; it is
+separate from your provider name and model IDs. The adapter must support configured
+providers. TypeSafe supports this contract; ONNX's local model loader does not.
+
+```json5
+{
+  plugins: { allow: ["typesafe"], entries: { typesafe: { enabled: true } } },
+  models: {
+    providers: {
+      custom: {
+        type: "decision",
+        decisionProvider: "typesafe",
+        baseUrl: "https://decisions.example.com/v1",
+        apiKey: { source: "env", provider: "default", id: "CUSTOM_DECISION_API_KEY" },
+        timeoutSeconds: 10,
+        models: [{ id: "custom-decision-model", name: "Custom decision model" }],
+      },
+    },
+  },
+  agents: { defaults: { decisionModel: "custom/custom-decision-model" } },
+}
+```
+
+This example requires an endpoint implementing TypeSafe's hosted System One
+protocol at `/v1/systemone`. The configured provider uses its own key and prepared
+headers, without falling back to the plugin's credential. The endpoint receives
+the supplied decision evidence. HTTPS is required for remote TypeSafe endpoints;
+explicit loopback HTTP is also supported. Redirects are refused.
+
+Configured models appear in the Decision picker and remain unavailable to chat,
+primary, fallback, and utility model selection. Omitting `type` preserves chat
+provider behavior. Adding, removing, or editing decision provider entries follows
+the plugin reload lifecycle; changed endpoints, credentials, adapters, or model
+lists invalidate pending evaluations. Host deadlines still cap evaluations at
+30 seconds.
+
+Chat API overrides, agent runtimes, managed local services, and request retry/proxy
+options are not accepted for decision providers. Install a matching decision
+adapter for another wire protocol; changing the model role does not translate an
+arbitrary endpoint into a native decision API.
+
 ## Define a decision
 
 Each request contains shared `state` and a `questions` map. State accepts text,

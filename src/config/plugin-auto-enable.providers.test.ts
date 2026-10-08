@@ -15,6 +15,45 @@ afterAll(() => {
 });
 
 describe("applyPluginAutoEnable providers", () => {
+  it("activates the decision adapter owner selected through a configured endpoint", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        agents: { defaults: { decisionModel: "custom/fast" } },
+        models: {
+          providers: {
+            custom: {
+              type: "decision",
+              decisionProvider: "judge",
+              baseUrl: "https://decision.example.test",
+              models: [
+                {
+                  id: "fast",
+                  name: "Fast",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  maxTokens: 1,
+                },
+              ],
+            },
+          },
+        },
+        plugins: { allow: ["telegram"] },
+      },
+      env,
+      manifestRegistry: makeRegistry([
+        {
+          id: "decision-plugin",
+          channels: [],
+          origin: "bundled",
+          contracts: { decisionProviders: ["judge"] },
+        },
+      ]),
+    });
+    expect(result.config.plugins?.entries?.["decision-plugin"]?.enabled).toBe(true);
+    expect(result.config.plugins?.allow).toEqual(["telegram", "decision-plugin"]);
+  });
+
   it("activates a selected decision contract owner", () => {
     const result = applyPluginAutoEnable({
       config: {

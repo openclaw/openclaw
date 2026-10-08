@@ -3,7 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../agents/agent-scope-config.js";
-import { getConfiguredDecisionProviderIds } from "../agents/decision-model-setting.js";
+import { getConfiguredDecisionAdapterIds } from "../agents/decision-model-setting.js";
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
@@ -69,7 +69,9 @@ function isProviderConfigured(cfg: OpenClawConfig, providerId: string): boolean 
   if (
     providerConfig &&
     typeof providerConfig === "object" &&
-    Object.keys(providerConfig).some((key) => normalizeProviderId(key) === normalized)
+    Object.entries(providerConfig).some(
+      ([key, provider]) => provider.type !== "decision" && normalizeProviderId(key) === normalized,
+    )
   ) {
     return true;
   }
@@ -212,7 +214,7 @@ function hasPluginAllowlistWithMaterialEntries(cfg: OpenClawConfig): boolean {
 function hasConfiguredPluginProviders(cfg: OpenClawConfig): boolean {
   const webSearch = cfg.tools?.web?.search;
   return (
-    getConfiguredDecisionProviderIds(cfg).length > 0 ||
+    getConfiguredDecisionAdapterIds(cfg).length > 0 ||
     Object.keys(cfg.auth?.profiles ?? {}).length > 0 ||
     Object.keys(cfg.models?.providers ?? {}).length > 0 ||
     collectConfiguredModelRefs(cfg, { includeChannelModelOverrides: false }).length > 0 ||
@@ -360,7 +362,7 @@ export function resolveConfiguredPluginAutoEnableCandidates(
     changes.push({ pluginId, kind: "storage-provider-selected", providerId });
   }
 
-  const decisionProviderIds = new Set(getConfiguredDecisionProviderIds(params.config));
+  const decisionProviderIds = new Set(getConfiguredDecisionAdapterIds(params.config));
   for (const plugin of params.registry.plugins) {
     for (const providerId of plugin.contracts?.decisionProviders ?? []) {
       if (decisionProviderIds.has(providerId)) {

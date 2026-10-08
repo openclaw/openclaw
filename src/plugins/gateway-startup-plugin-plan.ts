@@ -1,6 +1,6 @@
 // Plans deterministic Gateway startup plugin activation from prepared registry metadata.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
-import { getConfiguredDecisionProviderIds } from "../agents/decision-model-setting.js";
+import { getConfiguredDecisionAdapterIds } from "../agents/decision-model-setting.js";
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
@@ -115,7 +115,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const configuredMemoryEmbeddingProviderIds =
     collectConfiguredMemoryEmbeddingProviderIds(activationSourceConfig);
   const configuredDecisionProviderIds = new Set(
-    getConfiguredDecisionProviderIds(activationSourceConfig),
+    getConfiguredDecisionAdapterIds(activationSourceConfig),
   );
   const configuredWorkerProviderIds = new Set([
     ...collectConfiguredWorkerProviderIds(activationSourceConfig),

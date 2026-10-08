@@ -10,6 +10,7 @@ import type { PluginEntryConfig } from "../config/types.plugins.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { PluginRecord, PluginRegistry } from "../plugins/registry-types.js";
 import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime-state.js";
+import { resolveConfiguredDecisionProvider } from "./configured-providers.js";
 import {
   decisionDebugEnabled,
   logDecisionEvaluation,
@@ -48,6 +49,7 @@ type Health = {
   id: string;
   secretRevision: number;
   config: PluginEntryConfig | undefined;
+  modelConfig: ReturnType<typeof resolveConfiguredDecisionProvider>;
   failures: number;
   openUntil: number;
   authFailed: boolean;
@@ -73,20 +75,24 @@ export class DecisionProviderHost {
   constructor(
     readonly provider: DecisionProviderV1,
     readonly record: PluginRecord,
+    readonly configuredAdapterId?: string,
   ) {}
 
   private generation(config: OpenClawConfig): Health {
     const secretRevision = getActiveSecretsRuntimeSnapshotRevisionState();
     const providerConfig = config.plugins?.entries?.[this.record.id];
+    const modelConfig = resolveConfiguredDecisionProvider(config, this.provider.id);
     if (
       !this.health ||
       this.health.secretRevision !== secretRevision ||
-      !isDeepStrictEqual(this.health.config, providerConfig)
+      !isDeepStrictEqual(this.health.config, providerConfig) ||
+      !isDeepStrictEqual(this.health.modelConfig, modelConfig)
     ) {
       this.health = {
         id: randomUUID(),
         secretRevision,
-        config: providerConfig,
+        config: structuredClone(providerConfig),
+        modelConfig: structuredClone(modelConfig),
         failures: 0,
         openUntil: 0,
         authFailed: false,
@@ -264,6 +270,13 @@ export class DecisionProviderHost {
     }
     const health = this.generation(config);
     const readConfig = createRuntimeConfigReader(config);
+    if (
+      this.configuredAdapterId &&
+      (health.modelConfig?.decisionProvider !== this.configuredAdapterId ||
+        !health.modelConfig.models.some((entry) => entry.id === model))
+    ) {
+      return this.unavailable("not-configured");
+    }
     if (!instance.runInRegistry(registry, () => this.ready())) {
       return this.unavailable("credentials-unavailable");
     }
@@ -333,6 +346,10 @@ export class DecisionProviderHost {
         this.health !== health ||
         currentConfig.plugins?.enabled === false ||
         !isDeepStrictEqual(currentConfig.plugins?.entries?.[this.record.id], health.config) ||
+        !isDeepStrictEqual(
+          resolveConfiguredDecisionProvider(currentConfig, this.provider.id),
+          health.modelConfig,
+        ) ||
         selection?.provider !== this.provider.id ||
         selection.model !== model
       ) {
@@ -357,16 +374,11 @@ export class DecisionProviderHost {
               ...(options.agentId ? { agentId: options.agentId } : {}),
               signal,
               deadlineMonotonicMs,
-              ...(isAdmissible
-                ? {
-                    isAdmissible: () => {
-                      // The same owner fences consumer and provider generations. Keep
-                      // its observed outcome even if config changes back during cleanup.
-                      observedInterruption ??= interrupted();
-                      return observedInterruption === undefined;
-                    },
-                  }
-                : {}),
+              isAdmissible: () => {
+                // Fence endpoint/key changes even for explicit evaluations without a consumer guard.
+                observedInterruption ??= interrupted();
+                return observedInterruption === undefined;
+              },
             });
           },
           // The provider callback's physical settlement is already tracked by

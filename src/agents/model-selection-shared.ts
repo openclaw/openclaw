@@ -46,6 +46,10 @@ import {
   providerAliasKey,
 } from "./model-selection-alias-scope.js";
 import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
+import {
+  hasConfiguredProviderModelRows,
+  hasConfiguredProviderRowsNeedingManifestLookup,
+} from "./model-selection-provider-rows.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import { readUtilityModelSetting } from "./utility-model-setting.js";
 
@@ -320,7 +324,7 @@ export function inferUniqueProviderFromConfiguredModels(
   const matcher = collectModelMapProviders(params.cfg.agents?.defaults?.models);
   const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer(params);
   for (const [providerId, providerConfig] of Object.entries(params.cfg.models?.providers ?? {})) {
-    if (!Array.isArray(providerConfig?.models)) {
+    if (providerConfig.type === "decision" || !Array.isArray(providerConfig?.models)) {
       continue;
     }
     for (const entry of providerConfig.models) {
@@ -1073,25 +1077,6 @@ export function resolveAllowedModelRefFromAliasIndex(
   return { ref: resolved.ref, key: status.key };
 }
 
-function hasConfiguredProviderModelRows(cfg: OpenClawConfig): boolean {
-  const providers = cfg.models?.providers;
-  if (!providers || typeof providers !== "object") {
-    return false;
-  }
-  return Object.values(providers).some((provider) => Array.isArray(provider?.models));
-}
-
-function hasConfiguredProviderRowsNeedingManifestLookup(cfg: OpenClawConfig): boolean {
-  const providers = cfg.models?.providers;
-  if (!providers || typeof providers !== "object") {
-    return false;
-  }
-  return Object.entries(providers).some(
-    ([providerRaw, provider]) =>
-      Array.isArray(provider?.models) && normalizeProviderId(providerRaw) !== "openai",
-  );
-}
-
 function hasConfiguredModelRefsNeedingManifestLookup(
   cfg: OpenClawConfig,
   defaultProvider: string,
@@ -1160,7 +1145,7 @@ export function buildConfiguredModelCatalog(params: {
   const catalog: ModelCatalogEntry[] = [];
   for (const [providerRaw, provider] of Object.entries(providers)) {
     const providerId = normalizeProviderId(providerRaw);
-    if (!providerId || !Array.isArray(provider?.models)) {
+    if (!providerId || provider.type === "decision" || !Array.isArray(provider?.models)) {
       continue;
     }
     for (const model of provider.models) {

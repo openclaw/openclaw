@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveConfiguredDecisionProvider } from "../../decisions/configured-providers.js";
 import type { Model } from "../../llm/types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { providerOwnsDynamicModelPreparation } from "../../plugins/provider-runtime.js";
@@ -89,6 +90,17 @@ export async function resolveModelAsync(
   options?: AsyncModelResolutionOptions,
 ): Promise<ModelResolution> {
   options?.assertCurrent?.();
+  if (cfg && resolveConfiguredDecisionProvider(cfg, provider)) {
+    const stores =
+      options?.authStorage && options?.modelRegistry
+        ? { authStorage: options.authStorage, modelRegistry: options.modelRegistry }
+        : createEmptyAgentDiscoveryStores();
+    return {
+      error: `Provider ${provider.trim()} is configured for decision models. Select it with decisionModel and use a chat provider for conversational requests.`,
+      authStorage: options?.authStorage ?? stores.authStorage,
+      modelRegistry: options?.modelRegistry ?? stores.modelRegistry,
+    };
+  }
   const resolvedAgentDir = agentDir ?? resolveDefaultAgentDir(cfg ?? {});
   const derivedWorkspaceDir = resolveModelWorkspaceDir(
     cfg,

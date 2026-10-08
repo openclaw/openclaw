@@ -1,4 +1,11 @@
+import type { DecisionProviderV1 } from "openclaw/plugin-sdk/decisions";
 import { Type } from "typebox";
+
+export type DecisionProviderConfig = NonNullable<
+  ReturnType<
+    Parameters<NonNullable<DecisionProviderV1["createConfiguredProvider"]>>[0]["getConfig"]
+  >
+>;
 
 const LOCAL_BASE_URL_PATTERN =
   "^https?://(?:localhost|127\\.0\\.0\\.1|\\[::1\\])(?::[0-9]{1,5})?/?$";
@@ -26,7 +33,69 @@ export const ConfigSchema = Type.Object(
   { additionalProperties: false },
 );
 
-export type RuntimeConfig = { apiKey?: string; baseUrl?: string; timeoutMs: number };
+export type RuntimeConfig = {
+  apiKey?: string;
+  baseUrl?: string;
+  timeoutMs: number;
+  /** Model-provider declarations use the native hosted schema, even on loopback. */
+  endpointMode?: "configured";
+  headers?: Record<string, string>;
+  authHeader?: boolean;
+};
+
+/** Configured model endpoints are API prefixes; HTTP is reserved for explicit loopback. */
+export function configuredBaseUrl(value: string): string {
+  const parsed = value === value.trim() ? URL.parse(value) : null;
+  const loopback = /^https?:\/\/(?:localhost|127\.0\.0\.1|\[::1\])(?::[0-9]{1,5})?(?:\/|$)/.test(
+    value,
+  );
+  if (
+    !parsed ||
+    (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && loopback)) ||
+    parsed.username ||
+    parsed.password ||
+    value.includes("?") ||
+    value.includes("#") ||
+    (["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname) && !loopback)
+  ) {
+    throw new Error(
+      "Invalid TypeSafe model-provider baseUrl; use HTTPS or an HTTP loopback API prefix.",
+    );
+  }
+  return parsed.toString().replace(/\/+$/, "");
+}
+
+/** The host owns secret preparation; unresolved inputs cannot make an endpoint ready. */
+export function configuredRuntimeConfig(
+  config: DecisionProviderConfig | undefined,
+): RuntimeConfig | undefined {
+  if (!config || (config.apiKey !== undefined && typeof config.apiKey !== "string")) {
+    return undefined;
+  }
+  const headers: Record<string, string> = {};
+  for (const [name, value] of Object.entries(config.headers ?? {})) {
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    headers[name] = value;
+  }
+  const timeoutSeconds = config.timeoutSeconds ?? 30;
+  if (!Number.isFinite(timeoutSeconds) || timeoutSeconds <= 0) {
+    return undefined;
+  }
+  try {
+    return {
+      baseUrl: configuredBaseUrl(config.baseUrl),
+      apiKey: config.apiKey?.trim() ? config.apiKey : undefined,
+      headers,
+      authHeader: config.authHeader,
+      timeoutMs: timeoutSeconds * 1000,
+      endpointMode: "configured",
+    };
+  } catch {
+    return undefined;
+  }
+}
 
 /** A configured endpoint grants access to one loopback origin, never arbitrary private hosts. */
 export function localBaseUrl(value: unknown): string | undefined {

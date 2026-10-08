@@ -17,6 +17,7 @@ export async function evaluate(
   }
   const parsed = parseInput(input);
   const model = parsed.model;
+  const local = Boolean(config.baseUrl && config.endpointMode !== "configured");
   if (!model) {
     throw new EvaluationError("TypeSafe requires a host-selected model.", "unsupported-input");
   }
@@ -30,21 +31,24 @@ export async function evaluate(
     throw new Error("TypeSafe API key is missing. Configure a SecretRef in plugin Settings.");
   }
   try {
-    const wireInput = config.baseUrl ? localInput(parsed) : parsed;
+    const wireInput = local ? localInput(parsed) : parsed;
     const response = await requestEvaluation({
       body: { ...wireInput, model },
-      apiKey: config.baseUrl ? undefined : config.apiKey,
+      apiKey: local ? undefined : config.apiKey,
       baseUrl: config.baseUrl,
+      endpointMode: config.endpointMode,
+      headers: config.headers,
+      authHeader: config.authHeader,
       timeoutMs: config.timeoutMs,
       signal,
       deadlineMonotonicMs,
       isAdmissible,
     });
     signal?.throwIfAborted();
-    const evaluation = config.baseUrl
+    const evaluation = local
       ? parseLocalResult(response, wireInput, parsed)
       : parseResult(response, parsed);
-    if (!config.baseUrl && config.apiKey && JSON.stringify(evaluation).includes(config.apiKey)) {
+    if (!local && config.apiKey && JSON.stringify(evaluation).includes(config.apiKey)) {
       throw new Error("Invalid TypeSafe response.");
     }
     return { evaluation };
