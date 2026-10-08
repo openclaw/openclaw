@@ -292,9 +292,13 @@ export async function resolveOllamaDiscoveryResult(params: {
         ...(discoveryApiKey ? { apiKey: discoveryApiKey } : {}),
       });
       const api = explicit?.api ?? provider.api;
+      // Configured rows own their settings (for example `compat.supportsTools: false` for models
+      // that fail on tool schemas), so discovery only adds models the config does not list.
+      const configuredIds = new Set(explicit?.models?.map((model) => model.id));
       return {
         provider: {
           ...provider,
+          models: provider.models.filter((model) => !configuredIds.has(model.id)),
           baseUrl: resolveOllamaRuntimeBaseUrl({
             api,
             configuredBaseUrl,

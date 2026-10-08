@@ -169,7 +169,7 @@ describe("registered Ollama catalog", () => {
     },
   );
 
-  it("lists chat models pulled after setup and keeps setup models when listing fails", async () => {
+  it("lists chat models pulled after setup, keeps setup model settings, and keeps setup models when listing fails", async () => {
     const stateDir = tempDirs.make("ollama-catalog-pull-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir, OLLAMA_API_KEY: undefined }, async () => {
       const setupModel = {
@@ -180,6 +180,8 @@ describe("registered Ollama catalog", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 8192,
         maxTokens: 2048,
+        // Documented workaround for local models that fail on tool schemas.
+        compat: { supportsTools: false },
       };
       // Setup saves the models it found; later pulls must not need a config edit.
       const cfg: OpenClawConfig = {
@@ -207,7 +209,7 @@ describe("registered Ollama catalog", () => {
         });
       });
       vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
-      const listedIds = async () => {
+      const listedModels = async () => {
         const plan = await planOpenClawModelsJson({
           context: {
             cfg,
@@ -224,18 +226,26 @@ describe("registered Ollama catalog", () => {
           existingRaw: "",
           existingParsed: null,
         });
-        const catalog: { providers: { ollama: { models: Array<{ id: string }> } } } = JSON.parse(
+        const catalog: {
+          providers: { ollama: { models: Array<{ id: string; compat?: unknown }> } };
+        } = JSON.parse(
           expectDefined(
             plan.pluginCatalogWrites?.[encodePluginModelCatalogRelativePath("ollama")],
             "Ollama writable plugin catalog",
           ),
         );
-        return catalog.providers.ollama.models.map(({ id }) => id);
+        return catalog.providers.ollama.models.map(({ id, compat }) => ({ id, compat }));
       };
 
-      expect(await listedIds()).toEqual([setupModel.id, "qwen3:0.6b"]);
+      // `/api/show` advertises tools for the setup model, but its configured compat still wins.
+      expect(await listedModels()).toEqual([
+        { id: setupModel.id, compat: { supportsTools: false } },
+        { id: "qwen3:0.6b", compat: expect.objectContaining({ supportsTools: true }) },
+      ]);
       installed = undefined;
-      expect(await listedIds()).toEqual([setupModel.id]);
+      expect(await listedModels()).toEqual([
+        { id: setupModel.id, compat: { supportsTools: false } },
+      ]);
       expect(tagsRequests).toBe(2);
     });
   });
