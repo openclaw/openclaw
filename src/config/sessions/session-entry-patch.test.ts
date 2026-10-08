@@ -37,7 +37,7 @@ import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { appendExpectedSessionTranscriptTurn } from "./session-accessor.sqlite-transcript-turn.js";
 import { readSessionTranscriptWatermarkInDatabase } from "./session-accessor.sqlite-transcript-watermark.js";
-import { createSessionEntryPatchFixture as fixture } from "./session-entry-patch.test-support.js";
+import { createSessionCompoundWorkerFixture as fixture } from "./session-compound-worker.test-support.js";
 import { commitSessionEntryPatch } from "./session-entry-patch.worker.js";
 import { readSessionEntryInWorker } from "./session-entry-read-runtime.js";
 import { SqliteSessionMutationConflictError } from "./session-mutation-conflict-error.js";

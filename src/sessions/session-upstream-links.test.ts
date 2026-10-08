@@ -300,19 +300,7 @@ describe("session upstream links", () => {
     );
 
     // Same source (thread/host/kind unchanged): scan progress must survive.
-    upsertSessionUpstreamLink(
-      {
-        sessionKey,
-        agentId: "main",
-        catalogId: "claude",
-        hostId: "gateway:local",
-        threadId: `thread-${sessionKey}`,
-        upstreamKind: "claude-cli",
-        upstreamRef: { source: sessionKey },
-        marker: { offset: 99 },
-      },
-      database,
-    );
+    upsertSessionUpstreamLink({ ...expected, marker: { offset: 99 } }, database);
     expect((await listWatchedSessionUpstreamLinks(database)).get("claude")?.[0]).toEqual(
       expect.objectContaining({
         upstreamRef: { source: sessionKey },
@@ -323,12 +311,8 @@ describe("session upstream links", () => {
     // Source change: the old cursor is meaningless for the new thread; rebase.
     upsertSessionUpstreamLink(
       {
-        sessionKey,
-        agentId: "main",
-        catalogId: "claude",
-        hostId: "gateway:local",
+        ...expected,
         threadId: "thread-refreshed",
-        upstreamKind: "claude-cli",
         upstreamRef: { source: "rebased" },
         marker: { offset: 99 },
       },
