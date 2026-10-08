@@ -54,30 +54,15 @@ export function resolveFeishuGroupSession(params: {
         (replyInThread ? messageId : null))
       : null;
 
-  let peerId;
-  switch (groupSessionScope) {
-    case "group_sender":
-      peerId = buildFeishuConversationId({ chatId, scope: "group_sender", senderOpenId });
-      break;
-    case "group_topic":
-      peerId = topicScope
-        ? buildFeishuConversationId({ chatId, scope: "group_topic", topicId: topicScope })
-        : chatId;
-      break;
-    case "group_topic_sender":
-      peerId = topicScope
-        ? buildFeishuConversationId({
-            chatId,
-            scope: "group_topic_sender",
-            topicId: topicScope,
-            senderOpenId,
-          })
-        : buildFeishuConversationId({ chatId, scope: "group_sender", senderOpenId });
-      break;
-    default:
-      peerId = chatId;
-      break;
-  }
+  const peerId =
+    groupSessionScope === "group_sender" || groupSessionScope === "group_topic_sender" || topicScope
+      ? buildFeishuConversationId({
+          chatId,
+          scope: groupSessionScope,
+          senderOpenId,
+          topicId: topicScope ?? undefined,
+        })
+      : chatId;
 
   return {
     peerId,

@@ -11,7 +11,6 @@ import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-ar
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
-import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import {
   backgroundWorkFixture as fixture,
   createBackgroundWorkInstance,
@@ -128,7 +127,6 @@ for (const stopMethod of ["button", "slash"] as const) {
             ]);
             await pairControlUiPage(page, runCli);
             await page.goto(controlUiSessionUrl(suite.server.baseUrl, fixture.key));
-            await enterControlUiSession(page);
             await waitForControlUiGatewayReady(page);
             const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
             const composer = pane.getByRole("textbox", { name: "Chat composer", exact: true });

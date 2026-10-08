@@ -115,6 +115,26 @@ function createState(overrides: Partial<PreparedEmbeddedRunInput["runParams"]> =
 }
 
 describe("embedded run session prompt state", () => {
+  it("carries the current request and settled work across repeated recovery without changing legacy prompts", async () => {
+    await using state = await createState({ prompt: "Task B: inspect the blue database." });
+    state.continueFromCurrentTranscript({ messages: [] });
+    expect(state.continuation).toEqual({
+      prompt: "Task B: inspect the blue database.",
+      messages: [],
+    });
+    const completed = buildEmbeddedRunnerAssistant({
+      content: [{ type: "text", text: "The blue database was inspected." }],
+    });
+    state.continueFromCurrentTranscript({ messages: [completed] });
+    state.continueFromCurrentTranscript({ messages: [] });
+    expect(state.continuation).toEqual({
+      prompt: "Task B: inspect the blue database.",
+      messages: [completed],
+    });
+    expect(state.activePrompt.override).toBe(CONTINUE_FROM_TRANSCRIPT_PROMPT);
+    expect(state.suppressNextUserMessagePersistence).toBe(true);
+  });
+
   it.each([
     { name: "moves command cancellation to an accepted compaction successor", replaced: false },
     { name: "preserves command ownership when a replacement rejects compaction", replaced: true },

@@ -533,37 +533,27 @@ export async function sendMessageIMessage(
       return null;
     }
     let attachmentChatTarget: string | null = null;
-    if (remoteHost) {
-      if (target.kind === "chat_guid") {
-        attachmentChatTarget = target.chatGuid;
-      } else if (target.kind === "chat_identifier") {
-        attachmentChatTarget = target.chatIdentifier;
-      } else if (target.kind === "handle") {
+    if (target.kind === "chat_guid") {
+      attachmentChatTarget = target.chatGuid;
+    } else if (target.kind === "handle") {
+      const rawHandle = target.to.trim();
+      // Local imsg only accepts canonical handles; remote resolution accepts aliases.
+      if (remoteHost || rawHandle.includes("@") || rawHandle.startsWith("+")) {
         const normalizedHandle = normalizeIMessageHandle(target.to);
         if (normalizedHandle) {
           const attachmentService = target.service !== "auto" ? target.service : service;
           attachmentChatTarget = `${attachmentService === "sms" ? "SMS" : attachmentService === "imessage" ? "iMessage" : "any"};-;${normalizedHandle}`;
         }
-      } else {
-        attachmentChatTarget = formatIMessageChatTarget(target.chatId);
       }
-    } else {
+    } else if (remoteHost) {
+      attachmentChatTarget =
+        target.kind === "chat_identifier"
+          ? target.chatIdentifier
+          : formatIMessageChatTarget(target.chatId);
+    } else if (target.kind === "chat_id") {
       try {
-        if (target.kind === "chat_guid") {
-          attachmentChatTarget = target.chatGuid;
-        } else if (target.kind === "handle") {
-          const rawHandle = target.to.trim();
-          if (rawHandle.includes("@") || rawHandle.startsWith("+")) {
-            const normalizedHandle = normalizeIMessageHandle(target.to);
-            if (normalizedHandle) {
-              const attachmentService = target.service !== "auto" ? target.service : service;
-              attachmentChatTarget = `${attachmentService === "sms" ? "SMS" : attachmentService === "imessage" ? "iMessage" : "any"};-;${normalizedHandle}`;
-            }
-          }
-        } else if (target.kind === "chat_id") {
-          const result = await runCliJson(["group", "--chat-id", String(target.chatId)]);
-          attachmentChatTarget = stringValue(result.guid) ?? stringValue(result.chat_guid) ?? null;
-        }
+        const result = await runCliJson(["group", "--chat-id", String(target.chatId)]);
+        attachmentChatTarget = stringValue(result.guid) ?? stringValue(result.chat_guid) ?? null;
       } catch (error) {
         if (!audioAsVoice && isAttachmentCommandFallbackError(error)) {
           return null;

@@ -3,7 +3,6 @@ import { linkSync, unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -45,17 +44,6 @@ it.each(["module-load", "entry-open"] as const)(
   "keeps %s startup errors diagnostic while healthy plugins reload and disable",
   { timeout: 120_000 },
   async (failureKind) => {
-    const startupPlugins = await import("./server-startup-plugins.js");
-    const runMaintenance = startupPlugins.runGatewayPostReadyStartupMaintenance;
-    const maintenanceSettled = createDeferred();
-    const maintenanceObserver = vi
-      .spyOn(startupPlugins, "runGatewayPostReadyStartupMaintenance")
-      .mockImplementation((params) => {
-        const maintenance = runMaintenance(params);
-        maintenanceSettled.resolve(maintenance);
-        return maintenance;
-      });
-    onTestFinished(() => maintenanceObserver.mockRestore());
     const coordinator = installInstanceBindingProbeCoordinator({ reportReloadSettlement: true });
     const bundledRoot = tempDirs.make("openclaw-startup-error-");
     // External code has captured source generations; bundled JS intentionally
@@ -146,8 +134,6 @@ it.each(["module-load", "entry-open"] as const)(
     let socket: Awaited<ReturnType<typeof connectWebchatClient>> | undefined;
     try {
       await server.startupSettled;
-      // Mandatory sidecars settle before deferred registry maintenance releases its lease.
-      await maintenanceSettled.promise;
       const connected = await connectWebchatClient({ port, scopes: ["operator.admin"] });
       socket = connected;
       const waitForReloadSettlement = async () => {

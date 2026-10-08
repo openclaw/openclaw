@@ -411,19 +411,11 @@ function listPendingContextEngineTurnSessions(
   database: ContextEngineTurnOutboxConnection,
   filter: ContextEngineTurnOutboxFilter & { sessionId?: string; limit: number },
 ): string[] {
-  const db = outboxDb(database);
-  let query = db
-    .selectFrom("context_engine_turn_outbox")
+  const query = pendingContextEngineTurns(database, filter, filter.sessionId || undefined)
     .select("session_id")
     // SQLite rowid preserves enqueue order among surviving pending rows.
     // Use it instead of wall-clock timestamps, which can collide.
-    .select(oldestOutboxEnqueueSequence().as("oldest_enqueue_sequence"))
-    .where("engine_id", "=", filter.engineId)
-    .where("owner_plugin_id", filter.ownerPluginId ? "=" : "is", filter.ownerPluginId ?? null)
-    .where(outboxPayloadRequiresAdvancement());
-  if (filter.sessionId) {
-    query = query.where("session_id", "=", filter.sessionId);
-  }
+    .select(oldestOutboxEnqueueSequence().as("oldest_enqueue_sequence"));
   return executeSqliteQuerySync(
     database.db,
     query.groupBy("session_id").orderBy("oldest_enqueue_sequence", "asc").limit(filter.limit),
@@ -436,13 +428,8 @@ function readNextPendingContextEngineTurn(
 ): PendingContextEngineTurn | undefined {
   return executeSqliteQueryTakeFirstSync(
     database.db,
-    outboxDb(database)
-      .selectFrom("context_engine_turn_outbox")
+    pendingContextEngineTurns(database, filter, filter.sessionId)
       .select(["advancement_key", "payload_json", "session_id"])
-      .where("engine_id", "=", filter.engineId)
-      .where("owner_plugin_id", filter.ownerPluginId ? "=" : "is", filter.ownerPluginId ?? null)
-      .where("session_id", "=", filter.sessionId)
-      .where(outboxPayloadRequiresAdvancement())
       .orderBy(outboxEnqueueSequence(), "asc")
       .limit(1),
   );
@@ -479,19 +466,26 @@ function recordContextEngineTurnFailure(
   );
 }
 
+function pendingContextEngineTurns(
+  database: ContextEngineTurnOutboxConnection,
+  filter: ContextEngineTurnOutboxFilter,
+  sessionId: string | undefined,
+) {
+  const query = outboxDb(database)
+    .selectFrom("context_engine_turn_outbox")
+    .where("engine_id", "=", filter.engineId)
+    .where("owner_plugin_id", filter.ownerPluginId ? "=" : "is", filter.ownerPluginId ?? null)
+    .where(outboxPayloadRequiresAdvancement());
+  return sessionId === undefined ? query : query.where("session_id", "=", sessionId);
+}
+
 function hasPendingContextEngineTurn(
   database: ContextEngineTurnOutboxConnection,
   filter: ContextEngineTurnOutboxFilter & { sessionId?: string },
 ): boolean {
-  let query = outboxDb(database)
-    .selectFrom("context_engine_turn_outbox")
-    .select("advancement_key")
-    .where("engine_id", "=", filter.engineId)
-    .where("owner_plugin_id", filter.ownerPluginId ? "=" : "is", filter.ownerPluginId ?? null)
-    .where(outboxPayloadRequiresAdvancement());
-  if (filter.sessionId) {
-    query = query.where("session_id", "=", filter.sessionId);
-  }
+  const query = pendingContextEngineTurns(database, filter, filter.sessionId || undefined).select(
+    "advancement_key",
+  );
   return executeSqliteQueryTakeFirstSync(database.db, query.limit(1)) !== undefined;
 }
 

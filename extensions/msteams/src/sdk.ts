@@ -139,29 +139,28 @@ export async function loadMSTeamsSdkWithAuth(
       : {}),
   };
 
+  const createApp = (
+    auth: Pick<
+      NonNullable<ConstructorParameters<typeof App>[0]>,
+      "clientSecret" | "managedIdentityClientId" | "token"
+    >,
+  ) => ({
+    app: new App({
+      clientId: creds.appId,
+      tenantId: creds.tenantId,
+      ...auth,
+      ...appOptions,
+    } as ConstructorParameters<typeof App>[0]) as unknown as MSTeamsApp,
+  });
+
   if (creds.type !== "federated") {
-    return {
-      app: new App({
-        clientId: creds.appId,
-        clientSecret: creds.appPassword,
-        tenantId: creds.tenantId,
-        ...appOptions,
-      } as ConstructorParameters<typeof App>[0]) as unknown as MSTeamsApp,
-    };
+    return createApp({ clientSecret: creds.appPassword });
   }
   // Teams SDK otherwise lets ambient CLIENT_SECRET override both federated modes.
   appOptions.clientSecret = "";
   if (creds.useManagedIdentity) {
-    // The SDK handles managed identity natively — pass managedIdentityClientId
-    // and it selects the right credential flow (system MI, user MI, or FIC).
-    return {
-      app: new App({
-        clientId: creds.appId,
-        tenantId: creds.tenantId,
-        managedIdentityClientId: creds.managedIdentityClientId ?? "system",
-        ...appOptions,
-      } as unknown as ConstructorParameters<typeof App>[0]) as unknown as MSTeamsApp,
-    };
+    // The SDK handles system MI, user MI, and FIC through this option.
+    return createApp({ managedIdentityClientId: creds.managedIdentityClientId ?? "system" });
   }
 
   // Certificate-based auth — the SDK doesn't have built-in cert support,
@@ -195,14 +194,7 @@ export async function loadMSTeamsSdkWithAuth(
     return token.token;
   };
 
-  return {
-    app: new App({
-      clientId: creds.appId,
-      tenantId: creds.tenantId,
-      token: tokenProvider,
-      ...appOptions,
-    } as unknown as ConstructorParameters<typeof App>[0]) as unknown as MSTeamsApp,
-  };
+  return createApp({ token: tokenProvider });
 }
 
 export function createMSTeamsTokenProvider(

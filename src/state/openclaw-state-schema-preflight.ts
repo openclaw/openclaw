@@ -75,15 +75,6 @@ export function inspectStateDatabaseSchema(
       stateVersion > supportedVersion
         ? stateVersion
         : readStateSchemaContentVersion(database, stateVersion);
-    const migrationVersion =
-      contentVersion > supportedVersion
-        ? contentVersion
-        : readStateSchemaMigrationVersion(database, contentVersion);
-    if (migrationVersion < supportedVersion) {
-      schemas.pendingMigrations = [
-        { kind: "state", path: pathname, foundVersion: stateVersion, supportedVersion },
-      ];
-    }
     if (contentVersion > supportedVersion) {
       const writerAppVersion = readSqliteWriterAppVersion(database);
       schemas.incompatible.push({
@@ -93,6 +84,14 @@ export function inspectStateDatabaseSchema(
         supportedVersion,
         ...(writerAppVersion ? { writerAppVersion } : {}),
       });
+      // This build cannot interpret a newer registry or prescribe repairs for it.
+      return inspection;
+    }
+    const migrationVersion = readStateSchemaMigrationVersion(database, contentVersion);
+    if (migrationVersion < supportedVersion) {
+      schemas.pendingMigrations = [
+        { kind: "state", path: pathname, foundVersion: stateVersion, supportedVersion },
+      ];
     }
     if (stateVersion < contentVersion && migrationVersion === contentVersion) {
       schemas.deferredSchemaPublications = [
