@@ -199,7 +199,7 @@ export function restoreDraftPlacePreferences(params: {
       (selectingConfiguredRemoteProject && !restoringConfiguredRemoteProject) ||
       (!repositoryState.baseRef && preferredRemoteProject.defaultBranch)
     ) {
-      repositoryState.setBaseRef(preferredRemoteProject.defaultBranch ?? "", false);
+      repositoryState.setDetail("baseRef", preferredRemoteProject.defaultBranch ?? "", false);
     }
     state.preferredRemoteProjectRestore = null;
     changed = true;

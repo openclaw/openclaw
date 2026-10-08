@@ -304,27 +304,6 @@ export function markOpenClawAgentIntegrityClean(
   });
 }
 
-// Read admission needs this error without importing schema migrations.
-function createOpenClawDatabaseVerificationError(
-  kind: "agent" | "state",
-  pathname: string,
-  storedError: string | null,
-): Error {
-  // Doctor's clearing hooks run after a full integrity assertion, so a still-
-  // corrupt file cannot be cleared directly: the file must be healthy first.
-  const error = new Error(
-    `OpenClaw ${kind} database ${pathname} is quarantined after integrity verification failed: ${storedError ?? "unknown integrity error"}. Restore the database from a backup or repair it, then run openclaw doctor --fix to clear the quarantine. See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
-  );
-  error.name = "SqliteIntegrityError";
-  return error;
-}
-
-function ensureQuarantineStoreDirectory(storePath: string): void {
-  const dir = path.dirname(storePath);
-  mkdirSync(dir, { recursive: true, mode: OPENCLAW_QUARANTINE_DIR_MODE });
-  applyPrivateModeSync(dir, OPENCLAW_QUARANTINE_DIR_MODE);
-}
-
 function configureQuarantineWriter(database: DatabaseSync, storePath: string): void {
   database.exec(`
     PRAGMA journal_mode = DELETE;
@@ -377,7 +356,9 @@ function readQuarantineSchemaVersion(database: DatabaseSync, storePath: string):
 function withQuarantineWriter<T>(env: NodeJS.ProcessEnv, operation: (db: DatabaseSync) => T): T {
   const storePath = resolveQuarantineStorePath(env);
   const existed = existsSync(storePath);
-  ensureQuarantineStoreDirectory(storePath);
+  const dir = path.dirname(storePath);
+  mkdirSync(dir, { recursive: true, mode: OPENCLAW_QUARANTINE_DIR_MODE });
+  applyPrivateModeSync(dir, OPENCLAW_QUARANTINE_DIR_MODE);
   const database = openNodeSqliteDatabase(storePath, {
     timeout: OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS,
   });
@@ -523,14 +504,19 @@ export function readOpenClawDatabaseQuarantineFailure(
   if (!quarantine) {
     return undefined;
   }
-  const failure = createOpenClawDatabaseVerificationError(kind, pathname, quarantine.reason);
+  // Read admission needs this error without importing schema migrations.
+  // Doctor's clearing hooks run after a full integrity assertion, so a still-
+  // corrupt file cannot be cleared directly: the file must be healthy first.
+  const failure = new Error(
+    `OpenClaw ${kind} database ${pathname} is quarantined after integrity verification failed: ${quarantine.reason ?? "unknown integrity error"}. Restore the database from a backup or repair it, then run openclaw doctor --fix to clear the quarantine. See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
+  );
+  failure.name = "SqliteIntegrityError";
   if (cleanupFailure) {
     failure.cause = cleanupFailure;
   }
   return failure;
 }
 
-/** Persist one authoritative quarantine decision. */
 export function recordOpenClawDatabaseQuarantine(options: {
   env?: NodeJS.ProcessEnv;
   generation?: SqliteFileGeneration;
@@ -584,7 +570,6 @@ export function recordOpenClawDatabaseQuarantine(options: {
   }
 }
 
-/** Clear one authoritative quarantine decision. */
 export function clearOpenClawDatabaseQuarantine(
   pathname: string,
   options: { env?: NodeJS.ProcessEnv } = {},

@@ -30,20 +30,18 @@ function normalizeCachedStickerForStore(sticker: CachedSticker): CachedSticker {
   };
 }
 
-function openStickerCacheStore(): TelegramStickerCacheStore {
-  return getTelegramRuntime().state.openKeyedStore<CachedSticker>({
-    namespace: TELEGRAM_STICKER_CACHE_NAMESPACE,
-    maxEntries: TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
-  });
-}
-
 async function readStickerCacheStore<T>(
   operation: string,
   read: (store: TelegramStickerCacheStore) => Promise<T>,
   fallback: T,
 ): Promise<T> {
   try {
-    return await read(openStickerCacheStore());
+    return await read(
+      getTelegramRuntime().state.openKeyedStore<CachedSticker>({
+        namespace: TELEGRAM_STICKER_CACHE_NAMESPACE,
+        maxEntries: TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
+      }),
+    );
   } catch (err) {
     logVerbose(`telegram sticker cache ${operation} failed: ${String(err)}`);
     return fallback;

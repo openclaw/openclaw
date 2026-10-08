@@ -1150,6 +1150,7 @@ src/infra/worker-native-lifecycle.ts
 src/infra/worker-native-port.ts
 src/infra/worker-native-resource.ts
 src/infra/worker-native-task-port.ts
+src/infra/worker-pool-sizing.ts
 src/infra/worker-request-diagnostics.ts
 src/infra/worker-request-kind.ts
 src/infra/worker-task-capacity.ts
