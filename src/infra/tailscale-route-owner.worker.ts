@@ -1,5 +1,5 @@
 // Owns one foreground Tailscale route claim and releases it when Gateway IPC closes.
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFile, spawn, type ChildProcess } from "node:child_process";
 import process from "node:process";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { signalProcessTree } from "../process/kill-tree.js";
@@ -57,11 +57,38 @@ export type TailscaleRouteOwnerHandle = {
   stop: () => void;
 };
 
-function signalChild(child: ChildProcess, signal: "SIGTERM" | "SIGKILL"): void {
+async function signalChild(
+  child: ChildProcess,
+  signal: "SIGTERM" | "SIGKILL",
+  privileged: boolean,
+  onError: (message: string) => void,
+): Promise<void> {
   if (typeof child.pid !== "number" || child.pid <= 0) {
     return;
   }
   if (process.platform !== "win32") {
+    if (privileged) {
+      // The detached, non-TTY sudo claim owns this group. An unprivileged
+      // kill cannot reach its root processes; serve off cannot release it.
+      await new Promise<void>((resolve) => {
+        execFile(
+          "sudo",
+          ["-n", "/bin/kill", `-${signal.slice(3)}`, "--", `-${child.pid}`],
+          { timeout: 5_000, maxBuffer: 16_384 },
+          (error) => {
+            if (error) {
+              onError(
+                `Could not stop the owned Tailscale process group ${child.pid} through sudo. ` +
+                  `Run \`sudo /bin/kill -TERM -- -${child.pid}\` to stop it, then ` +
+                  "`sudo tailscale set --operator=$USER` to avoid privileged claims.",
+              );
+            }
+            resolve();
+          },
+        );
+      });
+      return;
+    }
     signalProcessTree(child.pid, signal, { detached: true });
     return;
   }
@@ -80,7 +107,9 @@ export function runTailscaleRouteOwner(
   const output = { stdout: "", stderr: "" };
   let ready = false;
   let stopping = false;
+  let closed = false;
   let forceTimer: NodeJS.Timeout | undefined;
+  const signalOperations: Promise<void>[] = [];
   const exit = createDeferredCore<TailscaleRouteOwnerExit>();
   const child = spawn(command, args, {
     detached: process.platform !== "win32",
@@ -89,12 +118,21 @@ export function runTailscaleRouteOwner(
   });
 
   const stop = () => {
-    if (stopping) {
+    if (stopping || closed) {
       return;
     }
     stopping = true;
-    signalChild(child, "SIGTERM");
-    forceTimer = setTimeout(() => signalChild(child, "SIGKILL"), STOP_GRACE_MS);
+    const signal = (value: "SIGTERM" | "SIGKILL") => {
+      signalOperations.push(
+        signalChild(child, value, command === "sudo" && args[0] === "-n", (message) => {
+          if (!closed) {
+            sendMessage({ type: "stop-failed", message });
+          }
+        }),
+      );
+    };
+    signal("SIGTERM");
+    forceTimer = setTimeout(() => signal("SIGKILL"), STOP_GRACE_MS);
     forceTimer.unref?.();
   };
   child.once("spawn", () => {
@@ -118,13 +156,16 @@ export function runTailscaleRouteOwner(
     );
   });
   child.once("close", (code, signal) => {
+    closed = true;
     if (forceTimer) {
       clearTimeout(forceTimer);
     }
-    if (!stopping || !ready) {
-      sendMessage({ type: "failed", code, signal, ...output });
-    }
-    exit.resolve({ code, signal, stopping });
+    void Promise.all(signalOperations).then(() => {
+      if (!stopping || !ready) {
+        sendMessage({ type: "failed", code, signal, ...output });
+      }
+      exit.resolve({ code, signal, stopping });
+    });
   });
   return { exited: exit.promise, stop };
 }
