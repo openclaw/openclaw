@@ -693,12 +693,17 @@ describe("catalog-worker replacement demand", () => {
       clock.mockRestore();
     }
   });
-  it("refuses a failed-runtime demand from plugin work its replacement drain is joining", async () => {
-    await failReplacement();
+  it("keeps healthy reads passive while refusing drain-joined recovery", async () => {
+    await failReplacement(undefined, ["default", "other"]);
+    const healthy = await prepareModelRuntimeSnapshot(fixture.agentInput("other", {}));
+    expect(healthy.isCurrent()).toBe(true);
     const instance = new PluginInstance("demand-recovery-donor");
     const releaseReplacement = instance.reserveReplacement();
     const drain = beginPreparedModelRuntimePluginDrain();
     const abort = new AbortController();
+    const passiveRead = instance.run(() =>
+      ensureGatewayPreparedModelRuntimeReady({ agentId: "other", abortSignal: abort.signal }),
+    );
     const admission = instance
       .run(() =>
         ensureGatewayPreparedModelRuntimeReady({
@@ -710,12 +715,13 @@ describe("catalog-worker replacement demand", () => {
       .catch((error: unknown) => error);
     try {
       abort.abort(new Error("Demand incorrectly waited on its own replacement drain"));
+      await expect(passiveRead).resolves.toBeUndefined();
       expect(await admission).toMatchObject({ admissionBlocked: true });
       await instance.waitForRetainedWork(new AbortController().signal, { includeCalls: true });
     } finally {
       drain.release();
       releaseReplacement();
-      await admission;
+      await Promise.allSettled([passiveRead, admission]);
       await instance.dispose();
     }
     mocks.resolveAmbientCredentials.mockClear();

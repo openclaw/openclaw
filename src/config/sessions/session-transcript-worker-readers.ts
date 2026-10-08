@@ -430,6 +430,11 @@ export function createSessionHistoryWorkerReaders(
         },
       );
     },
+    readSessionMaintenance: reader(
+      "session-maintenance-read",
+      "session maintenance facts",
+      (value) => value,
+    ),
     readProgressCard: reader("session-progress-card", "a progress card", (value) => value.card),
     readPendingInputHistory: reader(
       "session-pending-input-history",

@@ -299,18 +299,14 @@ export function createPreparedModelRuntimeRecovery(host: {
       return;
     }
     const owner = resolveConfiguredOwner(host.owners, { agentId, agentDir: ".", config: {} });
-    const replacement = host.getAdmissionReplacement();
-    if (replacement && !replacement.degraded) {
-      assertPreparedModelRuntimeAdmissionCanWait();
-    } else if (owner?.pending) {
-      assertPreparedModelRuntimeAdmissionCanWait(owner);
-    }
     const recovery = owner?.catalogRecovery;
     if (!owner || !recovery) {
       return;
     }
     const assertLifetime = host.captureLifetime();
+    const replacement = host.getAdmissionReplacement();
     if (replacement && !replacement.degraded) {
+      assertPreparedModelRuntimeAdmissionCanWait();
       const joinsRecovery = recovery.replacementGateId === replacement.gateId;
       // A publication for another scope must not spend this failure's scheduled opportunity.
       if (demand === "scheduled" && joinsRecovery) {

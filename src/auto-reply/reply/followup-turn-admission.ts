@@ -347,6 +347,7 @@ export async function admitFollowupTurn(params: {
     const preflightEntry = session.current();
     try {
       activeEntry = await runSessionCompactionIfNeeded({
+        replyOperation: operation,
         cfg: config,
         followupRun: turn.queued,
         pendingUserEntryId: readPendingUserTurnTranscriptAdmission(

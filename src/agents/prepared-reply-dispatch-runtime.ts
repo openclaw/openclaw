@@ -123,7 +123,7 @@ export class PreparedReplyDispatchPublicationOwner {
     params: PreparedReplyDispatchLoadParams,
   ): Promise<PreparedReplyDispatchRuntime | undefined> => {
     const { agentId, abortSignal } = params;
-    await this.host.ensureReady(params);
+    let demandPrepared = false;
     for (;;) {
       if (abortSignal?.aborted) {
         throw createAbortError("Prepared reply dispatch admission aborted", {
@@ -134,14 +134,23 @@ export class PreparedReplyDispatchPublicationOwner {
         return undefined;
       }
       const replacement = this.host.getPendingReplacement();
+      const pendingOwner = replacement ? undefined : this.host.getConfiguredOwner(agentId);
       if (replacement) {
         assertPreparedModelRuntimeAdmissionCanWait();
+      } else if (pendingOwner?.pending) {
+        assertPreparedModelRuntimeAdmissionCanWait(pendingOwner);
+      }
+      if (!demandPrepared) {
+        // Demand can join recovery, so preserve admission before that first wait.
+        await this.host.ensureReady(params);
+        demandPrepared = true;
+        continue;
+      }
+      if (replacement) {
         await racePromiseWithAbortSignal(replacement, abortSignal);
         continue;
       }
-      const pendingOwner = this.host.getConfiguredOwner(agentId);
       if (pendingOwner?.pending) {
-        assertPreparedModelRuntimeAdmissionCanWait(pendingOwner);
         await racePromiseWithAbortSignal(pendingOwner.pending, abortSignal);
         continue;
       }
