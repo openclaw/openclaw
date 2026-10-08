@@ -10,7 +10,10 @@ import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-d
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { issueDeviceBootstrapToken } from "./device-bootstrap.js";
+import {
+  issueDeviceBootstrapToken,
+  pruneExpiredDevicePairSetupCompletions,
+} from "./device-bootstrap.js";
 import { resolvePairedDeviceTokenIdentity } from "./device-pairing-identity.js";
 import { withDevicePairingLock } from "./device-pairing-lock.js";
 import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pairing-node-facts.js";
@@ -30,7 +33,10 @@ import {
   revokeDeviceToken,
   verifyDeviceToken,
 } from "./device-pairing-tokens.js";
-import { withCurrentDevicePairingSnapshot } from "./device-pairing-worker.js";
+import {
+  executeDevicePairingMutation,
+  withCurrentDevicePairingSnapshot,
+} from "./device-pairing-worker.js";
 import {
   getPairedDevice,
   listDevicePairing,
@@ -99,6 +105,91 @@ test("keeps committed node bindings across bootstrap writes and caller-owned row
   copy.identity = "caller-edit";
   expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
 });
+
+test("keeps node authority available while retained setup cleanup is pending", async () => {
+  const snapshot = await readDevicePairingNodeSnapshot(baseDir);
+  const binding = getPublishedPairedDeviceBinding("node", baseDir);
+  expect(binding).not.toBeNull();
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const run = stateWorker.runOpenClawStateWorkerOperation;
+  const writer = vi
+    .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+    .mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await release.promise;
+      return run(...args);
+    });
+  const pruning = pruneExpiredDevicePairSetupCompletions({ baseDir });
+  try {
+    await awaitGateBeforeSettlement(entered.promise, pruning, "setup cleanup was not held");
+    expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
+    release.resolve();
+    await expect(pruning).resolves.toBe(0);
+    expect(getPublishedPairedDeviceBinding("node", baseDir)).toEqual(binding);
+    expect(await readDevicePairingNodeSnapshot(baseDir)).toBe(snapshot);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([pruning]);
+    writer.mockRestore();
+  }
+});
+
+test.each([0, 1])(
+  "settles setup cleanup after late revocation according to removed rows (%s)",
+  async (removed) => {
+    database.db.prepare("DELETE FROM device_pair_setup_completions").run();
+    if (removed > 0) {
+      database.db
+        .prepare(
+          "INSERT INTO device_pair_setup_completions (setup_id, device_id, access, completed_at_ms, delivery_state, retain_until_ms) VALUES ('expired', 'node', 'node', 1, 'confirmed', 1000)",
+        )
+        .run();
+    }
+    let current = true;
+    const revoked = new Error("setup cleanup owner revoked after native result");
+    const original = stateWorker.runOpenClawStateWorkerOperation;
+    const delivery = vi
+      .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
+      .mockImplementationOnce((context, operation, options) =>
+        original(
+          context,
+          (scope) =>
+            operation({
+              execute: async (command, executeOptions) => {
+                const result = await scope.execute(command, executeOptions);
+                current = false;
+                return result;
+              },
+            }),
+          options,
+        ),
+      );
+    try {
+      const pruning = executeDevicePairingMutation(
+        { type: "bootstrap.prune", input: { nowMs: 1_000 } },
+        {
+          baseDir,
+          assertCurrent: () => {
+            if (!current) {
+              throw revoked;
+            }
+          },
+        },
+      );
+      if (removed === 0) {
+        await expect(pruning).rejects.toBe(revoked);
+      } else {
+        await expect(pruning).resolves.toBe(removed);
+      }
+      expect(
+        database.db.prepare("SELECT setup_id FROM device_pair_setup_completions").all(),
+      ).toEqual([]);
+    } finally {
+      delivery.mockRestore();
+    }
+  },
+);
 
 test.each(["verification", "token reuse", "bootstrap issuance"] as const)(
   "keeps accepted operator work current while %s is awaiting worker dispatch",

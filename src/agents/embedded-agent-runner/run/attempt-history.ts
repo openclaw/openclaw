@@ -37,7 +37,7 @@ export function splitLeadingTimestampEnvelope(text: string): {
   envelope: string;
 } {
   const envelope = text.match(LEADING_TIMESTAMP_ENVELOPE_RE)?.[0] ?? "";
-  return { envelope, body: envelope ? text.slice(envelope.length) : text };
+  return { envelope, body: text.slice(envelope.length) };
 }
 
 function readFirstUserText(content: unknown): string | undefined {
@@ -72,7 +72,7 @@ export function resolveUserTranscriptMessages(
   }
   const resolved = Array.from(
     { length: messages.length },
-    () => undefined as AgentMessage | undefined,
+    (): AgentMessage | undefined => undefined,
   );
   const unusedContexts = new Set(contexts);
   const byRuntimeMessage = new Map<AgentMessage, UserTranscriptContext[]>();
@@ -166,8 +166,7 @@ function normalizePersistedSenderValue(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
-  const normalized = value.replaceAll("\u0000", "").trim();
-  return normalized || undefined;
+  return value.replaceAll("\u0000", "").trim() || undefined;
 }
 
 type PersistedSender = {

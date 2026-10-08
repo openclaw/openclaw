@@ -46,6 +46,8 @@ Text output is compact:
 
 Columns are id prefix, status, priority, board id, optional agent id, and title.
 
+An invalid `--status` exits with an error listing the allowed values instead of returning an empty list.
+
 | Flag                 | Purpose                                       |
 | -------------------- | --------------------------------------------- |
 | `--board <id>`       | Limit results to one board namespace          |

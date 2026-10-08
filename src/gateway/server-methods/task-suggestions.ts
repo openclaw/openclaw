@@ -54,6 +54,13 @@ import { defineValidatedGatewayHandler } from "./validation.js";
 
 type TaskSuggestionAcceptMode = NonNullable<TaskSuggestionsAcceptParams["mode"]>;
 
+type SuggestedTaskContext = {
+  taskId: string;
+  suggestion: TaskSuggestion;
+  options: GatewayRequestHandlerOptions;
+  agentId: string;
+};
+
 const activeAcceptances = new Map<string, Promise<TaskSuggestionAcceptanceResult>>();
 
 function authorizeSuggestedTaskSource(params: {
@@ -105,14 +112,9 @@ async function captureSuggestedTaskResponse(
       };
 }
 
-async function sendSuggestedTaskPrompt(params: {
-  taskId: string;
-  suggestion: TaskSuggestion;
-  options: GatewayRequestHandlerOptions;
-  sessionKey: string;
-  agentId: string;
-  sessionId?: string;
-}): Promise<ErrorShape | undefined> {
+async function sendSuggestedTaskPrompt(
+  params: SuggestedTaskContext & { sessionKey: string; sessionId?: string },
+): Promise<ErrorShape | undefined> {
   const chatParams = {
     sessionKey: params.sessionKey,
     agentId: params.agentId,
@@ -135,15 +137,13 @@ async function sendSuggestedTaskPrompt(params: {
   return response.ok ? undefined : response.error;
 }
 
-async function createSuggestedTaskSession(params: {
-  taskId: string;
-  suggestion: TaskSuggestion;
-  options: GatewayRequestHandlerOptions;
-  agentId: string;
-  mode: Exclude<TaskSuggestionAcceptMode, "session">;
-  cloudProfileId?: string;
-  cwd?: string;
-}): Promise<TaskSuggestionAcceptanceResult> {
+async function createSuggestedTaskSession(
+  params: SuggestedTaskContext & {
+    mode: Exclude<TaskSuggestionAcceptMode, "session">;
+    cloudProfileId?: string;
+    cwd?: string;
+  },
+): Promise<TaskSuggestionAcceptanceResult> {
   const { agentId } = params;
   const cwd = params.cwd ?? params.suggestion.cwd;
   if (params.mode === "worktree") {
@@ -236,12 +236,9 @@ async function createSuggestedTaskSession(params: {
   return finishSuggestedTaskAcceptance({ ...params, sessionKey: key });
 }
 
-async function deliverSuggestedTaskToSourceSession(params: {
-  taskId: string;
-  suggestion: TaskSuggestion;
-  options: GatewayRequestHandlerOptions;
-  agentId: string;
-}): Promise<TaskSuggestionAcceptanceResult> {
+async function deliverSuggestedTaskToSourceSession(
+  params: SuggestedTaskContext,
+): Promise<TaskSuggestionAcceptanceResult> {
   const { agentId } = params;
   const fail = (error: NonNullable<Parameters<RespondFn>[2]>) =>
     restoreSuggestedTaskClaim({ taskId: params.taskId, options: params.options, error });

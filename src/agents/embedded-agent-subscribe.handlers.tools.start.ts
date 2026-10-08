@@ -179,16 +179,8 @@ export function buildCommandItemId(toolCallId: string): string {
   return `command:${toolCallId}`;
 }
 
-export function buildPatchItemId(toolCallId: string): string {
-  return `patch:${toolCallId}`;
-}
-
 export function buildCommandItemTitle(toolName: string, meta?: string): string {
   return meta ? `command ${meta}` : `${toolName} command`;
-}
-
-export function buildPatchItemTitle(meta?: string): string {
-  return meta ? `patch ${meta}` : "apply patch";
 }
 
 export function emitTrackedItemEvent(

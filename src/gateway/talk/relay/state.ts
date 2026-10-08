@@ -339,10 +339,7 @@ export function adoptRelayProviderToolCallId(
   }
   const current = session.relayToolCallIdsByProviderId.get(providerCallId);
   if (current) {
-    if (session.toolCalls.isAgentCompleted(current)) {
-      return undefined;
-    }
-    return current;
+    return session.toolCalls.isAgentCompleted(current) ? undefined : current;
   }
   const relayCallId = session.toolCalls.isAgentCompleted(providerCallId)
     ? `relay-${randomUUID()}`

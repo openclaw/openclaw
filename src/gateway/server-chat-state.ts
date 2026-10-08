@@ -592,16 +592,14 @@ export function createSessionMessageSubscriberRegistry(
       };
       state.inflight.set(provisionalRecency, mode);
       updateSubscription(normalizedConnId, normalizedSessionKey, owners);
-      let settled = false;
       const settle = (succeeded: boolean) => {
         if (
-          settled ||
+          !state.inflight.has(provisionalRecency) ||
           connections.get(normalizedConnId)?.get(normalizedSessionKey)?.get(subscriptionId) !==
             state
         ) {
           return;
         }
-        settled = true;
         if (succeeded && provisionalRecency >= (state.committed?.sequence ?? -Infinity)) {
           state.committed = {
             sequence: provisionalRecency,

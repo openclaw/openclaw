@@ -19,6 +19,7 @@ import {
 } from "../../agents/sandbox-paths.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import type { SandboxWorkspaceAccess } from "../../agents/sandbox/types.js";
+import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
@@ -119,7 +120,7 @@ export type PreparedReplyMedia = readonly {
   outcome: PreparedReplyMediaSource | { failure: ReplyMediaFailure };
 }[];
 
-export function createReplyMediaSourcePreparer(params: {
+type ReplyMediaSourcePreparationParams = {
   cfg: OpenClawConfig;
   sessionKey?: string;
   agentId?: string;
@@ -144,7 +145,12 @@ export function createReplyMediaSourcePreparer(params: {
   workspaceMediaRoot?: string;
   /** Streams local audio/video up to this size instead of the channel cap. */
   localMediaMaxBytes?: number;
-}): (sources: readonly string[]) => Promise<PreparedReplyMedia> {
+};
+
+export function createReplyMediaSourcePreparer(
+  params: ReplyMediaSourcePreparationParams,
+  readSource?: CapturedSessionEntryReadSource,
+): (sources: readonly string[]) => Promise<PreparedReplyMedia> {
   // Prefer an explicit agentId so callers without a resolved sessionKey (e.g.
   // `openclaw agent --deliver` with `--reply-channel/--reply-to`) still get
   // the stricter agent-scoped file-read policy applied during staging.
@@ -179,12 +185,15 @@ export function createReplyMediaSourcePreparer(params: {
   const persistedMediaBySource = new Map<string, Promise<{ path: string; contentType?: string }>>();
 
   const resolveSandboxWorkspace = async () => {
-    sandboxWorkspacePromise ??= ensureSandboxWorkspaceForSession({
-      config: params.cfg,
-      agentId,
-      sessionKey: params.sessionKey,
-      workspaceDir: params.workspaceDir,
-    }).then((sandbox) =>
+    sandboxWorkspacePromise ??= ensureSandboxWorkspaceForSession(
+      {
+        config: params.cfg,
+        agentId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+      },
+      readSource,
+    ).then((sandbox) =>
       sandbox
         ? {
             root: sandbox.workspaceDir,
@@ -487,8 +496,9 @@ export function applyPreparedReplyMedia(
 
 export function createReplyMediaPathNormalizer(
   params: Parameters<typeof createReplyMediaSourcePreparer>[0],
+  readSource?: CapturedSessionEntryReadSource,
 ): (payload: ReplyPayload) => Promise<ReplyPayload> {
-  const prepare = createReplyMediaSourcePreparer(params);
+  const prepare = createReplyMediaSourcePreparer(params, readSource);
   return async (payload) =>
     applyPreparedReplyMedia(
       payload,

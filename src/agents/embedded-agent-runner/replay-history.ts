@@ -308,12 +308,9 @@ function normalizeAssistantReplayMessage(
       ? message
       : replaceCompactionReplayOwnerContent(message, blockContent as typeof message.content);
   const normalized = normalizeAssistantReplayBlockContent(assistantMessage, blockContent);
-  if (!normalized) {
-    return null;
-  }
-  if (isReasoningOnlyLengthAssistantTurn(normalized)) {
-    // Token-limited thinking is incomplete provider state. Replaying it can
-    // resend a partial signature, while visible text or tool calls remain useful.
+  // Token-limited thinking is incomplete provider state. Replaying it can
+  // resend a partial signature, while visible text or tool calls remain useful.
+  if (!normalized || isReasoningOnlyLengthAssistantTurn(normalized)) {
     return null;
   }
   // Historical side-branch rebuilds could strip every mirror marker while

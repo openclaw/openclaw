@@ -137,8 +137,7 @@ export function createSessionRowProjectionBackfill(params: {
     prepare(row: EntryRow, facts: Row["retainedDatabaseFacts"]) {
       const id = identity(row);
       const next = revision(row, facts);
-      const previous = revisions.get(id);
-      if (!isDeepStrictEqual(previous, next)) {
+      if (!isDeepStrictEqual(revisions.get(id), next)) {
         revisions.set(id, next);
         queued.add(id);
       }

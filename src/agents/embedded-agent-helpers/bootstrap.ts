@@ -156,10 +156,10 @@ export function resolveBootstrapTotalMaxChars(
 }
 
 function isPolicyDigestCandidate(line: string): boolean {
-  if (/^(?:#{1,6}|\s*[-*+]|\s*\d+[.)])\s+\S/u.test(line)) {
-    return true;
-  }
-  return AGENTS_POLICY_DIGEST_CANDIDATE_PATTERN.test(line);
+  return (
+    /^(?:#{1,6}|\s*[-*+]|\s*\d+[.)])\s+\S/u.test(line) ||
+    AGENTS_POLICY_DIGEST_CANDIDATE_PATTERN.test(line)
+  );
 }
 
 function normalizePolicyDigestLine(line: string): string {
@@ -368,11 +368,9 @@ function clampToBudget(content: string, budget: number): string {
   if (content.length <= budget) {
     return content;
   }
-  if (budget <= 3) {
-    return truncateUtf16Safe(content, budget);
-  }
-  const safe = budget - 1;
-  return `${truncateUtf16Safe(content, safe)}…`;
+  return budget <= 3
+    ? truncateUtf16Safe(content, budget)
+    : `${truncateUtf16Safe(content, budget - 1)}…`;
 }
 
 export function buildBootstrapContextFiles(
@@ -397,17 +395,21 @@ export function buildBootstrapContextFiles(
       );
       continue;
     }
+    const appendContext = (content: string, includePersonalUser = false) => {
+      remainingTotalChars = Math.max(0, remainingTotalChars - content.length);
+      result.push({
+        path: pathValue,
+        content,
+        ...(includePersonalUser && file.personalUser ? { personalUser: file.personalUser } : {}),
+      });
+    };
     if (file.missing) {
       const missingText = `[MISSING] Expected at: ${pathValue}`;
       const cappedMissingText = clampToBudget(missingText, remainingTotalChars);
       if (!cappedMissingText) {
         break;
       }
-      remainingTotalChars = Math.max(0, remainingTotalChars - cappedMissingText.length);
-      result.push({
-        path: pathValue,
-        content: cappedMissingText,
-      });
+      appendContext(cappedMissingText);
       continue;
     }
     if (remainingTotalChars < MIN_BOOTSTRAP_FILE_BUDGET_CHARS) {
@@ -436,12 +438,7 @@ export function buildBootstrapContextFiles(
         `workspace bootstrap file ${file.name} is ${trimmed.originalLength} chars (limit ${trimmed.maxChars}); truncating in injected context`,
       );
     }
-    remainingTotalChars = Math.max(0, remainingTotalChars - contentWithinBudget.length);
-    result.push({
-      path: pathValue,
-      content: contentWithinBudget,
-      ...(file.personalUser ? { personalUser: file.personalUser } : {}),
-    });
+    appendContext(contentWithinBudget, true);
   }
   return result;
 }

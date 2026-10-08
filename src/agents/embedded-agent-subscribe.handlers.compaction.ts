@@ -12,17 +12,8 @@ import type { AgentSessionEvent } from "./sessions/index.js";
 
 type SessionCompactionStartEvent = Extract<AgentSessionEvent, { type: "compaction_start" }>;
 type SessionCompactionEndEvent = Extract<AgentSessionEvent, { type: "compaction_end" }>;
-type CompactionReason = SessionCompactionStartEvent["reason"];
 
 type CompactionStartEvent = Omit<SessionCompactionStartEvent, "reason"> & { reason?: unknown };
-
-// Unknown reasons come from external runtimes or older sessions. Treat them as
-// threshold compaction so logs and event payloads stay on the closed reason set.
-function normalizeCompactionReason(reason: unknown): CompactionReason {
-  return reason === "manual" || reason === "threshold" || reason === "overflow"
-    ? reason
-    : "threshold";
-}
 
 function emitCompactionAgentEvent(
   ctx: EmbeddedAgentSubscribeContext,
@@ -83,7 +74,13 @@ export function handleCompactionStart(
   ctx: EmbeddedAgentSubscribeContext,
   evt: CompactionStartEvent,
 ) {
-  const reason = normalizeCompactionReason(evt.reason);
+  // Unknown reasons come from external runtimes or older sessions. Treat them as
+  // threshold compaction so logs and event payloads stay on the closed reason set.
+  const rawReason = evt.reason;
+  const reason =
+    rawReason === "manual" || rawReason === "threshold" || rawReason === "overflow"
+      ? rawReason
+      : "threshold";
   const kind = reason === "manual" ? "manual compaction" : "auto-compaction";
   ctx.state.compactionInFlight = true;
   ctx.state.livenessState = "paused";
