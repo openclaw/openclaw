@@ -703,7 +703,6 @@ extensions/qa-lab/src/evidence-gallery.ts	2
 extensions/qa-lab/src/fixture-utils.ts	4
 extensions/qa-lab/src/gateway-child-artifacts.ts	1
 extensions/qa-lab/src/gateway-process-boundary.ts	1
-extensions/qa-lab/src/harness-parity.ts	1
 extensions/qa-lab/src/harness-runtime.ts	2
 extensions/qa-lab/src/lab-server-capture.ts	1
 extensions/qa-lab/src/lab-server.ts	2
@@ -760,7 +759,7 @@ extensions/qa-lab/src/providers/mock-openai/mock-openai-directives.ts	3
 extensions/qa-lab/src/providers/mock-openai/mock-openai-events.ts	1
 extensions/qa-lab/src/providers/mock-openai/mock-openai-input.ts	6
 extensions/qa-lab/src/providers/mock-openai/mock-openai-responses-websocket.ts	1
-extensions/qa-lab/src/providers/mock-openai/server.ts	6
+extensions/qa-lab/src/providers/mock-openai/server.ts	4
 extensions/qa-lab/src/qa-transport.ts	1
 extensions/qa-lab/src/run-config.ts	1
 extensions/qa-lab/src/runtime-parity.ts	1

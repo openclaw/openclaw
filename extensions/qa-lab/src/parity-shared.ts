@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type ParityToolCallShape = {
   argsHash: string;
@@ -111,13 +112,11 @@ function countParityTranscriptRecords(transcriptBytes: string, mode?: "lines" | 
       continue;
     }
     try {
-      const parsed = JSON.parse(trimmed) as {
-        message?: { role?: unknown };
-        role?: unknown;
-      };
+      const parsed: unknown = JSON.parse(trimmed);
       if (
-        (parsed.message && typeof parsed.message.role === "string") ||
-        typeof parsed.role === "string"
+        isRecord(parsed) &&
+        ((isRecord(parsed.message) && typeof parsed.message.role === "string") ||
+          typeof parsed.role === "string")
       ) {
         count += 1;
       }
