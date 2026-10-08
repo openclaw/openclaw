@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  resolveAcpSpawnOpenClawOwnerAgentId,
-  resolveTargetAcpAgentId,
-} from "./acp-spawn-target.js";
+import { resolveTargetAcpAgentId } from "./acp-spawn-target.js";
 
 describe("resolveTargetAcpAgentId", () => {
   it.each(["", "агент✨"])("rejects explicit unrepresentable ACP agent id %j", (agentId) => {
@@ -50,20 +47,5 @@ describe("resolveTargetAcpAgentId", () => {
         cfg: { agents: { entries: { main: {} } } },
       }),
     ).not.toHaveProperty("configAgentId");
-  });
-});
-
-describe("resolveAcpSpawnOpenClawOwnerAgentId", () => {
-  it("uses the configured requester for a raw external ACP target", () => {
-    expect(resolveAcpSpawnOpenClawOwnerAgentId({ requesterAgentId: "main" })).toBe("main");
-  });
-
-  it("keeps an explicit configured ACP alias as the OpenClaw owner", () => {
-    expect(
-      resolveAcpSpawnOpenClawOwnerAgentId({
-        requesterAgentId: "main",
-        configAgentId: "reviewer",
-      }),
-    ).toBe("reviewer");
   });
 });

@@ -170,17 +170,18 @@ export async function validateAcpResumeSessionOwnership(params: {
     agentId: params.ownerAgentId,
     backendId: normalizeOptionalLowercaseString(params.backendId),
     resumeSessionId,
+    runtimeAgentId: params.runtimeAgentId,
     assertCurrent: params.assertCurrent,
   });
   params.assertCurrent?.();
-  const persistedRuntimeAgent = normalizeOptionalAgentId(owner?.entry.acp?.agent);
   const requestedRuntimeAgent = normalizeOptionalAgentId(params.runtimeAgentId);
   if (
     owner &&
+    requestedRuntimeAgent &&
+    owner.runtimeAgent === requestedRuntimeAgent &&
     (owner.sessionKey === requesterSessionKey ||
       normalizeOptionalString(owner.entry.spawnedBy) === requesterSessionKey ||
-      normalizeOptionalString(owner.entry.parentSessionKey) === requesterSessionKey) &&
-    (!persistedRuntimeAgent || persistedRuntimeAgent === requestedRuntimeAgent)
+      normalizeOptionalString(owner.entry.parentSessionKey) === requesterSessionKey)
   ) {
     return { ok: true };
   }

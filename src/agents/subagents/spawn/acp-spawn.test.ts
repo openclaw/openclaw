@@ -1283,6 +1283,7 @@ describe("spawnAcpDirect", () => {
     expectRelayCallFields({
       parentSessionKey: "agent:main:subagent:parent",
       agentId: "codex",
+      ownerAgentId: "main",
       childSessionId: "sess-123",
       deliveryContext: {
         channel: "discord",

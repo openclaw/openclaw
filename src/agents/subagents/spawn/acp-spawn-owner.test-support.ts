@@ -90,12 +90,14 @@ export function registerAcpSpawnOwnerTests(fixture: {
     const resumeSessionId = "fixture-resume";
     fixture.readAcpResumeSessionOwnerMock.mockResolvedValue({
       sessionKey: "agent:reviewer:acp:owned",
+      runtimeAgent: "codex",
       entry: { sessionId: "sess-owned", updatedAt: 100, spawnedBy: "agent:main:main" },
     });
     fixture.expectAcceptedSpawn(await fixture.spawn({ agentId: "reviewer", resumeSessionId }));
     expect(fixture.readAcpResumeSessionOwnerMock).toHaveBeenCalledWith(
       expect.objectContaining({
         agentId: "reviewer",
+        runtimeAgentId: "codex",
         backendId: "fallback",
         resumeSessionId,
       }),
@@ -111,19 +113,8 @@ export function registerAcpSpawnOwnerTests(fixture: {
   it("refuses resume when the persisted ACP runtime identity does not match", async () => {
     fixture.readAcpResumeSessionOwnerMock.mockResolvedValue({
       sessionKey: "agent:main:acp:owned",
-      entry: {
-        sessionId: "sess-owned",
-        updatedAt: 100,
-        spawnedBy: "agent:main:main",
-        acp: {
-          backend: "acpx",
-          agent: "cursor",
-          runtimeSessionName: "owned",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: 100,
-        },
-      },
+      runtimeAgent: "cursor",
+      entry: { sessionId: "sess-owned", updatedAt: 100, spawnedBy: "agent:main:main" },
     });
     const result = await fixture.spawn({ agentId: "codex", resumeSessionId: "fixture-resume" });
     expect(result).toMatchObject({ status: "forbidden", errorCode: "resume_forbidden" });

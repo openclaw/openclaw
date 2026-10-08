@@ -47,14 +47,6 @@ it("resolves resume ownership off-thread, preserving backend, order, and lifecyc
             sessionStartedAt: options.startedAt,
             spawnedBy: options.owner ?? requester,
             parentSessionKey: options.parent,
-            acp: {
-              backend: options.backend ?? "fixture",
-              agent: options.runtimeAgent ?? agentId,
-              runtimeSessionName: name,
-              mode: "persistent",
-              state: "idle",
-              lastActivityAt: 100,
-            },
           });
       const meta: SessionAcpMeta = {
         backend: options.backend ?? "fixture",
@@ -159,6 +151,32 @@ it("resolves resume ownership off-thread, preserving backend, order, and lifecyc
     }
 
     const read = entryReader.withSessionEntryReadOnlyInWorker;
+    const changedAgent = vi
+      .spyOn(entryReader, "withSessionEntryReadOnlyInWorker")
+      .mockImplementationOnce((scope, assertCurrent, consume) =>
+        read(scope, assertCurrent, async (snapshot, owner) => {
+          writeAcpSessionMetaForMigration({
+            sessionKey: buildAcpDatabaseSessionKey(owned.sessionKey, "coder"),
+            lifecycleRevision: owned.entry?.lifecycleRevision,
+            meta: { ...owned.meta, agent: "cursor" },
+            env: state.env,
+          });
+          return consume(snapshot, owner);
+        }),
+      );
+    try {
+      expect(
+        (await validateAcpResumeSessionOwnership({ ...input, resumeSessionId: "owned" })).ok,
+      ).toBe(false);
+    } finally {
+      changedAgent.mockRestore();
+      writeAcpSessionMetaForMigration({
+        sessionKey: buildAcpDatabaseSessionKey(owned.sessionKey, "coder"),
+        lifecycleRevision: owned.entry?.lifecycleRevision,
+        meta: owned.meta,
+        env: state.env,
+      });
+    }
     const changedIdentity = vi
       .spyOn(entryReader, "withSessionEntryReadOnlyInWorker")
       .mockImplementationOnce((scope, assertCurrent, consume) =>
