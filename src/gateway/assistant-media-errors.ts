@@ -30,6 +30,8 @@ export function classifyAssistantMediaError(err: unknown): AssistantMediaAvailab
       case "path-mismatch":
       case "symlink":
         return { available: false, code: "invalid-file", reason: "Invalid file" };
+      default:
+        break;
     }
   } else if (err instanceof Error && "code" in err) {
     const errorCode = err.code;

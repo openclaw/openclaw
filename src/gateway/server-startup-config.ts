@@ -341,8 +341,8 @@ export function createRuntimeSecretsActivator(params: {
       (activationParams.activate || activationParams.publishFailureAsDegraded === true) &&
       (activationParams.canPublishFailureAsDegraded?.() ?? true);
     const degradations = classifySecretResolutionErrorDegradations(err);
-    const retryableDegradations = degradations.filter((degradation) =>
-      isRetryableSecretDegradationReason(degradation.reason),
+    const retryableDegradations = degradations.filter((entry) =>
+      isRetryableSecretDegradationReason(entry.reason),
     );
     if (
       retryableDegradations.length > 0 &&
