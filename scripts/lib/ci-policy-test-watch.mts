@@ -1079,7 +1079,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
   ...[
     "src/infra/sqlite-worker-transcripts.test.ts",
     "src/meeting-bot/transcripts-bridge.test.ts",
-    "src/transcripts/status.producer.shutdown.test.ts",
+    "src/transcripts/status.test.ts",
   ].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: [
@@ -1996,7 +1996,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     watchGlobs: ["ui/index.html", "ui/src/**/*.css", "ui/src/**/*.ts"],
   },
   ...[
-    "src/cron/service.stream-trigger.test.ts",
     "src/cron/service.stream-validation.test.ts",
     "src/cron/service/timer.timeout-watchdog.test.ts",
   ].map((testFile) => ({

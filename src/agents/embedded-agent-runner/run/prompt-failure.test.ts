@@ -3,7 +3,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildExternalRunFailureReply,
   buildKnownAgentRunFailureReplyPayload,
+  resolveAgentRunFailureText,
 } from "../../../auto-reply/reply/agent-runner-failure-reply.js";
+import { assertCurrentSessionTranscriptHeader } from "../../../config/sessions/session-entry-codec.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { FailoverError } from "../../failover-error.js";
 import { AgentHarnessPreflightError } from "../../harness/errors.js";
@@ -419,56 +421,70 @@ describe("handleEmbeddedPromptFailure", () => {
     await vi.waitFor(() => expect(events).toEqual(["advance", "mark-start", "mark-finish"]));
   });
 
-  it("keeps a live SessionManager transcript-validation error off shared credential health", async () => {
-    let promptError: unknown;
-    try {
-      await SessionManager.inMemory("/tmp").appendModelChange("", "");
-    } catch (error) {
-      promptError = error;
-    }
-    expect(promptError).toBeInstanceOf(Error);
-    expect(promptError).toHaveProperty("message", "Invalid session transcript entry: model_change");
+  it.each(["invalid entry", "missing header"])(
+    "keeps %s history failures visible without harming shared credential health",
+    async (historyFailure) => {
+      let promptError: unknown;
+      try {
+        if (historyFailure === "invalid entry") {
+          await SessionManager.inMemory("/tmp").appendModelChange("", "");
+        } else {
+          assertCurrentSessionTranscriptHeader(undefined);
+        }
+      } catch (error) {
+        promptError = error;
+      }
+      expect(promptError).toBeInstanceOf(Error);
 
-    const params = makeParams({
-      promptError,
-      provider: "openrouter",
-      modelId: "gemini-2.5-flash",
-      activeErrorContext: { provider: "openrouter", model: "gemini-2.5-flash" },
-      failover: {
-        resolveAuthProfileFailureReason: (reason, opts) =>
-          resolveAuthProfileFailureReason({
-            failoverReason: reason,
-            providerStarted: opts?.providerStarted,
-            transientRateLimit: opts?.transientRateLimit,
-            policy: "shared",
-          }),
-        advanceAuthProfile: vi.fn(async () => false),
-      },
-    });
-
-    const error = await handleEmbeddedPromptFailure(params).catch((failure: unknown) => failure);
-
-    expect(error).toBe(promptError);
-    expect(params.failover.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
-    expect(params.failover.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(params.traceAttempts).toEqual([
-      expect.objectContaining({
+      const params = makeParams({
+        promptError,
         provider: "openrouter",
-        model: "gemini-2.5-flash",
-        result: "surface_error",
-        reason: "format",
-        stage: "prompt",
-      }),
-    ]);
-    expect(
-      buildKnownAgentRunFailureReplyPayload({
-        err: error,
-        sessionCtx: { ChatType: "direct" },
-        resolvedVerboseLevel: "off",
-      }),
-    ).toMatchObject({
-      text: "OpenClaw couldn't read this conversation's history. Try /compact, or start a new conversation with /new.",
-      isError: true,
-    });
-  });
+        modelId: "gemini-2.5-flash",
+        activeErrorContext: { provider: "openrouter", model: "gemini-2.5-flash" },
+        failover: {
+          resolveAuthProfileFailureReason: (reason, opts) =>
+            resolveAuthProfileFailureReason({
+              failoverReason: reason,
+              providerStarted: opts?.providerStarted,
+              transientRateLimit: opts?.transientRateLimit,
+              policy: "shared",
+            }),
+          advanceAuthProfile: vi.fn(async () => false),
+        },
+      });
+
+      const error = await handleEmbeddedPromptFailure(params).catch((failure: unknown) => failure);
+
+      expect(error).toBe(promptError);
+      expect(params.failover.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+      expect(params.failover.advanceAuthProfile).not.toHaveBeenCalled();
+      expect(params.traceAttempts).toEqual([
+        expect.objectContaining({
+          provider: "openrouter",
+          model: "gemini-2.5-flash",
+          result: "surface_error",
+          reason: "format",
+          stage: "prompt",
+        }),
+      ]);
+      expect(
+        buildKnownAgentRunFailureReplyPayload({
+          err: error,
+          sessionCtx: { ChatType: "group" },
+          resolvedVerboseLevel: "off",
+        }),
+      ).toMatchObject({
+        text: "OpenClaw couldn't read this conversation's history. Ask the Gateway operator to try `openclaw doctor --fix`. If it still fails, preserve the history and contact support with the Gateway logs.",
+        isError: true,
+      });
+      const reply = buildExternalRunFailureReply({ message: String(error), error });
+      expect(
+        resolveAgentRunFailureText({
+          ...reply,
+          replyExpectation: "optional",
+          visibleReplyDelivered: false,
+        }),
+      ).toBe(reply.text);
+    },
+  );
 });

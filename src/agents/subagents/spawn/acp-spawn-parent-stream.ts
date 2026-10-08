@@ -113,6 +113,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   childSessionKey: string;
   childSessionId?: string;
   agentId: string;
+  ownerAgentId?: string;
   env?: NodeJS.ProcessEnv;
   eventRouting: EventSessionRoutingPolicy;
   deliveryContext?: DeliveryContext;
@@ -131,7 +132,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   try {
     if (childSessionId) {
       recorder = createAcpParentStreamRecorder({
-        agentId: params.agentId,
+        agentId: params.ownerAgentId ?? params.agentId,
         env: stateEnv,
         sessionId: childSessionId,
         runId,

@@ -22,6 +22,7 @@ const require = createRequire(import.meta.url);
 let validatedSqliteModule: typeof import("node:sqlite") | undefined;
 let extensionLoadingSupported = false;
 let jsonbSupported = false;
+let walCheckpointNoopSupported = false;
 // Unqualified runtimes cannot confirm native disposal until the owning worker exits.
 export let bunSqliteNativeCleanupPending = false;
 
@@ -114,6 +115,7 @@ function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): void {
   ) {
     assertSqliteWalResetSafeVersion(inherited.version, process.versions.node);
     jsonbSupported = (compareValidSemver(inherited.version, "3.45.0") ?? -1) >= 0;
+    walCheckpointNoopSupported = (compareValidSemver(inherited.version, "3.53.0") ?? -1) >= 0;
     extensionLoadingSupported = inherited.extensionLoadingSupported;
     validatedSqliteModule = sqlite;
     return;
@@ -136,6 +138,7 @@ function assertSafeSqliteRuntime(sqlite: typeof import("node:sqlite")): void {
     database.close();
   }
   jsonbSupported = (compareValidSemver(version, "3.45.0") ?? -1) >= 0;
+  walCheckpointNoopSupported = (compareValidSemver(version, "3.53.0") ?? -1) >= 0;
   extensionLoadingSupported = extensions;
   validatedSqliteModule = sqlite;
   setEnvironmentData(SQLITE_NATIVE_RUNTIME_ADMISSION_KEY, {
@@ -174,6 +177,12 @@ export function supportsNodeSqliteExtensionLoading(): boolean {
 export function supportsNodeSqliteJsonb(): boolean {
   requireNodeSqlite();
   return jsonbSupported;
+}
+
+/** Older SQLite versions can interpret NOOP as a mutating checkpoint mode. */
+export function supportsNodeSqliteWalCheckpointNoop(): boolean {
+  requireNodeSqlite();
+  return walCheckpointNoopSupported;
 }
 
 /** Open node:sqlite through OpenClaw's runtime and filesystem-location boundary. */

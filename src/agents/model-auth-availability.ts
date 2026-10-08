@@ -681,10 +681,7 @@ export function createModelAuthAvailabilityResolver(
         ? { availability: false, evidence: "synthetic", unavailableReason: "missing-auth" }
         : { availability: undefined, evidence: "synthetic" };
     }
-    const hasAuthEvidence =
-      configured?.auth !== undefined ||
-      (apiKey !== undefined && !(typeof apiKey === "string" && apiKey.trim() === "")) ||
-      hasProfileEvidence(provider);
+    const hasAuthEvidence = configured?.auth !== undefined || hasProfileEvidence(provider);
     return {
       availability: hasAuthEvidence ? false : undefined,
       unavailableReason: hasAuthEvidence ? "auth-failed" : "missing-auth",

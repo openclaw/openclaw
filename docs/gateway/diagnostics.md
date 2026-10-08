@@ -284,14 +284,15 @@ main JavaScript isolate:
 openclaw gateway call diagnostics.cpuProfile --params '{}' --timeout 30000 --json
 ```
 
-This Node-only RPC requests five seconds of sampling at a 10 ms interval. It opens
+The RPC supports Node and OpenClaw's Bun runtime. It requests five seconds of sampling at a 10 ms interval and opens
 no debugger port and sends no process signal. A disconnected caller or Gateway
 shutdown cancels the capture and runs profiler cleanup. Overlapping requests fail
 instead of queuing. No profile is written to disk or included in diagnostics exports.
 
 The result contains `profile` in V8 CPU-profile format, `requestedDurationMs`,
 `actualDurationMs`, `startBlockedMs`, `samplingIntervalMicros`, `redactedNodeCount`, and
-`sampleLossCount: null` because V8 does not expose an explicit lost-sample count.
+`sampleLossCount: null` because the native profilers do not expose an explicit lost-sample count.
+Node samples V8; Bun samples JavaScriptCore and returns the same profile format.
 The complete result is limited to 1 MiB; larger profiles fail without truncating
 nodes or samples. Code locations inside the OpenClaw package use `openclaw:` paths;
 Node builtin locations use `node:` paths. External paths, eval labels, and other
@@ -302,11 +303,11 @@ emit samples out of timestamp order, so signed time deltas are preserved for pro
 viewers to reconstruct timestamps and order samples.
 
 Sampling can outlast the requested interval when the event loop is blocked. The
-response limit does not bound V8's internal allocation during that delay. Profile
+response limit does not bound the runtime's internal allocation during that delay. Profile
 samples describe this isolate, not all process threads, and are not exact
 per-function CPU accounting.
 
-Starting a CPU profile synchronously scans V8's heap to build its code map. On a
+On Node, starting a CPU profile synchronously scans V8's heap to build its code map. On a
 large Gateway this can block the main event loop for seconds on every capture
 (about 3.5 seconds has been observed with a 3 GB heap),
 before regular sampling begins. Keeping the inspector domain enabled or sending
@@ -321,6 +322,8 @@ The RPC refuses a known active inspector listener, profiling flags, coverage
 collection, or any active Node tracing, including non-CPU categories. Stop tracing
 before requesting a profile, and do not enable it during capture: V8 can send raw
 profile chunks to an existing trace writer before this RPC sanitizes the result.
+On Bun the RPC also refuses nonempty `BUN_INSPECT` or `BUN_INSPECT_CONNECT_TO` settings,
+which can activate debugging without appearing in `inspector.url()`.
 The RPC cannot discover arbitrary third-party in-process inspector sessions;
 do not run it alongside another debugger, profiler, tracer, or coverage owner. An unavailable
 response names the reason and whether cleanup failed. If cleanup remains uncertain,
@@ -328,14 +331,15 @@ further captures are refused; the RPC never restarts the Gateway automatically.
 
 ## Full heap snapshot
 
-An operator with `operator.admin` can explicitly capture the Gateway's main V8
+An operator with `operator.admin` can explicitly capture the Gateway's main JavaScript
 isolate, including objects allocated before the request:
 
 ```bash
 openclaw gateway call diagnostics.heapSnapshot --params '{"reason":"retention baseline"}' --timeout 180000 --json
 ```
 
-This Node-only RPC accepts only an optional `reason` (at most 256 characters),
+The RPC supports Node and OpenClaw's Bun runtime and writes V8-compatible snapshot JSON.
+It accepts only an optional `reason` (at most 256 characters),
 recorded in the warning before capture. No configuration switch is needed. It
 writes `<state>/diagnostics/heap-<timestamp>.heapsnapshot` with owner-only file
 permissions and returns `path`, `sizeBytes`, `heapUsedBefore`, `heapUsedAfter`
@@ -352,8 +356,9 @@ hard duration, output-size, or memory limit: synchronous `writeHeapSnapshot()`
 cannot be interrupted by a timeout, disconnection, or shutdown once started.
 A client timeout does not mean capture stopped; inspect the host directory before
 retrying. After capture, the diagnostic owner disables the heap profiler and
-disconnects its inspector session, releasing V8's object-ID map and object-move
-tracking so later garbage collections do not keep paying snapshot tracking costs.
+disconnects its inspector session, releasing the runtime's retained snapshot metadata.
+On Node this also releases V8's object-ID map and object-move tracking, so later garbage
+collections do not keep paying snapshot tracking costs.
 Failed captures remove partial files when possible; `cleanupFailed`
 reports whether profiler cleanup or file removal failed.
 
@@ -421,7 +426,7 @@ openclaw gateway call diagnostics.heapProfile --params '{"durationMs":10000,"sam
 openclaw gateway call diagnostics.heapProfile --params '{"includeObjectsCollectedByMajorGC":true,"includeObjectsCollectedByMinorGC":true}' --timeout 30000 --json
 ```
 
-The Node-only RPC defaults to five seconds and an average sampling interval of
+The RPC supports Node and OpenClaw's Bun runtime. It defaults to five seconds and an average sampling interval of
 32 KiB. `durationMs` and `samplingIntervalBytes` must be positive integers. With
 both collection flags false, durations are capped at 15 minutes (900,000 ms).
 Enabling either collection flag keeps the duration cap at 30 seconds;
@@ -453,16 +458,18 @@ The result includes actual elapsed `durationMs`, `samplingIntervalBytes`,
 `includeObjectsCollectedByMajorGC`, `includeObjectsCollectedByMinorGC`,
 `heapUsedBefore`, `heapUsedAfter`, `rssBefore`, `rssAfter` (all memory values in
 bytes), `redactedNodeCount`, `unattributedSampleCount`, `unattributedSampleBytes`,
-and `truncated`. When present, `profile` contains the sanitized V8 sampling tree
+and `truncated`. When present, `profile` contains the sanitized V8-format sampling tree
 and samples. Each node's `selfSize` is the estimated allocation bytes at that call
 site; sum its descendants for inclusive
 bytes. Samples link to nodes by `nodeId`.
 
-`heapSpacesBefore` and `heapSpacesAfter` contain the main isolate's V8 heap-space
+`heapSpacesBefore` and `heapSpacesAfter` contain the main isolate's `node:v8` heap-space
 statistics at the same boundaries as the memory readings: `space_name`,
 `space_used_size`, `space_size`, `space_available_size`, and `physical_space_size`
 (sizes in bytes). Compare entries by name to locate growth in old, large-object,
-code, or other spaces. On Node, the [Prometheus exporter](/gateway/prometheus)
+code, or other spaces on Node. Bun reports its JavaScriptCore heap in `old_space`;
+the other V8-named spaces are zero rather than separate JavaScriptCore regions.
+On Node, the [Prometheus exporter](/gateway/prometheus)
 also exposes `openclaw_heap_space_bytes{space="<space_name>",stat="used|size|available|physical"}`
 from the existing 30-second diagnostic memory heartbeat, with the same idle
 sample suppression, never per scrape. Names come from V8's finite space set,
@@ -494,7 +501,7 @@ then `selfBytes`; lower-ranked entries are omitted to fit the cap. Inclusive tot
 overlap across callers, so do not add them together. Start with large `selfBytes`
 and inspect the stack to identify the allocating code.
 
-Sampling is cheaper than a whole-heap snapshot but is still approximate. V8's
+Sampling is cheaper than a whole-heap snapshot but is still approximate. The
 default sampling mode excludes objects collected before capture ends; enable both
 collection flags to include those samples. Neither mode is an exact inventory of
 every allocation or includes objects allocated before capture.
@@ -505,7 +512,7 @@ Heap and CPU captures share one inspector owner: overlapping calls fail instead
 of queuing. Both use the same redaction, runtime-conflict checks, cancellation,
 and cleanup rules described above. No listener is opened and no file is written.
 Event-loop stalls can extend capture duration, and the response cap does not bound
-V8's internal sampling memory. Review retained code-symbol names before sharing.
+the runtime's internal sampling memory. Review retained code-symbol names before sharing.
 
 ## Useful options
 

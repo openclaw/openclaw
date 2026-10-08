@@ -49,9 +49,7 @@ export function createConfigWriteCoordinator({
   resetConfigLoad,
   refreshConnectionState,
   canCallConfigMethod,
-  cancelAppliedRefresh,
-  reconcileAppliedRefresh,
-  disposeAppliedRefresh,
+  appliedRefresh,
   isDisposed,
 }: ConfigWriteCoordinatorContext): ConfigWriteCoordinator {
   let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -148,7 +146,7 @@ export function createConfigWriteCoordinator({
     pauseAutoSaveDraftConnection,
     clearAutoSaveDraftConnection,
     publish,
-    reconcileAppliedRefresh,
+    reconcileAppliedRefresh: appliedRefresh.reconcile,
   });
   const { applySnapshot, unacknowledgedDraftWrite, hasUnacknowledgedDraftWrite } = reconciliation;
   const reconcileAutoSaveDraftConnection = () => {
@@ -204,7 +202,7 @@ export function createConfigWriteCoordinator({
         if (wantsTrailing && !isDisposed()) {
           runAutoSave();
         } else {
-          reconcileAppliedRefresh();
+          appliedRefresh.reconcile();
         }
       });
     inFlight = flight;
@@ -225,7 +223,7 @@ export function createConfigWriteCoordinator({
       autoSaveTrailing = true;
       return;
     }
-    cancelAppliedRefresh();
+    appliedRefresh.cancel();
     void trackWrite(
       (onSubmitted) =>
         run(() =>
@@ -260,7 +258,7 @@ export function createConfigWriteCoordinator({
     ) {
       return;
     }
-    cancelAppliedRefresh();
+    appliedRefresh.cancel();
     if (autoSaveTimer) {
       clearTimeout(autoSaveTimer);
     }
@@ -398,7 +396,7 @@ export function createConfigWriteCoordinator({
       // Reconnect can reuse the client object; the epoch must still advance.
       invalidateConfigConnection(state);
       cancelScheduledAutoSave();
-      cancelAppliedRefresh();
+      appliedRefresh.cancel();
       if (draftBelongsToPreviousConnection) {
         // Retain the draft, visibly paused until Save/Apply or reload binds it
         // to the new connection; silent suspension would make later edits look saved.
@@ -425,7 +423,7 @@ export function createConfigWriteCoordinator({
         if (reconciliation.interrupted) {
           reconciliation.refreshInterrupted();
         } else {
-          void refreshDraft(state, refreshConnectionState, publish, reconcileAppliedRefresh);
+          void refreshDraft(state, refreshConnectionState, publish, appliedRefresh.reconcile);
         }
       }
     }
@@ -440,8 +438,7 @@ export function createConfigWriteCoordinator({
         flushScheduledDraft: true,
         canDispatch: () => canDispatchConfigMutation("config.patch"),
       }),
-    cancelAppliedRefresh,
-    reconcileAppliedRefresh,
+    appliedRefresh,
     scheduleAutoSave: () => {
       if (!hasUnacknowledgedDraftWrite()) {
         scheduleAutoSave();
@@ -460,7 +457,7 @@ export function createConfigWriteCoordinator({
       : afterPendingWritesSettled(
           async (onSubmitted) => {
             bindDraftToExplicitSubmit();
-            cancelAppliedRefresh();
+            appliedRefresh.cancel();
             try {
               // A drained raw Save may apply; a still-dirty raw draft remains manual-save-only.
               if (mode === "apply" && state.configFormDirty && state.configFormMode === "raw") {
@@ -490,7 +487,7 @@ export function createConfigWriteCoordinator({
               reconcileAutoSaveDraftConnection();
               return saved;
             } finally {
-              reconcileAppliedRefresh();
+              appliedRefresh.reconcile();
             }
           },
           () => false,
@@ -517,8 +514,7 @@ export function createConfigWriteCoordinator({
         reconciliation.clear();
         clearAutoSaveDraftConnection();
       },
-      cancelAppliedRefresh,
-      reconcileAppliedRefresh,
+      appliedRefresh,
     }),
     setWritesSuspended: (suspended, refreshAdmission) => {
       refreshWriteAdmission = refreshAdmission;
@@ -664,7 +660,7 @@ export function createConfigWriteCoordinator({
         state.connected && client !== null && !writesSuspended && canCallConfigMethod("config.set");
       const pendingFlight = inFlight;
       cancelScheduledAutoSave();
-      disposeAppliedRefresh();
+      appliedRefresh.dispose();
       if (client && pendingFlight) {
         reconciliation.flushDisposedFlight(
           client,

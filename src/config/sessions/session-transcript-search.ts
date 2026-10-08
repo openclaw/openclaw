@@ -51,6 +51,7 @@ import type {
   SessionTranscriptSearchReadResult,
   SessionTranscriptSearchResult,
 } from "./session-transcript-search.types.js";
+import { projectionLane } from "./session-transcript-worker-resources.js";
 import { withSessionHistoryWorkerDatabase } from "./session-transcript-worker-runtime.js";
 
 const SEARCH_SNIPPET_MAX_CHARS = 500;
@@ -280,13 +281,17 @@ export async function searchSessionTranscripts(
     } catch (error) {
       statusOwnerFailure = { error };
     }
-    return await withSessionHistoryWorkerDatabase(options, async (owner) => {
-      return await finish(
-        await owner.searchTranscripts(request),
-        (revision) => owner.isTranscriptSearchCurrent({ revision, env: scope.env }),
-        owner.assertCurrent,
-      );
-    });
+    // Search revisions are connection-local; keep both reads on one serialized worker.
+    return await withSessionHistoryWorkerDatabase(
+      options,
+      async (owner) =>
+        await finish(
+          await owner.searchTranscripts(request),
+          (revision) => owner.isTranscriptSearchCurrent({ revision, env: scope.env }),
+          owner.assertCurrent,
+        ),
+      projectionLane,
+    );
   } finally {
     await execution?.release();
   }

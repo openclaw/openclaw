@@ -294,10 +294,7 @@ export async function prepareCodexThreadFinalConfigPatch(
         ...(nativeModelInputTools ? { nativeModelInputTools } : {}),
       },
       params.client,
-    )) ?? {
-      configPatch: params.finalConfigPatch,
-      nativeHookRelayGeneration: params.nativeHookRelayGeneration,
-    }
+    )) ?? { configPatch: undefined, nativeHookRelayGeneration: undefined }
   );
 }
 

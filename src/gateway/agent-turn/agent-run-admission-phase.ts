@@ -31,7 +31,12 @@ import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-even
 import { claimAgentRunContext } from "../../infra/agent-run-registry.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { isSubagentCoordinationInputProvenance } from "../../sessions/input-provenance.js";
-import { registerChatAbortController, resolveAgentRunExpiresAtMs } from "../chat-abort.js";
+import { createChatAbortOps } from "../chat-abort-ops.js";
+import {
+  abortChatRunById,
+  registerChatAbortController,
+  resolveAgentRunExpiresAtMs,
+} from "../chat-abort.js";
 import { readInProcessSubagentResume } from "../in-process-subagent-resume.js";
 import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import { resolveGatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
@@ -169,6 +174,13 @@ export async function prepareAgentRunDispatch(
           }),
           isAbortable: () => isEmbeddedAgentRunAbortableForRunId(params.runId),
           onRemoved: () => clearEmbeddedAgentRunAbortabilityForRunId(params.runId),
+          onQueueTimeout: (entry) => {
+            abortChatRunById(createChatAbortOps(params.context), {
+              runId: params.runId,
+              sessionKey: entry.sessionKey,
+              stopReason: "timeout",
+            });
+          },
           controlUiVisible,
           kind: "agent",
           lifecycleGeneration: params.lifecycleGeneration,

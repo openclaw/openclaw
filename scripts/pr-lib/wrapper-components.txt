@@ -1761,6 +1761,7 @@ src/state/openclaw-state-read-scope.ts
 src/state/openclaw-state-read-worker.ts
 src/state/openclaw-state-schema-compatibility.ts
 src/state/openclaw-state-schema-inspection.ts
+src/state/openclaw-state-schema-preflight.ts
 src/state/openclaw-state-schema-publication.ts
 src/state/openclaw-state-schema.sql
 src/state/openclaw-state-schema.ts
