@@ -3899,7 +3899,6 @@
 ["src/auto-reply/reply/commands-system-prompt.test.ts","../../agents/system-prompt.js","14bead4a5c8a0bac90b438850d6f4abc06da7204ec9b2b8eb8fd5777c528dda6",1]
 ["src/auto-reply/reply/commands-system-prompt.test.ts","../../infra/machine-name.js","bd180d802d0647dfabcbd31e0a252c1925887c4e1c1ad4f54cf4ec9e2d8e7008",1]
 ["src/auto-reply/reply/commands-system-prompt.test.ts","../../infra/os-summary.js","dca5b33501b281b164cad940d6eb98aa378613d243d1bdc4c1d9d999ee22a170",1]
-["src/auto-reply/reply/commands-system-prompt.test.ts","../../logging/subsystem.js","8032742aceb6ee1a5cc2ac0cf889413e931141abc94f4bcb7e8613c949dea418",1]
 ["src/auto-reply/reply/commands-system-prompt.test.ts","../../skills/runtime/remote.js","af35068c34101c7f522ac35d3ff38abdb4e2eb0beed243f1930d67bc515932f4",1]
 ["src/auto-reply/reply/commands-system-prompt.test.ts","../../skills/runtime/session-snapshot.js","d1536f7abf40bcfa1cf49e7817e189a3bdd20bb3ecaaa4b8e80b7e6abffee05f",1]
 ["src/auto-reply/reply/commands-system-prompt.test.ts","../../tts/tts-settings.js","81788c2e4e5749722791d31983539afde68c65b0b716cd8c04b2ad0af131f811",1]
