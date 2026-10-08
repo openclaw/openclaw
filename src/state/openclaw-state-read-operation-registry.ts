@@ -11,6 +11,7 @@ import type { GeneratedHtmlProvenanceReadOperations } from "../media/generated-h
 import type { PairingReadOperations } from "../pairing/pairing-store.types.js";
 import type { SecretStoreReadOperations } from "../secrets/store/secret-store.types.js";
 import type { SessionStateReadOperations } from "../sessions/session-state-events.read.worker-contract.js";
+import type { sessionUpstreamReadOperations } from "../sessions/session-upstream-links.kernel.js";
 import type { SkillLibraryReadOperations } from "../skills/library/read.contract.js";
 import {
   createWorkerOperationRegistry,
@@ -26,6 +27,7 @@ type Operations = WorkerOperations<typeof localWorkspaceReadOperations> &
   SkillLibraryReadOperations &
   RestartSentinelReadOperations &
   SessionStateReadOperations &
+  WorkerOperations<typeof sessionUpstreamReadOperations> &
   SecretStoreReadOperations &
   WorkerOperations<typeof configHealthReadOperations> &
   DeferredPluginMigrationReadOperations;
@@ -60,6 +62,10 @@ export const stateReadRegistry = createWorkerOperationRegistry<Operations, Datab
   sessionState: () =>
     import("../sessions/session-state-events.read.worker.js").then(
       (m) => m.sessionStateReadOperations,
+    ),
+  sessionUpstream: () =>
+    import("../sessions/session-upstream-links.kernel.js").then(
+      (m) => m.sessionUpstreamReadOperations,
     ),
   diagnostic: () =>
     import("../infra/sqlite-audit-record.kernel.js").then((m) => m.diagnosticReadOperations),

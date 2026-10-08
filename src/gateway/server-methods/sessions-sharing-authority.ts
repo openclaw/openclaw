@@ -1,4 +1,5 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { operatorSessionCap, resolveGatewayOperatorRoleActor } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import {
@@ -135,10 +136,13 @@ export async function prepareManagedSessionAccess(
       facts?.release();
       return null;
     }
-    const current = (entry?: SessionSharingTarget["entry"]) => {
+    const current = (
+      entry?: SessionSharingTarget["entry"],
+      assertRequest = () => params.sessionMutationAuthorization?.assertCurrent(),
+    ) => {
       // Refuse dirty membership before invoking any additional request authority guard.
       readCurrent(selected);
-      params.sessionMutationAuthorization?.assertCurrent();
+      assertRequest();
       const { target, sharing } = readCurrent(selected);
       if (
         entry &&
@@ -158,9 +162,12 @@ export async function prepareManagedSessionAccess(
       // Lifecycle peers still fence the logical locator; worker I/O retains the physical source.
       lifecycleStorePath: facts.storageTarget.storePath,
       current,
-      assertCurrent: () => {
-        current();
-      },
+      assertCurrent: composeSessionSourceAssertion(
+        [params.sessionMutationAuthorization?.assertCurrent],
+        (assertSources) => {
+          current(undefined, assertSources);
+        },
+      ),
       assertEntryManageable: (entry: SessionSharingTarget["entry"]) => {
         current(entry);
       },

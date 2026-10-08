@@ -36,6 +36,10 @@ export type SessionSourceAssertion = (() => void) & {
   prepareSessionSource?: () => Promise<PreparedSessionSourceAuthority>;
 };
 
+export function sessionEntryCommitGuardOptions(source: SessionSourceAssertion | undefined) {
+  return source?.nativeSource ? { assertCommitAllowed: source } : { workerGuard: { source } };
+}
+
 /** Classify request/SDK callbacks before adapters compose them with prepared internal authority. */
 export function captureExternalSessionCommitGuard(guard: SessionSourceAssertion | undefined) {
   return guard && !guard.prepareSessionSource

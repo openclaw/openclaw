@@ -1,12 +1,10 @@
 import { listRegisteredAgentHarnesses } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
-import {
-  readSessionUpstreamLink,
-  type SessionUpstreamLink,
-} from "../../sessions/session-upstream-links.js";
+import { readCurrentSessionUpstreamLink } from "../../sessions/session-upstream-links-runtime.js";
+import type { SessionUpstreamLink } from "../../sessions/session-upstream-links.js";
 import { sessionUpstreamLinkSourceMatches } from "../../sessions/session-upstream-links.kernel.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
@@ -53,12 +51,13 @@ export function createUpstreamForkCurrentGuard(params: {
   sessionKey: string;
   source: ReturnType<typeof loadAccessorSessionEntryForGatewayTarget>;
   targetKey: string;
+  upstreamContext: OpenClawStateWorkerContext;
 }) {
   const expectedEntry = params.source.entry;
   if (!expectedEntry) {
     throw new Error(`Session ${params.sessionKey} changed during fork initialization`);
   }
-  const context = captureOpenClawStateWorkerContext();
+  const context = params.upstreamContext;
   const expectedLink = structuredClone(params.link);
   let inSourceTransaction = false;
   const readCurrent = () => {
@@ -74,9 +73,7 @@ export function createUpstreamForkCurrentGuard(params: {
     const currentLink = sourceEntry
       ? inSourceTransaction
         ? expectedLink
-        : readSessionUpstreamLink(source.canonicalKey, source.target.agentId, {
-            path: context.admission.databasePath,
-          })
+        : readCurrentSessionUpstreamLink(context, source.canonicalKey, source.target.agentId)
       : undefined;
     const currentForkHarness = currentLink ? resolveUpstreamForkHarness(currentLink) : undefined;
     if (

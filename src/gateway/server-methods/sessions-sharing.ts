@@ -18,6 +18,10 @@ import { sessionCreatorProfileId } from "../../config/sessions/session-entry-pro
 import { resolveSessionPublicShare } from "../../config/sessions/session-public-share.js";
 import { readSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
 import type { SessionMember as StoredSessionMember } from "../../config/sessions/session-sharing-store.kernel.js";
+import {
+  composeSessionSourceAssertion,
+  sessionEntryCommitGuardOptions,
+} from "../../config/sessions/session-source-authority.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { listProfiles } from "../../state/user-profiles.js";
@@ -370,12 +374,13 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
           {
             // Entry patches await preparation before committing. Recheck current
             // sharing authority on the synchronous commit edge, after that await.
-            assertCommitAllowed: access.assertCurrent,
+            ...sessionEntryCommitGuardOptions(access.assertCurrent),
           },
         );
         if (!inspected) {
           throw new Error("session changed before sharing mutation");
         }
+        access.assertCurrent();
         if (changed) {
           emitSessionsChanged(context, {
             reason: "sharing",
@@ -384,6 +389,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
           });
         }
       });
+      access.assertCurrent();
       respond(
         true,
         {
@@ -434,6 +440,15 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
         // replacement still cannot inherit this visibility change.
         let inspected = false;
         let changed = false;
+        const commitGuard = composeSessionSourceAssertion(
+          [access.assertCurrent],
+          (assertSources) => {
+            assertSources();
+            if (!isSessionVisibilityAllowed(context.getRuntimeConfig(), visibility)) {
+              throw new Error(`session visibility is disabled: ${visibility}`);
+            }
+          },
+        );
         await patchSessionEntryCore(
           scope,
           (entry) => {
@@ -445,18 +460,12 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
             changed = true;
             return { visibility };
           },
-          {
-            assertCommitAllowed: () => {
-              access.assertCurrent();
-              if (!isSessionVisibilityAllowed(context.getRuntimeConfig(), visibility)) {
-                throw new Error(`session visibility is disabled: ${visibility}`);
-              }
-            },
-          },
+          sessionEntryCommitGuardOptions(commitGuard),
         );
         if (!inspected) {
           throw new Error("session changed before sharing mutation");
         }
+        access.assertCurrent();
         if (!changed) {
           return;
         }
@@ -475,6 +484,7 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
           },
         });
       });
+      access.assertCurrent();
       respond(true, { ok: true, sessionKey: managed.canonicalKey, visibility }, undefined);
     },
   ),

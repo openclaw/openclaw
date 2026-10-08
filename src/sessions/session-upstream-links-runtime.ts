@@ -1,14 +1,63 @@
 import { assertSessionEntryCurrentAdmission } from "../config/sessions/session-entry-current-admission.js";
 import type { SessionEntryCurrentCheck } from "../config/sessions/session-entry-current.types.js";
+import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import {
+  executeExistingOpenClawStateRead,
+  withExistingOpenClawStateDatabaseCurrentReadOnly,
+} from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
   executeOpenClawStateWorker,
   runOpenClawStateWorkerOperation,
 } from "../state/openclaw-state-worker-store.js";
-import type { SessionUpstreamLink } from "./session-upstream-links.kernel.js";
+import {
+  readSessionUpstreamLinkInDatabase,
+  type SessionUpstreamLink,
+} from "./session-upstream-links.kernel.js";
 import type { SessionUpstreamSettlement } from "./session-upstream-links.worker-contract.js";
+
+export async function prepareSessionUpstreamLink(
+  context: OpenClawStateWorkerContext,
+  sessionKey: string,
+  agentId: string,
+): Promise<SessionUpstreamLink | undefined> {
+  const result = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "sessionUpstream.read", input: { sessionKey, agentId } },
+    { context, current: true },
+  );
+  context.admission.assertCurrent();
+  if (!result?.ok || result.type !== "sessionUpstream.read") {
+    throw new Error("Session upstream source is unavailable");
+  }
+  return result.link;
+}
+
+/** Final native guards remain current even when a foreign or released SDK writer bypasses publication. */
+export function readCurrentSessionUpstreamLink(
+  context: OpenClawStateWorkerContext,
+  sessionKey: string,
+  agentId: string,
+): SessionUpstreamLink | undefined {
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    const { key, birthtime } = context.admission.identity;
+    assertExistingDatabaseIdentity(context.admission.databasePath, key, birthtime);
+  };
+  assertCurrent();
+  const result = withExistingOpenClawStateDatabaseCurrentReadOnly(
+    ({ db }) => ({ link: readSessionUpstreamLinkInDatabase(db, sessionKey, agentId) }),
+    { path: context.admission.databasePath, env: context.environment, allowNativeRead: true },
+  );
+  assertCurrent();
+  if (!result) {
+    throw new Error("Session upstream source is unavailable");
+  }
+  return result.link;
+}
 
 export function isSessionUpstreamLinkCurrent(
   expected: SessionUpstreamLink,

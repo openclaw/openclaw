@@ -6,6 +6,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import type { SessionUpstreamJsonValue, SessionUpstreamKind } from "../plugins/session-catalog.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
 
 type SessionUpstreamLinkRow = Selectable<OpenClawStateKyselyDatabase["session_upstream_links"]>;
 
@@ -49,6 +50,29 @@ export function rowToSessionUpstreamLink(row: SessionUpstreamLinkRow): SessionUp
     updatedAt: normalizeSqliteNumber(row.updated_at) ?? 0,
   };
 }
+
+export function readSessionUpstreamLinkInDatabase(
+  db: DatabaseSync,
+  sessionKey: string,
+  agentId: string,
+): SessionUpstreamLink | undefined {
+  const row = executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "session_upstream_links">>(db)
+      .selectFrom("session_upstream_links")
+      .selectAll()
+      .where("session_key", "=", sessionKey)
+      .where("agent_id", "=", agentId),
+  ).rows[0];
+  return row ? rowToSessionUpstreamLink(row) : undefined;
+}
+
+export const sessionUpstreamReadOperations = {
+  "sessionUpstream.read": (input: { sessionKey: string; agentId: string }, db) => ({
+    type: "sessionUpstream.read" as const,
+    link: readSessionUpstreamLinkInDatabase(db, input.sessionKey, input.agentId),
+  }),
+} satisfies WorkerOperationHandlers<DatabaseSync>;
 
 export function listWatchedSessionUpstreamLinksInDatabase(db: DatabaseSync): SessionUpstreamLink[] {
   // Watch cursors own demand. Their key-only lookup relies on one owning agent per
