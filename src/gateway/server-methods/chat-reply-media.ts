@@ -73,6 +73,22 @@ function resolveRequesterPolicyContext(requester?: WebchatReplyMediaRequesterCon
   };
 }
 
+/** The policy facts retained while preparing one reply's files. */
+export function webchatReplyMediaAuthority(scope: WebchatReplyMediaScope): string {
+  const entry = scope.sessionEntry;
+  const workspace = resolveWebchatReplyWorkspace(scope);
+  return JSON.stringify([
+    entry?.sessionId,
+    entry?.lifecycleRevision,
+    entry?.permissionMode,
+    entry?.execNode,
+    entry?.repositoryWorkspaceId,
+    workspace.remote,
+    workspace.workspaceDir,
+    resolveWebchatReplyWorkspaceOnly(scope),
+  ]);
+}
+
 /** Bind reads to the source session; reread its owner after every awaited file operation. */
 export function captureWebchatReplyMediaScope(
   params: Omit<WebchatReplyMediaScope, "sessionEntry"> & {
@@ -83,26 +99,12 @@ export function captureWebchatReplyMediaScope(
   const readEntry = () => loadSessionEntry(params.sessionKey, params.sessionLoadOptions).entry;
   const sessionEntry = readEntry();
   const scope = { ...params, sessionEntry: sessionEntry ? { ...sessionEntry } : undefined };
-  const authority = (entry: SessionEntry | undefined) => {
-    const currentScope = { ...scope, sessionEntry: entry };
-    const workspace = resolveWebchatReplyWorkspace(currentScope);
-    return JSON.stringify([
-      entry?.sessionId,
-      entry?.lifecycleRevision,
-      entry?.permissionMode,
-      entry?.execNode,
-      entry?.repositoryWorkspaceId,
-      workspace.remote,
-      workspace.workspaceDir,
-      resolveWebchatReplyWorkspaceOnly(currentScope),
-    ]);
-  };
-  const expected = authority(scope.sessionEntry);
+  const expected = webchatReplyMediaAuthority(scope);
   return {
     ...scope,
     assertCurrent: () => {
       params.assertCurrent?.();
-      if (authority(readEntry()) !== expected) {
+      if (webchatReplyMediaAuthority({ ...scope, sessionEntry: readEntry() }) !== expected) {
         throw new Error("Session media access changed before attachment delivery.");
       }
     },
