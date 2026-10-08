@@ -32,6 +32,7 @@ import {
 import { loadSessionEntry } from "../session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "../session-worker-placement-context.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
+import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-record.js";
 import { buildAssistantReplyContentFromInputs } from "./chat-assistant-content.js";
 import {
   readChatSendReplyPayload,
@@ -74,9 +75,12 @@ function resolveRequesterPolicyContext(requester?: WebchatReplyMediaRequesterCon
 }
 
 /** The policy facts retained while preparing one reply's files. */
-export function webchatReplyMediaAuthority(scope: WebchatReplyMediaScope) {
+export function webchatReplyMediaAuthority(
+  scope: WebchatReplyMediaScope,
+  placement: WorkerSessionPlacementRecord | undefined,
+) {
   const entry = scope.sessionEntry;
-  const workspace = resolveWebchatReplyWorkspace(scope);
+  const workspace = resolveWebchatReplyWorkspace(scope, placement);
   return {
     workspace,
     key: JSON.stringify([
@@ -104,17 +108,25 @@ export function captureWebchatReplyMediaScope(
   assertCurrent: () => void;
 } {
   const readEntry = () => loadSessionEntry(params.sessionKey, params.sessionLoadOptions).entry;
+  const readPlacement = (entry: SessionEntry | undefined) =>
+    entry?.sessionId && !entry.execNode && !entry.repositoryWorkspaceId
+      ? resolveSessionWorkerPlacementContext()
+          .workerSessionPlacementService?.getMany([entry.sessionId])
+          .get(entry.sessionId)
+      : undefined;
   const sessionEntry = readEntry();
   const scope = { ...params, sessionEntry: sessionEntry ? { ...sessionEntry } : undefined };
-  const expected = webchatReplyMediaAuthority(scope);
+  const expected = webchatReplyMediaAuthority(scope, readPlacement(sessionEntry));
   return {
     ...scope,
     // The custody fence already read this workspace; preparation consumes that same snapshot.
     workspace: expected.workspace,
     assertCurrent: () => {
       params.assertCurrent?.();
+      const current = readEntry();
       if (
-        webchatReplyMediaAuthority({ ...scope, sessionEntry: readEntry() }).key !== expected.key
+        webchatReplyMediaAuthority({ ...scope, sessionEntry: current }, readPlacement(current))
+          .key !== expected.key
       ) {
         throw new Error("Session media access changed before attachment delivery.");
       }
@@ -212,14 +224,11 @@ export async function prepareWebchatReplyMediaForDisplay(
   );
 }
 
-function resolveWebchatReplyWorkspace(params: WebchatReplyMediaScope) {
+function resolveWebchatReplyWorkspace(
+  params: WebchatReplyMediaScope,
+  placement: WorkerSessionPlacementRecord | undefined,
+) {
   const entry = params.sessionEntry;
-  const placement =
-    entry?.sessionId && !entry.execNode && !entry.repositoryWorkspaceId
-      ? resolveSessionWorkerPlacementContext()
-          .workerSessionPlacementService?.getMany([entry.sessionId])
-          .get(entry.sessionId)
-      : undefined;
   // Placement can be remote before any workspace metadata has been published.
   const remote = Boolean(
     entry?.execNode ||

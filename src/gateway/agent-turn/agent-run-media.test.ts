@@ -35,6 +35,7 @@ import { listManagedImageRecordEntries } from "../managed-image-record-store.js"
 import * as replyMedia from "../server-methods/chat-reply-media.js";
 import * as transcriptMedia from "../server-methods/chat-transcript-persistence.js";
 import { loadSessionEntry } from "../session-utils.js";
+import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { createTrackedDispatch } from "./agent-run-dispatch.test-support.js";
 import { dispatchAgentRunWithMedia } from "./agent-run-media.js";
 
@@ -56,7 +57,7 @@ async function runMediaTurn(
     payloads: ReplyPayload[];
     options?: Partial<AgentCommandGatewayIngressOpts>;
     incognito?: boolean;
-    changeAfterPreparation?: "abort" | "permission" | "route";
+    changeAfterPreparation?: "abort" | "permission" | "placement" | "route";
     abortAfterCommit?: boolean;
   },
 ) {
@@ -79,6 +80,8 @@ async function runMediaTurn(
   expect(await listManagedImageRecordEntries({ sessionKey })).toEqual([]);
   const lifecycle = createEmbeddedAttemptTranscriptLifecycle({ runId, sessionId });
   let finalizationStatements = 0;
+  const placements =
+    final?.changeAfterPreparation === "placement" ? createWorkerSessionPlacementStore() : undefined;
   if (final?.changeAfterPreparation) {
     const prepare = replyMedia.prepareWebchatReplyMediaForDisplay;
     vi.spyOn(replyMedia, "prepareWebchatReplyMediaForDisplay").mockImplementationOnce(
@@ -86,6 +89,13 @@ async function runMediaTurn(
         const prepared = await prepare(params);
         if (final.changeAfterPreparation === "abort") {
           entry.controller.abort();
+        } else if (placements) {
+          await placements.startDispatch({
+            agentId: "main",
+            sessionKey,
+            sessionId,
+            executionMode: "worker-turn",
+          });
         } else {
           await patchSessionEntryCore(scope, () =>
             final.changeAfterPreparation === "permission"
@@ -378,7 +388,7 @@ it.each<{
   });
 });
 
-it.each(["abort", "permission", "route"] as const)(
+it.each(["abort", "permission", "placement", "route"] as const)(
   "settles prepared final media after a %s change",
   async (change) => {
     await withOpenClawTestState({ label: "agent-final-media-revocation" }, async (state) => {
@@ -396,9 +406,10 @@ it.each(["abort", "permission", "route"] as const)(
           changeAfterPreparation: change,
         },
       );
-      expect(result.terminalOutcome.status).toBe(
-        change === "abort" ? "timeout" : change === "permission" ? "error" : "ok",
-      );
+      expect(result.terminalOutcome.status).toBe(change === "route" ? "ok" : "error");
+      if (change === "abort") {
+        expect(result.terminalOutcome).toMatchObject({ reason: "cancelled", stopReason: "rpc" });
+      }
       const records = await listManagedImageRecordEntries({ sessionKey });
       if (change === "route") {
         expect(messageAtFinal?.openclawDisplayContent).toEqual(
