@@ -458,7 +458,7 @@ describe("give-up terminal failed delivery (#154834)", () => {
       task: "deliver the held report",
       expectsCompletionMessage: true,
       execution: { status: "terminal", endedAt, outcome: { status: "ok" } },
-      endedReason: "complete",
+      endedReason: "subagent-complete",
       completion: { required: true, resultText: "held-for-requester result" },
       delivery: { status: "suspended", suspendedAt: endedAt + 1_000 },
     } satisfies SubagentRunRecordOverrides);

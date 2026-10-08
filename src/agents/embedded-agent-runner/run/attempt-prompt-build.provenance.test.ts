@@ -22,6 +22,7 @@ import {
   createLifecycleControllerFixture,
   installLifecycleWorkerAckFixture,
 } from "../../subagents/registry/subagent-registry-lifecycle-controller.test-support.js";
+import { SubagentLifecycleController } from "../../subagents/registry/subagent-registry-lifecycle.js";
 import { mutateSubagentRuns } from "../../subagents/registry/subagent-registry-persistence.js";
 import { createSubagentRegistryPublicApi } from "../../subagents/registry/subagent-registry-public-api.js";
 import type { SubagentRunRecord } from "../../subagents/registry/subagent-registry.types.js";
@@ -335,6 +336,7 @@ it("injects complete lifecycle results into requester prompts and acknowledges o
     startAnnounceCleanup: vi.fn(() => false),
     settleRequesterTurn: controller.settleRequesterTurnAfterSessionSpawns,
     markRequesterYielded: controller.markRequesterTurnYielded,
+    discardTerminalDelivery: SubagentLifecycleController.discardTerminalDelivery,
   });
   steeringMocks.lease.mockImplementation(api.leasePendingAgentSteeringItems);
 
