@@ -500,6 +500,7 @@ export function createAuthProfileStoreUpdater(
               profiles: buildPersistedAuthProfileSecretsStore(store).profiles,
             };
           const options = params.saveOptions;
+          const copyIds = (ids: Iterable<string> | undefined) => ids && [...ids];
           return {
             save: true,
             store: sanitize(loadedStore)!,
@@ -514,15 +515,9 @@ export function createAuthProfileStoreUpdater(
                 : undefined,
             options: options && {
               ...options,
-              preserveOrderProfileIds: options.preserveOrderProfileIds && [
-                ...options.preserveOrderProfileIds,
-              ],
-              preserveStateProfileIds: options.preserveStateProfileIds && [
-                ...options.preserveStateProfileIds,
-              ],
-              pruneOrderProfileIds: options.pruneOrderProfileIds && [
-                ...options.pruneOrderProfileIds,
-              ],
+              preserveOrderProfileIds: copyIds(options.preserveOrderProfileIds),
+              preserveStateProfileIds: copyIds(options.preserveStateProfileIds),
+              pruneOrderProfileIds: copyIds(options.pruneOrderProfileIds),
             },
           };
         },

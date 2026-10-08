@@ -221,7 +221,6 @@ src/agents/auth-profiles/oauth-manager.ts
 src/agents/auth-profiles/profiles.test.ts
 src/agents/auth-profiles/store.ts
 src/agents/auth-profiles/usage.test.ts
-src/agents/auth-profiles/usage.ts
 src/agents/bash-tools.exec-host-gateway.test.ts
 src/agents/bash-tools.exec-host-gateway.ts
 src/agents/bash-tools.exec-host-node.test.ts
