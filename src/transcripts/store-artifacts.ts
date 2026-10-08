@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { root } from "@openclaw/fs-safe/root";
+import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { sha256Hex } from "../infra/crypto-digest.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { removePathWithinRoot } from "../infra/fs-safe-remove.js";
-import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
 
 export const TRANSCRIPT_PATH_SEGMENT_MAX_BYTES = 255;
@@ -87,17 +88,59 @@ export async function writeTranscriptArtifact(
   rootDir: string,
   fileName: string,
   content: string,
+  assertBeforeMutation?: () => void,
 ): Promise<string> {
-  await writeExternalFileWithinRoot({
+  await writeTranscriptArtifactFile({
     rootDir,
-    path: fileName,
-    write: async (tempPath) => await fs.writeFile(tempPath, content, { mode: 0o600 }),
+    fileName,
+    write: (filePath) => fs.writeFile(filePath, content, { mode: 0o600 }),
+    assertBeforeMutation,
   });
   return sha256Hex(content);
 }
 
-export async function removeTranscriptArtifact(rootDir: string, fileName: string): Promise<void> {
-  await removePathWithinRoot({ rootDir, relativePath: fileName, force: true });
+/** Retain private staging and the destination root until guarded, durable publication. */
+export async function writeTranscriptArtifactFile(params: {
+  rootDir: string;
+  fileName: string;
+  write: (filePath: string) => Promise<void>;
+  assertBeforeMutation?: () => void;
+  signal?: AbortSignal;
+}): Promise<void> {
+  const target = await root(params.rootDir);
+  await withTempWorkspace(
+    { rootDir: params.rootDir, prefix: ".openclaw-transcript-", mode: 0o600 },
+    async (stage) => {
+      const source = await stage.store.root();
+      await params.write(stage.path(params.fileName));
+      // copyIn retains the former best-effort file/parent fsync behavior on every platform.
+      await target.copyIn(
+        params.fileName,
+        { root: source, relativePath: params.fileName },
+        {
+          mode: 0o600,
+          durable: true,
+          maxBytes: Infinity,
+          sourceHardlinks: "reject",
+          signal: params.signal,
+          assertBeforeMutation: params.assertBeforeMutation,
+        },
+      );
+    },
+  );
+}
+
+export async function removeTranscriptArtifact(
+  rootDir: string,
+  fileName: string,
+  assertBeforeMutation?: () => void,
+): Promise<void> {
+  await removePathWithinRoot({
+    rootDir,
+    relativePath: fileName,
+    force: true,
+    assertBeforeMutation,
+  });
 }
 
 export async function isCaseSensitiveDirectory(directory: string): Promise<boolean> {

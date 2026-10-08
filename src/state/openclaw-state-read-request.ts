@@ -6,6 +6,9 @@ import type {
 } from "./openclaw-state-read.types.js";
 
 export function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
+  if (command.type === "meetingTranscripts.export") {
+    return structuredClone(command);
+  }
   if (
     command.type === "localWorkspace.get" ||
     command.type === "localWorkspace.exists" ||
@@ -539,6 +542,9 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   }
   if (command.type === "workerEnvironments.snapshot") {
     return bytes + stringBytes(command.ids ?? []);
+  }
+  if (command.type === "meetingTranscripts.export") {
+    return bytes + Buffer.byteLength(JSON.stringify(command));
   }
   return bytes;
 }

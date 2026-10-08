@@ -55,9 +55,17 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
     typeof environment.OPENCLAW_STATE_DIR === "string" &&
     (environment.OPENCLAW_SUPERVISOR_MODE === undefined ||
       environment.OPENCLAW_SUPERVISOR_MODE === "external") &&
-    ((input.command.type === "deliveryQueue.outbound" &&
-      (input.command.id === undefined || typeof input.command.id === "string") &&
-      (input.command.mode === "pending" || input.command.mode === "unfinished")) ||
+    ((input.command.type === "meetingTranscripts.export" &&
+      ((input.command.format === "library" &&
+        typeof input.command.selector === "string" &&
+        typeof input.command.includeNotes === "boolean") ||
+        (input.command.format === "artifact" &&
+          isRecord(input.command.session) &&
+          typeof input.command.session.sessionId === "string" &&
+          typeof input.command.session.startedAt === "string"))) ||
+      (input.command.type === "deliveryQueue.outbound" &&
+        (input.command.id === undefined || typeof input.command.id === "string") &&
+        (input.command.mode === "pending" || input.command.mode === "unfinished")) ||
       (input.command.type === "pairing.allowFrom" &&
         isRecord(input.command.input) &&
         typeof input.command.input.channel === "string" &&

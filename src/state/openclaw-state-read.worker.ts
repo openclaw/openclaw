@@ -83,6 +83,7 @@ import {
   selectSkillLibraryRevisionMetadataBatch,
   selectSkillLibraryRevisionManifestsBatch,
 } from "../skills/library/selection-read.kernel.js";
+import { streamTranscriptExportInWorker } from "../transcripts/store-export.worker.js";
 import { isTuiLastSessionReadCommand } from "../tui/tui-last-session.contract.js";
 import { readTuiLastSessionCommand } from "../tui/tui-last-session.kernel.js";
 import { readAgentDatabaseDeletionWorkerSnapshot } from "./agent-deletion-journal.snapshot.worker.js";
@@ -170,6 +171,17 @@ serveOwnedWorkerTasks(
             }),
           );
           return { ok: true, type: command.type, sourceAdmitted: true, count };
+        }
+        if (command.type === "meetingTranscripts.export") {
+          if (!channel) {
+            throw new Error("Transcript export requires a bounded receiver");
+          }
+          const result = await control.runNativeSection(() =>
+            streamTranscriptExportInWorker(input, command, channel, () => {
+              sourceAdmitted = true;
+            }),
+          );
+          return { ok: true, type: command.type, sourceAdmitted: true, result };
         }
         if (command.type === "doctor.gatewayOwnerLease.read") {
           const lease = inspectGatewayOwnerLeaseForMaintenance(input, () => {

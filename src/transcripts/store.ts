@@ -4,11 +4,7 @@ import type { TranscriptUtterance as ProjectedTranscriptUtterance } from "../../
 import { sha256File, sha256Hex } from "../infra/crypto-digest.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { ensureAbsoluteDirectory } from "../infra/fs-safe.js";
-import { iterateOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-read-connection.js";
-import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
+import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   withOpenClawStateLease,
@@ -20,7 +16,6 @@ import type {
   TranscriptSourceLocator,
   TranscriptUtterance,
 } from "./provider-types.js";
-import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
 import {
   isCaseSensitiveDirectory,
   legacyTranscriptSessionSelector,
@@ -70,11 +65,6 @@ export class TranscriptsStore {
       "env" | "path" | "readOnly"
     > = {},
   ) {}
-
-  private database() {
-    ensureMeetingTranscriptsSchema(this.databaseOptions);
-    return openOpenClawStateDatabase(this.databaseOptions);
-  }
 
   sessionDir(session: TranscriptSessionDescriptor): string {
     return path.join(this.exportRootDir, transcriptSessionSelector(session));
@@ -258,15 +248,26 @@ export class TranscriptsStore {
     return this.readWorker("transcripts.libraryEntry", { params });
   }
 
-  async *iterateExport(
+  async streamExport(
     selector: string,
     includeNotes: boolean,
-  ): AsyncGenerator<ProjectedTranscriptUtterance, read.TranscriptExportRead | undefined> {
-    return yield* iterateOpenClawStateDatabaseReadOnly(
-      this.database(),
-      ({ db }) => read.iterateTranscriptExport(db, selector, includeNotes),
-      this.databaseOptions.env,
+    consume: (utterances: ProjectedTranscriptUtterance[]) => void | Promise<void>,
+    signal?: AbortSignal,
+  ): Promise<read.TranscriptExportRead> {
+    const result = await createTranscriptStoreOperation(this.databaseOptions).streamExport(
+      { type: "meetingTranscripts.export", format: "library", selector, includeNotes },
+      async (chunk) => {
+        if (chunk.format !== "library") {
+          throw new Error("Unexpected transcript export chunk.");
+        }
+        await consume(chunk.utterances);
+      },
+      signal,
     );
+    if (!result) {
+      throw new Error("Transcript export ended before completion.");
+    }
+    return result;
   }
 
   async readRecentStoppedSession(
@@ -605,13 +606,16 @@ export class TranscriptsStore {
       sessionDir,
       "metadata.json",
       `${JSON.stringify(session, null, 2)}\n`,
+      assertOwner,
     );
     if (includeTranscript) {
       assertOwner();
       exportedHashes["transcript.jsonl"] = await writeTranscriptJsonlArtifact({
         sessionDir,
         session,
-        databaseOptions: operation.databaseOptions,
+        operation,
+        assertOwner,
+        signal: lease.signal,
       });
     }
     if (includeSummary) {
@@ -627,10 +631,15 @@ export class TranscriptsStore {
       for (const [fileName, content] of Object.entries(summaries)) {
         assertOwner();
         if (content === undefined) {
-          await removeTranscriptArtifact(sessionDir, fileName);
+          await removeTranscriptArtifact(sessionDir, fileName, assertOwner);
           removedExports.add(fileName);
         } else {
-          exportedHashes[fileName] = await writeTranscriptArtifact(sessionDir, fileName, content);
+          exportedHashes[fileName] = await writeTranscriptArtifact(
+            sessionDir,
+            fileName,
+            content,
+            assertOwner,
+          );
         }
       }
     }

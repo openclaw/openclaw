@@ -65,9 +65,9 @@ describe("transcript library asynchronous reads", () => {
           return snapshot;
         });
       } else {
-        const iterate = store.iterateExport.bind(store);
-        vi.spyOn(store, "iterateExport").mockImplementationOnce(async function* (...args) {
-          const snapshot = yield* iterate(...args);
+        const stream = store.streamExport.bind(store);
+        vi.spyOn(store, "streamExport").mockImplementationOnce(async (...args) => {
+          const snapshot = await stream(...args);
           reading.resolve();
           await gate.promise;
           return snapshot;
@@ -121,8 +121,8 @@ describe("transcript library asynchronous reads", () => {
     const target = session("rejected-read");
     await store.writeSession(target);
     const failure = new Error("archive read failed");
-    vi.spyOn(store, "iterateExport").mockImplementationOnce(async function* () {
-      yield { sequence: 0, text: "Partial content" };
+    vi.spyOn(store, "streamExport").mockImplementationOnce(async (_selector, _notes, consume) => {
+      await consume([{ sequence: 0, text: "Partial content" }]);
       throw failure;
     });
     await expect(
@@ -131,17 +131,6 @@ describe("transcript library asynchronous reads", () => {
         format: "jsonl",
       }),
     ).rejects.toBe(failure);
-  });
-
-  it("rejects an export canceled before its completion result", async () => {
-    const { store } = fixture();
-    vi.spyOn(store, "iterateExport").mockImplementationOnce(async function* () {
-      yield { sequence: 0, text: "Partial content" };
-      return undefined;
-    });
-    await expect(
-      exportTranscriptLibrary(store, { selector: "canceled", format: "jsonl" }),
-    ).rejects.toThrow("export ended before completion");
   });
 
   it("propagates provider projection failure after releasing the page reader", async () => {
