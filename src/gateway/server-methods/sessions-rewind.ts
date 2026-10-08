@@ -29,6 +29,7 @@ import {
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import {
+  captureSessionUpstreamLinkReadSource,
   prepareSessionUpstreamLink,
   readCurrentSessionUpstreamLink,
 } from "../../sessions/session-upstream-links-runtime.js";
@@ -246,7 +247,7 @@ async function mutateSessionAtMessage(
   }
   const initialSessionId = initial.entry.sessionId;
   const initialLifecycleRevision = initial.entry.lifecycleRevision;
-  const upstreamContext = captureOpenClawStateWorkerContext();
+  const upstreamContext = captureSessionUpstreamLinkReadSource();
   const initialPlacementError = resolveSessionWorkerPlacementMutationError({
     action,
     context,
@@ -349,7 +350,7 @@ async function mutateSessionAtMessage(
       if (rejectInitializing(current.entry.initializationPending)) {
         return;
       }
-      upstreamContext.admission.assertCurrent();
+      upstreamContext.assertCurrent();
       const upstreamLink = preparedUpstreamLink;
       const archived = current.entry.archivedAt !== undefined;
       if ((archived || upstreamLink) && action !== "fork") {

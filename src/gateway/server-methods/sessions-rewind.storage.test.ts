@@ -40,7 +40,10 @@ import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.
 import { createRuntimeAgent } from "../../plugins/runtime/runtime-agent.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
-import { readCurrentSessionUpstreamLink } from "../../sessions/session-upstream-links-runtime.js";
+import {
+  captureSessionUpstreamLinkReadSource,
+  readCurrentSessionUpstreamLink,
+} from "../../sessions/session-upstream-links-runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import * as storeWriterQueue from "../../shared/store-writer-queue.js";
 import {
@@ -51,7 +54,6 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
@@ -236,7 +238,7 @@ it.each([
 
       openOpenClawStateDatabase();
       readCurrentSessionUpstreamLink(
-        captureOpenClawStateWorkerContext(),
+        captureSessionUpstreamLinkReadSource(),
         scope.sessionKey,
         scope.agentId,
       );
