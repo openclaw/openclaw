@@ -68,49 +68,86 @@ function latestAssistantProvider(messages: unknown[] | undefined): string | null
   return null;
 }
 
+type ContextNoticeViewModel = {
+  /** Both usage and limit are known, so a percentage can be shown. */
+  complete: boolean;
+  pct: number;
+  fromLastPrompt: boolean;
+  used: number | null;
+  limit: number | null;
+  input: number | null;
+  output: number | null;
+  cost: number | null;
+  detail: string;
+  color: string;
+  bg: string;
+  warning: boolean;
+  approximate: boolean;
+};
+
+const MUTED_COLOR = "var(--muted)";
+const MUTED_BG = "color-mix(in srgb, var(--muted) 8%, transparent)";
+const UNKNOWN_VALUE = "—";
+
 function getContextNoticeViewModel(
   session: GatewaySessionRow | undefined,
   defaultContextTokens: number | null,
-) {
-  const used = asNonNegativeFiniteNumber(session?.totalTokens);
-  const { tokens: limit, fromLastPrompt } = resolveSessionContextLimit(
-    session,
-    defaultContextTokens,
-  );
-  if (used === undefined || !limit) {
-    return null;
-  }
+): ContextNoticeViewModel {
+  const used = asNonNegativeFiniteNumber(session?.totalTokens) ?? null;
+  const { tokens, fromLastPrompt } = resolveSessionContextLimit(session, defaultContextTokens);
+  const limit = tokens > 0 ? tokens : null;
   const approximate = session?.totalTokensFresh === false;
+  // Session rows expose the latest run snapshot; totalTokens is the separate context snapshot.
+  const input = Number.isFinite(session?.inputTokens) ? (session?.inputTokens ?? null) : null;
+  const output = Number.isFinite(session?.outputTokens) ? (session?.outputTokens ?? null) : null;
+  const cost = asNonNegativeFiniteNumber(session?.estimatedCostUsd) ?? null;
+  const prefix = approximate && used !== null ? "~" : "";
+  const detail = `${prefix}${used === null ? UNKNOWN_VALUE : formatCompactTokenCount(used)} / ${
+    limit === null ? UNKNOWN_VALUE : formatCompactTokenCount(limit)
+  }`;
+  const base = { fromLastPrompt, used, limit, input, output, cost, detail, approximate };
+  if (used === null || limit === null) {
+    // Keep the meter visible with an empty ring until both numbers are known,
+    // e.g. before the first reply or for models missing a catalog context window.
+    return { ...base, complete: false, pct: 0, color: MUTED_COLOR, bg: MUTED_BG, warning: false };
+  }
   const ratio = used / limit;
   const pct = Math.min(Math.round(ratio * 100), 100);
   // A stale total is still useful orientation, but must not drive warning or
   // compaction decisions because the session may already have compacted.
   const warning = !approximate && ratio >= CONTEXT_NOTICE_RATIO;
-  // Session rows expose the latest run snapshot; totalTokens is the separate context snapshot.
-  const input = Number.isFinite(session?.inputTokens) ? (session?.inputTokens ?? null) : null;
-  const output = Number.isFinite(session?.outputTokens) ? (session?.outputTokens ?? null) : null;
-  const cost = asNonNegativeFiniteNumber(session?.estimatedCostUsd) ?? null;
-  let color = "var(--muted)";
-  let bg = "color-mix(in srgb, var(--muted) 8%, transparent)";
+  let color = MUTED_COLOR;
+  let bg = MUTED_BG;
   if (warning) {
     const mix = Math.min(Math.max((ratio - CONTEXT_NOTICE_RATIO) / 0.1, 0), 1);
     color = `color-mix(in srgb, var(--warn), var(--danger) ${mix * 100}%)`;
     bg = `color-mix(in srgb, ${color} ${8 + 8 * mix}%, transparent)`;
   }
-  return {
-    pct,
-    fromLastPrompt,
-    used,
-    limit,
-    input,
-    output,
-    cost,
-    detail: `${approximate ? "~" : ""}${formatCompactTokenCount(used)} / ${formatCompactTokenCount(limit)}`,
-    color,
-    bg,
-    warning,
-    approximate,
-  };
+  return { ...base, complete: true, pct, color, bg, warning };
+}
+
+function contextNoticeSummary(model: ContextNoticeViewModel, hasPlanUsage: boolean): string {
+  if (model.complete && model.used !== null && model.limit !== null) {
+    return t("chat.composer.contextUsage.summary", {
+      used: `${model.approximate ? "~" : ""}${formatCompactTokenCount(model.used)}`,
+      limit: formatCompactTokenCount(model.limit),
+      pct: `${model.approximate ? "~" : ""}${model.pct}`,
+    });
+  }
+  if (model.used !== null) {
+    return t("chat.composer.contextUsage.summaryUsedOnly", {
+      used: `${model.approximate ? "~" : ""}${formatCompactTokenCount(model.used)}`,
+    });
+  }
+  if (hasPlanUsage) {
+    return t("chat.usageRemaining");
+  }
+  if (model.limit !== null) {
+    return t("chat.composer.contextUsage.summaryLimitOnly", {
+      limit: formatCompactTokenCount(model.limit),
+    });
+  }
+  return t("chat.composer.contextUsage.unavailable");
 }
 
 const RING_RADIUS = 6.5;
@@ -252,19 +289,10 @@ export function renderContextNotice(
         group.providers.some((id) => id.trim().toLowerCase() === normalizedProvider),
       )
     : undefined;
-  if (!model && !currentGroup) {
-    return nothing;
-  }
-  const summary = model
-    ? t("chat.composer.contextUsage.summary", {
-        used: `${model.approximate ? "~" : ""}${formatCompactTokenCount(model.used)}`,
-        limit: formatCompactTokenCount(model.limit),
-        pct: `${model.approximate ? "~" : ""}${model.pct}`,
-      })
-    : t("chat.usageRemaining");
-  const percentage = model ? `${model.approximate ? "~" : ""}${model.pct}%` : null;
-  const dashOffset = model ? RING_CIRCUMFERENCE * (1 - model.pct / 100) : RING_CIRCUMFERENCE;
-  const providerCosts = model ? latestProviderCostStats(options.messages) : null;
+  const summary = contextNoticeSummary(model, Boolean(currentGroup));
+  const percentage = model.complete ? `${model.approximate ? "~" : ""}${model.pct}%` : null;
+  const dashOffset = RING_CIRCUMFERENCE * (1 - model.pct / 100);
+  const providerCosts = latestProviderCostStats(options.messages);
   // Plan-billed sessions hide dollar estimates: subscription usage is bounded
   // by the plan windows below, and per-token math would misread as real spend.
   // Billing mode is provider-level: session rows do not record which auth
@@ -288,7 +316,7 @@ export function renderContextNotice(
   return html`
     <div
       class="context-usage"
-      style=${model ? `--ctx-color:${model.color};--ctx-bg:${model.bg}` : ""}
+      style=${`--ctx-color:${model.color};--ctx-bg:${model.bg}`}
     >
       <details
         @toggle=${(event: Event) => {
@@ -300,7 +328,9 @@ export function renderContextNotice(
         }}
       >
         <summary
-          class="context-ring ${model?.warning ? "context-ring--warning" : ""}"
+          class="context-ring ${model.warning ? "context-ring--warning" : ""} ${
+            model.complete ? "" : "context-ring--unknown"
+          }"
           aria-label=${summary}
           title=${t("chat.composer.contextUsage.open")}
         >
@@ -327,17 +357,17 @@ export function renderContextNotice(
             class="context-usage__popover"
             aria-label=${t("chat.composer.contextUsage.title")}
           >
+            <div class="context-usage__header">
+              <span class="context-usage__title"
+                >${t(model.fromLastPrompt ? "chat.composer.contextUsage.promptBudget" : "chat.composer.contextUsage.contextWindow")}</span
+              >
+              <strong class="context-usage__context-value"
+                >${percentage ? `${model.detail} · ${percentage}` : model.detail}</strong
+              >
+            </div>
             ${
-              model
+              model.complete
                 ? html`
-                    <div class="context-usage__header">
-                      <span class="context-usage__title"
-                        >${t(model.fromLastPrompt ? "chat.composer.contextUsage.promptBudget" : "chat.composer.contextUsage.contextWindow")}</span
-                      >
-                      <strong class="context-usage__context-value"
-                        >${model.detail} · ${percentage}</strong
-                      >
-                    </div>
                     <div
                       class="context-usage__bar"
                       role="progressbar"
@@ -349,10 +379,12 @@ export function renderContextNotice(
                       <span style="width: ${model.pct}%"></span>
                     </div>
                   `
-                : nothing
+                : html`<div class="context-usage__pending" data-chat-context-pending="true">
+                    ${t("chat.composer.contextUsage.pending")}
+                  </div>`
             }
             ${
-              model
+              model.used !== null || model.input !== null || model.output !== null
                 ? html`
                     <div class="context-usage__section-label">
                       ${t("chat.composer.contextUsage.latestRunTokens")}

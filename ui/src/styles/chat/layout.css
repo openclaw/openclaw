@@ -1062,6 +1062,16 @@ openclaw-pending-session-create {
   white-space: nowrap;
 }
 
+.context-usage__pending {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.context-ring--unknown .context-ring__track {
+  stroke-dasharray: 2 2;
+}
+
 .context-usage__limits {
   display: flex;
   flex-direction: column;

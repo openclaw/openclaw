@@ -83,8 +83,42 @@ describe("renderChatComposer context usage", () => {
     });
 
     expect(container.querySelector(".context-ring")?.getAttribute("aria-label") ?? null).toBe(
-      owned ? "Session context usage: 46k of 200k (23%)" : null,
+      owned
+        ? "Session context usage: 46k of 200k (23%)"
+        : "Session context usage not reported yet (200k window)",
     );
+  });
+
+  it.each([
+    {
+      name: "without any session metrics",
+      session: undefined,
+      label: "Session context usage not reported yet",
+      detail: "— / —",
+    },
+    {
+      name: "without a context window",
+      session: sessionRow({ totalTokens: 81_000 }),
+      label: "Session context usage: 81k (context window unknown)",
+      detail: "81k / —",
+    },
+    {
+      name: "without a token total",
+      session: sessionRow({ contextTokens: 200_000 }),
+      label: "Session context usage not reported yet (200k window)",
+      detail: "— / 200k",
+    },
+  ])("always renders the meter $name", ({ session, label, detail }) => {
+    const container = renderComposer({ selectedSession: session, sessions: null });
+    const ring = container.querySelector(".context-ring");
+
+    expect(ring?.getAttribute("aria-label")).toBe(label);
+    expect(ring?.classList.contains("context-ring--unknown")).toBe(true);
+    expect(container.querySelector(".context-usage__context-value")?.textContent?.trim()).toBe(
+      detail,
+    );
+    expect(container.querySelector(".context-usage__bar")).toBeNull();
+    expect(container.querySelector("[data-chat-context-pending='true']")).not.toBeNull();
   });
 
   it("renders only the current session provider's plan usage", () => {
