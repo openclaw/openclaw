@@ -1095,7 +1095,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/embedded-agent-runner/run/attempt-prompt-error.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-observability.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-phase.test.ts",
-  "src/agents/embedded-agent-runner/run/attempt-prompt-submit.retention.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-submit.steering.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-recovery.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-session-boundary.test.ts",
