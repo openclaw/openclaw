@@ -295,9 +295,9 @@ type UpdateRepairTurnParams = {
   timeoutMs: number;
   maxToolCalls: number;
   signal: AbortSignal;
-  /** Full authority before each model candidate and tool effect. */
+  /** Full authority for model candidates, tool admission, and tool effect guards. */
   isCurrent?: () => boolean;
-  /** Repeated in-turn source checks; defaults to `isCurrent`. */
+  /** Repeated run-preparation source checks; defaults to `isCurrent`. */
   isLive?: () => boolean;
   maintenanceHandoff?: true;
 };
@@ -338,8 +338,7 @@ async function runScopedUpdateRepairTurn(params: UpdateRepairTurnParams) {
     maxToolCalls: params.maxToolCalls,
     signal,
     abort: (reason) => controller.abort(reason),
-    isCurrent: isLive,
-    ...(params.isLive ? { isAdmissionCurrent: params.isCurrent } : {}),
+    isCurrent: params.isCurrent,
   });
   const deadline = Date.now() + params.timeoutMs;
   let timedOut = false;

@@ -102,12 +102,12 @@ export async function runDelegatedUpdateRepairTurn(
           signal.throwIfAborted();
           return assertAuthority();
         };
-        // The embedded run re-checks its source at every preparation and exec-guard
-        // boundary; copying the shared database for each one made those checks the
-        // turn's critical path. Those checks carry the run row and requester policy
-        // observed before the turn and keep executor ownership, the parent
-        // connection, and cancellation live. Model candidates, tool admission, and
-        // settlement still observe the run row and requester policy fresh.
+        // The embedded run re-checks its source at every preparation stage; copying
+        // the shared database for each one made those checks the turn's critical
+        // path. Preparation carries the run row and requester policy observed before
+        // the turn and keeps executor ownership, the parent connection, and
+        // cancellation live. Model candidates, tool admission, tool effect guards,
+        // and settlement still observe the run row and requester policy fresh.
         const assertTurnLive = () => {
           signal.throwIfAborted();
           timings.liveChecks += 1;
