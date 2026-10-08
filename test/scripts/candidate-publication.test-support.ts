@@ -221,7 +221,6 @@ export function candidatePublicationFixture(
     targetSha: q,
     workflowFullRef: tooling.fullRef,
     workflowRef: branch,
-    publicationArtifacts: { npmPreflight: {}, docker: {} },
   });
   delete manifest.candidateBinding;
   delete manifest.evidenceReuse;
@@ -417,7 +416,6 @@ export function candidatePublicationFixture(
       runAttempt: "1",
     },
   };
-  manifest.publicationArtifacts.npmPreflight = npmQualified;
   const npmJob = {
     id: 780,
     run_id: Number(runId),
@@ -480,11 +478,14 @@ export function candidatePublicationFixture(
     })),
   };
   const dockerBytes = JSON.stringify(docker, null, 2) + "\n";
-  manifest.publicationArtifacts.docker = {
-    preparedRunId: runId,
-    preparedRunAttempt: "1",
-    preparedArtifactName: artifactName,
-    preparedManifestSha256: hash(dockerBytes),
+  const publicationArtifacts = {
+    npmPreflight: npmQualified,
+    docker: {
+      preparedRunId: runId,
+      preparedRunAttempt: "1",
+      preparedArtifactName: artifactName,
+      preparedManifestSha256: hash(dockerBytes),
+    },
   };
   const dockerJob = {
     id: 800,
@@ -538,7 +539,7 @@ export function candidatePublicationFixture(
     admission,
     source,
     plan,
-    manifest,
+    manifest: Object.assign(manifest, { publicationArtifacts }),
     parent,
     client,
     fixture,

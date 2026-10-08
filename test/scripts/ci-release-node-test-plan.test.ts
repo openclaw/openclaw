@@ -255,7 +255,7 @@ it("fits measured release work without changing coverage or worker contracts", a
             OPENCLAW_VITEST_MAX_WORKERS: String(
               Math.min(2, Number(group.env?.OPENCLAW_VITEST_MAX_WORKERS ?? 2)),
             ),
-          }).toSorted(),
+          }).toSorted(([left], [right]) => left.localeCompare(right)),
           group.pretestBuildMode,
           group.requiresDist,
           group.runner,

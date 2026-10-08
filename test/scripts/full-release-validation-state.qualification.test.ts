@@ -114,7 +114,7 @@ console.log(response);
     const result = runCollector("decision", {
       GITHUB_RUN_ID: current.runId,
       GITHUB_RUN_ATTEMPT: "1",
-      GITHUB_REF_NAME: current.plan.workflowRef,
+      GITHUB_REF_NAME: current.branch,
       GITHUB_SHA: current.q,
       TARGET_SHA: current.q,
       RELEASE_PROFILE: "beta",

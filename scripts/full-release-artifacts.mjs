@@ -243,7 +243,7 @@ function retainedArtifactGh(args) {
   return response;
 }
 
-async function readArtifact(request, runId, name, fileName, { retained = false } = {}) {
+function findArtifact(request, runId, name, { retained = false } = {}) {
   const scope = runId ? `actions/runs/${runId}` : "actions";
   const response = api(
     request.repository,
@@ -264,6 +264,14 @@ async function readArtifact(request, runId, name, fileName, { retained = false }
   const metadata = matches[0];
   if (retained && metadata.expired === true) {
     throw new PublicationArtifactUnavailable("Original publication artifact has expired.");
+  }
+  return metadata;
+}
+
+async function readArtifact(request, runId, name, fileName, { retained = false } = {}) {
+  const metadata = findArtifact(request, runId, name, { retained });
+  if (!metadata) {
+    return undefined;
   }
   const { archiveBytes } = await downloadExactActionsArtifactArchive({
     expected: {
@@ -477,6 +485,23 @@ async function reusePublicationArtifacts(env) {
     workflowRef: root.workflowRef,
     workflowPath: WORKFLOW,
     job: raw.producer.jobName,
+  });
+  const sdk = findArtifact(
+    baseRequest,
+    qualified.producer.runId,
+    `plugin-sdk-api-release-diff-${qualified.producer.runId}-${qualified.producer.runAttempt}`,
+    { retained: true },
+  );
+  if (!sdk) {
+    throw new PublicationArtifactUnavailable("Original Plugin SDK evidence is unavailable.");
+  }
+  verifyRetainedArtifact({
+    repository: baseRequest.repository,
+    artifact: sdk,
+    producer: qualified.producer,
+    workflowRef: root.workflowRef,
+    workflowPath: WORKFLOW,
+    job: qualified.producer.jobName,
   });
 
   const dockerReceipt = await receiptFor("docker", docker.preparedRunId, docker.preparedRunAttempt);

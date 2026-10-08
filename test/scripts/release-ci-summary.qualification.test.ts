@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -67,6 +68,7 @@ describe("candidate-owned publish consumer chain", () => {
       if (scenario === "changed input") {
         inputs.fail_fast = inputs.fail_fast === "true" ? "false" : "true";
       }
+      assert(inputs.trusted_workflow_json);
       const envelope = JSON.parse(inputs.trusted_workflow_json);
       envelope.trustedWorkflow = {
         ref: workflowRef,
