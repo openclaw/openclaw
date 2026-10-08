@@ -1,0 +1,97 @@
+/* GitHub links carry a brand mark or an issue/pull-request icon. Painted as a
+   masked ::before rather than markup: it
+   stays out of the accessibility tree and out of copied text, and currentColor
+   keeps it on the link color in every theme. Sized in em so it tracks
+   --chat-text-size (14px default) and the user's text-scale setting. */
+.chat-text :where(a.markdown-github-link)::before {
+  --github-mark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23000' d='M12 .5C5.65.5.5 5.65.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56 0-.27-.01-1.17-.02-2.12-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.19 1.76 1.19 1.03 1.76 2.7 1.25 3.36.96.1-.75.4-1.25.72-1.54-2.55-.29-5.24-1.28-5.24-5.69 0-1.26.45-2.28 1.19-3.09-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.1 11.1 0 0 1 5.78 0c2.21-1.49 3.18-1.18 3.18-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.83 1.19 3.09 0 4.42-2.7 5.39-5.26 5.68.41.35.78 1.05.78 2.12 0 1.53-.01 2.76-.01 3.14 0 .3.21.67.8.55A11.5 11.5 0 0 0 23.5 12C23.5 5.65 18.35.5 12 .5Z'/%3E%3C/svg%3E");
+
+  content: "";
+  position: absolute;
+  inset-inline-start: 0;
+  /* vertical-align cannot reach an out-of-flow box, so the baseline shift it
+     used to carry becomes an offset from the first line box's top edge. */
+  top: 0.1em;
+  width: 1em;
+  height: 1em;
+  background: currentColor;
+  mask: var(--github-mark) center / contain no-repeat;
+  -webkit-mask: var(--github-mark) center / contain no-repeat;
+}
+
+.chat-text :where(a.markdown-github-link) {
+  /* The mark is painted out of flow with its space reserved here, so nothing
+     inside the anchor precedes the label: an in-flow atomic mark carries a soft
+     wrap opportunity after it, so a line could end on the mark alone. The anchor
+     stays inline so the bare-URL rule below can still fill the line a long URL
+     starts on; the file-link chip's `display: inline-block` could not. */
+  position: relative;
+  padding-inline-start: 1.3em; /* the mark's 1em box plus the 0.3em gap it had */
+  text-decoration: none;
+}
+
+/* Keep status in the ink, not competing fills inside tinted user/sender bubbles.
+   The opaque neutral surface stays independent of its host, while mixing the
+   ink toward strong text protects light and dark palettes. Chips stay atomic. */
+.chat-text a.markdown-github-item {
+  --github-item-tone: var(--muted);
+
+  display: inline-block;
+  max-inline-size: 100%;
+  padding: 0.08em 0.45em;
+  padding-inline-start: 1.7em;
+  border-radius: var(--radius-sm);
+  background: var(--github-item-bg);
+  /* Unknown, unavailable and draft states remain neutral, not disabled. */
+  color: color-mix(in srgb, var(--github-item-tone) 65%, var(--text-strong));
+  font-weight: 600;
+  line-height: 1.25;
+  text-decoration: none;
+  vertical-align: baseline;
+  /* Short references remain atomic; qualified repository names can wrap when
+     the chip itself is wider than its mobile or enlarged-text container. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-break: auto;
+}
+
+.chat-text a.markdown-github-item[data-link-reader-tone="positive"] {
+  --github-item-tone: var(--ok);
+}
+
+.chat-text a.markdown-github-item[data-link-reader-tone="accent"] {
+  --github-item-tone: var(--pr-merged);
+}
+
+.chat-text a.markdown-github-item[data-link-reader-tone="negative"] {
+  --github-item-tone: var(--danger);
+}
+
+.chat-text a.markdown-github-item[data-link-reader-tone="attention"] {
+  --github-item-tone: var(--warn);
+}
+
+.chat-text a.markdown-github-item:hover,
+.chat-text a.markdown-github-item:focus-visible {
+  background: var(--github-item-hover-bg);
+  text-decoration: underline;
+}
+
+.chat-text a.markdown-github-item:focus-visible {
+  outline-color: var(--text-strong);
+}
+
+.chat-text a.markdown-github-item::before {
+  --github-mark: var(--github-item-icon);
+
+  inset-inline-start: 0.4em;
+}
+
+/* GitHub Octicons issue-opened-16 and git-pull-request-16 (MIT). */
+.chat-text a.markdown-github-item[data-github-kind="issue"]::before {
+  --github-item-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 9.5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z'/%3E%3Cpath d='M8 0a8 8 0 1 1 0 16A8 8 0 0 1 8 0ZM1.5 8a6.5 6.5 0 1 0 13 0 6.5 6.5 0 0 0-13 0Z'/%3E%3C/svg%3E");
+}
+
+.chat-text a.markdown-github-item[data-github-kind="pull"]::before {
+  --github-item-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z'/%3E%3C/svg%3E");
+}

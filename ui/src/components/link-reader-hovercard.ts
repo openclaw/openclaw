@@ -1,4 +1,5 @@
 import { initialState, Task, TaskStatus } from "@lit/task";
+import { GITHUB_ITEM_LINK_SELECTOR } from "@openclaw/github/control-ui-markdown-api.js";
 import { nothing, ReactiveElement, render } from "lit";
 import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import type {
@@ -203,7 +204,7 @@ export class LinkReaderHovercardProvider extends ReactiveElement {
   }
   private syncInlineStates(): void {
     this.syncPreviewContext();
-    for (const anchor of this.querySelectorAll<HTMLAnchorElement>("a.markdown-github-item")) {
+    for (const anchor of this.querySelectorAll<HTMLAnchorElement>(GITHUB_ITEM_LINK_SELECTOR)) {
       // Nested providers retain their own agent and connection identity.
       if (!this.ownsAnchor(anchor)) {
         continue;

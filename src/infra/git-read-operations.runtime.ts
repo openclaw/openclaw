@@ -11,11 +11,14 @@ import {
 } from "../sessions/session-diff.runtime.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import type { GitReadOperation, GitReadOperationResult } from "./git-read-operations.js";
+import { readGitRefFile } from "./git-ref-file.runtime.js";
 
 export async function executeGitReadOperation(
   operation: GitReadOperation,
 ): Promise<GitReadOperationResult> {
   switch (operation.type) {
+    case "repository.ref-file":
+      return await readGitRefFile(operation.input);
     case "repository.identities":
       return (
         await runTasksWithConcurrency({

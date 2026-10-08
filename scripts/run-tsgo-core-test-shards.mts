@@ -22,11 +22,15 @@ import {
   TSGO_CORE_TEST_SHARDS,
   selectTsgoCoreTestStripe,
 } from "./lib/tsgo-core-test-shards.mts";
-import { prepareTsgoCommand, runPreparedTsgoCommand } from "./run-tsgo.mts";
+import {
+  needsControlUiPluginArtifacts,
+  prepareTsgoCommand,
+  runPreparedTsgoCommand,
+} from "./run-tsgo.mts";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
-async function runShard(config: string, env: NodeJS.ProcessEnv, evidenceId: string) {
-  const command = prepareTsgoCommand(
+function prepareShard(config: string, env: NodeJS.ProcessEnv) {
+  return prepareTsgoCommand(
     // These graphs have no project references. Project mode rechecks root
     // membership even when a restored build-info file is newer than a new root.
     [
@@ -41,6 +45,9 @@ async function runShard(config: string, env: NodeJS.ProcessEnv, evidenceId: stri
     env,
     repoRoot,
   );
+}
+
+async function runShard(command: ReturnType<typeof prepareTsgoCommand>, evidenceId: string) {
   // One owner joins each native compiler. A second wrapper's escalation deadline
   // can kill the cleanup owner before it releases its artifact claim.
   let verified = false;
@@ -71,9 +78,21 @@ async function runTsgoCoreTestShards(
   const evidenceMode = env.OPENCLAW_CI_STATIC_EVIDENCE === "1" && process.platform !== "win32";
   const id = randomUUID();
   const leaves: string[] = [];
+  const commands = new Map(
+    executionGraphs.map(({ config }) => [config, prepareShard(config, env)]),
+  );
   // The batch owns outputs once; its existing compiler concurrency stays intact
   // without children waiting to reacquire their parent's lock.
   const resultCode = await withDistArtifactOwnership(repoRoot, async () => {
+    if (
+      executionGraphs.some(
+        ({ config }) => commands.get(config) && needsControlUiPluginArtifacts(config, repoRoot),
+      )
+    ) {
+      const { prepareControlUiPluginBoundaryArtifacts } =
+        await import("./prepare-extension-package-boundary-artifacts.mts");
+      await prepareControlUiPluginBoundaryArtifacts(repoRoot);
+    }
     const queue = executionGraphs.map((shard, index) => ({
       ...shard,
       evidenceId: `${id}:${index}`,
@@ -87,13 +106,14 @@ async function runTsgoCoreTestShards(
           return;
         }
         const startedAt = performance.now();
-        const { code, verified } = await runShard(shard.config, env, shard.evidenceId).catch(
-          (error: unknown) => {
-            stopped = true;
-            failureCode = 1;
-            throw error;
-          },
-        );
+        const { code, verified } = await runShard(
+          commands.get(shard.config)!,
+          shard.evidenceId,
+        ).catch((error: unknown) => {
+          stopped = true;
+          failureCode = 1;
+          throw error;
+        });
         console.error(
           `[tsgo:${shard.name}] ${code === 0 ? "passed" : `failed (exit ${code})`} in ${((performance.now() - startedAt) / 1000).toFixed(1)}s`,
         );
@@ -141,7 +161,11 @@ export function createChangedCoreTestCheck(
       const { checkCoreTsgoGraphBoundary, CoreTsgoBoundaryInterruptedError } =
         await import("./check-tsgo-core-boundary.mts");
       try {
-        graphs = await checkCoreTsgoGraphBoundary();
+        const { withPreparedControlUiPluginArtifacts } =
+          await import("./prepare-extension-package-boundary-artifacts.mts");
+        graphs = await withPreparedControlUiPluginArtifacts(repoRoot, () =>
+          checkCoreTsgoGraphBoundary(),
+        );
         return 0;
       } catch (error) {
         if (error instanceof CoreTsgoBoundaryInterruptedError) {
@@ -204,7 +228,11 @@ export async function createChangedCiTypeCheckPlan(
     return { mode: "full", graphs: TSGO_CI_GRAPHS };
   }
   const { inspectCiTsgoCheckGraphs } = await import("./check-tsgo-core-boundary.mts");
-  const inspected = await inspectCiTsgoCheckGraphs({ cwd, scope });
+  const { withPreparedControlUiPluginArtifacts } =
+    await import("./prepare-extension-package-boundary-artifacts.mts");
+  const inspected = await withPreparedControlUiPluginArtifacts(cwd, () =>
+    inspectCiTsgoCheckGraphs({ cwd, scope }),
+  );
   const selected =
     paths.every((file) => existsSync(path.resolve(cwd, file))) &&
     (scope !== "noncore" || physicalExtensionInputs())

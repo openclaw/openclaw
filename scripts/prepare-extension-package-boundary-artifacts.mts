@@ -18,6 +18,7 @@ import { withDistArtifactOwnership } from "./lib/dist-artifact-ownership.mts";
 import {
   BOUNDARY_CACHE_ROOT,
   BOUNDARY_PLUGIN_UNITS,
+  CONTROL_UI_PLUGIN_BOUNDARY_UNITS,
   LOCAL_PLUGIN_ROOT,
   LOCAL_SDK_ROOT,
   BoundaryInputSnapshot,
@@ -36,10 +37,11 @@ import { runManagedCommand, signalExitCode } from "./lib/managed-child-process.m
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
-import { resolveTsgoTimeoutMs } from "./run-tsgo.mts";
+import { resolveTsgoTimeoutMs } from "./lib/tsgo-timeout.mts";
 const repoRoot = resolveRepoRoot(import.meta.url);
 const DEFAULT_NODE_STEP_ABORT_KILL_GRACE_MS = 1_000;
 type NodeStepParams = {
+  cwd?: string;
   bin?: string;
   shell?: boolean;
   windowsVerbatimArguments?: boolean;
@@ -57,7 +59,7 @@ const activeNodeSteps = new Set<Promise<number>>();
 let nodeStepParentSignal: NodeJS.Signals | undefined;
 export function parseMode(argv: string[] = process.argv.slice(2)) {
   const mode = argv.find((arg) => arg.startsWith("--mode="))?.slice("--mode=".length) ?? "all";
-  if (mode !== "all" && mode !== "package-boundary") {
+  if (mode !== "all" && mode !== "package-boundary" && mode !== "control-ui") {
     throw new Error(`Unknown mode: ${mode}`);
   }
   return mode;
@@ -120,7 +122,7 @@ export async function runNodeStep(
   const command = runManagedCommand({
     bin: params.bin ?? process.execPath,
     args,
-    cwd: repoRoot,
+    cwd: params.cwd ?? repoRoot,
     env: params.env ? { ...process.env, ...params.env } : process.env,
     shell: params.shell ?? false,
     windowsVerbatimArguments: params.windowsVerbatimArguments,
@@ -241,17 +243,23 @@ export async function runNodeSteps(steps: NodeStep[], env: NodeJS.ProcessEnv = p
   }
 }
 
-async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process.argv.slice(2)) {
+async function prepareExtensionPackageBoundaryArtifacts(
+  argv: string[] = process.argv.slice(2),
+  root = repoRoot,
+) {
   const mode = parseMode(argv);
-  await ensureKyselyTypes(repoRoot);
-  const selectedArgument = argv.find((arg) => arg.startsWith("--extensions="));
+  await ensureKyselyTypes(root);
+  const selectedArgument =
+    mode === "control-ui"
+      ? `--extensions=${JSON.stringify(CONTROL_UI_PLUGIN_BOUNDARY_UNITS.map(([id]) => id))}`
+      : argv.find((arg) => arg.startsWith("--extensions="));
   let selected: string[] | undefined;
   let discoverPreparation: typeof resolveExtensionBoundaryPreparation | undefined;
   let preparation: Awaited<ReturnType<typeof resolveExtensionBoundaryPreparation>> | undefined;
   if (selectedArgument) {
     const requested: unknown = JSON.parse(selectedArgument.slice("--extensions=".length));
     if (
-      mode !== "all" ||
+      (mode !== "all" && mode !== "control-ui") ||
       !Array.isArray(requested) ||
       requested.length === 0 ||
       !requested.every((id) => typeof id === "string" && /^[a-z0-9][a-z0-9-]*$/u.test(id))
@@ -261,7 +269,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
     selected = requested;
     ({ resolveExtensionBoundaryPreparation: discoverPreparation } =
       await import("./lib/extension-boundary-projects.mts"));
-    preparation = await discoverPreparation(repoRoot, selected);
+    preparation = await discoverPreparation(root, selected);
     process.stdout.write(
       `selected preparation: ${preparation.sdkRoots.length} SDK roots; plugin producers: ${preparation.pluginIds.join(", ") || "none"}\n`,
     );
@@ -294,16 +302,16 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
     roots: undefined,
     required: [`${LOCAL_PLUGIN_ROOT}/${id}/${entry}.d.ts`],
   }));
-  const batches = [[sdk], mode === "all" ? plugins : []].map((batch) =>
+  const batches = [[sdk], mode !== "package-boundary" ? plugins : []].map((batch) =>
     batch.map((unit) => {
-      fs.mkdirSync(resolve(repoRoot, unit.outDir), { recursive: true });
+      fs.mkdirSync(resolve(root, unit.outDir), { recursive: true });
       if (unit.id !== "plugin-sdk") {
         // Relocated declarations still resolve third-party types through their package owner.
-        ensureRepoNodeModulesLink(resolve(repoRoot, unit.rootDir, "node_modules"), {
-          cwd: resolve(repoRoot, unit.outDir),
+        ensureRepoNodeModulesLink(resolve(root, unit.rootDir, "node_modules"), {
+          cwd: resolve(root, unit.outDir),
         });
       }
-      return { ...unit, outputRoot: fs.realpathSync.native(resolve(repoRoot, unit.outDir)) };
+      return { ...unit, outputRoot: fs.realpathSync.native(resolve(root, unit.outDir)) };
     }),
   );
   const prepareBatch = async (batch: (typeof batches)[number]) => {
@@ -311,12 +319,12 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
       return;
     }
     // Upstream pruning changes consumer topology; snapshot after the preceding batch's cleanup.
-    const before = new BoundaryInputSnapshot(repoRoot);
+    const before = new BoundaryInputSnapshot(root);
     const pending = batch
       .map((unit) => {
-        const recordPath = resolve(repoRoot, BOUNDARY_CACHE_ROOT, `${unit.id}.json`);
+        const recordPath = resolve(root, BOUNDARY_CACHE_ROOT, `${unit.id}.json`);
         const inputReceipt = `${unit.outDir}/.inputs.json`;
-        const args = boundaryPreparationArgs(repoRoot, unit);
+        const args = boundaryPreparationArgs(root, unit);
         const previous = readArtifactRecord(recordPath);
         // Prime config/toolchain/topology before starting even an uncached owner.
         before.signature(unit.config, args, [], unit.outputRoot);
@@ -324,9 +332,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
           // A valid full receipt can cover a narrower request; the reverse never applies.
           [
             args,
-            ...(unit.roots
-              ? [boundaryPreparationArgs(repoRoot, { ...unit, roots: undefined })]
-              : []),
+            ...(unit.roots ? [boundaryPreparationArgs(root, { ...unit, roots: undefined })] : []),
           ].some((receiptArgs) =>
             before.matchesReceipt(
               previous,
@@ -344,7 +350,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
         fs.rmSync(recordPath, { force: true });
         // Every stale owner emits its complete requested graph, never surviving cache files.
         // Output directories stay intact until a successful complete inventory exists.
-        fs.rmSync(resolve(repoRoot, inputReceipt), { force: true });
+        fs.rmSync(resolve(root, inputReceipt), { force: true });
         const outputs = new Set<string>();
         return Object.assign(unit, { recordPath, inputReceipt, args, outputs, startedAt: 0 });
       })
@@ -354,6 +360,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
         unit.startedAt = Date.now();
         return {
           label: `${unit.id} boundary dts`,
+          cwd: root,
           args: unit.args,
           env: compilerEnv,
           timeoutMs: Math.min(
@@ -364,7 +371,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
             if (!line.startsWith("TSFILE: ")) {
               return true;
             }
-            unit.outputs.add(portableRelativePath(repoRoot, line.slice(8).trim()));
+            unit.outputs.add(portableRelativePath(root, line.slice(8).trim()));
             return false;
           },
         };
@@ -373,7 +380,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
     if (!pending.length) {
       return;
     }
-    const after = new BoundaryInputSnapshot(repoRoot);
+    const after = new BoundaryInputSnapshot(root);
     // Join and validate every owner before publishing any success in this batch.
     const completed = pending.map((unit) => {
       const outputs = [...unit.outputs].toSorted();
@@ -397,15 +404,15 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
     for (const unit of completed) {
       // Surviving files are cleanup candidates, never evidence of successful emit.
       for (const file of listCacheFiles(
-        repoRoot,
+        root,
         [{ path: unit.outDir, extensions: [".d.ts", ".d.mts", ".d.cts"] }],
         fs,
       )) {
-        if (!unit.outputs.has(portableRelativePath(repoRoot, file))) {
+        if (!unit.outputs.has(portableRelativePath(root, file))) {
           fs.rmSync(file);
         }
       }
-      fs.rmSync(resolve(repoRoot, unit.outDir, ".tsbuildinfo"), { force: true });
+      fs.rmSync(resolve(root, unit.outDir, ".tsbuildinfo"), { force: true });
       writeArtifactRecord(unit.recordPath, unit.record);
       process.stdout.write(`[${unit.id} boundary dts] emitted ${unit.outputs.size} files\n`);
     }
@@ -421,7 +428,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
     await prepareBatch([sdkUnit]);
     // Only admitted SDK output may reveal declaration-only producer edges. Expand
     // their SDK inputs before compiling any producer or selected package.
-    const discovered = await discoverPreparation!(repoRoot, selected!, {
+    const discovered = await discoverPreparation!(root, selected!, {
       preparedSdk: true,
     });
     if (sharedSdk) {
@@ -430,7 +437,7 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
           `Full SDK preparation is missing inputs: ${discovered.sdkRoots.join(", ")}`,
         );
       }
-      for (const id of discovered.pluginIds) {
+      for (const id of [...discovered.pluginIds, ...(mode === "control-ui" ? selected! : [])]) {
         await prepareBatch(batches[1]!.filter((unit) => unit.id === id));
       }
       break;
@@ -443,11 +450,27 @@ async function prepareExtensionPackageBoundaryArtifacts(argv: string[] = process
       );
       continue;
     }
-    for (const id of discovered.pluginIds) {
+    for (const id of [...discovered.pluginIds, ...(mode === "control-ui" ? selected! : [])]) {
       await prepareBatch(batches[1]!.filter((unit) => unit.id === id));
     }
     break;
   }
+}
+
+/** Caller holds checkout artifact ownership, including while compiler readers run. */
+export async function prepareControlUiPluginBoundaryArtifacts(root = repoRoot) {
+  await prepareExtensionPackageBoundaryArtifacts(["--mode=control-ui"], root);
+}
+
+/** Graph discovery owns the declarations until its compiler inventory is complete. */
+export async function withPreparedControlUiPluginArtifacts<T>(
+  root: string,
+  read: () => Promise<T>,
+) {
+  return withDistArtifactOwnership(root, async () => {
+    await prepareControlUiPluginBoundaryArtifacts(root);
+    return read();
+  });
 }
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {

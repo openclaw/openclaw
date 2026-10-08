@@ -443,6 +443,10 @@ describe("run-oxlint", () => {
     for (const directory of ["src/a", "src/b", "scripts"]) {
       mkdirSync(join(cwd, directory), { recursive: true });
     }
+    // Budget fixtures isolate the compiler children; native declaration preparation has separate proof.
+    writeModule(join(cwd, "scripts/prepare-extension-package-boundary-artifacts.mts"), [
+      "export {};",
+    ]);
     writeModule(join(cwd, "scripts/run-oxlint.mts"), [
       "import { writeFileSync } from 'node:fs';",
       "const target = process.argv.find((arg) => arg === 'src/a' || arg === 'src/b');",
@@ -489,6 +493,9 @@ describe("run-oxlint", () => {
       for (const file of files) {
         writeFileSync(join(cwd, file), "export {};\n");
       }
+      writeModule(join(cwd, "scripts/prepare-extension-package-boundary-artifacts.mts"), [
+        "export {};",
+      ]);
       writeModule(join(cwd, "scripts/run-oxlint.mts"), [
         "import { appendFileSync } from 'node:fs';",
         "appendFileSync('budgets.jsonl', JSON.stringify({ bounded: process.env.OPENCLAW_OXLINT_BOUNDED_SHARD_ARGS === JSON.stringify(process.argv.slice(2)), files: process.argv.slice(4) }) + '\\n');",

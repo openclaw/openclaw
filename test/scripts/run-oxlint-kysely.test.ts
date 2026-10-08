@@ -135,6 +135,46 @@ describe("typed lint Kysely prerequisites", () => {
     },
   );
 
+  it.each([
+    { name: "direct", args: direct },
+    { name: "striped", args: striped },
+  ])("prepares browser public declarations before $name typed lint", ({ args }) => {
+    const fixture = createLintFixture();
+    const declaration = ".artifacts/extension-package-boundary/plugins/github/control-ui-api.d.ts";
+    fixture.write(
+      "tsconfig.json",
+      JSON.stringify({
+        compilerOptions: {
+          strict: true,
+          types: [],
+          module: "nodenext",
+          paths: { "@openclaw/github/control-ui-api.js": ["./" + declaration] },
+        },
+      }),
+    );
+    fixture.write(
+      "src/state/consumer.ts",
+      'import type { View } from "@openclaw/github/control-ui-api.js"; export type Row = View | null;',
+    );
+    // Native emit has separate proof; this fixture checks the two lint owners' ordering.
+    fixture.write(
+      "scripts/prepare-extension-package-boundary-artifacts.mts",
+      `
+import fs from "node:fs";
+import path from "node:path";
+if (process.argv.includes("--mode=control-ui")) {
+  fs.mkdirSync(path.dirname(${JSON.stringify(declaration)}), { recursive: true });
+  fs.writeFileSync(${JSON.stringify(declaration)}, "export type View = string;\\n");
+}
+`,
+    );
+    const missing = fixture.run(direct, { OPENCLAW_OXLINT_SKIP_PREPARE: "1" });
+    expect(missing.status, missing.stdout + missing.stderr).toBe(1);
+    expect(missing.stdout).toContain("no-redundant-type-constituents");
+    const prepared = fixture.run(args);
+    expect(prepared.status, prepared.stdout + prepared.stderr).toBe(0);
+  });
+
   it("leaves preparation to skip-prepare callers and skips syntax-only and metadata commands", () => {
     const fixture = createLintFixture();
     const skipped = fixture.run(direct, { OPENCLAW_OXLINT_SKIP_PREPARE: "1" });

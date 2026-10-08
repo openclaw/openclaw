@@ -196,6 +196,8 @@ describe("CI changed lint", () => {
     ]) {
       copyFileSync(path.join("scripts", file), path.join(cwd, "scripts", file));
     }
+    // This fixture owns its type graph; native producer generation has separate coverage.
+    write("scripts/prepare-extension-package-boundary-artifacts.mts", "export {};\n");
     write("src/contract.ts", "export type Work = () => number;\n");
     write("src/contract.js", "export const compiled = true;\n");
     write("src/barrel.ts", 'export type { Work } from "./contract.js";\n');

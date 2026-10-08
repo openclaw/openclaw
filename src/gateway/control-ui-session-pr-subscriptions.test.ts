@@ -2,12 +2,14 @@ import { getEventListeners } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createRetainedCache } from "../infra/retained-cache.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   createGatewaySchedulerClock,
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import type { ControlUiSessionPullRequests } from "./control-ui-contract.js";
-import { parseControlUiSessionPullRequestsSubscribeParams } from "./control-ui-session-pr-subscriptions.js";
+import type { ControlUiSessionPrTarget } from "./control-ui-session-pr-read.js";
+import { parseControlUiSessionPullRequestsSubscribeParams } from "./control-ui-session-pr-subscription-params.js";
 import { createTestControlUiSessionPrSubscriptions } from "./control-ui-session-pr-subscriptions.test-support.js";
 import type { ControlUiSessionPullRequestsParams } from "./control-ui-session-prs.js";
 
@@ -155,6 +157,111 @@ describe("control UI session PR subscriptions", () => {
           .toSorted((left, right) => left.localeCompare(right)),
       ).toEqual(["only-a", "only-b", "shared"]);
     }
+  });
+
+  it.each([0, -3_600_000])(
+    "keeps merge and idle polling cadence after a %i ms clock adjustment",
+    async (clockShift) => {
+      const clock = createGatewaySchedulerClock();
+      let merging = true;
+      const load = vi.fn(async ({ sessionKey }: ControlUiSessionPullRequestsParams) => ({
+        ...READY,
+        pullRequests:
+          sessionKey === "merging" && merging
+            ? [
+                {
+                  number: 1,
+                  owner: "openclaw",
+                  repo: "openclaw",
+                  branch: "feature",
+                  title: "Feature",
+                  url: "https://github.com/openclaw/openclaw/pull/1",
+                  state: "open" as const,
+                  merge: { status: "pending" as const, message: "Merging" },
+                },
+              ]
+            : [],
+      }));
+      active = createTestControlUiSessionPrSubscriptions({
+        broadcastToConnIds: vi.fn(),
+        load,
+        scheduler: createTestGatewayScheduler(clock.clock),
+      });
+      await active.replace("viewer", ["merging", "idle"]);
+      clock.setTime(clock.clock.now() + clockShift);
+      load.mockClear();
+      await clock.advanceBy(5_000);
+      expect(load.mock.calls.map(([params]) => params.sessionKey)).toEqual(["merging"]);
+      merging = false;
+      await clock.advanceBy(5_000);
+      expect(load).toHaveBeenCalledTimes(2);
+      await clock.advanceBy(5_000);
+      expect(load).toHaveBeenCalledTimes(2);
+      active.unsubscribe("viewer");
+      await clock.advanceBy(60_000);
+      expect(load).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each([
+    "prepared merge",
+    "prepared idle",
+    "session invalidation",
+    "target replacement",
+    "source removal",
+  ])("reconciles polling cadence after %s", async (transition) => {
+    const clock = createGatewaySchedulerClock();
+    const pending: ControlUiSessionPullRequests = {
+      ...READY,
+      pullRequests: [
+        {
+          number: 1,
+          owner: "openclaw",
+          repo: "openclaw",
+          branch: "feature",
+          title: "Feature",
+          url: "https://github.com/openclaw/openclaw/pull/1",
+          state: "open",
+          merge: { status: "pending", message: "Merging" },
+        },
+      ],
+    };
+    let target: ControlUiSessionPrTarget = {
+      params: { sessionKey: "shared", agentId: "main" },
+      identity: "original",
+      readSource: { agentId: "main", path: "unused" },
+      source: "/synthetic/repository",
+    };
+    const startsMerge = transition === "prepared merge";
+    let snapshot = startsMerge ? READY : pending;
+    const load = vi.fn(async () => snapshot);
+    active = createTestControlUiSessionPrSubscriptions({
+      broadcastToConnIds: vi.fn(),
+      scheduler: createTestGatewayScheduler(clock.clock),
+      prepareRead: async () => async () => target,
+      load,
+    });
+    await active.replace("viewer", ["shared"]);
+    active.readPrepared(target);
+    snapshot = startsMerge ? pending : READY;
+    if (transition === "session invalidation") {
+      sessionChanges.invalidate({ ...target.params, factsInvalidated: true });
+    } else if (transition === "target replacement" || transition === "source removal") {
+      target = {
+        ...target,
+        identity: "replacement",
+        source: transition === "source removal" ? null : target.source,
+      };
+      active.readPrepared(target);
+    } else {
+      await active.read(target, () => {});
+    }
+    load.mockClear();
+
+    await clock.advanceBy((startsMerge ? 5_000 : 60_000) - 1);
+    expect(load).not.toHaveBeenCalled();
+    await clock.advanceBy(1);
+    expect(load).toHaveBeenCalledTimes(1);
   });
 
   it("skips a watcher disconnected by an earlier synchronous send", async () => {

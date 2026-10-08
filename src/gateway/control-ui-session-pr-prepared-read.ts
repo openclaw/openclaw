@@ -64,15 +64,23 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
   load: LoadSessionPullRequests;
   keyStates: Map<string, State>;
   stateForTarget: (sessionKey: string, target: ControlUiSessionPrTarget) => State;
+  onSnapshotChanged: () => void;
   getSessionRowProjection?: () => SessionRowProjection | undefined;
 }) {
   const { scope, limit, withSource, load, keyStates, stateForTarget } = deps;
   const spawnBroker = getSpawnBroker();
   const preparing = new Map<State, Promise<void>>();
-  const publishSnapshot = (state: State, snapshot: ControlUiSessionPullRequestSnapshot) => {
+  const setSnapshot = (state: State, snapshot: ControlUiSessionPullRequestSnapshot | undefined) => {
     const changed = JSON.stringify(state.snapshot) !== JSON.stringify(snapshot);
     state.snapshot = snapshot;
-    if (changed && state.prepared) {
+    // Prepared reads and invalidation can change polling cadence without a watcher load.
+    if (changed && state.connIds.size > 0) {
+      deps.onSnapshotChanged();
+    }
+    return changed;
+  };
+  const publishSnapshot = (state: State, snapshot: ControlUiSessionPullRequestSnapshot) => {
+    if (setSnapshot(state, snapshot) && state.prepared) {
       sessionChanges.emit({
         ...state.target.params,
         scope: "runtime",
@@ -143,8 +151,8 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
     const state = stateForTarget(target.params.sessionKey, target);
     const preparedTarget = state.target;
     state.prepared = true;
-    if (target.source === null) {
-      state.snapshot ??= { pullRequests: [], rateLimited: false, status: "ready" };
+    if (target.source === null && !state.snapshot) {
+      setSnapshot(state, { pullRequests: [], rateLimited: false, status: "ready" });
     }
     const getProjection = deps.getSessionRowProjection;
     if (
@@ -206,7 +214,7 @@ export function createControlUiSessionPrPreparedRead<State extends PreparedSessi
     const invalidated: Array<ControlUiSessionPrTarget["params"]> = [];
     for (const [key, state] of affected) {
       if (state?.prepared) {
-        state.snapshot = undefined;
+        setSnapshot(state, undefined);
         if (state.connIds.size === 0) {
           state.cacheLifetime.abort(null);
           keyStates.delete(key);

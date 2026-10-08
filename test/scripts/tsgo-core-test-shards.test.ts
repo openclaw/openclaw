@@ -358,6 +358,7 @@ it.runIf(process.platform !== "win32").each([
       fs.writeFileSync(
         path.join(root, "scripts/run-tsgo.mts"),
         `import fs from "node:fs";
+export function needsControlUiPluginArtifacts() { return false; }
 export function prepareTsgoCommand(args) { return args; }
 export async function runPreparedTsgoCommand(args, options) {
   const fd = fs.openSync("active-compiler", "wx");
@@ -454,6 +455,14 @@ it.runIf(process.platform !== "win32")(
         write(`scripts/${name}`, fs.readFileSync(path.join(sourceRoot, "scripts", name), "utf8"));
       }
       fs.symlinkSync(path.join(sourceRoot, "scripts/lib"), path.join(root, "scripts/lib"), "dir");
+      // This fixture owns compiler graph behavior; declaration generation has native owner proof.
+      write(
+        "scripts/prepare-extension-package-boundary-artifacts.mts",
+        `
+export async function prepareControlUiPluginBoundaryArtifacts() {}
+export async function withPreparedControlUiPluginArtifacts(_root, read) { return read(); }
+`,
+      );
       const leaf = "src/agents/nested/leaf.test.ts";
       const consumer = "src/agents/tools/consumer.test.ts";
       const helper = "test/helpers/value.ts";
@@ -528,6 +537,12 @@ exec ${JSON.stringify(native)} "$@"
         { ...process.env, OPENCLAW_LOCAL_CHECK: "0" },
         [
           [
+            new URL("./prepare-extension-package-boundary-artifacts.js", preparedDriver),
+            pathToFileURL(
+              path.join(root, "scripts/prepare-extension-package-boundary-artifacts.mts"),
+            ),
+          ],
+          [
             new URL("./lib/tsdown-declaration-boundary.mts", preparedDriver),
             resolveRuntimeWorkerUrl(toolingMtsEntrypoints.tsdownDeclarationBoundary),
           ],
@@ -555,9 +570,10 @@ exec ${JSON.stringify(native)} "$@"
           ),
         );
         const calls = compilerEvents();
-        expect(calls.filter((args) => args.includes("--listFilesOnly"))).toHaveLength(
-          expectedGraphListings,
-        );
+        expect(
+          calls.filter((args) => args.includes("--listFilesOnly")),
+          result.stderr,
+        ).toHaveLength(expectedGraphListings);
         // Discovery and diagnostic checks both use project mode.
         const builds = calls
           .filter((args) => !args.includes("--listFilesOnly") && !args.includes("--showConfig"))

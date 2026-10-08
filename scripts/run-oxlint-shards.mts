@@ -25,6 +25,7 @@ import {
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import {
   shouldPrepareExtensionPackageBoundaryArtifacts,
+  shouldPrepareControlUiPluginBoundaryArtifacts,
   shouldPrepareOxlintArtifacts,
 } from "./run-oxlint.mts";
 
@@ -403,13 +404,21 @@ export async function main(
     ) {
       await ensureKyselyTypes(process.cwd(), false, { allowPartialCheckout: true });
     }
-    if (needsArtifacts) {
+    const preparationModes = [
+      ...(needsArtifacts ? ["package-boundary"] : []),
+      ...(selectedShards.some((shard) =>
+        shouldPrepareControlUiPluginBoundaryArtifacts([...shard.args, ...shardArgs.oxlintArgs]),
+      )
+        ? ["control-ui"]
+        : []),
+    ];
+    for (const mode of preparationModes) {
       const code = await runManagedCommand({
         bin: process.execPath,
         shell: false,
         args: distArtifactEntryArgs(
           path.resolve("scripts/prepare-extension-package-boundary-artifacts.mts"),
-          ["--mode=package-boundary"],
+          [`--mode=${mode}`],
         ),
         env,
         requireProcessTreeExit: process.platform !== "win32",

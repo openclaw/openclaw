@@ -30,6 +30,11 @@ export type GitCheckoutDiffInput = { cwd: string; baseCommit?: string } & (
 );
 
 export type GitReadOperations = {
+  "repository.ref-file": {
+    input: { root: string; ref: string; path: string };
+    /** A locally available blob of at most 64 KiB, without checkout or network access. */
+    output: string | null;
+  };
   "repository.identities": {
     input: { roots: string[] };
     output: Array<

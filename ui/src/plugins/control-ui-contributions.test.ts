@@ -1,7 +1,7 @@
 import type { LitElement } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PluginControlUiDiagnostic } from "../../../packages/gateway-protocol/src/schema/plugins.js";
-import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
+import type { ControlUiAccessory, ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
@@ -21,7 +21,7 @@ import "./control-ui-contributions.ts";
 import "./control-ui-view.runtime.ts";
 
 type ContributionsElement = LitElement & {
-  kind: "header" | "composer";
+  kind: "header" | "composer" | "session-header";
   sessionKey: string;
   agentId?: string;
   presented: boolean;
@@ -137,6 +137,7 @@ async function mountActions(
     placement?: "header" | "composer";
     session?: GatewaySessionRow;
     agentId?: string;
+    accessory?: ControlUiAccessory;
   } = {},
 ) {
   const request = vi.fn().mockResolvedValue({ ok: true });
@@ -177,13 +178,13 @@ async function mountActions(
     run,
   };
   const plugins = {
-    registrations: () =>
-      registered
+    registrations: (kind: string) =>
+      registered && (kind === "actions" || (kind === "accessories" && options.accessory))
         ? [
             {
               key: "fixture/review",
               pluginId: "fixture",
-              value: action,
+              value: kind === "accessories" ? options.accessory : action,
               host,
               signal: actionSignal,
             },
@@ -214,7 +215,7 @@ async function mountActions(
   const host = createControlUiPluginHost(() => context, plugins, owner);
   const provider = createApplicationContextProvider(context);
   const element = document.createElement("openclaw-plugin-contributions") as ContributionsElement;
-  element.kind = options.placement ?? "header";
+  element.kind = options.accessory?.placement ?? options.placement ?? "header";
   element.sessionKey = session.key;
   element.agentId = options.agentId;
   cleanups.push(() => {
@@ -244,6 +245,48 @@ async function mountActions(
 }
 
 describe("native plugin session actions", () => {
+  it.each(["session-header", "composer"] as const)(
+    "mounts %s accessories with scoped presentation and teardown",
+    async (placement) => {
+      const contexts: Parameters<ControlUiAccessory["mount"]>[1][] = [];
+      const disposed = vi.fn();
+      const { element, unregister } = await mountActions({
+        placement: "composer",
+        accessory: {
+          id: "status",
+          placement,
+          mount(container, context) {
+            container.textContent = "Plugin status";
+            contexts.push(context);
+            return { update: (next) => contexts.push(next), dispose: disposed };
+          },
+        },
+      });
+      const view = element.querySelector<LitElement>("openclaw-plugin-view");
+      expect(view).not.toBeNull();
+      await view?.updateComplete;
+      expect(element.textContent).toContain("Plugin status");
+      expect(element.querySelector("button")?.textContent?.trim()).toBe(
+        placement === "composer" ? "Review Ready" : undefined,
+      );
+      expect(contexts[0]?.props).toMatchObject({
+        sessionKey,
+      });
+
+      element.presented = false;
+      await element.updateComplete;
+      await view?.updateComplete;
+      expect(contexts.at(-1)?.presented).toBe(false);
+      expect(disposed).not.toHaveBeenCalled();
+
+      unregister();
+      expect(contexts[0]?.signal.aborted).toBe(true);
+      expect(disposed).toHaveBeenCalledOnce();
+      await element.updateComplete;
+      expect(element.textContent).not.toContain("Plugin status");
+    },
+  );
+
   it("keeps header metadata scoped to its pane agent when the global key is shared", async () => {
     const { element, sessions, run, resolve, request } = await mountActions({
       placement: "header",

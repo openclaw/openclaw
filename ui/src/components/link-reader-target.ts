@@ -1,13 +1,9 @@
+import { isGitHubPreviewUrlAllowed } from "@openclaw/github/control-ui-links-api.js";
 import type { ControlUiLinkReaderDescriptor } from "../../../src/shared/control-ui-link-reader.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { composedParent } from "../lib/navigation-click.ts";
-import {
-  isGitHubHost,
-  isGitHubPublicPageUrl,
-  matchGitHubItemUrl,
-} from "./github-link-eligibility.ts";
 
 export const LINK_READER_HOVERCARD_OPEN_DELAY_MS = 250;
 export const LINK_READER_HOVERCARD_PROVIDER_TAG = "openclaw-link-reader-hovercard-provider";
@@ -67,12 +63,7 @@ export function isPreviewAnchor(anchor: HTMLAnchorElement): boolean {
   // Repositories and public information pages use anonymous social metadata.
   // Account/auth URLs stay unfetched.
   // Hover, focus, and prefetch share this gate.
-  if (
-    url &&
-    isGitHubHost(url.hostname) &&
-    !matchGitHubItemUrl(url) &&
-    !isGitHubPublicPageUrl(url)
-  ) {
+  if (url && !isGitHubPreviewUrlAllowed(url)) {
     return false;
   }
   if (

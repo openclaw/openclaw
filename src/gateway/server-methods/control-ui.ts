@@ -27,7 +27,7 @@ import {
   type ControlUiSessionPrTarget,
 } from "../control-ui-session-pr-read.js";
 import { withControlUiSessionPrSource } from "../control-ui-session-pr-source.js";
-import { parseControlUiSessionPullRequestsSubscribeParams } from "../control-ui-session-pr-subscriptions.js";
+import { parseControlUiSessionPullRequestsSubscribeParams } from "../control-ui-session-pr-subscription-params.js";
 import { requestCurrentGitHubOAuthRefresh } from "../github-oauth-lifecycle.js";
 import { gitHubPublicApi, type ControlUiGitHubPreviewIdentity } from "../github-public-api.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";

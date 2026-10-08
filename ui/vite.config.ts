@@ -37,6 +37,7 @@ import {
 import { createControlUiDevGateway } from "./config/control-ui-dev-gateway.ts";
 import { controlUiHoverGuardPlugin } from "./config/control-ui-hover-guard.ts";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
+import { controlUiPluginArtifactAliases } from "./config/control-ui-plugin-artifacts.ts";
 import { controlUiSocialCardPlugin } from "./config/control-ui-social-card.ts";
 import { controlUiWebAwesomePageRulePlugin } from "./config/control-ui-web-awesome-page-rule.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
@@ -376,6 +377,7 @@ function sourcePackageAlias(packageId: string, subpath?: string): ControlUiViteA
 
 export function resolveSourcePackageAliasesForVite(): ControlUiViteAlias[] {
   return [
+    ...controlUiPluginArtifactAliases(repoRoot),
     sourcePackageAlias("normalization-core", "agent-id"),
     sourcePackageAlias("normalization-core", "code-points"),
     sourcePackageAlias("normalization-core", "grapheme"),

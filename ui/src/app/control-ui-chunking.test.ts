@@ -8,18 +8,22 @@ import {
 } from "../../config/control-ui-chunking.ts";
 
 describe("Control UI build chunking", () => {
-  it("emits one measured shared stylesheet while keeping optional code lazy", async () => {
+  it("groups initial UI owners and shared styles while keeping optional code lazy", async () => {
     const modulePath = (relative: string) => new URL(relative, import.meta.url).pathname;
     const chat = modulePath("../pages/chat/chat-pane.ts");
     const newSession = modulePath("../pages/new-session/new-session-page.ts");
     const optional = modulePath("../components/assistant-panel-content.ts");
+    const shell = modulePath("./app-host.ts");
+    const pluginApi = modulePath("../../../extensions/example/control-ui-api.ts");
+    const pluginBrowser = modulePath("../../../extensions/example/browser/badge.ts");
+    const pluginOptional = modulePath("../../../extensions/example/browser/panel.ts");
     const sharedStyle = modulePath("../styles/hub-tabs.css");
     const sidebarStyle = modulePath("../styles/sidebar-issues.css");
     const entry = "\0cold-load-fixture";
     const sources = new Map([
       [
         entry,
-        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)});`,
+        `export { shell } from ${JSON.stringify(shell)}; export { badge } from ${JSON.stringify(pluginApi)}; export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)});`,
       ],
       [
         chat,
@@ -27,6 +31,10 @@ describe("Control UI build chunking", () => {
       ],
       [newSession, `import ${JSON.stringify(sidebarStyle)}; export const ready = true;`],
       [optional, 'export const panel = "optional-panel";'],
+      [shell, 'export const shell = "initial-shell";'],
+      [pluginApi, `export { badge } from ${JSON.stringify(pluginBrowser)};`],
+      [pluginBrowser, `export const badge = () => import(${JSON.stringify(pluginOptional)});`],
+      [pluginOptional, 'export const panel = "optional-plugin-panel";'],
       [sharedStyle, ".shared-fixture { color: red; }"],
       [sidebarStyle, ".sidebar-fixture { color: blue; }"],
     ]);
@@ -62,9 +70,14 @@ describe("Control UI build chunking", () => {
     expect(styles[0]).toMatchObject({ source: expect.stringContaining(".shared-fixture") });
     expect(styles[0]).toMatchObject({ source: expect.stringContaining(".sidebar-fixture") });
     const chunks = result.output.filter((asset) => asset.type === "chunk");
-    const deferred = chunks.find((chunk) => optional in chunk.modules)!;
-    expect(deferred).toBeDefined();
-    expect(chunks.filter((chunk) => chunk.imports.includes(deferred.fileName))).toHaveLength(0);
+    const initial = chunks.find((chunk) => shell in chunk.modules)!;
+    expect(initial).toBeDefined();
+    expect(pluginBrowser in initial.modules).toBe(true);
+    for (const module of [optional, pluginOptional]) {
+      const deferred = chunks.find((chunk) => module in chunk.modules)!;
+      expect(deferred).toBeDefined();
+      expect(chunks.filter((chunk) => chunk.imports.includes(deferred.fileName))).toHaveLength(0);
+    }
   });
 
   it("groups stable runtime dependencies into bounded chunks", () => {

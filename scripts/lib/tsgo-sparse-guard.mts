@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { readFlagValue } from "./arg-utils.mts";
+import { CONTROL_UI_PLUGIN_SOURCE_ROOTS } from "./control-ui-plugin-boundary.mts";
 import { createManagedCommandInvocation } from "./managed-child-process.mts";
 import {
   TSGO_CORE_TEST_SHARDS,
@@ -31,8 +32,19 @@ const GUARDED_CONFIGS = new Set([
 ]);
 const TSGO_SPARSE_SKIP_ENV_KEY = "OPENCLAW_TSGO_SPARSE_SKIP";
 const CORE_PROD_SPARSE_ROOTS = ["packages"];
-const UI_PROD_SPARSE_ROOTS = ["packages", "src", "ui/config", "ui/src"];
-const CORE_TEST_SPARSE_ROOTS = ["packages", "ui/config", "ui/src"];
+const UI_PROD_SPARSE_ROOTS = [
+  "packages",
+  "src",
+  "ui/config",
+  "ui/src",
+  ...CONTROL_UI_PLUGIN_SOURCE_ROOTS,
+];
+const CORE_TEST_SPARSE_ROOTS = [
+  "packages",
+  "ui/config",
+  "ui/src",
+  ...CONTROL_UI_PLUGIN_SOURCE_ROOTS,
+];
 
 const CORE_PROD_REQUIRED_PATHS = [
   {

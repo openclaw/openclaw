@@ -64,6 +64,7 @@ import {
   buildChannelWizardMocks,
 } from "./control-ui-mock-channels.ts";
 import { buildCronMocks } from "./control-ui-mock-cron.ts";
+import { applyGitHubMergeDemo } from "./control-ui-mock-github-merge.ts";
 import { createStandaloneMockIsolationPlugins } from "./control-ui-mock-isolation.ts";
 import {
   buildPluginCatalogMock,
@@ -78,6 +79,7 @@ import { skillWorkshopMockInitScript } from "./control-ui-mock-skill-workshop.js
 import { buildProfileUsageMocks } from "./control-ui-mock-usage.ts";
 
 const FIXTURES = [
+  "github-merge",
   "approval",
   "attachments",
   "avatars",
@@ -3626,6 +3628,9 @@ async function waitForShutdown(): Promise<void> {
 
 const options = parseArgs(process.argv.slice(2));
 const scenario = await createChatPickerScenario(options.fixture);
+if (options.fixture === "github-merge") {
+  applyGitHubMergeDemo(scenario);
+}
 if (options.operatorScopes) {
   scenario.operatorScopes = options.operatorScopes;
 }

@@ -84,6 +84,7 @@ describe("Control UI PR owner selection", () => {
     { changed: null, forceFull: false },
     { changed: [], forceFull: false },
     { changed: ["ui/src/app/bootstrap.ts"], forceFull: false },
+    { changed: ["ui/config/control-ui-plugin-artifacts.ts"], forceFull: false },
     { changed: [cron], forceFull: true },
   ])(
     "selects the full inventory for missing/shared inputs or a forced run: %j",

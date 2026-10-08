@@ -215,6 +215,8 @@ function createRootTestLintFixture() {
   // reconcile this partial install. The CLI and source-only lint wrapper stay real.
   // The export audit is selected normally, but this fixture has only the lint graph.
   writeRepoFile(dir, "scripts/check-deadcode-exports.mts", "export {};\n");
+  // This fixture owns its type graph; native producer generation has separate coverage.
+  writeRepoFile(dir, "scripts/prepare-extension-package-boundary-artifacts.mts", "export {};\n");
   const binDir = path.join(dir, "bin");
   for (const bin of ["pnpm", "corepack"]) {
     writeRepoFile(dir, `bin/${bin}`, "#!/bin/sh\nexit 0\n");

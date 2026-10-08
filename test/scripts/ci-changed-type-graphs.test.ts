@@ -16,6 +16,11 @@ const inspectGraphs = vi.hoisted(() => vi.fn<() => Promise<CoreTsgoGraph[]>>());
 vi.mock("../../scripts/check-tsgo-core-boundary.mts", () => ({
   inspectCiTsgoCheckGraphs: inspectGraphs,
 }));
+// mock-isolation: graph selection fixtures must not compile or mutate the real checkout artifacts.
+vi.mock("../../scripts/prepare-extension-package-boundary-artifacts.mts", () => ({
+  withPreparedControlUiPluginArtifacts: async (_root: string, read: () => Promise<unknown>) =>
+    read(),
+}));
 afterEach(() => inspectGraphs.mockReset());
 
 describe("changed CI compiler graph selection", () => {
@@ -61,18 +66,20 @@ describe("changed CI compiler graph selection", () => {
     ).toEqual(consumers);
   });
 
-  it.for([[], ["src/types/runtime.d.ts"], ["package.json"]])(
-    "retains all compilers without discovery for uncertain input %j",
-    async (paths) => {
-      expect(selectChangedCiTsgoGraphs(paths, graphs())).toBeUndefined();
-      inspectGraphs.mockRejectedValue(new Error("Full plans must not enumerate compiler inputs"));
-      expect(await createChangedCiTypeCheckPlan(paths)).toEqual({
-        mode: "full",
-        graphs: TSGO_CI_GRAPHS,
-      });
-      expect(inspectGraphs).not.toHaveBeenCalled();
-    },
-  );
+  it.for([
+    [],
+    ["src/types/runtime.d.ts"],
+    ["package.json"],
+    ["extensions/github/browser/pull-requests.ts"],
+  ])("retains all compilers without discovery for uncertain input %j", async (paths) => {
+    expect(selectChangedCiTsgoGraphs(paths, graphs())).toBeUndefined();
+    inspectGraphs.mockRejectedValue(new Error("Full plans must not enumerate compiler inputs"));
+    expect(await createChangedCiTypeCheckPlan(paths)).toEqual({
+      mode: "full",
+      graphs: TSGO_CI_GRAPHS,
+    });
+    expect(inspectGraphs).not.toHaveBeenCalled();
+  });
 
   it("retains full planning for deleted paths alongside existing source", async () => {
     const cwd = tempDirs.make("ci-type-deleted-");

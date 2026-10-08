@@ -14,6 +14,7 @@ import {
   SecretSurfaceUnavailableError,
 } from "../secrets/runtime-degraded-state.js";
 import type { ControlUiLinkReaderDocument } from "../shared/control-ui-link-reader.js";
+import type { ControlUiSessionPullRequest } from "./control-ui-contract.js";
 
 export const CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE =
   "The configured Control UI GitHub credential is unavailable. Check gateway.controlUi.github.token and its host binding, then retry.";
@@ -45,7 +46,28 @@ type GitHubDetailTarget =
   | { owner: string; repo: string; kind: "commit"; sha: string };
 
 /** Host consumers depend on this public read contract, not the plugin's source graph. */
+type GitHubAsyncMergeTarget = Pick<
+  ControlUiSessionPullRequest,
+  "owner" | "repo" | "number" | "url"
+> & { headSha: string };
+type GitHubAsyncMergeStatus = NonNullable<ControlUiSessionPullRequest["merge"]>;
+type GitHubAsyncMergeReceipt = GitHubAsyncMergeStatus & { uuid: string | null };
 type GitHubPublicApi = {
+  githubAsyncMergeReceiptRef: (number: number) => string;
+  parseGitHubAsyncMergeReceipt: (
+    raw: string,
+    target: GitHubAsyncMergeTarget,
+  ) => GitHubAsyncMergeReceipt | null;
+  readGitHubAsyncMergeStatus: (
+    target: GitHubAsyncMergeTarget,
+    receipt: GitHubAsyncMergeReceipt,
+    options: {
+      identity: { token: string; revalidate: () => Promise<void>; assertSelected: () => void };
+      apiBaseUrl: string;
+      fetchImpl?: typeof fetch;
+      signal?: AbortSignal;
+    },
+  ) => Promise<GitHubAsyncMergeStatus>;
   resolveGitHubApiUrls: (apiBaseUrl: string | undefined) => { baseUrl: string; graphqlUrl: string };
   GITHUB_API_ORIGIN: string;
   GITHUB_API_BASE_URL: string;

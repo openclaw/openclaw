@@ -30,3 +30,13 @@ export type {
 export type { ControlUiGitHubPreview } from "./src/preview-contract.js";
 export { loadGitHubDetail } from "./src/detail.js";
 export { parseGitHubTarget } from "./src/targets.js";
+export {
+  githubAsyncMergeReceiptRef,
+  parseGitHubAsyncMergeReceipt,
+  readGitHubAsyncMergeStatus,
+} from "./src/merge-status.js";
+export type {
+  GitHubAsyncMergeTarget,
+  GitHubAsyncMergeReceipt,
+  GitHubAsyncMergeStatus,
+} from "./src/merge-status.js";

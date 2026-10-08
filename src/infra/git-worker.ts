@@ -43,6 +43,7 @@ const MAX_PENDING_OPERATIONS = 128;
 const WORKER_PHASE_TIMEOUT_MS = 30 * 60_000;
 const log = createSubsystemLogger("git/worker");
 const SPAWN_OPERATIONS = {
+  "repository.ref-file": "repository.ref-file",
   "repository.identities": "repository.identities",
   "repository.branches": "repository.branches",
   "checkout.revision": "checkout.revision",
@@ -233,7 +234,7 @@ async function executeOperation(
   const contentRoot =
     command.type === "checkout.diff" || command.type === "checkout.baseline"
       ? command.input.cwd
-      : command.type === "pull-request.branch-facts"
+      : command.type === "pull-request.branch-facts" || command.type === "repository.ref-file"
         ? command.input.root
         : undefined;
   const contentRead = contentRoot !== undefined;

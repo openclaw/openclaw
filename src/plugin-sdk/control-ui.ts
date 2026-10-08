@@ -183,7 +183,7 @@ export type ControlUiAction = {
 
 export type ControlUiAccessory = {
   id: string;
-  placement: "session-header";
+  placement: "session-header" | "composer";
   mount: ControlUiView<BoardGetParams>;
 };
 

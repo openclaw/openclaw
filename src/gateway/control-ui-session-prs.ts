@@ -13,6 +13,7 @@ import type {
   ControlUiSessionPullRequest,
   ControlUiSessionPullRequests,
 } from "./control-ui-contract.js";
+import { observeSessionPullRequestMerges } from "./control-ui-session-pr-merge.js";
 import type { ControlUiSessionPrReadContext } from "./control-ui-session-pr-read.js";
 import {
   createGitHubReadGroup,
@@ -485,7 +486,7 @@ export async function loadControlUiSessionPullRequests(
         rateLimited: false,
       };
     }
-    const result = await cachedBranchPullRequests(
+    let result = await cachedBranchPullRequests(
       context,
       deps,
       request.refresh === true,
@@ -502,8 +503,43 @@ export async function loadControlUiSessionPullRequests(
         status: "unavailable",
       };
     }
-    const { publicationCandidates, mergedHeads, workingBranchHasLivePullRequest, ...snapshot } =
-      result;
+    // Merge receipts advance independently of HEAD and the slower branch/CI cache.
+    const observed =
+      projection === "publication"
+        ? { pullRequests: result.publicationCandidates, reconcile: false }
+        : await observeSessionPullRequestMerges(
+            context,
+            result.pullRequests,
+            deps.read,
+            deps.cacheSignal,
+            deps.fetchImpl,
+          );
+    if (observed.reconcile) {
+      // A newly completed request invalidates branch facts once. The canonical loader
+      // confirms the PR state and landing, without polling CI on every merge-status tick.
+      result = await cachedBranchPullRequests(
+        context,
+        deps,
+        true,
+        JSON.stringify([target.identity, deps.read.sourceIdentity]),
+      ).catch(() => result!);
+    }
+    const {
+      publicationCandidates: _publicationCandidates,
+      mergedHeads,
+      workingBranchHasLivePullRequest,
+      ...snapshot
+    } = result;
+    const pullRequests = observed.reconcile
+      ? snapshot.pullRequests.map((pr) => {
+          const previous = observed.pullRequests.find(
+            (item) => item.url === pr.url && item.headSha === pr.headSha,
+          );
+          return previous?.merge && (pr.state === "open" || pr.state === "draft")
+            ? { ...pr, merge: previous.merge }
+            : pr;
+        })
+      : observed.pullRequests;
     const branch =
       projection === "publication" || workingBranchHasLivePullRequest
         ? undefined
@@ -516,7 +552,7 @@ export async function loadControlUiSessionPullRequests(
     assertCurrent();
     return {
       ...snapshot,
-      pullRequests: projection === "publication" ? publicationCandidates : snapshot.pullRequests,
+      pullRequests,
       ...(branch ? { branch } : {}),
     };
   } catch (error) {

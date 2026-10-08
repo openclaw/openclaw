@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { readStyleSheet } from "../../../test/helpers/ui-style-fixtures.js";
 
 const stylesDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -545,7 +546,7 @@ describe("Control UI theme contrast", () => {
   });
 
   it("keeps GitHub item surfaces neutral and ink and focus legible across themes and bubbles", () => {
-    const css = fs.readFileSync(path.join(stylesDir, "chat", "text.css"), "utf8");
+    const css = readStyleSheet("extensions/github/browser/markdown.css");
     const bubble = readBubbleBackgrounds(
       fs.readFileSync(path.join(stylesDir, "chat", "grouped.css"), "utf8"),
     );

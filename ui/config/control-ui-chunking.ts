@@ -142,8 +142,17 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
         priority: 20,
       },
       {
-        name: (id: string) =>
-          normalizeModuleId(id).includes("/ui/src/") ? "control-ui-core" : "control-ui-foundation",
+        name: (id: string) => {
+          const normalized = normalizeModuleId(id);
+          // Moving browser presentation to its plugin owner must not repartition
+          // already-initial UI code into the dependency foundation chunk.
+          const browserOwner =
+            normalized.includes("/ui/src/") ||
+            /\/extensions\/[^/]+\/(?:browser\/|control-ui(?:-[^/]+)?-api\.[cm]?[jt]s(?:[?#]|$))/u.test(
+              normalized,
+            );
+          return browserOwner ? "control-ui-core" : "control-ui-foundation";
+        },
         tags: ["$initial"] as ["$initial"],
         priority: 10,
         // Keep the boot graph in fewer partitions; the performance checker owns

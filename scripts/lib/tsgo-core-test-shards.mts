@@ -1,3 +1,5 @@
+import { CONTROL_UI_PLUGIN_SOURCE_ROOTS } from "./control-ui-plugin-boundary.mts";
+
 /**
  * Advisory shard size. Oversized shards only warn: they cost tsgo memory and wall
  * time but never block CI, so unrelated test-only PRs keep landing while a
@@ -71,7 +73,7 @@ export const TSGO_CORE_TEST_SHARDS = [
     name: "packages",
     group: "packages",
     config: "test/tsconfig/tsconfig.test.packages.json",
-    sparseRoots: ["packages", "src", "ui/src"],
+    sparseRoots: ["packages", "src", "ui/src", ...CONTROL_UI_PLUGIN_SOURCE_ROOTS],
   },
   {
     name: "plugin-sdk",
@@ -192,6 +194,10 @@ export function resolveChangedCiTsgoInputs(
   if (
     compilerPaths.length === 0 ||
     !compilerPaths.every(isChangedCiTsgoInput) ||
+    // Declaration consumers do not contain producer source paths in their inventories.
+    compilerPaths.some((file) =>
+      CONTROL_UI_PLUGIN_SOURCE_ROOTS.some((root) => file.startsWith(`${root}/`)),
+    ) ||
     (exists && !paths.every(exists))
   ) {
     return undefined;

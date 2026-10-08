@@ -16,6 +16,7 @@ let spawnLog: ReturnType<typeof createSubsystemLogger> | undefined;
 const COMMAND_FAMILIES =
   /^(node|bun|git|ps|pgrep|lsof|sh|bash|zsh|cmd|powershell|pwsh|npm|pnpm|python|python3|uv|ssh|openclaw)$/;
 const GIT_OPERATIONS = [
+  "repository.ref-file",
   "repository.identities",
   "repository.branches",
   "checkout.revision",

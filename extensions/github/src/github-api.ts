@@ -230,11 +230,11 @@ function activeGitHubCooldown(
   return error;
 }
 
-function githubApiHeaders(token?: string): Record<string, string> {
+function githubApiHeaders(token?: string, apiVersion = GITHUB_API_VERSION): Record<string, string> {
   const headers: Record<string, string> = {
     Accept: "application/vnd.github+json",
     "User-Agent": "OpenClaw-Control-UI",
-    "X-GitHub-Api-Version": GITHUB_API_VERSION,
+    "X-GitHub-Api-Version": apiVersion,
   };
   if (token) {
     headers.Authorization = `Bearer ${token}`;
@@ -271,6 +271,7 @@ export async function fetchGitHubApi(
   callerSignal?: AbortSignal,
   graphql?: { query: string; variables: Record<string, string> },
   apiBaseUrl = GITHUB_API_BASE_URL,
+  options: { apiVersion?: string; cacheControl?: "max-age=0" } = {},
 ): Promise<Response> {
   callerSignal?.throwIfAborted();
   const baseUrl = resolveGitHubApiBaseUrl(apiBaseUrl);
@@ -312,7 +313,8 @@ export async function fetchGitHubApi(
     try {
       response = await fetchImpl(url.href, {
         headers: {
-          ...githubApiHeaders(token),
+          ...githubApiHeaders(token, options.apiVersion),
+          ...(options.cacheControl ? { "Cache-Control": options.cacheControl } : {}),
           ...(etag ? { "If-None-Match": etag } : {}),
           ...(graphql ? { "Content-Type": "application/json" } : {}),
         },

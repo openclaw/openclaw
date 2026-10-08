@@ -1,18 +1,23 @@
 import { readGitHubPublicationSelectionRejectedError } from "@openclaw/gateway-protocol/gateway-error-details";
+import {
+  personalGitHubPublicationSelection,
+  type GitHubPublicationOptions,
+  type GitHubPublicationView,
+} from "@openclaw/github/control-ui-contract.js";
 import type { Static } from "typebox";
 import type {
-  GitHubPublicationPublisher,
   GitHubPublicationSelection,
   SessionGitHubOptionsParamsSchema,
-  SessionGitHubOptionsResultSchema,
   SessionGitHubPublicationResult,
   SessionGitHubStatusResult,
 } from "../../../../packages/gateway-protocol/src/schema/session-github-publication.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../format-error.ts";
 import { generateUUID } from "../uuid.ts";
-
-export type GitHubPublicationOptions = Static<typeof SessionGitHubOptionsResultSchema>;
+export type {
+  GitHubPublicationOptions,
+  GitHubPublicationView,
+} from "@openclaw/github/control-ui-contract.js";
 type GitHubPublicationPresentation = {
   canPublishShared: boolean;
   canPublishPersonal: boolean;
@@ -41,43 +46,8 @@ export type GitHubPublicationPresentationBinding = {
 };
 type GitHubPublicationActivity = "read" | "publish" | "confirm";
 
-export type GitHubPublicationView = {
-  activity: GitHubPublicationActivity | null;
-  canPublishShared: boolean;
-  canPublishPersonal: boolean;
-  locked: boolean;
-  options: GitHubPublicationOptions | null;
-  selection: GitHubPublicationSelection | null;
-  result: SessionGitHubPublicationResult | null;
-  confirmation: SessionGitHubStatusResult["confirmation"];
-  error: string | null;
-  personalReady: boolean;
-  onSelect?: (source: "shared" | "personal") => void;
-  onPublish?: () => void;
-  onConfirm?: () => void;
-  onRefresh: () => void;
-  onNewAction?: () => void;
-};
-
 function terminal(result: SessionGitHubPublicationResult | null): boolean {
   return result?.status === "published" || result?.status === "failed";
-}
-
-export function selectedGitHubPublisher(
-  selection: GitHubPublicationSelection | null,
-): GitHubPublicationPublisher | undefined {
-  return selection?.source === "personal"
-    ? { source: "personal", ...selection.account }
-    : selection?.expected;
-}
-
-export function personalGitHubPublicationSelection(
-  options: GitHubPublicationOptions | null,
-): Extract<GitHubPublicationSelection, { source: "personal" }> | null {
-  const personal = options?.personal;
-  return personal?.state === "connected" && personal.account && personal.generation
-    ? { source: "personal", account: personal.account, generation: personal.generation }
-    : null;
 }
 
 /** Owns one session's explicit publication; connection/access changes retire every response. */

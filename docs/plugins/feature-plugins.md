@@ -142,7 +142,7 @@ Its id must match the plugin manifest. Register contributions through
 | `registerPage` and `registerNavigation` | Plugin-owned routes and sidebar destinations.                                                                                           |
 | `registerAction`                        | Composer, header, or session menu actions. An optional `resolve` function supplies the current label, hidden state, and disabled state. |
 | `registerPanel`                         | Session panels.                                                                                                                         |
-| `registerAccessory`                     | Session header content.                                                                                                                 |
+| `registerAccessory`                     | Session header content or content above the composer, alongside composer actions.                                                       |
 | `registerWidget`                        | Native dashboard widget views.                                                                                                          |
 | `registerReplacement`                   | `workspace`, `session-list`, `composer`, `transcript`, or `tool-result`.                                                                |
 
@@ -214,6 +214,10 @@ submission. Show rejected submissions rather than clearing the draft. Composer
 operations retire when the view stops being presented, even while its DOM and
 host lifetime survive. Use the fresh operations supplied by `update` when the
 view is presented again; previously captured operations remain retired.
+
+Use `placement: "composer"` for content above the input without replacing the
+composer. Accessories receive `sessionKey`, `agentId`, and the view lifecycle.
+Pause visual work when `presented` is false and release subscriptions in `dispose`.
 
 ### Host capabilities
 

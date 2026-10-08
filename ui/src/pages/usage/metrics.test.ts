@@ -3,10 +3,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildAggregatesFromSessions,
   buildPeakErrorHours,
-  renderUsageMosaic,
   sessionTouchesSelectedHours,
 } from "./metrics.ts";
 import type { UsageSessionEntry, UsageTotals } from "./types.ts";
+import { renderUsageMosaic } from "./view-mosaic.ts";
 
 const emptyUsageTotals: UsageTotals = {
   input: 0,

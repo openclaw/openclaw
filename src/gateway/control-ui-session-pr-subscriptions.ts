@@ -1,5 +1,4 @@
 import pLimit from "p-limit";
-import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/primitives.js";
 import type { GatewayScheduler, GatewayScheduledJob } from "../infra/gateway-scheduler.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
@@ -7,10 +6,7 @@ import type {
   ControlUiSessionPullRequestSnapshot,
   ControlUiSessionPullRequestsChanged,
 } from "./control-ui-contract.js";
-import {
-  CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
-  CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS,
-} from "./control-ui-contract.js";
+import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "./control-ui-contract.js";
 import {
   createControlUiSessionPrPreparedRead,
   type PreparedSessionPrState,
@@ -29,6 +25,7 @@ import type { GatewayBroadcastToConnIdsFn } from "./server-broadcast-types.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
 const CONTROL_UI_SESSION_PR_POLL_INTERVAL_MS = 60_000;
+const CONTROL_UI_SESSION_MERGE_POLL_INTERVAL_MS = 5_000;
 const CONTROL_UI_SESSION_PR_REFRESH_INTERVAL_MS = 10_000;
 const CONTROL_UI_SESSION_PR_LOAD_CONCURRENCY = 4;
 
@@ -51,46 +48,6 @@ type SubscriptionDeps = {
   scheduler: GatewayScheduler;
   getSessionRowProjection?: () => SessionRowProjection | undefined;
 };
-
-function parseSessionKeys(value: unknown): string[] | null {
-  if (!Array.isArray(value) || value.length > CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS) {
-    return null;
-  }
-  const keys = new Set<string>();
-  for (const entry of value) {
-    if (typeof entry !== "string") {
-      return null;
-    }
-    const key = entry.trim();
-    if (!key || key.length > CHAT_SEND_SESSION_KEY_MAX_LENGTH) {
-      return null;
-    }
-    keys.add(key);
-  }
-  return [...keys];
-}
-
-export function parseControlUiSessionPullRequestsSubscribeParams(
-  value: unknown,
-): { sessionKeys: string[]; refreshSessionKeys: string[] } | null {
-  if (!value || typeof value !== "object" || !("sessionKeys" in value)) {
-    return null;
-  }
-  const raw = value as { sessionKeys?: unknown; refreshSessionKeys?: unknown };
-  const sessionKeys = parseSessionKeys(raw.sessionKeys);
-  const refreshSessionKeys =
-    raw.refreshSessionKeys === undefined ? [] : parseSessionKeys(raw.refreshSessionKeys);
-  if (!sessionKeys || !refreshSessionKeys) {
-    return null;
-  }
-  const watched = new Set(sessionKeys);
-  for (const key of refreshSessionKeys) {
-    if (!watched.has(key)) {
-      return null;
-    }
-  }
-  return { sessionKeys, refreshSessionKeys };
-}
 
 /**
  * Owns the union of connection replace-sets. Only this union drives GitHub
@@ -131,7 +88,11 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
     customLoad
       ? operation(() => {}, target.identity)
       : withControlUiSessionPrSource(target.readSource, operation);
-  let pollJob: GatewayScheduledJob | undefined;
+  const pollJobs = new Map<boolean, GatewayScheduledJob>();
+  const merging = (state: WatchedKeyState) =>
+    state.snapshot?.pullRequests.some(
+      (pr) => pr.merge?.status === "pending" || pr.merge?.status === "merged",
+    ) ?? false;
   const scope = new AsyncWorkScope();
   let stopPromise: Promise<void> | undefined;
 
@@ -194,6 +155,9 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
       cacheLifetime: new AbortController(),
     };
     keyStates.set(sessionKey, state);
+    if (state.connIds.size > 0) {
+      schedulePoll();
+    }
     return state;
   };
 
@@ -204,6 +168,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
     load,
     keyStates,
     stateForTarget,
+    onSnapshotChanged: () => schedulePoll(),
     getSessionRowProjection: deps.getSessionRowProjection,
   });
 
@@ -227,11 +192,8 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
       if (subscription?.size === 0) {
         // Pruning an old watch does not retire a newer replacement still preparing its keys.
         subscriptions.delete(connId);
-        if (subscriptions.size === 0) {
-          pollJob?.cancel();
-          pollJob = undefined;
-        }
       }
+      schedulePoll();
       return undefined;
     }
     if (watched.target.identity !== target.identity) {
@@ -475,18 +437,37 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
   };
 
   const schedulePoll = () => {
-    if (scope.isClosing || pollJob || subscriptions.size === 0) {
+    if (scope.isClosing) {
       return;
     }
-    pollJob = scheduler.schedule({
-      id: "control-ui-session-pr-poll",
-      atMs: scheduler.now() + CONTROL_UI_SESSION_PR_POLL_INTERVAL_MS,
-      everyMs: CONTROL_UI_SESSION_PR_POLL_INTERVAL_MS,
-      run: pollNow,
-    });
+    // The scheduler owns elapsed and wall-clock deadlines for both cadences;
+    // per-key wall-clock checks would stall polling after a backward clock change.
+    for (const [isMerging, interval] of [
+      [false, CONTROL_UI_SESSION_PR_POLL_INTERVAL_MS],
+      [true, CONTROL_UI_SESSION_MERGE_POLL_INTERVAL_MS],
+    ] as const) {
+      const watched = [...keyStates.values()].some(
+        (state) => state.connIds.size > 0 && merging(state) === isMerging,
+      );
+      const job = pollJobs.get(isMerging);
+      if (!watched) {
+        job?.cancel();
+        pollJobs.delete(isMerging);
+      } else if (!job) {
+        pollJobs.set(
+          isMerging,
+          scheduler.schedule({
+            id: `control-ui-session-${isMerging ? "merge" : "pr"}-poll`,
+            atMs: scheduler.now() + interval,
+            everyMs: interval,
+            run: () => pollNow(isMerging),
+          }),
+        );
+      }
+    }
   };
 
-  const pollNow = (): Promise<void> => {
+  const pollNow = (isMerging?: boolean): Promise<void> => {
     if (scope.isClosing) {
       return Promise.resolve();
     }
@@ -495,7 +476,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
       // rate-limit cache, so the poller never creates a second quota policy.
       const loads = [];
       for (const [sessionKey, state] of keyStates) {
-        if (state.connIds.size > 0) {
+        if (state.connIds.size > 0 && (isMerging === undefined || merging(state) === isMerging)) {
           const watchLifetime = state.watchLifetime;
           loads.push(
             loadSnapshot(
@@ -697,10 +678,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
     for (const key of generation?.retainedKeys ?? []) {
       retireKeyStateIfUnused(key, keyStates.get(key));
     }
-    if (subscriptions.size === 0) {
-      pollJob?.cancel();
-      pollJob = undefined;
-    }
+    schedulePoll();
   };
 
   const stop = (): Promise<void> => {

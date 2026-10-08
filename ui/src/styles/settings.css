@@ -1,3 +1,5 @@
+@import "../../../extensions/github/browser/identity.css";
+
 /* One structural pattern for every settings surface:
  *   .settings-page > .settings-section > .settings-group > .settings-row
  *
@@ -907,14 +909,6 @@ textarea.settings-input {
   height: 20px;
   border-radius: var(--radius-full);
   flex: none;
-}
-
-.github-device-code {
-  color: var(--text-strong);
-  font-size: var(--control-ui-text-lg);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  user-select: all;
 }
 
 .shell--embed-settings {

@@ -1,5 +1,15 @@
 export * from "./error-details.js";
 export * from "./github-publication-api.js";
+export type {
+  ControlUiSessionPullRequestCheckStep,
+  ControlUiSessionPullRequestCheck,
+  ControlUiSessionPullRequestCheckDetails,
+  ControlUiSessionPullRequest,
+  ControlUiSessionBranch,
+  ControlUiSessionPullRequests,
+  ControlUiSessionPullRequestSnapshot,
+  ControlUiSessionPullRequestsChanged,
+} from "./control-ui-session-pull-requests.js";
 export * from "./session-agent-status.js";
 export type {
   ModelCatalogScope,

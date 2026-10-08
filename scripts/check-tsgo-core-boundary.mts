@@ -292,7 +292,9 @@ export async function inspectCiTsgoCheckGraphs(
 
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
-    await checkCoreTsgoGraphBoundary();
+    const { withPreparedControlUiPluginArtifacts } =
+      await import("./prepare-extension-package-boundary-artifacts.mts");
+    await withPreparedControlUiPluginArtifacts(repoRoot, () => checkCoreTsgoGraphBoundary());
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = error instanceof CoreTsgoBoundaryInterruptedError ? error.exitCode : 1;

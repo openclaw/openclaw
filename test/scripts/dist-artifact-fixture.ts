@@ -26,6 +26,19 @@ export function installDistArtifactScripts(
       fs.readFileSync(path.join(sourceRoot, "scripts", script), "utf8"),
     );
   }
+  if (
+    scripts.some((script) =>
+      ["run-tsgo.mts", "run-oxlint.mts", "run-oxlint-shards.mts"].includes(script),
+    ) &&
+    !scripts.includes("prepare-extension-package-boundary-artifacts.mts")
+  ) {
+    // Process ownership fixtures substitute preparation; native emit has its own owner suite.
+    write(
+      root,
+      "scripts/prepare-extension-package-boundary-artifacts.mts",
+      "export async function prepareControlUiPluginBoundaryArtifacts() {}\n",
+    );
+  }
   for (const file of [
     "scripts/lib",
     "scripts/windows-cmd-helpers.mjs",

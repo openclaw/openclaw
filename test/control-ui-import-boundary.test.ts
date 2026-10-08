@@ -6,6 +6,14 @@ import { uiNodeDrivenBrowserTestFiles } from "./vitest/vitest.ui-paths.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 
+it("follows public plugin aliases into runtime source", () => {
+  expect(
+    findSourceImportBackedges("ui/src/components/github-link-eligibility.ts", [
+      "extensions/github/control-ui-links-api.ts",
+    ]),
+  ).toHaveLength(1);
+});
+
 it("keeps Control UI runtime imports off the state database", () => {
   const files = listGitTrackedFiles({ repoRoot, pathspecs: ["ui/src", "src/state"] });
   if (!files) {

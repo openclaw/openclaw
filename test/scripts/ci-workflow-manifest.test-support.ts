@@ -331,6 +331,7 @@ export function runCiManifestFixture(options: {
         "scripts/lib/merge-head-diff-base.mjs",
         "scripts/lib/record-shared.mjs",
         "scripts/lib/tsgo-core-test-shards.mts",
+        "scripts/lib/control-ui-plugin-boundary.mts",
         "packages/normalization-core/src/stable-stringify.ts",
         "scripts/run-tsgo-core-test-shards.mts",
         "scripts/run-additional-boundary-checks.mts",
@@ -341,6 +342,10 @@ export function runCiManifestFixture(options: {
       }
     }
     if (options.checkFamilyScope) {
+      writeFileSync(
+        path.join(root, "scripts/prepare-extension-package-boundary-artifacts.mts"),
+        "export async function withPreparedControlUiPluginArtifacts(_root, read) { return read(); }\n",
+      );
       copyFileSync("scripts/ci-check-plan.mts", path.join(root, "scripts/ci-check-plan.mts"));
       writeFileSync(
         path.join(scriptsDir, "ci-check-family-scope.mts"),
@@ -352,6 +357,7 @@ export function runCiManifestFixture(options: {
         "failed-trailer.mts",
         "record-shared.mjs",
         "tsgo-core-test-shards.mts",
+        "control-ui-plugin-boundary.mts",
       ]) {
         copyFileSync(path.join("scripts/lib", file), path.join(scriptsDir, file));
       }

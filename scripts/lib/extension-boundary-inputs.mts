@@ -7,6 +7,7 @@ import {
   type ArtifactRecord,
 } from "./build-artifact-cache.mts";
 import { CompilerInputSnapshot } from "./compiler-input-snapshot.mts";
+import { CONTROL_UI_PLUGIN_BOUNDARY_UNITS } from "./control-ui-plugin-boundary.mts";
 import { createDeclarationInputBoundary } from "./local-check-runtime.mts";
 import {
   replayDeclarationLookups,
@@ -15,10 +16,14 @@ import {
 import { nativeTypeScriptToolchainFiles } from "./native-typescript-toolchain.mts";
 import { pluginSdkEntrypoints } from "./plugin-sdk-entries.mts";
 
+export { CONTROL_UI_PLUGIN_BOUNDARY_UNITS } from "./control-ui-plugin-boundary.mts";
+
 export const LOCAL_SDK_ROOT = "packages/plugin-sdk/dist";
 export const BOUNDARY_CACHE_ROOT = ".artifacts/extension-package-boundary";
 export const LOCAL_PLUGIN_ROOT = `${BOUNDARY_CACHE_ROOT}/plugins`;
+
 export const BOUNDARY_PLUGIN_UNITS = [
+  ...CONTROL_UI_PLUGIN_BOUNDARY_UNITS,
   ["qa-channel", "api"],
   ["memory-core", "api"],
   ["matrix", "test-api"],
@@ -69,6 +74,7 @@ const GENERATOR_INPUTS = [
   // Pnpm's manifest carries machine-local store metadata. Native membership,
   // installed topology, and input bytes own dependency invalidation here.
   "scripts/lib/extension-boundary-inputs.mts",
+  "scripts/lib/control-ui-plugin-boundary.mts",
   "scripts/lib/native-declaration-emitter.mts",
   "scripts/lib/native-declaration-filesystem.mts",
   "scripts/lib/native-typescript.mts",
@@ -80,6 +86,7 @@ const GENERATOR_INPUTS = [
   "scripts/lib/build-artifact-cache.mts",
   "scripts/lib/bounded-output-tail.mjs",
   "scripts/lib/local-check-runtime.mts",
+  "scripts/lib/tsgo-timeout.mts",
   "scripts/lib/managed-child-process.mts",
   "scripts/lib/vitest-resource-ownership.mts",
   "scripts/lib/dist-artifact-ownership.mts",

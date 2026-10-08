@@ -1581,7 +1581,7 @@ const RELEASE_ONLY_UI_TEST_FILES = new Set([
 
 const sharedUiE2eInputs = [
   "ui/{package.json,tsconfig.json,index.html,vite.config.ts}",
-  "ui/config/control-ui-{boot-preloads,chunking,locales,hover-guard,web-awesome-page-rule}.ts",
+  "ui/config/control-ui-{boot-preloads,chunking,locales,hover-guard,web-awesome-page-rule,plugin-artifacts}.ts",
   "ui/config/control-ui-boot-modules.json",
   "ui/src/main.ts",
   "ui/src/app/{app-host,app-root,bootstrap,router-outlet,router-outlet-controller}.ts",

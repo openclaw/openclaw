@@ -14,6 +14,7 @@ import {
 } from "../../scripts/lib/vitest-local-scheduling.mts";
 import type { LocalVitestScheduling } from "../../scripts/lib/vitest-local-scheduling.mts";
 import { resolveTestBunSourceArgs } from "../../src/test-utils/bun-process.ts";
+import { controlUiPluginArtifactAliases } from "../../ui/config/control-ui-plugin-artifacts.ts";
 import {
   BUNDLED_PLUGIN_ROOT_DIR,
   BUNDLED_PLUGIN_TEST_GLOB,
@@ -162,6 +163,7 @@ export const sharedVitestConfig = {
   ],
   resolve: {
     alias: [
+      ...controlUiPluginArtifactAliases(repoRoot),
       {
         // Route bare `zod` through a runtime shim (same pattern as the
         // discord-api-types shims below): zod's own entry re-exports `z` as a

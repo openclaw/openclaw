@@ -1,3 +1,4 @@
+import { createGitHubRepositoryPickerRenderer } from "@openclaw/github/control-ui-projects-api.js";
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import type {
@@ -18,6 +19,12 @@ import { renderPlaceBrowser } from "./place-browser.ts";
 import { disambiguate } from "./place-labels.ts";
 
 registerNewSessionSetupEnglish();
+
+const renderGitHubRepositoryPicker = createGitHubRepositoryPickerRenderer({
+  t,
+  gitBranchIcon: icons.gitBranch,
+  renderMenuItem: renderSessionMenuItem,
+});
 
 /** Detects pasted clone URLs; the Gateway remains authoritative for host validation. */
 export function projectCloneInput(value: string): string | null {
@@ -291,53 +298,7 @@ export function renderProjectChip(params: {
                 }
                 ${
                   !cloneInput && query.length >= 2 && params.projectSearchAvailable
-                    ? html`
-                        <div class="new-session-page__menu-title">
-                          ${t("newSession.githubProjects")}
-                        </div>
-                        ${
-                          params.projectSearchCredentialMissing
-                            ? html`<div class="new-session-page__menu-note">
-                                ${t("newSession.githubTokenHint")}
-                              </div>`
-                            : nothing
-                        }
-                        ${
-                          params.projectSearchLoading
-                            ? html`<div class="new-session-page__project-status" role="status">
-                                ${t("common.loading")}
-                              </div>`
-                            : nothing
-                        }
-                        ${
-                          params.projectSearchError
-                            ? html`<div class="new-session-page__project-error" role="alert">
-                                ${params.projectSearchError}
-                              </div>`
-                            : nothing
-                        }
-                        ${params.remoteProjects.map((project) =>
-                          renderSessionMenuItem(
-                            {
-                              value: `remote-project:${project.fullName}`,
-                              label: project.fullName,
-                              icon: icons.gitBranch,
-                              sub: project.description ?? t("newSession.cloneProject"),
-                              checked: params.selectedRemoteProject?.cloneUrl === project.cloneUrl,
-                              title: project.webUrl,
-                              onSelect: () =>
-                                params.onSelectRemoteProject({
-                                  identity: project.fullName,
-                                  cloneUrl: project.cloneUrl,
-                                  ...(project.defaultBranch
-                                    ? { defaultBranch: project.defaultBranch }
-                                    : {}),
-                                }),
-                            },
-                            params.submitting || !params.projectAddAvailable,
-                          ),
-                        )}
-                      `
+                    ? renderGitHubRepositoryPicker(params)
                     : nothing
                 }
                 ${

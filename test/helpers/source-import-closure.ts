@@ -1,8 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createRuntimeImportGraph } from "../../scripts/lib/runtime-import-closure.mts";
+import { controlUiPluginArtifactAliases } from "../../ui/config/control-ui-plugin-artifacts.ts";
 
 const repoRoot = path.resolve(import.meta.dirname, "../..");
+const pluginAliases = controlUiPluginArtifactAliases(repoRoot);
 const staticDependencyCache = new Map<string, readonly string[]>();
 
 export function findSourceImportBackedges(
@@ -34,8 +36,12 @@ export function findSourceImportBackedges(
         graph ??= createRuntimeImportGraph(repoRoot, entries, {
           includeCommonJs: true,
           sourceImports: true,
-          // Vite query suffixes select asset handling without changing the source file.
-          normalizeSpecifier: (specifier) => specifier.split("?", 1)[0]!,
+          // Follow Vite's runtime sources, not declarations that hide plugin dependencies.
+          normalizeSpecifier: (specifier) =>
+            pluginAliases.reduce(
+              (source, { find, replacement }) => source.replace(find, replacement),
+              specifier.split("?", 1)[0]!,
+            ),
         });
         const resolved: string[] = [];
         for (const { specifier, resolvedFileName } of graph.dependencies(file)) {

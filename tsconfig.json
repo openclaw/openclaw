@@ -25,6 +25,7 @@
     "useDefineForClassFields": false,
     "verbatimModuleSyntax": true,
     "paths": {
+      "@openclaw/github/control-ui*.js": ["./.artifacts/extension-package-boundary/plugins/github/control-ui*.d.ts"],
       "openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
       "@openclaw/ai": ["./packages/ai/src/index.ts"],
       "@openclaw/ai/diagnostics": ["./packages/ai/src/utils/diagnostics.ts"],

@@ -157,6 +157,8 @@ describe("project runner native empty-file policy", () => {
       for (const name of ["scripts", "src", "packages", "node_modules"]) {
         fs.symlinkSync(path.join(repoRoot, name), path.join(root, name), "junction");
       }
+      fs.mkdirSync(path.join(root, "ui"));
+      fs.symlinkSync(path.join(repoRoot, "ui/config"), path.join(root, "ui/config"), "junction");
       for (const name of ["package.json", "tsconfig.json"]) {
         fs.copyFileSync(path.join(repoRoot, name), path.join(root, name));
       }

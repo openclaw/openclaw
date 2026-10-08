@@ -122,6 +122,7 @@ export function readUiCss(): string {
     "ui/src/styles/components.css",
     "ui/src/styles/chat/startup-layout.css",
     "ui/src/styles/chat/layout.css",
+    "extensions/github/control-ui.css",
     "ui/src/styles/chat/message-layout.css",
     "ui/src/styles/chat/composer-surface.css",
     "ui/src/styles/chat/composer.css",

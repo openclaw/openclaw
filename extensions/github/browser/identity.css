@@ -1,0 +1,7 @@
+.github-device-code {
+  color: var(--text-strong);
+  font-size: var(--control-ui-text-lg);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  user-select: all;
+}

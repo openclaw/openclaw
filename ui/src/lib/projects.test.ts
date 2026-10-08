@@ -1,3 +1,4 @@
+import { markdownGitHubAliases } from "@openclaw/github/control-ui-markdown-api.js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   ProjectRecord,
@@ -5,7 +6,6 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
-import { markdownGitHubAliases } from "../components/markdown-github-repositories.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { projectsForGateway } from "./projects.ts";
 

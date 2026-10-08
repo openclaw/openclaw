@@ -20,6 +20,7 @@ function readChatCss(): string {
     "ui/src/styles/base.css",
     "ui/src/styles/chat/startup-layout.css",
     "ui/src/styles/chat/text.css",
+    "extensions/github/browser/markdown.css",
   ]
     .map((file) => readStyleSheet(file))
     .join("\n");

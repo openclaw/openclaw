@@ -34,11 +34,13 @@ import {
   uiTimingTestFiles,
 } from "../test/vitest/vitest.ui-paths.mjs";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
+import { controlUiPluginArtifactAliases } from "./config/control-ui-plugin-artifacts.ts";
 import { UiRuntimePartitionSequencer } from "./test/vitest-runtime-sequencer.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const workspaceSourceAliases = [
+  ...controlUiPluginArtifactAliases(repoRoot),
   {
     find: "../logging/redact.js",
     replacement: path.resolve(here, "src/lib/browser-redact.ts"),

@@ -25,7 +25,6 @@ import {
   formatUsageCost,
   formatIsoDate,
   formatUsageTokens,
-  renderUsageMosaic,
   sessionTouchesSelectedHours,
 } from "./metrics.ts";
 import { renderUsageEmptyState, renderUsageLoadingStatus } from "./page-shell.ts";
@@ -42,6 +41,7 @@ import { renderDailyChartCompact, renderCostBreakdownCompact } from "./view-char
 import { renderUsageCreatorFilter, renderUsageCreators } from "./view-creators.ts";
 import { renderSessionDetailPanel } from "./view-details.ts";
 import { renderUsageHeatmap } from "./view-heatmap.ts";
+import { renderUsageMosaic } from "./view-mosaic.ts";
 import {
   renderCostWindowComparison,
   renderFilterChips,

@@ -69,7 +69,9 @@ export async function createCiCheckPlan(input: CiCheckPlanInput) {
     !resolveChangedCiTsgoInputs(input.changedPaths, existsSync)
   ) {
     const { checkCoreTsgoGraphBoundary } = await import("./check-tsgo-core-boundary.mts");
-    await checkCoreTsgoGraphBoundary();
+    const { withPreparedControlUiPluginArtifacts } =
+      await import("./prepare-extension-package-boundary-artifacts.mts");
+    await withPreparedControlUiPluginArtifacts(process.cwd(), () => checkCoreTsgoGraphBoundary());
   }
   const graphs = typePlan?.graphs ?? [];
   const production = graphs.filter(({ name }) => ["core", "ui", "extensions"].includes(name));

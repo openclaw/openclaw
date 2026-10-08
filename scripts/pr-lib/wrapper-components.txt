@@ -168,6 +168,7 @@ scripts/lib/changed-extensions.mts
 scripts/lib/changed-path-facts.mjs
 scripts/lib/ci-test-timings-schema.mts
 scripts/lib/ci-test-timings.mts
+scripts/lib/control-ui-plugin-boundary.mts
 scripts/lib/direct-run.mjs
 scripts/lib/error-format.mts
 scripts/lib/extension-test-plan.mts
@@ -892,6 +893,7 @@ src/infra/git-operation-timing.ts
 src/infra/git-operation.worker.ts
 src/infra/git-path-quote.ts
 src/infra/git-read-operations.runtime.ts
+src/infra/git-ref-file.runtime.ts
 src/infra/git-root.ts
 src/infra/git-worker-context.ts
 src/infra/git-worker-contract.ts

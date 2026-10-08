@@ -95,6 +95,7 @@ function readUiCss(): string {
     "ui/src/styles/chat/composer.css",
     "ui/src/styles/chat/split-view.css",
     "ui/src/styles/chat/text.css",
+    "extensions/github/browser/markdown.css",
   ]
     .map((file) => readStyleSheet(file))
     .join("\n");

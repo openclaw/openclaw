@@ -1,13 +1,11 @@
+import {
+  decorateGitHubMarkdownLink,
+  isGitHubCodeSpanUrl,
+} from "@openclaw/github/control-ui-markdown-api.js";
 import MarkdownIt, { type MarkdownIt as MarkdownItParser, type Token } from "markdown-it";
 import markdownItCjkFriendly from "markdown-it-cjk-friendly";
 import { escapeHtml } from "../../../src/shared/html-escape.js";
 import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
-import { isGitHubHost } from "./github-link-eligibility.ts";
-import {
-  decodeGitHubPathSegment,
-  parseGitHubItemPath,
-  parseGitHubLinkTarget,
-} from "./github-link-target.ts";
 import { installAssistantTranscriptRoleMarkdown } from "./markdown-assistant-transcript.ts";
 import { markdownCodeBlockCopyText, renderMarkdownCodeBlock } from "./markdown-code-blocks.ts";
 import { installMarkdownDetails } from "./markdown-details.ts";
@@ -31,13 +29,10 @@ const CJK_RE = new RegExp(
   "[\\u2E80-\\u2FFF\\u3000-\\u303F\\u3040-\\u309F\\u30A0-\\u30FF\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uAC00-\\uD7AF\\uF900-\\uFAFF\\uFF01-\\uFF60]",
 );
 
-// CSS paints the decorative mark outside the accessibility tree and copied text.
-const GITHUB_LINK_CLASS = "markdown-github-link";
 // Only generated URL labels may wrap at any character.
 const BARE_URL_CLASS = "markdown-bare-url";
 // Code-span URLs use the same generated labels as autolinks.
 const CODE_SPAN_LINK_MARKUP = "code-span-url";
-const CODE_SPAN_URL_BREAK_RE = /[\s\p{Cc}]/u;
 
 // Label shortening needs every file target before applying any label.
 type MarkdownFileLinkDecoration = {
@@ -98,28 +93,6 @@ function parseWebLinkHref(href: string): URL | null {
   // Docs-relative rewriting runs later in markdown.ts.
   const url = URL.parse(href);
   return url?.protocol === "https:" || url?.protocol === "http:" ? url : null;
-}
-
-function formatGitHubLinkLabel(url: URL): string {
-  const segments = url.pathname.split("/").filter(Boolean);
-  if (segments.length === 2) {
-    return segments.map((segment) => decodeGitHubPathSegment(segment) ?? segment).join("/");
-  }
-  if ((segments[2] === "blob" || segments[2] === "tree") && segments.length > 4) {
-    const basename = decodeGitHubPathSegment(segments.at(-1) ?? "");
-    if (basename) {
-      // Tree URLs can contain slash-separated refs, not just folder paths.
-      // Show the omission rather than presenting the suffix as a folder name.
-      return segments[2] === "tree"
-        ? `${segments
-            .slice(0, 2)
-            .map((segment) => decodeGitHubPathSegment(segment) ?? segment)
-            .join("/")}/…/${basename}`
-        : basename;
-    }
-  }
-  const path = segments.map((segment) => decodeGitHubPathSegment(segment) ?? segment);
-  return ["github.com", ...path].join("/");
 }
 
 export function createMarkdownParser(): MarkdownItParser {
@@ -436,8 +409,8 @@ export function createMarkdownParser(): MarkdownItParser {
           // URL parsing absorbs whitespace/control characters, so reject mixed prose first.
           // CommonMark already removed symmetric code-span padding.
           const content = open.content;
-          const codeUrl = CODE_SPAN_URL_BREAK_RE.test(content) ? null : parseWebLinkHref(content);
-          if (!codeUrl || !isGitHubHost(codeUrl.hostname)) {
+          const codeUrl = parseWebLinkHref(content);
+          if (!isGitHubCodeSpanUrl(content, codeUrl)) {
             continue;
           }
           const label = new state.Token("text", "", 0);
@@ -461,8 +434,6 @@ export function createMarkdownParser(): MarkdownItParser {
           open.markup === "autolink" ||
           open.markup === CODE_SPAN_LINK_MARKUP;
         const host = url.hostname.toLowerCase();
-        const githubLink = isGitHubHost(host);
-        const githubPreview = githubLink ? parseGitHubLinkTarget(href) : null;
         if (generatedUrlLabel) {
           open.attrJoin("class", BARE_URL_CLASS);
         }
@@ -480,32 +451,16 @@ export function createMarkdownParser(): MarkdownItParser {
             break;
           }
         }
-        if (githubLink && labelToken) {
-          open.attrJoin("class", GITHUB_LINK_CLASS);
-          const item = githubPreview ?? parseGitHubItemPath(url);
-          const label =
-            labelToken.type === "text" &&
-            children[index + 1] === labelToken &&
-            children[index + 2]?.type === "link_close"
-              ? labelToken.content
-              : null;
-          const itemChip =
-            item &&
-            (generatedUrlLabel ||
-              label === `#${item.number}` ||
-              label === `${item.owner}/${item.repo}#${item.number}`);
-          if (itemChip) {
-            open.attrJoin("class", "markdown-github-item");
-            open.attrSet("data-github-kind", item.kind);
-          }
-          if (generatedUrlLabel) {
-            labelToken.content = item ? `#${item.number}` : formatGitHubLinkLabel(url);
-          }
-          if (!githubPreview && (generatedUrlLabel || itemChip)) {
-            open.attrSet("title", href);
-          }
-        }
-        if (!githubLink && labelToken && state.env.linkFavicons) {
+        const decorated = decorateGitHubMarkdownLink({
+          open,
+          labelToken,
+          children,
+          index,
+          url,
+          href,
+          generatedUrlLabel,
+        });
+        if (!decorated && labelToken && state.env.linkFavicons) {
           const favicon = new state.Token("link_favicon", "img", 0);
           favicon.meta = { hostname: host };
           children.splice(index + 1, 0, favicon);

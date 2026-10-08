@@ -16,28 +16,13 @@ import {
   resolveRepoToolBinPath,
 } from "./lib/local-check-runtime.mts";
 import { runManagedCommand } from "./lib/managed-child-process.mts";
-import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import { findRepoRoot } from "./lib/repo-root.mjs";
+import { TSGO_CI_GRAPHS, TSGO_ROOT_TEST_SHARDS } from "./lib/tsgo-core-test-shards.mts";
 import {
   getSparseTsgoGuardError,
   shouldSkipSparseTsgoGuardError,
 } from "./lib/tsgo-sparse-guard.mts";
-
-// Declared locally, as sibling scripts do, rather than imported from packages/:
-// a static import there resolves before the sparse-checkout guard can report a
-// missing project, turning a clean skip into ERR_MODULE_NOT_FOUND. Mirrors
-// normalization-core's MAX_TIMER_TIMEOUT_MS.
-const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
-
-export function resolveTsgoTimeoutMs(env: NodeJS.ProcessEnv): number | undefined {
-  if (!env.OPENCLAW_TSGO_TIMEOUT_MS?.trim()) {
-    return undefined;
-  }
-  return Math.min(
-    readPositiveEnvInt("OPENCLAW_TSGO_TIMEOUT_MS", env, MAX_TIMER_TIMEOUT_MS),
-    MAX_TIMER_TIMEOUT_MS,
-  );
-}
+import { resolveTsgoTimeoutMs } from "./lib/tsgo-timeout.mts";
 
 /** Prepare one compiler invocation; the caller owns its process group and deadline. */
 export function prepareTsgoCommand(
@@ -84,6 +69,21 @@ export function prepareTsgoCommand(
     shell: process.platform === "win32",
     timeoutMs,
   };
+}
+
+/** These graphs can reach Control UI imports directly or through shared test helpers. */
+export function needsControlUiPluginArtifacts(projectConfig: string, cwd: string) {
+  const root = findRepoRoot(cwd) ?? cwd;
+  const resolvedConfig = path.resolve(cwd, projectConfig);
+  // Nested projects can share these filenames without consuming the UI producers.
+  return [
+    "tsconfig.json",
+    "test/tsconfig/tsconfig.core.test.json",
+    ...TSGO_CI_GRAPHS.filter(({ name }) => name !== "core" && !name.startsWith("extensions")).map(
+      ({ config }) => config,
+    ),
+    ...TSGO_ROOT_TEST_SHARDS.map(({ config }) => config),
+  ].some((candidate) => path.resolve(root, candidate) === resolvedConfig);
 }
 
 /** The caller holds artifact ownership until this compiler and its output are joined. */
@@ -199,14 +199,24 @@ async function main(): Promise<void> {
   const id = randomUUID();
   const evidenceId = `${id}:0`;
   let verified = false;
-  process.exitCode = await withDistArtifactOwnership(command.cwd, () =>
-    runPreparedTsgoCommand(command, {
+  process.exitCode = await withDistArtifactOwnership(command.cwd, async () => {
+    const config = readFlagValue(command.args, "-p") ?? readFlagValue(command.args, "--project");
+    if (
+      config &&
+      !command.args.includes("--showConfig") &&
+      needsControlUiPluginArtifacts(config, command.cwd)
+    ) {
+      const { prepareControlUiPluginBoundaryArtifacts } =
+        await import("./prepare-extension-package-boundary-artifacts.mts");
+      await prepareControlUiPluginBoundaryArtifacts(findRepoRoot(command.cwd) ?? command.cwd);
+    }
+    return runPreparedTsgoCommand(command, {
       evidenceId,
       onEvidence: () => {
         verified = true;
       },
-    }),
-  );
+    });
+  });
   if (verified) {
     console.log(
       `[ci-static:tsgo:completion] ${JSON.stringify({ version: 1, id, planned: 1, completed: 1, leaves: [evidenceId] })}`,

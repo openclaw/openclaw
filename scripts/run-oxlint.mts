@@ -28,10 +28,6 @@ import { resolveUntouchedOxlintExclusions } from "./lib/oxlint-changed-scope.mts
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
 import { resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
-const PREPARE_EXTENSION_BOUNDARY_ARGS = distArtifactEntryArgs(
-  path.resolve("scripts", "prepare-extension-package-boundary-artifacts.mts"),
-  ["--mode=package-boundary"],
-);
 const OXLINT_PREPARE_SKIP_FLAGS = new Set([
   "--help",
   "-h",
@@ -430,24 +426,45 @@ export function shouldPrepareOxlintArtifacts(args: readonly string[]) {
   );
 }
 
-/** Returns whether oxlint args also need plugin package-boundary declarations. */
-export function shouldPrepareExtensionPackageBoundaryArtifacts(args: string[]) {
-  if (!shouldPrepareOxlintArtifacts(args)) {
-    return false;
-  }
-
-  const tsconfigs = args.flatMap((arg, index) => {
+function readOxlintTsconfigs(args: readonly string[]) {
+  return args.flatMap((arg, index) => {
     if (arg === "--tsconfig") {
       const value = args[index + 1];
       return value === undefined ? [] : [value];
     }
     return arg.startsWith("--tsconfig=") ? [arg.slice("--tsconfig=".length)] : [];
   });
+}
+
+/** Returns whether oxlint args also need plugin package-boundary declarations. */
+export function shouldPrepareExtensionPackageBoundaryArtifacts(args: string[]) {
+  if (!shouldPrepareOxlintArtifacts(args)) {
+    return false;
+  }
+
+  const tsconfigs = readOxlintTsconfigs(args);
   // Core, script, and root-test lint resolve sources through the root tsconfig;
-  // generated plugin package declarations are only an extension-lint input.
+  // SDK package declarations remain an extension-lint input. Browser public artifacts
+  // have their own producer preparation below.
   return (
     tsconfigs.length === 0 ||
     tsconfigs.some((tsconfig) => !OXLINT_BOUNDARY_FREE_TS_CONFIGS.has(tsconfig))
+  );
+}
+
+/** Core and browser lint consume public plugin declarations through the root config. */
+export function shouldPrepareControlUiPluginBoundaryArtifacts(args: readonly string[]) {
+  if (!shouldPrepareOxlintArtifacts(args)) {
+    return false;
+  }
+  const configs = readOxlintTsconfigs(args);
+  // Plugin package configs consume their own sources and SDK declarations.
+  return (
+    configs.length === 0 ||
+    configs.some(
+      (config) =>
+        !path.relative(process.cwd(), path.resolve(config)).startsWith(`extensions${path.sep}`),
+    )
   );
 }
 
@@ -605,11 +622,17 @@ function resolveOxlintToolchainEnv(
   };
 }
 
-async function prepareExtensionPackageBoundaryArtifacts(env: NodeJS.ProcessEnv) {
+async function prepareExtensionPackageBoundaryArtifacts(
+  env: NodeJS.ProcessEnv,
+  mode: "package-boundary" | "control-ui",
+) {
   const status = await runManagedCommand({
     bin: process.execPath,
     shell: false,
-    args: PREPARE_EXTENSION_BOUNDARY_ARGS,
+    args: distArtifactEntryArgs(
+      path.resolve("scripts", "prepare-extension-package-boundary-artifacts.mts"),
+      [`--mode=${mode}`],
+    ),
     env,
     requireProcessTreeExit: process.platform !== "win32",
   });
@@ -649,6 +672,10 @@ export async function runOxlint(
     !focusedConfig &&
     env.OPENCLAW_OXLINT_SKIP_PREPARE !== "1" &&
     shouldPrepareExtensionPackageBoundaryArtifacts(finalArgs);
+  const needsControlUiPreparation =
+    !focusedConfig &&
+    env.OPENCLAW_OXLINT_SKIP_PREPARE !== "1" &&
+    shouldPrepareControlUiPluginBoundaryArtifacts(finalArgs);
   if (sparseTargets.skippedTargets.length > 0) {
     delete env.OPENCLAW_CI_STATIC_EVIDENCE;
     console.error(
@@ -673,7 +700,10 @@ export async function runOxlint(
     }
     if (needsArtifactPreparation) {
       // Declaration compilation owns its Go policy; lint limits belong to the oxlint child.
-      await prepareExtensionPackageBoundaryArtifacts(localEnv);
+      await prepareExtensionPackageBoundaryArtifacts(localEnv, "package-boundary");
+    }
+    if (needsControlUiPreparation) {
+      await prepareExtensionPackageBoundaryArtifacts(localEnv, "control-ui");
     }
     return await runWithAdvisoryLimits(
       oxlintPath,

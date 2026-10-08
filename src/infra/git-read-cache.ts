@@ -164,6 +164,12 @@ function createReadCache<Input, Output>(
 
 function createReadCaches() {
   return {
+    refFile: createReadCache(
+      (input: GitReadOperations["repository.ref-file"]["input"], signal) =>
+        runGitWorkerOperation({ type: "repository.ref-file", input }, { signal }),
+      // Ref-backed metadata can advance without changing HEAD or the index.
+      0,
+    ),
     identities: createReadCache(
       (input: GitReadOperations["repository.identities"]["input"], signal) =>
         runGitWorkerOperation({ type: "repository.identities", input }, { signal }),
@@ -256,9 +262,11 @@ export function runGitReadOperation(operation: GitReadOperation, options?: GitRe
   if (state.closing) {
     return Promise.reject(new Error("Git reads are unavailable while the Gateway is restarting"));
   }
-  const { context, branchFacts, diff, branches, baseline, identities } = (state.caches ??=
+  const { context, branchFacts, diff, branches, baseline, identities, refFile } = (state.caches ??=
     createReadCaches());
   switch (operation.type) {
+    case "repository.ref-file":
+      return refFile.read(operation.input, options);
     case "repository.identities":
       return identities.read(operation.input, options);
     case "checkout.revision":

@@ -71,6 +71,19 @@ cached image data; closing its tab or replacing the document retires that cache.
 Script and connection policies are unchanged; remote content cannot run scripts
 or app widgets.
 
+## Merge status above the composer
+
+The existing **CI** dot pulses while GitHub reports a pending async merge for
+the session's pull request. Open the same popover for a short status message.
+Queued, failed, and unavailable results remain distinct; a queued request is
+not a completed merge. Completion refreshes the pull request's normal state.
+
+This observes requests recorded by the native `scripts/pr` merge workflow in
+the session's local checkout. Remote-only checkouts and merges started elsewhere
+do not currently deliver those tracking IDs. The selected agent's GitHub identity
+needs Contents write permission to read GitHub's async result endpoint. Opening
+or refreshing the UI only reads status; it does not submit another merge.
+
 ## Enable or disable the plugin
 
 Open **Plugins** in the Control UI to manage the GitHub plugin. The corresponding
