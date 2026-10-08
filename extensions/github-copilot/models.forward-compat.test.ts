@@ -1,33 +1,11 @@
-import { expectDefined } from "@openclaw/normalization-core/expect";
-import type { ProviderResolveDynamicModelContext } from "openclaw/plugin-sdk/core";
 import { describe, expect, it, vi } from "vitest";
 import { resolveCopilotForwardCompatModel } from "./models.js";
+import { createMockCtx, requireResolvedModel } from "./models.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/provider-model-shared", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-model-shared")>()),
   normalizeModelCompat: (model: Record<string, unknown>) => model,
 }));
-
-function createMockCtx(
-  modelId: string,
-  registryModels: Record<string, Record<string, unknown>> = {},
-): ProviderResolveDynamicModelContext {
-  return {
-    modelId,
-    provider: "github-copilot",
-    config: {},
-    modelRegistry: {
-      find: (provider: string, id: string) => registryModels[`${provider}/${id}`] ?? null,
-    },
-  } as unknown as ProviderResolveDynamicModelContext;
-}
-
-function requireResolvedModel(ctx: ProviderResolveDynamicModelContext) {
-  return expectDefined(
-    resolveCopilotForwardCompatModel(ctx),
-    `expected model ${ctx.modelId} to resolve`,
-  );
-}
 
 describe("resolveCopilotForwardCompatModel", () => {
   it("returns undefined for empty modelId", () => {

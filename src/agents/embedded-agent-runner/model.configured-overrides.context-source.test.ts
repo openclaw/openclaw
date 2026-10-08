@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { applyConfiguredProviderOverrides } from "./model.configured-overrides.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
@@ -8,26 +9,29 @@ import { makeModel } from "./model.test-harness.js";
 const provider = "synthetic-fixture";
 const baseUrl = "https://models.example/v1";
 
-function resolve(configuredModel?: Record<string, unknown>) {
-  const discoveredModel = {
+function resolve(configuredModel?: Partial<ModelDefinitionConfig>) {
+  const discoveredModel: ProviderRuntimeModel = {
     ...makeModel("future-model"),
     provider,
-    api: "openai-completions" as const,
+    api: "openai-completions",
+    input: ["text"],
     baseUrl,
     contextWindow: 128_000,
     contextWindowSource: "synthetic",
-  } as ProviderRuntimeModel;
+  };
   const providerConfig = {
     baseUrl,
-    models: configuredModel ? [{ id: "future-model", ...configuredModel }] : [],
+    models: configuredModel
+      ? [{ ...makeModel("future-model"), contextWindow: undefined, ...configuredModel }]
+      : [],
   };
   const cfg = {
     models: { providers: { [provider]: providerConfig } },
-  } as unknown as OpenClawConfig;
+  } satisfies OpenClawConfig;
   return applyConfiguredProviderOverrides({
     provider,
     discoveredModel,
-    providerConfig: providerConfig as never,
+    providerConfig,
     modelId: "future-model",
     cfg,
     manifestAlias: { provider },
@@ -42,11 +46,11 @@ describe("configured overrides and synthetic context provenance", () => {
     expect(model?.contextWindowSource).toBeUndefined();
   });
 
-  it("drops the synthetic marker when config authors only context tokens", () => {
-    const model = resolve({ contextTokens: 50_000 });
-    expect(model?.contextTokens).toBe(50_000);
+  it("keeps estimated native-window provenance when config authors only context tokens", () => {
+    const model = resolve({ contextTokens: 200_000 });
+    expect(model?.contextTokens).toBe(200_000);
     expect(model?.contextWindow).toBe(128_000);
-    expect(model?.contextWindowSource).toBeUndefined();
+    expect(model?.contextWindowSource).toBe("synthetic");
   });
 
   it("keeps the synthetic marker when the override does not author sizing", () => {

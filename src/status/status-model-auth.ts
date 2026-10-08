@@ -106,6 +106,7 @@ export function createStatusModelResolver(params: {
       ? resolveCapacity(provider, model, {
           profileId: evaluation.selectedProfileId,
           route: evaluation.selectedRoute,
+          contextWindow: sessionEntry?.contextWindow,
           ...(evaluation.runtimeAuth ? { nativeRuntime: evaluation.runtimeAuth.id } : {}),
         })
       : { state: "unavailable" as const };

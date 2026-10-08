@@ -533,12 +533,11 @@ export function applyConfiguredProviderOverrides(params: {
     return undefined;
   }
   const contextWindow = metadataOverrideModel?.contextWindow ?? discoveredModel.contextWindow;
-  // An authored size is not a provider unknown-model estimate; drop that marker with it.
+  // An authored native window replaces its provenance; a prompt cap does not.
   const { contextWindowSource: _syntheticContextWindowSource, ...discoveredWithoutSizeSource } =
     discoveredModel;
   const discoveredSizing =
-    metadataOverrideModel?.contextWindow !== undefined ||
-    metadataOverrideModel?.contextTokens !== undefined
+    metadataOverrideModel?.contextWindow !== undefined
       ? discoveredWithoutSizeSource
       : discoveredModel;
   const configuredMaxTokens = metadataOverrideModel?.maxTokens ?? providerConfig.maxTokens;

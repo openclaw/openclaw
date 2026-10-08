@@ -145,6 +145,7 @@ type BundledStaticCatalogLookup = {
 type BundledStaticCatalogContext = {
   contextWindow?: number;
   contextTokens?: number;
+  contextWindowSource?: "synthetic";
 };
 
 type BundledStaticCatalogScopedLookup = {
@@ -621,6 +622,7 @@ export function createBundledProviderStaticCatalogContextResolver(
       ...(typeof model.contextTokens === "number" && model.contextTokens > 0
         ? { contextTokens: model.contextTokens }
         : {}),
+      ...(model.contextWindowSource ? { contextWindowSource: model.contextWindowSource } : {}),
     };
   };
 }

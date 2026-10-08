@@ -204,10 +204,8 @@ export function mergeProviderModels(
       contextWindowSource: implicitContextWindowSource,
       ...implicitMetadata
     } = implicitModel;
-    // Authored sizing is author intent, never a replaceable provider estimate.
-    const authoredSizing =
-      asPositiveFiniteNumber(explicitModel.contextWindow) !== undefined ||
-      asPositiveFiniteNumber(explicitModel.contextTokens) !== undefined;
+    // Only an authored native window replaces native-window provenance.
+    const authoredWindow = asPositiveFiniteNumber(explicitModel.contextWindow) !== undefined;
     const { contextWindowSource: _explicitContextWindowSource, ...explicitFields } = explicitModel;
     return Object.assign(
       {},
@@ -219,7 +217,7 @@ export function mergeProviderModels(
         reasoning: `reasoning` in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
       },
       contextWindow === undefined ? {} : { contextWindow },
-      !authoredSizing && implicitContextWindowSource === "synthetic"
+      !authoredWindow && implicitContextWindowSource === "synthetic"
         ? { contextWindowSource: implicitContextWindowSource }
         : {},
       contextTokens === undefined ? {} : { contextTokens },

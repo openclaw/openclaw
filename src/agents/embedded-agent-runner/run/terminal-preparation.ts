@@ -20,6 +20,7 @@ import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
 import type { UsageAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import type { EmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import type { OuterContextTokenMeta } from "./context-token-meta.js";
 import {
   buildUsageAgentMetaFields,
   normalizeAssistantUsageForContext,
@@ -57,7 +58,7 @@ export function prepareEmbeddedRunTerminal(input: {
   authProfileId?: string;
   sessionIdUsed: string;
   sessionFileUsed?: string;
-  outerContextTokenMeta: { contextTokens?: number; contextTokensSource?: "synthetic" };
+  outerContextTokenMeta: OuterContextTokenMeta;
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage?: NormalizedUsage;
   contextRecoveryState: EmbeddedRunContextRecoveryState;
@@ -107,6 +108,11 @@ export function prepareEmbeddedRunTerminal(input: {
   // into the accumulator, so read it directly instead of re-adding the attempt.
   const runAssistantTurns = input.usageAccumulator.assistantTurns;
   const contextTokens = attempt.contextTokens ?? input.outerContextTokenMeta.contextTokens;
+  // The prepared window belongs to the selected model, even if a response
+  // reports a different route. A cold reader must not adopt it for that route.
+  const preparedContextMatchesReportedModel =
+    reportedModelRef.provider.trim().toLowerCase() === input.provider.trim().toLowerCase() &&
+    reportedModelRef.model.trim().toLowerCase() === input.model.trim().toLowerCase();
   const agentMeta: EmbeddedAgentMeta = {
     sessionId: input.sessionIdUsed,
     sessionFile: input.sessionFileUsed,
@@ -118,7 +124,9 @@ export function prepareEmbeddedRunTerminal(input: {
           contextTokensSource:
             attempt.contextTokens !== undefined
               ? (attempt.contextTokensSource ?? "resolved")
-              : (input.outerContextTokenMeta.contextTokensSource ?? "resolved"),
+              : preparedContextMatchesReportedModel
+                ? (input.outerContextTokenMeta.contextTokensSource ?? "resolved")
+                : "resolved",
         }
       : {}),
     agentHarnessId: attempt.agentHarnessId,

@@ -108,7 +108,7 @@ export function overlayCatalogMetadata(
     ...(applyRoute && overlay.api !== undefined ? { api: overlay.api } : {}),
     ...(applyRoute && overlay.baseUrl !== undefined ? { baseUrl: overlay.baseUrl } : {}),
     ...(overlay.contextWindow !== undefined ? { contextWindow: overlay.contextWindow } : {}),
-    ...(overlay.contextWindow !== undefined || overlay.contextTokens !== undefined
+    ...(overlay.contextWindow !== undefined
       ? { contextWindowSource: overlay.contextWindowSource }
       : {}),
     ...(overlay.contextTokens !== undefined ? { contextTokens: overlay.contextTokens } : {}),

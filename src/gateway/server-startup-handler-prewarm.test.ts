@@ -108,11 +108,8 @@ vi.mock("../plugins/public-surface-loader.js", () => ({
   loadBundledPluginPublicArtifactModuleSync: mocks.loadBundledPluginPublicArtifactModuleSync,
 }));
 
-const {
-  scheduleGatewayHandlerPrewarm,
-  scheduleGatewayPrewarm,
-  scheduleContextCachePublicationRefresh,
-} = await import("./server-startup-handler-prewarm.js");
+const { scheduleGatewayHandlerPrewarm, scheduleGatewayPrewarm } =
+  await import("./server-startup-handler-prewarm.js");
 const workspaces = {
   main: path.resolve("prewarm-main"),
   research: path.resolve("prewarm-research"),
@@ -545,11 +542,13 @@ it("joins publication refresh failure warning and admission release when stopped
   mocks.prewarmContextWindowCacheAfterReady.mockRejectedValueOnce(
     new Error("discovery fixture failure"),
   );
+  const ready = createDeferred();
   let stopping: Promise<void> | undefined;
   let activeAfterStop: number | undefined;
-  const sidecar = scheduleContextCachePublicationRefresh({
+  const sidecar = scheduleGatewayHandlerPrewarm({
     scheduler: createTestGatewayScheduler("fake-timers"),
     getConfig: () => ({}),
+    waitForPostReadyWork: () => ready.promise,
     log: {
       warn: () => {
         notifyPreparedModelRuntimePublication({
@@ -562,16 +561,20 @@ it("joins publication refresh failure warning and admission release when stopped
       },
     },
   });
-  notifyPreparedModelRuntimePublication({ phase: "catalog-published", modelFactsChanged: true });
-  await vi.runAllTimersAsync();
-  await vi.dynamicImportSettled();
-  await vi.runAllTimersAsync();
-  expect(stopping).toBeDefined();
-  await stopping;
-  expect(activeAfterStop).toBe(0);
-  expect(mocks.prewarmContextWindowCacheAfterReady).toHaveBeenCalledTimes(1);
-  const admission = tryBeginGatewayIndependentRootWorkAdmission("publication-after-stop");
-  expect(admission).not.toBeNull();
-  admission?.release();
-  await sidecar.stop();
+  try {
+    notifyPreparedModelRuntimePublication({ phase: "catalog-published", modelFactsChanged: true });
+    await vi.runAllTimersAsync();
+    await vi.dynamicImportSettled();
+    await vi.runAllTimersAsync();
+    expect(stopping).toBeDefined();
+    await stopping;
+    expect(activeAfterStop).toBe(0);
+    expect(mocks.prewarmContextWindowCacheAfterReady).toHaveBeenCalledTimes(1);
+    const admission = tryBeginGatewayIndependentRootWorkAdmission("publication-after-stop");
+    expect(admission).not.toBeNull();
+    admission?.release();
+  } finally {
+    await sidecar.stop();
+    ready.resolve();
+  }
 });

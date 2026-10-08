@@ -1,6 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ModelCatalogSnapshot, ModelCatalogEntry } from "./model-catalog.types.js";
 import { modelTransportRoutesMatch } from "./model-compat-catalog.js";
+import { resolveModelContextWindowProfile } from "./model-context-window.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 /**
@@ -29,6 +30,7 @@ export type SessionContextCapacityResolver = (
     profileId?: string;
     route?: Pick<ModelCatalogEntry, "api" | "baseUrl">;
     nativeRuntime?: string;
+    contextWindow?: string;
   },
 ) => SessionContextCapacity | undefined;
 
@@ -91,9 +93,18 @@ export function createSessionContextCapacityResolver(
         continue;
       }
       const tokens = positive(entry.contextTokens);
-      const window = positive(entry.contextWindow);
+      const profile = resolveModelContextWindowProfile({
+        catalogEntry: entry,
+        selected: selection?.contextWindow,
+      });
+      const window = positive(profile.contextTokens);
       // A real prompt limit is reported even beside an estimated native window.
-      const value = entry.contextWindowSource === "synthetic" ? tokens : (tokens ?? window);
+      const value =
+        entry.contextWindowSource === "synthetic" && profile.contextWindow === undefined
+          ? tokens
+          : tokens !== undefined && window !== undefined
+            ? Math.min(tokens, window)
+            : (tokens ?? window);
       if (value !== undefined) {
         reported = reported === undefined ? value : Math.min(reported, value);
       } else if (window !== undefined) {

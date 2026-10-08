@@ -44,13 +44,14 @@ import {
   type ProviderAuthMode,
 } from "./model-registry-schema.js";
 import type { ProviderConfigInput } from "./provider-config.js";
-export type { ProviderConfigInput } from "./provider-config.js";
 import { BUILT_IN_PROVIDER_DISPLAY_NAMES } from "./provider-display-names.js";
 import {
   resolveConfigValueOrThrow,
   resolveConfigValueUncached,
   resolveHeadersOrThrow,
 } from "./resolve-config-value.js";
+
+export type { ProviderConfigInput } from "./provider-config.js";
 
 const log = createSubsystemLogger("agents/model-registry");
 

@@ -4,6 +4,7 @@ import {
   resolveTrustedSessionContextTokens,
 } from "../config/sessions/context-token-provenance.js";
 import { resolveOuterContextTokenMeta } from "./embedded-agent-runner/run/context-token-meta.js";
+import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createSessionContextCapacityResolver } from "./session-context-capacity.js";
 
 const selection = {
@@ -32,7 +33,7 @@ const syntheticRow = {
   contextTokens: undefined,
   contextWindowSource: "synthetic" as const,
 };
-function owner(entries: object[], current = true) {
+function owner(entries: ModelCatalogEntry[], current = true) {
   let isCurrent = current;
   return {
     retire: () => {
@@ -41,7 +42,7 @@ function owner(entries: object[], current = true) {
     snapshot: {
       isCurrent: () => isCurrent,
       modelCatalog: { entries: [] },
-      readFullModelCatalog: () => ({ entries: entries as never[] }),
+      readFullModelCatalog: () => ({ entries }),
     },
   };
 }
@@ -56,18 +57,18 @@ describe("synthetic producer provenance", () => {
     ).toEqual({ contextTokens: 128_000, contextTokensSource: "synthetic" });
   });
   it.each([
-    ["reported window", { ...syntheticRow, contextWindowSource: undefined }, {}],
-    ["reported prompt limit", { ...syntheticRow, contextTokens: 128_000 }, {}],
-    ["authored cap", syntheticRow, { authoredContextTokenCap: 128_000 }],
-    ["modelsConfig sizing", syntheticRow, { source: "modelsConfig" }],
-    ["narrower caller budget", syntheticRow, { contextTokenBudget: 64_000 }],
-  ])("does not stamp a %s", (_name, model, patch: Record<string, unknown>) => {
+    ["reported window", { ...syntheticRow, contextWindowSource: undefined }, {}, "resolved-v1"],
+    ["reported prompt limit", { ...syntheticRow, contextTokens: 128_000 }, {}, "resolved-v1"],
+    ["authored cap", syntheticRow, { authoredContextTokenCap: 128_000 }, undefined],
+    ["modelsConfig sizing", syntheticRow, { source: "modelsConfig" }, undefined],
+    ["narrower caller budget", syntheticRow, { contextTokenBudget: 64_000 }, undefined],
+  ])("does not stamp a %s as synthetic", (_name, model, patch: Record<string, unknown>, source) => {
     const meta = resolveOuterContextTokenMeta(model, {
       contextTokenBudget: 128_000,
       contextWindowInfo: { tokens: 128_000, source: (patch.source as string) ?? "model" },
       ...patch,
     });
-    expect(meta.contextTokensSource).toBeUndefined();
+    expect(meta.contextTokensSource).toBe(source);
   });
 });
 
@@ -201,13 +202,19 @@ describe("existing-session recovery through the admitted owner", () => {
     ).toMatchObject({ state: "ready", contextTokens: 872_000 });
   });
 
-  it("a real prompt limit beside an estimated native window is reported capacity", () => {
-    expect(
-      createSessionContextCapacityResolver(
-        owner([{ ...syntheticRow, contextWindow: 777_000, contextTokens: 777_000 }]).snapshot,
-      )("github-copilot", "claude-opus-5.5"),
-    ).toEqual({ state: "ready", contextTokens: 777_000, synthetic: false });
-  });
+  it.each([
+    ["synthetic" as const, 777_000],
+    [undefined, 128_000],
+  ])(
+    "projects reported prompt capacity beside a %s native window",
+    (contextWindowSource, tokens) => {
+      expect(
+        createSessionContextCapacityResolver(
+          owner([{ ...syntheticRow, contextWindowSource, contextTokens: 777_000 }]).snapshot,
+        )("github-copilot", "claude-opus-5.5"),
+      ).toEqual({ state: "ready", contextTokens: tokens, synthetic: false });
+    },
+  );
 
   it("without an owner binding the legacy projection is unchanged", () => {
     expect(

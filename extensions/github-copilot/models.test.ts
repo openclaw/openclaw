@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { createProviderUsageFetch, makeResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createMockCtx, requireResolvedModel } from "./models.test-support.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { CopilotRuntimeAuthError } from "./runtime-auth-error.js";
 import { resolveCopilotRuntimeAuth } from "./runtime-auth.js";
@@ -763,6 +764,101 @@ describe("fetchCopilotModelCatalog", () => {
       supportedReasoningEfforts: ["low", "medium", "high", "max"],
     });
   });
+
+  it.each([
+    { endpoints: undefined, vendor: "OpenAI", id: "endpoint-fixture", api: "openai-responses" },
+    { endpoints: null, vendor: "OpenAI", id: "endpoint-fixture", api: "openai-responses" },
+    { endpoints: [], vendor: "OpenAI", id: "endpoint-fixture", api: "openai-responses" },
+    {
+      endpoints: { unknown: true },
+      vendor: "OpenAI",
+      id: "endpoint-fixture",
+      api: "openai-responses",
+    },
+    {
+      endpoints: ["/future-api"],
+      vendor: "OpenAI",
+      id: "endpoint-fixture",
+      api: "openai-responses",
+    },
+    {
+      endpoints: [42, "/v1/chat/completions"],
+      vendor: "OpenAI",
+      id: "endpoint-fixture",
+      api: "openai-completions",
+    },
+    {
+      endpoints: ["/chat/completions", "/responses"],
+      vendor: "OpenAI",
+      id: "endpoint-fixture",
+      api: "openai-responses",
+    },
+    {
+      endpoints: ["/responses", "/v1/messages"],
+      vendor: "Anthropic",
+      id: "endpoint-fixture",
+      api: "anthropic-messages",
+    },
+    {
+      endpoints: ["/v1/messages"],
+      vendor: "OpenAI",
+      id: "endpoint-fixture",
+      api: "anthropic-messages",
+    },
+    {
+      endpoints: ["/v1/responses"],
+      vendor: "OpenAI",
+      id: "endpoint-fixture",
+      api: "openai-responses",
+    },
+    {
+      endpoints: ["/responses"],
+      vendor: "Google",
+      id: "gemini-endpoint-fixture",
+      api: "openai-responses",
+    },
+    {
+      endpoints: ["/chat/completions"],
+      vendor: "Anthropic",
+      id: "claude-sonnet-4.5",
+      api: "openai-completions",
+    },
+  ])(
+    "uses advertised transport $api for $id ($endpoints)",
+    async ({ endpoints, vendor, id, api }) => {
+      const out = await fetchCatalogWithFetch({
+        copilotApiToken: "tid=test",
+        baseUrl: "https://api.githubcopilot.com",
+        fetchImpl: vi.fn().mockResolvedValue(
+          Response.json({
+            data: [
+              {
+                id,
+                vendor,
+                supported_endpoints: endpoints,
+                capabilities: {
+                  type: "chat",
+                  limits: { max_context_window_tokens: 1_048_576, max_prompt_tokens: 917_504 },
+                },
+              },
+            ],
+          }),
+        ),
+      });
+      const model = expectDefined(out[0], "discovered endpoint fixture");
+      expect(model).toMatchObject({ api, contextWindow: 1_048_576, contextTokens: 917_504 });
+      if (api === "openai-completions") {
+        expect(model.compat).toEqual({
+          supportsStore: false,
+          supportsDeveloperRole: false,
+          supportsUsageInStreaming: false,
+          maxTokensField: "max_tokens",
+        });
+      } else {
+        expect(model.compat?.maxTokensField).toBeUndefined();
+      }
+    },
+  );
 
   it("strips trailing slash from baseUrl when building the /models URL", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(makeResponse(200, { data: [] }));

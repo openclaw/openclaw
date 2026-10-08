@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveContextTokens } from "../auto-reply/reply/model-selection-context.js";
+import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { copyProviderCatalogResultEntries } from "../plugins/provider-catalog-result.js";
@@ -561,26 +562,99 @@ describe("synthetic configured context publication", () => {
       expect(await budget([reported], { ...fallback, contextWindow: 200_000 })).toBe(128_000);
     });
 
-    it("(c) keeps authored sizing and clears synthetic provenance", async () => {
-      for (const limits of [{ contextTokens: 64_000 }, { contextWindow: 64_000 }]) {
+    it.each([
+      { name: "prompt cap", limits: { contextTokens: 64_000 }, synthetic: true },
+      { name: "native window", limits: { contextWindow: 64_000 }, synthetic: false },
+    ])(
+      "(c) preserves authored $name sizing and native-window provenance",
+      async ({ limits, synthetic }) => {
+        const authored: ModelDefinitionConfig = {
+          id: "new-model",
+          name: "New model",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          maxTokens: 8_192,
+          ...limits,
+        };
         const merged = mergeProviderModels(
           { models: [missingNative] },
-          { models: [{ id: "new-model", name: "New model", ...limits } as never] },
+          { models: [authored] },
           { providerId: "fixture" },
         );
-        expect(merged.models?.[0]).not.toHaveProperty("contextWindowSource");
+        if (synthetic) {
+          expect(merged.models?.[0]).toHaveProperty("contextWindowSource", "synthetic");
+        } else {
+          expect(merged.models?.[0]).not.toHaveProperty("contextWindowSource");
+        }
         const config: OpenClawConfig = {
           models: {
             providers: {
-              fixture: {
-                baseUrl: discovered.baseUrl,
-                models: [{ id: "new-model", ...limits } as never],
-              },
+              fixture: { baseUrl: discovered.baseUrl, models: [authored] },
             },
           },
         };
         expect(await budget([missingNative], fallback, config)).toBe(64_000);
-      }
+      },
+    );
+
+    it("(c) applies a prompt-only authored cap through the prepared catalog without trusting the native estimate", async () => {
+      const authored: ModelDefinitionConfig = {
+        id: "new-model",
+        name: "New model",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        maxTokens: 8_192,
+        contextTokens: 200_000,
+      };
+      const config: OpenClawConfig = {
+        models: {
+          providers: {
+            fixture: { api: "openai-responses", baseUrl: discovered.baseUrl, models: [authored] },
+          },
+        },
+      };
+      const metadataSnapshot = createPluginMetadataSnapshotFixture();
+      const registry = ModelRegistry.create(AuthStorage.inMemory({}), "captured:models.json", {
+        config,
+        includePluginCatalogs: false,
+        pluginMetadataSnapshot: metadataSnapshot,
+        modelsJsonContents: JSON.stringify({
+          providers: {
+            fixture: {
+              api: "openai-responses",
+              baseUrl: discovered.baseUrl,
+              models: [
+                {
+                  ...missingNative,
+                  contextWindow: 128_000,
+                  maxTokens: 8_192,
+                  reasoning: false,
+                  input: ["text"],
+                },
+              ],
+            },
+          },
+        }),
+      });
+      const modelCatalog = await buildPreparedModelCatalogSnapshot({
+        config,
+        agentDir: "captured:agent",
+        authCredentials: {},
+        modelRegistry: registry,
+        metadataSnapshot,
+        includeProviderPluginAugmentation: false,
+      });
+      const capacity = createSessionContextCapacityResolver({
+        isCurrent: () => true,
+        modelCatalog,
+      });
+      expect(capacity("fixture", "new-model")).toEqual({
+        state: "ready",
+        contextTokens: 200_000,
+        synthetic: false,
+      });
     });
 
     it("(d) failed discovery, another account, API, endpoint or provider supply no authority", async () => {

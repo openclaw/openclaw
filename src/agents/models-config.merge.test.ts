@@ -48,6 +48,18 @@ describe("models-config merge", () => {
     expect(merged.models).toEqual([{ ...authored, input: ["text"] }]);
   });
 
+  it("preserves estimated native-window provenance beside an authored prompt cap", () => {
+    const merged = mergeProviderModels<ProviderModelCatalog>(
+      { models: [{ id: "model", contextWindow: 128_000, contextWindowSource: "synthetic" }] },
+      { models: [{ id: "model", contextTokens: 200_000 }] },
+    );
+    expect(merged.models?.[0]).toMatchObject({
+      contextWindow: 128_000,
+      contextWindowSource: "synthetic",
+      contextTokens: 200_000,
+    });
+  });
+
   it.each(["https://catalog.example/v1", "http://127.0.0.1:9000/v1"])(
     "uses compat from the owner of the configured route %s",
     (baseUrl) => {

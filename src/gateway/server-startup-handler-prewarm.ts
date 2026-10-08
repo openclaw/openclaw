@@ -119,7 +119,7 @@ function gatewayPrewarmItems(getConfig: () => OpenClawConfig): GatewayHandlerPre
  * admission; a publisher's temporary startup/auth scope never owns this projection.
  * Bursts coalesce into one task whose pass reads the newest accepted publication.
  */
-export function scheduleContextCachePublicationRefresh(params: {
+function scheduleContextCachePublicationRefresh(params: {
   scheduler: GatewayScheduler;
   getConfig: () => OpenClawConfig;
   log: { warn: (msg: string) => void };

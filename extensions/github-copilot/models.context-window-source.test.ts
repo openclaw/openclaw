@@ -4,7 +4,8 @@ import { fetchCopilotModelCatalog } from "./models.js";
 
 const fixture = vi.hoisted(() => ({ limits: {} as Record<string, unknown> }));
 // Mapping owns these tests; transport cleanup and SSRF have coverage in models.test.ts.
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>()),
   ssrfPolicyFromHttpBaseUrlAllowedOrigin: () => ({}),
   fetchWithSsrFGuard: async () => ({
     response: Response.json({

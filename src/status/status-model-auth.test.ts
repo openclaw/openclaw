@@ -234,6 +234,7 @@ describe("status model authentication and endpoint", () => {
       baseUrl: "https://api.openai.com/v1",
       contextWindow: 1_000_000,
       contextTokens: 872_000,
+      contextWindows: [{ id: "200k", label: "200K", contextWindow: 200_000 }],
     };
     const catalog: ModelCatalogSnapshot = {
       entries: [route],
@@ -241,7 +242,7 @@ describe("status model authentication and endpoint", () => {
       providerOutcomes: [{ provider: "openai", profileId: "openai:first", status: "ready" }],
     };
     for (const [profileId, expected] of [
-      ["openai:first", { state: "ready", contextTokens: 872_000, synthetic: false }],
+      ["openai:first", { state: "ready", contextTokens: 200_000, synthetic: false }],
       ["openai:second", { state: "unavailable" }],
     ] as const) {
       const resolve = statusAuth(undefined, {
@@ -253,6 +254,7 @@ describe("status model authentication and endpoint", () => {
           authProfileOverride: profileId,
           authProfileOverrideSource: "user",
           modelProvider: "openai",
+          contextWindow: "200k",
         },
       });
       expect((await resolve({ ...selection, runtimeId: "openclaw" })).ownerCapacity).toEqual(

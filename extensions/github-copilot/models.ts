@@ -80,6 +80,7 @@ type CopilotApiModelEntry = {
   name?: string;
   object?: string;
   vendor?: string;
+  supported_endpoints?: unknown;
   preview?: boolean;
   model_picker_enabled?: boolean;
   model_picker_category?: string;
@@ -183,14 +184,37 @@ type CopilotCatalogModel = Omit<ModelDefinitionConfig, "input"> & {
   input: ProviderRuntimeModel["input"];
 };
 
-function resolveCopilotApiForVendor(
-  vendor: string | undefined,
-  modelId: string,
-): "anthropic-messages" | "openai-completions" | "openai-responses" {
-  if (vendor && vendor.toLowerCase() === "anthropic") {
-    return "anthropic-messages";
-  }
-  return resolveCopilotTransportApi(modelId);
+const COPILOT_TRANSPORT_ENDPOINTS = {
+  "anthropic-messages": "/messages",
+  "openai-completions": "/chat/completions",
+  "openai-responses": "/responses",
+} as const;
+
+function resolveCopilotApi(
+  entry: CopilotApiModelEntry,
+): ReturnType<typeof resolveCopilotTransportApi> {
+  const preferred =
+    entry.vendor?.toLowerCase() === "anthropic"
+      ? "anthropic-messages"
+      : resolveCopilotTransportApi(entry.id ?? "");
+  const endpoints = new Set(
+    Array.isArray(entry.supported_endpoints)
+      ? entry.supported_endpoints
+          .filter((endpoint): endpoint is string => typeof endpoint === "string")
+          .map((endpoint) =>
+            endpoint
+              .trim()
+              .replace(/^\/v1(?=\/)/, "")
+              .replace(/\/+$/, ""),
+          )
+      : [],
+  );
+  // Account discovery owns supported transports; naming is only a preference or missing-data fallback.
+  return (
+    ([preferred, "openai-responses", "openai-completions", "anthropic-messages"] as const).find(
+      (api) => endpoints.has(COPILOT_TRANSPORT_ENDPOINTS[api]),
+    ) ?? preferred
+  );
 }
 
 function mergeCopilotCompat(
@@ -246,8 +270,8 @@ function mapCopilotApiModelToDefinition(
   // must not clamp a real, larger prompt limit. Below 128k the historic estimate stands.
   const contextWindow = nativeContextWindow ?? Math.max(contextTokens ?? 0, DEFAULT_CONTEXT_WINDOW);
   const maxTokens = asPositiveSafeInteger(limits?.max_output_tokens) ?? DEFAULT_MAX_TOKENS;
-  const compat = mergeCopilotCompat(resolveCopilotModelCompat(id), supports?.reasoning_effort);
-  const api = resolveCopilotApiForVendor(entry.vendor, id);
+  const api = resolveCopilotApi(entry);
+  const compat = mergeCopilotCompat(resolveCopilotModelCompat(id, api), supports?.reasoning_effort);
   const thinkingLevelMap = resolveCopilotThinkingLevelMap(id, compat, api);
 
   const definition: CopilotCatalogModel = {
