@@ -166,14 +166,13 @@ function rememberItemStatus(
   state: SessionActivityNoteState,
   itemId: string,
   status: string,
-  limit: number,
 ): boolean {
   if (state.itemStatuses.get(itemId) === status) {
     return false;
   }
   state.itemStatuses.delete(itemId);
   state.itemStatuses.set(itemId, status);
-  pruneMapToMaxSize(state.itemStatuses, limit);
+  pruneMapToMaxSize(state.itemStatuses, MAX_ITEM_STATUSES);
   return true;
 }
 
@@ -264,7 +263,7 @@ export function noteSessionActivityEvent(
       if (!["running", "completed", "failed", "blocked"].includes(status)) {
         return;
       }
-      if (!rememberItemStatus(state, itemId, status, MAX_ITEM_STATUSES)) {
+      if (!rememberItemStatus(state, itemId, status)) {
         return;
       }
       addActivityNote(state, `${title}: ${status}`, noteMaxChars);
@@ -281,7 +280,7 @@ export function noteSessionActivityEvent(
       };
       for (const [index, step] of steps.entries()) {
         const itemId = `plan:${index}:${step.step}`;
-        if (!rememberItemStatus(state, itemId, step.status, MAX_ITEM_STATUSES)) {
+        if (!rememberItemStatus(state, itemId, step.status)) {
           continue;
         }
         const status = step.status === "in_progress" ? "running" : step.status;

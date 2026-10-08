@@ -192,9 +192,7 @@ export class CodexNativeSubagentCloseOwner {
       }
       this.callbacks.markTerminalRevision(childState.childThreadId);
     }
-    if (childState.pendingCompletion) {
-      childState.pendingCompletion = undefined;
-    }
+    childState.pendingCompletion = undefined;
     childState.subscriptionClosed = true;
     this.callbacks.unregisterChild(childState);
     releaseSubscription?.();

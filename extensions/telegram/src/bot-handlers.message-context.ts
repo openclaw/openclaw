@@ -87,14 +87,8 @@ export function promptContextBoundaryOptions(
 export function latestPromptContextMinTimestampMs(
   ...timestamps: Array<number | undefined>
 ): number | undefined {
-  let latest: number | undefined;
-  for (const timestampMs of timestamps) {
-    const normalized = asFiniteNumber(timestampMs);
-    if (normalized !== undefined) {
-      latest = latest === undefined ? normalized : Math.max(latest, normalized);
-    }
-  }
-  return latest;
+  const finite = timestamps.map(asFiniteNumber).filter((timestamp) => timestamp !== undefined);
+  return finite.length > 0 ? Math.max(...finite) : undefined;
 }
 
 export const latestPromptContextAmbientWatermark = (
@@ -161,29 +155,22 @@ export function createTelegramMessageSessionRuntime({
   const loadSessionEntry = telegramDeps.getSessionEntry ?? getSessionEntry;
   const resolveTelegramSessionState = async (params: ResolveTelegramSessionStateParams) => {
     const dmThreadId = params.threadSpec.scope === "dm" ? params.threadSpec.id : undefined;
-    const topicThreadId = params.threadSpec.id;
     const { topicConfig } = resolveTelegramGroupConfig(
       params.chatId,
-      topicThreadId,
+      params.threadSpec.id,
       params.runtimeCfg,
     );
     const { route, bindingMode } = await resolveTelegramConversationRoute({
+      ...params,
       cfg: params.runtimeCfg,
       accountId,
-      chatId: params.chatId,
-      isGroup: params.isGroup,
-      threadSpec: params.threadSpec,
-      senderId: params.senderId,
       topicAgentId: topicConfig?.agentId,
     });
     const sessionKey = resolveTelegramTargetSession({
+      ...params,
       cfg: params.runtimeCfg,
       route,
-      chatId: params.chatId,
-      isGroup: params.isGroup,
-      senderId: params.senderId,
       dmThreadId,
-      botHasTopicsEnabled: params.botHasTopicsEnabled,
     });
     const storePath = telegramDeps.resolveStorePath(params.runtimeCfg.session?.store, {
       agentId: route.agentId,
@@ -374,7 +361,7 @@ export function createTelegramMessageContextRuntime({
   const toPromptContextMessage = (
     node: TelegramCachedMessageNode,
     ctx: TelegramContext,
-    flags?: { replyTarget?: boolean },
+    isReplyTarget: boolean | undefined,
     media?: TelegramMediaRef,
   ) => ({
     message_id: node.messageId,
@@ -388,7 +375,7 @@ export function createTelegramMessageContextRuntime({
     media_path: media?.path,
     media_ref: media?.path ? undefined : node.mediaRef,
     reply_to_id: node.replyToId,
-    is_reply_target: flags?.replyTarget === true ? true : undefined,
+    is_reply_target: isReplyTarget === true ? true : undefined,
   });
 
   const buildPromptContextForMessage = async (
@@ -497,7 +484,7 @@ export function createTelegramMessageContextRuntime({
         message: toPromptContextMessage(
           entry.node,
           ctx,
-          { replyTarget: entry.isReplyTarget },
+          entry.isReplyTarget,
           entry.node.messageId ? mediaByMessageId?.get(entry.node.messageId) : undefined,
         ),
       }));

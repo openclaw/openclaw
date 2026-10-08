@@ -28,8 +28,14 @@ const LEGACY_DELIVERY_HINT_FIELDS = [
 
 export function normalizePayloadKind(payload: UnknownRecord) {
   const raw = normalizeOptionalLowercaseString(payload.kind) ?? "";
-  const kind =
-    raw === "agentturn" ? "agentTurn" : raw === "systemevent" ? "systemEvent" : undefined;
+  let kind = raw === "agentturn" ? "agentTurn" : raw === "systemevent" ? "systemEvent" : undefined;
+  if (!payload.kind) {
+    kind = normalizeOptionalString(payload.message)
+      ? "agentTurn"
+      : normalizeOptionalString(payload.text)
+        ? "systemEvent"
+        : undefined;
+  }
   if (!kind || payload.kind === kind) {
     return false;
   }
@@ -38,18 +44,13 @@ export function normalizePayloadKind(payload: UnknownRecord) {
 }
 
 export function inferPayloadIfMissing(raw: UnknownRecord) {
-  const message = normalizeOptionalString(raw.message) ?? "";
-  const text = normalizeOptionalString(raw.text) ?? "";
-  const command = normalizeOptionalString(raw.command) ?? "";
-  if (message) {
-    raw.payload = { kind: "agentTurn", message };
-    return true;
+  const message = normalizeOptionalString(raw.message);
+  const text = normalizeOptionalString(raw.text) ?? normalizeOptionalString(raw.command);
+  if (!message && !text) {
+    return false;
   }
-  if (text || command) {
-    raw.payload = { kind: "systemEvent", text: text || command };
-    return true;
-  }
-  return false;
+  raw.payload = message ? { kind: "agentTurn", message } : { kind: "systemEvent", text };
+  return true;
 }
 
 export function copyTopLevelAgentTurnFields(raw: UnknownRecord, payload: UnknownRecord) {

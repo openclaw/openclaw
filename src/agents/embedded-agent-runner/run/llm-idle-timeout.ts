@@ -82,9 +82,6 @@ function isExplicitLocalHostname(hostname: string): boolean {
 }
 
 function isBareProviderHostname(hostname: string): boolean {
-  if (hostname.includes(".") || hostname.includes(":")) {
-    return false;
-  }
   return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(hostname);
 }
 
@@ -107,13 +104,12 @@ function findConfiguredProviderConfig(
     return undefined;
   }
   const providers = cfg?.models?.providers;
-  const exact = providers?.[normalizedProvider];
-  if (exact) {
-    return exact;
-  }
-  return Object.entries(providers ?? {}).find(
-    ([key]) => key.trim().toLowerCase() === normalizedProvider,
-  )?.[1];
+  return (
+    providers?.[normalizedProvider] ||
+    Object.entries(providers ?? {}).find(
+      ([key]) => key.trim().toLowerCase() === normalizedProvider,
+    )?.[1]
+  );
 }
 
 function hasLocalProviderAuthMarker(apiKey: unknown): boolean {
@@ -253,12 +249,7 @@ export function streamWithIdleTimeout(
     const trackCleanup = captureAsyncWorkTracker();
     const streamAbortController = new AbortController();
     const sourceSignal = options?.signal;
-    const abortStream = (reason?: unknown) => {
-      if (!streamAbortController.signal.aborted) {
-        streamAbortController.abort(reason);
-      }
-    };
-    const abortFromSourceSignal = () => abortStream(sourceSignal?.reason);
+    const abortFromSourceSignal = () => streamAbortController.abort(sourceSignal?.reason);
     // Mirror caller cancellation into the provider request while still allowing
     // this wrapper to abort independently on idle timeout.
     if (sourceSignal?.aborted) {
@@ -276,7 +267,7 @@ export function streamWithIdleTimeout(
         const budget = progress ? progressTimeoutMs : timeoutMs;
         const reason = progress ? "no model progress" : "no response from model";
         const error = new Error(`LLM idle timeout (${Math.floor(budget / 1000)}s): ${reason}`);
-        abortStream(error);
+        streamAbortController.abort(error);
         onIdleTimeout?.(error);
         reject(error);
       }, delay);

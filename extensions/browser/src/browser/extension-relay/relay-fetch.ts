@@ -30,14 +30,14 @@ type OwnedStream = {
 };
 
 const STREAM_PREFIX = "openclaw-fetch-stream:";
-const REQUEST_COMMANDS = new Set([
-  "Fetch.continueRequest",
-  "Fetch.continueResponse",
-  "Fetch.continueWithAuth",
-  "Fetch.failRequest",
-  "Fetch.fulfillRequest",
-  "Fetch.getResponseBody",
-  "Fetch.takeResponseBodyAsStream",
+const REQUEST_STAGES = new Map<string, readonly PauseKind[]>([
+  ["Fetch.continueRequest", ["request", "response", "buffered"]],
+  ["Fetch.continueResponse", ["response", "buffered"]],
+  ["Fetch.continueWithAuth", ["auth"]],
+  ["Fetch.failRequest", ["request", "response", "buffered", "stream"]],
+  ["Fetch.fulfillRequest", ["request", "response", "buffered", "stream"]],
+  ["Fetch.getResponseBody", ["response", "buffered"]],
+  ["Fetch.takeResponseBodyAsStream", ["response"]],
 ]);
 
 /** One physical Fetch domain; exact logical-session objects own its exclusive lease. */
@@ -90,7 +90,8 @@ export class RelayFetch {
         }
         return this.release(this.state.lease, "disable").then(() => ({}));
       }
-      if (!REQUEST_COMMANDS.has(method)) {
+      const stages = REQUEST_STAGES.get(method);
+      if (!stages) {
         throw new Error(`Unsupported Fetch command: ${method}`);
       }
       const lease = this.ownedLease(owner);
@@ -103,7 +104,17 @@ export class RelayFetch {
       if (!pause) {
         throw new Error("Invalid Fetch requestId for this session");
       }
-      this.validatePause(pause, method, input);
+      if (pause.pending) {
+        throw new Error("Fetch request already has a command in flight");
+      }
+      if (
+        !stages.includes(pause.kind) ||
+        (pause.kind === "stream" &&
+          method === "Fetch.fulfillRequest" &&
+          typeof input?.body !== "string")
+      ) {
+        throw new Error(`Invalid Fetch request stage for ${method}`);
+      }
       return this.runPause(lease, pause, method, input);
     } catch (error) {
       return Promise.reject(error instanceof Error ? error : new Error(String(error)));
@@ -308,25 +319,6 @@ export class RelayFetch {
       () => undefined,
     );
     return operation;
-  }
-
-  private validatePause(pause: Pause, method: string, params?: Record<string, unknown>): void {
-    if (pause.pending) {
-      throw new Error("Fetch request already has a command in flight");
-    }
-    const auth = method === "Fetch.continueWithAuth";
-    const body = method === "Fetch.getResponseBody" || method === "Fetch.takeResponseBodyAsStream";
-    const response = pause.kind === "response" || pause.kind === "buffered";
-    if (
-      auth !== (pause.kind === "auth") ||
-      ((body || method === "Fetch.continueResponse") && !response) ||
-      (method === "Fetch.takeResponseBodyAsStream" && pause.kind !== "response") ||
-      (pause.kind === "stream" &&
-        method !== "Fetch.failRequest" &&
-        !(method === "Fetch.fulfillRequest" && typeof params?.body === "string"))
-    ) {
-      throw new Error(`Invalid Fetch request stage for ${method}`);
-    }
   }
 
   private runPause(

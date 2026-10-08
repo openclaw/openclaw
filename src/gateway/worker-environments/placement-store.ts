@@ -33,9 +33,9 @@ import {
 import type { PlacementStoreRuntime } from "./placement-runtime.js";
 import { createPlacementSessionToolOperationOps } from "./placement-session-tool-operations.js";
 import {
-  observePlacementAuthority,
   preparePlacementAuthorityRead,
   preparePlacementTurnClaimAuthority,
+  prepareSessionPlacementRead,
   type PlacementTurnClaimAuthority,
 } from "./placement-turn-authority.js";
 import { attachWorkerTurnExecutionIdentityStore } from "./placement-turn-claim-events.js";
@@ -158,23 +158,28 @@ export function createWorkerSessionPlacementStore(
       };
     },
 
+    prepareSessionPlacement(sessionIdInput: string) {
+      const sessionId = required(sessionIdInput, "session id");
+      return prepareSessionPlacementRead(path, sessionId, () => store.getAsync(sessionId));
+    },
+
     async prepareMaintenancePlacements() {
-      const observation = observePlacementAuthority(path);
-      try {
-        const result = await executeExistingOpenClawStateRead(
-          { path },
-          { type: "workers.placementPreservation" },
-          { current: true },
-        );
-        observation.assertCurrent();
-        if (!result || !result.ok || result.type !== "workers.placementPreservation") {
-          throw new Error("Worker placement preservation source is unavailable");
-        }
-        return { placements: result.placements, ...observation };
-      } catch (error) {
-        observation.release();
-        throw error;
-      }
+      const { value: placements, ...observation } = await preparePlacementAuthorityRead(
+        path,
+        undefined,
+        async () => {
+          const result = await executeExistingOpenClawStateRead(
+            { path },
+            { type: "workers.placementPreservation" },
+            { current: true },
+          );
+          if (!result || !result.ok || result.type !== "workers.placementPreservation") {
+            throw new Error("Worker placement preservation source is unavailable");
+          }
+          return result.placements;
+        },
+      );
+      return { placements, ...observation };
     },
 
     async readProjection(

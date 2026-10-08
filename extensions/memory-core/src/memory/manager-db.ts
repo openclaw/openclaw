@@ -21,7 +21,7 @@ import {
   memoryDatabaseTableExists as tableExists,
   readMemoryDatabaseRevision,
 } from "./manager-db-kernel.js";
-import { withMemoryIndexPublishGeneration } from "./manager-index-generation-lease.js";
+import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 
 const MEMORY_DATABASE_FILE_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
@@ -80,7 +80,7 @@ export async function resetMemoryDatabase(params: {
   const lock = await waitForMemoryReindexLock(params.dbPath);
   try {
     return await withMemoryWorkspaceLock(params.workspaceDir, async () =>
-      withMemoryIndexPublishGeneration(params.dbPath, async () => {
+      withMemoryIndexGeneration(params.dbPath, "write", async () => {
         if (tableExists(db, "main", MEMORY_INDEX_VECTOR_TABLE) && !hasSqliteVecExtension(db)) {
           const loaded = await loadSqliteVecExtension({
             db,

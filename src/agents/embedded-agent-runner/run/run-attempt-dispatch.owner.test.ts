@@ -346,7 +346,6 @@ it.each(dispatchCases)(
           ? {
               media: [{ path: imagePath, contentType: "image/png", kind: "image" as const }],
               requireWorkspaceOnly: true as const,
-              requireWritableSandbox: true as const,
             }
           : {}),
         timeoutMs: 5_000,

@@ -47,8 +47,6 @@ type GooglePromptCacheSessionManager = {
   appendCustomEntryAsync(customType: string, data?: unknown): Promise<void>;
   getEntries(): CustomEntryLike[];
 };
-type GooglePromptCacheContext = Parameters<StreamFn>[1];
-type GooglePromptCacheOptions = Parameters<StreamFn>[2];
 
 type GooglePromptCacheEntry = {
   timestamp: number;
@@ -207,39 +205,6 @@ function mapManagedGoogleToolChoice(
   }
 }
 
-function buildManagedGooglePromptCacheConfig(
-  context: GooglePromptCacheContext,
-  options: GooglePromptCacheOptions,
-) {
-  const tools = context.tools?.length
-    ? [
-        {
-          functionDeclarations: sortPromptCacheToolsByName(context.tools).map((tool) => ({
-            name: tool.name,
-            description: tool.description,
-            parametersJsonSchema: tool.parameters,
-          })),
-        },
-      ]
-    : undefined;
-  const toolChoice = tools
-    ? mapManagedGoogleToolChoice((options as { toolChoice?: unknown } | undefined)?.toolChoice)
-    : undefined;
-  const toolConfig = toolChoice ? { functionCallingConfig: toolChoice } : undefined;
-  const cacheConfigDigest =
-    tools || toolConfig
-      ? stableStringify({
-          tools,
-          toolConfig,
-        })
-      : undefined;
-  return {
-    cacheConfigDigest,
-    tools,
-    toolConfig,
-  };
-}
-
 function resolveGooglePromptCacheAuthHeaders(params: {
   apiKey: string;
   provider: string;
@@ -269,30 +234,6 @@ function resolveGooglePromptCacheAuthHeaders(params: {
   );
 }
 
-function buildGooglePromptCacheHeaders(params: {
-  apiKey: string;
-  baseUrl: string;
-  headers?: Record<string, string>;
-  model: Model;
-}): Record<string, string> | undefined {
-  const authHeaders = resolveGooglePromptCacheAuthHeaders({
-    apiKey: params.apiKey,
-    provider: params.model.provider,
-  });
-  return (
-    resolveProviderRequestHeaders({
-      provider: params.model.provider,
-      api: params.model.api,
-      baseUrl: params.baseUrl,
-      capability: "llm",
-      transport: "http",
-      defaultHeaders: authHeaders,
-      callerHeaders: params.headers,
-      precedence: "caller-wins",
-    }) ?? mergeTransportHeaders(authHeaders, params.headers)
-  );
-}
-
 async function requestGooglePromptCache(
   params: {
     apiKey: string;
@@ -317,7 +258,21 @@ async function requestGooglePromptCache(
   const url = refreshing
     ? `${params.baseUrl}/${params.cachedContent}?updateMask=ttl`
     : `${params.baseUrl}/cachedContents`;
-  const headers = buildGooglePromptCacheHeaders(params);
+  const authHeaders = resolveGooglePromptCacheAuthHeaders({
+    apiKey: params.apiKey,
+    provider: params.model.provider,
+  });
+  const headers =
+    resolveProviderRequestHeaders({
+      provider: params.model.provider,
+      api: params.model.api,
+      baseUrl: params.baseUrl,
+      capability: "llm",
+      transport: "http",
+      defaultHeaders: authHeaders,
+      callerHeaders: params.headers,
+      precedence: "caller-wins",
+    }) ?? mergeTransportHeaders(authHeaders, params.headers);
   const ttl = params.cacheRetention === "long" ? "3600s" : "300s";
   const body = JSON.stringify(
     refreshing
@@ -486,10 +441,33 @@ export async function prepareGooglePromptCacheStreamFn(
     if (!split || !systemPrompt.trim()) {
       return inner(model, context, options);
     }
-    const cacheConfig = buildManagedGooglePromptCacheConfig(context, options);
+    const tools = context.tools?.length
+      ? [
+          {
+            functionDeclarations: sortPromptCacheToolsByName(context.tools).map((tool) => ({
+              name: tool.name,
+              description: tool.description,
+              parametersJsonSchema: tool.parameters,
+            })),
+          },
+        ]
+      : undefined;
+    const toolChoice = tools
+      ? mapManagedGoogleToolChoice((options as { toolChoice?: unknown } | undefined)?.toolChoice)
+      : undefined;
+    const toolConfig = toolChoice ? { functionCallingConfig: toolChoice } : undefined;
+    const cacheConfigDigest =
+      tools || toolConfig
+        ? stableStringify({
+            tools,
+            toolConfig,
+          })
+        : undefined;
     const cachedContent = await ensureGooglePromptCache({
       apiKey,
-      ...cacheConfig,
+      cacheConfigDigest,
+      tools,
+      toolConfig,
       cacheRetention: resolvedRetention,
       model: params.model,
       provider: params.provider,

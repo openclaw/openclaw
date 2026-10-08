@@ -31,6 +31,7 @@ import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js"
 import { drainAgentRunTerminalWrites } from "../../infra/agent-run-terminal-writes.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
 import {
   bindGatewayContextResolver,
@@ -68,6 +69,7 @@ import type {
   AgentFallbackCycleState,
 } from "./agent-runner-fallback-cycle.types.js";
 import { createAgentTurnPresentation } from "./agent-runner-presentation.js";
+import { buildReplyMediaContextParams } from "./agent-runner-run-params.js";
 import {
   createAgentTurnTimingTracker,
   resolveRunStartupPhase,
@@ -86,6 +88,7 @@ import {
   retainReplyOperationUntilComplete,
 } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
+import { getReplySystemEventContext } from "./system-event-session-key.js";
 
 async function executeAgentTurnInternalLoop(
   inputParams: AppContextTurnParams,
@@ -176,23 +179,9 @@ async function executeAgentTurnInternalLoop(
     replyMediaContext =
       params.replyMediaContext ??
       agentTurnTiming.measureSync("reply_media_context", () =>
-        createReplyMediaContext({
-          cfg: runtimeConfig,
-          agentId: params.followupRun.run.agentId,
-          sessionKey: params.sessionKey,
-          workspaceDir: params.followupRun.run.workspaceDir,
-          mediaNormalizationOwner: params.followupRun.run.mediaNormalizationOwner,
-          messageProvider: params.followupRun.run.messageProvider,
-          accountId:
-            params.followupRun.originatingAccountId ?? params.followupRun.run.agentAccountId,
-          groupId: params.followupRun.run.groupId,
-          groupChannel: params.followupRun.run.groupChannel,
-          groupSpace: params.followupRun.run.groupSpace,
-          requesterSenderId: params.followupRun.run.senderId,
-          requesterSenderName: params.followupRun.run.senderName,
-          requesterSenderUsername: params.followupRun.run.senderUsername,
-          requesterSenderE164: params.followupRun.run.senderE164,
-        }),
+        createReplyMediaContext(
+          buildReplyMediaContextParams(params.followupRun, params.sessionKey, runtimeConfig),
+        ),
       );
     const internalFollowupRun = params.followupRun as InternalFollowupRun;
     const hasQueuedCurrentTurnImages =
@@ -685,7 +674,19 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
   const executionParams =
     params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
   try {
-    const result = await executeAgentTurnOutcome(executionParams, runId);
+    const result = await withExecRequestTurn(
+      {
+        identity: {
+          runId,
+          sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+          sessionId: params.followupRun.run.sessionId,
+          agentId: params.followupRun.run.agentId,
+        },
+        owners: getReplySystemEventContext(params.opts)?.execRequestOwners,
+        abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+      },
+      () => executeAgentTurnOutcome(executionParams, runId),
+    );
     await recordAgentTurnExecutionOutcome(executionParams, result);
     return result;
   } catch (error) {

@@ -91,42 +91,37 @@ export function planOutboundTextMessageUnits(params: {
     };
   };
 
-  const withDeliveryTopology = (units: OutboundTextMessageUnit[]): OutboundTextMessageUnit[] => {
-    const deliveryPartCount = units.length;
-    // These units are planner-owned until return; finalize them in place rather
-    // than cloning every chunk solely to attach the shared fan-out count.
-    for (const unit of units) {
-      unit.overrides.deliveryPartCount = deliveryPartCount;
-    }
-    return units;
-  };
-
-  if (!params.chunker || params.textLimit === undefined) {
-    return withDeliveryTopology([planTextUnit(params.text, 0)]);
-  }
-
-  // In newline mode the channel chunker below owns length splits. Splitting a long
-  // paragraph here would cut fenced code before a fence-aware chunker sees it.
-  const blockChunks =
-    params.chunkMode !== "newline"
-      ? [params.text]
-      : (params.chunkerMode ?? "text") === "markdown"
-        ? chunkMarkdownTextWithMode(params.text, params.textLimit, "newline")
-        : chunkByParagraph(params.text, params.textLimit, { splitLongParagraphs: false });
-  if (!blockChunks.length && params.text) {
-    blockChunks.push(params.text);
-  }
-
   const units: OutboundTextMessageUnit[] = [];
-  for (const blockChunk of blockChunks) {
-    const chunks = params.formatting
-      ? params.chunker(blockChunk, params.textLimit, { formatting: params.formatting })
-      : params.chunker(blockChunk, params.textLimit);
-    for (const chunk of chunks.length === 0 && blockChunk ? [blockChunk] : chunks) {
-      units.push(planTextUnit(chunk, units.length, params.chunkedTextFormatting));
+  if (!params.chunker || params.textLimit === undefined) {
+    units.push(planTextUnit(params.text, 0));
+  } else {
+    // In newline mode the channel chunker below owns length splits. Splitting a long
+    // paragraph here would cut fenced code before a fence-aware chunker sees it.
+    const blockChunks =
+      params.chunkMode !== "newline"
+        ? [params.text]
+        : (params.chunkerMode ?? "text") === "markdown"
+          ? chunkMarkdownTextWithMode(params.text, params.textLimit, "newline")
+          : chunkByParagraph(params.text, params.textLimit, { splitLongParagraphs: false });
+    if (!blockChunks.length && params.text) {
+      blockChunks.push(params.text);
+    }
+
+    for (const blockChunk of blockChunks) {
+      const chunks = params.formatting
+        ? params.chunker(blockChunk, params.textLimit, { formatting: params.formatting })
+        : params.chunker(blockChunk, params.textLimit);
+      for (const chunk of chunks.length === 0 && blockChunk ? [blockChunk] : chunks) {
+        units.push(planTextUnit(chunk, units.length, params.chunkedTextFormatting));
+      }
     }
   }
-  return withDeliveryTopology(units);
+  // Units remain planner-owned until their common fan-out count is finalized.
+  const deliveryPartCount = units.length;
+  for (const unit of units) {
+    unit.overrides.deliveryPartCount = deliveryPartCount;
+  }
+  return units;
 }
 
 /** Plans media sends with a caption only on the leading media unit. */

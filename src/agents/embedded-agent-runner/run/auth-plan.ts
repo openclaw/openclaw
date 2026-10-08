@@ -64,11 +64,9 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     params.getEffectiveModel().api === "openai-chatgpt-responses";
   const resolveExternalCliAuthScope = (store?: AuthProfileStore) =>
     resolveExternalCliAuthOverlayScopeFromSelection({
-      provider: params.provider,
+      ...params,
       cfg: runParams.config,
       agentId: runParams.agentId,
-      modelId: params.modelId,
-      workspaceDir: params.workspaceDir,
       ...(store ? { store } : {}),
       userPinnedAuthProfileId:
         runParams.authProfileIdSource === "user" ? runParams.authProfileId : undefined,
@@ -164,11 +162,8 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     });
   };
   const providerUsesProfileScopedModelMetadata = providerUsesCredentialScopedModelMetadata({
-    provider: params.provider,
-    modelId: params.modelId,
+    ...params,
     config: runParams.config,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
   });
   const providerOwnsDynamicModelRefresh = providerOwnsDynamicModelPreparation({
     provider: params.provider,
@@ -177,13 +172,10 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   });
   const { materialize: materializeAuthPlan, materializeUncached: materializeAuthPlanUncached } =
     createPreparedRuntimeModelMaterializer({
-      provider: params.provider,
-      modelId: params.modelId,
+      ...params,
       config: runParams.config,
-      workspaceDir: params.workspaceDir,
       metadataSnapshot: params.preparedModelRuntime?.metadataSnapshot,
       getModel: params.getRuntimeModel,
-      nativeModelOwned: params.nativeModelOwned,
       requestedProfileId: runParams.authProfileId,
       providerUsesProfileScopedModelMetadata,
       providerOwnsDynamicModelRefresh,

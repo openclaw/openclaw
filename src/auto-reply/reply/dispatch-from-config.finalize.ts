@@ -116,35 +116,33 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       throwIfDispatchOperationAborted();
       // Durable reasoning is a channel-owned lane; generic channels keep the
       // historical suppression unless they explicitly opt in.
-      if (
+      const laneSuppressed =
         (reply.isReasoning === true && !state.reasoningPayloadsEnabled) ||
-        (reply.isCommentary === true && !state.commentaryPayloadsEnabled)
+        (reply.isCommentary === true && !state.commentaryPayloadsEnabled);
+      const sourceSuppressed =
+        !laneSuppressed &&
+        suppressDelivery &&
+        !shouldDeliverDespiteSourceReplySuppression(reply, state);
+      if (sourceSuppressed && hasOutboundReplyContent(reply, { trimText: true })) {
+        logVerbose(
+          [
+            `dispatch-from-config: final reply suppressed by ${state.deliverySuppressionReason || "source delivery policy"}`,
+            `(session=${state.acpDispatchSessionKey ?? sessionKey ?? "unknown"}`,
+            `provider=${ctx.Provider ?? "unknown"}`,
+            `surface=${ctx.Surface ?? "unknown"}`,
+            `chatType=${chatType ?? "unknown"}`,
+            `inboundEventKind=${ctx.InboundEventKind ?? "unknown"}`,
+            `message=${ctx.MessageSidFull ?? ctx.MessageSid ?? "unknown"}`,
+            `${formatSuppressedReplyPayloadForLog(reply)})`,
+          ].join(" "),
+        );
+      }
+      const finalPayloadDedupeKey =
+        laneSuppressed || sourceSuppressed ? undefined : createFinalDispatchPayloadDedupeKey(reply);
+      if (
+        finalPayloadDedupeKey === undefined ||
+        sentFinalPayloadDedupeKeys.has(finalPayloadDedupeKey)
       ) {
-        await suppressPendingFinalDelivery(reply, pendingFinalOptions);
-        await heartbeatReply?.settle?.("cancelled");
-        continue;
-      }
-      if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply, state)) {
-        if (hasOutboundReplyContent(reply, { trimText: true })) {
-          logVerbose(
-            [
-              `dispatch-from-config: final reply suppressed by ${state.deliverySuppressionReason || "source delivery policy"}`,
-              `(session=${state.acpDispatchSessionKey ?? sessionKey ?? "unknown"}`,
-              `provider=${ctx.Provider ?? "unknown"}`,
-              `surface=${ctx.Surface ?? "unknown"}`,
-              `chatType=${chatType ?? "unknown"}`,
-              `inboundEventKind=${ctx.InboundEventKind ?? "unknown"}`,
-              `message=${ctx.MessageSidFull ?? ctx.MessageSid ?? "unknown"}`,
-              `${formatSuppressedReplyPayloadForLog(reply)})`,
-            ].join(" "),
-          );
-        }
-        await suppressPendingFinalDelivery(reply, pendingFinalOptions);
-        await heartbeatReply?.settle?.("cancelled");
-        continue;
-      }
-      const finalPayloadDedupeKey = createFinalDispatchPayloadDedupeKey(reply);
-      if (sentFinalPayloadDedupeKeys.has(finalPayloadDedupeKey)) {
         await suppressPendingFinalDelivery(reply, pendingFinalOptions);
         await heartbeatReply?.settle?.("cancelled");
         continue;

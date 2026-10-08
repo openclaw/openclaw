@@ -8,7 +8,6 @@ import { listRegisteredMemoryEmbeddingProviderAdapters } from "openclaw/plugin-s
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   createSubsystemLogger,
-  resolveAgentDir,
   resolveUserPath,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
@@ -21,7 +20,6 @@ import type {
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import {
-  createEmbeddingProvider,
   resolveEmbeddingProviderAdapterTransport,
   type EmbeddingProvider,
   type EmbeddingProviderResult,
@@ -208,12 +206,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
       return false;
     }
     if (!this.provider) {
-      const nextFailure: MemoryEmbeddingBootstrapDebug = {
-        ...failure,
-        reason: this.providerUnavailableReason ?? failure.reason,
-      };
-      this.embeddingBootstrapFailure = nextFailure;
-      this.cacheProbeResult({ ok: false, error: nextFailure.reason });
+      const nextFailure = this.refreshEmbeddingBootstrapFailure(failure);
       onDebug?.({ backend: "builtin", embeddingBootstrap: nextFailure });
       return true;
     }
@@ -246,6 +239,13 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     activeFailure = this.embeddingBootstrapFailure ?? activeFailure;
     onDebug?.({ backend: "builtin", embeddingBootstrap: activeFailure });
     return true;
+  }
+
+  protected refreshEmbeddingBootstrapFailure(failure: MemoryEmbeddingBootstrapDebug) {
+    const nextFailure = { ...failure, reason: this.providerUnavailableReason ?? failure.reason };
+    this.embeddingBootstrapFailure = nextFailure;
+    this.cacheProbeResult({ ok: false, error: nextFailure.reason });
+    return nextFailure;
   }
 
   protected clearEmbeddingBootstrapFailureAfterRecovery(): void {
@@ -347,11 +347,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     const recovery = (async () => {
       let candidate: EmbeddingProvider | null = null;
       try {
-        const result = await createEmbeddingProvider({
-          createProvider: this.createProvider,
-          config: this.cfg,
-          agentDir: resolveAgentDir(this.cfg, this.agentId),
-          ...(this.acquireLocalService ? { acquireLocalService: this.acquireLocalService } : {}),
+        const result = await this.createConfiguredEmbeddingProvider({
           ...resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
           fallback: "none",
         });
@@ -432,13 +428,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
         if (this.closed) {
           return;
         }
-        const providerResult = await createEmbeddingProvider({
-          createProvider: this.createProvider,
-          config: this.cfg,
-          agentDir: resolveAgentDir(this.cfg, this.agentId),
-          ...(this.acquireLocalService ? { acquireLocalService: this.acquireLocalService } : {}),
-          ...resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
-        });
+        const providerResult = await this.createConfiguredEmbeddingProvider();
         this.applyProviderResult(providerResult);
       })();
     }

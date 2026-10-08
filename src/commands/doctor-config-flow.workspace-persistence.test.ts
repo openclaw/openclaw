@@ -133,7 +133,12 @@ describe("Doctor workspace persistence", () => {
           "123",
           456,
         ];
-        const canonical = ["discord:100000000000000001", "telegram:123", "slack:U123"];
+        // Unavailable channel contracts cannot prove it is safe to drop a target kind.
+        const canonical = [
+          "discord:user:100000000000000001",
+          "telegram:user:123",
+          "slack:user:U123",
+        ];
         const configPath = await writeOpenClawConfig(home, {
           // v2026.7.1-beta.1 (published July 2 UTC) admits this roster and ownerAllowFrom shape.
           meta: { lastTouchedVersion: "2026.7.1-beta.1" },
@@ -150,11 +155,6 @@ describe("Doctor workspace persistence", () => {
           plugins: { enabled: false },
         });
         const ctx = await prepareDoctorContext(configPath);
-        for (const index of [0, 1, 2]) {
-          expect(ctx.configResult.pendingChangePanels?.join("\n")).toContain(
-            `commands.ownerAllowFrom[${index}]`,
-          );
-        }
         await runInitialConfigWriteHealth(ctx);
         expect(ctx.configWriteRefusal).toBeUndefined();
         const saved = await readConfigFileSnapshot();

@@ -15,24 +15,23 @@ export function consumeQueueSummaryDelivery(
   let consumedCount = delivery.sources.length === 0 ? delivery.droppedCount : 0;
   for (const source of delivery.sources) {
     const sourceIndex = queue.summarySources.indexOf(source);
-    if (sourceIndex >= 0) {
-      queue.summarySources.splice(sourceIndex, 1);
-      queue.summaryLines.splice(sourceIndex, 1);
+    const entry =
+      sourceIndex < 0
+        ? queue.summaryElisions.find(
+            (candidate) => candidate.sources.includes(source) || candidate.sourceRefs.has(source),
+          )
+        : undefined;
+    if (sourceIndex >= 0 || entry) {
+      const index = entry
+        ? entry.sources.indexOf(entry.sourceRefs.get(source) ?? source)
+        : sourceIndex;
+      if (index >= 0) {
+        (entry?.sources ?? queue.summarySources).splice(index, 1);
+        (entry?.summaryLines ?? queue.summaryLines).splice(index, 1);
+      }
       consumedCount += 1;
-    } else {
-      const entry = queue.summaryElisions.find(
-        (candidate) => candidate.sources.includes(source) || candidate.sourceRefs.has(source),
-      );
-      if (entry) {
-        const elidedSourceIndex = entry.sources.indexOf(entry.sourceRefs.get(source) ?? source);
-        if (elidedSourceIndex >= 0) {
-          entry.sources.splice(elidedSourceIndex, 1);
-          entry.summaryLines.splice(elidedSourceIndex, 1);
-        }
-        consumedCount += 1;
-        if (entry.sources.length === 0) {
-          queue.summaryElisions.splice(queue.summaryElisions.indexOf(entry), 1);
-        }
+      if (entry && entry.sources.length === 0) {
+        queue.summaryElisions.splice(queue.summaryElisions.indexOf(entry), 1);
       }
     }
     if (completeLifecycles) {

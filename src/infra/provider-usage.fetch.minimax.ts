@@ -193,9 +193,13 @@ const WINDOW_MINUTE_KEYS = [
   "minutes",
 ] as const;
 
-function pickNumber(record: Record<string, unknown>, keys: readonly string[]): number | undefined {
+function pickNumber(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+  parse = parseFiniteNumber,
+): number | undefined {
   for (const key of keys) {
-    const parsed = parseFiniteNumber(record[key]);
+    const parsed = parse(record[key]);
     if (parsed !== undefined) {
       return parsed;
     }
@@ -358,16 +362,6 @@ function pickChatModelRemains(modelRemains: unknown[]): Record<string, unknown> 
   );
 }
 
-function pickEpoch(record: Record<string, unknown>, keys: readonly string[]): number | undefined {
-  for (const key of keys) {
-    const parsed = parseEpoch(record[key]);
-    if (parsed !== undefined) {
-      return parsed;
-    }
-  }
-  return undefined;
-}
-
 function deriveMinimaxModelWindows(record: Record<string, unknown>): {
   recognized: boolean;
   windows: UsageWindow[];
@@ -412,7 +406,7 @@ function deriveMinimaxModelWindows(record: Record<string, unknown>): {
     windows.push({
       label: window.label ?? deriveWindowLabel(record),
       usedPercent,
-      resetAt: pickEpoch(record, window.reset),
+      resetAt: pickNumber(record, window.reset, parseEpoch),
     });
   }
   return { recognized, windows };
@@ -492,7 +486,9 @@ export async function fetchMinimaxUsage(
       return buildUsageErrorSnapshot("minimax", "Unsupported response shape");
     }
 
-    const resetAt = pickEpoch(usageRecord, RESET_KEYS) ?? pickEpoch(payload, RESET_KEYS);
+    const resetAt =
+      pickNumber(usageRecord, RESET_KEYS, parseEpoch) ??
+      pickNumber(payload, RESET_KEYS, parseEpoch);
     windows = [
       {
         label: deriveWindowLabel(usageRecord),

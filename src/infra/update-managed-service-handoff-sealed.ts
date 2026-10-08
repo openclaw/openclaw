@@ -8,7 +8,10 @@ export {
   writeRestartSentinelRowIfRevisionSync,
 } from "./restart-sentinel-store.js";
 export { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
-export { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
+export {
+  createManagedHandoffLeaseStore,
+  prepareManagedHandoffLeaseStore,
+} from "./update-managed-service-handoff-lease.js";
 
 export {
   resolveUpdateRestartNoticeMeta,

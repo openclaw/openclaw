@@ -313,6 +313,15 @@ and cleanup. Without an actor binding it returns `undefined`, preserving the
 existing host route. The synchronous Codex context reader and validators refuse
 actor-bound access; they never reopen a native incognito database.
 
+Plugins that project durable history in their own worker can await
+`readCodexSessionContextProjection(target, project, signal?)` from the same SDK
+subpath. The projection callback receives the captured target, admission, and
+physical source. Pass those facts to the worker's `readCodexSessionContext`
+call and return `{ value, version }`. The retained transcript reader validates
+the result before returning it, keeping final version and admission checks off
+the Gateway thread. The synchronous validation exports remain compatible until
+the next Plugin SDK major.
+
 `branchAsync` can hydrate missing history through the read worker before selecting
 the branch. `resetLeafAsync(): Promise<void>` orders an in-memory navigation reset
 with queued session writes. Neither operation writes a leaf record by itself;

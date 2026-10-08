@@ -4,7 +4,7 @@ import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.
 import {
   bindDeliveryQueueEntry,
   deliveryQueueEntriesQuery,
-  inflateDeliveryQueueRow,
+  inflateDeliveryQueueRows,
   loadDeliveryQueueEntryInDatabase,
   pruneDeliveryQueueTombstoneAges,
   pruneDeliveryQueueTombstones,
@@ -19,6 +19,7 @@ import {
   inferDeliveryQueueFailureRetention,
   parseDeliveryQueueCompletionRetention,
   projectDeliveryQueueTerminalEntry,
+  resolveDeliveryQueueAttemptCount,
   type DeliveryQueueEntryState,
 } from "./delivery-queue-sqlite.types.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
@@ -86,12 +87,8 @@ export function expireStagingAndLoadDeliveryQueueEntriesInDatabase(
     },
   );
   return {
-    entries: snapshot.entryRows
-      .map(inflateDeliveryQueueRow)
-      .filter((entry): entry is DeliveryQueueEntryState => entry != null),
-    stagingEntries: snapshot.stagingRows
-      .map(inflateDeliveryQueueRow)
-      .filter((entry): entry is DeliveryQueueEntryState => entry != null),
+    entries: inflateDeliveryQueueRows(snapshot.entryRows),
+    stagingEntries: inflateDeliveryQueueRows(snapshot.stagingRows),
   };
 }
 
@@ -232,9 +229,7 @@ export function loadDeliveryQueueEntriesInDatabase(
       .orderBy("enqueued_at", "asc")
       .orderBy("id", "asc"),
   ).rows;
-  return rows
-    .map(inflateDeliveryQueueRow)
-    .filter((entry): entry is DeliveryQueueEntryState => entry != null);
+  return inflateDeliveryQueueRows(rows);
 }
 
 export function deleteDeliveryQueueEntryInDatabase(
@@ -350,13 +345,7 @@ export function reserveDeliveryQueueEntryAttemptInDatabase(
   ) {
     throw new Error(`Delivery platform claim was lost: ${params.id}`);
   }
-  const persistedAttemptCount =
-    typeof current.attemptCount === "number" &&
-    Number.isInteger(current.attemptCount) &&
-    current.attemptCount >= 0
-      ? current.attemptCount
-      : 0;
-  const attemptCount = Math.max(persistedAttemptCount, current.retryCount);
+  const attemptCount = resolveDeliveryQueueAttemptCount(current);
   if (attemptCount >= params.maxAttempts) {
     return { status: "exhausted", attemptCount };
   }

@@ -23,10 +23,8 @@ import {
   readPreRegisteredRun,
   resolveChatAbortRequester,
 } from "./chat-abort-authorization.js";
-import {
-  abortChatRunsForSessionKeyWithPartials,
-  descendantAbortError,
-} from "./chat-abort-runtime.js";
+import { descendantAbortError } from "./chat-abort-descendants.js";
+import { abortChatRunsForSessionKeyWithPartials } from "./chat-abort-runtime.js";
 import {
   abortedPartialPersistenceError,
   withAbortedPartialPersistenceWarning,
@@ -351,6 +349,19 @@ export async function runChatSendPreAdmission(
     return false;
   }
 
+  const resolveClaim = (currentEntry: typeof entry, warn: (message: string) => void) =>
+    resolveDurableChatClaim({
+      canonicalSessionKey: sessionKey,
+      cfg,
+      clientRunId,
+      entry: currentEntry,
+      persistedSessionKey: legacyKey ?? sessionKey,
+      reloadEntry: () => loadSessionEntry(sessionLoadKey, sessionLoadOptions).entry,
+      storePath,
+      recoveryRuntime: context.recoveryRuntime,
+      warn,
+    });
+
   if (request.goalOperation) {
     const prepared = await prepareGoalChatSendRetry(params);
     const retry = await consumeChatSendCurrent(params, () =>
@@ -362,17 +373,7 @@ export async function runChatSendPreAdmission(
     if (retry.kind === "replay") {
       // Let the existing recovery owner wake an interrupted admission before replaying its
       // original result. A receipt never creates another Goal or another human turn.
-      const claim = await resolveDurableChatClaim({
-        canonicalSessionKey: sessionKey,
-        cfg,
-        clientRunId,
-        entry,
-        persistedSessionKey: legacyKey ?? sessionKey,
-        reloadEntry: () => loadSessionEntry(sessionLoadKey, sessionLoadOptions).entry,
-        storePath,
-        recoveryRuntime: context.recoveryRuntime,
-        warn: (message) => context.logGateway.warn(message),
-      });
+      const claim = await resolveClaim(entry, (message) => context.logGateway.warn(message));
       await consumeChatSendCurrent(params, () => {
         if (claim.kind === "pending" || claim.kind === "rejected") {
           respond(
@@ -570,18 +571,9 @@ export async function runChatSendPreAdmission(
     params.assertCurrent?.();
   }
 
-  const durableClaim = await resolveDurableChatClaim({
-    canonicalSessionKey: sessionKey,
-    cfg,
-    clientRunId,
-    entry: durableEntry,
-    persistedSessionKey: legacyKey ?? sessionKey,
-    reloadEntry: () => loadSessionEntry(sessionLoadKey, sessionLoadOptions).entry,
-    storePath,
-    recoveryRuntime: context.recoveryRuntime,
-    warn: (message) =>
-      context.logGateway.warn(`failed to retry durable chat recovery ${clientRunId}: ${message}`),
-  });
+  const durableClaim = await resolveClaim(durableEntry, (message) =>
+    context.logGateway.warn(`failed to retry durable chat recovery ${clientRunId}: ${message}`),
+  );
   await consumeChatSendCurrent(params, () => {});
   const retrySession = {
     ...session,

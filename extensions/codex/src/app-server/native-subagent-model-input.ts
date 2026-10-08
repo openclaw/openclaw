@@ -369,11 +369,7 @@ type AdmissionDrainDependencies = {
     threadId: string,
     options: { agentPath?: string; directOwner?: ParentOwner; nativeParentThreadId?: string },
   ) => ChildState | undefined;
-  admitFollowupChild: (
-    known: KnownChild,
-    threadId: string,
-    owner?: ParentOwner,
-  ) => ChildState | undefined;
+  admitFollowupChild: (known: KnownChild, owner?: ParentOwner) => ChildState | undefined;
   observeActivity: (child: ChildState) => void;
 };
 
@@ -488,11 +484,7 @@ export function drainNativeChildModelAdmissions(
       continue;
     }
     const previous = dependencies.currentChild(threadId);
-    const child = dependencies.admitFollowupChild(
-      known,
-      threadId,
-      ownerIsCurrent ? owner : undefined,
-    );
+    const child = dependencies.admitFollowupChild(known, ownerIsCurrent ? owner : undefined);
     if (observeActivity && child && child !== previous && child.nativeTurnState === "active") {
       dependencies.observeActivity(child);
     }

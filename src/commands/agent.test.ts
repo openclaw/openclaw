@@ -23,6 +23,7 @@ import {
 } from "../agents/prepared-model-catalog.js";
 import {
   createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
   isAgentRunDirectAbortReason,
   isAgentRunRestartAbortReason,
 } from "../agents/run-termination.js";
@@ -1210,7 +1211,7 @@ describe("agentCommand", () => {
     });
   });
 
-  it.each(["generic", "terminal Stop"] as const)(
+  it.each(["generic", "explicit restart", "terminal Stop"] as const)(
     "preserves lifecycle interruption semantics: %s",
     async (interruption) => {
       await withTempHome(async (home) => {
@@ -1225,7 +1226,11 @@ describe("agentCommand", () => {
         const entered = createDeferredCore();
         const cleanup = new AbortController();
         const reason =
-          interruption === "terminal Stop" ? createAgentRunDirectAbortError() : undefined;
+          interruption === "terminal Stop"
+            ? createAgentRunDirectAbortError()
+            : interruption === "explicit restart"
+              ? createAgentRunRestartAbortError()
+              : undefined;
         vi.mocked(runEmbeddedAgent).mockImplementationOnce(
           async (opts) =>
             await new Promise((resolve) => {
@@ -1265,15 +1270,17 @@ describe("agentCommand", () => {
             reason,
           });
           const commandResult = await command;
-          if (interruption === "terminal Stop") {
+          if (reason) {
             expect(observedAbortReason).toBe(reason);
-            expect(isAgentRunDirectAbortReason(observedAbortReason)).toBe(true);
           }
+          expect(isAgentRunDirectAbortReason(observedAbortReason)).toBe(
+            interruption === "terminal Stop",
+          );
           expect(isAgentRunRestartAbortReason(observedAbortReason)).toBe(
-            interruption !== "terminal Stop",
+            interruption === "explicit restart",
           );
           expect(isAgentRunRestartAbortReason(commandResult)).toBe(
-            interruption !== "terminal Stop",
+            interruption === "explicit restart",
           );
         } finally {
           cleanup.abort(createAgentRunDirectAbortError());

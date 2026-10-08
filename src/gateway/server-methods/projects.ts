@@ -413,8 +413,8 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           } else {
             const projection = requireSessionRowProjection(context);
             do {
-              await projection.ensureMaterialized();
-            } while (projection.needsMaterialization);
+              await projection.prepareSelection();
+            } while (projection.needsSelectionPreparation());
             assertCurrent();
             if (getSessionRowProjection(context) !== projection || projection.state.cfg !== cfg) {
               throw new Error(
@@ -428,7 +428,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
                 // Federation and process-local incognito stores retain the existing loader.
                 loadEntries: (target) =>
                   projection
-                    .selectEntries({ storePath: target.storePath, sortBy: null })
+                    .selectEntries({ storePath: target.storePath, sortBy: null }, true)
                     .map((row) => ({
                       sessionKey: row.key,
                       entry: row.storedEntry ?? row.entry,
@@ -461,7 +461,6 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
         const recents = recentProfile
           ? await listProjectRecents(store, recentProfile.aliases, registryProjects)
           : undefined;
-        assertCurrent();
         recentProfile?.assertCurrent();
         diagnostics?.mark("response");
         assertCurrent();
@@ -518,11 +517,10 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
       },
       projectCheckoutError,
     ),
-    "projects.add": async ({ params, respond, context, signal }) => {
-      if (!assertValidParams(params, validateProjectsAddParams, "projects.add", respond)) {
-        return;
-      }
-      try {
+    "projects.add": defineValidatedGatewayHandler(
+      "projects.add",
+      validateProjectsAddParams,
+      async ({ params, respond, context, signal }) => {
         const cfg = context.getRuntimeConfig();
         respond(
           true,
@@ -532,42 +530,28 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           ),
           undefined,
         );
-      } catch (error) {
-        if (isTrustedSecretSurfaceUnavailableError(error)) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE, {
-              details: {
-                code: GatewayErrorDetailCodes.PROJECT_CLONE_FAILED,
-                cause: "auth_required",
-              },
-              retryable: false,
-            }),
-          );
-          return;
-        }
-        if (error instanceof ProjectCloneError) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              error.failure === "invalid_url" ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
-              error.message,
+      },
+      (error) => {
+        const failure = isTrustedSecretSurfaceUnavailableError(error)
+          ? { cause: "auth_required", message: CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE }
+          : error instanceof ProjectCloneError
+            ? { cause: error.failure, message: error.message }
+            : undefined;
+        return failure
+          ? errorShape(
+              failure.cause === "invalid_url" ? ErrorCodes.INVALID_REQUEST : ErrorCodes.UNAVAILABLE,
+              failure.message,
               {
                 details: {
                   code: GatewayErrorDetailCodes.PROJECT_CLONE_FAILED,
-                  cause: error.failure,
+                  cause: failure.cause,
                 },
-                retryable: error.failure === "network" || error.failure === "clone_failed",
+                retryable: failure.cause === "network" || failure.cause === "clone_failed",
               },
-            ),
-          );
-          return;
-        }
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-      }
-    },
+            )
+          : errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
+      },
+    ),
     "projects.searchRemote": defineValidatedGatewayHandler(
       "projects.searchRemote",
       validateProjectsSearchRemoteParams,

@@ -10,7 +10,6 @@ import {
   ensureSubagentControllerOwnsRun,
   listControlledSubagentRunFacts,
   resolveSubagentControllerIdentity,
-  type ResolvedSubagentController,
 } from "../subagents/registry/subagent-control-scope.js";
 import {
   DEFAULT_RECENT_MINUTES,
@@ -19,6 +18,7 @@ import {
   MAX_RECENT_MINUTES,
   resolveSubagentController,
 } from "../subagents/registry/subagent-control.js";
+import type { ResolvedSubagentController } from "../subagents/registry/subagent-control.types.js";
 import { createSubagentControllerRead } from "../subagents/registry/subagent-controller-read.js";
 import { observeSubagentExecution } from "../subagents/registry/subagent-execution-observation.js";
 import {

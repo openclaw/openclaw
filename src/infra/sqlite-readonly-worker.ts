@@ -5,6 +5,7 @@ import { performance } from "node:perf_hooks";
 import { formatByteSize } from "@openclaw/normalization-core";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { resolveForwardedExitCompilerArgs } from "../bootstrap/node-exit-safe-compilers.js";
+import { resolveStateDir } from "../config/state-dir.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getSpawnBroker } from "../process/spawn-broker/context.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
@@ -258,7 +259,11 @@ export function captureSqliteReadOnlyWorkerLaunch(
     runtimeGeneration: captureRuntimeWorkerSource(
       resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly),
     ).runtimeGeneration,
-    env: { ...resolveNodeCompileCacheEnv(env) },
+    env: {
+      ...resolveNodeCompileCacheEnv(env),
+      // Auth readers pin this default explicitly; equivalent roots share one child.
+      OPENCLAW_STATE_DIR: resolveStateDir(env),
+    },
     cwd: tryProcessCwd() ?? tmpdir(),
     transport: broker ? { kind: "broker", owner: broker } : { kind: "native" },
   };

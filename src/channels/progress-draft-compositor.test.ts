@@ -42,6 +42,81 @@ describe("channel progress draft compositor", () => {
     vi.restoreAllMocks();
   });
 
+  it("keeps bounded operation state without a preamble or verbose tool log", async () => {
+    const { progress, update } = createProgress(
+      { toolProgress: false, label: false },
+      { preparedItems: true, showWorkStatus: true },
+    );
+    await progress.pushItemEvent({
+      itemId: "read-1",
+      kind: "tool",
+      name: "read",
+      phase: "start",
+      status: "running",
+      title: "Private document",
+      meta: "private/path.txt",
+    });
+    expect(update).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
+    expect(update.mock.lastCall?.[0]).toBe("Read: running");
+    await progress.pushItemEvent({
+      itemId: "exec-2",
+      kind: "tool",
+      name: "exec",
+      phase: "start",
+      status: "running",
+    });
+    await progress.pushItemEvent({
+      itemId: "read-1",
+      kind: "tool",
+      name: "read",
+      phase: "end",
+      status: "completed",
+    });
+    expect(update.mock.lastCall?.[0]).toBe("Exec: running");
+    expect(progress.getSnapshot().lines).toHaveLength(1);
+    expect(JSON.stringify(update.mock.calls)).not.toContain("private/path");
+    await progress.pushItemEvent({ itemId: "exec-2", hideFromChannelProgress: true });
+    expect(progress.getSnapshot().lines).toHaveLength(0);
+    progress.markFinalReplyStarted();
+    const calls = update.mock.calls.length;
+    await progress.pushItemEvent({
+      itemId: "late",
+      kind: "tool",
+      name: "write",
+      status: "running",
+    });
+    await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
+    expect(update).toHaveBeenCalledTimes(calls);
+  });
+
+  it("continues public child state with the detailed tool log disabled", async () => {
+    const { progress, update } = createProgress(
+      { toolProgress: false, label: false },
+      { preparedItems: true, showWorkStatus: true },
+    );
+    await progress.pushPreambleHeadline("Checking the result");
+    await progress.pushItemEvent({
+      itemId: "child",
+      kind: "subagent",
+      title: "Verification",
+      status: "running",
+      summary: "PRIVATE CHILD CONTENT",
+    });
+    await vi.advanceTimersByTimeAsync(INITIAL_DELAY_MS);
+    expect(update.mock.lastCall?.[0]).toContain("Verification: running");
+    expect(update.mock.lastCall?.[0]).toContain("Checking the result");
+    await progress.pushItemEvent({
+      itemId: "child",
+      kind: "subagent",
+      title: "Verification",
+      phase: "end",
+      status: "completed",
+    });
+    expect(update.mock.lastCall?.[0]).toContain("Verification: completed");
+    expect(JSON.stringify(update.mock.calls)).not.toContain("PRIVATE CHILD CONTENT");
+  });
+
   it("counts only work tools and resets per turn", () => {
     let now = 1_000;
     const work = createChannelProgressWorkCounter({ now: () => now });

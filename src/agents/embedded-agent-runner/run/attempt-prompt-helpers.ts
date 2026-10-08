@@ -255,25 +255,22 @@ function sanitizeStructuredJsonValue(
     return limited;
   }
   const output: Record<string, unknown> = {};
-  let copied = 0;
-  let skipped = 0;
+  let keyCount = 0;
   for (const key in value as Record<string, unknown>) {
     if (!Object.hasOwn(value, key)) {
       continue;
     }
-    if (copied >= MAX_STRUCTURED_JSON_OBJECT_KEYS) {
-      skipped += 1;
-      continue;
+    keyCount += 1;
+    if (keyCount <= MAX_STRUCTURED_JSON_OBJECT_KEYS) {
+      output[key] = sanitizeStructuredJsonValue(
+        (value as Record<string, unknown>)[key],
+        depth + 1,
+        seen,
+      );
     }
-    output[key] = sanitizeStructuredJsonValue(
-      (value as Record<string, unknown>)[key],
-      depth + 1,
-      seen,
-    );
-    copied += 1;
   }
-  if (skipped > 0) {
-    output["__truncated"] = `${skipped} more keys`;
+  if (keyCount > MAX_STRUCTURED_JSON_OBJECT_KEYS) {
+    output["__truncated"] = `${keyCount - MAX_STRUCTURED_JSON_OBJECT_KEYS} more keys`;
   }
   seen.delete(value);
   return output;
@@ -445,32 +442,6 @@ type AfterTurnRuntimeContextAttempt = Pick<
   sessionId?: EmbeddedRunAttemptParams["sessionId"];
 };
 
-function resolveRuntimeContextSessionTarget(params: {
-  attempt: AfterTurnRuntimeContextAttempt;
-  activeAgentId?: string;
-}): ContextEngineSessionTarget | undefined {
-  const sessionTarget = params.attempt.sessionTarget;
-  const agentId = sessionTarget?.agentId ?? params.activeAgentId;
-  const sessionId = sessionTarget?.sessionId ?? params.attempt.sessionId;
-  const sessionKey = sessionTarget?.sessionKey ?? params.attempt.sessionKey;
-  if (
-    !agentId &&
-    !sessionId &&
-    !sessionKey &&
-    !sessionTarget?.storePath &&
-    sessionTarget?.threadId === undefined
-  ) {
-    return undefined;
-  }
-  return {
-    ...(agentId ? { agentId } : {}),
-    ...(sessionId ? { sessionId } : {}),
-    ...(sessionKey ? { sessionKey } : {}),
-    ...(sessionTarget?.storePath ? { storePath: sessionTarget.storePath } : {}),
-    ...(sessionTarget?.threadId !== undefined ? { threadId: sessionTarget.threadId } : {}),
-  };
-}
-
 export function buildAfterTurnRuntimeContext(params: {
   attempt: AfterTurnRuntimeContextAttempt;
   workspaceDir: string;
@@ -482,10 +453,20 @@ export function buildAfterTurnRuntimeContext(params: {
   currentTokenCount?: number;
   promptCache?: ContextEnginePromptCacheInfo;
 }): ContextEngineRuntimeContext {
-  const sessionTarget = resolveRuntimeContextSessionTarget({
-    attempt: params.attempt,
-    activeAgentId: params.activeAgentId,
-  });
+  const target = params.attempt.sessionTarget;
+  const agentId = target?.agentId ?? params.activeAgentId;
+  const sessionId = target?.sessionId ?? params.attempt.sessionId;
+  const sessionKey = target?.sessionKey ?? params.attempt.sessionKey;
+  const sessionTarget: ContextEngineSessionTarget | undefined =
+    agentId || sessionId || sessionKey || target?.storePath || target?.threadId !== undefined
+      ? {
+          ...(agentId ? { agentId } : {}),
+          ...(sessionId ? { sessionId } : {}),
+          ...(sessionKey ? { sessionKey } : {}),
+          ...(target?.storePath ? { storePath: target.storePath } : {}),
+          ...(target?.threadId !== undefined ? { threadId: target.threadId } : {}),
+        }
+      : undefined;
   const tokenBudget = normalizeContextTokenBudget(params.tokenBudget);
   const currentTokenCount = normalizeContextTokenBudget(params.currentTokenCount);
   return {

@@ -355,6 +355,7 @@ it.for([
       );
     }
     let server: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
+    let inspectionSettled: Promise<unknown> | undefined;
     let suppliedBroker: Awaited<ReturnType<typeof spawnBroker.startGatewaySpawnBroker>>;
     let unadoptedPortClaim: TestPortClaim | undefined;
     try {
@@ -387,6 +388,7 @@ it.for([
           );
         }
         await assertOpenClawDatabasesReady({ env, operation: "gateway-startup", config: cfg });
+        inspectionSettled = admission.pendingPreparation;
         // Other Unix hosts exercise the broker context without pretending their OS is Linux.
         if (brokerExpected && !nativeBroker) {
           suppliedBroker = await spawnBroker.startGatewaySpawnBroker({
@@ -434,12 +436,12 @@ it.for([
       }
       expect((await fetch(`http://127.0.0.1:${port}/healthz`)).status).toBe(200);
       if (outcome === "corrupt") {
-        await vi.waitFor(() =>
-          expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
-            code: "agent-database-inspection-failed",
-            repairHint: expect.stringContaining("doctor --fix"),
-          }),
-        );
+        // Gateway startup can settle before background integrity inspection does.
+        await withinTest(inspectionSettled ?? Promise.resolve(), signal);
+        expect(readAgentDatabaseAdmissionRefusal(agentId, { env })).toMatchObject({
+          code: "agent-database-inspection-failed",
+          repairHint: expect.stringContaining("doctor --fix"),
+        });
         expect(() => openOpenClawAgentDatabase(scope)).toThrow(AgentDatabaseAdmissionError);
         expect((await fetch(`http://127.0.0.1:${port}/readyz`)).status).toBe(
           agentId === "main" ? 503 : 200,

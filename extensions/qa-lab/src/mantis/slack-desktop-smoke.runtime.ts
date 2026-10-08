@@ -12,12 +12,9 @@ import { createPhaseTimer, type MantisPhaseTimings } from "../mantis-phase-timer
 import {
   copyCrabboxArtifacts,
   type CommandRunner,
-  defaultCommandRunner,
   createMantisCrabboxSession,
-  resolveCrabboxBin,
   renderMantisBrowserDiscoveryScript,
   renderMantisDesktopRecordingScript,
-  resolveMantisCrabboxLeaseOptions,
   type MantisCrabboxLeaseOptions,
   shellQuote,
 } from "./crabbox-runtime.js";
@@ -930,23 +927,15 @@ export async function runMantisSlackDesktopSmoke(
   );
   const summaryPath = path.join(outputDir, "mantis-slack-desktop-smoke-summary.json");
   const reportPath = path.join(outputDir, "mantis-slack-desktop-smoke-report.md");
-  const crabboxBin = await resolveCrabboxBin({
-    env,
-    explicit: opts.crabboxBin,
-    repoRoot,
-  });
-  const {
-    provider,
-    machineClass,
-    idleTimeout,
-    ttl,
-    leaseId: explicitLeaseId,
-    keepLease,
-  } = resolveMantisCrabboxLeaseOptions(opts, env, {
-    idleTimeout: "90m",
-    ttl: "180m",
-    keepLease: opts.gatewaySetup ?? false,
-  });
+  const session = await createMantisCrabboxSession(
+    opts,
+    { repoRoot, env },
+    {
+      idleTimeout: "90m",
+      ttl: "180m",
+      keepLease: opts.gatewaySetup ?? false,
+    },
+  );
   const market = trimToValue(opts.market) ?? trimToValue(env[CRABBOX_MARKET_ENV]);
   const credentialSource = trimToValue(opts.credentialSource) ?? DEFAULT_CREDENTIAL_SOURCE;
   const credentialRole = trimToValue(opts.credentialRole) ?? DEFAULT_CREDENTIAL_ROLE;
@@ -974,7 +963,6 @@ export async function runMantisSlackDesktopSmoke(
     trimToValue(env.OPENCLAW_QA_SLACK_CHANNEL_ID) ??
     DEFAULT_SLACK_CHANNEL_ID;
   const slackUrl = trimToValue(opts.slackUrl) ?? trimToValue(env[SLACK_URL_ENV]);
-  const runner = opts.commandRunner ?? defaultCommandRunner;
   const artifacts = await createSlackDesktopArtifactOwner({
     outputDir,
     approvalCheckpoints,
@@ -985,14 +973,6 @@ export async function runMantisSlackDesktopSmoke(
     .replace(/[^0-9A-Za-z]/gu, "-")}-${artifacts.runId}`;
   let credentialLease: SlackGatewayCredentialLease | undefined;
   let leaseHeartbeat: SlackGatewayCredentialHeartbeat | undefined;
-  const session = createMantisCrabboxSession({
-    crabboxBin,
-    cwd: repoRoot,
-    env,
-    leaseId: explicitLeaseId,
-    provider,
-    runner,
-  });
   const summary: MantisSlackDesktopSmokeSummary = {
     artifacts: {
       approvalCheckpoints: undefined,
@@ -1015,11 +995,9 @@ export async function runMantisSlackDesktopSmoke(
   };
 
   try {
-    const resolvedLeaseId =
-      session.leaseId ??
-      (await timer.timePhase("crabbox.warmup", () =>
-        session.acquire({ idleTimeout, machineClass, market, ttl }),
-      ));
+    if (session.leaseId === undefined) {
+      await timer.timePhase("crabbox.warmup", () => session.acquire(market));
+    }
     const inspected = await timer.timePhase("crabbox.inspect", () => session.inspect());
     const preparedCredentialEnv = await timer.timePhase("credentials.prepare", () =>
       prepareGatewayCredentialEnv({
@@ -1035,41 +1013,23 @@ export async function runMantisSlackDesktopSmoke(
     const remoteRunStartedAt = new Date();
     const freshPrArgs = freshPr ? ["--fresh-pr", freshPr] : [];
     try {
-      await runner(
-        crabboxBin,
-        [
-          "run",
-          "--provider",
-          provider,
-          "--id",
-          resolvedLeaseId,
-          "--desktop",
-          "--browser",
-          "--no-hydrate",
-          ...freshPrArgs,
-          "--shell",
-          "--",
-          renderRemoteScript({
-            alternateModel,
-            approvalCheckpoints,
-            credentialRole,
-            credentialSource,
-            fastMode,
-            hydrateMode,
-            primaryModel,
-            providerMode,
-            remoteOutputDir,
-            scenarioIds,
-            setupGateway: gatewaySetup,
-            slackChannelId,
-            slackUrl,
-          }),
-        ],
-        {
-          cwd: repoRoot,
-          env,
-          stdio: "inherit",
-        },
+      await session.runShell(
+        renderRemoteScript({
+          alternateModel,
+          approvalCheckpoints,
+          credentialRole,
+          credentialSource,
+          fastMode,
+          hydrateMode,
+          primaryModel,
+          providerMode,
+          remoteOutputDir,
+          scenarioIds,
+          setupGateway: gatewaySetup,
+          slackChannelId,
+          slackUrl,
+        }),
+        ["--no-hydrate", ...freshPrArgs],
       );
       timer.recordPhase("crabbox.remote_run", remoteRunStartedAt, "pass");
     } catch (error) {
@@ -1084,7 +1044,7 @@ export async function runMantisSlackDesktopSmoke(
         inspect: inspected,
         outputDir: artifacts.stagingDir,
         remoteOutputDir,
-        runner,
+        runner: session.runner,
       }),
     );
     summary.artifacts.screenshotPath = path.join(outputDir, "slack-desktop-smoke.png");
@@ -1134,9 +1094,7 @@ export async function runMantisSlackDesktopSmoke(
       await artifacts.writeSummary(summary, renderReport(summary), summary.error);
     } finally {
       try {
-        if (session.createdLease && session.leaseId && !keepLease) {
-          await session.stop();
-        }
+        await session.stopIfOwned();
       } finally {
         try {
           if (leaseHeartbeat) {

@@ -120,19 +120,16 @@ export async function resolveReplyDirectives(params: {
     defaultModel,
     primaryProvider,
     primaryModel,
-    provider: initialProvider,
-    model: initialModel,
     hasResolvedHeartbeatModelOverride,
     typing,
     opts,
     skillFilter,
   } = params;
+  let { provider, model } = params;
   const agentEntry = listAgentEntries(cfg).find(
     (entry) => normalizeAgentId(entry.id) === normalizeAgentId(agentId),
   );
   const targetSessionEntry = sessionStore[sessionKey] ?? sessionEntry;
-  let provider = initialProvider;
-  let model = initialModel;
 
   const commandText = sessionCtx.commandText;
   const command = buildCommandContext({
@@ -326,10 +323,8 @@ export async function resolveReplyDirectives(params: {
   const resolvedVerboseLevel =
     directives.verboseLevel ??
     (targetSessionEntry?.verboseLevel as VerboseLevel | undefined) ??
-    (agentCfg?.verboseDefault as VerboseLevel | undefined);
-  const configuredReasoningDefault =
-    (agentEntry?.reasoningDefault as ReasoningLevel | undefined) ??
-    (agentCfg?.reasoningDefault as ReasoningLevel | undefined);
+    agentCfg?.verboseDefault;
+  const configuredReasoningDefault = agentEntry?.reasoningDefault ?? agentCfg?.reasoningDefault;
   const canUseReasoningState =
     command.isAuthorizedSender ||
     command.senderIsOwner ||
@@ -340,19 +335,14 @@ export async function resolveReplyDirectives(params: {
     | undefined;
   const sessionReasoningLevel = canUseReasoningState ? rawSessionReasoningLevel : undefined;
   const blockedSessionReasoningLevel = rawSessionReasoningLevel != null && !canUseReasoningState;
-  const reasoningUsesConfiguredDefault =
-    directives.reasoningLevel === undefined &&
-    sessionReasoningLevel == null &&
-    configuredReasoningDefault != null;
-  let resolvedReasoningLevel: ReasoningLevel =
-    directives.reasoningLevel ?? sessionReasoningLevel ?? configuredReasoningDefault ?? "off";
-  if (reasoningUsesConfiguredDefault && !canUseReasoningState) {
-    resolvedReasoningLevel = "off";
-  }
+  const resolvedReasoningLevel: ReasoningLevel =
+    !canUseReasoningState && directives.reasoningLevel === undefined
+      ? "off"
+      : (directives.reasoningLevel ?? sessionReasoningLevel ?? configuredReasoningDefault ?? "off");
   const resolvedElevatedLevel = elevatedAllowed
     ? (directives.elevatedLevel ??
       (targetSessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
-      (agentCfg?.elevatedDefault as ElevatedLevel | undefined) ??
+      agentCfg?.elevatedDefault ??
       "on")
     : "off";
   const blockStreamingEnabled =
@@ -408,8 +398,7 @@ export async function resolveReplyDirectives(params: {
     }
     return { kind: "reply" as const, reply: { text: error.message, isError: true } };
   }
-  provider = modelState.provider;
-  model = modelState.model;
+  ({ provider, model } = modelState);
 
   let contextTokens = useFastReplyRuntime
     ? DEFAULT_CONTEXT_TOKENS
@@ -457,10 +446,7 @@ export async function resolveReplyDirectives(params: {
     recordReplyPreRunRejection(resolveReplyOperationRunState(opts), applyResult.preRunRejection);
     return { kind: "reply" as const, reply: markCommandReplyForDelivery(applyResult.reply) };
   }
-  directives = applyResult.directives;
-  provider = applyResult.provider;
-  model = applyResult.model;
-  contextTokens = applyResult.contextTokens;
+  ({ directives, provider, model, contextTokens } = applyResult);
   const thinkingRuntime = resolveEffectiveAgentRuntime({
     cfg,
     provider,

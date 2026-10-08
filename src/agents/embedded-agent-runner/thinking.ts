@@ -22,6 +22,14 @@ type RecoverySessionMeta = {
   onRecoveredAnthropicThinking?: (recovery: AnthropicThinkingRecovery) => void | Promise<void>;
 };
 
+type ThinkingRecoveryRequest = {
+  sessionMeta: RecoverySessionMeta;
+  retry: () => ReturnType<StreamFn>;
+  notify: () => Promise<void>;
+  trackRecovery: ReturnType<typeof captureAsyncWorkTracker>;
+  readNotification: () => Promise<void> | undefined;
+};
+
 const THINKING_BLOCK_ERROR_PATTERN =
   /(?:thinking|redacted_thinking).*?\b(?:cannot be modified|signature|invalid|missing|empty|blank)\b|\b(?:signature|invalid|missing|empty|blank)\b.*?(?:thinking|redacted_thinking)/i;
 const OMITTED_ASSISTANT_REASONING_TEXT = "[assistant reasoning omitted]";
@@ -181,7 +189,6 @@ export function assessLastAssistantMessage(message: AgentMessage): RecoveryAsses
   }
 
   let hasSignedThinking = false;
-  let hasUnsignedThinking = false;
   let hasNonThinkingContent = false;
   let hasEmptyTextBlock = false;
 
@@ -190,11 +197,10 @@ export function assessLastAssistantMessage(message: AgentMessage): RecoveryAsses
       return "incomplete-thinking";
     }
     if (isThinkingBlock(block)) {
-      if (isSignedThinkingBlock(block)) {
-        hasSignedThinking = true;
-      } else {
-        hasUnsignedThinking = true;
+      if (!isSignedThinkingBlock(block)) {
+        return "incomplete-thinking";
       }
+      hasSignedThinking = true;
       continue;
     }
     hasNonThinkingContent = true;
@@ -203,9 +209,6 @@ export function assessLastAssistantMessage(message: AgentMessage): RecoveryAsses
     }
   }
 
-  if (hasUnsignedThinking) {
-    return "incomplete-thinking";
-  }
   if (hasSignedThinking && (!hasNonThinkingContent || hasEmptyTextBlock)) {
     return "incomplete-text";
   }
@@ -279,18 +282,11 @@ function isSuccessfulRecoveryRetryResult(message: AssistantMessage | undefined):
 
 function wrapRetryStreamWithRecoveryNotification(
   retryStream: ReturnType<StreamFn>,
-  notify: () => Promise<void>,
-  trackRecovery: ReturnType<typeof captureAsyncWorkTracker>,
-  readNotification: () => Promise<void> | undefined,
+  recovery: ThinkingRecoveryRequest,
 ): ReturnType<StreamFn> {
   if (retryStream instanceof Promise) {
     return retryStream.then((resolved) =>
-      wrapRetryStreamWithRecoveryNotification(
-        resolved as ReturnType<StreamFn>,
-        notify,
-        trackRecovery,
-        readNotification,
-      ),
+      wrapRetryStreamWithRecoveryNotification(resolved as ReturnType<StreamFn>, recovery),
     ) as ReturnType<StreamFn>;
   }
   const resultMethod = Reflect.get(retryStream, "result");
@@ -300,11 +296,11 @@ function wrapRetryStreamWithRecoveryNotification(
   const result = resultMethod.bind(retryStream) as () => Promise<AssistantMessage>;
   let completion: Promise<AssistantMessage> | undefined;
   const finish = () => {
-    completion ??= trackRecovery(() =>
+    completion ??= recovery.trackRecovery(() =>
       Promise.resolve().then(async () => {
         const message = await result();
         if (isSuccessfulRecoveryRetryResult(message)) {
-          await notify();
+          await recovery.notify();
         }
         return message;
       }),
@@ -312,7 +308,7 @@ function wrapRetryStreamWithRecoveryNotification(
     void completion.catch(() => {});
     return completion;
   };
-  return settleRecoveryStream(retryStream, finish, readNotification);
+  return settleRecoveryStream(retryStream, finish, recovery.readNotification);
 }
 
 function settleRecoveryStream(
@@ -367,10 +363,9 @@ async function retryStreamWithoutThinking(
 async function pumpStreamWithRecovery(
   outer: ReturnType<typeof createAssistantMessageEventStream>,
   stream: ReturnType<StreamFn>,
-  sessionMeta: RecoverySessionMeta,
-  retry: () => ReturnType<StreamFn>,
-  notify: () => Promise<void>,
+  recovery: ThinkingRecoveryRequest,
 ): Promise<AssistantMessage> {
+  const { sessionMeta, retry, notify } = recovery;
   let yieldedOutput = false;
   const recover = (error: unknown, stage: "stream error" | "error during stream") => {
     if (!shouldRecoverAnthropicThinkingError(error, sessionMeta)) {
@@ -416,18 +411,14 @@ async function pumpStreamWithRecovery(
 
 function createRecoveryStream(
   stream: Awaited<ReturnType<StreamFn>>,
-  sessionMeta: RecoverySessionMeta,
-  retry: () => ReturnType<StreamFn>,
-  notify: () => Promise<void>,
-  trackRecovery: ReturnType<typeof captureAsyncWorkTracker>,
-  readNotification: () => Promise<void> | undefined,
+  recovery: ThinkingRecoveryRequest,
 ): Awaited<ReturnType<StreamFn>> {
   const outer = createAssistantMessageEventStream();
-  const finalResultPromise = trackRecovery(() =>
-    pumpStreamWithRecovery(outer, stream, sessionMeta, retry, notify).finally(() => outer.end()),
+  const finalResultPromise = recovery.trackRecovery(() =>
+    pumpStreamWithRecovery(outer, stream, recovery).finally(() => outer.end()),
   );
   void finalResultPromise.catch(() => {});
-  return settleRecoveryStream(outer, () => finalResultPromise, readNotification);
+  return settleRecoveryStream(outer, () => finalResultPromise, recovery.readNotification);
 }
 
 export function wrapAnthropicStreamWithRecovery(
@@ -465,19 +456,12 @@ export function wrapAnthropicStreamWithRecovery(
       return notification;
     };
 
+    const recovery = { sessionMeta: requestMeta, retry, notify, trackRecovery, readNotification };
     const stream = innerStreamFn(model, context, options);
     if (stream instanceof Promise) {
       return runPluginStreamConsumer(stream, () =>
         stream.then(
-          (resolved) =>
-            createRecoveryStream(
-              resolved,
-              requestMeta,
-              retry,
-              notify,
-              trackRecovery,
-              readNotification,
-            ),
+          (resolved) => createRecoveryStream(resolved, recovery),
           (error: unknown) => {
             if (!shouldRecoverAnthropicThinkingError(error, requestMeta)) {
               throw error;
@@ -486,23 +470,11 @@ export function wrapAnthropicStreamWithRecovery(
             log.warn(
               `[session-recovery] Anthropic thinking request rejected; retrying once without thinking blocks: sessionId=${requestMeta.id}`,
             );
-            return wrapRetryStreamWithRecoveryNotification(
-              retry(),
-              notify,
-              trackRecovery,
-              readNotification,
-            );
+            return wrapRetryStreamWithRecoveryNotification(retry(), recovery);
           },
         ),
       ) as ReturnType<StreamFn>;
     }
-    return createRecoveryStream(
-      stream,
-      requestMeta,
-      retry,
-      notify,
-      trackRecovery,
-      readNotification,
-    );
+    return createRecoveryStream(stream, recovery);
   };
 }

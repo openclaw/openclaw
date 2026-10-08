@@ -220,9 +220,14 @@ Accepting, queueing, or preparing a resume request alone does not refresh it.
 CLI backends that do not report turn acceptance refresh the budget only after
 observed assistant output or tool activity; silent startup does not refresh it.
 
-First turns that qualify for restart-safe admission through `sessions.create`
-use the same durable admission as idle `chat.send` turns, including direct RPC
-clients. A restart
+For a freshly created session's eligible local, idle, restart-safe initial turn,
+`sessions.create` commits the session first, then commits the input transcript and
+restart claim together before acknowledging a started run. Failure or a crash
+between those commits can leave the created session with no retained input bytes.
+After the input commits, restart recovery retains that turn even if the client
+never receives the acknowledgment. Queued input, hook-dependent input, worker
+placement, idle `chat.send`, and retries of existing durable input retain their
+existing admission and recovery behavior. A restart
 during managed worktree preparation resumes the accepted turn and prepares or
 reuses its local worktree before starting the agent. Recovery does not inherit
 the original caller's permission to run worktree setup scripts.

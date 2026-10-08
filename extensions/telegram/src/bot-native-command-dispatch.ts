@@ -120,7 +120,6 @@ export async function resolveTelegramNativeCommandThreadContext(params: {
   return {
     chatId,
     isGroup,
-    isForum,
     threadSpec,
     threadParams: buildTelegramThreadParams(threadSpec),
   };
@@ -141,10 +140,9 @@ async function resolveTelegramCommandAuth(params: {
   requireAuth: boolean;
 }) {
   const { msg, bot, cfg, accountId, telegramCfg, requireAuth } = params;
-  const { chatId, isGroup, isForum, threadSpec, threadParams } =
+  const { chatId, isGroup, threadSpec, threadParams } =
     await resolveTelegramNativeCommandThreadContext({ msg, bot });
   const senderId = msg.from?.id ? String(msg.from.id) : "";
-  const senderUsername = msg.from?.username ?? "";
   const scopedConfig = params.resolveTelegramGroupConfig(chatId, threadSpec.id, cfg);
   const inspectedRoute = inspectTelegramConversationRoute({
     cfg,
@@ -204,7 +202,6 @@ async function resolveTelegramCommandAuth(params: {
     dmThreadId,
     storeAllowFrom,
     groupConfig,
-    topicConfig,
     groupAllowOverride,
     effectiveGroupAllow,
   } = groupAllowContext;
@@ -307,12 +304,7 @@ async function resolveTelegramCommandAuth(params: {
   return {
     chatId,
     isGroup,
-    isForum,
-    resolvedThreadId,
     senderId,
-    senderUsername,
-    groupConfig,
-    topicConfig,
     threadSpec,
     threadParams,
     commandAuthorized,
@@ -375,7 +367,7 @@ export async function prepareTelegramCommandDispatch(
           params.bot.api.sendMessage(
             auth.chatId,
             "Configured ACP binding is unavailable right now. Please try again.",
-            buildTelegramThreadParams(auth.threadSpec) ?? {},
+            auth.threadParams ?? {},
           ),
       });
       return null;

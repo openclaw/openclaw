@@ -229,6 +229,12 @@ function findAssistantTranscriptMessageByIdempotencyKeyInEvents(
   return transcriptMessageTarget(target);
 }
 
+function mediaReferenceSet(mediaUrls: readonly string[]) {
+  return new Set(
+    mediaUrls.map(normalizeMediaReferenceForComparison).filter((value) => value.length > 0),
+  );
+}
+
 function findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
   events: readonly TranscriptEvent[],
   params: {
@@ -237,11 +243,7 @@ function findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
     rejectedMediaCount: number;
   },
 ): { messageId: string; message: Record<string, unknown> } | null {
-  const expectedMedia = new Set(
-    params.mediaUrls
-      .map((value) => normalizeMediaReferenceForComparison(value))
-      .filter((value) => value.length > 0),
-  );
+  const expectedMedia = mediaReferenceSet(params.mediaUrls);
   if (
     (expectedMedia.size === 0 && params.rejectedMediaCount === 0) ||
     !Number.isSafeInteger(params.assistantMessageIndex) ||
@@ -258,11 +260,7 @@ function findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
     return null;
   }
   const parsed = splitMediaFromOutput(text);
-  const actualMedia = new Set(
-    (parsed.mediaUrls ?? [])
-      .map((value) => normalizeMediaReferenceForComparison(value))
-      .filter((value) => value.length > 0),
-  );
+  const actualMedia = mediaReferenceSet(parsed.mediaUrls ?? []);
   // A reply whose only directives were rejected is identified by their count.
   const exactMediaMatch =
     actualMedia.size === expectedMedia.size &&
