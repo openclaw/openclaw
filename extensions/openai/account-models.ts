@@ -19,7 +19,7 @@ const OPENAI_RESPONSES_UNSUPPORTED_MODEL_ID_PATTERN =
 export const OPENAI_PRE_GPT5_MODEL_ID_PATTERN = /^(?:ft:)?(?:gpt-3\.5|gpt-4|o[134])/;
 
 /** Conservative Responses metadata for an OpenAI chat id without a catalog row. */
-export function buildOpenAIUncataloguedModel(id: string, baseUrl: string): ModelDefinitionConfig {
+export function buildOpenAIUncataloguedModel(id: string, baseUrl: string) {
   return {
     id,
     name: id,
@@ -31,7 +31,7 @@ export function buildOpenAIUncataloguedModel(id: string, baseUrl: string): Model
     cost: OPENAI_UNKNOWN_MODEL_COST,
     contextWindow: 128_000,
     maxTokens: 16_384,
-  };
+  } satisfies ModelDefinitionConfig;
 }
 
 /**
