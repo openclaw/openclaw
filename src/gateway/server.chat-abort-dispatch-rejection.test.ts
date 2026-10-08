@@ -540,7 +540,8 @@ describe("gateway WebSocket chat abort ownership", () => {
     const reader = await gateway.openWs();
     const runId = "runtime-loss-after-commentary";
     const error = "codex app-server client closed before turn completed";
-    const warning = "Lost the connection to Codex before it confirmed the task was finished.";
+    const warning =
+      "⚠️ Lost the connection to Codex before it confirmed the task was finished. It may still be running. Check the conversation in the Control UI before trying again.";
     const terminalStates = trackChatTerminalStates(socket, runId);
     const commentaryPersisted = createDeferred();
     const dispatchRelease = createDeferred();
@@ -616,13 +617,14 @@ describe("gateway WebSocket chat abort ownership", () => {
           data: { phase: "error", startedAt, endedAt: Date.now(), error, executionSettled: true },
         }),
       ).toBe(true);
-      await terminal;
+      const terminalFrame = await terminal;
       dispatchRelease.resolve();
       await admissionRelease;
       const replay = await rpcReq(socket, "chat.send", sendParameters);
       expect(replay.ok).toBe(false);
       expect(replay.payload).toMatchObject({ runId, status: "error", summary: warning });
       expect.soft(terminalStates).toEqual(["error"]);
+      expect.soft(terminalFrame.payload?.errorMessage).toBe(warning);
       expect(loadSessionEntry(scope)).toMatchObject({ status: "failed", lastRunId: runId });
       const history = await rpcReq<{ messages: unknown[] }>(reader, "chat.history", {
         sessionKey: scope.sessionKey,
@@ -639,7 +641,16 @@ describe("gateway WebSocket chat abort ownership", () => {
           expect.objectContaining({
             role: "custom",
             customType: "run-failed-before-reply",
-            content: expect.stringContaining(error),
+            content: warning,
+          }),
+        ]),
+      );
+      expect(loadTranscriptEventsSync(scope)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            customType: "run-failed-before-reply",
+            content: warning,
+            details: expect.objectContaining({ runId, error }),
           }),
         ]),
       );
