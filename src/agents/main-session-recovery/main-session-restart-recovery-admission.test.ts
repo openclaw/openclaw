@@ -32,7 +32,7 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../../process/gateway-work-admission.js";
 import {
-  getSessionWorkAdmissionRelease,
+  getSessionWorkAdmissionOwnerRelease,
   runExclusiveSessionLifecycleMutation,
 } from "../../sessions/session-lifecycle-admission.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -371,7 +371,7 @@ describe("startup recovery admission", () => {
     try {
       await waitForFast(() =>
         expect(
-          getSessionWorkAdmissionRelease({
+          getSessionWorkAdmissionOwnerRelease({
             scope: storePath,
             identities: [sessionKey, "main-session"],
             owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,

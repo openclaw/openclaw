@@ -33,7 +33,7 @@ import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-s
 import * as gatewayWorkAdmission from "../process/gateway-work-admission.js";
 import {
   beginSessionWorkAdmission,
-  getSessionWorkAdmissionRelease,
+  getSessionWorkAdmissionOwnerRelease,
 } from "../sessions/session-lifecycle-admission.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -306,7 +306,7 @@ it(
       });
       await vi.waitFor(() => expect(targetRequests).toHaveLength(1), { timeout: 30_000 });
       expect(readRecoveryPrompt(targetRequests[0] ?? "").includes(originalChildMarker)).toBe(true);
-      const initialOwner = getSessionWorkAdmissionRelease({
+      const initialOwner = getSessionWorkAdmissionOwnerRelease({
         scope: storePath,
         identities: [sessionKey, sessionId],
         owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
