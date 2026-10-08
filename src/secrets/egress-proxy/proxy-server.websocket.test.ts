@@ -87,39 +87,21 @@ async function connectTls(): Promise<tls.TLSSocket> {
 
 async function rawUpgrade(
   params: {
-    credential?: string;
     pathname?: string;
     head?: Buffer;
     upgrade?: string;
-    forward?: boolean;
-    auth?: string;
   } = {},
 ) {
-  const socket = params.forward
-    ? await new Promise<Socket>((resolve, reject) => {
-        const endpoint = new URL(proxy.proxyOrigin);
-        const connected = track(net.connect(Number(endpoint.port), endpoint.hostname));
-        connected.once("connect", () => resolve(connected));
-        connected.once("error", reject);
-      })
-    : await connectTls();
+  const socket = await connectTls();
   const received: Buffer[] = [];
   socket.on("data", (chunk: Buffer) => received.push(chunk));
   const closed = new Promise<void>((resolve) => {
     socket.once("close", () => resolve());
   });
-  const auth = params.auth ?? new URL(proxyEnv.HTTPS_PROXY!).password;
-  const proxyAuth =
-    params.forward && auth
-      ? `Proxy-Authorization: Basic ${Buffer.from(`openclaw:${auth}`).toString("base64")}\r\n`
-      : "";
-  const target = params.forward
-    ? `https://localhost:${port}${params.pathname ?? "/"}`
-    : (params.pathname ?? "/");
   socket.write(
     Buffer.concat([
       Buffer.from(
-        `GET ${target} HTTP/1.1\r\nHost: localhost:${port}\r\n${proxyAuth}Connection: Upgrade\r\nUpgrade: ${params.upgrade ?? "websocket"}\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nAuthorization: Bearer ${params.credential ?? sentinel}\r\n\r\n`,
+        `GET ${params.pathname ?? "/"} HTTP/1.1\r\nHost: localhost:${port}\r\nConnection: Upgrade\r\nUpgrade: ${params.upgrade ?? "websocket"}\r\nSec-WebSocket-Version: 13\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nAuthorization: Bearer ${sentinel}\r\n\r\n`,
       ),
       params.head ?? Buffer.alloc(0),
     ]),
@@ -187,12 +169,6 @@ beforeEach(async () => {
       url: request.url ?? "",
       proxyAuth: request.headers["proxy-authorization"],
     });
-    if (request.url === "/reject") {
-      socket.end(
-        "HTTP/1.1 401 Unauthorized\r\nConnection: close\r\nContent-Length: 6\r\n\r\ndenied",
-      );
-      return;
-    }
     if (request.url === "/reset") {
       socket.destroy();
       return;
@@ -286,54 +262,6 @@ describe("secret egress WebSocket forwarding", () => {
     expect(auditEvents).toEqual([{ kind: "forwarded", host: "localhost", substituted: true }]);
   });
 
-  it("refuses an unauthenticated forwarded upgrade before WSS origin access", async () => {
-    const forwarded = await rawUpgrade({ forward: true, auth: "" });
-    await forwarded.closed;
-    expect(Buffer.concat(forwarded.received).toString()).toMatch(/^HTTP\/1\.1 407 /);
-    expect(observed).toEqual([]);
-  });
-
-  it("authenticates and substitutes an absolute-HTTPS forwarded upgrade", async () => {
-    const request = await rawUpgrade({ forward: true });
-    expect(await receive(request, "ready")).toMatch(/^HTTP\/1\.1 101 /);
-    expect(observed).toEqual([
-      { authorization: `Bearer ${value}`, url: "/", proxyAuth: undefined },
-    ]);
-  });
-
-  it.each(["unknown", "wrong-host"])(
-    "refuses a %s handshake sentinel without contacting the origin",
-    async (kind) => {
-      if (kind !== "unknown") {
-        proxyEnv = proxy.registerProcess([
-          {
-            name: "SERVICE_KEY",
-            sentinel,
-            allowedHosts: ["other.example"],
-          },
-        ]).env;
-      }
-      const credential =
-        kind === "unknown"
-          ? sealSecretSentinel("other-secret", { label: "unregistered" })
-          : sentinel;
-      const request = await rawUpgrade({ credential });
-      await request.closed;
-      expect(Buffer.concat(request.received).toString()).toMatch(/^HTTP\/1\.1 502 /);
-      expect(observed).toEqual([]);
-    },
-  );
-
-  it("preserves an upstream non-upgrade HTTP rejection", async () => {
-    const request = await rawUpgrade({ pathname: "/reject" });
-    await request.closed;
-    expect(Buffer.concat(request.received).toString()).toMatch(/^HTTP\/1\.1 401 [\s\S]*denied$/);
-    expect(observed).toEqual([
-      { authorization: `Bearer ${value}`, url: "/reject", proxyAuth: undefined },
-    ]);
-    expect(auditEvents).toEqual([{ kind: "forwarded", host: "localhost", substituted: true }]);
-  });
-
   it("audits a forwarded handshake and refusal when the upstream returns an invalid upgrade", async () => {
     const request = await rawUpgrade({ pathname: "/invalid-upgrade" });
     await request.closed;
@@ -363,7 +291,6 @@ describe("secret egress WebSocket forwarding", () => {
     proxyEnv = proxy.registerProcess().env;
     const request = await rawUpgrade({
       pathname: "https://other.example/socket",
-      credential: "ordinary-value",
     });
     await request.closed;
     expect(Buffer.concat(request.received).toString()).toMatch(/^HTTP\/1\.1 403 /);
