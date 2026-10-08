@@ -142,6 +142,7 @@ function createTalkClientAgentRuntime(params: {
         }),
       });
     } finally {
+      // Accepted terminal writes commit under this admission; abort still closes it immediately.
       try {
         await drainAgentRunTerminalWrites(operationalRunInstance);
       } finally {
