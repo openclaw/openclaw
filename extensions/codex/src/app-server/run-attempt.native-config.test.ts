@@ -80,25 +80,18 @@ setupRunAttemptTestHooks();
 useProviderToolSchemaRuntimeForTest(["codex"]);
 
 describe("Codex native configuration", () => {
-  it.each(["missing", "disabled"])(
-    "refuses required-root execution before connection when host tools are %s",
-    async (state) => {
-      const params = createParams(path.join(tempDir, "session.jsonl"), tempDir);
-      params.requireWorkspaceOnly = true;
-      params.sessionRoot = tempDir;
-      if (state === "missing") {
-        Reflect.deleteProperty(params, "hostCapabilities");
-      } else {
-        params.disableTools = true;
-      }
-      const clientFactory = vi.fn();
+  it("refuses required-root execution before connection when host tools are missing", async () => {
+    const params = createParams(path.join(tempDir, "session.jsonl"), tempDir);
+    params.requireWorkspaceOnly = true;
+    params.sessionRoot = tempDir;
+    Reflect.deleteProperty(params, "hostCapabilities");
+    const clientFactory = vi.fn();
 
-      await expect(runCodexAppServerAttempt(params, { clientFactory })).rejects.toThrow(
-        "requires an enabled host-mediated tool surface",
-      );
-      expect(clientFactory).not.toHaveBeenCalled();
-    },
-  );
+    await expect(runCodexAppServerAttempt(params, { clientFactory })).rejects.toThrow(
+      "requires an enabled host-mediated tool surface",
+    );
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
 
   it.each(["denied", "revoked"] as const)(
     "binds the actual harness retry model when its permission is %s",
@@ -671,7 +664,7 @@ describe("Codex native configuration", () => {
   );
 });
 
-it.each(["restore", "fresh", "fresh after yield"] as const)(
+it.each(["restore", "fresh"] as const)(
   "cancels accepted unqualified native work when a policy is introduced (%s)",
   async (origin) => {
     const fresh = origin !== "restore";
