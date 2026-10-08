@@ -233,7 +233,6 @@ describe("update command admission with fresh state", () => {
           denyRelease();
         }
         return {
-          target: "2026.9.2",
           version: null,
           nodeEngine: null,
           error: "fixture registry unavailable",
@@ -912,7 +911,6 @@ it("Doctor sees an already-current update's completed history after original-sta
     });
     vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
       ...targetMetadata,
-      target: VERSION,
       version: VERSION,
       schemaVersions: {
         state: OPENCLAW_STATE_SCHEMA_VERSION,

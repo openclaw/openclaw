@@ -12,6 +12,37 @@ const boardIdField = Type.Optional(
   }),
 );
 
+const matchRuleSchema = strictObject({
+  health: Type.Optional(
+    Type.Array(
+      Type.Union([
+        Type.Literal("on-track"),
+        Type.Literal("grinding"),
+        Type.Literal("stuck"),
+        Type.Literal("waiting-on-user"),
+        Type.Literal("wrapping-up"),
+        Type.Literal("done"),
+        Type.Literal("failed"),
+      ]),
+    ),
+  ),
+  run: Type.Optional(
+    Type.Array(Type.Union([Type.Literal("active"), Type.Literal("idle"), Type.Literal("failed")])),
+  ),
+  pullRequest: Type.Optional(
+    Type.Array(
+      Type.Union([
+        Type.Literal("none"),
+        Type.Literal("open"),
+        Type.Literal("draft"),
+        Type.Literal("merged"),
+        Type.Literal("closed"),
+      ]),
+    ),
+  ),
+  archived: Type.Optional(Type.Boolean()),
+});
+
 const columnSchema = strictObject({
   id: Type.String({
     minLength: 1,
@@ -26,42 +57,9 @@ const columnSchema = strictObject({
   description: Type.String({
     minLength: 1,
     maxLength: 400,
-    description: "Describe the sessions that belong here to steer utility-model placement.",
+    description: "Description shown in the column tooltip.",
   }),
-  match: Type.Optional(
-    strictObject({
-      health: Type.Optional(
-        Type.Array(
-          Type.Union([
-            Type.Literal("on-track"),
-            Type.Literal("grinding"),
-            Type.Literal("stuck"),
-            Type.Literal("waiting-on-user"),
-            Type.Literal("wrapping-up"),
-            Type.Literal("done"),
-            Type.Literal("failed"),
-          ]),
-        ),
-      ),
-      run: Type.Optional(
-        Type.Array(
-          Type.Union([Type.Literal("active"), Type.Literal("idle"), Type.Literal("failed")]),
-        ),
-      ),
-      pullRequest: Type.Optional(
-        Type.Array(
-          Type.Union([
-            Type.Literal("none"),
-            Type.Literal("open"),
-            Type.Literal("draft"),
-            Type.Literal("merged"),
-            Type.Literal("closed"),
-          ]),
-        ),
-      ),
-      archived: Type.Optional(Type.Boolean()),
-    }),
-  ),
+  match: Type.Optional(Type.Union([matchRuleSchema, Type.Array(matchRuleSchema, { minItems: 1 })])),
   fallback: Type.Optional(
     Type.Boolean({ description: "Exactly one column must be the unresolved-session fallback." }),
   ),
@@ -70,7 +68,7 @@ const columnSchema = strictObject({
 export function createWorkboardSessionsBoardTools(params: {
   store: WorkboardStore;
   caller: { assertCurrent: () => void };
-  sessionsBoard?: Pick<WorkboardSessionsBoardService, "read" | "update" | "move" | "refresh">;
+  sessionsBoard?: Pick<WorkboardSessionsBoardService, "read" | "update" | "move">;
 }): AnyAgentTool[] {
   const service = () => {
     if (!params.sessionsBoard) {
@@ -100,26 +98,37 @@ export function createWorkboardSessionsBoardTools(params: {
       name: "workboard_sessions_board_read",
       label: "Sessions Board Read",
       description:
-        "Read a Sessions board and its cached session placements. Columns are free-form: match rules are deterministic and descriptions steer the utility model. Card tools do not apply to Sessions boards.",
+        "Read a Sessions board and its session placements. Columns match Gateway-owned session status, observer health, and pull-request facts in order; operator pins take precedence. Card tools do not apply to Sessions boards.",
       parameters: strictObject({ boardId: boardIdField }),
       execute: async (_toolCallId, rawParams) => {
         const record = asNonArrayRecord(rawParams);
-        return jsonResult(await service().read(await resolveBoardId(record)));
+        return jsonResult(
+          await service().read(await resolveBoardId(record), undefined, params.caller),
+        );
       },
     },
     {
       name: "workboard_sessions_board_update",
       label: "Sessions Board Update",
       description:
-        "Edit a Sessions board's free-form columns, classification instructions, or scope. columns replaces the full ordered list; preserve ids when renaming labels. All fields in a match rule must match, and the first matching column wins. Descriptions steer the utility model; nonempty instructions let it reconsider rule placements. Exactly one fallback is required. Card tools do not apply to Sessions boards.",
+        "Edit a Sessions board's columns, match rules, or scope. columns replaces the full ordered list; preserve ids when renaming labels. All fields in each rule must match; a match array accepts any rule, and the first matching column wins. Exactly one fallback is required. Card tools do not apply to Sessions boards.",
       parameters: strictObject({
         boardId: boardIdField,
         columns: Type.Optional(Type.Array(columnSchema, { minItems: 2, maxItems: 12 })),
-        instructions: Type.Optional(Type.String({ maxLength: 2000 })),
         scope: Type.Optional(
           strictObject({
             agentIds: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
             includeArchived: Type.Optional(Type.Boolean()),
+            includeAutomation: Type.Optional(
+              Type.Boolean({
+                description: "Include automation (cron) and system sessions. Defaults to false.",
+              }),
+            ),
+            includeHome: Type.Optional(
+              Type.Boolean({
+                description: "Include each agent's Home session. Defaults to false.",
+              }),
+            ),
             maxAgeHours: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
           }),
         ),
@@ -135,7 +144,7 @@ export function createWorkboardSessionsBoardTools(params: {
       name: "workboard_sessions_board_move",
       label: "Sessions Board Move",
       description:
-        "Pin a session in a Sessions board column until its placement facts change. Columns are free-form; match rules and utility-model descriptions resume classification after that change. Card tools do not apply to Sessions boards.",
+        "Pin a session in a Sessions board column. The pin overrides match rules while the column exists. Card tools do not apply to Sessions boards.",
       parameters: strictObject({
         boardId: boardIdField,
         sessionKey: Type.String({ description: "Exact session key from the board read." }),

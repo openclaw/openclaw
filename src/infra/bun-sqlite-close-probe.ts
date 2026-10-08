@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { Worker } from "node:worker_threads";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 
@@ -17,24 +18,19 @@ async function cleanupProbe(
   directory: string | undefined,
   background: boolean,
 ) {
-  let deadline: NodeJS.Timeout | undefined;
   try {
     if (worker) {
       if (background) {
         worker.unref();
       }
-      await Promise.race([
+      await raceWithTimeout(
         worker.terminate(),
-        new Promise<never>((_resolve, reject) => {
-          deadline = setTimeout(
-            () => reject(new Error("SQLite close probe termination timed out after 5000ms")),
-            5_000,
-          );
-          if (background) {
-            deadline.unref();
-          }
-        }),
-      ]);
+        5_000,
+        () => {
+          throw new Error("SQLite close check termination timed out after 5000ms");
+        },
+        { ref: !background },
+      );
       await nextTurn(undefined, { ref: !background });
     }
     if (directory) {
@@ -42,11 +38,9 @@ async function cleanupProbe(
     }
   } catch (error) {
     worker?.unref();
-    const reason = `SQLite close probe cleanup failed: ${String(error)}; retained ${directory}`;
+    const reason = `SQLite close check cleanup failed: ${String(error)}; retained ${directory}`;
     process.emitWarning(reason, { code: "SQLITE_CLOSE_PROBE_CLEANUP" });
     return reason;
-  } finally {
-    clearTimeout(deadline);
   }
   return undefined;
 }
@@ -68,20 +62,20 @@ export async function probeSqliteNativeClose(): Promise<SqliteCloseProbeResult> 
     result = await new Promise<SqliteCloseProbeResult>((resolve, reject) => {
       running.once("message", (value: unknown) => {
         if (typeof value !== "string") {
-          reject(new Error("Invalid SQLite close probe reply"));
+          reject(new Error("Invalid SQLite close check reply"));
           return;
         }
         resolve({
           explicitSqliteCloseReleasesNativeResources: value === "",
-          reason: value || "Native close probe passed",
+          reason: value || "Native close check passed",
         });
       });
       running.once("error", reject);
       running.once("exit", (code) =>
-        reject(new Error(`SQLite close probe exited before its reply (${code})`)),
+        reject(new Error(`SQLite close check exited before its reply (${code})`)),
       );
       deadline = setTimeout(
-        () => reject(new Error("SQLite close probe timed out after 10000ms")),
+        () => reject(new Error("SQLite close check timed out after 10000ms")),
         10_000,
       );
     });

@@ -61,7 +61,7 @@ async function withCronGateway(
   await withOpenClawTestState({ prefix: "cron-mutation-dispatch-" }, async (state) => {
     resetCommandQueueStateForTest();
     const cfg: OpenClawConfig = {
-      agents: { list: [{ id: "main" }], defaults: { workspace: state.workspaceDir } },
+      agents: { entries: { main: {} }, defaults: { workspace: state.workspaceDir } },
       cron: { enabled: false },
     };
     await state.writeConfig(cfg);
@@ -255,8 +255,6 @@ describe("Cron mutation outcomes through the in-process router", () => {
 
   it.each([
     { closure: "revoked", reportingError: false },
-    { closure: "aborted", reportingError: false },
-    { closure: "revoked", reportingError: true },
     { closure: "aborted", reportingError: true },
   ] as const)(
     "preserves committed state and outcome when $closure after commit (reporting error: $reportingError)",

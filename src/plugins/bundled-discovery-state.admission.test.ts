@@ -101,7 +101,7 @@ function invalidatedRead() {
 }
 
 it.each(readers)(
-  "retains typed invalidation and its cause from $name",
+  "retains typed invalidation and ordinary errors from $name",
   async ({ reject, read }) => {
     const cause = invalidatedRead();
     reject.mockImplementation(() => {
@@ -114,6 +114,13 @@ it.each(readers)(
         expect(error instanceof Error && error.cause).toBe(cause),
       );
       await expect(result.catch(isPluginCacheFactInvalidatedError)).resolves.toBe(true);
+    });
+    const failure = new Error("Synthetic metadata read failure");
+    reject.mockImplementation(() => {
+      throw failure;
+    });
+    await withPluginCache(createPluginCache(), async () => {
+      await expect(Promise.resolve().then(async () => await read())).rejects.toBe(failure);
     });
   },
 );
@@ -130,15 +137,5 @@ it("retains typed invalidation when reactivating a prepared discovery snapshot",
     await result.catch((error: unknown) =>
       expect(error instanceof Error && error.cause).toBe(cause),
     );
-  });
-});
-
-it.each(readers)("preserves ordinary errors from $name", async ({ reject, read }) => {
-  const failure = new Error("Synthetic metadata read failure");
-  reject.mockImplementation(() => {
-    throw failure;
-  });
-  await withPluginCache(createPluginCache(), async () => {
-    await expect(Promise.resolve().then(async () => await read())).rejects.toBe(failure);
   });
 });

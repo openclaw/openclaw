@@ -10,6 +10,7 @@ type Waiter = {
   kind: "read" | "write";
   resolve: (release: () => void) => void;
 };
+type GenerationLeaseKind = Waiter["kind"] | "mutation" | "retrieval";
 
 type GenerationLeaseState = {
   readers: number;
@@ -32,7 +33,7 @@ function throwIfGenerationLeaseAborted(signal?: AbortSignal): void {
 
 async function acquireCrossProcessLease(
   databasePath: string,
-  kind: Waiter["kind"],
+  kind: GenerationLeaseKind,
   signal?: AbortSignal,
 ): Promise<MemorySqliteLeaseHandle> {
   const acquireSqliteLease = async (
@@ -63,9 +64,12 @@ async function acquireCrossProcessLease(
   let admission: MemorySqliteLeaseHandle;
   try {
     admission =
-      kind === "read"
-        ? await acquireSqliteLease(admissionLocation, "shared")
-        : await acquireMemorySqliteWriterLease(admissionLocation, signal);
+      kind === "write"
+        ? await acquireMemorySqliteWriterLease(admissionLocation, signal)
+        : await acquireSqliteLease(
+            admissionLocation,
+            kind === "retrieval" ? "exclusive" : "shared",
+          );
   } catch (err) {
     throw signal?.aborted ? createGenerationLeaseAbortError(signal) : err;
   }
@@ -73,7 +77,7 @@ async function acquireCrossProcessLease(
   try {
     generation = await acquireSqliteLease(
       `${databasePath}.generation-lock.sqlite`,
-      kind === "read" ? "shared" : "exclusive",
+      kind === "write" ? "exclusive" : "shared",
     );
   } catch (err) {
     await admission.release();
@@ -198,11 +202,11 @@ async function acquireLocal(
 
 async function acquire(
   databasePath: string,
-  kind: Waiter["kind"],
+  kind: GenerationLeaseKind,
   signal?: AbortSignal,
 ): Promise<() => Promise<void>> {
   const key = resolveUserPath(databasePath);
-  const releaseLocal = await acquireLocal(key, kind, signal);
+  const releaseLocal = await acquireLocal(key, kind === "write" ? "write" : "read", signal);
   let crossProcess: MemorySqliteLeaseHandle;
   try {
     throwIfGenerationLeaseAborted(signal);
@@ -227,15 +231,19 @@ async function acquire(
 export async function acquireMemoryIndexReadGeneration(
   databasePath: string,
   signal?: AbortSignal,
+  excludeMutations = false,
 ): Promise<() => Promise<void>> {
-  return await acquire(databasePath, "read", signal);
+  // Fused reads retain admission exclusively through acceptance, while existing
+  // ordinary readers keep their shared generation and can finish independently.
+  return await acquire(databasePath, excludeMutations ? "retrieval" : "read", signal);
 }
 
-export async function withMemoryIndexPublishGeneration<T>(
+export async function withMemoryIndexGeneration<T>(
   databasePath: string,
+  kind: "mutation" | "write",
   run: () => Promise<T>,
 ): Promise<T> {
-  const release = await acquire(databasePath, "write");
+  const release = await acquire(databasePath, kind);
   try {
     return await run();
   } finally {

@@ -27,7 +27,7 @@ async function resolveExplicitSessionSqliteMaintenancePaths(
   // Explicit path mode intentionally bypasses runtime config. Resolve through
   // the same selector as the migration so ownership checks cover exact targets.
   const targets = resolveSessionStoreTargets(
-    { agents: { entries: { [requestedAgentId]: { default: true } } } },
+    { agents: { entries: { [requestedAgentId]: {} } } },
     {
       store: options.sessionSqliteStore,
       ...(options.sessionSqliteAgent ? { agent: options.sessionSqliteAgent } : {}),

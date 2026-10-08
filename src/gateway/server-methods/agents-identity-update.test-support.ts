@@ -46,7 +46,7 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
       async (state) => {
         const workspace = `/remote-identity-${randomUUID()}`;
         mocks.loadConfigReturn = {
-          agents: { list: [{ id: "test-agent", workspace, identity: { name: "Current Agent" } }] },
+          agents: { entries: { "test-agent": { workspace, identity: { name: "Current Agent" } } } },
         };
         let release = () => {};
         const readFile = vi.fn(async () => {
@@ -150,7 +150,6 @@ export function registerAgentIdentityUpdateTests(harness: IdentityUpdateHarness)
       expectRespondOk(respond, { ok: true, agentId: "test-agent" });
       expectRecordFields(mockCallArg(mocks.rootRead), {
         relativePath: "IDENTITY.md",
-        nonBlockingRead: true,
       });
       const configOptions = expectRecordFields(mockCallArg(mocks.applyAgentConfig, 0, 1), {
         name: "New Name",

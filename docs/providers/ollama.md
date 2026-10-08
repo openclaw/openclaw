@@ -33,7 +33,7 @@ job. Open the page that matches your task.
 | Page                                                                  | Read it when                                                                                                                |
 | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | [Ollama setup](/providers/ollama/setup)                               | You are connecting an account: auth rules per host type, onboarding and manual setup, and the hybrid cloud-plus-local flow. |
-| [Ollama model discovery](/providers/ollama/model-discovery)           | You want to know how models are found: the implicit-discovery table, capability detection, and smoke-test probes.           |
+| [Ollama model discovery](/providers/ollama/model-discovery)           | You want to know how models are found: the implicit-discovery table, capability detection, and smoke-test checks.           |
 | [Ollama node-local inference](/providers/ollama/node-local-inference) | You are running models on a paired node: setup steps, model filtering, and direct verification commands.                    |
 | [Ollama vision and image description](/providers/ollama/vision)       | You are describing or understanding images through a local or hosted Ollama vision model.                                   |
 | [Ollama configuration](/providers/ollama/configuration)               | You are writing the provider entry: implicit discovery, an explicit model list, or a custom base URL.                       |

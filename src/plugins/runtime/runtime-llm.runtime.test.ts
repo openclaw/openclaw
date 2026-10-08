@@ -719,38 +719,41 @@ describe("runtime.llm.complete", () => {
     });
   });
 
-  it("allows plugin model overrides only when configured and allowlisted", async () => {
-    const llm = createRuntimeLlm({
-      getConfig: () =>
-        configWithPluginPolicy("trusted-plugin", {
-          allowModelOverride: true,
-          allowedModels: ["openai/gpt-5.4"],
-        }),
-      authority: {
-        allowComplete: true,
-      },
-    });
+  it.each(["trusted-plugin", "TrUsTeD-plugin"])(
+    "allows model overrides for %s only when configured and allowlisted",
+    async (pluginId) => {
+      const llm = createRuntimeLlm({
+        getConfig: () =>
+          configWithPluginPolicy("trusted-plugin", {
+            allowModelOverride: true,
+            allowedModels: ["openai/gpt-5.4"],
+          }),
+        authority: {
+          allowComplete: true,
+        },
+      });
 
-    await withPluginRuntimePluginScope({ pluginId: "trusted-plugin" }, () =>
-      llm.complete({
-        model: "openai/gpt-5.4",
-        messages: [{ role: "user", content: "Ping" }],
-      }),
-    );
-    expectSingleCallFirstArg(hoisted.acquireSimpleCompletionModelForAgent, {
-      agentId: "main",
-      modelRef: "openai/gpt-5.4",
-    });
-
-    await expect(
-      withPluginRuntimePluginScope({ pluginId: "trusted-plugin" }, () =>
+      await withPluginRuntimePluginScope({ pluginId }, () =>
         llm.complete({
-          model: "openai/gpt-5.6",
+          model: "openai/gpt-5.4",
           messages: [{ role: "user", content: "Ping" }],
         }),
-      ),
-    ).rejects.toThrow('model override "openai/gpt-5.6" is not allowlisted');
-  });
+      );
+      expectSingleCallFirstArg(hoisted.acquireSimpleCompletionModelForAgent, {
+        agentId: "main",
+        modelRef: "openai/gpt-5.4",
+      });
+
+      await expect(
+        withPluginRuntimePluginScope({ pluginId }, () =>
+          llm.complete({
+            model: "openai/gpt-5.6",
+            messages: [{ role: "user", content: "Ping" }],
+          }),
+        ),
+      ).rejects.toThrow('model override "openai/gpt-5.6" is not allowlisted');
+    },
+  );
 
   it("keeps the shipped model allowlist scoped to explicit overrides", async () => {
     const llm = createRuntimeLlm({
@@ -768,22 +771,25 @@ describe("runtime.llm.complete", () => {
     ).resolves.toMatchObject({ text: "done" });
   });
 
-  it("applies a completion model allowlist to the host-resolved default", async () => {
-    const llm = createRuntimeLlm({
-      getConfig: () =>
-        configWithPluginPolicy("restricted-plugin", {
-          allowedCompletionModels: ["anthropic/claude-haiku-4-5"],
-        }),
-      authority: { allowComplete: true },
-    });
+  it.each(["restricted-plugin", "ReStRiCtEd-plugin"])(
+    "applies the completion allowlist to the host-resolved default for %s",
+    async (pluginId) => {
+      const llm = createRuntimeLlm({
+        getConfig: () =>
+          configWithPluginPolicy("restricted-plugin", {
+            allowedCompletionModels: ["anthropic/claude-haiku-4-5"],
+          }),
+        authority: { allowComplete: true },
+      });
 
-    await expect(
-      withPluginRuntimePluginScope({ pluginId: "restricted-plugin" }, () =>
-        llm.complete({ messages: [{ role: "user", content: "Ping" }] }),
-      ),
-    ).rejects.toThrow('model "openai/gpt-5.5" is not allowlisted for completions');
-    expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
-  });
+      await expect(
+        withPluginRuntimePluginScope({ pluginId }, () =>
+          llm.complete({ messages: [{ role: "user", content: "Ping" }] }),
+        ),
+      ).rejects.toThrow('model "openai/gpt-5.5" is not allowlisted for completions');
+      expect(hoisted.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    },
+  );
 
   it("applies the completion model allowlist to explicit overrides too", async () => {
     const llm = createRuntimeLlm({

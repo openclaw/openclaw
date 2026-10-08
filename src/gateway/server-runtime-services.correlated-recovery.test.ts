@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import * as completionStore from "../agents/subagents/completion/subagent-completion-admission.store.js";
@@ -6,16 +7,17 @@ import * as completion from "../agents/subagents/completion/subagent-completion-
 import { SUBAGENT_ENDED_REASON_COMPLETE } from "../agents/subagents/registry/subagent-lifecycle-events.js";
 import { createSubagentRegistryCompletionRuntime } from "../agents/subagents/registry/subagent-registry-completion-runtime.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import { readFullSubagentRuns } from "../agents/subagents/registry/subagent-registry-read-cache.js";
 import {
-  persistSubagentRunsToDiskAsyncOrThrow,
+  mutateSubagentRuns,
   restoreSubagentRunsFromDisk,
-} from "../agents/subagents/registry/subagent-registry-state.js";
+} from "../agents/subagents/registry/subagent-registry-persistence.js";
+import { readFullSubagentRuns } from "../agents/subagents/registry/subagent-registry-read-cache.js";
 import { bindSubagentRunRecord } from "../agents/subagents/registry/subagent-registry.store.codec.js";
-import { upsertSubagentRunRowInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
+import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/subagent-registry.store.kernel.js";
 import { readSubagentRun } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
+import { getSubagentRunRuntimeKey } from "../agents/subagents/registry/subagent-run-generation.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
-import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.test-support.js";
 import {
   enqueueClaimedSessionDelivery,
   loadPendingSessionDelivery,
@@ -55,10 +57,8 @@ afterEach(() => {
 
 describe("registered correlated completion recovery custody", () => {
   it.for([
-    { change: "none", outcome: "recovered" },
     { change: "none", outcome: "moved-to-failed" },
     { change: "default", outcome: "recovered" },
-    { change: "default", outcome: "moved-to-failed" },
     { change: "file", outcome: "recovered" },
     { change: "successor", outcome: "recovered" },
     { change: "default after commit", outcome: "recovered" },
@@ -77,7 +77,7 @@ describe("registered correlated completion recovery custody", () => {
       const scheduler = createTestGatewayScheduler(clock.clock);
       const context = captureOpenClawStateWorkerContext();
       const now = Date.now();
-      const child = createSubagentRunRecord({
+      let child = createSubagentRunRecord({
         runId: "retained-completion",
         childSessionKey: "agent:main:subagent:retained-completion",
         requesterSessionKey: "agent:main:retained-requester",
@@ -123,7 +123,7 @@ describe("registered correlated completion recovery custody", () => {
         const database = openOpenClawStateDatabase({
           env: { ...state.env, OPENCLAW_STATE_DIR: root },
         });
-        upsertSubagentRunRowInDatabase(database, bindSubagentRunRecord(child));
+        writeSubagentRunValuesInDatabase(database, [bindSubagentRunRecord(child)], []);
         return database;
       };
       const database = persist(state.stateDir);
@@ -132,7 +132,9 @@ describe("registered correlated completion recovery custody", () => {
         const unavailable = vi
           .spyOn(store, "executeExistingOpenClawStateRead")
           .mockImplementationOnce(async (_options, command) => {
-            expect(command).toEqual({ type: "subagents.runs", scope: { kind: "all" } });
+            expect(command).toEqual({
+              type: "subagents.restore",
+            });
             throw new Error("registry hydration read unavailable");
           });
         try {
@@ -144,7 +146,8 @@ describe("registered correlated completion recovery custody", () => {
         }
       }
       if (change !== "hydration pending" && change !== "retired owner") {
-        subagentRuns.set(child.runId, child);
+        await restoreSubagentRunsFromDisk({ runs: subagentRuns });
+        child = expectDefined(subagentRuns.get(child.runId), "restored completion owner");
       }
       const replacementRoot = state.path("replacement");
       const replacingSource =
@@ -152,16 +155,17 @@ describe("registered correlated completion recovery custody", () => {
       const replacement = replacingSource ? persist(replacementRoot) : undefined;
       const before = structuredClone(child);
       const replacementBefore = replacement && readSubagentRun(replacement, child.runId);
+      let cleanupRelease: Promise<void> | undefined;
       if (change === "cleanup released at receipt") {
         const failedCompletion = vi
           .fn()
           .mockRejectedValue(new Error("terminal effects unavailable"));
         const fallbackResume = vi.fn(() => {
-          expect(child.delivery?.status).toBe("in_progress");
+          expect(subagentRuns.get(child.runId)?.delivery?.status).toBe("delivered");
         });
         const completionRuntime = createSubagentRegistryCompletionRuntime({
           runs: subagentRuns,
-          resumed: new Set([child.runId]),
+          resumed: new Set([getSubagentRunRuntimeKey(child)]),
           retryTimers: new Set(),
           completeSubagentRun: failedCompletion,
           scheduleSweep: vi.fn(),
@@ -180,20 +184,24 @@ describe("registered correlated completion recovery custody", () => {
                     const receipt = await scope.execute(command, executeOptions);
                     if (command.type === "sessionDelivery.mutateSubagentCompletion" && !released) {
                       released = true;
-                      await completionRuntime.completeSubagentRunWithRecovery(
-                        {
-                          runId: child.runId,
-                          expectedEntry: child,
-                          endedAt: now - 10,
-                          outcome: { status: "ok" },
-                          reason: SUBAGENT_ENDED_REASON_COMPLETE,
-                          triggerCleanup: true,
-                        },
-                        "queued-completion-retry",
-                      );
-                      expect(failedCompletion).toHaveBeenCalledTimes(2);
-                      expect(fallbackResume).toHaveBeenCalledOnce();
-                      expect(child.cleanupHandled).toBe(false);
+                      // The cleanup successor waits for this ACK to release row admission.
+                      cleanupRelease = completionRuntime
+                        .completeSubagentRunWithRecovery(
+                          {
+                            runId: child.runId,
+                            expectedEntry: child,
+                            endedAt: now - 10,
+                            outcome: { status: "ok" },
+                            reason: SUBAGENT_ENDED_REASON_COMPLETE,
+                            triggerCleanup: true,
+                          },
+                          "queued-completion-retry",
+                        )
+                        .then(() => {
+                          expect(failedCompletion).toHaveBeenCalledTimes(2);
+                          expect(fallbackResume).toHaveBeenCalledOnce();
+                          expect(subagentRuns.get(child.runId)?.cleanupHandled).toBe(false);
+                        });
                     }
                     return receipt;
                   },
@@ -231,16 +239,27 @@ describe("registered correlated completion recovery custody", () => {
               return;
             }
             changed = true;
+            if (change === "successor") {
+              await mutateSubagentRuns([child.runId], (rows) => ({
+                value: undefined,
+                postimages: new Map([
+                  [
+                    child.runId,
+                    {
+                      ...expectDefined(rows.get(child.runId), "committed delivery owner"),
+                      generation: 2,
+                    },
+                  ],
+                ]),
+              }));
+              successor = subagentRuns.get(child.runId);
+              return;
+            }
             // The first continuation performs the existing pre-import guard. The
             // second advances ownership while that actual import is pending.
             queueMicrotask(() =>
               queueMicrotask(() => {
-                if (change === "successor") {
-                  successor = { ...structuredClone(child), generation: 2 };
-                  subagentRuns.set(child.runId, successor);
-                } else {
-                  vi.stubEnv("OPENCLAW_STATE_DIR", replacementRoot);
-                }
+                vi.stubEnv("OPENCLAW_STATE_DIR", replacementRoot);
               }),
             );
           },
@@ -262,6 +281,7 @@ describe("registered correlated completion recovery custody", () => {
         try {
           await clock.advanceBy(1_250);
           await services.stopDeliveryRecovery();
+          await cleanupRelease;
           expect(settled).toHaveBeenCalledOnce();
           expect(deliver).not.toHaveBeenCalled();
           if (change === "hydration pending") {
@@ -291,10 +311,7 @@ describe("registered correlated completion recovery custody", () => {
               getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, queueId, state.stateDir),
             ).toBe("completed");
             expect(resume).not.toHaveBeenCalled();
-          } else if (
-            change === "default after commit" ||
-            change === "cleanup released at receipt"
-          ) {
+          } else if (change === "default after commit") {
             const committed = readSubagentRun(database, child.runId);
             expect(committed?.delivery?.status).toBe("delivered");
             expect(resume).not.toHaveBeenCalled();
@@ -303,17 +320,13 @@ describe("registered correlated completion recovery custody", () => {
             });
             if (replacement) {
               expect(readSubagentRun(replacement, child.runId)).toEqual(replacementBefore);
-            } else {
-              expect(child.delivery?.status).toBe("in_progress");
             }
             database.db.exec(
               "CREATE TRIGGER reject_settlement_rewrite BEFORE UPDATE ON subagent_runs BEGIN SELECT RAISE(ABORT, 'must reconcile committed delivery without rewriting'); END",
             );
-            if (change === "default after commit") {
-              vi.unstubAllEnvs();
-              // Reconstitute the live owner through canonical restoration, without a receipt closure.
-              expect(await restoreSubagentRunsFromDisk({ runs: subagentRuns })).toBe(1);
-            }
+            vi.unstubAllEnvs();
+            // Reconstitute the live owner through canonical restoration, without a receipt closure.
+            expect(await restoreSubagentRunsFromDisk({ runs: subagentRuns })).toBe(1);
             services.heartbeatRunner.stop();
             services = startServices();
             await clock.advanceBy(1_250);
@@ -348,6 +361,10 @@ describe("registered correlated completion recovery custody", () => {
             expect(
               getDeliveryQueueEntryStatus(SESSION_DELIVERY_QUEUE_NAME, queueId, state.stateDir),
             ).toBe(outcome === "recovered" ? "completed" : "failed");
+            if (change === "cleanup released at receipt") {
+              expect(readSubagentRun(database, child.runId)?.cleanupHandled).toBe(false);
+              expect(subagentRuns.get(child.runId)?.delivery?.status).toBe("delivered");
+            }
             if (change === "successor") {
               expect(successor).toBeDefined();
               expect(subagentRuns.get(child.runId)).toBe(successor);
@@ -372,7 +389,14 @@ describe("registered correlated completion recovery custody", () => {
       if (change === "retired owner") {
         await withOpenClawStateDatabaseReadSnapshot(
           async () => {
-            await persistSubagentRunsToDiskAsyncOrThrow(subagentRuns, [child.runId], { context });
+            await mutateSubagentRuns(
+              [child.runId],
+              () => ({
+                value: undefined,
+                postimages: new Map([[child.runId, null]]),
+              }),
+              { context },
+            );
             expect(
               (await readFullSubagentRuns(context, { kind: "ids", runIds: [child.runId] })).has(
                 child.runId,

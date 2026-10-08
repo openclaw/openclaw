@@ -25,9 +25,6 @@ function estimateUnknownChars(value: unknown): number {
   if (typeof value === "string") {
     return value.length;
   }
-  if (value === undefined) {
-    return 0;
-  }
   try {
     const serialized = JSON.stringify(value);
     return typeof serialized === "string" ? serialized.length : 0;

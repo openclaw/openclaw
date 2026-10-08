@@ -39,7 +39,7 @@ beforeEach(async () => {
     layout: "state-only",
   });
   configMocks.getRuntimeConfig.mockReset().mockReturnValue({
-    agents: { list: [{ id: "main" }, { id: "ops-team" }] },
+    agents: { entries: { main: {}, "ops-team": {} } },
   });
 });
 

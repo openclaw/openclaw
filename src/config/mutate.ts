@@ -1,4 +1,3 @@
-// Applies scoped config mutations while preserving IO and observer state.
 import fsNode from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -47,6 +46,7 @@ import {
   type ConfigWriteOptions,
   type ConfigWriteResult,
 } from "./io.js";
+import { hasWebhookMigrationProgress } from "./io.meta.js";
 import { containsConfigIncludeDirective, hashConfigRaw } from "./io.read-helpers.js";
 import { resolveManagedRuntimeEnvBaseline } from "./io.runtime-env.js";
 import { configWriteCommittedSnapshot } from "./io.types.js";
@@ -119,8 +119,7 @@ export type ConfigMutationIO = {
   env?: NodeJS.ProcessEnv;
   readConfigFileSnapshotForWrite: typeof readConfigFileSnapshotForWrite;
   writeConfigFile: (
-    cfg: OpenClawConfig,
-    options?: ConfigWriteOptions,
+    ...args: Parameters<typeof writeConfigFile>
   ) => Promise<ConfigWriteResult | void>;
 };
 
@@ -179,12 +178,10 @@ export type ConfigMutationResult<T> = ConfigReplaceResult & {
   attempts: number;
 };
 
-type ConfigMutationOwnership = {
-  initialized: boolean;
-  expectedConfigPath: string;
-  ownedConfigPathForWrite?: string;
-  assertConfigPathForWrite?: () => void;
-};
+type ConfigMutationOwnership = Pick<
+  ConfigWriteOptions,
+  "expectedConfigPath" | "ownedConfigPathForWrite" | "assertConfigPathForWrite"
+>;
 
 function assertManagedRuntimeEnvGeneration(generation: number): void {
   if (getPublishedConfigRuntimeEnvState().generation !== generation) {
@@ -234,10 +231,7 @@ async function readConfigSnapshotForMutation(params: {
   ownedConfigPathForWrite?: string;
   io?: ConfigMutationIO;
   writeOptions?: ConfigWriteOptions;
-}): Promise<{
-  snapshot: ConfigFileSnapshot;
-  writeOptions: ConfigWriteOptions;
-}> {
+}): ReturnType<typeof readConfigFileSnapshotForWrite> {
   const options = {
     ...(params.writeOptions?.skipPluginValidation ? { skipPluginValidation: true } : {}),
     ...(params.writeOptions?.observe === false ? { observe: false } : {}),
@@ -297,7 +291,6 @@ function createConfigMutationOwnership(
 ): ConfigMutationOwnership {
   const mergedWriteOptions = mergeConfigMutationWriteOptions(prepared.writeOptions, writeOptions);
   return {
-    initialized: true,
     expectedConfigPath: mergedWriteOptions.expectedConfigPath ?? prepared.snapshot.path,
     ownedConfigPathForWrite: mergedWriteOptions.ownedConfigPathForWrite,
     assertConfigPathForWrite: mergedWriteOptions.assertConfigPathForWrite,
@@ -305,23 +298,21 @@ function createConfigMutationOwnership(
 }
 
 async function withConfigMutationSnapshotLock<T>(
-  params: { writeOptions?: ConfigWriteOptions },
+  writeOptions: ConfigWriteOptions | undefined,
   fn: (prepared: Awaited<ReturnType<typeof readConfigSnapshotForMutation>>) => Promise<T>,
 ): Promise<T> {
-  let lockPath = path.resolve(params.writeOptions?.ownedConfigPathForWrite ?? resolveConfigPath());
+  let lockPath = path.resolve(writeOptions?.ownedConfigPathForWrite ?? resolveConfigPath());
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    params.writeOptions?.assertConfigPathForWrite?.();
+    writeOptions?.assertConfigPathForWrite?.();
     const outcome = await withConfigMutationLock(
-      { lockPath, assertCurrent: params.writeOptions?.assertCurrent },
+      { lockPath, assertCurrent: writeOptions?.assertCurrent },
       async () => {
         const prepared = await readConfigSnapshotForMutation({
-          ...(params.writeOptions?.ownedConfigPathForWrite
-            ? { ownedConfigPathForWrite: params.writeOptions.ownedConfigPathForWrite }
-            : {}),
-          writeOptions: params.writeOptions,
+          ownedConfigPathForWrite: writeOptions?.ownedConfigPathForWrite,
+          writeOptions,
         });
         captureConfigWriteLockGuard(lockPath)?.();
-        params.writeOptions?.assertConfigPathForWrite?.();
+        writeOptions?.assertConfigPathForWrite?.();
         const preparedPath = path.resolve(prepared.snapshot.path);
         if (preparedPath !== lockPath) {
           return { done: false as const, lockPath: preparedPath };
@@ -346,9 +337,8 @@ async function withConfigMutationSnapshotLock<T>(
 export async function withConfigMutationExclusive<T>(
   fn: (config: OpenClawConfig) => Promise<T>,
 ): Promise<T> {
-  return await withConfigMutationSnapshotLock(
-    {},
-    async (prepared) => await fn(prepared.snapshot.sourceConfig),
+  return await withConfigMutationSnapshotLock(undefined, (prepared) =>
+    fn(prepared.snapshot.sourceConfig),
   );
 }
 
@@ -363,8 +353,11 @@ function resolveIncludeOwnedWriteCandidate(params: {
   writeOptions?: ConfigWriteOptions;
   io?: ConfigMutationIO;
 }): (IncludeWriteBoundary & { nextConfig: OpenClawConfig }) | null {
-  // A roster-format persist is a root write; an include-only commit cannot carry it.
-  if (params.writeOptions?.persistCanonicalAgentRoster === true) {
+  // Root-owned migration markers and roster format cannot travel in an include-only commit.
+  if (
+    params.writeOptions?.persistCanonicalAgentRoster === true ||
+    hasWebhookMigrationProgress(params.snapshot.sourceConfig, params.nextConfig)
+  ) {
     return null;
   }
   const projection = {
@@ -399,16 +392,10 @@ function resolveIncludeOwnedWriteCandidate(params: {
     env: params.io?.env ?? process.env,
     explicitSetPaths: params.writeOptions?.explicitSetPaths,
   });
-  const markerPath = ["meta", "migrations", "modelPolicyAllowlist"];
   const nextConfig = projectIncludeModelPolicyWrite({
     config: values.authoredConfig,
     previousConfig: params.snapshot.sourceConfig,
-    preserveMarker:
-      params.writeOptions?.explicitSetPaths?.some(
-        (segments) =>
-          segments.length <= markerPath.length &&
-          segments.every((part, i) => part === markerPath[i]),
-      ) === true,
+    explicitSetPaths: params.writeOptions?.explicitSetPaths,
   });
   let changed = collectChangedConfigPaths(values.authoredSourceConfig, nextConfig);
   if (changed.paths.length === 0 && !changed.rootChanged && nextConfig !== values.authoredConfig) {
@@ -836,7 +823,7 @@ export async function replaceConfigFile(params: ConfigReplaceParams): Promise<Co
   params.writeOptions?.assertConfigPathForWrite?.();
   if (!params.snapshot && !params.io) {
     return await withConfigMutationSnapshotLock(
-      { writeOptions: params.writeOptions },
+      params.writeOptions,
       async (prepared) =>
         await replaceConfigFileUnlocked({
           ...params,
@@ -986,8 +973,7 @@ async function transformConfigFileAttempt<T>(
     }));
   let mergedWriteOptions = mergeConfigMutationWriteOptions(writeOptions, params.writeOptions);
   if (ownership) {
-    if (!ownership.initialized) {
-      ownership.initialized = true;
+    if (ownership.expectedConfigPath === undefined) {
       ownership.expectedConfigPath = mergedWriteOptions.expectedConfigPath ?? snapshot.path;
       ownership.ownedConfigPathForWrite = mergedWriteOptions.ownedConfigPathForWrite;
       ownership.assertConfigPathForWrite = mergedWriteOptions.assertConfigPathForWrite;
@@ -1047,7 +1033,7 @@ export async function transformConfigFile<T = void>(
   params.writeOptions?.assertConfigPathForWrite?.();
   if (!params.io) {
     return await withConfigMutationSnapshotLock(
-      { writeOptions: params.writeOptions },
+      params.writeOptions,
       async (prepared) =>
         await transformConfigFileAttempt(
           params,
@@ -1074,12 +1060,9 @@ export async function transformConfigFileWithRetry<T = void>(
   const runWithPrepared = async (
     prepared?: Awaited<ReturnType<typeof readConfigSnapshotForMutation>>,
   ) => {
-    const ownership = prepared
+    const ownership: ConfigMutationOwnership = prepared
       ? createConfigMutationOwnership(prepared, params.writeOptions)
-      : {
-          initialized: false,
-          expectedConfigPath: "",
-        };
+      : {};
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       try {
         return await transformConfigFileAttempt(
@@ -1102,10 +1085,7 @@ export async function transformConfigFileWithRetry<T = void>(
     throw new Error("Config mutation retry loop exhausted unexpectedly.");
   };
   if (!params.io) {
-    return await withConfigMutationSnapshotLock(
-      { writeOptions: params.writeOptions },
-      runWithPrepared,
-    );
+    return await withConfigMutationSnapshotLock(params.writeOptions, runWithPrepared);
   }
   return await withConfigMutationLock(
     { io: params.io, assertCurrent: params.writeOptions?.assertCurrent },

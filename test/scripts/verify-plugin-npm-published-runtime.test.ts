@@ -86,6 +86,34 @@ describe("plugin npm publish verifier command limits", () => {
 });
 
 describe("collectPluginNpmPublishedRuntimeErrors", () => {
+  it("rejects test and fixture files from the publication artifact", () => {
+    expect(
+      collectPluginNpmPublishedRuntimeErrors({
+        packageJson: {
+          name: "runtime-entry-fixture",
+          openclaw: {
+            extensions: ["./index.ts"],
+            runtimeExtensions: ["./dist/index.js"],
+          },
+        },
+        files: [
+          "package.json",
+          "openclaw.plugin.json",
+          "dist/index.js",
+          "dist/runtime.test-harness.js",
+          "skills/example/src/index.ts",
+          "src/index.ts",
+          "src/__fixtures__/plugin.ts",
+          "src/test-support/helper.ts",
+          "test/pack.test.ts",
+          "root.test.ts",
+        ],
+      }),
+    ).toEqual([
+      "runtime-entry-fixture plugin npm package must not include test or fixture files: root.test.ts, src/__fixtures__/plugin.ts, src/test-support/helper.ts, test/pack.test.ts",
+    ]);
+  });
+
   it.each(
     [".js", ".mjs", ".cjs"].flatMap((extension) => [
       { extension, present: false },

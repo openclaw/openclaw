@@ -194,14 +194,13 @@ export function buildSidebarSessionNavigationState(input: {
       participantCount: row.participantCount,
       archivedBy: row.archivedBy,
       // Parent attention attributes subagent failures with the worker's own label.
-      label: resolveSessionDisplayName(row.key, row, { includeSubagentPrefix: false }),
+      label: resolveSessionDisplayName(row.key, row),
       userLabel: row.label,
       renameValue: resolveSessionRenameValue(row),
       subtitle: resolveSessionWorkSubtitle(row),
       workContext: resolveSessionWorkContext(row),
       active: row.key === navigation.activeRowKey,
       visuallyActive: input.highlightCurrentSession && row.key === navigation.currentSessionKey,
-      // Normalize optional gateway state before collapsing it to the sidebar's required fact.
       hasActiveRun: row.archived !== true && isSessionRunActive(row),
       gatewayHasActiveRun: row.hasActiveRun,
       activeRunIds: row.archived === true ? undefined : row.activeRunIds,
@@ -310,7 +309,7 @@ export function buildReconciledSidebarZone(input: {
   const defaultPluginNavigationKeys = new Set([
     ...pluginTabs.keys(),
     ...navigation
-      .filter((entry) => entry.value.defaultVisible !== false)
+      .filter((entry) => !entry.value.parent && entry.value.defaultVisible !== false)
       .toSorted((a, b) => (a.value.order ?? 0) - (b.value.order ?? 0) || a.key.localeCompare(b.key))
       .map((entry) => entry.key),
   ]);

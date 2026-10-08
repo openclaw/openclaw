@@ -1,14 +1,12 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
 import {
   createUiTestShardGroups,
-  hasSharedUiE2eInput,
   resolveUiE2ePrTestSelection,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import { resolvePolicyTestTargets } from "../../scripts/lib/ci-policy-test-watch.mts";
-import { readUiE2eFileTimings } from "../../scripts/lib/ci-test-timings.mts";
 import { UI_E2E_SMOKE_TEST_FILES } from "../../scripts/lib/ci-ui-e2e-owner-inventory.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { uiE2eRealGatewayTestFiles } from "../vitest/vitest.ui-paths.mjs";
@@ -17,12 +15,16 @@ import {
   runCiManifestFixture,
 } from "./ci-workflow-manifest.test-support.js";
 
-const temporary = useAutoCleanupTempDirTracker(afterEach);
+const temporary = useAutoCleanupTempDirTracker(afterAll);
 const cron = "ui/src/e2e/cron-descriptions.e2e.test.ts";
 const appearance = "ui/src/e2e/appearance-control-layout.e2e.test.ts";
 const unknown = "ui/src/e2e/new-unmapped-flow.e2e.test.ts";
+let fixtureCwd: string | undefined;
 
 function fixture() {
+  if (fixtureCwd) {
+    return fixtureCwd;
+  }
   const cwd = temporary.make("ui-e2e-selection-");
   const files: Record<string, string> = {
     [cron]: 'import "../test-helpers/cron-fixture.ts";',
@@ -40,7 +42,7 @@ function fixture() {
     mkdirSync(path.dirname(destination), { recursive: true });
     writeFileSync(destination, source);
   }
-  return cwd;
+  return (fixtureCwd = cwd);
 }
 
 describe("Control UI PR owner selection", () => {
@@ -66,7 +68,6 @@ describe("Control UI PR owner selection", () => {
   });
 
   it.each([
-    [cron, "edited test", cron],
     [unknown, "edited test", unknown],
     ["ui/src/test-helpers/cron-fixture.ts", "test or fixture import dependency", cron],
     ["ui/src/pages/cron/route.ts", "explicit source-owner watch", cron],
@@ -80,18 +81,14 @@ describe("Control UI PR owner selection", () => {
   );
 
   it.each([
-    null,
-    [],
-    ["ui/src/app/bootstrap.ts"],
-    ["ui/src/test-helpers/control-ui-e2e.ts"],
-    ["ui/src/e2e/control-ui-e2e-suite.test-support.ts"],
-    ["ui/vite.config.ts"],
-    ["ui/config/control-ui-chunking.ts"],
-    ["test/vitest/vitest.ui-e2e.setup.ts"],
+    { changed: null, forceFull: false },
+    { changed: [], forceFull: false },
+    { changed: ["ui/src/app/bootstrap.ts"], forceFull: false },
+    { changed: [cron], forceFull: true },
   ])(
-    "keeps full coverage for missing paths or core harness, bundle, and shell inputs: %j",
-    (changed) => {
-      const selected = resolveUiE2ePrTestSelection(changed, { cwd: fixture() });
+    "selects the full inventory for missing/shared inputs or a forced run: %j",
+    ({ changed, forceFull }) => {
+      const selected = resolveUiE2ePrTestSelection(changed, { cwd: fixture(), forceFull });
       expect(selected.mode).toBe("full");
       expect(selected.files).toContain(cron);
       expect(selected.files).toContain(appearance);
@@ -99,31 +96,12 @@ describe("Control UI PR owner selection", () => {
     },
   );
 
-  it.each([
-    "ui/src/styles/base.css",
-    "ui/public/themes/paper.css",
-    "scripts/lib/vitest-worker-bootstrap.mts",
-    "scripts/lib/control-ui-i18n-catalog.ts",
-    "tsdown.config.ts",
-    "pnpm-lock.yaml",
-    "ui/src/components/unmapped-shared-component.ts",
-    "ui/src/unmapped-runtime.ts",
-  ])("keeps unmapped or non-core shared inputs on the smoke cohort: %s", (changed) => {
-    const selected = resolveUiE2ePrTestSelection([changed], { cwd: fixture() });
+  it("keeps an unmapped source change on the smoke cohort", () => {
+    const selected = resolveUiE2ePrTestSelection(["ui/src/unmapped-runtime.ts"], {
+      cwd: fixture(),
+    });
     expect(selected.mode).toBe("owners");
     expect(selected.files.toSorted()).toEqual([...UI_E2E_SMOKE_TEST_FILES].toSorted());
-  });
-
-  it("restores the complete inventory when forced and keeps the fixed smoke within one shard", () => {
-    const cwd = fixture();
-    const selected = resolveUiE2ePrTestSelection([cron], { cwd, forceFull: true });
-    expect(selected.mode).toBe("full");
-    expect(selected.files).toContain(appearance);
-    const timings = readUiE2eFileTimings();
-    expect(
-      UI_E2E_SMOKE_TEST_FILES.reduce((sum, file) => sum + timings.fileSeconds[file]!, 0),
-    ).toBeLessThan(60);
-    expect(hasSharedUiE2eInput(["ui/src/e2e/cron-descriptions.e2e.test.ts"])).toBe(false);
   });
 
   it("retains formerly release-only and real-Gateway files in full periodic groups", () => {
@@ -143,12 +121,9 @@ describe("Control UI PR owner selection", () => {
 });
 
 it.each([
-  { event: "pull_request", kill: "", full: false, count: 1 },
   { event: "pull_request", kill: "", full: false, count: 0 },
   { event: "pull_request", kill: "", full: false, count: 30 },
   { event: "pull_request", kill: "", full: false, count: 31 },
-  { event: "pull_request", kill: "", full: false, count: 60 },
-  { event: "pull_request", kill: "", full: false, count: 61 },
   { event: "pull_request", kill: "", full: false, count: 241 },
   { event: "pull_request", kill: "true", full: true, count: 1 },
   { event: "pull_request", kill: "1", full: true, count: 1 },

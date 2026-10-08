@@ -7,8 +7,6 @@ import {
 import { USER_PROFILE_ID_MAX_LENGTH } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SystemPresence } from "../infra/system-presence.js";
-// Gateway WebSocket broadcaster.
-// Applies event scope guards and slow-consumer handling before sending frames.
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { queuePluginSessionsChanged } from "../plugins/gateway-events.js";
@@ -40,6 +38,7 @@ import { MAX_BUFFERED_BYTES, WEBSOCKET_OPEN_READY_STATE } from "./server-constan
 import type { GatewayClientRegistry } from "./server/client-registry.js";
 import { closeGatewayTransportWithGrace } from "./server/connection-transport-close.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
+import { invalidateSharedReadResponses } from "./shared-read-responses.js";
 import { logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
 // Opt-in scoped clients never receive session-bearing broadcasts without an
@@ -239,6 +238,9 @@ export function createGatewayBroadcaster(params: {
       publication?: LiveTextPublication;
     },
   ) => {
+    if (!retained) {
+      invalidateSharedReadResponses(broadcast, event);
+    }
     if (!retained && event === "sessions.changed") {
       // Delivery is queued here so process-local handlers run after websocket fanout returns.
       queuePluginSessionsChanged(payload);

@@ -43,12 +43,9 @@ async function resolveInstalledPluginIdOwners(config: OpenClawConfig, env: NodeJ
     const claimants = new Map<string, Array<(typeof snapshot.plugins)[number]>>();
     for (const plugin of snapshot.plugins) {
       for (const legacyId of new Set(plugin.legacyPluginIds ?? [])) {
-        const owners = claimants.get(legacyId);
-        if (owners) {
-          owners.push(plugin);
-        } else {
-          claimants.set(legacyId, [plugin]);
-        }
+        const owners = claimants.get(legacyId) ?? [];
+        owners.push(plugin);
+        claimants.set(legacyId, owners);
       }
     }
     const eligibleOwners = new Map<string, InstalledPluginIdOwner>();

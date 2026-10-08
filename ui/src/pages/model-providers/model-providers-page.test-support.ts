@@ -48,7 +48,6 @@ export type ModelProvidersPageTestElement = HTMLElement & {
   updateComplete: Promise<boolean>;
   busy: Record<string, boolean>;
   data: ModelProvidersData | null;
-  addProvider: () => Promise<void>;
   addProviderId: string;
   addProviderKey: string;
   addProviderOpen: boolean;

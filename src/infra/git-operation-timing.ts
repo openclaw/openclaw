@@ -9,6 +9,8 @@ import {
 } from "./diagnostic-trace-context.js";
 import { createFixedWindowBudget } from "./fixed-window-rate-limit.js";
 
+const diagnosticNow = () => performance.now();
+
 const operations = {
   "ref-mutation": {
     stateKey: "openclaw.gitRefMutationDiagnostics",
@@ -20,10 +22,16 @@ const operations = {
     message: "slow managed worktree removal",
     phases: ["admissionMs", "bodyMs", "finalizeMs"],
   },
+  "content-read": {
+    stateKey: "openclaw.gitContentReadDiagnostics",
+    message: "slow Git content read",
+    phases: ["firstHostRequestMs", "workerMs", "settlementMs"],
+  },
 } as const;
 
 const removalStages = [
   ["preparation", "preparationMs"],
+  ["packRepair", "packRepairMs"],
   ["snapshot", "snapshotMs"],
   ["checkoutRemoval", "checkoutRemovalMs"],
   ["finalization", "bodyFinalizeMs"],
@@ -33,9 +41,13 @@ type RemovalStage = (typeof removalStages)[number][0];
 export function startGitOperationTiming(
   kind: keyof typeof operations,
   log: Pick<SubsystemLogger, "isEnabled" | "info">,
+  details?: () => Record<string, unknown>,
 ) {
   try {
-    if (!areDiagnosticsEnabledForProcess() || !log.isEnabled("info")) {
+    if (
+      kind !== "worktree-removal" &&
+      (!areDiagnosticsEnabledForProcess() || !log.isEnabled("info"))
+    ) {
       return undefined;
     }
     const startedAt = performance.now();
@@ -44,9 +56,23 @@ export function startGitOperationTiming(
     let firstPhaseEnd: number | undefined;
     let secondPhaseEnd: number | undefined;
     let removalStage: RemovalStage | undefined;
+    let failedRemovalStage: RemovalStage | undefined;
     let removalStageStartedAt = 0;
     let removalDurations: Partial<Record<RemovalStage, number>> | undefined;
+    let inventory: { tracked: number; untracked: number } | undefined;
     return {
+      recordInventory(counts: { tracked: number; untracked: number }) {
+        inventory = counts;
+      },
+      removalProgress() {
+        return {
+          stage: failedRemovalStage ?? removalStage ?? "preparation",
+          elapsedMs: Math.round(performance.now() - startedAt),
+        };
+      },
+      markRemovalFailure() {
+        failedRemovalStage ??= removalStage;
+      },
       markPhase() {
         if (firstPhaseEnd === undefined) {
           firstPhaseEnd = performance.now();
@@ -83,7 +109,7 @@ export function startGitOperationTiming(
             budget: createFixedWindowBudget({
               maxRequests: 60,
               windowMs: 60_000,
-              now: () => performance.now(),
+              now: diagnosticNow,
             }),
             omitted: 0,
           }));
@@ -91,30 +117,40 @@ export function startGitOperationTiming(
             state.omitted = Math.min(Number.MAX_SAFE_INTEGER, state.omitted + 1);
             return;
           }
+          const fields = {
+            pid: process.pid,
+            threadId,
+            isMainThread,
+            durationMs: Math.round(durationMs),
+            [operation.phases[0]]: Math.round((firstPhaseEnd ?? endedAt) - startedAt),
+            ...(firstPhaseEnd !== undefined && secondPhaseEnd !== undefined
+              ? {
+                  [operation.phases[1]]: Math.round(secondPhaseEnd - firstPhaseEnd),
+                  [operation.phases[2]]: Math.round(endedAt - secondPhaseEnd),
+                }
+              : {}),
+            ...Object.fromEntries(
+              removalStages.flatMap(([stage, field]) => {
+                const elapsed = removalDurations?.[stage];
+                return elapsed === undefined ? [] : [[field, Math.round(elapsed)]];
+              }),
+            ),
+            callbackEntered:
+              (kind === "ref-mutation" ? secondPhaseEnd : firstPhaseEnd) !== undefined,
+            outcome,
+            omittedObservations: state.omitted,
+            ...details?.(),
+            ...(kind === "worktree-removal"
+              ? { tracked: inventory?.tracked ?? null, untracked: inventory?.untracked ?? null }
+              : {}),
+          };
           runWithDiagnosticTraceContext(trace, () =>
-            log.info(operation.message, {
-              pid: process.pid,
-              threadId,
-              isMainThread,
-              durationMs: Math.round(durationMs),
-              [operation.phases[0]]: Math.round((firstPhaseEnd ?? endedAt) - startedAt),
-              ...(firstPhaseEnd !== undefined && secondPhaseEnd !== undefined
-                ? {
-                    [operation.phases[1]]: Math.round(secondPhaseEnd - firstPhaseEnd),
-                    [operation.phases[2]]: Math.round(endedAt - secondPhaseEnd),
-                  }
-                : {}),
-              ...Object.fromEntries(
-                removalStages.flatMap(([stage, field]) => {
-                  const elapsed = removalDurations?.[stage];
-                  return elapsed === undefined ? [] : [[field, Math.round(elapsed)]];
-                }),
-              ),
-              callbackEntered:
-                (kind === "ref-mutation" ? secondPhaseEnd : firstPhaseEnd) !== undefined,
-              outcome,
-              omittedObservations: state.omitted,
-            }),
+            log.info(
+              kind !== "ref-mutation"
+                ? `${operation.message} ${JSON.stringify(fields)}`
+                : operation.message,
+              fields,
+            ),
           );
           state.omitted = 0;
         } catch {

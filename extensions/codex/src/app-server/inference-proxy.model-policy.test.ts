@@ -232,7 +232,7 @@ describe("inference transport model authority", () => {
     }
   });
 
-  it.each(["/responses", "/guardian", "/guardian-classifier"])(
+  it.each(["/responses", "/guardian-classifier"])(
     "authorizes WebSocket frames on %s and returns a sanitized denial before forwarding",
     async (path) => {
       bindModelExecution.mockImplementation(() => {

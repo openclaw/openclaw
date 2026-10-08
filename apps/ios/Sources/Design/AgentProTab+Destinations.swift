@@ -9,14 +9,10 @@ extension AgentProTab {
         case .agents:
             self.agentsDestination
         case .files:
-            self.filesDestination
+            AgentWorkspaceFilesScreen(
+                agentId: self.activeAgentID,
+                headerSidebarAction: self.headerSidebarAction)
         }
-    }
-
-    var filesDestination: some View {
-        AgentWorkspaceFilesScreen(
-            agentId: self.activeAgentID,
-            headerSidebarAction: self.headerSidebarAction)
     }
 
     var agentsDestination: some View {

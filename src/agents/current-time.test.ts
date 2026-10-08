@@ -13,7 +13,7 @@ describe("resolveCronStyleNow", () => {
     vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-05-30T12:00:00.000Z"));
 
     const result = resolveCronStyleNow(
-      { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
+      { agents: { defaults: { userTimezone: "UTC" } } },
       8_640_000_000_000_001,
     );
 
@@ -26,7 +26,7 @@ describe("resolveCronStyleNow", () => {
     vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
 
     const result = resolveCronStyleNow(
-      { agents: { defaults: { userTimezone: "UTC", timeFormat: "24" } } },
+      { agents: { defaults: { userTimezone: "UTC" } } },
       8_640_000_000_000_001,
     );
 

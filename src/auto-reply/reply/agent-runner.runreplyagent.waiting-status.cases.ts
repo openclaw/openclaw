@@ -33,9 +33,9 @@ export async function mockAcceptedWaitingStatusRun(
     | ((params: RunEmbeddedAgentInternalParams) => Promise<EmbeddedAgentRunResult>),
 ): Promise<void> {
   const testState = await createOpenClawTestState({ label: "reply-waiting-child" });
-  resetSubagentRegistryForTests({ persist: false });
+  await resetSubagentRegistryForTests({ persist: false });
   onTestFinished(async () => {
-    resetSubagentRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
     await testState.cleanup();
   });
   runner.mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {

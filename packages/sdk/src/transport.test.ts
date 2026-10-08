@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { OpenClaw } from "./client.js";
 import { createAgentEvent, createChatEvent } from "./client.test-support.js";
-import { GatewayClientTransport } from "./transport.js";
+import { GatewayClientTransport, observeGatewayReconnects } from "./transport.js";
 import type { GatewayEvent, OpenClawEvent } from "./types.js";
 
 type MockGatewayClientInstance = {
@@ -41,6 +41,33 @@ vi.mock("@openclaw/gateway-client", async () => ({
 describe("GatewayClientTransport", () => {
   beforeEach(() => {
     gatewayClientMocks.instances.length = 0;
+  });
+
+  it("keeps replacement reconnect observers when an old disposer runs again", async () => {
+    const transport = new GatewayClientTransport();
+    const retired = vi.fn();
+    const unsubscribe = observeGatewayReconnects(transport, retired);
+    unsubscribe();
+    const active = vi.fn();
+    const stop = observeGatewayReconnects(transport, active);
+    try {
+      unsubscribe();
+      const connecting = transport.connect();
+      const client = gatewayClientMocks.instances[0];
+      client?.opts.onHelloOk?.({ sessionId: "connection-1" });
+      await connecting;
+      client?.opts.onClose?.(1006, "connection lost");
+      client?.opts.onHelloOk?.({ sessionId: "connection-2" });
+      expect(retired).not.toHaveBeenCalled();
+      expect(active).toHaveBeenCalledOnce();
+      stop();
+      client?.opts.onClose?.(1006, "connection lost again");
+      client?.opts.onHelloOk?.({ sessionId: "connection-3" });
+      expect(active).toHaveBeenCalledOnce();
+    } finally {
+      stop();
+      await transport.close();
+    }
   });
 
   it.each(["chat", "assistant"])(

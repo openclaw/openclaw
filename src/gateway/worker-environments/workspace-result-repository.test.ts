@@ -27,7 +27,7 @@ import {
 import { recoverPendingWorkspaceResults } from "./placement-dispatch-pending-results.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
-import { SessionWorkspaceReservationBusyError } from "./placement-workspace-reservation.js";
+import { SessionWorkspaceReservationBusyError } from "./placement-workspace-reservation.kernel.js";
 import * as checkpoints from "./session-repository-checkpoints.js";
 import { withSessionRepositoryCheckpoint } from "./session-repository-checkpoints.js";
 import {
@@ -192,7 +192,7 @@ describe("repository workspace result ownership", () => {
         if (admission?.type !== "return") {
           throw new Error("Repository mutation did not return its admitted claim");
         }
-        const claim = admission.value;
+        const claim = await admission.value;
         expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
         const pausedCandidates = await candidates();
         expect(pausedCandidates).toHaveLength(boundary === "publication-metadata" ? 1 : 0);
@@ -207,7 +207,7 @@ describe("repository workspace result ownership", () => {
         expect(writesBefore).toBe(0);
         expect(await f.store.get(before.workspaceId)).toEqual(before);
         if (drained) {
-          const draining = placements.startWorkspaceResultDrain(claim);
+          const draining = await placements.startWorkspaceResultDrain(claim);
           expect(draining).toMatchObject({
             state: "draining",
             generation: claim.placementGeneration + 1,
@@ -227,7 +227,7 @@ describe("repository workspace result ownership", () => {
         await queueOwner;
         const remainingCandidates = await candidates();
         const after = (await f.store.get(before.workspaceId))!;
-        const pending = placements.listPendingWorkspaceResults(SESSION_ID);
+        const pending = await placements.listPendingWorkspaceResultsAsync(SESSION_ID);
         // The intermediate copy is gone; only the real private import inputs exist.
         const importRoots: string[] = [];
         for (const [index, [prefix]] of temporary.mock.calls.entries()) {
@@ -405,7 +405,7 @@ describe("repository workspace result ownership", () => {
         }),
       ).resolves.toBe("unchanged");
       expect(await f.store.get(f.repository.workspaceId)).toEqual(accepted);
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
     },
   );
@@ -427,7 +427,7 @@ describe("repository workspace result ownership", () => {
           },
         }),
       ).rejects.toThrow("lost the acknowledgement");
-      expect(placements.listPendingWorkspaceResults()).toMatchObject([
+      expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
         {
           workspaceAcceptedAtMs: null,
           recoveryRequestedAtMs: expect.any(Number),
@@ -443,7 +443,7 @@ describe("repository workspace result ownership", () => {
         },
         await placements.readProjection([SESSION_ID], { current: true }),
       );
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
       const checkpoint = await readArtifact(f.repository.workspaceId, "uncertain.txt");
       expect(checkpoint.preview).toEqual(
@@ -482,7 +482,7 @@ describe("repository workspace result ownership", () => {
         });
       }
       expect(competing).not.toHaveBeenCalled();
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
     },
   );
@@ -510,7 +510,7 @@ describe("repository workspace result ownership", () => {
     expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBe(
       f.initialCheckpointRef,
     );
-    expect(placements.listPendingWorkspaceResults()).toMatchObject([
+    expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
       { workspaceAcceptedAtMs: null, recoveryRequestedAtMs: expect.any(Number) },
     ]);
   });
@@ -523,8 +523,8 @@ describe("repository workspace result ownership", () => {
       f.mutations.mutate({ ...sessionTarget, assertCurrent: () => {}, mutate }),
     ).rejects.toThrow("active turn claim");
     expect(mutate).not.toHaveBeenCalled();
-    placements.acceptWorkspaceResult(activeTurn.turnClaim);
-    placements.completeWorkspaceResultAndReleaseTurn(activeTurn.turnClaim);
+    await placements.acceptWorkspaceResult(activeTurn.turnClaim);
+    await placements.completeWorkspaceResultAndReleaseTurn(activeTurn.turnClaim);
 
     await expect(
       f.mutations.mutate({
@@ -532,17 +532,17 @@ describe("repository workspace result ownership", () => {
         assertCurrent: () => {},
         mutate: async () => {
           await fs.writeFile(path.join(f.remote, "interrupted.txt"), "must remain recoverable\n");
-          expect(() =>
+          await expect(
             placements.startDrain({
               sessionId: SESSION_ID,
               environmentId: activeTurn.placement.environmentId,
               ownerEpoch: activeTurn.placement.activeOwnerEpoch,
               expectedGeneration: activeTurn.placement.generation,
             }),
-          ).toThrow("pending cloud workspace result");
+          ).rejects.toThrow("pending cloud workspace result");
           const claim = projectWorkerSessionTurnClaim(placements.get(SESSION_ID)!);
           expect(claim).toBeDefined();
-          placements.startWorkspaceResultDrain(claim!);
+          await placements.startWorkspaceResultDrain(claim!);
           return { changed: true, value: "unaccepted" };
         },
       }),
@@ -550,7 +550,7 @@ describe("repository workspace result ownership", () => {
     expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBe(
       f.initialCheckpointRef,
     );
-    expect(placements.listPendingWorkspaceResults()).toMatchObject([
+    expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
       {
         recoveryRequestedAtMs: expect.any(Number),
         workspaceAcceptedAtMs: null,
@@ -619,7 +619,7 @@ describe("repository workspace result ownership", () => {
           stagedResultRef: workerWorkspaceResultRef(first.turnClaim.claimId),
         }),
       ).toBe(true);
-      expect(placements.listPendingWorkspaceResults()).toEqual([]);
+      expect(await placements.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
     },
   );
@@ -638,7 +638,9 @@ describe("repository workspace result ownership", () => {
     await expect(
       placements.recordStagedWorkspaceResult(turnClaim, ref, foreign.workspaceId),
     ).rejects.toThrow("repository owner changed");
-    expect(placements.listPendingWorkspaceResults()).toMatchObject([{ stagedResultRef: null }]);
+    expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
+      { stagedResultRef: null },
+    ]);
     const hostSql = observeMainThreadSql();
     hostSql.calibrate();
     try {
@@ -654,7 +656,7 @@ describe("repository workspace result ownership", () => {
     await expect(placements.recordStagedWorkspaceResult(turnClaim, ref)).rejects.toThrow(
       "result ref changed",
     );
-    expect(placements.listPendingWorkspaceResults()).toMatchObject([
+    expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
       {
         stagedResultRef: ref,
         repositoryWorkspaceId: workspaceId,
@@ -675,7 +677,7 @@ describe("repository workspace result ownership", () => {
       const owned = await f.beginTurn("interrupted", !materialized);
       const destination = path.join(root, "materialized-worktree");
       if (materialized) {
-        placements.beginPlacementMove({
+        await placements.beginPlacementMove({
           sessionId: SESSION_ID,
           source: {
             generation: owned.placement.generation,
@@ -684,7 +686,7 @@ describe("repository workspace result ownership", () => {
           },
           target: { kind: "gateway" },
         });
-        placements.markWorkspaceResultPending(owned.turnClaim);
+        await placements.markWorkspaceResultPending(owned.turnClaim);
         await expect(
           f.finishTurn(owned, async () => {
             await fs.mkdir(destination);
@@ -710,7 +712,7 @@ describe("repository workspace result ownership", () => {
       }
       const checkpointRef = workerWorkspaceResultRef(owned.turnClaim.claimId);
       expect((await f.store.get(f.repository.workspaceId))?.checkpointRef).toBe(checkpointRef);
-      expect(placements.listPendingWorkspaceResults()).toMatchObject([
+      expect(await placements.listPendingWorkspaceResultsAsync()).toMatchObject([
         materialized
           ? {
               stagedResultRef: checkpointRef,
@@ -761,7 +763,7 @@ describe("repository workspace result ownership", () => {
         await restarted.readProjection([SESSION_ID], { current: true }),
       );
       expect(reportWorkspaceResultRecoveryFailure).not.toHaveBeenCalled();
-      expect(restarted.listPendingWorkspaceResults()).toEqual([]);
+      expect(await restarted.listPendingWorkspaceResultsAsync()).toEqual([]);
       expect(restarted.get(SESSION_ID)).toMatchObject({
         state: materialized ? "local" : "reclaimed",
         turnClaim: null,

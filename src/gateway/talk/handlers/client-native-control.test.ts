@@ -1,5 +1,6 @@
 import { setImmediate as nextEventLoopTurn, setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
 import { ACTIVE_EMBEDDED_RUNS } from "../../../agents/embedded-agent-runner/run-state.js";
 import type { RunEmbeddedAgentParams } from "../../../agents/embedded-agent-runner/run/params.js";
 import {
@@ -10,7 +11,17 @@ import { createEmbeddedRunHandle } from "../../../agents/embedded-agent-runner/r
 import * as workspace from "../../../agents/workspace.js";
 import { readSessionTranscriptMessageEvents } from "../../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
-import { flushClientVoiceSessionWrites } from "../../../talk/client-voice-session.js";
+import * as voiceSessionReads from "../../../talk/client-voice-session-read.js";
+import {
+  flushClientVoiceSessionWrites,
+  isClientVoiceSessionConfirmable,
+  resolveOpenClientVoiceSessionId,
+} from "../../../talk/client-voice-session.js";
+import * as talkAgentConsult from "../agent-consult.js";
+import {
+  forgetLegacyVoiceBinding,
+  readLegacyVoiceBinding,
+} from "./client-legacy-voice-bindings.js";
 import {
   AGENT_ID,
   CONNECTION_ID,
@@ -89,6 +100,13 @@ describe("native Talk through the public OpenAI plugin registration", () => {
     await withNativePlugin(async ({ create, offer, invoke, broadcast }) => {
       const { result, socket } = await connectNativeSession({ create, offer });
       expect(talkEventTypes(broadcast).filter((type) => type === "session.ready")).toHaveLength(1);
+      expect(
+        isClientVoiceSessionConfirmable({
+          agentId: AGENT_ID,
+          sessionKey: SESSION_KEY,
+          voiceSessionId: requireString(result, "voiceSessionId"),
+        }),
+      ).toBe(true);
       socket.serverEvent({ type: "turn.done", turn: { role: "user", transcript: "Hello voice" } });
       socket.serverEvent({
         type: "turn.done",
@@ -344,6 +362,67 @@ describe("native Talk through the public OpenAI plugin registration", () => {
       });
     },
   );
+
+  it("reuses one implicit call when legacy tool lookups overlap on the same connection", async () => {
+    await withNativePlugin(async ({ invoke }) => {
+      const ready = createDeferredCore();
+      const release = createDeferredCore();
+      const lookup = voiceSessionReads.lookupClientVoiceSessions;
+      let lookups = 0;
+      const reader = vi
+        .spyOn(voiceSessionReads, "lookupClientVoiceSessions")
+        .mockImplementation(async (request) => {
+          const matches = await lookup(request);
+          if (++lookups === 2) {
+            ready.resolve();
+          }
+          await release.promise;
+          return matches;
+        });
+      // Agent execution is downstream of the persisted binding this case protects.
+      const consult = vi
+        .spyOn(talkAgentConsult, "startTalkRealtimeAgentConsult")
+        .mockResolvedValue({
+          ok: true,
+          runId: "synthetic-legacy-run",
+          idempotencyKey: "synthetic-legacy-call",
+        });
+      const calls = Promise.all(
+        ["first", "second"].map((callId) =>
+          invoke("talk.client.toolCall", {
+            voiceSessionId: undefined,
+            callId,
+            name: "openclaw_agent_consult",
+            args: { question: "Report status" },
+          }),
+        ),
+      );
+      try {
+        await awaitGateBeforeSettlement(
+          ready.promise,
+          calls,
+          "Both legacy lookups must reach the worker before either creates a call",
+        );
+        release.resolve();
+        await calls;
+        const binding = readLegacyVoiceBinding(CONNECTION_ID, SESSION_KEY);
+        expect(binding).toBeTypeOf("string");
+        expect(
+          await resolveOpenClientVoiceSessionId({ agentId: AGENT_ID, sessionKey: SESSION_KEY }),
+        ).toBe(binding);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([calls]);
+        reader.mockRestore();
+        consult.mockRestore();
+        forgetLegacyVoiceBinding(
+          CONNECTION_ID,
+          SESSION_KEY,
+          readLegacyVoiceBinding(CONNECTION_ID, SESSION_KEY),
+        );
+      }
+    });
+  });
 
   it("keeps legacy native data-channel and client transcript ownership unchanged", async () => {
     await withNativePlugin(async ({ create, offer, invoke, broadcast }) => {

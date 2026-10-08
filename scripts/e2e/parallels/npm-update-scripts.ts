@@ -1,4 +1,3 @@
-// Npm Update Scripts script supports OpenClaw repository automation.
 import { posixAgentWorkspaceScript, windowsAgentWorkspaceScript } from "./agent-workspace.ts";
 import { shellQuote } from "./host-command.ts";
 import {
@@ -473,68 +472,48 @@ ${posixAssertAgentOkScript("openclaw", input, "linux", "parallels-npm-update-lin
 
 function posixVersionCheck(command: string, expectedNeedle: string): string {
   const quotedNeedle = shellQuote(expectedNeedle);
-  if (!expectedNeedle) {
-    return `hash -r || true
-version_deadline=$((SECONDS + 60))
-while true; do
-  if version="$(${command} --version 2>&1)"; then
-    version_status=0
-    printf '%s\\n' "$version"
-    break
-  else
-    version_status=$?
-    printf '%s\\n' "$version"
-  fi
-  if [ "$SECONDS" -ge "$version_deadline" ]; then
-    exit "$version_status"
-  fi
-  sleep 2
-done`;
-  }
+  const success = expectedNeedle ? `case "$version" in *${quotedNeedle}*) break ;; esac` : "break";
+  const failure = expectedNeedle
+    ? `if [ "$version_status" -ne 0 ]; then
+      exit "$version_status"
+    fi
+    echo "version mismatch: expected ${expectedNeedle}" >&2
+    exit 1`
+    : 'exit "$version_status"';
   return `hash -r || true
 version_deadline=$((SECONDS + 60))
 while true; do
   if version="$(${command} --version 2>&1)"; then
     version_status=0
     printf '%s\\n' "$version"
-    case "$version" in *${quotedNeedle}*) break ;; esac
+    ${success}
   else
     version_status=$?
     printf '%s\\n' "$version"
   fi
   if [ "$SECONDS" -ge "$version_deadline" ]; then
-    if [ "$version_status" -ne 0 ]; then
-      exit "$version_status"
-    fi
-    echo "version mismatch: expected ${expectedNeedle}" >&2
-    exit 1
+    ${failure}
   fi
   sleep 2
 done`;
 }
 
 function windowsVersionCheck(expectedNeedle: string): string {
-  if (!expectedNeedle) {
-    return `$versionDeadline = (Get-Date).AddSeconds(60)
-while ($true) {
-  $version = Invoke-OpenClaw --version
-  $version
-  if ($LASTEXITCODE -eq 0) { break }
-  if ((Get-Date) -ge $versionDeadline) { throw "openclaw --version failed with exit code $LASTEXITCODE" }
-  Start-Sleep -Seconds 2
-}`;
-  }
-  const expectedPattern = psSingleQuote(`*${expectedNeedle}*`);
-  const mismatch = psSingleQuote(`version mismatch: expected ${expectedNeedle}`);
+  const expectedCondition = expectedNeedle
+    ? ` -and (($version | Out-String) -like ${psSingleQuote(`*${expectedNeedle}*`)})`
+    : "";
+  const failure = expectedNeedle
+    ? `{
+    if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LASTEXITCODE" }
+    throw ${psSingleQuote(`version mismatch: expected ${expectedNeedle}`)}
+  }`
+    : '{ throw "openclaw --version failed with exit code $LASTEXITCODE" }';
   return `$versionDeadline = (Get-Date).AddSeconds(60)
 while ($true) {
   $version = Invoke-OpenClaw --version
   $version
-  if ($LASTEXITCODE -eq 0 -and (($version | Out-String) -like ${expectedPattern})) { break }
-  if ((Get-Date) -ge $versionDeadline) {
-    if ($LASTEXITCODE -ne 0) { throw "openclaw --version failed with exit code $LASTEXITCODE" }
-    throw ${mismatch}
-  }
+  if ($LASTEXITCODE -eq 0${expectedCondition}) { break }
+  if ((Get-Date) -ge $versionDeadline) ${failure}
   Start-Sleep -Seconds 2
 }`;
 }

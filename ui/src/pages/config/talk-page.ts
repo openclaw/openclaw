@@ -22,7 +22,6 @@ import {
   selectedTalkProviderOption,
   talkProviderConfigKeys,
   type TalkCatalogState,
-  type TalkRealtimeProviderOption,
 } from "./talk.ts";
 
 type GatewayClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
@@ -44,6 +43,18 @@ type CatalogConnection = {
   voiceWake: boolean;
 };
 
+function catalogConnection(gateway: ApplicationContext["gateway"]): CatalogConnection {
+  const snapshot = gateway.snapshot;
+  return {
+    gatewayUrl: gateway.connection.gatewayUrl,
+    client: snapshot.client,
+    connected: snapshot.phase === "connected",
+    voiceWake:
+      isGatewayMethodAdvertised(snapshot, "voicewake.get") === true &&
+      isGatewayMethodAdvertised(snapshot, "voicewake.set") === true,
+  };
+}
+
 type VoiceWakeWrite = {
   connection: CatalogConnection;
   text: string;
@@ -54,24 +65,6 @@ type ModelDefaultResetIntent = {
   gatewayUrl: string;
   configRevision: string | null;
 };
-
-function toProviderOption(
-  provider: TalkCatalogResult["realtime"]["providers"][number],
-): TalkRealtimeProviderOption {
-  return {
-    id: provider.id,
-    label: provider.label,
-    configured: provider.configured,
-    aliases: provider.aliases ?? [],
-    models: provider.models ?? [],
-    voices: provider.voices ?? [],
-    activeVoices: provider.activeVoices,
-    activeVoiceSelectionPolicy: provider.activeVoiceSelectionPolicy,
-    voicesByModel: provider.voicesByModel,
-    transports: provider.transports ?? [],
-    defaultModel: provider.defaultModel ?? null,
-  };
-}
 
 /** Transports whose sessions are client-owned (`talk.client.create`). */
 const TALK_CLIENT_OWNED_TRANSPORTS = new Set(["webrtc", "provider-websocket"]);
@@ -141,13 +134,8 @@ class VoiceWakeSettingsOwner {
   }
 
   private sync() {
-    const snapshot = this.gateway.snapshot;
-    const gatewayUrl = this.gateway.connection.gatewayUrl;
-    const client = snapshot.client;
-    const connected = snapshot.phase === "connected";
-    const voiceWake =
-      isGatewayMethodAdvertised(snapshot, "voicewake.get") === true &&
-      isGatewayMethodAdvertised(snapshot, "voicewake.set") === true;
+    const connection = catalogConnection(this.gateway);
+    const { gatewayUrl, client, connected, voiceWake } = connection;
     if (
       this.connection?.gatewayUrl === gatewayUrl &&
       this.connection.client === client &&
@@ -170,7 +158,6 @@ class VoiceWakeSettingsOwner {
       this.state.phase !== "saved"
         ? this.state
         : null;
-    const connection: CatalogConnection = { gatewayUrl, client, connected, voiceWake };
     this.connection = connection;
     this.update(
       draft
@@ -316,14 +303,7 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     .watchStore(() => this.context?.nativeDeviceSettings)
     .watchStore(
       () => this.context?.gateway,
-      (gateway) =>
-        this.syncCatalog(
-          gateway.connection.gatewayUrl,
-          gateway.snapshot.client,
-          gateway.snapshot.phase === "connected",
-          isGatewayMethodAdvertised(gateway.snapshot, "voicewake.get") === true &&
-            isGatewayMethodAdvertised(gateway.snapshot, "voicewake.set") === true,
-        ),
+      (gateway) => this.syncCatalog(catalogConnection(gateway)),
     )
     .watchStore(
       () => this.context?.runtimeConfig,
@@ -353,12 +333,8 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     super.disconnectedCallback();
   }
 
-  private syncCatalog(
-    gatewayUrl: string,
-    client: GatewayClient | null,
-    connected: boolean,
-    voiceWake: boolean,
-  ) {
+  private syncCatalog(connection: CatalogConnection) {
+    const { gatewayUrl, client, connected, voiceWake } = connection;
     if (this.modelDefaultResetIntent && this.modelDefaultResetIntent.gatewayUrl !== gatewayUrl) {
       this.modelDefaultResetIntent = null;
     }
@@ -372,7 +348,6 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     ) {
       return;
     }
-    const connection: CatalogConnection = { gatewayUrl, client, connected, voiceWake };
     this.connection = connection;
     if (!client || !connected) {
       this.catalog = { kind: "unavailable" };
@@ -393,7 +368,7 @@ class TalkSettingsPage extends OpenClawLightDomElement {
         kind: "ready",
         ready: result.realtime.ready === true,
         activeProvider: result.realtime.activeProvider ?? null,
-        providers: result.realtime.providers.map(toProviderOption),
+        providers: result.realtime.providers,
       });
       if (applied) {
         this.acknowledgeModelDefaultReset(connection);
@@ -580,7 +555,7 @@ class TalkSettingsPage extends OpenClawLightDomElement {
     // A relay-only provider (no client-owned transport) needs the transport
     // written explicitly when the current selection cannot carry across.
     const relayOnly =
-      option !== undefined &&
+      option?.transports !== undefined &&
       option.transports.length > 0 &&
       !option.transports.some((candidate) => TALK_CLIENT_OWNED_TRANSPORTS.has(candidate));
     let resultingTransport = rejectsTransport ? null : configuredTransport;

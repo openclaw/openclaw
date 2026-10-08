@@ -59,7 +59,17 @@ Frame shapes:
 - Response: `{type:"res", id, ok, payload|error}`
 - Event: `{type:"event", event, payload, seq?, stateVersion?, recipientProfileId?}`
 
-Live text uses append deltas after an initial recipient snapshot. An outer event
+Live text uses append deltas after an initial recipient snapshot. The
+`chat.history` field `inFlightRun.text` restores only the current run's unpersisted
+assistant tail. Silent-reply suppression uses the full available source; the tail keeps existing directive and media normalization without being classified as a silent reply again. If the cap evicts source context, retained tail text stays visible conservatively. Cumulative snapshots or replacements that restore text evicted by the live buffer cap may redisplay committed text when ownership is unknown, preserving unsaved output.
+When durable history or a keyed
+commentary item takes ownership of live text, the Gateway sends an existing
+`replace: true` frame before subsequent append deltas. Terminal result snapshots
+retain their complete result in `message.content`. A buffer-backed terminal can
+also supply the existing `message.openclawDisplayContent` projection: the same
+unpersisted tail finalized for display, including an explicitly empty tail and
+any Canvas blocks. The Control UI applies that projection before storing its
+live view; delivery consumers retain the complete content. An outer event
 sequence gap means a client may have lost part of that baseline: retire the
 connection and reconnect before applying more deltas. If the frame revealing the
 gap is a `chat` final, aborted, or error event, deliver its authoritative terminal
@@ -69,6 +79,14 @@ Renew session subscriptions
 after reconnect; the Gateway sends a complete snapshot with the next text frame
 for each observed run. Run-local payload sequences can skip numbers because text
 is paced and coalesced; they are not the outer connection sequence.
+
+Retirement uses assistant occurrence identity, never text-prefix matching.
+Producers correlate live occurrences with committed transcript idempotency keys
+or the host's exact source receipts. Native harnesses that persist part of a
+still-streaming item retain its text-merge `itemId` and separately identify each
+captured interval with `occurrenceId`. Unidentified text remains in the
+live tail until it gains an identity-bearing commit or the run terminates;
+equal durable text alone cannot hide it.
 
 Clients that share one connection among several views must keep reconstruction
 with their local stream owner. A new local listener may join after the wire
@@ -92,12 +110,24 @@ concurrent Control UI setup can queue without giving one connection the entire
 request allowance. The aggregate serialized-byte bound still applies.
 Small `sessions.messages.subscribe` requests without approval replay and
 `sessions.messages.unsubscribe` requests have separate bounded waiting capacity,
-including a per-connection limit. They keep the same FIFO order and yielding
-budget as other requests. Roster snapshots and approval replay retain the ordinary
-request budget.
+including a per-connection limit. All requests share the same yielding budget.
+Roster subscriptions, catalog reads, and message subscriptions with approval
+replay share four preparation slots. A slot remains occupied until its request
+settles, and each start yields to ready socket I/O. A request waiting for a
+preparation slot stays in the bounded queue while eligible requests start:
+`chat.history` and `sessions.list` reads can pass waiting preparations, as can
+ordinary requests on other connections. Other starts preserve FIFO order within
+each connection, including subscriptions and their later unsubscribe requests.
+WebSocket handshakes bypass the request queue, so reconnecting tabs cannot start
+an unbounded replay wave ahead of other clients' handshakes.
 When waiting capacity is exhausted, the Gateway returns retryable `UNAVAILABLE`
-before the method runs; retry within the request's budget. Started requests
-complete concurrently, so responses can arrive out of order.
+before the method runs; retry within the request's budget. Starts still waiting
+after 30 seconds also return retryable `UNAVAILABLE`, with
+`details.reason: "request-start-timeout"`. The deadline runs when the event loop
+can next make progress; it does not interrupt an already-started handler.
+Gateway RPC queue-wait diagnostics include the entire wait, including preparation
+capacity and timed-out starts. Started requests complete concurrently, so
+responses can arrive out of order.
 
 During cooperative suspension, identity reads (`agent.identity.get`) wait in the
 shared browser/CLI client for `gateway.suspension` with phase `accepting`. A

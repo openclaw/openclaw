@@ -672,7 +672,7 @@ struct TalkModeRuntimeSpeechTests {
             await runtime.setPaused(false)
 
             #expect(await runtime.realtimeSession != nil)
-            #expect(await runtime.realtimeModelId == "fresh-model")
+            #expect(await runtime.config?.snapshot.realtime.modelId == "fresh-model")
             #expect(await requests.snapshot().methods.first == "talk.session.create")
             await runtime.setEnabled(false)
         }
@@ -805,8 +805,8 @@ struct TalkModeRuntimeSpeechTests {
             Issue.record("expected bootstrap failure")
         } catch {}
 
-        #expect(await runtime.realtimeProvider == nil)
-        #expect(await runtime.realtimeModelId == nil)
+        #expect(await runtime.config?.snapshot.realtime.provider == nil)
+        #expect(await runtime.config?.snapshot.realtime.modelId == nil)
         #expect(await !runtime.hasGatewayRealtimeRelayTuple)
         await runtime.setEnabled(false)
     }
@@ -837,7 +837,7 @@ struct TalkModeRuntimeSpeechTests {
         await checkpoint.release()
 
         #expect(await attempt.value == false)
-        #expect(await runtime.realtimeModelId == "current-model")
+        #expect(await runtime.config?.snapshot.realtime.modelId == "current-model")
         await runtime._test_setRealtimeConfigApplicationCheckpoint(nil)
         await runtime.setEnabled(false)
     }
@@ -869,7 +869,7 @@ struct TalkModeRuntimeSpeechTests {
         await checkpoint.release()
 
         #expect(await attempt.value == false)
-        #expect(await runtime.realtimeModelId == "current-model")
+        #expect(await runtime.config?.snapshot.realtime.modelId == "current-model")
         await runtime._test_setRealtimeConfigApplicationCheckpoint(nil)
         await runtime.setEnabled(false)
     }
@@ -958,7 +958,7 @@ struct TalkModeRuntimeSpeechTests {
             #expect(await sequence.requestCount() == 2)
             #expect(await requests.snapshot().methods == ["talk.session.create", "talk.catalog"])
             #expect(await runtime.realtimeSession != nil)
-            #expect(await runtime.realtimeModelId == "fresh-model")
+            #expect(await runtime.config?.snapshot.realtime.modelId == "fresh-model")
             await runtime.setEnabled(false)
         }
     }

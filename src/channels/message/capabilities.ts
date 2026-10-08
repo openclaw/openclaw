@@ -18,41 +18,31 @@ function hasMediaPayload(
   );
 }
 
-function setRequired(
-  requirements: DurableFinalDeliveryRequirementMap,
-  capability: DurableFinalDeliveryCapability,
-  required: boolean | undefined,
-): void {
-  if (required === true) {
-    requirements[capability] = true;
-  }
-}
-
 /** Derives the adapter capabilities core needs before it can require durable final delivery. */
 export function deriveDurableFinalDeliveryRequirements(
   params: DeriveDurableFinalDeliveryRequirementsParams,
 ): DurableFinalDeliveryRequirementMap {
   const requirements: DurableFinalDeliveryRequirementMap = {};
-  setRequired(requirements, "text", true);
-  setRequired(requirements, "media", hasMediaPayload(params.payload));
-  setRequired(
-    requirements,
-    "replyTo",
-    params.replyToId != null || params.payload.replyToId != null,
-  );
-  setRequired(requirements, "thread", params.threadId != null);
-  setRequired(requirements, "silent", params.silent);
-  setRequired(requirements, "messageSendingHooks", params.messageSendingHooks !== false);
-  setRequired(requirements, "payload", params.payloadTransport);
-  setRequired(requirements, "batch", params.batch);
-  setRequired(requirements, "reconcileUnknownSend", params.reconcileUnknownSend);
-  setRequired(requirements, "afterSendSuccess", params.afterSendSuccess);
-  setRequired(requirements, "afterCommit", params.afterCommit);
-
-  for (const [capability, required] of Object.entries(params.extraCapabilities ?? {}) as Array<
-    [DurableFinalDeliveryCapability, boolean | undefined]
-  >) {
-    setRequired(requirements, capability, required);
+  const requested: Array<[DurableFinalDeliveryCapability, boolean | undefined]> = [
+    ["text", true],
+    ["media", hasMediaPayload(params.payload)],
+    ["replyTo", params.replyToId != null || params.payload.replyToId != null],
+    ["thread", params.threadId != null],
+    ["silent", params.silent],
+    ["messageSendingHooks", params.messageSendingHooks !== false],
+    ["payload", params.payloadTransport],
+    ["batch", params.batch],
+    ["reconcileUnknownSend", params.reconcileUnknownSend],
+    ["afterSendSuccess", params.afterSendSuccess],
+    ["afterCommit", params.afterCommit],
+    ...(Object.entries(params.extraCapabilities ?? {}) as Array<
+      [DurableFinalDeliveryCapability, boolean | undefined]
+    >),
+  ];
+  for (const [capability, required] of requested) {
+    if (required === true) {
+      requirements[capability] = true;
+    }
   }
 
   return requirements;

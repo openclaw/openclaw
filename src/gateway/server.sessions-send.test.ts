@@ -69,7 +69,10 @@ function expectSessionsSendDetails(
   result: { details?: unknown },
   expected: { reply: string; sessionKey: string },
 ): void {
-  expect(result.details).toMatchObject({ status: "ok", ...expected });
+  expect(result.details, JSON.stringify(result.details)).toMatchObject({
+    status: "ok",
+    ...expected,
+  });
 }
 
 async function writeConfig(config: OpenClawConfig) {
@@ -363,6 +366,23 @@ describe("sessions_send agent targeting", () => {
   it.each([
     { name: "default cross-agent access", tools: undefined },
     {
+      name: "send-only edge with agent-scoped reads",
+      tools: { sessions: { visibility: "agent" } },
+      send: ["orion"],
+    },
+    {
+      name: "empty send list with otherwise broad access",
+      tools: { sessions: { visibility: "all" } },
+      send: [],
+      error: "tools.agentToAgent.send",
+    },
+    {
+      name: "unlisted send destination",
+      tools: { sessions: { visibility: "all" } },
+      send: ["different-agent"],
+      error: "tools.agentToAgent.send",
+    },
+    {
       name: "disabled agent-to-agent access",
       tools: { agentToAgent: { enabled: false } },
       error: "Agent-to-agent messaging is disabled",
@@ -372,14 +392,27 @@ describe("sessions_send agent targeting", () => {
       tools: { agentToAgent: { allow: ["main"] } },
       error: "denied by tools.agentToAgent.allow",
     },
-  ] satisfies Array<{ name: string; tools: OpenClawConfig["tools"]; error?: string }>)(
+  ] satisfies Array<{
+    name: string;
+    tools: OpenClawConfig["tools"];
+    send?: string[];
+    error?: string;
+  }>)(
     "enforces $name when targeting a configured agent main session by agentId",
-    async ({ tools, error }) => {
+    async ({ tools, error, send }) => {
       const dir = tempDirs.make("openclaw-sessions-send-agent-");
       const config: OpenClawConfig = {
         ...(tools ? { tools } : {}),
         agents: {
-          list: [{ id: "main", default: true }, { id: "orion" }],
+          ownership: "explicit",
+          defaults: {
+            systemAgent: { agentId: "main" },
+            sessionStore: { agentId: "main" },
+          },
+          entries: {
+            main: send ? { tools: { agentToAgent: { send } } } : {},
+            orion: {},
+          },
         },
       };
 

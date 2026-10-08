@@ -26,60 +26,43 @@ type LevelDirectiveParseOptions = {
   strict?: boolean;
 };
 
-const compileDirectivePattern = (names: readonly string[]): RegExp => {
-  const namePattern = names.map(escapeRegExp).join("|");
-  return new RegExp(`(?<!\\S)\\/(?:${namePattern})(?=$|\\s|:)`, "i");
-};
-
-const matchLevelDirective = (
-  body: string,
-  pattern: RegExp,
-  normalize: (raw?: string) => unknown,
-  options?: LevelDirectiveParseOptions,
-): { start: number; end: number; rawLevel?: string } | null => {
-  const match = body.match(pattern);
-  if (!match || match.index === undefined) {
-    return null;
-  }
-  const start = match.index;
-  const directiveEnd = match.index + match[0].length;
-  const prefixEnd = directiveEnd + skipDirectiveArgPrefix(body.slice(directiveEnd));
-  let i = prefixEnd;
-  while (i < body.length && /\s/.test(body.charAt(i))) {
-    i += 1;
-  }
-  const argStart = i;
-  while (
-    i < body.length &&
-    (options?.strict ? !/\s/.test(body.charAt(i)) : /[A-Za-z-]/.test(body.charAt(i)))
-  ) {
-    i += 1;
-  }
-  const candidate = i > argStart ? body.slice(argStart, i) : undefined;
-  if (
-    candidate !== undefined &&
-    (options?.strict || normalize(candidate) !== undefined || body.slice(i).trim().length === 0)
-  ) {
-    return { start, end: i, rawLevel: candidate };
-  }
-  return { start, end: prefixEnd };
-};
-
 function createLevelDirectiveExtractor<T, Field extends string>(
   names: readonly string[],
   field: Field,
   normalize: (raw?: string) => T | undefined,
 ): (body?: string, options?: LevelDirectiveParseOptions) => NamedLevelDirective<T, Field> {
-  const pattern = compileDirectivePattern(names);
+  const namePattern = names.map(escapeRegExp).join("|");
+  const pattern = new RegExp(`(?<!\\S)\\/(?:${namePattern})(?=$|\\s|:)`, "i");
   return (body, options) => {
     if (!body) {
       return { cleaned: "", hasDirective: false } as NamedLevelDirective<T, Field>;
     }
-    const match = matchLevelDirective(body, pattern, normalize, options);
+    const match = pattern.exec(body);
+    let cleaned = body;
+    let rawLevel: string | undefined;
+    if (match) {
+      const start = match.index;
+      const directiveEnd = start + match[0].length;
+      const prefixEnd = directiveEnd + skipDirectiveArgPrefix(body.slice(directiveEnd));
+      const argument = (options?.strict ? /^\s*(\S+)/ : /^\s*([A-Za-z-]+)/).exec(
+        body.slice(prefixEnd),
+      );
+      const end = prefixEnd + (argument?.[0].length ?? 0);
+      const candidate = argument?.[1];
+      if (
+        candidate !== undefined &&
+        (options?.strict ||
+          normalize(candidate) !== undefined ||
+          body.slice(end).trim().length === 0)
+      ) {
+        rawLevel = candidate;
+      }
+      cleaned = removeDirectiveSpan(body, start, rawLevel === undefined ? prefixEnd : end);
+    }
     return {
-      cleaned: match ? removeDirectiveSpan(body, match.start, match.end) : body,
-      [field]: match ? normalize(match.rawLevel) : undefined,
-      rawLevel: match?.rawLevel,
+      cleaned,
+      [field]: match ? normalize(rawLevel) : undefined,
+      rawLevel,
       hasDirective: match !== null,
     } as NamedLevelDirective<T, Field>;
   };

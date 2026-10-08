@@ -34,9 +34,11 @@ export function createDecisionTool(
           contract: "decisionProviders",
         }).flatMap((plugin) => plugin.decisionModels ?? [])
       : [];
-  const capabilities = models.find(
-    (model) => model.provider === selected.provider && model.id === selected.model,
-  )?.capabilities;
+  const resolveCapabilities = (selection: ReturnType<typeof resolveDecisionModelSetting>) =>
+    selection &&
+    models.find((model) => model.provider === selection.provider && model.id === selection.model)
+      ?.capabilities;
+  const capabilities = resolveCapabilities(selected);
   return {
     name: "decision_evaluate",
     label: "Decision evaluation",
@@ -61,12 +63,7 @@ export function createDecisionTool(
       operationSignal.throwIfAborted();
       const currentConfig = getRuntimeConfig();
       const currentSelection = resolveDecisionModelSetting(currentConfig, agentId);
-      const currentCapabilities =
-        currentSelection &&
-        models.find(
-          (model) =>
-            model.provider === currentSelection.provider && model.id === currentSelection.model,
-        )?.capabilities;
+      const currentCapabilities = resolveCapabilities(currentSelection);
       const outcome = await evaluateDecision(batch, {
         agentId,
         purpose: "decision_evaluate",

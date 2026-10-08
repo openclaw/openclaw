@@ -244,7 +244,6 @@ function formatWhatsAppScenarioWaitDiagnostics(
 function hasWhatsAppBatchExpectations(run: WhatsAppQaMessageScenarioRun) {
   return (
     run.expectedSutMessageCount !== undefined ||
-    run.expectedSutMessageCountRange !== undefined ||
     (run.expectedJoinedSutTextIncludes?.length ?? 0) > 0
   );
 }
@@ -276,9 +275,7 @@ export async function assertWhatsAppScenarioMessageBatch(params: {
   if (!hasWhatsAppBatchExpectations(params.run)) {
     return undefined;
   }
-  await new Promise((resolve) => {
-    setTimeout(resolve, params.run.settleMs ?? 4_000);
-  });
+  await sleep(params.run.settleMs ?? 4_000);
   const messages = params.context.driver.getObservedMessages().filter((message) =>
     isWhatsAppScenarioSutMessage(message, {
       observedAfter: params.observedAfter,
@@ -297,16 +294,6 @@ export async function assertWhatsAppScenarioMessageBatch(params: {
         uniqueMessages.length
       }: ${formatWhatsAppBatchMessageDiagnostics(uniqueMessages)}`,
     );
-  }
-  if (params.run.expectedSutMessageCountRange !== undefined) {
-    const [min, max] = params.run.expectedSutMessageCountRange;
-    if (uniqueMessages.length < min || uniqueMessages.length > max) {
-      throw new Error(
-        `expected ${min}-${max} SUT message(s), observed ${
-          uniqueMessages.length
-        }: ${formatWhatsAppBatchMessageDiagnostics(uniqueMessages)}`,
-      );
-    }
   }
   const joinedText = uniqueMessages.map((message) => message.text).join("\n");
   for (const expected of params.run.expectedJoinedSutTextIncludes ?? []) {

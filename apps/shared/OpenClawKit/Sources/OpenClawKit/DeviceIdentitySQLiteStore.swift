@@ -35,13 +35,43 @@ enum DeviceIdentitySQLiteStore {
         try OpenClawNativeStateSQLite.assertNoOfflineMaintenance(databaseURL: databaseURL)
         try self.secureDirectory(destinationStateDirURL)
         try self.secureDirectory(databaseURL.deletingLastPathComponent())
-        return try self.loadOrCreateOwned(
-            databaseURL: databaseURL,
-            destinationStateDirURL: destinationStateDirURL,
-            profile: profile,
-            legacySources: legacySources,
-            beforeLegacyClaim: beforeLegacyClaim,
-            afterLegacyCommit: afterLegacyCommit)
+        do {
+            // SQLite owns an existing profile; leave any downgrade-recreated legacy source for Doctor.
+            if self.pathMayExist(databaseURL),
+               let existing = try self.loadExisting(
+                   databaseURL: databaseURL,
+                   destinationStateDirURL: destinationStateDirURL,
+                   profile: profile)
+            {
+                return existing
+            }
+            var claims: [LegacyClaim] = []
+            do {
+                for source in legacySources {
+                    if let claim = try self.claimLegacyIdentity(source, beforeClaim: beforeLegacyClaim) {
+                        claims.append(claim)
+                    }
+                }
+                return try self.loadOrCreate(
+                    databaseURL: databaseURL,
+                    destinationStateDirURL: destinationStateDirURL,
+                    profile: profile,
+                    claims: claims,
+                    legacySources: legacySources,
+                    afterLegacyCommit: afterLegacyCommit)
+            } catch {
+                do {
+                    try self.restoreClaimedLegacyIdentities(claims)
+                } catch let restoreError {
+                    throw DeviceIdentityStore.storageError(
+                        "Device identity migration failed: \(error.localizedDescription); " +
+                            "native claim restoration failed: \(restoreError.localizedDescription)")
+                }
+                throw error
+            }
+        } catch let error as OpenClawNativeStateError {
+            throw DeviceIdentityStore.storageError(error.message)
+        }
     }
 
     static func loadExisting(
@@ -60,70 +90,6 @@ enum DeviceIdentitySQLiteStore {
             stateDirectoryURL: destinationStateDirURL)?.identity
     }
 
-    private static func loadOrCreateOwned(
-        databaseURL: URL,
-        destinationStateDirURL: URL,
-        profile: GatewayDeviceIdentityProfile,
-        legacySources: [DeviceIdentityPaths.LegacyIdentitySource],
-        beforeLegacyClaim: ((DeviceIdentityPaths.LegacyIdentitySource) throws -> Void)?,
-        afterLegacyCommit: (() throws -> Void)?) throws -> DeviceIdentity
-    {
-        do {
-            return try self.loadOrCreateNativeState(
-                databaseURL: databaseURL,
-                destinationStateDirURL: destinationStateDirURL,
-                profile: profile,
-                legacySources: legacySources,
-                beforeLegacyClaim: beforeLegacyClaim,
-                afterLegacyCommit: afterLegacyCommit)
-        } catch let error as OpenClawNativeStateError {
-            throw DeviceIdentityStore.storageError(error.message)
-        }
-    }
-
-    private static func loadOrCreateNativeState(
-        databaseURL: URL,
-        destinationStateDirURL: URL,
-        profile: GatewayDeviceIdentityProfile,
-        legacySources: [DeviceIdentityPaths.LegacyIdentitySource],
-        beforeLegacyClaim: ((DeviceIdentityPaths.LegacyIdentitySource) throws -> Void)?,
-        afterLegacyCommit: (() throws -> Void)?) throws -> DeviceIdentity
-    {
-        // SQLite owns an existing profile; leave any downgrade-recreated legacy source for Doctor.
-        if self.pathMayExist(databaseURL),
-           let existing = try self.loadExisting(
-               databaseURL: databaseURL,
-               destinationStateDirURL: destinationStateDirURL,
-               profile: profile)
-        {
-            return existing
-        }
-        var claims: [LegacyClaim] = []
-        do {
-            for source in legacySources {
-                if let claim = try self.claimLegacyIdentity(source, beforeClaim: beforeLegacyClaim) {
-                    claims.append(claim)
-                }
-            }
-            return try self.loadOrCreate(
-                databaseURL: databaseURL,
-                destinationStateDirURL: destinationStateDirURL,
-                profile: profile,
-                claims: claims,
-                legacySources: legacySources,
-                afterLegacyCommit: afterLegacyCommit)
-        } catch {
-            do {
-                try self.restoreClaimedLegacyIdentities(claims)
-            } catch let restoreError {
-                throw DeviceIdentityStore.storageError(
-                    "Device identity migration failed: \(error.localizedDescription); " +
-                        "native claim restoration failed: \(restoreError.localizedDescription)")
-            }
-            throw error
-        }
-    }
-
     private static func loadOrCreate(
         databaseURL: URL,
         destinationStateDirURL: URL,
@@ -133,7 +99,7 @@ enum DeviceIdentitySQLiteStore {
         afterLegacyCommit: (() throws -> Void)?) throws -> DeviceIdentity
     {
         try self.requireConsistentClaims(claims)
-        let generatedMaterial = claims.isEmpty ? DeviceIdentityStore.generateMaterial() : nil
+        let candidate = claims.first?.material ?? DeviceIdentityStore.generateMaterial()
         let writeTimestampMs = Int64(Date().timeIntervalSince1970 * 1000)
 
         let database = try OpenClawNativeStateSQLite(
@@ -163,9 +129,6 @@ enum DeviceIdentitySQLiteStore {
                 }) {
                     throw DeviceIdentityStore.storageError(
                         "Legacy device identity appeared during creation; retry without replacing its keys")
-                }
-                guard let candidate = claims.first?.material ?? generatedMaterial else {
-                    throw DeviceIdentityStore.storageError("Device identity candidate is unavailable")
                 }
                 selected = candidate
                 try self.insertIdentity(
@@ -325,11 +288,7 @@ enum DeviceIdentitySQLiteStore {
                     let quarantineURL = self.claimURL(
                         nativeClaimURL,
                         suffix: ".stale-\(UUID().uuidString)")
-                    let acquireResult = nativeClaimURL.path.withCString { claimPath in
-                        quarantineURL.path.withCString { quarantinePath in
-                            renamex_np(claimPath, quarantinePath, UInt32(RENAME_EXCL))
-                        }
-                    }
+                    let acquireResult = self.renameExclusive(from: nativeClaimURL, to: quarantineURL)
                     if acquireResult != 0 {
                         let acquireError = errno
                         if acquireError == ENOENT { continue }
@@ -340,11 +299,7 @@ enum DeviceIdentitySQLiteStore {
 
                     /// RENAME_EXCL restores only into a vacant path. EEXIST leaves the acquired file quarantined.
                     func restoreOrParkQuarantine() {
-                        _ = quarantineURL.path.withCString { quarantinePath in
-                            nativeClaimURL.path.withCString { claimPath in
-                                renamex_np(quarantinePath, claimPath, UInt32(RENAME_EXCL))
-                            }
-                        }
+                        _ = self.renameExclusive(from: quarantineURL, to: nativeClaimURL)
                     }
                     // Validate the acquired bytes before any continue path: only a claim that
                     // still parses and matches may be parked while startup proceeds.
@@ -387,11 +342,7 @@ enum DeviceIdentitySQLiteStore {
             // Claims first, source last: a Doctor restore moves claim -> source atomically.
             guard self.pathMayExist(source.identityURL) else { return nil }
 
-            let renameResult = source.identityURL.path.withCString { sourcePath in
-                nativeClaimURL.path.withCString { destinationPath in
-                    renamex_np(sourcePath, destinationPath, UInt32(RENAME_EXCL))
-                }
-            }
+            let renameResult = self.renameExclusive(from: source.identityURL, to: nativeClaimURL)
             if renameResult == 0 {
                 ownsNativeClaim = true
                 break
@@ -458,6 +409,14 @@ enum DeviceIdentitySQLiteStore {
         URL(
             fileURLWithPath: sourceURL.path + suffix,
             isDirectory: false)
+    }
+
+    private static func renameExclusive(from source: URL, to destination: URL) -> Int32 {
+        source.path.withCString { sourcePath in
+            destination.path.withCString { destinationPath in
+                renamex_np(sourcePath, destinationPath, UInt32(RENAME_EXCL))
+            }
+        }
     }
 
     private static func pathMayExist(_ url: URL) -> Bool {
@@ -651,11 +610,7 @@ enum DeviceIdentitySQLiteStore {
 
     private static func restoreClaimedLegacyIdentity(identityURL: URL, sourceURL: URL) throws {
         guard self.pathMayExist(identityURL) else { return }
-        let renameResult = identityURL.path.withCString { claimedPath in
-            sourceURL.path.withCString { destinationPath in
-                renamex_np(claimedPath, destinationPath, UInt32(RENAME_EXCL))
-            }
-        }
+        let renameResult = self.renameExclusive(from: identityURL, to: sourceURL)
         guard renameResult == 0 else {
             let renameError = errno
             if renameError == ENOENT, !self.pathMayExist(identityURL) {

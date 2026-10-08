@@ -5,6 +5,7 @@ import { hasErrnoCode } from "../../infra/errno.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { prepareSqliteReadOnlyLocationSync } from "../../infra/sqlite-snapshot-source.js";
+import { registerListener } from "../../shared/listeners.js";
 import { writeConfigMachineState } from "../../state/config-machine-state-write.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
@@ -19,10 +20,10 @@ import {
   noteCommittedSharedAuthStoreOwnership,
   resolveSharedAuthStorePath,
   resolveSharedAuthStoreOwnership,
-  type SharedAuthStoreOwnership,
 } from "./path-resolve.js";
 import { resolveSharedMainAuthAgentDir } from "./shared-main-dir.js";
 import { SHARED_AUTH_STORE_STATE_KEY } from "./sqlite-json.js";
+import type { SharedAuthStoreOwnership } from "./types.js";
 
 const PRIMARY_ROW_KEY = "primary";
 const SHARED_AUTH_STORE_MIGRATION_KIND = "shared-auth-store-state-db";
@@ -42,8 +43,7 @@ const freshSharedAuthStoreHandoffs = new Set<(handoff: FreshSharedAuthStoreHando
 export function registerFreshSharedAuthStoreHandoff(
   handoff: (receipt: FreshSharedAuthStoreHandoff) => void,
 ): () => void {
-  freshSharedAuthStoreHandoffs.add(handoff);
-  return () => freshSharedAuthStoreHandoffs.delete(handoff);
+  return registerListener(freshSharedAuthStoreHandoffs, handoff);
 }
 
 type SourceAuthDatabase = Pick<

@@ -41,11 +41,8 @@ import { withHookTimeout } from "./hook-timeout.js";
 import { isPluginHookReplyDispatchKind } from "./hook-types.js";
 import type {
   PluginAgentTurnPrepareResult,
-  PluginHookAfterToolCallEvent,
   PluginHookAgentContext,
   PluginHookAgentTrigger,
-  PluginHookAgentEndEvent,
-  PluginHookBeforeAgentFinalizeEvent,
   PluginHookBeforeAgentFinalizeResult,
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
@@ -70,9 +67,6 @@ import type {
   PluginHookBeforeMessageWriteResult,
   PluginHookResolveExecEnvContext,
   PluginHookResolveExecEnvEvent,
-  PluginHookSkillContext,
-  PluginHookSkillProposalEvaluateEvent,
-  PluginHookSkillProposalEvaluationOutcome,
 } from "./hook-types.js";
 import { createPromptBuildHookDispatch } from "./hooks-prompt-build.js";
 import { getPluginValueInstance, runPluginCleanup } from "./plugin-instance-scope.js";
@@ -97,7 +91,6 @@ const DEFAULT_VOID_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, numbe
   before_compaction: 30_000,
   after_compaction: 30_000,
   skill_changed: 30_000,
-  skill_proposal_changed: 30_000,
   // Shutdown hooks share the Gateway's five-second teardown budget. They fail
   // open after logging so one plugin cannot consume the process watchdog.
   gateway_stop: 5_000,
@@ -118,7 +111,6 @@ const DEFAULT_MODIFYING_HOOK_TIMEOUT_MS_BY_HOOK: Partial<Record<PluginHookName, 
   message_sending: 15_000,
   reply_payload_sending: 15_000,
   resolve_exec_env: 15_000,
-  skill_proposal_evaluate: 120_000,
 };
 
 function deepFreezeHookValue<T>(value: T, seen = new WeakSet<object>()): T {
@@ -861,27 +853,6 @@ export function createHookRunner(
       ),
   });
 
-  async function runAgentEnd(
-    event: PluginHookAgentEndEvent,
-    ctx: PluginHookAgentContext,
-    optionsLocal?: VoidHookRunOptions,
-  ): Promise<void> {
-    return runVoidHook("agent_end", projectAgentEndEvent(event, ctx), ctx, optionsLocal);
-  }
-
-  /** Allows another model pass before natural finalization, separate from user cancellation. */
-  async function runBeforeAgentFinalize(
-    event: PluginHookBeforeAgentFinalizeEvent,
-    ctx: PluginHookAgentContext,
-  ): Promise<PluginHookBeforeAgentFinalizeResult | undefined> {
-    return runModifyingHook<"before_agent_finalize", PluginHookBeforeAgentFinalizeResult>(
-      "before_agent_finalize",
-      withAgentRunId(event, ctx),
-      ctx,
-      { mergeResults: mergeBeforeAgentFinalize },
-    );
-  }
-
   async function runInboundClaimForPlugin(
     pluginId: string,
     event: PluginHookInboundClaimEvent,
@@ -951,27 +922,24 @@ export function createHookRunner(
       event,
       ctx,
       {
-        mergeResults: (_acc, next, reg) => {
-          const normalized: InputGateDecision = isHookDecision(next)
-            ? next
-            : {
-                outcome: "block",
-                reason: "before_agent_run returned an invalid decision",
-              };
-          const merged =
-            !_acc || (normalized.outcome === "block" && _acc.outcome !== "block")
-              ? normalized
-              : _acc;
-          if (merged === normalized) {
-            winningPluginId = reg.pluginId;
-          }
-          return merged;
-        },
-        mergeNullResults: true,
-        shouldStop: (result) => result?.outcome === "block",
-        terminalLabel: "gate-decision",
+      mergeResults: (_acc, next, reg) => {
+        const normalized: InputGateDecision = isHookDecision(next)
+          ? next
+          : {
+              outcome: "block",
+              reason: "before_agent_run returned an invalid decision",
+            };
+        const merged =
+          !_acc || (normalized.outcome === "block" && _acc.outcome !== "block") ? normalized : _acc;
+        if (merged === normalized) {
+          winningPluginId = reg.pluginId;
+        }
+        return merged;
       },
-    );
+      mergeNullResults: true,
+      shouldStop: (result) => result?.outcome === "block",
+      terminalLabel: "gate-decision",
+    });
     if (!decision) {
       return undefined;
     }
@@ -1046,13 +1014,6 @@ export function createHookRunner(
     );
   }
 
-  async function runAfterToolCall(
-    event: PluginHookAfterToolCallEvent,
-    ctx: PluginHookToolContext,
-  ): Promise<void> {
-    return runVoidHook("after_tool_call", event, ctx, {}, event.toolName);
-  }
-
   /** Transcript hooks stay synchronous and pass each replacement to the next handler. */
   function runToolResultPersist(
     event: PluginHookToolResultPersistEvent,
@@ -1074,52 +1035,6 @@ export function createHookRunner(
     return result && result.message !== event.message ? { message: result.message } : undefined;
   }
 
-  /**
-   * Run every registered proposal evaluator and retain its attribution.
-   *
-   * Evaluator failures are returned as data so Workshop can persist and show
-   * them. A broken optional evaluator must not make proposal state unreadable.
-   */
-  async function runSkillProposalEvaluate(
-    event: PluginHookSkillProposalEvaluateEvent,
-    ctx: PluginHookSkillContext,
-  ): Promise<PluginHookSkillProposalEvaluationOutcome[]> {
-    const hookName = "skill_proposal_evaluate";
-    const hooks = getHooksForName(registry, hookName);
-    if (hooks.length === 0) {
-      return [];
-    }
-
-    logger?.debug?.(`[hooks] running ${hookName} (${hooks.length} handlers, attributed)`);
-    const immutableEvent = deepFreezeHookValue(structuredClone(event));
-    return await Promise.all(
-      hooks.map(async (hook): Promise<PluginHookSkillProposalEvaluationOutcome> => {
-        const pluginVersion = registry.plugins.find(
-          (plugin) => plugin.id === hook.pluginId,
-        )?.packageVersion;
-        const attribution = {
-          evaluatorId: hook.registrationId ?? hook.pluginId,
-          pluginId: hook.pluginId,
-          ...(pluginVersion ? { pluginVersion } : {}),
-        };
-        try {
-          const handler = hook.handler;
-          const promise = Promise.resolve(handler(immutableEvent, ctx));
-          const result = await awaitHook(hook, promise, modifyingHookTimeoutMsByHook[hookName]);
-          return result
-            ? Object.assign({}, attribution, { status: "completed" as const, result })
-            : Object.assign({}, attribution, { status: "skipped" as const });
-        } catch (error) {
-          const message = sanitizeHookError(error);
-          logger?.error(
-            `[hooks] ${hookName} handler from ${hook.pluginId} failed: ${formatHookErrorForLog(error)}`,
-          );
-          return Object.assign({}, attribution, { status: "error" as const, error: message });
-        }
-      }),
-    );
-  }
-
   async function runResolveExecEnv(
     event: PluginHookResolveExecEnvEvent,
     ctx: PluginHookResolveExecEnvContext,
@@ -1129,9 +1044,8 @@ export function createHookRunner(
       event,
       ctx,
       {
-        mergeResults: (acc, next) => (acc ? { ...acc, ...next } : next),
-      },
-    );
+      mergeResults: (acc, next) => (acc ? { ...acc, ...next } : next),
+    });
     return result ?? {};
   }
 
@@ -1156,8 +1070,22 @@ export function createHookRunner(
     runModelCallEnded: bindVoidHook("model_call_ended"),
     runLlmInput: withoutIncognitoLlmContent(bindVoidHook("llm_input")),
     runLlmOutput: withoutIncognitoLlmContent(bindVoidHook("llm_output")),
-    runBeforeAgentFinalize,
-    runAgentEnd,
+    runBeforeAgentFinalize: async (
+      event: HookEvent<"before_agent_finalize">,
+      ctx: HookContext<"before_agent_finalize">,
+    ) =>
+      runModifyingHook<"before_agent_finalize", PluginHookBeforeAgentFinalizeResult>(
+        "before_agent_finalize",
+        withAgentRunId(event, ctx),
+        ctx,
+        {
+        mergeResults: mergeBeforeAgentFinalize,
+      }),
+    runAgentEnd: async (
+      event: HookEvent<"agent_end">,
+      ctx: HookContext<"agent_end">,
+      optionsLocal?: VoidHookRunOptions,
+    ) => runVoidHook("agent_end", projectAgentEndEvent(event, ctx), ctx, optionsLocal),
     runBeforeCompaction: bindVoidHook("before_compaction"),
     runAfterCompaction: bindVoidHook("after_compaction"),
     runBeforeReset: bindVoidHook("before_reset"),
@@ -1195,23 +1123,25 @@ export function createHookRunner(
         event,
         ctx,
         {
-          mergeResults: (acc, next) => ({
-            content: next.content ?? acc?.content,
-            cancel: stickyTrue(acc?.cancel, next.cancel),
-            cancelReason: next.cancelReason ?? acc?.cancelReason,
-            metadata: next.metadata ?? acc?.metadata,
-          }),
-          shouldStop: (decision) => decision.cancel === true,
-          terminalLabel: "cancel=true",
-        },
-      );
+        mergeResults: (acc, next) => ({
+          content: next.content ?? acc?.content,
+          cancel: stickyTrue(acc?.cancel, next.cancel),
+          cancelReason: next.cancelReason ?? acc?.cancelReason,
+          metadata: next.metadata ?? acc?.metadata,
+        }),
+        shouldStop: (decision) => decision.cancel === true,
+        terminalLabel: "cancel=true",
+      });
       const original = result?.cancel ? undefined : (result?.content ?? event.content);
       const content = finalizeGroupThreadToolReply(original, event, ctx);
       return content !== original ? { ...result, content } : result;
     },
     runMessageSent: bindVoidHook("message_sent"),
     runBeforeToolCall,
-    runAfterToolCall,
+    runAfterToolCall: async (
+      event: HookEvent<"after_tool_call">,
+      ctx: HookContext<"after_tool_call">,
+    ) => runVoidHook("after_tool_call", event, ctx, {}, event.toolName),
     runToolResultPersist,
     runBeforeMessageWrite,
     runSessionStart: bindVoidHook("session_start"),
@@ -1237,8 +1167,6 @@ export function createHookRunner(
     }),
     runCronReconciled: bindVoidHook("cron_reconciled"),
     runCronChanged: bindVoidHook("cron_changed"),
-    runSkillProposalEvaluate,
-    runSkillProposalChanged: bindFrozenVoidHook("skill_proposal_changed"),
     runSkillChanged: bindFrozenVoidHook("skill_changed"),
     runBeforeInstall: bindModifyingHook("before_install", {
       mergeResults: (acc, next) => {

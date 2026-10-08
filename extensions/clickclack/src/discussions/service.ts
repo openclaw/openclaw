@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import type { OpenClawPluginGatewayEvents, PluginRuntime } from "openclaw/plugin-sdk/core";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import type {
   SessionDiscussionInfo,
   SessionDiscussionProvider,
@@ -54,8 +55,6 @@ type DiscussionServiceOptions = {
   clientFactory?: (account: ResolvedClickClackAccount) => ClickClackClient;
   installationId?: string;
   bindingGenerationFactory?: () => string;
-  gatewayEvents?: Pick<OpenClawPluginGatewayEvents, "onSessionsChanged">;
-  startTimer?: boolean;
   maxRetainedDetachedBindings?: number;
 };
 
@@ -69,15 +68,11 @@ export class ClickClackDiscussionService {
   #installationId: string | undefined;
   readonly #bindingGenerationFactory: () => string;
   readonly #detachedBindings: DetachedDiscussionBindingRetention;
-  readonly #timersEnabled: boolean;
   readonly #sessionQueue = new KeyedAsyncQueue();
-  readonly #reconcileScheduler = new DiscussionReconcileScheduler({
-    shouldSchedule: () => !this.#closed,
-    run: async (sessionKey) => await this.reconcile(sessionKey),
-    warn: (message) => this.#logger().warn(message),
-  });
+  #scheduler: PluginServiceSchedulerV1 | undefined;
+  #reconcileScheduler: DiscussionReconcileScheduler | undefined;
   readonly #withChannelMutationLock = createAsyncLock();
-  #timer: ReturnType<typeof setInterval> | undefined;
+  #timer: ReturnType<PluginServiceSchedulerV1["schedule"]> | undefined;
   #reconcileAllPromise: Promise<void> | undefined;
   #unsubscribeSessionsChanged: (() => void) | undefined;
   #closed = false;
@@ -98,24 +93,16 @@ export class ClickClackDiscussionService {
       store: this.#store,
       maxRetained: options.maxRetainedDetachedBindings ?? MAX_RETAINED_DETACHED_DISCUSSION_BINDINGS,
     });
-    this.#timersEnabled = options.startTimer !== false;
     this.provider = {
       id: "clickclack",
-      info: async ({ sessionKey }) => await this.info(sessionKey),
-      open: async ({ sessionKey }) => await this.open(sessionKey),
+      info: ({ sessionKey }) => this.info(sessionKey),
+      open: ({ sessionKey }) => this.open(sessionKey),
     };
-    // Activation (event subscription + catch-up reconciles) belongs to the
-    // registered service lifecycle via bindGatewayEvents; construction alone
-    // must not touch remote channels. Tests may inject events for immediacy.
-    if (options.gatewayEvents) {
-      void this.bindGatewayEvents(options.gatewayEvents).catch((error: unknown) => {
-        this.#logger().warn(`discussion activation failed: ${String(error)}`);
-      });
-    }
   }
 
   async bindGatewayEvents(
     gatewayEvents: Pick<OpenClawPluginGatewayEvents, "onSessionsChanged"> | undefined,
+    scheduler: PluginServiceSchedulerV1,
   ): Promise<void> {
     const activation = ++this.#activation;
     if (this.#cleanupPromise) {
@@ -124,10 +111,21 @@ export class ClickClackDiscussionService {
     if (activation !== this.#activation) {
       return;
     }
+    if (this.#scheduler) {
+      await this.#scheduler.stop();
+    }
+    if (activation !== this.#activation) {
+      return;
+    }
     this.#cleanupPromise = undefined;
     this.#unsubscribeSessionsChanged?.();
     this.#closed = false;
-    this.#reconcileScheduler.supersede();
+    this.#scheduler = scheduler.scope();
+    this.#timer = undefined;
+    this.#reconcileScheduler = new DiscussionReconcileScheduler(this.#scheduler, {
+      run: (sessionKey) => this.reconcile(sessionKey),
+      warn: (message) => this.#logger().warn(message),
+    });
     this.#unsubscribeSessionsChanged = gatewayEvents?.onSessionsChanged((event) => {
       void this.#withOperation(async () => {
         if (
@@ -137,7 +135,7 @@ export class ClickClackDiscussionService {
           )
         ) {
           if (activation === this.#activation) {
-            this.#reconcileScheduler.schedule(event.sessionKey);
+            this.#reconcileScheduler?.schedule(event.sessionKey);
           }
         }
       }).catch((error: unknown) => {
@@ -149,7 +147,7 @@ export class ClickClackDiscussionService {
         if (activation !== this.#activation) {
           return;
         }
-        this.#reconcileScheduler.schedule(sessionKey, 0);
+        this.#reconcileScheduler?.schedule(sessionKey, 0);
       }
       await this.#ensureTimer();
     });
@@ -236,9 +234,9 @@ export class ClickClackDiscussionService {
         bindingGenerationFactory: this.#bindingGenerationFactory,
         sessionKey,
         ensureTimer: () => this.#ensureTimer(),
-        reconcilePendingOpen: async (pending) =>
-          await this.#reconcilePendingOpen(pending, { allowRetry: false }),
-        withChannelMutationLock: async (run) => await this.#withChannelMutationLock(run),
+        reconcilePendingOpen: (pending) =>
+          this.#reconcilePendingOpen(pending, { allowRetry: false }),
+        withChannelMutationLock: (run) => this.#withChannelMutationLock(run),
         ensureBindingCapacity: (key) => this.#detachedBindings.ensureCapacity(key),
         finalizePendingBinding: (key, nextBinding) =>
           this.#finalizePendingBinding(key, nextBinding),
@@ -347,13 +345,12 @@ export class ClickClackDiscussionService {
     this.#activation += 1;
     this.#unsubscribeSessionsChanged?.();
     this.#unsubscribeSessionsChanged = undefined;
-    this.#reconcileScheduler.supersede();
-    this.#reconcileScheduler.clear();
-    if (this.#timer) {
-      clearInterval(this.#timer);
-      this.#timer = undefined;
-    }
-    this.#cleanupPromise ??= Promise.allSettled(this.#operations).then(() => undefined);
+    this.#reconcileScheduler = undefined;
+    this.#timer = undefined;
+    this.#cleanupPromise ??= Promise.allSettled([
+      this.#scheduler?.stop(),
+      ...this.#operations,
+    ]).then(() => undefined);
     return this.#cleanupPromise;
   }
 
@@ -603,23 +600,26 @@ export class ClickClackDiscussionService {
       this.#unsubscribeSessionsChanged === undefined && this.#store.count() > 0;
     if (this.#closed || (!hasPendingOpens && !needsBindingPoll)) {
       if (this.#timer) {
-        clearInterval(this.#timer);
+        this.#timer.cancel();
         this.#timer = undefined;
       }
       return;
     }
-    if (!this.#timersEnabled || this.#timer) {
+    if (!this.#scheduler || this.#scheduler.signal.aborted || this.#timer) {
       return;
     }
     // Session changes drive normal binding reconciliation through gateway events.
     // Only ambiguous creates still need time-based retries while their durable
     // pending-open record exists.
-    this.#timer = setInterval(() => {
-      void this.reconcileAll().catch((error: unknown) => {
-        this.#logger().warn(`discussion reconcile pass failed: ${String(error)}`);
-      });
-    }, RECONCILE_INTERVAL_MS);
-    this.#timer.unref?.();
+    this.#timer = this.#scheduler.schedule({
+      id: "reconcile-all",
+      delayMs: RECONCILE_INTERVAL_MS,
+      everyMs: RECONCILE_INTERVAL_MS,
+      run: () =>
+        this.reconcileAll().catch((error: unknown) => {
+          this.#logger().warn(`discussion reconcile pass failed: ${String(error)}`);
+        }),
+    });
   }
 
   async #listReconcileSessionKeys(): Promise<Set<string>> {

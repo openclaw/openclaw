@@ -271,8 +271,12 @@ Managed `[embed ref="..."]` previews use that authenticated path whenever their
 effective sandbox policy permits scripts, including the default with no explicit
 sandbox field. Explicit strict previews remain script-free.
 There is no completed-document cache: Canvas permits replacing named document
-IDs, so a remount reads the current source again. Reconnection retires pending
-results from the previous connection.
+IDs, so a remount reads the current source again. A transient disconnect keeps
+an already-mounted inline iframe and its local interaction state, but retires
+pending results and server-action authority from the previous connection.
+Reconnect revalidates the document: unchanged bytes preserve the frame, while
+changed content or identity replaces it. This is in-memory presentation retention,
+not a durable document cache or permission to replay widget actions.
 
 ### Website widgets
 
@@ -378,14 +382,16 @@ It never loads plugins merely to describe their dashboard capabilities.
 
 Core's existing GitHub identity and HTTP owners serve `github.actions.runs`
 through `board.data.read`. The closed parameter contract constructs only the
-repository or workflow run-list operation at `api.github.com`. Authorization
-requires the exact normalized `github.actions.runs:<owner>/<repo>` tool grant.
+repository or workflow run-list operation at `api.github.com`. Both credential
+selection and transport stay bound to `github.com`, even when project discovery
+uses a configured Enterprise host. Enterprise credentials are never used for
+this public-host capability. Authorization requires the exact normalized `github.actions.runs:<owner>/<repo>` tool grant.
 Network-origin grants never supply GitHub identity authority. Approval discloses
 that Actions metadata, including private repository data accessible to the
 agent, is shared with the widget/session audience.
 
 Author guidance is conditional on a usable connected agent identity, not a
-tool-construction-time probe. `board.widget.put` verifies and revalidates that
+tool-construction-time check. `board.widget.put` verifies and revalidates that
 identity before saving HTML (including materialized Canvas documents) or
 registered widgets declaring this host capability. The same preparation owner
 serves pinning and reads, including source-config preview-credential scrubbing
@@ -497,19 +503,26 @@ The canonical table definitions, constraints, and indexes are in
 for schema versions, migration and downgrade rules, and the review checkpoint for
 material storage changes. Do not use a copied SQL sketch as the schema contract.
 
-Ordinary disk data mutations borrow the canonical per-agent SQLite worker connection.
-The Boards backend runs the existing synchronous transaction kernels and checks
-current caller authority at transaction entry and commit. Committed changes
+Ordinary disk snapshots and widget-document reads use the existing session
+history read worker. Mutations borrow the canonical per-agent SQLite writer
+connection, where the Boards backend checks current caller authority at
+transaction entry and commit. Committed changes
 invalidate the host's exact session projection before the mutation returns;
 cleanup failures do not turn a completed write into a retryable failure.
-Existing-session preflight, source-handle acquisition, schema/bootstrap/migration,
-protected reads, and cold
-`hasBoard` projection remain with their existing native owners. Protected read turns
-join the same per-agent FIFO before checking the current widget and starting
-consumption. They release the queue before awaiting external consumer work, so
-queued revocation cannot be overtaken by a later protected publication. Incognito writes
-continue on their process-held connection. The worker never owns a second agent
-database actor, and this cut does not change board schemas or protocol payloads.
+Existing-session write preflight, source-handle acquisition,
+schema/bootstrap/migration, and board-presence projection retain their existing
+owners. Reads capture
+their physical store before waiting and join the same per-agent FIFO as writes.
+The read worker retains its admitted read-only connection and reads one coherent
+snapshot without creating missing board tables or opening a writer publication.
+The host checks the captured physical identity, native mutation witness, and
+current authority before starting consumption and releasing the queue.
+External consumer promises run without holding that queue, so queued
+revocation cannot be overtaken by a later protected publication. Gateway close
+rejects new requests and joins accepted reads and publication cleanup before
+worker teardown. Incognito reads and writes continue on their process-held
+connection. The worker never owns a second agent database actor, and this cut
+changes no board schemas, retention, update behavior, or protocol payloads.
 
 Board existence = any rows for the `sessionKey`. Deleting a session deletes its
 board rows. `/new`/`/reset` does not touch them.

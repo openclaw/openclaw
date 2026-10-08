@@ -5,8 +5,9 @@ import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { captureManagedUpdateLeaseDatabaseIdentity } from "../../infra/update-managed-service-handoff-database.js";
 import {
-  createManagedHandoffLeaseStore,
+  prepareManagedHandoffLeaseStore,
   resolveManagedUpdateLeaseDatabasePath,
+  type createManagedHandoffLeaseStore,
   type ManagedHandoffLease,
   type ManagedHandoffParent,
 } from "../../infra/update-managed-service-handoff-lease.js";
@@ -17,6 +18,7 @@ import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import { createUpdateCommandOriginalCancellation } from "./update-command-executor-cancellation.js";
 import {
   requestUpdateCommandExecutorCancellation,
+  requireUpdateCommandAcquisition,
   reserveUpdateCommandExecutorSlot,
 } from "./update-command-executor-capabilities.js";
 import { createChildOwner } from "./update-command-executor-children.js";
@@ -128,6 +130,15 @@ export async function withUpdateCommandExecutor<T>(
         children.assertIdle();
       };
       const fence = { assertCurrent };
+      const retireFence = () => {
+        originalFence = undefined;
+        originalCancellations.delete(fence);
+        active = false;
+        preflightReleases.delete(fence);
+        childOwners.delete(fence);
+        slotReservations.delete(fence);
+        admittedAuthorities.delete(fence);
+      };
       const children = createChildOwner({
         runId,
         assertBase,
@@ -202,20 +213,10 @@ export async function withUpdateCommandExecutor<T>(
             "Occupied slot does not resolve to its original installation.",
           );
         }
-        const acquired = store.acquire(
-          key,
-          lease.owner,
-          { kind: "update" },
-          false,
-          undefined,
-          lease,
-        );
-        if (acquired.kind !== "acquired") {
-          throw new UpdateCommandRecoveryPendingError(
-            "Another update executor owns the occupied slot.",
-          );
-        }
-        slotLease = acquired.lease;
+        slotLease = requireUpdateCommandAcquisition(
+          store.acquire(key, lease.owner, { kind: "update" }, false, undefined, lease),
+          "Another update executor owns the occupied slot.",
+        ).lease;
         preflightReleases.delete(fence);
         assertCurrent();
       });
@@ -241,15 +242,7 @@ export async function withUpdateCommandExecutor<T>(
             key,
             Boolean(options?.existingAuthority),
           );
-          if (lease) {
-            assertCurrent();
-            identityWarnings.flush();
-            if (
-              ((legacyTarget ?? lease).key !== key && slotLease?.key !== key) ||
-              serviceKey !== distinctServiceKey
-            ) {
-              throw new UpdateCommandRecoveryPendingError("Update executor installation changed.");
-            }
+          const finishAdmission = () => {
             if (!enterOptions?.preflight) {
               preflightReleases.delete(fence);
               reserveUpdateCommandExecutorSlot(fence, root);
@@ -261,6 +254,17 @@ export async function withUpdateCommandExecutor<T>(
               );
             }
             return fence;
+          };
+          if (lease) {
+            assertCurrent();
+            identityWarnings.flush();
+            if (
+              ((legacyTarget ?? lease).key !== key && slotLease?.key !== key) ||
+              serviceKey !== distinctServiceKey
+            ) {
+              throw new UpdateCommandRecoveryPendingError("Update executor installation changed.");
+            }
+            return finishAdmission();
           }
           entering = true;
           try {
@@ -272,14 +276,28 @@ export async function withUpdateCommandExecutor<T>(
                 ? captureManagedUpdateLeaseDatabaseIdentity(databasePath)
                 : undefined);
             databasePath = existingIdentity?.databasePath ?? databasePath;
-            store = createManagedHandoffLeaseStore({
-              databasePath,
-              serviceManagerEnv: resolveServiceManagerEnv(),
+            const initialDatabasePath = databasePath;
+            const openStore = async (
+              identity: typeof existingIdentity,
+              originalUpdateKey?: string,
+            ) => {
+              const prepared = await prepareManagedHandoffLeaseStore({
+                databasePath: identity?.databasePath ?? initialDatabasePath,
+                serviceManagerEnv: resolveServiceManagerEnv(),
+                existingIdentity: identity,
+                originalUpdateKey,
+                onProcessIdentityWarning: identityWarnings.warn,
+              });
+              activation.assertCurrent();
+              if (!active) {
+                throw new UpdateCommandRecoveryPendingError("Update executor admission is closed.");
+              }
+              return prepared;
+            };
+            store = await openStore(
               existingIdentity,
-              originalUpdateKey:
-                !options?.legacyManagedParent && !options?.legacyPackageParent ? key : undefined,
-              onProcessIdentityWarning: identityWarnings.warn,
-            });
+              !options?.legacyManagedParent && !options?.legacyPackageParent ? key : undefined,
+            );
             const found = store.read(key);
             if (found.kind === "unreadable" && !options?.legacyPackageParent) {
               throw new UpdateCommandRecoveryPendingError("Update executor state is unreadable.");
@@ -333,33 +351,23 @@ export async function withUpdateCommandExecutor<T>(
               borrowed = true;
               managedHandoff = true;
             } else {
-              const acquired = store.acquire(key, randomUUID(), { kind: "update" });
-              if (acquired.kind !== "acquired") {
-                throw new UpdateCommandRecoveryPendingError(
-                  "Another update executor owns this installation.",
-                );
-              }
+              const acquired = requireUpdateCommandAcquisition(
+                store.acquire(key, randomUUID(), { kind: "update" }),
+                "Another update executor owns this installation.",
+              );
               lease = acquired.lease;
               if (acquired.originalDatabaseIdentity) {
                 existingIdentity = acquired.originalDatabaseIdentity;
                 databasePath = existingIdentity.databasePath;
-                store = createManagedHandoffLeaseStore({
-                  databasePath,
-                  existingIdentity,
-                  serviceManagerEnv: resolveServiceManagerEnv(),
-                  onProcessIdentityWarning: identityWarnings.warn,
-                });
+                store = await openStore(existingIdentity);
               }
             }
             serviceKey = distinctServiceKey;
             if (serviceKey) {
-              const acquired = store.acquire(serviceKey, randomUUID(), { kind: "update" });
-              if (acquired.kind !== "acquired") {
-                throw new UpdateCommandRecoveryPendingError(
-                  "Another update executor owns the managed service installation.",
-                );
-              }
-              serviceLease = acquired.lease;
+              serviceLease = requireUpdateCommandAcquisition(
+                store.acquire(serviceKey, randomUUID(), { kind: "update" }),
+                "Another update executor owns the managed service installation.",
+              ).lease;
             }
             admissionComplete = true;
             assertCurrent();
@@ -371,12 +379,7 @@ export async function withUpdateCommandExecutor<T>(
             // Switch the live owner too: capture, later child admission and final
             // release must not recreate a database lost after initial admission.
             databasePath = authority.databasePath;
-            store = createManagedHandoffLeaseStore({
-              databasePath,
-              serviceManagerEnv: resolveServiceManagerEnv(),
-              existingIdentity: authority,
-              onProcessIdentityWarning: identityWarnings.warn,
-            });
+            store = await openStore(authority);
             readConnections.use(store.retainReadConnection());
             if (
               borrowed &&
@@ -411,14 +414,8 @@ export async function withUpdateCommandExecutor<T>(
                 if (!store || !lease || children.pending || slotLease) {
                   throw new UpdateCommandRecoveryPendingError("Preflight executor release failed.");
                 }
-                originalFence = undefined;
-                originalCancellations.delete(fence);
-                active = false;
+                retireFence();
                 children.close();
-                childOwners.delete(fence);
-                slotReservations.delete(fence);
-                admittedAuthorities.delete(fence);
-                preflightReleases.delete(fence);
                 if (serviceLease) {
                   if (!store.release(serviceLease)) {
                     throw new UpdateCommandRecoveryPendingError(
@@ -434,16 +431,7 @@ export async function withUpdateCommandExecutor<T>(
                 readConnections.dispose();
               });
             }
-            if (!enterOptions?.preflight) {
-              reserveUpdateCommandExecutorSlot(fence, root);
-            }
-            if (enterOptions?.activationTimeoutMs !== undefined) {
-              activation.start(
-                new UpdateActivationTimeoutError(key, enterOptions.activationTimeoutMs),
-                enterOptions.activationTimeoutMs,
-              );
-            }
-            return fence;
+            return finishAdmission();
           } finally {
             entering = false;
           }
@@ -460,13 +448,7 @@ export async function withUpdateCommandExecutor<T>(
         },
       });
       const outcome = cancellation.mergeOutcome(operationOutcome);
-      originalFence = undefined;
-      originalCancellations.delete(fence);
-      active = false;
-      preflightReleases.delete(fence);
-      childOwners.delete(fence);
-      slotReservations.delete(fence);
-      admittedAuthorities.delete(fence);
+      retireFence();
       if ("error" in outcome && hasCommandProcessCleanupError(outcome.error)) {
         throw new UpdateCommandRecoveryPendingError(
           "Command cleanup is unconfirmed; update ownership remains retained.",

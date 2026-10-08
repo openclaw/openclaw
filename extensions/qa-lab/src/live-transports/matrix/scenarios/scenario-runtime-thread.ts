@@ -1,4 +1,3 @@
-// QA Lab Matrix plugin module implements thread and reply scenarios.
 import { randomUUID } from "node:crypto";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import {
@@ -19,28 +18,6 @@ import type { MatrixQaCanaryArtifact, MatrixQaScenarioExecution } from "./scenar
 
 type MatrixQaThreadScenarioResult = Awaited<ReturnType<typeof runThreadScenario>>;
 
-function assertMatrixQaInReplyTarget(params: {
-  actualEventId?: string;
-  expectedEventId: string;
-  label: string;
-}) {
-  if (params.actualEventId !== params.expectedEventId) {
-    throw new Error(
-      `${params.label} targeted ${params.actualEventId ?? "<none>"} instead of ${params.expectedEventId}`,
-    );
-  }
-}
-
-function requireMatrixQaNestedThreadEvent(
-  nestedDriverEventId: string | undefined,
-  scenarioLabel: string,
-) {
-  if (!nestedDriverEventId) {
-    throw new Error(`${scenarioLabel} did not create a nested trigger`);
-  }
-  return nestedDriverEventId;
-}
-
 function buildMatrixQaThreadArtifacts(result: MatrixQaThreadScenarioResult) {
   return {
     driverEventId: result.driverEventId,
@@ -52,49 +29,36 @@ function buildMatrixQaThreadArtifacts(result: MatrixQaThreadScenarioResult) {
 
 export function buildMatrixQaThreadDetailLines(params: {
   result: MatrixQaThreadScenarioResult;
-  includeNestedTrigger?: boolean;
   extraLines?: string[];
   replyLabel?: string;
 }) {
   return [
     `thread root event: ${params.result.rootEventId}`,
-    ...(params.includeNestedTrigger && params.result.nestedDriverEventId
-      ? [`nested trigger event: ${params.result.nestedDriverEventId}`]
-      : []),
+    `nested trigger event: ${params.result.nestedDriverEventId}`,
     `mention trigger event: ${params.result.driverEventId}`,
     ...(params.extraLines ?? []),
     ...buildMatrixReplyDetails(params.replyLabel ?? "reply", params.result.reply),
   ];
 }
 
-export async function runThreadScenario(
-  params: MatrixQaScenarioContext,
-  options?: {
-    createNestedReply?: boolean;
-    tokenPrefix?: string;
-  },
-) {
+export async function runThreadScenario(params: MatrixQaScenarioContext, tokenPrefix: string) {
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(params);
   const rootBody = `thread root ${randomUUID().slice(0, 8)}`;
   const rootEventId = await client.sendTextMessage({
     body: rootBody,
     roomId: params.roomId,
   });
-  const nestedDriverEventId =
-    options?.createNestedReply === true
-      ? await client.sendTextMessage({
-          body: `thread nested ${randomUUID().slice(0, 8)}`,
-          replyToEventId: rootEventId,
-          roomId: params.roomId,
-          threadRootEventId: rootEventId,
-        })
-      : undefined;
-  const triggerEventId = nestedDriverEventId ?? rootEventId;
-  const token = buildMatrixQaToken(options?.tokenPrefix ?? "MATRIX_QA_THREAD");
+  const nestedDriverEventId = await client.sendTextMessage({
+    body: `thread nested ${randomUUID().slice(0, 8)}`,
+    replyToEventId: rootEventId,
+    roomId: params.roomId,
+    threadRootEventId: rootEventId,
+  });
+  const token = buildMatrixQaToken(tokenPrefix);
   const driverEventId = await client.sendTextMessage({
     body: buildMentionPrompt(params.sutUserId, token),
     mentionUserIds: [params.sutUserId],
-    replyToEventId: triggerEventId,
+    replyToEventId: nestedDriverEventId,
     roomId: params.roomId,
     threadRootEventId: rootEventId,
   });
@@ -164,23 +128,15 @@ export async function runMatrixQaCanary(params: {
 }
 
 export async function runThreadRootPreservationScenario(context: MatrixQaScenarioContext) {
-  const result = await runThreadScenario(context, {
-    createNestedReply: true,
-    tokenPrefix: "MATRIX_QA_THREAD_ROOT",
-  });
+  const result = await runThreadScenario(context, "MATRIX_QA_THREAD_ROOT");
   assertThreadReplyArtifact(result.reply, {
     expectedRootEventId: result.rootEventId,
     label: "thread root preservation reply",
   });
-  requireMatrixQaNestedThreadEvent(
-    result.nestedDriverEventId,
-    "Matrix thread root preservation scenario",
-  );
   return {
     artifacts: buildMatrixQaThreadArtifacts(result),
     details: buildMatrixQaThreadDetailLines({
       result,
-      includeNestedTrigger: true,
       extraLines: [
         `reply thread root: ${result.reply.relatesTo?.eventId ?? "<none>"}`,
         `reply in_reply_to: ${result.reply.relatesTo?.inReplyToId ?? "<none>"}`,
@@ -193,23 +149,17 @@ export async function runThreadNestedReplyShapeScenario(context: MatrixQaScenari
   if (!context.gatewayCall) {
     throw new Error("Matrix nested reply proof requires the Gateway send method");
   }
-  const result = await runThreadScenario(context, {
-    createNestedReply: true,
-    tokenPrefix: "MATRIX_QA_THREAD_NESTED",
-  });
+  const result = await runThreadScenario(context, "MATRIX_QA_THREAD_NESTED");
   assertThreadReplyArtifact(result.reply, {
     expectedRootEventId: result.rootEventId,
     label: "thread nested reply",
   });
-  const selectedReplyId = requireMatrixQaNestedThreadEvent(
-    result.nestedDriverEventId,
-    "Matrix thread nested reply scenario",
-  );
-  assertMatrixQaInReplyTarget({
-    actualEventId: result.reply.relatesTo?.inReplyToId,
-    expectedEventId: result.rootEventId,
-    label: "thread nested reply in_reply_to",
-  });
+  const selectedReplyId = result.nestedDriverEventId;
+  if (result.reply.relatesTo?.inReplyToId !== result.rootEventId) {
+    throw new Error(
+      `thread nested reply in_reply_to targeted ${result.reply.relatesTo?.inReplyToId ?? "<none>"} instead of ${result.rootEventId}`,
+    );
+  }
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const explicitToken = buildMatrixQaToken("MATRIX_QA_EXPLICIT_THREAD_REPLY");
   await context.gatewayCall("send", {
@@ -253,7 +203,6 @@ export async function runThreadNestedReplyShapeScenario(context: MatrixQaScenari
     artifacts: { ...buildMatrixQaThreadArtifacts(result), secondReply: explicitReply },
     details: buildMatrixQaThreadDetailLines({
       result,
-      includeNestedTrigger: true,
       extraLines: [
         `reply in_reply_to: ${result.reply.relatesTo?.inReplyToId ?? "<none>"}`,
         `expected fallback root: ${result.rootEventId}`,

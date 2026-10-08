@@ -20,12 +20,7 @@ import type { WorkerConnectionIdentity } from "../../worker-environments/connect
 
 export function workerProtocolError(
   reason: WorkerProtocolCloseReason,
-  options: {
-    code?: WorkerErrorShape["code"];
-    message?: string;
-    retryable?: boolean;
-    retryAfterMs?: number;
-  } = {},
+  options: Partial<Omit<WorkerErrorShape, "details">> = {},
 ): WorkerErrorShape {
   return {
     code: options.code ?? ErrorCodes.INVALID_REQUEST,

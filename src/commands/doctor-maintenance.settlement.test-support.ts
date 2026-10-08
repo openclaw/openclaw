@@ -274,7 +274,7 @@ beforeEach(() => {
     loadState: { status: "loaded" },
     runtime: { status: "stopped" },
   });
-  boundary.health.mockResolvedValue({ healthy: true });
+  boundary.health.mockResolvedValue({ outcome: "ready", healthy: true });
   boundary.native.mockImplementation(() => {
     throw new Error("Doctor settlement controls cannot start or inspect native processes");
   });

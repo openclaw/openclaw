@@ -10,28 +10,6 @@ import {
 } from "./runtime.moderation-shared.js";
 import { createDiscordActionOptions } from "./runtime.shared.js";
 
-async function verifySenderModerationPermission(params: {
-  guildId: string;
-  senderUserId?: string;
-  requiredPermission: bigint;
-  accountId?: string;
-  cfg: OpenClawConfig;
-}) {
-  // CLI/manual flows may not have sender context; enforce only when present.
-  if (!params.senderUserId) {
-    return;
-  }
-  const hasPermission = await discordModerationActionRuntime.hasAnyGuildPermissionDiscord(
-    params.guildId,
-    params.senderUserId,
-    [params.requiredPermission],
-    createDiscordActionOptions({ cfg: params.cfg, accountId: params.accountId }),
-  );
-  if (!hasPermission) {
-    throw new Error("Sender does not have required permissions for this moderation action.");
-  }
-}
-
 export async function handleDiscordModerationAction(
   action: string,
   params: Record<string, unknown>,
@@ -51,13 +29,18 @@ export async function handleDiscordModerationAction(
   const command = readDiscordModerationCommand(action, params);
   const senderUserId = readStringParam(params, "senderUserId");
   const withOpts = () => createDiscordActionOptions({ cfg, accountId });
-  await verifySenderModerationPermission({
-    guildId: command.guildId,
-    senderUserId,
-    requiredPermission: requiredGuildPermissionForModerationAction(command.action),
-    accountId,
-    cfg,
-  });
+  // CLI/manual flows may not have sender context; enforce only when present.
+  const hasPermission = await (senderUserId
+    ? discordModerationActionRuntime.hasAnyGuildPermissionDiscord(
+        command.guildId,
+        senderUserId,
+        [requiredGuildPermissionForModerationAction(command.action)],
+        withOpts(),
+      )
+    : true);
+  if (!hasPermission) {
+    throw new Error("Sender does not have required permissions for this moderation action.");
+  }
   const target = { guildId: command.guildId, userId: command.userId, reason: command.reason };
   if (command.action === "timeout") {
     const member = await discordModerationActionRuntime.timeoutMemberDiscord(

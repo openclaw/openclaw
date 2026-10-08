@@ -153,7 +153,7 @@ Legacy single-pass setup uses unqualified WhatsApp peer IDs as keys and arrays o
 
 Every listed agent ID must exist in the configured roster: config validation rejects unknown IDs in both arrays and objects. Deleting an agent prunes it from both forms.
 
-Runtime membership uses the canonical `agents.entries` roster when present, including an empty roster. Legacy `agents.list` is used only when `agents.entries` is absent.
+Runtime membership uses the canonical `agents.entries` roster. Run `openclaw doctor --fix` to migrate a legacy `agents.list` roster before startup.
 
 ### Processing strategy
 
@@ -178,9 +178,14 @@ Runtime membership uses the canonical `agents.entries` roster when present, incl
 ```json
 {
   "agents": {
+    "ownership": "explicit",
+    "defaults": {
+      "authInheritance": { "agentId": "code-reviewer" },
+      "heartbeat": { "agentId": "code-reviewer" },
+      "systemAgent": { "agentId": "code-reviewer" }
+    },
     "entries": {
       "code-reviewer": {
-        "default": true,
         "name": "Code Reviewer",
         "workspace": "/path/to/code-reviewer",
         "sandbox": { "mode": "all" }
@@ -197,6 +202,10 @@ Runtime membership uses the canonical `agents.entries` roster when present, incl
       }
     }
   },
+  "bindings": [
+    { "agentId": "code-reviewer", "match": { "channel": "whatsapp", "accountId": "*" } }
+  ],
+  "talk": { "agentId": "code-reviewer" },
   "broadcast": {
     "strategy": "parallel",
     "120363403215116621@g.us": ["code-reviewer", "security-auditor", "docs-generator"]
@@ -293,12 +302,22 @@ In group `120363403215116621@g.us` with agents `["alfred", "baerbel"]`:
     ```json
     {
       "agents": {
+        "ownership": "explicit",
+        "defaults": {
+          "authInheritance": { "agentId": "security-scanner" },
+          "heartbeat": { "agentId": "security-scanner" },
+          "systemAgent": { "agentId": "security-scanner" }
+        },
         "entries": {
-          "security-scanner": { "default": true, "name": "Security Scanner" },
+          "security-scanner": {
+            "name": "Security Scanner",
+            "workspace": "~/.openclaw/workspace"
+          },
           "code-formatter": { "name": "Code Formatter" },
           "test-generator": { "name": "Test Generator" }
         }
-      }
+      },
+      "talk": { "agentId": "security-scanner" }
     }
     ```
   </Accordion>
@@ -306,14 +325,21 @@ In group `120363403215116621@g.us` with agents `["alfred", "baerbel"]`:
     ```json
     {
       "agents": {
+        "ownership": "explicit",
+        "defaults": {
+          "authInheritance": { "agentId": "reviewer" },
+          "heartbeat": { "agentId": "reviewer" },
+          "systemAgent": { "agentId": "reviewer" }
+        },
         "entries": {
           "reviewer": {
-            "default": true,
+            "workspace": "~/.openclaw/workspace",
             "tools": { "allow": ["read", "exec"] }
           },
           "fixer": { "tools": { "allow": ["read", "write", "edit", "exec"] } }
         }
-      }
+      },
+      "talk": { "agentId": "reviewer" }
     }
     ```
 
@@ -405,9 +431,14 @@ Broadcast groups work alongside existing routing:
         ]
       },
       "agents": {
+        "ownership": "explicit",
+        "defaults": {
+          "authInheritance": { "agentId": "code-formatter" },
+          "heartbeat": { "agentId": "code-formatter" },
+          "systemAgent": { "agentId": "code-formatter" }
+        },
         "entries": {
           "code-formatter": {
-            "default": true,
             "workspace": "~/agents/formatter",
             "tools": { "allow": ["read", "write"] }
           },
@@ -421,7 +452,11 @@ Broadcast groups work alongside existing routing:
           },
           "docs-checker": { "workspace": "~/agents/docs", "tools": { "allow": ["read"] } }
         }
-      }
+      },
+      "bindings": [
+        { "agentId": "code-formatter", "match": { "channel": "whatsapp", "accountId": "*" } }
+      ],
+      "talk": { "agentId": "code-formatter" }
     }
     ```
 
@@ -436,12 +471,22 @@ Broadcast groups work alongside existing routing:
         "+15555550123": ["detect-language", "translator-en", "translator-de"]
       },
       "agents": {
+        "ownership": "explicit",
+        "defaults": {
+          "authInheritance": { "agentId": "detect-language" },
+          "heartbeat": { "agentId": "detect-language" },
+          "systemAgent": { "agentId": "detect-language" }
+        },
         "entries": {
-          "detect-language": { "default": true, "workspace": "~/agents/lang-detect" },
+          "detect-language": { "workspace": "~/agents/lang-detect" },
           "translator-en": { "workspace": "~/agents/translate-en" },
           "translator-de": { "workspace": "~/agents/translate-de" }
         }
-      }
+      },
+      "bindings": [
+        { "agentId": "detect-language", "match": { "channel": "whatsapp", "accountId": "*" } }
+      ],
+      "talk": { "agentId": "detect-language" }
     }
     ```
   </Accordion>

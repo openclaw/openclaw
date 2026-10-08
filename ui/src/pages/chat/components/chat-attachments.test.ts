@@ -132,7 +132,7 @@ class StubFileReader {
   }
 }
 
-function pasteEventWithFiles(files: File[]): ClipboardEvent {
+function pasteEventWithFiles(files: File[], text = ""): ClipboardEvent {
   return {
     preventDefault: () => {},
     clipboardData: {
@@ -140,7 +140,7 @@ function pasteEventWithFiles(files: File[]): ClipboardEvent {
         type: file.type,
         getAsFile: () => file,
       })),
-      getData: () => "",
+      getData: (type: string) => (type === "text/plain" ? text : ""),
     },
   } as unknown as ClipboardEvent;
 }
@@ -222,8 +222,23 @@ describe("chat attachment read failures", () => {
     },
   );
 
-  it("keeps a read failure in its tile beside its ready sibling without a toast", async () => {
-    StubFileReader.failNames = new Set(["bad.png"]);
+  it.each(["error", "timeout"])("settles a read %s into a failed tile", async (failure) => {
+    const files =
+      failure === "error"
+        ? [
+            new File(["ok"], "good.png", { type: "image/png" }),
+            new File(["broken"], "bad.png", { type: "image/png" }),
+          ]
+        : [new File(["stalled"], "stalled.png", { type: "image/png" })];
+    if (failure === "error") {
+      StubFileReader.failNames.add("bad.png");
+    } else {
+      vi.useFakeTimers();
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
+      StubFileReader.heldNames.add("stalled.png");
+    }
     let attachments: ChatAttachment[] = [];
     const container = document.createElement("div");
     const redraw = () =>
@@ -246,97 +261,50 @@ describe("chat attachment read failures", () => {
       payloads.releaseChatAttachmentPayloads(attachments);
       render(null, container);
     });
-    handleChatAttachmentPaste(
-      pasteEventWithFiles([
-        new File(["ok"], "good.png", { type: "image/png" }),
-        new File(["broken"], "bad.png", { type: "image/png" }),
-      ]),
-      {
-        attachments,
-        attachmentReads: reads,
-        getAttachments: () => attachments,
-        readSignal: signal,
-        onPendingReadsChange: (delta) => reads.updatePending(signal, delta),
-        onAttachmentsChange: (next) => {
-          attachments = next;
-          redraw();
-        },
+    handleChatAttachmentPaste(pasteEventWithFiles(files), {
+      attachments,
+      attachmentReads: reads,
+      getAttachments: () => attachments,
+      readSignal: signal,
+      onPendingReadsChange: (delta) => reads.updatePending(signal, delta),
+      onAttachmentsChange: (next) => {
+        attachments = next;
+        redraw();
       },
-    );
-    expect(container.querySelectorAll('.chat-attachment-thumb[aria-busy="true"]')).toHaveLength(2);
-    await vi.waitFor(() => expect(reads.pendingReads).toBe(0));
-    await toastHost.updateComplete;
-    expect(toastHost.querySelector(".app-toast")).toBeNull();
-    expect(attachments.map(({ fileName }) => fileName)).toEqual(["good.png"]);
-    const tiles = container.querySelectorAll(".chat-attachment-thumb");
-    expect(tiles).toHaveLength(2);
-    expect(tiles[0]?.querySelector("img")?.alt).toBe("good.png");
-    expect(
-      tiles[1]?.querySelector('.chat-attachment-error[role="img"]')?.getAttribute("aria-label"),
-    ).toContain("bad.png");
-    const tooltips = [...(tiles[1]?.querySelectorAll("openclaw-tooltip") ?? [])];
-    expect(
-      tooltips.some(
-        (tooltip) => tooltip.content.includes("bad.png") && !tooltip.content.startsWith("Remove"),
-      ),
-    ).toBe(true);
-    expect(tiles[1]?.textContent?.trim()).toBe("");
-  });
-
-  it("settles an eventless stalled attachment read through failure without leaving pending reads", async () => {
-    vi.useFakeTimers();
-    onTestFinished(() => {
-      vi.useRealTimers();
     });
-    StubFileReader.heldNames.add("stalled.png");
-    let attachments: ChatAttachment[] = [];
-    const container = document.createElement("div");
-    const redraw = () =>
-      render(
-        renderAttachmentPreview({
-          attachments,
-          attachmentReads: reads,
-          getAttachments: () => attachments,
-          onAttachmentsChange: (next) => {
-            attachments = next;
-            redraw();
-          },
-        }),
-        container,
+    if (failure === "error") {
+      expect(container.querySelectorAll('.chat-attachment-thumb[aria-busy="true"]')).toHaveLength(
+        2,
       );
-    const reads = new ChatAttachmentReadLifecycle(redraw);
-    const signal = reads.readSignal;
-    onTestFinished(() => {
-      reads.abortReads();
-      payloads.releaseChatAttachmentPayloads(attachments);
-      render(null, container);
-    });
-    handleChatAttachmentPaste(
-      pasteEventWithFiles([new File(["stalled"], "stalled.png", { type: "image/png" })]),
-      {
-        attachments,
-        attachmentReads: reads,
-        getAttachments: () => attachments,
-        readSignal: signal,
-        onPendingReadsChange: (delta) => reads.updatePending(signal, delta),
-        onAttachmentsChange: (next) => {
-          attachments = next;
-          redraw();
-        },
-      },
-    );
-    expect(reads.pendingReads).toBe(1);
-
-    await vi.advanceTimersByTimeAsync(15_001);
-    expect(reads.pendingReads).toBe(0);
-    expect(container.querySelector(".chat-attachment-thumb--error")).not.toBeNull();
-    expect(container.querySelector(".chat-attachment-error")).not.toBeNull();
-
-    const removeButton = container.querySelector<HTMLButtonElement>(".chat-attachment-remove");
-    expect(removeButton).not.toBeNull();
-    removeButton?.click();
-    expect(reads.pendingReads).toBe(0);
-    expect(container.querySelector(".chat-attachment-thumb")).toBeNull();
+      await vi.waitFor(() => expect(reads.pendingReads).toBe(0));
+      await toastHost.updateComplete;
+      expect(toastHost.querySelector(".app-toast")).toBeNull();
+      expect(attachments.map(({ fileName }) => fileName)).toEqual(["good.png"]);
+      const tiles = container.querySelectorAll(".chat-attachment-thumb");
+      expect(tiles).toHaveLength(2);
+      expect(tiles[0]?.querySelector("img")?.alt).toBe("good.png");
+      expect(
+        tiles[1]?.querySelector('.chat-attachment-error[role="img"]')?.getAttribute("aria-label"),
+      ).toContain("bad.png");
+      const tooltips = [...(tiles[1]?.querySelectorAll("openclaw-tooltip") ?? [])];
+      expect(
+        tooltips.some(
+          (tooltip) => tooltip.content.includes("bad.png") && !tooltip.content.startsWith("Remove"),
+        ),
+      ).toBe(true);
+      expect(tiles[1]?.textContent?.trim()).toBe("");
+    } else {
+      expect(reads.pendingReads).toBe(1);
+      await vi.advanceTimersByTimeAsync(15_001);
+      expect(reads.pendingReads).toBe(0);
+      expect(container.querySelector(".chat-attachment-thumb--error")).not.toBeNull();
+      expect(container.querySelector(".chat-attachment-error")).not.toBeNull();
+      const removeButton = container.querySelector<HTMLButtonElement>(".chat-attachment-remove");
+      expect(removeButton).not.toBeNull();
+      removeButton?.click();
+      expect(reads.pendingReads).toBe(0);
+      expect(container.querySelector(".chat-attachment-thumb")).toBeNull();
+    }
   });
 
   it("rejects batch overflow by name and admits a later smaller file before reading", async () => {
@@ -473,81 +441,24 @@ describe("chat attachment read failures", () => {
     expect(attached[0]?.fileName).toBe("small.png");
   });
 
-  it("blocks a non-resizable image-only batch above the image ceiling", async () => {
+  it.each<[string, File[], string, number | undefined]>([
+    ["huge.gif", [new File(["way-too-big"], "huge.gif", { type: "image/gif" })], "", 4],
+    ["empty.png", [new File([], "empty.png", { type: "image/png" })], "", undefined],
+    ["pasted-text", [], "x".repeat(2048), 1024],
+    ["pasted-image", [], `data:image/gif;base64,${btoa("p".repeat(64))}`, 16],
+  ])("rejects %s at intake without publishing it", async (name, files, text, imageLimit) => {
     const onAttachmentsChange = vi.fn();
-    handleChatAttachmentPaste(
-      pasteEventWithFiles([new File(["way-too-big"], "huge.gif", { type: "image/gif" })]),
-      {
-        attachmentLimits: { maxBytes: 1024, maxImageBytes: 4, maxBatchBytes: 1024 },
-        attachments: [],
-        onAttachmentsChange,
-      },
-    );
-    await toastHost.updateComplete;
-    await vi.waitFor(() => {
-      expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain("huge.gif");
+    handleChatAttachmentPaste(pasteEventWithFiles(files, text), {
+      attachmentLimits:
+        imageLimit === undefined
+          ? undefined
+          : { maxBytes: 1024, maxImageBytes: imageLimit, maxBatchBytes: 1024 },
+      attachments: [],
+      onAttachmentsChange,
     });
-    expect(onAttachmentsChange).not.toHaveBeenCalled();
-  });
-
-  it("rejects a zero-byte file instead of silently dropping it after send", async () => {
-    const onAttachmentsChange = vi.fn();
-    handleChatAttachmentPaste(
-      pasteEventWithFiles([new File([], "empty.png", { type: "image/png" })]),
-      { attachments: [], onAttachmentsChange },
-    );
     await toastHost.updateComplete;
     await vi.waitFor(() => {
-      expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain("empty.png");
-    });
-    expect(onAttachmentsChange).not.toHaveBeenCalled();
-  });
-
-  it("blocks a large text paste that exceeds the non-image ceiling", async () => {
-    const onAttachmentsChange = vi.fn();
-    const text = "x".repeat(2048);
-    handleChatAttachmentPaste(
-      {
-        preventDefault: () => {},
-        clipboardData: {
-          items: [],
-          getData: (type: string) => (type === "text/plain" ? text : ""),
-        },
-      } as unknown as ClipboardEvent,
-      {
-        attachmentLimits: { maxBytes: 1024, maxImageBytes: 1024, maxBatchBytes: 1024 },
-        attachments: [],
-        onAttachmentsChange,
-      },
-    );
-    await toastHost.updateComplete;
-    await vi.waitFor(() => {
-      expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain("pasted-text");
-    });
-    expect(onAttachmentsChange).not.toHaveBeenCalled();
-  });
-
-  it("blocks a pasted non-resizable data-URL image above the image ceiling", async () => {
-    const onAttachmentsChange = vi.fn();
-    const bigBase64 = btoa("p".repeat(64));
-    handleChatAttachmentPaste(
-      {
-        preventDefault: () => {},
-        clipboardData: {
-          items: [],
-          getData: (type: string) =>
-            type === "text/plain" ? `data:image/gif;base64,${bigBase64}` : "",
-        },
-      } as unknown as ClipboardEvent,
-      {
-        attachmentLimits: { maxBytes: 1024, maxImageBytes: 16, maxBatchBytes: 1024 },
-        attachments: [],
-        onAttachmentsChange,
-      },
-    );
-    await toastHost.updateComplete;
-    await vi.waitFor(() => {
-      expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain("pasted-image");
+      expect(toastHost.querySelector(".app-toast__message")?.textContent).toContain(name);
     });
     expect(onAttachmentsChange).not.toHaveBeenCalled();
   });
@@ -768,19 +679,6 @@ describe("chat attachment read failures", () => {
       expect(onAttachmentsChange).not.toHaveBeenCalled();
     },
   );
-
-  it("does not toast when every read succeeds", async () => {
-    const onAttachmentsChange = vi.fn();
-    handleChatAttachmentPaste(
-      pasteEventWithFiles([new File(["ok"], "good.png", { type: "image/png" })]),
-      { attachments: [], onAttachmentsChange },
-    );
-    await vi.waitFor(() => {
-      expect(onAttachmentsChange).toHaveBeenCalled();
-    });
-    await toastHost.updateComplete;
-    expect(toastHost.querySelector(".app-toast")).toBeNull();
-  });
 });
 
 describe("attachment removal names", () => {

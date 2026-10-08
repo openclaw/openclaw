@@ -1,3 +1,7 @@
+import {
+  captureChannelReadAuthority,
+  captureEffectAuthority,
+} from "openclaw/plugin-sdk/fetch-runtime";
 import { runIMessageCliJsonCommand } from "./cli-output.js";
 import { createIMessageRpcClient } from "./client.js";
 
@@ -28,11 +32,15 @@ export async function runIMessageAction(
   args: readonly string[],
 ): Promise<Record<string, unknown>> {
   if (!options.remoteHost) {
-    return await runIMessageCliJsonCommand({
-      args,
-      cliPath: options.cliPath,
-      dbPath: options.dbPath,
-      timeoutMs: options.timeoutMs,
+    const assertReadAuthority = captureChannelReadAuthority();
+    return await captureEffectAuthority().initiate(() => {
+      assertReadAuthority?.();
+      return runIMessageCliJsonCommand({
+        args,
+        cliPath: options.cliPath,
+        dbPath: options.dbPath,
+        timeoutMs: options.timeoutMs,
+      });
     });
   }
   const client = await createIMessageRpcClient({

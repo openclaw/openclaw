@@ -8,7 +8,6 @@ import { findGraphUsersByExactIdentity } from "./graph-users.js";
 import {
   listChannelsForTeamWithPageInfo,
   listTeamsByNameWithPageInfo,
-  normalizeQuery,
   resolveGraphToken,
   type GraphChannel,
   type GraphGroup,
@@ -165,27 +164,15 @@ export function parseMSTeamsConversationId(raw: string): string | null {
  */
 export function looksLikeMSTeamsConversationId(raw: string): boolean {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (/^conversation:/i.test(trimmed)) {
-    return true;
-  }
-  if (MSTEAMS_GROUP_CONVERSATION_ID.test(trimmed)) {
-    return true;
-  }
-  if (/^19:.+@unq\.gbl\.spaces$/i.test(trimmed)) {
-    return true;
-  }
-  if (/^a:1[A-Za-z0-9_-]+$/i.test(trimmed)) {
-    return true;
-  }
-  if (/^8:orgid:[A-Za-z0-9-]+$/i.test(trimmed)) {
-    return true;
-  }
-  // Fallback: anything containing @thread is still treated as a conversation
-  // id so the current matches for tenant-specific suffixes remain accepted.
-  return /@thread\b/i.test(trimmed);
+  return (
+    /^conversation:/i.test(trimmed) ||
+    MSTEAMS_GROUP_CONVERSATION_ID.test(trimmed) ||
+    /^19:.+@unq\.gbl\.spaces$/i.test(trimmed) ||
+    /^a:1[A-Za-z0-9_-]+$/i.test(trimmed) ||
+    /^8:orgid:[A-Za-z0-9-]+$/i.test(trimmed) ||
+    // Preserve tenant-specific thread suffixes beyond the known Graph formats.
+    /@thread\b/i.test(trimmed)
+  );
 }
 
 /**
@@ -534,7 +521,7 @@ export async function resolveMSTeamsUserAllowlist(params: {
   return await mapAllowlistResolutionInputs({
     inputs: params.entries,
     mapInput: async (input): Promise<BasicAllowlistResolutionEntry> => {
-      const query = normalizeQuery(normalizeMSTeamsUserInput(input));
+      const query = normalizeMSTeamsUserInput(input);
       if (!query) {
         return { input, resolved: false };
       }

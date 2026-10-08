@@ -94,7 +94,7 @@ export async function fixture(
     gateway: { mode: "local" },
     plugins: { slots: { memory: "none" } },
     agents: {
-      entries: { main: { default: true } },
+      entries: { main: {} },
       defaults: {
         workspace,
         ...(options.primaryModel

@@ -173,7 +173,6 @@ export async function readClawOpenClawProfile(params: {
     const read = await profileFiles.read(declaredPath, {
       hardlinks: "reject",
       maxBytes: MAX_PROFILE_BYTES,
-      nonBlockingRead: true,
       symlinks: "reject",
     });
     raw = read.buffer;

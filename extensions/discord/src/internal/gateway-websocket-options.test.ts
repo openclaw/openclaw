@@ -34,7 +34,6 @@ describe("GatewayPlugin websocket options", () => {
   it("bounds inbound gateway websocket payloads and the opening handshake", () => {
     expect(WebSocket).toBe(mockOwner.constructor);
     const gateway = new GatewayPlugin({
-      autoInteractions: false,
       url: "wss://gateway.example.test",
     });
 

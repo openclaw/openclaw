@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "../plugin-sdk/message-tool-delivery-hints.js";
 import {
   collectToolCallIds,
   isContractToolCallBlock,
@@ -16,7 +17,6 @@ import {
   isHeartbeatAcknowledgementText,
   resolveHeartbeatPromptForResponseTool,
 } from "./heartbeat.js";
-import { MESSAGE_TOOL_DELIVERY_HINTS } from "./reply/delivery-hints.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "./tokens.js";
 
 const HEARTBEAT_TASK_PROMPT_PREFIX =
@@ -87,23 +87,6 @@ function isFailedToolResultRecord(record: Record<string, unknown>): boolean {
     record.is_error === true ||
     readString(record.type) === "tool_result_error"
   );
-}
-
-function hasSuccessfulToolResultMessage(message: HeartbeatTranscriptMessage): boolean {
-  const resultBlocks = collectToolResultBlocks(message.content);
-  if (resultBlocks.length > 0) {
-    return resultBlocks.some((block) => !isFailedToolResultRecord(block));
-  }
-  return isToolResultMessage(message) && !isFailedToolResultRecord(message);
-}
-
-function collectSuccessfulToolResultCallIds(message: HeartbeatTranscriptMessage): string[] {
-  const resultBlocks = collectToolResultBlocks(message.content);
-  const records = resultBlocks.length > 0 ? resultBlocks : [message];
-  const ids = records.flatMap((record) =>
-    isFailedToolResultRecord(record) ? [] : collectToolCallIds(record),
-  );
-  return [...new Set(ids)];
 }
 
 function matchesHeartbeatPromptText(text: string, prompt: string | undefined): boolean {
@@ -216,10 +199,6 @@ function advancePastAdjacentToolResults(
   return index;
 }
 
-function isToolResultCompletionCandidate(message: HeartbeatTranscriptMessage): boolean {
-  return isToolResultMessage(message) || collectToolResultBlocks(message.content).length > 0;
-}
-
 function hasCompletedVisibleHeartbeatResponseToolCall(
   messages: HeartbeatTranscriptMessage[],
   index: number,
@@ -228,19 +207,19 @@ function hasCompletedVisibleHeartbeatResponseToolCall(
   const callIds = new Set(visibleCalls.flatMap((call) => collectToolCallIds(call)));
   for (let resultIndex = index + 1; resultIndex < messages.length; resultIndex++) {
     const result = expectDefined(messages[resultIndex], "messages entry at resultIndex");
-    if (!isToolResultCompletionCandidate(result)) {
+    const blocks = collectToolResultBlocks(result.content);
+    if (blocks.length === 0 && !isToolResultMessage(result)) {
       break;
     }
-    if (!hasSuccessfulToolResultMessage(result)) {
-      continue;
-    }
-    if (callIds.size === 0) {
+    const records = blocks.length > 0 ? blocks : [result];
+    if (
+      records.some(
+        (record) =>
+          !isFailedToolResultRecord(record) &&
+          (callIds.size === 0 || collectToolCallIds(record).some((id) => callIds.has(id))),
+      )
+    ) {
       return true;
-    }
-    for (const resultId of collectSuccessfulToolResultCallIds(result)) {
-      if (callIds.has(resultId)) {
-        return true;
-      }
     }
   }
   return false;

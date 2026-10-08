@@ -25,6 +25,10 @@ import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { mergeSlackAccountConfig } from "./accounts.js";
 import {
+  BLOCKS_FINAL_PRESENTATION,
+  BLOCKS_FINAL_TEXT,
+  SHORT_FINAL_TEXT,
+  assertSlackSteeringTransportTrace,
   buildSlackDeliveryProofVerdict,
   collectSlackWireTexts,
   createSlackTsNormalizer,
@@ -219,9 +223,7 @@ const NATIVE_FINAL_TEXT =
   "the next fifteen minutes before closing out the change.";
 
 // Below the SDK's buffer threshold: final delivery must explicitly flush it.
-const SHORT_FINAL_TEXT = "All checks passed. Ship it.";
 
-const PREVIEW_PARTIAL_ONE = "Compiling the changelog";
 const PREVIEW_PARTIAL_TWO = "Compiling the changelog for 2026.1.0.";
 const PREVIEW_FINAL_TEXT = "Compiling the changelog for 2026.1.0.\n\nDone: 12 entries.";
 const EXEC_FAILED_TRACE = "⚠️ 🛠️ Exec failed: ";
@@ -230,21 +232,6 @@ const COMPACT_COMMENTARY_TEXT = "Checking the current Slack behavior.";
 const COMPACT_COMMENTARY_TEXT_UPDATED =
   "Checking the current Slack behavior and preparing the focused fix.";
 const COMPACT_FINAL_TEXT = "Compact Slack progress is ready.";
-
-const BLOCKS_FINAL_TEXT = "Release 2026.1.0 is ready to ship.";
-// Portable presentation actions; slack renders them as Block Kit and must
-// synthesize accessible fallback text because blocks hide top-level text.
-const BLOCKS_FINAL_PRESENTATION = {
-  blocks: [
-    {
-      type: "buttons",
-      buttons: [
-        { label: "Approve release", action: { type: "callback", value: "approve-release" } },
-        { label: "Release notes", url: "https://docs.openclaw.ai/release" },
-      ],
-    },
-  ],
-};
 
 // Slack-specific scenario scripts; the runner only consumes `steps` and the
 // name (outside the shared scenario library) keys the golden filename.
@@ -290,7 +277,7 @@ const slackTraceScenarios: Record<SlackTraceScenarioName, readonly DeliveryTrace
   // a disposable app-authored draft plus a separate customized final instead.
   "preview-edit-fallback": [
     { kind: "reply-start" },
-    { kind: "partial", text: PREVIEW_PARTIAL_ONE },
+    { kind: "partial", text: "Compiling the changelog" },
     { kind: "advance", ms: 300 },
     { kind: "partial", text: PREVIEW_PARTIAL_TWO },
     { kind: "advance", ms: 1100 },
@@ -1027,6 +1014,19 @@ describe("slack delivery trace goldens", () => {
     expect(collectSlackWireTexts(events).join("\n")).not.toContain("Late answer");
     expect(traceRuntimeError).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "keeps top-level native output below later ingress (Slack Stop: %s)",
+    async (stoppedBySlack) =>
+      assertSlackSteeringTransportTrace({
+        stoppedBySlack,
+        channelId: CHANNEL_ID,
+        inboundTs: INBOUND_TS,
+        setup: (recorder) => setupSlackTrace(recorder, "streaming-happy-native"),
+        getClient: () => traceState.client as unknown as WebClient,
+        assertNoRuntimeError: () => expect(traceRuntimeError).not.toHaveBeenCalled(),
+      }),
+  );
 
   it("removes a progress card detached by a later human message", async () => {
     let progressEvents = 0;

@@ -1,4 +1,3 @@
-// Doctor checks and repairs for exec safeBins profiles and trusted binary directories.
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { listAgentEntriesWithSource } from "../../../agents/agent-scope-config.js";
@@ -23,11 +22,8 @@ type ExecSafeBinCoverageHit = {
   scopePath: string;
   /** Normalized binary name from safeBins. */
   bin: string;
-  /** Missing profile coverage or unsafe semantic shape detected by doctor. */
   kind: "missingProfile" | "riskySemantics";
-  /** True when the missing profile belongs to an interpreter/runtime binary. */
   isInterpreter?: boolean;
-  /** Risk explanation for risky semantic hits. */
   warning?: string;
 };
 
@@ -52,48 +48,37 @@ function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
   const scopes: ExecSafeBinScopeRef[] = [];
   const globalExec = asNullableRecord(cfg.tools?.exec);
   const globalTrustedDirs = normalizeConfiguredTrustedSafeBinDirs(globalExec?.safeBinTrustedDirs);
-  if (globalExec) {
-    const safeBins = normalizeConfiguredSafeBins(globalExec.safeBins);
-    if (safeBins.length > 0) {
-      scopes.push({
-        scopePath: "tools.exec",
-        safeBins,
-        exec: globalExec,
-        mergedProfiles:
-          resolveMergedSafeBinProfileFixtures({
-            global: globalExec,
-          }) ?? {},
-        trustedSafeBinDirs: getTrustedSafeBinDirs({
-          extraDirs: globalTrustedDirs,
-        }),
-      });
-    }
-  }
-  for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
-    const agentExec = asNullableRecord(agent.tools?.exec);
-    if (!agentExec) {
+  const candidates = [
+    { exec: globalExec, scopePath: "tools.exec", local: undefined },
+    ...listAgentEntriesWithSource(cfg).map(({ entry: agent, source }) => {
+      const exec = asNullableRecord(agent.tools?.exec);
+      return {
+        exec,
+        local: exec,
+        scopePath:
+          source.kind === "entries"
+            ? `agents.entries.${source.key}.tools.exec`
+            : `agents.list.${source.index}.tools.exec`,
+      };
+    }),
+  ];
+  for (const { exec, scopePath, local } of candidates) {
+    if (!exec) {
       continue;
     }
-    const safeBins = normalizeConfiguredSafeBins(agentExec.safeBins);
+    const safeBins = normalizeConfiguredSafeBins(exec.safeBins);
     if (safeBins.length === 0) {
       continue;
     }
     scopes.push({
-      scopePath:
-        source.kind === "entries"
-          ? `agents.entries.${source.key}.tools.exec`
-          : `agents.list.${source.index}.tools.exec`,
+      scopePath,
       safeBins,
-      exec: agentExec,
-      mergedProfiles:
-        resolveMergedSafeBinProfileFixtures({
-          global: globalExec,
-          local: agentExec,
-        }) ?? {},
+      exec,
+      mergedProfiles: resolveMergedSafeBinProfileFixtures({ global: globalExec, local }) ?? {},
       trustedSafeBinDirs: getTrustedSafeBinDirs({
         extraDirs: [
           ...globalTrustedDirs,
-          ...normalizeConfiguredTrustedSafeBinDirs(agentExec.safeBinTrustedDirs),
+          ...normalizeConfiguredTrustedSafeBinDirs(local?.safeBinTrustedDirs),
         ],
       }),
     });
@@ -101,20 +86,21 @@ function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
   return scopes;
 }
 
-/** Scan configured safeBins for missing profiles and risky low-friction entries. */
+function inspectSafeBinProfiles(scope: ExecSafeBinScopeRef) {
+  const interpreterBins = new Set(listInterpreterLikeSafeBins(scope.safeBins));
+  const riskyHits = listRiskyConfiguredSafeBins(scope.safeBins);
+  const riskyBins = new Set(riskyHits.map((hit) => hit.bin));
+  const missingBins = scope.safeBins.filter(
+    (bin) => !scope.mergedProfiles[bin] && !riskyBins.has(normalizeSafeBinName(bin)),
+  );
+  return { interpreterBins, riskyHits, missingBins };
+}
+
 export function scanExecSafeBinCoverage(cfg: OpenClawConfig): ExecSafeBinCoverageHit[] {
   const hits: ExecSafeBinCoverageHit[] = [];
   for (const scope of collectExecSafeBinScopes(cfg)) {
-    const interpreterBins = new Set(listInterpreterLikeSafeBins(scope.safeBins));
-    const riskyHits = listRiskyConfiguredSafeBins(scope.safeBins);
-    const riskyBins = new Set(riskyHits.map((hit) => hit.bin));
-    for (const bin of scope.safeBins) {
-      if (scope.mergedProfiles[bin]) {
-        continue;
-      }
-      if (riskyBins.has(normalizeSafeBinName(bin))) {
-        continue;
-      }
+    const { interpreterBins, riskyHits, missingBins } = inspectSafeBinProfiles(scope);
+    for (const bin of missingBins) {
       hits.push({
         scopePath: scope.scopePath,
         bin,
@@ -134,7 +120,6 @@ export function scanExecSafeBinCoverage(cfg: OpenClawConfig): ExecSafeBinCoverag
   return hits;
 }
 
-/** Scan configured safeBins that resolve outside trusted binary directories. */
 export function scanExecSafeBinTrustedDirHints(
   cfg: OpenClawConfig,
 ): ExecSafeBinTrustedDirHintHit[] {
@@ -163,7 +148,6 @@ export function scanExecSafeBinTrustedDirHints(
   return hits;
 }
 
-/** Format doctor warnings for safeBins profile coverage and risky semantics. */
 export function collectExecSafeBinCoverageWarnings(params: {
   hits: ExecSafeBinCoverageHit[];
   doctorFixCommand: string;
@@ -212,7 +196,6 @@ export function collectExecSafeBinCoverageWarnings(params: {
   return lines;
 }
 
-/** Format doctor warnings for safeBins resolved outside trusted directories. */
 export function collectExecSafeBinTrustedDirHintWarnings(
   hits: ExecSafeBinTrustedDirHintHit[],
 ): string[] {
@@ -234,7 +217,6 @@ export function collectExecSafeBinTrustedDirHintWarnings(
   return lines;
 }
 
-/** Scaffold missing custom safeBin profiles and warn on interpreter/risky entries. */
 export function maybeRepairExecSafeBinProfiles(cfg: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];
@@ -245,15 +227,10 @@ export function maybeRepairExecSafeBinProfiles(cfg: OpenClawConfig): {
   const warnings: string[] = [];
 
   for (const scope of collectExecSafeBinScopes(next)) {
-    const interpreterBins = new Set(listInterpreterLikeSafeBins(scope.safeBins));
-    const riskyHits = listRiskyConfiguredSafeBins(scope.safeBins);
-    const riskyBins = new Set(riskyHits.map((hit) => hit.bin));
+    const { interpreterBins, riskyHits, missingBins } = inspectSafeBinProfiles(scope);
     for (const hit of riskyHits) {
       warnings.push(`- ${scope.scopePath}.safeBins includes '${hit.bin}': ${hit.warning}`);
     }
-    const missingBins = scope.safeBins.filter(
-      (bin) => !scope.mergedProfiles[bin] && !riskyBins.has(normalizeSafeBinName(bin)),
-    );
     if (missingBins.length === 0) {
       continue;
     }

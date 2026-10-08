@@ -166,7 +166,7 @@ describe("chat pane native history pagination", () => {
     },
   );
 
-  it("preserves the steer split through the refresh callback and later cumulative deltas", async () => {
+  it("keeps all run output above the steer through refresh and later cumulative deltas", async () => {
     const history = createDeferred<ChatHistoryResult>();
     const request = vi.fn(() => history.promise);
     const client = { request } as unknown as GatewayBrowserClient;
@@ -220,19 +220,18 @@ describe("chat pane native history pagination", () => {
       activeRunId: "run-refresh",
     });
     delta("Saved opening. Still working.");
-    const expected = [
+    const liveExpected = [
       "Start working.",
-      "Saved opening.",
+      "Saved opening. Still working.",
       "Also check the result.",
-      "Still working.",
     ];
 
     try {
-      expect(renderedText()).toEqual(expected);
+      expect(renderedText()).toEqual(liveExpected);
       pane.render();
       expect(pane.chatProps).toBeDefined();
       pane.chatProps!.onRefresh();
-      expect(renderedText()).toEqual(expected);
+      expect(renderedText()).toEqual(liveExpected);
       history.resolve({
         messages: [
           original,
@@ -251,12 +250,22 @@ describe("chat pane native history pagination", () => {
           hasActiveRun: true,
           activeRunIds: ["run-refresh"],
         },
-        inFlightRun: { runId: "run-refresh", text: "Saved opening. Still working." },
+        inFlightRun: { runId: "run-refresh", text: "Still working." },
       });
       await vi.waitFor(() => expect(state.chatLoading).toBe(false));
-      expect(renderedText()).toEqual(expected);
-      delta("Saved opening. Still working. More progress.");
-      expect(renderedText()).toEqual([...expected.slice(0, -1), "Still working. More progress."]);
+      expect(renderedText()).toEqual([
+        "Start working.",
+        "Saved opening.",
+        "Still working.",
+        "Also check the result.",
+      ]);
+      delta("Still working. More progress.");
+      expect(renderedText()).toEqual([
+        "Start working.",
+        "Saved opening.",
+        "Still working. More progress.",
+        "Also check the result.",
+      ]);
     } finally {
       state.connected = false;
       history.resolve({ messages: [] });
@@ -875,7 +884,7 @@ describe("chat pane native history pagination", () => {
       2,
       "chat.history",
       expect.objectContaining({ sessionKey: state.sessionKey, limit: 80, maxBytes: 256 * 1024 }),
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
     );
     expect(state.currentSessionId).toBe("session-new");
     expect(state.chatMessages.map(nativeHistorySeq)).toEqual([7, 8]);
@@ -958,7 +967,7 @@ describe("chat pane native history pagination", () => {
       expect(request).toHaveBeenLastCalledWith(
         "chat.history",
         expect.objectContaining({ cursor: "cursor-current" }),
-        { signal: expect.any(AbortSignal) },
+        { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
       );
     },
   );

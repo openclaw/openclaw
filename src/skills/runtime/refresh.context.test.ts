@@ -39,11 +39,11 @@ it("does not retain the requesting turn context through initial observation or r
       seen.push(caller.getStore());
       return setScopes(scopes);
     };
-    await caller.run("scope-turn", () =>
-      pathWatchers
-        .get(path.join(fixture.workspaceDir, "skills").replaceAll("\\", "/"))!
-        .refreshScope(),
-    );
+    const state = pathWatchers.get(
+      path.join(fixture.workspaceDir, "skills").replaceAll("\\", "/"),
+    )!;
+    state.depth += 1;
+    await caller.run("scope-turn", () => state.refreshScope());
     expect(seen).toHaveLength(initialCount + 1);
     expect(seen.at(-1)).toBeUndefined();
     caller.run("later-turn", () => original.fail(new Error("lost coverage")));

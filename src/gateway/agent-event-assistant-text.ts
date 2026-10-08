@@ -4,6 +4,7 @@ type AssistantTextInput = {
   text?: string;
   delta?: string;
   itemId?: string;
+  occurrenceId?: string;
   replace?: boolean;
   replaceable?: boolean;
   managedMediaUrls?: string[];
@@ -24,20 +25,6 @@ type AssistantTextMerge = AssistantTextSnapshot & {
   appendedText?: string;
 };
 
-/** Append provenance is usable only while the wire still matches the merge base. */
-export function resolveAssistantTextStreamDelta(
-  previous: AssistantTextSnapshot,
-  merged: AssistantTextMerge,
-  streamed: AssistantTextSnapshot,
-): string | undefined {
-  if (previous === streamed && merged.appendedText !== undefined) {
-    return merged.appendedText;
-  }
-  return merged.text.startsWith(streamed.text)
-    ? merged.text.slice(streamed.text.length)
-    : undefined;
-}
-
 /** A text-bearing empty result clears output; a missing text payload does not. */
 export function resolveAssistantResultText(result: unknown): string | undefined {
   const payloads = asOptionalObjectRecord(result)?.payloads;
@@ -50,34 +37,65 @@ export function resolveAssistantResultText(result: unknown): string | undefined 
   return texts.length > 0 ? texts.filter(Boolean).join("\n\n") : undefined;
 }
 
-/** Settled provisional output is run-wide; ordinary item streams keep their wire projection. */
-export function resolveAssistantTextCompletion(params: {
-  assistantText: AssistantTextSnapshot;
-  pending?: AssistantTextSnapshot;
-  resultText?: string;
-  streamedText: string;
-  fallbackText: string;
-}): string {
-  if (params.pending) {
-    return (
-      params.resultText ?? (params.pending.text || (params.streamedText ? "" : params.fallbackText))
-    );
-  }
-  return params.streamedText
-    ? params.assistantText.text
-    : (params.resultText ?? params.assistantText.text) || params.fallbackText;
-}
-
-/** Unkeyed held snapshots, including terminal echoes, describe the whole pending run. */
-export function mergePendingAssistantText(
-  previous: AssistantTextSnapshot,
-  input: AssistantTextInput,
-): AssistantTextSnapshot {
-  return mergeAssistantText(
-    previous,
-    !input.itemId && input.text !== undefined ? { ...input, replace: true } : input,
-    "append-only",
-  );
+/** Both HTTP transports share buffering; each owns its terminal error policy. */
+export function createAssistantTextStream(holdOutput: boolean) {
+  let current: AssistantTextSnapshot = { text: "" };
+  let streamed = current;
+  let pending: AssistantTextSnapshot | undefined;
+  return {
+    get streamedText() {
+      return streamed.text;
+    },
+    update(data: unknown): { delta?: string; replacement?: "representable" | "unrepresentable" } {
+      const input = resolveAssistantTextInput(data);
+      if (!input) {
+        return {};
+      }
+      // Hold provisional replacements and their terminal echoes until the run result settles.
+      if (input.replaceable || pending) {
+        pending = mergeAssistantText(
+          pending ?? current,
+          !input.itemId && input.text !== undefined ? { ...input, replace: true } : input,
+          "append-only",
+        );
+        return !input.replaceable &&
+          input.replace &&
+          input.text !== undefined &&
+          pending.text.startsWith(streamed.text)
+          ? { replacement: "representable" }
+          : {};
+      }
+      const previous = current;
+      const merged = mergeAssistantText(previous, input, "append-only");
+      current = merged;
+      // Tool-choice prose cannot reach the wire before the requested call is confirmed.
+      if (holdOutput) {
+        return {};
+      }
+      const delta =
+        previous === streamed && merged.appendedText !== undefined
+          ? merged.appendedText
+          : merged.text.startsWith(streamed.text)
+            ? merged.text.slice(streamed.text.length)
+            : undefined;
+      if (delta === undefined) {
+        return { replacement: "unrepresentable" };
+      }
+      streamed = current;
+      return {
+        delta,
+        ...(input.replace && input.text !== undefined
+          ? { replacement: "representable" as const }
+          : {}),
+      };
+    },
+    complete(resultText: string | undefined, fallbackText: string): string {
+      if (pending) {
+        return resultText ?? (pending.text || (streamed.text ? "" : fallbackText));
+      }
+      return streamed.text ? current.text : (resultText ?? current.text) || fallbackText;
+    },
+  };
 }
 
 /** Preserve snapshot presence: an absent snapshot is not an empty item. */
@@ -90,6 +108,10 @@ export function resolveAssistantTextInput(data: unknown): AssistantTextInput | u
     text: typeof record.text === "string" ? record.text : undefined,
     delta: typeof record.delta === "string" ? record.delta : undefined,
     itemId: typeof record.itemId === "string" && record.itemId ? record.itemId : undefined,
+    occurrenceId:
+      typeof record.occurrenceId === "string" && record.occurrenceId
+        ? record.occurrenceId
+        : undefined,
     replace: record.replace === true,
     replaceable: record.replaceable === true,
     ...(Array.isArray(record.managedMediaUrls)

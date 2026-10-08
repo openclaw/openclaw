@@ -29,8 +29,6 @@ type ResolvedMountPath = SandboxResolvedPath & {
   writable: boolean;
 };
 
-type FsSafeRoot = Awaited<ReturnType<typeof fsRoot>>;
-
 export function createOpenShellFsBridge(params: {
   sandbox: OpenShellFsBridgeContext;
   backend: OpenShellMirrorBackend;
@@ -142,7 +140,10 @@ class OpenShellFsBridge implements SandboxFsBridge {
       allowFinalSymlinkForUnlink: false,
     });
     await this.backend.mkdirpRemotePath(target.containerPath, params.signal);
-    await mkdirLocalRootPath(target);
+    const relativePath = relativeToRoot(target, target.hostPath);
+    if (relativePath) {
+      await (await fsRoot(target.mountHostRoot)).mkdir(relativePath);
+    }
   }
 
   async remove(params: Parameters<SandboxFsBridge["remove"]>[0]): Promise<void> {
@@ -184,7 +185,14 @@ class OpenShellFsBridge implements SandboxFsBridge {
       toHostPath: to.hostPath,
     });
     await this.backend.renameRemotePath(from.containerPath, to.containerPath, params.signal);
-    await moveLocalRootPath({ from, to });
+    const root = await fsRoot(from.mountHostRoot);
+    const fromRelativePath = relativeToRoot(from, from.hostPath);
+    const toRelativePath = relativeToRoot(to, to.hostPath);
+    const parentPath = path.dirname(toRelativePath);
+    if (parentPath !== "." && parentPath !== "") {
+      await root.mkdir(parentPath);
+    }
+    await root.move(fromRelativePath, toRelativePath, { overwrite: true });
   }
 
   async stat(params: Parameters<SandboxFsBridge["stat"]>[0]): Promise<SandboxFsStat | null> {
@@ -354,56 +362,26 @@ class OpenShellFsBridge implements SandboxFsBridge {
 
     // Resolve protected host aliases before the writable workspace that contains
     // them; virtual mount shadows still resolve through the container table below.
-    for (const mount of readOnlyMounts) {
+    for (const mount of [
+      ...readOnlyMounts,
+      { hostPath: workspaceRoot, containerPath: workspaceContainerRoot },
+      ...(hasAgentMount ? [{ hostPath: agentRoot, containerPath: agentContainerRoot }] : []),
+    ]) {
       if (isPathInside(mount.hostPath, hostPath)) {
         const relative = path
           .relative(mount.hostPath, hostPath)
           .split(path.sep)
           .join(path.posix.sep);
-        return expectResolvedContainerTarget(
-          resolveContainerTarget(path.posix.join(mount.containerPath, relative)),
-          input,
-        );
+        const target = resolveContainerTarget(path.posix.join(mount.containerPath, relative));
+        if (!target) {
+          throw new Error(`Sandbox path escapes allowed mounts; cannot access: ${input}`);
+        }
+        return target;
       }
-    }
-
-    if (isPathInside(workspaceRoot, hostPath)) {
-      const relative = path.relative(workspaceRoot, hostPath).split(path.sep).join(path.posix.sep);
-      return expectResolvedContainerTarget(
-        resolveContainerTarget(path.posix.join(workspaceContainerRoot, relative)),
-        input,
-      );
-    }
-
-    if (hasAgentMount && isPathInside(agentRoot, hostPath)) {
-      const relative = path.relative(agentRoot, hostPath).split(path.sep).join(path.posix.sep);
-      return expectResolvedContainerTarget(
-        resolveContainerTarget(path.posix.join(agentContainerRoot, relative)),
-        input,
-      );
     }
 
     throw new Error(`Path escapes sandbox root (${workspaceRoot}): ${params.filePath}`);
   }
-}
-
-function expectResolvedContainerTarget(
-  target: ResolvedMountPath | undefined,
-  input: string,
-): ResolvedMountPath {
-  if (!target) {
-    throw new Error(`Sandbox path escapes allowed mounts; cannot access: ${input}`);
-  }
-  return target;
-}
-
-async function mkdirLocalRootPath(target: ResolvedMountPath): Promise<void> {
-  const relativePath = relativeToRoot(target, target.hostPath);
-  if (!relativePath) {
-    return;
-  }
-  const root = await fsRoot(target.mountHostRoot);
-  await root.mkdir(relativePath);
 }
 
 async function removeLocalRootPath(params: {
@@ -438,25 +416,6 @@ async function removeLocalRootPath(params: {
     }
     throw err;
   }
-}
-
-async function moveLocalRootPath(params: {
-  from: ResolvedMountPath;
-  to: ResolvedMountPath;
-}): Promise<void> {
-  const root = await fsRoot(params.from.mountHostRoot);
-  const fromRelativePath = relativeToRoot(params.from, params.from.hostPath);
-  const toRelativePath = relativeToRoot(params.to, params.to.hostPath);
-  await mkdirParentPath(root, toRelativePath);
-  await root.move(fromRelativePath, toRelativePath, { overwrite: true });
-}
-
-async function mkdirParentPath(root: FsSafeRoot, relativePath: string): Promise<void> {
-  const parentPath = path.dirname(relativePath);
-  if (parentPath === "." || parentPath === "") {
-    return;
-  }
-  await root.mkdir(parentPath);
 }
 
 function relativeToRoot(target: ResolvedMountPath, hostPath: string): string {

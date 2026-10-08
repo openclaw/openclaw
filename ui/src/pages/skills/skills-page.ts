@@ -130,8 +130,6 @@ class SkillsPage extends OpenClawLightDomElement {
   private readonly library = new SkillLibraryController(
     this,
     this.gateway,
-    () => this.skillsAgentId,
-    () => this.refreshPage(),
     () => this.context?.config,
   );
   private readonly clawhubSearchTask = new Task(this, {
@@ -195,10 +193,7 @@ class SkillsPage extends OpenClawLightDomElement {
 
   override disconnectedCallback() {
     this.subscriptions.clear();
-    if (this.clawhubSearchTimer) {
-      clearTimeout(this.clawhubSearchTimer);
-      this.clawhubSearchTimer = null;
-    }
+    this.clearClawHubSearchTimer();
     this.clawhubIcons.reset();
     super.disconnectedCallback();
   }
@@ -226,10 +221,7 @@ class SkillsPage extends OpenClawLightDomElement {
   private resetLoadedSkillState() {
     this.library.reset();
     this.clawhubSearchTask.abort();
-    if (this.clawhubSearchTimer) {
-      clearTimeout(this.clawhubSearchTimer);
-      this.clawhubSearchTimer = null;
-    }
+    this.clearClawHubSearchTimer();
     if (this.routeDataInitialized) {
       this.routeDataEnabled = false;
     }
@@ -344,15 +336,20 @@ class SkillsPage extends OpenClawLightDomElement {
   private changeClawHubQuery(query: string) {
     this.clawhubSearchQuery = query;
     this.clawhubInstallMessage = null;
-    if (this.clawhubSearchTimer) {
-      clearTimeout(this.clawhubSearchTimer);
-    }
+    this.clearClawHubSearchTimer();
     this.clawhubSearchTimer = setTimeout(() => {
       this.clawhubSearchTimer = null;
       this.debouncedClawHubSearchQuery = query.trim();
       this.requestUpdate();
     }, 300);
     this.requestUpdate();
+  }
+
+  private clearClawHubSearchTimer() {
+    if (this.clawhubSearchTimer) {
+      clearTimeout(this.clawhubSearchTimer);
+      this.clawhubSearchTimer = null;
+    }
   }
 
   get clawhubSearchResults(): ClawHubSearchResult[] | null {

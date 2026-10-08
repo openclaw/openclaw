@@ -16,9 +16,7 @@ import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   buildPluginAppPolicyContext,
   disableUnlistedCodexApps,
-  type CodexAppPolicyContextEntry,
   type CodexPluginThreadConfig,
-  type PluginAppPolicyContext,
 } from "./plugin-thread-config.js";
 import { isJsonObject, type v2 } from "./protocol.js";
 import type { CodexAttemptConnection } from "./run-attempt-connection.js";
@@ -30,6 +28,10 @@ import {
   type CodexAppToolApprovalMode,
   type CodexScheduledAppTool,
 } from "./scheduled-app-tool-policy.js";
+import type {
+  CodexAppPolicyContextEntry,
+  PluginAppPolicyContext,
+} from "./session-binding-record-codec.js";
 import { readCodexManagedRequirementsFingerprint } from "./thread-requests.js";
 import { withAbortableTimeout } from "./timeout.js";
 
@@ -512,11 +514,8 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
   const appsPatch = asOptionalRecord(configPatch.apps);
   for (const [appId, captured] of capturedById) {
     const appPatch = asOptionalRecord(appsPatch?.[appId]);
-    if (!appPatch || !Object.hasOwn(apps, appId)) {
-      continue;
-    }
-    const currentApp = apps[appId];
-    if (!currentApp) {
+    const currentApp = Object.hasOwn(apps, appId) ? apps[appId] : undefined;
+    if (!appPatch || !currentApp) {
       continue;
     }
     if (currentApp.destructiveApprovalMode === "ask") {
@@ -575,7 +574,6 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
   };
 }
 
-/** Returns the managed-requirements identity captured for a configured app-server job. */
 export function readScheduledCodexAppManagedRequirementsFingerprint(
   authority: EmbeddedRunAttemptParams["scheduledRuntimeAuthority"],
 ): string | undefined {

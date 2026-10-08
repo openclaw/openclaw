@@ -7,56 +7,112 @@ import type { OpenClawDatabaseVerifyTarget } from "./openclaw-database-verify.wo
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 
 const log = createSubsystemLogger("state/database-verify");
-type QuickCheckQueue = {
-  paths: Set<string>;
+type IntegrityCheck = OpenClawDatabaseVerifyTarget["check"];
+type IntegrityCheckRequest = {
+  check: IntegrityCheck;
+  proof?: {
+    identity: string;
+    complete: (assertCurrent: () => void, signal: AbortSignal) => Promise<boolean>;
+  };
+  release?: () => Promise<void>;
+};
+type IntegrityCheckQueue = {
+  paths: Map<string, IntegrityCheckRequest>;
   subscribers: Set<() => void>;
+  releases: Set<Promise<void>>;
   active?: object;
 };
-const quickCheckQueues = resolveGlobalSingleton(
-  Symbol.for("openclaw.databaseIntegrityQuickChecks"),
-  () => new Map<string, QuickCheckQueue>(),
+const integrityCheckQueues = resolveGlobalSingleton(
+  Symbol.for("openclaw.databaseIntegrityChecks"),
+  () => new Map<string, IntegrityCheckQueue>(),
 );
 
-function quickCheckQueue(env: NodeJS.ProcessEnv): QuickCheckQueue {
+function integrityCheckQueue(env: NodeJS.ProcessEnv): IntegrityCheckQueue {
   const key = path.resolve(resolveOpenClawStateSqlitePath(env));
-  let queue = quickCheckQueues.get(key);
+  let queue = integrityCheckQueues.get(key);
   if (!queue) {
-    queue = { paths: new Set(), subscribers: new Set() };
-    quickCheckQueues.set(key, queue);
+    queue = { paths: new Map(), subscribers: new Set(), releases: new Set() };
+    integrityCheckQueues.set(key, queue);
   }
   return queue;
 }
 
-function wakeSubscribers(queue: QuickCheckQueue): void {
+function wakeSubscribers(queue: IntegrityCheckQueue): void {
   for (const wake of queue.subscribers) {
     wake();
   }
 }
 
-/** Cached opens queue work; only the listening Gateway starts the verifier. */
-export function requestOpenClawAgentDatabaseQuickCheck(options: {
-  path: string;
-  env: NodeJS.ProcessEnv;
-}): void {
-  const queue = quickCheckQueue(options.env);
-  queue.paths.add(path.resolve(options.path));
+function enqueueCheck(
+  queue: IntegrityCheckQueue,
+  pathname: string,
+  request: IntegrityCheckRequest,
+): void {
+  if (request.check === "full" || queue.paths.get(pathname)?.check !== "full") {
+    const previous = queue.paths.get(pathname);
+    queue.paths.set(pathname, request);
+    if (previous) {
+      releaseCheck(queue, previous);
+    }
+  } else {
+    releaseCheck(queue, request);
+  }
+}
+
+function releaseCheck(queue: IntegrityCheckQueue, request: IntegrityCheckRequest): void {
+  const release = request.release;
+  request.release = undefined;
+  if (!release) {
+    return;
+  }
+  const pending = release().catch((error: unknown) => {
+    log.error("database integrity verification cleanup failed", { error: String(error) });
+  });
+  queue.releases.add(pending);
+  void pending.finally(() => queue.releases.delete(pending));
+}
+
+/** Admitted opens queue work; only the listening Gateway starts the verifier. */
+export function requestOpenClawAgentDatabaseIntegrityCheck(
+  options: IntegrityCheckRequest & {
+    path: string;
+    env: NodeJS.ProcessEnv;
+  },
+): void {
+  const queue = integrityCheckQueue(options.env);
+  enqueueCheck(queue, path.resolve(options.path), {
+    check: options.check,
+    proof: options.proof,
+    release: options.release,
+  });
   wakeSubscribers(queue);
 }
 
-/** Consume requested agent quick checks for the listening Gateway. */
+/** Consume requested agent checks for the listening Gateway. */
 export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.ProcessEnv }): {
   stop: () => Promise<void>;
 } {
   const env = { ...options.env };
-  const queue = quickCheckQueue(env);
+  const queue = integrityCheckQueue(env);
   const owner = {};
   const inOwnerContext = AsyncLocalStorage.snapshot();
   let activeWorker: ChildProcess | undefined;
   let activeRun: Promise<void> | undefined;
-  let claimedQuickPaths: string[] = [];
+  let claimedChecks = new Map<string, IntegrityCheckRequest>();
   let stopPromise: Promise<void> | undefined;
   let stopped = false;
+  const controller = new AbortController();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const workerLifetime = {
+    onWorker: (worker: ChildProcess | undefined) => {
+      activeWorker = worker;
+    },
+    assertCurrent: () => {
+      if (stopped) {
+        throw new Error("database integrity verifier stopped");
+      }
+    },
+  };
 
   const schedule = () => {
     if (stopped || queue.active || queue.paths.size === 0) {
@@ -80,8 +136,8 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
     timer.unref?.();
   };
   const run = async () => {
-    const quickPaths = [...queue.paths];
-    claimedQuickPaths = quickPaths;
+    const checks = new Map(queue.paths);
+    claimedChecks = checks;
     queue.paths.clear();
     try {
       const { applyOpenClawDatabaseVerificationResults, runDatabaseVerifyWorker } =
@@ -89,19 +145,28 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
       if (stopped) {
         return;
       }
-      const targets: OpenClawDatabaseVerifyTarget[] = quickPaths.map((pathname) => ({
+      const targets: OpenClawDatabaseVerifyTarget[] = Array.from(checks, ([pathname, request]) => ({
         kind: "agent",
         label: "OpenClaw agent database",
         path: pathname,
-        check: "quick",
+        check: request.check,
+        ...(request.proof ? { identity: request.proof.identity } : {}),
       }));
-      const results = await runDatabaseVerifyWorker(targets, {
-        onWorker: (worker) => {
-          activeWorker = worker;
-        },
-      });
+      const results = await runDatabaseVerifyWorker(targets, workerLifetime);
       if (!stopped) {
-        await applyOpenClawDatabaseVerificationResults({ env, results, targets });
+        await applyOpenClawDatabaseVerificationResults({
+          env,
+          results,
+          targets,
+          workerLifetime,
+          onVerified: async (pathname) => {
+            const request = checks.get(pathname);
+            if (request?.check === "full") {
+              return request.proof?.complete(workerLifetime.assertCurrent, controller.signal);
+            }
+            return undefined;
+          },
+        });
       }
     } catch (error) {
       if (!stopped) {
@@ -109,7 +174,13 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
       }
     } finally {
       activeWorker = undefined;
-      claimedQuickPaths = [];
+      for (const [pathname, check] of checks) {
+        if (queue.paths.get(pathname) !== check) {
+          releaseCheck(queue, check);
+        }
+      }
+      claimedChecks.clear();
+      await Promise.all(queue.releases);
     }
   };
 
@@ -123,13 +194,20 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
         return stopPromise;
       }
       stopped = true;
+      controller.abort(new Error("database integrity verifier stopped"));
       queue.subscribers.delete(wake);
       if (queue.subscribers.size === 0) {
+        for (const check of queue.paths.values()) {
+          releaseCheck(queue, check);
+        }
         queue.paths.clear();
       } else {
         // Replay before yielding so a later final stop can still discard this work.
-        for (const pathname of claimedQuickPaths) {
-          queue.paths.add(pathname);
+        for (const [pathname, check] of claimedChecks) {
+          // A newer full request carries its own writer's publication authority.
+          if (queue.paths.get(pathname)?.check !== "full") {
+            enqueueCheck(queue, pathname, check);
+          }
         }
         wakeSubscribers(queue);
       }
@@ -148,6 +226,7 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
         } finally {
           // Worker exit can precede async confirmation and result application.
           await activeRun;
+          await Promise.all(queue.releases);
         }
       })();
       return stopPromise;

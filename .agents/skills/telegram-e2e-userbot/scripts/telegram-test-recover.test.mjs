@@ -32,6 +32,10 @@ function restoreCredential(root, directory) {
   });
   assert.equal(packed.status, 0, packed.stderr);
   const archive = fs.readFileSync(archivePath);
+  const emptyPath = path.join(root, "empty-path");
+  fs.mkdirSync(emptyPath);
+  // These layout cases skip discovery; telegram-runtime and the credential real-UV case cover it.
+  const hostEnv = { PATH: emptyPath };
   const previousUmask = process.umask(0o022);
   try {
     return restoreTelegramTestCredential(
@@ -48,6 +52,7 @@ function restoreCredential(root, directory) {
         tdlibVersion: "1.8.67",
       },
       path.join(directory, "state"),
+      hostEnv,
     );
   } finally {
     process.umask(previousUmask);
@@ -141,6 +146,15 @@ async function fixture() {
   };
 }
 
+// A held lease heartbeats every 30 s, so a stalled host can add heartbeats before release.
+function assertHeldLeaseCalls(methods, final) {
+  const held = final ? methods.slice(0, -1) : methods;
+  assert.ok(held.length > 0 && held.every((method) => method === "heartbeat"), methods.join(","));
+  if (final) {
+    assert.equal(methods.at(-1), final);
+  }
+}
+
 test("release removes its receipt but preserves unknown sibling files", async () => {
   const f = await fixture();
   try {
@@ -154,17 +168,21 @@ test("release removes its receipt but preserves unknown sibling files", async ()
     assert.equal(fs.readFileSync(path.join(f.directory, "operator-notes"), "utf8"), "keep");
     assert.equal(result.code, 0, result.stderr);
     assert.equal(fs.existsSync(f.receipt), false);
-    assert.deepEqual(f.methods, ["heartbeat", "release"]);
+    assertHeldLeaseCalls(f.methods, "release");
   } finally {
     await f.close();
   }
 });
 
-test("cleanup recovers an actual restored archive with ordinary directory modes", async () => {
+test("cleanup recovers a restored archive after TDLib and uv wrote ordinary modes", async () => {
   const f = await fixture();
   try {
     const restored = restoreCredential(f.root, f.directory);
     assert.equal(fs.statSync(path.join(restored.userDriverDir, "db")).mode & 0o777, 0o755);
+    // TDLib 1.8.67 creates its database with the inherited umask (0644 under 022).
+    const database = path.join(restored.userDriverDir, "db", "db_test.sqlite");
+    fs.writeFileSync(database, "tdlib-database");
+    fs.chmodSync(database, 0o644);
     const cache = path.join(restored.stateRoot, "runtime", "uv-cache", "tool-created");
     fs.mkdirSync(cache);
     fs.chmodSync(cache, 0o755);
@@ -185,7 +203,21 @@ console.log(JSON.stringify({ ok: true, cleaned: true }));
     assert.equal(result.code, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), { ok: true, cleaned: true, leaseReleased: true });
     assert.equal(fs.existsSync(f.directory), false);
-    assert.deepEqual(f.methods, ["heartbeat", "release"]);
+    assertHeldLeaseCalls(f.methods, "release");
+  } finally {
+    await f.close();
+  }
+});
+
+test("recovery accepts another spelling of the configured temporary root", async () => {
+  const f = await fixture();
+  try {
+    const alias = path.join(f.root, "tmp-alias");
+    fs.symlinkSync(f.temp, alias);
+    const result = await f.run(path.join(alias, path.basename(f.directory)), "status");
+    assert.equal(result.code, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).leaseHealthy, true);
+    assertHeldLeaseCalls(f.methods);
   } finally {
     await f.close();
   }
@@ -287,7 +319,7 @@ test("status revalidates a retained broker receipt after credential state was re
       leaseReleased: false,
     });
     assert.equal(fs.existsSync(f.receipt), true);
-    assert.deepEqual(f.methods, ["heartbeat"]);
+    assertHeldLeaseCalls(f.methods);
   } finally {
     await f.close();
   }
@@ -307,7 +339,7 @@ test("failed group cleanup preserves both credential state and recovery receipt"
     assert.match(result.stderr, /unconfirmed group creation/);
     assert.equal(fs.existsSync(f.receipt), true);
     assert.equal(fs.existsSync(state), true);
-    assert.deepEqual(f.methods, ["heartbeat"]);
+    assertHeldLeaseCalls(f.methods);
   } finally {
     await f.close();
   }

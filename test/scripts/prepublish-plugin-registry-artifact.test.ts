@@ -28,6 +28,7 @@ import {
   findLaneByName,
   requiredPrepublishPluginPackagesForLanes,
 } from "../../scripts/lib/docker-e2e-plan.mts";
+import { resolveNpmJsonString } from "../../scripts/lib/npm-json-output.mts";
 import { resolveNpmRunner } from "../../scripts/npm-runner.mts";
 import {
   PREPUBLISH_PLUGIN_REGISTRY_MANIFEST,
@@ -547,8 +548,8 @@ describe("prepublish plugin registry artifact", () => {
         packageSpec: `openclaw@${candidateVersion}`,
       });
 
-      const viewedVersion = JSON.parse(
-        (await runNpm(["view", "openclaw", "version", "--json"])).stdout,
+      const viewedVersion = resolveNpmJsonString(
+        JSON.parse((await runNpm(["view", "openclaw", "version", "--json"])).stdout),
       );
       expect(viewedVersion).toBe(candidateVersion);
 

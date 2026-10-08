@@ -1,4 +1,5 @@
 import path from "node:path";
+import { auth } from "@modelcontextprotocol/sdk/client/auth.js";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { withTempHome as withBaseTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -55,8 +56,10 @@ function createOAuthNetwork(config: {
   challengeMetadataUrl: string;
   issuer: string;
   mintedAccessToken: string;
+  registrationClientId?: string;
 }) {
   const tokenRequests: Array<{ url: string; body: string }> = [];
+  const registrationRequests: string[] = [];
   const fetchFn: FetchLike = async (input, init) => {
     const url = new URL(String(input instanceof Request ? input.url : input));
     if (url.href === SERVER_URL) {
@@ -84,6 +87,17 @@ function createOAuthNetwork(config: {
         token_endpoint: `${config.issuer}/token`,
         response_types_supported: ["code"],
         grant_types_supported: ["authorization_code", "refresh_token"],
+        code_challenge_methods_supported: ["S256"],
+        ...(config.registrationClientId
+          ? { registration_endpoint: `${config.issuer}/register` }
+          : {}),
+      });
+    }
+    if (url.href === `${config.issuer}/register` && config.registrationClientId) {
+      registrationRequests.push(url.href);
+      return Response.json({
+        ...JSON.parse(bodyText(init?.body)),
+        client_id: config.registrationClientId,
       });
     }
     if (url.href === `${config.issuer}/token`) {
@@ -97,7 +111,7 @@ function createOAuthNetwork(config: {
     }
     return new Response(null, { status: 404 });
   };
-  return { fetchFn, tokenRequests };
+  return { fetchFn, tokenRequests, registrationRequests };
 }
 
 async function seedAuthorizedStore(
@@ -271,30 +285,91 @@ describe("MCP OAuth refresh issuer binding", () => {
     );
   });
 
-  it("blocks an issuer-changing challenge on an upgraded row after it refreshed", async () => {
+  it.each([undefined, "replacement-client-id"])(
+    "blocks an issuer-changing challenge after refresh (registration client: %s)",
+    async (registrationClientId) => {
+      await withTempHome(
+        async () => {
+          await seedAuthorizedStore("tokens-then-discovery", 0);
+          const sameIssuer = createOAuthNetwork({
+            challengeMetadataUrl: ORIGINAL_METADATA_URL,
+            issuer: ORIGINAL_ISSUER,
+            mintedAccessToken: "rotated-access",
+          });
+          await buildOAuthFetch(sameIssuer.fetchFn)(SERVER_URL, { method: "POST", body: "{}" });
+          const refreshedStore = await readStore();
+          expect(refreshedStore.tokens).toMatchObject({
+            access_token: "rotated-access",
+            refresh_token: "rotated-refresh-secret",
+            issuer: ORIGINAL_ISSUER,
+          });
+          expect(refreshedStore.clientInformation).toMatchObject({
+            client_id: "stored-client-id",
+            issuer: ORIGINAL_ISSUER,
+          });
+
+          const newIssuer = createOAuthNetwork({
+            challengeMetadataUrl: REPLACEMENT_METADATA_URL,
+            issuer: REPLACEMENT_ISSUER,
+            mintedAccessToken: "attacker-access",
+            registrationClientId,
+          });
+          await expect(
+            buildOAuthFetch(newIssuer.fetchFn)(SERVER_URL, { method: "POST", body: "{}" }),
+          ).rejects.toThrow(/requires OAuth authorization/);
+
+          expect(newIssuer.tokenRequests).toEqual([]);
+          expect(newIssuer.registrationRequests).toEqual([]);
+          const retainedStore = await readStore();
+          expect(retainedStore.tokens).toEqual(refreshedStore.tokens);
+          expect(retainedStore.clientInformation).toEqual(refreshedStore.clientInformation);
+          expect(retainedStore.tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
+        },
+        { prefix: "openclaw-mcp-oauth-issuer-upgrade-challenge-", ...TEMP_HOME_OPTIONS },
+      );
+    },
+  );
+
+  it("allows explicit login to register with the replacement issuer", async () => {
     await withTempHome(
       async () => {
         await seedAuthorizedStore("tokens-then-discovery", 0);
-        const sameIssuer = createOAuthNetwork({
+        const original = createOAuthNetwork({
           challengeMetadataUrl: ORIGINAL_METADATA_URL,
           issuer: ORIGINAL_ISSUER,
           mintedAccessToken: "rotated-access",
         });
-        await buildOAuthFetch(sameIssuer.fetchFn)(SERVER_URL, { method: "POST", body: "{}" });
-
-        const newIssuer = createOAuthNetwork({
+        await buildOAuthFetch(original.fetchFn)(SERVER_URL, { method: "POST", body: "{}" });
+        const replacement = createOAuthNetwork({
           challengeMetadataUrl: REPLACEMENT_METADATA_URL,
           issuer: REPLACEMENT_ISSUER,
-          mintedAccessToken: "attacker-access",
+          mintedAccessToken: "replacement-access",
+          registrationClientId: "replacement-client-id",
         });
         await expect(
-          buildOAuthFetch(newIssuer.fetchFn)(SERVER_URL, { method: "POST", body: "{}" }),
+          buildOAuthFetch(replacement.fetchFn)(SERVER_URL, { method: "POST", body: "{}" }),
         ).rejects.toThrow(/requires OAuth authorization/);
 
-        expect(newIssuer.tokenRequests).toEqual([]);
-        expect((await readStore()).tokensAuthorizationServerUrl).toBe(ORIGINAL_ISSUER);
+        await withMcpOAuthProviderForTest(
+          { identity: IDENTITY, allowAuthorizationRedirect: true },
+          async (provider) => {
+            expect(
+              await auth(provider, {
+                serverUrl: SERVER_URL,
+                resourceMetadataUrl: new URL(REPLACEMENT_METADATA_URL),
+                fetchFn: replacement.fetchFn,
+              }),
+            ).toBe("REDIRECT");
+          },
+        );
+        expect(replacement.registrationRequests).toEqual([`${REPLACEMENT_ISSUER}/register`]);
+        expect(replacement.tokenRequests).toEqual([]);
+        expect((await readStore()).clientInformation).toMatchObject({
+          client_id: "replacement-client-id",
+          issuer: REPLACEMENT_ISSUER,
+        });
       },
-      { prefix: "openclaw-mcp-oauth-issuer-upgrade-challenge-", ...TEMP_HOME_OPTIONS },
+      { prefix: "openclaw-mcp-oauth-issuer-explicit-login-", ...TEMP_HOME_OPTIONS },
     );
   });
 

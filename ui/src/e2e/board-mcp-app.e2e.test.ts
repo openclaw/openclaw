@@ -5,7 +5,8 @@ import { LATEST_PROTOCOL_VERSION } from "@modelcontextprotocol/ext-apps/app-brid
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
-import { getGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock } from "../../../src/gateway/test-helpers.listener.js";
+import type { TestPortClaim } from "../../../src/test-utils/port-claims.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
@@ -31,6 +32,7 @@ let browser: Browser;
 let controlUi: ControlUiE2eServer;
 let sandboxServer: HttpServer;
 let sandboxPort: number;
+let sandboxPortClaim: TestPortClaim | undefined;
 const contexts = new Set<BrowserContext>();
 
 function widget(index: number) {
@@ -176,7 +178,8 @@ async function expectRetainedBoardPresentation(
 describeControlUiE2e("Control UI dashboard MCP Apps", () => {
   beforeAll(async () => {
     controlUi = await startControlUiE2eServer();
-    sandboxPort = await getGatewayE2ePortBlock();
+    sandboxPortClaim = await acquireGatewayE2ePortBlock();
+    sandboxPort = sandboxPortClaim.port;
     sandboxServer = createSandboxHostHttpServer();
     await new Promise<void>((resolve) => {
       sandboxServer.listen(sandboxPort, "127.0.0.1", resolve);
@@ -195,6 +198,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
         sandboxServer.close(() => resolve());
       });
     }
+    await sandboxPortClaim?.release();
     await controlUi?.close();
   });
 
@@ -520,10 +524,10 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
             reported?.width === size.width && reported?.height === size.height,
         );
     };
-    expect(await frameInsets()).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
+    await expect.poll(frameInsets).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
     await expectHostDimensions();
     await page.setViewportSize({ width: 1440, height: 1000 });
-    expect(await frameInsets()).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
+    await expect.poll(frameInsets).toEqual({ top: 0, bottom: 0, bodyHeightGap: 0 });
     await expectHostDimensions();
     await expectRetainedBoardPresentation(page, "expanded");
     if (artifactDir) {
@@ -536,7 +540,7 @@ describeControlUiE2e("Control UI dashboard MCP Apps", () => {
       .getByRole("button", { name: "Restore split", exact: true })
       .click();
     await expectRetainedBoardPresentation(page, "split");
-    expect((await frameInsets()).bodyHeightGap).toBe(0);
+    await expect.poll(async () => (await frameInsets()).bodyHeightGap).toBe(0);
     await expectHostDimensions();
     await restoreChatAsMain(page);
 

@@ -35,7 +35,8 @@ export type NormalizedApprovalRequest<TRequest extends ApprovalRequestInput> =
         ? TRequest & { approvalKind: "system-agent" }
         : never;
 
-function deriveApprovalRequestKind(request: { request: object }): ChannelApprovalKind {
+/** Resolve approval ownership from the typed request payload, never from id spelling. */
+export function resolveApprovalRequestKind(request: { request: object }): ChannelApprovalKind {
   const isSystemAgent = "proposalHash" in request.request && "sessionId" in request.request;
   if (isSystemAgent) {
     return "system-agent";
@@ -49,19 +50,13 @@ function deriveApprovalRequestKind(request: { request: object }): ChannelApprova
 }
 
 function isExecApprovalRequest(request: ApprovalRequestInput): request is ExecApprovalRequest {
-  return deriveApprovalRequestKind(request) === "exec";
+  return resolveApprovalRequestKind(request) === "exec";
 }
 
 export function isPluginApprovalRequest(request: {
   request: object;
 }): request is PluginApprovalRequest {
-  return deriveApprovalRequestKind(request) === "plugin";
-}
-
-function isSystemAgentApprovalRequest(
-  request: ApprovalRequestInput,
-): request is SystemAgentApprovalRequest {
-  return deriveApprovalRequestKind(request) === "system-agent";
+  return resolveApprovalRequestKind(request) === "plugin";
 }
 
 function hasExecApprovalKind(
@@ -94,13 +89,5 @@ export function normalizeApprovalRequest(request: ApprovalRequestInput): Approva
   if (isPluginApprovalRequest(request)) {
     return hasPluginApprovalKind(request) ? request : { ...request, approvalKind: "plugin" };
   }
-  if (isSystemAgentApprovalRequest(request)) {
-    return { ...request, approvalKind: "system-agent" };
-  }
-  throw new Error("approval request payload does not identify exactly one owner");
-}
-
-/** Resolve approval ownership from the typed request payload, never from id spelling. */
-export function resolveApprovalRequestKind(request: { request: object }): ChannelApprovalKind {
-  return deriveApprovalRequestKind(request);
+  return { ...request, approvalKind: "system-agent" };
 }
