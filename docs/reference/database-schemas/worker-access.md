@@ -3298,6 +3298,9 @@ preserves actor order, missing profiles, merge aliases, and secondary GitHub log
 Released synchronous SDK projectors remain available through the next SDK major.
 Final source-session disclosure guards still read selected session keys on the host:
 raw synchronous SDK and foreign writers do not publish complete revocation facts.
+Retained agent readers share admission and synchronous consumption in one fresh
+read scope. Each new use still observes foreign commits, with no scope carried
+across an await and no added transaction around the final guard.
 These guards retire when the next SDK major removes those writers and session-owner
 publications cover all revocations. Schemas, stored bytes, permissions, retention,
 durability, and update behavior are unchanged.
