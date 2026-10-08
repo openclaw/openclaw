@@ -1,6 +1,6 @@
 /** Pure repair rules for OpenClaw-generated plugin model catalogs. */
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeModelCostForCatalog } from "./models-config.providers.catalog.js";
+import { normalizeModelCostForCatalog } from "./model-cost-normalization.js";
 
 export const PLUGIN_MODEL_CATALOG_GENERATED_BY = "openclaw-plugin-model-catalog-v1";
 
@@ -62,6 +62,7 @@ export function repairPluginModelCatalogTransportMetadata(
         models.push(model);
         continue;
       }
+      // SAFETY: isRecord(model) holds above; the helper only reads `cost` and spreads the row.
       const completed = normalizeModelCostForCatalog(model as CatalogModel);
       if (completed !== model) {
         completedCostModelCount += 1;
