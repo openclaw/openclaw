@@ -264,7 +264,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   ...[
-    "src/acp/runtime/session-meta.alias-lifecycle.test.ts",
     "src/commands/doctor-config-health-freshness.test.ts",
     "src/commands/doctor/shared/post-core-plugin-convergence.persistence.test.ts",
     "src/hooks/installs.test.ts",
