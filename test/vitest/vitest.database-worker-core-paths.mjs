@@ -650,6 +650,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-agent-db.storage-migration.test.ts",
   "src/state/openclaw-agent-session-snapshots-migration.test.ts",
   "src/state/openclaw-agent-db.test.ts",
+  "src/state/openclaw-agent-db.integrity-recovery.test.ts",
   "src/state/openclaw-agent-db-disposal.test.ts",
   "src/state/openclaw-agent-admission-order.diagnostic.test.ts",
   "src/state/openclaw-agent-participants-migration.test.ts",

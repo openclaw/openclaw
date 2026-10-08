@@ -1685,8 +1685,10 @@ src/state/openclaw-database-preflight-state-path.ts
 src/state/openclaw-database-preflight-targets.ts
 src/state/openclaw-database-preflight.messages.ts
 src/state/openclaw-database-preflight.ts
+src/state/openclaw-database-verify-client.ts
 src/state/openclaw-database-verify.impl.ts
 src/state/openclaw-database-verify.ts
+src/state/openclaw-database-verify.worker.ts
 src/state/openclaw-quarantine-error.ts
 src/state/openclaw-quarantine-store.ts
 src/state/openclaw-state-db-additive-columns.ts

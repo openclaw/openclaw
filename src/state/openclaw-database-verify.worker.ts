@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { constants, setPriority } from "node:os";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { formatSqliteErrorCodeSuffix } from "../infra/sqlite-error-diagnostics.js";
@@ -120,33 +121,40 @@ export async function verifyOpenClawDatabases(
 // child may consume and disconnect the process-wide IPC channel.
 const sendToParent =
   process.argv[2] === DATABASE_VERIFY_CHILD_ARG ? process.send?.bind(process) : undefined;
-if (sendToParent) {
-  process.once("message", (message: unknown) => {
-    void (async () => {
-      try {
-        const targets = Array.isArray(message) ? message.filter(isVerifyTarget) : [];
-        if (targets.some((target) => target.check === "full")) {
-          try {
-            setPriority(process.pid, constants.priority.PRIORITY_LOW);
-          } catch {
-            // Priority is best effort; only this dedicated child changes it.
-          }
+if (process.argv[2] === DATABASE_VERIFY_CHILD_ARG) {
+  const run = async (message: unknown) => {
+    try {
+      const targets = Array.isArray(message) ? message.filter(isVerifyTarget) : [];
+      if (targets.some((target) => target.check === "full")) {
+        try {
+          setPriority(process.pid, constants.priority.PRIORITY_LOW);
+        } catch {
+          // Priority is best effort; only this dedicated child changes it.
         }
-        const results = await verifyOpenClawDatabases(targets);
-        await new Promise<void>((resolve, reject) => {
-          sendToParent(results, (error) => {
-            if (error) {
-              reject(error);
-            } else {
-              resolve();
-            }
-          });
-        });
-      } catch {
-        process.exitCode = 1;
-      } finally {
-        process.disconnect?.();
       }
-    })();
-  });
+      const results = await verifyOpenClawDatabases(targets);
+      if (!sendToParent) {
+        process.stdout.write(JSON.stringify(results));
+        return;
+      }
+      await new Promise<void>((resolve, reject) => {
+        sendToParent(results, (error) => {
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        });
+      });
+    } catch {
+      process.exitCode = 1;
+    } finally {
+      process.disconnect?.();
+    }
+  };
+  if (sendToParent) {
+    process.once("message", (message: unknown) => void run(message));
+  } else {
+    void run(JSON.parse(readFileSync(0, "utf8")));
+  }
 }

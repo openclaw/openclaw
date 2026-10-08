@@ -21,7 +21,10 @@ import {
 } from "../state/openclaw-agent-db-lease.js";
 import { agentDatabaseLifecycle } from "../state/openclaw-agent-db-lifecycle.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
-import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
+import {
+  assertOpenClawAgentDatabaseOwner,
+  repairOpenClawAgentDatabaseIntegrityForMaintenance,
+} from "../state/openclaw-agent-db-maintenance.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
@@ -55,7 +58,6 @@ import {
   enableNodeSqliteKyselyStatementCache,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { repairDoctorSqliteIndexCorruption } from "./sqlite-index-recovery.js";
 import { repairCanonicalSqliteIndexes } from "./sqlite-index-schema.js";
 import { runSqliteIntegrityOperationInWorker } from "./sqlite-integrity-operation.js";
 import { assertSqliteIntegrity, isTerminalSqliteIntegrityError } from "./sqlite-integrity.js";
@@ -161,7 +163,7 @@ async function migrateAgentDatabase(params: {
         userVersion = readSqliteUserVersion(database);
       }
     };
-    let indexChanges: string[] = [];
+    let integrityChanges: string[] = [];
     try {
       await prepareSchema();
     } catch (error) {
@@ -170,25 +172,23 @@ async function migrateAgentDatabase(params: {
       }
       // Admission already checks the whole file. Only a proven integrity failure
       // needs Doctor's preserving repair scan under an immediate transaction.
-      indexChanges = repairDoctorSqliteIndexCorruption(database, params.pathname, {
-        label: `agent ${params.agentId}`,
-        assertCurrent: () => {
-          assertAgentDatabaseMaintenanceAuthority();
-          assertOpenClawAgentDatabaseOwner(database, params);
-        },
-      });
-      params.changes.push(...indexChanges);
+      integrityChanges = repairOpenClawAgentDatabaseIntegrityForMaintenance(
+        database,
+        params,
+        params.maintenance,
+      );
+      params.changes.push(...integrityChanges);
       await prepareSchema();
     }
     if (
-      indexChanges.length > 0 ||
+      integrityChanges.length > 0 ||
       agentDatabaseLifecycle.terminal.peek(params.pathname) ||
       readOpenClawDatabaseQuarantineFailure("agent", params.pathname, { env: params.env })
     ) {
       runSqliteImmediateTransactionSync(
         database,
         () => {
-          if (indexChanges.length === 0) {
+          if (integrityChanges.length === 0) {
             assertSqliteIntegrity(database, params.pathname);
           }
           assertAgentDatabaseMaintenanceAuthority();

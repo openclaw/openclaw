@@ -772,6 +772,31 @@ Gateway gracefully with `openclaw gateway restart`. Report the captured output
 if the warning returns. Do not delete the WAL: it can contain committed data
 that has not reached the main database file.
 
+### Doctor reports orphan session windows
+
+If `foreign_key_check` names `session_windows` referencing missing `session_nodes`,
+run `openclaw doctor --fix`. Doctor uses its existing exclusive maintenance
+ownership; a managed Gateway may be stopped and restored, and an independently
+running Gateway must release the state before repair can proceed.
+
+For a current-schema agent database, Doctor first preserves a complete WAL-aware
+copy in a private `openclaw-session-window-recovery-*` directory beside the database.
+It then removes only windows whose referenced node is absent, with their dependent
+transcript records and search entries. Windows belonging to existing nodes remain
+unchanged. The report includes the backup path and removed-window count.
+
+The repair refuses unrelated foreign-key violations, checks integrity before
+commit, and rolls back deletion if repair fails. Keep the backup private: it
+contains the original orphan windows and any history they owned. No schema change
+is required, and this repair does not identify the writer that created the orphans.
+
+Fresh agent database admission re-verifies a cached integrity refusal in the
+native verifier process. A clean result clears only that refusal and its verified
+file generation, so a repaired database does not remain blocked by the old
+process-local error. Healthy admissions do not run this recovery check. This does
+not clear startup ownership refusals or newer-schema errors, and Doctor retains
+its exclusive maintenance requirements.
+
 ### Doctor reports orphan task delivery rows
 
 If `foreign_key_check` names `task_delivery_state` referencing `task_runs`,

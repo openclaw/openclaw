@@ -104,7 +104,7 @@ import {
   agentDatabaseIntegrityBeforeMutationSteps,
   ensureOpenClawAgentSchema,
 } from "./openclaw-agent-db-schema.js";
-import { assertAgentDatabaseTerminalOpenAllowed } from "./openclaw-agent-db-terminal.js";
+import { revalidateAgentDatabaseTerminalOpen } from "./openclaw-agent-db-terminal.js";
 import {
   adoptOpenClawAgentDatabaseValidation,
   adoptOpenClawAgentDatabaseSchema,
@@ -154,14 +154,14 @@ export {
 /** Drain the live owner before reconfirming an advisory failure in a native child. */
 export async function confirmOpenClawAgentDatabaseIntegrity(
   pathname: string,
-  lifetime?: import("./openclaw-database-verify.impl.js").DatabaseVerifyWorkerLifetime,
+  lifetime?: import("./openclaw-database-verify-client.js").DatabaseVerifyWorkerLifetime,
 ): Promise<SqliteIntegrityConfirmation> {
   const resolvedPath = path.resolve(pathname);
   await closeOpenClawAgentDatabaseByPathAsync(resolvedPath);
   // Closing breaks process ownership of the pathname. A replacement must
   // revalidate and claim its schema before the path can become trusted again.
   invalidateOpenClawAgentDatabaseValidation(resolvedPath);
-  const { confirmDatabaseVerifyWorker } = await import("./openclaw-database-verify.impl.js");
+  const { confirmDatabaseVerifyWorker } = await import("./openclaw-database-verify-client.js");
   return confirmDatabaseVerifyWorker(
     { path: resolvedPath, kind: "agent", label: resolvedPath },
     lifetime,
@@ -289,7 +289,7 @@ function* openOpenClawAgentDatabaseSteps(
   }
   // Latched paths are quarantined; every fresh open fails fast here until
   // doctor repairs the file and clears the latch plus the persisted row.
-  assertAgentDatabaseTerminalOpenAllowed(pathname);
+  revalidateAgentDatabaseTerminalOpen(pathname);
   const persistedFailure = readOpenClawDatabaseQuarantineFailure("agent", pathname, {
     env: databaseOptions.env,
   });

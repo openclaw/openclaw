@@ -140,8 +140,9 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
     claimedChecks = checks;
     queue.paths.clear();
     try {
-      const { applyOpenClawDatabaseVerificationResults, runDatabaseVerifyWorker } =
+      const { applyOpenClawDatabaseVerificationResults } =
         await import("./openclaw-database-verify.impl.js");
+      const { runDatabaseVerifyWorker } = await import("./openclaw-database-verify-client.js");
       if (stopped) {
         return;
       }
@@ -220,7 +221,7 @@ export function startOpenClawDatabaseIntegrityVerifier(options: { env: NodeJS.Pr
           const worker = activeWorker;
           if (worker) {
             const { terminateDatabaseVerifyWorker } =
-              await import("./openclaw-database-verify.impl.js");
+              await import("./openclaw-database-verify-client.js");
             await terminateDatabaseVerifyWorker(worker);
           }
         } finally {

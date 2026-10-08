@@ -60,4 +60,23 @@ describe("terminal failure asynchronous generation validation", () => {
     ).rejects.toBe(unavailable);
     expect(latch.get(pathname)).toBe(failure);
   });
+
+  it("clears only the captured refusal for the verified file generation", () => {
+    const { pathname, generation, latch, failure } = fixture();
+    const newerFailure = new Error("newer refusal");
+    latch.record(pathname, newerFailure);
+    expect(latch.clear(pathname, { expectedError: failure, generation })).toBe(false);
+    expect(latch.peek(pathname)).toBe(newerFailure);
+
+    fs.writeFileSync(pathname, "replacement after verification");
+    expect(latch.clear(pathname, { expectedError: newerFailure, generation })).toBe(false);
+    expect(latch.peek(pathname)).toBe(newerFailure);
+    expect(
+      latch.clear(pathname, {
+        expectedError: newerFailure,
+        generation: readStableSqliteFileGeneration(pathname),
+      }),
+    ).toBe(true);
+    expect(latch.peek(pathname)).toBeUndefined();
+  });
 });

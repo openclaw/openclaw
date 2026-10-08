@@ -20,11 +20,9 @@ import {
   openOpenClawAgentDatabase,
   recordOpenClawAgentDatabaseOpenFailure,
 } from "./openclaw-agent-db.js";
+import { runDatabaseVerifyWorker } from "./openclaw-database-verify-client.js";
 import { databaseVerifyHostRuntimeEntrypoint } from "./openclaw-database-verify-runtime.test-support.js";
-import {
-  applyOpenClawDatabaseVerificationResults,
-  runDatabaseVerifyWorker,
-} from "./openclaw-database-verify.impl.js";
+import { applyOpenClawDatabaseVerificationResults } from "./openclaw-database-verify.impl.js";
 import {
   type OpenClawDatabaseVerifyResult,
   type OpenClawDatabaseVerifyTarget,
