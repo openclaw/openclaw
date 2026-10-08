@@ -627,6 +627,7 @@ describe("Claude native stdio boundary", () => {
   it.each([
     { scenario: "steer-merged", results: 1 },
     { scenario: "steer-after-result", results: 2 },
+    { scenario: "steer-idle-trailer", results: 1 },
   ])(
     "delivers same-turn input once native starts it and keeps the turn open ($scenario)",
     async ({ scenario, results }) => {
@@ -701,24 +702,31 @@ describe("Claude native stdio boundary", () => {
     await expect(running).rejects.toThrow();
   });
 
-  it("settles same-turn input that native cancels, releasing the held result", async () => {
-    let injection: CliBackendMessageInjection | undefined;
-    const context = await createContext("steer-cancelled", {
-      liveSession: createLiveSession(),
-      registerMessageInjection: (value) => {
-        injection = value;
-      },
-    });
-    const running = collect(context);
-    await vi.waitFor(() => expect(injection?.isAvailable()).toBe(true));
-    // Cancelled before it ran: the host gets a rejection and falls back to a later turn.
-    await expect(injection!.queueMessage("cancelled input", () => {})).rejects.toThrow();
-    // The held result is released as terminal instead of keeping the turn open forever.
-    const records = await running;
-    const results = records.filter((record) => record.type === "result");
-    expect(results).toHaveLength(1);
-    expect(results[0]?.openclaw_interim_result).toBeUndefined();
-  });
+  it.each(["cancelled", "discarded", "refused", "completed"])(
+    "settles %s same-turn input and releases the held result",
+    async (state) => {
+      let injection: CliBackendMessageInjection | undefined;
+      const context = await createContext(`steer-${state}`, {
+        liveSession: createLiveSession(),
+        registerMessageInjection: (value) => {
+          injection = value;
+        },
+      });
+      const running = collect(context);
+      await vi.waitFor(() => expect(injection?.isAvailable()).toBe(true));
+      const receipt = injection!.queueMessage("terminal input", () => {});
+      if (state === "completed") {
+        await expect(receipt).resolves.toBeUndefined();
+      } else {
+        await expect(receipt).rejects.toThrow(`Claude CLI ${state} the injected input.`);
+      }
+      // The held result is released as terminal instead of keeping the turn open forever.
+      const records = await running;
+      const results = records.filter((record) => record.type === "result");
+      expect(results).toHaveLength(1);
+      expect(results[0]?.openclaw_interim_result).toBeUndefined();
+    },
+  );
 
   it("refuses same-turn input when the admitted authority fails at the write", async () => {
     let injection: CliBackendMessageInjection | undefined;

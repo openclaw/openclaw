@@ -565,31 +565,54 @@ describe("plugin-owned CLI same-turn input", () => {
     const failing = recorder("failing", async () => {
       throw new Error("transcript store unavailable");
     });
-    const optionsFor = (value: object) =>
-      ({ userTurnTranscriptRecorder: value }) as unknown as Parameters<
-        typeof injection.queueMessage
-      >[1];
+    const optionsFor = (value: object, label: string) =>
+      ({
+        userTurnTranscriptRecorder: value,
+        onQueueAccepted: () => order.push(`accepted:${label}`),
+        onQueueSettled: () => order.push(`settled:${label}`),
+      }) as unknown as Parameters<typeof injection.queueMessage>[1];
 
-    await injection.queueMessage("steer", optionsFor(accepted), () => {}, "run");
+    await injection.queueMessage("steer", optionsFor(accepted, "steer"), () => {}, "run");
     await expect(
-      injection.queueMessage("refused", optionsFor(refused), () => {}, "run"),
+      injection.queueMessage("refused", optionsFor(refused, "refused"), () => {}, "run"),
     ).rejects.toThrow("native refused");
     // The input already reached the model: a transcript failure must not become a
     // replay, but it must not pass for a committed one either.
     await expect(
-      injection.queueMessage("failing", optionsFor(failing), () => {}, "run"),
+      injection.queueMessage("failing", optionsFor(failing, "failing"), () => {}, "run"),
     ).resolves.toMatchObject({
       transcriptCommit: "unconfirmed",
       errorMessage: expect.stringContaining("transcript store unavailable"),
     });
+    for (const callback of ["onQueueAccepted", "onQueueSettled"] as const) {
+      await expect(
+        injection.queueMessage(
+          callback,
+          {
+            [callback]: () => {
+              throw new Error("observer failed");
+            },
+          },
+          () => {},
+          "run",
+        ),
+      ).resolves.toMatchObject({ transcriptCommit: "unconfirmed" });
+    }
     finish.resolve();
     await run;
 
     expect(order).toEqual([
       "started:steer",
+      "accepted:steer",
       "persisted:steer:cwd",
+      "settled:steer",
+      "settled:refused",
       "started:failing",
+      "accepted:failing",
       "persisted:failing:cwd",
+      "settled:failing",
+      "started:onQueueAccepted",
+      "started:onQueueSettled",
     ]);
     expect(refused.persistApproved).not.toHaveBeenCalled();
     expect(accepted.markBlocked).not.toHaveBeenCalled();

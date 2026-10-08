@@ -116,15 +116,15 @@ for await (const line of createInterface({ input: process.stdin })) {
         result({ interim: true });
         send({ type: "command_lifecycle", state: "completed", command_uuid: firstInputUuid });
       }
-      send({ type: "command_lifecycle", state: "queued", command_uuid: message.uuid });
+      if (scenario !== "steer-refused") send({ type: "command_lifecycle", state: "queued", command_uuid: message.uuid });
       if (scenario === "steer-exit") {
         process.exit(1);
       }
-      if (scenario === "steer-cancelled") {
-        // The turn ends before the queued input runs, and native reports it cancelled.
+      if (["steer-cancelled", "steer-discarded", "steer-refused", "steer-completed"].includes(scenario)) {
+        // Terminal receipts may omit started; only completed proves consumption.
         result();
         send({ type: "command_lifecycle", state: "completed", command_uuid: firstInputUuid });
-        send({ type: "command_lifecycle", state: "cancelled", command_uuid: message.uuid });
+        send({ type: "command_lifecycle", state: scenario.slice("steer-".length), command_uuid: message.uuid });
         continue;
       }
       request("injected-context", { subtype: "hook_callback", callback_id: hooks.UserPromptSubmit[0].hookCallbackIds[0],
@@ -321,6 +321,9 @@ for await (const line of createInterface({ input: process.stdin })) {
         send({ type: "command_lifecycle", state: "completed", command_uuid: firstInputUuid });
       } else {
         result({ injectedContext });
+        if (scenario === "steer-idle-trailer") {
+          send({ type: "system", subtype: "session_state_changed", state: "idle" });
+        }
         send({ type: "command_lifecycle", state: "completed", command_uuid: pendingInputUuid });
       }
     } else if (id === "elicitation") {

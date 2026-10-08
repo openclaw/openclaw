@@ -328,6 +328,17 @@ function completeTurn(session: ClaudeCliSession, turn: ClaudeCliTurn) {
   }
 }
 
+async function emitHeldInterimResult(turn: ClaudeCliTurn) {
+  const heldResult = turn.heldResult;
+  if (!heldResult) {
+    return;
+  }
+  turn.heldResult = undefined;
+  if (!turn.events.write({ ...heldResult, openclaw_interim_result: true })) {
+    await once(turn.events, "drain", { signal: turn.controller.signal });
+  }
+}
+
 async function acceptMessage(session: ClaudeCliSession, message: Record<string, unknown>) {
   if (message.type === "system" && message.subtype === "init") {
     session.hasInputLifecycle =
@@ -346,15 +357,22 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
     const injected = injectedUuid ? turn.injectedInputs.get(injectedUuid) : undefined;
     if (injected && message.state === "started") {
       injected.started.resolve();
+      await emitHeldInterimResult(turn);
     } else if (
       injected &&
       injectedUuid &&
-      (message.state === "completed" || message.state === "cancelled")
+      (message.state === "completed" ||
+        message.state === "cancelled" ||
+        message.state === "discarded" ||
+        message.state === "refused")
     ) {
-      // Native reports `cancelled` for input its interrupted turn never ran; a
-      // pending receipt is refused so the host falls back to a later turn.
-      if (message.state === "cancelled") {
-        injected.started.reject(new Error("Claude CLI cancelled the injected input."));
+      // Discarded/refused inputs never run; cancellation can also precede start.
+      // Already-started receipts stay accepted, so terminal cleanup never replays them.
+      if (message.state === "completed") {
+        // Native may omit started on a terminal receipt; completion still proves consumption.
+        injected.started.resolve();
+      } else {
+        injected.started.reject(new Error(`Claude CLI ${message.state} the injected input.`));
       }
       turn.injectedInputs.delete(injectedUuid);
       const heldResult = turn.heldResult;
@@ -426,13 +444,10 @@ async function acceptMessage(session: ClaudeCliSession, message: Record<string, 
     // Include non-held tasks: each queued notification has its own ordered result.
     turn.taskNotifications.set(message.task_id, "queued");
   }
-  const heldResult = turn.heldResult;
-  if (heldResult && message.type !== "rate_limit_event") {
-    // Native opened another turn for the injected input: the held answer was interim.
-    turn.heldResult = undefined;
-    if (!turn.events.write({ ...heldResult, openclaw_interim_result: true })) {
-      await once(turn.events, "drain", { signal: turn.controller.signal });
-    }
+  if (message.type === "result") {
+    // Only another input start or answer supersedes a held result. Idle/status
+    // trailers are bookkeeping, not evidence that native opened another query.
+    await emitHeldInterimResult(turn);
   }
   let completesTurn = false;
   let holdsForInput = false;

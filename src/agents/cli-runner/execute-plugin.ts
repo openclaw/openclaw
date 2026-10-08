@@ -43,7 +43,7 @@ import {
 } from "./cli-native-tool-approval.js";
 import { createCliAbortError } from "./execute-node-claude.js";
 import { createCliPluginWatchdog, type CliWatchdogClock } from "./execute-plugin-watchdog.js";
-import { persistSteeredCliUserTurn } from "./execute-plugin.steered-transcript.js";
+import { queueSteeredCliUserTurn } from "./execute-plugin.steered-transcript.js";
 import { attachCliReplyBackend, createCliRunCurrentAssertion } from "./execution-target.js";
 import { createCliFailoverError as failover } from "./exit-error.js";
 import * as noOutputPolicy from "./no-output-timeout-policy.js";
@@ -557,12 +557,17 @@ export async function executePluginOwnedProcess(params: {
           if (!messageInjection) {
             throw new Error("CLI plugin runtime does not accept input during its turn.");
           }
-          // The plugin invokes this at its final write; both host fences must still hold.
-          await messageInjection.queueMessage(text, () => {
-            assertInjectionCurrent();
-            assertCurrent();
-          });
-          return await persistSteeredCliUserTurn(options, run.cwd ?? run.workspaceDir);
+          const injection = messageInjection;
+          return await queueSteeredCliUserTurn(
+            () =>
+              injection.queueMessage(text, () => {
+                // The plugin invokes this at its final write; both host fences must still hold.
+                assertInjectionCurrent();
+                assertCurrent();
+              }),
+            options,
+            run.cwd ?? run.workspaceDir,
+          );
         },
       },
     },
