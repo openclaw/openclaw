@@ -11,7 +11,10 @@ import {
   appendReplyMediaFailures,
   getReplyPayloadMetadata,
 } from "../../auto-reply/reply-payload.js";
+import { isFencedProviderReadAction } from "../../channels/plugins/message-action-dispatch.js";
 import type { ChannelId, ChannelPlugin } from "../../channels/plugins/types.public.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { hasPollCreationParams } from "../../poll-params.js";
@@ -38,7 +41,11 @@ import {
   type ResolvedActionContext,
 } from "./message-action-contracts.js";
 import { MessageActionDeniedError } from "./message-action-denial.js";
-import { executeMessagePlugin, executeMessagePoll } from "./message-action-execution.js";
+import {
+  assertMessageDeliveryCurrent,
+  executeMessagePlugin,
+  executeMessagePoll,
+} from "./message-action-execution.js";
 import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
@@ -425,18 +432,34 @@ async function handleInternalSourceReplySendAction(
       throw new Error("Internal source reply requires a session key");
     }
     const { persistInternalSourceReply } = await loadInternalSourceReplyPersistence();
-    await persistInternalSourceReply({
-      cfg: input.cfg,
-      sessionKey,
-      expectedSessionId: input.sessionId,
-      agentId: input.agentId ?? resolveSessionAgentId({ sessionKey, config: input.cfg }),
-      payload: sourceReplyPayload,
-      idempotencyKey,
-      runId: input.runId,
-      sourceReplyFinal: input.sourceReplyFinal,
-      toolCallId: input.sourceReplyToolCallId,
-      sourceTurnId: input.messageActionAuthorization?.toolContext?.currentSourceTurnId,
-    });
+    const persist = () =>
+      persistInternalSourceReply({
+        cfg: input.cfg,
+        sessionKey,
+        expectedSessionId: input.sessionId,
+        agentId: input.agentId ?? resolveSessionAgentId({ sessionKey, config: input.cfg }),
+        payload: sourceReplyPayload,
+        idempotencyKey,
+        runId: input.runId,
+        sourceReplyFinal: input.sourceReplyFinal,
+        toolCallId: input.sourceReplyToolCallId,
+        sourceTurnId: input.messageActionAuthorization?.toolContext?.currentSourceTurnId,
+      });
+    const scheduled = input.messageActionAuthorization?.scheduled;
+    if (scheduled) {
+      await withSessionTranscriptWriteAssertion(
+        {
+          agentId: input.agentId ?? resolveSessionAgentId({ sessionKey, config: input.cfg }),
+          sessionKey,
+          sessionId: input.sessionId,
+          storePath: resolveSessionStorePathCore(input.cfg.session?.store, { agentId }),
+        },
+        () => assertMessageDeliveryCurrent(input),
+        persist,
+      );
+    } else {
+      await persist();
+    }
     persistedIdempotencyKey = idempotencyKey;
     persistedTranscriptOwner = true;
   }
@@ -666,6 +689,17 @@ export async function runMessageAction(input: MessageActionInput): Promise<Messa
         },
         input.abortSignal,
       );
+      if (
+        !context.dryRun &&
+        !isFencedProviderReadAction(action) &&
+        context.input.messageActionAuthorization?.scheduled
+      ) {
+        const deliveryInput = context.input;
+        context.input = {
+          ...deliveryInput,
+          assertDirectAdapterHandoff: () => assertMessageDeliveryCurrent(deliveryInput),
+        };
+      }
       if (action === "send") {
         return executeMessageSend(context);
       }

@@ -13,6 +13,7 @@ import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
+import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
 import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
@@ -46,7 +47,9 @@ export function prepareCronPromptRunAdmission(params: {
   cfg: OpenClawConfig;
   agentId: string;
   runId: string;
-  sessionId: string;
+  sessionId?: string;
+  ingressBoundary?: "cron.isolated-agent" | "cron.script";
+  resolveGatewayContext?: GatewayContextResolver;
   sessionKey: string;
   jobId: string;
   channelRequester?: CronAuthenticatedChannelRequester;
@@ -56,7 +59,8 @@ export function prepareCronPromptRunAdmission(params: {
 }) {
   const { runId, scheduledToolPolicy } = params;
   const operationalRunInstance = createOperationalRunInstanceRef(runId);
-  const resolveGatewayContext = getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+  const resolveGatewayContext =
+    params.resolveGatewayContext ?? getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   const basePreparedRunAdmission = prepareAgentRunAdmission({
     operationalRunInstance,
     admissionSource: params.admissionSource,
@@ -66,7 +70,7 @@ export function prepareCronPromptRunAdmission(params: {
       agentId: params.agentId,
       ingress: params.executionIdentity?.ingress ?? {
         kind: "schedule",
-        boundary: "cron.isolated-agent",
+        boundary: params.ingressBoundary ?? "cron.isolated-agent",
         state: "present",
       },
       ...(params.executionIdentity?.invoker ? { invoker: params.executionIdentity.invoker } : {}),
