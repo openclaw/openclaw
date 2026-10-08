@@ -19,6 +19,7 @@ import {
   captureRetainedNativeWorkerSource,
   type RetainedNativeWorkerSource,
 } from "../infra/worker-native-lifecycle.js";
+import { resolveStateReadWorkerCount } from "../infra/worker-pool-sizing.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
@@ -153,7 +154,7 @@ function readPool(state: ReadRuntime, admitted: boolean): ReadPool {
       {
         workerUrl: state.workerUrl,
         workerOptions: { resourceLimits: { maxOldGenerationSizeMb: 512 } },
-        maxWorkers: 2,
+        maxWorkers: resolveStateReadWorkerCount(),
         idleTimeoutMs: SQLITE_IDLE_HANDLE_TTL_MS,
         maxPendingTasks: DEFAULT_WORKER_PENDING_TASKS,
         maxPendingBytes: DEFAULT_WORKER_PENDING_BYTES,
