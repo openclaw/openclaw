@@ -28,7 +28,11 @@ const stopSubagentsForRequesterMock = vi.hoisted(() =>
   }),
 );
 const abortSessionRunTargetWithOutcomeMock = vi.hoisted(() =>
-  vi.fn<typeof import("./abort-operation.js").abortSessionRunTargetWithOutcome>(() => ({
+  vi.fn<
+    (
+      params: unknown,
+    ) => ReturnType<ReturnType<typeof import("./abort-operation.js").prepareSessionRunTargetAbort>>
+  >(() => ({
     active: false,
     aborted: false,
   })),
@@ -53,8 +57,10 @@ vi.mock("./abort-cutoff.js", () => ({
   shouldPersistAbortCutoff: vi.fn(() => false),
 }));
 
-vi.mock("./abort-operation.js", () => ({
-  abortSessionRunTargetWithOutcome: abortSessionRunTargetWithOutcomeMock,
+vi.mock(import("./abort-operation.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  prepareSessionRunTargetAbort: (params: unknown) => () =>
+    abortSessionRunTargetWithOutcomeMock(params),
   stopSubagentsForRequester: stopSubagentsForRequesterMock,
 }));
 

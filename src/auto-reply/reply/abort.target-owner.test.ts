@@ -10,6 +10,12 @@ import {
   waitForExecSession,
   type ProcessSession,
 } from "../../agents/bash-process-registry.js";
+import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
+import {
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.js";
+import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { createLazyExecTool } from "../../agents/lazy-exec-tool.js";
 import {
   addSubagentRunForTests,
@@ -19,6 +25,7 @@ import {
 import { getRuntimeConfig } from "../../config/config.js";
 import {
   loadSessionEntry,
+  patchSessionEntryCore,
   replaceSessionEntry,
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
@@ -37,10 +44,12 @@ import {
   normalizeSessionDeliveryState,
   patchSessionEntry,
 } from "../../plugin-sdk/session-store-runtime.js";
+import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { executeFastAbortRequest } from "./abort-operation.js";
 import { tryFastAbortFromMessage } from "./abort.js";
 import { handleStopCommand } from "./commands-session-abort.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -64,12 +73,15 @@ afterEach(() => {
   testing.resetReplyRunRegistry();
 });
 
-async function setupStop() {
+async function setupStop(createEntry = true) {
   const root = await dirs.make("case");
   const storePath = path.join(root, "sessions.json");
   const cfg = { session: { store: storePath }, commands: { allowFrom: { "*": ["*"] } } };
   const entry = { sessionId: "session-a", updatedAt: Date.now() };
-  await replaceSessionEntry({ storePath, sessionKey }, entry);
+  await replaceSessionEntry(
+    { storePath, sessionKey: createEntry ? sessionKey : "agent:main:other" },
+    entry,
+  );
   const ctx = buildTestCtx({
     Body: "/stop",
     CommandBody: "/stop",
@@ -103,7 +115,7 @@ async function setupStop() {
     directives: parseInlineSessionDirectives(""),
     elevated: { enabled: false, allowed: false, failures: [] },
     sessionKey: ctx.SessionKey ?? "",
-    sessionStore: { [sessionKey]: entry },
+    sessionStore: createEntry ? { [sessionKey]: entry } : {},
     storePath,
     workspaceDir: root,
     defaultGroupActivation: () => "always",
@@ -120,34 +132,50 @@ async function setupStop() {
   return { cfg, ctx, entry, params, storePath, isCommandTargetCurrent };
 }
 
-it("retires an idle MCP runtime on explicit Stop", async () => {
-  const state = await setupStop();
-  const { getOrCreateSessionMcpRuntime } =
-    await import("../../agents/agent-bundle-mcp-manager.test-support.js");
-  const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
-    await import("../../agents/agent-bundle-mcp-manager-api.js");
-  const scheduler = createTestGatewayScheduler();
-  onTestFinished(() => scheduler.stop());
-  await setSessionMcpRuntimeScheduler(scheduler);
-  const manager = getSessionMcpRuntimeManagerForTesting();
-  try {
-    await getOrCreateSessionMcpRuntime({
-      sessionId: state.entry.sessionId,
-      sessionKey,
-      workspaceDir: state.params.workspaceDir,
-      cfg: { mcp: { servers: {} } },
-      manifestRegistry: { plugins: [] },
-    });
-    await tryFastAbortFromMessage({
-      ctx: state.ctx,
-      cfg: state.cfg,
-      isCommandTargetCurrent: state.isCommandTargetCurrent,
-    });
-    expect(manager.peekSession({ sessionId: state.entry.sessionId })).toBeUndefined();
-  } finally {
-    await manager.disposeAll();
-  }
-});
+it.each([false, true])(
+  "retires idle MCP state while preserving a later lease=%s",
+  async (laterLease) => {
+    const state = await setupStop();
+    const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
+      await import("../../agents/agent-bundle-mcp-manager.test-support.js");
+    const { getSessionMcpRuntimeManagerForTesting, setSessionMcpRuntimeScheduler } =
+      await import("../../agents/agent-bundle-mcp-manager-api.js");
+    const scheduler = createTestGatewayScheduler();
+    onTestFinished(() => scheduler.stop());
+    await setSessionMcpRuntimeScheduler(scheduler);
+    const manager = getSessionMcpRuntimeManagerForTesting();
+    try {
+      const runtime = await getOrCreateSessionMcpRuntime({
+        sessionId: state.entry.sessionId,
+        sessionKey,
+        workspaceDir: state.params.workspaceDir,
+        cfg: unopenedMcpConfig,
+        manifestRegistry: { plugins: [] },
+      });
+      expect(manager.peekSession({ sessionId: state.entry.sessionId })).toBe(runtime);
+      const stopping = executeFastAbortRequest(state, {
+        commandSessionKey: state.ctx.SessionKey,
+        targetKey: sessionKey,
+        resolveTargetAgentId: () => "main",
+      });
+      const releaseLease = laterLease
+        ? expectDefined(runtime.acquireLease, "runtime lease")()
+        : undefined;
+      try {
+        await stopping;
+        expect(manager.peekSession({ sessionId: state.entry.sessionId })).toBe(
+          laterLease ? runtime : undefined,
+        );
+      } finally {
+        releaseLease?.();
+      }
+      await manager.completeDeferredRetirement(state.entry.sessionId, runtime);
+      expect(manager.peekSession({ sessionId: state.entry.sessionId })).toBeUndefined();
+    } finally {
+      await manager.disposeAll();
+    }
+  },
+);
 
 describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) => {
   it.each(["completed", "running", "backend-error", "cleanup-error"] as const)(
@@ -396,48 +424,148 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
     },
   );
 
-  it("captures only the selected active request and preserves a later human turn", async () => {
-    const state = await setupStop();
-    const release = createDeferred();
-    const owners: ExecRequestOwner[] = [];
-    const executions: Promise<void>[] = [];
-    const start = (identity: ExecRequestIdentity) => {
-      executions.push(
-        withExecRequestTurn({ identity }, async () => {
-          owners.push(expectDefined(captureExecRequestOwners(identity)?.[0], "request owner"));
-          await release.promise;
-        }),
+  it.each(["reply", "embedded", "new-session"] as const)(
+    "preserves later human %s work across Stop preparation",
+    async (backend) => {
+      const state = await setupStop(backend !== "new-session");
+      const release = createDeferred();
+      const owners: ExecRequestOwner[] = [];
+      const executions: Promise<void>[] = [];
+      const start = (identity: ExecRequestIdentity) => {
+        executions.push(
+          withExecRequestTurn({ identity }, async () => {
+            owners.push(expectDefined(captureExecRequestOwners(identity)?.[0], "request owner"));
+            await release.promise;
+          }),
+        );
+      };
+      const target = {
+        sessionKey,
+        sessionId: state.entry.sessionId,
+        agentId: "main",
+      };
+      start({ ...target, runId: "selected" });
+      start({ ...target, runId: "other-agent", agentId: "other" });
+      start({ ...target, runId: "other-session", sessionId: "unrelated-session" });
+      start({ ...target, runId: "other-key", sessionKey: "agent:main:other" });
+      owners[0]!.signal.addEventListener(
+        "abort",
+        () => start({ ...target, runId: "during-signal" }),
+        {
+          once: true,
+        },
       );
-    };
-    const target = {
-      runId: "selected",
-      sessionKey,
-      sessionId: state.entry.sessionId,
-      agentId: "main",
-    };
-    start(target);
-    start({ ...target, runId: "other-agent", agentId: "other" });
-    start({ ...target, runId: "other-session", sessionId: "unrelated-session" });
-    start({ ...target, runId: "other-key", sessionKey: "agent:main:other" });
-    owners[0]!.signal.addEventListener("abort", () => start({ ...target, runId: "later-human" }), {
-      once: true,
-    });
-    try {
-      await (pathKind === "fast"
-        ? tryFastAbortFromMessage(state)
-        : handleStopCommand(state.params, true));
-      expect(owners.map((owner) => [owner.identity.runId, owner.signal.aborted])).toEqual([
-        ["selected", true],
-        ["other-agent", false],
-        ["other-session", false],
-        ["other-key", false],
-        ["later-human", false],
-      ]);
-    } finally {
-      release.resolve();
-      await Promise.all(executions);
-    }
-  });
+      const nativeAbort = vi.fn();
+      const native = createEmbeddedRunHandle({ abort: nativeAbort });
+      const original =
+        backend === "new-session"
+          ? createReplyOperation({
+              agentId: "main",
+              sessionKey,
+              sessionId: state.entry.sessionId,
+              resetTriggered: false,
+            })
+          : undefined;
+      let replacement: ReturnType<typeof createReplyOperation> | undefined;
+      const lane = resolveEmbeddedSessionLane(sessionKey);
+      const blocker = enqueueCommandInLane(lane, () => release.promise);
+      const selectedQueued = vi.fn(async () => {});
+      const selectedAdmission = enqueueCommandInLane(lane, selectedQueued, {
+        sessionTarget: target,
+      }).catch((error: unknown) => error);
+      const selectedFollowup = createQueueTestRun({ prompt: "selected pending input" });
+      selectedFollowup.run = { ...selectedFollowup.run, ...target };
+      enqueueFollowupRun(
+        sessionKey,
+        selectedFollowup,
+        { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
+        "none",
+      );
+      const laterQueued = vi.fn(async () => {});
+      let laterAdmission: Promise<unknown> | undefined;
+      try {
+        const stopping =
+          pathKind === "fast"
+            ? executeFastAbortRequest(
+                {
+                  ...state,
+                  isCommandTargetCurrent:
+                    backend === "new-session" ? undefined : state.isCommandTargetCurrent,
+                },
+                {
+                  commandSessionKey: state.ctx.SessionKey,
+                  targetKey: sessionKey,
+                  resolveTargetAgentId: () => "main",
+                },
+              )
+            : handleStopCommand(
+                {
+                  ...state.params,
+                  opts: backend === "new-session" ? undefined : state.params.opts,
+                },
+                true,
+              );
+        original?.complete();
+        start({ ...target, runId: "during-preparation" });
+        laterAdmission = enqueueCommandInLane(lane, laterQueued, { sessionTarget: target }).catch(
+          (error: unknown) => error,
+        );
+        const laterFollowup = createQueueTestRun({ prompt: "later human input" });
+        laterFollowup.run = { ...laterFollowup.run, ...target };
+        enqueueFollowupRun(
+          sessionKey,
+          laterFollowup,
+          { mode: "collect", debounceMs: 0, cap: 20, dropPolicy: "summarize" },
+          "none",
+        );
+        if (backend === "new-session") {
+          replaceSessionEntrySync(
+            { storePath: state.storePath, sessionKey },
+            { ...state.entry, activeWriterRunId: "later-human" },
+          );
+        }
+        if (backend !== "embedded") {
+          replacement = createReplyOperation({
+            agentId: "main",
+            sessionKey,
+            sessionId: state.entry.sessionId,
+            resetTriggered: false,
+          });
+        } else {
+          setActiveEmbeddedRun(state.entry.sessionId, native, sessionKey, undefined, "main");
+        }
+        await stopping;
+        expect(owners.map((owner) => [owner.identity.runId, owner.signal.aborted])).toEqual([
+          ["selected", true],
+          ["other-agent", false],
+          ["other-session", false],
+          ["other-key", false],
+          ["during-preparation", false],
+          ["during-signal", false],
+        ]);
+        expect(replacement?.abortSignal.aborted).not.toBe(true);
+        expect(nativeAbort).not.toHaveBeenCalled();
+        if (backend === "new-session") {
+          expect(
+            loadSessionEntry({ storePath: state.storePath, sessionKey })?.abortedLastRun,
+          ).not.toBe(true);
+        }
+        expect(await selectedAdmission).toBeInstanceOf(Error);
+        expect(selectedQueued).not.toHaveBeenCalled();
+        expect(getExistingFollowupQueue(sessionKey)?.items).toEqual([laterFollowup]);
+        release.resolve();
+        expect(await laterAdmission).toBeUndefined();
+        expect(laterQueued).toHaveBeenCalledOnce();
+      } finally {
+        replacement?.complete();
+        original?.complete();
+        clearActiveEmbeddedRun(state.entry.sessionId, native, sessionKey);
+        release.resolve();
+        await Promise.allSettled([blocker, selectedAdmission, laterAdmission]);
+        await Promise.all(executions);
+      }
+    },
+  );
 
   it.each([
     { agentId: "selected", activeAgentId: "selected", otherAgentId: "other" },
@@ -622,57 +750,63 @@ describe.each(["fast", "command"] as const)("%s Stop current owner", (pathKind) 
     operation.complete();
   });
 
-  it("skips stale abort bookkeeping after waiting for a replacement writer", async () => {
-    const state = await setupStop();
-    const entered = createDeferred();
-    const release = createDeferred();
-    const writer = patchSessionEntry({
-      storePath: state.storePath,
-      sessionKey,
-      update: async () => {
-        entered.resolve();
-        await release.promise;
-        return { sessionId: "session-b", updatedAt: Date.now() };
-      },
-    });
-    await entered.promise;
-    const operation = createReplyOperation({
-      sessionKey,
-      sessionId: "session-a",
-      resetTriggered: false,
-    });
-    operation.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
-    const aborted = createDeferred();
-    const onAbort = () => aborted.resolve();
-    operation.abortSignal.addEventListener("abort", onAbort, { once: true });
-    const stopping =
-      pathKind === "fast" ? tryFastAbortFromMessage(state) : handleStopCommand(state.params, true);
-    onTestFinished(async () => {
-      operation.abortSignal.removeEventListener("abort", onAbort);
+  it.each(["session", "writer"] as const)(
+    "skips stale abort bookkeeping after waiting for a replacement %s",
+    async (replacement) => {
+      const state = await setupStop();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const nextOwner =
+        replacement === "session"
+          ? { sessionId: "session-b" }
+          : { activeWriterRunId: "later-writer", lifecycleRunId: "later-writer" };
+      const writer = patchSessionEntryCore(
+        { storePath: state.storePath, sessionKey, agentId: "main" },
+        async () => {
+          entered.resolve();
+          await release.promise;
+          return { ...nextOwner, updatedAt: Date.now() };
+        },
+      );
+      await entered.promise;
+      const operation = createReplyOperation({
+        sessionKey,
+        sessionId: "session-a",
+        resetTriggered: false,
+      });
+      operation.attachBackend({ kind: "embedded", cancel: () => {}, isStreaming: () => true });
+      const aborted = createDeferred();
+      const onAbort = () => aborted.resolve();
+      operation.abortSignal.addEventListener("abort", onAbort, { once: true });
+      const stopping =
+        pathKind === "fast"
+          ? tryFastAbortFromMessage(state)
+          : handleStopCommand(state.params, true);
+      onTestFinished(async () => {
+        operation.abortSignal.removeEventListener("abort", onAbort);
+        release.resolve();
+        await Promise.allSettled([writer, stopping]);
+        operation.complete();
+      });
+      void stopping.then(
+        () => {
+          if (!operation.abortSignal.aborted) {
+            aborted.reject(new Error("Stop completed without aborting the active operation"));
+          }
+        },
+        (error: unknown) => aborted.reject(error),
+      );
+      await aborted.promise;
+      expect(operation.abortSignal.aborted).toBe(true);
       release.resolve();
-      await Promise.allSettled([writer, stopping]);
-      operation.complete();
-    });
-    void stopping.then(
-      () => {
-        if (!operation.abortSignal.aborted) {
-          aborted.reject(new Error("Stop completed without aborting the active operation"));
-        }
-      },
-      (error: unknown) => aborted.reject(error),
-    );
-    await aborted.promise;
-    expect(operation.abortSignal.aborted).toBe(true);
-    release.resolve();
-    await writer;
-    await stopping;
-    expect(loadSessionEntry({ storePath: state.storePath, sessionKey })).toMatchObject({
-      sessionId: "session-b",
-    });
-    expect(loadSessionEntry({ storePath: state.storePath, sessionKey })?.abortedLastRun).toBe(
-      false,
-    );
-  });
+      expect(await writer).toMatchObject(nextOwner);
+      await stopping;
+      expect(loadSessionEntry({ storePath: state.storePath, sessionKey })).toMatchObject(nextOwner);
+      expect(loadSessionEntry({ storePath: state.storePath, sessionKey })?.abortedLastRun).not.toBe(
+        true,
+      );
+    },
+  );
 
   it("completes cancellation when its own abort releases the live publisher", async () => {
     const state = await setupStop();
