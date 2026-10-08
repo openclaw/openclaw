@@ -38,6 +38,7 @@ const cronCliLogs = [
   "legacy-operator-candidate-transcript-1-earlier.out",
   "legacy-operator-candidate-transcript-1-earlier.err",
 ];
+const doctorLintLogs = ["doctor-lint.json", "doctor-lint.err"];
 const nativeRecoveryLogs = [
   "native-recover.out",
   "native-recover.err",
@@ -599,7 +600,7 @@ it("publishes bounded and redacted Gateway, Cron, native recovery, and update fa
   for (const name of baselineGatewayLogs) {
     fs.writeFileSync(path.join(f.artifacts, name), `Baseline startup failed: token=${secret}\n`);
   }
-  for (const name of cronCliLogs) {
+  for (const name of [...cronCliLogs, ...doctorLintLogs]) {
     fs.writeFileSync(
       path.join(f.artifacts, name),
       `Published Cron run failed: token=${secret}\n` + "Cron run diagnostic line\n".repeat(1000),
@@ -657,7 +658,7 @@ it("publishes bounded and redacted Gateway, Cron, native recovery, and update fa
   for (const name of baselineGatewayLogs) {
     expect(report.logs[name]).toContain("Baseline startup failed");
   }
-  for (const name of cronCliLogs) {
+  for (const name of [...cronCliLogs, ...doctorLintLogs]) {
     expect(report.logs[name]).toContain("Published Cron run failed");
     expect(Buffer.byteLength(JSON.stringify(report.logs[name]))).toBeLessThanOrEqual(16 * 1024);
     expect(report.omissions[name]).toBe("redacted output truncated at a complete line (16 KiB)");
@@ -1015,6 +1016,7 @@ it("does not reuse sibling or startup observations when an attempt fails before 
     "update-noop.err",
     ...turnLogs,
     ...cronCliLogs,
+    ...doctorLintLogs,
     ...nativeRecoveryLogs,
     "native-assignment-inventory-after-first-hop.json",
     "native-assignment-inventory-before-recovery.json",
