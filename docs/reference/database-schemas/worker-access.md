@@ -3008,6 +3008,13 @@ preserving the original failure. Process-held incognito reads retain their exist
 native lifetime owner. Metadata-change tolerance, missing-session results, stored
 bytes, and update behavior are unchanged.
 
+Personal account labels for chat startup and asynchronous account selection read
+committed summaries in the shared-state read worker, independently of the writer
+queue. The reader checks account ownership and returns no credentials. Requester,
+identity, and source-generation checks still gate publication; synchronous SDK
+compatibility uses the same summary query. Schema, stored bytes, and update
+behavior are unchanged.
+
 Saved-session provider discovery retains its previous synchronous canonical-row
 check only at the final credential-send boundary. Guarded fetch requires that
 check after transport preparation and before each request or redirect; a worker
