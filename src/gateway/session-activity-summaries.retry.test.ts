@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { ACTIVITY_SUMMARY_FORMAT_REVISION } from "../config/sessions/activity-summary.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
@@ -488,19 +488,30 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     expect(complete).toHaveBeenCalledTimes(2);
   });
 
-  it("queues a full Activity page and reports admission limits until a slot settles", async () => {
+  it("queues a full Activity page and reports admission limits until a slot settles", async ({
+    signal,
+  }) => {
     const targets: ActivitySummaryTarget[] = [];
     for (let index = 0; index < 257; index += 1) {
       targets.push(await addSession(index));
     }
     const overflow = targets[256]!;
+    const initial = createDeferred();
+    changed.mockImplementation(() => {
+      if (view(overflow)?.state === "current") {
+        initial.resolve();
+      }
+    });
     service.ensure(overflow);
-    await vi.waitFor(() => expect(view(overflow)?.state).toBe("current"));
+    await withinTest(initial.promise, signal);
+    expect(view(overflow)?.state).toBe("current");
     await service.dispose();
     service = createService();
     complete.mockClear();
     const first = createDeferred<typeof result>();
     const remaining = createDeferred<typeof result>();
+    const slotsOccupied = createDeferred();
+    const slotReused = createDeferred();
     const drained = createDeferred();
     const completed = new Set<string>();
     changed.mockImplementation((target: ActivitySummaryTarget) => {
@@ -513,7 +524,14 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
     });
     complete
       .mockImplementationOnce(() => first.promise)
-      .mockImplementation(() => remaining.promise);
+      .mockImplementationOnce(() => {
+        slotsOccupied.resolve();
+        return remaining.promise;
+      })
+      .mockImplementation(() => {
+        slotReused.resolve();
+        return remaining.promise;
+      });
     const context = createDirectChatContext({
       getRuntimeConfig: () => cfg,
       sessionActivitySummaries: service,
@@ -535,7 +553,8 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       for (let index = 0; index < 100; index += 20) {
         await ensure(targets.slice(index, index + 20));
       }
-      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(2));
+      await withinTest(slotsOccupied.promise, signal);
+      expect(complete).toHaveBeenCalledTimes(2);
       expect(targets.slice(0, 100).map((target) => view(target)?.state)).toEqual(
         Array.from({ length: 100 }, () => "updating"),
       );
@@ -576,7 +595,8 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
       });
       expect(complete).toHaveBeenCalledTimes(2);
       first.resolve(result);
-      await vi.waitFor(() => expect(complete).toHaveBeenCalledTimes(3));
+      await withinTest(slotReused.promise, signal);
+      expect(complete).toHaveBeenCalledTimes(3);
       await ensure([overflow]);
       expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
         sessions: [
@@ -587,12 +607,14 @@ describe("Activity recap admission, refresh, and provider recovery", () => {
         ],
       });
       remaining.resolve(result);
-      await drained.promise;
+      await withinTest(drained.promise, signal);
       expect(targets.every((target) => view(target)?.state === "current")).toBe(true);
       expect(complete).toHaveBeenCalledTimes(257);
     } finally {
+      const disposal = service.dispose();
       first.resolve(result);
       remaining.resolve(result);
+      await disposal;
     }
   });
 
