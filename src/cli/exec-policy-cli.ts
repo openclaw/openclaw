@@ -279,7 +279,7 @@ function buildExecPolicyShowScope(snapshot: ExecPolicyScopeSnapshot) {
       runtimeApprovalsSource: "local-file" as const,
     };
   }
-  const nodeManagedPolicy = <T extends "security" | "ask">(field: T) => ({
+  const nodeManagedPolicy = (field: "security" | "ask") => ({
     requested: snapshot[field].requested,
     requestedSource: snapshot[field].requestedSource,
     host: "unknown" as const,

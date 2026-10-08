@@ -34,7 +34,7 @@ export function registerMediaUnderstandingCommand(parent: Command, kind: "audio"
           resolveLocalCapabilityAgent,
           resolveCapabilityAgentOption,
         } = await import("./shared.js");
-        const file = String(opts.file);
+        const file = opts.file;
         const agent = resolveCapabilityAgentOption(actionCommand, opts.agent);
         const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
         const { transcribeAudioFile, describeVideoFile } =

@@ -118,7 +118,7 @@ async function runModelRun(params: {
   const imageFiles = await readModelRunImageFiles(params.files);
   const inputs =
     imageFiles.length > 0
-      ? { inputs: imageFiles.map(({ path, mimeType }) => ({ path, mimeType })) }
+      ? { inputs: imageFiles.map((image) => ({ path: image.path, mimeType: image.mimeType })) }
       : {};
   const messageContent =
     imageFiles.length > 0
