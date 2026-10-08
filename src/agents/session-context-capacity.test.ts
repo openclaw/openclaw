@@ -3,7 +3,6 @@ import {
   resolveProjectedSessionContextTokens,
   resolveTrustedSessionContextTokens,
 } from "../config/sessions/context-token-provenance.js";
-import { resolveOuterContextTokenMeta } from "./embedded-agent-runner/run/context-token-meta.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createSessionContextCapacityResolver } from "./session-context-capacity.js";
 
@@ -46,31 +45,6 @@ function owner(entries: ModelCatalogEntry[], current = true) {
     },
   };
 }
-
-describe("synthetic producer provenance", () => {
-  it("stamps a budget that is exactly the provider estimate", () => {
-    expect(
-      resolveOuterContextTokenMeta(syntheticRow, {
-        contextTokenBudget: 128_000,
-        contextWindowInfo: { tokens: 128_000, source: "model" },
-      }),
-    ).toEqual({ contextTokens: 128_000, contextTokensSource: "synthetic" });
-  });
-  it.each([
-    ["reported window", { ...syntheticRow, contextWindowSource: undefined }, {}, "resolved-v1"],
-    ["reported prompt limit", { ...syntheticRow, contextTokens: 128_000 }, {}, "resolved-v1"],
-    ["authored cap", syntheticRow, { authoredContextTokenCap: 128_000 }, undefined],
-    ["modelsConfig sizing", syntheticRow, { source: "modelsConfig" }, undefined],
-    ["narrower caller budget", syntheticRow, { contextTokenBudget: 64_000 }, undefined],
-  ])("does not stamp a %s as synthetic", (_name, model, patch: Record<string, unknown>, source) => {
-    const meta = resolveOuterContextTokenMeta(model, {
-      contextTokenBudget: 128_000,
-      contextWindowInfo: { tokens: 128_000, source: (patch.source as string) ?? "model" },
-      ...patch,
-    });
-    expect(meta.contextTokensSource).toBe(source);
-  });
-});
 
 describe("existing-session recovery through the admitted owner", () => {
   it("a synthetic persisted 128k is never trusted telemetry, even for a locked session", () => {

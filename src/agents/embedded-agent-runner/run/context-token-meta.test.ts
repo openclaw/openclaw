@@ -71,6 +71,22 @@ describe("prepared context provenance", () => {
     });
   });
 
+  it.each([
+    ["authored cap", { authoredContextTokenCap: 128_000 }],
+    ["modelsConfig sizing", { contextWindowInfo: { tokens: 128_000, source: "modelsConfig" } }],
+    ["narrower caller budget", { contextTokenBudget: 64_000 }],
+  ])("does not stamp %s as synthetic", (_name, patch) => {
+    const meta = resolveOuterContextTokenMeta(
+      { contextWindow: 128_000, contextWindowSource: "synthetic" },
+      {
+        contextTokenBudget: 128_000,
+        contextWindowInfo: { tokens: 128_000, source: "model" },
+        ...patch,
+      },
+    );
+    expect(meta.contextTokensSource).toBeUndefined();
+  });
+
   it("retains an explicit estimate when the guard reports a default", () => {
     expect(
       resolveOuterContextTokenMeta(
