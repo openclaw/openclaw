@@ -58,7 +58,7 @@ describe("Telegram registered adapter conformance over HTTP", () => {
   it("rejects ambiguous account ownership before dispatch and sends with an explicit owner", async () => {
     const ownerCfg: OpenClawConfig = {
       ...cfg,
-      agents: { entries: { main: {}, other: {} } },
+      agents: { ownership: "explicit", entries: { main: {}, other: {} } },
     };
     const request = {
       cfg: ownerCfg,

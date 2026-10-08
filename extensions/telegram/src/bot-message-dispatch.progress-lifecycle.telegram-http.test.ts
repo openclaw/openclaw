@@ -40,7 +40,7 @@ describe("Telegram progress custody and delivery outcomes through HTTP", () => {
     await dispatchProgressTurn(async () => {}, {
       mode: "off",
       toolProgress: false,
-      cfg: { agents: { entries: { main: {}, other: {} } } },
+      cfg: { agents: { ownership: "explicit", entries: { main: {}, other: {} } } },
       finalReply: { text: "The requested answer." },
       allowErrors: true,
     });
