@@ -49,31 +49,15 @@ const STRICT_NON_NEGATIVE_INTEGER_OPTIONS = new Map([
   ["deleteDays", "--delete-days"],
 ]);
 
-type MessagePluginPreloadPlan = { preload: true; channelId?: string } | { preload: false };
-
-function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, unknown> {
-  const { account, ...rest } = opts;
-  return {
-    ...rest,
-    accountId: typeof account === "string" ? account : rest.accountId,
-  };
-}
-
 function validateMessageNumericOptions(opts: Record<string, unknown>): void {
-  for (const [key, flag] of STRICT_POSITIVE_INTEGER_OPTIONS) {
-    if (opts[key] === undefined) {
-      continue;
-    }
-    if (parseStrictPositiveInteger(opts[key]) === undefined) {
-      throw new Error(`${flag} must be a positive integer.`);
-    }
-  }
-  for (const [key, flag] of STRICT_NON_NEGATIVE_INTEGER_OPTIONS) {
-    if (opts[key] === undefined) {
-      continue;
-    }
-    if (parseStrictNonNegativeInteger(opts[key]) === undefined) {
-      throw new Error(`${flag} must be a non-negative integer.`);
+  for (const [options, parse, kind] of [
+    [STRICT_POSITIVE_INTEGER_OPTIONS, parseStrictPositiveInteger, "positive"],
+    [STRICT_NON_NEGATIVE_INTEGER_OPTIONS, parseStrictNonNegativeInteger, "non-negative"],
+  ] as const) {
+    for (const [key, flag] of options) {
+      if (opts[key] !== undefined && parse(opts[key]) === undefined) {
+        throw new Error(`${flag} must be a ${kind} integer.`);
+      }
     }
   }
 }
@@ -95,47 +79,15 @@ async function runPluginStopHooks(registry: PluginRegistry): Promise<void> {
   }
 }
 
-function resolveScopedMessageChannel(opts: Record<string, unknown>): string | undefined {
-  return resolveMessageSecretScope({
-    channel: opts.channel,
-    target: opts.target,
-    targets: opts.targets,
-  }).channel;
-}
-
-function asChannelMessageActionName(action: string): ChannelMessageActionName | undefined {
-  return CHANNEL_MESSAGE_ACTION_NAME_SET.has(action)
-    ? (action as ChannelMessageActionName)
-    : undefined;
-}
-
 function isGatewayOwnedMessageAction(action: string, scopedChannel: string | undefined): boolean {
-  const messageAction = asChannelMessageActionName(action);
-  if (!messageAction || !scopedChannel) {
+  if (!CHANNEL_MESSAGE_ACTION_NAME_SET.has(action) || !scopedChannel) {
     return false;
   }
   const plugin = getChannelPlugin(scopedChannel);
   const executionMode = plugin?.actions?.resolveExecutionMode?.({
-    action: messageAction,
+    action: action as ChannelMessageActionName,
   });
   return executionMode === "gateway";
-}
-
-function resolveMessagePluginPreloadPlan(
-  action: string,
-  opts: Record<string, unknown>,
-): MessagePluginPreloadPlan {
-  const scopedChannel = resolveScopedMessageChannel(opts);
-  // Gateway-owned actions can execute without loading channel plugins in the CLI process;
-  // dry-runs, broadcasts, and local actions need registry metadata before building payloads.
-  if (
-    opts.dryRun === true ||
-    action === "broadcast" ||
-    !isGatewayOwnedMessageAction(action, scopedChannel)
-  ) {
-    return { preload: true, ...(scopedChannel ? { channelId: scopedChannel } : {}) };
-  }
-  return { preload: false };
 }
 
 /** Create shared option decorators and the common message action runner. */
@@ -166,24 +118,33 @@ export function createMessageCliHelpers(messageChannelOptions: string) {
             if (action === "poll" && opts.pollAnonymous === true && opts.pollPublic === true) {
               throw new Error("--poll-anonymous and --poll-public are mutually exclusive.");
             }
-            const preloadPlan = resolveMessagePluginPreloadPlan(action, opts);
+            const { channel: scopedChannel } = resolveMessageSecretScope({
+              channel: opts.channel,
+              target: opts.target,
+              targets: opts.targets,
+            });
+            // Gateway-owned actions need no local plugin runtime; previews and broadcasts do.
+            const preloadPlugins =
+              opts.dryRun === true ||
+              action === "broadcast" ||
+              !isGatewayOwnedMessageAction(action, scopedChannel);
             await measureCliCommandStartup("config-ready", async () => {
               const { ensureConfigReady } = await import("../config-guard.js");
               await ensureConfigReady({
                 runtime: defaultRuntime,
                 commandPath: ["message", action],
                 suppressDoctorStdout: opts.json === true,
-                validateConfigOnly: !preloadPlan.preload,
+                validateConfigOnly: !preloadPlugins,
                 measure: (stage, run) => measureCliCommandStartup(stage, run),
               });
             });
-            if (preloadPlan.preload) {
+            if (preloadPlugins) {
               const config = getRuntimeConfig();
-              const pluginIds = preloadPlan.channelId
+              const pluginIds = scopedChannel
                 ? resolveDiscoverableScopedChannelPluginIds({
                     config,
                     activationSourceConfig: config,
-                    channelIds: [preloadPlan.channelId],
+                    channelIds: [scopedChannel],
                     env: process.env,
                   })
                 : resolveConfiguredChannelPluginIds({
@@ -205,16 +166,18 @@ export function createMessageCliHelpers(messageChannelOptions: string) {
               import("../../deps.js"),
             ]);
             const deps = createDefaultDeps();
-            const run = () =>
+            const { account, ...rest } = opts;
+            result = await withPluginRuntimeRegistryScope(pluginRegistry, () =>
               messageCommand(
                 {
-                  ...normalizeMessageOptions(opts),
+                  ...rest,
+                  accountId: typeof account === "string" ? account : rest.accountId,
                   action,
                 },
                 deps,
                 defaultRuntime,
-              );
-            result = await withPluginRuntimeRegistryScope(pluginRegistry, run);
+              ),
+            );
           },
           (err) => {
             failed = true;

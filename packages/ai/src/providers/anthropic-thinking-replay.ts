@@ -5,6 +5,7 @@ type ReplayMessage = {
   role?: unknown;
   content?: unknown;
   toolCallId?: unknown;
+  operatorMessage?: unknown;
 };
 
 export const ANTHROPIC_OMITTED_REASONING_TEXT = "[assistant reasoning omitted]";
@@ -73,6 +74,10 @@ export function findActiveAnthropicToolTurnAssistantIndex(messages: readonly unk
 
   while (index >= 0) {
     const message = asReplayMessage(messages[index]);
+    if (message?.role === "user" && isRecord(message.operatorMessage)) {
+      index -= 1;
+      continue;
+    }
     if (message?.role !== "toolResult") {
       break;
     }

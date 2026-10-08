@@ -1,10 +1,13 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import type { ControlUiHost, ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import type { ControlUiRegistration } from "../plugins/control-ui-capability.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { collectKnownSessionRows, fetchSessionLineage } from "./app-sidebar-child-session-data.ts";
 import {
+  buildReconciledSidebarZone,
   buildSidebarSessionNavigationState,
   collectSidebarSessionRowsByKey,
   createSidebarSessionRowsComparator,
@@ -14,6 +17,32 @@ import { projectSidebarSession } from "./app-sidebar-session-navigation.test-sup
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import type { SidebarRecentSession, SidebarSessionAttention } from "./app-sidebar-session-types.ts";
 import { renderTeamSessionSlots } from "./session-attention-presentation.ts";
+
+it("admits only plugin parents by default and preserves an explicitly pinned child's position", () => {
+  const pluginNavigation = [
+    { id: "boards", label: "Boards", page: { id: "boards" } },
+    { id: "child", parent: "boards", label: "Child", page: { id: "child" } },
+  ].map((value): ControlUiRegistration<ControlUiNavigationItem> => ({
+    key: `example/${value.id}`,
+    pluginId: "example",
+    signal: new AbortController().signal,
+    value,
+    host: {} as ControlUiHost,
+  }));
+  const reconcile = (sidebarEntries: string[]) =>
+    buildReconciledSidebarZone({
+      sidebarEntries,
+      pluginNavigation,
+      pluginTabs: undefined,
+      rows: [],
+    });
+  const initial = reconcile(["route:usage"]);
+  expect(initial.sidebarEntries).toEqual(["route:usage", "plugin:example/boards"]);
+  expect([...initial.defaultPluginNavigationKeys]).toEqual(["example/boards"]);
+  const pinned = ["plugin:example/child", ...initial.sidebarEntries];
+  expect(reconcile(pinned).sidebarEntries).toEqual(pinned);
+  expect(reconcile(pinned).entries[0]).toEqual({ type: "plugin", key: "example/child" });
+});
 
 it.each([
   ["global before hello", "global", undefined, "global"],

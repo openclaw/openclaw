@@ -1,54 +1,28 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { clearCliSession } from "../../agents/cli-session.js";
 import type { ModelRef } from "../../agents/model-ref-shared.js";
-import {
-  deriveSessionTotalTokens,
-  hasBillableUsage,
-  hasNonzeroUsage,
-  type NormalizedUsage,
-} from "../../agents/usage.js";
+import { hasBillableUsage, hasNonzeroUsage, type NormalizedUsage } from "../../agents/usage.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import {
-  resolveSessionGoalDisplayState,
-  SESSION_TOTAL_TOKENS_VERSION,
-  type SessionSystemPromptReport,
-  type SessionEntry,
-} from "../../config/sessions.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
-import type { InternalSessionEntry } from "../../config/sessions/types.js";
+import { applySessionEntryOperation } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import {
+  projectSessionEntryUsageUpdate,
+  type SessionEntryUsageUpdate,
+} from "../../config/sessions/session-entry-usage.js";
+import type {
+  InternalSessionEntry,
+  SessionEntry,
+  SessionSystemPromptReport,
+} from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
-
-function applyCliSessionClearToSessionPatch(
-  params: {
-    providerUsed?: string;
-    clearCliSessionBinding?: boolean;
-  },
-  entry: SessionEntry,
-  patch: Partial<SessionEntry>,
-): Partial<SessionEntry> {
-  const cliProvider = params.providerUsed ?? entry.modelProvider;
-  if (!cliProvider || params.clearCliSessionBinding !== true) {
-    return patch;
-  }
-  const nextEntry = { ...entry, ...patch };
-  clearCliSession(nextEntry, cliProvider);
-  return {
-    ...patch,
-    cliSessionIds: nextEntry.cliSessionIds,
-    cliSessionBindings: nextEntry.cliSessionBindings,
-    claudeCliSessionId: nextEntry.claudeCliSessionId,
-  };
-}
 
 function resolveNonNegativeTokenCount(value: number | undefined): number | undefined {
   const resolved = asNonNegativeFiniteNumber(value);
   return resolved === undefined ? undefined : Math.floor(resolved);
 }
 
-/** Persists usage accounting and selected runtime metadata to the session store. */
 export async function persistSessionUsageUpdate(params: {
   agentId?: string;
   storePath?: string;
@@ -78,24 +52,21 @@ export async function persistSessionUsageUpdate(params: {
   promptTokens?: number;
   isHeartbeat?: boolean;
   systemPromptReport?: SessionSystemPromptReport;
-  /** Compaction invalidates native continuity with its accounting commit. */
-  clearCliSessionBinding?: boolean;
   /** Presence overrides usage inference; undefined tokens explicitly mean current context is unknown. */
   currentContextSnapshot?: { tokens: number | undefined };
   preserveFreshTotalTokensOnStaleUsage?: boolean;
   preserveRuntimeModel?: boolean;
   preserveUserFacingSessionModelState?: boolean;
-  logLabel?: string;
 }): Promise<void> {
   const { agentId, storePath, sessionKey, sessionStore, authorize } = params;
   if (!storePath || !sessionKey) {
     return;
   }
-  const expectedSession = params.expectedSession ? { ...params.expectedSession } : undefined;
+  const expectedSession = params.expectedSession
+    ? { ...params.expectedSession, lifecycleRevision: params.expectedSession.lifecycleRevision }
+    : undefined;
 
-  const label = params.logLabel ? `${params.logLabel} ` : "";
   const cfg = params.cfg ?? getRuntimeConfig();
-  const agentHarnessId = normalizeOptionalString(params.agentHarnessId);
   const modelSelection = params.runtimeModelSelection ?? {
     provider: params.providerUsed,
     model: params.modelUsed,
@@ -110,7 +81,6 @@ export async function persistSessionUsageUpdate(params: {
     Boolean(params.lastCallUsage) && params.lastCallUsage?.contextUsage?.state !== "unavailable";
   const hasFreshContextSnapshot = hasUsableLastCallUsage || hasPromptTokens;
   const hasCurrentContextSnapshot = params.currentContextSnapshot !== undefined;
-  const currentContextTokens = resolveNonNegativeTokenCount(params.currentContextSnapshot?.tokens);
 
   // A monetary-only update must not invalidate the existing context observation.
   const hasContextUpdate =
@@ -118,13 +88,81 @@ export async function persistSessionUsageUpdate(params: {
     hasFreshContextSnapshot ||
     hasCurrentContextSnapshot ||
     Boolean(modelSelection.model || params.contextTokensUsed);
-  if (hasBilling || hasContextUpdate) {
-    try {
+  if (!hasBilling && !hasContextUpdate) {
+    return;
+  }
+  const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
+  const update: SessionEntryUsageUpdate = {
+    usage: params.usage,
+    lastCallUsage: params.lastCallUsage,
+    modelSelection,
+    agentHarnessId: normalizeOptionalString(params.agentHarnessId),
+    contextTokensUsed: params.contextTokensUsed,
+    contextTokensSource: params.contextTokensSource,
+    contextBudgetStatus: params.contextBudgetStatus,
+    systemPromptReport: params.systemPromptReport,
+    promptTokens: params.promptTokens,
+    currentContextTokens: resolveNonNegativeTokenCount(params.currentContextSnapshot?.tokens),
+    hasUsage,
+    hasBilling,
+    hasContextUpdate,
+    hasFreshContextSnapshot,
+    hasCurrentContextSnapshot,
+    preserveSessionModelState:
+      params.isHeartbeat === true ||
+      params.preserveRuntimeModel === true ||
+      preserveUserFacingRunState,
+    preserveUserFacingRunState,
+    preserveFreshTotalTokensOnStaleUsage: params.preserveFreshTotalTokensOnStaleUsage,
+  };
+  const estimateCost = (entry?: SessionEntry) =>
+    preserveUserFacingRunState || !hasBilling
+      ? undefined
+      : asNonNegativeFiniteNumber(
+          estimateAggregateUsageCost({
+            config: cfg,
+            agentDir: params.agentDir,
+            usage: params.usage,
+            provider: params.providerUsed ?? entry?.modelProvider,
+            model: params.modelUsed ?? entry?.model,
+          }),
+        );
+  const options = {
+    skipMaintenance: true,
+    onCommitted: sessionStore
+      ? (entry: InternalSessionEntry) => {
+          // Publish this commit before a newer writer can replace the caller's cache.
+          sessionStore[sessionKey] = entry;
+        }
+      : undefined,
+    workerGuard: {
+      assertCurrent: authorize
+        ? () => {
+            if (!authorize()) {
+              throw new Error("session usage accounting authority revoked");
+            }
+          }
+        : undefined,
+    },
+  };
+  try {
+    if (
+      !hasBilling ||
+      preserveUserFacingRunState ||
+      (params.providerUsed !== undefined && params.modelUsed !== undefined)
+    ) {
+      options.workerGuard.assertCurrent?.();
+      update.estimatedCostUsd = estimateCost();
+      await applySessionEntryOperation(
+        { agentId, storePath, sessionKey },
+        { kind: "usage-accounting", usage: update, expected: expectedSession },
+        options,
+      );
+    } else {
+      // Pricing without a complete producing model depends on the prepared row and host catalog.
       await patchSessionEntryCore(
         { agentId, storePath, sessionKey },
         (entry) => {
-          // Retained compaction facts carry an exact writer, including known absence;
-          // ordinary usage callers may carry only the existing generation fence.
           if (
             !(authorize?.() ?? true) ||
             (expectedSession &&
@@ -136,115 +174,16 @@ export async function persistSessionUsageUpdate(params: {
             return null;
           }
           const updatedAt = Date.now();
-          const preserveSessionModelState =
-            params.isHeartbeat === true ||
-            params.preserveRuntimeModel === true ||
-            params.preserveUserFacingSessionModelState === true;
-          const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
-          const resolvedContextTokens = preserveSessionModelState
-            ? entry.contextTokens
-            : (params.contextTokensUsed ?? entry.contextTokens);
-          // Arrival order owns context freshness; an older model result cannot replace
-          // a later compaction or an explicit unknown observation. Billing stays separate.
-          const totalTokens = hasCurrentContextSnapshot
-            ? currentContextTokens
-            : hasFreshContextSnapshot
-              ? deriveSessionTotalTokens({
-                  lastCallUsage: params.lastCallUsage,
-                  contextTokens: resolvedContextTokens,
-                  promptTokens: params.promptTokens,
-                })
-              : undefined;
-          const runEstimatedCostUsd =
-            preserveUserFacingRunState || !hasBillableUsage(params.usage)
-              ? undefined
-              : asNonNegativeFiniteNumber(
-                  estimateAggregateUsageCost({
-                    config: cfg,
-                    agentDir: params.agentDir,
-                    usage: params.usage,
-                    provider: params.providerUsed ?? entry.modelProvider,
-                    model: params.modelUsed ?? entry.model,
-                  }),
-                );
-          const patch: Partial<SessionEntry> = {
-            modelProvider: preserveSessionModelState
-              ? entry.modelProvider
-              : (modelSelection.provider ?? entry.modelProvider),
-            model: preserveSessionModelState ? entry.model : (modelSelection.model ?? entry.model),
-            ...(!preserveSessionModelState
-              ? {
-                  agentHarnessId,
-                  contextTokensSource: params.contextTokensSource,
-                  contextBudgetStatus: params.contextBudgetStatus,
-                }
-              : {}),
-            ...(resolvedContextTokens !== undefined
-              ? { contextTokens: resolvedContextTokens }
-              : {}),
-            systemPromptReport: preserveUserFacingRunState
-              ? entry.systemPromptReport
-              : (params.systemPromptReport ?? entry.systemPromptReport),
+          return projectSessionEntryUsageUpdate(
+            entry,
+            { ...update, estimatedCostUsd: estimateCost(entry) },
             updatedAt,
-          };
-          if (hasUsage && !preserveUserFacingRunState) {
-            patch.inputTokens = params.usage?.input ?? 0;
-            patch.outputTokens = params.usage?.output ?? 0;
-            // Cache buckets retain the latest call's usage, independently of current context.
-            const cacheUsage = params.lastCallUsage ?? params.usage;
-            patch.cacheRead = cacheUsage?.cacheRead ?? 0;
-            patch.cacheWrite = cacheUsage?.cacheWrite ?? 0;
-          }
-          if (hasBilling && !preserveUserFacingRunState) {
-            // Snapshot cumulative run cost once, including unknown cost; accumulating
-            // or retaining a prior amount would attach stale dollars to new tokens.
-            patch.estimatedCostUsd = runEstimatedCostUsd;
-          }
-          if (totalTokens !== undefined && !preserveUserFacingRunState) {
-            patch.totalTokens = totalTokens;
-            patch.totalTokensFresh = true;
-            patch.totalTokensVersion = SESSION_TOTAL_TOKENS_VERSION;
-            const accountedGoal = resolveSessionGoalDisplayState({ ...entry, ...patch }, updatedAt);
-            if (accountedGoal) {
-              patch.goal = accountedGoal;
-            }
-          } else if (
-            !preserveUserFacingRunState &&
-            hasContextUpdate &&
-            (hasCurrentContextSnapshot ||
-              params.preserveFreshTotalTokensOnStaleUsage !== true ||
-              entry.totalTokensFresh !== true)
-          ) {
-            patch.totalTokensFresh = false;
-            patch.totalTokensVersion = undefined;
-          }
-          return preserveUserFacingRunState
-            ? patch
-            : applyCliSessionClearToSessionPatch(params, entry, patch);
+          );
         },
-        {
-          skipMaintenance: true,
-          ...(sessionStore
-            ? {
-                onCommitted: (entry: InternalSessionEntry) => {
-                  // Publish this commit before a newer writer can replace the caller's cache.
-                  sessionStore[sessionKey] = entry;
-                },
-              }
-            : {}),
-          ...(authorize
-            ? {
-                assertCommitAllowed: () => {
-                  if (!authorize()) {
-                    throw new Error("session usage accounting authority revoked");
-                  }
-                },
-              }
-            : {}),
-        },
+        options,
       );
-    } catch (err) {
-      logVerbose(`failed to persist ${label}usage update: ${String(err)}`);
     }
+  } catch (err) {
+    logVerbose(`failed to persist usage update: ${String(err)}`);
   }
 }

@@ -41,6 +41,7 @@ const job = {
   started_at: "2026-09-01T01:00:00Z",
   completed_at: "2026-09-01T01:15:00Z",
   labels: ["ubuntu-24.04"],
+  steps: [{ name: "Run Node test shard" }],
 };
 function log(shard_name: string, timing_key?: string, files?: string[]) {
   const group = {
@@ -96,49 +97,84 @@ function execute(
 }
 
 describe("release shard timing refresh CLI", () => {
-  it("writes hosted full-job wall, preserves unrelated costs, and ignores failed or self-hosted jobs", () => {
-    const { result, bytes } = execute({
-      jobs: [
-        job,
-        { ...job, id: 2, conclusion: "failure" },
-        { ...job, id: 3, labels: ["ubuntu-24.04", "self-hosted"] },
-        { ...job, id: 4, labels: ["blacksmith-4vcpu-ubuntu-2404"] },
-        { ...job, id: 5 },
-      ],
-      logs: { "1": log("fixture"), "5": log("retained", "release-full-retained") },
-    });
-    expect(result.status, result.stderr).toBe(0);
-    const written = JSON.parse(bytes);
-    expect(written.compactGroupSeconds).toEqual({
-      blacksmith: { other: 99 },
-      github: { compact: 17, "release-full-fixture": 900, "release-full-retained": 2000 },
-    });
-    expect(bytes).toBe(`${JSON.stringify(written, null, 2)}\n`);
-    expect(written.source).toContain("Release CI 321 attempt 1");
-  });
-  it("binds historical explicit-file rows to isolated selector generations", () => {
-    const { result, bytes } = execute({
-      logs: { "1": log("fixture", undefined, ["test/fixture.test.ts"]) },
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(Object.entries(JSON.parse(bytes).compactGroupSeconds.github)).toEqual(
-      expect.arrayContaining([
-        [
-          expect.stringMatching(
-            /^release-full-fixture#selector-1-[a-f0-9]{12}#generation-[a-f0-9]{12}#part-1-of-1#include-1-[a-f0-9]{12}$/u,
-          ),
-          900,
+  it.each([
+    { name: "whole owner", files: undefined },
+    { name: "explicit files", files: ["test/fixture.test.ts"] },
+    { name: "wildcard owner", files: ["src/**/*.test.ts"] },
+  ])(
+    "writes $name timings while retaining unrelated costs and skipping other jobs",
+    ({ files }) => {
+      const { result, bytes } = execute({
+        jobs: [
+          job,
+          { ...job, id: 2, conclusion: "failure" },
+          { ...job, id: 3, labels: ["ubuntu-24.04", "self-hosted"] },
+          { ...job, id: 4, labels: ["blacksmith-4vcpu-ubuntu-2404"] },
+          { ...job, id: 5 },
+          {
+            ...job,
+            id: 6,
+            name: "checks-node-compat-node24",
+            steps: [{ name: "Run Node 24 minimum compatibility" }],
+          },
+          { ...job, id: 7, name: "checks-node-compact-small-1" },
+          { ...job, id: 8, name: "checks-node-release-packed-1" },
         ],
-      ]),
-    );
-  });
-  it("keeps wildcard selections on the unsplittable owner timing key", () => {
-    const { result, bytes } = execute({
-      logs: { "1": log("fixture", undefined, ["src/**/*.test.ts"]) },
-    });
-    expect(result.status, result.stderr).toBe(0);
-    expect(JSON.parse(bytes).compactGroupSeconds.github["release-full-fixture"]).toBe(900);
-  });
+        logs: {
+          "1": log("fixture", undefined, files),
+          "5": log("retained", "release-full-retained"),
+          "6": "2026-09-01T01:04:00Z Node 24 compatibility succeeded\n",
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+      const written = JSON.parse(bytes);
+      if (files?.[0] === "test/fixture.test.ts") {
+        expect(Object.entries(written.compactGroupSeconds.github)).toEqual(
+          expect.arrayContaining([
+            [
+              expect.stringMatching(
+                /^release-full-fixture#selector-1-[a-f0-9]{12}#generation-[a-f0-9]{12}#part-1-of-1#include-1-[a-f0-9]{12}$/u,
+              ),
+              900,
+            ],
+          ]),
+        );
+      } else {
+        expect(written.compactGroupSeconds).toEqual({
+          blacksmith: { other: 99 },
+          github: { compact: 17, "release-full-fixture": 900, "release-full-retained": 2000 },
+        });
+      }
+      expect(bytes).toBe(`${JSON.stringify(written, null, 2)}\n`);
+      expect(written.source).toContain("Release CI 321 attempt 1");
+    },
+  );
+
+  it.each([
+    {
+      label: "missing descriptor",
+      log: "2026-09-01T01:04:00Z [shard:fixture] end (exit 0)\n",
+      error: "one unambiguous shard descriptor",
+    },
+    {
+      label: "ambiguous descriptors",
+      log: log("fixture") + log("other"),
+      error: "one unambiguous shard descriptor",
+    },
+    {
+      label: "unsuccessful shard span",
+      log: log("fixture").replace("end (exit 0)", "end (exit 1)"),
+      error: "successful matching shard span",
+    },
+  ])(
+    "rejects a planned shard with $label without changing timing bytes",
+    ({ log: shardLog, error }) => {
+      const { result, before, bytes } = execute({ logs: { "1": shardLog } });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(error);
+      expect(bytes).toBe(before);
+    },
+  );
 
   it.each([
     { label: "run retry", after: { ...run, run_attempt: 2 } },

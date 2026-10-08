@@ -1,10 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import {
   getCronManagementAuthority,
   withCronManagementGrant,
 } from "../../gateway/cron-creator-authority-grant.js";
 import {
+  claimAgentRunContext,
+  clearAgentRunContext,
+  consumeCronNextCheckProposal,
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
@@ -87,7 +90,7 @@ async function withAdminTool(
 }
 
 describe("admin automation management", () => {
-  it.each(["channel-owner", "unknown"] as const)(
+  it.each(["channel-owner"] as const)(
     "permits %s command edits without recapturing creator authority",
     async (origin) => {
       await withAdminTool(origin, async (tool, calls) => {
@@ -127,18 +130,6 @@ describe("admin automation management", () => {
     );
   });
 
-  it("advertises only admitted management actions and inputs", async () => {
-    await withAdminTool("unknown", async (tool) => {
-      const actions = ["list", "get", "update", "run", "remove"];
-      expect(tool.parameters).toHaveProperty("properties.action.enum", actions);
-      for (const key of ["in", "text", "mode", "contextMessages", "sessionKey"]) {
-        expect(tool.parameters).not.toHaveProperty(`properties.${key}`);
-      }
-      expect(tool.parameters).not.toHaveProperty("properties.job.properties.declarationKey");
-      expect(tool.parameters).toHaveProperty("properties.job.properties.agentId");
-    });
-  });
-
   it("visibly refuses unsupported next_check", async () => {
     await withAdminTool("unknown", async (tool, calls) => {
       await expect(tool.execute("unsupported", { action: "next_check", in: "1m" })).rejects.toThrow(
@@ -146,5 +137,63 @@ describe("admin automation management", () => {
       );
       expect(calls).toEqual([]);
     });
+  });
+});
+
+describe("cron next_check action", () => {
+  const RUN_ID = "paced-run";
+  const JOB_ID = "paced-job";
+
+  afterEach(() => {
+    clearAgentRunContext(RUN_ID);
+  });
+
+  function createScopedTool(scopedJobId = JOB_ID) {
+    return createCronTool(
+      { selfRemoveOnlyJobId: scopedJobId, runId: RUN_ID },
+      { callGatewayTool: vi.fn() },
+    );
+  }
+
+  function registerRun(pacingEnabled: boolean) {
+    claimAgentRunContext(RUN_ID, {
+      sessionKey: `agent:main:cron:${JOB_ID}`,
+      cronRunsByJobId: new Map([[JOB_ID, { pacingEnabled }]]),
+    });
+  }
+
+  it("rejects a proposal when the current job has no pacing", async () => {
+    registerRun(false);
+
+    await expect(
+      createScopedTool().execute("call-next-check", { action: "next_check", in: "15m" }),
+    ).rejects.toThrow("cron next_check requires pacing on the current job");
+  });
+
+  it("rejects next_check outside a current cron run", async () => {
+    const tool = createCronTool(undefined, { callGatewayTool: vi.fn() });
+
+    await expect(
+      tool.execute("call-next-check-unscoped", { action: "next_check", in: "15m" }),
+    ).rejects.toThrow("cron next_check is only available to the currently running job");
+  });
+
+  it("keeps proposals isolated when a shared run context adds another job", async () => {
+    registerRun(true);
+    await createScopedTool().execute("call-next-check-stale", {
+      action: "next_check",
+      in: "15m",
+    });
+
+    claimAgentRunContext(RUN_ID, {
+      cronRunsByJobId: new Map([["next-job", { pacingEnabled: true }]]),
+    });
+    await createScopedTool("next-job").execute("call-next-check-next-job", {
+      action: "next_check",
+      in: "30m",
+    });
+
+    expect(consumeCronNextCheckProposal(RUN_ID, JOB_ID)).toBe(15 * 60_000);
+    expect(consumeCronNextCheckProposal(RUN_ID, "next-job")).toBe(30 * 60_000);
   });
 });

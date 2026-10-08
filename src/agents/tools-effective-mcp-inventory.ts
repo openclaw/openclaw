@@ -5,19 +5,11 @@
  */
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { McpToolCatalog } from "./agent-bundle-mcp-types.js";
-import type { RuntimeToolSchemaDiagnostic } from "./tool-schema-projection.js";
-import { normalizeToolInventorySchemas } from "./tools-effective-inventory-build.js";
 import {
-  disambiguateEffectiveToolLabels,
-  resolveEffectiveToolLabel,
-  resolveEffectiveToolRawDescription,
-  summarizeEffectiveToolDescription,
+  buildEffectiveToolInventory,
+  type RuntimeCompatibleToolInventoryParams,
 } from "./tools-effective-inventory-shared.js";
-import type {
-  EffectiveToolInventoryEntry,
-  EffectiveToolInventoryNotice,
-} from "./tools-effective-inventory.types.js";
-import type { AnyAgentTool } from "./tools/common.js";
+import type { EffectiveToolInventoryNotice } from "./tools-effective-inventory.types.js";
 
 const BUNDLE_MCP_PLUGIN_ID = "bundle-mcp";
 
@@ -30,57 +22,27 @@ export function buildMcpCatalogNotices(catalog: McpToolCatalog): EffectiveToolIn
   }));
 }
 
-// Runtime schema diagnostics become operator-facing notices on the effective
-// inventory screen instead of silently hiding quarantined MCP tools.
-function buildMcpUnsupportedToolSchemaNotice(
-  diagnostic: RuntimeToolSchemaDiagnostic,
-): EffectiveToolInventoryNotice {
-  return {
-    id: `unsupported-tool-schema:${diagnostic.toolName}`,
-    severity: "warning",
-    message: `Tool "${diagnostic.toolName}" from plugin "${BUNDLE_MCP_PLUGIN_ID}" has an unsupported runtime input schema (${diagnostic.violations.join(", ")}) and was quarantined before model projection. Fix or disable the owner, or remove the tool from active allowlists.`,
-  };
-}
-
-function buildMcpToolInventoryEntries(
-  tools: readonly AnyAgentTool[],
-): EffectiveToolInventoryEntry[] {
-  return disambiguateEffectiveToolLabels(
-    tools
-      .map((tool) => {
-        const mcp = getPluginToolMeta(tool)?.mcp;
-        return {
-          id: tool.name,
-          label: resolveEffectiveToolLabel(tool),
-          description: summarizeEffectiveToolDescription(tool),
-          rawDescription:
-            resolveEffectiveToolRawDescription(tool) || summarizeEffectiveToolDescription(tool),
-          source: "mcp",
-          pluginId: BUNDLE_MCP_PLUGIN_ID,
-          ...(mcp
-            ? {
-                mcpServer: mcp.serverName,
-                mcpToolName: mcp.toolName,
-                ...(mcp.deniedBySession ? { deniedBySession: true } : {}),
-              }
-            : {}),
-        } satisfies EffectiveToolInventoryEntry;
-      })
-      .toSorted((a, b) => a.label.localeCompare(b.label)),
-    (entry) => entry.pluginId ?? entry.id,
-  );
-}
-
 /** Builds the runtime-compatible MCP tool inventory and quarantine notices. */
 export function buildRuntimeCompatibleMcpToolInventory(
-  params: Parameters<typeof normalizeToolInventorySchemas>[0],
-): {
-  entries: EffectiveToolInventoryEntry[];
-  notices: EffectiveToolInventoryNotice[];
-} {
-  const projection = normalizeToolInventorySchemas(params, false);
-  return {
-    entries: buildMcpToolInventoryEntries(projection.tools),
-    notices: projection.diagnostics.map(buildMcpUnsupportedToolSchemaNotice),
-  };
+  params: RuntimeCompatibleToolInventoryParams,
+) {
+  return buildEffectiveToolInventory(params, {
+    allowProviderRuntimePluginLoad: false,
+    rawDescriptionFallback: "summary",
+    diagnosticOwner: () => ` from plugin "${BUNDLE_MCP_PLUGIN_ID}"`,
+    createToolProjection: () => (tool) => {
+      const mcp = getPluginToolMeta(tool)?.mcp;
+      return {
+        source: "mcp",
+        pluginId: BUNDLE_MCP_PLUGIN_ID,
+        ...(mcp
+          ? {
+              mcpServer: mcp.serverName,
+              mcpToolName: mcp.toolName,
+              ...(mcp.deniedBySession ? { deniedBySession: true } : {}),
+            }
+          : {}),
+      };
+    },
+  });
 }

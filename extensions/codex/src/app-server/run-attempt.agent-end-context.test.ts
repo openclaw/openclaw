@@ -1,3 +1,4 @@
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import * as agentHarnessRuntime from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -26,7 +27,7 @@ describe("runCodexAppServerAttempt agent-end context", () => {
         agentId: "main",
         sessionId: "session-1",
         sessionKey: "agent:main:session-1",
-        storePath: path.join(tempDir, "agent-end-context.sqlite"),
+        storePath: path.join(realpathSync(tempDir), "agent-end-context.sqlite"),
       };
       const sessionFile = formatSqliteSessionFileMarker(source);
       await upsertSessionEntry({
@@ -37,9 +38,9 @@ describe("runCodexAppServerAttempt agent-end context", () => {
       const responsesProjected = createDeferred<void>();
       let responseCount = 0;
       const harness = createStartedThreadHarness();
-      const runAgentEndSideEffects = vi
-        .spyOn(agentHarnessRuntime, "runAgentEndSideEffects")
-        .mockImplementation(() => {});
+      const runAgentEndSideEffectsAsync = vi
+        .spyOn(agentHarnessRuntime, "runAgentEndSideEffectsAsync")
+        .mockResolvedValue(undefined);
       const params = createParams(sessionFile, workspaceDir);
       params.runtimePlan = createCodexRuntimePlanFixture();
       const abortController = new AbortController();
@@ -105,13 +106,13 @@ describe("runCodexAppServerAttempt agent-end context", () => {
           expect(result.terminal).toEqual({ kind: "ok" });
         }
 
-        const ctx = runAgentEndSideEffects.mock.calls.at(-1)?.[0]?.ctx;
+        const ctx = runAgentEndSideEffectsAsync.mock.calls.at(-1)?.[0]?.ctx;
         expect(ctx?.foregroundPromptContext?.memberRoleIds).toEqual(["maintainer-role"]);
         expect(typeof ctx?.foregroundPromptContext?.agentDir).toBe("string");
         expect(ctx?.modelIterations).toBe(10);
         expect(ctx?.skillWorkshopAvailable).toBe(true);
         const reviewSource =
-          runAgentEndSideEffects.mock.calls.at(-1)?.[0]?.skillExperienceReviewSource;
+          runAgentEndSideEffectsAsync.mock.calls.at(-1)?.[0]?.skillExperienceReviewSource;
         if (outcome === "provider refusal") {
           expect(result.currentAttemptAssistant).toMatchObject({
             stopReason: "error",

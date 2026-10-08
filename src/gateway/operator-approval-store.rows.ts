@@ -13,7 +13,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import type { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
 import type {
   NewOperatorApproval,
   OperatorApprovalDatabase,
@@ -353,7 +353,7 @@ export function decodeOperatorApprovalRow(row: OperatorApprovalRow): OperatorApp
 }
 
 export function selectOperatorApprovalRow(
-  database: ReturnType<typeof openOpenClawStateDatabase>,
+  database: OpenClawStateDatabase,
   id: string,
 ): OperatorApprovalRow | undefined {
   const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
@@ -364,7 +364,7 @@ export function selectOperatorApprovalRow(
 }
 
 export function selectOperatorApprovalRowByLocator(
-  database: ReturnType<typeof openOpenClawStateDatabase>,
+  database: OpenClawStateDatabase,
   locator: string,
 ): OperatorApprovalRow | undefined {
   const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
@@ -380,7 +380,7 @@ export function selectOperatorApprovalRowByLocator(
 }
 
 export function hasApprovalLocatorNamespaceConflict(params: {
-  database: ReturnType<typeof openOpenClawStateDatabase>;
+  database: OpenClawStateDatabase;
   id: string;
   resolutionRef: string;
 }): boolean {
@@ -410,7 +410,7 @@ export function matchesExpectedApprovalOwner(params: {
 }
 
 export function denyCorruptPendingRow(params: {
-  database: ReturnType<typeof openOpenClawStateDatabase>;
+  database: OpenClawStateDatabase;
   id: string;
   nowMs: number;
   createdAtMs: number;
@@ -436,7 +436,7 @@ export function denyCorruptPendingRow(params: {
 }
 
 export function expirePendingRow(params: {
-  database: ReturnType<typeof openOpenClawStateDatabase>;
+  database: OpenClawStateDatabase;
   id: string;
   nowMs: number;
   createdAtMs: number;

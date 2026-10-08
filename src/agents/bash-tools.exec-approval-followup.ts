@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sleepWithAbort } from "@openclaw/retry";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
@@ -206,10 +207,6 @@ function formatDirectExecApprovalFollowupText(
   );
 }
 
-function buildSessionResumeFallbackPrefix(): string {
-  return "Automatic session resume failed, so sending the status directly.\n\n";
-}
-
 function readGatewayStatus(value: unknown): string | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? normalizeOptionalString((value as { status?: unknown }).status)
@@ -280,10 +277,7 @@ async function waitForAgentFollowupRun(params: {
         return { status: "observation_ended", reason: "deadline", transportErrors };
       }
       if (consecutiveTransportErrors > 1) {
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, retryDelayMs);
-          timer.unref?.();
-        });
+        await sleepWithAbort(retryDelayMs, undefined, { ref: false });
       }
       continue;
     }
@@ -383,7 +377,7 @@ async function sendDirectFollowupFallback(params: {
 
   const prefix =
     !params.allowDenied && shouldPrefixDirectFollowupWithSessionResumeFailure(params)
-      ? buildSessionResumeFallbackPrefix()
+      ? "Automatic session resume failed, so sending the status directly.\n\n"
       : "";
   const availableBodyUnits =
     DIRECT_FOLLOWUP_MAX_UTF16_UNITS - prefix.length - DIRECT_FOLLOWUP_TRUNCATION_MARKER.length - 1;

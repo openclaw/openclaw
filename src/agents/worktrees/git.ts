@@ -11,6 +11,7 @@ import {
   executeGitCommandBuffered,
   normalizeGitPathForFilesystem,
   requireGitCommandOutput,
+  type GitBufferedCommandOptions,
   type GitCommandOptions,
 } from "../../infra/git-exec.js";
 import { hasGitWorkerContext, requestGitWorkerCommand } from "../../infra/git-worker-context.js";
@@ -19,7 +20,7 @@ import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../../infra/windows-encoding.js";
-import type { BufferedCommandOptions, BufferedCommandResult } from "../../process/exec.js";
+import type { BufferedCommandResult } from "../../process/exec.js";
 
 export type GitResult = Awaited<ReturnType<typeof executeGitCommand>>;
 
@@ -28,6 +29,7 @@ export const WORKTREE_CHECKOUT_TIMEOUT_MS = 300_000;
 
 type WorktreeListEntry = {
   path: string;
+  head?: string;
   lockedReason?: string;
   branch?: string | null;
 };
@@ -138,6 +140,7 @@ async function runOwnedGitCommand<
         killProcessTree: options.killProcessTree ?? (args[0] === "fetch" && gitArgs === args),
       }),
     options.signal,
+    options.refMutationDirectory,
   );
 }
 
@@ -148,30 +151,36 @@ async function withGitRefAdmission<
   args: string[],
   run: (args: string[]) => Promise<T>,
   signal?: AbortSignal,
+  refMutationDirectory?: string,
 ): Promise<T> {
   const mutatesRefs =
     args[0] === "fetch" ||
     args[0] === "update-ref" ||
+    args[0] === "merge" ||
+    (args[0] === "symbolic-ref" && args.length === 3 && !args[1]?.startsWith("-")) ||
     (args[0] === "branch" &&
       args.some((arg) => arg === "-d" || arg === "-D" || arg === "--delete"));
   if (!mutatesRefs) {
     return await run(args);
   }
-  const resolved = await run(["rev-parse", "--git-common-dir"]);
-  if (resolved.termination !== "exit" || resolved.code !== 0) {
-    return resolved;
+  let commonDir = refMutationDirectory;
+  if (!commonDir) {
+    const resolved = await run(["rev-parse", "--git-common-dir"]);
+    if (resolved.termination !== "exit" || resolved.code !== 0) {
+      return resolved;
+    }
+    commonDir =
+      typeof resolved.stdout === "string"
+        ? resolved.stdout
+        : decodeWindowsOutputBuffer({
+            buffer: Buffer.from(
+              resolved.stdout.buffer,
+              resolved.stdout.byteOffset,
+              resolved.stdout.byteLength,
+            ),
+            windowsEncoding: resolveWindowsConsoleEncoding(),
+          });
   }
-  const commonDir =
-    typeof resolved.stdout === "string"
-      ? resolved.stdout
-      : decodeWindowsOutputBuffer({
-          buffer: Buffer.from(
-            resolved.stdout.buffer,
-            resolved.stdout.byteOffset,
-            resolved.stdout.byteLength,
-          ),
-          windowsEncoding: resolveWindowsConsoleEncoding(),
-        });
   let entered = false;
   try {
     return await enqueueGitRefMutation(
@@ -196,7 +205,7 @@ async function withGitRefAdmission<
 export async function runGitBuffered(
   cwd: string,
   args: string[],
-  options: BufferedCommandOptions & { beforeRun?: () => void } = {},
+  options: GitBufferedCommandOptions = {},
 ): Promise<BufferedCommandResult> {
   if (hasGitWorkerContext()) {
     const { signal: _signal, beforeRun: _beforeRun, ...forwarded } = options;
@@ -225,6 +234,7 @@ export async function runGitBuffered(
       });
     },
     options.signal,
+    options.refMutationDirectory,
   );
 }
 
@@ -283,6 +293,8 @@ function parseWorktreeList(output: string): WorktreeListEntry[] {
       current = {
         path: normalizeGitPathForFilesystem(field.slice("worktree ".length)),
       };
+    } else if (current && field.startsWith("HEAD ")) {
+      current.head = field.slice("HEAD ".length);
     } else if (current && field === "locked") {
       current.lockedReason = "";
     } else if (current && field.startsWith("locked ")) {
@@ -319,9 +331,7 @@ export async function resolveGitRepositoryPaths(
   const commonRaw = normalizeGitPathForFilesystem(
     await requireGit(sourceRoot, ["rev-parse", "--git-common-dir"], options),
   );
-  const commonDir = await fs.realpath(
-    path.isAbsolute(commonRaw) ? commonRaw : path.resolve(sourceRoot, commonRaw),
-  );
+  const commonDir = await fs.realpath(path.resolve(sourceRoot, commonRaw));
   const primary = (await listGitWorktrees(sourceRoot, options))[0]?.path ?? sourceRoot;
   const canonicalRoot = await fs.realpath(primary);
   return { canonicalRoot, commonDir };

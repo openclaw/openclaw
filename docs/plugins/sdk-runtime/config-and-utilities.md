@@ -35,7 +35,7 @@ after the mutation returns.
 Use `current()`, a passed-in `cfg`, `mutateConfigFile(...)`, or
 `replaceConfigFile(...)` for runtime config access and writes.
 
-For direct SDK imports, prefer the focused config subpaths over the broad `openclaw/plugin-sdk/config-runtime` compatibility barrel: `config-contracts` for types, `runtime-config-snapshot` for current process snapshots, and `config-mutation` for writes. Read entry-scoped values from `api.pluginConfig`; use a supplied tool context only for its runtime-wide config snapshot, and keep plugin-specific merging at that boundary. Bundled plugin tests should mock these focused subpaths directly instead of mocking the broad compatibility barrel.
+For direct SDK imports, use `config-contracts` for types, `runtime-config-snapshot` for current process snapshots, and `config-mutation` for writes. The broad `openclaw/plugin-sdk/config-runtime` compatibility barrel has been removed. Read entry-scoped values from `api.pluginConfig`; use a supplied tool context only for its runtime-wide config snapshot, and keep plugin-specific merging at that boundary. Bundled plugin tests should mock these focused subpaths directly.
 
 When using the direct `config-mutation` import to replace a source snapshot, pass
 the edited config as `sourceConfig` to `replaceConfigFile`, retaining its `snapshot`,
@@ -95,10 +95,10 @@ exports from `infra-runtime`. The retired `resolveExecModeFromPolicy`,
 `resolveExecPolicyForMode`, and `resolveExecModePolicy` exports can also migrate
 to `execPolicy.resolveExecModePolicy`, selecting the returned fields they need.
 
-Native command probes should use `runCommandWithTimeout` from
+Native command checks should use `runCommandWithTimeout` from
 `openclaw/plugin-sdk/process-runtime` with `timeoutMs`, the caller's `signal`, and
 `killProcessTree: true`. For commands whose output is always UTF-8, such as JSON status
-probes, use `runUtf8CommandWithTimeout` from the same subpath. A bounded command result
+checks, use `runUtf8CommandWithTimeout` from the same subpath. A bounded command result
 can return before canceled remote startup delivers its PID. When a command owns a
 session reservation or temporary output, await `withCommandProcessScope` from the
 same subpath around execution before releasing those resources. The scope joins
@@ -131,6 +131,35 @@ dispose dependent files only after closure is acknowledged. The optional
 It may return `void` or `Promise<void>`; observer throws and rejections do not
 replace the termination error or release custody, and closure does not wait for
 the observer.
+
+Bundled pools use the host sizing policy through a `workerClass` or a prepared
+numeric budget when constructing `WorkerTaskPool`. The host sizes the pool once
+from `os.availableParallelism()`, reserving one CPU when
+possible: `reader` admits up to eight workers, `file-reader` up to two for small
+file reads, `compute` up to four, and `writer`
+or `singleton` exactly one. Workers are created on demand. Choose `singleton`
+for worker-local continuation state, generation-wide callbacks, or deliberately
+shared native heaps; independent requests do not make those owners parallel-safe.
+Choose `writer` when the pool owns serial side effects. SQLite's writer broker
+still owns one writer per physical database; its cross-database worker budget
+does not create additional writers for a database.
+
+Foreground transcript history and context each retain half the host's CPU
+headroom, capped at eight workers per pool. Background transcript owners remain
+serial. Shared-state readers retain a minimum of two workers so a held settlement
+read can admit a fresh catalog read before release, and scale up to eight.
+Inventory hashing retains its CPU and available-memory admission budget,
+including its in-process fallback on low-memory and Bun/Linux hosts.
+
+Reader, file-reader, and compute classes default to a 512 MiB V8 old-generation limit per
+worker. An explicit `workerOptions.resourceLimits` overrides the corresponding
+limits; native allocations, buffers, and WASM memory remain the caller's
+responsibility. Existing numeric `maxWorkers` remains supported. When both are
+supplied, `workerClass` takes precedence; a published plugin can retain its numeric
+limit for older supported hosts until its minimum host version includes class
+sizing. FIFO task admission remains unchanged; parallel tasks may finish
+out of order, so owners requiring serial completion must use a serial class.
+This policy adds no operator configuration or storage migration.
 
 `prepareWorker()` can return `temporaryDirectory` for disposable scratch files
 and an optional asynchronous `releaseResources()` callback for producer-owned
@@ -174,7 +203,7 @@ Empty quoted arguments are omitted.
 
 Existing process owners can use `signalProcessTree`. Its `onComplete` callback runs after Unix
 signaling or the bounded Windows `taskkill` attempt, not proof that every process
-exited. Keep the probe pending through cleanup, use `detached: true` only for a
+exited. Keep the check pending through cleanup, use `detached: true` only for a
 process group you created, and start Windows tree termination while its root is
 still alive.
 
@@ -270,6 +299,35 @@ return {
 
 Use `openclaw/plugin-sdk/pair-loop-guard-runtime` directly only for custom
 two-party event loops that do not go through the shared inbound reply runner.
+
+### Bounded waits
+
+`openclaw/plugin-sdk/time-runtime` exports
+`raceWithTimeout(operation, timeoutMs, onTimeout, { ref?, signal?, onAbort? })`. Pass an existing
+promise, or a function returning a promise when the timer must start before the
+work. The timeout callback returns a fallback or throws the caller's error.
+Delays use native `setTimeout` semantics; the timer keeps the process alive
+unless `ref` is `false`, and is cleared when the race settles.
+
+When `signal` is supplied, the same wait owns cancellation and clears both the
+timer and listener on any outcome. `onAbort(signal)` returns a fallback or throws
+the caller's error; the default throws an `AbortError` with the signal reason as
+its cause. The operation comes first in the promise race, including when both
+inputs have already settled. Check an existing abort before calling if it must
+prevent an operation factory from starting.
+
+`racePromiseWithAbortSignal(operation, signal?, createError?)` from the same
+subpath bounds observation by caller cancellation. An already-aborted signal
+wins over an already-settled promise. By default it rejects with an `AbortError`
+whose cause is the signal's reason; `createError(signal)` can preserve a
+transport's existing cancellation error. The helper removes its abort listener
+when the race settles and observes late source rejections. A function returning
+a promise starts after the abort listener is registered; an already-aborted
+signal prevents that function from starting.
+
+Neither helper cancels the underlying operation or certifies that cleanup has
+finished. Keep resource settlement, authority checks, and abort side effects
+with the operation's lifecycle owner.
 
 ### Stage timing diagnostics
 

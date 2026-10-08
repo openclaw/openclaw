@@ -8,12 +8,15 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { resolveNpmJsonEntries } from "../../../lib/npm-json-output.mts";
 import {
+  readJson as readRecoveryJson,
+  writeJson as writeRecoveryJson,
+} from "../fixtures/common.mjs";
+import {
   assertRecoveryApplied,
   assertRecoveryHistory,
   assertRecoveryInventory,
   assertRecoveryOriginals,
   assertRecoverySnapshot,
-  readRecoveryJson,
   readRecoveryMoves,
   recoveryEvent,
   recoveryFileIdentity,
@@ -22,7 +25,6 @@ import {
   recoveryVolumeSpec,
   recoveryWalIndexPaths,
   seedRecoveryFixture,
-  writeRecoveryJson,
   writeRecoveryTranscript,
 } from "./recovery-cleanup-fixture.mjs";
 
@@ -389,7 +391,7 @@ async function customRestore() {
       "agents",
       JSON.stringify({
         defaults: { heartbeat: { every: "0m" } },
-        list: [{ id: "main", default: true, agentDir, workspace: path.join(home, "workspace") }],
+        entries: { main: { agentDir, workspace: path.join(home, "workspace") } },
       }),
       "--strict-json",
     ],

@@ -7,6 +7,10 @@ import { readProviderJsonArrayFieldResponse } from "openclaw/plugin-sdk/provider
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+import {
   asPositiveSafeInteger,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -277,8 +281,6 @@ type FetchCopilotModelCatalogParams = {
   /** Resolved baseUrl from the same token-exchange response. */
   baseUrl: string;
   headers?: Record<string, string>;
-  /** Optional fetch override for testing. */
-  fetchImpl?: typeof fetch;
   /** Optional AbortSignal; defaults to a 10s timeout. */
   signal?: AbortSignal;
 };
@@ -295,7 +297,6 @@ type FetchCopilotModelCatalogParams = {
 export async function fetchCopilotModelCatalog(
   params: FetchCopilotModelCatalogParams,
 ): Promise<CopilotCatalogModel[]> {
-  const fetchImpl = params.fetchImpl ?? fetch;
   const trimmedBase = params.baseUrl.replace(/\/+$/, "");
   if (!trimmedBase) {
     throw new Error("fetchCopilotModelCatalog: baseUrl required");
@@ -308,16 +309,23 @@ export async function fetchCopilotModelCatalog(
   const timeoutId = controller
     ? setTimeout(() => controller.abort(), COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS)
     : undefined;
+  let release: (() => Promise<void>) | undefined;
   try {
-    const res = await fetchImpl(url, {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-        ...buildCopilotRuntimeHeaders({ headers: params.headers }),
-        Authorization: `Bearer ${params.copilotApiToken}`,
-      },
+    const guarded = await fetchWithSsrFGuard({
+      url,
+      policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(trimmedBase),
       signal: params.signal ?? controller?.signal,
+      init: {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          ...buildCopilotRuntimeHeaders({ headers: params.headers }),
+          Authorization: `Bearer ${params.copilotApiToken}`,
+        },
+      },
     });
+    release = guarded.release;
+    const res = guarded.response;
     if (!res.ok) {
       // Failed discovery never consumes this body, so release the transport before cleanup.
       await res.body?.cancel().catch(() => undefined);
@@ -329,10 +337,7 @@ export async function fetchCopilotModelCatalog(
     for (const rawEntry of data) {
       const entry = asCopilotApiModelEntry(rawEntry);
       const def = mapCopilotApiModelToDefinition(entry);
-      if (!def) {
-        continue;
-      }
-      if (seen.has(def.id)) {
+      if (!def || seen.has(def.id)) {
         continue;
       }
       seen.add(def.id);
@@ -343,5 +348,6 @@ export async function fetchCopilotModelCatalog(
     if (timeoutId !== undefined) {
       clearTimeout(timeoutId);
     }
+    await release?.();
   }
 }

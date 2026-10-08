@@ -7,8 +7,8 @@ import {
   saveAuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import {
-  closeOpenClawAgentDatabasesForTest,
-  closeOpenClawStateDatabaseForTest,
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -31,8 +31,8 @@ async function createQaAuthState(prefix = "openclaw-qa-auth-store-") {
 
 describe("QA auth profile store", () => {
   afterEach(async () => {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
     vi.unstubAllEnvs();
     await tempDirs.cleanup();
   });
@@ -44,7 +44,7 @@ describe("QA auth profile store", () => {
       env: { ...process.env, OPENCLAW_STATE_DIR: hostStateDir },
     });
     const hostDatabasePath = hostDatabase.path;
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawStateDatabaseAsync();
     const legacyHostDatabase = new DatabaseSync(hostDatabasePath);
     legacyHostDatabase.exec(`
       PRAGMA user_version = 6;
@@ -65,8 +65,8 @@ describe("QA auth profile store", () => {
       stateDir: qaStateDir,
     });
 
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
     const preservedHostDatabase = new DatabaseSync(hostDatabasePath, { readOnly: true });
     expect(preservedHostDatabase.prepare("PRAGMA user_version").get()).toEqual({
       user_version: 6,

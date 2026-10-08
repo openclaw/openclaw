@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createSessionArchiveState } from "./session-archive-state.ts";
 import {
@@ -7,6 +7,45 @@ import {
   createSessionWriteObservation,
   mergeSessionFieldObservations,
 } from "./session-row-provenance.ts";
+
+it.each([
+  { pending: false, archived: undefined, publishedId: "same", expected: undefined },
+  { pending: false, archived: false, publishedId: "same", expected: undefined },
+  { pending: true, archived: undefined, publishedId: null, expected: "pending" },
+  { pending: false, archived: true, publishedId: null, expected: "archived" },
+  { pending: false, archived: true, publishedId: "replacement", expected: undefined },
+  { pending: false, archived: true, publishedId: undefined, expected: undefined },
+  { pending: true, archived: true, publishedId: "same", expected: "pending" },
+  { pending: true, archived: false, publishedId: "same", expected: "pending" },
+])(
+  "resolves visibility with pending=$pending archived=$archived publishedId=$publishedId",
+  ({ pending, archived, publishedId, expected }) => {
+    const row: GatewaySessionRow = {
+      key: "agent:main:archive-visibility",
+      sessionId: "same",
+      kind: "direct",
+    };
+    const provenance = createSessionRowProvenance();
+    const publishedRow = vi.fn(() =>
+      publishedId === null ? undefined : { ...row, sessionId: publishedId },
+    );
+    const archives = createSessionArchiveState(publishedRow, () => {}, provenance);
+    if (archived !== undefined) {
+      provenance.observeReadRow(row, 1);
+      archives.observe(row.key, archived, row);
+    }
+    if (pending) {
+      archives.beginPending(row.key, row.sessionId);
+    }
+    expect(archives.visibility(` ${row.key} `)).toBe(expected);
+    if (!pending && !archived) {
+      for (const key of [row.key, "agent:main:unknown", " "]) {
+        expect(archives.visibility(key)).toBeUndefined();
+      }
+      expect(publishedRow).not.toHaveBeenCalled();
+    }
+  },
+);
 
 it("keeps a successor's archive pending when an older same-key archive confirms", () => {
   const previous: GatewaySessionRow = {

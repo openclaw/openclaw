@@ -1,4 +1,3 @@
-/** ACP prompt submission, Gateway chat streaming, and prompt settlement. */
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import type {
@@ -52,16 +51,11 @@ type AcpPendingPromptAdmission = {
 };
 
 function isAdminScopeProvenanceRejection(err: unknown): boolean {
-  if (!(err instanceof Error)) {
-    return false;
-  }
-  const gatewayCode =
-    typeof (err as { gatewayCode?: unknown }).gatewayCode === "string"
-      ? (err as { gatewayCode?: string }).gatewayCode
-      : undefined;
   return (
+    err instanceof Error &&
     err.name === "GatewayClientRequestError" &&
-    gatewayCode === "INVALID_REQUEST" &&
+    "gatewayCode" in err &&
+    err.gatewayCode === "INVALID_REQUEST" &&
     err.message.includes("system provenance fields require admin scope")
   );
 }
@@ -69,32 +63,6 @@ function isAdminScopeProvenanceRejection(err: unknown): boolean {
 function isGatewayCloseError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
   return message.startsWith("gateway closed (");
-}
-
-function buildSystemInputProvenance(originSessionId: string) {
-  return {
-    kind: "external_user" as const,
-    originSessionId,
-    sourceChannel: "acp",
-    sourceTool: "openclaw_acp",
-  };
-}
-
-function buildSystemProvenanceReceipt(params: {
-  cwd: string;
-  sessionId: string;
-  sessionKey: string;
-}) {
-  return [
-    "[Source Receipt]",
-    "bridge=openclaw-acp",
-    `originHost=${os.hostname()}`,
-    `originCwd=${shortenHomePath(params.cwd)}`,
-    `acpSessionId=${params.sessionId}`,
-    `originSessionId=${params.sessionId}`,
-    `targetSession=${params.sessionKey}`,
-    "[/Source Receipt]",
-  ].join("\n");
 }
 
 export class AcpTranslatorPromptStream {
@@ -241,8 +209,6 @@ export class AcpTranslatorPromptStream {
     session: AcpPendingPromptAdmission["session"],
   ): Promise<PromptResponse> {
     const meta = parseSessionMeta(params["_meta"]);
-    // Pass MAX_PROMPT_BYTES so extractTextFromPrompt rejects oversized content
-    // block-by-block, before the full string is ever assembled in memory (CWE-400)
     const userText = extractTextFromPrompt(params.prompt, MAX_PROMPT_BYTES);
     const attachments = extractAttachmentsFromPrompt(params.prompt);
     const prefixCwd = meta.prefixCwd ?? this.opts.prefixCwd ?? true;
@@ -250,17 +216,29 @@ export class AcpTranslatorPromptStream {
     const message = prefixCwd ? `[Working directory: ${displayCwd}]\n\n${userText}` : userText;
     const provenanceMode = this.opts.provenanceMode ?? "off";
     const systemInputProvenance =
-      provenanceMode === "off" ? undefined : buildSystemInputProvenance(params.sessionId);
+      provenanceMode === "off"
+        ? undefined
+        : {
+            kind: "external_user" as const,
+            originSessionId: params.sessionId,
+            sourceChannel: "acp",
+            sourceTool: "openclaw_acp",
+          };
     const systemProvenanceReceipt =
       provenanceMode === "meta+receipt"
-        ? buildSystemProvenanceReceipt({
-            cwd: session.cwd,
-            sessionId: params.sessionId,
-            sessionKey: session.sessionKey,
-          })
+        ? [
+            "[Source Receipt]",
+            "bridge=openclaw-acp",
+            `originHost=${os.hostname()}`,
+            `originCwd=${displayCwd}`,
+            `acpSessionId=${params.sessionId}`,
+            `originSessionId=${params.sessionId}`,
+            `targetSession=${session.sessionKey}`,
+            "[/Source Receipt]",
+          ].join("\n")
         : undefined;
 
-    // Defense-in-depth: also check the final assembled message (includes cwd prefix)
+    // The cwd prefix also counts against the prompt budget.
     if (Buffer.byteLength(message, "utf-8") > MAX_PROMPT_BYTES) {
       throw new Error(`Prompt exceeds maximum allowed size of ${MAX_PROMPT_BYTES} bytes`);
     }
@@ -460,9 +438,7 @@ export class AcpTranslatorPromptStream {
     if (this.getPendingPrompt(pending.sessionId, pending.idempotencyKey) !== pending) {
       return false;
     }
-    this.agentEvents.clearApprovalRelaysForPrompt(pending.sessionId, pending.idempotencyKey, {
-      denyActive: true,
-    });
+    this.agentEvents.clearApprovalRelaysForPrompt(pending.sessionId, pending.idempotencyKey);
     this.pendingPrompts.delete(pending.sessionId);
     this.sessionStore.clearActiveRun(pending.sessionId, pending.idempotencyKey);
     this.disconnects.clearWhenIdle();

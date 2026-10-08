@@ -14,7 +14,6 @@ import {
   createCoreGatewayMethodDescriptors,
   createGatewayMethodDescriptorsFromHandlers,
   createGatewayMethodRegistry,
-  createPluginGatewayMethodDescriptors,
   isCoreGatewayMethodClassified,
   type GatewayMethodRegistry,
 } from "./methods/registry.js";
@@ -25,6 +24,7 @@ import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generati
 import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
 import { getHealthVersion, getPresenceVersion } from "./server/health-state.js";
 import { listPluginNodeCapabilities } from "./server/plugins-http/route-capability.js";
+import { invalidateSharedReadResponses } from "./shared-read-responses.js";
 import { resolveGrantExpiryDaysConfig } from "./standing-grant-expiry-config.js";
 
 type GatewayLifecycle = Awaited<ReturnType<typeof prepareGatewayLifecycle>>;
@@ -55,8 +55,6 @@ export async function startGatewayCoreRuntime(input: {
   logDiscovery: GatewayLogger;
   logHealth: GatewayLogger;
   logChannels: GatewayLogger;
-  loadGatewayStartupEarlyModule: () => Promise<typeof import("./server-startup-early.js")>;
-  loadGatewayPluginBootstrapModule: () => Promise<typeof import("./server-plugin-bootstrap.js")>;
   loadGatewayModelCatalog: typeof import("./server-model-catalog.js").loadGatewayModelCatalog;
   loadGatewayModelCatalogSnapshot: typeof import("./server-model-catalog.js").loadGatewayModelCatalogSnapshot;
   readPreparedGatewayModelCatalog: typeof import("./server-model-catalog.js").readPreparedGatewayModelCatalog;
@@ -69,8 +67,6 @@ export async function startGatewayCoreRuntime(input: {
     logDiscovery,
     logHealth,
     logChannels,
-    loadGatewayStartupEarlyModule,
-    loadGatewayPluginBootstrapModule,
     loadGatewayModelCatalog,
     loadGatewayModelCatalogSnapshot,
     readPreparedGatewayModelCatalog,
@@ -111,7 +107,6 @@ export async function startGatewayCoreRuntime(input: {
     broadcastToConnIds,
     controlUiBasePath,
     workerEnvironmentService,
-    workerPlacementDispatchAvailable,
     workerPlacementControlAvailable,
     desktopSessionRegistry,
     gatewayComputerService,
@@ -142,12 +137,20 @@ export async function startGatewayCoreRuntime(input: {
   if (secretEgressProxy) {
     runtime.registerGatewayLifetimeSidecars(secretEgressProxy);
   }
+  const sendNodeSessionEvent: (...args: Parameters<typeof nodeSendToSession>) => void = (
+    sessionKey,
+    event,
+    payload,
+    opts,
+  ) => {
+    void nodeSendToSession(sessionKey, event, payload, opts);
+  };
   let pendingThawRestartTargets: readonly ThawRestartTarget[] | undefined;
   let earlyRuntimePromise: Promise<GatewayEarlyRuntime> | undefined;
   const startEarlyRuntime = (): Promise<GatewayEarlyRuntime> =>
     (earlyRuntimePromise ??= startupTrace
       .measure("runtime.early", () =>
-        loadGatewayStartupEarlyModule().then(({ startGatewayEarlyRuntime }) =>
+        import("./server-startup-early.js").then(({ startGatewayEarlyRuntime }) =>
           startGatewayEarlyRuntime({
             scheduler: runtime.scheduler,
             minimalTestGateway,
@@ -194,6 +197,7 @@ export async function startGatewayCoreRuntime(input: {
             refreshPresence: runtime.publishPresence,
             resetEventLoopHealth: readinessEventLoopHealth.reset,
             logHealth,
+            clients,
             dedupe,
             chatAbortControllers,
             chatQueuedTurns,
@@ -201,14 +205,7 @@ export async function startGatewayCoreRuntime(input: {
             chatRunState,
             removeChatRun,
             agentRunSeq,
-            nodeSendToSession: (
-              sessionKey,
-              event,
-              payload,
-              opts?: Parameters<typeof nodeSendToSession>[3],
-            ) => {
-              void nodeSendToSession(sessionKey, event, payload, opts);
-            },
+            nodeSendToSession: sendNodeSessionEvent,
             getRuntimeConfig,
             startupTrace,
           }),
@@ -241,14 +238,7 @@ export async function startGatewayCoreRuntime(input: {
       broadcast,
       broadcastToConnIds,
       nodeHasSessionSubscribers,
-      nodeSendToSession: (
-        sessionKey,
-        event,
-        payload,
-        opts?: Parameters<typeof nodeSendToSession>[3],
-      ) => {
-        void nodeSendToSession(sessionKey, event, payload, opts);
-      },
+      nodeSendToSession: sendNodeSessionEvent,
       agentRunSeq,
       chatRunState,
       toolEventRecipients,
@@ -412,7 +402,7 @@ export async function startGatewayCoreRuntime(input: {
           (descriptor.name !== "environments.create" &&
             descriptor.name !== "environments.destroy" &&
             !descriptor.name.startsWith("environments.session."))) &&
-        (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch") &&
+        (workerPlacementControlAvailable || descriptor.name !== "sessions.dispatch") &&
         (workerPlacementControlAvailable ||
           (descriptor.name !== "sessions.reclaim" && descriptor.name !== "sessions.move")) &&
         (workerEnvironmentService ||
@@ -423,7 +413,7 @@ export async function startGatewayCoreRuntime(input: {
     return createGatewayMethodRegistry(
       [
         ...coreDescriptors,
-        ...createPluginGatewayMethodDescriptors(nextPluginRegistry),
+        ...nextPluginRegistry.gatewayMethodDescriptors,
         ...createGatewayMethodDescriptorsFromHandlers({
           handlers: auxHandlers,
           owner: { kind: "aux", area: "gateway-extra" },
@@ -445,10 +435,10 @@ export async function startGatewayCoreRuntime(input: {
       listPluginNodeCapabilities(pluginRuntime.registry),
       isCoreCanvasHostEnabled(getRuntimeConfig()),
     );
-  const prepareAttachedPluginRuntime = async (loaded: {
-    pluginRegistry: typeof pluginRuntime.registry;
-    gatewayMethods: string[];
-  }) => {
+  const prepareAttachedPluginRuntime = async (
+    loaded: { pluginRegistry: typeof pluginRuntime.registry; gatewayMethods: string[] },
+    trackActivationCleanup: (completion: Promise<void>) => void,
+  ) => {
     const { activatePluginRegistry } = await import("../plugins/loader-shared.js");
     const nextMethodRegistry = buildAttachedGatewayMethodRegistry(loaded.pluginRegistry);
     const nextMethods = uniqueStrings([
@@ -467,6 +457,7 @@ export async function startGatewayCoreRuntime(input: {
           "gateway-bindable",
           runtime.pluginWorkspaceDir,
           pluginRuntime.registry,
+          trackActivationCleanup,
         );
         pluginRuntime.publish(loaded.pluginRegistry);
         pluginRuntime.baseGatewayMethods = loaded.gatewayMethods;
@@ -476,6 +467,7 @@ export async function startGatewayCoreRuntime(input: {
         Object.assign(attachedGatewayExtraHandlers, loaded.pluginRegistry.gatewayHandlers);
         attachedPluginGatewayHandlerKeys = nextHandlerKeys;
         attachedGatewayMethodRegistry = nextMethodRegistry;
+        invalidateSharedReadResponses(broadcast);
         kernel.publishMethodSurface(nextMethods);
       },
       afterCommit: () => {
@@ -511,7 +503,7 @@ export async function startGatewayCoreRuntime(input: {
         runtime,
         port,
         log,
-        loadGatewayPluginBootstrapModule,
+        loadGatewayPluginBootstrapModule: () => import("./server-plugin-bootstrap.js"),
         prepareAttachedPluginRuntime,
       },
       params,

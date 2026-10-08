@@ -1,11 +1,12 @@
 // Gateway node event dispatcher.
 // Handles device/node-originated events and routes them to sessions/channels.
 import { randomUUID } from "node:crypto";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
+import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Value } from "typebox/value";
 import {
   validateNodeHostStatsPayload,
@@ -21,28 +22,18 @@ import { getRuntimeConfig } from "../config/io.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions/main-session.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadOrCreateProcessDeviceIdentity } from "../infra/device-identity.js";
 import { updatePairedDevicePresence, type NodePairingGeneration } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  resolveEventSessionKeyForPolicy,
-  resolveEventSessionRoutingPolicy,
-  scopedHeartbeatWakeOptionsForPolicy,
-} from "../infra/event-session-routing.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
-import {
-  ApnsRegistrationPairingChangedError,
-  registerApnsRegistration,
-} from "../infra/push-apns.js";
 import { withSystemEventOwner } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { deleteMediaBuffer } from "../media/store.js";
 import { runWithGatewayIndependentRootWorkContinuation } from "../process/gateway-work-admission.js";
-import { isUnscopedSessionKeySentinel, normalizeMainKey } from "../routing/session-key.js";
+import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveAgentHarnessSessionContextError } from "../sessions/agent-harness-session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -52,6 +43,7 @@ import {
   NODE_PRESENCE_ACTIVITY_EVENT,
   normalizeNodePresenceAliveReason,
 } from "../shared/node-presence.js";
+import { truncateUtf16WithEllipsis } from "../shared/text-truncate.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import { resolveChatAttachmentMaxBytes } from "./chat-attachment-policy.js";
 import {
@@ -61,6 +53,7 @@ import {
 } from "./chat-attachments.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 import { registerNodeApnsEvent } from "./server-node-events-apns.js";
+import { enqueueNodeExecNotice } from "./server-node-events-exec-notice.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   loadSessionEntry,
@@ -352,12 +345,7 @@ function pruneBoundedTimestampMap(
 }
 
 function compactNodeEventText(raw: string, maxChars: number) {
-  const normalized = raw.replace(/\s+/g, " ").trim();
-  if (normalized.length <= maxChars) {
-    return normalized;
-  }
-  const safe = Math.max(1, maxChars - 1);
-  return `${sliceUtf16Safe(normalized, 0, safe)}…`;
+  return truncateUtf16WithEllipsis(raw.replace(/\s+/g, " ").trim(), maxChars);
 }
 
 type LoadedSessionEntry = ReturnType<typeof loadSessionEntry>;
@@ -392,28 +380,19 @@ async function touchSessionStore(params: {
   );
 }
 
-function queueSessionStoreTouch(params: {
-  ctx: NodeEventContext;
-  storePath: LoadedSessionEntry["storePath"];
-  canonicalKey: LoadedSessionEntry["canonicalKey"];
-  entry: LoadedSessionEntry["entry"];
-  sessionId: string;
-  now: number;
-  isConnectionCurrent?: () => boolean | Promise<boolean>;
-}) {
+function queueSessionStoreTouch(
+  params: Parameters<typeof touchSessionStore>[0] & {
+    ctx: NodeEventContext;
+    isConnectionCurrent?: () => boolean | Promise<boolean>;
+  },
+) {
   // Voice dispatch intentionally does not wait for persistence, but a host
   // snapshot must not race the accepted write after its node RPC returns.
   void runWithGatewayIndependentRootWorkContinuation(async () => {
     if (params.isConnectionCurrent && !(await params.isConnectionCurrent())) {
       return;
     }
-    await touchSessionStore({
-      storePath: params.storePath,
-      canonicalKey: params.canonicalKey,
-      entry: params.entry,
-      sessionId: params.sessionId,
-      now: params.now,
-    });
+    await touchSessionStore(params);
   }, "node-events:voice-persist").catch((err: unknown) => {
     params.ctx.logGateway.warn("voice session-store update failed: " + formatForLog(err));
   });
@@ -437,10 +416,10 @@ function pairingChangedResult(event: string): NodeEventHandleResult {
 }
 
 async function cleanupNodeEventMedia(
-  ids: Iterable<string>,
+  media: Iterable<{ id: string }>,
   ctx: Pick<NodeEventContext, "logGateway">,
 ): Promise<void> {
-  for (const id of ids) {
+  for (const { id } of media) {
     try {
       await deleteMediaBuffer(id);
     } catch (cleanupErr) {
@@ -452,18 +431,7 @@ async function cleanupNodeEventMedia(
 }
 
 function parsePayloadObject(payloadJSON?: string | null): Record<string, unknown> | null {
-  if (!payloadJSON) {
-    return null;
-  }
-  let payload: unknown;
-  try {
-    payload = JSON.parse(payloadJSON) as unknown;
-  } catch {
-    return null;
-  }
-  return typeof payload === "object" && payload !== null
-    ? (payload as Record<string, unknown>)
-    : null;
+  return payloadJSON ? asNullableObjectRecord(safeParseJson(payloadJSON)) : null;
 }
 
 async function sendReceiptAck(params: {
@@ -688,10 +656,7 @@ export const handleNodeEvent = async (
             acceptNonImage: false,
           });
           if (!(await isNodeEventConnectionCurrent(opts))) {
-            await cleanupNodeEventMedia(
-              (parsed.offloadedRefs ?? []).map((ref) => ref.id),
-              ctx,
-            );
+            await cleanupNodeEventMedia(parsed.offloadedRefs ?? [], ctx);
             return pairingChangedResult(evt.event);
           }
           message = parsed.message.trim();
@@ -703,10 +668,7 @@ export const handleNodeEvent = async (
               `agent.request message exceeds limit after attachment parsing (length=${message.length})`,
             );
             if (parsed.offloadedRefs && parsed.offloadedRefs.length > 0) {
-              await cleanupNodeEventMedia(
-                parsed.offloadedRefs.map((ref) => ref.id),
-                ctx,
-              );
+              await cleanupNodeEventMedia(parsed.offloadedRefs, ctx);
             }
             return undefined;
           }
@@ -732,10 +694,7 @@ export const handleNodeEvent = async (
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
       if (!(await isNodeEventConnectionCurrent(opts))) {
-        await cleanupNodeEventMedia(
-          (offloadedRefs ?? []).map((ref) => ref.id),
-          ctx,
-        );
+        await cleanupNodeEventMedia(offloadedRefs ?? [], ctx);
         return pairingChangedResult(evt.event);
       }
       await touchSessionStore({
@@ -746,10 +705,7 @@ export const handleNodeEvent = async (
         now,
       });
       if (!(await isNodeEventConnectionCurrent(opts))) {
-        await cleanupNodeEventMedia(
-          (offloadedRefs ?? []).map((ref) => ref.id),
-          ctx,
-        );
+        await cleanupNodeEventMedia(offloadedRefs ?? [], ctx);
         return pairingChangedResult(evt.event);
       }
 
@@ -776,10 +732,7 @@ export const handleNodeEvent = async (
       }
 
       if (!(await isNodeEventConnectionCurrent(opts))) {
-        await cleanupNodeEventMedia(
-          (offloadedRefs ?? []).map((ref) => ref.id),
-          ctx,
-        );
+        await cleanupNodeEventMedia(offloadedRefs ?? [], ctx);
         return pairingChangedResult(evt.event);
       }
       const persistedTranscriptMedia = await persistInboundImagesForTranscript({
@@ -789,10 +742,7 @@ export const handleNodeEvent = async (
         logContext: "agent.request",
       });
       if (!(await isNodeEventConnectionCurrent(opts))) {
-        await cleanupNodeEventMedia(
-          persistedTranscriptMedia.entries.map((media) => media.id),
-          ctx,
-        );
+        await cleanupNodeEventMedia(persistedTranscriptMedia.entries, ctx);
         return pairingChangedResult(evt.event);
       }
       if (persistedTranscriptMedia.omission === "inline-image-save-failed") {
@@ -850,11 +800,7 @@ export const handleNodeEvent = async (
           allowModelOverride: false,
         },
         opts?.isConnectionCurrent,
-        () =>
-          cleanupNodeEventMedia(
-            persistedTranscriptMedia.entries.map((media) => media.id),
-            ctx,
-          ),
+        () => cleanupNodeEventMedia(persistedTranscriptMedia.entries, ctx),
       );
       return undefined;
     }
@@ -863,17 +809,14 @@ export const handleNodeEvent = async (
       if (!obj) {
         return undefined;
       }
-      const change = normalizeOptionalString(obj.change)
-        ? normalizeLowercaseStringOrEmpty(obj.change)
-        : undefined;
+      const change = normalizeLowercaseStringOrEmpty(obj.change);
       if (change !== "posted" && change !== "removed") {
         return undefined;
       }
-      const keyRaw = normalizeOptionalString(obj.key);
-      if (!keyRaw) {
+      const key = normalizeOptionalString(obj.key);
+      if (!key) {
         return undefined;
       }
-      const key = keyRaw;
       const requestedSessionKey = normalizeOptionalString(obj.sessionKey);
       let target: { sessionKey: string; agentId?: string };
       try {
@@ -896,8 +839,7 @@ export const handleNodeEvent = async (
       if (resolveAgentHarnessSessionContextError(sessionKey, entry)) {
         return undefined;
       }
-      const packageNameRaw = normalizeOptionalString(obj.packageName);
-      const packageName = packageNameRaw ?? null;
+      const packageName = normalizeOptionalString(obj.packageName);
       const title = compactNodeEventText(
         normalizeOptionalString(obj.title) ?? "",
         MAX_NOTIFICATION_EVENT_TEXT_CHARS,
@@ -921,7 +863,7 @@ export const handleNodeEvent = async (
 
       const queued = enqueueSystemEvent(
         summary,
-        withSystemEventOwner({ sessionKey, contextKey: `notification:${keyRaw}` }, agentId),
+        withSystemEventOwner({ sessionKey, contextKey: `notification:${key}` }, agentId),
       );
       if (queued) {
         requestHeartbeat({
@@ -958,19 +900,16 @@ export const handleNodeEvent = async (
       }
       const sessionKeyRaw = normalizeOptionalString(obj.sessionKey) ?? `node-${nodeId}`;
       const { canonicalKey: sessionKey, agentId } = loadSessionEntry(sessionKeyRaw);
-
       const cfg = getRuntimeConfig();
       const runId = normalizeOptionalString(obj.runId) ?? "";
-      if (
-        !ctx.authorizeNodeSystemRunEvent({
-          nodeId,
-          connId: opts?.connId,
-          ...(runId ? { runId } : {}),
-          // Match the key sent in system.run params; canonicalization below is for routing.
-          sessionKey: sessionKeyRaw,
-          terminal: evt.event === "exec.finished" || evt.event === "exec.denied",
-        })
-      ) {
+      const auth = ctx.authorizeNodeSystemRunEvent({
+        nodeId,
+        connId: opts?.connId,
+        ...(runId ? { runId } : {}),
+        sessionKey: sessionKeyRaw,
+        event: evt.event,
+      });
+      if (!auth) {
         return {
           ok: true,
           event: evt.event,
@@ -978,13 +917,7 @@ export const handleNodeEvent = async (
           reason: "unmatched_exec_event",
         };
       }
-      // Respect tools.exec.notifyOnExit setting (default: true)
-      // When false, skip system event notifications for node exec events.
-      const notifyOnExit = cfg.tools?.exec?.notifyOnExit !== false;
-      if (!notifyOnExit) {
-        return undefined;
-      }
-      if (obj.suppressNotifyOnExit === true) {
+      if (cfg.tools?.exec?.notifyOnExit === false || obj.suppressNotifyOnExit === true) {
         return undefined;
       }
       if (evt.event === "exec.denied") {
@@ -1027,33 +960,14 @@ export const handleNodeEvent = async (
         }
       }
 
-      const eventRouting = resolveEventSessionRoutingPolicy({ cfg, sessionKey });
-      const queued = enqueueSystemEvent(
+      enqueueNodeExecNotice({
+        cfg,
+        sessionKey,
+        agentId,
+        authorization: auth,
+        runId,
         text,
-        withSystemEventOwner(
-          {
-            sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
-            contextKey: runId ? `exec:${runId}` : "exec",
-          },
-          agentId,
-        ),
-      );
-      if (queued) {
-        // Global keys retain the loaded owner; synthetic node-* keys keep unscoped wakes.
-        requestHeartbeat(
-          scopedHeartbeatWakeOptionsForPolicy(
-            sessionKey,
-            {
-              source: "exec-event",
-              intent: "event",
-              reason: "exec-event",
-              coalesceMs: 0,
-              ...(isUnscopedSessionKeySentinel(sessionKey) ? { agentId } : {}),
-            },
-            eventRouting,
-          ),
-        );
-      }
+      });
       return undefined;
     }
     case "push.apns.register": {
@@ -1061,12 +975,7 @@ export const handleNodeEvent = async (
       if (!obj) {
         return undefined;
       }
-      const result = await registerNodeApnsEvent(ctx, nodeId, obj, opts, {
-        ApnsRegistrationPairingChangedError,
-        registerApnsRegistration,
-        loadOrCreateProcessDeviceIdentity,
-        formatForLog,
-      });
+      const result = await registerNodeApnsEvent(ctx, nodeId, obj, opts);
       return result === "pairing-changed" ? pairingChangedResult(evt.event) : undefined;
     }
     case NODE_HOST_STATS_EVENT: {

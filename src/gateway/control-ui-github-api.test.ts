@@ -165,7 +165,12 @@ describe("Control UI GitHub failures", () => {
     },
   );
 
-  it.each<{ headers: Record<string, string>; delay: number }>([
+  it.each<{
+    headers: Record<string, string>;
+    delay: number;
+    status?: number;
+    message?: string;
+  }>([
     { headers: { "retry-after": "90" }, delay: 90_000 },
     { headers: {}, delay: 60_000 },
     { headers: { "retry-after": "invalid", "x-ratelimit-reset": "Infinity" }, delay: 60_000 },
@@ -177,13 +182,22 @@ describe("Control UI GitHub failures", () => {
       headers: { "x-ratelimit-remaining": "42", "x-ratelimit-reset": "1800003000" },
       delay: 60_000,
     },
+    {
+      headers: {},
+      delay: 60_000,
+      status: 403,
+      message: "You have exceeded a secondary rate limit.",
+    },
   ])(
     "shares secondary quota cooldown across REST buckets: $delay ms",
-    async ({ headers, delay }) => {
+    async ({ headers, delay, status = 429, message }) => {
       const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
       const fetchMock = vi
         .fn<typeof fetch>()
-        .mockImplementation(async () => new Response(null, { status: 429, headers }));
+        .mockImplementation(
+          async () =>
+            new Response(message ? JSON.stringify({ message }) : null, { status, headers }),
+        );
       await expect(
         gitHubPublicApi.fetchGitHubJson("https://api.github.com/search/repositories", fetchMock),
       ).rejects.toMatchObject({ statusCode: 429, retryAfterMs: delay });
@@ -316,7 +330,12 @@ describe("Control UI GitHub failures", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it.each<{ status: number; headers: Record<string, string>; delay: number }>([
+  it.each<{
+    status: number;
+    headers: Record<string, string>;
+    delay: number;
+    message?: string;
+  }>([
     {
       status: 403,
       headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "1788393720" },
@@ -331,17 +350,32 @@ describe("Control UI GitHub failures", () => {
       },
       delay: 120_000,
     },
+    {
+      status: 403,
+      headers: {},
+      delay: 60_000,
+      message: "You have exceeded a secondary rate limit. secret-upstream-body",
+    },
+    {
+      status: 403,
+      headers: {},
+      delay: 60_000,
+      message: "You have triggered an abuse detection mechanism. secret-upstream-body",
+    },
   ])(
     "preserves rate-limit status and retry timing for HTTP $status",
-    async ({ status, headers, delay }) => {
-      vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-03T00:00:00Z"));
+    async ({ status, headers, delay, message = "secret-upstream-body" }) => {
+      const now = Date.parse("2026-09-03T00:00:00Z");
+      vi.spyOn(Date, "now").mockReturnValue(now);
       const error = await gitHubPublicApi
-        .readGitHubJsonResponse(
-          new Response('{"message":"secret-upstream-body"}', { status, headers }),
-        )
+        .readGitHubJsonResponse(new Response(JSON.stringify({ message }), { status, headers }))
         .catch((failure: unknown) => failure);
 
-      expect(error).toMatchObject({ statusCode: 429, retryAfterMs: delay });
+      expect(error).toMatchObject({
+        statusCode: 429,
+        retryAfterMs: delay,
+        retryAtMs: now + delay,
+      });
       const display = gitHubPublicApi.formatControlUiGitHubPreviewError(error);
       expect(display).toMatchObject({ retryable: true, retryAfterMs: delay });
       expect(display.message).toContain(`HTTP ${status}`);
@@ -351,6 +385,7 @@ describe("Control UI GitHub failures", () => {
       expect(gitHubPublicApi.formatControlUiGitHubPreviewError(error).retryAfterMs).toBe(
         delay - 30_000,
       );
+      expect(error).toMatchObject({ retryAtMs: now + delay });
     },
   );
 
@@ -382,21 +417,40 @@ describe("Control UI GitHub failures", () => {
     ).toEqual(gitHubPublicApi.formatControlUiGitHubPreviewError(missing));
   });
 
-  it("uses a bounded cooldown when rate-limit timing is malformed", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
-    const error = await gitHubPublicApi
-      .readGitHubJsonResponse(
-        new Response(null, {
-          status: 429,
-          headers: { "retry-after": "secret-upstream-header", "x-ratelimit-reset": "Infinity" },
-        }),
-      )
-      .catch((failure: unknown) => failure);
-    const display = gitHubPublicApi.formatControlUiGitHubPreviewError(error);
+  it.each<{ status: number; headers: Record<string, string> }>([
+    {
+      status: 429,
+      headers: { "retry-after": "secret-upstream-header", "x-ratelimit-reset": "Infinity" },
+    },
+    {
+      status: 403,
+      headers: { "x-ratelimit-remaining": "0", "x-ratelimit-reset": "9000000000000" },
+    },
+    { status: 429, headers: { "retry-after": "9000000000000" } },
+  ])(
+    "uses a bounded cooldown when HTTP $status timing is malformed",
+    async ({ status, headers }) => {
+      const now = 1_800_000_000_000;
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      const error = await gitHubPublicApi
+        .readGitHubJsonResponse(new Response(null, { status, headers }))
+        .catch((failure: unknown) => failure);
+      const display = gitHubPublicApi.formatControlUiGitHubPreviewError(error);
 
-    expect(display.retryAfterMs).toBe(60_000);
-    expect(display.message).toMatch(/rate limit/i);
-    expect(display.message).not.toContain("secret-upstream-header");
+      expect(error).toMatchObject({ retryAtMs: now + 60_000 });
+      expect(display.retryAfterMs).toBe(60_000);
+      expect(display.message).toMatch(/rate limit/i);
+      expect(display.message).not.toContain("secret-upstream-header");
+    },
+  );
+
+  it.each([
+    { name: "malformed", body: "not JSON" },
+    { name: "oversized", body: JSON.stringify({ message: "x".repeat(256 * 1024) }) },
+  ])("preserves access denial with a $name error body", async ({ body }) => {
+    await expect(
+      gitHubPublicApi.readGitHubJsonResponse(new Response(body, { status: 403 })),
+    ).rejects.toMatchObject({ statusCode: 403, message: "GitHub request failed (HTTP 403)" });
   });
 
   it.each([

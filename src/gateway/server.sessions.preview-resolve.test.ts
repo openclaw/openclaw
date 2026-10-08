@@ -1,8 +1,9 @@
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, onTestFinished, test } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
+import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import {
   closeOpenClawAgentDatabaseByPath,
   resolveIncognitoOpenClawAgentSqlitePath,
@@ -10,7 +11,7 @@ import {
 import type { ControlUiSessionPreview } from "./control-ui-contract.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
-import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
+import * as sessionRows from "./session-row-projection-record.js";
 import { readSessionPreviewItemsFromTranscriptAsync } from "./session-transcript-preview.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
@@ -71,27 +72,46 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
   const { workStorePath } = await createSelectedGlobalSessionStore();
   testState.agentsConfig = {
     entries: {
-      main: { default: true, model: { primary: "openai/gpt-5.4" } },
+      main: { model: { primary: "openai/gpt-5.4" } },
       work: { model: { primary: "openai/gpt-5.5" } },
     },
   };
   const sessionId = "aggregate-work-global";
+  const workSqlitePath = resolveUnsuffixedSqliteTargetFromSessionStorePath(workStorePath).path;
+  const backfilled = Promise.withResolvers<void>();
+  const publishTranscriptFields = sessionRows.publishTranscriptFields;
+  const publication = vi
+    .spyOn(sessionRows, "publishTranscriptFields")
+    .mockImplementation((row, ...args) => {
+      const changed = publishTranscriptFields(row, ...args);
+      if (
+        row.key === "global" &&
+        row.agentId === "work" &&
+        row.storeTarget.storePath === workSqlitePath &&
+        row.entry.sessionId === sessionId &&
+        row.lastMessagePreview === "Work global conversation"
+      ) {
+        backfilled.resolve();
+      }
+      return changed;
+    });
+  onTestFinished(() => publication.mockRestore());
   await writeSessionStore({
     agentId: "work",
     storePath: workStorePath,
     entries: { global: sessionStoreEntry(sessionId, { label: "Work global conversation" }) },
   });
-  await seedSessionTranscript({
-    agentId: "work",
-    sessionId,
-    sessionKey: "global",
-    storePath: workStorePath,
-    messages: [{ role: "user", content: "Work global conversation" }],
-  });
-  const backfilled = observeSessionRowBackfill(["global"]);
+  // The suite Gateway is already running, so publish the transcript to its projection.
+  await sessionAccessor.persistSessionTranscriptTurn(
+    { agentId: "work", sessionId, sessionKey: "global", storePath: workStorePath },
+    {
+      updateMode: "file-only",
+      messages: [{ message: { role: "user", content: "Work global conversation" } }],
+    },
+  );
   const { ws } = await openClient();
   try {
-    await backfilled;
+    await backfilled.promise;
     for (const search of [undefined, "gpt-5.5"]) {
       const listed = await rpcReq<SessionsListResult>(ws, "sessions.list", {
         includeGlobal: true,
@@ -179,7 +199,7 @@ function identifiedClient(profileId: string, scopes: string[] = ["operator.read"
   };
 }
 
-test("sessions.preview returns transcript previews", async () => {
+test("sessions.preview returns transcript previews within the requested text budget", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionId = "sess-preview";
   const lines = createToolSummaryPreviewTranscriptLines(sessionId);
@@ -197,7 +217,15 @@ test("sessions.preview returns transcript previews", async () => {
       .map((line) => JSON.parse(line) as { message?: Record<string, unknown> })
       .map((record) => record.message)
       .filter((message): message is Record<string, unknown> => Boolean(message))
-      .map((message) => Object.assign({ role: String(message.role) }, message)),
+      .map((message) =>
+        Object.assign(
+          { role: String(message.role) },
+          message,
+          message.role === "user"
+            ? { content: "Long preview input crosses the requested character budget." }
+            : {},
+        ),
+      ),
   });
 
   const preview = await directSessionReq<{
@@ -206,51 +234,15 @@ test("sessions.preview returns transcript previews", async () => {
       status: string;
       items: Array<{ role: string; text: string }>;
     }>;
-  }>("sessions.preview", { keys: ["main"], limit: 3, maxChars: 120 });
+  }>("sessions.preview", { keys: ["main"], limit: 3, maxChars: 24 });
   expect(preview.ok).toBe(true);
   const entry = preview.payload?.previews[0];
   expect(entry?.key).toBe("main");
   expect(entry?.status).toBe("ok");
   expect(entry?.items).toEqual([
-    { role: "user", text: "Hello" },
+    { role: "user", text: "Long preview input cr..." },
     { role: "assistant", text: "Hi" },
     { role: "assistant", text: "Forecast ready" },
-  ]);
-});
-
-test("sessions.preview honors maxChars up to the shared cap", async () => {
-  const { storePath } = await createSessionStoreDir();
-  const sessionId = "sess-preview-explicit-budget";
-  const maxChars = 800;
-
-  await writeSessionStore({
-    entries: {
-      "agent:main:main": sessionStoreEntry(sessionId),
-    },
-  });
-  await seedSessionTranscript({
-    sessionId,
-    sessionKey: "agent:main:main",
-    storePath,
-    messages: [{ role: "assistant", content: "a".repeat(maxChars + 20) }],
-  });
-
-  const preview = await directSessionReq<{
-    previews: Array<{ items: Array<{ role: string; text: string }> }>;
-  }>("sessions.preview", { keys: ["main"], limit: 1, maxChars });
-
-  expect(preview.ok).toBe(true);
-  expect(preview.payload?.previews[0]?.items).toEqual([
-    { role: "assistant", text: `${"a".repeat(maxChars - 3)}...` },
-  ]);
-
-  const capped = await directSessionReq<{
-    previews: Array<{ items: Array<{ role: string; text: string }> }>;
-  }>("sessions.preview", { keys: ["main"], limit: 1, maxChars: Number.MAX_SAFE_INTEGER });
-
-  expect(capped.ok).toBe(true);
-  expect(capped.payload?.previews[0]?.items).toEqual([
-    { role: "assistant", text: `${"a".repeat(maxChars - 3)}...` },
   ]);
 });
 

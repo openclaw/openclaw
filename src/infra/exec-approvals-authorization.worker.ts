@@ -1,26 +1,27 @@
 import type { DatabaseSync } from "node:sqlite";
-import {
-  openOpenClawStateDatabase,
-  runOpenClawStateWriteTransaction,
-  type OpenClawStateDatabaseOptions,
-} from "../state/openclaw-state-db.js";
+import type {
+  WorkerOperationHandlers,
+  WorkerWriteOperationContext,
+} from "../state/worker-operation-registry.js";
 import { applyExecAuthorizationCommit } from "./exec-approvals-authorization.kernel.js";
 import { resolveExecApprovalsDisplayPath } from "./exec-approvals-config.js";
 import type {
   ExecAuthorizationCommitInput,
   ExecAuthorizationCommitOutcome,
-  ExecAuthorizationWorkerOperations,
 } from "./exec-approvals-contracts.js";
 import type { ExecApprovalsSnapshot } from "./exec-approvals-core.js";
 import { assertNoPendingLegacyExecApprovals } from "./exec-approvals-migration-gate.js";
+import { execPolicyMutationOperations } from "./exec-approvals-mutation.worker.js";
+import { assertExecApprovalsHostPolicyUnchanged } from "./exec-approvals-policy.js";
 import {
+  snapshotFromExecApprovalsDatabase,
   assertExecApprovalsMutationAllowed,
   ExecApprovalsMutationFencedError,
   serializeExecApprovals,
   snapshotFromExecApprovalsRow,
   writeExecApprovalsConfigRow,
 } from "./exec-approvals-sqlite.js";
-import { snapshotFromExecApprovalsDatabase } from "./exec-approvals-store.js";
+import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 function applyAuthorizationBatch(
   db: DatabaseSync,
@@ -36,6 +37,7 @@ function applyAuthorizationBatch(
       return { ok: false, message: error instanceof Error ? error.message : String(error) };
     }
     if (next !== null) {
+      assertExecApprovalsHostPolicyUnchanged(current.file, next);
       try {
         assertExecApprovalsMutationAllowed({ db, current: current.file, next });
       } catch (error) {
@@ -55,22 +57,29 @@ function applyAuthorizationBatch(
 }
 
 export function commitExecAuthorizationsInWorker(
-  input: ExecAuthorizationWorkerOperations["execApprovals.commitAuthorizations"]["input"],
-  options: OpenClawStateDatabaseOptions,
+  input: { items: ExecAuthorizationCommitInput[] },
+  context: WorkerWriteOperationContext,
 ): ExecAuthorizationCommitOutcome[] {
+  const options = context.stateOptions();
   assertNoPendingLegacyExecApprovals({ env: options.env });
-  const database = openOpenClawStateDatabase(options);
-  const read = () =>
-    snapshotFromExecApprovalsDatabase(database.db, resolveExecApprovalsDisplayPath(options.env));
-  const initial = read();
-  const prepared = applyAuthorizationBatch(database.db, initial, input.items);
-  if (prepared.snapshot.raw === initial.raw) {
-    return prepared.outcomes;
+  const displayPath = resolveExecApprovalsDisplayPath(options.env);
+  const mayWrite = input.items.some(
+    (item) =>
+      item.matches.length > 0 ||
+      (item.allowAlwaysDecision !== undefined && item.allowAlwaysDecision.kind !== "one-shot"),
+  );
+  if (!mayWrite) {
+    const { db } = context.open();
+    return applyAuthorizationBatch(
+      db,
+      snapshotFromExecApprovalsDatabase(db, displayPath),
+      input.items,
+    ).outcomes;
   }
-  return runOpenClawStateWriteTransaction(
+  return context.write(
     ({ db }) => {
-      // Policy may change while admission waits; only this authoritative pass commits.
-      const current = read();
+      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      const current = snapshotFromExecApprovalsDatabase(db, displayPath);
       const committed = applyAuthorizationBatch(db, current, input.items);
       if (committed.snapshot.raw !== current.raw) {
         writeExecApprovalsConfigRow({
@@ -79,9 +88,14 @@ export function commitExecAuthorizationsInWorker(
           raw: committed.snapshot.raw ?? undefined,
         });
       }
+      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
       return committed.outcomes;
     },
-    { ...options, database },
     { operationLabel: "exec-approvals.commit-authorizations" },
   );
 }
+
+export const execAuthorizationOperations = {
+  ...execPolicyMutationOperations,
+  "execApprovals.commitAuthorizations": commitExecAuthorizationsInWorker,
+} satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

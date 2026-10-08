@@ -1,4 +1,3 @@
-// Cron edit command registration and patch construction for existing jobs.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -204,11 +203,8 @@ export function registerCronEditCommand(cron: Command) {
           if (displayName && opts.clearDisplayName) {
             throw new CronCliError("Use --display-name or --clear-display-name, not both");
           }
-          if (displayName) {
-            patch.displayName = displayName;
-          }
-          if (opts.clearDisplayName) {
-            patch.displayName = null;
+          if (displayName || opts.clearDisplayName) {
+            patch.displayName = displayName ?? null;
           }
           if (typeof opts.description === "string") {
             patch.description = opts.description;
@@ -216,20 +212,14 @@ export function registerCronEditCommand(cron: Command) {
           if (opts.enable && opts.disable) {
             throw new CronCliError("Choose --enable or --disable, not both");
           }
-          if (opts.enable) {
-            patch.enabled = true;
-          }
-          if (opts.disable) {
-            patch.enabled = false;
+          if (opts.enable || opts.disable) {
+            patch.enabled = Boolean(opts.enable);
           }
           if (opts.deleteAfterRun && opts.keepAfterRun) {
             throw new CronCliError("Choose --delete-after-run or --keep-after-run, not both");
           }
-          if (opts.deleteAfterRun) {
-            patch.deleteAfterRun = true;
-          }
-          if (opts.keepAfterRun) {
-            patch.deleteAfterRun = false;
+          if (opts.deleteAfterRun || opts.keepAfterRun) {
+            patch.deleteAfterRun = Boolean(opts.deleteAfterRun);
           }
           if (typeof opts.session === "string") {
             patch.sessionTarget = sessionTarget;
@@ -245,21 +235,15 @@ export function registerCronEditCommand(cron: Command) {
           if (agentId && opts.clearAgent) {
             throw new CronCliError("Use --agent or --clear-agent, not both");
           }
-          if (agentId) {
-            patch.agentId = sanitizeAgentId(agentId);
-          }
-          if (opts.clearAgent) {
-            patch.agentId = null;
+          if (agentId || opts.clearAgent) {
+            patch.agentId = agentId ? sanitizeAgentId(agentId) : null;
           }
           const sessionKey = parseCronStringOption(opts.sessionKey, "--session-key");
           if (sessionKey && opts.clearSessionKey) {
             throw new CronCliError("Use --session-key or --clear-session-key, not both");
           }
-          if (sessionKey) {
-            patch.sessionKey = sessionKey;
-          }
-          if (opts.clearSessionKey) {
-            patch.sessionKey = null;
+          if (sessionKey || opts.clearSessionKey) {
+            patch.sessionKey = sessionKey ?? null;
           }
 
           const pacingMin = parseCronStringOption(opts.pacingMin, "--pacing-min");

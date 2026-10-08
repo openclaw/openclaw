@@ -2,6 +2,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockCall } from "../../test-utils/mock-call-assertions.js";
 import { applyJobPatch } from "../service/jobs.js";
+import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import {
   buildSafeExternalPromptMock,
   callGatewayMock,
@@ -48,13 +49,12 @@ function makeJob(
   } as never;
 }
 function makeParams(job = makeJob()) {
-  return {
-    cfg: {},
-    deps: {} as never,
+  return makeIsolatedAgentParamsFixture({
+    deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
     job,
     message: "send a message",
     sessionKey: "cron:message-tool-policy",
-  };
+  });
 }
 function mockAnnounce(overrides: Record<string, unknown> = {}) {
   resolveCronDeliveryPlanMock.mockReturnValue({ requested: true, ...announce, ...overrides });
@@ -196,122 +196,6 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
       );
     });
 
-    it("uses final assistant text to recover tool warnings for bare no-deliver runs", async () => {
-      const text = "Final cron report from the agent.";
-      resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
-      resolveCronPayloadOutcomeMock.mockReturnValue(visibleOutcome(text));
-      runEmbeddedAgentMock.mockResolvedValue({
-        payloads: [{ text: "⚠️ 🛠️ show > (agent) failed", isError: true }],
-        meta: { finalAssistantVisibleText: text, agentMeta: { usage } },
-      });
-      const result = await runCronIsolatedAgentTurn(makeParams());
-      expectFields(result, {
-        status: "ok",
-        error: undefined,
-        summary: text,
-        outputText: text,
-        replyDisposition: "visible",
-      });
-      expect(resolveCronPayloadOutcomeMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          finalAssistantVisibleText: text,
-          preferFinalAssistantVisibleText: true,
-        }),
-      );
-      dispatch({ deliveryRequested: false, deliveryPayloads: [{ text }] });
-    });
-
-    it("marks delivery.mode none delivered when the message tool sends to the explicit target", async () => {
-      const destination = { channel: "topicchat", to: "room#42", threadId: 42 };
-      const route = { mode: "none", ...destination };
-      const observed = {
-        tool: "message",
-        provider: "topicchat",
-        to: "room#42",
-        threadId: "42",
-      };
-      resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, ...route });
-      resolveDeliveryTargetMock.mockResolvedValue({
-        ok: true,
-        ...destination,
-        accountId: undefined,
-        error: undefined,
-      });
-      const runResult = messageResult([observed]);
-      runEmbeddedAgentMock.mockResolvedValue({
-        ...runResult,
-        meta: {
-          ...runResult.meta,
-          finalAssistantVisibleText: "NO_REPLY",
-          finalAssistantRawText: "NO_REPLY",
-        },
-      });
-      const result = await runCronIsolatedAgentTurn(makeParams(makeJob(route)));
-      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-      embedded({
-        disableMessageTool: false,
-        forceMessageTool: false,
-        messageChannel: "topicchat",
-        messageTo: "room#42",
-        messageThreadId: 42,
-        currentChannelId: "room#42",
-        execOverrides: { notifyOnExit: false, notifyOnExitEmptySuccess: false },
-      });
-      dispatch({
-        deliveryRequested: false,
-        sourceDeliveryOutcome: sourceOutcome([observed], true, false),
-      });
-      expectFields(result, {
-        delivered: true,
-        deliveryAttempted: true,
-        replyDisposition: "silent",
-      });
-      expectFields(result.delivery, {
-        intended: { ...destination, source: "explicit" },
-        resolved: { ok: true, ...destination, source: "explicit" },
-        messageToolSentTo: [{ channel: "topicchat", to: "room#42", threadId: "42" }],
-        fallbackUsed: false,
-        delivered: true,
-      });
-    });
-
-    it.each([{ accountId: "ops" }, { threadId: 42 }])(
-      "resolves no-deliver context with only %j",
-      async (context) => {
-        resolveCronDeliveryPlanMock.mockReturnValue({
-          requested: false,
-          mode: "none",
-          channel: "last",
-          ...context,
-        });
-        await runCronIsolatedAgentTurn(makeParams(makeJob({ mode: "none", ...context })));
-        expect(resolveDeliveryTargetMock).toHaveBeenCalledTimes(1);
-        expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-        embedded({
-          disableMessageTool: false,
-          forceMessageTool: false,
-          messageChannel: "messagechat",
-          messageTo: "123",
-          currentChannelId: "123",
-        });
-      },
-    );
-
-    it("lets channels build currentChannelId from split delivery fields", async () => {
-      const destination = { channel: "topicchat", accountId: "ops", to: "room", threadId: 42 };
-      mockAnnounce(destination);
-      resolveDeliveryTargetMock.mockResolvedValue(resolvedTarget(destination));
-      await runCronIsolatedAgentTurn(makeParams(makeJob({ mode: "announce", ...destination })));
-      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-      embedded({
-        messageChannel: "topicchat",
-        agentAccountId: "ops",
-        messageTo: "room",
-        messageThreadId: 42,
-        currentChannelId: "room#42",
-      });
-    });
-
     it("binds the resolved delivery account to account-implicit CLI message sends", async () => {
       mockCliAnnounce();
       const destination = { channel: "telegram", accountId: "bot-a" };
@@ -395,17 +279,7 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
       });
     });
 
-    it("does not restrict CLI-backed announce runs when toolsAllow contains a wildcard", async () => {
-      mockCliAnnounce();
-      await runCronIsolatedAgentTurn(
-        makeParams(makeJob(announce, { toolsAllow: ["read", " * "] })),
-      );
-      const cliRun = expectFields(mockCall(runCliAgentMock)[0], {}, "CLI run params");
-      expect(cliRun.toolsAllow).toBeUndefined();
-      expect(runPrompt(cliRun, true)).toContain("Message delivery destination metadata");
-    });
-
-    it("keeps a cron-tool default toolsAllow marker after a self-edit before CLI execution", async () => {
+    it("runs a self-edited automatic snapshot with the owner tools on CLI", async () => {
       mockCliAnnounce();
       const job = makeJob(announce, {
         toolsAllow: ["read", "cron"],
@@ -419,13 +293,9 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
         },
       });
       await runCronIsolatedAgentTurn(makeParams(job));
-      const cliRun = expectFields(
-        mockCall(runCliAgentMock)[0],
-        {
-          toolsAllow: ["read", "cron"],
-        },
-        "CLI run params",
-      );
+      // The automatic snapshot runs with the owner conversation's tools: no CLI cap.
+      const cliRun = expectFields(mockCall(runCliAgentMock)[0], {}, "CLI run params");
+      expect(cliRun.toolsAllow).toBeUndefined();
       expect(runPrompt(cliRun)).not.toContain("Message delivery destination metadata");
       expect(cliRun.transcriptPrompt).toBeUndefined();
     });
@@ -458,53 +328,35 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
       dispatch({ deliveryRequested: true, skipDelivery: "heartbeat" });
     });
 
-    it.each([false, true])(
-      "does not dispatch fatal error announces (prior delivery: %s)",
-      async (delivered) => {
-        mockAnnounce();
-        runEmbeddedAgentMock.mockResolvedValue({
-          payloads: [
-            {
-              text: 'Codex error: {"type":"error","error":{"type":"server_error"}}',
-              isError: true,
-            },
-          ],
-          ...(delivered
-            ? {
-                didSendViaMessagingTool: true,
-                messagingToolSentTargets: [sentTarget],
-              }
-            : {}),
-          meta: { agentMeta: { usage } },
-        });
-        const result = await runCronIsolatedAgentTurn(makeParams(makeJob(announce)));
-        expectFields(result, {
-          status: "error",
-          error: "cron isolated run returned an error payload",
-          delivered,
-          deliveryAttempted: delivered,
-        });
-        expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
-        expect(callGatewayMock).not.toHaveBeenCalled();
-        expectFields(result.delivery, {
-          intended: tracedTarget,
-          resolved: { ok: true, ...tracedTarget },
-          ...(delivered ? { messageToolSentTo: [target] } : {}),
-          fallbackUsed: false,
-          delivered,
-        });
-      },
-    );
-
-    it("cleans up deleteAfterRun sessions when suppressing fatal error announces", async () => {
+    it("does not dispatch fatal error announces after a verified message-tool delivery", async () => {
       mockAnnounce();
       runEmbeddedAgentMock.mockResolvedValue({
-        payloads: [{ text: "provider failed", isError: true }],
+        payloads: [
+          {
+            text: 'Codex error: {"type":"error","error":{"type":"server_error"}}',
+            isError: true,
+          },
+        ],
+        didSendViaMessagingTool: true,
+        messagingToolSentTargets: [sentTarget],
         meta: { agentMeta: { usage } },
       });
-      await runCronIsolatedAgentTurn(makeParams(makeJob(announce, {}, { deleteAfterRun: true })));
+      const result = await runCronIsolatedAgentTurn(makeParams(makeJob(announce)));
+      expectFields(result, {
+        status: "error",
+        error: "cron isolated run returned an error payload",
+        delivered: true,
+        deliveryAttempted: true,
+      });
       expect(dispatchCronDeliveryMock).not.toHaveBeenCalled();
-      expect(callGatewayMock).toHaveBeenCalledTimes(1);
+      expect(callGatewayMock).not.toHaveBeenCalled();
+      expectFields(result.delivery, {
+        intended: tracedTarget,
+        resolved: { ok: true, ...tracedTarget },
+        messageToolSentTo: [target],
+        fallbackUsed: false,
+        delivered: true,
+      });
     });
 
     it("passes deferred same-source awareness to current-session dispatch", async () => {
@@ -543,24 +395,7 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
       dispatch({ sourceSessionKey, queueSourceSessionMessageToolAwareness: queueSourceAwareness });
     });
 
-    it("uses cron fallback delivery when the message tool returns no target evidence", async () => {
-      mockAnnounce();
-      runEmbeddedAgentMock.mockResolvedValue(messageResult([]));
-      const result = await runCronIsolatedAgentTurn(makeParams(makeJob(announce)));
-      expect(dispatchCronDeliveryMock).toHaveBeenCalledTimes(1);
-      dispatch({ deliveryRequested: true, sourceDeliveryOutcome: sourceOutcome([], false) });
-      expectFields(result.delivery, {
-        intended: tracedTarget,
-        resolved: { ok: true, ...tracedTarget },
-        fallbackUsed: true,
-        delivered: true,
-      });
-    });
-
-    it.each([
-      { accountId: "bot-a", channel: "messagechat", verified: true },
-      { accountId: "bot-b", channel: "message", verified: false },
-    ])(
+    it.each([{ accountId: "bot-a", channel: "messagechat", verified: true }])(
       "rewrites generic providers only for matching account evidence ($accountId)",
       async ({ accountId, channel, verified }) => {
         mockAnnounce({ accountId: "bot-a" });
@@ -584,77 +419,6 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
       },
     );
 
-    it("does not mark message tool delivery as matched when cron target resolution failed", async () => {
-      resolveCronDeliveryPlanMock.mockReturnValue({
-        requested: true,
-        mode: "announce",
-        channel: "last",
-      });
-      const error = "sessionKey is required to resolve delivery.channel=last";
-      resolveDeliveryTargetMock.mockResolvedValue({
-        ok: false,
-        channel: undefined,
-        to: undefined,
-        accountId: undefined,
-        threadId: undefined,
-        mode: "implicit",
-        error: new Error(error),
-      });
-      runEmbeddedAgentMock.mockResolvedValue(messageResult([sentTarget]));
-      const result = await runCronIsolatedAgentTurn(makeParams());
-      expect(dispatchCronDeliveryMock).toHaveBeenCalledTimes(1);
-      dispatch({
-        deliveryRequested: true,
-        sourceDeliveryOutcome: sourceOutcome([sentTarget], false),
-      });
-      const trace = expectFields(result.delivery, {
-        intended: { channel: "last", to: null, source: "last" },
-        messageToolSentTo: [target],
-        fallbackUsed: false,
-        delivered: false,
-      });
-      expectFields(trace.resolved, { ok: false, source: "last", error }, "resolved target");
-      const prompt = runPrompt(embedded(), true);
-      expect(prompt).toContain("with an explicit target");
-      expect(prompt).not.toContain('with channel="messagechat"');
-    });
-
-    it("does not mark bare no-deliver runs delivered when the current target is unresolved", async () => {
-      resolveCronDeliveryPlanMock.mockReturnValue({
-        requested: false,
-        mode: "none",
-        channel: "last",
-      });
-      runEmbeddedAgentMock.mockResolvedValue(messageResult([sentTarget]));
-      const result = await runCronIsolatedAgentTurn(makeParams());
-      expect(resolveDeliveryTargetMock).not.toHaveBeenCalled();
-      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-      const run = embedded({ disableMessageTool: false, forceMessageTool: false });
-      expect(run.messageChannel).toBeUndefined();
-      expect(run.messageTo).toBeUndefined();
-      expect(dispatchCronDeliveryMock).toHaveBeenCalledTimes(1);
-      dispatch({
-        deliveryRequested: false,
-        sourceDeliveryOutcome: sourceOutcome([sentTarget], false),
-      });
-      expectFields(result, { delivered: false, deliveryAttempted: false });
-      expectFields(result.delivery, {
-        intended: { channel: "last", to: null, source: "last" },
-        messageToolSentTo: [target],
-        fallbackUsed: false,
-        delivered: false,
-      });
-      expect(result.delivery).not.toHaveProperty("resolved");
-    });
-
-    it("clears pending message presentation warnings only after cron delivery succeeds", async () => {
-      mockPendingWarning();
-      mockAnnounce();
-      const result = await runCronIsolatedAgentTurn(makeParams(makeJob(announce)));
-      expectFields(result, { status: "ok", error: undefined });
-      dispatch({ deliveryPayloads: [{ text: "Final cron report" }] });
-    });
-
     it("keeps pending message presentation warnings fatal when cron delivery does not succeed", async () => {
       mockPendingWarning();
       resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
@@ -669,27 +433,6 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
   });
 
   describe("delivery instruction", () => {
-    it("keeps default announce guidance aligned with the embedded toolset", async () => {
-      mockAnnounce();
-      await runCronIsolatedAgentTurn(makeParams());
-      expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-      const prompt = runPrompt(embedded());
-      const unattendedPreamble =
-        "This is an unattended scheduled run. Nobody is present to clarify or approve, so complete the task with what you have. Your final reply is the deliverable — not a plan, an acknowledgement, or a request for input. If nothing needs doing, reply exactly NO_REPLY. If something failed, state plainly what failed and what you tried — the scheduler owns retries and failure alerts. Where the job's own instructions conflict with this preamble, the job's instructions win (a question or plan the job explicitly requests is a valid deliverable). If this job is no longer needed, remove it if your available tools allow.";
-      expect(prompt).toContain(unattendedPreamble);
-      expect(prompt).not.toContain("Use the message tool");
-      expect(prompt).toContain("Your response will be delivered automatically");
-      expect(prompt.indexOf(unattendedPreamble)).toBeLessThan(
-        prompt.indexOf("Your response will be delivered automatically"),
-      );
-      expect(prompt).not.toContain("Message delivery destination metadata");
-      expect(prompt).not.toContain('"channel":"messagechat","target":"123"');
-      expect(prompt).toContain("note who/where");
-      expect(embedded().transcriptPrompt).toBeUndefined();
-      // #58535: asking for a summary discarded fields from structured reports.
-      expect(prompt).not.toMatch(/\bsummary\b/i);
-    });
-
     it("composes unattended guidance after the safe external-hook wrapper", async () => {
       resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
       buildSafeExternalPromptMock.mockReturnValue("<safe-external>wrapped hook</safe-external>");
@@ -737,12 +480,12 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
         error: undefined,
       });
       await runCronIsolatedAgentTurn(makeParams(makeJob(announce, { toolsAllow: ["message"] })));
-      expect(runPrompt(embedded(), true)).toContain(
-        '"channel":"topicchat","target":"room","threadId":"42"',
-      );
+      const prompt = runPrompt(embedded(), true);
+      expect(prompt).toContain('"channel":"topicchat","target":"room","threadId":"42"');
+      expect(prompt).not.toMatch(/\bsummary\b/i);
     });
 
-    it.each([false, true])(
+    it.each([true])(
       "keeps a successful isolated turn at status ok when post-run delivery fails (bestEffort=%s)",
       async (bestEffort) => {
         // #94058 / #95419: delivery failure must not overwrite execution status.

@@ -985,14 +985,9 @@ function publish(github, options, publicKey) {
   const publicKeyPath = github.temp("updater.pub");
   writeFileSync(signaturePath, Buffer.from(signature, "base64"), { flag: "wx" });
   writeFileSync(publicKeyPath, Buffer.from(publicKey, "base64"), { flag: "wx" });
-  command("minisign", [
-    "-Vm",
-    join(directory, names.appimage),
-    "-x",
-    signaturePath,
-    "-p",
-    publicKeyPath,
-  ]);
+  const verifySignature = (name) =>
+    command("minisign", ["-Vm", join(directory, name), "-x", signaturePath, "-p", publicKeyPath]);
+  verifySignature(names.appimage);
 
   // Detect every immutable conflict before uploading any missing file.
   for (const entry of inputs) {
@@ -1080,14 +1075,7 @@ function publish(github, options, publicKey) {
       signaturePath,
       Buffer.from(retained.platforms["linux-x86_64"].signature, "base64"),
     );
-    command("minisign", [
-      "-Vm",
-      join(directory, names.appimage),
-      "-x",
-      signaturePath,
-      "-p",
-      publicKeyPath,
-    ]);
+    verifySignature(names.appimage);
   } else {
     assert(
       typeof published.published_at === "string" &&
@@ -1107,14 +1095,7 @@ function publish(github, options, publicKey) {
             signaturePath,
             Buffer.from(legacy.platforms["linux-x86_64"].signature, "base64"),
           );
-          command("minisign", [
-            "-Vm",
-            join(directory, names.appimage),
-            "-x",
-            signaturePath,
-            "-p",
-            publicKeyPath,
-          ]);
+          verifySignature(names.appimage);
         }
       }
     }
@@ -1208,14 +1189,7 @@ function publish(github, options, publicKey) {
           "Invalid retained desktop signature",
         );
         writeFileSync(signaturePath, Buffer.from(previousSignature, "base64"));
-        command("minisign", [
-          "-Vm",
-          join(directory, name),
-          "-x",
-          signaturePath,
-          "-p",
-          publicKeyPath,
-        ]);
+        verifySignature(name);
       }
       // Keep the previously published date/notes on an identical bundle replay.
       writeFileSync(desktopPath, previous);

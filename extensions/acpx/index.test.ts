@@ -6,7 +6,13 @@ import { inspectAgentModels } from "acpx/runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  withinTest,
+  type FixtureReceiptChannel,
+} from "openclaw/plugin-sdk/test-fixtures";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import setupPlugin from "./setup-api.js";
 
 const { createAcpxRuntimeServiceMock, tryDispatchAcpReplyHookMock, nativePrograms } = vi.hoisted(
@@ -68,6 +74,13 @@ function registerAcpxAutoEnableProbe(): AcpxAutoEnableProbe {
 }
 
 describe("acpx plugin", () => {
+  let receipts: FixtureReceiptChannel;
+  beforeAll(async () => {
+    receipts = await openFixtureReceiptChannel();
+  });
+  afterAll(async () => {
+    await receipts.close();
+  });
   afterEach(() => vi.restoreAllMocks());
   beforeEach(() => {
     vi.clearAllMocks();
@@ -313,12 +326,18 @@ describe("acpx plugin", () => {
     expect(getRuntime).not.toHaveBeenCalled();
   });
 
-  it.each(["enabled", "disabled", "disposed"] as const)(
+  it.for(["enabled", "disabled", "disposed"] as const)(
     "inspects a real native catalog without runtime state when the harness becomes %s",
-    async (lifecycle) => {
+    async (lifecycle, { signal }) => {
       const directory = await fs.mkdtemp(path.join(os.tmpdir(), "acpx-native-catalog-"));
       const peerDirectory = path.join(directory, "peer");
       await fs.mkdir(peerDirectory);
+      const receiptModule = path.join(directory, "receipts.mjs");
+      await fs.writeFile(
+        receiptModule,
+        `${fixtureReceiptClientSource(receipts.endpoint)}
+export { sendReceipt };`,
+      );
       const runtimeDirectory = path.join(directory, "runtime");
       const getRuntime = vi.fn(() => {
         throw new Error("Catalog inspection must not acquire the runtime");
@@ -343,6 +362,7 @@ describe("acpx plugin", () => {
                   peerDirectory,
                   "--model-controls",
                   "--hold-new-session",
+                  `--receipt-module=${receiptModule}`,
                 ],
               },
             },
@@ -379,11 +399,17 @@ describe("acpx plugin", () => {
           (error: unknown) => ({ models: undefined, error }),
         );
       try {
-        await expect
-          .poll(() => fs.readFile(path.join(peerDirectory, "session-new-entered"), "utf8"), {
-            timeout: 10_000,
-          })
-          .not.toBe("");
+        const entered = path.join(peerDirectory, "session-new-entered");
+        // The peer records entry before replying; its receipt uses a separate pipe.
+        await withinTest(
+          Promise.race([
+            receipts.waitFor(entered, ""),
+            catalog.then(async () => {
+              expect(await fs.readFile(entered, "utf8")).not.toBe("");
+            }),
+          ]),
+          signal,
+        );
         if (lifecycle === "disabled") {
           config = {
             plugins: { entries: { acpx: { config: { nativeAgents: { opencode: false } } } } },

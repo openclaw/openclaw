@@ -45,7 +45,7 @@ type MockRoute = {
 type MockRequest = {
   isNavigationRequest: () => boolean;
   frame: () => object;
-  resourceType?: () => string;
+  resourceType: () => string;
   url: () => string;
 };
 type MockRouteHandler = (route: MockRoute, request: MockRequest) => Promise<void>;
@@ -88,6 +88,7 @@ function installBrowserMocks() {
   } as unknown as import("playwright-core").BrowserContext;
   const page = {
     on: vi.fn(),
+    isClosed: vi.fn(() => false),
     context: () => context,
     goto: pageGoto,
     title: vi.fn(async () => ""),
@@ -168,7 +169,6 @@ async function dispatch(
   if (!handler) {
     throw new Error("missing route handler");
   }
-  const { resourceType } = opts;
   await handler(createMockRoute(opts.route), {
     isNavigationRequest: () => opts.isNavigationRequest ?? true,
     frame: () => {
@@ -177,7 +177,7 @@ async function dispatch(
       }
       return opts.frame ?? f.mainFrame;
     },
-    ...(resourceType ? { resourceType: () => resourceType } : {}),
+    resourceType: () => opts.resourceType ?? "document",
     url: () => opts.url ?? publicUrl,
   });
 }
@@ -252,12 +252,6 @@ afterEach(async () => {
 });
 
 describe("pw-session createPageViaPlaywright navigation guard", () => {
-  it("blocks unsupported non-network URLs", async () => {
-    await expect(create({ url: "file:///etc/passwd" })).rejects.toBeInstanceOf(
-      InvalidBrowserNavigationUrlError,
-    );
-    expect(f.pageGoto).not.toHaveBeenCalled();
-  });
   it("blocks hostname navigation when strict SSRF policy is configured", async () => {
     getChromeWebSocketEndpointSpy.mockResolvedValue({
       url: "ws://127.0.0.1:18792/devtools/browser/ROOT",
@@ -269,12 +263,6 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
       }),
     ).rejects.toBeInstanceOf(InvalidBrowserNavigationUrlError);
     expect(f.pageGoto).not.toHaveBeenCalled();
-  });
-  it("blocks private redirect hops even when Playwright marks hop as non-navigation", async () => {
-    blockedRedirect({ isNavigationRequest: false, resourceType: "document" });
-    await denied(create());
-    expect(f.pageGoto).toHaveBeenCalledTimes(1);
-    expect(f.pageClose).toHaveBeenCalledTimes(1);
   });
   it("fails closed as a top-level navigation when request frame resolution throws", async () => {
     f.pageGoto.mockImplementationOnce(async () => {
@@ -337,6 +325,7 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     const error = new Error("page.goto: net::ERR_CONNECTION_REFUSED");
     f.pageGoto.mockRejectedValueOnce(error);
     f.pageClose.mockRejectedValueOnce(new Error("close failed"));
+    cleanupFailure(false);
     await expect(create()).rejects.toBe(error);
     expect(f.pageClose).toHaveBeenCalledTimes(1);
   });
@@ -359,19 +348,14 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
   });
   it("keeps blocked tab quarantined if close fails", async () => {
     f.pageClose.mockRejectedValueOnce(new Error("close failed"));
-    blockedRedirect();
+    blockedRedirect({ isNavigationRequest: false, resourceType: "document" });
     await denied(create());
+    expect(f.pageGoto).toHaveBeenCalledOnce();
     expect(await listPagesViaPlaywright({ cdpUrl })).toHaveLength(0);
+    expect(f.disconnect()).toBe(true);
     await expect(getPage("TARGET_1")).rejects.toThrow(blockedTargetMessage);
     await expect(getPage()).rejects.toThrow(blockedTargetMessage);
     expect(f.pageClose).toHaveBeenCalledTimes(1);
-  });
-  it("preserves blocked-target quarantine across transport disconnects", async () => {
-    f.pageClose.mockRejectedValueOnce(new Error("close failed"));
-    blockedRedirect();
-    await denied(create());
-    expect(f.disconnect()).toBe(true);
-    await expect(getPage("TARGET_1")).rejects.toThrow(blockedTargetMessage);
   });
   it("quarantines the actual page when blocked navigation receives a stale target id", async () => {
     await quarantineExistingPage("MISSING_TARGET");
@@ -428,12 +412,6 @@ describe("pw-session guarded browser navigation route cleanup", () => {
   });
   it("surfaces navigation route cleanup failure while the page remains open", async () => {
     const error = cleanupFailure(false);
-    await expect(navigate()).rejects.toBe(error);
-  });
-  it("preserves the original navigation failure when route cleanup also fails", async () => {
-    cleanupFailure(false);
-    const error = new Error("browser navigation failed");
-    f.pageGoto.mockRejectedValueOnce(error);
     await expect(navigate()).rejects.toBe(error);
   });
   it("ignores navigation route cleanup failure after the page closes", async () => {

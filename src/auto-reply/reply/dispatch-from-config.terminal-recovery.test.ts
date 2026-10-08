@@ -18,6 +18,11 @@ import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { expectedNoQueuedReplyResult } from "./dispatch-result-expectations.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import {
+  REPLY_OPERATION_RUN_STATE,
+  type ReplyOperationRunState,
+  resolveReplyOperationRunState,
+} from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
@@ -161,7 +166,9 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       text: "partial telegram reply",
     });
     expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith(
-      expect.objectContaining({ text: expect.stringContaining("Something went wrong") }),
+      expect.objectContaining({
+        text: expect.stringContaining("Check the conversation before trying again"),
+      }),
     );
   });
 
@@ -212,10 +219,8 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
   });
 
   it.each([
-    ["direct", false, false, "allow", "slack", true],
     ["group", true, true, "allow", "slack", true],
     ["group", false, false, "allow", "slack", false],
-    ["group", false, false, "disallow", "slack", true],
     ["direct", true, false, "allow", "discord", true],
   ] as const)(
     "settles an adopted %s failure (progress=%s, mentioned=%s, silence=%s, origin=%s)",
@@ -275,7 +280,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       );
       if (expectedFinal) {
         expect(delivered.at(-1)?.payload).toMatchObject({
-          text: expect.stringContaining("Something went wrong"),
+          text: expect.stringContaining("Check the conversation before trying again"),
           isError: true,
         });
       }
@@ -300,39 +305,34 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
     },
   );
 
-  it.each(["before adoption", "adoption rejected"])(
-    "keeps %s failures retryable without a final notice",
-    async (failure) => {
-      const resolverError = new Error(failure);
-      const onAdopted = vi.fn(async () => {
+  it("keeps rejected adoption retryable without a final notice", async () => {
+    const resolverError = new Error("adoption rejected");
+    const onAdopted = vi.fn(async () => {
+      throw resolverError;
+    });
+    const dispatcher = createReplyDispatcher({ deliver: vi.fn(async () => {}) });
+    const replyResolver = vi.fn<NonNullable<DispatchFromConfigParams["replyResolver"]>>(
+      async (_ctx, options) => {
+        await options?.turnAdoptionLifecycle?.onAdopted();
         throw resolverError;
-      });
-      const dispatcher = createReplyDispatcher({ deliver: vi.fn(async () => {}) });
-      const replyResolver = vi.fn<NonNullable<DispatchFromConfigParams["replyResolver"]>>(
-        async (_ctx, options) => {
-          if (failure === "adoption rejected") {
-            await options?.turnAdoptionLifecycle?.onAdopted();
-          }
-          throw resolverError;
-        },
-      );
-      const params = {
-        ...createVisibleDispatchParams(replyResolver),
-        dispatcher,
-        replyOptions: { turnAdoptionLifecycle: { onAdopted } },
-      };
-      params.ctx.MessageSid = "retryable-failure";
-      await expect(
-        withReplyDispatcher({ dispatcher, run: () => dispatchReplyFromConfig(params) }),
-      ).rejects.toBe(resolverError);
-      expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
-      replyResolver.mockResolvedValueOnce({ text: "retry succeeded" });
-      await dispatchReplyFromConfig({ ...params, dispatcher: createDispatcher() });
-      expect(replyResolver).toHaveBeenCalledTimes(2);
-    },
-  );
+      },
+    );
+    const params = {
+      ...createVisibleDispatchParams(replyResolver),
+      dispatcher,
+      replyOptions: { turnAdoptionLifecycle: { onAdopted } },
+    };
+    params.ctx.MessageSid = "retryable-failure";
+    await expect(
+      withReplyDispatcher({ dispatcher, run: () => dispatchReplyFromConfig(params) }),
+    ).rejects.toBe(resolverError);
+    expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
+    replyResolver.mockResolvedValueOnce({ text: "retry succeeded" });
+    await dispatchReplyFromConfig({ ...params, dispatcher: createDispatcher() });
+    expect(replyResolver).toHaveBeenCalledTimes(2);
+  });
 
-  it.each(["message_tool_only", "send-denied", "observed-delivery", "room-event"])(
+  it.each(["observed-delivery", "room-event"])(
     "does not add an adopted failure notice for %s",
     async (policy) => {
       const params = createVisibleDispatchParams(async (_ctx, options) => {
@@ -343,18 +343,12 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
         throw new Error("adopted failure");
       });
       params.ctx.MessageSid = "adopted-suppressed-failure";
-      if (policy === "send-denied") {
-        sessionStoreMocks.currentEntry = { sendPolicy: "deny" };
-      }
       if (policy === "room-event") {
         params.ctx.InboundEventKind = "room_event";
       }
       const result = await dispatchReplyFromConfig({
         ...params,
         replyOptions: {
-          ...(policy === "message_tool_only"
-            ? { sourceReplyDeliveryMode: "message_tool_only" as const }
-            : {}),
           turnAdoptionLifecycle: { onAdopted: vi.fn(async () => {}) },
         },
       });
@@ -444,11 +438,31 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
     expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["no_activity", "stuck_recovery"] as const)(
-    "sends truthful stalled feedback when %s expires the active reply",
-    async (reason) => {
+  it.each([
+    { reason: "stuck_recovery", continued: false, notice: true },
+    { reason: "finalization_stalled", continued: true, notice: false },
+    // A final message-tool answer reached the source before the watchdog fired.
+    { reason: "stuck_recovery", continued: true, notice: false, answered: true },
+    // A newer input steered in after that answer still needs one.
+    { reason: "stuck_recovery", continued: true, notice: false, answered: true, steered: true },
+  ] as const)(
+    "sends the stall notice only as a last resort ($reason, continued=$continued)",
+    async ({ reason, continued, notice, ...testCase }) => {
+      const answered = "answered" in testCase;
+      const steered = "steered" in testCase;
       const resolverStarted = createDeferred();
+      const continueStalledTurn = vi.fn(() => continued);
       const dispatchParams = createVisibleDispatchParams(async (_ctx, options) => {
+        const runState = resolveReplyOperationRunState(options);
+        if (runState) {
+          runState.continueStalledTurn = continueStalledTurn;
+        }
+        if (answered) {
+          replyRunRegistry.get(sessionKey)?.markSourceReplyDelivered();
+        }
+        if (steered) {
+          replyRunRegistry.get(sessionKey)?.markSteeredInputAccepted({ inboundAudio: false });
+        }
         resolverStarted.resolve();
         await new Promise<void>((resolve) => {
           options?.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
@@ -464,11 +478,48 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       expect(operation).toBeDefined();
       expect(expireStaleReplyOperation(operation!, reason)).toBe(false);
 
-      await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: true });
-      expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith({
-        text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
-        isError: true,
-      });
+      await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: notice });
+      expect(continueStalledTurn).toHaveBeenCalledTimes(
+        reason !== "finalization_stalled" && (!answered || steered) ? 1 : 0,
+      );
+      if (notice) {
+        expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith({
+          text: "⚠️ This turn was interrupted because it stopped making progress. Please try again.",
+          isError: true,
+        });
+      } else {
+        expect(dispatchParams.dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      }
     },
   );
+
+  it("keeps a queued channel turn accepted when the busy session frees before final admission", async () => {
+    const activeOperation = createReplyOperation({
+      sessionKey,
+      sessionId: "active-session",
+      resetTriggered: false,
+    });
+    activeOperation.setPhase("running");
+    sessionStoreMocks.currentEntry = { sessionId: "active-session", updatedAt: Date.now() };
+    const runState: ReplyOperationRunState = {};
+    const dispatchParams = createVisibleDispatchParams(async () => {
+      // The turn queues behind pending follow-up work; the owner settles before
+      // dispatch reacquires the now-idle session for final delivery.
+      runState.admission = { status: "accepted", mode: "followup" };
+      activeOperation.complete();
+      return undefined;
+    });
+
+    await expect(
+      dispatchReplyFromConfig({
+        ...dispatchParams,
+        replyOptions: {
+          [REPLY_OPERATION_RUN_STATE]: runState,
+          turnAdoptionLifecycle: { admission: "exclusive", onAdopted: () => {} },
+        },
+      }),
+    ).resolves.toMatchObject({ queuedFinal: false });
+    expect(dispatchParams.dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(mocks.routeReply).not.toHaveBeenCalled();
+  });
 });

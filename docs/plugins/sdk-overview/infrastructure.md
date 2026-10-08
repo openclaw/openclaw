@@ -33,12 +33,29 @@ background services, plus the SDK helpers those surfaces depend on. Part of the
 | `api.registerTextTransforms(transforms)`          | Plugin-owned prompt/message compatibility text rewrites                |
 | `api.registerConfigMigration(migrate)`            | Lightweight config migration run before plugin runtime loads           |
 | `api.registerMigrationProvider(provider)`         | Importer for `openclaw migrate`                                        |
-| `api.registerAutoEnableProbe(probe)`              | Config probe that can auto-enable this plugin                          |
+| `api.registerAutoEnableProbe(probe)`              | Config check that can auto-enable this plugin                          |
 | `api.registerReload(registration)`                | Restart/hot/noop config-prefix policy for reload handling              |
 | `api.registerNodeInvokePolicy(policy)`            | Allowlist/approval policy for node-invoked commands                    |
 | `api.registerSecurityAuditCollector(collector)`   | Findings collector for `openclaw security audit`                       |
 
 Gateway methods default to `profileAccess: "required"`, so authenticated-profile verification fails closed before plugin dispatch. Set `profileAccess: "independent"` only for an audited method that neither reads nor mutates durable user or session state. Operator scope remains a separate authorization requirement.
+
+Read-only methods may opt into WebSocket response sharing with registration options
+`shareKey(caller, params)`, `shareInvalidationEvents`, and `shareMaxAgeMs`.
+Return `null` when a request cannot share. The key must include every caller and
+parameter dependency, including identity, scopes, capabilities, agent, and account
+selection. A successful result must be immutable after publication. The dispatcher
+checks each caller's authority and shares only the result and serialized payload;
+errors are not cached. Listed broadcasts invalidate pending and completed entries.
+The default absolute ceiling is one second and the host caps it at five seconds.
+The Gateway retains at most 16 responses across all methods, each at most 1 MiB,
+and clears them when its method registry is replaced. Expiry and invalidation
+release waiting callers to perform their own reads instead of repeatedly joining
+retired work.
+Only opt in when the method's authorization is fully covered by dispatch; a
+handler that performs additional caller-specific authorization or nested requests
+must remain request-local. Omit these options for mutations, subscriptions, and
+connection-bound providers.
 
 ### File-watch capacity errors
 
@@ -138,6 +155,11 @@ Inside those workers, import `serveWorkerTasks` and the
 `WorkerTaskControl` type from `openclaw/plugin-sdk/worker-task-server` to avoid
 loading the host process and pool runtime. Both paths use the same task protocol.
 
+The shared implementation lives in the private `@openclaw/worker-runtime`
+workspace package. Plugins keep using these public SDK entrypoints; OpenClaw's
+host adapter supplies worker creation, resource cleanup, and process accounting
+to the same scheduler.
+
 The older serving exports in `process-runtime` remain for released official
 plugins. Bundled workers use `worker-task-server`; remove the older exports only
 after supported official plugin versions have migrated to hosts with this subpath.
@@ -161,6 +183,20 @@ For stateless computation, `sharedCompute: true` also shares an aggregate
 128-task/256-MiB admission budget and CPU execution capacity with participating
 pools in the same isolate. Dedicated ordered pools retain their own execution
 capacity and still enforce their individual admission limits.
+
+For interactive tasks waiting on a host response, queue pressure can request a
+cooperative checkpoint through `yieldSignal` so queued work can run. The host
+operation retains its own lifetime. Internal `openclaw.worker.task` diagnostics
+include `hostWaitMs` alongside the existing timing fields; host wait is included
+in `runMs`, not added to it. This field is diagnostic data, not a public config
+option.
+
+The task's `timeoutMs` includes host callbacks. Expiry aborts the callback's
+`signal` and retires the worker; a host response can shorten the remaining
+deadline but cannot renew it. An owner that already enforces a separate,
+approval-aware host deadline can set `hostTimeout: "owner"` to suspend the pool
+clock during host callbacks and supply its remaining budget in the response.
+Accepted host effects still need their owner's settlement and cleanup receipts.
 
 Pass static Node.js Worker settings in `workerOptions`. For per-worker settings,
 `prepareWorker()` runs once per Worker creation attempt and returns
@@ -344,12 +380,12 @@ verification and bounded body read.
 
 For bundled callback setup and Doctor guidance, `classifyGatewayProbePath(pathname)`
 from the private `openclaw/plugin-sdk/gateway-config-runtime` facade identifies
-Gateway probe paths without loading webhook execution code. This facade is not
+Gateway check paths without loading webhook execution code. This facade is not
 part of the third-party SDK. Normalize callback input
 through `new URL(rawPath, "http://localhost").pathname` first. Results `live`,
-`ready`, and `startup` identify exact paths owned by probes on the Gateway port;
+`ready`, and `startup` identify exact paths owned by checks on the Gateway port;
 choose a different webhook path. Results `namespace` and `outside` do not identify
-an exact probe route. The same private facade exports `resolvePluginRoutePathContext`
+an exact check route. The same private facade exports `resolvePluginRoutePathContext`
 and `isProtectedPluginRoutePathFromContext` for canonical protected-path checks.
 If the callback falls under a protected namespace, choose the channel's safe default
 path before moving the external callback or reverse proxy to the Gateway port.
@@ -374,21 +410,56 @@ need an unambiguous account path or authentication identity.
 The optional registration metadata `health: { path, contentType? }` preserves a
 shipped exact raw health target: `200 ok` for ordinary HTTP methods, with Node's
 HEAD behavior and only the optional Content-Type. It applies only on the legacy
-port, including during route handoff, and does not expose Gateway probe details.
+port, including during route handoff, and does not expose Gateway check details.
 Legacy ports retain native Node expectation handling, Upgrade fallback, header
 limits and timeout defaults. A shipped timeout profile can be preserved with
 `timeouts: { headers, request, socket }` in milliseconds. These are plugin
 registration contracts, not new operator configuration.
 
-The channel owns effective listener resolution: preserve its shipped default when
-`legacyWebhook` is omitted, use an explicit endpoint object when configured, and
-register no legacy listener when it is `false`. Resolve the same endpoint for
+The channel owns effective listener resolution: register a legacy listener only
+for an explicit `legacyWebhook` endpoint object. Omitted settings and `false`
+select Gateway-only ingress. Resolve the same endpoint for
 runtime routing and Doctor guidance. Plugin-owned Doctor contracts can compose
 `createLegacyWebhookListenerDoctorContract` from
 `openclaw/plugin-sdk/runtime-doctor-migrations` to preserve authored ports and
 inherited bind addresses through the normal backed-up config write. An explicit
 legacy host without a port uses the channel's shipped default port. Canonical
 `false` settings remain authoritative when Doctor removes retired keys.
+For retirement of a historical default, export the helper's static
+`historicalWebhookListener` property from the existing config Doctor module and
+its `config-doctor-api` and `doctor-contract-api` entrypoints. This
+`{ channelId, port, host? }` object reuses the helper's historical defaults.
+The host validates that the channel belongs to the plugin, the port is an integer
+from 1 to 65535, and an explicit host is nonblank. Set the factory option
+`preserveAuthoredActivation: true` only when authored listener settings previously
+implied channel activation. The returned static declaration carries this flag;
+the host preserves activation after prior-operation and completion checks, before
+adding implicit pins. The normalizer must not enable the channel itself. Keep
+`doctorContract.configRepair: true` in the manifest. Return
+`historicalWebhookAccountIds` from the existing `normalizeCompatibilityConfig`
+result, using the plugin's account and transport owners to select eligible
+accounts. An empty array means inspection completed with no eligible accounts;
+an `undefined` array entry selects an accountless channel root. Return `null`
+when the current process cannot decide environment-dependent eligibility. Omit
+the field only when the contract is not implemented. The host owns
+prior-operation detection, pin creation, and completion; the normalizer returns
+eligibility without opening listeners or creating implicit endpoints.
+
+Retained host config Doctor artifacts also expose `normalizeHistoricalWebhookConfig`.
+It reuses the listener-only migration and returns its config changes, warnings,
+and `historicalWebhookAccountIds`, without applying unrelated compatibility repairs.
+During an update rehearsal, the host can use this operation for a missing plugin
+whose installation is deferred. Selected installed or custom owners still shadow
+the host artifact, and this operation does not complete deferred plugin inspection.
+External plugins are not required to implement this host fallback.
+
+Automatic pins belong to existing accounts, including `accounts.default`, so
+accounts added later do not inherit them. Doctor backs up the config before
+persisting pins with `meta.migrations.webhookListeners`. The marker records exact
+inserted paths per completed channel, or `true` for a fresh installation.
+Removing a pin while retaining this marker does not recreate it on a later
+Doctor run or update. See [webhook migrations](/gateway/doctor/config-migrations#channel-webhook-listeners)
+for read-only config behavior.
 Return normal listener guidance in `runConfigSequence().infoNotes` so Doctor
 labels it as information. Keep actionable configuration problems in
 `warningNotes`; `changeNotes` describe applied repairs.
@@ -533,3 +604,20 @@ Telegram's normal inbound agent path after the handler succeeds. OpenClaw keeps
 the callback button when inbound policy skips the text or processing fails, so
 the user can retry after the blocking condition changes. This result field is
 Telegram-specific; other channels keep their own interactive result contracts.
+
+### Doctor plugin-state repairs
+
+`PluginDoctorStateMigrationContext.repairPluginStateEntries(namespace, replacements)`
+is available during the offline `after-session-repair` phase. Each replacement
+contains an exact `PluginDoctorRawStateEntry` observation from
+`readPluginStateEntriesInKeyRange` and a JSON-compatible `value`. An empty read
+prefix scans the namespace in pages of at most 512 rows. The host binds plugin
+identity and the state location; plugins never supply database paths or SQL.
+
+The host freezes each batch, verifies a backup containing the original row bytes,
+and compares the complete observations under current maintenance authority before
+one transaction replaces their values. Keys, creation timestamps, and expiry
+remain unchanged. Any changed row or database generation refuses the whole batch.
+Plugins keep format interpretation in their Doctor contract and leave credential
+binding and runtime lifecycle decisions with their existing owners. Older hosts
+may omit this optional repair capability.

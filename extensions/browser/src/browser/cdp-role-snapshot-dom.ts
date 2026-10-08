@@ -5,14 +5,11 @@ import type { CdpRoleRef, CursorInteractiveInfo, RoleTreeNode } from "./cdp-role
 
 export async function findCursorInteractiveElements(
   send: CdpProtocolSend,
-  sessionId?: string,
 ): Promise<Map<number, CursorInteractiveInfo>> {
   const attr = "data-openclaw-cdp-ci";
   try {
-    const evaluated = (await send(
-      "Runtime.evaluate",
-      {
-        expression: `(() => {
+    const evaluated = (await send("Runtime.evaluate", {
+      expression: `(() => {
           const out = [];
           const roles = new Set(["button","link","textbox","checkbox","radio","combobox","listbox","menuitem","menuitemcheckbox","menuitemradio","option","searchbox","slider","spinbutton","switch","tab","treeitem"]);
           const tags = new Set(["a","button","input","select","textarea","details","summary"]);
@@ -58,11 +55,9 @@ export async function findCursorInteractiveElements(
           }
           return out;
         })()`,
-        returnByValue: true,
-        awaitPromise: false,
-      },
-      sessionId,
-    ).catch(() => null)) as { result?: { value?: unknown } } | null; // SAFETY: Runtime returns a RemoteObject result; its page-derived by-value data is validated below.
+      returnByValue: true,
+      awaitPromise: false,
+    }).catch(() => null)) as { result?: { value?: unknown } } | null; // SAFETY: Runtime returns a RemoteObject result; its page-derived by-value data is validated below.
     const values: unknown[] = Array.isArray(evaluated?.result?.value) ? evaluated.result.value : [];
     const entries: (CursorInteractiveInfo | undefined)[] = values.map((value) => {
       const entry = asOptionalRecord(value);
@@ -84,7 +79,7 @@ export async function findCursorInteractiveElements(
       return new Map();
     }
 
-    const documentResult = await send("DOM.getDocument", { depth: 0 }, sessionId).catch(() => null);
+    const documentResult = await send("DOM.getDocument", { depth: 0 }).catch(() => null);
     // SAFETY: DOM.getDocument returns its root DOM.Node; nodeId is checked before use.
     const doc = documentResult as {
       root?: { nodeId?: number };
@@ -93,17 +88,17 @@ export async function findCursorInteractiveElements(
     if (typeof rootNodeId !== "number") {
       return new Map();
     }
-    const queried = (await send(
-      "DOM.querySelectorAll",
-      { nodeId: rootNodeId, selector: `[${attr}]` },
-      sessionId,
-    ).catch(() => null)) as { nodeIds?: number[] } | null; // SAFETY: DOM.querySelectorAll returns browser-owned integer NodeIds.
+    const queried = (await send("DOM.querySelectorAll", {
+      nodeId: rootNodeId,
+      selector: `[${attr}]`,
+    }).catch(() => null)) as { nodeIds?: number[] } | null; // SAFETY: DOM.querySelectorAll returns browser-owned integer NodeIds.
     const out = new Map<number, CursorInteractiveInfo>();
     await Promise.all(
       (queried?.nodeIds ?? []).map(async (nodeId) => {
-        const described = (await send("DOM.describeNode", { nodeId }, sessionId).catch(
-          () => null,
-        )) as { node?: { backendNodeId?: number; attributes?: string[] } } | null; // SAFETY: DOM.describeNode returns native node identity and alternating string attributes.
+        // SAFETY: DOM.describeNode returns native node identity and alternating string attributes.
+        const described = (await send("DOM.describeNode", { nodeId }).catch(() => null)) as {
+          node?: { backendNodeId?: number; attributes?: string[] };
+        } | null;
         const attrs = described?.node?.attributes ?? [];
         const attrIndex = attrs.indexOf(attr);
         const rawIndex = attrIndex >= 0 ? attrs[attrIndex + 1] : undefined;
@@ -116,21 +111,16 @@ export async function findCursorInteractiveElements(
     );
     return out;
   } finally {
-    await send(
-      "Runtime.evaluate",
-      {
-        expression: `document.querySelectorAll("[${attr}]").forEach((el) => el.removeAttribute("${attr}"))`,
-        returnByValue: true,
-      },
-      sessionId,
-    ).catch(() => {});
+    await send("Runtime.evaluate", {
+      expression: `document.querySelectorAll("[${attr}]").forEach((el) => el.removeAttribute("${attr}"))`,
+      returnByValue: true,
+    }).catch(() => {});
   }
 }
 
 export async function resolveLinkUrls(
   send: CdpProtocolSend,
   refs: Record<string, CdpRoleRef>,
-  sessionId?: string,
 ): Promise<Map<number, string>> {
   const out = new Map<number, string>();
   const linkRefs = Object.values(refs).filter(
@@ -139,24 +129,18 @@ export async function resolveLinkUrls(
   );
   await Promise.all(
     linkRefs.map(async (ref) => {
-      const resolved = (await send(
-        "DOM.resolveNode",
-        { backendNodeId: ref.backendDOMNodeId },
-        sessionId,
-      ).catch(() => null)) as { object?: { objectId?: string } } | null; // SAFETY: DOM.resolveNode returns a RemoteObject; its objectId is required below.
+      const resolved = (await send("DOM.resolveNode", {
+        backendNodeId: ref.backendDOMNodeId,
+      }).catch(() => null)) as { object?: { objectId?: string } } | null; // SAFETY: DOM.resolveNode returns a RemoteObject; its objectId is required below.
       const objectId = resolved?.object?.objectId;
       if (!objectId) {
         return;
       }
-      const hrefResult = (await send(
-        "Runtime.callFunctionOn",
-        {
-          objectId,
-          functionDeclaration: "function() { return this.href || ''; }",
-          returnByValue: true,
-        },
-        sessionId,
-      ).catch(() => null)) as { result?: { value?: unknown } } | null; // SAFETY: Runtime returns a RemoteObject result; its page-derived by-value data is validated below.
+      const hrefResult = (await send("Runtime.callFunctionOn", {
+        objectId,
+        functionDeclaration: "function() { return this.href || ''; }",
+        returnByValue: true,
+      }).catch(() => null)) as { result?: { value?: unknown } } | null; // SAFETY: Runtime returns a RemoteObject result; its page-derived by-value data is validated below.
       const href = typeof hrefResult?.result?.value === "string" ? hrefResult.result.value : "";
       if (href) {
         out.set(ref.backendDOMNodeId, href);
@@ -169,7 +153,6 @@ export async function resolveLinkUrls(
 export async function resolveIframeFrameIds(
   send: CdpProtocolSend,
   tree: RoleTreeNode[],
-  sessionId?: string,
 ): Promise<Map<number, string>> {
   const out = new Map<number, string>();
   const iframeNodes = tree.filter(
@@ -178,11 +161,10 @@ export async function resolveIframeFrameIds(
   );
   await Promise.all(
     iframeNodes.map(async (node) => {
-      const description = await send(
-        "DOM.describeNode",
-        { backendNodeId: node.backendDOMNodeId, depth: 1 },
-        sessionId,
-      ).catch(() => null);
+      const description = await send("DOM.describeNode", {
+        backendNodeId: node.backendDOMNodeId,
+        depth: 1,
+      }).catch(() => null);
       // SAFETY: DOM.describeNode includes optional native frameId and contentDocument metadata.
       const described = description as {
         node?: { frameId?: string; contentDocument?: { frameId?: string } };

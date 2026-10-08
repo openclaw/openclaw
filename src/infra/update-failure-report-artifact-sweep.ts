@@ -50,33 +50,25 @@ export async function cleanRetiredUpdateFailureReportArtifacts(
     !keepCurrent || receipt.replacementReady
       ? undefined
       : bindSavedReportArtifact(prepared, receipt.reservationId, receipt.previewDigest);
+  const hasSweepLease = () =>
+    hasUpdateFailureReportArtifactSweepLease(
+      prepared.attemptId,
+      receipt.reservationId,
+      sweepOwnerId,
+      sweepGeneration,
+      stateEnv,
+    );
   let swept = false;
   try {
     await hooks.beforeList?.();
-    if (
-      !hasUpdateFailureReportArtifactSweepLease(
-        prepared.attemptId,
-        receipt.reservationId,
-        sweepOwnerId,
-        sweepGeneration,
-        stateEnv,
-      )
-    ) {
+    if (!hasSweepLease()) {
       return false;
     }
     const candidates = await (hooks.listCandidates ?? listRetiredUpdateFailureReportArtifacts)(
       prepared,
       keep,
     );
-    if (
-      !hasUpdateFailureReportArtifactSweepLease(
-        prepared.attemptId,
-        receipt.reservationId,
-        sweepOwnerId,
-        sweepGeneration,
-        stateEnv,
-      )
-    ) {
+    if (!hasSweepLease()) {
       return false;
     }
     await removeRetiredUpdateFailureReportArtifacts(candidates);

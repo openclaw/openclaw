@@ -315,7 +315,7 @@ describe("effective service inspection through legacy busctl", () => {
       }
       if (args.includes("org.freedesktop.systemd1.Unit")) {
         return success(
-          `s ${JSON.stringify(unit)}\nas ${[loadedDropIns.length, ...loadedDropIns.map((file) => JSON.stringify(file))].join(" ")}\nb ${pendingReload}\ns "loaded"\n`,
+          `s ${JSON.stringify(unit)}\nas ${[loadedDropIns.length, ...loadedDropIns.map((file) => JSON.stringify(file))].join(" ")}\nb ${pendingReload}\ns "loaded"\ns "enabled"\ns "active"\nb true\nb false\n`,
         );
       }
       return success(

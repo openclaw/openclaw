@@ -168,6 +168,9 @@ export async function inspectGatewayRestart(params: {
           ...(reachable.channelProbeErrors.length > 0
             ? { channelProbeErrors: reachable.channelProbeErrors }
             : {}),
+          ...(reachable.channelProbeTimeouts?.length
+            ? { channelProbeTimeouts: reachable.channelProbeTimeouts }
+            : {}),
         },
         expectedVersion,
         expectedBuildId,
@@ -178,9 +181,7 @@ export async function inspectGatewayRestart(params: {
 
   const gatewayListeners =
     portUsage.status === "busy"
-      ? portUsage.listeners.filter(
-          (listener) => classifyPortListener(listener, params.port) === "gateway",
-        )
+      ? portUsage.listeners.filter((listener) => classifyPortListener(listener) === "gateway")
       : [];
   const running = runtime.status === "running";
   const runtimePid = runtime.pid;
@@ -192,16 +193,11 @@ export async function inspectGatewayRestart(params: {
         ) || listenerAttributionGap
       : gatewayListeners.length > 0 || listenerAttributionGap;
   let healthy = running && ownsPort && !startupPhase;
-  if (requiresGatewayProbe && healthy && portUsage.status === "busy") {
-    const reachable = (reachability ??= await loadReachability());
-    healthy = reachable.reachable;
-  }
   if (
-    !healthy &&
     !startupPhase &&
     running &&
     portUsage.status === "busy" &&
-    !requiresGatewayProbe
+    (requiresGatewayProbe ? healthy : !healthy)
   ) {
     const reachable = (reachability ??= await loadReachability());
     healthy = reachable.reachable;
@@ -243,6 +239,7 @@ export async function inspectGatewayRestart(params: {
     activatedPluginErrors,
     unavailablePlugins,
     channelProbeErrors,
+    channelProbeTimeouts,
   } = reachability ?? {};
   return finalizeGatewayRestartSnapshot(
     {
@@ -259,6 +256,7 @@ export async function inspectGatewayRestart(params: {
       ...(activatedPluginErrors?.length ? { activatedPluginErrors } : {}),
       ...(unavailablePlugins?.length ? { unavailablePlugins } : {}),
       ...(channelProbeErrors?.length ? { channelProbeErrors } : {}),
+      ...(channelProbeTimeouts?.length ? { channelProbeTimeouts } : {}),
     },
     expectedVersion,
     expectedBuildId,

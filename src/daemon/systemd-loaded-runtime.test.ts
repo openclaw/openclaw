@@ -31,6 +31,9 @@ const unitPath = "/org/freedesktop/systemd1/unit/openclaw_2downed_2eservice";
 const properties = {
   Id: { type: "s", data: unitName },
   LoadState: { type: "s", data: "loaded" },
+  UnitFileState: { type: "s", data: "enabled" },
+  RefuseManualStart: { type: "b", data: false },
+  CanStart: { type: "b", data: true },
   ActiveState: { type: "s", data: "active" },
   SubState: { type: "s", data: "running" },
   StartLimitBurst: { type: "u", data: 5 },
@@ -88,6 +91,62 @@ beforeEach(() => {
 });
 
 describe("loaded-only systemd runtime", () => {
+  it.each([
+    { load: "masked", file: "masked", refuse: false, canStart: false, reason: "masked" },
+    { load: "loaded", file: "masked-runtime", refuse: false, canStart: false, reason: "masked" },
+    {
+      load: "loaded",
+      file: "disabled",
+      refuse: true,
+      canStart: true,
+      reason: "refuse-manual-start",
+    },
+    {
+      load: "loaded",
+      file: "disabled",
+      refuse: false,
+      canStart: false,
+      reason: "disabled-no-start",
+    },
+    { load: "loaded", file: "disabled", refuse: false, canStart: true, reason: undefined },
+  ])("preserves native start refusal diagnostics ($file, $reason)", async (row) => {
+    busctl.mockImplementation(async (_env, args) =>
+      managerReply(args, {
+        LoadState: { type: "s", data: row.load },
+        UnitFileState: { type: "s", data: row.file },
+        RefuseManualStart: { type: "b", data: row.refuse },
+        CanStart: { type: "b", data: row.canStart },
+        ActiveState: { type: "s", data: "inactive" },
+        MainPID: { type: "u", data: 0 },
+        TasksCurrent: { type: "t", data: 0 },
+      }),
+    );
+    systemctl.mockResolvedValue(
+      success(
+        [
+          `Id=${unitName}`,
+          `LoadState=${row.load}`,
+          `UnitFileState=${row.file}`,
+          `RefuseManualStart=${row.refuse ? "yes" : "no"}`,
+          `CanStart=${row.canStart ? "yes" : "no"}`,
+          "ActiveState=inactive",
+          "MainPID=0",
+          "TasksCurrent=0",
+        ].join("\n"),
+      ),
+    );
+    for (const requireLoaded of [true, false]) {
+      const runtime = await readSystemdServiceRuntime(env, {
+        requireLoaded,
+        commandInspection: { kind: "present" },
+      });
+      expect(runtime.systemd?.startRefusal?.reason).toBe(row.reason);
+      if (row.reason === "masked") {
+        expect(runtime.detail).toContain(`systemctl --user unmask ${unitName}`);
+      }
+    }
+  });
+
   it.each([0, 2001])("authenticates the selected system manager UID %s", async (uid) => {
     systemBusctl.mockImplementation(async (args) =>
       args.includes("GetConnectionUnixUser")

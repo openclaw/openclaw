@@ -2,7 +2,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acquireMemoryIndexReadGeneration,
-  withMemoryIndexPublishGeneration,
+  withMemoryIndexGeneration,
 } from "./manager-index-generation-lease.js";
 import type { MemorySqliteLeaseHandle } from "./manager-sqlite-lease.js";
 
@@ -47,7 +47,7 @@ describe("memory generation lease cleanup", () => {
         },
       });
       const databasePath = `/memory-generation-release-${failRelease}.sqlite`;
-      const publication = withMemoryIndexPublishGeneration(databasePath, async () => {
+      const publication = withMemoryIndexGeneration(databasePath, "write", async () => {
         events.push("published");
       }).then(
         () => events.push("released"),
@@ -117,7 +117,7 @@ describe("memory generation lease cleanup", () => {
     await releaseStarted.promise;
     let published = false;
     leases.acquireWriter.mockResolvedValue({ release: async () => {} });
-    const nextPublication = withMemoryIndexPublishGeneration(databasePath, async () => {
+    const nextPublication = withMemoryIndexGeneration(databasePath, "write", async () => {
       published = true;
     });
     try {

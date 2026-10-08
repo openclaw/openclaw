@@ -19,14 +19,13 @@ import {
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId, resolveUiSelectedSessionAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
+import type { ChatPaneBase } from "../pages/chat/chat-pane-base.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import { renderPluginSurface } from "../plugins/control-ui-view.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
-import {
-  renderLazyDevicePairSetup,
-  type DevicePairSetupHost,
-} from "./app-shell-device-pair-setup.ts";
+import { renderLazyDevicePairSetup } from "./app-shell-device-pair-setup.ts";
 import { renderShellDocks } from "./app-shell-docks.ts";
+import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
 import { renderShellLazyOverlays, type ShellLazyOverlayHost } from "./app-shell-lazy-view.ts";
 import type { ShellViewCallbacks } from "./app-shell-view-callbacks.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
@@ -55,10 +54,9 @@ import { NAV_WIDTH_MAX, NAV_WIDTH_MIN, normalizeCatalogOpenTarget } from "./sett
 import { renderCollapsedHomeToggle } from "./shell-assistant-toggles.ts";
 import type { ShellLayoutController } from "./shell-layout-traits.ts";
 
-type SettingsSidebarHost = Parameters<typeof renderLazySettingsSidebar>[0];
-
-export interface ShellViewHost
-  extends DevicePairSetupHost, ShellLazyOverlayHost, SettingsSidebarHost {
+export interface ShellViewHost extends ShellLazyOverlayHost {
+  readonly devicePairSetup: Parameters<typeof renderLazyDevicePairSetup>[0];
+  readonly settingsSidebar: Parameters<typeof renderLazySettingsSidebar>[0];
   readonly runtime: ApplicationRuntime | undefined;
   readonly activeSessionKey: string;
   readonly custodianMinimizeRequestId: number;
@@ -74,6 +72,7 @@ export interface ShellViewHost
   readonly routeState: ShellRouteState;
   readonly settingsPreloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
   readonly settingsSearchQuery: string;
+  readonly storedOutboxes: ReturnType<OutboxStoreRuntime["read"]> | undefined;
   readonly viewCallbacks: ShellViewCallbacks;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
   newSessionRouteAgentId(): string;
@@ -87,6 +86,7 @@ export interface ShellViewHost
   refreshControlUi: () => Promise<boolean>;
   recoverNotFoundRoute: () => boolean;
   requestUpdate(): void;
+  querySelectorAll: ParentNode["querySelectorAll"];
   resizeNavigation(splitRatio: number): void;
   readonly toggleNavigationSurface: (trigger?: HTMLElement) => void;
 }
@@ -108,7 +108,14 @@ export function renderApplicationShell(host: ShellViewHost) {
   const navigationSnapshot = context.navigation.snapshot;
   const overlaySnapshot = context.overlays.snapshot;
   const controlUiRefreshRequired = overlaySnapshot.controlUiRefreshRequired;
-  const connectionStatus = resolveGatewayStatus(gatewaySnapshot, controlUiRefreshRequired);
+  const historyRecovering = [...host.querySelectorAll<ChatPaneBase>("openclaw-chat-pane")].some(
+    (pane) => pane.conversationPresented && pane.historyRecovering,
+  );
+  const connectionStatus = resolveGatewayStatus(
+    gatewaySnapshot,
+    controlUiRefreshRequired,
+    historyRecovering,
+  );
   const presentationScope = gatewayPresentationScope(context.gateway);
   // Initial hello can paint the shell before recovery finishes. Keep that brief
   // startup state in existing chrome rather than inserting and removing a row.
@@ -241,8 +248,7 @@ export function renderApplicationShell(host: ShellViewHost) {
       connected: gatewayConnected,
       connectionStatus,
       lastError: gatewaySnapshot.lastError,
-      outboxAttentionCountForSession: callbacks.outboxAttentionCountForSession,
-      hasSessionDraft: callbacks.hasSessionDraft,
+      storedOutboxes: host.storedOutboxes,
       terminalAvailable,
       catalogOpenTarget: normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget),
       canPairDevice: gatewayConnected && (operatorAccess.canAdmin || operatorAccess.canPair),
@@ -273,7 +279,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   const shellConnectionStatus =
     (navigationSurfaceHidden ||
       (settingsTakeover
-        ? host.settingsSidebarRenderer === null
+        ? host.settingsSidebar.renderer === null
         : !isOptionalElementDefined(APP_SIDEBAR_ELEMENT))) &&
     !nativeEmbed &&
     !onboarding &&
@@ -293,7 +299,7 @@ export function renderApplicationShell(host: ShellViewHost) {
   };
   const navigationContent =
     settingsTakeover || embedNavigation
-      ? renderLazySettingsSidebar(host, {
+      ? renderLazySettingsSidebar(host.settingsSidebar, {
           presentation: nativeEmbed ? (embedSettingsRoot ? "embed-list" : "embed-page") : "sidebar",
           basePath: context.basePath,
           activeRouteId: activeRoute,
@@ -537,6 +543,7 @@ export function renderApplicationShell(host: ShellViewHost) {
           aria-disabled=${pageActionsBlocked || reloadRequired ? "true" : nothing}
           .router=${runtime.router}
           .retryContext=${context}
+          .retryEnabled=${gatewayConnected}
           .retentionScope=${presentationScope}
           .onNotFound=${host.recoverNotFoundRoute}
           .notFoundRecoveryReady=${gatewayConnected}
@@ -591,7 +598,7 @@ export function renderApplicationShell(host: ShellViewHost) {
             ></openclaw-exec-approval>`
           : nothing
       }
-      ${renderLazyDevicePairSetup(host, {
+      ${renderLazyDevicePairSetup(host.devicePairSetup, {
         open: overlaySnapshot.devicePairSetupOpen,
         lifecycle: overlaySnapshot.devicePairSetupLifecycle,
         nowMs: Date.now(),

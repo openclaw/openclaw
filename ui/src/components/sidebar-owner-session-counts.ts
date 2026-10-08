@@ -6,6 +6,7 @@ import type {
 } from "../lib/sessions/session-capability.ts";
 
 const QUERY = {
+  source: "sidebar",
   includeOwnerSessionCounts: true,
   limit: 1,
   includeDerivedTitles: false,
@@ -15,6 +16,7 @@ const QUERY = {
   excludeSubagents: true,
   excludeCron: true,
   excludeSystem: true,
+  excludeDock: true,
 } as const satisfies SessionListScope;
 
 /** Presentation adapter for one complete, access-scoped managed-list facet. */

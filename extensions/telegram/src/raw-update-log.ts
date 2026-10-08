@@ -32,9 +32,6 @@ const TELEGRAM_RAW_UPDATE_ALWAYS_REDACT_KEYS = new Set([
   "url",
   "username",
   "vcard",
-]);
-const TELEGRAM_RAW_UPDATE_ALLOWED_ID_KEYS = new Set(["message_id", "update_id"]);
-const TELEGRAM_RAW_UPDATE_ID_REDACT_KEYS = new Set([
   "chat_id",
   "custom_emoji_id",
   "inline_message_id",
@@ -46,32 +43,16 @@ const TELEGRAM_RAW_UPDATE_ID_REDACT_KEYS = new Set([
   "user_id",
   "user_chat_id",
 ]);
+const TELEGRAM_RAW_UPDATE_ALLOWED_ID_KEYS = new Set(["message_id", "update_id"]);
 
 function shouldRedactTelegramRawUpdateValue(key: string, parentKey: string | undefined): boolean {
-  if (!key) {
-    return false;
-  }
   if (TELEGRAM_RAW_UPDATE_ALWAYS_REDACT_KEYS.has(key)) {
     return true;
   }
   if (TELEGRAM_RAW_UPDATE_ALLOWED_ID_KEYS.has(key)) {
     return false;
   }
-  if (TELEGRAM_RAW_UPDATE_ID_REDACT_KEYS.has(key)) {
-    return true;
-  }
-  if (key === "id" || key.endsWith("_id") || key.endsWith("_ids")) {
-    return parentKey !== undefined;
-  }
-  return false;
-}
-
-function isTelegramUserObject(value: Record<string, unknown>): boolean {
-  return (
-    typeof value.id === "number" &&
-    typeof value.is_bot === "boolean" &&
-    typeof value.first_name === "string"
-  );
+  return parentKey !== undefined && (key === "id" || key.endsWith("_id") || key.endsWith("_ids"));
 }
 
 export function formatTelegramRawUpdateForLog(update: unknown): string {
@@ -98,7 +79,11 @@ export function formatTelegramRawUpdateForLog(update: unknown): string {
       }
       seen.add(value);
       const record = value as Record<string, unknown>;
-      if (isTelegramUserObject(record)) {
+      if (
+        typeof record.id === "number" &&
+        typeof record.is_bot === "boolean" &&
+        typeof record.first_name === "string"
+      ) {
         return REDACTED_TELEGRAM_FIELD;
       }
       const redacted: Record<string, unknown> = {};

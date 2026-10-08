@@ -91,7 +91,7 @@ function scheduleChatMetadataRefresh(callback: () => void) {
 }
 
 export async function refreshChatCommands(host: ChatPageHost) {
-  await refreshSlashCommands({
+  return refreshSlashCommands({
     client: host.client,
     agentId: resolveChatAgentId(host),
     sessionKey: host.sessionKey,
@@ -126,11 +126,9 @@ export function applyChatAgentOwnerTransition(
   host.assistantAgentId = selectedAgentId;
   host.assistantName = "";
   host.assistantAvatar = null;
-  host.assistantAvatarSource = null;
   host.assistantAvatarStatus = null;
   host.assistantAvatarReason = null;
   host.chatAvatarUrl = null;
-  host.chatAvatarSource = null;
   host.chatAvatarStatus = null;
   host.chatAvatarReason = null;
   host.modelAuthStatusResult = null;
@@ -195,20 +193,16 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
             applyCachedChatModelCatalog(host, binding);
           }
           binding.sessionFactsInvalidated ||= update.refreshSessionFacts;
+          if (update.scope === "session" && binding.catalogRequest) {
+            // The foreground picker already owns replacement of its retired catalog read.
+            return;
+          }
           void refreshChatMetadata(host, { automatic: true });
           return;
         }
         if (update.type !== "loading") {
           if (update.type === "result") {
-            applyRemoteSlashCommandsResult({
-              client,
-              agentId: scope.agentId,
-              result: update.result,
-            });
-            if (update.catalogChanged) {
-              binding.sessionFactsInvalidated = true;
-              void refreshChatMetadata(host, { automatic: true });
-            }
+            applyRemoteSlashCommandsResult(update.result);
           }
           if (binding.sessionFactsRetryPending) {
             binding.sessionFactsRetryPending = false;
@@ -224,7 +218,7 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
   host.chatModelCatalogInitialized = hasUnrestrictedModelCatalogSnapshot(client);
   const cached = peekChatMetadata(client, scope);
   if (cached) {
-    applyRemoteSlashCommandsResult({ client, agentId: scope.agentId, result: cached });
+    applyRemoteSlashCommandsResult(cached);
   }
   return binding;
 }
@@ -384,7 +378,7 @@ function refreshChatSessionFacts(host: ChatPageHost, binding: ChatMetadataBindin
   return promise;
 }
 
-export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { refresh?: boolean }) {
+export async function refreshChatModelAuthStatus(host: ChatPageHost) {
   if (!host.client || !host.connected) {
     return;
   }
@@ -399,10 +393,7 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
     host.modelAuthStatusRequestVersion === requestVersion &&
     resolveChatAgentId(host) === agentId;
   try {
-    const result = await loadModelAuthStatus(client, {
-      ...opts,
-      agentId,
-    });
+    const result = await loadModelAuthStatus(client, { agentId });
     if (!ownsRequest()) {
       return;
     }
@@ -616,10 +607,9 @@ async function refreshChat(
       return;
     }
     const sessionInfo = selectedChatSessionRow(host);
-    const rosterRow = sessionInfo ?? history.sessionInfo;
     if (sessionInfo) {
-      host.selectedChatSessionArchived = rosterRow.archived === true;
-      host.selectedChatSessionIncognito = rosterRow.incognito === true;
+      host.selectedChatSessionArchived = sessionInfo.archived === true;
+      host.selectedChatSessionIncognito = sessionInfo.incognito === true;
     }
     const snapshotRunId = history.inFlightRun?.runId?.trim();
     const activeRunIds = history.sessionInfo.activeRunIds;
@@ -667,11 +657,7 @@ async function refreshChat(
     previousSessionsResult,
     () => void flushChatQueueForEvent(host),
   );
-  const secondaryRefresh = Promise.allSettled([sessionsRefresh, startupMetadataRefresh]).finally(
-    requestUpdate,
-  );
-  void historyRefresh;
-  void secondaryRefresh;
+  void Promise.allSettled([sessionsRefresh, startupMetadataRefresh]).finally(requestUpdate);
   if (opts?.awaitHistory === true) {
     await historyRefresh;
     return;

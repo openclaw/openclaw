@@ -44,16 +44,6 @@ function formatLogTime(value: string | null | undefined, formatTime: (ms: number
   return formatTime(date.getTime());
 }
 
-function matchesFilter(entry: LogEntry, needle: string) {
-  if (!needle) {
-    return true;
-  }
-  const haystack = normalizeLowercaseStringOrEmpty(
-    [entry.message, entry.subsystem, entry.raw].filter(Boolean).join(" "),
-  );
-  return haystack.includes(needle);
-}
-
 export function renderLogs(props: LogsProps) {
   const formatTime = createMsFormatter({ timeStyle: "short" });
   const needle = normalizeLowercaseStringOrEmpty(props.filterText);
@@ -62,7 +52,13 @@ export function renderLogs(props: LogsProps) {
     if (entry.level && !props.levelFilters[entry.level]) {
       return false;
     }
-    return matchesFilter(entry, needle);
+    if (!needle) {
+      return true;
+    }
+    const haystack = normalizeLowercaseStringOrEmpty(
+      [entry.message, entry.subsystem, entry.raw].filter(Boolean).join(" "),
+    );
+    return haystack.includes(needle);
   });
   const exportFileLabel = needle || levelFiltered ? "filtered" : "visible";
   const exportDisplayLabel = t(`gatewayLogs.exportLabels.${exportFileLabel}`);

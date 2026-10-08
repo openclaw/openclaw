@@ -55,7 +55,7 @@ describe("ordinary reply model capability at cloud media admission", () => {
       const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "reply-vision-")));
       roots.push(root);
       const cfg: OpenClawConfig = {
-        agents: { list: [{ id: "main", workspace: root }] },
+        agents: { entries: { main: { workspace: root } } },
         ...(testCase.configured
           ? {
               models: {

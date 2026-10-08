@@ -353,9 +353,6 @@ function mapEditedOffset(
     if (offset < edit.end) {
       return edit.start + delta + (preferEnd ? edit.text.length : 0);
     }
-    if (offset === edit.end) {
-      return edit.start + delta + edit.text.length;
-    }
   }
   return offset + delta;
 }
@@ -402,20 +399,13 @@ export function sliceTextStyles(
         return null;
       }
 
-      if (style.st === TextStyle.Indent) {
-        return {
-          start: overlapStart - start,
-          len: overlapEnd - overlapStart,
-          st: style.st,
-          indentSize: style.indentSize,
-        };
-      }
-
-      return {
+      const range = {
         start: overlapStart - start,
         len: overlapEnd - overlapStart,
-        st: style.st,
       };
+      return style.st === TextStyle.Indent
+        ? { ...range, st: style.st, indentSize: style.indentSize }
+        : { ...range, st: style.st };
     })
     .filter((style): style is NonNullable<typeof style> => style !== null);
 

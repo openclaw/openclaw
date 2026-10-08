@@ -14,7 +14,7 @@ describe("scheduled message invocation admission", () => {
 
   it.each(["embedded", "loopback"] as const)(
     "%s applies a published model policy for the borrowed owner to the next invocation",
-    (surface) => {
+    async (surface) => {
       const config: OpenClawConfig = {
         plugins: { enabled: false },
         tools: { profile: "full" },
@@ -44,16 +44,18 @@ describe("scheduled message invocation admission", () => {
               runSessionKey: "agent:main:cron:execution",
               runtimeToolAllowlist: ["message"],
             })
-          : resolveGatewayScopedTools({
-              ...run,
-              cfg: config,
-              surface: "loopback",
-              sessionKey: "agent:main:cron:execution",
-              runtimePolicyAgentId: "reader",
-              runtimePolicySessionKey: "agent:reader:cron:policy",
-              gatewayRequestedTools: ["message"],
-              disablePluginTools: true,
-            }).tools;
+          : (
+              await resolveGatewayScopedTools({
+                ...run,
+                cfg: config,
+                surface: "loopback",
+                sessionKey: "agent:main:cron:execution",
+                runtimePolicyAgentId: "reader",
+                runtimePolicySessionKey: "agent:reader:cron:policy",
+                gatewayRequestedTools: ["message"],
+                disablePluginTools: true,
+              })
+            ).tools;
       expect(tools.some((tool) => tool.name === "message")).toBe(true);
       const factoryOptions = vi.mocked(createOpenClawTools).mock.calls.at(-1)?.[0];
       const admit = expectDefined(

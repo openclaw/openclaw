@@ -30,27 +30,48 @@ describe("GitHub publication account controls", () => {
     container.remove();
   });
 
-  it.each(["system-configured", "agent-override"] as const)(
-    "renders a sole %s publisher as a plain Publish PR button",
+  it.each(["system-configured", "agent-override", null] as const)(
+    "renders publisher %s without redundant account controls",
     (source) => {
-      const shared = { source, accountId: 1, login: "system-bot" };
+      const shared = source ? { source, accountId: 1, login: "system-bot" } : null;
       const onSelect = vi.fn();
       paint({
-        pullRequests: [],
         branch: sessionBranch(),
         publication: publication({
           options: { shared, personal: null, pendingPersonal: null, latestShared: null },
-          selection: { source: "shared", expected: shared },
+          selection: shared ? { source: "shared", expected: shared } : null,
           onSelect,
         }),
       });
-      expect(container.querySelector("select")).toBeNull();
+      expect(container.querySelector("select, wa-dropdown, wa-popover")).toBeNull();
       expect(container.querySelector('[aria-label="Publication account"]')).toBeNull();
-      expect(container.querySelector("wa-dropdown, wa-popover")).toBeNull();
       expect(container.querySelector(".chat-pr__create")?.textContent?.trim()).toBe("Publish PR");
       expect(container.querySelector("[data-publication-account]")).toBeNull();
-      expect(container.querySelector(".chat-pr__publication-outcome")).toBeNull();
       expect(onSelect).not.toHaveBeenCalled();
+      if (shared) {
+        expect(container.querySelector(".chat-pr__publication-outcome")).toBeNull();
+      } else {
+        expect(container.querySelector<HTMLButtonElement>(".chat-pr__create")?.disabled).toBe(true);
+        expect(container.textContent).toContain(
+          "Sign in with a personal profile to use My GitHub.",
+        );
+        expect(container.textContent).not.toContain(
+          "applies only to this explicit Publish PR action",
+        );
+        paint({
+          branch: sessionBranch(),
+          publication: publication({
+            options: {
+              shared: { source: "system-configured", accountId: 1, login: "system-bot" },
+              personal: null,
+              pendingPersonal: null,
+              latestShared: null,
+            },
+            selection: null,
+          }),
+        });
+        expect(container.textContent).not.toContain("Sign in with a personal profile");
+      }
     },
   );
 
@@ -108,35 +129,6 @@ describe("GitHub publication account controls", () => {
       expect(container.querySelector(".chat-pr__create")?.textContent?.trim()).toBe("Publish PR");
     },
   );
-
-  it("shows setup guidance without a picker when no publisher is available", () => {
-    paint({
-      branch: sessionBranch(),
-      publication: publication({
-        options: { shared: null, personal: null, pendingPersonal: null, latestShared: null },
-        selection: null,
-        onSelect: vi.fn(),
-      }),
-    });
-    expect(container.querySelector('[aria-label="Publication account"]')).toBeNull();
-    expect(container.querySelector("wa-dropdown, wa-popover")).toBeNull();
-    expect(container.querySelector<HTMLButtonElement>(".chat-pr__create")?.disabled).toBe(true);
-    expect(container.textContent).toContain("Sign in with a personal profile to use My GitHub.");
-    expect(container.textContent).not.toContain("applies only to this explicit Publish PR action");
-    paint({
-      branch: sessionBranch(),
-      publication: publication({
-        options: {
-          shared: { source: "system-configured", accountId: 1, login: "system-bot" },
-          personal: null,
-          pendingPersonal: null,
-          latestShared: null,
-        },
-        selection: null,
-      }),
-    });
-    expect(container.textContent).not.toContain("Sign in with a personal profile");
-  });
 
   it("warns about the workspace only for a selected or sole personal account", () => {
     const personal = {

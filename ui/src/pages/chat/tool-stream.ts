@@ -13,7 +13,7 @@ import {
   resolveToolApprovalReviewOutcome,
   withToolApprovalReviews,
 } from "../../lib/chat/tool-approval-reviews.ts";
-import type { DiffStat } from "../../lib/chat/tool-call-diff.ts";
+import { readLiveDiffStat } from "../../lib/chat/tool-call-diff.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { formatUnknownText, truncateText } from "../../lib/format.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
@@ -88,20 +88,6 @@ function formatToolOutput(value: unknown): string | null {
   return `${truncated.text}\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`;
 }
 
-function readLiveDiffStat(value: unknown): DiffStat | undefined {
-  const diff = readRecord(value);
-  const added = diff?.added;
-  const removed = diff?.removed;
-  return typeof added === "number" &&
-    Number.isInteger(added) &&
-    added >= 0 &&
-    typeof removed === "number" &&
-    Number.isInteger(removed) &&
-    removed >= 0
-    ? { added, removed }
-    : undefined;
-}
-
 function refreshSessionStatusModel(host: ToolStreamHost, data: Record<string, unknown>) {
   const details = readRecord(readRecord(data.result)?.details);
   if (details?.changedModel !== true) {
@@ -117,6 +103,12 @@ function refreshSessionStatusModel(host: ToolStreamHost, data: Record<string, un
 }
 
 function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown> {
+  const itemEnded = entry.activity?.some(
+    (item) =>
+      (item.toolCallId ?? item.itemId) === entry.toolCallId &&
+      item.phase === "end" &&
+      !item.suppressChannelProgress,
+  );
   const content: Array<Record<string, unknown>> = [];
   content.push({
     type: "toolcall",
@@ -146,12 +138,13 @@ function buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown>
     content,
     timestamp: entry.startedAt,
     // Running-state markers: only live tool-stream cards may show a spinner,
-    // and completion comes from the result event — partial `update` output
-    // must not end the running state. Transcript messages never carry these,
+    // and completion comes from a result or live item end, never partial output
+    // or a status-less history placeholder. Transcript messages never carry these,
     // so historical output-less calls (aborted runs) stay inert.
     __openclawToolStreamLive: true,
     __openclawToolStreamResultReceived: entry.resultReceived === true,
-    ...(entry.resultReceived !== true && entry.liveDiffStat
+    __openclawToolStreamItemEnded: itemEnded === true,
+    ...(entry.resultReceived !== true && !itemEnded && entry.liveDiffStat
       ? { __openclawToolStreamDiffStat: entry.liveDiffStat }
       : {}),
     __openclawToolStreamReceivedAt: entry.receivedAt,
@@ -361,9 +354,9 @@ function handleNoticeEvent(host: ToolStreamHost, payload: AgentEventPayload): bo
       runId: payload.runId,
       seq: payload.seq,
       state,
-      ...(model ? { model: formatUiExternalText(model.slice(0, 256)) } : {}),
+      ...(model ? { model: formatUiExternalText(truncateText(model, 256).text) } : {}),
       ...(fallbackModel
-        ? { fallbackModel: formatUiExternalText(fallbackModel.slice(0, 256)) }
+        ? { fallbackModel: formatUiExternalText(truncateText(fallbackModel, 256).text) }
         : {}),
     };
     return true;
@@ -472,8 +465,6 @@ function applyToolReviewEvent(
     retainedReviews,
     nextOutcome && payload.seq >= newestReviewSeq ? nextOutcome : currentOutcome,
   );
-  entry.message = buildToolStreamMessage(entry);
-  scheduleToolStreamSync(host, true);
 }
 
 export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPayload): boolean {
@@ -501,19 +492,12 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     }
   }
 
-  if (handleUsageEvent(host, payload)) {
-    return true;
-  }
-
-  if (handleNoticeEvent(host, payload)) {
-    return true;
-  }
-
-  if (handleStreamStatus(host, payload)) {
-    return true;
-  }
-
-  if (handlePreambleProgress(host, payload)) {
+  if (
+    handleUsageEvent(host, payload) ||
+    handleNoticeEvent(host, payload) ||
+    handleStreamStatus(host, payload) ||
+    handlePreambleProgress(host, payload)
+  ) {
     return true;
   }
 
@@ -522,7 +506,9 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
       ? Value.Clean(AgentActivityItemSchema, { ...payload.data })
       : undefined;
   if (Value.Check(AgentActivityItemSchema, activityItem)) {
-    if (!acceptsToolStreamSession(host, payload)) {
+    // Analysis items (Codex reasoning, context compaction) are not tool calls;
+    // a tool card would show a fabricated empty input and a completion.
+    if (!acceptsToolStreamSession(host, payload) || activityItem.kind === "analysis") {
       return true;
     }
     const item = activityItem;
@@ -611,62 +597,51 @@ export function handleAgentEvent(host: ToolStreamHost, payload?: AgentEventPaylo
     entry = {
       toolCallId,
       runId: payload.runId,
-      ...(parentToolCallId ? { parentToolCallId } : {}),
       sessionKey,
       name,
-      args,
-      output: output || undefined,
-      ...(initialResultDetails !== undefined ? { details: initialResultDetails } : {}),
-      ...(resultIsError !== undefined ? { isError: resultIsError } : {}),
-      ...(exitCode !== undefined ? { exitCode } : {}),
-      ...(liveDiffStat ? { liveDiffStat } : {}),
-      ...(phase === "result" ? { resultReceived: true } : {}),
       startedAt: typeof payload.ts === "number" ? payload.ts : now,
       receivedAt: now,
       message: {},
     };
     host.toolStreamById.set(toolStreamIdentity, entry);
     host.toolStreamOrder.push(toolStreamIdentity);
-  } else {
-    entry.name = name;
-    entry.parentToolCallId ??= parentToolCallId;
-    if (args !== undefined) {
-      entry.args = args;
-    }
-    if (output !== undefined) {
-      entry.output = output || undefined;
-    }
-    if (resultDetails !== undefined || resultApprovalReviewOutcome) {
-      const currentOutcome = readToolApprovalReviewOutcome(entry.details);
-      const outcome =
-        currentOutcome === "denied" ? "denied" : (resultApprovalReviewOutcome ?? currentOutcome);
-      const reviews = readToolApprovalReviews(entry.details);
-      entry.details = reviews.length
-        ? withToolApprovalReviews(resultDetails, reviews, outcome)
-        : initialResultDetails;
-    }
-    if (resultIsError !== undefined) {
-      entry.isError = resultIsError;
-    }
-    if (exitCode !== undefined) {
-      entry.exitCode = exitCode;
-    }
-    if (liveDiffStat) {
-      entry.liveDiffStat = liveDiffStat;
-    }
-    if (phase === "result") {
-      entry.liveDiffStat = undefined;
-      entry.resultReceived = true;
-    }
+  }
+  entry.name = name;
+  entry.parentToolCallId ??= parentToolCallId;
+  if (args !== undefined) {
+    entry.args = args;
+  }
+  if (output !== undefined) {
+    entry.output = output || undefined;
+  }
+  if (resultDetails !== undefined || resultApprovalReviewOutcome) {
+    const currentOutcome = readToolApprovalReviewOutcome(entry.details);
+    const outcome =
+      currentOutcome === "denied" ? "denied" : (resultApprovalReviewOutcome ?? currentOutcome);
+    const reviews = readToolApprovalReviews(entry.details);
+    entry.details = reviews.length
+      ? withToolApprovalReviews(resultDetails, reviews, outcome)
+      : initialResultDetails;
+  }
+  if (resultIsError !== undefined) {
+    entry.isError = resultIsError;
+  }
+  if (exitCode !== undefined) {
+    entry.exitCode = exitCode;
+  }
+  if (liveDiffStat) {
+    entry.liveDiffStat = liveDiffStat;
+  }
+  if (phase === "result") {
+    entry.liveDiffStat = undefined;
+    entry.resultReceived = true;
   }
 
   if (approvalReview) {
-    trimToolStream(host);
     applyToolReviewEvent(host, payload, entry, approvalReview);
-    return true;
   }
   entry.message = buildToolStreamMessage(entry);
   trimToolStream(host);
-  scheduleToolStreamSync(host, phase === "result");
+  scheduleToolStreamSync(host, phase === "result" || approvalReview !== null);
   return true;
 }

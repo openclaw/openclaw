@@ -114,15 +114,16 @@ export function chatAttachmentBatchBytes(attachments: readonly ChatAttachment[])
   return attachments.reduce((total, attachment) => total + attachmentBytes(attachment), 0);
 }
 
-function oversizedAttachmentBatch(
+export function attachmentBatchRejection(
   attachments: readonly ChatAttachment[],
-  limits: ChatAttachmentLimits | undefined,
-): ChatAttachment[] {
+  policy: ChatAttachmentHelloPolicy | undefined,
+): string | undefined {
+  const limits = resolveChatAttachmentLimits(policy);
   if (!limits) {
-    return [];
+    return undefined;
   }
   let total = 0;
-  return attachments.filter((attachment) => {
+  const oversized = attachments.filter((attachment) => {
     const size = attachmentBytes(attachment);
     const ceiling = attachment.mimeType.startsWith("image/")
       ? limits.maxImageBytes
@@ -133,13 +134,6 @@ function oversizedAttachmentBatch(
     total += size;
     return false;
   });
-}
-
-export function attachmentBatchRejection(
-  attachments: readonly ChatAttachment[],
-  policy: ChatAttachmentHelloPolicy | undefined,
-): string | undefined {
-  const oversized = oversizedAttachmentBatch(attachments, resolveChatAttachmentLimits(policy));
   return oversized.length > 0
     ? skippedFilesMessage(
         "chat.attachments.tooLarge",

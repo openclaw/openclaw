@@ -1,3 +1,4 @@
+import type { SessionLogEntry } from "../../../../src/infra/session-cost-usage.types.js";
 import type { CostUsageSummary } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
@@ -162,12 +163,6 @@ export type UsageProps = {
   callbacks: UsageCallbacks;
 };
 
-export type SessionLogEntry = {
-  timestamp: number;
-  role: "user" | "assistant" | "tool" | "toolResult";
-  content: string;
-  tokens?: number;
-  cost?: number;
-};
+export type { SessionLogEntry } from "../../../../src/infra/session-cost-usage.types.js";
 
 export type SessionLogRole = SessionLogEntry["role"];

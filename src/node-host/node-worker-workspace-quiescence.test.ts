@@ -1,11 +1,17 @@
+import { ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import { createRequire } from "node:module";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { PassThrough } from "node:stream";
+import { runInNewContext } from "node:vm";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  REMOTE_WORKSPACE_QUIESCE_JS,
-  REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
-  REMOTE_WORKSPACE_RESUME_JS,
-} from "../gateway/worker-environments/workspace-quiescence-scripts.js";
-import type { ManagedRun, ProcessSupervisor, RunExit } from "../process/supervisor/types.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { workspaceQuiescenceArgv } from "../gateway/worker-environments/workspace-quiescence-scripts.js";
+import type { ProcessSupervisor, RunExit } from "../process/supervisor/types.js";
 import type { NodeWorkerWorkspaceQuiescenceInput } from "../worker/node-workspace-protocol.js";
 import { NodeWorkerWorkspaceQuiescence } from "./node-worker-workspace-quiescence.js";
 
@@ -13,22 +19,25 @@ const mocks = vi.hoisted(() => ({
   cleanup: vi.fn<() => Promise<void>>(async () => {}),
   acquire: vi.fn<ProcessSupervisor["acquireScopeCleanup"]>(),
   spawn: vi.fn<ProcessSupervisor["spawn"]>(),
-  cancel: vi.fn<ProcessSupervisor["cancel"]>(),
-  cancelScope: vi.fn<ProcessSupervisor["cancelScope"]>(),
+  helper: vi.fn<typeof import("node:child_process").spawn>(),
+  live: new Set<number>(),
 }));
-vi.mock("../process/supervisor/index.js", () => ({
-  getProcessSupervisor: () => ({
-    acquireScopeCleanup: mocks.acquire,
-    spawn: mocks.spawn,
-    cancel: mocks.cancel,
-    cancelScope: mocks.cancelScope,
-  }),
+vi.mock("../process/supervisor/index.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/supervisor/index.js")>()),
+  getProcessSupervisor: () => ({ acquireScopeCleanup: mocks.acquire, spawn: mocks.spawn }),
 }));
-vi.mock("node:child_process", () => ({
-  spawn: () => {
-    throw new Error("Windows must not start a POSIX watchdog");
-  },
+vi.mock("node:child_process", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:child_process")>()),
+  spawn: mocks.helper,
 }));
+vi.mock("./node-worker-process-identity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./node-worker-process-identity.js")>()),
+  requireNodeWorkerProcessIdentity: (pid: number) => ({ pid, startTime: pid }),
+  inspectNodeWorkerProcessIdentity: ({ pid }: { pid: number }) =>
+    mocks.live.has(pid) ? "live" : "dead",
+}));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const require = createRequire(import.meta.url);
 const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
 beforeEach(() => {
   Object.defineProperty(process, "platform", { ...platform, value: "win32" });
@@ -36,172 +45,333 @@ beforeEach(() => {
 });
 afterEach(() => {
   Object.defineProperty(process, "platform", platform);
+  mocks.live.clear();
   vi.resetAllMocks();
 });
 const nonce = "a".repeat(32);
-const result: RunExit = {
-  reason: "exit",
-  exitCode: 0,
-  exitSignal: null,
-  durationMs: 0,
-  stdout: "ok",
-  stderr: "",
-  timedOut: false,
-  noOutputTimedOut: false,
-};
-function fixture(operation: NodeWorkerWorkspaceQuiescenceInput) {
-  const release = vi.fn();
-  const context = {
-    input: {
-      gatewayNamespace: "gateway-one",
-      environmentId: "environment-one",
-      sessionId: "session-one",
-      generation: 1,
-      argv: ["openclaw-internal-workspace-quiescence", "C:\\workspace"],
-      quiescence: operation,
+const acquire = { action: "acquire", nonce, timeoutMs: 30_000 } as const;
+const renew = { action: "renew", nonce, timeoutMs: 30_000, validationMode: "final" } as const;
+const release = { action: "release", nonce } as const;
+
+function fixture(guestPlatform: "win32" | "linux" = "win32") {
+  const home = fs.realpathSync(tempDirs.make("node-quiescence-controller-"));
+  const workspaceDir = path.join(home, "workspace");
+  fs.mkdirSync(workspaceDir);
+  const releaseWorkspace = vi.fn();
+  const owner = new NodeWorkerWorkspaceQuiescence();
+  const children: ChildProcess[] = [];
+  const exits = new Map<ChildProcess, () => void>();
+  const execute = (operation: NodeWorkerWorkspaceQuiescenceInput, signal?: AbortSignal) =>
+    owner.execute(
+      {
+        input: {
+          gatewayNamespace: "gateway-one",
+          environmentId: "environment-one",
+          sessionId: "session-one",
+          generation: 1,
+          argv: ["openclaw-internal-workspace-quiescence", workspaceDir],
+          quiescence: operation,
+        },
+        workspaceDir,
+        env: { HOME: home, USERPROFILE: home },
+        retainWorkspace: () => releaseWorkspace,
+      },
+      signal,
+    );
+  const readLease = () => {
+    if (guestPlatform === "linux") {
+      const lease = path.join(
+        home,
+        ".openclaw-worker",
+        "quiescence",
+        createHash("sha256").update(workspaceDir).digest("hex") + "." + nonce + ".json",
+      );
+      return fs.existsSync(lease) ? JSON.parse(fs.readFileSync(lease, "utf8")) : undefined;
+    }
+    const database = new DatabaseSync(
+      path.join(home, ".openclaw-worker", "quiescence", "windows-shared-host.sqlite"),
+      { readOnly: true },
+    );
+    try {
+      const row = database
+        .prepare("SELECT lease_json FROM workspace_leases WHERE workspace_key = ?")
+        .get(createHash("sha256").update(workspaceDir).digest("hex"));
+      return row ? JSON.parse(String(row.lease_json)) : undefined;
+    } finally {
+      database.close();
+    }
+  };
+
+  // Execute the generated program with real lease storage and IPC receipts.
+  // Only the OS transport, process identity and expiry clock are simulated.
+  const script = (args: readonly string[], child?: ChildProcess) => {
+    let stdout = "";
+    let stderr = "";
+    let exitCode = 0;
+    const exited = new Error("script exited");
+    const pid = child?.pid ?? 9000;
+    const writeStderr = (text: string) => {
+      stderr += text;
+      child?.stderr?.emit("data", Buffer.from(text));
+    };
+    const finish = (code: number) => {
+      exitCode = code;
+      if (child && mocks.live.delete(pid)) {
+        Object.defineProperties(child, {
+          connected: { configurable: true, value: false },
+          exitCode: { configurable: true, value: code },
+        });
+        queueMicrotask(() => child.emit("close", code, null));
+      }
+    };
+    const guest = Object.assign(new EventEmitter(), {
+      argv: [process.execPath, ...args.slice(2)],
+      platform: guestPlatform,
+      getuid: () => 0,
+      kill: () => {
+        throw new Error("native quiescence must not signal any process");
+      },
+      pid,
+      execPath: process.execPath,
+      stdout: { write: (text: string) => (stdout += text) },
+      stderr: { write: writeStderr },
+      send: (message: unknown) => queueMicrotask(() => child?.emit("message", message)),
+      exit: (code: number) => {
+        finish(code);
+        throw exited;
+      },
+    });
+    Object.defineProperty(guest, "connected", {
+      get: () => child?.connected ?? false,
+    });
+    if (child) {
+      exits.set(child, () => finish(1));
+      Object.defineProperty(child, "send", {
+        value: (message: unknown, callback?: (error: Error | null) => void) => {
+          queueMicrotask(() => {
+            try {
+              guest.emit("message", message);
+              callback?.(null);
+            } catch (error) {
+              if (error !== exited) {
+                throw error;
+              }
+            }
+          });
+          return true;
+        },
+      });
+    }
+    try {
+      runInNewContext(args[1]!, {
+        process: guest,
+        require: (name: string) => {
+          if (name === "node:os") {
+            return { homedir: () => home };
+          }
+          if (name === "node:child_process") {
+            return {
+              execFileSync: (command: string, probeArgs: string[]) => {
+                if (command !== "ps" || probeArgs[0] !== "-o" || probeArgs.at(-1) !== String(pid)) {
+                  throw new Error("native quiescence must only inspect its watchdog");
+                }
+                return "Tue Oct  6 19:00:00 2026\n";
+              },
+            };
+          }
+          return require(name);
+        },
+        setTimeout: () => 1,
+        clearTimeout: () => {},
+        performance,
+      });
+    } catch (error) {
+      if (error !== exited) {
+        writeStderr(String(error));
+        finish(1);
+      }
+    }
+    return { stdout, stderr, exitCode };
+  };
+  mocks.helper.mockImplementation((_command, args) => {
+    if (!Array.isArray(args)) {
+      throw new Error("expected helper argv");
+    }
+    const child = new ChildProcess();
+    const pid = 1000 + children.length;
+    Object.defineProperties(child, {
+      pid: { value: pid },
+      connected: { configurable: true, value: true },
+      stderr: { value: new PassThrough() },
+    });
+    children.push(child);
+    mocks.live.add(pid);
+    queueMicrotask(() => script(args, child));
+    return child;
+  });
+  mocks.spawn.mockImplementation(async (input) => {
+    if (input.mode !== "child") {
+      throw new Error("expected standalone recovery command");
+    }
+    const outcome = script(input.argv.slice(1));
+    const result: RunExit = {
+      ...outcome,
+      reason: "exit",
+      exitSignal: null,
+      durationMs: 0,
+      timedOut: false,
+      noOutputTimedOut: false,
+    };
+    return {
+      activity: { resultSettled: true, lastOutputAtMs: 0 },
+      runId: input.runId ?? "recovery",
+      startedAtMs: 0,
+      wait: async () => result,
+      cancel: () => {},
+    };
+  });
+  return {
+    owner,
+    execute,
+    readLease,
+    releaseWorkspace,
+    children,
+    script,
+    workspaceDir,
+    kill: async () => {
+      const child = children.at(-1)!;
+      const closed = new Promise<void>((resolve) => {
+        child.once("close", () => resolve());
+      });
+      exits.get(child)!();
+      await closed;
     },
-    workspaceDir: "C:\\workspace",
-    env: { HOME: "C:\\home", USERPROFILE: "C:\\home", SystemRoot: "C:\\Windows" },
-    retainWorkspace: vi.fn(() => release),
   };
-  const run: ManagedRun = {
-    activity: { resultSettled: false, lastOutputAtMs: 0 },
-    runId: "controlled-run",
-    startedAtMs: 0,
-    wait: vi.fn(async () => result),
-    cancel: vi.fn(),
-  };
-  mocks.spawn.mockResolvedValue(run);
-  return { owner: new NodeWorkerWorkspaceQuiescence(), context, run, release };
 }
 
-// The platform selector and process backend are simulated. These unit contracts
-// complement, but never count as, native Windows Job/filesystem acceptance.
-describe("Windows-selected quiescence controller contracts", () => {
-  it.each([
-    [
-      { action: "acquire", nonce, timeoutMs: 30_000 },
-      REMOTE_WORKSPACE_QUIESCE_JS,
-      ["30000", "shared-host", "owned", nonce],
-    ],
-    [
-      { action: "renew", nonce, timeoutMs: 30_000, validationMode: "final" },
-      REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
-      [nonce, "30000", "final", "shared-host"],
-    ],
-    [{ action: "release", nonce }, REMOTE_WORKSPACE_RESUME_JS, [nonce, "owned"]],
-  ] satisfies [NodeWorkerWorkspaceQuiescenceInput, string, string[]][])(
-    "routes operation %# through scoped command cleanup without a POSIX helper",
-    async (operation, script, args) => {
-      const f = fixture(operation);
-      await expect(f.owner.execute(f.context)).resolves.toBe("ok");
-      expect(mocks.spawn).toHaveBeenCalledWith(
-        expect.objectContaining({
-          argv: [process.execPath, "-e", script, f.context.workspaceDir, ...args],
-          cwd: f.context.workspaceDir,
-          env: f.context.env,
-          exactEnv: true,
-          stdinMode: "pipe-closed",
-        }),
-      );
-      expect(mocks.acquire).toHaveBeenCalledWith(expect.any(String), {
-        processTree: "required-all",
+describe("root-owned POSIX quiescence", () => {
+  it("acquires, renews and releases native custody without scanning or signaling root processes", async () => {
+    const f = fixture("linux");
+    try {
+      await expect(f.execute(acquire)).resolves.toBe("quiesced " + nonce + "\n");
+      expect(f.readLease()).toMatchObject({
+        nonce,
+        sharedHost: true,
+        processes: [],
+        watchdog: { pid: f.children[0]?.pid },
       });
-      expect(mocks.cleanup).toHaveBeenCalledOnce();
+      await expect(f.execute(renew)).resolves.toBe("renewed " + nonce + "\n");
+      await f.execute(release);
+      expect(f.readLease()).toBeUndefined();
+    } finally {
+      await f.owner.close();
+    }
+    expect(f.children[0]?.exitCode).toBe(0);
+  });
+
+  it.each(["dedicated", "shared-host"] as const)(
+    "keeps detached %s acquisition unavailable to root",
+    async (hostMode) => {
+      const f = fixture("linux");
+      const result = f.script(workspaceQuiescenceArgv(f.workspaceDir, acquire, hostMode).slice(1));
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("workspace quiescence refuses root-owned worker sessions");
+      expect(f.readLease()).toBeUndefined();
       await f.owner.close();
     },
   );
+});
 
-  it("does not admit an already-aborted operation", async () => {
-    const f = fixture({ action: "release", nonce });
-    const controller = new AbortController();
-    controller.abort(new Error("caller revoked"));
-    await expect(f.owner.execute(f.context, controller.signal)).rejects.toThrow("caller revoked");
-    expect(mocks.spawn).not.toHaveBeenCalled();
-    expect(mocks.acquire).not.toHaveBeenCalled();
+describe("Windows-selected quiescence controller contracts", () => {
+  it("reuses the retained helper across SQLite leases while fencing stale nonces", async () => {
+    const f = fixture();
+    try {
+      await expect(f.execute(acquire)).resolves.toBe("quiesced " + nonce + "\n");
+      expect(mocks.helper).toHaveBeenCalledOnce();
+      expect(mocks.spawn).not.toHaveBeenCalled();
+      expect(f.readLease()).toMatchObject({
+        nonce,
+        sharedHost: true,
+        processes: [],
+        watchdog: null,
+      });
+      expect(f.releaseWorkspace).not.toHaveBeenCalled();
+      await expect(f.execute(renew)).resolves.toBe("renewed " + nonce + "\n");
+      await f.execute(release);
+      expect(f.readLease()).toBeUndefined();
+      const nextNonce = "b".repeat(32);
+      await f.execute({ ...acquire, nonce: nextNonce });
+      for (const operation of [acquire, renew, release]) {
+        await expect(f.execute(operation)).rejects.toThrow(/already active|no longer active/);
+      }
+      expect(f.readLease()).toMatchObject({ nonce: nextNonce });
+      await f.execute({ ...renew, nonce: nextNonce });
+      await f.execute({ ...release, nonce: nextNonce });
+      expect(mocks.helper).toHaveBeenCalledOnce();
+      expect(mocks.spawn).not.toHaveBeenCalled();
+    } finally {
+      await f.owner.close();
+    }
+    expect(f.children[0]?.exitCode).toBe(0);
+    expect(f.owner.hasActiveWork()).toBe(false);
   });
 
-  it("joins accepted Windows command cleanup before close and workspace release", async () => {
-    const f = fixture({ action: "acquire", nonce, timeoutMs: 30_000 });
+  it("does not admit an already-aborted operation", async () => {
+    const f = fixture();
+    const caller = new AbortController();
+    caller.abort(new Error("caller revoked"));
+    await expect(f.execute(acquire, caller.signal)).rejects.toThrow("caller revoked");
+    expect(mocks.helper).not.toHaveBeenCalled();
+    expect(mocks.spawn).not.toHaveBeenCalled();
+    await f.owner.close();
+  });
+
+  it("joins exact-nonce standalone recovery cleanup before releasing dead-helper custody", async () => {
+    const f = fixture();
     const cleanupEntered = createDeferred();
     const cleaned = createDeferred();
+    await f.execute(acquire);
+    expect(mocks.helper).toHaveBeenCalledOnce();
+    await f.kill();
+    await expect(f.execute(renew)).rejects.toThrow("watchdog identity changed");
+    expect(f.readLease()).toMatchObject({ nonce });
     mocks.cleanup.mockImplementation(async () => {
       cleanupEntered.resolve();
       await cleaned.promise;
     });
-    const operation = f.owner.execute(f.context);
+    const releasing = f.execute(release);
     await cleanupEntered.promise;
-    let closed = false;
-    const closing = f.owner.close().then(() => {
-      closed = true;
-    });
+    const closing = f.owner.close();
     try {
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(closed).toBe(false);
+      expect(f.readLease()).toBeUndefined();
+      expect(f.releaseWorkspace).not.toHaveBeenCalled();
       expect(f.owner.hasActiveWork()).toBe(true);
-      expect(f.context.retainWorkspace).toHaveBeenCalledOnce();
-      expect(f.release).not.toHaveBeenCalled();
     } finally {
       cleaned.resolve();
-      await Promise.allSettled([operation, closing]);
+      await Promise.all([releasing, closing]);
     }
-    expect(f.release).toHaveBeenCalledOnce();
+    expect(mocks.spawn).toHaveBeenCalledOnce();
+    expect(f.releaseWorkspace).toHaveBeenCalledTimes(2);
     expect(f.owner.hasActiveWork()).toBe(false);
   });
 
-  it("preserves uncertain cleanup custody across repeated close attempts", async () => {
-    const f = fixture({ action: "release", nonce });
+  it("retains custody when dead-helper recovery cannot certify command cleanup", async () => {
+    const f = fixture();
+    await f.execute(acquire);
+    expect(mocks.helper).toHaveBeenCalledOnce();
+    await f.kill();
     const failure = new Error("uncertain Job cleanup");
-    // The real scope-cleanup owner caches its result; retrying cannot invent extinction.
     mocks.cleanup.mockRejectedValue(failure);
-    await expect(f.owner.execute(f.context)).rejects.toBe(failure);
-    expect(f.owner.hasActiveWork()).toBe(true);
-    expect(f.release).not.toHaveBeenCalled();
-    await expect(f.owner.close()).rejects.toMatchObject({ errors: [failure] });
-    await expect(f.owner.close()).rejects.toMatchObject({ errors: [failure] });
-    expect(mocks.cleanup).toHaveBeenCalledOnce();
-    expect(f.release).not.toHaveBeenCalled();
-    expect(f.owner.hasActiveWork()).toBe(true);
-  });
-
-  it("releases custody after a command error when physical cleanup succeeds", async () => {
-    const f = fixture({ action: "release", nonce });
-    vi.mocked(f.run.wait).mockResolvedValue({ ...result, exitCode: 1, stderr: "lease rejected" });
-    await expect(f.owner.execute(f.context)).rejects.toThrow("lease rejected");
-    expect(mocks.cleanup).toHaveBeenCalledOnce();
-    expect(f.release).toHaveBeenCalledOnce();
-    expect(f.owner.hasActiveWork()).toBe(false);
-    await f.owner.close();
-  });
-
-  it("cancels the exact accepted run and still joins its cleanup", async () => {
-    const f = fixture({ action: "renew", nonce, timeoutMs: 30_000, validationMode: "final" });
-    const entered = createDeferred();
-    const exit = createDeferred<RunExit>();
-    vi.mocked(f.run.wait).mockImplementation(async () => {
-      entered.resolve();
-      return exit.promise;
+    await expect(f.execute(release)).rejects.toBe(failure);
+    expect(mocks.acquire).toHaveBeenCalledExactlyOnceWith(expect.any(String), {
+      processTree: "required-all",
     });
-    const controller = new AbortController();
-    const operation = f.owner.execute(f.context, controller.signal);
-    const rejected = expect(operation).rejects.toThrow("cancelled command");
-    try {
-      await entered.promise;
-      controller.abort();
-      expect(mocks.cancel).toHaveBeenCalledWith(mocks.spawn.mock.calls[0]![0].runId);
-    } finally {
-      exit.resolve({
-        ...result,
-        exitCode: null,
-        exitSignal: "SIGTERM",
-        stderr: "cancelled command",
-      });
-      await rejected;
-      await f.owner.close();
+    expect(f.readLease()).toBeUndefined();
+    expect(f.releaseWorkspace).not.toHaveBeenCalled();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(f.owner.close()).rejects.toThrow("workspace quiescence recovery failed");
+      expect(f.owner.hasActiveWork()).toBe(true);
+      expect(f.releaseWorkspace).not.toHaveBeenCalled();
     }
-    expect(mocks.cleanup).toHaveBeenCalledOnce();
-    expect(f.release).toHaveBeenCalledOnce();
-    expect(f.owner.hasActiveWork()).toBe(false);
   });
 });

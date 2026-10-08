@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import { createRetainedOperation, type RetainedOperation } from "../infra/retained-operation.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -16,21 +16,20 @@ import { onUserProfilesChanged, readUserProfileVersion } from "./user-profile-ev
 import {
   getUserProfileDisplay,
   readUserProfileIdentity,
-  retainUserProfileCatalog,
+  prepareUserProfileCatalog,
 } from "./user-profile-list.js";
+import { linkEmail, setAvatar, setDisplayName } from "./user-profile-writes.worker.js";
 import { getProfileAvatar } from "./user-profiles-avatar.test-support.js";
-import {
-  adoptTailscaleProfileAvatar,
-  ensureProfileForEmail,
-  linkEmail,
-  setAvatar,
-  setDisplayName,
-} from "./user-profiles.js";
+import { adoptTailscaleProfileAvatar, ensureProfileForEmail } from "./user-profiles.js";
+
+// Exercise retained-read progress even when CPU headroom would otherwise admit one reader.
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  availableParallelism: () => 2,
+}));
 
 const delivery = vi.hoisted(() => ({
   afterResult: undefined as (() => Promise<void>) | undefined,
-  readFailure: undefined as Error | undefined,
-  closeFailure: undefined as Error | undefined,
   afterRead: undefined as (() => Promise<void>) | undefined,
 }));
 vi.mock("./openclaw-state-read-worker.js", async (importOriginal) => {
@@ -46,31 +45,17 @@ vi.mock("./openclaw-state-read-worker.js", async (importOriginal) => {
           return {
             ...owned,
             startRead: (...readArgs: Parameters<typeof owned.startRead>) => {
-              let read: RetainedOperation<OpenClawStateReadOutcome> | undefined;
+              const read = owned.startRead(...readArgs);
               const completion = createRetainedOperation<OpenClawStateReadOutcome>(() =>
-                read?.service(),
+                read.service(),
               );
-              if (delivery.readFailure) {
-                completion.reject(delivery.readFailure);
-              } else {
-                read = owned.startRead(...readArgs);
-                // The existing race control holds delivery after the real worker read.
-                void read.result
-                  .then(async (outcome) => {
-                    await delivery.afterRead?.();
-                    return outcome;
-                  })
-                  .then(completion.resolve, completion.reject);
-              }
+              void read.result
+                .then(async (outcome) => {
+                  await delivery.afterRead?.();
+                  return outcome;
+                })
+                .then(completion.resolve, completion.reject);
               return completion.operation;
-            },
-            startClose: () => {
-              if (delivery.closeFailure) {
-                const completion = createRetainedOperation<void>(() => {});
-                completion.reject(delivery.closeFailure);
-                return completion.operation;
-              }
-              return owned.startClose();
             },
           };
         },
@@ -104,290 +89,44 @@ vi.mock("./openclaw-state-worker-store.js", async (importOriginal) => {
   };
 });
 
-afterEach(() => {
+const bytes = Uint8Array.from(readFileSync(join(process.cwd(), "ui/public/favicon-32.png")));
+function adoptAvatar(profileId: string) {
+  return adoptTailscaleProfileAvatar(
+    profileId,
+    "https://avatars.example.test/p",
+    {},
+    {
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(bytes.slice().buffer, {
+            headers: { "content-type": "image/png" },
+          }),
+      ),
+    },
+  );
+}
+
+let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
+beforeEach(async () => {
+  state = await createOpenClawTestState({ layout: "state-only", prefix: "avatar-worker-" });
+});
+afterEach(async () => {
   delivery.afterResult = undefined;
-  delivery.readFailure = undefined;
-  delivery.closeFailure = undefined;
   delivery.afterRead = undefined;
+  await state.cleanup();
 });
 
-it.each(["edit", "merge", "late catalog"] as const)(
-  "preserves newer %s during settlement read publication",
-  async (boundary) => {
-    const state = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "avatar-read-race-",
-    });
-    const read = createDeferredCore();
-    const resume = createDeferredCore();
-    let release = () => {};
-    let pending: Promise<unknown> | undefined;
-    let closing: Promise<unknown> | undefined;
-    try {
-      const profile = ensureProfileForEmail("portrait@example.test");
-      const target = ensureProfileForEmail("target@example.test");
-      const alias = ensureProfileForEmail("alias@example.test");
-      linkEmail("alias@example.test", profile.id);
-      const pathname = openOpenClawStateDatabase().path;
-      if (boundary !== "late catalog") {
-        release = retainUserProfileCatalog();
-      }
-      delivery.afterResult = async () => {
-        throw new Error("synthetic result delivery failure");
-      };
-      delivery.afterRead = async () => {
-        read.resolve();
-        await resume.promise;
-      };
-      const bytes = readFileSync(join(process.cwd(), "ui/public/favicon-32.png"));
-      pending = adoptTailscaleProfileAvatar(
-        alias.id,
-        "https://avatars.example.test/p",
-        {},
-        {
-          fetchImpl: vi.fn(
-            async () =>
-              new Response(Uint8Array.from(bytes).buffer, {
-                headers: { "content-type": "image/png" },
-              }),
-          ),
-        },
-      );
-      void pending.catch(() => {});
-      await read.promise;
-      if (boundary === "merge") {
-        linkEmail("portrait@example.test", target.id);
-        linkEmail("alias@example.test", target.id);
-      } else {
-        setDisplayName(profile.id, "After recovery snapshot");
-        expect(setAvatar(profile.id, new Uint8Array([9]), "image/png").ok).toBe(true);
-        if (boundary === "late catalog") {
-          release = retainUserProfileCatalog();
-        }
-      }
-      closing = closeOpenClawStateDatabaseByPathAsync(pathname);
-      resume.resolve();
-      await expect(pending).rejects.toThrow("synthetic result delivery failure");
-      await closing;
-      expect(getUserProfileDisplay(alias.id)).toMatchObject({
-        id: boundary === "merge" ? target.id : profile.id,
-        hasAvatar: true,
-        ...(boundary === "merge" ? {} : { displayName: "After recovery snapshot" }),
-      });
-      expect(readUserProfileIdentity(alias.id)?.aliases).toContain(alias.id);
-      if (boundary !== "merge") {
-        expect(getProfileAvatar(profile.id)?.bytes).toEqual(new Uint8Array([9]));
-      }
-    } finally {
-      resume.resolve();
-      await Promise.allSettled([pending, closing]);
-      release();
-      await state.cleanup();
-    }
-  },
-);
-
-it.each(["read", "retirement", "both"] as const)(
-  "retains original source custody for a failed settlement %s and canonical retry",
-  async (failure) => {
-    const state = await createOpenClawTestState({ layout: "state-only", prefix: "avatar-retry-" });
-    let release = () => {};
-    let closing: Promise<unknown> | undefined;
-    const originalFailure = new Error("synthetic result delivery failure");
-    const queryFailure = new Error("synthetic settlement query failure");
-    const retirementFailure = new Error("synthetic settlement retirement failure");
-    try {
-      const profile = ensureProfileForEmail("retry@example.test");
-      const pathname = openOpenClawStateDatabase().path;
-      release = retainUserProfileCatalog();
-      await closeOpenClawStateDatabaseByPathAsync(pathname);
-      delivery.readFailure = failure === "retirement" ? undefined : queryFailure;
-      delivery.closeFailure = failure === "read" ? undefined : retirementFailure;
-      delivery.afterResult = async () => {
-        closing = closeOpenClawStateDatabaseByPathAsync(pathname);
-        void closing.catch(() => {});
-        throw originalFailure;
-      };
-      const bytes = readFileSync(join(process.cwd(), "ui/public/favicon-32.png"));
-      const failed = await adoptTailscaleProfileAvatar(
-        profile.id,
-        "https://avatars.example.test/p",
-        {},
-        {
-          fetchImpl: vi.fn(
-            async () =>
-              new Response(Uint8Array.from(bytes).buffer, {
-                headers: { "content-type": "image/png" },
-              }),
-          ),
-        },
-      ).then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      expect(failed).toMatchObject({ errors: expect.arrayContaining([originalFailure]) });
-      if (failure === "both") {
-        expect(failed).toMatchObject({
-          errors: [
-            originalFailure,
-            expect.objectContaining({ errors: [queryFailure, retirementFailure] }),
-          ],
-        });
-      }
-      await expect(closing).rejects.toThrow();
-      expect(getUserProfileDisplay(profile.id).hasAvatar).toBe(false);
-      delivery.readFailure = undefined;
-      delivery.closeFailure = undefined;
-      await closeOpenClawStateDatabaseByPathAsync(pathname);
-      expect(getUserProfileDisplay(profile.id).hasAvatar).toBe(true);
-      expect(getProfileAvatar(profile.id)?.bytes).toEqual(Uint8Array.from(bytes));
-    } finally {
-      delivery.readFailure = undefined;
-      delivery.closeFailure = undefined;
-      await Promise.allSettled([closing]);
-      release();
-      await state.cleanup();
-    }
-  },
-);
-
-it.each(["resident", "absent", "late"] as const)(
-  "retains committed avatar catalog reconciliation when result delivery fails during close (%s)",
-  async (catalog) => {
-    const state = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "avatar-result-loss-",
-    });
-    let release = () => {};
-    let closing: Promise<unknown> | undefined;
-    try {
-      const profile = ensureProfileForEmail("result-loss@example.test");
-      const pathname = openOpenClawStateDatabase().path;
-      const admission = captureOpenClawStateWorkerContext({ path: pathname }).admission;
-      if (catalog === "resident") {
-        release = retainUserProfileCatalog();
-      }
-      const version = readUserProfileVersion();
-      const bytes = readFileSync(join(process.cwd(), "ui/public/favicon-32.png"));
-      delivery.afterResult = async () => {
-        if (catalog === "late") {
-          release = retainUserProfileCatalog();
-        }
-        closing = closeOpenClawStateDatabaseByPathAsync(pathname);
-        expect(() => admission.assertCurrent()).toThrow();
-        throw new Error("synthetic result delivery failure");
-      };
-      await expect(
-        adoptTailscaleProfileAvatar(
-          profile.id,
-          "https://avatars.example.test/p",
-          {},
-          {
-            fetchImpl: vi.fn(
-              async () =>
-                new Response(Uint8Array.from(bytes).buffer, {
-                  headers: { "content-type": "image/png" },
-                }),
-            ),
-          },
-        ),
-      ).rejects.toThrow("synthetic result delivery failure");
-      await closing;
-      expect(getProfileAvatar(profile.id)?.bytes).toEqual(Uint8Array.from(bytes));
-      expect(getUserProfileDisplay(profile.id).hasAvatar).toBe(true);
-      expect(readUserProfileVersion()).toBe(version + 1);
-    } finally {
-      await closing;
-      release();
-      await state.cleanup();
-    }
-  },
-);
-
-it.each([new Uint8Array(), new Uint8Array([9])])(
-  "preserves an explicit non-null avatar %j without fetching",
-  async (bytes) => {
-    const state = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "avatar-explicit-",
-    });
-    try {
-      const profile = ensureProfileForEmail("explicit@example.test");
-      expect(setAvatar(profile.id, bytes, "image/png").ok).toBe(true);
-      const fetchImpl = vi.fn();
-      await expect(
-        adoptTailscaleProfileAvatar(
-          profile.id,
-          "https://avatars.example.test/p",
-          {},
-          { fetchImpl },
-        ),
-      ).resolves.toMatchObject({ id: profile.id, avatarMime: "image/png" });
-      expect(fetchImpl).not.toHaveBeenCalled();
-      expect(getProfileAvatar(profile.id)?.bytes).toEqual(bytes);
-    } finally {
-      await state.cleanup();
-    }
-  },
-);
-
-it("adopts an avatar off-thread and publishes its catalog before identity observers", async () => {
-  const state = await createOpenClawTestState({ layout: "state-only", prefix: "avatar-worker-" });
-  let release = () => {};
-  let stop = () => {};
-  try {
-    const profile = ensureProfileForEmail("portrait@example.test");
-    const alias = ensureProfileForEmail("alias@example.test");
-    linkEmail("alias@example.test", profile.id);
-    release = retainUserProfileCatalog();
-    const seen: unknown[] = [];
-    stop = onUserProfilesChanged(() => {
-      seen.push({
-        display: getUserProfileDisplay(alias.id),
-        identity: readUserProfileIdentity(alias.id),
-      });
-    });
-    const bytes = readFileSync(join(process.cwd(), "ui/public/favicon-32.png"));
-    requireNodeSqlite();
-    const sql = observeMainThreadSql();
-    const adopted = await adoptTailscaleProfileAvatar(
-      alias.id,
-      "https://avatars.example.test/p",
-      {},
-      {
-        fetchImpl: vi.fn(
-          async () =>
-            new Response(Uint8Array.from(bytes).buffer, {
-              headers: { "content-type": "image/png" },
-            }),
-        ),
-      },
-    );
-    expect(adopted).toMatchObject({ id: profile.id, avatarMime: "image/png" });
-    expect(seen).toEqual([
-      {
-        display: expect.objectContaining({ id: profile.id, hasAvatar: true }),
-        identity: { profileId: profile.id, role: null, aliases: new Set([profile.id, alias.id]) },
-      },
-    ]);
-    sql.expectIdle();
-    sql.restore();
-    expect(getProfileAvatar(profile.id)?.bytes).toEqual(Uint8Array.from(bytes));
-  } finally {
-    vi.restoreAllMocks();
-    stop();
-    release();
-    await state.cleanup();
-  }
-});
-
-it.each(["close", "native edit", "native merge", "recreated catalog", "late catalog"] as const)(
-  "preserves committed avatar publication through %s during result delivery",
-  async (boundary) => {
-    const state = await createOpenClawTestState({
-      layout: "state-only",
-      prefix: "avatar-publication-",
-    });
+it.each([
+  ["settlement read", "edit"],
+  ["settlement read", "merge"],
+  ["settlement read", "late catalog"],
+  ["result", "close"],
+  ["result", "edit"],
+  ["result", "merge"],
+  ["result", "late catalog"],
+] as const)(
+  "preserves avatar publication during %s delivery across %s",
+  async (stage, boundary) => {
     const received = createDeferredCore();
     const resume = createDeferredCore();
     let release = () => {};
@@ -401,33 +140,36 @@ it.each(["close", "native edit", "native merge", "recreated catalog", "late cata
       linkEmail("alias@example.test", profile.id);
       const pathname = openOpenClawStateDatabase().path;
       if (boundary !== "late catalog") {
-        release = retainUserProfileCatalog();
+        release = (await prepareUserProfileCatalog()).release;
       }
       const observed: Array<ReturnType<typeof getUserProfileDisplay>> = [];
-      stop = onUserProfilesChanged(() => {
-        observed.push(getUserProfileDisplay(alias.id));
-      });
-      delivery.afterResult = async () => {
+      if (stage === "result") {
+        stop = onUserProfilesChanged(() => {
+          observed.push(getUserProfileDisplay(alias.id));
+        });
+      }
+      const holdDelivery = async () => {
         received.resolve();
         await resume.promise;
       };
-      const bytes = readFileSync(join(process.cwd(), "ui/public/favicon-32.png"));
-      pending = adoptTailscaleProfileAvatar(
-        alias.id,
-        "https://avatars.example.test/p",
-        {},
-        {
-          fetchImpl: vi.fn(
-            async () =>
-              new Response(Uint8Array.from(bytes).buffer, {
-                headers: { "content-type": "image/png" },
-              }),
-          ),
-        },
-      );
+      delivery.afterResult =
+        stage === "result"
+          ? holdDelivery
+          : async () => {
+              throw new Error("synthetic result delivery failure");
+            };
+      if (stage === "settlement read") {
+        delivery.afterRead = holdDelivery;
+      }
+      pending = adoptAvatar(alias.id);
+      void pending.catch(() => {});
       await received.promise;
-      expect(getProfileAvatar(profile.id)?.bytes).toEqual(Uint8Array.from(bytes));
+      if (stage === "result") {
+        expect(getProfileAvatar(profile.id)?.bytes).toEqual(bytes);
+      }
       let closeComplete = false;
+      const replacesAvatar =
+        boundary === "edit" || (stage === "settlement read" && boundary === "late catalog");
       if (boundary === "close") {
         closing = closeOpenClawStateDatabaseByPathAsync(pathname).then(() => {
           closeComplete = true;
@@ -436,37 +178,41 @@ it.each(["close", "native edit", "native merge", "recreated catalog", "late cata
           setImmediate(resolve);
         });
         expect(closeComplete).toBe(false);
-      } else if (boundary === "native merge") {
+      } else if (boundary === "merge") {
         linkEmail("portrait@example.test", target.id);
         linkEmail("alias@example.test", target.id);
       } else {
-        if (boundary === "recreated catalog") {
-          release();
-          release = retainUserProfileCatalog();
-        }
         setDisplayName(profile.id, "Newer name");
-        if (boundary === "native edit") {
+        if (replacesAvatar) {
           expect(setAvatar(profile.id, new Uint8Array([9]), "image/png").ok).toBe(true);
         }
         if (boundary === "late catalog") {
-          release = retainUserProfileCatalog();
+          delivery.afterRead = undefined;
+          release = (await prepareUserProfileCatalog()).release;
         }
       }
-      const expectedId = boundary === "native merge" ? target.id : profile.id;
+      if (stage === "settlement read") {
+        closing = closeOpenClawStateDatabaseByPathAsync(pathname);
+      }
       resume.resolve();
-      await pending;
+      if (stage === "settlement read") {
+        await expect(pending).rejects.toThrow("synthetic result delivery failure");
+      } else {
+        await pending;
+      }
       await closing;
+      const expectedId = boundary === "merge" ? target.id : profile.id;
       expect(getUserProfileDisplay(alias.id)).toMatchObject({
         id: expectedId,
         hasAvatar: true,
-        ...(boundary !== "close" && boundary !== "native merge"
-          ? { displayName: "Newer name" }
-          : {}),
+        ...(boundary === "close" || boundary === "merge" ? {} : { displayName: "Newer name" }),
       });
       expect(readUserProfileIdentity(alias.id)?.aliases).toContain(alias.id);
-      expect(readUserProfileIdentity(alias.id)?.profileId).toBe(expectedId);
-      expect(observed.at(-1)).toEqual(getUserProfileDisplay(alias.id));
-      if (boundary === "native edit") {
+      if (stage === "result") {
+        expect(readUserProfileIdentity(alias.id)?.profileId).toBe(expectedId);
+        expect(observed.at(-1)).toEqual(getUserProfileDisplay(alias.id));
+      }
+      if (replacesAvatar) {
         expect(getProfileAvatar(profile.id)?.bytes).toEqual(new Uint8Array([9]));
       }
       if (boundary === "close") {
@@ -477,7 +223,78 @@ it.each(["close", "native edit", "native merge", "recreated catalog", "late cata
       await Promise.allSettled([pending, closing]);
       stop();
       release();
-      await state.cleanup();
     }
   },
 );
+
+it.each(["resident", "absent", "late"] as const)(
+  "retains committed avatar catalog reconciliation when result delivery fails during close (%s)",
+  async (catalog) => {
+    let release = () => {};
+    let closing: Promise<unknown> | undefined;
+    try {
+      const profile = ensureProfileForEmail("result-loss@example.test");
+      const pathname = openOpenClawStateDatabase().path;
+      const admission = captureOpenClawStateWorkerContext({ path: pathname }).admission;
+      if (catalog === "resident") {
+        release = (await prepareUserProfileCatalog()).release;
+      }
+      const version = readUserProfileVersion();
+      delivery.afterResult = async () => {
+        if (catalog === "late") {
+          release = (await prepareUserProfileCatalog()).release;
+        }
+        closing = closeOpenClawStateDatabaseByPathAsync(pathname);
+        expect(() => admission.assertCurrent()).toThrow();
+        throw new Error("synthetic result delivery failure");
+      };
+      await expect(adoptAvatar(profile.id)).rejects.toThrow("synthetic result delivery failure");
+      await closing;
+      expect(getProfileAvatar(profile.id)?.bytes).toEqual(bytes);
+      expect(getUserProfileDisplay(profile.id).hasAvatar).toBe(true);
+      expect(readUserProfileVersion()).toBe(version + 1);
+    } finally {
+      await closing;
+      release();
+    }
+  },
+);
+
+it("adopts an avatar off-thread and publishes its catalog before identity observers", async () => {
+  let release = () => {};
+  let stop = () => {};
+  try {
+    const profile = ensureProfileForEmail("portrait@example.test");
+    const alias = ensureProfileForEmail("alias@example.test");
+    linkEmail("alias@example.test", profile.id);
+    release = (await prepareUserProfileCatalog()).release;
+    const seen: unknown[] = [];
+    stop = onUserProfilesChanged(() => {
+      seen.push({
+        display: getUserProfileDisplay(alias.id),
+        identity: readUserProfileIdentity(alias.id),
+      });
+    });
+    requireNodeSqlite();
+    const sql = observeMainThreadSql();
+    expect(await adoptAvatar(alias.id)).toMatchObject({ id: profile.id, avatarMime: "image/png" });
+    expect(seen).toEqual([
+      {
+        display: expect.objectContaining({ id: profile.id, hasAvatar: true }),
+        identity: {
+          profileId: profile.id,
+          role: null,
+          githubLogin: null,
+          aliases: new Set([profile.id, alias.id]),
+        },
+      },
+    ]);
+    sql.expectIdle();
+    sql.restore();
+    expect(getProfileAvatar(profile.id)?.bytes).toEqual(bytes);
+  } finally {
+    vi.restoreAllMocks();
+    stop();
+    release();
+  }
+});

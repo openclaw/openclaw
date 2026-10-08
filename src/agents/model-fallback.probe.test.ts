@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { createDiagnosticLogRecordCapture } from "../logging/test-helpers/diagnostic-log-capture.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
-import { hasAnyAuthProfileStoreSource } from "./auth-profiles/source-check.js";
+import { hasAnyAuthProfileStoreSourceAsync } from "./auth-profiles/source-check.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
@@ -39,8 +39,9 @@ vi.mock("./auth-profiles/order.js", () => ({ resolveAuthProfileOrder: vi.fn() })
 vi.mock("./provider-model-normalization.runtime.js", () => ({
   normalizeProviderModelIdWithRuntime: () => undefined,
 }));
+// mock-isolation: Cooldown probing uses the mocked profile store; disk source discovery must stay isolated.
 vi.mock("./auth-profiles/source-check.js", () => ({
-  hasAnyAuthProfileStoreSource: vi.fn(() => true),
+  hasAnyAuthProfileStoreSourceAsync: vi.fn(() => true),
 }));
 const sessionSuspensionMocks = vi.hoisted(() => ({
   suspendSession: vi.fn().mockResolvedValue(undefined),
@@ -63,7 +64,7 @@ const sessionSuspensionMocks = vi.hoisted(() => ({
 vi.mock("./session-suspension.js", () => sessionSuspensionMocks);
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => {
   const { createEmptyPluginMetadataSnapshot } =
-    await import("./test-helpers/embedded-agent-runner-e2e-mocks.js");
+    await import("../plugins/plugin-metadata-empty.test-support.js");
   const snapshot = {
     ...createEmptyPluginMetadataSnapshot(),
     policyHash: "model-fallback-probe-test-empty-plugin-policy",
@@ -141,7 +142,7 @@ beforeEach(() => {
   vi.spyOn(Date, "now").mockReturnValue(NOW);
   setLoggerOverride({ level: "silent", consoleLevel: "silent" });
   probeThrottleInternals.lastProbeAttempt.clear();
-  vi.mocked(hasAnyAuthProfileStoreSource).mockReturnValue(true);
+  vi.mocked(hasAnyAuthProfileStoreSourceAsync).mockResolvedValue(true);
   vi.mocked(ensureAuthProfileStore).mockReturnValue({ version: 1, profiles: {} });
   profileOrder.mockImplementation(({ provider }) =>
     ["openai", "anthropic", "google"].includes(provider) ? [`${provider}-profile-1`] : [],

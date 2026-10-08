@@ -1,20 +1,5 @@
 export const MAX_RELEASE_ARTIFACT_BYTES: number;
-export const WINDOWS_NODE_CI_ADVISORY: {
-  readonly id: "windows-node-ci";
-  readonly child: "normalCi";
-  readonly jobNamePattern: RegExp;
-  readonly aggregateJob: "checks-windows";
-};
-export interface ReleaseAdvisoryJob {
-  class: "windows-node-ci";
-  child: "normalCi";
-  job: string;
-  conclusion: string;
-  runId: string;
-  url: string;
-}
-export function releaseAdvisoryJobs(children: ReleaseRecord[]): ReleaseAdvisoryJob[];
-export function validateReleaseManifestAdvisoryJobs(manifest: unknown): ReleaseAdvisoryJob[];
+export function validateReleaseManifestAdvisoryJobs(manifest: unknown): [];
 export const SPLIT_CHANGELOG_EVIDENCE_REUSE_POLICY: "split-changelog-release-v1";
 export function isSplitChangelogEvidenceDelta(paths: unknown, version: unknown): boolean;
 export function classifyReleaseChangelogEvidenceComparison(
@@ -55,6 +40,13 @@ export interface ReleaseChild extends ReleaseRecord {
 }
 export interface ReleaseExecutionPlan extends ReleaseRecord {
   sha256: string;
+  parentRunId: string;
+  parentRunAttempt: number;
+  workflowSha: string;
+  targetSha: string;
+  candidateRequest?: import("./full-release-candidate-contract.mjs").RecordedFullReleaseCandidateRequest;
+  qualificationCoverage?: import("./release-qualification-admission.mjs").QualificationCoverage;
+  qualificationInputs?: import("./release-qualification-admission.mjs").QualificationInputs;
   sourceAdmissionContract?: "1";
   sourceAdmission?: import("./full-release-publication-contract.mjs").PublicationSourceFact | null;
   publicationAdmissionContract?: "1";
@@ -86,6 +78,13 @@ export type ReleaseGhTransportErrorClass = "ambiguous" | "hard" | "transient";
 export function classifyReleaseGhTransportError(error: unknown): ReleaseGhTransportErrorClass;
 export function isReleaseGhArtifactMissingError(error: unknown): boolean;
 export function releaseChildSpec(key: string): ReleaseChildSpec;
+export function releaseChildSpecs(): ReleaseChildSpec[];
+export function planReleaseChildRerun(input: {
+  childKey: string;
+  jobs: ReleaseRecord[];
+}):
+  | { failed: string[]; mode: "failed-jobs" }
+  | { failed: string[]; mode: "producer"; producer: string };
 export function validateReleaseChildRunProvenance(
   run: ReleaseRecord,
   expected?: ReleaseRecord,
@@ -154,18 +153,8 @@ export function selectReleaseStateArtifacts(
   decisionCandidates: Array<{ name: string; payload: unknown }>,
   drainCandidates: Array<{ name: string; payload: unknown }>,
   expected?: Record<string, unknown>,
-): {
-  decision: ReleaseStateArtifact;
-  drain: ReleaseStateArtifact;
-  executionPlan: ReleaseExecutionPlan;
-  sourceAttempts: {
-    decision: number;
-    drain: number;
-    executionPlan: number;
-  };
-};
+): ReturnType<typeof verifyReleaseStateArtifacts>;
 export function formatReleaseStateOutcome(payload: ReleaseRecord): string;
-export function releaseStateChildEvidence(child: ReleaseRecord): ReleaseRecord;
 export function affectedActiveRunIds(
   children: ReleaseRecord[],
   blockers: ReleaseRecord[],

@@ -12,6 +12,7 @@ import {
   SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS,
   type SlackQaApprovalDecision,
   type SlackQaApprovalScenarioRun,
+  type SlackQaApprovalContext,
   type SlackQaScenarioContext,
   type SlackQaScenarioMetadata,
   type SlackAuthIdentity,
@@ -139,9 +140,7 @@ export async function waitForSlackApprovalMessage(
 
 export async function runSlackApprovalScenario(params: {
   channelId: string;
-  context: Pick<SlackQaScenarioContext, "sutIdentity" | "sutReadClient"> & {
-    gateway: Pick<SlackQaScenarioContext["gateway"], "call">;
-  };
+  context: SlackQaApprovalContext;
   observedMessages: SlackObservedMessage[];
   run: SlackQaApprovalScenarioRun;
   scenario: SlackQaScenarioMetadata;
@@ -181,11 +180,40 @@ export async function runSlackApprovalScenario(params: {
     state: "pending",
     approvalId,
   });
+  return completeSlackApprovalScenario({
+    approvalId,
+    gateway: params.context.gateway,
+    observation,
+    pending,
+    requestStartedAt,
+    verifyDecision: async () => {
+      assertApprovalDecisionResult({
+        decision: params.run.decision,
+        result: await waitForLiveQaApprovalDecision({
+          approvalId,
+          gateway: params.context.gateway,
+          kind: params.run.approvalKind,
+          timeoutMs: SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
+        }),
+      });
+    },
+  });
+}
+
+export async function completeSlackApprovalScenario(params: {
+  approvalId: string;
+  gateway: Pick<SlackQaScenarioContext["gateway"], "call">;
+  observation: SlackApprovalObservation;
+  pending: Awaited<ReturnType<typeof waitForSlackApprovalMessage>>;
+  requestStartedAt: Date;
+  verifyDecision: () => Promise<void>;
+}) {
+  const { approvalId, gateway, observation, pending, requestStartedAt } = params;
   const checkpoint = {
     approvalId,
-    approvalKind: params.run.approvalKind,
-    channelId: params.channelId,
-    scenarioId: params.scenario.id,
+    approvalKind: observation.approvalKind,
+    channelId: observation.channelId,
+    scenarioId: observation.scenarioId,
   };
   const pendingCheckpoint = await writeSlackApprovalCheckpoint({
     ...checkpoint,
@@ -195,20 +223,12 @@ export async function runSlackApprovalScenario(params: {
   });
   await resolveLiveQaApprovalDecision({
     approvalId,
-    gateway: params.context.gateway,
-    decision: params.run.decision,
-    kind: params.run.approvalKind,
+    gateway,
+    decision: observation.decision,
+    kind: observation.approvalKind,
     timeoutMs: SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
   });
-  assertApprovalDecisionResult({
-    decision: params.run.decision,
-    result: await waitForLiveQaApprovalDecision({
-      approvalId,
-      gateway: params.context.gateway,
-      kind: params.run.approvalKind,
-      timeoutMs: SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS + 5_000,
-    }),
-  });
+  await params.verifyDecision();
   const resolved = await waitForSlackApprovalMessage({
     ...observation,
     state: "resolved",
@@ -216,7 +236,7 @@ export async function runSlackApprovalScenario(params: {
   });
   const resolvedCheckpoint = await writeSlackApprovalCheckpoint({
     ...checkpoint,
-    decision: params.run.decision,
+    decision: observation.decision,
     message: resolved.message,
     observedAt: resolved.observedAt,
     state: "resolved",
@@ -225,9 +245,9 @@ export async function runSlackApprovalScenario(params: {
   return {
     artifact: {
       approvalId,
-      approvalKind: params.run.approvalKind,
-      channelId: params.channelId,
-      decision: params.run.decision,
+      approvalKind: observation.approvalKind,
+      channelId: observation.channelId,
+      decision: observation.decision,
       pendingActionValues: pending.actionValues,
       pendingCheckpointPath: pendingCheckpoint?.checkpointPath,
       pendingMessageTs: pending.message.ts,

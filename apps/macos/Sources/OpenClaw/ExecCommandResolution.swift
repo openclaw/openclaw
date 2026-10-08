@@ -200,10 +200,7 @@ struct ExecCommandResolution {
         var inSingle = false
         var inDouble = false
         var escaped = false
-        let chars = Array(payload)
-
-        for idx in chars.indices {
-            let ch = chars[idx]
+        for ch in payload {
             if escaped {
                 if ch == "\n" {
                     return false
@@ -262,16 +259,7 @@ struct ExecCommandResolution {
         guard let raw = effective.first?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
             return nil
         }
-        return self.resolveExecutable(rawExecutable: raw, argv: effective, cwd: cwd, env: env)
-    }
-
-    private static func resolveExecutable(
-        rawExecutable: String,
-        argv: [String]?,
-        cwd: String?,
-        env: [String: String]?) -> ExecCommandResolution?
-    {
-        let expanded = rawExecutable.hasPrefix("~") ? (rawExecutable as NSString).expandingTildeInPath : rawExecutable
+        let expanded = raw.hasPrefix("~") ? (raw as NSString).expandingTildeInPath : raw
         let hasPathSeparator = expanded.contains("/") || expanded.contains("\\")
         let resolvedPath: String? = {
             if hasPathSeparator {
@@ -296,7 +284,7 @@ struct ExecCommandResolution {
             resolvedRealPath: resolvedRealPath,
             executableName: name,
             cwd: cwd,
-            argv: argv)
+            argv: effective)
     }
 
     private static func collectAllowAlwaysPatterns(
@@ -312,6 +300,7 @@ struct ExecCommandResolution {
             return
         }
 
+        let unwrapped: [String]?
         if let token0 = command.first?.trimmingCharacters(in: .whitespacesAndNewlines),
            ExecCommandToken.basenameLower(token0) == "env",
            let envUnwrapped = ExecEnvInvocationUnwrapper.unwrapWithMetadata(command),
@@ -323,20 +312,14 @@ struct ExecCommandResolution {
             {
                 return
             }
-            self.collectAllowAlwaysPatterns(
-                command: envUnwrapped.command,
-                cwd: cwd,
-                env: env,
-                rawCommand: rawCommand,
-                depth: depth + 1,
-                patterns: &patterns,
-                seen: &seen)
-            return
+            unwrapped = envUnwrapped.command
+        } else {
+            unwrapped = self.unwrapShellMultiplexerInvocation(command)
         }
 
-        if let shellMultiplexer = unwrapShellMultiplexerInvocation(command) {
+        if let unwrapped {
             self.collectAllowAlwaysPatterns(
-                command: shellMultiplexer,
+                command: unwrapped,
                 cwd: cwd,
                 env: env,
                 rawCommand: rawCommand,
@@ -389,9 +372,9 @@ struct ExecCommandResolution {
         let normalizedCwd = self.canonicalApprovalCwd(cwd)
         let arguments = Array(argv.dropFirst())
         let argvSubject = "\(arguments.count)\0" + arguments
-            .map { "\($0.data(using: .utf8)?.count ?? 0)\0\($0)\0" }
+            .map { "\($0.utf8.count)\0\($0)\0" }
             .joined()
-        let subject = "\(normalizedCwd.data(using: .utf8)?.count ?? 0)\0\(normalizedCwd)\0\(argvSubject)"
+        let subject = "\(normalizedCwd.utf8.count)\0\(normalizedCwd)\0\(argvSubject)"
         let digest = SHA256.hash(data: Data(subject.utf8))
         return "sha256:cwd-argv:v1:" + digest.map { String(format: "%02x", $0) }.joined()
     }
@@ -556,17 +539,10 @@ struct ExecCommandResolution {
     }
 
     private static func trimmingShellWordSeparators(_ value: String) -> String {
-        var start = value.startIndex
-        while start < value.endIndex, self.isShellWordSeparator(value[start]) {
-            value.formIndex(after: &start)
-        }
-        var end = value.endIndex
-        while end > start {
-            let previous = value.index(before: end)
-            guard self.isShellWordSeparator(value[previous]) else { break }
-            end = previous
-        }
-        return String(value[start..<end])
+        guard let start = value.firstIndex(where: { !self.isShellWordSeparator($0) }),
+              let end = value.lastIndex(where: { !self.isShellWordSeparator($0) })
+        else { return "" }
+        return String(value[start...end])
     }
 
     private static func splitShellCommandChain(_ command: String) -> [String]? {

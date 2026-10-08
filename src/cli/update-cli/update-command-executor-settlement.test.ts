@@ -28,7 +28,7 @@ import {
   withUpdateCommandExecutorChild,
   type UpdateCommandExecutor,
 } from "./update-command-executor.js";
-import { resolvePackageRuntimePreflight } from "./update-command-service-plan.js";
+import { resolvePackageRuntimePreflight } from "./update-command-runtime-preflight.js";
 import { createUpdateOperationDeadline } from "./update-operation-deadline.js";
 
 const boundaries = vi.hoisted(() => ({ store: vi.fn(), runtime: vi.fn(), databasePath: "" }));
@@ -36,8 +36,9 @@ vi.mock("../../daemon/runtime-paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/runtime-paths.js")>()),
   resolveNodeRuntimeInfo: boundaries.runtime,
 }));
-vi.mock("../../infra/update-managed-service-handoff-lease.js", () => ({
-  createManagedHandoffLeaseStore: boundaries.store,
+vi.mock("../../infra/update-managed-service-handoff-lease.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-managed-service-handoff-lease.js")>()),
+  prepareManagedHandoffLeaseStore: boundaries.store,
   resolveManagedUpdateLeaseDatabasePath: () => boundaries.databasePath,
 }));
 vi.mock("../../infra/update-managed-service-handoff-database.js", () => ({
@@ -143,7 +144,7 @@ beforeEach(() => {
     isProcessIdentityCurrent: () => true,
     acceptParentBoundExecutor: current,
   };
-  boundaries.store.mockReturnValue(store);
+  boundaries.store.mockResolvedValue(store);
 });
 
 function runWithExecutorFence<T>(
@@ -348,21 +349,36 @@ it.each(["direct", "delegated"] as const)(
   },
 );
 
-it.each(["forced", "uncertain"] as const)(
-  "retains the direct lease until command cleanup reports %s",
-  async (cleanupResult) => {
+it.each([
+  { kind: "direct", cleanupResult: "forced" },
+  { kind: "direct", cleanupResult: "uncertain" },
+  { kind: "delegated", cleanupResult: "forced" },
+  { kind: "delegated", cleanupResult: "uncertain" },
+] as const)(
+  "retains $kind authority until command cleanup reports $cleanupResult",
+  async ({ kind, cleanupResult }) => {
     const admitted = createDeferredCore();
     const cleanup = createDeferredCore<"forced" | "uncertain">();
     const original = new Error("operation cancelled");
     let saved: UpdateCommandExecutor | undefined;
     let fence: UpdateRecoveryFence | undefined;
-    const work = withUpdateCommandExecutor("run", async (executor) => {
-      saved = executor;
-      fence = await executor.enter(root);
+    const operation = async (current: UpdateRecoveryFence) => {
+      fence = current;
       retainCommandProcessCleanup(cleanup.promise);
       admitted.resolve();
-      throw original;
-    }).catch((error: unknown) => {
+      if (kind === "direct") {
+        throw original;
+      }
+      return "complete";
+    };
+    const work = (
+      kind === "direct"
+        ? withUpdateCommandExecutor("run", async (executor) => {
+            saved = executor;
+            return operation(await executor.enter(root));
+          })
+        : runWithExecutorFence(kind, operation)
+    ).catch((error: unknown) => {
       admitted.reject(error);
       return error;
     });
@@ -377,12 +393,17 @@ it.each(["forced", "uncertain"] as const)(
     }
     const error = await work;
     expect(hasCommandProcessCleanupError(error)).toBe(cleanupResult === "uncertain");
-    expect(rows.has(root)).toBe(cleanupResult === "uncertain");
     if (cleanupResult === "forced") {
-      expect(error).toBe(original);
+      expect(error).toBe(kind === "direct" ? original : "complete");
     }
-    expect(fence!.assertCurrent).toThrow("no longer current");
-    await expect(saved!.enter(root)).rejects.toThrow("closed or busy");
+    if (kind === "direct") {
+      expect(rows.has(root)).toBe(cleanupResult === "uncertain");
+      expect(fence!.assertCurrent).toThrow("no longer current");
+      await expect(saved!.enter(root)).rejects.toThrow("closed or busy");
+    } else {
+      expect(fence!.assertCurrent).toThrow("no longer has permission");
+      expect(rows.size).toBe(2);
+    }
   },
 );
 
@@ -429,41 +450,10 @@ it.each(["forced", "uncertain"] as const)(
 );
 
 it.each(["forced", "uncertain"] as const)(
-  "keeps delegated authority through command cleanup reporting %s",
-  async (cleanupResult) => {
-    const admitted = createDeferredCore();
-    const cleanup = createDeferredCore<"forced" | "uncertain">();
-    let fence: UpdateRecoveryFence | undefined;
-    const work = runWithExecutorFence("delegated", async (current) => {
-      fence = current;
-      retainCommandProcessCleanup(cleanup.promise);
-      admitted.resolve();
-      return "complete";
-    }).catch((error: unknown) => {
-      admitted.reject(error);
-      return error;
-    });
-    try {
-      await admitted.promise;
-      await setImmediate();
-      expect(() => captureUpdateCommandExecutorAuthority(fence!)).not.toThrow();
-    } finally {
-      cleanup.resolve(cleanupResult);
-      await work;
-    }
-    const result = await work;
-    expect(hasCommandProcessCleanupError(result)).toBe(cleanupResult === "uncertain");
-    if (cleanupResult === "forced") {
-      expect(result).toBe("complete");
-    }
-    expect(fence!.assertCurrent).toThrow("no longer has permission");
-    expect(rows.size).toBe(2);
-  },
-);
-
-it.each(["forced", "uncertain"] as const)(
   "settles a failed runtime probe before preflight handoff release (%s)",
   async (cleanupResult) => {
+    const fallbackNodeRunner = path.join(root, "replacement-node");
+    fs.writeFileSync(fallbackNodeRunner, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
     const admitted = createDeferredCore();
     const cleanup = createDeferredCore<"forced" | "uncertain">();
     let handedOff = false;
@@ -479,6 +469,7 @@ it.each(["forced", "uncertain"] as const)(
       const runtime = await resolvePackageRuntimePreflight({
         root,
         target: { version: "2026.9.17", nodeEngine: ">=24.16.0" },
+        fallbackNodeRunner,
         alreadyCurrent: true,
         shouldRestart: true,
         service: {

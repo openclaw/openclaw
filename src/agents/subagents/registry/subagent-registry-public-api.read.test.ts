@@ -6,12 +6,15 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { createSubagentRegistryPublicApi } from "./subagent-registry-public-api.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
+import {
+  persistRegistryFixture,
+  saveSubagentRegistryToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
 import * as registryState from "./subagent-registry-state.js";
 import {
   clearSubagentRunsReadCacheForTest,
   prepareSubagentSessionListReadCache,
 } from "./subagent-registry-state.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 function createRun(runId: string, overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
@@ -39,8 +42,6 @@ function createReadApi(runs = new Map<string, SubagentRunRecord>()) {
   };
   return createSubagentRegistryPublicApi({
     runs,
-    persist: unexpectedMutation,
-    persistOrThrow: unexpectedMutation,
     restoreOnce: unexpectedMutation,
     startAnnounceCleanup: unexpectedMutation,
     settleRequesterTurn: unexpectedMutation,
@@ -75,7 +76,7 @@ describe("subagent registry known-run reads", () => {
       for (const entry of [target, ...unrelated]) {
         subagentRuns.set(entry.runId, entry);
       }
-      registryState.persistSubagentRunsToDiskOrThrow(subagentRuns);
+      persistRegistryFixture(subagentRuns);
       const api = createReadApi(subagentRuns);
       const warm = await api.prepareSubagentRunsByRunIds(["collector"]);
       expect(warm.consume((runs) => runs.get("collector"))).toEqual({ ready: true, value: target });
@@ -85,7 +86,11 @@ describe("subagent registry known-run reads", () => {
       let unrelatedVisits = 0;
       const restore: Array<() => void> = [];
       for (const entry of unrelated) {
-        const persisted = (snapshot as Map<string, SubagentRunReadRecord>).get(entry.runId)!;
+        const persistedRows = snapshot as Map<string, SubagentRunReadRecord>;
+        const persistedSource = persistedRows.get(entry.runId)!;
+        const persisted = { ...persistedSource };
+        persistedRows.set(entry.runId, persisted);
+        restore.push(() => persistedRows.set(entry.runId, persistedSource));
         for (const row of [entry, persisted]) {
           const runId = row.runId;
           Object.defineProperty(row, "runId", {
@@ -112,7 +117,7 @@ describe("subagent registry known-run reads", () => {
         ]);
         const replacement = { ...target, completion: { required: false, resultText: "updated" } };
         subagentRuns.set(replacement.runId, replacement);
-        registryState.persistSubagentRunsToDiskOrThrow(subagentRuns, [replacement.runId]);
+        persistRegistryFixture(subagentRuns, [replacement.runId]);
         expect(prepared.consume((runs) => [...runs])).toEqual({
           ready: true,
           value: [
@@ -161,10 +166,10 @@ describe("subagent registry known-run reads", () => {
           swarmRunId: "collector",
           requesterSessionKey: "agent:other:current-owner",
         });
-        registryState.persistSubagentRunsToDiskOrThrow(
-          new Map([[replacement.runId, replacement]]),
-          [original.runId, replacement.runId],
-        );
+        persistRegistryFixture(new Map([[replacement.runId, replacement]]), [
+          original.runId,
+          replacement.runId,
+        ]);
         release.resolve();
         const prepared = await pending;
         expect(prepared.consume((runs) => [...runs])).toEqual({
@@ -200,48 +205,22 @@ describe("subagent registry known-run reads", () => {
           ),
         );
         saveSubagentRegistryToSqlite(new Map(rows.map((row) => [row.runId, row])));
-        const readSnapshot = registryState.getSubagentRunsSnapshotForRead;
-        const snapshots: Map<string, SubagentRunRecord>[] = [];
-        let visitedRows = 0;
-        const read = vi
-          .spyOn(registryState, "getSubagentRunsSnapshotForRead")
-          .mockImplementation((runs) => {
-            const snapshot = readSnapshot(runs);
-            snapshots.push(snapshot);
-            const values = snapshot.values.bind(snapshot);
-            Object.defineProperty(snapshot, "values", {
-              configurable: true,
-              value: () => {
-                const iterator = values();
-                const next = iterator.next.bind(iterator);
-                iterator.next = () => {
-                  const result = next();
-                  if (!result.done) {
-                    visitedRows += 1;
-                  }
-                  return result;
-                };
-                return iterator;
-              },
-            });
-            return snapshot;
-          });
+        const api = createReadApi();
+        expect(() => api.countActiveRunsForSession("agent:main:main")).toThrow("must be prepared");
+        const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
         try {
+          await prepareSubagentSessionListReadCache();
           expect(
-            createReadApi().countActiveRunsForSession("agent:main:main", {
+            api.countActiveRunsForSession("agent:main:main", {
               collect: false,
               requesterAgentId: "main",
             }),
           ).toBe(activeChildren);
-          expect(snapshots).toHaveLength(1);
-          expect(snapshots[0]?.size).toBe(rows.length);
-          // These children need only selection and current retention checks.
-          expect(visitedRows).toBeLessThanOrEqual(rows.length);
+          expect(read.mock.calls.map(([, command]) => command.type)).toEqual([
+            "subagents.sessionList",
+          ]);
         } finally {
           read.mockRestore();
-          for (const snapshot of snapshots) {
-            Reflect.deleteProperty(snapshot, "values");
-          }
         }
       });
     },
@@ -294,7 +273,13 @@ describe("subagent registry known-run reads", () => {
       }
 
       // A scoped result must never masquerade as a complete registry cache.
-      expect(api.getSubagentRunByRunId("retained")?.completion?.resultText).toBe(retainedResult);
+      const retained = await api.prepareSubagentRunsByRunIds(["retained"]);
+      expect(
+        retained.consume((selected) => selected.get("retained")?.completion?.resultText),
+      ).toEqual({
+        ready: true,
+        value: retainedResult,
+      });
     });
   });
 

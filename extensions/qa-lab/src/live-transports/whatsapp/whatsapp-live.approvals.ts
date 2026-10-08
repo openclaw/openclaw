@@ -1,10 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type {
-  WhatsAppQaDriverObservedMessage,
-  WhatsAppQaDriverSession,
-} from "@openclaw/whatsapp/api.js";
+import type { WhatsAppQaDriverSession } from "@openclaw/whatsapp/api.js";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { QaGatewayChild } from "../../gateway-child.js";
 import {
   requestLiveQaApproval,
   resolveLiveQaApprovalDecision,
@@ -15,10 +12,12 @@ import type {
   WhatsAppObservedMessage,
   WhatsAppQaApprovalDecision,
   WhatsAppQaApprovalScenarioRun,
-  WhatsAppQaGateway,
   WhatsAppQaScenarioMetadata,
 } from "./whatsapp-live.contracts.js";
-import { formatDiagnosticId } from "./whatsapp-live.observations.js";
+import {
+  formatDiagnosticId,
+  waitForWhatsAppObservedMessage,
+} from "./whatsapp-live.observations.js";
 
 const WHATSAPP_QA_APPROVAL_DECISION_TIMEOUT_MS = 60_000;
 
@@ -108,9 +107,9 @@ async function waitForWhatsAppApprovalMessage(params: {
   timeoutMs: number;
   token: string;
 }) {
-  let reply: WhatsAppQaDriverObservedMessage;
-  try {
-    reply = await params.driver.waitForMessage({
+  const reply = await waitForWhatsAppObservedMessage(
+    params.driver,
+    {
       observedAfter: params.observedAfter,
       timeoutMs: params.timeoutMs,
       match: (message) => {
@@ -118,16 +117,9 @@ async function waitForWhatsAppApprovalMessage(params: {
           !message.fromPhoneE164 || message.fromPhoneE164 === params.sutPhoneE164;
         return fromExpectedSender && matchesWhatsAppApprovalText(params, message.text);
       },
-    });
-  } catch (error) {
-    if (/\btimed out waiting for WhatsApp QA driver message\b/iu.test(formatErrorMessage(error))) {
-      throw new Error(
-        `${formatErrorMessage(error)}; ${formatWhatsAppApprovalWaitDiagnostics(params)}`,
-        { cause: error },
-      );
-    }
-    throw error;
-  }
+    },
+    () => formatWhatsAppApprovalWaitDiagnostics(params),
+  );
   const observed: WhatsAppObservedMessage = {
     ...reply,
     approvalState: params.state,
@@ -141,7 +133,7 @@ async function waitForWhatsAppApprovalMessage(params: {
 
 export async function runWhatsAppApprovalScenario(params: {
   driver: WhatsAppQaDriverSession;
-  gateway: WhatsAppQaGateway;
+  gateway: QaGatewayChild;
   observedMessages: WhatsAppObservedMessage[];
   run: WhatsAppQaApprovalScenarioRun;
   scenario: WhatsAppQaScenarioMetadata;

@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
 // Static method policy is shared by metadata discovery and runtime target resolution.
 // Keep it independent of session storage so scope/profile classification does not load the runtime.
 type SessionMutationTargetField = "key" | "parentSessionKey" | "sessionKey";
@@ -21,7 +23,14 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
   ["chat.abort", { fields: ["sessionKey"], required: true }],
   ["chat.inject", { fields: ["sessionKey"], required: true }],
   ["chat.send", { fields: ["sessionKey"], required: true, runStart: true }],
+  ["mcp.app.onboard", { fields: ["sessionKey"], required: true, runStart: true }],
+  ["mcp.app.launch", { fields: ["sessionKey"], required: true }],
+  ["mcp.app.settings", { fields: ["sessionKey"], required: true }],
+  ["mcp.app.mention", { fields: ["sessionKey"], required: true }],
   ["mcp.app.callTool", { fields: ["sessionKey"], required: true }],
+  ["mcp.app.removeModelContext", { fields: ["sessionKey"], required: true }],
+  ["mcp.app.formResource", { fields: ["sessionKey"], required: true }],
+  ["mcp.app.writeResource", { fields: ["sessionKey"], required: true }],
   ["mcp.app.updateModelContext", { fields: ["sessionKey"], required: true }],
   ["message.action", { fields: ["sessionKey"], runStart: true }],
   ["plugins.sessionAction", { fields: ["sessionKey"] }],
@@ -30,6 +39,7 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
   ["progressCard.refresh", { fields: ["sessionKey"], required: true, runStart: true }],
   ["send", { fields: ["sessionKey"], runStart: true }],
   ["session.discussion.open", { fields: ["sessionKey"], required: true }],
+  ["sessions.processes.stop", { fields: ["key"], required: true }],
   ["sessions.abort", { fields: ["key"], required: true }],
   ["sessions.assignOwner", { fields: ["key"], required: true }],
   // This changes a personal list preference, not the shared session.
@@ -85,6 +95,7 @@ const SESSION_TARGET_POLICY_BY_METHOD = new Map<string, SessionTargetPolicy>([
 const DIRECT_SESSION_READ_METHODS = new Set([
   "board.get",
   "chat.history",
+  "sessions.processes.list",
   "sessions.describe",
   "sessions.get",
   "sessions.preview",
@@ -93,6 +104,7 @@ const DIRECT_SESSION_READ_METHODS = new Set([
   "sessions.companion.state",
   "sessions.diff",
   "sessions.files.get",
+  "sessions.files.assets",
   "sessions.files.list",
   "sessions.files.reveal",
   "sessions.github.options",
@@ -106,6 +118,11 @@ const INDIRECT_SESSION_READ_METHODS = new Set([
   "board.widget.appView",
   "board.prompt.authorize",
   "board.data.read",
+  "mcp.app.modelContext",
+  "mcp.app.subscribeResource",
+  "mcp.app.unsubscribeResource",
+  "mcp.app.openFile",
+  "mcp.app.discover",
   "mcp.app.view",
   "mcp.app.listTools",
   "mcp.app.listResources",
@@ -159,4 +176,14 @@ export function isAgentRunStartMethod(method: string, requestParams: unknown): b
       "action" in requestParams &&
       requestParams.action === "resume")
   );
+}
+
+export function isSessionArchiveMutation(method: string, requestParams: unknown): boolean {
+  const patch =
+    method === "sessions.patchMany" && isRecord(requestParams)
+      ? requestParams.patch
+      : method === "sessions.patch"
+        ? requestParams
+        : undefined;
+  return isRecord(patch) && typeof patch.archived === "boolean";
 }

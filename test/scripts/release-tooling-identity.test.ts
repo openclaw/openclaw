@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -161,6 +162,40 @@ describe("release tooling identity", () => {
         workflowSha: SHA,
       }),
     ).toThrow("release-ci workflow ref does not match the workflow SHA");
+  });
+
+  it("loads candidate qualification admission without deadlocking the CLI module cycle", () => {
+    const releaseCiRef = `release-ci/${SHA.slice(0, 12)}-123`;
+    const result = spawnSync(
+      process.execPath,
+      [
+        join(process.cwd(), "scripts/release-tooling-identity.mjs"),
+        "resolve",
+        "--qualification-admission-json",
+        "{}",
+        "--qualification-inputs-json",
+        "{}",
+        "--candidate-sha",
+        SHA,
+        "--repository",
+        "openclaw/openclaw",
+        "--workflow-contract",
+        "2",
+        "--workflow-ref",
+        releaseCiRef,
+        "--workflow-full-ref",
+        `refs/heads/${releaseCiRef}`,
+        "--workflow-sha",
+        SHA,
+        "--requested-identity-json",
+        JSON.stringify({ ref: releaseCiRef, fullRef: `refs/heads/${releaseCiRef}`, sha: SHA }),
+      ],
+      { encoding: "utf8" },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Invalid admission descriptor fields");
+    expect(result.stderr).not.toContain("unsettled top-level await");
   });
 
   it("rejects a candidate SHA substituted for the release-ci Tooling SHA", () => {
@@ -651,43 +686,73 @@ const qualificationRoutes = [
     fullRunId: PARENT_RUN_ID,
     fullRunAttempt: "3",
   },
+  {
+    label: "FRV-owned producer retained across transport refs",
+    workflowPath: ".github/workflows/full-release-validation.yml",
+    fullRunId: PARENT_RUN_ID,
+    fullRunAttempt: "1",
+    retainedTransport: true,
+    producerRunAttempt: "2",
+  },
+  {
+    label: "independent producer retained across transport refs",
+    workflowPath: ".github/workflows/full-release-artifacts.yml",
+    fullRunId: PARENT_RUN_ID,
+    fullRunAttempt: "1",
+    retainedTransport: true,
+  },
 ];
 
 function qualificationFixture({
   workflowPath,
   fullRunId,
   fullRunAttempt,
+  retainedTransport = false,
+  producerRunAttempt = "1",
 }: {
   workflowPath: string;
   fullRunId: string;
   fullRunAttempt: string;
+  retainedTransport?: boolean;
+  producerRunAttempt?: string;
 }) {
+  const sourceSha = retainedTransport ? SHA : OTHER_SHA;
+  const producerRef = retainedTransport ? `release-ci/${SHA.slice(0, 12)}-100` : "main";
+  const fullRef = `refs/heads/${producerRef}`;
+  const currentRef = `refs/heads/release-ci/${SHA.slice(0, 12)}-200`;
+  const retainedSource = {
+    runId: RUN_ID,
+    runAttempt: 1,
+    candidateSha: SHA,
+    workflow: { ref: fullRef, sha: SHA },
+    qualificationAdmission: { artifactId: "100" },
+  };
   const producer = {
     repository: "openclaw/openclaw",
-    workflowRef: `openclaw/openclaw/${workflowPath}@refs/heads/main`,
+    workflowRef: `openclaw/openclaw/${workflowPath}@${fullRef}`,
     workflowSha: SHA,
     runId: RUN_ID,
-    runAttempt: "1",
+    runAttempt: producerRunAttempt,
     jobId: "999",
     jobName: "Qualify release npm artifacts / Qualify prepared npm package",
     producerWorkflowPath: ".github/workflows/openclaw-npm-preflight.yml",
   };
   const manifest = {
     version: 3,
-    releaseSha: OTHER_SHA,
+    releaseSha: sourceSha,
     tarballName: "openclaw.tgz",
     tarballSha256: "c".repeat(64),
     producer,
     preparedBundle: {
       schema: "openclaw.prepared-npm-bundle/v1",
-      source: { sha: OTHER_SHA },
+      source: { sha: sourceSha },
       package: { sha256: "c".repeat(64) },
       producer: { repository: producer.repository, workflowSha: SHA },
     },
   };
   const qualified = {
     schema: "openclaw.qualified-npm-preflight/v1",
-    source: { sha: OTHER_SHA },
+    source: { sha: sourceSha },
     producer,
     manifestSha256: "d".repeat(64),
     artifact: {
@@ -695,26 +760,44 @@ function qualificationFixture({
       name: `openclaw-npm-preflight-${OTHER_SHA}`,
       digest: "e".repeat(64),
       runId: RUN_ID,
-      runAttempt: "1",
+      runAttempt: producerRunAttempt,
     },
   };
   const fullReleaseManifest = {
     workflowName: "Full Release Validation",
     runId: fullRunId,
     runAttempt: fullRunAttempt,
-    workflowFullRef: "refs/heads/main",
-    targetSha: OTHER_SHA,
+    workflowFullRef: retainedTransport ? currentRef : fullRef,
+    targetSha: sourceSha,
     workflowSha: SHA,
     publicationArtifacts: { npmPreflight: qualified },
+    ...(retainedTransport
+      ? {
+          sourceAdmission: {
+            ...retainedSource,
+            runId: fullRunId,
+            runAttempt: Number(fullRunAttempt),
+            workflow: { ref: currentRef, sha: SHA },
+          },
+          evidenceReuse: {
+            policy: "exact-target-full-validation-v1",
+            runId: RUN_ID,
+            selectedRunId: RUN_ID,
+            evidenceSha: SHA,
+            changedPaths: [],
+            publication: { sourceAdmission: retainedSource },
+          },
+        }
+      : {}),
   };
   const input = {
     manifest,
     repository: producer.repository,
-    workflowFullRef: "refs/heads/main",
+    workflowFullRef: fullRef,
     workflowSha: SHA,
     workflowPath,
     runId: RUN_ID,
-    runAttempt: "1",
+    runAttempt: producerRunAttempt,
     fullReleaseManifest,
     fullReleaseRunId: fullRunId,
     fullReleaseRunAttempt: fullRunAttempt,
@@ -725,7 +808,7 @@ function qualificationFixture({
     repository: producer.repository,
     runId: fullRunId,
     runAttempt: fullRunAttempt,
-    sourceSha: OTHER_SHA,
+    sourceSha,
     toolingSha: SHA,
   };
   function reader(jobOverrides = {}, artifactOverrides = {}, runOverrides = {}) {
@@ -733,7 +816,7 @@ function qualificationFixture({
       id: 999,
       name: producer.jobName,
       run_id: Number(RUN_ID),
-      run_attempt: 1,
+      run_attempt: Number(producerRunAttempt),
       head_sha: SHA,
       status: "completed",
       conclusion: "success",
@@ -757,13 +840,16 @@ function qualificationFixture({
       if (endpoint.includes("/jobs?")) {
         return JSON.stringify({ total_count: 1, jobs: [job] });
       }
-      if (endpoint.endsWith("/attempts/1") || endpoint.endsWith(`/actions/runs/${RUN_ID}`)) {
+      if (
+        endpoint.endsWith(`/attempts/${producerRunAttempt}`) ||
+        endpoint.endsWith(`/actions/runs/${RUN_ID}`)
+      ) {
         return JSON.stringify({
           id: Number(RUN_ID),
-          run_attempt: 1,
+          run_attempt: Number(producerRunAttempt),
           head_sha: SHA,
           path: workflowPath,
-          head_branch: "main",
+          head_branch: producerRef,
           event: "workflow_dispatch",
           status: "completed",
           conclusion: "success",
@@ -810,11 +896,11 @@ describe("npm qualification", () => {
     } = qualificationFixture(route);
     const runGh = vi.fn(routeReader());
     expect(resolveFullReleaseNpmPreflight({ ...routeResolutionInput, runGh })).toMatchObject({
-      producer: { runId: RUN_ID, runAttempt: "1" },
+      producer: { runId: RUN_ID, runAttempt: route.producerRunAttempt ?? "1" },
       artifact: { id: 555 },
     });
     expect(runGh.mock.calls.map(([args]) => args[1])).toContain(
-      `repos/openclaw/openclaw/actions/runs/${RUN_ID}/attempts/1`,
+      `repos/openclaw/openclaw/actions/runs/${RUN_ID}/attempts/${route.producerRunAttempt ?? "1"}`,
     );
     expect(verifyNpmPreflightProducer({ ...routeInput, runGh: routeReader() })).toMatchObject({
       provenance: "immutable-manifest",
@@ -864,6 +950,32 @@ describe("npm qualification", () => {
       }),
     ).toThrow("qualification");
   });
+
+  it.each(["root", "candidate", "policy", "transport"])(
+    "rejects retained npm evidence with a changed %s binding",
+    (mismatch) => {
+      const fixture = qualificationFixture(qualificationRoutes[3]!);
+      const reuse = fixture.fullReleaseManifest.evidenceReuse;
+      if (!reuse) {
+        throw new Error("Expected retained producer fixture");
+      }
+      if (mismatch === "root") {
+        reuse.selectedRunId = "99999";
+      }
+      if (mismatch === "candidate") {
+        reuse.publication.sourceAdmission.candidateSha = OTHER_SHA;
+      }
+      if (mismatch === "policy") {
+        reuse.policy = "changelog-only-release-v1";
+      }
+      if (mismatch === "transport") {
+        fixture.producer.workflowRef = fixture.producer.workflowRef.replace("-100", "-300");
+      }
+      expect(() =>
+        resolveFullReleaseNpmPreflight({ ...fixture.resolutionInput, runGh: fixture.reader() }),
+      ).toThrow("qualified npm preflight");
+    },
+  );
 
   it.each(["run", "attempt", "tooling", "workflow", "repository", "ref"])(
     "rejects a descriptor detached from its %s binding",

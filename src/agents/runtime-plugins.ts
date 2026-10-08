@@ -61,6 +61,8 @@ type AgentRuntimePluginRegistryParams = {
   basePluginIds?: readonly string[];
   /** Exact registry from the supplied lifecycle metadata generation. */
   reusableRegistry?: PluginRegistry;
+  /** Live Gateway registry whose unchanged instances this load borrows instead of loading. */
+  borrowRegistry?: PluginRegistry;
   selections?: readonly AgentHarnessPluginSelection[];
   /** Config-wide harness runtimes carried by a prepared lifecycle batch. */
   configuredHarnessRuntimes?: readonly string[];
@@ -101,13 +103,15 @@ function resolveAgentRuntimePluginRegistryLoad(
   // startup runtime plugin ids plus selected run owners bound the registry scope.
   const activePluginIds = listLoadedRuntimePluginIds();
   const startupPluginIds =
-    params.purpose === "model-catalog"
-      ? (params.basePluginIds ?? [])
-      : (params.basePluginIds ??
-        (requestPluginRegistry
-          ? listRuntimePluginIdsFromRegistry(requestPluginRegistry)
-          : (metadataSnapshot.pluginIds ??
-            (activePluginIds.length > 0 ? activePluginIds : undefined))));
+    params.purpose === "isolated-completion"
+      ? []
+      : params.purpose === "model-catalog"
+        ? (params.basePluginIds ?? [])
+        : (params.basePluginIds ??
+          (requestPluginRegistry
+            ? listRuntimePluginIdsFromRegistry(requestPluginRegistry)
+            : (metadataSnapshot.pluginIds ??
+              (activePluginIds.length > 0 ? activePluginIds : undefined))));
   const plan = resolveAgentRuntimePluginLoadPlan({
     config: params.config,
     workspaceDir: workspaceDir ?? process.cwd(),
@@ -115,7 +119,9 @@ function resolveAgentRuntimePluginRegistryLoad(
     selections: resolveAgentRuntimePluginSelections(
       params.config,
       params.selections ?? [],
-      params.purpose === "model-catalog" ? [] : params.configuredHarnessRuntimes,
+      params.purpose === "model-catalog" || params.purpose === "isolated-completion"
+        ? []
+        : params.configuredHarnessRuntimes,
     ),
     metadataSnapshot,
     ...(params.purpose ? { purpose: params.purpose } : {}),
@@ -142,6 +148,7 @@ function resolveAgentRuntimePluginRegistryLoad(
     preferBuiltPluginArtifacts: params.preferBuiltPluginArtifacts,
     onlyPluginIds: startupPluginIds === undefined ? undefined : plan.pluginIds,
     channelPluginLoadIntent: startupPluginIds === undefined ? undefined : "full",
+    borrowRegistry: params.borrowRegistry,
   };
 }
 
@@ -152,7 +159,7 @@ function reusableAgentRuntimeRegistry(
   const pluginIds = loadOptions.onlyPluginIds;
   return params.reusableRegistry &&
     pluginIds !== undefined &&
-    (params.purpose !== "model-catalog" ||
+    ((params.purpose !== "model-catalog" && params.purpose !== "isolated-completion") ||
       listRuntimePluginIdsFromRegistry(params.reusableRegistry).every((pluginId) =>
         pluginIds.includes(pluginId),
       )) &&
@@ -172,7 +179,7 @@ function adoptAgentRuntimeRegistrations(
   toolDonor?: PluginRegistry;
 } {
   const activeRegistry = getActivePluginRegistry();
-  if (params.purpose === "model-catalog") {
+  if (params.purpose === "model-catalog" || params.purpose === "isolated-completion") {
     return { registry: pluginRegistry };
   }
   const channelRegistry =

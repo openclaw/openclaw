@@ -71,7 +71,11 @@ function createContext(): FinalizeReplyAgentRunInput {
         payloads: [],
         meta: { durationMs: 0, yielded: true },
         acceptedSessionSpawns: [
-          { runId: "index-worker-run", childSessionKey: "agent:main:subagent:index-worker" },
+          {
+            runId: "index-worker-run",
+            childSessionKey: "agent:main:subagent:index-worker",
+            expectsCompletionMessage: true,
+          },
         ],
       },
       resolved: { provider: followupRun.run.provider, model: followupRun.run.model },
@@ -150,14 +154,20 @@ it("delivers an ordinary terminal failure", async () => {
 });
 
 describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (lane) => {
-  it.each(["explicit acknowledgment", "visible final"])(
-    "preserves %s precedence",
-    async (precedence) => {
+  it.each(["explicit acknowledgment", "visible final", "optional turn", "delivered message"])(
+    "selects waiting status for %s",
+    async (selection) => {
       const context = createContext();
       const onPendingContinuation = vi.fn<(settlement?: PendingContinuationSettlement) => void>();
-      context.opts = { onPendingContinuation };
-      const selected = { text: `${precedence} selected` };
-      if (precedence === "explicit acknowledgment") {
+      if (selection === "explicit acknowledgment" || selection === "visible final") {
+        context.opts = { onPendingContinuation };
+      }
+      const selected = { text: `${selection} selected` };
+      if (selection === "optional turn") {
+        context.followupRun.run.terminalReplyExpectation = "optional";
+      } else if (selection === "delivered message") {
+        context.execution.result.didDeliverSourceReplyViaMessageTool = true;
+      } else if (selection === "explicit acknowledgment") {
         context.execution.result.meta.yieldAcknowledgment = ` ${selected.text} `;
         context.execution.result.payloads = [{ text: "Private plan", isReasoning: true }];
         if (lane === "queued") {
@@ -170,8 +180,12 @@ describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (la
         context.execution.result.payloads = [selected];
       }
       const payloads = await prepare(lane, context);
+      if (selection === "optional turn" || selection === "delivered message") {
+        expect(payloads).toEqual([]);
+        return;
+      }
       expect(payloads.map((payload) => payload.text)).toEqual([selected.text]);
-      if (precedence === "explicit acknowledgment") {
+      if (selection === "explicit acknowledgment") {
         expect(getReplyPayloadMetadata(payloads[0] ?? {})).toMatchObject({
           continuationStatus: true,
           deliverDespiteSourceReplySuppression: true,
@@ -180,19 +194,6 @@ describe.each(["ordinary", "queued"] as const)("%s waiting status delivery", (la
           expect(onPendingContinuation.mock.calls).toEqual([[]]);
         }
       }
-    },
-  );
-
-  it.each(["optional turn", "delivered message"])(
-    "does not deliver a waiting status for a %s",
-    async (suppression) => {
-      const context = createContext();
-      if (suppression === "optional turn") {
-        context.followupRun.run.terminalReplyExpectation = "optional";
-      } else {
-        context.execution.result.didDeliverSourceReplyViaMessageTool = true;
-      }
-      expect(await prepare(lane, context)).toEqual([]);
     },
   );
 });

@@ -1,3 +1,4 @@
+import { sleep } from "../utils/sleep.js";
 export type UpdateReportPreCreateGuardReason = "authority" | "reservation" | "stale" | "validation";
 
 export class UpdateReportPreCreateGuardError extends Error {
@@ -31,9 +32,7 @@ export async function retryUpdateReportStateWriteAfterNoStart(
   const retryDelaysMs = [0, 25, 100, 250, 500] as const;
   for (const delayMs of retryDelaysMs) {
     if (delayMs > 0) {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, delayMs);
-      });
+      await sleep(delayMs);
     }
     try {
       if (write()) {
@@ -46,16 +45,22 @@ export async function retryUpdateReportStateWriteAfterNoStart(
   return false;
 }
 
-export async function assertUpdateReportPreCreateState(options: {
+export function assertUpdateReportSubmissionAuthority(options: {
   hasCurrentAuthority?: () => boolean;
-  validateCurrentAttempt?: () => boolean | Promise<boolean>;
-}): Promise<void> {
+}): void {
   if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
     throw new UpdateReportPreCreateGuardError(
       "Update report submission requires a current authenticated client.",
       "authority",
     );
   }
+}
+
+export async function assertUpdateReportPreCreateState(options: {
+  hasCurrentAuthority?: () => boolean;
+  validateCurrentAttempt?: () => boolean | Promise<boolean>;
+}): Promise<void> {
+  assertUpdateReportSubmissionAuthority(options);
   if (options.validateCurrentAttempt) {
     let currentAttempt: boolean;
     try {
@@ -74,10 +79,5 @@ export async function assertUpdateReportPreCreateState(options: {
       );
     }
   }
-  if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
-    throw new UpdateReportPreCreateGuardError(
-      "Update report submission requires a current authenticated client.",
-      "authority",
-    );
-  }
+  assertUpdateReportSubmissionAuthority(options);
 }

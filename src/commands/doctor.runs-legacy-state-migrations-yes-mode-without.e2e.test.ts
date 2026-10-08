@@ -1,5 +1,6 @@
 // Doctor legacy-state e2e tests cover yes-mode state migrations without interactive prompts.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import {
   arrangeLegacyStateMigrationTest,
@@ -34,10 +35,34 @@ vi.mock("../plugins/providers.runtime.js", async () => {
 
 let doctorCommand: typeof import("./doctor.js").doctorCommand;
 let healthCommand: typeof import("./health.js").healthCommand;
+type MaintenancePhase = "loading" | "loaded" | "entered" | "settled" | "rejected";
+let observeMaintenance: ((phase: MaintenancePhase) => void) | undefined;
 
 describe("doctor command", () => {
   beforeEach(async () => {
+    observeMaintenance = undefined;
     vi.resetModules();
+    vi.doMock("./doctor-maintenance.js", async (importOriginal) => {
+      const loading = observeMaintenance;
+      loading?.("loading");
+      const actual = await importOriginal<typeof import("./doctor-maintenance.js")>();
+      loading?.("loaded");
+      return {
+        ...actual,
+        beginDoctorMaintenance: (params: Parameters<typeof actual.beginDoctorMaintenance>[0]) => {
+          const observe = observeMaintenance;
+          observe?.("entered");
+          const pending = actual.beginDoctorMaintenance(params);
+          if (observe) {
+            void pending.then(
+              () => observe("settled"),
+              () => observe("rejected"),
+            );
+          }
+          return pending;
+        },
+      };
+    });
     vi.doUnmock("../flows/doctor-health-contributions.js");
     ({ doctorCommand } = await import("./doctor.js"));
     ({ healthCommand } = await import("./health.js"));
@@ -46,34 +71,48 @@ describe("doctor command", () => {
     providerRuntimeMocks.resolvePluginProvidersCore.mockReturnValue([]);
   });
 
-  it("runs legacy state migrations in yes mode without prompting", async () => {
-    const {
-      doctorCommand: doctorCommandValue,
-      runtime,
-      runLegacyStateMigrations,
-    } = await arrangeLegacyStateMigrationTest();
+  afterEach(() => {
+    observeMaintenance = undefined;
+    vi.doUnmock("./doctor-maintenance.js");
+  });
 
-    await (
-      doctorCommandValue as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>
-    )(runtime, { yes: true });
+  it("runs legacy state migrations in yes mode without prompting", async ({ signal }) => {
+    const startedAt = performance.now();
+    const maintenance: { phase: MaintenancePhase; elapsedMs: number }[] = [];
+    let migrationCalls: (() => number) | undefined;
+    let doctorSettled = false;
+    observeMaintenance = (phase) => {
+      maintenance.push({ phase, elapsedMs: Math.round(performance.now() - startedAt) });
+    };
+    const reportInterruption = () => {
+      console.error("Doctor yes-mode interrupted before test settlement", {
+        maintenance,
+        legacyMigrationCalls: migrationCalls?.(),
+        doctorSettled,
+      });
+    };
+    signal.addEventListener("abort", reportInterruption, { once: true });
+    try {
+      const {
+        doctorCommand: doctorCommandValue,
+        runtime,
+        runLegacyStateMigrations,
+      } = await arrangeLegacyStateMigrationTest();
+      migrationCalls = () => runLegacyStateMigrations.mock.calls.length;
+      try {
+        await (
+          doctorCommandValue as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>
+        )(runtime, { yes: true });
+      } finally {
+        doctorSettled = true;
+      }
 
-    expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
-    expect(confirm).not.toHaveBeenCalled();
-  }, 30_000);
-
-  it("runs legacy state migrations in non-interactive mode without prompting", async () => {
-    const {
-      doctorCommand: doctorCommandLocal,
-      runtime,
-      runLegacyStateMigrations,
-    } = await arrangeLegacyStateMigrationTest();
-
-    await (
-      doctorCommandLocal as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>
-    )(runtime, { nonInteractive: true });
-
-    expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
-    expect(confirm).not.toHaveBeenCalled();
+      expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
+      expect(confirm).not.toHaveBeenCalled();
+    } finally {
+      signal.removeEventListener("abort", reportInterruption);
+      observeMaintenance = undefined;
+    }
   }, 30_000);
 
   it("refuses doctor repair mode in Nix before repair side effects", async () => {

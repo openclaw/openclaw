@@ -14,7 +14,7 @@ import { requestCloudWorkerStop } from "../../components/cloud-worker-stop.runti
 import { resolveCloudWorkerStopAction } from "../../components/cloud-worker-stop.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { fetchSessionMenuWork } from "../../components/session-menu-work.ts";
-import type { SessionMenuAction, SessionMenuWork } from "../../components/session-menu.ts";
+import type { SessionMenuWork } from "../../components/session-menu.ts";
 import "../../components/session-menu.ts";
 import {
   formatBatchSessionRemovalError,
@@ -27,7 +27,7 @@ import { t } from "../../i18n/index.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
 import { openEditor } from "../../lib/editor-links.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../../lib/open-external-url.ts";
 import {
   readSessionMethodAccess,
@@ -72,6 +72,7 @@ import { ensureSessionAgentIdentities, sessionAgentIdentityById } from "./agent-
 import { prepareArchiveOutcome } from "./archive-outcome.ts";
 import { rememberSessionCustomGroup, sessionCategoryNames } from "./custom-groups.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
+import { SessionsPageDialog } from "./page-dialog.ts";
 import { loadStoredGroupBy, saveStoredGroupBy } from "./page-state.ts";
 import type { SessionsRouteData } from "./route.ts";
 import {
@@ -79,6 +80,7 @@ import {
   updateSelectedSessions,
   type SessionDeleteRow,
 } from "./selection.ts";
+import { SessionDetailsController } from "./session-details-controller.ts";
 import { renderSessionManagementMenu } from "./session-menu.ts";
 import { renderSessions, type SessionsProps } from "./view.ts";
 
@@ -94,9 +96,6 @@ type SessionsPageRequestScope = {
 };
 
 type SessionsPageMutationResult = "completed" | "failed" | "stale";
-
-/** Type-only, so the dialog itself stays behind its lazy boundary. */
-type InputDialogOpener = (typeof import("../../components/input-dialog.ts"))["showInputDialog"];
 
 type SessionsPageListBinding = {
   sessions: ApplicationContext["sessions"];
@@ -146,14 +145,20 @@ class SessionsPage extends OpenClawLightDomElement {
   private appliedRouteData?: SessionsRouteData;
   private sessionMutationPending = false;
   private sessionMenuTrigger: HTMLElement | null = null;
-  // Guards the async work fetch: a menu reopened for another session must not
-  // adopt a stale response.
-  private sessionMenuWorkVersion = 0;
   private listBinding?: SessionsPageListBinding;
   private unsubscribeList?: () => void;
   private listRequest?: Promise<void>;
   private searchTimer?: ReturnType<typeof setTimeout>;
   private appliedListResult: SessionsListResult | null | undefined;
+  private readonly details = new SessionDetailsController(this, {
+    captureScope: () => this.captureRequestScope(),
+    isCurrent: (scope) => this.isRequestScopeCurrent(scope),
+    row: () => this.result?.sessions.find((row) => row.key === this.expandedSessionKey),
+    agentId: (row, scope) => row.agentId ?? this.sessionPathAgentId(row.key, scope.context),
+  });
+  private readonly inputDialog = new SessionsPageDialog((message) => {
+    this.error = message;
+  });
   private readonly observeAgentScope = watchAgentScope(() => {
     // Keep same-connection list serialization.
     this.retirePageOperations();
@@ -168,22 +173,13 @@ class SessionsPage extends OpenClawLightDomElement {
     this.requestUpdate();
   });
   private readonly subscriptions = new SubscriptionsController(this)
-    .watch(
-      () => this.context?.agentIdentity,
-      (agentIdentity, notify) => agentIdentity.subscribe(notify),
-    )
+    .watchStore(() => this.context?.agentIdentity)
     .effect(
       () => this.context?.agentSelection,
       (agentSelection) => this.observeAgentScope(agentSelection),
     )
-    .watch(
-      () => this.context?.runtimeConfig,
-      (runtimeConfig, notify) => runtimeConfig.subscribe(notify),
-    )
-    .watch(
-      () => this.context?.plugins,
-      (plugins, notify) => plugins.subscribe(notify),
-    );
+    .watchStore(() => this.context?.runtimeConfig)
+    .watchStore(() => this.context?.plugins);
   private readonly gatewayLifecycle = new GatewayPageController(this, {
     getGateway: () => this.context?.gateway,
     onIdentityChange: () => {
@@ -239,6 +235,7 @@ class SessionsPage extends OpenClawLightDomElement {
       this.applyRouteData();
     }
     this.bindSessionList();
+    this.details.synchronize();
   }
 
   override disconnectedCallback() {
@@ -249,11 +246,12 @@ class SessionsPage extends OpenClawLightDomElement {
     this.invalidatePageWork();
     // Dialogs mount on document.body, so navigating away would otherwise leave
     // one over the destination, still submitting against this detached page.
-    this.dialogLifecycle?.abort();
+    this.inputDialog.abort();
     super.disconnectedCallback();
   }
 
   private retirePageOperations() {
+    this.details.reset();
     this.pluginActionLifetime.abort();
     this.pluginActionLifetime = new AbortController();
     this.pageEpoch += 1;
@@ -313,6 +311,14 @@ class SessionsPage extends OpenClawLightDomElement {
       gateway.snapshot.phase === "connected" &&
       gateway.snapshot.client === scope.client
     );
+  }
+
+  private publishRequestError(scope: SessionsPageRequestScope, error: unknown): "failed" | "stale" {
+    if (!this.isRequestScopeCurrent(scope)) {
+      return "stale";
+    }
+    this.error = formatUiError(error);
+    return "failed";
   }
 
   private mutationDisabledReason(request: SessionMethodAccessRequest): string | undefined {
@@ -577,12 +583,7 @@ class SessionsPage extends OpenClawLightDomElement {
     await this.transcriptSearchTask.run();
   }
 
-  private updateFilters(next: {
-    activeMinutes: string;
-    limit: string;
-    includeGlobal: boolean;
-    includeUnknown: boolean;
-  }) {
+  private updateFilters(next: Parameters<SessionsProps["onFiltersChange"]>[0]) {
     this.activeMinutes = next.activeMinutes;
     this.limit = next.limit;
     this.includeGlobal = next.includeGlobal;
@@ -638,18 +639,23 @@ class SessionsPage extends OpenClawLightDomElement {
         : "sessionsView.deleteSelectedConfirm",
       { count: String(rows.length) },
     );
-    if (
-      !(await showConfirmDialog({
-        message,
-        confirmLabel: t("common.delete"),
-        danger: true,
-        signal: this.pluginActionLifetime.signal,
-      })) ||
-      !this.isRequestScopeCurrent(scope)
-    ) {
+    if (!(await this.confirmMutation(message)) || !this.isRequestScopeCurrent(scope)) {
       return;
     }
     await this.deleteSessions(rows.filter((row) => this.selectedSessions.get(row.key) === row));
+  }
+
+  private confirmMutation(
+    message: string,
+    options: { confirmLabel?: string; signal?: AbortSignal } = {},
+  ) {
+    return showConfirmDialog({
+      message,
+      confirmLabel: t("common.delete"),
+      danger: true,
+      signal: this.pluginActionLifetime.signal,
+      ...options,
+    });
   }
 
   private async deleteSessions(
@@ -780,9 +786,7 @@ class SessionsPage extends OpenClawLightDomElement {
       }
       rows = listed;
     } catch (error) {
-      if (this.isRequestScopeCurrent(scope)) {
-        this.error = formatUiError(error);
-      }
+      this.publishRequestError(scope, error);
       return;
     }
     const archivedRows = rows.filter((row) => row.archived === true);
@@ -790,14 +794,12 @@ class SessionsPage extends OpenClawLightDomElement {
       return;
     }
     if (
-      !(await showConfirmDialog({
-        message: t("sessionsView.deleteAllArchivedConfirm", {
+      !(await this.confirmMutation(
+        t("sessionsView.deleteAllArchivedConfirm", {
           count: String(archivedRows.length),
         }),
-        confirmLabel: t("common.delete"),
-        danger: true,
-        signal,
-      })) ||
+        { signal },
+      )) ||
       !this.isRequestScopeCurrent(scope)
     ) {
       return;
@@ -810,12 +812,7 @@ class SessionsPage extends OpenClawLightDomElement {
     const scope = this.captureRequestScope();
     if (
       !scope ||
-      !(await showConfirmDialog({
-        message: t("sessionsView.deleteSessionConfirm", { session: label }),
-        confirmLabel: t("common.delete"),
-        danger: true,
-        signal: this.pluginActionLifetime.signal,
-      })) ||
+      !(await this.confirmMutation(t("sessionsView.deleteSessionConfirm", { session: label }))) ||
       !this.isRequestScopeCurrent(scope)
     ) {
       return;
@@ -832,11 +829,8 @@ class SessionsPage extends OpenClawLightDomElement {
     const scope = this.captureRequestScope();
     if (
       !scope ||
-      !(await showConfirmDialog({
-        message: t("sessionsView.stopCloudWorkerConfirm", { session: label }),
+      !(await this.confirmMutation(t("sessionsView.stopCloudWorkerConfirm", { session: label }), {
         confirmLabel: t("sessionsView.stopCloudWorkerConfirmAction"),
-        danger: true,
-        signal: this.pluginActionLifetime.signal,
       })) ||
       !this.isRequestScopeCurrent(scope) ||
       !this.requireMutationAccess(scope, stopAction)
@@ -936,47 +930,6 @@ class SessionsPage extends OpenClawLightDomElement {
     void this.patchSession(key, { category });
   }
 
-  /** Only one dialog is open at a time; disconnect closes whichever it is. */
-  private dialogLifecycle: AbortController | null = null;
-
-  private async openInputDialog(
-    options: () => Parameters<InputDialogOpener>[0],
-  ): Promise<string | null> {
-    // Reentrant opens share the live controller but must not retire it on completion.
-    const active = this.dialogLifecycle;
-    const lifecycle = active ?? new AbortController();
-    this.dialogLifecycle = lifecycle;
-    try {
-      const showInputDialog = await this.loadInputDialog();
-      if (!showInputDialog) {
-        return null;
-      }
-      const resolved = options();
-      return (
-        (await showInputDialog({
-          ...resolved,
-          signal: resolved.signal
-            ? AbortSignal.any([lifecycle.signal, resolved.signal])
-            : lifecycle.signal,
-        })) ?? null
-      );
-    } finally {
-      if (!active && this.dialogLifecycle === lifecycle) {
-        this.dialogLifecycle = null;
-      }
-    }
-  }
-
-  /** A dialog that never opens still owes the operator a visible outcome. */
-  private async loadInputDialog(): Promise<InputDialogOpener | null> {
-    try {
-      return (await import("../../components/input-dialog.ts")).showInputDialog;
-    } catch (error) {
-      this.error = formatUiError(error);
-      return null;
-    }
-  }
-
   private async requestNewCategory(sessionKey?: string) {
     // Capture before loading the dialog: its key may belong to a replacement
     // by the time the operator submits or the catalog write completes.
@@ -985,7 +938,7 @@ class SessionsPage extends OpenClawLightDomElement {
       this.error = t("common.refresh");
       return;
     }
-    await this.openInputDialog(() => ({
+    await this.inputDialog.open(() => ({
       title: t("sessionsView.newGroupTitle"),
       label: t("sessionsView.newGroupPrompt"),
       submitLabel: t("sessionsView.newGroupCreate"),
@@ -1037,7 +990,7 @@ class SessionsPage extends OpenClawLightDomElement {
     }
     const initialValue = resolveSessionRenameValue(row);
     const requestSignal = this.pluginActionLifetime.signal;
-    const value = await this.openInputDialog(() => ({
+    const value = await this.inputDialog.open(() => ({
       signal: requestSignal,
       title: t("sessionsView.renameSessionPrompt"),
       defaultValue: initialValue,
@@ -1124,11 +1077,7 @@ class SessionsPage extends OpenClawLightDomElement {
       this.selectedSessions = selected;
       return "completed";
     } catch (error) {
-      if (this.isRequestScopeCurrent(scope)) {
-        this.error = formatUiError(error);
-        return "failed";
-      }
-      return "stale";
+      return this.publishRequestError(scope, error);
     }
   }
 
@@ -1193,27 +1142,8 @@ class SessionsPage extends OpenClawLightDomElement {
         this.error = scope.sessions.state.error;
       }
     } catch (error) {
-      if (this.isRequestScopeCurrent(scope)) {
-        this.error = formatUiError(error);
-      }
+      this.publishRequestError(scope, error);
     }
-  }
-
-  private async toggleSessionDetails(sessionKey: string) {
-    const context = this.context;
-    if (!context) {
-      return;
-    }
-    const leavingDeepLink = this.deepLinkSessionKey !== null;
-    this.deepLinkSessionKey = null;
-    if (leavingDeepLink) {
-      void this.refreshSessionList();
-    }
-    if (this.expandedSessionKey === sessionKey) {
-      this.expandedSessionKey = null;
-      return;
-    }
-    this.expandedSessionKey = sessionKey;
   }
 
   private openSessionMenu(
@@ -1240,12 +1170,12 @@ class SessionsPage extends OpenClawLightDomElement {
     }
     this.sessionMenu = null;
     this.sessionMenuTrigger = null;
-    this.sessionMenuWorkVersion += 1;
     this.sessionMenuWork = null;
   }
 
   private loadSessionMenuWork(row: GatewaySessionRow) {
-    const version = ++this.sessionMenuWorkVersion;
+    // Every opening has its own identity, including reopening the same row.
+    const menu = this.sessionMenu;
     if (!row.worktree) {
       this.sessionMenuWork = null;
       return;
@@ -1263,17 +1193,17 @@ class SessionsPage extends OpenClawLightDomElement {
     );
     void fetchSessionMenuWork({
       client: scope.client,
-      loadPullRequests:
-        isGatewayMethodAdvertised(
-          scope.context.gateway.snapshot,
-          SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
-        ) === true
-          ? () => store.load(this, pullRequestKey)
-          : undefined,
+      loadPullRequests: canCallGatewayMethod(
+        scope.context.gateway.snapshot,
+        SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
+        "operator.read",
+      )
+        ? () => store.load(this, pullRequestKey)
+        : undefined,
       worktreeId: row.worktree.id,
       execNode: row.execNode,
     }).then((work) => {
-      if (version === this.sessionMenuWorkVersion) {
+      if (this.sessionMenu === menu) {
         this.sessionMenuWork = { loading: false, ...work };
       }
     });
@@ -1299,7 +1229,7 @@ class SessionsPage extends OpenClawLightDomElement {
       groups: this.knownCategories(),
       work: this.sessionMenuWork,
       onClose: () => this.closeSessionMenu(),
-      onAction: (action: SessionMenuAction) => {
+      onAction: (action) => {
         switch (action.kind) {
           case "open-pr":
             openExternalUrlSafe(action.url);
@@ -1344,11 +1274,7 @@ class SessionsPage extends OpenClawLightDomElement {
                   await this.refreshSessionList(scope);
                 }
               })
-              .catch((error: unknown) => {
-                if (this.isRequestScopeCurrent(scope)) {
-                  this.error = formatUiError(error);
-                }
-              });
+              .catch((error: unknown) => this.publishRequestError(scope, error));
             break;
           }
           case "toggle-unread":
@@ -1387,9 +1313,29 @@ class SessionsPage extends OpenClawLightDomElement {
               void this.archiveSessionWithUndo(row);
             }
             break;
-          case "assign-owner":
-            void this.context?.sessions.assignOwner(row.key, action.owner);
+          case "assign-owner": {
+            const scope = this.captureRequestScope();
+            if (!scope) {
+              this.error = t("sessionsView.actionRequiresConnection");
+              break;
+            }
+            if (
+              !this.requireMutationAccess(scope, {
+                method: "sessions.assignOwner",
+                params: { key: row.key, owner: action.owner },
+                requiredScope: "operator.write",
+              })
+            ) {
+              break;
+            }
+            void this.runSessionMutation(scope, async () => {
+              const assigned = await scope.sessions.assignOwner(row.key, action.owner);
+              return assigned || !this.isRequestScopeCurrent(scope)
+                ? undefined
+                : (scope.sessions.state.error ?? undefined);
+            });
             break;
+          }
           case "stop-cloud-worker":
             void this.stopCloudWorker(row);
             break;
@@ -1424,10 +1370,10 @@ class SessionsPage extends OpenClawLightDomElement {
       })}
       ${renderSettingsWorkspace(
         renderSessions({
-          loading: this.loading,
+          loading: this.loading || this.details.loading,
           refreshing: this.refreshing,
           result: this.result,
-          error: this.error,
+          error: this.details.error ?? this.error,
           activeMinutes: this.activeMinutes,
           limit: this.limit,
           includeGlobal: this.includeGlobal,
@@ -1486,15 +1432,13 @@ class SessionsPage extends OpenClawLightDomElement {
           deleteSelectedDisabledReason: this.selectedDeleteDisabledReason(),
           onFiltersChange: (next) => this.updateFilters(next),
           onClearFilters: () => {
-            this.activeMinutes = "";
-            this.limit = String(SESSIONS_PAGE_DEFAULT_LIMIT);
-            this.includeGlobal = true;
-            this.includeUnknown = false;
             this.searchQuery = "";
-            this.page = 0;
-            this.selectedSessions = new Map();
-            this.deepLinkSessionKey = null;
-            void this.refreshSessionList();
+            this.updateFilters({
+              activeMinutes: "",
+              limit: String(SESSIONS_PAGE_DEFAULT_LIMIT),
+              includeGlobal: true,
+              includeUnknown: false,
+            });
           },
           onSearchChange: (query) => {
             this.routeDataEnabled = false;
@@ -1561,7 +1505,13 @@ class SessionsPage extends OpenClawLightDomElement {
           },
           onOpenSessionMenu: (row, position, trigger) =>
             this.openSessionMenu(row, position, trigger),
-          onToggleDetails: (sessionKey) => void this.toggleSessionDetails(sessionKey),
+          onToggleDetails: (key) => {
+            this.expandedSessionKey = this.expandedSessionKey === key ? null : key;
+            if (this.deepLinkSessionKey !== null) {
+              this.deepLinkSessionKey = null;
+              void this.refreshSessionList();
+            }
+          },
         }),
         { id: "sessions-hub-panel" },
       )}
@@ -1586,9 +1536,7 @@ class SessionsPage extends OpenClawLightDomElement {
         signal: this.pluginActionLifetime.signal,
       });
     } catch (error) {
-      if (this.isRequestScopeCurrent(scope)) {
-        this.error = formatUiError(error);
-      }
+      this.publishRequestError(scope, error);
     }
   }
 }

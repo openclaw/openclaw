@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
-import type { RetainedOperation, RetainedOutcome } from "../infra/retained-operation.js";
+import type { RetainedOperation, RetainedOutcome } from "@openclaw/worker-runtime/lifecycle";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { retainSnapshotTempDirectory } from "../infra/sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationFromOwnedDatabase } from "../infra/sqlite-readonly-location.js";
@@ -22,12 +22,12 @@ import {
 } from "./openclaw-state-db-cache.js";
 import { canReadWarmNativeSourceIndependently } from "./openclaw-state-db-readonly-reuse.js";
 import { existingPathOrUndefined } from "./openclaw-state-db.paths.js";
-import { observeReadOutcome, type OpenClawStateReadReceipt } from "./openclaw-state-read-error.js";
 import { captureOpenClawStateReadSource } from "./openclaw-state-read-worker.js";
 import type {
   OpenClawStateReadAuthority,
   OpenClawStateReadCommand,
   OpenClawStateReadOptions,
+  OpenClawStateReadReceipt,
   OpenClawStateReadReply,
   ReadResource,
   RetainedReadScope,
@@ -51,6 +51,7 @@ type Selection = {
   context: ReturnType<typeof captureOpenClawStateReadWorkerContext>;
   preserveArtifacts: boolean;
   preferIndependentWarmRead?: true;
+  onChunk?: OpenClawStateReadOptions["onChunk"];
   controller: AbortController;
   signal: AbortSignal;
   receipt: OpenClawStateReadReceipt;
@@ -241,22 +242,7 @@ export function startOpenClawStateReadOperation(
       // Native backup cleanup is genuinely awaited; only its query/transport tail is serviceable.
       const pending = prepared.cleanupAsync();
       cleanupStep = undefined;
-      void pending.then(
-        (success) =>
-          resume(() => {
-            try {
-              acceptCleanup(success);
-            } catch (error) {
-              finishCleanup({ error });
-            }
-            service();
-          }),
-        (error: unknown) =>
-          resume(() => {
-            finishCleanup({ error });
-            service();
-          }),
-      );
+      waitAwaited(pending, acceptCleanup, finishCleanup);
     }
   }
 
@@ -373,6 +359,29 @@ export function startOpenClawStateReadOperation(
     void operation.result.then(service, service);
   }
 
+  function waitAwaited<T>(
+    pending: Promise<T>,
+    accept: (value: T) => void,
+    fail: (failure: { error: unknown }) => void,
+  ) {
+    void pending.then(
+      (next) =>
+        resume(() => {
+          try {
+            accept(next);
+          } catch (error) {
+            fail({ error });
+          }
+          service();
+        }),
+      (error: unknown) =>
+        resume(() => {
+          fail({ error });
+          service();
+        }),
+    );
+  }
+
   function query() {
     if (!snapshot && !prepared) {
       expectedIdentity = context.admission.identity.key;
@@ -384,7 +393,7 @@ export function startOpenClawStateReadOperation(
       );
     }
     // The transport checks current authority at dispatch, including after a queue wait.
-    receipt.phase = "unobserved";
+    receipt.phase = command.type === "admit" ? "before-read" : "unobserved";
     if (!transport) {
       throw new Error("Shared-state read transport is unavailable");
     }
@@ -401,11 +410,17 @@ export function startOpenClawStateReadOperation(
         authority,
       ),
       (readOutcome) => {
-        observeReadOutcome(receipt, readOutcome);
         const admitted =
           "error" in readOutcome
             ? readOutcome.sourceAdmitted
-            : readOutcome.value.type !== "admit" && readOutcome.value.sourceAdmitted;
+            : readOutcome.value.type === "admit"
+              ? undefined
+              : readOutcome.value.sourceAdmitted;
+        if (admitted === true) {
+          receipt.phase = "read";
+        } else if (admitted === false && receipt.phase !== "read") {
+          receipt.phase = "before-read";
+        }
         try {
           authority.assertCurrent();
           if (admitted) {
@@ -435,7 +450,7 @@ export function startOpenClawStateReadOperation(
 
   try {
     source = captureOpenClawStateReadSource();
-    transport = source.createTransport(command);
+    transport = source.createTransport(command, selection.onChunk);
     unregister = registerOpenClawStateDatabaseAsyncResource({
       async close(identity) {
         if (
@@ -456,67 +471,63 @@ export function startOpenClawStateReadOperation(
     if (snapshot) {
       openClawStateDatabaseCache.assertOpenClawStateDatabaseOpenAllowed(pathname, "cached-read");
     }
-    const native =
-      !snapshot && preserveArtifacts
-        ? borrowOpenClawStateDatabaseForAsyncRead(pathname, "cached-read")
-        : undefined;
-    borrowed =
-      native ??
-      (!snapshot && !preserveArtifacts
-        ? retainOpenClawStateDatabaseForIndependentRead(pathname, "cached-read")
-        : undefined);
-    const independentWarmSource =
-      native &&
-      preferIndependentWarmRead &&
-      canReadWarmNativeSourceIndependently(
-        native.database,
-        pathname,
-        context.admission.identity.key,
-      );
-    if (!snapshot && !borrowed && !existingPathOrUndefined(pathname)) {
-      finishProducer();
-    } else if (native && !independentWarmSource) {
-      awaitedOnly = true;
-      void prepareSqliteReadOnlyLocationFromOwnedDatabase(
-        native.database.db,
-        authority.assertCurrent,
-        authority.signal,
-        "async",
-      ).then(
-        (location) =>
-          resume(() => {
-            try {
-              prepared = location;
-              query();
-            } catch (error) {
-              finishProducer({ error });
-            }
-            service();
-          }),
-        (error: unknown) =>
-          resume(() => {
-            finishProducer({ error });
-            service();
-          }),
-      );
-    } else if (!snapshot && preserveArtifacts && !independentWarmSource) {
-      expectedSourceIdentity = { key: context.admission.identity.key };
-      authority.assertCurrent();
-      waitRetained("producer", transport.startValidateFresh(context, authority), () => {
-        authority.assertCurrent();
-        preparation = startSqliteReadOnlyLocationAsync(pathname, {
-          preserveSourceArtifacts: preserveArtifacts,
-          signal: authority.signal,
-          expectedSourceIdentity,
-        });
-        waitRetained("producer", preparation, (location) => {
-          prepared = location;
-          startPreparedCleanup = () => location.startCleanup();
-          query();
-        });
-      });
-    } else {
+    if (command.type === "admit") {
+      // Admission must finish before a snapshot producer may open the source.
       query();
+    } else {
+      const native =
+        !snapshot && preserveArtifacts
+          ? borrowOpenClawStateDatabaseForAsyncRead(pathname, "cached-read")
+          : undefined;
+      borrowed =
+        native ??
+        (!snapshot && !preserveArtifacts
+          ? retainOpenClawStateDatabaseForIndependentRead(pathname, "cached-read")
+          : undefined);
+      const independentWarmSource =
+        native &&
+        preferIndependentWarmRead &&
+        canReadWarmNativeSourceIndependently(
+          native.database,
+          pathname,
+          context.admission.identity.key,
+        );
+      if (!snapshot && !borrowed && !existingPathOrUndefined(pathname)) {
+        finishProducer();
+      } else if (native && !independentWarmSource) {
+        awaitedOnly = true;
+        waitAwaited(
+          prepareSqliteReadOnlyLocationFromOwnedDatabase(
+            native.database.db,
+            authority.assertCurrent,
+            authority.signal,
+            "async",
+          ),
+          (location) => {
+            prepared = location;
+            query();
+          },
+          finishProducer,
+        );
+      } else if (!snapshot && preserveArtifacts && !independentWarmSource) {
+        expectedSourceIdentity = { key: context.admission.identity.key };
+        authority.assertCurrent();
+        waitRetained("producer", transport.startValidateFresh(context, authority), () => {
+          authority.assertCurrent();
+          preparation = startSqliteReadOnlyLocationAsync(pathname, {
+            preserveSourceArtifacts: preserveArtifacts,
+            signal: authority.signal,
+            expectedSourceIdentity,
+          });
+          waitRetained("producer", preparation, (location) => {
+            prepared = location;
+            startPreparedCleanup = () => location.startCleanup();
+            query();
+          });
+        });
+      } else {
+        query();
+      }
     }
   } catch (error) {
     finishProducer({ error });

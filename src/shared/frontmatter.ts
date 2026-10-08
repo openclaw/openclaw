@@ -6,14 +6,10 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import JSON5 from "json5";
-import { LEGACY_MANIFEST_KEYS, MANIFEST_KEY } from "../compat/legacy-names.js";
+import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
-
-/** Normalizes comma-delimited or loose array metadata fields into string lists. */
-export function normalizeStringList(input: unknown): string[] {
-  return normalizeCsvOrLooseStringList(input);
-}
+import type { Requirements } from "./requirements.js";
 
 /** Reads a frontmatter field only when it is represented as a string value. */
 export function getFrontmatterString(
@@ -45,44 +41,25 @@ export function resolveOpenClawManifestBlock(params: {
       return undefined;
     }
 
-    const manifestKeys = [MANIFEST_KEY, ...LEGACY_MANIFEST_KEYS];
-    // Prefer the current manifest key, but still read legacy names for existing skill/hook files.
-    for (const key of manifestKeys) {
-      const candidate = asOptionalObjectRecord(parsed[key]);
-      if (candidate) {
-        return candidate;
-      }
-    }
-    return undefined;
+    return asOptionalObjectRecord(parsed[MANIFEST_KEY]);
   } catch {
     return undefined;
   }
 }
 
-type OpenClawManifestRequires = {
-  /** All binaries that must be available. */
-  bins: string[];
-  /** Alternative binaries where any one match is enough. */
-  anyBins: string[];
-  /** Environment variables required by the entry. */
-  env: string[];
-  /** Config paths required by the entry. */
-  config: string[];
-};
-
 /** Extracts normalized runtime requirement lists from an OpenClaw manifest block. */
 export function resolveOpenClawManifestRequires(
   metadataObj: Record<string, unknown>,
-): OpenClawManifestRequires | undefined {
+): Omit<Requirements, "os"> | undefined {
   const requiresRaw = asOptionalObjectRecord(metadataObj.requires);
   if (!requiresRaw) {
     return undefined;
   }
   return {
-    bins: normalizeStringList(requiresRaw.bins),
-    anyBins: normalizeStringList(requiresRaw.anyBins),
-    env: normalizeStringList(requiresRaw.env),
-    config: normalizeStringList(requiresRaw.config),
+    bins: normalizeCsvOrLooseStringList(requiresRaw.bins),
+    anyBins: normalizeCsvOrLooseStringList(requiresRaw.anyBins),
+    env: normalizeCsvOrLooseStringList(requiresRaw.env),
+    config: normalizeCsvOrLooseStringList(requiresRaw.config),
   };
 }
 
@@ -99,7 +76,7 @@ export function resolveOpenClawManifestInstall<T>(
 
 /** Extracts normalized OS allowlist entries from an OpenClaw manifest block. */
 export function resolveOpenClawManifestOs(metadataObj: Record<string, unknown>): string[] {
-  return normalizeStringList(metadataObj.os);
+  return normalizeCsvOrLooseStringList(metadataObj.os);
 }
 
 type ParsedOpenClawManifestInstallBase = {
@@ -141,7 +118,7 @@ export function parseOpenClawManifestInstallBase(
   if (typeof raw.label === "string") {
     spec.label = raw.label;
   }
-  const bins = normalizeStringList(raw.bins);
+  const bins = normalizeCsvOrLooseStringList(raw.bins);
   if (bins.length > 0) {
     spec.bins = bins;
   }

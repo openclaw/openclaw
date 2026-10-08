@@ -1,4 +1,5 @@
 // Openai tests cover speech provider plugin behavior.
+import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";

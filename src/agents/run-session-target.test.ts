@@ -1,11 +1,10 @@
-import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { resolveAgentRunSessionTarget as resolveAgentRunSessionTargetImpl } from "./run-session-target.js";
 
 type ResolveTargetParams = Omit<
@@ -21,14 +20,11 @@ function resolveAgentRunSessionTarget(
 }
 
 describe("agent run session target", () => {
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-run-session-target-");
   let tempDir: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-run-session-target-"));
-  });
-
-  afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    tempDir = sessionDirs.make();
   });
 
   it("resolves runtime identity through the run config store", async () => {

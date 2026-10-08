@@ -144,14 +144,12 @@ async function resolveDiscordThreadStarterUncached(
       messageChannelId,
       params.channel.id,
     )) as DiscordThreadStarterRestMessage | null;
-    if (!starter) {
-      cacheMiss();
-      return null;
-    }
-    const payload = buildDiscordThreadStarterPayload({
-      starter,
-      resolveTimestampMs: params.resolveTimestampMs,
-    });
+    const payload = starter
+      ? buildDiscordThreadStarterPayload({
+          starter,
+          resolveTimestampMs: params.resolveTimestampMs,
+        })
+      : null;
     if (!payload) {
       cacheMiss();
       return null;
@@ -225,8 +223,7 @@ export function sanitizeDiscordThreadName(rawName: string, fallbackId: string): 
     .replace(/\s+/g, " ")
     .trim();
   const baseSource = cleanedName || `Thread ${fallbackId}`;
-  const base = truncateUtf16Safe(baseSource, 80);
-  return base || `Thread ${fallbackId}`;
+  return truncateUtf16Safe(baseSource, 80);
 }
 
 export function resolveDiscordReplyDeliveryPlan(params: {

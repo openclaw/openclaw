@@ -1,5 +1,10 @@
+import fs from "node:fs";
 import path from "node:path";
 import { resolveIdentityPathViaExistingAncestorSync } from "../../infra/boundary-path.js";
+import {
+  inspectDatabasePathIdentitySync,
+  readDatabasePathIdentitySync,
+} from "../../infra/sqlite-worker-identity.js";
 import {
   matchesAgentDatabaseReadCandidatePath,
   type OpenClawAgentDatabaseReadCandidateResource,
@@ -44,6 +49,20 @@ export type SessionStoreReadCandidate = Pick<
   "path" | "scope"
 > & { physicalPath: string };
 
+/** Capture exact candidates before discovery yields; sibling families have no file identity. */
+export function captureSessionStoreCandidateIdentities(
+  candidates: readonly SessionStoreReadCandidate[],
+) {
+  return new Map(
+    candidates
+      .filter((candidate) => !candidate.scope)
+      .map((candidate) => {
+        const identity = readDatabasePathIdentitySync(candidate.path);
+        return [identity.canonicalPath, identity] as const;
+      }),
+  );
+}
+
 /** Families follow their directory; existing file aliases get separate exact captures. */
 export function captureSessionStoreReadCandidate(
   pathname: string,
@@ -59,6 +78,86 @@ export function captureSessionStoreReadCandidate(
   return { path: capturedPath, physicalPath, ...(scope ? { scope } : {}) };
 }
 
+/** Re-resolve both sides so aliases that converge after file creation remain in custody. */
+export function isSessionStoreReadCandidateCurrent(candidate: SessionStoreReadCandidate): boolean {
+  const currentPhysicalPath = captureSessionStoreReadCandidate(
+    candidate.path,
+    candidate.scope,
+  ).physicalPath;
+  const capturedPhysicalPath = resolveCapturedSessionStoreReadCandidatePhysicalPath(candidate);
+  if (currentPhysicalPath === capturedPhysicalPath) {
+    return true;
+  }
+  if (
+    candidate.scope ||
+    (!isSymlinkFreeWindowsShortPath(candidate.path) &&
+      !isSymlinkFreeWindowsShortPath(candidate.physicalPath))
+  ) {
+    return false;
+  }
+  return matchesWindowsFileAlias(currentPhysicalPath, capturedPhysicalPath);
+}
+
+function resolveCapturedSessionStoreReadCandidatePhysicalPath(
+  candidate: SessionStoreReadCandidate,
+): string {
+  // Family custody is anchored to its captured physical directory. Re-resolving that anchor
+  // would accept a directory that was replaced with a symlink after capture.
+  if (candidate.scope || !isSymlinkFreeWindowsShortPath(candidate.physicalPath)) {
+    return candidate.physicalPath;
+  }
+  return resolveIdentityPathViaExistingAncestorSync(candidate.physicalPath);
+}
+
+function isSymlinkFreeWindowsShortPath(pathname: string): boolean {
+  if (process.platform !== "win32" || !/(?:^|[\\/])[^\\/]*~\d+(?=[\\/]|$)/iu.test(pathname)) {
+    return false;
+  }
+  return isSymlinkFreePath(pathname);
+}
+
+function isSymlinkFreePath(pathname: string): boolean {
+  const resolved = path.resolve(pathname);
+  const parsed = path.parse(resolved);
+  let cursor = parsed.root;
+  for (const segment of resolved.slice(parsed.root.length).split(path.sep)) {
+    cursor = path.join(cursor, segment);
+    const stat = fs.lstatSync(cursor, { throwIfNoEntry: false });
+    if (!stat || stat.isSymbolicLink()) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function matchesWindowsFileAlias(capturedPath: string, selectedPath: string): boolean {
+  const shortPath = isSymlinkFreeWindowsShortPath(capturedPath)
+    ? capturedPath
+    : isSymlinkFreeWindowsShortPath(selectedPath)
+      ? selectedPath
+      : undefined;
+  if (
+    process.platform !== "win32" ||
+    !shortPath ||
+    !isSymlinkFreePath(capturedPath) ||
+    !isSymlinkFreePath(selectedPath)
+  ) {
+    return false;
+  }
+  const capturedParent = fs.statSync(path.dirname(capturedPath), { bigint: true });
+  const selectedParent = fs.statSync(path.dirname(selectedPath), { bigint: true });
+  if (capturedParent.dev !== selectedParent.dev || capturedParent.ino !== selectedParent.ino) {
+    return false;
+  }
+  const capturedIdentity = inspectDatabasePathIdentitySync(capturedPath);
+  const selectedIdentity = inspectDatabasePathIdentitySync(selectedPath);
+  return (
+    capturedIdentity?.key.startsWith("file:") === true &&
+    capturedIdentity.key === selectedIdentity?.key &&
+    capturedIdentity.birthtime === selectedIdentity.birthtime
+  );
+}
+
 /** Native discovery may use only the captured lexical and physical family together. */
 export function assertSessionStoreReadCandidate(
   pathname: string,
@@ -66,14 +165,19 @@ export function assertSessionStoreReadCandidate(
 ): string {
   const physicalPath = resolveIdentityPathViaExistingAncestorSync(pathname);
   for (const candidate of candidates) {
+    const matchesCapturedPhysicalPath =
+      !candidate.scope &&
+      physicalPath === resolveCapturedSessionStoreReadCandidatePhysicalPath(candidate);
     if (
-      matchesAgentDatabaseReadCandidatePath(candidate, pathname) &&
-      matchesAgentDatabaseReadCandidatePath(
-        { ...candidate, path: candidate.physicalPath },
-        physicalPath,
-      ) &&
-      captureSessionStoreReadCandidate(candidate.path, candidate.scope).physicalPath ===
-        candidate.physicalPath
+      (matchesAgentDatabaseReadCandidatePath(candidate, pathname) ||
+        matchesCapturedPhysicalPath ||
+        (!candidate.scope && matchesWindowsFileAlias(candidate.path, pathname))) &&
+      (!candidate.scope ||
+        matchesAgentDatabaseReadCandidatePath(
+          { ...candidate, path: resolveCapturedSessionStoreReadCandidatePhysicalPath(candidate) },
+          physicalPath,
+        )) &&
+      isSessionStoreReadCandidateCurrent(candidate)
     ) {
       return physicalPath;
     }

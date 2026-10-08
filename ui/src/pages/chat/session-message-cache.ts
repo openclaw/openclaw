@@ -235,19 +235,6 @@ export function readChatSessionSnapshot(
   return getSessionCacheValue(cache, resolveChatSnapshotKey(host, target))?.snapshot ?? null;
 }
 
-export function measureChatSnapshotWeight(snapshot: ChatSessionSnapshot): number | null {
-  const messageWeights = measureMessageWeights(snapshot.messages);
-  if (!messageWeights) {
-    return null;
-  }
-  return measuredSnapshotWeight(
-    snapshot,
-    snapshot.pagination,
-    messageWeights.reduce((sum, weight) => sum + weight, 0),
-    messageWeights.length,
-  );
-}
-
 function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSessionSnapshot | null {
   const messageWeights = measureMessageWeights(snapshot.messages);
   if (!messageWeights) {
@@ -286,18 +273,16 @@ function boundChatSessionSnapshot(snapshot: ChatSessionSnapshot): CachedChatSess
       return null;
     }
     const boundarySeq = readSessionMessageSequence(snapshot.messages[start]);
-    retainedMessageWeight -= messageWeights[start] ?? 0;
-    start += 1;
-    if (boundarySeq === null) {
-      continue;
-    }
-    while (start < snapshot.messages.length) {
-      if (readSessionMessageSequence(snapshot.messages[start]) !== boundarySeq) {
-        break;
-      }
+    do {
       retainedMessageWeight -= messageWeights[start] ?? 0;
       start += 1;
-    }
+      if (boundarySeq === null) {
+        break;
+      }
+    } while (
+      start < snapshot.messages.length &&
+      readSessionMessageSequence(snapshot.messages[start]) === boundarySeq
+    );
   }
 }
 

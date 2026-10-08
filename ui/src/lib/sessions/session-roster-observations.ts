@@ -1,5 +1,6 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { projectSessionResultRows } from "./reconcile.ts";
+import { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
+import { projectSessionResultRows, reconcileRosterPresentationMetadata } from "./reconcile.ts";
 import type {
   SessionConnectionOwner,
   SessionConnectionScope,
@@ -20,7 +21,7 @@ import {
 import type { ObservedSessionList } from "./session-list-query.ts";
 import { createSessionRosterProjection } from "./session-roster-projection.ts";
 import { createSessionRowProvenance } from "./session-row-provenance.ts";
-import type { SessionChangedRowResult } from "./session-row-reconcile.ts";
+import { matchesExistingSession, type SessionChangedRowResult } from "./session-row-reconcile.ts";
 import { createSessionRunTerminalStaging } from "./session-run-terminal.ts";
 
 type ObservedSessionRow = {
@@ -49,6 +50,8 @@ type RegisteredSessionRow = {
 type RowProjection = (entry: ObservedSessionRow) => {
   row: GatewaySessionRow | null;
   invalidateRevision?: number;
+  invalidationReason?: string;
+  certification?: { revision: number; reason?: string };
   observationRevision?: number;
   eventResult?: SessionChangedRowResult;
 };
@@ -76,6 +79,31 @@ export function createSessionRosterObservations(
   const provenance = createSessionRowProvenance();
   const { owner, identity, inheritRow, mergeRow, rowRevision } = provenance;
   const registeredRows = new Set<RegisteredSessionRow>();
+  const certifications = new Map<SessionRowTarget, { revision: number; reason?: string }>();
+  const certificationRefresh = createSessionEventRefreshCoordinator({
+    active: true,
+    refresh: async () => {
+      stageManagedResults(
+        host.connection.capture(),
+        (entry) => entry.snapshot.result,
+        ({ target, row }) => ({
+          row,
+          invalidateRevision: certifications.get(target)?.revision,
+          invalidationReason: certifications.get(target)?.reason,
+        }),
+      ).notify();
+    },
+  });
+  const clearCertification = (target: SessionRowTarget, retired = false) => {
+    certifications.delete(target);
+    if (!certifications.size) {
+      if (retired) {
+        certificationRefresh.reset();
+      } else {
+        certificationRefresh.absorb();
+      }
+    }
+  };
   const registrationIsAttached = (entry: RegisteredSessionRow) =>
     registeredRows.has(entry) && entry.scope !== null && host.connection.isCurrent(entry.scope);
   const registrationIsCurrent = (entry: RegisteredSessionRow) =>
@@ -221,6 +249,7 @@ export function createSessionRosterObservations(
       entry: RegisteredSessionRow;
       previous: RegisteredSessionRow["snapshot"];
       snapshot: RegisteredSessionRow["snapshot"];
+      invalidationReason?: string;
     }> = [];
     for (const [key, entry] of lists) {
       if (entry.connectionEpoch !== scope.epoch) {
@@ -273,6 +302,22 @@ export function createSessionRosterObservations(
         !previous.row || entry.onInvalidate
           ? Math.max(previous.invalidatedRevision, projected.invalidateRevision ?? 0)
           : previous.invalidatedRevision;
+      if (projected.certification && entry.onInvalidate) {
+        certifications.set(entry.target, projected.certification);
+        certificationRefresh.schedule();
+      }
+      const certification = certifications.get(entry.target);
+      if (
+        certification &&
+        (invalidatedRevision >= certification.revision ||
+          (admitRead &&
+            admittedRows.some(
+              ({ row: admitted, revision }) =>
+                revision > certification.revision && acceptsRow(entry, admitted, revision),
+            )))
+      ) {
+        clearCertification(entry.target);
+      }
       const hasObserved =
         previous.hasObserved || row !== null || Boolean(projected.eventResult?.deletedKey);
       let nextSnapshot = previous;
@@ -295,6 +340,7 @@ export function createSessionRosterObservations(
           entry,
           previous,
           snapshot: nextSnapshot,
+          invalidationReason: projected.invalidationReason,
         });
       }
       if (
@@ -327,6 +373,9 @@ export function createSessionRosterObservations(
         change.entry.snapshot === change.previous
       ) {
         change.entry.snapshot = change.snapshot;
+        if (change.snapshot.retired) {
+          clearCertification(change.entry.target, true);
+        }
         changed = true;
       }
     }
@@ -339,6 +388,7 @@ export function createSessionRosterObservations(
         const retirement = successorRetirement(entry, publishedRows);
         if (retirement) {
           entry.snapshot = retirement.snapshot;
+          clearCertification(entry.target, true);
           rowChanges.push(retirement);
         }
       }
@@ -353,7 +403,7 @@ export function createSessionRosterObservations(
           listener(snapshot);
         }
       }
-      for (const { entry, previous, snapshot } of rowChanges) {
+      for (const { entry, previous, snapshot, invalidationReason } of rowChanges) {
         if (!host.connection.isCurrent(scope)) {
           return;
         }
@@ -373,7 +423,7 @@ export function createSessionRosterObservations(
             entry.snapshot === snapshot &&
             snapshot.invalidatedRevision > previous.invalidatedRevision
           ) {
-            entry.onInvalidate?.(reason);
+            entry.onInvalidate?.(invalidationReason ?? reason);
           }
         }
       }
@@ -440,6 +490,8 @@ export function createSessionRosterObservations(
       // Retained cache rows carry presentation, not evidence from the retired connection.
       provenance.reset();
       registeredRows.clear();
+      certifications.clear();
+      certificationRefresh.reset();
       descriptions.clear();
     },
     registerRow(
@@ -483,6 +535,7 @@ export function createSessionRosterObservations(
             invalidatedRevision: Math.max(entry.snapshot.invalidatedRevision, revision),
           };
           entry.snapshot = snapshot;
+          clearCertification(entry.target);
           return () => {
             if (registrationIsCurrent(entry) && entry.snapshot === snapshot) {
               entry.listener(null);
@@ -491,12 +544,20 @@ export function createSessionRosterObservations(
         },
         dispose: () => {
           registeredRows.delete(entry);
+          clearCertification(entry.target, true);
         },
       };
     },
     inheritRow,
     mergeRow,
     currentRow,
+    observedRow(this: void, key: string, agentId?: string | null) {
+      return observations.publishedRow(
+        (row, ownerAgentId) =>
+          observations.hasLiveObservation(row) &&
+          matchesExistingSession(row, key, agentId ?? ownerAgentId ?? null),
+      );
+    },
     mergeRows: merge,
     publishedRow(
       this: void,
@@ -583,18 +644,19 @@ export function createSessionRosterObservations(
     },
     accept(
       result: SessionsListResult | null,
-      previous: SessionsListResult | null,
+      previous: ReturnType<typeof host.readState>,
       primary: SessionsListResult | null,
       agentId?: string | null,
-      previousAgentId = agentId,
-      primaryAgentId = host.readState().agentId,
     ) {
-      const incomingRows = indexRows(result?.sessions ?? [], agentId);
+      const donor = previous.resultCached ? null : previous.result;
+      const presented = reconcileRosterPresentationMetadata(result, donor);
+      observations.inherit(presented, result, donor, agentId);
+      const incomingRows = indexRows(presented?.sessions ?? [], agentId);
       let accepted = merge(
-        merge(result, previous?.sessions ?? [], agentId, previousAgentId),
+        merge(presented, previous.result?.sessions ?? [], agentId, previous.agentId),
         primary?.sessions ?? [],
         agentId,
-        primaryAgentId,
+        host.readState().agentId,
       );
       const epoch = host.connection.capture()?.epoch;
       for (const entry of lists.values()) {

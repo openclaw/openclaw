@@ -1,5 +1,6 @@
 // The real channels-list route must resolve catalog-row repair hints from prepared
 // manifest facts instead of rebuilding the manifest registry once per catalog row.
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

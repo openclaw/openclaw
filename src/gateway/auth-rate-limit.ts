@@ -50,8 +50,7 @@ interface RateLimitEntry {
   lockedUntil?: number;
 }
 
-export interface RateLimitCheckResult {
-  /** Whether the request is allowed to proceed. */
+interface RateLimitCheckResult {
   allowed: boolean;
   /** Number of remaining attempts before the limit is reached. */
   remaining: number;
@@ -60,9 +59,7 @@ export interface RateLimitCheckResult {
 }
 
 export interface AuthRateLimiter {
-  /** Check whether `ip` is currently allowed to attempt authentication. */
   check(ip: string | undefined, scope?: string): RateLimitCheckResult;
-  /** Record a failed authentication attempt for `ip`. */
   recordFailure(ip: string | undefined, scope?: string): void;
   /**
    * Record a failed attempt and await any loopback penalty delay.
@@ -76,11 +73,8 @@ export interface AuthRateLimiter {
   recordFailureAndDelay(ip: string | undefined, scope?: string): Promise<void>;
   /** Reset the rate-limit state for `ip` (e.g. after a successful login). */
   reset(ip: string | undefined, scope?: string): void;
-  /** Return the current number of tracked IPs (useful for diagnostics). */
   size(): number;
-  /** Remove expired entries and release memory. */
   prune(): void;
-  /** Dispose the limiter and cancel periodic cleanup timers. */
   dispose(): void;
 }
 
@@ -98,9 +92,9 @@ export function isAuthRateLimitClientExempt(
 }
 
 const DEFAULT_MAX_ATTEMPTS = 10;
-const DEFAULT_WINDOW_MS = 60_000; // 1 minute
-const DEFAULT_LOCKOUT_MS = 300_000; // 5 minutes
-const PRUNE_INTERVAL_MS = 60_000; // prune stale entries every minute
+const DEFAULT_WINDOW_MS = 60_000;
+const DEFAULT_LOCKOUT_MS = 300_000;
+const PRUNE_INTERVAL_MS = 60_000;
 const DEFAULT_MAX_ENTRIES = 10_000;
 const LOOPBACK_FAILURE_DELAY_BASE_MS = 250;
 const LOOPBACK_FAILURE_DELAY_MAX_MS = 5_000;
@@ -326,7 +320,6 @@ export function createGatewayAuthRateLimiter(
 
   function pruneExpiredEntries(now: number): void {
     for (const [key, entry] of entries) {
-      // If locked out, keep the entry until the lockout expires.
       if (entry.lockedUntil && now < entry.lockedUntil) {
         continue;
       }

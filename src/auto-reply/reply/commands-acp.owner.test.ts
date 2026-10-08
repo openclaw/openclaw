@@ -13,7 +13,7 @@ import {
   linkUserChannelIdentity,
   unlinkUserChannelIdentity,
 } from "../../state/user-channel-identities.js";
-import { setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { installDiscordRegistryHooks } from "../test-helpers/command-auth-registry-fixture.js";
 import { handleAcpCommand } from "./commands-acp.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";

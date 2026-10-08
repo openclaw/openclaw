@@ -1,9 +1,6 @@
 // Doctor repairs incident-scale Codex plugin state only after durable session convergence.
 import { createHash } from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   loadExactSessionEntryReadOnly,
   replaceSessionEntry,
@@ -17,7 +14,7 @@ import {
 } from "../plugin-state/plugin-state-store.js";
 import { seedPluginStateEntriesForTests } from "../plugin-state/plugin-state-store.test-helpers.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-registry.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 
 const note = vi.hoisted(() => vi.fn());
 
@@ -45,31 +42,25 @@ const SESSION_BINDING_COUNT = 47_794;
 const ADVISORY_MANAGED_THREAD_COUNT = 2_206;
 const INCIDENT_ROW_COUNT = 50_000;
 
-let incidentStateDir: string | undefined;
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-codex-doctor-incident-");
 
 const stableKey = (sessionKey: string, agentId = "main") =>
   `session-key:${agentId}:${createHash("sha256").update(sessionKey).digest("base64url")}`;
 
-afterEach(async () => {
-  closeOpenClawAgentDatabasesForTest();
-  resetPluginStateStoreForTests();
+afterEach(() => {
+  // The suite helper closes shared state after its agent drain.
+  resetPluginStateStoreForTests({ closeDatabase: false });
   vi.unstubAllEnvs();
   note.mockClear();
-  if (incidentStateDir) {
-    await fs.rm(incidentStateDir, { recursive: true, force: true });
-    incidentStateDir = undefined;
-  }
 });
 
 describe("doctor incident-scale Codex binding repair", () => {
   it("repairs a full store of mixed stable bindings without losing current or uncertain ownership", async () => {
-    incidentStateDir = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-doctor-incident-")),
-    );
+    const incidentStateDir = sessionDirs.make();
     vi.stubEnv("OPENCLAW_STATE_DIR", incidentStateDir);
     const env = process.env;
     const config: OpenClawConfig = {
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
       plugins: { entries: { codex: { enabled: true } } },
     };
 

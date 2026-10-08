@@ -20,11 +20,7 @@ export function ensureOperatorApprovalResolutionRefs(db: DatabaseSync): void {
     ensureColumn(db, "operator_approvals", "resolution_ref TEXT");
     const rows = db
       .prepare("SELECT approval_id, kind, resolution_ref FROM operator_approvals")
-      .all() as Array<{
-      approval_id?: unknown;
-      kind?: unknown;
-      resolution_ref?: unknown;
-    }>;
+      .all();
     const update = db.prepare(
       "UPDATE operator_approvals SET resolution_ref = ? WHERE approval_id = ?",
     );
@@ -187,20 +183,6 @@ export function repairLegacySubagentExecutionPayloads(db: DatabaseSync): void {
       AND (json_type(payload_json, '$.startedAt') IS NOT NULL
         OR json_type(payload_json, '$.endedAt') IS NOT NULL
         OR json_type(payload_json, '$.outcome') IS NOT NULL);
-  `);
-}
-
-/** Canonicalize the shipped suspension reason before runtime hydrates subagent state. */
-export function repairLegacySubagentSuspensionReasons(db: DatabaseSync): void {
-  if (!tableExists(db, "subagent_runs")) {
-    return;
-  }
-  // v2026.6.34 persisted retry-limit; remove this backfill after its 7-day retention window.
-  db.exec(`
-    UPDATE subagent_runs
-    SET payload_json = json_set(payload_json, '$.delivery.suspendedReason', 'permanent_failure')
-    WHERE json_valid(payload_json)
-      AND json_extract(payload_json, '$.delivery.suspendedReason') = 'retry-limit';
   `);
 }
 

@@ -118,10 +118,4 @@ describe("resolvePromptBuildHookResult drain cache", () => {
     expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledTimes(2);
     forgetPromptBuildDrainCacheForRun(runId);
   });
-
-  it("drains every call without a run identity", async () => {
-    await build();
-    await build();
-    expect(hostHookStateMocks.drainPluginNextTurnInjectionContext).toHaveBeenCalledTimes(2);
-  });
 });

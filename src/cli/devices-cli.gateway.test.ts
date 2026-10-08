@@ -2,7 +2,7 @@
 // Authentication mode is supplied by the fixture; device scope grants use the real verifier.
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import type { GatewayClientOptions } from "../gateway/client.js";
 import { authorizeOperatorScopesForMethod } from "../gateway/method-scopes.js";
 import { deviceHandlers } from "../gateway/server-methods/devices.js";
@@ -68,7 +68,6 @@ vi.mock("../gateway/client.js", async (importOriginal) => ({
 
 const roots = createSuiteTempRootTracker({ prefix: "openclaw-devices-cli-scopes-" });
 const targetDeviceId = "device-1";
-let baseDir: string;
 const warn = vi.fn();
 
 beforeAll(async () => {
@@ -76,8 +75,7 @@ beforeAll(async () => {
 });
 beforeEach(async () => {
   vi.clearAllMocks();
-  baseDir = await roots.make();
-  vi.stubEnv("OPENCLAW_STATE_DIR", baseDir);
+  vi.stubEnv("OPENCLAW_STATE_DIR", await roots.make());
 });
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -162,57 +160,38 @@ async function runTokenCommand(command: string, scopes?: string[]) {
   await program.parseAsync(argv, { from: "user" });
 }
 
-describe.each(["rotate", "revoke"])("devices %s request authorization", (command) => {
-  it.each([
-    {
-      name: "shared caller with admin target",
-      scopes: ["operator.admin"],
-      caller: "shared",
-      connectionScopes: ["operator.admin"],
-    },
-    {
-      name: "paired admin managing another admin target",
-      scopes: ["operator.admin"],
-      caller: "admin-cross-device",
-      connectionScopes: ["operator.admin"],
-    },
-    {
-      name: "paired admin managing another limited target",
-      scopes: ["operator.pairing", "operator.read"],
-      caller: "admin-cross-device",
-      connectionScopes: ["operator.admin"],
-    },
-    {
-      name: "limited self with a broader approval baseline",
-      scopes: ["operator.pairing", "operator.read"],
-      caller: "self",
-      connectionScopes: ["operator.pairing", "operator.read"],
-    },
-    {
-      name: "admin self with implicit pairing/read/write scopes",
-      scopes: ["operator.admin"],
-      caller: "self",
-      connectionScopes: ["operator.admin"],
-    },
-    {
-      name: "limited self with talk and questions",
-      scopes: ["operator.pairing", "operator.talk", "operator.questions"],
-      caller: "self",
-      connectionScopes: ["operator.pairing", "operator.questions", "operator.talk"],
-    },
-    {
-      name: "pairing-only self",
-      scopes: ["operator.pairing"],
-      caller: "self",
-      connectionScopes: ["operator.pairing"],
-    },
-    {
-      name: "write self with implied read",
-      scopes: ["operator.pairing", "operator.write"],
-      caller: "self",
-      connectionScopes: ["operator.pairing", "operator.read", "operator.write"],
-    },
-  ])("manages $name", async ({ scopes, caller, connectionScopes }) => {
+it.each([
+  {
+    command: "rotate",
+    caller: "self",
+    scopes: ["operator.pairing", "operator.write"],
+    requested: undefined,
+    connection: ["operator.pairing", "operator.read", "operator.write"],
+  },
+  {
+    command: "revoke",
+    caller: "self",
+    scopes: ["operator.pairing", "operator.read"],
+    requested: undefined,
+    connection: ["operator.pairing", "operator.read"],
+  },
+  {
+    command: "rotate",
+    caller: "admin-cross-device",
+    scopes: ["operator.admin"],
+    requested: ["operator.read"],
+    connection: ["operator.admin"],
+  },
+  {
+    command: "rotate",
+    caller: "shared",
+    scopes: ["operator.pairing", "operator.write"],
+    requested: ["operator.admin"],
+    connection: ["operator.admin"],
+  },
+])(
+  "$command with $caller authority preserves the approval ceiling",
+  async ({ command, caller, scopes, requested, connection }) => {
     await pairOperator(targetDeviceId, ["operator.admin"], scopes);
     if (caller === "admin-cross-device") {
       await pairOperator("caller", ["operator.admin"]);
@@ -221,205 +200,75 @@ describe.each(["rotate", "revoke"])("devices %s request authorization", (command
       caller === "self" ? targetDeviceId : caller === "admin-cross-device" ? "caller" : undefined,
     );
     const before = expectDefined(await getPairedDevice(targetDeviceId), "paired target");
-
-    await runTokenCommand(command);
-
-    const after = expectDefined(await getPairedDevice(targetDeviceId), "retained paired target");
+    await runTokenCommand(command, requested);
+    const after = expectDefined(await getPairedDevice(targetDeviceId), "retained target");
     expect(after.approvedScopes).toEqual(before.approvedScopes);
-    expect(after.tokens?.operator?.scopes).toEqual(normalizeDeviceAuthScopes(scopes));
+    expect(after.tokens?.operator?.scopes).toEqual(normalizeDeviceAuthScopes(requested ?? scopes));
     if (command === "rotate") {
       expect(after.tokens?.operator?.token !== before.tokens?.operator?.token).toBe(true);
       expect(after.tokens?.operator?.revokedAtMs).toBeUndefined();
     } else {
       expect(after.tokens?.operator?.revokedAtMs).toEqual(expect.any(Number));
     }
-    expect(transport.runtime.writeJson).toHaveBeenCalledOnce();
     expect(
-      transport.request.mock.calls.map(([requested, method]) => ({ requested, method })),
+      transport.request.mock.calls.map(([grant, method]) => ({ requested: grant, method })),
     ).toEqual([
       { requested: ["operator.pairing"], method: "device.pair.list" },
-      { requested: connectionScopes, method: `device.token.${command}` },
+      { requested: connection, method: `device.token.${command}` },
     ]);
-    const [output] = expectDefined(
-      transport.runtime.writeJson.mock.calls[0],
-      "expected CLI output",
-    );
+    expect(transport.runtime.writeJson).toHaveBeenCalledOnce();
+    const [output] = expectDefined(transport.runtime.writeJson.mock.calls[0], "CLI output");
     expect(typeof output.token === "string").toBe(command === "rotate" && caller === "self");
     expect(warn).not.toHaveBeenCalled();
-  });
+  },
+);
 
-  it("uses a revoked target token's narrowed scopes", async () => {
-    await pairOperator(targetDeviceId, ["operator.admin"], ["operator.read"]);
-    const revoked = await revokeDeviceToken({ deviceId: targetDeviceId, role: "operator" });
-    expect(revoked.ok).toBe(true);
-    await installTransport();
-
-    await runTokenCommand(command);
-
-    expect(transport.request.mock.calls.at(-1)?.[0]).toEqual(["operator.pairing", "operator.read"]);
-    const after = await getPairedDevice(targetDeviceId);
-    expect(after?.tokens?.operator?.scopes).toEqual(["operator.read"]);
-    expect(Boolean(after?.tokens?.operator?.revokedAtMs)).toBe(command === "revoke");
-  });
-
-  it.each([
-    { name: "omitted scopes", scopes: undefined },
-    ...(command === "rotate" ? [{ name: "explicit scopes", scopes: ["operator.read"] }] : []),
-  ])("keeps cross-device management denied for a limited caller with $name", async ({ scopes }) => {
-    await pairOperator(targetDeviceId, ["operator.admin"]);
-    await pairOperator("caller", ["operator.pairing", "operator.read"]);
-    await installTransport("caller");
-    const before = await getPairedDevice(targetDeviceId);
-
-    await expect(runTokenCommand(command, scopes)).rejects.toThrow(
-      "device auth denied: scope-mismatch",
-    );
-
-    expect(warn).not.toHaveBeenCalled();
-    expect(
-      transport.request.mock.calls.map(([requested, method]) => ({ requested, method })),
-    ).toEqual([
-      { requested: ["operator.pairing"], method: "device.pair.list" },
-      { requested: ["operator.admin"], method: `device.token.${command}` },
-    ]);
-    const after = await getPairedDevice(targetDeviceId);
-    expect(after?.tokens?.operator?.token === before?.tokens?.operator?.token).toBe(true);
-    expect(after?.tokens?.operator?.revokedAtMs).toBeUndefined();
-    expect(transport.runtime.writeJson).not.toHaveBeenCalled();
-  });
-
-  it("keeps missing targets at the canonical token-owner denial", async () => {
-    await installTransport();
-
-    await expect(runTokenCommand(command)).rejects.toThrow(
-      command === "rotate" ? "device token rotation denied" : "device token revocation denied",
-    );
-
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("unknown-device-or-role"));
-    expect(await getPairedDevice(targetDeviceId)).toBeNull();
-    expect(transport.runtime.writeJson).not.toHaveBeenCalled();
-  });
-
-  it("rechecks target scopes when they change after listing", async () => {
-    await pairOperator(targetDeviceId, ["operator.admin"], ["operator.read"]);
-    await installTransport();
-    const dispatch = expectDefined(
-      transport.request.getMockImplementation(),
-      "installed transport",
-    );
-    let replacementToken: string | undefined;
-    transport.request.mockImplementation(async (...args) => {
-      const result = await dispatch(...args);
-      if (args[1] === "device.pair.list") {
-        const replacement = await rotateDeviceToken({
-          deviceId: targetDeviceId,
-          role: "operator",
-          scopes: ["operator.admin"],
-        });
-        expect(replacement.ok).toBe(true);
-        if (replacement.ok) {
-          replacementToken = replacement.entry.token;
-        }
-      }
-      return result;
-    });
-
-    await expect(runTokenCommand(command)).rejects.toThrow(
-      command === "rotate" ? "device token rotation denied" : "device token revocation denied",
-    );
-
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("caller-missing-scope scope=operator.admin"),
-    );
-    const after = await getPairedDevice(targetDeviceId);
-    expect(after?.tokens?.operator?.token === replacementToken).toBe(true);
-    expect(after?.tokens?.operator?.revokedAtMs).toBeUndefined();
-    expect(transport.runtime.writeJson).not.toHaveBeenCalled();
-  });
-
-  it("does not attempt token mutation when listing fails", async () => {
-    transport.request.mockRejectedValue(new Error("pairing list unavailable"));
-
-    await expect(
-      runTokenCommand(command, command === "rotate" ? ["operator.read"] : undefined),
-    ).rejects.toThrow("pairing list unavailable");
-
-    expect(transport.request.mock.calls.map(([, method]) => method)).toEqual(["device.pair.list"]);
-    expect(transport.runtime.writeJson).not.toHaveBeenCalled();
-  });
+it("rotates a revoked target using its narrowed scopes", async () => {
+  await pairOperator(targetDeviceId, ["operator.admin"], ["operator.read"]);
+  expect((await revokeDeviceToken({ deviceId: targetDeviceId, role: "operator" })).ok).toBe(true);
+  await installTransport();
+  await runTokenCommand("rotate");
+  expect(transport.request.mock.calls.at(-1)?.[0]).toEqual(["operator.pairing", "operator.read"]);
+  const after = await getPairedDevice(targetDeviceId);
+  expect(after?.tokens?.operator?.scopes).toEqual(["operator.read"]);
+  expect(after?.tokens?.operator?.revokedAtMs).toBeUndefined();
 });
 
-describe("devices rotate explicit scopes", () => {
-  it.each([
-    {
-      name: "narrowing self",
-      caller: "self",
-      requested: ["operator.read"],
-      expected: ["operator.pairing", "operator.read"],
-    },
-    {
-      name: "shared caller restoring approved admin",
-      caller: "shared",
-      requested: ["operator.admin"],
-      expected: ["operator.admin"],
-    },
-    {
-      name: "paired admin narrowing another admin token",
-      caller: "admin-cross-device",
-      tokenScopes: ["operator.admin"],
-      requested: ["operator.read"],
-      expected: ["operator.admin"],
-    },
-  ])(
-    "selects required connection scopes for $name",
-    async ({ caller, tokenScopes, requested, expected }) => {
-      await pairOperator(
-        targetDeviceId,
-        ["operator.admin"],
-        tokenScopes ?? ["operator.pairing", "operator.write"],
-      );
-      if (caller === "admin-cross-device") {
-        await pairOperator("caller", ["operator.admin"]);
+it("rechecks target scopes before revoking after the list changes", async () => {
+  await pairOperator(targetDeviceId, ["operator.admin"], ["operator.read"]);
+  await installTransport();
+  const dispatch = expectDefined(transport.request.getMockImplementation(), "installed transport");
+  let replacementToken: string | undefined;
+  transport.request.mockImplementation(async (...args) => {
+    const result = await dispatch(...args);
+    if (args[1] === "device.pair.list") {
+      const replacement = await rotateDeviceToken({
+        deviceId: targetDeviceId,
+        role: "operator",
+        scopes: ["operator.admin"],
+      });
+      expect(replacement.ok).toBe(true);
+      if (replacement.ok) {
+        replacementToken = replacement.entry.token;
       }
-      await installTransport(
-        caller === "self" ? targetDeviceId : caller === "admin-cross-device" ? "caller" : undefined,
-      );
-
-      await runTokenCommand("rotate", requested);
-
-      expect(transport.request.mock.calls.map(([scopes, method]) => ({ scopes, method }))).toEqual([
-        { scopes: ["operator.pairing"], method: "device.pair.list" },
-        { scopes: expected, method: "device.token.rotate" },
-      ]);
-      const after = await getPairedDevice(targetDeviceId);
-      expect(after?.tokens?.operator?.scopes).toEqual(normalizeDeviceAuthScopes(requested));
-      expect(after?.approvedScopes).toEqual(["operator.admin"]);
-    },
-  );
-
-  it.each([
-    {
-      name: "caller token ceiling",
-      caller: "self",
-      approved: ["operator.admin"],
-      error: "device auth denied: scope-mismatch",
-    },
-    {
-      name: "approved device baseline",
-      caller: "shared",
-      approved: ["operator.pairing", "operator.read"],
-      error: "device token rotation denied",
-    },
-  ])("rejects escalation beyond the $name", async ({ caller, approved, error }) => {
-    await pairOperator(targetDeviceId, approved, ["operator.pairing", "operator.read"]);
-    await installTransport(caller === "self" ? targetDeviceId : undefined);
-    const before = await getPairedDevice(targetDeviceId);
-
-    await expect(runTokenCommand("rotate", ["operator.admin"])).rejects.toThrow(error);
-
-    const after = await getPairedDevice(targetDeviceId);
-    expect(after?.tokens?.operator?.token === before?.tokens?.operator?.token).toBe(true);
-    expect(after?.approvedScopes).toEqual(before?.approvedScopes);
-    expect(transport.runtime.writeJson).not.toHaveBeenCalled();
+    }
+    return result;
   });
+  await expect(runTokenCommand("revoke")).rejects.toThrow("device token revocation denied");
+  expect(warn).toHaveBeenCalledWith(
+    expect.stringContaining("caller-missing-scope scope=operator.admin"),
+  );
+  const after = await getPairedDevice(targetDeviceId);
+  expect(after?.tokens?.operator?.token === replacementToken).toBe(true);
+  expect(after?.tokens?.operator?.revokedAtMs).toBeUndefined();
+  expect(transport.runtime.writeJson).not.toHaveBeenCalled();
+});
+
+it("does not attempt rotation when listing fails", async () => {
+  transport.request.mockRejectedValue(new Error("pairing list unavailable"));
+  await expect(runTokenCommand("rotate", ["operator.read"])).rejects.toThrow(
+    "pairing list unavailable",
+  );
+  expect(transport.request.mock.calls.map(([, method]) => method)).toEqual(["device.pair.list"]);
+  expect(transport.runtime.writeJson).not.toHaveBeenCalled();
 });

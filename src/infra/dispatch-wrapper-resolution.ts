@@ -1,4 +1,3 @@
-// Unwraps dispatch wrappers that delegate to real commands.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -59,10 +58,6 @@ const XCRUN_FLAG_OPTIONS = new Set([
   "-v",
   "--verbose",
 ]);
-function isArchSelectorToken(token: string): boolean {
-  return /^-[A-Za-z0-9_]+$/.test(token);
-}
-
 function isKnownArchSelectorToken(token: string): boolean {
   return (
     token === "-arm64" ||
@@ -71,10 +66,6 @@ function isKnownArchSelectorToken(token: string): boolean {
     token === "-x86_64" ||
     token === "-x86_64h"
   );
-}
-
-function isKnownArchNameToken(token: string): boolean {
-  return isKnownArchSelectorToken(`-${token}`);
 }
 
 type WrapperScanDirective = "continue" | "consume-next" | "stop" | "invalid";
@@ -281,15 +272,11 @@ function timeInvocationWritesOutputFile(argv: string[]): boolean {
   return false;
 }
 
-function supportsScriptPositionalCommand(platform: NodeJS.Platform = process.platform): boolean {
-  return platform === "darwin" || platform === "freebsd";
-}
-
 function unwrapScriptInvocation(
   argv: string[],
   platform: NodeJS.Platform = process.platform,
 ): string[] | null {
-  if (!supportsScriptPositionalCommand(platform)) {
+  if (platform !== "darwin" && platform !== "freebsd") {
     return null;
   }
   return scanWrapperInvocation(argv, {
@@ -342,7 +329,7 @@ function unwrapArchInvocation(argv: string[]): string[] | null {
     onToken: (token, lower) => {
       if (expectsArchName) {
         expectsArchName = false;
-        return isKnownArchNameToken(lower) ? "continue" : "invalid";
+        return isKnownArchSelectorToken(`-${lower}`) ? "continue" : "invalid";
       }
       if (!token.startsWith("-") || token === "-") {
         return "stop";
@@ -358,7 +345,7 @@ function unwrapArchInvocation(argv: string[]): string[] | null {
       if (lower === "-c" || lower === "-d" || lower === "-e" || lower === "-h") {
         return "invalid";
       }
-      return isArchSelectorToken(token) && isKnownArchSelectorToken(lower) ? "continue" : "invalid";
+      return isKnownArchSelectorToken(lower) ? "continue" : "invalid";
     },
   });
 }
@@ -546,22 +533,6 @@ function isSemanticDispatchWrapperUsage(
   return transparentUsage !== true;
 }
 
-function blockedDispatchWrapperPlan(params: {
-  argv: string[];
-  wrappers: string[];
-  wrapperInvocations: DispatchWrapperInvocation[];
-  blockedWrapper: string;
-}): DispatchWrapperTrustPlan {
-  return {
-    argv: params.argv,
-    wrappers: params.wrappers,
-    wrapperInvocations: params.wrapperInvocations,
-    policyBlocked: true,
-    dispatchChainComplete: false,
-    blockedWrapper: params.blockedWrapper,
-  };
-}
-
 export function resolveDispatchWrapperTrustPlan(
   argv: string[],
   maxDepth = MAX_DISPATCH_WRAPPER_DEPTH,
@@ -570,15 +541,18 @@ export function resolveDispatchWrapperTrustPlan(
   let current = argv;
   const wrappers: string[] = [];
   const wrapperInvocations: DispatchWrapperInvocation[] = [];
+  const blocked = (blockedWrapper: string): DispatchWrapperTrustPlan => ({
+    argv: current,
+    wrappers,
+    wrapperInvocations,
+    policyBlocked: true,
+    dispatchChainComplete: false,
+    blockedWrapper,
+  });
   for (let depth = 0; depth < maxDepth; depth += 1) {
     const unwrap = unwrapKnownDispatchWrapperInvocation(current, platform);
     if (unwrap.kind === "blocked") {
-      return blockedDispatchWrapperPlan({
-        argv: current,
-        wrappers,
-        wrapperInvocations,
-        blockedWrapper: unwrap.wrapper,
-      });
+      return blocked(unwrap.wrapper);
     }
     if (unwrap.kind !== "unwrapped" || unwrap.argv.length === 0) {
       break;
@@ -586,24 +560,14 @@ export function resolveDispatchWrapperTrustPlan(
     wrappers.push(unwrap.wrapper);
     wrapperInvocations.push({ wrapper: unwrap.wrapper, sourceArgv: [...current] });
     if (isSemanticDispatchWrapperUsage(unwrap.wrapper, current, platform)) {
-      return blockedDispatchWrapperPlan({
-        argv: current,
-        wrappers,
-        wrapperInvocations,
-        blockedWrapper: unwrap.wrapper,
-      });
+      return blocked(unwrap.wrapper);
     }
     current = unwrap.argv;
   }
   if (wrappers.length >= maxDepth) {
     const overflow = unwrapKnownDispatchWrapperInvocation(current, platform);
     if (overflow.kind === "blocked" || overflow.kind === "unwrapped") {
-      return blockedDispatchWrapperPlan({
-        argv: current,
-        wrappers,
-        wrapperInvocations,
-        blockedWrapper: overflow.wrapper,
-      });
+      return blocked(overflow.wrapper);
     }
   }
   return {

@@ -67,11 +67,7 @@ export async function retainBlockedMediaCompletion(params: {
     expectedSessionId: target.sessionId,
     expectedLifecycleRevision: target.lifecycleRevision,
     idempotencyKey: `media-completion-retained:${handle.runId}`,
-    // Keyed appends run this inside the transaction, after awaited preparation.
-    beforeMessageWrite: ({ message }) => {
-      assertCurrent();
-      return message;
-    },
+    assertCurrent,
     text: "Generated media is ready, but completion delivery was not confirmed. The saved media is retained here.",
     mediaUrls: Array.from(
       new Set([
@@ -114,24 +110,6 @@ export function retainBlockedMediaReferences(
   };
 }
 
-function buildMediaGenerationReplyInstruction(params: {
-  status: "ok" | "error";
-  completionLabel: string;
-}) {
-  if (params.status === "ok") {
-    return [
-      `The ${params.completionLabel} is ready for the original chat.`,
-      "Follow the current visible-reply contract with a short user-facing caption and every structured generated attachment from this event.",
-      "Keep internal task/session details private and do not copy the internal event text verbatim.",
-    ].join(" ");
-  }
-  return [
-    `${params.completionLabel[0]?.toUpperCase() ?? "T"}${params.completionLabel.slice(1)} generation task failed for the original chat.`,
-    "Follow the current visible-reply contract with a concise user-facing failure message.",
-    "Keep internal task/session details private and do not copy the internal event text verbatim.",
-  ].join(" ");
-}
-
 export async function wakeMediaGenerationTaskCompletion(params: {
   handle: MediaGenerationTaskHandle | null;
   status: "ok" | "error";
@@ -139,7 +117,6 @@ export async function wakeMediaGenerationTaskCompletion(params: {
   result: string;
   attachments?: AgentGeneratedAttachment[];
   mediaUrls?: string[];
-  statsLine?: string;
   eventSource: AgentInternalEvent["source"];
   announceType: string;
   toolName: string;
@@ -223,16 +200,18 @@ export async function wakeMediaGenerationTaskCompletion(params: {
       result: params.result,
       ...(params.attachments?.length ? { attachments: params.attachments } : {}),
       ...(mediaUrls.length ? { mediaUrls } : {}),
-      ...(params.statsLine?.trim() ? { statsLine: params.statsLine } : {}),
-      replyInstruction: buildMediaGenerationReplyInstruction({
-        status: params.status,
-        completionLabel: params.completionLabel,
-      }),
+      replyInstruction: [
+        params.status === "ok"
+          ? `The ${params.completionLabel} is ready for the original chat.`
+          : `${params.completionLabel[0]?.toUpperCase() ?? "T"}${params.completionLabel.slice(1)} generation task failed for the original chat.`,
+        params.status === "ok"
+          ? "Follow the current visible-reply contract with a short user-facing caption and every structured generated attachment from this event."
+          : "Follow the current visible-reply contract with a concise user-facing failure message.",
+        "Keep internal task/session details private and do not copy the internal event text verbatim.",
+      ].join(" "),
     },
   ];
-  const triggerMessage =
-    formatAgentInternalEventsForPrompt(internalEvents) ||
-    `A ${params.completionLabel} generation task finished. Process the completion update now.`;
+  const triggerMessage = formatAgentInternalEventsForPrompt(internalEvents);
   const delivery = await deliverSubagentAnnouncement({
     isSourceSessionAdmissionAllowed: isSourceCurrent,
     isSourceSessionEffectsAllowed: isSourceCurrent,
@@ -241,7 +220,6 @@ export async function wakeMediaGenerationTaskCompletion(params: {
     targetRequesterSessionKey: target.sessionKey,
     preparedRequester: { binding: requesterBinding, entry: requesterEntry },
     triggerMessage,
-    steerMessage: triggerMessage,
     internalEvents,
     requesterSessionOrigin: handle.requesterOrigin,
     completionDirectOrigin: handle.requesterOrigin,

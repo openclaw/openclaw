@@ -1,4 +1,3 @@
-// Browser Origin validator for gateway HTTP and websocket requests.
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
 import {
@@ -33,7 +32,7 @@ type OriginCheckResult =
     }
   | { ok: false; reason: string };
 
-type BrowserOriginPolicy = {
+export type BrowserOriginPolicy = {
   requestHost?: string;
   origin?: string;
   fetchSite?: string;

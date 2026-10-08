@@ -18,9 +18,17 @@ import {
   serializeSqliteFileGeneration,
   type SqliteFileGeneration,
 } from "../infra/sqlite-file-generation.js";
+import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
+import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { VERSION } from "../version.js";
-import { invalidateOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
+import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
+import { readOpenClawAgentDatabaseIdentity } from "./openclaw-agent-db-identity.js";
+import {
+  hasRevokedOpenClawAgentDatabaseValidation,
+  invalidateOpenClawAgentDatabaseValidation,
+  type OpenClawAgentDatabaseValidation,
+} from "./openclaw-agent-db-validation-cache.js";
 import {
   OpenClawQuarantineReadCleanupError,
   type OpenClawDatabaseKind,
@@ -54,6 +62,33 @@ export type OpenClawAgentIntegrityVerification = {
   clean_close: number;
 };
 type IntegrityDatabase = { agent_integrity_verifications: OpenClawAgentIntegrityVerification };
+
+export function resolveAgentDatabaseIntegrityGateReason(
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
+  proof: {
+    verification?: OpenClawAgentIntegrityVerification;
+    validation?: OpenClawAgentDatabaseValidation;
+    integrityRevoked: boolean;
+    reuseIntegrity: boolean;
+  },
+): SqliteIntegrityDiagnostics["integrityGateReason"] {
+  const { verification, validation, integrityRevoked, reuseIntegrity } = proof;
+  if (integrityRevoked) {
+    return "stale-lease-full";
+  }
+  if (hasRevokedOpenClawAgentDatabaseValidation(database.path, validation)) {
+    return "revoked";
+  }
+  if (!reuseIntegrity) {
+    return "lease-class";
+  }
+  return verification?.clean_close === 0 &&
+    verification.app_version === VERSION &&
+    `${verification.dev}:${verification.ino}` ===
+      readOpenClawAgentDatabaseIdentity(database).identity
+    ? "dirty-receipt"
+    : "no-proof";
+}
 
 /** The lease owner consumes this receipt under the shared writer admission. */
 export function readOpenClawAgentIntegrityVerification(
@@ -109,7 +144,7 @@ export function readOpenClawAgentIntegrityVerification(
   }
   let database: DatabaseSync | undefined;
   try {
-    database = openNodeSqliteDatabase(storePath, { readOnly: true });
+    database = openSqliteReadOnlyDatabase(storePath);
     return read(database);
   } catch {
     return undefined;
@@ -145,10 +180,10 @@ export function recordOpenClawAgentIntegrityVerification(
   pathname: string,
   env: NodeJS.ProcessEnv,
   identity: string,
-): void {
+): boolean {
   const current = statSync(pathname, { bigint: true, throwIfNoEntry: false });
   if (!current || identity !== `${current.dev}:${current.ino}`) {
-    return;
+    return false;
   }
   const dev = String(current.dev);
   const ino = String(current.ino);
@@ -177,6 +212,7 @@ export function recordOpenClawAgentIntegrityVerification(
         ),
     );
   });
+  return true;
 }
 
 /** Unclean disposal removes the proof that any surviving last closer could certify. */
@@ -269,30 +305,8 @@ export function markOpenClawAgentIntegrityClean(
   });
 }
 
-// Read admission needs this error without importing schema migrations.
-function createOpenClawDatabaseVerificationError(
-  kind: "agent" | "state",
-  pathname: string,
-  storedError: string | null,
-): Error {
-  // Doctor's clearing hooks run after a full integrity assertion, so a still-
-  // corrupt file cannot be cleared directly: the file must be healthy first.
-  const error = new Error(
-    `OpenClaw ${kind} database ${pathname} is quarantined after integrity verification failed: ${storedError ?? "unknown integrity error"}. Restore the database from a backup or repair it, then run openclaw doctor --fix to clear the quarantine. See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
-  );
-  error.name = "SqliteIntegrityError";
-  return error;
-}
-
-function ensureQuarantineStoreDirectory(storePath: string): void {
-  const dir = path.dirname(storePath);
-  mkdirSync(dir, { recursive: true, mode: OPENCLAW_QUARANTINE_DIR_MODE });
-  applyPrivateModeSync(dir, OPENCLAW_QUARANTINE_DIR_MODE);
-}
-
 function configureQuarantineWriter(database: DatabaseSync, storePath: string): void {
   database.exec(`
-    PRAGMA busy_timeout = ${OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS};
     PRAGMA journal_mode = DELETE;
     PRAGMA synchronous = FULL;
   `);
@@ -343,8 +357,12 @@ function readQuarantineSchemaVersion(database: DatabaseSync, storePath: string):
 function withQuarantineWriter<T>(env: NodeJS.ProcessEnv, operation: (db: DatabaseSync) => T): T {
   const storePath = resolveQuarantineStorePath(env);
   const existed = existsSync(storePath);
-  ensureQuarantineStoreDirectory(storePath);
-  const database = openNodeSqliteDatabase(storePath);
+  const dir = path.dirname(storePath);
+  mkdirSync(dir, { recursive: true, mode: OPENCLAW_QUARANTINE_DIR_MODE });
+  applyPrivateModeSync(dir, OPENCLAW_QUARANTINE_DIR_MODE);
+  const database = openNodeSqliteDatabase(storePath, {
+    timeout: OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS,
+  });
   let completed = false;
   try {
     if (!existed) {
@@ -380,7 +398,9 @@ function readOpenClawDatabaseQuarantine(
   if (!existsSync(storePath)) {
     return undefined;
   }
-  const database = openNodeSqliteDatabase(storePath);
+  const database = openSqliteReadOnlyDatabase(storePath, {
+    timeout: OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS,
+  });
   let outcome: { value: OpenClawDatabaseQuarantine | undefined } | { error: unknown };
   try {
     outcome = { value: readQuarantineDecision(database, pathname, storePath) };
@@ -406,7 +426,6 @@ function readQuarantineDecision(
   pathname: string,
   storePath: string,
 ): OpenClawDatabaseQuarantine | undefined {
-  database.exec(`PRAGMA busy_timeout = ${OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS};`);
   const userVersion = readQuarantineSchemaVersion(database, storePath);
   if (userVersion === 0) {
     return undefined;
@@ -486,14 +505,19 @@ export function readOpenClawDatabaseQuarantineFailure(
   if (!quarantine) {
     return undefined;
   }
-  const failure = createOpenClawDatabaseVerificationError(kind, pathname, quarantine.reason);
+  // Read admission needs this error without importing schema migrations.
+  // Doctor's clearing hooks run after a full integrity assertion, so a still-
+  // corrupt file cannot be cleared directly: the file must be healthy first.
+  const failure = new Error(
+    `OpenClaw ${kind} database ${pathname} is quarantined after integrity verification failed: ${quarantine.reason ?? "unknown integrity error"}. Restore the database from a backup or repair it, then run openclaw doctor --fix to clear the quarantine. See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
+  );
+  failure.name = "SqliteIntegrityError";
   if (cleanupFailure) {
     failure.cause = cleanupFailure;
   }
   return failure;
 }
 
-/** Persist one authoritative quarantine decision. */
 export function recordOpenClawDatabaseQuarantine(options: {
   env?: NodeJS.ProcessEnv;
   generation?: SqliteFileGeneration;
@@ -547,7 +571,6 @@ export function recordOpenClawDatabaseQuarantine(options: {
   }
 }
 
-/** Clear one authoritative quarantine decision. */
 export function clearOpenClawDatabaseQuarantine(
   pathname: string,
   options: { env?: NodeJS.ProcessEnv } = {},

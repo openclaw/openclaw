@@ -1,11 +1,9 @@
-// Doctor scanner and repair for subagent allowlists that reference missing agents.
 import { listAgentEntries, listAgentIds } from "../../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizeAgentId, normalizeOptionalAgentId } from "../../../routing/session-key.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 
 type StaleSubagentAllowlistHit = {
-  /** Config path containing the stale allowAgents entry. */
   pathLabel: string;
   /** Original configured agent id. */
   agentId: string;
@@ -59,14 +57,10 @@ function collectStaleAllowlistEntries(params: {
       continue;
     }
     const normalizedAgentId = normalizeAgentId(trimmed);
-    if (params.configuredTargetIds.has(normalizedAgentId)) {
+    if (params.configuredTargetIds.has(normalizedAgentId) || seen.has(normalizedAgentId)) {
       continue;
     }
-    const key = `${params.pathLabel}:${normalizedAgentId}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
+    seen.add(normalizedAgentId);
     hits.push({
       pathLabel: params.pathLabel,
       agentId: trimmed,
@@ -88,7 +82,6 @@ function listSubagentAllowlists(cfg: OpenClawConfig) {
   });
 }
 
-/** Find subagent allowlist entries not backed by configured agent or ACP targets. */
 export function scanStaleSubagentAllowlistReferences(
   cfg: OpenClawConfig,
 ): StaleSubagentAllowlistHit[] {
@@ -102,7 +95,6 @@ export function scanStaleSubagentAllowlistReferences(
   );
 }
 
-/** Format warnings for stale subagent allowlist entries. */
 export function collectStaleSubagentAllowlistWarnings(params: {
   hits: readonly StaleSubagentAllowlistHit[];
   doctorFixCommand: string;
@@ -141,7 +133,10 @@ export function maybeRepairStaleSubagentAllowlists(cfg: OpenClawConfig): {
       continue;
     }
     const staleTargetIds = new Set(pathHits.map((hit) => hit.normalizedAgentId));
-    subagents.allowAgents = subagents.allowAgents.filter((entry: string) => {
+    subagents.allowAgents = subagents.allowAgents.filter((entry: unknown) => {
+      if (typeof entry !== "string") {
+        return true;
+      }
       const trimmed = entry.trim();
       return !trimmed || trimmed === "*" || !staleTargetIds.has(normalizeAgentId(trimmed));
     });

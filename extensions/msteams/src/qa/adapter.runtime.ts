@@ -186,8 +186,12 @@ export async function createMSTeamsQaTransportAdapter(
         ...(input.replyToId ? { replyToId: input.replyToId } : {}),
         channelData: {
           tenant: { id: TENANT_ID },
-          team: { id: TEAM_ID, aadGroupId: TEAM_AAD_GROUP_ID },
-          channel: { id: conversationId },
+          ...(input.conversation.kind === "channel"
+            ? {
+                team: { id: TEAM_ID, aadGroupId: TEAM_AAD_GROUP_ID },
+                channel: { id: conversationId },
+              }
+            : {}),
         },
       };
       if (!webhookUrl) {
@@ -257,8 +261,8 @@ export async function createMSTeamsQaTransportAdapter(
         .join(" "),
     }),
     createRuntimePreloads: () => [bootstrapUrl],
-    waitReady: async ({ gateway, timeoutMs, pollIntervalMs }) =>
-      await waitForMSTeamsChannelReady(gateway, timeoutMs, pollIntervalMs),
+    waitReady: ({ gateway, timeoutMs, pollIntervalMs }) =>
+      waitForMSTeamsChannelReady(gateway, timeoutMs, pollIntervalMs),
     buildAgentDelivery: ({ target }) => ({
       channel: "msteams",
       to: target,

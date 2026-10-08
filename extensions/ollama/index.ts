@@ -1,5 +1,4 @@
 import { collectConfiguredModelRefValues } from "@openclaw/model-catalog-core/configured-model-refs";
-import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { MediaUnderstandingProvider } from "openclaw/plugin-sdk/media-understanding";
@@ -19,13 +18,10 @@ import {
   type ProviderReplayPolicy,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  buildApiKeyCredential,
-  coerceSecretRef,
-  isNonSecretApiKeyMarker,
-} from "openclaw/plugin-sdk/provider-auth";
+import { coerceSecretRef, isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
+import { findNormalizedProviderKey } from "openclaw/plugin-sdk/provider-model-metadata";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
@@ -136,10 +132,6 @@ function matchesOllamaContextOverflowError(errorMessage: string): boolean {
     /\bollama\b.*(?:context length|too many tokens|context window)/i.test(errorMessage) ||
     /\btruncating input\b.*\btoo long\b/i.test(errorMessage)
   );
-}
-
-function classifyOllamaFailoverReason(errorMessage: string): "server_error" | undefined {
-  return errorMessage.trim() === OLLAMA_INCOMPLETE_STREAM_ERROR ? "server_error" : undefined;
 }
 
 const OLLAMA_CLOUD_DEFAULT_MODEL_REF = `${OLLAMA_CLOUD_PROVIDER_ID}/${OLLAMA_CLOUD_DEFAULT_MODELS[0].id}`;
@@ -678,7 +670,8 @@ const createOllamaSharedProviderHooks = (api: OpenClawPluginApi) =>
     wrapStreamFn: createConfiguredOllamaCompatStreamWrapper,
     matchesContextOverflowError: ({ errorMessage }) =>
       matchesOllamaContextOverflowError(errorMessage),
-    classifyFailoverReason: ({ errorMessage }) => classifyOllamaFailoverReason(errorMessage),
+    classifyFailoverReason: ({ errorMessage }) =>
+      errorMessage.trim() === OLLAMA_INCOMPLETE_STREAM_ERROR ? "server_error" : undefined,
   }) satisfies Pick<
     ProviderPlugin,
     | "createStreamFn"
@@ -862,32 +855,11 @@ export default definePluginEntry({
             const result = await promptAndConfigureOllama({
               cfg: ctx.config,
               env: ctx.env,
-              workspaceDir: ctx.workspaceDir,
-              opts: ctx.opts as Record<string, unknown> | undefined,
               prompter: ctx.prompter,
               ...(ctx.signal ? { signal: ctx.signal } : {}),
-              secretInputMode: ctx.secretInputMode,
-              allowSecretRefPrompt: ctx.allowSecretRefPrompt,
             });
             return {
-              profiles: result.credential
-                ? [
-                    {
-                      profileId: "ollama:default",
-                      credential: buildApiKeyCredential(
-                        OLLAMA_PROVIDER_ID,
-                        result.credential,
-                        undefined,
-                        result.credentialMode
-                          ? {
-                              secretInputMode: result.credentialMode,
-                              config: ctx.config,
-                            }
-                          : undefined,
-                      ),
-                    },
-                  ]
-                : [],
+              profiles: [],
               configPatch: result.config,
               ...(result.defaultModel ? { defaultModel: result.defaultModel } : {}),
             };

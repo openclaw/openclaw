@@ -11,19 +11,18 @@ import type { MSTeamsIngressDispatchResult, MSTeamsIngressLifecycle } from "./ms
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import { buildGroupWelcomeText, buildWelcomeCard } from "./welcome-card.js";
 
-async function isInvokeAuthorized(params: {
+export async function isMSTeamsInvokeAuthorized(params: {
   context: Pick<MSTeamsTurnContext, "activity">;
   deps: MSTeamsMessageHandlerDeps;
   invokeKind: "feedback" | "signin" | "card action";
-  includeInvokeName?: boolean;
 }): Promise<boolean> {
-  const { context, deps, invokeKind, includeInvokeName = false } = params;
+  const { context, deps, invokeKind } = params;
   const resolved = await resolveMSTeamsSenderAccess({
     cfg: deps.cfg,
     activity: context.activity,
   });
   const { msteamsCfg, isDirectMessage, conversationId, senderId } = resolved;
-  const maybeInvokeName = includeInvokeName ? { name: context.activity.name } : undefined;
+  const maybeInvokeName = invokeKind === "feedback" ? undefined : { name: context.activity.name };
 
   if (resolved.hasConflictingConversationScope) {
     deps.log.info("dropping invoke (conflicting conversation scope)", {
@@ -72,41 +71,6 @@ async function isInvokeAuthorized(params: {
   return true;
 }
 
-export async function isFeedbackInvokeAuthorized(
-  context: MSTeamsTurnContext,
-  deps: MSTeamsMessageHandlerDeps,
-): Promise<boolean> {
-  return isInvokeAuthorized({
-    context,
-    deps,
-    invokeKind: "feedback",
-  });
-}
-
-export async function isSigninInvokeAuthorized(
-  context: Pick<MSTeamsTurnContext, "activity">,
-  deps: MSTeamsMessageHandlerDeps,
-): Promise<boolean> {
-  return isInvokeAuthorized({
-    context,
-    deps,
-    invokeKind: "signin",
-    includeInvokeName: true,
-  });
-}
-
-export async function isCardActionInvokeAuthorized(
-  context: MSTeamsTurnContext,
-  deps: MSTeamsMessageHandlerDeps,
-): Promise<boolean> {
-  return isInvokeAuthorized({
-    context,
-    deps,
-    invokeKind: "card action",
-    includeInvokeName: true,
-  });
-}
-
 export function createMSTeamsActivityHandler(deps: MSTeamsMessageHandlerDeps) {
   const handleTeamsMessage = createMSTeamsMessageHandler(deps);
   const handleReaction = createMSTeamsReactionHandler(deps);
@@ -118,7 +82,6 @@ export function createMSTeamsActivityHandler(deps: MSTeamsMessageHandlerDeps) {
 
     for (const member of membersAdded) {
       if (member.id === botId) {
-        // Bot was added to a conversation — send welcome card if configured.
         const conversationType =
           normalizeOptionalLowercaseString(ctx.activity?.conversation?.conversationType) ??
           "personal";

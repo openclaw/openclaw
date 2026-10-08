@@ -112,6 +112,24 @@ export async function consumeAnthropicStream(params: {
         eventSink.push(event);
       }
     };
+    const emitContentStart = (kind: "thinking" | "text", contentIndex: number, delta = "") => {
+      eventSink.push({ type: `${kind}_start`, contentIndex, partial: output });
+      if (delta.length > 0) {
+        eventSink.push({ type: `${kind}_delta`, contentIndex, delta, partial: output });
+      }
+    };
+    const appendContentDelta = (
+      block: Extract<AnthropicStreamBlock, { type: "thinking" | "text" }>,
+      contentIndex: number,
+      delta: string,
+    ) => {
+      if (block.type === "thinking") {
+        appendAssistantThinking(block, delta);
+      } else {
+        block.text += delta;
+      }
+      eventSink.push({ type: `${block.type}_delta`, contentIndex, delta, partial: output });
+    };
     const eventIndexKey = (eventIndex: unknown) =>
       typeof eventIndex === "number" ? eventIndex : -1;
     const appendReasoningContentDelta = (
@@ -130,7 +148,7 @@ export async function consumeAnthropicStream(params: {
       const key = eventIndexKey(eventIndex);
       let contentIndex = indexes.get(key);
       let block = contentIndex === undefined ? undefined : blocks[contentIndex];
-      if (!block || block.type !== kind) {
+      if (contentIndex === undefined || !block || block.type !== kind) {
         block =
           kind === "thinking"
             ? { type: "thinking", thinking: "", thinkingSignature: "reasoning_content" }
@@ -138,18 +156,12 @@ export async function consumeAnthropicStream(params: {
         output.content.push(block);
         contentIndex = output.content.length - 1;
         indexes.set(key, contentIndex);
-        eventSink.push({ type: `${kind}_start`, contentIndex, partial: output });
-      }
-      if (contentIndex === undefined) {
-        return false;
+        emitContentStart(kind, contentIndex);
       }
       if (block.type === "thinking") {
-        appendAssistantThinking(block, text);
         block.thinkingSignature = "reasoning_content";
-      } else if (block.type === "text") {
-        block.text += text;
       }
-      eventSink.push({ type: `${kind}_delta`, contentIndex, delta: text, partial: output });
+      appendContentDelta(block, contentIndex, text);
       return true;
     };
     const finishReasoningContentSidecars = (eventIndex: unknown) => {
@@ -181,7 +193,10 @@ export async function consumeAnthropicStream(params: {
       }
       if (event.type === "error") {
         const error = asOptionalObjectRecord(event.error);
-        throw new Error(readStringField(error, "message") || "Anthropic Messages stream failed");
+        throw Object.assign(
+          new Error(readStringField(error, "message") || "Anthropic Messages stream failed"),
+          { error },
+        );
       }
       if (event.type === "message_start") {
         sawMessageStart = true;
@@ -245,19 +260,7 @@ export async function consumeAnthropicStream(params: {
               continue;
             }
             delete block.index;
-            eventSink.push({
-              type: "text_start",
-              contentIndex: i,
-              partial: output,
-            });
-            if (block.text) {
-              eventSink.push({
-                type: "text_delta",
-                contentIndex: i,
-                delta: block.text,
-                partial: output,
-              });
-            }
+            emitContentStart("text", i, block.text);
             emitTextEnd({
               type: "text_end",
               contentIndex: i,
@@ -300,24 +303,11 @@ export async function consumeAnthropicStream(params: {
                     redacted: true,
                     index,
                   };
-          const kind = block.type;
           const delta = block.type === "text" ? block.text : block.redacted ? "" : block.thinking;
           output.content.push(block);
           const contentIndex = output.content.length - 1;
           blockIndexes.set(index, contentIndex);
-          eventSink.push({
-            type: `${kind}_start`,
-            contentIndex,
-            partial: output,
-          });
-          if (delta.length > 0) {
-            eventSink.push({
-              type: `${kind}_delta`,
-              contentIndex,
-              delta,
-              partial: output,
-            });
-          }
+          emitContentStart(block.type, contentIndex, delta);
           continue;
         }
         if (contentBlock?.type === "tool_use") {
@@ -379,13 +369,7 @@ export async function consumeAnthropicStream(params: {
             const text = sanitizeTransportPayloadText(delta.content);
             if (text.length > 0) {
               if (block?.type === "text" && index !== undefined) {
-                block.text += text;
-                eventSink.push({
-                  type: "text_delta",
-                  contentIndex: index,
-                  delta: text,
-                  partial: output,
-                });
+                appendContentDelta(block, index, text);
                 appendedContent = true;
               } else {
                 appendedContent = appendReasoningContentDelta("text", event.index, text);
@@ -404,11 +388,7 @@ export async function consumeAnthropicStream(params: {
           if (typeof event.index === "number") {
             blockIndexes.set(event.index, index);
           }
-          eventSink.push({
-            type: "text_start",
-            contentIndex: index,
-            partial: output,
-          });
+          emitContentStart("text", index);
         }
         if (index === undefined) {
           continue;
@@ -418,13 +398,7 @@ export async function consumeAnthropicStream(params: {
           delta?.type === "text_delta" &&
           typeof delta.text === "string"
         ) {
-          block.text += delta.text;
-          eventSink.push({
-            type: "text_delta",
-            contentIndex: index,
-            delta: delta.text,
-            partial: output,
-          });
+          appendContentDelta(block, index, delta.text);
           continue;
         }
         if (
@@ -432,13 +406,7 @@ export async function consumeAnthropicStream(params: {
           delta?.type === "thinking_delta" &&
           typeof delta.thinking === "string"
         ) {
-          appendAssistantThinking(block, delta.thinking);
-          eventSink.push({
-            type: "thinking_delta",
-            contentIndex: index,
-            delta: delta.thinking,
-            partial: output,
-          });
+          appendContentDelta(block, index, delta.thinking);
           continue;
         }
         if (

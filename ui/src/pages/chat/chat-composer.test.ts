@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
+import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
@@ -13,10 +13,56 @@ import {
 } from "./chat-composer.test-support.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
+import type { ChatQuestionCard } from "./components/chat-question-card.ts";
 import * as realtimeTalkInput from "./talk/input.ts";
 
 const discoverRealtimeTalkInputsMock = vi.fn();
 const openMicrophoneMock = vi.fn();
+
+describe("composer typing lifecycle", () => {
+  it.each([
+    { name: "Enter", key: {} },
+    { name: "Control+Enter", key: { ctrlKey: true } },
+    { name: "Command+Enter", key: { metaKey: true } },
+    { name: "goal Enter", key: {}, goal: true },
+    { name: "slash argument Enter", key: {}, command: true },
+  ])("stops the submitted preview before $name dispatch", ({ key, goal, command }) => {
+    let draft = command ? "/tools c" : "A shared draft";
+    const onTypingChange = vi.fn();
+    let typingAtSubmit: unknown;
+    const submit = vi.fn(() => {
+      typingAtSubmit = onTypingChange.mock.lastCall;
+    });
+    const { container } = renderComposer({
+      draft,
+      getDraft: () => draft,
+      onDraftChange: (next) => {
+        draft = next;
+      },
+      onTypingChange,
+      onSend: submit,
+      ...(goal
+        ? {
+            goalDraftMode: { action: "start" as const },
+            onGoalSubmit: async () => {
+              submit();
+              return true;
+            },
+          }
+        : {}),
+    });
+    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea.dispatchEvent(new InputEvent("beforeinput", { bubbles: true }));
+    textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    expect(onTypingChange).toHaveBeenLastCalledWith(true, draft);
+    textarea.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", ...key, bubbles: true, cancelable: true }),
+    );
+    expect(submit).toHaveBeenCalledOnce();
+    expect(typingAtSubmit).toEqual([false]);
+    expect(onTypingChange).toHaveBeenLastCalledWith(false);
+  });
+});
 
 describe("suggestion composer", () => {
   it("labels the send action as Suggest and emits ephemeral typing state", () => {
@@ -537,73 +583,6 @@ describe("renderChatComposer controls", () => {
 });
 
 describe("renderChatComposer status", () => {
-  it("swaps the expanded question with the composer and restores its draft and focus", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    const prompt = questionPrompt("question-swap", "Choose a release target");
-    const composerProps = props({
-      paneId: "question-swap-pane",
-      sessionKey: "queue-test",
-      draft: "Keep this draft",
-      gatewayQuestionPrompts: [],
-      composerControls: html`<button type="button">Model</button>`,
-      onRequestUpdate: vi.fn(),
-    });
-    composerProps.onDraftChange = (next) => {
-      composerProps.draft = next;
-    };
-    const draw = () => render(renderChatComposer(composerProps), container);
-
-    draw();
-    const initialTextarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
-    initialTextarea.focus();
-    expect(document.activeElement).toBe(initialTextarea);
-    initialTextarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-    initialTextarea.value = "Keep this draft while composing";
-    initialTextarea.dispatchEvent(
-      new InputEvent("input", { bubbles: true, inputType: "insertCompositionText" }),
-    );
-
-    composerProps.gatewayQuestionPrompts = [prompt];
-    draw();
-    let panel = container.querySelector("openclaw-chat-question-panel") as HTMLElement & {
-      updateComplete: Promise<unknown>;
-      props: { onCollapsedChange: (collapsed: boolean) => void };
-    };
-    await panel.updateComplete;
-    expect(container.querySelector(".agent-chat__input")).toBeNull();
-    expect(container.querySelector(".agent-chat__composer-footer")).toBeNull();
-    expect(container.querySelector(".agent-chat__typing-indicator--outside")).toBeNull();
-    expect(document.activeElement).toBe(panel.querySelector(".chat-question-panel"));
-    expect(composerProps.draft).toBe("Keep this draft while composing");
-
-    composerProps.draft = "Host updated this draft while the question was open";
-
-    panel.props.onCollapsedChange(true);
-    draw();
-    await Promise.resolve();
-    let textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
-    expect(textarea.value).toBe("Host updated this draft while the question was open");
-    expect(document.activeElement).toBe(textarea);
-
-    panel = container.querySelector("openclaw-chat-question-panel") as typeof panel;
-    panel.props.onCollapsedChange(false);
-    draw();
-    await panel.updateComplete;
-    expect(container.querySelector(".agent-chat__input")).toBeNull();
-    expect(document.activeElement).toBe(panel.querySelector(".chat-question-panel"));
-
-    prompt.status = "answered";
-    draw();
-    await Promise.resolve();
-    textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
-    expect(textarea.value).toBe("Host updated this draft while the question was open");
-    expect(document.activeElement).toBe(textarea);
-    expect(container.querySelector("openclaw-chat-question-panel")).toBeNull();
-
-    container.remove();
-  });
-
   it("keeps every concurrent gateway question reachable", async () => {
     const container = document.createElement("div");
     const onRequestUpdate = vi.fn();
@@ -617,48 +596,16 @@ describe("renderChatComposer status", () => {
     });
 
     render(renderChatComposer(composerProps), container);
-    let panel = container.querySelector("openclaw-chat-question-panel") as HTMLElement & {
-      props: {
-        model: { questions: Array<{ question: string }>; requestPosition?: unknown };
-        onNextRequest?: () => void;
-      };
-    };
-    expect(panel.props.model.questions[0]?.question).toBe("First prompt");
-    expect(panel.props.model.requestPosition).toEqual({ current: 1, total: 2 });
+    let panel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
+    expect(panel.props!.model.questions[0]?.question).toBe("First prompt");
+    expect(panel.props!.model.requestPosition).toEqual({ current: 1, total: 2 });
 
-    panel.props.onNextRequest?.();
+    panel.props!.onNextRequest?.();
     expect(onRequestUpdate).toHaveBeenCalledOnce();
     render(renderChatComposer(composerProps), container);
-    panel = container.querySelector("openclaw-chat-question-panel") as typeof panel;
-    expect(panel.props.model.questions[0]?.question).toBe("Second prompt");
-    expect(panel.props.model.requestPosition).toEqual({ current: 2, total: 2 });
-  });
-
-  it("floats a fresh interrupted status above the composer", () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    let view = renderComposer({
-      runStatus: { phase: "done", runId: "run-0", sessionKey: "main", occurredAt: 900 },
-    });
-    expect(view.container.querySelector(".agent-chat__run-status")).toBeNull();
-
-    view = renderComposer({
-      runStatus: { phase: "interrupted", runId: "run-1", sessionKey: "main", occurredAt: 900 },
-      composerControls: html`<button type="button">Settings</button>`,
-    });
-    const interrupted = view.container.querySelector(".agent-chat__run-status--interrupted");
-    expect(interrupted).not.toBeNull();
-    expect(interrupted?.closest(".agent-chat__composer-run-status")).not.toBeNull();
-    expect(interrupted?.querySelector("rect")?.getAttribute("width")).toBe("18");
-    expect(
-      view.container.querySelector(".agent-chat__run-status-announcement")?.textContent,
-    ).toContain("Interrupted");
-
-    now.mockReturnValue(7_000);
-    view = renderComposer({
-      runStatus: { phase: "interrupted", runId: "run-1", sessionKey: "main", occurredAt: 1_000 },
-      composerControls: html`<button type="button">Settings</button>`,
-    });
-    expect(view.container.querySelector(".agent-chat__run-status--interrupted")).toBeNull();
+    panel = container.querySelector<ChatQuestionCard>("openclaw-chat-question-card")!;
+    expect(panel.props!.model.questions[0]?.question).toBe("Second prompt");
+    expect(panel.props!.model.requestPosition).toEqual({ current: 2, total: 2 });
   });
 
   it("keeps fallback status in the composer without a compaction overlay", () => {

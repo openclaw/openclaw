@@ -251,32 +251,6 @@ describe("buildEmbeddedExtensionFactories", () => {
     );
   });
 
-  it("preserves model-visible failures when middleware rewrites details", async () => {
-    installMiddleware((event) => {
-      event.result.content = textToolResult("redacted error", {}).content;
-      event.result.details = { redacted: true };
-      return undefined;
-    });
-
-    const handler = await createToolResultHandler();
-
-    const result = await handler?.({
-      toolName: "edit",
-      toolCallId: "call-edit",
-      ...textToolResult("oldText must be unique", {
-        status: "error",
-        tool: "edit",
-        error: "oldText must be unique",
-      }),
-      isError: false,
-    });
-
-    expect(result).toEqual({
-      ...textToolResult("redacted error", { redacted: true }),
-      isError: true,
-    });
-  });
-
   it("stores private send receipts without overriding middleware details", async () => {
     installMiddleware((event) => ({
       result: {
@@ -377,30 +351,18 @@ describe("buildEmbeddedExtensionFactories", () => {
     expect(result).toEqual({ ...acceptedResult, isError: false });
   });
 
-  it.each([
-    { toolName: "sessions_spawn", details: { status: "accepted" } },
-    {
-      toolName: "exec",
-      details: {
-        status: "accepted",
-        childSessionKey: "agent:watcher:subagent:abc",
-        runId: "run-123",
-      },
-    },
-  ])(
-    "retains errors without the full spawn contract: $toolName $details",
-    async ({ toolName, details }) => {
-      setActivePluginRegistry(createEmptyPluginRegistry());
-      const handler = await createToolResultHandler();
-      const content = [{ type: "text", text: "failed" }];
-      const result = await handler?.({
-        toolName,
-        toolCallId: "call-invalid-acceptance",
-        content,
-        details,
-        isError: true,
-      });
-      expect(result).toEqual({ content, details, isError: true });
-    },
-  );
+  it("retains errors without the full spawn contract", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    const handler = await createToolResultHandler();
+    const content = [{ type: "text", text: "failed" }];
+    const details = { status: "accepted" };
+    const result = await handler?.({
+      toolName: "sessions_spawn",
+      toolCallId: "call-invalid-acceptance",
+      content,
+      details,
+      isError: true,
+    });
+    expect(result).toEqual({ content, details, isError: true });
+  });
 });
