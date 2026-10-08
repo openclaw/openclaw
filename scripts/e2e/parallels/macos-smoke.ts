@@ -49,6 +49,8 @@ import {
   posixAgentTurnScript,
   posixStopGatewayScript,
   SmokeRunController,
+  smokeDefaultOptions,
+  smokeDefaultStatus,
   type SmokeCliOptions,
 } from "./smoke-common.ts";
 
@@ -69,24 +71,14 @@ const guestNode = "node";
 const guestNpm = "npm";
 
 const defaultOptions = (): MacosOptions => ({
+  ...smokeDefaultOptions,
   discordChannelId: undefined,
   discordGuildId: undefined,
   discordTokenEnv: undefined,
-  hostIp: undefined,
   hostPort: 18425,
-  hostPortExplicit: false,
   installUrl: "https://openclaw.ai/install.sh",
-  installVersion: "",
-  json: false,
-  keepServer: false,
-  latestVersion: "",
-  mode: "both",
-  modelId: undefined,
-  npmRegistry: undefined,
-  provider: "openai",
   skipLatestRefCheck: false,
   snapshotHint: "macOS 26.5 latest",
-  targetPackageSpec: "",
   vmName: "macOS Tahoe",
   vmNameExplicit: false,
 });
@@ -163,20 +155,12 @@ class MacosSmoke extends SmokeRunController<MacosOptions> {
   private updateDevTimeoutSeconds: number;
   private devTargetCommit: string | undefined;
   protected status = {
-    freshAgent: "skip",
+    ...smokeDefaultStatus,
     freshDashboard: "skip",
     freshDiscord: "skip",
-    freshGateway: "skip",
-    freshMain: "skip",
-    freshVersion: "skip",
-    latestInstalledVersion: "skip",
-    upgrade: "skip",
-    upgradeAgent: "skip",
     upgradeDashboard: "skip",
     upgradeDiscord: "skip",
-    upgradeGateway: "skip",
     upgradePrecheck: "skip",
-    upgradeVersion: "skip",
   };
 
   constructor(options: MacosOptions) {
@@ -329,9 +313,6 @@ class MacosSmoke extends SmokeRunController<MacosOptions> {
   }
 
   private artifactLabel(): string {
-    if (this.targetInstallsDirectly()) {
-      return "target package spec";
-    }
     return this.options.targetPackageSpec ? "target package tgz" : "current main tgz";
   }
 
