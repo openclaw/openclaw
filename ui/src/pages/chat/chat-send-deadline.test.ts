@@ -12,7 +12,7 @@ useChatSendBrowserFixture();
 
 afterEach(() => vi.useRealTimers());
 
-it.each(["send", "send-consumed", "receipt"] as const)(
+it.each(["send", "send-pending", "send-consumed", "receipt"] as const)(
   "bounds the actual %s request without a client-wide deadline",
   async (kind) => {
     vi.useFakeTimers();
@@ -30,6 +30,7 @@ it.each(["send", "send-consumed", "receipt"] as const)(
       client,
       connected: true,
       sessionKey: "agent:main:deadline",
+      currentSessionId: "deadline-session",
       chatMessage: "Keep this submission",
     });
     const retry = vi.fn();
@@ -56,7 +57,13 @@ it.each(["send", "send-consumed", "receipt"] as const)(
     await vi.advanceTimersByTimeAsync(29_999);
     expect(pending.hasPending).toBe(true);
     expect(retry).not.toHaveBeenCalled();
-    if (kind === "send-consumed") {
+    if (kind === "send-pending") {
+      const runId = host.chatQueue[0]!.sendRunId!;
+      applyChatPendingInputs(host, undefined, {
+        receipts: [{ runId, state: "pending" }],
+      });
+      host.chatMessage = "A newer draft";
+    } else if (kind === "send-consumed") {
       const runId = host.chatQueue[0]!.sendRunId!;
       applyChatPendingInputs(host, undefined, {
         receipts: [{ runId, state: "consumed", consumedByEventId: "canonical-user" }],
@@ -67,7 +74,11 @@ it.each(["send", "send-consumed", "receipt"] as const)(
     await vi.advanceTimersByTimeAsync(1);
     if (kind !== "receipt") {
       await operation;
-      if (kind === "send-consumed") {
+      if (kind === "send-pending") {
+        expect(host.chatQueue[0]).toMatchObject({ sendState: "waiting-idle", sendAttempts: 1 });
+        expect(host.chatQueue[0]!.sendError).toBeUndefined();
+        expect(host.chatMessage).toBe("A newer draft");
+      } else if (kind === "send-consumed") {
         expect(host.chatQueue).toEqual([]);
         expect(host.chatMessage).toBe("A newer draft");
       } else {

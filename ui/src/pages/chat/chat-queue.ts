@@ -150,16 +150,15 @@ export function confirmQueuedMessageCustody(
   ) {
     return false;
   }
-  if (current.sessionId && current.sendState !== "unconfirmed") {
+  const awaitingReceipt = current.sendState === "sending" || current.sendState === "unconfirmed";
+  if (current.sessionId && !awaitingReceipt) {
     return true;
   }
   return (
     updateQueuedMessage(host, expected.id, (item) => ({
       ...item,
       sessionId,
-      ...(item.sendState === "unconfirmed"
-        ? { sendState: "waiting-idle" as const, sendError: undefined }
-        : {}),
+      ...(awaitingReceipt ? { sendState: "waiting-idle" as const, sendError: undefined } : {}),
     })) !== null
   );
 }

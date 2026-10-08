@@ -87,9 +87,9 @@ suite.define(() => {
             },
           ],
           methodResponses: {
+            "chat.startup": { messages: [] },
             "chat.history": {
               messages: [],
-              sessionId: `session:${sessionKey}`,
               sessionInfo: { hasActiveRun: false, status: "done" },
               thinkingLevel: null,
             },
@@ -106,7 +106,7 @@ suite.define(() => {
         await page.locator('.chat-send-status[data-send-state="waiting-reconnect"]').waitFor();
         await gateway.setOnline(true);
         const delivery = page.locator('.chat-send-status[data-send-state="unconfirmed"]');
-        await delivery.getByText("Delivery unconfirmed", { exact: true }).waitFor();
+        await delivery.getByText("Paused", { exact: true }).waitFor();
         await page.screenshot({
           path: path.join(artifacts, "01-chat-review.png"),
           animations: "disabled",
@@ -195,6 +195,13 @@ suite.define(() => {
               modelProvider: "openai",
             },
           ],
+          methodResponses: {
+            "chat.startup": { messages: [] },
+            "chat.history": {
+              messages: [],
+              sessionInfo: { hasActiveRun: false, status: "done" },
+            },
+          },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const composer = page.locator(".agent-chat__composer-combobox textarea");
@@ -271,7 +278,14 @@ suite.define(() => {
           sessionKey,
           agentModel: "openai/demo-model",
           models: [{ id: "demo-model", name: "Demo model", provider: "openai" }],
-          methodResponses: { "chat.history": history },
+          methodResponses: {
+            "chat.startup": { messages: [] },
+            "chat.history": {
+              ...history,
+              sessionId: undefined,
+              sessionInfo: { ...history.sessionInfo, sessionId: undefined },
+            },
+          },
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await gateway.deferNext("chat.send");

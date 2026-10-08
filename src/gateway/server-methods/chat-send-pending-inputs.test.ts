@@ -27,7 +27,6 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
-import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
 import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import {
@@ -42,7 +41,6 @@ import { createMentionInbox } from "../mention-inbox.js";
 import { readMentionInbox, dismissMentionInbox } from "../mention-inbox.test-support.js";
 import { refusePendingInputCommit } from "../pending-input-commit.test-support.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
-import { getTestPluginRegistry } from "../test-helpers.plugin-registry.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 import type { GatewayClient, RespondFn } from "./types.js";
@@ -658,54 +656,65 @@ describe("ordinary chat input admission", () => {
     },
   );
 
-  it("does not execute a consumed collected source when retried after the session becomes idle", async () => {
-    const fixture = await createBrowserFollowupFixture();
-    try {
-      await fixture.send();
-      expect((await listSessionPendingInputs(fixture.scope)).total).toBe(1);
-      const source = await fixture.dispatchedRecorder;
-      const aggregate = createUserTurnTranscriptRecorder({
-        input: {
-          text: "Collected follow-up already accepted for execution.",
-          idempotencyKey: "collected-follow-up:user",
-          timestamp: Date.now(),
-        },
-        pendingInputSources: [source],
-        target: () => ({
-          ...fixture.scope,
-          sessionEntry: loadSessionEntry(fixture.scope),
-          expectedSessionId: fixture.scope.sessionId,
-        }),
-      });
-      await aggregate.persistApproved();
-      const consumedTranscript = loadTranscriptEventsSync(fixture.scope);
-      expect(consumedTranscript).toHaveLength(fixture.activeTranscript.length + 1);
-      expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
-      await fixture.finishDispatch();
-      await patchSessionEntryCore(fixture.scope, () => ({ status: "done" }));
-      const registry = getTestPluginRegistry();
-      registry.typedHooks = registry.typedHooks.filter(
-        (hook) => hook.pluginId !== "approved-input-fixture",
-      );
-      initializeGlobalHookRunner(registry);
-      // Exercise durable replay detection after the transient ACK cache is gone.
-      fixture.context.dedupe.clear();
-      dispatchInboundMessageMock.mockClear();
-      const retried = await fixture.send();
-      expect(retried).toHaveBeenCalledWith(
-        true,
-        { runId: fixture.params.idempotencyKey, status: "ok" },
-        undefined,
-        expect.objectContaining({ cached: true }),
-      );
-      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-      expect(fixture.beforeApprove).toHaveBeenCalledOnce();
-      expect(loadTranscriptEventsSync(fixture.scope)).toEqual(consumedTranscript);
-      expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
-    } finally {
-      await fixture.cleanup();
-    }
-  });
+  it.each(["ordinary", "collected"] as const)(
+    "does not execute a consumed %s source when retried after the session becomes idle",
+    async (sourceKind) => {
+      const fixture = await createBrowserFollowupFixture();
+      try {
+        await fixture.send();
+        expect((await listSessionPendingInputs(fixture.scope)).total).toBe(1);
+        const source = await fixture.dispatchedRecorder;
+        const aggregate =
+          sourceKind === "ordinary"
+            ? source
+            : createUserTurnTranscriptRecorder({
+                input: {
+                  text: "Collected follow-up already accepted for execution.",
+                  idempotencyKey: "collected-follow-up:user",
+                  timestamp: Date.now(),
+                },
+                pendingInputSources: [source],
+                target: () => ({
+                  ...fixture.scope,
+                  sessionEntry: loadSessionEntry(fixture.scope),
+                  expectedSessionId: fixture.scope.sessionId,
+                }),
+              });
+        await aggregate.persistApproved();
+        const consumedTranscript = loadTranscriptEventsSync(fixture.scope);
+        expect(consumedTranscript).toHaveLength(fixture.activeTranscript.length + 1);
+        expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+        await fixture.finishDispatch();
+        const database = openOpenClawAgentDatabase(
+          toDatabaseOptions(resolveSqliteScope(fixture.scope)),
+        );
+        const pendingInputs = database.db
+          .prepare("SELECT run_id FROM session_pending_inputs WHERE run_id = ?")
+          .all(fixture.params.idempotencyKey);
+        expect(pendingInputs).toHaveLength(sourceKind === "ordinary" ? 0 : 1);
+        await patchSessionEntryCore(fixture.scope, () => ({
+          status: "done",
+          restartRecoveryTerminalRunIds: [],
+        }));
+        // Exercise durable replay detection after the transient ACK cache is gone.
+        fixture.context.dedupe.clear();
+        dispatchInboundMessageMock.mockClear();
+        const retried = await fixture.send();
+        expect(retried).toHaveBeenCalledWith(
+          true,
+          { runId: fixture.params.idempotencyKey, status: "ok" },
+          undefined,
+          expect.objectContaining({ cached: true }),
+        );
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+        expect(fixture.beforeApprove).toHaveBeenCalledOnce();
+        expect(loadTranscriptEventsSync(fixture.scope)).toEqual(consumedTranscript);
+        expect(await listSessionPendingInputs(fixture.scope)).toEqual({ items: [], total: 0 });
+      } finally {
+        await fixture.cleanup();
+      }
+    },
+  );
 
   it.each(
     ["consumed", "changed-payload", "interrupted"].flatMap((disposition) =>

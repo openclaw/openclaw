@@ -43,6 +43,7 @@ import {
   chatSendHoldReason,
   OFFLINE_QUEUE_STORAGE_ERROR,
   UNCONFIRMED_CHAT_SEND_ERROR,
+  requiresChatInputConsumption,
   surfaceChatDeliveryFailure,
 } from "./chat-send-support.ts";
 import { isQueuedMessageBeingEdited } from "./queued-message-edit.ts";
@@ -174,12 +175,20 @@ async function reconcileStoredChatOutboxHead(
   ) {
     return "send";
   }
-  // Passive unknown sends need positive delivery proof; only an explicit retry
-  // may continue through idle reconciliation to the same idempotency key.
+  const replaySafe = Boolean(
+    !neverAttempted &&
+    item.sessionId &&
+    item.sendRunId &&
+    requiresChatInputConsumption(item) &&
+    item.queueMode !== "interrupt" &&
+    item.queueMode !== "steer",
+  );
+  // Ordinary replay retains its physical target and original send ID.
+  // Interrupt and steer also affect the active run before durable deduplication.
   if (
     history === "blocked" ||
     history === "continue" ||
-    (item.sendState === "unconfirmed" && !retryUnconfirmed)
+    (item.sendState === "unconfirmed" && !retryUnconfirmed && !replaySafe)
   ) {
     return history === "continue" ? "continue" : "blocked";
   }
@@ -203,7 +212,7 @@ async function reconcileStoredChatOutboxHead(
       // Elapsed time cannot turn a current-connection send into reconnect uncertainty.
       return "blocked";
     }
-    if (retryUnconfirmed) {
+    if (retryUnconfirmed || replaySafe) {
       return "send";
     }
     const parked = updateQueuedMessage(host, item.id, (entry) => ({

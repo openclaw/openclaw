@@ -38,11 +38,9 @@ export function renderChatSendStatus(
         >${t(
           reconnecting
             ? "chat.queue.states.waitingForReconnect"
-            : status.state === "held"
+            : status.state === "held" || status.state === "unconfirmed"
               ? "chat.queue.states.needsReview"
-              : status.state === "unconfirmed"
-                ? "chat.queue.deliveryUnconfirmed"
-                : "chat.queue.notSent",
+              : "chat.queue.notSent",
         )}</span
       >
     </span>

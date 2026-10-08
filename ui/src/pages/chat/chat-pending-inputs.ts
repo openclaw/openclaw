@@ -257,7 +257,7 @@ function reconcilePendingInputPage(
     } else if (
       item.sendRunId &&
       acceptedRunIds.has(item.sendRunId) &&
-      (!item.sessionId || item.sendState === "unconfirmed")
+      (!item.sessionId || item.sendState === "sending" || item.sendState === "unconfirmed")
     ) {
       confirmQueuedMessageCustody(state, item, state.currentSessionId ?? undefined);
     }

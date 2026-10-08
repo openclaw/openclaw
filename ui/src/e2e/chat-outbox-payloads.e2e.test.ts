@@ -33,7 +33,7 @@ const suite = createChatFlowE2eSuite({
 });
 
 suite.define(() => {
-  it("sends and explicitly retries an attachment after a non-local plain HTTP reload", async () => {
+  it("preserves attachment adoption and explicit recovery after a non-local plain HTTP reload", async () => {
     await suite.withPage(
       {
         serviceWorkers: "block",
@@ -92,10 +92,9 @@ suite.define(() => {
         const releasePreviewReads = await holdOutboxPreviewReads(page);
         await page.reload();
         await waitForControlUiGatewayReady(page);
-        await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
         await expectRequestCountStable(gateway, "chat.send", 0);
-        // Reconnect parks the captured row while its real Blob read is pending.
-        // Adoption must preserve that newer delivery state and the original bytes.
+        // Without Web Locks, reload cannot prove this is the original tab.
+        // Adoption must preserve that recovery barrier and the original bytes.
         expect(await releasePreviewReads()).toBeGreaterThan(0);
         await expect
           .poll(async () => (await readQueue(page))[0]?.attachmentPayload?.key)
@@ -112,10 +111,7 @@ suite.define(() => {
           file.buffer.toString("base64"),
         ]);
         await expectRequestCountStable(gateway, "chat.send", 0);
-        await page.screenshot({
-          path: path.join(suite.artifactDir, "plain-http-reload-unconfirmed.png"),
-          animations: "disabled",
-        });
+        await paneFor(page).getByText("Paused", { exact: true }).waitFor();
         await paneFor(page)
           .locator(".chat-group.user")
           .getByRole("button", { name: /Retry/i })
@@ -138,7 +134,7 @@ suite.define(() => {
     );
   });
 
-  it("reloads an offline Blob queue with exact bytes and idempotency, and never replays a lost ACK", async () => {
+  it("reloads an offline Blob queue with exact bytes and idempotency, and automatically recovers a lost ACK", async () => {
     await suite.withPage(
       {
         serviceWorkers: "block",
@@ -186,15 +182,16 @@ suite.define(() => {
           }),
         );
         await expect.poll(() => payloadCount(page)).toBe(1);
-        // Reload destroys the pending ACK. The restored attempted row must require review.
+        // Reload destroys the pending ACK; replay keeps the same submission and exact Blob bytes.
         await page.reload();
-        await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
-        await expectRequestCountStable(gateway, "chat.send", 0);
+        const replayed = await gateway.waitForRequest("chat.send");
+        expect(replayed.params).toEqual(sent.params);
+        await expectRequestCountStable(gateway, "chat.send", 1);
         expect((await readQueue(page))[0]?.sendRunId).toBe(queued.sendRunId);
         await writeFile(
           path.join(suite.artifactDir, "reload-unconfirmed.png"),
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-            paneFor(page).getByText("Delivery unconfirmed", { exact: true }),
+            paneFor(page).locator(".chat-group.user"),
           ]),
         );
       },

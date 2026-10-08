@@ -12,10 +12,12 @@ import {
   retireFollowupRunCancellation,
 } from "../../auto-reply/reply/queue/lifecycle.js";
 import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
+import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { listSessionPendingInputs } from "../../config/sessions/session-accessor.pending-inputs.js";
 import { listSessionPendingInputReceipts } from "../../config/sessions/session-accessor.sqlite-pending-input-receipts.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
+import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
@@ -35,6 +37,42 @@ registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
 describe("queued chat input withdrawal", () => {
+  it("rejects a consumed replay when admission expires during the staging await", async () => {
+    const fixture = await createBrowserFollowupFixture();
+    try {
+      await fixture.send();
+      await (await fixture.dispatchedRecorder).persistApproved();
+      await fixture.finishDispatch();
+      await patchSessionEntryCore(fixture.scope, () => ({
+        status: "done",
+        restartRecoveryTerminalRunIds: [],
+      }));
+      fixture.context.dedupe.clear();
+      dispatchInboundMessageMock.mockClear();
+      const stage = sessionAccessor.stageSessionPendingInput;
+      const staging = vi
+        .spyOn(sessionAccessor, "stageSessionPendingInput")
+        .mockImplementation(async (...args) => {
+          const receipt = await stage(...args);
+          if (receipt?.state === "consumed") {
+            rotateAgentEventLifecycleGeneration();
+          }
+          return receipt;
+        });
+      try {
+        const retried = await fixture.send();
+        expect(staging).toHaveBeenCalledOnce();
+        expect(retried).toHaveBeenCalledOnce();
+        expect(retried.mock.calls[0]?.[0]).toBe(false);
+        expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      } finally {
+        staging.mockRestore();
+      }
+    } finally {
+      await fixture.cleanup();
+    }
+  });
+
   it("keeps refused browser input revoked after its session access returns", async () => {
     const fixture = await createBrowserFollowupFixture({
       preserveContent: true,

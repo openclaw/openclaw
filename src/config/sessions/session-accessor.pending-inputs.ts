@@ -195,6 +195,8 @@ export function bindSessionPendingInputSources(
 type PendingInputStageOptions = PendingInputRequest & {
   authority?: SessionPendingInputAuthority;
   trackCompletion?: boolean;
+  /** Ordinary ingress must not execute an input already committed by its original turn. */
+  committedReplay?: "consumed";
   assertCurrent: () => void;
   assertAdmittedCurrent?: () => void;
   assertCompletionCurrent?: () => void;
@@ -437,6 +439,17 @@ async function stagePreparedPendingInput(
       settled: store.settled,
     };
     if (committed) {
+      if (options.committedReplay === "consumed" && !options.trackCompletion) {
+        return {
+          state: "consumed",
+          inputId: committed.messageId,
+          message: committed.message,
+          run: () => {
+            throw new Error("Pending input has already been consumed");
+          },
+          finish: () => {},
+        };
+      }
       if (options.trackCompletion) {
         const committedHash = resolveCommittedPendingInputRequestHash(
           {

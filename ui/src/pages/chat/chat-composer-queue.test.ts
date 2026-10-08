@@ -14,7 +14,7 @@ afterEach(async () => {
 });
 
 describe("chat composer steering queue", () => {
-  it("keeps attempted unconfirmed messages inline while local commands retain retry and discard", () => {
+  it("keeps the exact unconfirmed blocker actionable beside the queue", () => {
     const onQueueRetry = vi.fn();
     const onQueueRemove = vi.fn();
     const container = renderQueue({
@@ -24,6 +24,7 @@ describe("chat composer steering queue", () => {
           text: "Already attempted",
           createdAt: 1,
           sendState: "unconfirmed",
+          sendError: "Delivery details are available on hover.",
           sendAttempts: 1,
         },
         {
@@ -41,16 +42,26 @@ describe("chat composer steering queue", () => {
     });
 
     const rows = container.querySelectorAll(".chat-queue__item");
-    expect(rows).toHaveLength(1);
-    expect(container.querySelector(".chat-queue__global-state")?.textContent?.trim()).toBe(
-      "Queue paused. Retry or discard the earlier unconfirmed message in the conversation.",
+    expect(rows).toHaveLength(2);
+    expect(container.querySelector(".chat-queue__global-state")).toBeNull();
+    expect(rows[0]?.getAttribute("data-chat-queue-item")).toBe("message");
+    expect(rows[0]?.classList.contains("chat-queue__item--failed")).toBe(false);
+    expect(rows[0]?.querySelector(".chat-queue__error")).toBeNull();
+    expect(rows[0]?.querySelector(".chat-queue__badge")?.getAttribute("title")).toBe(
+      "Delivery details are available on hover.",
     );
-    expect(rows[0]?.getAttribute("data-chat-queue-item")).toBe("reset");
     expect(rows[0]?.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe(
       t("chat.queue.states.needsReview"),
     );
     rows[0]?.querySelector<HTMLButtonElement>(".chat-queue__retry")?.click();
     rows[0]?.querySelector<HTMLButtonElement>(".chat-queue__remove")?.click();
+    expect(onQueueRetry).toHaveBeenCalledWith("message");
+    expect(onQueueRemove).toHaveBeenCalledWith("message");
+    expect(rows[0]?.querySelector(".chat-queue__remove")?.getAttribute("aria-label")).toBe(
+      t("chat.queue.discard"),
+    );
+    rows[1]?.querySelector<HTMLButtonElement>(".chat-queue__retry")?.click();
+    rows[1]?.querySelector<HTMLButtonElement>(".chat-queue__remove")?.click();
     expect(onQueueRetry).toHaveBeenCalledWith("reset");
     expect(onQueueRemove).toHaveBeenCalledWith("reset");
   });
@@ -604,14 +615,19 @@ describe("chat composer queue reordering", () => {
     });
 
     const row = container.querySelector(".chat-queue__item");
-    expect(row?.classList.contains("chat-queue__item--failed")).toBe(true);
+    expect(row?.classList.contains("chat-queue__item--failed")).toBe(sendState === "failed");
     expect(row?.classList.contains("chat-queue__item--reconnect")).toBe(false);
-    expect(row?.querySelector(".chat-queue__error .chat-queue__badge")?.textContent?.trim()).toBe(
-      label,
-    );
-    expect(row?.querySelector(".chat-queue__error-text")?.textContent).toBe(
-      `${sendState} diagnostic`,
-    );
+    expect(row?.querySelector(".chat-queue__badge")?.textContent?.trim()).toBe(label);
+    if (sendState === "failed") {
+      expect(row?.querySelector(".chat-queue__error-text")?.textContent).toBe(
+        `${sendState} diagnostic`,
+      );
+    } else {
+      expect(row?.querySelector(".chat-queue__error")).toBeNull();
+      expect(row?.querySelector(".chat-queue__badge")?.getAttribute("title")).toBe(
+        `${sendState} diagnostic`,
+      );
+    }
     expect(row?.querySelectorAll(".chat-queue__badge")).toHaveLength(1);
   });
 

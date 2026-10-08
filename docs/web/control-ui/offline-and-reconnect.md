@@ -316,8 +316,7 @@ keep their existing tab-only inline outbox and its smaller browser storage limit
 store queued attachment Blobs in IndexedDB.
 
 Duplicating a tab copies the same submission IDs. Once opened, the duplicate claims its own
-payload copies and marks those submissions **Delivery unconfirmed**. Check the conversation
-before retrying. A duplicate first opened after the source discarded or delivered a message may
+payload copies and marks those submissions **Paused** until delivery is reconciled. A duplicate first opened after the source discarded or delivered a message may
 instead report missing attachments. Independent tabs do not share newly authored outbox messages.
 
 After connecting, chat waits for account-scoped recovery before accepting or sending ordinary
@@ -328,20 +327,26 @@ If the initial message is waiting for recovery, its chat shows a loading placeho
 until the message can be restored, rather than the empty new-chat welcome screen.
 Recovery notices appear below the composer and clear when the blocking condition resolves.
 
-If a sent message times out before its acknowledgement, the browser keeps it as
-**Delivery unconfirmed**, not **Not sent**. It checks delivery receipts automatically
-while the connection is available, without sending the message again. Timed-out
-receipt reads retry with backoff; they do not release later queued messages ahead
-of the uncertain input or overwrite a newer draft.
+If a sent message times out before its acknowledgement, the browser preserves it
+and checks delivery automatically. When the original physical conversation is known, ordinary messages retry with the
+same submission ID and original payload. Already accepted input is not executed
+again. Receipt reads and transport retries use backoff; they never let later
+queued messages overtake an unresolved input or overwrite a newer draft. An exact
+Gateway receipt keeps delivery confirmed even if the original acknowledgement
+later times out.
 
 If the connection drops before a send is acknowledged, reconnect checks the transcript and
 the session's active or last run ID for delivery proof. A matching run confirms receipt even
-before its transcript row appears. Without proof, an attempted message stays in the conversation
-with an amber **Delivery unconfirmed** footer, **Retry**, and **Discard**. Check the conversation and retry only
-if the message did not arrive. Discard removes the pending copy from this browser's outbox; it does not
+before its transcript row appears. If automatic recovery cannot safely continue
+(for example, the conversation was replaced, its original physical target was
+unknown, or the send would steer or interrupt an active run), the message stays in the conversation with a compact **Paused**
+status, **Retry**, and **Discard**. Delivery details are available on hover. Check
+the conversation before retrying an uncertain message. Discard removes the pending copy from this browser's outbox; it does not
 undo or cancel work the Gateway already accepted. Later queued messages stay paused until the earlier
-unconfirmed message is resolved or discarded, and the queue explains that blockage. Discarding the
-earlier message lets the next queued message proceed when the session is ready. Unconfirmed local
+unconfirmed message is resolved or discarded. The queue shows that exact message
+with **Retry** and **Discard** beside the messages it blocks, so recovery does not
+require finding an older transcript row. Discarding the earlier message lets the
+next queued message proceed when the session is ready. Unconfirmed local
 commands keep their retry/discard queue controls.
 
 An ordinary message rejected by the Gateway stays in the conversation with a **Not sent**

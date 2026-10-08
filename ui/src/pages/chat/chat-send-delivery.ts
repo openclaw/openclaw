@@ -238,6 +238,12 @@ async function sendPreparedChatMessage(
   const runId = prepared.sendRunId ?? generateUUID();
   const startedAt = Date.now();
   const requestStartedAtMs = controlUiNowMs();
+  const deliverySessionId =
+    prepared.sessionId ??
+    (requiresChatInputConsumption(prepared) &&
+    visibleSessionMatches(host, sessionKey, prepared.agentId)
+      ? (host.currentSessionId ?? undefined)
+      : undefined);
   const sendingItem = updateQueuedSendItem(host, storageMode, id, (item) => ({
     ...item,
     sendAttempts: (item.sendAttempts ?? 0) + 1,
@@ -245,6 +251,7 @@ async function sendPreparedChatMessage(
     sendRunId: runId,
     sendState: "sending",
     sendRequestStartedAtMs: requestStartedAtMs,
+    sessionId: deliverySessionId,
     sessionKey,
     agentId: prepared.agentId,
   }));
@@ -334,7 +341,7 @@ async function sendPreparedChatMessage(
       runId,
       sessionKey,
       agentId: prepared.agentId,
-      ...(prepared.sessionId ? { sessionId: prepared.sessionId } : {}),
+      ...(deliverySessionId ? { sessionId: deliverySessionId } : {}),
       ...(prepared.intent ? { intent: prepared.intent, sessionId: prepared.sessionId } : {}),
       ...(prepared.queueMode ? { queueMode: prepared.queueMode } : {}),
       ...(prepared.queueMode !== "steer" && deliveryLeafEntryId !== undefined
@@ -494,6 +501,12 @@ async function sendPreparedChatMessage(
     return retireOnAck ? "sent" : "pending";
   } catch (err) {
     if (!requestConnectionIsCurrent()) {
+      return "pending";
+    }
+    const currentDelivery = readQueuedMessageById(host, id);
+    // Exact custody can arrive before the ACK. Its newer delivery state owns
+    // recovery; a late transport failure cannot make accepted input uncertain.
+    if (!currentDelivery || !sameQueuedDeliveryVersion(currentDelivery, sendingItem)) {
       return "pending";
     }
     if (steerSubmission) {

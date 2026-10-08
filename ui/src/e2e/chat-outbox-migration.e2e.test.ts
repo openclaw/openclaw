@@ -156,9 +156,7 @@ suite.define(() => {
           ]);
           expect(await readQueue(page)).toEqual([]);
           expect(await paneFor(page).locator(".chat-queue__item").count()).toBe(0);
-          expect(
-            await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).count(),
-          ).toBe(0);
+          expect(await paneFor(page).getByText("Paused", { exact: true }).count()).toBe(0);
           const notice = paneFor(page).locator(".chat-outbox-recovery");
           await notice
             .locator(".chat-outbox-recovery-row")
@@ -182,9 +180,9 @@ suite.define(() => {
             animations: "disabled",
           });
           await dialog.getByRole("button", { name: "Restore", exact: true }).click();
-          await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
+          await paneFor(page).getByText("Paused", { exact: true }).waitFor();
           await page.reload();
-          await paneFor(page).getByText("Delivery unconfirmed", { exact: true }).waitFor();
+          await paneFor(page).getByText("Paused", { exact: true }).waitFor();
           expect((await readQueue(page))[0]).toMatchObject({
             id: original.id,
             sessionKey: destination,

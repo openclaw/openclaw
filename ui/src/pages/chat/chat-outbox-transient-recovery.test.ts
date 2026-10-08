@@ -20,7 +20,7 @@ import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 useChatSendBrowserFixture();
 
 describe("transient outbox delivery recovery", () => {
-  it.each(["receipt", "legacy"] as const)(
+  it.each(["receipt", "legacy", "interrupt", "steer"] as const)(
     "rechecks each outbox by cursor and retires newly delivered %s proof",
     async (proof) => {
       const sessionKeys = ["agent:main:queued", "agent:main:sibling"];
@@ -34,8 +34,11 @@ describe("transient outbox delivery recovery", () => {
           sendRunId: `run-${sessionKey}`,
           sendAttempts: 1,
           sendState: "unconfirmed" as const,
+          ...(proof === "interrupt" || proof === "steer" ? { queueMode: proof } : {}),
           sessionKey,
-          sessionId: `session-${sessionKey}`,
+          ...(proof === "legacy" || proof === "receipt"
+            ? {}
+            : { sessionId: `session-${sessionKey}` }),
         })),
         requestHandlers: {
           "chat.history": (params: { sessionKey: string; cursor?: string }) => {
@@ -58,7 +61,7 @@ describe("transient outbox delivery recovery", () => {
               messages:
                 delivered && proof === "legacy" ? [params.cursor ? { message } : message] : [],
               inputReceipts:
-                delivered && proof === "receipt"
+                delivered && proof !== "legacy"
                   ? [{ runId, state: "consumed", consumedByEventId: "stored-user" }]
                   : [],
             };
@@ -71,6 +74,7 @@ describe("transient outbox delivery recovery", () => {
       await resumeStoredChatOutboxes(host);
       await resumeStoredChatOutboxes(host);
       expect(listStoredChatOutboxes(host)).toHaveLength(2);
+      expect(requestCalls(host.request, "chat.send")).toEqual([]);
       for (const sessionKey of sessionKeys) {
         expect(
           requestCalls(host.request, "chat.history")
@@ -111,6 +115,7 @@ describe("transient outbox delivery recovery", () => {
             sendRunId: "uncertain-submission",
             sendAttempts: 1,
             sendState: "unconfirmed",
+            queueMode: "interrupt",
             sessionKey,
             sessionId,
           },
@@ -196,6 +201,7 @@ describe("transient outbox delivery recovery", () => {
           sendRunId: runId,
           sendAttempts: 1,
           sendState: "unconfirmed",
+          queueMode: "interrupt",
           sessionKey,
           sessionId,
         },
@@ -311,6 +317,7 @@ describe("transient outbox delivery recovery", () => {
             sendRunId: "window-run",
             sendAttempts: 1,
             sendState: "unconfirmed",
+            queueMode: "interrupt",
             sessionKey,
             sessionId,
           },
@@ -456,7 +463,7 @@ describe("transient outbox delivery recovery", () => {
   );
 
   it.each([false, true])(
-    "reconciles a timed-out send without resending (receipt=%s)",
+    "recovers a timed-out send without losing the newer draft (receipt=%s)",
     async (received) => {
       let runId = "";
       const host = makeChatHost({
@@ -504,14 +511,18 @@ describe("transient outbox delivery recovery", () => {
         await vi.advanceTimersByTimeAsync(500);
         await resumeStoredChatOutboxes(host);
         expect(requestCalls(host.request, "chat.history").length).toBeGreaterThan(0);
-        expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
+        const sends = requestCalls(host.request, "chat.send");
+        expect(sends).toHaveLength(received ? 1 : 2);
+        if (!received) {
+          expect(sends[1]?.[1]).toEqual(sends[0]?.[1]);
+        }
         expect(host.chatMessage).toBe("A newer offline draft");
         if (received) {
           expect(listStoredChatOutboxes(host)).toEqual([]);
         } else {
           expect(host.chatQueue[0]).toMatchObject({
             sendRunId: runId,
-            sendAttempts: 1,
+            sendAttempts: 2,
             sendState: "unconfirmed",
           });
         }
