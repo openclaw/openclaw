@@ -555,9 +555,12 @@ export function createAgentDatabaseNativeGeneration(
               release: retainVerification(),
               proof: {
                 identity: nativeIdentity.physicalIdentity,
-                complete: async (assertVerifierCurrent: () => void, signal: AbortSignal) => {
+                complete: async (
+                  assertVerifierCurrent: () => void,
+                  verifierSignal: AbortSignal,
+                ) => {
                   if (preparation) {
-                    await racePromiseWithAbortSignal(preparation, signal);
+                    await racePromiseWithAbortSignal(preparation, verifierSignal);
                   }
                   const assert = () => {
                     assertVerifierCurrent();
