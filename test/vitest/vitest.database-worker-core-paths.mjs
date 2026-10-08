@@ -669,6 +669,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/embedded-agent-runner/compact.queued-resources.test.ts",
   "src/agents/embedded-agent-runner/compact.summary-fallback.test.ts",
   "src/agents/embedded-agent-runner/transcript-rewrite-notifications.test.ts",
+  "src/agents/embedded-agent-runner/transcript-rewrite-plugin-reads.test.ts",
   "src/agents/embedded-agent-runner/transcript-rewrite.test.ts",
   "src/agents/embedded-agent-runner/tool-result-truncation.test.ts",
   "src/agents/embedded-agent-runner/run/attempt-prompt-submit.test.ts",

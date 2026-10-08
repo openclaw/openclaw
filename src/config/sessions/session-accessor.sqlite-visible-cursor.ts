@@ -18,6 +18,11 @@ export type VisibleMessageCursor = {
    * window being drained, or -1 when no reset existed when the cursor was created.
    */
   resetBoundarySeq?: number;
+  /**
+   * Entry id of that reset row, when it has one. Raw seqs restart after a generation
+   * rotation, so only the id identifies the drained reset across generations.
+   */
+  resetBoundaryId?: string;
   sessionId: string;
   version: typeof VISIBLE_MESSAGE_CURSOR_VERSION;
 };
@@ -66,6 +71,7 @@ export function encodeVisibleMessageCursor(cursor: VisibleMessageCursor): string
     lastEventSeq: cursor.lastEventSeq,
     lastMessagePosition: cursor.lastMessagePosition,
     ...(cursor.resetBoundarySeq !== undefined ? { resetBoundarySeq: cursor.resetBoundarySeq } : {}),
+    ...(cursor.resetBoundaryId !== undefined ? { resetBoundaryId: cursor.resetBoundaryId } : {}),
     version: cursor.version,
   };
   return Buffer.from(JSON.stringify(canonical), "utf8").toString("base64url");
@@ -111,7 +117,12 @@ export function parseVisibleMessageCursor(value: string): VisibleMessageCursor |
       (parsed.resetBoundarySeq !== undefined &&
         (typeof parsed.resetBoundarySeq !== "number" ||
           !Number.isSafeInteger(parsed.resetBoundarySeq) ||
-          parsed.resetBoundarySeq < -1))
+          parsed.resetBoundarySeq < -1)) ||
+      (parsed.resetBoundaryId !== undefined &&
+        (typeof parsed.resetBoundaryId !== "string" ||
+          parsed.resetBoundaryId.length === 0 ||
+          parsed.resetBoundarySeq === undefined ||
+          parsed.resetBoundarySeq < 0))
     ) {
       return undefined;
     }
@@ -124,6 +135,7 @@ export function parseVisibleMessageCursor(value: string): VisibleMessageCursor |
       ...(parsed.resetBoundarySeq !== undefined
         ? { resetBoundarySeq: parsed.resetBoundarySeq }
         : {}),
+      ...(parsed.resetBoundaryId !== undefined ? { resetBoundaryId: parsed.resetBoundaryId } : {}),
       version: parsed.version,
     };
     return encodeVisibleMessageCursor(cursor) === value ? cursor : undefined;

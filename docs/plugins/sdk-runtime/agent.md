@@ -272,6 +272,15 @@ caps are 10,000 messages and 64 MiB.
 | `scope_mismatch`      | The cursor belongs to another agent or session ID.                                                                  | Do not reuse state from the other session; start this session from the fresh cursor.                                                                                                 |
 | `session_reset`       | Reset-window cursors only. A same-session reset after the cursor was created closed the window it was draining.     | Retire the conversation state built from the old window and drain the new one from the fresh cursor.                                                                                 |
 
+When several discontinuities apply at once, a read reports one reason in this
+order: `invalid_cursor`, `scope_mismatch`, `session_reset`, `generation_mismatch`,
+then `anchor_missing` or `anchor_moved`. For a reset-window cursor, a newer reset
+therefore wins over a rewrite or generation change that happened before the
+read, because the fresh cursor already starts in the new window and the engine
+must retire the old one rather than reconcile it. Resets are compared by their
+entry ID across generations, since raw positions restart when the generation
+changes.
+
 A reset always returns a cursor that starts a complete drain. Because entry IDs
 are stable, a bulk ID match after the drain is cheaper than per-entry lookups.
 

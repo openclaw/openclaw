@@ -274,9 +274,15 @@ export function readSessionTranscriptVisibleMessageDeltaCore(
           generation,
           sessionId: projection.resolved.sessionId,
         });
-        return start === "reset-window" || cursor?.resetBoundarySeq !== undefined
-          ? { ...initial, resetBoundarySeq: readLatestReset()?.seq ?? -1 }
-          : initial;
+        if (start !== "reset-window" && cursor?.resetBoundarySeq === undefined) {
+          return initial;
+        }
+        const latest = readLatestReset();
+        return {
+          ...initial,
+          resetBoundarySeq: latest?.seq ?? -1,
+          ...(latest?.event_id !== undefined ? { resetBoundaryId: latest.event_id } : {}),
+        };
       };
       const reset = (reason: VisibleDeltaResetReason) => ({
         kind: "reset" as const,
@@ -293,8 +299,14 @@ export function readSessionTranscriptVisibleMessageDeltaCore(
       ) {
         return reset("scope_mismatch");
       }
-      if (current.generation !== generation) {
-        return reset("generation_mismatch");
+      // A newer same-session reset outranks generation and anchor discontinuities: the
+      // engine must retire the old window, not reconcile it into the new one.
+      const sameGeneration = current.generation === generation;
+      const resetChanged =
+        current.resetBoundarySeq !== undefined &&
+        hasResetBoundaryChanged(current, readLatestReset(), sameGeneration);
+      if (!sameGeneration) {
+        return reset(resetChanged ? "session_reset" : "generation_mismatch");
       }
       // A cursor that returned the admitted entry, or saw a reset after it, was read
       // outside this turn's fence.
@@ -306,6 +318,9 @@ export function readSessionTranscriptVisibleMessageDeltaCore(
         throw new SessionTranscriptReadFenceError(
           "Transcript read cursor has crossed the current-turn admission fence",
         );
+      }
+      if (resetChanged) {
+        return reset("session_reset");
       }
       const range = resolveVisibleDeltaRange(projection, current, {
         beforeRawSeq: transcriptFence?.beforeRawSeq,
@@ -326,9 +341,23 @@ export function readSessionTranscriptVisibleMessageDeltaCore(
 }
 
 /**
- * Validates a cursor's anchor and reset window, then returns the unread positions.
- * A reset-window cursor first drains the latest reset's retained tail, then every
- * message after the reset row; a newer reset invalidates it with `session_reset`.
+ * Compares a reset-window cursor's reset row with the latest one. Raw seqs are
+ * comparable only within one generation; across generations only entry ids are.
+ */
+function hasResetBoundaryChanged(
+  cursor: VisibleMessageCursor,
+  latest: LatestResetBoundary | null,
+  sameGeneration: boolean,
+): boolean {
+  return sameGeneration
+    ? (latest?.seq ?? -1) !== cursor.resetBoundarySeq
+    : latest?.event_id !== cursor.resetBoundaryId;
+}
+
+/**
+ * Validates a cursor's anchor, then returns the unread positions. A reset-window
+ * cursor (already checked against the latest reset) first drains that reset's
+ * retained tail, then every message after the reset row.
  */
 function resolveVisibleDeltaRange(
   projection: CurrentTranscriptProjection,
@@ -359,9 +388,6 @@ function resolveVisibleDeltaRange(
     return { kept: [], start: next };
   }
   const latest = resets.readLatestReset();
-  if ((latest?.seq ?? -1) !== cursor.resetBoundarySeq) {
-    return { reason: "session_reset" };
-  }
   // Steady-state cursors already past the reset row skip retained-tail resolution.
   if (!latest || anchorActivePosition > latest.active_position) {
     return { kept: [], start: next };
@@ -432,30 +458,36 @@ function readVisibleDeltaMetadata(
   bounds: { endExclusive: number; maxMessages: number },
 ) {
   const limit = bounds.maxMessages + 1;
-  const kept =
-    range.kept.length === 0
-      ? []
-      : executeSqliteQuerySync(
-          projection.database.db,
-          selectMessageMetadata(
-            selectMessageRows(projection.database, projection.resolved.sessionId, {
-              positions: range.kept.slice(0, limit),
-            }),
-          ),
-        ).rows;
-  if (kept.length >= limit) {
-    return kept;
-  }
-  const suffix = executeSqliteQuerySync(
+  const keptHead = range.kept.slice(0, limit);
+  // One ordered scan from the first retained position: retained positions precede the
+  // reset row, so excluding unretained pre-reset rows leaves the tail, then the suffix.
+  const rows = selectMessageRows(projection.database, projection.resolved.sessionId, {
+    start: keptHead[0] ?? range.start,
+    endExclusive: bounds.endExclusive,
+  });
+  const selection =
+    keptHead.length === 0
+      ? rows
+      : rows.where((eb) =>
+          eb.or([
+            eb("active.message_position", ">=", range.start),
+            eb(
+              "active.message_position",
+              "in",
+              getActiveTranscriptKysely(projection.database)
+                .selectFrom((json) =>
+                  json
+                    .fn<{ value: number }>("json_each", [json.val(JSON.stringify(keptHead))])
+                    .as("requested"),
+                )
+                .select("requested.value"),
+            ),
+          ]),
+        );
+  return executeSqliteQuerySync(
     projection.database.db,
-    selectMessageMetadata(
-      selectMessageRows(projection.database, projection.resolved.sessionId, {
-        start: range.start,
-        endExclusive: bounds.endExclusive,
-      }),
-    ).limit(limit - kept.length),
+    selectMessageMetadata(selection).limit(limit),
   ).rows;
-  return [...kept, ...suffix];
 }
 
 /** Reads selected message payloads with their active-path predecessor ids. */

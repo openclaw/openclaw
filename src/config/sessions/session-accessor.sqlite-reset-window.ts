@@ -200,7 +200,12 @@ function readLatestActiveBoundaryMetadataByType(
                 .onRef("identity.session_id", "=", "active.session_id")
                 .onRef("identity.seq", "=", "active.event_seq"),
             )
-            .select(["active.active_position", "identity.event_type", "identity.seq"])
+            .select([
+              "active.active_position",
+              "identity.event_id",
+              "identity.event_type",
+              "identity.seq",
+            ])
             .where("active.session_id", "=", projection.resolved.sessionId)
             .where("identity.event_type", "=", eventType)
             .$if(beforeRawSeq !== undefined, (query) =>
@@ -222,6 +227,7 @@ function readLatestActiveBoundaryMetadataByType(
   return unindexed && (!indexed || unindexed.event_seq > indexed.seq)
     ? {
         active_position: unindexed.active_position,
+        ...(typeof unindexed.event.id === "string" ? { event_id: unindexed.event.id } : {}),
         event_type: eventType,
         seq: unindexed.event_seq,
       }
@@ -232,7 +238,7 @@ function readLatestActiveBoundaryMetadataByType(
 export function readLatestActiveResetBoundary(
   projection: CurrentTranscriptProjection,
   beforeRawSeq?: number,
-): { active_position: number; seq: number } | undefined {
+): { active_position: number; event_id?: string; seq: number } | undefined {
   return readLatestActiveBoundaryMetadataByType(projection, "reset", beforeRawSeq);
 }
 
