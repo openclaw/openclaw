@@ -450,29 +450,15 @@ async function consumeChatStream(
             params.usedContentIndexes,
           );
 
-    if (functionName) {
-      // A new name normally starts a sibling call even when the SDK's omitted
-      // index default aliases an earlier block. It is a continuation only when
-      // one nameless block can safely adopt the name.
-      const namelessCandidates = indexCandidates.filter(
+    // Adopt newly supplied identity only into a block that still lacks it.
+    // Index alone must remain unambiguous even when the SDK defaults it to zero.
+    return requireSingleCandidate(
+      indexCandidates.filter(
         (identity) =>
-          identity.functionNames.size === 0 && (!explicitId || identity.explicitIds.size === 0),
-      );
-      return requireSingleCandidate(namelessCandidates);
-    }
-
-    if (explicitId) {
-      // A provider id may arrive after an idless opening fragment. Adopt it
-      // only when one indexed block still lacks an explicit id.
-      const idlessCandidates = indexCandidates.filter(
-        (identity) => identity.explicitIds.size === 0,
-      );
-      return requireSingleCandidate(idlessCandidates);
-    }
-
-    // With neither id nor name, index is the only remaining identity. Never
-    // guess when the SDK's default index aliases multiple open tool calls.
-    return requireSingleCandidate(indexCandidates);
+          (!functionName || identity.functionNames.size === 0) &&
+          (!explicitId || identity.explicitIds.size === 0),
+      ),
+    );
   };
 
   const finishCurrentBlock = () => {
@@ -487,19 +473,26 @@ async function consumeChatStream(
     });
   };
 
-  const appendTextDelta = (text: string) => {
-    const textDelta = sanitizeSurrogates(text);
-    if (!currentBlock || currentBlock.type !== "text") {
-      finishCurrentBlock();
-      currentBlock = { type: "text", text: "" };
-      output.content.push(currentBlock);
-      stream.push({ type: "text_start", contentIndex: blockIndex(), partial: output });
+  const appendContentDelta = (type: "text" | "thinking", text: string) => {
+    const delta = sanitizeSurrogates(text);
+    if (type === "thinking" && !delta) {
+      return;
     }
-    currentBlock.text += textDelta;
+    if (!currentBlock || currentBlock.type !== type) {
+      finishCurrentBlock();
+      currentBlock = type === "text" ? { type, text: "" } : { type, thinking: "" };
+      output.content.push(currentBlock);
+      stream.push({ type: `${type}_start`, contentIndex: blockIndex(), partial: output });
+    }
+    if (currentBlock.type === "text") {
+      currentBlock.text += delta;
+    } else {
+      appendAssistantThinking(currentBlock, delta);
+    }
     stream.push({
-      type: "text_delta",
+      type: `${type}_delta`,
       contentIndex: blockIndex(),
-      delta: textDelta,
+      delta,
       partial: output,
     });
   };
@@ -550,34 +543,17 @@ async function consumeChatStream(
       const contentItems = typeof delta.content === "string" ? [delta.content] : delta.content;
       for (const item of contentItems) {
         if (typeof item === "string") {
-          appendTextDelta(item);
+          appendContentDelta("text", item);
           continue;
         }
 
         if (item.type === "thinking") {
-          const deltaText = item.thinking.map((part) => ("text" in part ? part.text : "")).join("");
-          const thinkingDelta = sanitizeSurrogates(deltaText);
-          if (!thinkingDelta) {
-            continue;
-          }
-          if (!currentBlock || currentBlock.type !== "thinking") {
-            finishCurrentBlock();
-            currentBlock = { type: "thinking", thinking: "" };
-            output.content.push(currentBlock);
-            stream.push({ type: "thinking_start", contentIndex: blockIndex(), partial: output });
-          }
-          appendAssistantThinking(currentBlock, thinkingDelta);
-          stream.push({
-            type: "thinking_delta",
-            contentIndex: blockIndex(),
-            delta: thinkingDelta,
-            partial: output,
-          });
-          continue;
-        }
-
-        if (item.type === "text") {
-          appendTextDelta(item.text);
+          appendContentDelta(
+            "thinking",
+            item.thinking.map((part) => ("text" in part ? part.text : "")).join(""),
+          );
+        } else if (item.type === "text") {
+          appendContentDelta("text", item.text);
         }
       }
     }
@@ -618,9 +594,9 @@ async function consumeChatStream(
           block,
           contentIndex,
           preview: createToolArgumentPreviewSchedule(),
-          explicitIds: new Set(providedCallId ? [providedCallId] : []),
-          functionNames: new Set(functionName ? [functionName] : []),
-          indexes: new Set(toolCallIndex === undefined ? [] : [toolCallIndex]),
+          explicitIds: new Set(),
+          functionNames: new Set(),
+          indexes: new Set(),
         };
         toolBlocks.push(identity);
         stream.push({ type: "toolcall_start", contentIndex, partial: output });
@@ -763,18 +739,13 @@ function toChatMessages(
       }> = [];
 
       for (const block of msg.content) {
-        if (block.type === "text") {
-          if (block.text.trim().length > 0) {
-            contentParts.push({ type: "text", text: sanitizeSurrogates(block.text) });
-          }
-          continue;
-        }
-        if (block.type === "thinking") {
-          if (block.thinking.trim().length > 0) {
-            contentParts.push({
-              type: "thinking",
-              thinking: [{ type: "text", text: sanitizeSurrogates(block.thinking) }],
-            });
+        if (block.type === "text" || block.type === "thinking") {
+          const text = block.type === "text" ? block.text : block.thinking;
+          if (text.trim().length > 0) {
+            const part = { type: "text" as const, text: sanitizeSurrogates(text) };
+            contentParts.push(
+              block.type === "text" ? part : { type: "thinking", thinking: [part] },
+            );
           }
           continue;
         }

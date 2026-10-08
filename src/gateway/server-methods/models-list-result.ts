@@ -11,6 +11,7 @@ import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
 import {
   createModelCatalogDecisions,
+  prepareModelCatalogDecisions,
   resolveCatalogDecisionRuntime,
   type ModelCatalogDecisionParams,
 } from "../../agents/model-catalog-decisions.js";
@@ -200,12 +201,10 @@ async function prepareOwnedModelsListResult({
     ...(view === "provider-config" ? {} : profiles),
     routeResolverFactory: params.routeResolverFactory,
   };
-  const projector = await withCurrentReadAuthority(
-    authority,
-    () =>
-      (usedPreloadedCatalog ? params.catalogProjector : undefined) ??
-      createModelCatalogDecisions(projectorParams),
-  );
+  const preloadedProjector = usedPreloadedCatalog ? params.catalogProjector : undefined;
+  const projector = preloadedProjector
+    ? await withCurrentReadAuthority(authority, () => preloadedProjector)
+    : await prepareModelCatalogDecisions(projectorParams, authority);
   if (view !== "provider-config") {
     await projector.prepareSelectedAccountCatalog(
       () => {
@@ -218,8 +217,7 @@ async function prepareOwnedModelsListResult({
         }
       },
       {
-        allowDiscovery: !params.preloadedOnly && !params.params.preparedOnly,
-        refresh,
+        refresh: refresh && !params.preloadedOnly && !params.params.preparedOnly,
         withCurrent: authority?.withCurrent,
         beforeRequest: publicationScope?.beforeRequest,
       },
@@ -304,6 +302,7 @@ async function prepareOwnedModelsListResult({
       ...outcomeProjection,
       ...(snapshot.refreshFailed ? { refreshFailed: true } : {}),
       ...(accountSelection ? { accountSelection } : {}),
+      ...(decisionModels.length ? { decisionModels } : {}),
     };
   };
   const includeProviderCapabilities = params.params.includeProviderCapabilities === true;
@@ -513,7 +512,6 @@ async function prepareOwnedModelsListResult({
           .filter(({ entry }) => matchesProvider(entry))
           .map(({ entry, host }) => projectPublic(entry, evaluateNative(entry, host))),
         ...readOutcomeProjection(),
-        ...(decisionModels.length ? { decisionModels } : {}),
       }),
     };
   }
@@ -642,7 +640,6 @@ async function prepareOwnedModelsListResult({
           selectionPolicies,
         ),
         ...readOutcomeProjection(),
-        ...(decisionModels.length ? { decisionModels } : {}),
       };
     },
   };

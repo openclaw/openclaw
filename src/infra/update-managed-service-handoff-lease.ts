@@ -17,8 +17,8 @@ import {
 } from "./update-managed-service-handoff-children.js";
 import {
   createManagedHandoffLeaseDatabase,
+  prepareManagedHandoffLeaseDatabase,
   leaseQueries,
-  readManagedHandoffRepairMetadata,
 } from "./update-managed-service-handoff-database.js";
 import type {
   BorrowedLegacyHandoffParent,
@@ -38,6 +38,7 @@ import {
 } from "./update-managed-service-handoff-original-owner.js";
 import { createManagedHandoffProcessIdentityReader } from "./update-managed-service-handoff-process.js";
 import {
+  createManagedHandoffReclaimability,
   observeManagedHandoffReclamation,
   prepareManagedHandoffRepair,
   readManagedHandoffAdmissionLease as admissionLease,
@@ -63,8 +64,6 @@ const originalUpdateAdmissions = new WeakMap<
 >();
 
 export type {
-  BorrowedLegacyHandoffParent,
-  LeaseAcquisition,
   ManagedHandoffLease,
   ManagedHandoffLeaseStoreOptions,
   ManagedHandoffParent,
@@ -82,7 +81,34 @@ export function createManagedHandoffLeaseStore(
   },
   logger?: SqliteTransactionOptions["logger"],
 ) {
-  const { databasePath, serviceManagerEnv } = options;
+  return createLeaseStore(
+    options,
+    logger,
+    createManagedHandoffLeaseDatabase(options.databasePath, options.existingIdentity),
+  );
+}
+
+/** Current writers prepare cross-process admission; the synchronous factory remains for shipped readers/helpers. */
+export async function prepareManagedHandoffLeaseStore(
+  options: ManagedHandoffLeaseStoreOptions = {
+    databasePath: resolveManagedUpdateLeaseDatabasePath(),
+    serviceManagerEnv: resolveServiceManagerEnv(),
+  },
+  logger?: SqliteTransactionOptions["logger"],
+) {
+  const database = await prepareManagedHandoffLeaseDatabase(
+    options.databasePath,
+    options.existingIdentity,
+  );
+  return createLeaseStore(options, logger, database);
+}
+
+function createLeaseStore(
+  options: ManagedHandoffLeaseStoreOptions,
+  logger: SqliteTransactionOptions["logger"] | undefined,
+  withDatabase: ReturnType<typeof createManagedHandoffLeaseDatabase>,
+) {
+  const { serviceManagerEnv } = options;
   const bootIdentity = createManagedHandoffBootIdentityReader(serviceManagerEnv);
   const {
     isPidAlive,
@@ -101,7 +127,6 @@ export function createManagedHandoffLeaseStore(
 
   const { control, properties, nativeScope, isInNativeScope, nativeClosed } =
     createManagedHandoffScopeReader(serviceManagerEnv);
-  const withDatabase = createManagedHandoffLeaseDatabase(databasePath, options.existingIdentity);
   const {
     row,
     handle,
@@ -127,41 +152,14 @@ export function createManagedHandoffLeaseStore(
     descendants,
     processState,
   });
-  function reclaimable(lease: ManagedHandoffLease, db?: HandoffDatabase) {
-    // No process/boot liveness observation is a join receipt.
-    if (lease.version === 3 || lease.version === 4 || hasOriginalUpdateExecutorCustody(lease)) {
-      return false;
-    }
-    const action = lease.action;
-    if (managedCommandCustody(lease)) {
-      return !managedCommandUnsettled(lease) && !hasUnsettledChildren(lease, db);
-    }
-    if (action.kind === "triage" && action.lifetime.kind === "foreground") {
-      const boot = bootIdentity();
-      if (
-        boot.platform === action.lifetime.boot.platform &&
-        boot.identity !== action.lifetime.boot.identity
-      ) {
-        const repair = (connection: HandoffDatabase) =>
-          readManagedHandoffRepairMetadata(connection, lease, (operation) =>
-            transact(connection, operation),
-          );
-        return action.phase === "closed" || !(db ? repair(db) : withDatabase(true, repair));
-      }
-      if (!["reserved", "closed"].includes(action.phase)) {
-        return false;
-      }
-    }
-    if (processState(lease.helper) !== "dead" || processState(lease.executor) !== "dead") {
-      return false;
-    }
-    return (
-      !hasUnsettledChildren(lease, db) &&
-      (action.kind !== "triage" ||
-        action.lifetime.kind !== "native" ||
-        nativeClosed(action.lifetime))
-    );
-  }
+  const reclaimable = createManagedHandoffReclaimability({
+    bootIdentity,
+    processState,
+    nativeClosed,
+    hasUnsettledChildren,
+    withDatabase,
+    transact,
+  });
   function admit(
     root: string,
     owner: string,
@@ -285,7 +283,11 @@ export function createManagedHandoffLeaseStore(
   const acquire = createManagedHandoffOriginalAcquisition({
     options,
     acquirePinnedOriginal: (pinnedOptions, root, owner, action) =>
-      createManagedHandoffLeaseStore(pinnedOptions, logger).acquire(root, owner, action),
+      createLeaseStore(
+        pinnedOptions,
+        logger,
+        withDatabase.forExisting(pinnedOptions.existingIdentity),
+      ).acquire(root, owner, action),
     withDatabase,
     processIdentity,
     read,

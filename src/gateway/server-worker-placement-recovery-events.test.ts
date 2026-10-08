@@ -401,13 +401,16 @@ describe("worker placement recovery session events", () => {
           }
         },
       },
-      async ({ context, changes, start, time }) => {
+      async ({ context, changes, readChangeSnapshot, start, time }) => {
         const initialMutationVersion = changes.mock.calls.length;
         await start();
         await time.advanceBy(60_000);
         sweepCount = 0;
+        readChangeSnapshot.mockClear();
         await time.advanceBy(60_000);
         expect(sweepCount).toBe(1);
+        // Empty retirement and disabled auto-suspension need no reporting snapshots.
+        expect(readChangeSnapshot).toHaveBeenCalledTimes(2);
         expect(context.broadcastToConnIds).not.toHaveBeenCalled();
         expect(changes.mock.calls.length).toBe(initialMutationVersion);
 
@@ -425,6 +428,11 @@ describe("worker placement recovery session events", () => {
           new Set(["session-observer"]),
           expect.objectContaining({ agentId: recovered.agentId, dropIfSlow: true }),
         );
+        expect(changes.mock.calls.length).toBe(initialMutationVersion + 1);
+        readChangeSnapshot.mockClear();
+        await time.advanceBy(60_000);
+        // Nonempty retirement reuses its scan as the before-snapshot, then reads once after.
+        expect(readChangeSnapshot).toHaveBeenCalledTimes(3);
         expect(changes.mock.calls.length).toBe(initialMutationVersion + 1);
         expect(runtimeMocks.createDispatch.mock.lastCall?.[0]).not.toHaveProperty(
           "onRecoveredMoveTransition",

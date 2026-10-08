@@ -10,7 +10,7 @@ import {
 } from "../../agent-run-terminal-outcome.js";
 import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
-import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.js";
+import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.start.js";
 import { isSignalTimeoutReason } from "../../failover-error.js";
 import { runAgentEndSideEffectsAsync } from "../../harness/agent-end-side-effects.js";
 import { finalizeHarnessContextEngineTurn } from "../../harness/context-engine-lifecycle.js";
@@ -518,21 +518,6 @@ export function createEmbeddedAttemptRunAbort(input: {
   state: Pick<EmbeddedAttemptExecutionState, "terminal">;
 }): RunAbort {
   let abortAccepted = false;
-  const abortCompaction = () => {
-    if (!input.activeSession.isCompacting) {
-      return;
-    }
-    try {
-      input.activeSession.abortCompaction();
-    } catch (error) {
-      if (!input.isProbeSession) {
-        input.log.warn(
-          `embedded run abortCompaction failed: runId=${input.attempt.runId} sessionId=${input.attempt.sessionId} err=${String(error)}`,
-        );
-      }
-    }
-  };
-
   return (isTimeout = false, reason?: unknown) => {
     // Reply-operation cancellation can synchronously re-enter through its abort signal.
     // The attempt owner accepts the first reason so session and lock cleanup run once.
@@ -553,7 +538,17 @@ export function createEmbeddedAttemptRunAbort(input: {
     } else {
       input.runAbortController.abort(reason);
     }
-    abortCompaction();
+    if (input.activeSession.isCompacting) {
+      try {
+        input.activeSession.abortCompaction();
+      } catch (error) {
+        if (!input.isProbeSession) {
+          input.log.warn(
+            `embedded run abortCompaction failed: runId=${input.attempt.runId} sessionId=${input.attempt.sessionId} err=${String(error)}`,
+          );
+        }
+      }
+    }
     void input.abortActiveSession(input.runAbortController.signal.reason);
     const queueHandle = input.getQueueHandle();
     if (isTimeout && queueHandle) {

@@ -26,7 +26,10 @@ it("opens agent avatar selection from the keyboard and respects the busy state",
     await userEvent.keyboard(" ");
     expect(openPicker).toHaveBeenCalledTimes(2);
 
-    render(renderAgents({ ...props, identitySaving: true }), container);
+    render(
+      renderAgents({ ...props, overview: { ...props.overview, identitySaving: true } }),
+      container,
+    );
     expect(button.disabled).toBe(true);
     button.click();
     expect(openPicker).toHaveBeenCalledTimes(2);

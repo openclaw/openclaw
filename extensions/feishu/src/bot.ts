@@ -47,7 +47,6 @@ import {
 import {
   checkBotMentioned,
   normalizeFeishuCommandProbeBody,
-  normalizeMentions,
   parseMessageContent,
   resolveFeishuGroupSession,
   resolveFeishuMediaList,
@@ -71,6 +70,7 @@ import {
   extractMentionTargets,
   isFeishuBroadcastMention,
   isMentionForwardRequest,
+  normalizeMentions,
 } from "./mention.js";
 import {
   hasExplicitFeishuGroupConfig,

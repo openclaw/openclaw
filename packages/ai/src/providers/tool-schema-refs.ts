@@ -198,14 +198,10 @@ function inlineLocalSchemaRefsWithDefs(
     setOwnSchemaProperty(result, key, next);
   }
   if (state.unresolvedLocalRefs) {
-    if ("$defs" in obj) {
-      result.$defs = obj.$defs;
-    }
-    if ("definitions" in obj) {
-      result.definitions = obj.definitions;
-    }
-    if ("components" in obj) {
-      result.components = obj.components;
+    for (const key of ["$defs", "definitions", "components"]) {
+      if (key in obj) {
+        result[key] = obj[key];
+      }
     }
   }
   return result;

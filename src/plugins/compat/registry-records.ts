@@ -5,12 +5,14 @@ import { DEPRECATION_MARKING_COMPAT_RECORDS } from "./deprecation-marking.js";
 import { MEDIA_LEGACY_PROJECTION_COMPAT_RECORD } from "./media-legacy-projection.js";
 import { MENTION_INBOX_COMPAT_RECORD } from "./mention-inbox-record.js";
 import { MODEL_ACCOUNT_CONNECT_COMPAT_RECORD } from "./model-account-connect-record.js";
+import { PLUGIN_SDK_REMOVED_EXPORT_RECORDS } from "./plugin-sdk-removed-export-records.js";
 import {
   BUNDLED_ONLY_PUBLIC_PLUGIN_SDK_SUBPATH_RECORDS,
   PLUGIN_SDK_SUBPATH_RECORDS,
 } from "./plugin-sdk-subpath-records.js";
 import { PROGRESS_RECEIPT_HANDOFF_COMPAT_RECORD } from "./progress-receipt-handoff-record.js";
 import { SESSION_PERSISTENCE_COMPAT_RECORDS } from "./session-persistence-records.js";
+import { SKILL_PROPOSAL_HOOKS_COMPAT_RECORD } from "./skill-proposal-hooks-record.js";
 import { TTS_PREFERENCES_COMPAT_RECORD } from "./tts-preferences-record.js";
 import type { PluginCompatRecord } from "./types.js";
 import { WATCHED_SESSIONS_COMPAT_RECORD } from "./watched-sessions.js";
@@ -26,6 +28,7 @@ const ACTIVATION_HINT_METADATA = {
 } as const;
 
 export const PLUGIN_COMPAT_RECORDS = [
+  ...PLUGIN_SDK_REMOVED_EXPORT_RECORDS,
   ...AGENT_HARNESS_COMPAT_RECORDS,
   CHANNEL_PAIRING_COMPAT_RECORD,
   MENTION_INBOX_COMPAT_RECORD,
@@ -93,7 +96,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     tests: [
       "src/plugin-sdk/memory-core-host-engine-sessions.test.ts",
       "src/plugins/compat/registry.test.ts",
-      "extensions/memory-core/src/memory-forget.participants.test.ts",
+      "extensions/memory-core/src/memory-forget.sources.test.ts",
     ],
     releaseNote:
       "Memory archive discovery and forget target selection can be awaited through worker-backed SDK readers; synchronous readers remain compatible until the next Plugin SDK major.",
@@ -299,6 +302,7 @@ export const PLUGIN_COMPAT_RECORDS = [
     releaseNote:
       '`api.on("subagent_spawning", ...)` was removed; core now owns thread-bound subagent routing, and `subagent_spawned` remains available for observation.',
   },
+  SKILL_PROPOSAL_HOOKS_COMPAT_RECORD,
   {
     code: "hook-only-plugin-shape",
     status: "active",
@@ -327,35 +331,6 @@ export const PLUGIN_COMPAT_RECORDS = [
     tests: ["src/plugins/compat/registry.test.ts"],
     releaseNote:
       "Memory-specific embedding provider registration was removed; plugins now use the generic embedding provider contract.",
-  },
-  {
-    code: "deprecated-session-store-beta5-api",
-    status: "removed",
-    owner: "sdk",
-    introduced: "2026-05-21",
-    deprecated: "2026-07-12",
-    warningStarts: "2026-07-12",
-    replacement:
-      "Use `getSessionEntry(...)` and `listSessionEntries(...)` for reads; `patchSessionEntry(...)`, `upsertSessionEntry(...)`, and `deleteSessionEntry(...)` for row mutations; and session identity with `session-transcript-runtime` for active transcripts. The supported-plugin cutoff excludes v2026.7.1-beta.5 and other packages importing the retired bridge.",
-    docsPath: "/plugins/sdk-migration/removed-surfaces#removed-session-and-transcript-file-apis",
-    surfaces: [
-      "openclaw/plugin-sdk/session-store-runtime loadSessionStore",
-      "openclaw/plugin-sdk/session-store-runtime updateSessionStore",
-      "openclaw/plugin-sdk/session-store-runtime resolveSessionFilePath",
-      "openclaw/plugin-sdk/session-store-runtime resolveSessionStoreEntry",
-      "openclaw/plugin-sdk/session-store-runtime LoadSessionStoreOptions",
-      "openclaw/plugin-sdk/session-store-runtime UpdateSessionStoreOptions",
-      "openclaw package root loadSessionStore",
-      "openclaw package root saveSessionStore",
-    ],
-    diagnostics: ["plugin compatibility registry and migration guide"],
-    tests: [
-      "src/plugin-sdk/session-store-runtime.test.ts",
-      "src/index.test.ts",
-      "src/plugins/compat/registry.test.ts",
-    ],
-    releaseNote:
-      "The September 30, 2026 approved cutoff retired the beta.5 session-store bridge, its option types, and package-root loadSessionStore/saveSessionStore aliases ahead of the former October 12 window. Plugins must use scoped row APIs and identity-backed transcript APIs; the session-store-runtime subpath and resolveStorePath remain available.",
   },
   {
     code: "plugin-sdk-session-agent-resolution-aliases",

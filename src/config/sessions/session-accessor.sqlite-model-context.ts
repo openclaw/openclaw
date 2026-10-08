@@ -69,6 +69,7 @@ import {
 import type { InternalSessionEntry } from "./types.js";
 
 type ContextEntry = SessionTreeEntry & { seq: number };
+type TranscriptSourceAuthority = Pick<InternalSessionEntry, "permissionMode" | "lifecycleRevision">;
 export type { SessionModelContextLimits } from "./session-history-read.types.js";
 type ModelContextRequest = {
   entry: ContextEntry;
@@ -92,7 +93,7 @@ function assertContextAnchor(
   database: Pick<OpenClawAgentDatabase, "db" | "path">,
   resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>,
   through: TranscriptEntryAnchor,
-  expectedAuthority?: Pick<InternalSessionEntry, "permissionMode">,
+  expectedAuthority?: TranscriptSourceAuthority,
 ): void {
   if (
     resolved.agentId !== through.agentId ||
@@ -125,9 +126,13 @@ function assertContextAnchor(
     );
     const entry =
       row && validateCanonicalSessionRowEntry(row, parseSessionEntryJson(row, "list"), "read");
-    if (!entry || entry.permissionMode !== expectedAuthority.permissionMode) {
+    if (
+      !entry ||
+      entry.permissionMode !== expectedAuthority.permissionMode ||
+      (entry.lifecycleRevision ?? null) !== (expectedAuthority.lifecycleRevision ?? null)
+    ) {
       throw new SessionTranscriptReadFenceError(
-        "Session transcript source was deleted, replaced, or changed permissions.",
+        "Session transcript source was deleted, replaced, or changed lifecycle or permissions.",
       );
     }
     current = createTranscriptEntryAnchor({ ...params, row });
@@ -148,7 +153,7 @@ function assertContextAnchor(
 export function validateSessionTranscriptContextAnchor(
   scope: SessionTranscriptReadScope,
   through: TranscriptEntryAnchor,
-  expectedAuthority?: Pick<InternalSessionEntry, "permissionMode">,
+  expectedAuthority?: TranscriptSourceAuthority,
 ): void {
   validateDetachedSessionTranscriptContext(scope, { through, expectedAuthority });
 }
@@ -235,7 +240,7 @@ type TranscriptContextValidation = {
   version?: SessionTranscriptContextVersion;
   admission?: UserTurnTranscriptAdmissionReceipt;
   through?: TranscriptEntryAnchor;
-  expectedAuthority?: Pick<InternalSessionEntry, "permissionMode">;
+  expectedAuthority?: TranscriptSourceAuthority;
 };
 
 /** Released validators share admission; only multi-statement version reads need a snapshot. */

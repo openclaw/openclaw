@@ -692,17 +692,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/agents/workspace-state-store.ts",
-    [
-      {
-        tier: "T2",
-        operations: ["retireWorkspaceRelocationAttestation"],
-        evidence:
-          "Only commands/doctor-skill-workshop-workspaces.ts:266 retires migration attestations",
-      },
-    ],
-  ],
-  [
     "src/agents/workspace-state-store.kernel.ts",
     [
       {
@@ -1274,6 +1263,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/acp/runtime/session-meta.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["writeAcpSessionMetaForMigration"],
+        evidence:
+          "The native writer is retained only by src/infra/state-migrations.acp-session-metadata.ts and test fixtures. Gateway reset rebinding uses session-meta-reset.ts -> commitAcpSessionMutation in the shared-state worker; synchronous SDK readers retain their separate native classification.",
+      },
+    ],
+  ],
+  [
     "src/claws/cron.ts",
     [
       {
@@ -1702,9 +1702,14 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T2",
-        operations: ["updateChannelPairingStateSnapshot"],
+        operations: [
+          "updateChannelPairingStateSnapshot",
+          "readChannelPairingRequests",
+          "readChannelPairingSnapshotFromDatabase",
+          "writeChannelPairingStateToDatabase",
+        ],
         evidence:
-          "Only src/infra/state-migrations.channel-pairing.ts:314,348 invokes the snapshot transaction; registered by state-migrations.doctor.ts:1527.",
+          "Runtime mutations execute in pairing-store.worker.ts through the shared-state writer registry. Native snapshots remain only in state-migrations.channel-pairing.ts for Doctor. The released synchronous SDK reader calls readChannelAllowEntries only; its shared allowlist query remains T1.",
       },
     ],
   ],
@@ -1716,23 +1721,6 @@ const reviewedOperations = new Map([
         operations: ["writePersonalGitHubSecret"],
         evidence:
           "Counted expression is null DELETE only: src/state/user-github-connections.ts:260 → user-profiles-merge.ts:58 → user-profile-writes.worker.ts:325,375,432. Other value callers pass JSON strings.",
-      },
-    ],
-  ],
-  [
-    "src/skills/workshop/store-sqlite-record.ts",
-    [
-      {
-        tier: "T3",
-        operations: ["readStoredProposalInDatabase", "updateProposal"],
-        evidence:
-          "Doctor native read/update src/commands/doctor-skill-workshop-sqlite.ts:333,349; other callers use src/skills/workshop/store.worker.ts:68,129,149,167,182,188.",
-      },
-      {
-        tier: "W",
-        operations: ["insertProposal"],
-        evidence:
-          "Only src/skills/workshop/store-proposal.kernel.ts:73,168 inserts; sole executors store.worker.ts:139,157.",
       },
     ],
   ],
@@ -2065,13 +2053,6 @@ const workerModules = new Set([
   "src/skills/lifecycle/upload-store-commit.ts", // Skill-upload worker commit command only.
   "src/skills/lifecycle/upload-store.kernel.ts", // Skill-upload worker dispatcher only.
   "src/skills/lifecycle/upload-store.sqlite.ts", // Skill-upload worker kernels; host imports pure options only.
-
-  "src/skills/workshop/collection-review.kernel.ts", // Skill-workshop worker collection-review reads only.
-  "src/skills/workshop/curator.kernel.ts", // Skill-workshop worker curator and usage commands only.
-  "src/skills/workshop/store-proposal.kernel.ts", // Skill-workshop worker proposal commands only.
-  "src/skills/workshop/store-sqlite-event.ts", // Skill-workshop and shared-state Doctor worker commands only.
-  "src/skills/workshop/store-sqlite-rollback.ts", // Skill-workshop worker rollback commands only.
-  "src/skills/workshop/store-sqlite-transition.ts", // Skill-workshop worker transition commands only.
 
   "src/state/backup-run-records.kernel.ts", // Backup record writes are called only by the shared-state worker runtime.
   "src/state/github-personal-publication-lifecycle.ts", // Receipt SQL runs in shared-state worker dispatch; host helper enqueues commands.

@@ -117,34 +117,28 @@ export function handleToolExecutionUpdate(
     commandBearing: toolMeta?.commandBearing,
     ...(toolProgress ? { progressText: toolProgress, meta: undefined } : {}),
   };
-  const hideFromChannelProgress = explicitHideFromChannelProgress;
+  const updateData = (includeResult: boolean) => ({
+    phase: "update" as const,
+    name: toolName,
+    toolCallId,
+    ...(parentToolCallId ? { parentToolCallId } : {}),
+    ...(includeResult ? { partialResult: liveResult } : {}),
+    ...(explicitHideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
+  });
   // Typed progress already has a sanitized path; suppress duplicate raw previews.
   const emitDetailedLiveUpdate = !toolProgress && (!isExecTool || execUpdate !== undefined);
   if (emitDetailedLiveUpdate) {
     emitAgentEvent({
       runId: ctx.params.runId,
       stream: "tool",
-      data: {
-        phase: "update",
-        name: toolName,
-        toolCallId,
-        ...(parentToolCallId ? { parentToolCallId } : {}),
-        partialResult: liveResult,
-        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-      },
+      data: updateData(true),
     });
   }
   emitTrackedItemEvent(ctx, itemData, execProgress?.emitItems);
   if (!toolProgress) {
     emitAgentEventCallbackBestEffort(ctx, {
       stream: "tool",
-      data: {
-        phase: "update",
-        name: toolName,
-        toolCallId,
-        ...(parentToolCallId ? { parentToolCallId } : {}),
-        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-      },
+      data: updateData(false),
     });
   }
   if (isExecTool) {

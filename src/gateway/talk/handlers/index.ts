@@ -389,18 +389,16 @@ function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParams) {
         const rawConfigWithModel = model ? { ...rawConfig, model } : rawConfig;
         const defaultRawConfig = { ...rawConfig };
         delete defaultRawConfig.model;
-        const defaultProviderConfig = available
-          ? (provider.resolveConfig?.({ ...realtimeResolveContext, rawConfig: defaultRawConfig }) ??
-            defaultRawConfig)
-          : defaultRawConfig;
-        const providerConfig = available
-          ? rawConfigWithModel.model === undefined
+        const resolveConfig = (rawInput: typeof defaultRawConfig) =>
+          available
+            ? (provider.resolveConfig?.({ ...realtimeResolveContext, rawConfig: rawInput }) ??
+              rawInput)
+            : rawInput;
+        const defaultProviderConfig = resolveConfig(defaultRawConfig);
+        const providerConfig =
+          available && rawConfigWithModel.model === undefined
             ? defaultProviderConfig
-            : (provider.resolveConfig?.({
-                ...realtimeResolveContext,
-                rawConfig: rawConfigWithModel,
-              }) ?? rawConfigWithModel)
-          : rawConfigWithModel;
+            : resolveConfig(rawConfigWithModel);
         const capabilities: ReturnType<typeof resolveRealtimeVoiceProviderCapabilities> = available
           ? resolveRealtimeVoiceProviderCapabilities({
               provider,
@@ -459,15 +457,11 @@ function buildTalkCatalog(config: OpenClawConfig, params: TalkCatalogParams) {
         if (capabilities?.transports) {
           entry.transports = [...capabilities.transports];
         }
-        if (capabilities?.inputAudioFormats) {
-          entry.inputAudioFormats = capabilities.inputAudioFormats.map((format) => ({
-            ...format,
-          }));
-        }
-        if (capabilities?.outputAudioFormats) {
-          entry.outputAudioFormats = capabilities.outputAudioFormats.map((format) => ({
-            ...format,
-          }));
+        for (const key of ["inputAudioFormats", "outputAudioFormats"] as const) {
+          const formats = capabilities?.[key];
+          if (formats) {
+            entry[key] = formats.map((format) => Object.assign({}, format));
+          }
         }
         for (const key of [
           "supportsBargeIn",
@@ -896,19 +890,17 @@ export const talkHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      if ((result.provider ?? setup.provider).trim().length === 0) {
+      const invalidAudio =
+        (result.provider ?? setup.provider).trim().length === 0
+          ? "provider"
+          : result.audioBuffer.length === 0
+            ? "audio"
+            : undefined;
+      if (invalidAudio) {
         respond(
           false,
           undefined,
-          talkSpeakError("invalid_audio_result", "talk synthesis returned empty provider"),
-        );
-        return;
-      }
-      if (result.audioBuffer.length === 0) {
-        respond(
-          false,
-          undefined,
-          talkSpeakError("invalid_audio_result", "talk synthesis returned empty audio"),
+          talkSpeakError("invalid_audio_result", `talk synthesis returned empty ${invalidAudio}`),
         );
         return;
       }

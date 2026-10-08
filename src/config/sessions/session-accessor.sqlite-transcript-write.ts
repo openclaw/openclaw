@@ -467,9 +467,10 @@ export async function withTranscriptWriteLock<T>(
   if (current.key !== identity.key || current.birthtime !== identity.birthtime) {
     throw new Error("Transcript lock changed its physical store");
   }
+  // Physical admission uses captured.path; writer authority retains the captured selector.
   return withWorkerTranscriptWriteLock(
     { ...fenced, ...captured, storePath: captured.path },
-    fenced,
+    { ...fenced, ...captured, storePath: captured.ownerStorePath ?? captured.path },
     run,
     runNativeTranscriptWriteLock,
   );

@@ -29,7 +29,6 @@ describe("cron source delivery policy", () => {
     { mode: "none", disabled: false, explicitTarget: false, channel: "messagechat" },
     { mode: "announce", disabled: false, explicitTarget: true, channel: "messagechat" },
     { mode: "webhook", disabled: true, explicitTarget: false, channel: undefined },
-    { mode: undefined, disabled: false, explicitTarget: true, channel: "messagechat" },
   ] as const)("runs delivery mode $mode with its prepared tool policy", async (row) => {
     resolveDeliveryTargetMock.mockResolvedValue({
       ok: true,

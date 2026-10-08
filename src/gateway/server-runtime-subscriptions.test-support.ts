@@ -3,6 +3,7 @@ import {
   bindTestChannelParticipantAdmissionEvidence,
   createChannelParticipantAdmissionEvidence,
 } from "../../test/helpers/channel-admission-evidence.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   enqueueExecutionIdentityContextAtAdmission,
   hasExecutionIdentityAdmissionSink,
@@ -14,8 +15,15 @@ import {
   recordChannelAdmissionDecision,
 } from "../channels/message-access/admission-evidence.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { emitAgentAuditEvent, emitAgentEvent } from "../infra/agent-events.js";
+import {
+  type AgentEventPayload,
+  emitAgentAuditEvent,
+  emitAgentEvent,
+  getAgentEventLifecycleGeneration,
+} from "../infra/agent-events.js";
+import { claimAgentRunContext } from "../infra/agent-run-registry.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
+import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { registerChatAbortController, type ChatAbortControllerEntry } from "./chat-abort.js";
 import {
@@ -364,4 +372,113 @@ export function registerAuditSubscriptionTests(params: {
     await unsubs.agentUnsub();
     expect(auditTestState.stopped).toBe(1);
   });
+}
+
+export function registerAssistantTailSubscriptionTests({
+  createParams,
+  installHandlerFactory,
+  start,
+}: {
+  createParams: ReturnType<typeof createSubscriptionTestFixture>["createParams"];
+  installHandlerFactory: (
+    factory: typeof import("./server-chat.js").createAgentEventHandler,
+  ) => void;
+  start: (params: Parameters<typeof startGatewayEventSubscriptions>[0]) => void;
+}): void {
+  it.each([
+    { source: "plain", committed: ["Saved paragraph."], initial: "Saved paragraph." },
+    {
+      source: "native raw directive",
+      committed: ["[[reply_to_current]]Saved paragraph."],
+      initial: "[[reply_to_current]]Saved paragraph.",
+    },
+    {
+      source: "native partial before directive",
+      committed: ["Saved[[reply_to_current]] paragraph."],
+      initial: "Saved",
+    },
+    { source: "before first bytes", committed: ["Saved paragraph."], initial: undefined },
+    {
+      source: "identical receipts before first bytes",
+      committed: ["Saved paragraph.", "Saved paragraph."],
+      initial: undefined,
+    },
+  ])(
+    "retires $source by identity before queued continuation without session subscribers",
+    async ({ committed, initial }) => {
+      const actual = await vi.importActual<typeof import("./server-chat.js")>("./server-chat.js");
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const params = createParams();
+      const runId = "run-persisted-tail";
+      const sessionKey = "agent:main:main";
+      const sessionId = "session-persisted-tail";
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const registration = registerSubscriptionChatRun(params, {
+        runId,
+        sessionId,
+        sessionKey,
+        lifecycleGeneration,
+      });
+      claimAgentRunContext(runId, { lifecycleGeneration, sessionId, sessionKey });
+      const delivered = createDeferred();
+      installHandlerFactory((options) => {
+        const handler = actual.createAgentEventHandler(options);
+        return Object.assign(async (event: AgentEventPayload) => {
+          await handler(event);
+          if (
+            typeof event.data.text === "string" &&
+            event.data.text.endsWith("Unpersisted tail.")
+          ) {
+            delivered.resolve();
+          }
+        }, handler);
+      });
+      try {
+        start(params);
+        emitAgentEvent(
+          initial === undefined
+            ? { runId, stream: "lifecycle", data: { phase: "start", startedAt: Date.now() } }
+            : {
+                runId,
+                stream: "assistant",
+                data: { itemId: "saved-paragraph-0", text: initial, delta: initial },
+              },
+        );
+        for (const [index, text] of committed.entries()) {
+          emitSessionTranscriptUpdate({
+            sessionKey,
+            target: { agentId: "main", sessionId, sessionKey },
+            messageId: `saved-paragraph-${index}`,
+            messageSeq: index * 2 + 2,
+            message: {
+              role: "assistant",
+              idempotencyKey: `saved-paragraph-${index}`,
+              content: [{ type: "text", text }],
+              __openclaw: { runId },
+            },
+          });
+        }
+        for (const [index, text] of committed.entries()) {
+          emitAgentEvent({
+            runId,
+            stream: "assistant",
+            data: { itemId: `saved-paragraph-${index}`, text },
+          });
+        }
+        emitAgentEvent({
+          runId,
+          stream: "assistant",
+          data: { itemId: "new-paragraph", text: "Unpersisted tail." },
+        });
+        await delivered.promise;
+        expect(params.chatRunState.resolveBuffer(runId).text.trim()).toBe("Unpersisted tail.");
+        expect(params.chatRunState.resolveBuffer(runId, { final: true }).text).toBe(
+          `${"Saved paragraph.\n\n".repeat(committed.length)}Unpersisted tail.`,
+        );
+      } finally {
+        params.chatRunState.clear();
+        registration.cleanup();
+      }
+    },
+  );
 }

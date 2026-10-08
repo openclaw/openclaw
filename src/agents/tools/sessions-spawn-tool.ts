@@ -5,6 +5,10 @@ import { resolveThreadBindingSpawnPolicy } from "../../channels/thread-bindings-
 import { getRuntimeConfig } from "../../config/config.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  captureExecRequestOwners,
+  withExecRequestOwners,
+} from "../../infra/exec-request-context.js";
 import { resolveSnakeCaseParamKey } from "../../param-key.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
@@ -68,10 +72,8 @@ import {
   PlacedSessionsSpawnSchema,
   PLACED_SESSIONS_SPAWN_DESCRIPTION,
 } from "./sessions-placement-tool-contract.js";
-import {
-  maybeSpawnVisibleSession,
-  type SessionsSpawnToolOptions,
-} from "./sessions-spawn-visible.js";
+import type { SessionsSpawnToolOptions } from "./sessions-spawn-options.js";
+import { maybeSpawnVisibleSession } from "./sessions-spawn-visible.js";
 import { SESSIONS_SPAWN_SESSION_SCHEMA } from "./sessions-spawn-visible.schema.js";
 
 const SESSIONS_SPAWN_RUNTIMES = ["subagent", "acp"] as const;
@@ -302,6 +304,10 @@ function resolveAcpUnavailableMessage(opts?: { sandboxed?: boolean; config?: Ope
 export function createSessionsSpawnTool(
   opts?: SessionsSpawnToolOptions & { workerPlacement?: boolean },
 ): AnyAgentTool {
+  const requestOwners = captureExecRequestOwners({
+    runId: opts?.requesterTurnRunId,
+    sessionId: opts?.expectedParentSessionId,
+  });
   const effectiveConfig = opts?.config ?? getRuntimeConfig();
   const acpAvailable = isAcpRuntimeSpawnAvailable({
     config: effectiveConfig,
@@ -475,12 +481,15 @@ export function createSessionsSpawnTool(
             runTimeoutSeconds,
             sandbox,
             expectsCompletionMessage,
-            options: {
-              ...opts,
-              onSpawnEffectsStart,
-              assertActive,
-              signal: executionSignal,
-            },
+            options: withExecRequestOwners(
+              {
+                ...opts,
+                onSpawnEffectsStart,
+                assertActive,
+                signal: executionSignal,
+              },
+              requestOwners,
+            ),
           });
         const visibleResult =
           params.visible === true && opts?.expectedParentSessionId
@@ -646,15 +655,18 @@ export function createSessionsSpawnTool(
                 : undefined,
           },
           withParentExecutionIdentity(
-            {
-              ...inheritedSpawnContext(),
-              requesterThinkingLevel: opts?.requesterThinkingLevel,
-              requesterModel: opts?.requesterModel,
-              currentMessagingTarget: opts?.currentMessagingTarget ?? opts?.currentChannelId,
-              agentGroupId: opts?.agentGroupId,
-              agentGroupChannel: opts?.agentGroupChannel,
-              requesterRunId: opts?.requesterRunId,
-            },
+            withExecRequestOwners(
+              {
+                ...inheritedSpawnContext(),
+                requesterThinkingLevel: opts?.requesterThinkingLevel,
+                requesterModel: opts?.requesterModel,
+                currentMessagingTarget: opts?.currentMessagingTarget ?? opts?.currentChannelId,
+                agentGroupId: opts?.agentGroupId,
+                agentGroupChannel: opts?.agentGroupChannel,
+                requesterRunId: opts?.requesterRunId,
+              },
+              requestOwners,
+            ),
             parentExecutionIdentityToken,
           ),
         );

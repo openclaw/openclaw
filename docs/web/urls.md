@@ -234,7 +234,10 @@ Signing in returns to the same thread and applies the person's existing
 permissions; it does not grant editing or access to other sessions. A signed-in
 person without private access can still read the public version. Private,
 missing, and ambiguous anonymous targets show the same unavailable page without
-revealing names or candidate sessions.
+revealing names or candidate sessions. While the protected login handoff checks
+access, a private-thread page shows **Loading conversation**, not an unavailable
+error. A failed access check offers reload or login instead of claiming access
+was denied. Without JavaScript, the generic unavailable page remains readable.
 
 Token/password operators with a saved credential for this Gateway automatically
 continue into the Control UI when reopening, reloading, or following a chat link.

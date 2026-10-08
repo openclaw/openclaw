@@ -1,47 +1,24 @@
+import path from "node:path";
+
+function memoryWorkerEntrypoint(sourceWorkerName: string, distWorkerName: string) {
+  return {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName,
+    distWorkerPath: `extensions/memory-core/${distWorkerName}.js`,
+    package: {
+      name: "@openclaw/memory-core",
+      distWorkerPath: path.posix.join("src/memory", `${sourceWorkerName}.js`),
+    },
+  } as const;
+}
+
 export const memoryCpuProcessEntrypoints = {
-  search: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "manager-search.worker",
-    distWorkerPath: "extensions/memory-core/memory-search.worker.js",
-    package: {
-      name: "@openclaw/memory-core",
-      distWorkerPath: "src/memory/manager-search.worker.js",
-    },
-  },
-  index: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "manager-index.worker",
-    distWorkerPath: "extensions/memory-core/memory-index.worker.js",
-    package: {
-      name: "@openclaw/memory-core",
-      distWorkerPath: "src/memory/manager-index.worker.js",
-    },
-  },
-  publication: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "manager-publication.worker",
-    distWorkerPath: "extensions/memory-core/memory-publication.worker.js",
-    package: {
-      name: "@openclaw/memory-core",
-      distWorkerPath: "src/memory/manager-publication.worker.js",
-    },
-  },
-  standingIntents: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "../standing-intents.worker",
-    distWorkerPath: "extensions/memory-core/standing-intents.worker.js",
-    package: {
-      name: "@openclaw/memory-core",
-      distWorkerPath: "src/standing-intents.worker.js",
-    },
-  },
-  entryOrigins: {
-    currentModuleUrl: import.meta.url,
-    sourceWorkerName: "../memory-entry-origins.worker",
-    distWorkerPath: "extensions/memory-core/memory-entry-origins.worker.js",
-    package: {
-      name: "@openclaw/memory-core",
-      distWorkerPath: "src/memory-entry-origins.worker.js",
-    },
-  },
+  search: memoryWorkerEntrypoint("manager-search.worker", "memory-search.worker"),
+  index: memoryWorkerEntrypoint("manager-index.worker", "memory-index.worker"),
+  publication: memoryWorkerEntrypoint("manager-publication.worker", "memory-publication.worker"),
+  standingIntents: memoryWorkerEntrypoint("../standing-intents.worker", "standing-intents.worker"),
+  entryOrigins: memoryWorkerEntrypoint(
+    "../memory-entry-origins.worker",
+    "memory-entry-origins.worker",
+  ),
 } as const;

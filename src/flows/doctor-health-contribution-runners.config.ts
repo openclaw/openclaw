@@ -14,6 +14,7 @@ import {
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 import {
   isUpdateDoctorRun,
+  noteDoctorRepairResult,
   resolveDoctorMode,
   resolveLegacyParentVersionOverride,
 } from "./doctor-health-contribution-utils.js";
@@ -510,12 +511,7 @@ export async function runWriteConfigHealth(
       await import("../commands/doctor-retired-phone-control.js");
     const { note } = await import("../../packages/terminal-core/src/note.js");
     const cleanup = await finalizeRetiredPhoneControlCleanup({ env: ctx.env ?? process.env });
-    if (cleanup.changes.length > 0) {
-      note(cleanup.changes.join("\n"), "Doctor changes");
-    }
-    if (cleanup.warnings.length > 0) {
-      note(cleanup.warnings.join("\n"), "Doctor warnings");
-    }
+    noteDoctorRepairResult(cleanup, note);
   }
   if (
     (!ctx.prompter.shouldRepair &&
@@ -545,12 +541,7 @@ export async function runWriteConfigHealth(
   });
   ctx.postConfigWriteRepairsCommitted = true;
   const { note } = await import("../../packages/terminal-core/src/note.js");
-  if (result.changes.length > 0) {
-    note(result.changes.join("\n"), "Doctor changes");
-  }
-  if (result.warnings.length > 0) {
-    note(result.warnings.join("\n"), "Doctor warnings");
-  }
+  noteDoctorRepairResult(result, note);
   return true;
 }
 

@@ -178,37 +178,34 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
             inboundReplayClaim = handle;
           },
         });
+      const ingressContext = {
+        handler: handlerConfig,
+        roomId,
+        event,
+        eventTs: eventTs ?? undefined,
+        senderId,
+        roomHistoryTracker,
+        commitInboundEventIfClaimed,
+      };
       const continueIngress = async (paramsLocal: MatrixIngressAccessParams) => {
         const access = await resolveMatrixIngressAccess({
-          handler: handlerConfig,
+          ...ingressContext,
           params: paramsLocal,
-          roomId,
-          event,
-          eventTs: eventTs ?? undefined,
-          senderId,
           isReactionEvent,
           readStoreAllowFrom: handlerState.readStoreAllowFrom,
           shouldSendPairingReply: handlerState.shouldSendPairingReply,
           resolveLiveAccountAllowlists: handlerState.resolveLiveAccountAllowlists,
-          roomHistoryTracker,
-          commitInboundEventIfClaimed,
         });
         if (!access) {
           return undefined;
         }
         return await resolveMatrixIngressContent({
-          handler: handlerConfig,
+          ...ingressContext,
           params: paramsLocal,
           access,
-          roomId,
-          event,
           eventType,
           isPollEvent,
-          eventTs: eventTs ?? undefined,
-          senderId,
-          roomHistoryTracker,
           resolveThreadContext,
-          commitInboundEventIfClaimed,
         });
       };
       const ingressResult =
@@ -272,14 +269,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       // Keep the per-room ingress gate focused on ordering-sensitive state updates.
       // Prompt/session enrichment below can run concurrently after the history snapshot is fixed.
       const inboundContext = await resolveMatrixInboundContext({
-        handler: handlerConfig,
+        ...ingressContext,
         ingress: resolvedIngressResult,
-        roomId,
-        event,
-        eventTs: eventTs ?? undefined,
         resolveThreadContext,
         resolveReplyContext,
-        senderId,
         sharedDmContextNoticeRooms,
       });
       if (!inboundContext) {

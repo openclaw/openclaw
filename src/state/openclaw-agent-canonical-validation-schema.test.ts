@@ -1,16 +1,24 @@
 import assert from "node:assert/strict";
+import { readFileSync, writeFileSync } from "node:fs";
 import { constants, DatabaseSync } from "node:sqlite";
 import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
+import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { maintenanceLane } from "../config/sessions/session-transcript-worker-resources.js";
+import { retainSessionHistoryWorkerDatabase } from "../config/sessions/session-transcript-worker-runtime.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { RuntimeWorkerGeneration } from "../infra/runtime-worker-generation.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
+import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
+import { sqliteWorkerPreloadEnv } from "../infra/sqlite-worker-preload.test-support.js";
 import { captureRetainedNativeWorkerSource } from "../infra/worker-native-lifecycle.js";
 import type { RetainedNativeWorker } from "../infra/worker-native-lifecycle.types.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   assertCanonicalSessionValidationSchema,
+  captureCanonicalSessionValidationSchema,
   withoutCanonicalSessionValidationSchema,
 } from "./openclaw-agent-canonical-validation-schema.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
@@ -215,6 +223,111 @@ describe("canonical validation schema admission", () => {
     reason: "table-missing",
     missingTables: ["session_canonical_validation_pending"],
     cause: expect.objectContaining({ message: expect.stringMatching(/missing or drifted/u) }),
+  });
+  it("carries expected definitions to a fresh retention reader without trusting its actual schema", async ({
+    signal,
+  }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const pathname = state.path("canonical-handoff.sqlite");
+      const seed = new DatabaseSync(pathname);
+      try {
+        seed.exec(OPENCLAW_AGENT_SCHEMA_SQL);
+        seed.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};
+          INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
+          VALUES ('primary', 'agent', ${OPENCLAW_AGENT_SCHEMA_VERSION}, 'main', 1, 1);`);
+        assertCanonicalSessionValidationSchema(seed);
+      } finally {
+        seed.close();
+      }
+      const host = observeHostDataSql();
+      let contract: ReturnType<typeof captureCanonicalSessionValidationSchema>;
+      try {
+        contract = captureCanonicalSessionValidationSchema();
+        expect(host.queries).toEqual([]);
+      } finally {
+        host.restore();
+      }
+      assert(contract);
+      const log = state.path("expected-definitions.log");
+      const preload = state.path("observe-expected-definitions.cjs");
+      writeFileSync(
+        preload,
+        `const fs = require('node:fs');
+const { DatabaseSync } = require('node:sqlite');
+const comparisons = new WeakSet();
+const record = (kind) => fs.appendFileSync(${JSON.stringify(log)}, kind + '\\n');
+const exec = DatabaseSync.prototype.exec;
+DatabaseSync.prototype.exec = function(sql) {
+  const result = exec.call(this, sql);
+  if (this.location() === null && sql.includes('CREATE TABLE IF NOT EXISTS session_canonical_validation_pending')) {
+    comparisons.add(this);
+    record('comparison-ddl');
+  }
+  return result;
+};
+const prepare = DatabaseSync.prototype.prepare;
+DatabaseSync.prototype.prepare = function(sql) {
+  const statement = prepare.call(this, sql);
+  if (comparisons.has(this) && sql.startsWith('SELECT name, sql FROM main.sqlite_schema')) {
+    const all = statement.all;
+    statement.all = function(...bindings) {
+      const rows = all.apply(this, bindings);
+      record('expected-definitions');
+      return rows;
+    };
+  }
+  return statement;
+};`,
+      );
+      const preloadEnv = sqliteWorkerPreloadEnv(preload);
+      const expectedIdentity = readDatabasePathIdentitySync(pathname);
+      await withEnvAsync(preloadEnv, async () => {
+        for (const carry of [false, true]) {
+          writeFileSync(log, "");
+          // Each fresh history worker starts without an inherited expected-contract cache.
+          await maintenanceLane.pool.rotate();
+          const factKey = "openclaw.agentCanonicalValidationSchemaDefinitions";
+          const inherited = getEnvironmentData(factKey);
+          setEnvironmentData(factKey, undefined);
+          const reader = retainSessionHistoryWorkerDatabase(
+            { agentId: "main", path: pathname, env: state.env },
+            maintenanceLane,
+          );
+          const read = () =>
+            reader.owner.readTrajectoryRetention(
+              {
+                input: { sessionId: "retained" },
+                now: 1,
+                schemaContract: carry ? contract : undefined,
+                expectedIdentity,
+                env: { ...state.env, ...preloadEnv },
+              },
+              { signal, timeoutMs: 60_000 },
+            );
+          try {
+            await expect(read()).resolves.toMatchObject({ sessionId: "retained", runs: [] });
+            expect(readFileSync(log, "utf8")).toBe(
+              carry ? "" : "comparison-ddl\nexpected-definitions\n",
+            );
+            if (carry) {
+              const changed = new DatabaseSync(pathname);
+              try {
+                changed.exec("DROP TRIGGER session_nodes_canonical_pending_after_update");
+              } finally {
+                changed.close();
+              }
+              await expect(read()).rejects.toThrow(
+                /canonical validation schema is missing or drifted/u,
+              );
+            }
+          } finally {
+            setEnvironmentData(factKey, inherited);
+            reader.release();
+            await maintenanceLane.pool.rotate();
+          }
+        }
+      });
+    });
   });
   it("reuses admitted comparison and runtime facts through an older worker carrier without hiding schema drift", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

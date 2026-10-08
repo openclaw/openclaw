@@ -25,8 +25,6 @@ type SessionRegistryMaintenanceStoreIdentity = {
 
 type SessionRegistryMaintenanceStoreSummary =
   | (SessionRegistryMaintenanceStoreIdentity & {
-      beforeCount: number;
-      afterCount: number;
       pruned: number;
       preservedRunning: number;
     })
@@ -175,8 +173,6 @@ export async function runSessionRegistryMaintenance(params: {
         stores.push({
           agentId: target.agentId,
           storePath: target.storePath,
-          beforeCount: result.beforeCount,
-          afterCount: result.afterCount,
           pruned: result.pruned,
           preservedRunning: result.preservedRunning,
         });

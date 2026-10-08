@@ -32,7 +32,6 @@ import {
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
 import {
   assertDoctorPreflightMigrationsComplete,
-  noteStateMigrationResult,
   prepareDoctorMigrationPlugins,
 } from "./doctor-config-preflight-migrations.js";
 import {
@@ -41,6 +40,7 @@ import {
 } from "./doctor-config-preflight-plugin-index.js";
 import { createDoctorPluginMigrationPreparation } from "./doctor-config-preflight-plugin-migrations.js";
 import * as cronMigration from "./doctor-config-preflight.cron.js";
+import { noteDoctorMigrationResult } from "./doctor-migration-notes.js";
 import { noteStaleUpdateRuns } from "./doctor-update-run.js";
 import type { CronCodexRuntimePolicyTarget } from "./doctor/cron/store-migration.js";
 import { commitAutomaticConfigRepair } from "./doctor/shared/automatic-config-repair.js";
@@ -116,7 +116,7 @@ async function runDoctorConfigPreflightOperation(
   });
   const noteDoctorStateMigrationResult = (result: MigrationMessages) => {
     pluginMigrations.observe(result);
-    noteStateMigrationResult(result);
+    noteDoctorMigrationResult(result, { prefix: "- " });
   };
   const getSnapshotPreparation = createDoctorRehearsalSnapshotPreparation(
     noteDoctorStateMigrationResult,

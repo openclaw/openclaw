@@ -68,6 +68,7 @@ vi.mock("../../gateway/session-worker-placement-context.js", () => ({
     workerSessionPlacementService: {
       getMany: () => new Map(),
       listForReconcile: () => [],
+      listAsync: async () => [],
     },
   }),
 }));

@@ -10,7 +10,6 @@ import {
   validateTalkSessionSteerParams,
   validateTalkSessionSubmitToolResultParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import { AgentSelectionRequiredError } from "../../../agents/agent-scope.js";
 import { assertSecretOwnerAvailable } from "../../../secrets/runtime-degraded-state.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../../talk/agent-run-control-shared.js";
@@ -26,9 +25,7 @@ import type { GatewayRequestHandlers, RespondFn } from "../../server-methods/typ
 import { defineValidatedGatewayHandler } from "../../server-methods/validation.js";
 import { resolveOperatorSessionCreation } from "../../session-creation-provenance.js";
 import { getSessionRowProjection } from "../../session-row-projection-access.js";
-import { SessionMutationAuthorizationChangedError } from "../../session-sharing.js";
 import { withPreparedSessionResolve } from "../../sessions-resolve.js";
-import { formatForLog } from "../../ws-log.js";
 import { resolveTalkAgentConsultAuthority } from "../client-gateway-control.js";
 import { createTalkHandoff, getTalkHandoff, revokeTalkHandoff } from "../handoff.js";
 import {
@@ -40,6 +37,7 @@ import {
   submitTalkRealtimeRelayToolResult,
 } from "../relay/operations.js";
 import { createTalkRealtimeRelaySession } from "../relay/session-create.js";
+import { talkRequestError } from "../request-error.js";
 import {
   buildRealtimeInstructions,
   buildRealtimeVoiceLaunchOptions,
@@ -70,24 +68,7 @@ function respondInvalidRequest(respond: RespondFn, message: string) {
   respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
 }
 
-function talkSessionError(err: unknown) {
-  if (err instanceof SessionMutationAuthorizationChangedError) {
-    return err.error;
-  }
-  const message = formatForLog(err);
-  if (err instanceof AgentSelectionRequiredError) {
-    return errorShape(ErrorCodes.INVALID_REQUEST, message);
-  }
-  return errorShape(ErrorCodes.UNAVAILABLE, message, {
-    details: {
-      talkIssue: {
-        code: "realtime_unavailable",
-        message,
-        phase: "request",
-      },
-    },
-  });
-}
+const talkSessionError = (error: unknown) => talkRequestError(error, "session");
 
 function respondOk(respond: RespondFn, payload: unknown = { ok: true }) {
   respond(true, payload, undefined);
@@ -432,23 +413,21 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           audioBase64: params.audioBase64,
           timestamp: params.timestamp,
         });
-        respondOk(respond);
-        return;
-      }
-      if (session.kind === "transcription-relay") {
+      } else if (session.kind === "transcription-relay") {
         const connId = requireUnifiedTalkSessionConn(session, client?.connId);
         sendTalkTranscriptionRelayAudio({
           transcriptionSessionId: session.transcriptionSessionId,
           connId,
           audioBase64: params.audioBase64,
         });
-        respondOk(respond);
+      } else {
+        respondInvalidRequest(
+          respond,
+          "talk.session.appendAudio is not supported for managed-room sessions",
+        );
         return;
       }
-      respondInvalidRequest(
-        respond,
-        "talk.session.appendAudio is not supported for managed-room sessions",
-      );
+      respondOk(respond);
     },
     talkSessionError,
   ),
@@ -479,14 +458,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
       try {
         const session = getUnifiedTalkSession(params.sessionId);
         if (session.kind !== "realtime-relay") {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "talk.session.acknowledgeMark requires realtime relay",
-            ),
-          );
+          respondInvalidRequest(respond, "talk.session.acknowledgeMark requires realtime relay");
           return;
         }
         acknowledgeTalkRealtimeRelayMark({
@@ -494,18 +466,9 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           connId: requireUnifiedTalkSessionConn(session, client?.connId),
           markName: params.markName,
         });
-        respond(true, { ok: true }, undefined);
+        respondOk(respond);
       } catch (error) {
-        const message = formatForLog(error);
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, message, {
-            details: {
-              talkIssue: { code: "realtime_unavailable", message, phase: "request" },
-            },
-          }),
-        );
+        respond(false, undefined, talkRequestError(error, "legacy-relay"));
       }
     },
   ),

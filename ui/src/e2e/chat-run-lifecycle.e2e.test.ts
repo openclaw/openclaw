@@ -292,7 +292,7 @@ suite.define(() => {
       ],
       inFlightRun: {
         runId: "run-reconnected",
-        text: "Saved opening. Still working after reconnect.",
+        text: "Still working after reconnect.",
       },
       sessionInfo: {
         activeRunIds: ["run-reconnected"],
@@ -541,6 +541,10 @@ suite.define(() => {
     await captureMockStopProof(currentPage, "stopped-live");
     await interrupted.waitFor({ state: "visible" });
     expect(await interrupted.count()).toBe(1);
+    expect(await currentPage.getByLabel("Run status: Interrupted").count()).toBe(0);
+    expect(await currentPage.locator(".agent-chat__run-status-announcement").textContent()).toBe(
+      "Interrupted",
+    );
   });
 
   it("retains stale Stop after a mock-Gateway history error and recovers on the next Stop", async () => {

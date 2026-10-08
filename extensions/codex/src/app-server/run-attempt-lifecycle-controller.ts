@@ -105,16 +105,13 @@ export function createCodexAttemptLifecycleController(
     });
     immediate.unref?.();
   };
-  const scheduleTurnReleaseAfterTerminalDynamicTool = (value: TerminalToolRelease) => {
-    state.pendingTerminalDynamicToolRelease = value;
-    scheduleTerminalDynamicToolReleaseCheck();
-  };
   const recordDynamicToolResult = (value: TerminalToolRelease) => {
     if (value.response.success && value.response.toolAuthoredFinalReply === true) {
       state.currentTurnHadToolAuthoredFinalReply = true;
     }
     if (value.response.terminate === true && value.response.success) {
-      scheduleTurnReleaseAfterTerminalDynamicTool(value);
+      state.pendingTerminalDynamicToolRelease = value;
+      scheduleTerminalDynamicToolReleaseCheck();
     } else if (value.response.asyncStarted === true) {
       scheduleTerminalDynamicToolReleaseCheck();
     } else {
@@ -231,7 +228,6 @@ export function createCodexAttemptLifecycleController(
   return {
     recordDynamicToolResult,
     scheduleTerminalDynamicToolReleaseCheck,
-    scheduleTurnReleaseAfterTerminalDynamicTool,
     emitLifecycleStart,
     emitLifecycleTerminal,
     buildLifecycleTerminalMeta,

@@ -9,6 +9,14 @@ sidebarTitle: "Removal timeline"
 
 The dates and gates that govern when deprecated surfaces become removable. Part of the [Plugin SDK migration](/plugins/sdk-migration) guide.
 
+`pnpm plugin-sdk:surface:check` enforces the latest stable release's committed
+typed public surface independently of export-count budgets. Removing a shipped
+subpath or named export requires a covering `deprecated`, `removal-pending`, or
+`removed` compatibility record with a `removeAfter` date strictly before the
+current UTC date; a `removalGate` alone does not authorize removal. Packaged
+private runtime facades without a `types` export condition are excluded because
+they are not declared typed-public contracts.
+
 ## Removal timeline
 
 | When                                                     | What happens                                                                                                                                                                                                                                                                                                     |

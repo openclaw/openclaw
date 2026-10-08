@@ -15,10 +15,11 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { hasErrnoCode } from "../../infra/errno.js";
 import { isPidDefinitelyDead } from "../../shared/pid-alive.js";
 import { createSpawnBrokerHost } from "./host.js";
+import { supportsSpawnBrokerCommandTransport } from "./pipe.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const skipBrokerTests = process.platform === "win32" || Boolean(process.versions.bun);
+const skipBrokerTests = !supportsSpawnBrokerCommandTransport();
 
 describe.skipIf(skipBrokerTests)("spawn broker admission custody", () => {
   let receipts: FixtureReceiptChannel;

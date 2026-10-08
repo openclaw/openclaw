@@ -78,10 +78,6 @@ function isValidCapabilities(value: unknown): value is OpenRouterModelCapabiliti
   );
 }
 
-function openSqliteCacheStore() {
-  return createCorePluginStateSyncKeyedStore<OpenRouterModelCapabilities>(SQLITE_CACHE_OPTIONS);
-}
-
 type PreparedCacheStore = ReturnType<
   typeof prepareCorePluginStateReplacement<OpenRouterModelCapabilities>
 >;
@@ -109,7 +105,9 @@ async function writeSqliteCache(
 
 function readSqliteCache(): Map<string, OpenRouterModelCapabilities> | undefined {
   try {
-    return parseSqliteCache(openSqliteCacheStore().entries());
+    const store =
+      createCorePluginStateSyncKeyedStore<OpenRouterModelCapabilities>(SQLITE_CACHE_OPTIONS);
+    return parseSqliteCache(store.entries());
   } catch (err: unknown) {
     const message = formatErrorMessage(err);
     log.debug(`Failed to read OpenRouter SQLite cache: ${message}`);

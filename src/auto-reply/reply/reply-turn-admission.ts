@@ -135,10 +135,6 @@ function rejectLifecycleInvalidatedWork(params: {
   throw new Error(params.message);
 }
 
-function isAbortSignalAborted(signal: AbortSignal | undefined): boolean {
-  return signal?.aborted === true;
-}
-
 type ReplyTurnAdmissionParams = {
   assertRequestCurrent?: () => void;
   providerReviewAcknowledgment?: import("../../sessions/provider-review.js").ProviderReviewAcknowledgment;
@@ -252,7 +248,7 @@ export async function admitReplyTurn(
   // database owner after waiting for an active turn, delivery, or writer.
   try {
     while (true) {
-      if (isAbortSignalAborted(params.upstreamAbortSignal)) {
+      if (params.upstreamAbortSignal?.aborted) {
         return { status: "skipped", reason: "aborted" };
       }
       const storelessRotation = !params.storePath ? rotations.takeStorelessRotation() : undefined;
@@ -275,7 +271,7 @@ export async function admitReplyTurn(
         if (!successorAdmission.settled) {
           return {
             status: "skipped",
-            reason: isAbortSignalAborted(params.upstreamAbortSignal) ? "aborted" : "active-run",
+            reason: params.upstreamAbortSignal?.aborted ? "aborted" : "active-run",
           };
         }
         rotations.recordBarrierSources(successorAdmission.sources);
@@ -300,9 +296,13 @@ export async function admitReplyTurn(
                   ? [params.sessionKey]
                   : undefined,
               signal: params.upstreamAbortSignal,
-              onInterrupt: () => {
+              onInterrupt: (reason) => {
                 interruptedBeforeOperation = true;
-                operation?.abortForRestart();
+                if (isAgentRunRestartAbortReason(reason)) {
+                  operation?.abortForRestart();
+                } else {
+                  operation?.abortByUser();
+                }
                 params.onLifecycleInterrupt?.();
               },
               assertAllowed: async (signal) => {
@@ -332,15 +332,16 @@ export async function admitReplyTurn(
                     assertCurrent,
                   },
                 );
-                if (
-                  !admitting ||
-                  interruptedBeforeOperation ||
-                  params.upstreamAbortSignal?.aborted
-                ) {
-                  await current.databaseClaim.release();
-                  throw new SessionWorkStartChangedError("Session changed during state admission.");
-                }
                 try {
+                  if (
+                    !admitting ||
+                    interruptedBeforeOperation ||
+                    params.upstreamAbortSignal?.aborted
+                  ) {
+                    throw new SessionWorkStartChangedError(
+                      "Session changed during state admission.",
+                    );
+                  }
                   params.assertRequestCurrent?.();
                 } catch (error) {
                   await current.databaseClaim.release();
@@ -500,7 +501,7 @@ export async function admitReplyTurn(
             recoveryOwnerLease = ownerClaim.kind === "claimed" ? ownerClaim.lease : undefined;
             admittedSessionEntry = ownerClaim.entry;
           }
-          if (interruptedBeforeOperation || isAbortSignalAborted(params.upstreamAbortSignal)) {
+          if (interruptedBeforeOperation || params.upstreamAbortSignal?.aborted) {
             rejectSessionChange();
           }
           assertDatabaseOwnerCurrent();
@@ -656,7 +657,7 @@ export async function admitReplyTurn(
           ...(admittedSessionEntry ? { sessionEntry: admittedSessionEntry } : {}),
         };
       } catch (error) {
-        if (isAbortSignalAborted(params.upstreamAbortSignal)) {
+        if (params.upstreamAbortSignal?.aborted) {
           return { status: "skipped", reason: "aborted" };
         }
         if (error instanceof QueuedFollowupLifecycleInvalidatedError) {
@@ -683,7 +684,7 @@ export async function admitReplyTurn(
           if (!followupAdmission.settled) {
             return {
               status: "skipped",
-              reason: isAbortSignalAborted(params.upstreamAbortSignal) ? "aborted" : "active-run",
+              reason: params.upstreamAbortSignal?.aborted ? "aborted" : "active-run",
             };
           }
           rotations.recordBarrierSources(followupAdmission.sources);
@@ -714,7 +715,7 @@ export async function admitReplyTurn(
           signal: params.upstreamAbortSignal,
         });
         if (!ended) {
-          if (params.kind === "visible" && !isAbortSignalAborted(params.upstreamAbortSignal)) {
+          if (params.kind === "visible" && !params.upstreamAbortSignal?.aborted) {
             // Visible turns block on active work like before, but in bounded wait
             // slices: each wake reclaims the owner once it is provably stale,
             // otherwise loops back to keep waiting.
@@ -724,7 +725,7 @@ export async function admitReplyTurn(
           }
           return {
             status: "skipped",
-            reason: isAbortSignalAborted(params.upstreamAbortSignal) ? "aborted" : "active-run",
+            reason: params.upstreamAbortSignal?.aborted ? "aborted" : "active-run",
             activeOperation,
           };
         }

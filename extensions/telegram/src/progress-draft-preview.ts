@@ -35,14 +35,15 @@ function isTelegramProgressPriorityLine(line: ChannelProgressDraftCompositorLine
 // Each row has one content decision; both Telegram transports use that row.
 type ProgressText = { html: string; rich: RichText };
 
-function literalProgressText(text: string, style?: "bold" | "italic" | "code"): ProgressText {
-  const escaped = escapeTelegramHtml(text);
-  if (!style) {
-    return { html: escaped, rich: text };
-  }
+function styleProgressText(text: ProgressText, style: "bold" | "italic" | "code"): ProgressText {
   // Code entities keep prepared notes inert, including bare URLs.
   const tag = { bold: "b", italic: "i", code: "code" }[style];
-  return { html: `<${tag}>${escaped}</${tag}>`, rich: { type: style, text } };
+  return { html: `<${tag}>${text.html}</${tag}>`, rich: { type: style, text: text.rich } };
+}
+
+function literalProgressText(text: string, style?: "bold" | "italic" | "code"): ProgressText {
+  const literal = { html: escapeTelegramHtml(text), rich: text };
+  return style ? styleProgressText(literal, style) : literal;
 }
 
 function joinProgressText(parts: ProgressText[], separator: string): ProgressText {
@@ -129,14 +130,7 @@ export function renderTelegramProgressDraftPreview(
     const text = compact(snapshot.statusHeadline);
     const plain = snapshot.statusHeadlineFormat === "plain";
     const status = plain ? literalProgressText(text, "code") : markdownProgressText(text);
-    addParagraph(
-      label || plain
-        ? status
-        : {
-            html: `<b>${status.html}</b>`,
-            rich: { type: "bold", text: status.rich },
-          },
-    );
+    addParagraph(label || plain ? status : styleProgressText(status, "bold"));
   }
   if (visibleLines.length) {
     addParagraph(

@@ -29,6 +29,10 @@ export type SqliteSchemaIssue = {
 };
 
 export type SqliteSchemaCompatibility = {
+  /** Tables outside this inspection's view of the canonical schema, even when present. */
+  excludedTables?: readonly string[];
+  /** Named indexes outside the expected view; actual unexpected uniqueness still fails. */
+  excludedIndexes?: readonly string[];
   /**
    * Canonical additive tables that may be absent until their owning feature
    * performs its one-time lazy ensure. Present tables still require the exact

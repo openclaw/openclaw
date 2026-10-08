@@ -415,7 +415,6 @@ export function renderChat(props: ChatProps) {
       pullRequests: props.pullRequests ?? [],
       gateway: props.pullRequestsGateway,
       sessionId: props.pullRequestsSessionId,
-      basePath: props.basePath,
       sessionKey: scopedSessionArtifactKey(props.sessionKey, props.currentAgentId ?? undefined),
       presented: props.presented ?? true,
       branch: props.pullRequestsBranch,

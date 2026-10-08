@@ -4,7 +4,6 @@ import {
   resolveChannelGroupRequireMention,
   resolveScopeRequireMention,
   resolveScopeToolsPolicy,
-  scopeKey,
   type GroupToolPolicyConfig,
   type ScopeTree,
 } from "openclaw/plugin-sdk/channel-policy";
@@ -27,10 +26,6 @@ function parseTelegramGroupId(value?: string | null) {
   return { chatId: raw, topicId: undefined };
 }
 
-const groupScopeKey = (groupKey: string) => scopeKey(["group", groupKey]);
-const topicScopeKey = (groupKey: string, topicKey: string) =>
-  scopeKey(["group", groupKey], ["topic", topicKey]);
-
 export function resolveTelegramGroupRequireMention(
   params: ChannelGroupContext,
 ): boolean | undefined {
@@ -40,26 +35,25 @@ export function resolveTelegramGroupRequireMention(
       (params.accountId
         ? params.cfg.channels?.telegram?.accounts?.[params.accountId]?.groups
         : undefined) ?? params.cfg.channels?.telegram?.groups;
-    const scopes: ScopeTree["scopes"] = {};
-    const path: string[] = [];
-    const add = (key: string, entry: { requireMention?: boolean } | undefined) => {
-      if (entry) {
-        scopes[key] = { requireMention: entry.requireMention };
-        path.push(key);
-      }
-    };
     const groupConfig = groups?.[chatId];
     const groupDefault = groups?.["*"];
-    add(groupScopeKey("*"), groupDefault);
-    add(groupScopeKey(chatId), groupConfig);
+    const entries = [groupDefault, groupConfig];
     if (topicId) {
-      // Resolver walks backward: group/topic → group/* → */topic → */* → group → *.
-      // Adjacent topic nodes preserve wildcard/exact field merging within each group.
-      add(topicScopeKey("*", "*"), groupDefault?.topics?.["*"]);
-      add(topicScopeKey("*", topicId), groupDefault?.topics?.[topicId]);
-      add(topicScopeKey(chatId, "*"), groupConfig?.topics?.["*"]);
-      add(topicScopeKey(chatId, topicId), groupConfig?.topics?.[topicId]);
+      // Broad to narrow; wildcard-group topics outrank exact-group scalar policy.
+      entries.push(
+        groupDefault?.topics?.["*"],
+        groupDefault?.topics?.[topicId],
+        groupConfig?.topics?.["*"],
+        groupConfig?.topics?.[topicId],
+      );
     }
+    const scopes: ScopeTree["scopes"] = {};
+    for (const [index, entry] of entries.entries()) {
+      if (entry) {
+        scopes[index] = { requireMention: entry.requireMention };
+      }
+    }
+    const path = Object.keys(scopes);
     if (path.some((key) => typeof scopes[key]?.requireMention === "boolean")) {
       return resolveScopeRequireMention({ tree: { scopes }, path });
     }

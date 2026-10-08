@@ -13,6 +13,7 @@ import { createQaSuiteEvidenceInvocation, rebaseQaSuiteEvidence } from "./suite-
 import { mapQaSuiteWithConcurrency, resolveQaSuiteWorkerStartStaggerMs } from "./suite-planning.js";
 import { createQaSuiteProgressController } from "./suite-progress.js";
 import { completeQaSuiteRun } from "./suite-run-completion.js";
+import { createQaSuiteRunResources } from "./suite-run-resources.js";
 import { buildQaIsolatedScenarioWorkerParams } from "./suite-support.js";
 import type {
   QaSuiteResolvedRunContext,
@@ -22,7 +23,6 @@ import type {
   QaSuiteScenarioResult,
 } from "./suite-types.js";
 import {
-  createQaSuiteTransportAdapter,
   markQaSuiteNestedRun,
   requireQaSuiteStartLab,
   runQaSuiteCleanupSteps,
@@ -49,46 +49,15 @@ export async function runQaFlowSuiteIsolated(
     progressEnabled,
   } = context;
   const recording = await createQaSuiteEvidenceInvocation(params, context);
-  const ownsLab = !params?.lab;
   const startLab = requireQaSuiteStartLab(params?.startLab);
-  const lab =
-    params?.lab ??
-    (await startLab({
-      repoRoot,
-      host: "127.0.0.1",
-      port: 0,
-      embeddedGateway: "disabled",
-    }));
-  const transportFactoryResult = await createQaSuiteTransportAdapter({
-    adapterFactories: params?.adapterFactories,
-    channelDriver: params?.channelDriver,
-    channelId: params?.channelId,
-    adapterOptions: {
-      ...params?.adapterOptions,
-      scenarioIds: selectedScenarios.map((scenario) => scenario.id),
-    },
-    cleanupOnFailure: ownsLab ? () => lab.stop() : undefined,
-    outputDir,
-    state: lab.state,
-    transportId,
-  });
-  const transport = transportFactoryResult.adapter;
-  const artifactParams = {
-    outputDir,
-    startedAt,
+  const {
+    lab,
+    ownsLab,
+    transportFactoryResult,
     transport,
-    providerMode,
-    primaryModel,
-    alternateModel,
-    fastMode,
-    concurrency,
-    channel: params?.channelId ?? transport.id,
-    channelDriver: transportFactoryResult.driver,
-    isolatedWorkers: true,
-    scenarioIds: params?.scenarioIds?.length
-      ? selectedScenarios.map((scenario) => scenario.id)
-      : undefined,
-  };
+    artifactParams: commonArtifactParams,
+  } = await createQaSuiteRunResources(params, context, "isolated");
+  const artifactParams = { ...commonArtifactParams, isolatedWorkers: true };
   const progress = createQaSuiteProgressController({
     lab,
     scenarios: selectedScenarios,

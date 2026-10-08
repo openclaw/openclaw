@@ -139,6 +139,8 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
   };
   const conversationRef = (conversationId: string) =>
     normalizeConversationRef({ ...accountScope, conversationId });
+  const conversationIdFromBinding = (bindingId?: string) =>
+    resolveThreadBindingConversationIdFromBindingId({ accountId, bindingId });
   const asAccountBindingRecord = (
     record: SessionBindingRecord,
   ): AccountScopedConversationBindingRecord<TKind> => {
@@ -296,10 +298,7 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
         ? resolveCurrentConversationBindingRecord(conversationRef(ref.conversationId))
         : null,
     touch: (bindingId, at) => {
-      const conversationId = resolveThreadBindingConversationIdFromBindingId({
-        accountId,
-        bindingId,
-      });
+      const conversationId = conversationIdFromBinding(bindingId);
       if (conversationId) {
         manager.touchConversation(conversationId, at);
       }
@@ -339,10 +338,7 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
           assertCurrent,
         );
       }
-      const conversationId = resolveThreadBindingConversationIdFromBindingId({
-        accountId,
-        bindingId: input.bindingId,
-      });
+      const conversationId = conversationIdFromBinding(input.bindingId);
       return conversationId
         ? removeCurrentConversationBindingsAsync(
             {
@@ -384,10 +380,7 @@ export function createAccountScopedConversationBindingManager<TKind extends stri
     inspectByConversationAsync: (ref) => readAccountBindingAsync(ref, true),
     resolveByConversationAsync: (ref) => readAccountBindingAsync(ref, false),
     touchAsync: async (bindingId, at) => {
-      const conversationId = resolveThreadBindingConversationIdFromBindingId({
-        accountId,
-        bindingId,
-      });
+      const conversationId = conversationIdFromBinding(bindingId);
       if (conversationId) {
         await touchCurrentConversationBindingRecordAsync(
           {

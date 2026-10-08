@@ -11,7 +11,7 @@ export const gatewayPluginTestFiles = [
 
 // Native database consumers retain lifecycle cleanup within each forked process.
 export const gatewayDatabaseWorkerTestFiles = [
-  "src/gateway/agent-turn/agent-run-commentary-media.test.ts",
+  "src/gateway/agent-turn/agent-run-media.test.ts",
   "src/gateway/approval-fixture.test.ts",
   "src/gateway/auth-token-store-ref.test.ts",
   "src/gateway/board-http.test.ts",
@@ -249,7 +249,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-row-selection.test.ts",
   "src/gateway/session-sharing-committed-read.test.ts",
   "src/gateway/session-sharing-groups.test.ts",
-  "src/gateway/session-sharing-preparation.admission.test.ts",
   "src/gateway/session-sharing-preparation.creation-settlement.test.ts",
   "src/gateway/session-sharing-preparation.test.ts",
   "src/gateway/session-sharing.worker.test.ts",
@@ -261,6 +260,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-utils-store-lookup.freshness.test.ts",
   "src/gateway/session-utils-store-lookup.test.ts",
   "src/gateway/session-utils.agent-models.test.ts",
+  "src/gateway/session-utils.deleted-agent.test.ts",
   "src/gateway/session-utils.queued-collector-admission.test.ts",
   "src/gateway/session-utils.queued-collector-narrow-abort.test.ts",
   "src/gateway/session-utils.queued-collector-settlement.test.ts",
@@ -527,6 +527,7 @@ export const gatewayServerIsolatedTestFiles = [
   "src/gateway/server-close.progress-card.test.ts",
   "src/gateway/server-close.question-publication.test.ts",
   "src/gateway/server-close.session-signals.test.ts",
+  "src/gateway/server-close.voice-session.test.ts",
   "src/gateway/server-close.channel-pairing.test.ts",
   "src/gateway/server-close.acp-diagnostics.test.ts",
   "src/gateway/server.chat.canonical-publication.test.ts",
