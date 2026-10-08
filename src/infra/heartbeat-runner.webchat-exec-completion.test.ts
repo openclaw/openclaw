@@ -5,9 +5,12 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { appendExecTimeoutRetryGuidance } from "../agents/bash-tools.exec-output.js";
+import { resolveExecNotificationDefaults } from "../agents/bash-tools.exec-request-preparation.js";
 import { createHeartbeatToolResponsePayload } from "../auto-reply/heartbeat-tool-response.js";
 import { setReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
+import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
+import { initSessionState } from "../auto-reply/reply/session.js";
 import { getReplySystemEventContext } from "../auto-reply/reply/system-event-session-key.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
@@ -627,32 +630,63 @@ describe("WebChat completions with an explicit heartbeat target", () => {
     });
   }
 
-  it("publishes into the WebChat session and does not send to the heartbeat channel", async () => {
+  it("keeps chained completions in WebChat instead of the heartbeat channel", async () => {
     await withTargetScenario(async (scenario, sendTelegram) => {
       const marker = "WEBCHAT_EXEC_COMPLETION_STAYS_HOME";
-      enqueueSystemEvent("Exec completed (bg-cmd, code 0) :: " + marker, {
+      enqueueSystemEvent("Exec completed (first, code 0) :: first result", {
         sessionKey: scenario.sessionKey,
+        deliveryContext: { channel: "webchat" },
+        fromConversationTurn: true,
       });
-      const reply = vi.fn().mockResolvedValue(completionPayload(marker));
-      const result = await runHeartbeatOnce({
-        cfg: scenario.cfg,
-        agentId: "main",
-        source: "exec-event",
-        intent: "event",
-        reason: "exec-event",
-        deps: { getReplyFromConfig: reply, telegram: sendTelegram },
-      });
-      expect(result.status).toBe("ran");
-      expect(reply).toHaveBeenCalledOnce();
+      const reply = vi
+        .fn<NonNullable<HeartbeatDeps["getReplyFromConfig"]>>()
+        .mockImplementation(async (ctx, options) => {
+          // Model stubs must still initialize the session to exercise persisted routing.
+          await initSessionState({
+            cfg: scenario.cfg,
+            ctx: finalizeInboundContext(ctx),
+            commandAuthorized: false,
+          });
+          if (reply.mock.calls.length === 1) {
+            const next = resolveExecNotificationDefaults({
+              trigger: "heartbeat",
+              continuesConversation: options?.continuesConversation,
+              messageProvider: ctx.OriginatingChannel,
+              currentChannelId: ctx.OriginatingTo ?? ctx.To,
+            });
+            enqueueSystemEvent("Exec completed (chained, code 0) :: next result", {
+              sessionKey: scenario.sessionKey,
+              deliveryContext: next.notifyDeliveryContext,
+              fromConversationTurn: next.notifyFromConversationTurn,
+            });
+            return completionPayload("First completed; started the next command.");
+          }
+          return completionPayload(marker);
+        });
+      const run = () =>
+        runHeartbeatOnce({
+          cfg: scenario.cfg,
+          agentId: "main",
+          source: "exec-event",
+          intent: "event",
+          reason: "exec-event",
+          deps: { getReplyFromConfig: reply, telegram: sendTelegram },
+        });
+      expect((await run()).status).toBe("ran");
+      expect(sendTelegram).not.toHaveBeenCalled();
+      expect(peekSystemEventEntries(scenario.sessionKey)).toHaveLength(1);
+      expect((await run()).status).toBe("ran");
+      expect(reply).toHaveBeenCalledTimes(2);
       expect(
         sendTelegram,
-        "session-owned completion leaked to the heartbeat channel",
+        "chained completion leaked to the heartbeat channel",
       ).not.toHaveBeenCalled();
       expect(
         (await readProjectionMessages(scenario)).filter((message) =>
           JSON.stringify(message?.content).includes(marker),
         ),
       ).toHaveLength(1);
+      expect(peekSystemEventEntries(scenario.sessionKey)).toEqual([]);
     });
   });
 

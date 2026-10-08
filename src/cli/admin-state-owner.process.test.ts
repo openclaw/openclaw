@@ -243,12 +243,15 @@ describe("administrative CLI state owner routing", () => {
       ],
     });
     await updateExecApprovals({
-      update: () => ({
-        version: 1,
-        agents: {
-          "*": { allowlist: operation.kind === "allowlist-remove" ? [{ pattern }] : [] },
+      update: {
+        kind: "replace",
+        file: {
+          version: 1,
+          agents: {
+            "*": { allowlist: operation.kind === "allowlist-remove" ? [{ pattern }] : [] },
+          },
         },
-      }),
+      },
     });
     if (scenario === "offline") {
       await closeOpenClawStateDatabaseAsync();
@@ -272,9 +275,7 @@ describe("administrative CLI state owner routing", () => {
     expect(result.code, result.stderr).toBe(succeeded ? 0 : 1);
     if (scenario === "offline") {
       expect(observation.adminSql).toBeGreaterThan(0);
-      if (operation.kind.startsWith("pairing-")) {
-        expect(observation.workerSql).toBeGreaterThan(0);
-      }
+      expect(observation.workerSql).toBeGreaterThan(0);
       expect(observation).toMatchObject({ missingCustody: 0, ownerPids: [observation.pid] });
       expect(methods).toEqual([]);
     } else {

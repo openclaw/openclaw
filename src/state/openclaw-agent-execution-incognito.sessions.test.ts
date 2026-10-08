@@ -175,15 +175,15 @@ it("reads existing actor sessions without creating missing stores or crossing na
   expect(fs.readdirSync(foreignEnv.OPENCLAW_STATE_DIR, { recursive: true })).toEqual([]);
 });
 
-it("withholds staged sharing from grants and publishes detached facts before its caller resumes", async () => {
+it("grants only its transaction preimage and publishes detached facts before its caller resumes", async () => {
   const sessionKey = key("publication");
   const stages: string[] = [];
   const source: IncognitoSessionAuthority = {
     assertCurrent() {},
     authorize(stage, facts) {
       stages.push(stage);
-      expect(() => actor.sessions.readSharing(sessionKey)).toThrow("pending or unavailable");
-      expect(() => actor.sessions.captureCurrent(sessionKey)).toThrow("pending or unavailable");
+      expect(actor.sessions.readSharing(sessionKey)).toBeUndefined();
+      actor.sessions.captureCurrent(sessionKey).assertCurrent();
       expect(() => actor.sessions.read(authority, { sessionKey })).toThrow(
         "Incognito authority callbacks cannot call their actor",
       );
@@ -212,7 +212,7 @@ it("withholds staged sharing from grants and publishes detached facts before its
   created.claim.assertCurrent();
 });
 
-it("authorizes controller policy from transaction facts while its actor projection is pending", async () => {
+it("authorizes controller policy from its transaction preimage inside synchronous grants", async () => {
   const sessionKey = "agent:main:subagent:incognito-controller";
   await actor.sessions.create(authority, {
     sessionKey,
@@ -236,7 +236,7 @@ it("authorizes controller policy from transaction facts while its actor projecti
         assertCurrent: controller.assertCurrent,
         authorize(stage, facts) {
           stages.push(stage);
-          expect(() => controller.read()).toThrow("pending or unavailable");
+          expect(controller.read().controlScope).toBe("children");
           expect(controller.read([facts]).controlScope).toBe("children");
           expect(() =>
             controller.read([
