@@ -78,10 +78,7 @@ import {
 } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
-import {
-  persistedSteerTargetRunId,
-  resolveAssistantTextTail,
-} from "./stream-causal-boundary.ts";
+import { persistedSteerTargetRunId, resolveAssistantTextTail } from "./stream-causal-boundary.ts";
 import type { CompactionStatus } from "./tool-stream-contract.ts";
 
 export type BuildChatItemsProps = ChatInputPlacementProps & {
