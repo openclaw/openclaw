@@ -120,13 +120,13 @@ function requestSkillCommandRefresh(
     return;
   }
   const refresh = host.refreshCommands();
-  if (!refresh || typeof refresh.then !== "function") {
+  if (!refresh) {
     return;
   }
   const generation = state.skillCommandRefreshGeneration + 1;
   state.skillCommandRefreshGeneration = generation;
   state.skillCommandRefreshPending = true;
-  void Promise.resolve(refresh)
+  void refresh
     .catch(() => undefined)
     .finally(() => {
       if (state.skillCommandRefreshGeneration !== generation) {
@@ -147,11 +147,7 @@ export function updateSkillMenu(
   requestUpdate: () => void,
   opts: { skipRefresh?: boolean } = {},
 ): void {
-  if (value.trimStart().startsWith("/")) {
-    closeSkillMenuIfNeeded(state, requestUpdate);
-    return;
-  }
-  const target = findSkillMentionTarget(value, caret);
+  const target = value.trimStart().startsWith("/") ? null : findSkillMentionTarget(value, caret);
   if (!target) {
     closeSkillMenuIfNeeded(state, requestUpdate);
     return;

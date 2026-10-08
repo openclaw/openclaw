@@ -93,11 +93,11 @@ describe("chat history cursor revalidation", () => {
     }));
     const first = createState(handler);
     const second = createState(handler);
+    second.client = first.client;
+    second.sessions = first.sessions;
     const cache = seedCachedHistory(first, [cached], "cursor-1");
     seedCachedHistory(second, [cached], "cursor-1");
     second.chatMessagesBySession = cache;
-    second.client = first.client;
-    second.sessions = first.sessions;
     await loadChatHistory(first);
     expect(first.chatMessages).toEqual([cached, reply]);
     expect(second.chatMessages).toEqual([cached]);

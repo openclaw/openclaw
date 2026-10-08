@@ -144,7 +144,7 @@ Notes:
 
 ### Custom Chrome MCP launch
 
-OpenClaw includes an exact-pinned Chrome DevTools MCP 1.9.0 dependency with a
+OpenClaw includes an exact-pinned Chrome DevTools MCP 1.10.1 dependency with a
 temporary document-identity patch and starts its CLI directly with the runtime
 running OpenClaw, Node or Bun.
 The npm package carries the patched dependency; source checkouts obtain it through

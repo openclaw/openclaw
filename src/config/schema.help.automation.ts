@@ -283,9 +283,9 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "messages.queue.mode":
     'Queue mode for active runs. Use "steer" to inject prompts into the active run, "followup" to run later, "collect" to batch compatible messages later, or "interrupt" to abort the active run before starting the newest prompt.',
   "messages.queue.byChannel":
-    "Per-channel queue mode overrides keyed by provider id (for example telegram, discord, slack). Use this when one channel's traffic pattern needs different behavior than global defaults.",
+    "Per-channel queue mode overrides keyed by channel ID, including plugin channels (for example discord, telegram, x). Use this when one channel's traffic pattern needs different behavior than global defaults.",
   "messages.queue.debounceMsByChannel":
-    "Per-channel debounce overrides for queue behavior keyed by provider id. Use this to tune burst handling independently for chat surfaces with different pacing.",
+    "Per-channel debounce overrides for queue behavior keyed by channel ID, including plugin channels. Use this to tune burst handling independently for chat surfaces with different pacing.",
   "messages.queue.cap":
     "Maximum number of queued inbound items retained before drop policy applies. Default is 20; keep caps bounded in noisy channels so memory usage remains predictable.",
   "messages.queue.drop":

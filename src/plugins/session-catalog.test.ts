@@ -14,6 +14,7 @@ const transcript = vi.hoisted(() => ({
   lockCalls: 0,
 }));
 
+// mock-isolation: Exercise catalog import ordering without opening the SQLite transcript owner.
 vi.mock("../plugin-sdk/session-transcript-runtime.js", () => ({
   withSessionTranscriptWriteLock: async (
     _params: unknown,
@@ -21,14 +22,13 @@ vi.mock("../plugin-sdk/session-transcript-runtime.js", () => ({
       appendMessage: (params: {
         message: Record<string, unknown>;
         idempotencyLookup?: string;
-        beforeCommitInTransaction?: () => void;
+        beforeFreshMessageCommit?: () => void;
       }) => Promise<void>;
     }) => Promise<void>,
   ) => {
     transcript.lockCalls += 1;
     await run({
-      appendMessage: async ({ message, idempotencyLookup, beforeCommitInTransaction }) => {
-        beforeCommitInTransaction?.();
+      appendMessage: async ({ message, idempotencyLookup, beforeFreshMessageCommit }) => {
         const key = message.idempotencyKey;
         if (
           idempotencyLookup === "scan" &&
@@ -37,6 +37,7 @@ vi.mock("../plugin-sdk/session-transcript-runtime.js", () => ({
         ) {
           return;
         }
+        beforeFreshMessageCommit?.();
         transcript.messages.push(message);
       },
     });
@@ -102,10 +103,10 @@ function messageText(message: Record<string, unknown>): string | undefined {
 }
 
 describe("listSessionCatalogEntries", () => {
-  it("scans the retained compatibility owner first", () => {
+  it("does not select a runtime catalog owner from retained migration metadata", () => {
     const config = retainLegacyDefaultAgentId(
       {
-        agents: { list: [{ id: "alpha" }, { id: "beta" }] },
+        agents: { entries: { alpha: {}, beta: {} } },
       } as OpenClawConfig,
       "beta",
     );
@@ -114,18 +115,17 @@ describe("listSessionCatalogEntries", () => {
       agent: { session: { listSessionEntries } },
     } as unknown as PluginRuntime;
 
-    expect(listSessionCatalogEntries({ config, runtime })).toEqual([]);
-    expect(listSessionEntries.mock.calls.map(([params]) => params.agentId)).toEqual([
-      "beta",
-      "alpha",
-    ]);
+    expect(() => listSessionCatalogEntries({ config, runtime })).toThrow(
+      "session agent resolution has no explicit owner",
+    );
+    expect(listSessionEntries).not.toHaveBeenCalled();
   });
 
   it("requires and scopes an owner under explicit multi-agent ownership", () => {
     const config = {
       agents: {
         ownership: "explicit",
-        list: [{ id: "alpha" }, { id: "beta" }],
+        entries: { alpha: {}, beta: {} },
       },
     } as OpenClawConfig;
     const listSessionEntries = vi.fn(() => []);
@@ -293,7 +293,9 @@ describe("importSessionCatalogHistory", () => {
     };
 
     await importHistory([{ id: "u-1", type: "userMessage", text: "Continue" }], options).result;
+    expect(commitGuard).toHaveBeenCalledTimes(2);
     await importHistory([{ id: "u-1", type: "userMessage", text: "Continue" }], options).result;
+    expect(commitGuard).toHaveBeenCalledTimes(2);
 
     expect(transcript.messages.map(messageText)).toEqual([
       "Continue",
@@ -304,7 +306,13 @@ describe("importSessionCatalogHistory", () => {
       model: "session-catalog",
       idempotencyKey: "pi-catalog:thread-1:continuation-notice",
     });
-    expect(commitGuard).toHaveBeenCalledTimes(4);
+    commitGuard.mockImplementation(() => {
+      throw new Error("Catalog source revoked");
+    });
+    await expect(
+      importHistory([{ id: "u-2", type: "userMessage", text: "Refused" }], options).result,
+    ).rejects.toThrow("Catalog source revoked");
+    expect(transcript.messages).toHaveLength(2);
   });
 });
 

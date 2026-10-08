@@ -9,7 +9,7 @@ import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { captureEnv, deleteTestEnvValue } from "../../test-utils/env.js";
-import type { GatewayRestartSnapshot } from "../daemon-cli/restart-health.js";
+import type { GatewayRestartResult } from "../daemon-cli/restart-health.types.js";
 import {
   createActiveWorkSnapshot,
   createCloseMock,
@@ -204,12 +204,16 @@ vi.mock("../daemon-cli/restart-health.js", async (importOriginal) => ({
   waitForGatewayHealthyRestart: (...args: Parameters<typeof waitForGatewayHealthyRestart>) =>
     waitForGatewayHealthyRestart(...args),
 }));
-const respawnHealth = (
-  overrides: Partial<GatewayRestartSnapshot> = {},
-): GatewayRestartSnapshot => ({
+const respawnHealth = (overrides: Partial<GatewayRestartResult> = {}): GatewayRestartResult => ({
   runtime: { status: "running", pid: 7777 },
   portUsage: { port: 18789, status: "busy", listeners: [{ pid: 7777 }], hints: [] },
   healthy: true,
+  outcome:
+    overrides.waitOutcome === "still-starting"
+      ? "starting"
+      : overrides.healthy === false
+        ? "failed"
+        : "ready",
   waitOutcome: "healthy",
   staleGatewayPids: [],
   ...overrides,

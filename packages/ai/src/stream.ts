@@ -96,8 +96,6 @@ function retainUnscopedStreamLifetime(
   const bufferWaiters = new Set<() => void>();
   let bufferError: Error | undefined;
   let resultPromise: ReturnType<typeof result> | undefined;
-  const wrapIterationError = (error: unknown) =>
-    new Error("Stream iteration failed", { cause: error });
   const notifyBufferWaiters = () => {
     for (const resolve of bufferWaiters) {
       resolve();
@@ -112,16 +110,11 @@ function retainUnscopedStreamLifetime(
       } catch (error) {
         providerResult = Promise.reject(new Error("Stream result failed", { cause: error }));
       }
-      void providerResult.then(
-        () => {
-          resultSettled = true;
-          releaseIfSettled();
-        },
-        () => {
-          resultSettled = true;
-          releaseIfSettled();
-        },
-      );
+      const settleResult = () => {
+        resultSettled = true;
+        releaseIfSettled();
+      };
+      void providerResult.then(settleResult, settleResult);
       resultPromise = providerResult;
     }
     return resultPromise;
@@ -138,7 +131,7 @@ function retainUnscopedStreamLifetime(
         notifyBufferWaiters();
       }
     } catch (error) {
-      bufferError = wrapIterationError(error);
+      bufferError = new Error("Stream iteration failed", { cause: error });
     } finally {
       bufferSettled = true;
       notifyBufferWaiters();
@@ -200,11 +193,6 @@ function createRuntime(registry: ApiRegistry, transportHost?: Partial<AiTranspor
     trackDefaultHostSessions(defaultHostsBySession);
   }
   const resolveRuntimeHost = () => explicitHost ?? getDefaultAiTransportHost();
-  const runWithHost = <T>(host: ActiveAiTransportHost, operation: () => T): T => {
-    // A normal runtime uses its current embedding owner, even when invoked from
-    // another runtime's callback. Do not capture the default during construction.
-    return runWithAiTransportHost(host, operation);
-  };
   const startStream = (
     start: () => AssistantMessageEventStreamContract,
     sessionId?: string,
@@ -215,22 +203,16 @@ function createRuntime(registry: ApiRegistry, transportHost?: Partial<AiTranspor
       hosts.add(host);
       defaultHostsBySession.set(sessionId, hosts);
     }
-    const runWithStreamHost = <T>(operation: () => T): T => runWithHost(host, operation);
+    const runWithStreamHost = <T>(operation: () => T): T => runWithAiTransportHost(host, operation);
     const started = runWithStreamHost(start);
     const completion = getEventStreamCompletion(started);
     const bound = bindAssistantMessageEventStream(started, runWithStreamHost);
     if (completion) {
       if (!supportsScopedAiTransportHosts()) {
         let producerSettled = false;
-        const observedCompletion = completion.then(
-          () => {
-            producerSettled = true;
-          },
-          (error: unknown) => {
-            producerSettled = true;
-            throw error;
-          },
-        );
+        const observedCompletion = completion.finally(() => {
+          producerSettled = true;
+        });
         void runWithStreamHost(() => observedCompletion);
         const result = runWithStreamHost(() => started.result());
         return bindAssistantMessageEventStream(
@@ -317,7 +299,7 @@ function createRuntime(registry: ApiRegistry, transportHost?: Partial<AiTranspor
     const errors: unknown[] = [];
     for (const host of hosts) {
       try {
-        runWithHost(host, () => cleanupRegisteredSessionResources(sessionId, host));
+        runWithAiTransportHost(host, () => cleanupRegisteredSessionResources(sessionId, host));
       } catch (error) {
         errors.push(error);
       }

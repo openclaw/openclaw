@@ -72,6 +72,14 @@ function isDirectConversationBindingId(value?: string | null): boolean {
   return Boolean(trimmed && /^(user:|channel:)/i.test(trimmed));
 }
 
+function normalizeTouchTimestamp(at: number | undefined): number {
+  return typeof at === "number" && Number.isFinite(at) ? Math.max(0, Math.floor(at)) : Date.now();
+}
+
+function touchBindingRecord(record: ThreadBindingRecord, at: number): ThreadBindingRecord {
+  return { ...record, lastActivityAt: Math.max(record.lastActivityAt || 0, at) };
+}
+
 export async function createThreadBindingManager(input: {
   accountId?: string;
   token?: string;
@@ -98,12 +106,10 @@ function createLoadedThreadBindingManager(
 ): ThreadBindingManager {
   const accountId = normalizeAccountId(params.accountId);
   const existing = MANAGERS_BY_ACCOUNT_ID.get(accountId);
+  rememberThreadBindingToken({ accountId, token: params.token });
   if (existing) {
-    rememberThreadBindingToken({ accountId, token: params.token });
     return existing;
   }
-
-  rememberThreadBindingToken({ accountId, token: params.token });
 
   const persist = params.persist ?? shouldDefaultPersist();
   PERSIST_BY_ACCOUNT_ID.set(accountId, persist);
@@ -119,6 +125,11 @@ function createLoadedThreadBindingManager(
   const resolveCurrentToken = () => getThreadBindingToken(accountId) ?? params.token;
   const getCurrentBinding = (threadId: string) =>
     MANAGERS_BY_ACCOUNT_ID.get(accountId) === manager ? manager.getByThreadId(threadId) : undefined;
+  const getBinding = (threadId: string) => {
+    const bindingKey = resolveBindingRecordKey({ accountId, threadId });
+    const record = bindingKey ? BINDINGS_BY_THREAD_ID.get(bindingKey) : undefined;
+    return bindingKey && record?.accountId === accountId ? { bindingKey, record } : undefined;
+  };
 
   let stopping = false;
   let stopPromise: Promise<void> | undefined;
@@ -148,9 +159,6 @@ function createLoadedThreadBindingManager(
   let sweepTimer: NodeJS.Timeout | null = null;
   const runSweepOnce = async () => {
     const bindings = manager.listBindings();
-    if (bindings.length === 0) {
-      return;
-    }
     let rest: ReturnType<typeof createDiscordRestClient>["rest"] | null = null;
     for (const snapshotBinding of bindings) {
       // Re-read live state after any awaited work from earlier iterations.
@@ -204,7 +212,7 @@ function createLoadedThreadBindingManager(
         }
         if (!channel || typeof channel !== "object") {
           logVerbose(
-            `discord thread binding sweep probe returned invalid payload for ${binding.threadId}`,
+            `discord thread binding sweep check returned invalid payload for ${binding.threadId}`,
           );
           continue;
         }
@@ -233,7 +241,7 @@ function createLoadedThreadBindingManager(
           continue;
         }
         logVerbose(
-          `discord thread binding sweep probe failed for ${binding.threadId}: ${summarizeDiscordError(err)}`,
+          `discord thread binding sweep check failed for ${binding.threadId}: ${summarizeDiscordError(err)}`,
         );
       }
     }
@@ -241,31 +249,23 @@ function createLoadedThreadBindingManager(
   const unbindThread = async (
     unbindParams: Parameters<ThreadBindingManager["unbindThread"]>[0],
   ) => {
-    const bindingKey = resolveBindingRecordKey({
-      accountId,
-      threadId: unbindParams.threadId,
-    });
-    if (!bindingKey) {
+    const binding = getBinding(unbindParams.threadId);
+    if (!binding || (unbindParams.expected && binding.record !== unbindParams.expected)) {
       return null;
     }
-    const existingLocal = BINDINGS_BY_THREAD_ID.get(bindingKey);
-    if (
-      !existingLocal ||
-      existingLocal.accountId !== accountId ||
-      (unbindParams.expected && existingLocal !== unbindParams.expected)
-    ) {
-      return null;
-    }
+    const { bindingKey, record: existingLocal } = binding;
     await commitBindingRecord({
       bindingKey,
       previous: existingLocal,
       next: null,
       persist: unbindParams.persist ?? persist,
-      assertCurrent: assertManagerCurrent,
+      assertCurrent: () => {
+        assertManagerCurrent();
+        unbindParams.assertCurrent?.();
+      },
     });
-    const removed = existingLocal;
-    manager.notifyUnbound(removed, unbindParams);
-    return removed;
+    manager.notifyUnbound(existingLocal, unbindParams);
+    return existingLocal;
   };
 
   const manager: ThreadBindingManager = {
@@ -289,36 +289,18 @@ function createLoadedThreadBindingManager(
         });
         // Use bot send path for farewell messages so unbound threads don't process
         // webhook echoes as fresh inbound events when allowBots is enabled.
-        if (cfg) {
-          void maybeSendBindingMessage({
-            cfg,
-            record: removed,
-            text: farewell,
-            preferWebhook: false,
-          });
-        }
+        void maybeSendBindingMessage({
+          cfg,
+          record: removed,
+          text: farewell,
+          preferWebhook: false,
+        });
       }
     },
     getIdleTimeoutMs: () => idleTimeoutMs,
     getMaxAgeMs: () => maxAgeMs,
-    getByThreadId: (threadId) => {
-      const key = resolveBindingRecordKey({
-        accountId,
-        threadId,
-      });
-      if (!key) {
-        return undefined;
-      }
-      const entry = BINDINGS_BY_THREAD_ID.get(key);
-      if (!entry || entry.accountId !== accountId) {
-        return undefined;
-      }
-      return entry;
-    },
-    getBySessionKey: (targetSessionKey) => {
-      const all = manager.listBySessionKey(targetSessionKey);
-      return all[0];
-    },
+    getByThreadId: (threadId) => getBinding(threadId)?.record,
+    getBySessionKey: (targetSessionKey) => manager.listBySessionKey(targetSessionKey)[0],
     listBySessionKey: (targetSessionKey) => {
       const ids = resolveBindingIdsForSession({
         targetSessionKey,
@@ -339,16 +321,10 @@ function createLoadedThreadBindingManager(
       if (!key) {
         return null;
       }
-      const at =
-        typeof input.at === "number" && Number.isFinite(input.at)
-          ? Math.max(0, Math.floor(input.at))
-          : Date.now();
+      const at = normalizeTouchTimestamp(input.at);
       return updateBindingRecordSync({
         bindingKey: key,
-        transform: (record) => ({
-          ...record,
-          lastActivityAt: Math.max(record.lastActivityAt || 0, at),
-        }),
+        transform: (record) => touchBindingRecord(record, at),
         persist: (input.persist ?? persist) && shouldPersistAnyBindingState(),
         minIntervalMs: THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS,
       });
@@ -356,29 +332,17 @@ function createLoadedThreadBindingManager(
     touchThread: (input) => {
       const touchParams = {
         ...input,
-        at:
-          typeof input.at === "number" && Number.isFinite(input.at)
-            ? Math.max(0, Math.floor(input.at))
-            : Date.now(),
+        at: normalizeTouchTimestamp(input.at),
       };
       return mutate(async () => {
-        const key = resolveBindingRecordKey({
-          accountId,
-          threadId: touchParams.threadId,
-        });
-        if (!key) {
+        const binding = getBinding(touchParams.threadId);
+        if (!binding) {
           return null;
         }
-        const existingResult = BINDINGS_BY_THREAD_ID.get(key);
-        if (!existingResult || existingResult.accountId !== accountId) {
-          return null;
-        }
-        const nextRecord: ThreadBindingRecord = {
-          ...existingResult,
-          lastActivityAt: Math.max(existingResult.lastActivityAt || 0, touchParams.at),
-        };
+        const { bindingKey, record: existingResult } = binding;
+        const nextRecord = touchBindingRecord(existingResult, touchParams.at);
         await commitBindingRecord({
-          bindingKey: key,
+          bindingKey,
           previous: existingResult,
           next: nextRecord,
           persist: (touchParams.persist ?? persist) && shouldPersistAnyBindingState(),
@@ -535,7 +499,7 @@ function createLoadedThreadBindingManager(
         );
 
         const introText = bindParams.introText?.trim();
-        if (introText && cfg) {
+        if (introText) {
           void maybeSendBindingMessage({
             cfg,
             record,
@@ -568,9 +532,6 @@ function createLoadedThreadBindingManager(
           accountId,
           targetKind: unbindParams.targetKind,
         });
-        if (ids.length === 0) {
-          return [];
-        }
         const removed: ThreadBindingRecord[] = [];
         for (const bindingKey of ids) {
           const binding = BINDINGS_BY_THREAD_ID.get(bindingKey);
@@ -632,7 +593,7 @@ function createLoadedThreadBindingManager(
     }, THREAD_BINDINGS_SWEEP_INTERVAL_MS);
     // Keep the production process free to exit, but avoid breaking fake-timer
     // sweeper tests where unref'd intervals may never fire.
-    if (!(process.env.VITEST || process.env.NODE_ENV === "test")) {
+    if (shouldDefaultPersist()) {
       sweepTimer.unref?.();
     }
   }

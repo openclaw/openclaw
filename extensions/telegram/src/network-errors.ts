@@ -107,10 +107,7 @@ function getErrorCode(err: unknown): string | undefined {
     return undefined;
   }
   const errno = (err as { errno?: unknown }).errno;
-  if (typeof errno === "string") {
-    return errno;
-  }
-  if (typeof errno === "number") {
+  if (typeof errno === "string" || typeof errno === "number") {
     return String(errno);
   }
   return undefined;
@@ -153,10 +150,11 @@ function getNumericHttpStatus(err: unknown): number | undefined {
 // significant bits, so a non-safe integer is not the documented id and stays unreported.
 function describeTelegramSupergroupMigration(err: unknown): string | undefined {
   for (const candidate of collectTelegramErrorCandidates(err)) {
-    if (!isRecord(candidate) || candidate.error_code !== 400) {
-      continue;
-    }
-    if (candidate.description !== TELEGRAM_SUPERGROUP_MIGRATION_DESCRIPTION) {
+    if (
+      !isRecord(candidate) ||
+      candidate.error_code !== 400 ||
+      candidate.description !== TELEGRAM_SUPERGROUP_MIGRATION_DESCRIPTION
+    ) {
       continue;
     }
     const migratedChatId = isRecord(candidate.parameters)
@@ -204,25 +202,19 @@ export function isSafeToRetrySendError(err: unknown): boolean {
   if (isTelegramRequestNotStartedError(err)) {
     return true;
   }
-  for (const candidate of collectTelegramErrorCandidates(err)) {
-    if (classifyTelegramTransientNetworkError(candidate) === "pre-connect") {
-      return true;
-    }
-  }
-  return false;
+  return collectTelegramErrorCandidates(err).some(
+    (candidate) => classifyTelegramTransientNetworkError(candidate) === "pre-connect",
+  );
 }
 
 function hasTelegramErrorCode(err: unknown, matches: (code: number) => boolean): boolean {
-  for (const candidate of collectTelegramErrorCandidates(err)) {
+  return collectTelegramErrorCandidates(err).some((candidate) => {
     if (!candidate || typeof candidate !== "object" || !("error_code" in candidate)) {
-      continue;
+      return false;
     }
     const code = (candidate as { error_code: unknown }).error_code;
-    if (typeof code === "number" && matches(code)) {
-      return true;
-    }
-  }
-  return false;
+    return typeof code === "number" && matches(code);
+  });
 }
 
 export function isTelegramAuthenticationError(err: unknown): boolean {
@@ -330,16 +322,14 @@ export function isRecoverableTelegramNetworkError(
     }
 
     const message = normalizeLowercaseStringOrEmpty(formatErrorMessage(candidate));
-    if (message && ALWAYS_RECOVERABLE_MESSAGES.has(message)) {
+    if (
+      message &&
+      (ALWAYS_RECOVERABLE_MESSAGES.has(message) ||
+        GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message) ||
+        (allowMessageMatch &&
+          RECOVERABLE_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))))
+    ) {
       return true;
-    }
-    if (message && GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message)) {
-      return true;
-    }
-    if (allowMessageMatch && message) {
-      if (RECOVERABLE_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))) {
-        return true;
-      }
     }
   }
 

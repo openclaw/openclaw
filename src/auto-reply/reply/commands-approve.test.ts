@@ -13,7 +13,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { handleApproveCommand } from "./commands-approve.js";
+import { handleApproveCommandFromContext as handleApproveCommand } from "./commands-approve.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
 const resolveApprovalOverGatewayMock = vi.hoisted(() => vi.fn());
@@ -518,7 +518,7 @@ describe("handleApproveCommand", () => {
       true,
     );
 
-    expect(result?.reply?.text).toContain("unknown or expired approval id");
+    expect(result?.reply?.text).toContain("That approval is no longer available");
     expect(resolveApprovalOverGatewayMock).toHaveBeenCalledTimes(2);
     expect(approvalResolverRequest(0).approvalKind).toBeUndefined();
     expect(approvalResolverRequest(1).approvalKind).toBeUndefined();
@@ -562,7 +562,7 @@ describe("handleApproveCommand", () => {
         },
       });
 
-      expect(result?.reply?.text).toContain("owner authority changed");
+      expect(result?.reply?.text).toContain("Check the request in the Control UI");
       const canonicalCalls = resolveApprovalOverGatewayMock.mock.calls.filter(
         ([request]) => (request as { approvalKind?: string }).approvalKind === "system-agent",
       );
@@ -582,7 +582,7 @@ describe("handleApproveCommand", () => {
     });
   });
 
-  it("returns the underlying not-found error for plugin-only approval routing", async () => {
+  it("explains an expired approval for plugin-only approval routing", async () => {
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -624,8 +624,8 @@ describe("handleApproveCommand", () => {
     );
 
     expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toContain("Failed to submit approval");
-    expect(result?.reply?.text).toContain("unknown or expired approval id");
+    expect(result?.reply?.text).toContain("approval is no longer available");
+    expect(result?.reply?.text).toContain("Control UI");
     expect(resolveApprovalOverGatewayMock).toHaveBeenCalledTimes(1);
     expectApprovalResolverCall({ method: "plugin.approval.resolve", id: "abc123" });
   });
@@ -704,7 +704,7 @@ describe("handleApproveCommand", () => {
           resolveApprovalOverGatewayMock.mockRejectedValue(
             new Error("unknown or expired approval id"),
           ),
-        expectedText: "unknown or expired approval id",
+        expectedText: "That approval is no longer available",
         expectResolverCalls: 2,
       },
       {

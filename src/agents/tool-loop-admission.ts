@@ -49,7 +49,6 @@ async function evaluateToolLoopCall(
     stateOverride ?? sessionState,
     toolName,
     call.params,
-    ctx.loopDetection,
     ctx.runId ? { runId: ctx.runId } : undefined,
   );
   if (!result.stuck) {
@@ -103,7 +102,6 @@ async function recordToolLoopCall(call: ToolLoopCall, ctx: HookContext): Promise
     normalizeToolPolicyName(call.toolName || "tool"),
     call.params,
     call.toolCallId,
-    ctx.loopDetection,
     ctx.runId ? { runId: ctx.runId } : undefined,
   );
 }
@@ -157,7 +155,6 @@ export async function admitToolCallBatch(
       normalizeToolPolicyName(call.toolCall.name || "tool"),
       call.args,
       call.toolCall.id,
-      ctx.loopDetection,
       ctx.runId ? { runId: ctx.runId } : undefined,
     );
     const projectedCall = state.toolCallHistory?.at(-1);
@@ -238,7 +235,6 @@ export async function admitToolCallBatch(
       admitted.toolName,
       readyCall.args,
       readyCall.toolCallId,
-      ctx.loopDetection,
       ctx.runId ? { runId: ctx.runId } : undefined,
     );
     if (admitted.validationFailure) {
@@ -249,7 +245,6 @@ export async function admitToolCallBatch(
         toolParams: readyCall.args,
         toolCallId: readyCall.toolCallId,
         result: admitted.validationFailure,
-        config: ctx.loopDetection,
         runId: ctx.runId,
       });
       if (record) {

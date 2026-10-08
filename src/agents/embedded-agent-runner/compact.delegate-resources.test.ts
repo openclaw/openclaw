@@ -58,7 +58,6 @@ const modes = [
   "cleanup-tail",
   "preparation-failure",
   "mcp-caller-abort",
-  "mcp-ready",
   "lsp-parent-abort",
   "before_compaction",
   "after_compaction",
@@ -192,10 +191,7 @@ vi.mock("../sessions/sdk.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../sessions/sdk.js")>();
   return {
     ...actual,
-    createAgentSessionForEmbeddedRunner: async (
-      options: Parameters<typeof actual.createAgentSessionForEmbeddedRunner>[0],
-      internalOptions: Parameters<typeof actual.createAgentSessionForEmbeddedRunner>[1],
-    ) => {
+    createAgentSession: async (options: Parameters<typeof actual.createAgentSession>[0]) => {
       const current = fixture();
       const extensions = expectDefined(
         options.resourceLoader,
@@ -229,7 +225,7 @@ vi.mock("../sessions/sdk.js", async (importOriginal) => {
           extensions.runtime,
         ),
       );
-      const created = await actual.createAgentSessionForEmbeddedRunner(options, internalOptions);
+      const created = await actual.createAgentSession(options);
       current.session = created.session;
       const dispose = created.session.dispose.bind(created.session);
       vi.spyOn(created.session, "dispose").mockImplementation(() => {
@@ -418,7 +414,7 @@ describe("delegate compaction resource retirement", () => {
     async (mode) => {
       const lspCancelled = mode === "lsp-parent-abort";
       const mcpCancelled = mode === "mcp-caller-abort";
-      const pendingPreparation = lspCancelled || mcpCancelled || mode === "mcp-ready";
+      const pendingPreparation = lspCancelled || mcpCancelled;
       const preparationFailed = mode === "preparation-failure" || lspCancelled || mcpCancelled;
       await withOpenClawTestState(
         { label: "delegate-resources", layout: "split" },
@@ -705,9 +701,6 @@ module.exports = { id: ${JSON.stringify(providerId)}, register(api) {
                   if (mode === "lsp-parent-abort") {
                     parent.beginClose(new Error("fixture parent cancelled compaction"));
                     expect(controller.signal.aborted).toBe(false);
-                  }
-                  if (mode === "mcp-ready") {
-                    current.finish.resolve();
                   }
                 }
                 const result = pendingPreparation

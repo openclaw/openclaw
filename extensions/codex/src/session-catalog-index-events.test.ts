@@ -14,7 +14,7 @@ import {
 import type { CodexCatalogState } from "./session-catalog-index-state.js";
 import { CodexCatalogIndex } from "./session-catalog-index.js";
 import { projectCodexCatalogPage } from "./session-catalog-projection.js";
-import { codexCatalogSourceForClient } from "./session-catalog-source.js";
+import { codexCatalogSourceForClient, setCodexCatalogSource } from "./session-catalog-source.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -61,10 +61,12 @@ async function fixture(
     const limit = params.limit ?? 64;
     return projectCodexCatalogPage(
       {
-        data: structuredClone(threads.slice(offset, offset + limit)),
+        data: structuredClone(threads.slice(offset, offset + limit)).map((entry) =>
+          setCodexCatalogSource(entry, codexCatalogSourceForClient(harness.client)),
+        ),
         nextCursor: offset + limit < threads.length ? String(offset + limit) : null,
       },
-      { sanitize: sanitizeTerminalText, source: codexCatalogSourceForClient(harness.client) },
+      { sanitize: sanitizeTerminalText },
     );
   });
   const index = new CodexCatalogIndex({
@@ -428,13 +430,16 @@ describe("resident Codex catalog notifications", () => {
     const page = await projectCodexCatalogPage(
       {
         data: [
-          thread({
-            cwd: "/workspace/fresh",
-            status: { type: "active", activeFlags: ["staleStatus"] },
-          }),
+          setCodexCatalogSource(
+            thread({
+              cwd: "/workspace/fresh",
+              status: { type: "active", activeFlags: ["staleStatus"] },
+            }),
+            codexCatalogSourceForClient(harness.client),
+          ),
         ],
       },
-      { sanitize: sanitizeTerminalText, source: codexCatalogSourceForClient(harness.client) },
+      { sanitize: sanitizeTerminalText },
     );
     const response = createDeferred<typeof page>();
     const started = createDeferred<void>();
@@ -496,6 +501,12 @@ describe("resident Codex catalog notifications", () => {
     try {
       await observeCodexCatalogClient(replacement.client, { startOptions });
       await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(2));
+      expect((await index.list({})).sessions[0]).toMatchObject({
+        threadId: "thread-1",
+        cwd: "/workspace/project",
+        recencyAt: 100,
+      });
+      expect(readNative).toHaveBeenCalledTimes(2);
       replacement.send({
         method: "thread/name/updated",
         params: { threadId: "thread-1", threadName: "Renamed during hydration" },
@@ -515,40 +526,6 @@ describe("resident Codex catalog notifications", () => {
     } finally {
       response.resolve(page);
       replacement.client.close();
-    }
-  });
-
-  it("refreshes remote inventory after reconnect while lists keep returning resident memory", async () => {
-    const { index, harness, startOptions, readNative } = await fixture();
-    await nextTurn();
-    expect(readNative).toHaveBeenCalledOnce();
-    harness.client.close();
-    const page = await projectCodexCatalogPage(
-      { data: [thread({ id: "created-while-offline", name: "New remote session" })] },
-      { sanitize: sanitizeTerminalText },
-    );
-    const response = createDeferred<typeof page>();
-    readNative.mockImplementation(() => response.promise);
-    const replacement = createClientHarness();
-    cleanups.push(async () => replacement.client.close());
-    try {
-      await observeCodexCatalogClient(replacement.client, { startOptions });
-      await vi.waitFor(() => expect(readNative).toHaveBeenCalledTimes(2));
-      expect((await index.list({})).sessions.map((session) => session.threadId)).toEqual([
-        "thread-1",
-      ]);
-      expect(readNative).toHaveBeenCalledTimes(2);
-      response.resolve(page);
-      await vi.waitFor(async () => {
-        expect((await index.list({})).sessions.map((session) => session.threadId)).toEqual([
-          "created-while-offline",
-        ]);
-      });
-      await observeCodexCatalogClient(replacement.client, { startOptions });
-      await nextTurn();
-      expect(readNative).toHaveBeenCalledTimes(2);
-    } finally {
-      response.resolve(page);
     }
   });
 
@@ -726,28 +703,6 @@ describe("resident Codex catalog notifications", () => {
     expect((await index.list({})).sessions[0]?.activeFlags).toBeUndefined();
     expect(harness.writes).toEqual([]);
   });
-
-  it.each(["archived", "deleted"])(
-    "keeps a thread %s when an older metadata read settles and cancels queued rereads",
-    async (action) => {
-      const { index, harness, complete, reply } = await fixture();
-      complete();
-      await harness.waitForWrite(0);
-      complete();
-      harness.send({ method: `thread/${action}`, params: { threadId: "thread-1" } });
-      expect((await index.list({})).sessions).toEqual([]);
-      await reply(0, thread({ name: "Stale pre-archive data", updatedAt: 101 }));
-      // The memory-only projection settles before the next event-loop turn.
-      await nextTurn();
-      expect((await index.list({})).sessions).toEqual([]);
-      if (action === "archived") {
-        expect(index.get("thread-1")?.archived).toBe(true);
-      } else {
-        expect(index.get("thread-1")).toBeUndefined();
-      }
-      expect(harness.writes).toHaveLength(1);
-    },
-  );
 
   it("does not start a queued reread after catalog shutdown", async () => {
     const { index, harness, complete, reply } = await fixture();

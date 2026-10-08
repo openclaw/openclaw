@@ -15,7 +15,7 @@ import { noteSlackDraftConversationMessage } from "../../draft-message-boundarie
 import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
 import { normalizeSlackChannelType } from "../channel-type.js";
 import type { SlackMonitorContext } from "../context.js";
-import { resolveSlackListenerEventScope, type SlackEventScope } from "../event-scope.js";
+import { resolveSlackMonitorEventScope, type SlackEventScope } from "../event-scope.js";
 import { resolveSlackIngressTurnLifecycle, resolveSlackSenderAuthentication } from "../ingress.js";
 import type { SlackMessageHandler } from "../message-handler.js";
 import type { SlackMessageChangedEvent } from "../types.js";
@@ -34,26 +34,34 @@ async function resolveSlackAppMentionChannelType(params: {
   ctx: SlackMonitorContext;
   eventScope?: SlackEventScope;
   mention: SlackAppMentionEvent;
-}): Promise<SlackMessageEvent["channel_type"] | undefined> {
+}): Promise<{
+  type: SlackMessageEvent["channel_type"] | undefined;
+  lookupFailureCategory?: Awaited<
+    ReturnType<SlackMonitorContext["resolveChannelName"]>
+  >["lookupFailureCategory"];
+}> {
   const explicitType = asString(params.mention.channel_type);
   if (explicitType) {
-    return normalizeSlackChannelType(explicitType, params.mention.channel);
+    return { type: normalizeSlackChannelType(explicitType, params.mention.channel) };
   }
   const rememberedType = params.ctx.recallSlackChannelType(
     params.mention.channel,
     params.eventScope,
   );
   if (rememberedType) {
-    return normalizeSlackChannelType(rememberedType, params.mention.channel);
+    return { type: normalizeSlackChannelType(rememberedType, params.mention.channel) };
   }
   // app_mention omits channel_type, and Slack ID prefixes are not a type contract.
   // Only an authoritative event/cache/API type may choose this event's owner.
   const resolved = await params.ctx
     .resolveChannelName(params.mention.channel, params.eventScope)
-    .catch(() => ({ type: undefined }));
-  return resolved.type
-    ? normalizeSlackChannelType(resolved.type, params.mention.channel)
-    : undefined;
+    .catch(() => ({ type: undefined, lookupFailureCategory: "other" as const }));
+  return {
+    type: resolved.type
+      ? normalizeSlackChannelType(resolved.type, params.mention.channel)
+      : undefined,
+    lookupFailureCategory: resolved.lookupFailureCategory,
+  };
 }
 
 function resolveAssistantMessageChangedSender(params: {
@@ -150,20 +158,6 @@ export function registerSlackMessageEvents(params: {
 }) {
   const { ctx, handleSlackMessage } = params;
 
-  const resolveEventScope = (args: {
-    body: unknown;
-    context: AllMiddlewareArgs["context"];
-    client: AllMiddlewareArgs["client"];
-  }) =>
-    resolveSlackListenerEventScope({
-      identity: ctx.installationIdentity,
-      body: args.body,
-      context: args.context,
-      client: args.client,
-      clientOptions: ctx.app.webClientOptions,
-      onDrop: (reason) => logVerbose(`slack: drop event (${reason})`),
-    });
-
   const noteConversationMessage = (
     message: SlackMessageEvent | SlackAppMentionEvent,
     eventScope?: SlackEventScope,
@@ -181,163 +175,136 @@ export function registerSlackMessageEvents(params: {
     });
   };
 
-  const handleIncomingMessageEvent = async ({
-    event,
-    body,
-    context,
-    client,
-  }: {
-    event: unknown;
-    body: SlackEventMiddlewareArgs<"message">["body"];
-    context: AllMiddlewareArgs["context"];
-    client: AllMiddlewareArgs["client"];
-  }) => {
-    const turnAdoptionLifecycle = resolveSlackIngressTurnLifecycle(context);
-    try {
-      const eventScope = resolveEventScope({ body, context, client });
-      if (eventScope === null) {
-        return;
-      }
-      if (ctx.shouldDropMismatchedSlackEvent(body)) {
-        return;
-      }
+  // Slack subscription names such as message.channels still deliver the message event.
+  for (const source of ["message", "app_mention"] as const) {
+    ctx.app.event(
+      source,
+      async ({
+        event,
+        body,
+        context,
+        client,
+      }: SlackEventMiddlewareArgs<typeof source> & AllMiddlewareArgs) => {
+        const turnAdoptionLifecycle = resolveSlackIngressTurnLifecycle(context);
+        try {
+          const eventScope = resolveSlackMonitorEventScope({
+            ctx,
+            body,
+            context,
+            client,
+            onDrop: (reason) => logVerbose(`slack: drop event (${reason})`),
+          });
+          if (eventScope === null || ctx.shouldDropMismatchedSlackEvent(body)) {
+            return;
+          }
+          const message = event as SlackMessageEvent;
+          let assistantChangedInbound: SlackMessageEvent | undefined;
+          if (source === "message") {
+            // Subtype handlers do not enter the regular message pipeline. Observe any explicit
+            // type here so edits and deletes share the same authoritative conversation cache.
+            ctx.rememberSlackChannelType(message.channel, message.channel_type, eventScope);
+            assistantChangedInbound = resolveAssistantMessageChangedInbound({
+              event: message,
+              ctx,
+            });
+            if (
+              !assistantChangedInbound &&
+              message.subtype === "message_changed" &&
+              isSelfAttributedMessageChange({
+                event: message as SlackMessageChangedEvent,
+                message: asRecord((message as SlackMessageChangedEvent).message),
+                ctx,
+              })
+            ) {
+              return;
+            }
 
-      const message = event as SlackMessageEvent;
-      // Subtype handlers do not enter the regular message pipeline. Observe any explicit
-      // type here so edits and deletes share the same authoritative conversation cache.
-      ctx.rememberSlackChannelType(message.channel, message.channel_type, eventScope);
-      const assistantChangedInbound = resolveAssistantMessageChangedInbound({
-        event: message,
-        ctx,
-      });
-      if (
-        !assistantChangedInbound &&
-        message.subtype === "message_changed" &&
-        isSelfAttributedMessageChange({
-          event: message as SlackMessageChangedEvent,
-          message: asRecord((message as SlackMessageChangedEvent).message),
-          ctx,
-        })
-      ) {
-        return;
-      }
+            const subtypeHandler = assistantChangedInbound
+              ? undefined
+              : resolveSlackMessageSubtypeHandler(message);
+            if (subtypeHandler) {
+              const ingressContext = await authorizeAndResolveSlackSystemEventContext({
+                ctx,
+                senderId: subtypeHandler.senderId,
+                channelId: message.channel,
+                threadTs: subtypeHandler.threadTs,
+                eventKind: subtypeHandler.eventKind,
+                eventScope,
+              });
+              if (!ingressContext) {
+                return;
+              }
+              enqueueRoutedSystemEvent(
+                subtypeHandler.describe(ingressContext.channelLabel),
+                ingressContext.route,
+                {
+                  contextKey: `${subtypeHandler.contextKey}:${body.event_id}`,
+                },
+              );
+              return;
+            }
+          } else {
+            const mention = event as SlackAppMentionEvent;
+            if (eventScope && isBotAuthoredEnterpriseEvent(mention)) {
+              logVerbose("slack: drop enterprise bot-authored app_mention");
+              return;
+            }
 
-      const subtypeHandler = assistantChangedInbound
-        ? undefined
-        : resolveSlackMessageSubtypeHandler(message);
-      if (subtypeHandler) {
-        const ingressContext = await authorizeAndResolveSlackSystemEventContext({
-          ctx,
-          senderId: subtypeHandler.resolveSenderId(message),
-          channelId: message.channel,
-          threadTs: subtypeHandler.resolveThreadTs(message),
-          eventKind: subtypeHandler.eventKind,
-          eventScope,
-        });
-        if (!ingressContext) {
-          return;
+            // DM and MPIM messages are owned by message.im/message.mpim. Resolve the
+            // omitted type before this guard so event ordering cannot change ownership.
+            const { type: channelType, lookupFailureCategory } =
+              await resolveSlackAppMentionChannelType({
+                ctx,
+                mention,
+                eventScope,
+              });
+            if (!channelType) {
+              // OpenClaw manifests pair app_mention with message.channels/groups/im/mpim.
+              // Never guess here: the canonical message event still owns delivery.
+              const channelId = /^[CDG][A-Z0-9]{1,32}$/.test(mention.channel)
+                ? mention.channel
+                : "unrecognized";
+              const category = lookupFailureCategory ?? "missing_type";
+              slackInboundLog.info(
+                `Slack app_mention skipped: conversation type unresolved; channelId=${channelId} lookupFailureCategory=${category}; waiting for message event`,
+                { channelId, lookupFailureCategory: category },
+              );
+              return;
+            }
+            if (channelType === "im" || channelType === "mpim") {
+              return;
+            }
+
+            // Emit a per-inbound receipt before dispatch so a silently-dropped mention
+            // (e.g. router consumes it without a tool call) still leaves journal evidence,
+            // matching the Telegram inbound log. Runs after the DM drop above, so duplicate
+            // DM app_mention events (already handled via message.im) produce no line.
+            const from = `slack:${eventScope?.teamId ?? ctx.teamId}:channel:${mention.channel}:user:${asString(mention.user) ?? "unknown"}`;
+            slackInboundLog.info(
+              `Inbound app_mention ${from} -> bot:${ctx.botUserId} (${channelType}, ${asString(mention.text)?.length ?? 0} chars)`,
+            );
+          }
+          const inbound = assistantChangedInbound ?? message;
+          noteConversationMessage(inbound, eventScope);
+          await handleSlackMessage(inbound, {
+            source,
+            // Assistant metadata identifies an asserted sender, not Slack's event actor.
+            senderAuthentication: assistantChangedInbound
+              ? undefined
+              : resolveSlackSenderAuthentication(context),
+            ...(source === "app_mention" ? { wasMentioned: true } : {}),
+            eventScope,
+            ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
+            ...(eventScope || turnAdoptionLifecycle ? { awaitDispatch: true } : {}),
+          });
+        } catch (err) {
+          if (turnAdoptionLifecycle) {
+            throw err;
+          }
+          const handler = source === "app_mention" ? "mention handler" : "handler";
+          ctx.runtime.error?.(danger(`slack ${handler} failed: ${formatErrorMessage(err)}`));
         }
-        enqueueRoutedSystemEvent(
-          subtypeHandler.describe(ingressContext.channelLabel),
-          ingressContext.route,
-          {
-            contextKey: `${subtypeHandler.contextKey(message)}:${body.event_id}`,
-          },
-        );
-        return;
-      }
-
-      const inbound = assistantChangedInbound ?? message;
-      noteConversationMessage(inbound, eventScope);
-      await handleSlackMessage(inbound, {
-        source: "message",
-        // Assistant metadata identifies an asserted sender, not Slack's event actor.
-        senderAuthentication: assistantChangedInbound
-          ? undefined
-          : resolveSlackSenderAuthentication(context),
-        eventScope,
-        ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
-        ...(eventScope || turnAdoptionLifecycle ? { awaitDispatch: true } : {}),
-      });
-    } catch (err) {
-      if (turnAdoptionLifecycle) {
-        throw err;
-      }
-      ctx.runtime.error?.(danger(`slack handler failed: ${formatErrorMessage(err)}`));
-    }
-  };
-
-  // NOTE: Slack Event Subscriptions use names like "message.channels" and
-  // "message.groups" to control *which* message events are delivered, but the
-  // actual event payload always arrives with `type: "message"`.  The
-  // `channel_type` field ("channel" | "group" | "im" | "mpim") distinguishes
-  // the source.  Bolt rejects `app.event("message.channels")` since v4.6
-  // because it is a subscription label, not a valid event type.
-  ctx.app.event("message", handleIncomingMessageEvent);
-
-  ctx.app.event(
-    "app_mention",
-    async (args: SlackEventMiddlewareArgs<"app_mention"> & AllMiddlewareArgs) => {
-      const { event, body, context, client } = args;
-      const turnAdoptionLifecycle = resolveSlackIngressTurnLifecycle(context);
-      try {
-        const eventScope = resolveEventScope({ body, context, client });
-        if (eventScope === null) {
-          return;
-        }
-        if (ctx.shouldDropMismatchedSlackEvent(body)) {
-          return;
-        }
-
-        const mention = event as SlackAppMentionEvent;
-        if (eventScope && isBotAuthoredEnterpriseEvent(mention)) {
-          logVerbose("slack: drop enterprise bot-authored app_mention");
-          return;
-        }
-
-        // DM and MPIM messages are owned by message.im/message.mpim. Resolve the
-        // omitted type before this guard so event ordering cannot change ownership.
-        const channelType = await resolveSlackAppMentionChannelType({
-          ctx,
-          mention,
-          eventScope,
-        });
-        if (!channelType) {
-          // OpenClaw manifests pair app_mention with message.channels/groups/im/mpim.
-          // Never guess here: the canonical message event still owns delivery.
-          logVerbose(
-            `slack: drop typeless app_mention channel=${mention.channel} (conversation type unresolved; waiting for message event)`,
-          );
-          return;
-        }
-        if (channelType === "im" || channelType === "mpim") {
-          return;
-        }
-
-        // Emit a per-inbound receipt before dispatch so a silently-dropped mention
-        // (e.g. router consumes it without a tool call) still leaves journal evidence,
-        // matching the Telegram inbound log. Runs after the DM drop above, so duplicate
-        // DM app_mention events (already handled via message.im) produce no line.
-        const from = `slack:${eventScope?.teamId ?? ctx.teamId}:channel:${mention.channel}:user:${asString(mention.user) ?? "unknown"}`;
-        slackInboundLog.info(
-          `Inbound app_mention ${from} -> bot:${ctx.botUserId} (${channelType}, ${asString(mention.text)?.length ?? 0} chars)`,
-        );
-
-        noteConversationMessage(mention, eventScope);
-        await handleSlackMessage(mention as unknown as SlackMessageEvent, {
-          source: "app_mention",
-          senderAuthentication: resolveSlackSenderAuthentication(context),
-          wasMentioned: true,
-          eventScope,
-          ...(turnAdoptionLifecycle ? { turnAdoptionLifecycle } : {}),
-          ...(eventScope || turnAdoptionLifecycle ? { awaitDispatch: true } : {}),
-        });
-      } catch (err) {
-        if (turnAdoptionLifecycle) {
-          throw err;
-        }
-        ctx.runtime.error?.(danger(`slack mention handler failed: ${formatErrorMessage(err)}`));
-      }
-    },
-  );
+      },
+    );
+  }
 }

@@ -34,10 +34,8 @@ export function normalizeQaCredentialConvexSiteUrl(params: {
   createError?: ErrorFactory;
 }): string {
   const createError = params.createError ?? Error;
-  let url: URL;
-  try {
-    url = new URL(params.raw);
-  } catch {
+  const url = URL.parse(params.raw);
+  if (!url) {
     throw createError(
       `OPENCLAW_QA_CONVEX_SITE_URL must be a valid URL, got "${params.raw || "<empty>"}".`,
     );

@@ -252,9 +252,6 @@ export async function buildSecretItems(params: {
   targets: PlannedMigrationTargets;
 }): Promise<MigrationItem[]> {
   const env = parseEnv(await readText(params.source.envPath));
-  const store = loadAuthProfileStoreWithoutExternalProfiles(params.targets.agentDir);
-  const seenProfiles = new Set<string>();
-  const items: MigrationItem[] = [];
   const candidates = [
     ...buildEnvSecretCandidates({
       config: params.config,
@@ -267,6 +264,12 @@ export async function buildSecretItems(params: {
     )),
     ...(await buildOpenCodeSecretCandidates(params.source.opencodeAuthPath)),
   ];
+  if (candidates.length === 0) {
+    return [];
+  }
+  const store = loadAuthProfileStoreWithoutExternalProfiles(params.targets.agentDir);
+  const seenProfiles = new Set<string>();
+  const items: MigrationItem[] = [];
   for (const candidate of candidates) {
     if (seenProfiles.has(candidate.profileId)) {
       continue;

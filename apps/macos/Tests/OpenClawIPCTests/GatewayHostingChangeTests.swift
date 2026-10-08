@@ -100,6 +100,25 @@ struct GatewayHostingChangeTests {
         #expect(fixture.calls.suffix(2) == ["restore-app", "health-app"])
     }
 
+    @Test func `CLI custody refusal ends the hosting change without recovery`() async {
+        let fixture = Fixture()
+        var operations = fixture.operations
+        let replace = operations.replace
+        let refusal = "Gateway service or runtime pin changed before installation. " +
+            "The newer selection was preserved; inspect it before retrying."
+        operations.replace = { admit in
+            _ = try await replace(admit)
+            throw GatewayHostingError(message: refusal)
+        }
+        do {
+            try await GatewayProcessManager.changeHosting(operations: operations)
+            Issue.record("Expected the CLI custody refusal")
+        } catch {
+            #expect(error.localizedDescription == refusal)
+        }
+        #expect(fixture.calls == ["prepare", "stop-app", "install-service"])
+    }
+
     @Test(arguments: [true, false])
     func `recovery failure is reported without retrying or claiming health`(operatorChanged: Bool) async {
         let fixture = Fixture()

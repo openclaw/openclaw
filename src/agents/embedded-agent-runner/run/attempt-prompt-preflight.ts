@@ -160,14 +160,13 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
     ...(input.timezone ? { timezone: input.timezone } : {}),
     ...(input.includeBoundaryTimestamp ? {} : { includeTimestamp: false }),
   };
-  const unwindowedLlmBoundaryMessagesForPrecheck =
-    input.contextEnginePromptAuthority === "preassembly_may_overflow" &&
-    input.unwindowedContextEngineMessagesForPrecheck
-      ? normalizeMessagesForLlmBoundary(
-          input.unwindowedContextEngineMessagesForPrecheck,
-          boundaryOptions,
-        )
+  const unwindowedMessages =
+    input.contextEnginePromptAuthority === "preassembly_may_overflow"
+      ? input.unwindowedContextEngineMessagesForPrecheck
       : undefined;
+  const unwindowedLlmBoundaryMessagesForPrecheck = unwindowedMessages
+    ? normalizeMessagesForLlmBoundary(unwindowedMessages, boundaryOptions)
+    : undefined;
   if (input.state.skipPromptSubmission) {
     return { ...input.state };
   }
@@ -222,10 +221,7 @@ export async function prepareEmbeddedAttemptPromptPreflight(input: {
     contextTokenBudget: input.contextTokenBudget,
     reserveTokens: input.reserveTokens,
     ...(attempt.sessionId ? { sessionId: attempt.sessionId } : {}),
-    ...(input.contextEnginePromptAuthority === "preassembly_may_overflow" &&
-    input.unwindowedContextEngineMessagesForPrecheck
-      ? { unwindowedMessageCount: input.unwindowedContextEngineMessagesForPrecheck.length }
-      : {}),
+    ...(unwindowedMessages ? { unwindowedMessageCount: unwindowedMessages.length } : {}),
   };
   const contextBudgetStatus = buildPrePromptContextBudgetStatus(precheckSummary);
   log.debug(

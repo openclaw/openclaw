@@ -11,7 +11,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
-import { observeSessionMaintenanceCompletion } from "../../config/sessions/session-accessor.sqlite-maintenance.test-support.js";
+import { observeSessionMaintenanceCompletion } from "../../config/sessions/session-accessor.sqlite-maintenance-completion.test-support.js";
 import {
   resolveSqliteStoreScope,
   toDatabaseOptions,
@@ -20,6 +20,7 @@ import { replaceTranscriptEvents } from "../../config/sessions/session-accessor.
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readCodexSessionContext } from "../../plugin-sdk/codex-session-transcript-runtime.js";
+import { ModelSelectionLockedError } from "../../sessions/model-selection-error.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
@@ -68,16 +69,16 @@ describe("forkSessionEntryFromParent", () => {
       },
     );
 
-    await expect(
-      forkSessionEntryFromParent({
-        agentId: "main",
-        fallbackEntry: { sessionId: "", updatedAt: 3 },
-        parentSessionKey: "agent:main:main",
-        parentStoreKeys: ["agent:main:main", "main"],
-        sessionKey: "agent:main:subagent:child",
-        storePath,
-      }),
-    ).rejects.toThrow(MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
+    const fork = forkSessionEntryFromParent({
+      agentId: "main",
+      fallbackEntry: { sessionId: "", updatedAt: 3 },
+      parentSessionKey: "agent:main:main",
+      parentStoreKeys: ["agent:main:main", "main"],
+      sessionKey: "agent:main:subagent:child",
+      storePath,
+    });
+    await expect(fork).rejects.toBeInstanceOf(ModelSelectionLockedError);
+    await expect(fork).rejects.toThrow(MODEL_SELECTION_LOCKED_PARENT_FORK_MESSAGE);
     expect(
       loadSessionEntry({ agentId: "main", sessionKey: "agent:main:subagent:child", storePath }),
     ).toBeUndefined();
@@ -188,7 +189,7 @@ describe("forkSessionEntryFromParent", () => {
       sessionKey,
       sessionStoreKeys: [sessionKey, staleSessionKey],
       storePath,
-      patch: () => ({ label: "forked child", updatedAt: 3 }),
+      entryPatch: { forked: { label: "forked child", updatedAt: 3 } },
     });
 
     expect(result.status).toBe("forked");
@@ -240,7 +241,7 @@ describe("forkSessionEntryFromParent", () => {
     );
   });
 
-  it("marks the child as handled when the SQLite parent is over the fork limit", async () => {
+  it("leaves the child unmaterialized when the SQLite parent is over the fork limit", async () => {
     const root = sessionDirs.make();
     const storePath = path.join(root, "sessions.json");
     const parentSessionKey = "agent:main:main";
@@ -266,7 +267,6 @@ describe("forkSessionEntryFromParent", () => {
       parentSessionKey,
       sessionKey,
       storePath,
-      decisionSkipPatch: () => ({ forkedFromParent: true, updatedAt: 3 }),
     });
 
     expect(result).toMatchObject({
@@ -278,15 +278,11 @@ describe("forkSessionEntryFromParent", () => {
         parentTokens: 150_000,
       },
       sessionEntry: {
-        forkedFromParent: true,
         sessionId: "",
         updatedAt: expect.any(Number),
       },
     });
-    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toMatchObject({
-      forkedFromParent: true,
-      sessionId: "",
-    });
+    expect(loadSessionEntry({ agentId: "main", sessionKey, storePath })).toBeUndefined();
   });
 
   it("skips stale-token SQLite parents using transcript usage estimates", async () => {

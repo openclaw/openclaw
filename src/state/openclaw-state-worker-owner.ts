@@ -3,7 +3,10 @@ import { performance } from "node:perf_hooks";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
-import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
+import {
+  assertExistingDatabaseIdentity,
+  type DatabasePathIdentity,
+} from "../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import {
   openSharedStateSqliteWorkerStore,
@@ -13,9 +16,10 @@ import {
   getSqliteWorkerActorIdentity,
   retireSqliteWorkerActor,
   runSqliteWorkerStoreOperation,
+  SqliteWorkerError,
 } from "../infra/sqlite-worker-store.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
+import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { isStateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import {
@@ -437,11 +441,62 @@ function createSharedStateWorkerOwner() {
     close,
     retainOperation,
     // Source and bundled callers must share the owner's backend URL.
-    openCleanup(databasePath: string, context: SqliteWorkerStateContext, assertOwned: () => void) {
+    async openCleanup(
+      databasePath: string,
+      context: SqliteWorkerStateContext,
+      assertOwned: () => void,
+      identity: DatabasePathIdentity,
+    ) {
+      const expectedIdentity = { ...identity };
+      assertOwned();
+      if (!expectedIdentity.key.startsWith("file:")) {
+        return undefined;
+      }
+      const assertCurrent = () => {
+        assertOwned();
+        assertExistingDatabaseIdentity(
+          databasePath,
+          expectedIdentity.key,
+          expectedIdentity.birthtime,
+        );
+        for (const entry of activeEntries) {
+          if (
+            matches(entry, expectedIdentity) &&
+            entry.store &&
+            !isSqliteWorkerStoreAvailable(entry.store)
+          ) {
+            // A retained callback may itself need cleanup before it can settle.
+            throw new SqliteWorkerError(
+              "Shared-state cleanup is waiting for accepted operations to settle",
+              "unavailable",
+            );
+          }
+        }
+      };
+      assertCurrent();
+      for (const attempt of retiringActors.values()) {
+        if (attempt.identity.key === expectedIdentity.key) {
+          assertCurrent();
+          await joinActorRetirement(attempt);
+          assertCurrent();
+        }
+      }
+      for (const entry of new Set([...stores, ...retiring.keys()])) {
+        if (
+          (stores.has(entry) || retiring.has(entry)) &&
+          matches(entry, expectedIdentity) &&
+          entry.store &&
+          !isSqliteWorkerStoreAvailable(entry.store)
+        ) {
+          assertCurrent();
+          await (entry.actor ? retireActor(entry.actor, expectedIdentity) : retire(entry));
+          assertCurrent();
+        }
+      }
       return openSharedStateSqliteWorkerStore<OpenClawStateWorkerCleanupOperations>(
         { ...captureRuntimeWorkerSource(moduleUrl), databasePath, existingOnly: true },
         context,
-        assertOwned,
+        assertCurrent,
       );
     },
     async open(
@@ -592,6 +647,7 @@ function createSharedStateWorkerOwner() {
             stores.delete(admitted);
             refreshPressureSubscription();
           }
+          admitted.openingAdmission.assertCurrent = undefined;
           return store;
         });
         stores.add(entry);
@@ -599,6 +655,7 @@ function createSharedStateWorkerOwner() {
         context.maintenanceScope?.own(entry, "shared-resources", () => retire(admitted));
         void entry.opening.catch(() => {
           stores.delete(admitted);
+          admitted.openingAdmission.assertCurrent = undefined;
           if (hasPendingCleanup(admitted) && !retiring.has(admitted)) {
             retiring.set(admitted, {});
           }

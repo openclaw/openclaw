@@ -1,5 +1,6 @@
 // Memory Core tests cover manager registry behavior.
 import path from "node:path";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { memoryRuntime } from "../runtime-provider.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
@@ -180,7 +181,7 @@ describe("memory index", () => {
     expect((first as unknown as { closed: boolean }).closed).toBe(true);
   });
 
-  it("does not block another agent while one scope retires its manager", async () => {
+  it("does not block another agent while one scope retires its manager", async ({ signal }) => {
     const firstCfg = createCfg({
       model: "first-model",
     });
@@ -201,27 +202,17 @@ describe("memory index", () => {
       cfg: createCfg({ model: "other-model" }),
       agentId: "other",
     });
-    let otherAgentSettled = false;
-    void otherAgentPromise.then(
-      () => {
-        otherAgentSettled = true;
-      },
-      () => {
-        otherAgentSettled = true;
-      },
-    );
     try {
-      await vi.waitFor(() => expect(otherAgentSettled).toBe(true));
+      const otherAgent = requireManager(await withinTest(otherAgentPromise, signal));
+      trackManager(otherAgent);
+      expect((otherAgent as unknown as { closed: boolean }).closed).toBe(false);
     } finally {
       releaseProviderClose();
       providerFixture.providerCloseGate = null;
     }
 
-    const otherAgent = requireManager(await otherAgentPromise);
     const replacement = requireManager(await replacementPromise);
-    trackManager(otherAgent);
     trackManager(replacement);
-    expect((otherAgent as unknown as { closed: boolean }).closed).toBe(false);
   });
 
   it("global teardown waits for an admitted builtin manager replacement", async () => {

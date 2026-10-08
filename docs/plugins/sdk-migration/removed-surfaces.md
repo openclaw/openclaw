@@ -31,6 +31,21 @@ Some legacy helpers and named types require caller changes rather than an
 import-path substitution. See the [channel mappings](/plugins/sdk-migration/import-paths#retained-channel-facade-mappings)
 and [config and infrastructure migration steps](/plugins/sdk-migration/how-to-migrate).
 
+### Command, Discord, and Telegram account facades
+
+`command-auth`, `discord`, and `telegram-account` were removed with explicit
+SDK-owner approval on October 2, 2026. Move sender authorization to
+`channel-ingress-runtime`, native command helpers to `command-auth-native`, and
+help builders to `command-status`. Discord and Telegram behavior remains owned
+by their plugins; use generic channel contracts and injected runtime helpers
+from external plugins, and the owning plugin's `api.ts` / `runtime-api.ts`
+barrels for repository consumers.
+
+These are breaking removals for third-party plugins that still import the old
+subpaths, including older published `@openclaw/discord` packages. Upgrade affected
+plugins before upgrading the host. Not every export has a path-only replacement;
+see the [per-surface mappings](/plugins/sdk-migration/import-paths#removed-command-and-channel-facades).
+
 ### Process-global API-provider publication
 
 `registerApiProvider(...)` and `unregisterApiProviders(...)` were removed from
@@ -59,6 +74,25 @@ api.on("gateway_stop", async (event, ctx) => {
   await stopPluginService(ctx);
 });
 ```
+
+### Skill Workshop proposal hooks
+
+The `skill_proposal_evaluate` and `skill_proposal_changed` hooks were removed
+together with Skill Workshop proposals. Workshop now applies each change
+immediately and keeps a restorable version, so there is no pending draft to
+evaluate and no proposal lifecycle to observe. The hook runner methods
+`runSkillProposalEvaluate` and `runSkillProposalChanged` were removed, and
+`openclaw/plugin-sdk/plugin-entry` no longer exports
+`PluginHookSkillProposalEvaluateEvent`, `PluginHookSkillProposalEvaluateResult`,
+`PluginHookSkillProposalEvaluationOutcome`, `PluginHookSkillProposalChangedEvent`,
+`PluginHookSkillProposalKind`, `PluginHookSkillEvaluationFinding`,
+`PluginHookSkillBundleFile`, or `PluginHookSkillBundleSnapshot`. The optional
+`proposal` field on `PluginHookSkillChangedEvent` was removed too.
+
+To observe committed Workshop skill writes, register `skill_changed` and filter
+on `source: "workshop"`. There is no replacement for pre-apply evaluation.
+Registering a removed hook name logs an `unknown typed hook` warning and the
+handler never runs.
 
 ### Private testing barrel
 

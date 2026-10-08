@@ -4,6 +4,7 @@ import {
   defaultsClaudeAdaptiveThinking,
   requiresClaudeAdaptiveThinking,
   resolveAnthropicThinkingEffort,
+  resolveClaudeHaiku55ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   supportsClaudeAdaptiveThinking,
@@ -70,6 +71,7 @@ export function resolveAnthropicTransportOptions(
     // Claude 5 defaults thinking on; the clamped 32k baseline starves thinking
     // plus response output, so these models keep their full catalog cap.
     useModelDefault:
+      resolveClaudeHaiku55ModelIdentity(model) !== undefined ||
       resolveClaudeSonnet5ModelIdentity(model) !== undefined ||
       resolveClaudeOpus5ModelIdentity(model) !== undefined,
   });

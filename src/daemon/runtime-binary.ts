@@ -1,4 +1,3 @@
-/** Classifies runtime executable paths for daemon command rendering. */
 const NODE_VERSIONED_PATTERN = /^node(?:-\d+|\d+)(?:\.\d+)*(?:\.exe)?$/;
 
 function normalizeRuntimeBasename(execPath: string): string {
@@ -8,13 +7,11 @@ function normalizeRuntimeBasename(execPath: string): string {
   return basename.trim().toLowerCase();
 }
 
-/** Returns whether an executable path names a Node runtime binary. */
 export function isNodeRuntime(execPath: string): boolean {
   const base = normalizeRuntimeBasename(execPath);
   return /^node(?:js)?(?:\.exe)?$/.test(base) || NODE_VERSIONED_PATTERN.test(base);
 }
 
-/** Returns whether an executable path names a Bun runtime binary. */
 export function isBunRuntime(execPath: string): boolean {
   const base = normalizeRuntimeBasename(execPath);
   return base === "bun" || base === "bun.exe";
@@ -45,6 +42,7 @@ const RUNTIME_VALUE_OPTIONS = new Set([
   "--disable-proto",
   "--cpu-prof-name",
   "--max-old-space-size",
+  "--max-semi-space-size",
 ]);
 const RUNTIME_BOOLEAN_OPTIONS = new Set([
   "--inspect",
@@ -54,6 +52,9 @@ const RUNTIME_BOOLEAN_OPTIONS = new Set([
   "--jitless",
   "--no-opt",
   "--experimental-strip-types",
+  "--watch",
+  "--no-warnings",
+  "--trace-uncaught",
   "--bun",
 ]);
 
@@ -111,9 +112,10 @@ export function resolveRuntimeScriptPosition(args: string[]): {
     } else if (arg.startsWith("-")) {
       // A negated spelling proves a boolean; its absence never proves a value option.
       const negated = `--no-${option.replace(/^--(?:no-)?/, "")}`;
-      const nodeOption = process.allowedNodeEnvironmentFlags.has(option);
+      const nodeOption = !bun && process.allowedNodeEnvironmentFlags.has(option);
       const knownBoolean =
         RUNTIME_BOOLEAN_OPTIONS.has(option) ||
+        (bun && (option === "--hot" || option === "--no-install")) ||
         (nodeOption && process.allowedNodeEnvironmentFlags.has(negated));
       if (!inlineCommand && !knownBoolean && !/^--[^=]+=/.test(arg)) {
         unresolved ??= { kind: "unclassified", reason: `unsupported runtime option ${arg}` };

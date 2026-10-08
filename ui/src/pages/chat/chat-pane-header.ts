@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import { isIncognitoSessionKey } from "../../../../src/shared/incognito-session-key.js";
 import type { GatewaySessionRow, SessionVisibility } from "../../api/types.ts";
 import { isNativeLocalGateway } from "../../app/native-editor-locality.runtime.ts";
@@ -35,6 +35,7 @@ import { displayedChatSessionBranches } from "./chat-history-branches.ts";
 import { ChatPaneDiscussion } from "./chat-pane-discussion.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import { ChatPaneHeaderMemo } from "./chat-pane-header-memo.ts";
+import { ChatPaneNativeSessionActions } from "./chat-pane-native-session-actions.ts";
 import { resolveChatPaneDesktopTarget, resolveChatPanePlacement } from "./chat-pane-placement.ts";
 import type { createChatPaneRails } from "./chat-pane-rails.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
@@ -48,6 +49,7 @@ import type {
 import {
   canRevealSessionWorkspace,
   renderChatPaneHeader,
+  renderChatPanePanelToggle,
   renderChatPanePanelLayoutActions,
   resolveChatPaneParentSession,
   resolveChatPaneWorkspaceIcon,
@@ -72,6 +74,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
   private headerBoardMenu?: BoardWidgetPageMenu;
   private readonly headerPanelsMemo = new ChatPaneHeaderMemo<HeaderMenuQuickAction[]>();
   private readonly headerLayoutMemo = new ChatPaneHeaderMemo<HeaderMenuQuickAction[]>();
+  private readonly headerSessionActions = new ChatPaneNativeSessionActions();
   private readonly headerReasonsMemo = new ChatPaneHeaderMemo<
     Partial<Record<HeaderMenuActionKind, string>>
   >();
@@ -112,6 +115,8 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     changes: () => this.headerWorkspace?.onOpenDiff?.(),
     files: () => this.headerWorkspace?.onToggleCollapsed(),
     companion: () => this.requestSessionRail("toggle"),
+    subagents: () => this.requestSubagentsPanel("toggle"),
+    processes: () => this.requestBackgroundPanel("processes", "toggle"),
   };
   private readonly onHeaderDefault = () => {
     if (this.headerDefaultAction?.kind !== "status") {
@@ -132,6 +137,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     placementStartupStatus: ApplicationPlacementStartupStatus | null | undefined,
     sidebarLayout?: SidebarLayout,
     panelDefinitions = sidebarPanelDefinitions(),
+    subagentStop: TemplateResult | typeof nothing = nothing,
   ) {
     this.headerMenuRow = row;
     this.headerWorkspace = sessionWorkspace;
@@ -190,14 +196,19 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       method: "session.members.listEvidence",
       requiredScope: "operator.read",
     });
-    const sharingWriteAccess = (method: string) =>
-      readSessionMethodAccess(sharingSnapshot, { method, requiredScope: "operator.write" });
-    const sharingVisibilityAccess = sharingWriteAccess("session.visibility.set");
-    const publicShareAccess = sharingWriteAccess("session.publicShare.set");
-    const sharingMemberAddAccess = sharingWriteAccess("session.members.add");
-    const sharingMemberRemoveAccess = sharingWriteAccess("session.members.remove");
+    const sharingWriteReason = (method: string) => {
+      const access = readSessionMethodAccess(sharingSnapshot, {
+        method,
+        requiredScope: "operator.write",
+      });
+      return access.allowed ? undefined : access.reason;
+    };
+    const visibilityDisabledReason = sharingWriteReason("session.visibility.set");
+    const publicShareDisabledReason = sharingWriteReason("session.publicShare.set");
+    const memberAddDisabledReason = sharingWriteReason("session.members.add");
+    const memberRemoveDisabledReason = sharingWriteReason("session.members.remove");
     const sharingOpenDisabledReason =
-      sharingReadAccess.allowed || sharingVisibilityAccess.allowed
+      sharingReadAccess.allowed || visibilityDisabledReason === undefined
         ? undefined
         : sharingReadAccess.reason;
     const renameAccess = row
@@ -264,33 +275,27 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
     const currentLayout = sidebarLayout ?? this.state?.sidebarLayout;
     const sidePanelOpen = currentLayout?.open === true && !currentLayout.expanded;
     const toggleSidePanel = () => this.setChatSidePanelOpen(!sidePanelOpen, sidebarLayout);
-    const sidePanelAction = html`<openclaw-tooltip
-      .content=${t(sidePanelOpen ? "chat.sidePanel.minimize" : "chat.sidePanel.label")}
-    >
-      <button
-        class="btn btn--ghost btn--icon chat-icon-btn chat-side-panel-toggle"
-        type="button"
-        aria-label=${t(sidePanelOpen ? "chat.sidePanel.minimize" : "chat.sidePanel.label")}
-        aria-expanded=${String(sidePanelOpen)}
-        @click=${toggleSidePanel}
-      >
-        ${sidePanelOpen ? icons.panelRightClose : icons.panelRightOpen}
-      </button>
-    </openclaw-tooltip>`;
+    const sidePanelAction = renderChatPanePanelToggle({
+      label: t(sidePanelOpen ? "chat.sidePanel.minimize" : "chat.sidePanel.label"),
+      icon: sidePanelOpen ? icons.panelRightClose : icons.panelRightOpen,
+      className: "chat-side-panel-toggle",
+      expanded: sidePanelOpen,
+      onToggle: toggleSidePanel,
+    });
     const browserPanelAction = sessionWorkspace.onToggleBrowser
-      ? html`<openclaw-tooltip .content=${t("browser.toggle")}>
-          <button
-            class="btn btn--ghost btn--icon chat-icon-btn chat-browser-panel-toggle"
-            type="button"
-            aria-label=${t("browser.toggle")}
-            @click=${sessionWorkspace.onToggleBrowser}
-          >
-            ${icons.globe}
-          </button>
-        </openclaw-tooltip>`
+      ? renderChatPanePanelToggle({
+          label: t("browser.toggle"),
+          icon: icons.globe,
+          className: "chat-browser-panel-toggle",
+          onToggle: sessionWorkspace.onToggleBrowser,
+        })
       : nothing;
     const sessionRailVisible =
       this.state !== undefined && isSidebarSlotVisible(this.state.sidebarLayout, "companion");
+    const subagentsVisible =
+      this.state !== undefined && isSidebarSlotVisible(this.state.sidebarLayout, "subagents");
+    const processesVisible =
+      this.state !== undefined && isSidebarSlotVisible(this.state.sidebarLayout, "processes");
     const modifiedFiles =
       sessionWorkspace.list?.files.filter((file) => file.kind === "modified").length ?? 0;
     const panelMenuActions = this.headerPanelsMemo.read(
@@ -304,57 +309,56 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         sessionWorkspace.collapsed,
         modifiedFiles,
         sessionRailVisible,
+        subagentsVisible,
+        processesVisible,
+        catalog,
         i18n.getLocale(),
       ],
       () => {
-        const actions: HeaderMenuQuickAction[] = (
+        const callbacks = this.headerPanelCallbacks;
+        const actions: HeaderMenuQuickAction[] = [];
+        for (const [id, label, icon, onActivate] of [
           [
-            [
-              "terminal",
-              t("terminal.toggle"),
-              icons.terminal,
-              sessionWorkspace.onToggleTerminal && this.headerPanelCallbacks.terminal,
-            ],
-            [
-              "browser",
-              t("browser.toggle"),
-              icons.globe,
-              sessionWorkspace.onToggleBrowser && this.headerPanelCallbacks.browser,
-            ],
-            [
-              "desktop",
-              t("desktop.toggle"),
-              icons.monitor,
-              desktopPanelAvailable && sessionWorkspace.onToggleDesktop
-                ? this.headerPanelCallbacks.desktop
-                : undefined,
-            ],
-            [
-              "discussion",
-              discussion?.label ?? "",
-              icons.messageSquare,
-              discussion && this.headerPanelCallbacks.discussion,
-            ],
-            [
-              "changes",
-              t("chat.sessionDiff.show"),
-              icons.diff,
-              sessionWorkspace.onOpenDiff && this.headerPanelCallbacks.changes,
-            ],
-          ] as const
-        ).flatMap(([id, label, icon, onActivate]) =>
-          onActivate
-            ? [
-                {
-                  id,
-                  label,
-                  icon,
-                  onActivate,
-                  ...(id === "discussion" ? { active: discussion?.active } : {}),
-                },
-              ]
-            : [],
-        );
+            "terminal",
+            t("terminal.toggle"),
+            icons.terminal,
+            sessionWorkspace.onToggleTerminal && callbacks.terminal,
+          ],
+          [
+            "browser",
+            t("browser.toggle"),
+            icons.globe,
+            sessionWorkspace.onToggleBrowser && callbacks.browser,
+          ],
+          [
+            "desktop",
+            t("desktop.toggle"),
+            icons.monitor,
+            desktopPanelAvailable && sessionWorkspace.onToggleDesktop && callbacks.desktop,
+          ],
+          [
+            "discussion",
+            discussion?.label ?? "",
+            icons.messageSquare,
+            discussion && callbacks.discussion,
+          ],
+          [
+            "changes",
+            t("chat.sessionDiff.show"),
+            icons.diff,
+            sessionWorkspace.onOpenDiff && callbacks.changes,
+          ],
+        ] as const) {
+          if (onActivate) {
+            actions.push({
+              id,
+              label,
+              icon,
+              onActivate,
+              ...(id === "discussion" ? { active: discussion?.active } : {}),
+            });
+          }
+        }
         actions.push({
           id: "session-files",
           label: t(
@@ -365,15 +369,27 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
           icon: icons.fileText,
           active: !sessionWorkspace.collapsed,
           badge: modifiedFiles,
-          onActivate: this.headerPanelCallbacks.files,
+          onActivate: callbacks.files,
         });
         actions.push({
           id: "session-companion",
           label: t(sessionRailVisible ? "chat.rail.collapse" : "chat.rail.show"),
           icon: icons.spark,
           active: sessionRailVisible,
-          onActivate: this.headerPanelCallbacks.companion,
+          onActivate: callbacks.companion,
         });
+        if (!catalog) {
+          for (const slot of ["subagents", "processes"] as const) {
+            const subagents = slot === "subagents";
+            actions.push({
+              id: `session-${slot}`,
+              label: t(subagents ? "chat.subagentsPanel.title" : "chat.processesPanel.title"),
+              icon: subagents ? icons.bot : icons.terminal,
+              active: subagents ? subagentsVisible : processesVisible,
+              onActivate: callbacks[slot],
+            });
+          }
+        }
         return actions;
       },
     );
@@ -486,14 +502,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         allowedVisibilities,
         sharingReadAccess.allowed,
         sharingOpenDisabledReason,
-        sharingVisibilityAccess.allowed,
-        sharingVisibilityAccess.allowed ? undefined : sharingVisibilityAccess.reason,
-        sharingMemberAddAccess.allowed,
-        sharingMemberAddAccess.allowed ? undefined : sharingMemberAddAccess.reason,
-        sharingMemberRemoveAccess.allowed,
-        sharingMemberRemoveAccess.allowed ? undefined : sharingMemberRemoveAccess.reason,
-        publicShareAccess.allowed,
-        publicShareAccess.allowed ? undefined : publicShareAccess.reason,
+        visibilityDisabledReason,
+        memberAddDisabledReason,
+        memberRemoveDisabledReason,
+        publicShareDisabledReason,
         ownerViewing,
         personActivity,
         showOwnerChip,
@@ -507,21 +519,13 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
               allowedVisibilities,
               membersAvailable: sharingReadAccess.allowed,
               openDisabledReason: sharingOpenDisabledReason,
-              visibilityDisabledReason: sharingVisibilityAccess.allowed
-                ? undefined
-                : sharingVisibilityAccess.reason,
-              memberAddDisabledReason: sharingMemberAddAccess.allowed
-                ? undefined
-                : sharingMemberAddAccess.reason,
-              memberRemoveDisabledReason: sharingMemberRemoveAccess.allowed
-                ? undefined
-                : sharingMemberRemoveAccess.reason,
+              visibilityDisabledReason,
+              memberAddDisabledReason,
+              memberRemoveDisabledReason,
               publicShareDisabledReason:
                 !row.sessionId || isIncognitoSessionKey(row.key)
                   ? t("chat.sessionSharing.publicUnavailable")
-                  : publicShareAccess.allowed
-                    ? undefined
-                    : publicShareAccess.reason,
+                  : publicShareDisabledReason,
               onPublicShareChange: (enabled: boolean) =>
                 void this.setSessionPublicShare(row, enabled),
               onCopyPublicLink: () => void this.copySessionPublicLink(row),
@@ -574,6 +578,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       renameDisabledReason,
       actionsDisabled: this.state?.connected !== true,
       panelActions: browserPanelAction,
+      runAction: subagentStop,
       panelLayoutActions: html`${renderChatPanePanelLayoutActions(
         currentLayout,
         panelDefinitions,
@@ -620,13 +625,18 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
                 this.context.runtimeConfig.canPatch === false
               }
               .compact=${this.narrow}
-              .navigationAllowed=${true}
               .copyMarkdownAllowed=${canCopySessionMarkdown(this.context.gateway.snapshot)}
               .splitAllowed=${canSplitSessionView()}
               .settings=${this.state.settings}
               .panelActions=${panelMenuActions}
               .layoutActions=${layoutMenuActions}
               .boardWidgetMenu=${boardWidgetMenu}
+              .sessionActions=${this.headerSessionActions.read(
+                this.context,
+                row,
+                placement.reclaimDisabledReason,
+                this.onHeaderAction,
+              )}
               .sharing=${sharing}
               .groups=${knownGroups}
               .currentOwner=${row.owner?.actor ?? null}

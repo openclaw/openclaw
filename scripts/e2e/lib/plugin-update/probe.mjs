@@ -1,4 +1,3 @@
-// Probe script for plugin update E2E scenarios.
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -240,11 +239,6 @@ function assertCorruptUpdate(updateJsonPath, pluginId) {
   assertCorruptPluginRestored(plugins, pluginId);
 }
 
-function assertCorruptPluginResult(pluginJsonPath, pluginId) {
-  const plugins = readJson(pluginJsonPath);
-  assertCorruptPluginRestored(plugins, pluginId);
-}
-
 function assertCorruptPluginRestored(plugins, pluginId) {
   const evidence = collectPluginEvidence(plugins, pluginId);
   const outcome = evidence.outcome;
@@ -310,13 +304,11 @@ const commands = {
   "assert-output": () => assertOutput(arg),
   "assert-corrupt-unavailable": () => assertCorruptTargetUnavailable(arg, arg2),
   "assert-corrupt-update": () => assertCorruptUpdate(arg, arg2),
-  "assert-corrupt-plugin-result": () => assertCorruptPluginResult(arg, arg2),
+  "assert-corrupt-plugin-result": () => assertCorruptPluginRestored(readJson(arg), arg2),
   "assert-corrupt-policy-preserved": () => assertCorruptPluginPolicyPreserved(arg, arg2),
 };
 const run = commands[command];
-await (
-  run ??
-  (() => {
-    throw new Error(`Unknown plugin update probe command: ${command || "(missing)"}`);
-  })
-)();
+if (!run) {
+  throw new Error(`Unknown plugin update probe command: ${command || "(missing)"}`);
+}
+await run();

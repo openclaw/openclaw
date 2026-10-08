@@ -125,9 +125,6 @@ function exists(target) {
   }
 }
 ${REMOTE_WORKSPACE_MUTATION_LOCK_JS}
-function readPaths() {
-  return parsePaths(fs.readFileSync(pathsFile, "utf8"));
-}
 function readPhase(candidate, required = true) {
   let value;
   try {
@@ -375,7 +372,7 @@ function runAction() {
     }
     if (phase !== "begun") throw new Error("accepted workspace transaction cannot be applied");
     transitionPhase(transaction, phase, "begun", "applying");
-    const paths = readPaths();
+    const paths = parsePaths(fs.readFileSync(pathsFile, "utf8"));
     try {
       const ancestorModes = prepareWritableAncestors(paths);
       const state = paths.map((relative) => {

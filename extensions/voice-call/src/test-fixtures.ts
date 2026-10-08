@@ -1,5 +1,6 @@
 // Voice Call plugin module implements test fixtures behavior.
 import type { VoiceCallConfig } from "./config.js";
+import { CallVoicemailConfigSchema } from "./errand-config.js";
 import { DEFAULT_VOICE_CALL_REALTIME_INSTRUCTIONS } from "./realtime-defaults.js";
 
 export function createVoiceCallBaseConfig(params?: {
@@ -14,6 +15,10 @@ export function createVoiceCallBaseConfig(params?: {
     allowFrom: [],
     numbers: {},
     outbound: { defaultMode: "notify", notifyHangupDelaySec: 3 },
+    reports: { enabled: false, includeTranscript: true },
+    live: { transcript: false, minIntervalMs: 5000 },
+    callbacks: { enabled: false, windowMinutes: 60 },
+    voicemail: CallVoicemailConfigSchema.parse({}),
     maxDurationSeconds: 300,
     staleCallReaperSeconds: 600,
     silenceTimeoutMs: 800,
@@ -79,4 +84,31 @@ export function createVoiceCallBaseConfig(params?: {
     },
     responseTimeoutMs: 30000,
   };
+}
+
+export function createExternalProviderConfig(params: {
+  provider: "twilio" | "telnyx" | "plivo";
+  publicUrl?: string;
+}): VoiceCallConfig {
+  const config = createVoiceCallBaseConfig({
+    provider: params.provider,
+    tunnelProvider: "none",
+  });
+  config.twilio = {
+    accountSid: "AC123",
+    authToken: "secret",
+  };
+  config.telnyx = {
+    apiKey: "key",
+    connectionId: "conn",
+    publicKey: "pub",
+  };
+  config.plivo = {
+    authId: "MA123",
+    authToken: "secret",
+  };
+  if (params.publicUrl) {
+    config.publicUrl = params.publicUrl;
+  }
+  return config;
 }

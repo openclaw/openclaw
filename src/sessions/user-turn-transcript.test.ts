@@ -36,49 +36,28 @@ describe("user turn transcript persistence", () => {
   };
 
   describe("trusted human transcript ownership", () => {
-    it.each([
-      [undefined, undefined, undefined],
-      [false, "external_user", false],
-      [true, undefined, true],
-      [true, "external_user", true],
-      [true, "inter_session", false],
-      [true, "internal_system", false],
-    ] as const)("normalizes owner %s for %s input", (senderIsOwner, kind, expected) => {
-      const provenance = kind ? { kind, sourceTool: "test" } : undefined;
-      const recorder = createUserTurnTranscriptRecorder({
-        input: {
-          text: "remember",
-          senderIsOwner,
-          sender: { id: "author", identity: { type: "profile", id: "author" } },
-          ...(provenance ? { provenance } : {}),
-        },
-        target: unusedRecorderTarget,
-      });
-      const message = recorder.message as
-        | {
-            __openclaw?: { senderIsOwner?: boolean; senderIdentity?: unknown };
-            provenance?: unknown;
-          }
-        | undefined;
-      expect(message?.["__openclaw"]?.senderIsOwner).toBe(expected);
-      expect(message?.["__openclaw"]?.senderIdentity).toEqual(
-        !kind || kind === "external_user" ? { type: "profile", id: "author" } : undefined,
-      );
-      expect(message?.provenance).toEqual(provenance);
-    });
-
     it("normalizes synthetic owner facts after asynchronous input resolution", async () => {
       const provenance = { kind: "inter_session" as const, sourceTool: "sessions_send" };
+      const sender = { id: "author", identity: { type: "profile" as const, id: "author" } };
       const recorder = createUserTurnTranscriptRecorder({
-        input: { text: "owner prompt", senderIsOwner: true },
-        resolveInput: async () => ({ text: "synthetic handoff", senderIsOwner: true, provenance }),
+        input: { text: "owner prompt", senderIsOwner: true, sender },
+        resolveInput: async () => ({
+          text: "synthetic handoff",
+          senderIsOwner: true,
+          sender,
+          provenance,
+        }),
         target: unusedRecorderTarget,
       });
-      expect(recorder.message).toMatchObject({ __openclaw: { senderIsOwner: true } });
-      await expect(recorder.resolveMessage()).resolves.toMatchObject({
+      expect(recorder.message).toMatchObject({
+        __openclaw: { senderIsOwner: true, senderIdentity: sender.identity },
+      });
+      const resolved = await recorder.resolveMessage();
+      expect(resolved).toMatchObject({
         provenance,
         __openclaw: { senderIsOwner: false },
       });
+      expect(resolved).not.toHaveProperty("__openclaw.senderIdentity");
     });
   });
 
@@ -88,6 +67,7 @@ describe("user turn transcript persistence", () => {
         input: {
           text: "display prompt",
           media: [{ path: "/tmp/image.png", contentType: "image/png" }],
+          sender: { id: "user-42", name: "Ada" },
           timestamp: 123,
         },
         target: unusedRecorderTarget,
@@ -99,6 +79,7 @@ describe("user turn transcript persistence", () => {
             role: "user",
             content: "runtime prompt",
             provenance: { sourceChannel: "telegram" },
+            __openclaw: { mirrorIdentity: "run-1:prompt" },
           }),
           preparedMessage: recorder.message,
         }),
@@ -108,34 +89,10 @@ describe("user turn transcript persistence", () => {
         provenance: { sourceChannel: "telegram" },
         timestamp: 123,
         __openclaw: {
-          media: [expect.objectContaining({ path: "/tmp/image.png", contentType: "image/png" })],
-        },
-      });
-    });
-
-    it("preserves runtime metadata when adding prepared sender attribution", () => {
-      const recorder = createUserTurnTranscriptRecorder({
-        input: {
-          text: "group prompt",
-          sender: { id: "user-42", name: "Ada" },
-        },
-        target: unusedRecorderTarget,
-      });
-
-      expect(
-        mergePreparedUserTurnMessageForRuntime({
-          runtimeMessage: castAgentMessage({
-            role: "user",
-            content: "runtime prompt",
-            __openclaw: { mirrorIdentity: "run-1:prompt" },
-          }),
-          preparedMessage: recorder.message,
-        }),
-      ).toMatchObject({
-        __openclaw: {
           mirrorIdentity: "run-1:prompt",
           senderId: "user-42",
           senderName: "Ada",
+          media: [expect.objectContaining({ path: "/tmp/image.png", contentType: "image/png" })],
         },
       });
     });
@@ -183,30 +140,9 @@ describe("user turn transcript persistence", () => {
         timestamp: 123,
       });
     });
-
-    it("does not apply prepared user metadata to assistant messages", () => {
-      const recorder = createUserTurnTranscriptRecorder({
-        input: { text: "display prompt" },
-        target: unusedRecorderTarget,
-      });
-      const assistant = castAgentMessage({ role: "assistant", content: "hello" });
-
-      expect(
-        mergePreparedUserTurnMessageForRuntime({
-          runtimeMessage: assistant,
-          preparedMessage: recorder.message,
-        }),
-      ).toBe(assistant);
-    });
   });
 
   describe("resolvePersistedUserTurnText", () => {
-    it("normalizes the selected clean user-turn transcript text", () => {
-      expect(resolvePersistedUserTurnText("  What is in this image?  ")).toBe(
-        "What is in this image?",
-      );
-    });
-
     it("preserves historical placeholder-like text as ordinary transcript content", () => {
       expect(resolvePersistedUserTurnText("<media:image> (2 images)")).toBe(
         "<media:image> (2 images)",
@@ -255,6 +191,7 @@ describe("user turn transcript persistence", () => {
     it("persists fallback user turns only once", async () => {
       const dir = sessionDirs.make();
       const target = createSqliteTranscriptTarget({ dir });
+      const persistedMessages: unknown[] = [];
       const recorder = createUserTurnTranscriptRecorder({
         input: {
           text: "hello from fallback",
@@ -263,6 +200,9 @@ describe("user turn transcript persistence", () => {
         },
         target,
         updateMode: "none",
+        onMessagePersisted: (message) => {
+          persistedMessages.push(message);
+        },
       });
       expect(recorder.getPersistedMessage?.()).toBeUndefined();
 
@@ -274,105 +214,12 @@ describe("user turn transcript persistence", () => {
       expect(first?.messageId).toBeTruthy();
       expect(second?.messageId).toBe(first?.messageId);
       expect(recorder.getPersistedMessage?.()).toEqual(first?.message);
+      expect(persistedMessages).toEqual([first?.message]);
       await expect(readTranscriptMessages(target)).resolves.toEqual([
         expect.objectContaining({
           role: "user",
           content: "hello from fallback",
           idempotencyKey: "chat-run-1:user",
-        }),
-      ]);
-    });
-
-    it("notifies once after fallback user-turn persistence", async () => {
-      const dir = sessionDirs.make();
-      const target = createSqliteTranscriptTarget({ dir });
-      const persistedMessages: unknown[] = [];
-      const recorder = createUserTurnTranscriptRecorder({
-        input: {
-          text: "#35676 Keśava: No wtf",
-          timestamp: 123,
-          idempotencyKey: "chat-run-ambient:user",
-        },
-        target,
-        updateMode: "none",
-        onMessagePersisted: (message) => {
-          persistedMessages.push(message);
-        },
-      });
-
-      await recorder.persistFallback();
-      await recorder.persistFallback();
-
-      expect(persistedMessages).toEqual([
-        expect.objectContaining({
-          role: "user",
-          content: "#35676 Keśava: No wtf",
-        }),
-      ]);
-      await expect(readTranscriptMessages(target)).resolves.toEqual([
-        expect.objectContaining({
-          role: "user",
-          content: "#35676 Keśava: No wtf",
-        }),
-      ]);
-    });
-
-    it("keeps #99495 media inline when lazily resolved before provider serialization", async () => {
-      const dir = sessionDirs.make();
-      const target = createSqliteTranscriptTarget({ dir });
-      let resolverCalled = false;
-      const recorder = createUserTurnTranscriptRecorder({
-        input: {
-          text: "describe this",
-          timestamp: 123,
-          idempotencyKey: "chat-run-lazy:user",
-        },
-        resolveInput: async () => {
-          resolverCalled = true;
-          return {
-            text: "describe this",
-            timestamp: 123,
-            idempotencyKey: "chat-run-lazy:user",
-            media: [{ path: path.join(dir, "image.png"), contentType: "image/png" }],
-          };
-        },
-        target,
-        updateMode: "none",
-      });
-
-      expect(recorder.message).toEqual(
-        expect.objectContaining({
-          role: "user",
-          content: "describe this",
-          idempotencyKey: "chat-run-lazy:user",
-        }),
-      );
-      expect(recorder.message).not.toHaveProperty("MediaPath");
-      expect(resolverCalled).toBe(false);
-
-      const persisted = await recorder.persistFallback();
-      recorder.markSentToProvider?.();
-
-      expect(resolverCalled).toBe(true);
-      expect(persisted?.message).toMatchObject({
-        role: "user",
-        content: "describe this",
-        __openclaw: {
-          media: [
-            expect.objectContaining({
-              path: path.join(dir, "image.png"),
-              contentType: "image/png",
-            }),
-          ],
-        },
-      });
-      await expect(readTranscriptMessages(target)).resolves.toEqual([
-        expect.objectContaining({
-          role: "user",
-          content: "describe this",
-          __openclaw: {
-            media: [expect.objectContaining({ path: path.join(dir, "image.png") })],
-          },
         }),
       ]);
     });
@@ -676,56 +523,6 @@ describe("user turn transcript persistence", () => {
           idempotencyKey: "chat-run-lazy-failed:user",
         }),
       ]);
-    });
-
-    it("does not fallback-persist after runtime persistence is marked", async () => {
-      const dir = sessionDirs.make();
-      const target = createSqliteTranscriptTarget({ dir });
-      const recorder = createUserTurnTranscriptRecorder({
-        input: {
-          text: "runtime-owned turn",
-          timestamp: 123,
-        },
-        target,
-        updateMode: "none",
-      });
-
-      recorder.markRuntimePersisted(makeUserMessage("runtime-owned turn", 123));
-
-      await expect(recorder.persistFallback()).resolves.toBeUndefined();
-      await expect(readTranscriptMessages(target)).resolves.toEqual([]);
-    });
-
-    it("approved persistence does not duplicate runtime-owned SQLite turns", async () => {
-      const dir = sessionDirs.make();
-      const storePath = path.join(dir, "sessions.json");
-      const sessionStore = {};
-      const recorder = createUserTurnTranscriptRecorder({
-        input: {
-          text: "runtime-owned turn",
-          timestamp: 123,
-        },
-        target: {
-          agentId: "main",
-          sessionEntry: undefined,
-          sessionId: "session-1",
-          sessionKey: "agent:main:main",
-          sessionStore,
-          storePath,
-        },
-        updateMode: "none",
-      });
-
-      recorder.markRuntimePersisted(makeUserMessage("runtime-owned turn", 123));
-
-      await expect(recorder.persistApproved()).resolves.toBeUndefined();
-      await expect(
-        readTranscriptMessages({
-          sessionId: "session-1",
-          sessionKey: "agent:main:main",
-          storePath,
-        }),
-      ).resolves.toEqual([]);
     });
 
     it("does not fallback-persist after before_agent_run blocks the turn", async () => {

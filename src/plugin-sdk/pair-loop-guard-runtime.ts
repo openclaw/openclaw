@@ -50,7 +50,7 @@ export type PairLoopGuardResult =
   | { suppressed: true; cooldownUntilMs: number };
 
 /** Snapshot entry for observability and tests. */
-export type PairLoopGuardSnapshotEntry = {
+type PairLoopGuardSnapshotEntry = {
   /** Internal pair key containing scope, conversation, and unordered participant ids. */
   key: string;
   /** Number of retained events in the current window. */
@@ -101,7 +101,7 @@ const DEFAULT_PRUNE_INTERVAL_MS = 60_000;
 const KEY_SEPARATOR = "\u0001";
 
 /** Default plugin-facing loop guard config before per-channel overrides. */
-export const DEFAULT_PAIR_LOOP_GUARD_CONFIG: Required<
+const DEFAULT_PAIR_LOOP_GUARD_CONFIG: Required<
   Omit<PairLoopGuardConfig, "maxConversationBotEvents">
 > = {
   enabled: true,

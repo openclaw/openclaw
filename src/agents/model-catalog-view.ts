@@ -21,6 +21,7 @@ import {
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import type { ModelAuthAvailabilityEvaluation } from "./model-auth-availability.js";
+import { resolveSelectedModelCredential } from "./model-auth-selected-credential.js";
 import {
   buildProviderConfigModelCatalogForBrowse,
   type ModelCatalogBrowseView,
@@ -266,14 +267,12 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
           config: params.cfg,
           agentScope: { kind: "prepared", agentId: params.agentId },
         });
+        if (!policy.forcedByEnvironment && policy.runtimeSource === "implicit") {
+          policy = { ...policy, runtime: routes.implicitNativeRuntime(entry) ?? policy.runtime };
+        }
         runtimePolicies.set(entry, policy);
       }
-      const runtime =
-        runtimeId ??
-        host.requestedRuntimeId ??
-        (!policy.forcedByEnvironment && policy.runtimeSource === "implicit"
-          ? (routes.implicitNativeRuntime(entry) ?? policy.runtime)
-          : policy.runtime);
+      const runtime = runtimeId ?? host.requestedRuntimeId ?? policy.runtime;
       if (runtime === "auto" || runtime === "openclaw") {
         return host;
       }
@@ -381,6 +380,10 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
         routeResolution: null,
         ...(host.requestedRuntimeId ? { requestedRuntimeId: host.requestedRuntimeId } : {}),
         runtimeAuth: { id: runtime, source: "native" },
+        selectedCredential: resolveSelectedModelCredential({
+          provider,
+          runtimeAuth: { id: runtime, source: "native" },
+        }),
         ...(authMode ? { selectedAuthMode: authMode } : {}),
       };
     },

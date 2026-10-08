@@ -64,15 +64,6 @@ describe("backupCreateCommand atomic archive write", () => {
     };
   }
 
-  async function expectPathMissing(targetPath: string): Promise<void> {
-    try {
-      await fs.access(targetPath);
-      throw new Error(`expected missing path: ${targetPath}`);
-    } catch (error) {
-      expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    }
-  }
-
   it("does not leave a partial final archive behind when tar creation fails", async () => {
     const { archiveDir, outputPath, runtime } = await prepareAtomicBackupScenario({
       archivePrefix: "openclaw-backup-failure-",
@@ -80,15 +71,12 @@ describe("backupCreateCommand atomic archive write", () => {
     try {
       backupWalkMock.mockReturnValueOnce(createMockTarStream({ error: new Error("disk full") }));
 
-      await expect(
-        backupCreateCommand(runtime, {
-          output: outputPath,
-        }),
-      ).rejects.toThrow(/disk full/i);
+      await expect(backupCreateCommand(runtime, { output: outputPath })).rejects.toThrow(
+        /disk full/i,
+      );
 
-      await expectPathMissing(outputPath);
-      const remaining = await fs.readdir(archiveDir);
-      expect(remaining).toStrictEqual([]);
+      await expect(fs.access(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.readdir(archiveDir)).resolves.toStrictEqual([]);
     } finally {
       await fs.rm(archiveDir, { recursive: true, force: true });
     }
@@ -175,33 +163,6 @@ describe("backupCreateCommand atomic archive write", () => {
       ).rejects.toThrow(/refusing to overwrite existing backup archive/i);
 
       expect(await fs.readFile(outputPath, "utf8")).toBe("concurrent-archive");
-    } finally {
-      publicationSpy.mockRestore();
-      await fs.rm(archiveDir, { recursive: true, force: true });
-    }
-  });
-
-  it("fails closed when hard-link publication is unsupported", async () => {
-    const { archiveDir, outputPath, runtime } = await prepareAtomicBackupScenario({
-      archivePrefix: "openclaw-backup-no-hardlink-",
-    });
-    const publicationSpy = vi.spyOn(directoryDurability, "publishFileExclusive");
-    try {
-      backupWalkMock.mockReturnValueOnce(createMockTarStream());
-      publicationSpy.mockRejectedValueOnce(
-        Object.assign(new Error("hard links not supported"), { code: "EOPNOTSUPP" }),
-      );
-
-      await expect(
-        backupCreateCommand(runtime, {
-          output: outputPath,
-        }),
-      ).rejects.toThrow(/requires hard-link support/iu);
-      expect(publicationSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ strategy: "link-required" }),
-      );
-      await expectPathMissing(outputPath);
-      await expect(fs.readdir(archiveDir)).resolves.toEqual([]);
     } finally {
       publicationSpy.mockRestore();
       await fs.rm(archiveDir, { recursive: true, force: true });

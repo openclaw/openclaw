@@ -7,17 +7,17 @@ title: "Health checks"
 ---
 
 Short guide to verify Gateway and channel health without guessing. It covers the
-CLI health checks, the HTTP probe endpoints, the dedicated `health` command, and
+CLI health checks, the HTTP check endpoints, the dedicated `health` command, and
 uptime monitoring.
 
 ## Quick checks
 
 - `openclaw status` - local summary: gateway reachability/mode, update hint, linked channel auth age, sessions + recent activity.
 - `openclaw status --all` - full local diagnosis (read-only, color, safe to paste for debugging).
-- `openclaw status --deep` - asks the running gateway for a live probe (`health` with `probe:true`), including per-account channel probes when supported.
+- `openclaw status --deep` - asks the running gateway for a live check (`health` with `probe:true`), including per-account channel checks when supported.
 - `openclaw status --usage` - show model provider usage/quota snapshots.
 - `openclaw health` - asks the running gateway for its health snapshot (WS-only; no direct channel sockets from the CLI).
-- `openclaw health --verbose` (alias `--debug`) - forces a live health probe and prints gateway connection details.
+- `openclaw health --verbose` (alias `--debug`) - forces a live health check and prints gateway connection details.
 - `openclaw health --json` - machine-readable health snapshot output.
 - Send `/status` as a standalone chat command in any channel to get a status reply without invoking the agent.
 - Logs: run `openclaw logs --follow` (or `openclaw --profile <profile> logs --follow`) and filter for `web-heartbeat`, `web-reconnect`, `web-auto-reply`, `web-inbound`.
@@ -72,19 +72,23 @@ Channel connectivity and inbound admission are separate failure domains. A chann
 - If the restarts keep repeating, the cause is not transient. Check the logged ingress failure: a plugin denied the `openChannelIngressQueue` capability, for example, needs operator action rather than another restart.
 - Channels that never report ingress state are unaffected: absence means "no signal", never "broken". There is no traffic-staleness heuristic, so a genuinely quiet channel is never marked unhealthy for having received nothing.
 
-## HTTP probes
+<a id="http-probes" />
 
-The Gateway exposes three unauthenticated `GET`/`HEAD` probe pairs:
+## HTTP checks
 
-| Endpoints               | Meaning                                                                                                                                              | Use                                        |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| `/health`, `/healthz`   | The HTTP server is live.                                                                                                                             | Process liveness and restart decisions.    |
-| `/startup`, `/startupz` | Startup sidecars have settled and the Gateway is not draining. Agent and channel health are not consulted.                                           | Startup-phase monitoring.                  |
-| `/ready`, `/readyz`     | Startup is complete, the Gateway is not draining, required agent databases are admitted, and configured channel accounts pass deep readiness checks. | Traffic admission and operator monitoring. |
+The Gateway exposes three unauthenticated `GET`/`HEAD` check pairs:
 
-`/startupz` returns `503` with `status: "starting"` while startup sidecars are pending, `503` with `status: "draining"` during drain, and `200` with `status: "started"` otherwise. Use `/readyz` when traffic admission requires usable agents. A refused default or system agent database keeps readiness false after any migration outcome, with `failing: ["agent-database:<id>"]` and the exact admission reason and repair hint in `agentDatabases`. A refused optional agent can remain isolated while healthy agents serve requests. Gateway ready announcements use the same readiness decision.
+| Endpoints               | Meaning                                                                                                                                                                      | Use                                               |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `/health`, `/healthz`   | The HTTP server is live.                                                                                                                                                     | Process liveness and restart decisions.           |
+| `/startup`, `/startupz` | Startup sidecars and agent database inspection/preparation have settled, and the Gateway is not draining. Channel health is not consulted.                                   | Startup-phase monitoring and update verification. |
+| `/ready`, `/readyz`     | Startup sidecars have settled, the Gateway is not draining, required agent databases have no confirmed failures, and configured channel accounts pass deep readiness checks. | Traffic admission and operator monitoring.        |
 
-A broken Telegram or other channel account can also make `/readyz` return `503` while `/startupz` remains started. Neither probe replaces the other: startup completion alone does not certify agent or channel availability.
+`/startupz` returns `503` with `status: "starting"` while startup sidecars or agent database inspection/preparation are pending, `503` with `status: "draining"` during drain, and `200` with `status: "started"` otherwise. After sidecars settle, pending inspection for any agent, including an optional agent, reports `pendingReason: "agent-database-inspection"`. This lets `openclaw update` candidate verification wait within its startup budget before checking readiness. A settled inspection failure does not keep startup pending; readiness and per-agent admission report the failure.
+
+A default or system agent database with a confirmed admission failure keeps readiness false, with `failing: ["agent-database:<id>"]` and the exact admission reason and repair hint in `agentDatabases`. Pending startup inspection is reported there with code `agent-database-inspection-pending` while the Gateway can report ready and serve the Control UI and healthy agents. RPC requests refused for pending inspection return `UNAVAILABLE` with `retryable: true` and `retryAfterMs: 250`; callers can retry the same request after that delay. Inspection failures and ownership mismatches remain non-retryable. A refused optional agent can remain isolated while healthy agents serve requests. Gateway ready announcements use the same readiness decision.
+
+A broken Telegram or other channel account can also make `/readyz` return `503` while `/startupz` remains started. Neither check replaces the other: startup completion alone does not certify agent or channel availability.
 
 Remote unauthenticated startup responses contain only `ok` and `status`. Local-direct and authenticated callers also receive `version`, `uptimeMs`, and `pendingReason` while startup is pending. Readiness details follow the same local-or-authenticated gate because they can name failing subsystems.
 
@@ -94,7 +98,7 @@ A terminal shared-state admission failure immediately makes `/ready` and `/ready
 return `503`, including failures discovered by a SQLite worker after startup.
 Detailed responses include `failing: ["state-database"]` and `stateDatabase.reason`
 with the recorded refusal. This bypasses cached channel health;
-probes read the admission owner's recorded result without querying SQLite.
+checks read the admission owner's recorded result without querying SQLite.
 
 `/healthz` still reports HTTP liveness. Supervisors that need to detect a Gateway
 that is running but cannot admit work must monitor `/readyz`.
@@ -198,14 +202,14 @@ When no `x-openclaw-session-key` header or `user` field is provided, `/v1/chat/c
 
 `openclaw health` asks the running gateway for its health snapshot (no direct channel
 sockets from the CLI). By default it returns a fresh cached gateway snapshot and the
-gateway refreshes that cache in the background; `--verbose` forces a live probe instead.
+gateway refreshes that cache in the background; `--verbose` forces a live check instead.
 Connections and cached health reads share a one-minute background refresh cadence, so
 repeated diagnostic connections do not each rebuild the health snapshot. Explicit live
-probes and refreshes for missing or stale health still run immediately.
+checks and refreshes for missing or stale health still run immediately.
 Snapshots describe loaded and configured channels. Stored credentials alone do not
 activate a channel or add it to Gateway health; use channel setup to enable it.
-The command reports linked creds/auth age when available, per-channel probe summaries,
-session-store summary, and probe duration. Live probes use bounded account concurrency
+The command reports linked creds/auth age when available, per-channel check summaries,
+session-store summary, and check duration. Live checks use bounded account concurrency
 and a Gateway-owned deadline, so one slow account returns a structured timeout while
 completed sibling results remain available. The command exits non-zero if the gateway is
 unreachable or the Gateway call itself times out.
@@ -234,11 +238,11 @@ payloads, claim owners or tokens, recorded errors, or session and target identif
 Options:
 
 - `--json`: machine-readable JSON output
-- `--timeout <ms>`: override the default 10s Gateway connection timeout; it does not widen the Gateway's internal live-probe deadline
-- `--verbose`: force a live probe and print gateway connection details
+- `--timeout <ms>`: override the default 10s Gateway connection timeout; it does not widen the Gateway's internal live-check deadline
+- `--verbose`: force a live check and print gateway connection details
 - `--debug`: alias for `--verbose`
 
-The health snapshot includes: `ok` (boolean), `ts` (timestamp), `durationMs` (probe time), per-channel status, agent availability, session-store summary, and optional delivery-queue warnings.
+The health snapshot includes: `ok` (boolean), `ts` (timestamp), `durationMs` (check time), per-channel status, agent availability, session-store summary, and optional delivery-queue warnings.
 
 ## Related
 

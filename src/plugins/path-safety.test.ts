@@ -81,52 +81,57 @@ function installWindowsPathFixture(params: {
 }
 
 describe("Windows plugin alias admission", () => {
-  it("rejects foreign shares and devices before probing their identity", () => {
-    const root = String.raw`C:\plugins\trusted`;
+  it.each([
+    {
+      root: String.raw`C:\plugins\trusted`,
+      targets: [
+        String.raw`\\plugin-canary\share\index.js`,
+        "//plugin-canary/share/index.js",
+        String.raw`\\?\UNC\plugin-canary\share\index.js`,
+        String.raw`\\.\UNC\plugin-canary\share\index.js`,
+        String.raw`\\.\pipe\plugin-canary`,
+        String.raw`\\?\GLOBALROOT\Device\Mup\plugin-canary\share\index.js`,
+        String.raw`\\.\C:\..\UNC\plugin-canary\share\index.js`,
+        String.raw`\\?\UNC\trusted\share\..\..\plugin-canary\share\index.js`,
+      ],
+      open: true,
+    },
+    ...(
+      [
+        [String.raw`\\plugin-kost\share\root`, String.raw`\\plugin-Kost\share\other\index.js`],
+        [String.raw`\\plugin-kost\share\root`, String.raw`\\?\UNC\plugin-Kost\share\root\index.js`],
+        [
+          String.raw`\\?\GLOBALROOT\Device\HarddiskVolume1\root`,
+          String.raw`\\?\GLOBALROOT\Device\Mup\plugin-canary\share\index.js`,
+        ],
+        [
+          String.raw`\\?\UNC\trusted\share\..\..\plugin-canary\share\root`,
+          String.raw`\\plugin-canary\share\other\index.js`,
+        ],
+      ] as const
+    ).map(([root, target]) => ({ root, targets: [target], open: false })),
+  ])("rejects foreign or ambiguous Windows aliases beneath $root", ({ root, targets, open }) => {
     const stat = installWindowsPathFixture({ root });
-    for (const target of [
-      String.raw`\\plugin-canary\share\index.js`,
-      "//plugin-canary/share/index.js",
-      String.raw`\\?\UNC\plugin-canary\share\index.js`,
-      String.raw`\\.\UNC\plugin-canary\share\index.js`,
-      String.raw`\\.\pipe\plugin-canary`,
-      String.raw`\\?\GLOBALROOT\Device\Mup\plugin-canary\share\index.js`,
-      String.raw`\\.\C:\..\UNC\plugin-canary\share\index.js`,
-      String.raw`\\?\UNC\trusted\share\..\..\plugin-canary\share\index.js`,
-    ]) {
+    for (const target of targets) {
       expect(isPathInside(root, target), target).toBe(false);
       expect(relativePluginPathInsideRootSync(root, target), target).toBeUndefined();
-      expect(
-        openPluginRootFileSync({
-          rootPath: root,
-          rootRealPath: root,
-          filePath: target,
-          rejectHardlinks: false,
-        }).ok,
-        target,
-      ).toBe(false);
+      if (open) {
+        expect(
+          openPluginRootFileSync({
+            rootPath: root,
+            rootRealPath: root,
+            filePath: target,
+            rejectHardlinks: false,
+          }).ok,
+          target,
+        ).toBe(false);
+      }
     }
-    expect(stat.mock.calls.filter(([value]) => String(value).includes("plugin-canary"))).toEqual(
-      [],
-    );
-  });
-
-  it.each([
-    [String.raw`\\plugin-kost\share\root`, String.raw`\\plugin-Kost\share\other\index.js`],
-    [String.raw`\\plugin-kost\share\root`, String.raw`\\?\UNC\plugin-Kost\share\root\index.js`],
-    [
-      String.raw`\\?\GLOBALROOT\Device\HarddiskVolume1\root`,
-      String.raw`\\?\GLOBALROOT\Device\Mup\plugin-canary\share\index.js`,
-    ],
-    [
-      String.raw`\\?\UNC\trusted\share\..\..\plugin-canary\share\root`,
-      String.raw`\\plugin-canary\share\other\index.js`,
-    ],
-  ])("does not widen ambiguous or Unicode-folded root %s", (root, target) => {
-    const stat = installWindowsPathFixture({ root });
-    expect(isPathInside(root, target)).toBe(false);
-    expect(relativePluginPathInsideRootSync(root, target)).toBeUndefined();
-    expect(stat.mock.calls.filter(([value]) => String(value) !== root)).toEqual([]);
+    expect(
+      stat.mock.calls.filter(([value]) =>
+        open ? String(value).includes("plugin-canary") : String(value) !== root,
+      ),
+    ).toEqual([]);
   });
 
   it.each([

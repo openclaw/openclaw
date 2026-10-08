@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-const { sysctl, errno, dead } = vi.hoisted(() => ({
+const { sysctl, errno, dead, rosetta } = vi.hoisted(() => ({
   sysctl: vi.fn(),
   errno: vi.fn(),
   dead: vi.fn(),
+  rosetta: vi.fn(),
 }));
 vi.mock("node:module", () => ({
   createRequire: () => () => ({
@@ -17,6 +18,8 @@ vi.mock("../../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ debug: vi.fn() }),
 }));
 vi.mock("../../shared/pid-alive.js", () => ({ isPidDefinitelyDead: dead }));
+// mock-isolation: the real detector reads and caches the test host's CPU brand.
+vi.mock("../../shared/rosetta-translation.js", () => ({ isRosettaTranslatedProcess: rosetta }));
 import { readDarwinProcessCommand } from "./darwin-process-command.js";
 
 let reply: Buffer | undefined;
@@ -46,6 +49,7 @@ beforeEach(() => {
   reply = undefined;
   errno.mockReset().mockReturnValue(1);
   dead.mockReset().mockReturnValue(false);
+  rosetta.mockReset().mockReturnValue(false);
   sysctl
     .mockReset()
     .mockImplementation((mib: Int32Array, _count: number, output: Buffer, size: Buffer) => {
@@ -63,67 +67,63 @@ beforeEach(() => {
     });
 });
 
-it.each([uid, undefined])(
-  "preserves exact native argv boundaries with observed uid %s",
-  (observedUid) => {
-    const argv = ["node", "/app with spaces/openclaw.mjs", "", "doctor"];
-    reply = argumentsReply(argv);
-    expect(readDarwinProcessCommand(12, observedUid)).toEqual({ argv });
-  },
-);
-
-it("preserves a rewritten process title with emptied original argument slots", () => {
-  const argv = ["openclaw-gateway", "", "", ""];
-  reply = argumentsReply(argv);
-  expect(readDarwinProcessCommand(12, uid)).toEqual({ argv });
-});
-
-it("retains only the OpenClaw service marker from the native environment", () => {
-  const argv = ["node", "dist/index.js"];
+it.each([
+  { argv: ["node", "/app with spaces/openclaw.mjs", "", "doctor"], serviceMarker: undefined },
+  { argv: ["openclaw-gateway", "", "", ""], serviceMarker: undefined },
+  { argv: ["node", "dist/index.js"], serviceMarker: "openclaw" },
+])("preserves native argv $argv and only the service marker", ({ argv, serviceMarker }) => {
   reply = argumentsReply(
     argv,
     argv.length,
-    "UNRELATED_PRIVATE_VALUE=fixture\0OPENCLAW_SERVICE_MARKER=openclaw",
+    `UNRELATED_PRIVATE_VALUE=fixture${serviceMarker ? `\0OPENCLAW_SERVICE_MARKER=${serviceMarker}` : ""}`,
   );
-  expect(readDarwinProcessCommand(12, uid)).toEqual({ argv, serviceMarker: "openclaw" });
-});
-
-it.each(["invalid count", "truncated argument"])("rejects %s native argument bytes", (fault) => {
-  reply = fault === "invalid count" ? argumentsReply(["node"], -1) : argumentsReply(["node"], 100);
-  expect(() => readDarwinProcessCommand(12, uid)).toThrow(/Darwin process arguments/);
-});
-
-it.each([1, 13, 22])("excludes unreadable foreign-UID argv with errno %s", (error) => {
-  errno.mockReturnValue(error);
-  expect(readDarwinProcessCommand(12, foreignUid)).toEqual({
-    uid: foreignUid,
-    argvUnavailable: true,
+  expect(readDarwinProcessCommand(12, uid)).toEqual({
+    argv,
+    ...(serviceMarker ? { serviceMarker } : {}),
   });
 });
 
-it.each(
-  [1, 13, 22].flatMap((error) => [uid, undefined].map((observedUid) => ({ error, observedUid }))),
-)(
-  "holds unreadable argv with current or unavailable UID $observedUid and errno $error",
-  ({ error, observedUid }) => {
+it.each([-1, 100])("rejects invalid native argument count %s", (argc) => {
+  reply = argumentsReply(["node"], argc);
+  expect(() => readDarwinProcessCommand(12, uid)).toThrow(/Darwin process arguments/);
+});
+
+it.each([
+  { observedUid: uid, inspectorUid: uid, exited: false, error: 1, outcome: "uncertain" },
+  { observedUid: undefined, inspectorUid: uid, exited: false, error: 13, outcome: "uncertain" },
+  {
+    observedUid: foreignUid,
+    inspectorUid: undefined,
+    exited: false,
+    error: 1,
+    outcome: "uncertain",
+  },
+  { observedUid: foreignUid, inspectorUid: uid, exited: false, error: 1, outcome: "foreign" },
+  { observedUid: foreignUid, inspectorUid: uid, exited: false, error: 13, outcome: "foreign" },
+  { observedUid: foreignUid, inspectorUid: uid, exited: true, error: 1, outcome: "gone" },
+])(
+  "classifies unreadable PID as $outcome ($observedUid/$inspectorUid, errno $error)",
+  ({ observedUid, inspectorUid, exited, error, outcome }) => {
+    Object.defineProperty(process, "getuid", {
+      configurable: true,
+      value: inspectorUid === undefined ? undefined : () => inspectorUid,
+    });
     errno.mockReturnValue(error);
-    expect(() => readDarwinProcessCommand(12, observedUid)).toThrow(
-      "Could not classify PID 12: cannot inspect Darwin arguments",
-    );
+    dead.mockReturnValue(exited);
+    const inspect = () => readDarwinProcessCommand(12, observedUid);
+    if (outcome === "uncertain") {
+      expect(inspect).toThrow("Could not classify PID 12: cannot inspect Darwin arguments");
+    } else {
+      expect(inspect()).toEqual(
+        outcome === "gone" ? undefined : { uid: foreignUid, argvUnavailable: true },
+      );
+    }
   },
 );
 
-it("distinguishes an exited process from unreadable arguments", () => {
-  expect(() => readDarwinProcessCommand(12, uid)).toThrow(
-    "Could not classify PID 12: cannot inspect Darwin arguments",
-  );
-  dead.mockReturnValue(true);
-  expect(readDarwinProcessCommand(12, foreignUid)).toBeUndefined();
-});
-
-it("holds unreadable argv when the inspecting UID is unavailable", () => {
-  Object.defineProperty(process, "getuid", { configurable: true, value: undefined });
-  expect(() => readDarwinProcessCommand(12, foreignUid)).toThrow(
-    "Could not classify PID 12: cannot inspect Darwin arguments",
-  );
+it("fails visibly instead of calling sysctl through koffi under Rosetta", () => {
+  rosetta.mockReturnValue(true);
+  reply = argumentsReply(["node", "dist/index.js"]);
+  expect(() => readDarwinProcessCommand(12, uid)).toThrow(/under Rosetta/);
+  expect(sysctl).not.toHaveBeenCalled();
 });

@@ -9,6 +9,13 @@ import type { AgentMessage } from "./runtime/index.js";
 
 const TOOL_RESULT_REAL_CONVERSATION_LOOKBACK = 20;
 const NON_CONVERSATION_BLOCK_TYPES = new Set(["thinking", "reasoning"]);
+const CONVERSATION_ANCHOR_ROLES = new Set([
+  "user",
+  "custom",
+  "bashExecution",
+  "branchSummary",
+  "compactionSummary",
+]);
 
 function hasMeaningfulText(text: string): boolean {
   const trimmed = text.trim();
@@ -17,10 +24,6 @@ function hasMeaningfulText(text: string): boolean {
   }
   const heartbeat = stripHeartbeatToken(trimmed, { mode: "message" });
   return !heartbeat.didStrip || heartbeat.text.trim().length > 0;
-}
-
-function isSummaryRole(role: unknown): boolean {
-  return role === "branchSummary" || role === "compactionSummary";
 }
 
 /** Returns whether a message has content worth preserving as conversation. */
@@ -72,11 +75,7 @@ function hasMeaningfulMessageContent(content: unknown): boolean {
 }
 
 function isToolResultConversationAnchor(message: AgentMessage): boolean {
-  const role = message.role;
-  return (
-    (role === "user" || role === "custom" || role === "bashExecution" || isSummaryRole(role)) &&
-    hasMeaningfulConversationContent(message)
-  );
+  return CONVERSATION_ANCHOR_ROLES.has(message.role) && hasMeaningfulConversationContent(message);
 }
 
 /** Returns whether a transcript message should count as real conversation. */
@@ -85,13 +84,7 @@ export function isRealConversationMessage(
   messages: AgentMessage[],
   index: number,
 ): boolean {
-  if (
-    message.role === "user" ||
-    message.role === "assistant" ||
-    message.role === "custom" ||
-    message.role === "bashExecution" ||
-    isSummaryRole(message.role)
-  ) {
+  if (message.role === "assistant" || CONVERSATION_ANCHOR_ROLES.has(message.role)) {
     return hasMeaningfulConversationContent(message);
   }
   if (message.role !== "toolResult") {
@@ -105,4 +98,19 @@ export function isRealConversationMessage(
     }
   }
   return false;
+}
+
+/** Classifies an ordered transcript without retaining earlier pages. */
+export function createRealConversationClassifier(): (message: AgentMessage) => boolean {
+  let anchorLookback = 0;
+  return (message) => {
+    const real =
+      message.role === "toolResult"
+        ? anchorLookback > 0
+        : isRealConversationMessage(message, [], 0);
+    anchorLookback = isToolResultConversationAnchor(message)
+      ? TOOL_RESULT_REAL_CONVERSATION_LOOKBACK
+      : Math.max(0, anchorLookback - 1);
+    return real;
+  };
 }

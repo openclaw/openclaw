@@ -1,10 +1,3 @@
-/**
- * Gmail Watcher Service
- *
- * Automatically starts `gog gmail watch serve` when the gateway starts,
- * if hooks.gmail is configured with an account.
- */
-
 import { type ChildProcess, spawn } from "node:child_process";
 import process from "node:process";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -17,7 +10,6 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { killProcessTree } from "../process/kill-tree.js";
 import { hasBinary } from "../skills/loading/config.js";
 import { ensureTailscaleEndpoint } from "./gmail-setup-utils.js";
-import { isAddressInUseError } from "./gmail-watcher-errors.js";
 import {
   buildGogWatchServeLogArgs,
   buildGogWatchServeArgs,
@@ -39,9 +31,6 @@ let shuttingDown = false;
 let currentConfig: GmailHookRuntimeConfig | null = null;
 let respawnTimeout: ReturnType<typeof setTimeout> | null = null;
 
-/**
- * Start the Gmail watch (registers with Gmail API)
- */
 async function startGmailWatch(
   cfg: Pick<GmailHookRuntimeConfig, "account" | "label" | "topic">,
   options: { signal?: AbortSignal } = {},
@@ -64,9 +53,6 @@ async function startGmailWatch(
   }
 }
 
-/**
- * Spawn the gog gmail watch serve process
- */
 function spawnGogServe(cfg: GmailHookRuntimeConfig, bindRetries = 0): ChildProcess {
   const args = buildGogWatchServeArgs(cfg);
   log.info(`starting gog ${buildGogWatchServeLogArgs(cfg).join(" ")}`);
@@ -101,7 +87,7 @@ function spawnGogServe(cfg: GmailHookRuntimeConfig, bindRetries = 0): ChildProce
     const chunk = data.toString();
     // Classify before truncation so a marker completed across the retention boundary survives.
     const combined = stderrTail + chunk;
-    if (!addressInUse && isAddressInUseError(combined)) {
+    if (!addressInUse && /address already in use|EADDRINUSE/i.test(combined)) {
       addressInUse = true;
     }
     stderrTail = combined.slice(-GMAIL_WATCHER_STDERR_TAIL_CHARS);
@@ -282,10 +268,6 @@ function cancelledGmailWatcherStart(
   return { started: false, reason: "startup cancelled" };
 }
 
-/**
- * Start the Gmail watcher service.
- * Called automatically by the gateway if hooks.gmail is configured.
- */
 export async function startGmailWatcher(
   cfg: OpenClawConfig,
   options: GmailWatcherStartOptions,
@@ -356,7 +338,6 @@ export async function startGmailWatcherService(
     }
   }
 
-  // Start the Gmail watch (register with Gmail API)
   const watchStarted = await startGmailWatch(runtimeConfig, { signal: options.signal });
   if (options.signal?.aborted) {
     return cancelledGmailWatcherStart(runtimeConfig);

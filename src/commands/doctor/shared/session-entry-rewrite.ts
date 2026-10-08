@@ -1,17 +1,16 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { sql } from "kysely";
 import type { DoctorSessionScanScope } from "../../../config/sessions/session-accessor.sqlite-canonical-inventory.js";
-import {
-  publishSessionEntryCacheInvalidation,
-  trackSessionEntryCacheWrite,
-} from "../../../config/sessions/session-accessor.sqlite-entry-cache.js";
+import { publishSessionEntryCacheInvalidation } from "../../../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { invalidateSessionEntryMaintenanceAgeFact } from "../../../config/sessions/session-accessor.sqlite-maintenance-age.js";
 import {
   getSessionKysely,
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
+import { normalizeStatus } from "../../../config/sessions/session-accessor.sqlite-status.js";
 import { parseSqliteSessionEntryRecord } from "../../../config/sessions/session-entry-json.js";
 import {
   attachSessionEntrySnapshots,
@@ -21,31 +20,31 @@ import {
 } from "../../../config/sessions/session-entry-snapshots.js";
 import { LEGACY_SESSION_ENTRY_STATE_FIELDS } from "../../../config/sessions/session-entry-state-format.js";
 import { stripRuntimeOnlySessionSkillsFields } from "../../../config/sessions/store-entry-shape.js";
+import { assertSupportedSessionStoreEntry } from "../../../config/sessions/supported-session-store.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { executeSqliteQuerySync, iterateSqliteQuerySync } from "../../../infra/kysely-sync.js";
-import type { DatabaseFileIdentity } from "../../../infra/sqlite-worker-identity.js";
+import {
+  assertExistingDatabaseIdentity,
+  readDatabasePathIdentitySync,
+  type DatabaseFileIdentity,
+} from "../../../infra/sqlite-worker-identity.js";
 import { assertOpenClawAgentDatabaseIdentity } from "../../../state/openclaw-agent-db-identity.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../../state/openclaw-agent-db-readonly.js";
-import { runOpenClawAgentWriteTransaction } from "../../../state/openclaw-agent-db.js";
+import {
+  runOpenClawAgentWriteTransaction,
+  withOpenClawAgentDatabaseAsync,
+} from "../../../state/openclaw-agent-db.js";
 import { chunkItems } from "../../../utils/chunk-items.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryChannel,
 } from "../../../utils/delivery-context.read.js";
+import { migrateLegacySessionRunOutcome } from "./session-entry-shape.js";
 
 const DOCTOR_SESSION_REWRITE_BATCH_SIZE = 64;
 
 export function iterateDoctorSessionKeyBatches(sessionKeys: readonly string[]): string[][] {
   return chunkItems(uniqueStrings(sessionKeys).toSorted(), DOCTOR_SESSION_REWRITE_BATCH_SIZE);
-}
-
-function parseDoctorSessionEntryRecord(entryJson: string): Record<string, unknown> | undefined {
-  try {
-    const entry: unknown = JSON.parse(entryJson);
-    return isRecord(entry) ? entry : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 /** Select legacy state before loading raw rows into canonical validation or runtime projection. */
@@ -63,16 +62,19 @@ export function scanDoctorSessionEntryRecords(
         .selectFrom("session_nodes")
         .select(["session_key", "entry_json"])
         .where(
-          /* kysely-allow-raw: JSON table-valued filtering keeps canonical payloads out of JavaScript. */
+          /* kysely-allow-raw: coarse key filtering bounds parsing; JSON.parse owns duplicate-key precedence. */
           sql<boolean>`CASE WHEN json_valid(entry_json) THEN EXISTS (
             SELECT 1 FROM json_each(entry_json)
             WHERE key IN (${sql.join(LEGACY_SESSION_ENTRY_STATE_FIELDS)})
+              OR key IN ('provider', 'lastProvider', 'room')
               OR (key = 'pendingFinalDelivery' AND type IN ('true', 'false'))
+              OR (key = 'status' AND value IN ('running', 'queued'))
           ) ELSE 1 END`,
         ),
     )) {
-      const entry = parseDoctorSessionEntryRecord(row.entry_json);
+      const entry = safeParseJsonRecord(row.entry_json);
       if (entry) {
+        assertSupportedSessionStoreEntry(entry);
         visit({ sessionKey: row.session_key, entry });
       }
     }
@@ -80,6 +82,47 @@ export function scanDoctorSessionEntryRecords(
   if (!result.found) {
     throw new Error(`Session database unavailable during raw state inspection: ${result.reason}`);
   }
+}
+
+/** Startup normalizes legacy outcomes before canonical reads; clean stores stay read-only. */
+export async function repairLegacySessionRunOutcomes(
+  scope: DoctorSessionScanScope,
+  assertCurrent: () => void,
+): Promise<number> {
+  assertCurrent();
+  const expectedIdentity = readDatabasePathIdentitySync(scope.storePath);
+  const sessionKeys: string[] = [];
+  scanDoctorSessionEntryRecords(
+    scope,
+    ({ entry, sessionKey }) => {
+      if (entry.status === "running" || entry.status === "queued") {
+        sessionKeys.push(sessionKey);
+      }
+    },
+    expectedIdentity,
+  );
+  assertCurrent();
+  return sessionKeys.length === 0
+    ? 0
+    : withOpenClawAgentDatabaseAsync(
+        toDatabaseOptions(resolveSqliteScope({ ...scope, sessionKey: "" })),
+        () =>
+          rewriteDoctorSessionEntries({
+            scope,
+            sessionKeys,
+            rawTransform: migrateLegacySessionRunOutcome,
+            expectedIdentity,
+            assertCurrent,
+          }),
+        () => {
+          assertCurrent();
+          assertExistingDatabaseIdentity(
+            scope.storePath,
+            expectedIdentity.key,
+            expectedIdentity.birthtime,
+          );
+        },
+      );
 }
 
 /** Rewrites bounded entry batches after rereading each authoritative row inside its commit. */
@@ -135,13 +178,16 @@ export function rewriteDoctorSessionEntries(
           }
           let entryJson: string;
           let nextEntry: SessionEntry | undefined;
+          let deliveryProjectionEntry: SessionEntry | undefined;
+          let runOutcome: { status?: unknown; endedAt?: unknown } | undefined;
           let snapshots: ReturnType<typeof splitSessionEntrySnapshots>["snapshots"] | undefined;
           let entryValid = row.entry_valid;
           if (params.rawTransform) {
-            const entry = parseDoctorSessionEntryRecord(row.entry_json);
+            const entry = safeParseJsonRecord(row.entry_json);
             if (!entry) {
               continue;
             }
+            assertSupportedSessionStoreEntry(entry);
             const previousSessionId = entry.sessionId;
             const previousUpdatedAt = entry.updatedAt;
             const previousFields = new Map(
@@ -174,17 +220,28 @@ export function rewriteDoctorSessionEntries(
             if (entryJson === row.entry_json) {
               continue;
             }
+            if (previousFields.get("status") !== JSON.stringify(transformed.status)) {
+              runOutcome = transformed;
+            }
             // Invalid identities remain for canonical-key repair; scalar migration cannot certify them.
-            if (!parseSqliteSessionEntryRecord({ ...row, entry_json: entryJson })) {
+            const parsedEntry = parseSqliteSessionEntryRecord({ ...row, entry_json: entryJson });
+            if (!parsedEntry) {
               entryValid = 0;
+            } else if (
+              params.updateDeliveryProjection &&
+              previousFields.get("delivery") !== JSON.stringify(transformed.delivery)
+            ) {
+              deliveryProjectionEntry = parsedEntry;
             }
           } else {
             const entry = parseSqliteSessionEntryRecord(row);
             if (!entry) {
               continue;
             }
+            assertSupportedSessionStoreEntry(entry);
             attachSessionEntrySnapshots(entry, row);
             const previousJson = JSON.stringify(entry);
+            const previousStatus = entry.status;
             const transformedEntry = params.transform(entry, sessionKey);
             if (JSON.stringify(transformedEntry) === previousJson) {
               continue;
@@ -195,48 +252,60 @@ export function rewriteDoctorSessionEntries(
               continue;
             }
             entryValid = 1;
+            if (previousStatus !== nextEntry.status) {
+              runOutcome = nextEntry;
+            }
           }
           params.assertCurrent?.();
           if (params.expectedIdentity) {
             assertOpenClawAgentDatabaseIdentity(database, params.expectedIdentity);
           }
           invalidateSessionEntryMaintenanceAgeFact(database.db);
-          const writeGeneration = trackSessionEntryCacheWrite(database, () => {
-            executeSqliteQuerySync(
-              database.db,
-              db
-                .updateTable("session_nodes")
-                .set({ entry_json: entryJson })
-                .where("session_key", "=", sessionKey),
-            );
-            if (snapshots) {
-              writeSessionEntrySnapshots(database, sessionKey, snapshots);
-            }
-            executeSqliteQuerySync(
-              database.db,
-              db
-                .updateTable("session_nodes")
-                .set({ entry_valid: entryValid })
-                .where("session_key", "=", sessionKey),
-            );
-            if (nextEntry && params.updateDeliveryProjection) {
-              executeSqliteQuerySync(
-                database.db,
-                db
-                  .updateTable("session_windows")
-                  .set({
-                    account_id: deliveryContextFromSession(nextEntry)?.accountId ?? null,
-                    channel: sessionDeliveryChannel(nextEntry) ?? null,
-                  })
-                  .where("session_id", "=", row.current_session_id),
-              );
-            }
-          });
-          publishSessionEntryCacheInvalidation(
-            database,
-            nextEntry ? { sessionKey, entry: nextEntry, entryJson } : { sessionKey },
-            writeGeneration,
+          const runProjection = runOutcome
+            ? {
+                status: normalizeStatus(runOutcome.status),
+                ended_at: asFiniteNumber(runOutcome.endedAt) ?? null,
+              }
+            : undefined;
+          executeSqliteQuerySync(
+            database.db,
+            db
+              .updateTable("session_nodes")
+              .set({
+                entry_json: entryJson,
+                ...(runProjection ? { status: runProjection.status } : {}),
+              })
+              .where("session_key", "=", sessionKey),
           );
+          if (snapshots) {
+            writeSessionEntrySnapshots(database, sessionKey, snapshots);
+          }
+          executeSqliteQuerySync(
+            database.db,
+            db
+              .updateTable("session_nodes")
+              .set({ entry_valid: entryValid })
+              .where("session_key", "=", sessionKey),
+          );
+          const projected = deliveryProjectionEntry ?? nextEntry;
+          const deliveryProjection =
+            projected && params.updateDeliveryProjection
+              ? {
+                  account_id: deliveryContextFromSession(projected)?.accountId ?? null,
+                  channel: sessionDeliveryChannel(projected) ?? null,
+                }
+              : undefined;
+          if (deliveryProjection || runProjection) {
+            executeSqliteQuerySync(
+              database.db,
+              db
+                .updateTable("session_windows")
+                .set({ ...deliveryProjection, ...runProjection })
+                .where("session_id", "=", row.current_session_id),
+            );
+          }
+          // Repair rows do not yet supply complete canonical runtime and side-table facts.
+          publishSessionEntryCacheInvalidation(database, { sessionKey });
           batchRewritten += 1;
         }
         params.assertCurrent?.();

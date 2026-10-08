@@ -58,7 +58,7 @@ function createLedgerStore<T>(): PluginStateKeyedStore<T> {
 }
 
 type SyncMenuOptions = {
-  deleteMyCommands?: ReturnType<typeof vi.fn>;
+  deleteMyCommands: ReturnType<typeof vi.fn>;
   setMyCommands: ReturnType<typeof vi.fn>;
   commandsToRegister: Parameters<typeof syncTelegramMenuCommands>[0]["commandsToRegister"];
   accountId: string;
@@ -84,7 +84,7 @@ function resolveTestBotToken(options: SyncMenuOptions): string {
 
 function syncMenuCommandsWithMocks(options: SyncMenuOptions): void {
   const api = {
-    ...(options.deleteMyCommands ? { deleteMyCommands: options.deleteMyCommands } : {}),
+    deleteMyCommands: options.deleteMyCommands,
     setMyCommands: options.setMyCommands,
   };
   syncTelegramMenuCommands({
@@ -998,33 +998,5 @@ describe("bot-native-command-menu sync lifecycle", () => {
     expect(setMyCommands).toHaveBeenCalledTimes(4);
     expect(ledgerRegisterCalls).toHaveLength(3);
     expect(runtimeError).toHaveBeenCalledTimes(2);
-  });
-
-  it("uses empty setMyCommands for each exact scope/language pair when delete is unavailable", async () => {
-    const setMyCommands = vi.fn(async () => undefined);
-    const accountId = `test-clear-fallback-${Date.now()}`;
-
-    syncMenuCommandsWithMocks({
-      setMyCommands,
-      accountId,
-      commandsToRegister: [
-        { command: "cmd", description: "Default", descriptionLocalizations: { fr: "Français" } },
-      ],
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(6));
-    setMyCommands.mockClear();
-
-    syncMenuCommandsWithMocks({
-      setMyCommands,
-      accountId,
-      commandsToRegister: [{ command: "cmd", description: "Default" }],
-    });
-    await waitForTelegramMenu(() => expect(setMyCommands).toHaveBeenCalledTimes(6));
-
-    expect(setMyCommands).toHaveBeenCalledWith([], { language_code: "fr" });
-    expect(setMyCommands).toHaveBeenCalledWith([], {
-      scope: { type: "all_group_chats" },
-      language_code: "fr",
-    });
   });
 });

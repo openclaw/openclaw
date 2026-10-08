@@ -37,6 +37,8 @@ export const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
   /(^|[\\/])\.pytest_cache([\\/]|$)/,
   /(^|[\\/])build([\\/]|$)/,
   /(^|[\\/])\.cache([\\/]|$)/,
+  // Workshop version snapshots; discovery skips dot directories too.
+  /(^|[\\/])\.archive([\\/]|$)/,
 ];
 
 export const isIgnoredSkillsWatchPath = (candidate: string): boolean =>

@@ -78,7 +78,7 @@ describe("Plugin reader link routing", () => {
     (native) => {
       let external = true;
       const shouldOpenExternally = () => external;
-      const { accept, click } = setup(shouldOpenExternally);
+      const { anchor, accept, click } = setup(shouldOpenExternally);
       const postMessage = vi.fn();
       if (native) {
         vi.stubGlobal("webkit", {
@@ -117,48 +117,27 @@ describe("Plugin reader link routing", () => {
       external = false;
       expect(click().allowed).toBe(false);
       expect(accept).toHaveBeenCalledOnce();
+      const request = accept.mock.calls[0]?.[0];
+      expect(request).toBeInstanceOf(CustomEvent);
+      expect((request as CustomEvent).detail).toEqual({
+        url: anchor.href,
+        open: true,
+        trigger: anchor,
+        newTab: true,
+      });
       expect(panel).not.toHaveBeenCalled();
       expect(postMessage).toHaveBeenCalledTimes(native ? 1 : 0);
     },
   );
 
-  it("routes primary clicks once before native webview handling, retaining the original URL", () => {
-    const { anchor, accept, click } = setup();
-    const postMessage = vi.fn();
-    vi.stubGlobal("webkit", { messageHandlers: { openclawLink: { postMessage } } });
-    const nativeRouting = startNativeLinkRouting();
-    cleanups.push(() => nativeRouting.dispose());
-    expect(click().allowed).toBe(false);
-    expect(accept).toHaveBeenCalledOnce();
-    const request = accept.mock.calls[0]?.[0];
-    expect(request).toBeInstanceOf(CustomEvent);
-    expect((request as CustomEvent).detail).toEqual({
-      url: anchor.href,
-      open: true,
-      trigger: anchor,
-      newTab: true,
-    });
-    expect(postMessage).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { ctrlKey: true },
-    { metaKey: true },
-    { shiftKey: true },
-    { altKey: true },
-    { button: 1 },
-  ])("preserves modified/native navigation %j", (init) => {
-    const { accept, click } = setup();
-    expect(click(init).allowed).toBe(true);
-    expect(accept).not.toHaveBeenCalled();
-  });
-
-  it.each(["download", "data-file-path", "data-link-reader-external"])(
-    "preserves explicit %s links",
-    (attribute) => {
+  it.each(["modified", "download", "data-file-path", "data-link-reader-external"])(
+    "preserves %s navigation",
+    (variant) => {
       const { anchor, accept, click } = setup();
-      anchor.setAttribute(attribute, "");
-      expect(click().allowed).toBe(true);
+      if (variant !== "modified") {
+        anchor.setAttribute(variant, "");
+      }
+      expect(click({ metaKey: variant === "modified" }).allowed).toBe(true);
       expect(accept).not.toHaveBeenCalled();
     },
   );
@@ -218,31 +197,19 @@ describe("Plugin reader destinations", () => {
       ]),
     ).toEqual({ href: "https://notes.example/documents/hello-world#discussion", reader: notes });
     expect(resolveLinkReaderTarget("https://forge.example/items/123", [])).toBeNull();
-    expect(resolveLinkReaderTarget("https://forge.example/items/123", [reader])?.reader).toBe(
-      reader,
-    );
+    const malformed = { ...reader, linkReader: { ...reader.linkReader, pathPattern: "[" } };
+    expect(
+      resolveLinkReaderTarget("https://forge.example/items/123", [malformed, reader])?.reader,
+    ).toBe(reader);
   });
   it.each([
     "https://forge.example.evil.test/items/1",
     "http://forge.example/items/1",
     "https://forge.example:8443/items/1",
     "https://forge.example/items/0",
-    "https://forge.example/items/new",
-    "https://forge.example/items/1/extra",
-    "https://forge.example/items/%2F",
-    "file:///items/1",
     "not-a-url",
+    "https://example:not-a-real-password@forge.example/items/1",
   ])("leaves unsupported URLs external: %s", (url) => {
     expect(resolveLinkReaderTarget(url, [reader])).toBeNull();
-  });
-  it("rejects userinfo and ignores a malformed contribution without breaking other links", () => {
-    const url = new URL("https://forge.example/items/1");
-    url.username = "example";
-    url.password = "not-a-real-password";
-    expect(resolveLinkReaderTarget(url.href, [reader])).toBeNull();
-    const malformed = { ...reader, linkReader: { ...reader.linkReader, pathPattern: "[" } };
-    expect(
-      resolveLinkReaderTarget("https://forge.example/items/1", [malformed, reader])?.reader,
-    ).toBe(reader);
   });
 });

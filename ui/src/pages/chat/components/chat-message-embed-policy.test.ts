@@ -11,6 +11,93 @@ import { renderStreamGroupParts } from "./chat-message-stream.ts";
 
 describe("assistant message embed policy", () => {
   it.each(["persisted", "streaming"] as const)(
+    "revokes YouTube playback on policy, source, and session changes in %s messages",
+    async (surface) => {
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          observe() {}
+          disconnect() {}
+        },
+      );
+      const host = document.createElement("div");
+      document.body.append(host);
+      onTestFinished(() => {
+        render(null, host);
+        host.remove();
+        vi.unstubAllGlobals();
+      });
+      const show = async (
+        embedSandboxMode: "scripts" | "strict" = "scripts",
+        sessionKey = "agent:main:first",
+        url = "https://youtu.be/AbCdEfGhI_1",
+      ) => {
+        const text = `[embed url="${url}" title="Synthetic video" /]`;
+        const options = { allowExternalEmbedUrls: false, embedSandboxMode, sessionKey };
+        render(
+          surface === "streaming"
+            ? renderStreamGroupParts(
+                [{ kind: "stream", key: "message", text, startedAt: 1, isStreaming: true }],
+                options,
+                "standalone",
+              )
+            : renderGroupedMessage(
+                prepareChatMessageRender({ role: "assistant", content: [{ type: "text", text }] }),
+                "message",
+                { ...options, isStreaming: false, showReasoning: false },
+              ),
+          host,
+        );
+        await vi.dynamicImportSettled();
+        const card = host.querySelector("openclaw-youtube-video");
+        expect(card).not.toBeNull();
+        await card!.updateComplete;
+        return card!;
+      };
+      const play = async (card: HTMLElementTagNameMap["openclaw-youtube-video"]) => {
+        const button = card.shadowRoot?.querySelector<HTMLButtonElement>(
+          'button[aria-label="Play Synthetic video"]',
+        );
+        expect(button).not.toBeNull();
+        button!.click();
+        await card.updateComplete;
+        const frame = card.shadowRoot?.querySelector("iframe");
+        expect(frame).toBeInstanceOf(HTMLIFrameElement);
+        return frame!;
+      };
+
+      const first = await show();
+      expect(first.shadowRoot?.querySelector("iframe")).toBeNull();
+      const firstFrame = await play(first);
+      await show("strict");
+      expect(firstFrame.isConnected).toBe(false);
+      expect(first.shadowRoot?.querySelector("button")).toBeNull();
+      expect(first.shadowRoot?.querySelector("a")?.href).toBe(
+        "https://www.youtube.com/watch?v=AbCdEfGhI_1",
+      );
+
+      const reenabled = await show();
+      expect(reenabled.shadowRoot?.querySelector("iframe")).toBeNull();
+      const reenabledFrame = await play(reenabled);
+      const otherSession = await show("scripts", "agent:main:second");
+      expect(reenabledFrame.isConnected).toBe(false);
+      expect(otherSession.shadowRoot?.querySelector("iframe")).toBeNull();
+
+      const sessionFrame = await play(otherSession);
+      const otherSource = await show(
+        "scripts",
+        "agent:main:second",
+        "https://youtu.be/JkLmNoPqR_2",
+      );
+      expect(sessionFrame.isConnected).toBe(false);
+      expect(otherSource.shadowRoot?.querySelector("iframe")).toBeNull();
+      expect(otherSource.shadowRoot?.querySelector("a")?.href).toBe(
+        "https://www.youtube.com/watch?v=JkLmNoPqR_2",
+      );
+    },
+  );
+
+  it.each(["persisted", "streaming"] as const)(
     "applies external embed policy changes to an existing %s message",
     (surface) => {
       const host = document.createElement("div");

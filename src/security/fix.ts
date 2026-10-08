@@ -1,11 +1,10 @@
-// Applies safe automatic fixes for supported security audit findings.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { modeBits } from "@openclaw/fs-safe/permissions";
 import { walkDirectory } from "@openclaw/fs-safe/walk";
 import { listAgentIds, tryResolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveAuthProfileDatabaseFilePaths } from "../agents/auth-profiles/sqlite.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { createConfigIO, replaceConfigFile } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveConfigPath, resolveOAuthDir, resolveStateDir } from "../config/paths.js";
@@ -139,29 +138,8 @@ async function applySecurityFixConfigMutations(params: {
   cfg: OpenClawConfig;
   changes: string[];
 }> {
-  const channelFixes = await collectChannelSecurityConfigFixMutation({
-    cfg: params.cfg,
-    env: params.env,
-    channelPlugins: params.channelPlugins,
-  });
-  const cfg = structuredClone(channelFixes.cfg ?? {});
-  const changes: string[] = [];
-  for (const channel of Object.keys(cfg.channels ?? {})) {
-    setGroupPolicyAllowlist({ cfg, channel, changes });
-  }
-  return {
-    cfg,
-    changes: [...changes, ...channelFixes.changes],
-  };
-}
-
-async function collectChannelSecurityConfigFixMutation(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  channelPlugins?: ChannelPlugin[];
-}) {
   let nextCfg = params.cfg;
-  const changes: string[] = [];
+  const channelChanges: string[] = [];
   const collectPlugins = async (): Promise<ChannelPlugin[]> => {
     if (params.channelPlugins) {
       return params.channelPlugins;
@@ -188,9 +166,14 @@ async function collectChannelSecurityConfigFixMutation(params: {
       continue;
     }
     nextCfg = mutation.config;
-    changes.push(...mutation.changes);
+    channelChanges.push(...mutation.changes);
   }
-  return { cfg: nextCfg, changes };
+  const cfg = structuredClone(nextCfg ?? {});
+  const changes: string[] = [];
+  for (const channel of Object.keys(cfg.channels ?? {})) {
+    setGroupPolicyAllowlist({ cfg, channel, changes });
+  }
+  return { cfg, changes: [...changes, ...channelChanges] };
 }
 
 async function collectSecurityPermissionTargets(params: {

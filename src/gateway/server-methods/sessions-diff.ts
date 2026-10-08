@@ -11,6 +11,7 @@ import { loadCheckoutDiff } from "../../sessions/session-diff.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
+import { startSlowRequestDiagnostics } from "../slow-request-diagnostics.js";
 import { loadRepositoryArtifactDiff } from "./session-repository-artifacts.js";
 import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
@@ -20,6 +21,17 @@ export async function loadSessionDiff(
   params: SessionsDiffParams,
   context?: GatewayRequestContext,
 ): Promise<SessionsDiffResult> {
+  let worktreeCount = 0;
+  let returnedFileCount = 0;
+  using timing =
+    context &&
+    startSlowRequestDiagnostics<"resolve" | "git" | "response">(
+      context.logGateway,
+      "slow session checkout diff",
+      "sessions.diff",
+      "resolve",
+      () => ({ worktreeCount, returnedFileCount, scope: params.scope ?? "all" }),
+    );
   const empty = (
     unavailableReason?: NonNullable<SessionsDiffResult["unavailableReason"]>,
   ): SessionsDiffResult => ({
@@ -29,7 +41,10 @@ export async function loadSessionDiff(
     deletions: 0,
     ...(unavailableReason ? { unavailableReason } : {}),
   });
-  const loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, { agentId: params.agentId });
+  const loaded = loadGatewaySessionEntryReadOnly(params.sessionKey, {
+    agentId: params.agentId,
+    projection: ["sessionDiffBaseline"],
+  });
   const { cfg, agentId, entry, storePath } = loaded;
   // Same session scoping as sessions.files.*: an unknown session must not fall
   // back to some agent workspace and surface another checkout's diff.
@@ -57,24 +72,26 @@ export async function loadSessionDiff(
   if (!cwd) {
     return empty(checkoutPending ? undefined : "unknown_session");
   }
+  worktreeCount = 1;
+  timing?.mark("git");
+  const input = { cwd, sessionKey: params.sessionKey };
+  let result: SessionsDiffResult;
   if (params.scope === "commit") {
     if (!params.commit) {
       throw new TypeError("commit scope requires a commit");
     }
-    return await loadCheckoutDiff({
-      commit: params.commit,
-      cwd,
-      scope: "commit",
-      sessionKey: params.sessionKey,
+    result = await loadCheckoutDiff({ ...input, commit: params.commit, scope: "commit" });
+  } else {
+    result = await loadCheckoutDiff({
+      ...input,
+      scope: params.scope ?? "all",
+      baseline: entry.sessionDiffBaseline,
+      sessionId: entry.sessionId,
     });
   }
-  return await loadCheckoutDiff({
-    cwd,
-    scope: params.scope ?? "all",
-    sessionKey: params.sessionKey,
-    baseline: entry.sessionDiffBaseline,
-    sessionId: entry.sessionId,
-  });
+  returnedFileCount = result.files.length;
+  timing?.mark("response");
+  return result;
 }
 
 export const sessionsDiffHandlers: GatewayRequestHandlers = {

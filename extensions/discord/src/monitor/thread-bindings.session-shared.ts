@@ -19,28 +19,15 @@ import type {
   ThreadBindingTargetKind,
 } from "./thread-bindings.types.js";
 
-export function normalizeNonNegativeMs(raw: number): number {
-  if (!Number.isFinite(raw)) {
-    return 0;
-  }
-  return Math.max(0, Math.floor(raw));
-}
-
 export function resolveBindingIdsForTargetSession(params: {
   targetSessionKey: string;
   accountId?: string;
   targetKind?: ThreadBindingTargetKind;
 }) {
   ensureBindingsLoaded();
-  const targetSessionKey = params.targetSessionKey.trim();
-  if (!targetSessionKey) {
-    return [];
-  }
-  const accountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
   return resolveBindingIdsForSession({
-    targetSessionKey,
-    accountId,
-    targetKind: params.targetKind,
+    ...params,
+    accountId: params.accountId ? normalizeAccountId(params.accountId) : undefined,
   });
 }
 

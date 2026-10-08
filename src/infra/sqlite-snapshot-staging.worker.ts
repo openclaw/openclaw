@@ -189,9 +189,6 @@ serveOwnedWorkerTasks<SqliteSnapshotStagingReply>(
           { ...command.launch, deadlineOwnedByCaller: command.deadlineOwnedByCaller },
         );
         controller.signal.throwIfAborted();
-        if (typeof location !== "string") {
-          throw new Error("SQLite snapshot preparation returned an invalid location");
-        }
         return { type: "prepared", directory, location };
       } catch (error) {
         let failure = error;

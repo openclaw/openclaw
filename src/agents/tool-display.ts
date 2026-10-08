@@ -10,6 +10,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { redactToolDetail } from "../logging/redact.js";
 import { shortenHomeInString } from "../utils.js";
+import { unwrapToolCallForDisplay } from "./tool-display-call.js";
 import {
   defaultTitle,
   formatDetailKey,
@@ -21,7 +22,6 @@ import type { ToolDetailMode } from "./tool-display-exec.js";
 
 type ToolDisplay = {
   name: string;
-  emoji: string;
   title: string;
   label: string;
   verb?: string;
@@ -48,7 +48,6 @@ const DETAIL_LABEL_OVERRIDES: Record<string, string> = {
   pollQuestion: "poll",
   maxChars: "max chars",
 };
-const MAX_DETAIL_ENTRIES = 8;
 
 /** Resolves the display model for a tool invocation. */
 export function resolveToolDisplay(params: {
@@ -57,26 +56,24 @@ export function resolveToolDisplay(params: {
   meta?: string;
   detailMode?: ToolDetailMode;
 }): ToolDisplay {
-  const name = normalizeToolDisplayName(params.name);
+  const call = unwrapToolCallForDisplay({ name: params.name, args: params.args });
+  const name = normalizeToolDisplayName(call.name);
   const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
-  const emoji = spec?.emoji ?? FALLBACK.emoji ?? "🧩";
   const title = spec?.title ?? defaultTitle(name);
   const label = spec?.label ?? title;
   const { verb, detail } = resolveToolVerbAndDetailForArgs({
     toolKey: key,
-    args: params.args,
+    args: call.args,
     meta: params.meta,
     spec,
     fallbackDetailKeys: FALLBACK.detailKeys,
     detailMode: "summary",
     toolDetailMode: params.detailMode,
-    detailMaxEntries: MAX_DETAIL_ENTRIES,
     detailFormatKey: (raw) => formatDetailKey(raw, DETAIL_LABEL_OVERRIDES),
   });
   return {
     name,
-    emoji,
     title,
     label,
     verb,
@@ -123,9 +120,7 @@ export function isCommandBearingToolCall(name: string | undefined, args?: unknow
 export function formatToolSummary(display: ToolDisplay): string {
   const detail = formatToolDetail(display);
   if (detail && isShellToolDisplayName(display.name)) {
-    return `${display.emoji} ${detail}`;
+    return detail;
   }
-  return detail
-    ? `${display.emoji} ${display.label}: ${detail}`
-    : `${display.emoji} ${display.label}`;
+  return detail ? `${display.label}: ${detail}` : display.label;
 }

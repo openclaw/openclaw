@@ -221,7 +221,7 @@ suite.define(() => {
           await sidebar.getByRole("button", { name: /Switch agent/ }).click();
           await sidebar
             .locator("wa-dropdown.sidebar-agent-menu")
-            .getByRole("menuitemradio", { name, exact: true })
+            .getByRole("menuitem", { name, exact: true })
             .click();
         };
         await rowFor(archived.key).waitFor({ state: "visible" });

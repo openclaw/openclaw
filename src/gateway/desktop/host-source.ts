@@ -1,8 +1,5 @@
 import fs from "node:fs/promises";
-import type {
-  DesktopObserveResult,
-  EnvironmentSummary,
-} from "../../../packages/gateway-protocol/src/index.js";
+import type { EnvironmentSummary } from "../../../packages/gateway-protocol/src/index.js";
 import type { DesktopHostConfig } from "../../config/types.desktop.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import type { RfbAttachment } from "./attachment.js";
@@ -11,7 +8,6 @@ import { HostDesktopCredentialsRequiredError } from "./host-source-errors.js";
 import type { DesktopAudioSource } from "./managed-linux-audio.js";
 import {
   createManagedLinuxDesktop,
-  type DesktopComputerLease,
   type ManagedLinuxDesktop,
   type ManagedLinuxDesktopStatus,
 } from "./managed-linux.js";
@@ -320,26 +316,7 @@ export function createHostDesktopSource(params: {
   };
 }
 
-export type HostDesktopService = {
-  observe(params: {
-    control: boolean;
-    requester?: DesktopObserveRequester;
-    credentials?: { username?: string; password?: string };
-  }): Promise<{
-    transport: "rfb";
-    wsPath: string;
-    expiresAtMs: number;
-    control: boolean;
-    auth: "vnc-password" | "ard-account";
-    vncPassword?: string;
-    audio?: DesktopObserveResult["audio"];
-    audioUnavailableReason?: DesktopObserveResult["audioUnavailableReason"];
-    preauthenticated?: boolean;
-  }>;
-  acquireComputer(params: { onStop(): Promise<void> }): Promise<DesktopComputerLease>;
-  status(): Promise<HostDesktopStatus>;
-  reconcileRuntimePolicy(): Promise<void>;
-};
+export type HostDesktopService = ReturnType<typeof createHostDesktopService>;
 
 /** Combines host acquisition, registry ownership, and observer-token minting. */
 export function createHostDesktopService(params: {
@@ -347,7 +324,7 @@ export function createHostDesktopService(params: {
   registry: DesktopSessionRegistry;
   platform?: NodeJS.Platform;
   managedDesktop?: ManagedLinuxDesktop;
-}): HostDesktopService {
+}) {
   const platform = params.platform ?? process.platform;
   type HostDesktopRuntime = {
     config: DesktopHostConfig;
@@ -445,7 +422,11 @@ export function createHostDesktopService(params: {
     return { acquired, runtime };
   };
   return {
-    async observe(observeParams) {
+    async observe(observeParams: {
+      control: boolean;
+      requester?: DesktopObserveRequester;
+      credentials?: { username?: string; password?: string };
+    }) {
       const { acquired, runtime } = await acquire();
       assertCurrent(runtime);
       const auth = acquired.auth;
@@ -483,7 +464,7 @@ export function createHostDesktopService(params: {
         ...(preauth ? { preauth } : {}),
       });
       return {
-        transport: "rfb",
+        transport: "rfb" as const,
         wsPath: `/desktop/observe?token=${minted.token}`,
         expiresAtMs: minted.expiresAtMs,
         control: observeParams.control,
@@ -497,7 +478,7 @@ export function createHostDesktopService(params: {
           : {}),
       };
     },
-    async acquireComputer(computerParams) {
+    async acquireComputer(computerParams: { onStop(): Promise<void> }) {
       const { runtime } = await acquire();
       assertCurrent(runtime);
       const activity = params.registry.retainActivity("host", runtime.ownerEpoch);

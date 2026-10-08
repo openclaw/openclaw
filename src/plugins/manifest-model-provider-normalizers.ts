@@ -1,13 +1,18 @@
 import { normalizeModelPricingProvider } from "@openclaw/model-catalog-core/model-catalog-pricing";
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
-import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
+import {
+  normalizeOptionalTrimmedStringList,
+  normalizeTrimmedStringList,
+} from "../../packages/normalization-core/src/string-normalization.js";
 import { ENV_SECRET_REF_ID_RE } from "../config/types.secrets.js";
 import { isRecord } from "../utils.js";
 import {
   normalizeManifestObjectList,
   normalizeManifestStringRecord,
   normalizeNamedMetadataRecord,
+  omitUndefinedManifestFields,
+  optionalManifestFields,
 } from "./manifest-capability-normalizers.js";
 import type {
   PluginManifestModelIdNormalization,
@@ -35,14 +40,10 @@ export function normalizeManifestModelSupport(
     return undefined;
   }
 
-  const modelPrefixes = normalizeTrimmedStringList(value.modelPrefixes);
-  const modelPatterns = normalizeTrimmedStringList(value.modelPatterns);
-  const modelSupport = {
-    ...(modelPrefixes.length > 0 ? { modelPrefixes } : {}),
-    ...(modelPatterns.length > 0 ? { modelPatterns } : {}),
-  } satisfies PluginManifestModelSupport;
-
-  return Object.keys(modelSupport).length > 0 ? modelSupport : undefined;
+  return optionalManifestFields({
+    modelPrefixes: normalizeOptionalTrimmedStringList(value.modelPrefixes),
+    modelPatterns: normalizeOptionalTrimmedStringList(value.modelPatterns),
+  });
 }
 
 function normalizeOwnedProviderMap<T>(
@@ -108,19 +109,14 @@ function normalizeManifestModelIdNormalizationProvider(
       }
     }
   }
-  const stripPrefixes = normalizeTrimmedStringList(value.stripPrefixes);
-  const prefixWhenBare = normalizeOptionalString(value.prefixWhenBare);
-  const prefixWhenBareAfterAliasStartsWith = normalizeManifestModelIdPrefixRules(
-    value.prefixWhenBareAfterAliasStartsWith,
-  );
-  const normalization = {
-    ...(Object.keys(aliases).length > 0 ? { aliases } : {}),
-    ...(stripPrefixes.length > 0 ? { stripPrefixes } : {}),
-    ...(prefixWhenBare ? { prefixWhenBare } : {}),
-    ...(prefixWhenBareAfterAliasStartsWith ? { prefixWhenBareAfterAliasStartsWith } : {}),
-  } satisfies PluginManifestModelIdNormalizationProvider;
-
-  return Object.keys(normalization).length > 0 ? normalization : undefined;
+  return optionalManifestFields({
+    aliases: Object.keys(aliases).length > 0 ? aliases : undefined,
+    stripPrefixes: normalizeOptionalTrimmedStringList(value.stripPrefixes),
+    prefixWhenBare: normalizeOptionalString(value.prefixWhenBare),
+    prefixWhenBareAfterAliasStartsWith: normalizeManifestModelIdPrefixRules(
+      value.prefixWhenBareAfterAliasStartsWith,
+    ),
+  });
 }
 
 export function normalizeManifestModelIdNormalization(
@@ -143,26 +139,26 @@ export function normalizeManifestProviderEndpoints(
     if (!endpointClass) {
       return undefined;
     }
-    const hosts = normalizeTrimmedStringList(rawEndpoint.hosts).map((host) => host.toLowerCase());
-    const hostSuffixes = normalizeTrimmedStringList(rawEndpoint.hostSuffixes).map((host) =>
+    const hosts = normalizeOptionalTrimmedStringList(rawEndpoint.hosts)?.map((host) =>
       host.toLowerCase(),
     );
-    const baseUrls = normalizeTrimmedStringList(rawEndpoint.baseUrls);
-    const googleVertexRegion = normalizeOptionalString(rawEndpoint.googleVertexRegion);
-    const googleVertexRegionHostSuffix = normalizeOptionalString(
-      rawEndpoint.googleVertexRegionHostSuffix,
-    )?.toLowerCase();
-    if (hosts.length === 0 && hostSuffixes.length === 0 && baseUrls.length === 0) {
+    const hostSuffixes = normalizeOptionalTrimmedStringList(rawEndpoint.hostSuffixes)?.map((host) =>
+      host.toLowerCase(),
+    );
+    const baseUrls = normalizeOptionalTrimmedStringList(rawEndpoint.baseUrls);
+    if (!hosts && !hostSuffixes && !baseUrls) {
       return undefined;
     }
-    return {
+    return omitUndefinedManifestFields({
       endpointClass,
-      ...(hosts.length > 0 ? { hosts } : {}),
-      ...(hostSuffixes.length > 0 ? { hostSuffixes } : {}),
-      ...(baseUrls.length > 0 ? { baseUrls } : {}),
-      ...(googleVertexRegion ? { googleVertexRegion } : {}),
-      ...(googleVertexRegionHostSuffix ? { googleVertexRegionHostSuffix } : {}),
-    };
+      hosts,
+      hostSuffixes,
+      baseUrls,
+      googleVertexRegion: normalizeOptionalString(rawEndpoint.googleVertexRegion),
+      googleVertexRegionHostSuffix: normalizeOptionalString(
+        rawEndpoint.googleVertexRegionHostSuffix,
+      )?.toLowerCase(),
+    });
   });
 }
 
@@ -192,9 +188,6 @@ export function normalizeManifestSecretProviderIntegrations(
     if (rawIntegration.source !== "exec" || command !== SECRET_PROVIDER_NODE_COMMAND_PLACEHOLDER) {
       return undefined;
     }
-    const providerAlias = normalizeOptionalString(rawIntegration.providerAlias);
-    const displayName = normalizeOptionalString(rawIntegration.displayName);
-    const description = normalizeOptionalString(rawIntegration.description);
     const args: string[] = [];
     if (Array.isArray(rawIntegration.args)) {
       for (const entry of rawIntegration.args) {
@@ -207,37 +200,31 @@ export function normalizeManifestSecretProviderIntegrations(
         }
       }
     }
-    const timeoutMs = normalizeManifestPositiveInteger(
-      rawIntegration.timeoutMs,
-      MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS,
-    );
-    const noOutputTimeoutMs = normalizeManifestPositiveInteger(
-      rawIntegration.noOutputTimeoutMs,
-      MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS,
-    );
-    const maxOutputBytes = normalizeManifestPositiveInteger(
-      rawIntegration.maxOutputBytes,
-      MAX_SECRET_PROVIDER_EXEC_OUTPUT_BYTES,
-    );
-    const env = normalizeManifestStringRecord(rawIntegration.env);
     const passEnv = normalizeTrimmedStringList(rawIntegration.passEnv)
       .filter((entry) => ENV_SECRET_REF_ID_RE.test(entry))
       .slice(0, MAX_SECRET_PROVIDER_EXEC_PASS_ENV);
-    return {
-      ...(providerAlias ? { providerAlias } : {}),
-      ...(displayName ? { displayName } : {}),
-      ...(description ? { description } : {}),
+    return omitUndefinedManifestFields<PluginManifestSecretProviderIntegration>({
+      providerAlias: normalizeOptionalString(rawIntegration.providerAlias),
+      displayName: normalizeOptionalString(rawIntegration.displayName),
+      description: normalizeOptionalString(rawIntegration.description),
       source: "exec",
       command,
-      ...(args.length > 0 ? { args } : {}),
-      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-      ...(noOutputTimeoutMs !== undefined ? { noOutputTimeoutMs } : {}),
-      ...(maxOutputBytes !== undefined ? { maxOutputBytes } : {}),
-      ...(typeof rawIntegration.jsonOnly === "boolean"
-        ? { jsonOnly: rawIntegration.jsonOnly }
-        : {}),
-      ...(env ? { env } : {}),
-      ...(passEnv.length > 0 ? { passEnv } : {}),
-    };
+      args: args.length > 0 ? args : undefined,
+      timeoutMs: normalizeManifestPositiveInteger(
+        rawIntegration.timeoutMs,
+        MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS,
+      ),
+      noOutputTimeoutMs: normalizeManifestPositiveInteger(
+        rawIntegration.noOutputTimeoutMs,
+        MAX_SECRET_PROVIDER_EXEC_TIMEOUT_MS,
+      ),
+      maxOutputBytes: normalizeManifestPositiveInteger(
+        rawIntegration.maxOutputBytes,
+        MAX_SECRET_PROVIDER_EXEC_OUTPUT_BYTES,
+      ),
+      jsonOnly: typeof rawIntegration.jsonOnly === "boolean" ? rawIntegration.jsonOnly : undefined,
+      env: normalizeManifestStringRecord(rawIntegration.env),
+      passEnv: passEnv.length > 0 ? passEnv : undefined,
+    });
   });
 }

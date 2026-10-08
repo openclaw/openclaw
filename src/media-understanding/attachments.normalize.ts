@@ -33,9 +33,9 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
   return normalizeMediaFacts(ctx.media)
     .map((fact, index) => {
       const attachment: MediaAttachment = {
-        path: normalizeOptionalString(fact.path),
-        url: normalizeOptionalString(fact.url),
-        mime: normalizeOptionalString(fact.contentType),
+        path: fact.path,
+        url: fact.url,
+        mime: fact.contentType,
         index,
         alreadyTranscribed: fact.transcribed === true,
       };
@@ -43,9 +43,8 @@ export function normalizeAttachments(ctx: MsgContext): MediaAttachment[] {
       if (kind) {
         attachment.kind = kind;
       }
-      const fileName = normalizeOptionalString(fact.fileName);
-      if (fileName) {
-        attachment.fileName = fileName;
+      if (fact.fileName) {
+        attachment.fileName = fact.fileName;
       }
       if (fact.workspaceDir) {
         attachment.workspaceDir = fact.workspaceDir;

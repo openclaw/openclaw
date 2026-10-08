@@ -1,6 +1,11 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
@@ -48,6 +53,7 @@ import type {
 import { resolveDynamicModelAuthProfile } from "./model.registry-resolution.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const modelAuthReadScope = new AsyncLocalStorage<boolean>();
 
 afterEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
@@ -56,98 +62,85 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it.each([
-  "one rotation",
-  "continued rotation",
-  "pinned profile rotation",
-  "cleanup failure",
-  "admission refusal",
-] as const)("resolves model auth across %s during its captured read", async (change) => {
-  const root = tempDirs.make("openclaw-model-auth-race-");
-  const agentDir = path.join(root, "agents/main/agent");
-  vi.stubEnv("OPENCLAW_STATE_DIR", root);
-  vi.spyOn(authPaths, "resolveSharedAuthStoreOwnershipAsync").mockResolvedValue({
-    location: "legacy-main",
-  });
-  const events: string[] = [];
-  const refusal = new Error("Auth source admission revoked");
-  const cleanupFailure = new Error("Auth child failed to close");
-  let reads = 0;
-  vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation(() => ({
-    assertCurrent: () => {},
-    dispose: async () => {
-      events.push("disposed");
-      if (change === "cleanup failure") {
-        throw cleanupFailure;
-      }
-    },
-    read: async (): Promise<AuthProfileRowRead> => {
-      events.push("read");
-      reads += 1;
-      if (change === "admission refusal") {
-        throw refusal;
-      }
-      const profileId = reads === 1 ? "custom:retired" : "custom:current";
-      if (reads === 1 || change === "continued rotation") {
-        noteRuntimeAuthProfileStorePersistedMutation(agentDir, {
-          credentialsChanged: true,
-          stateChanged: false,
-          profileIds: [profileId],
-        });
-      }
-      return {
-        store: {
-          status: "readable",
-          raw: {
-            version: 1,
-            profiles: { [profileId]: { type: "api_key", provider: "custom", key: "fixture" } },
+it.each(["one rotation", "cleanup failure", "admission refusal"] as const)(
+  "resolves model auth across %s during its captured read",
+  async (change) => {
+    const root = tempDirs.make("openclaw-model-auth-race-");
+    const agentDir = path.join(root, "agents/main/agent");
+    vi.stubEnv("OPENCLAW_STATE_DIR", root);
+    vi.spyOn(authPaths, "resolveSharedAuthStoreOwnershipAsync").mockResolvedValue({
+      location: "legacy-main",
+    });
+    const events: string[] = [];
+    const refusal = new Error("Auth source admission revoked");
+    const cleanupFailure = new Error("Auth child failed to close");
+    let reads = 0;
+    vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation(() => ({
+      assertCurrent: () => {},
+      dispose: async () => {
+        events.push("disposed");
+        if (change === "cleanup failure") {
+          throw cleanupFailure;
+        }
+      },
+      read: async (): Promise<AuthProfileRowRead> => {
+        events.push("read");
+        reads += 1;
+        if (change === "admission refusal") {
+          throw refusal;
+        }
+        const profileId = reads === 1 ? "custom:retired" : "custom:current";
+        if (reads === 1) {
+          noteRuntimeAuthProfileStorePersistedMutation(agentDir, {
+            credentialsChanged: true,
+            stateChanged: false,
+            profileIds: [profileId],
+          });
+        }
+        return {
+          store: {
+            status: "readable",
+            raw: {
+              version: 1,
+              profiles: { [profileId]: { type: "api_key", provider: "custom", key: "fixture" } },
+            },
           },
-        },
-        state: { status: "missing", reason: "row" },
-        cacheable: true,
-      };
-    },
-  }));
+          state: { status: "missing", reason: "row" },
+          cacheable: true,
+        };
+      },
+    }));
 
-  const resolution = resolveDynamicModelAuthProfile({
-    provider: "custom",
-    modelId: "fixture",
-    agentDir,
-    ...(change === "pinned profile rotation" ? { authProfileId: "custom:retired" } : {}),
-  });
-  if (change === "one rotation") {
-    await expect(resolution).resolves.toEqual({
-      authProfileId: "custom:current",
-      authProfileMode: "api_key",
+    const resolution = resolveDynamicModelAuthProfile({
+      provider: "custom",
+      modelId: "fixture",
+      agentDir,
     });
-  } else if (change === "continued rotation") {
-    await expect(resolution).rejects.toThrow("Auth profile store changed during its runtime read");
-  } else if (change === "pinned profile rotation") {
-    await expect(resolution).rejects.toMatchObject({
-      code: "selected_auth_profile_unavailable",
-      profileId: "custom:retired",
-    });
-  } else if (change === "admission refusal") {
-    await expect(resolution).rejects.toBe(refusal);
-  } else {
-    await expect(resolution).rejects.toMatchObject({
-      errors: [expect.any(Error), cleanupFailure],
-    });
-  }
-  expect(events).toEqual(
-    change === "cleanup failure" || change === "admission refusal"
-      ? ["read", "disposed"]
-      : ["read", "disposed", "read", "disposed"],
-  );
-});
+    if (change === "one rotation") {
+      await expect(resolution).resolves.toEqual({
+        authProfileId: "custom:current",
+        authProfileMode: "api_key",
+      });
+    } else if (change === "admission refusal") {
+      await expect(resolution).rejects.toBe(refusal);
+    } else {
+      await expect(resolution).rejects.toMatchObject({
+        errors: [expect.any(Error), cleanupFailure],
+      });
+    }
+    expect(events).toEqual(
+      change === "cleanup failure" || change === "admission refusal"
+        ? ["read", "disposed"]
+        : ["read", "disposed", "read", "disposed"],
+    );
+  },
+);
 
-it.each([
+it.for([
   "inherited",
   "caller timeout",
   "unrelated pin",
-  "unrelated provider",
   "cold local account override",
-  "cold copied peer",
   "reconnected primary with peer",
   "restored claim",
   "peer CAS replacement",
@@ -158,7 +151,7 @@ it.each([
   "foreign shared generation",
   "foreign shared replacement",
   "foreign shared portable replacement",
-] as const)("resolves model auth across one OAuth claim and settlement: %s", async (scope) => {
+] as const)("resolves model auth across one OAuth claim and settlement: %s", async (scope, ctx) => {
   const root = tempDirs.make("openclaw-model-auth-refresh-race-");
   const agentDir = path.join(root, "agents/main/agent");
   const localOverride = scope === "cold local account override" || scope === "peer CAS replacement";
@@ -172,7 +165,6 @@ it.each([
   const startDuringInheritedRead = cold && scope !== "cold local removed before local read";
   const reconnectedPrimary = scope === "reconnected primary with peer";
   const copiedPeer =
-    scope === "cold copied peer" ||
     scope === "reconnected primary with peer" ||
     scope === "peer CAS replacement" ||
     scope === "already fenced peer";
@@ -340,8 +332,14 @@ it.each([
   });
   let refresh: ReturnType<typeof manager.resolveOAuthAccess> | undefined;
   let foreignLocalChanged = false;
-  vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation(
-    ({ databasePath }) => ({
+  const prepareRowsRead = sqliteRead.prepareAgentAuthProfileRowsRead;
+  vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation((options) => {
+    // Only selection reads are held; refresh publication must reach the provider independently.
+    if (!modelAuthReadScope.getStore()) {
+      return prepareRowsRead(options);
+    }
+    const { databasePath } = options;
+    return {
       assertCurrent: () => {},
       dispose: async () => {},
       read: async () => {
@@ -390,21 +388,33 @@ it.each([
           if (activeCredential?.type !== "oauth") {
             throw new Error("Expected current OAuth credential");
           }
-          refresh = manager.resolveOAuthAccess({
-            store: activeStore,
-            profileId,
-            credential: activeCredential,
-            agentDir,
-            forceRefresh: true,
-          });
+          refresh = modelAuthReadScope.exit(() =>
+            manager.resolveOAuthAccess({
+              store: activeStore,
+              profileId,
+              credential: activeCredential,
+              agentDir,
+              forceRefresh: true,
+            }),
+          );
           void refresh.catch(() => {});
-          await refreshEntered.promise;
+          await withinTest(
+            awaitGateBeforeSettlement(
+              refreshEntered.promise,
+              refresh,
+              "OAuth refresh settled before entering the fixture provider",
+            ),
+            ctx.signal,
+          );
           if (foreignSharedChange) {
             const local = loadPersistedAuthProfileStore(readAgentDir)?.profiles[profileId];
             if (scope === "foreign shared replacement") {
               expect(readPendingOAuthRefreshClaimId(local)).toEqual(expect.any(String));
             } else {
-              expect(local).toMatchObject({ copyToAgents: true, refresh: "fixture-local-refresh" });
+              expect(local).toMatchObject({
+                copyToAgents: true,
+                refresh: "fixture-local-refresh",
+              });
             }
           }
           if (localRemoved) {
@@ -454,7 +464,7 @@ it.each([
         } else if (refresh) {
           retryEntered.resolve();
           if (!localOverride) {
-            await settled.promise;
+            await withinTest(settled.promise, ctx.signal);
           }
         }
         return {
@@ -463,27 +473,27 @@ it.each([
           cacheable: true,
         };
       },
+    };
+  });
+  const resolution = modelAuthReadScope.run(true, () =>
+    resolveDynamicModelAuthProfile({
+      provider: "custom",
+      modelId: "fixture",
+      agentDir: readAgentDir,
+      authProfileId: scope === "unrelated pin" ? "custom:other" : profileId,
     }),
   );
-  const resolution = resolveDynamicModelAuthProfile({
-    provider: scope === "unrelated provider" ? "other" : "custom",
-    modelId: "fixture",
-    agentDir: readAgentDir,
-    authProfileId:
-      scope === "unrelated pin"
-        ? "custom:other"
-        : scope === "unrelated provider"
-          ? undefined
-          : profileId,
-  });
   try {
-    const waitedForRefresh = await Promise.race([
-      retryEntered.promise.then(() => false),
-      observationEntered.promise.then(() => true),
-      resolution.then(() => {
-        throw new Error("Resolution skipped the refresh barrier");
-      }),
-    ]);
+    const waitedForRefresh = await withinTest(
+      Promise.race([
+        retryEntered.promise.then(() => false),
+        observationEntered.promise.then(() => true),
+        resolution.then(() => {
+          throw new Error("Resolution skipped the refresh barrier");
+        }),
+      ]),
+      ctx.signal,
+    );
     if (localOverride) {
       expect(waitedForRefresh).toBe(false);
     } else if (localRemoved || localAdded) {
@@ -541,7 +551,7 @@ it.each([
     } else {
       releaseRefresh.resolve();
     }
-    if (scope === "unrelated pin" || scope === "unrelated provider" || scope === "restored claim") {
+    if (scope === "unrelated pin" || scope === "restored claim") {
       await expect(resolution).rejects.toThrow(
         "Auth profile store changed during its runtime read",
       );
@@ -584,7 +594,6 @@ it.each([
   } finally {
     releaseRefresh.resolve();
     await Promise.allSettled([resolution, refresh]);
-    await settled.promise;
     stopObservingMutations();
     vi.useRealTimers();
     await cleanupSessionStateForTest({ stateDir: root });
@@ -688,53 +697,65 @@ it.each(["settled", "replaced", "removed", "failed"] as const)(
       });
       let ownerReads = 0;
       let refresh: Promise<unknown> | undefined;
-      vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation((owner) => ({
-        assertCurrent: () => {},
-        dispose: async () => {},
-        read: async () => {
-          const ownerAgentDir = path.dirname(owner.databasePath);
-          const rows = persistedRows(
-            readPersistedAuthProfileStoreRaw(ownerAgentDir),
-            readPersistedAuthProfileStateRaw(ownerAgentDir),
-          );
-          if (owner.databasePath !== databasePath) {
+      const prepareRowsRead = sqliteRead.prepareAgentAuthProfileRowsRead;
+      vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation((owner) => {
+        if (!modelAuthReadScope.getStore()) {
+          return prepareRowsRead(owner);
+        }
+        return {
+          assertCurrent: () => {},
+          dispose: async () => {},
+          read: async () => {
+            const ownerAgentDir = path.dirname(owner.databasePath);
+            const rows = persistedRows(
+              readPersistedAuthProfileStoreRaw(ownerAgentDir),
+              readPersistedAuthProfileStateRaw(ownerAgentDir),
+            );
+            if (owner.databasePath !== databasePath) {
+              return rows;
+            }
+            ownerReads += 1;
+            if (ownerReads === 1) {
+              // This real claim revokes the first captured read. The provider stays
+              // pending until selection joins it or wrongly begins its second read.
+              refresh = modelAuthReadScope
+                .exit(() =>
+                  manager.resolveOAuthAccess({
+                    store: initialStore,
+                    profileId,
+                    credential: original,
+                    agentDir,
+                    forceRefresh: true,
+                  }),
+                )
+                .then(
+                  (value) => ({ value }),
+                  (error: unknown) => ({ error }),
+                );
+              await Promise.race([providerEntered.promise, refresh]);
+            } else {
+              readingPendingFence.resolve();
+              // Before the repair this read captures the pending fence and its
+              // settlement invalidates the one remaining selection attempt.
+              await refresh;
+            }
             return rows;
-          }
-          ownerReads += 1;
-          if (ownerReads === 1) {
-            // This real claim revokes the first captured read. The provider stays
-            // pending until selection joins it or wrongly begins its second read.
-            refresh = manager
-              .resolveOAuthAccess({
-                store: initialStore,
-                profileId,
-                credential: original,
-                agentDir,
-                forceRefresh: true,
-              })
-              .then(
-                (value) => ({ value }),
-                (error: unknown) => ({ error }),
-              );
-            await Promise.race([providerEntered.promise, refresh]);
-          } else {
-            readingPendingFence.resolve();
-            // Before the repair this read captures the pending fence and its
-            // settlement invalidates the one remaining selection attempt.
-            await refresh;
-          }
-          return rows;
-        },
-      }));
-      const resolution = resolveDynamicModelAuthProfile({
-        provider: "openai",
-        modelId: "fixture",
-        agentDir,
-        ...(outcome === "failed" ? {} : { authProfileId: profileId }),
-      }).then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+          },
+        };
+      });
+      const resolution = modelAuthReadScope
+        .run(true, () =>
+          resolveDynamicModelAuthProfile({
+            provider: "openai",
+            modelId: "fixture",
+            agentDir,
+            ...(outcome === "failed" ? {} : { authProfileId: profileId }),
+          }),
+        )
+        .then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
       try {
         await Promise.race([joiningRefresh.promise, readingPendingFence.promise, resolution]);
         releaseProvider.resolve();

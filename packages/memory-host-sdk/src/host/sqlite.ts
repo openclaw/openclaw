@@ -54,3 +54,7 @@ export function closeMemorySqliteWalMaintenance(db: DatabaseSync): boolean {
   sqliteWalMaintenanceByDb.delete(db);
   return maintenance.close();
 }
+
+export async function stopMemorySqliteWalMaintenance(db: DatabaseSync): Promise<void> {
+  await sqliteWalMaintenanceByDb.get(db)?.stop();
+}

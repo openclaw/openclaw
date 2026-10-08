@@ -1,16 +1,15 @@
-import {
-  handleToolExecutionEnd,
-  handleToolExecutionStart,
-} from "./embedded-agent-subscribe.handlers.tools.js";
+import { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.completion.js";
+import { handleToolExecutionStart } from "./embedded-agent-subscribe.handlers.tools.start.js";
 import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import { recordEmbeddedToolTrajectoryEvent } from "./embedded-agent-subscribe.trajectory.js";
-import { buildToolLifecycleErrorResult } from "./embedded-agent-tool-results.js";
+import { buildToolLifecycleErrorResult, prepareToolResult } from "./embedded-agent-tool-results.js";
 import type { AgentEvent } from "./runtime/index.js";
 import { markToolExecutionNotStarted, type ToolEffectReceipt } from "./tool-effect-receipt.js";
 import { consumeTrustedToolNoStartError } from "./tool-result-error.js";
 
 type ToolTerminal = {
   result: unknown;
+  readSanitizedResult: () => unknown;
   isError: boolean;
   executedArguments: unknown;
   effectReceipt: ToolEffectReceipt;
@@ -44,7 +43,7 @@ export function createEmbeddedToolLifecycleRunner(
       hideFromChannelProgress: toolParams.hideFromChannelProgress,
       lifecycleProvenance: "nested",
     } as const;
-    recordEmbeddedToolTrajectoryEvent(ctx, startEvent);
+    recordEmbeddedToolTrajectoryEvent(ctx, startEvent, undefined);
     await handleToolExecutionStart(ctx, startEvent);
     let executionStarted = false;
     const onImplementationStart = () => {
@@ -92,10 +91,12 @@ async function finishToolLifecycle(
     result: outcome.result,
     hideFromChannelProgress: toolParams.hideFromChannelProgress,
   };
-  recordEmbeddedToolTrajectoryEvent(ctx, endEvent);
-  const terminal = await handleToolExecutionEnd(ctx, endEvent);
+  const readSanitizedResult = prepareToolResult(outcome.result);
+  recordEmbeddedToolTrajectoryEvent(ctx, endEvent, readSanitizedResult);
+  const terminal = await handleToolExecutionEnd(ctx, endEvent, readSanitizedResult);
   return {
     result: outcome.result,
+    readSanitizedResult,
     isError: terminal.isError,
     executedArguments: terminal.executedArguments ?? toolParams.args,
     effectReceipt: terminal.effectReceipt,

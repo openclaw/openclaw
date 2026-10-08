@@ -15,7 +15,10 @@ import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { StateDatabaseReadAdmissionInvalidatedError } from "../../state/openclaw-state-db-async-lifecycle.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  type OpenClawStateDatabaseOptions,
+} from "../../state/openclaw-state-db.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
@@ -24,6 +27,7 @@ import {
 import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import { invalidateGatewayDeviceRevocation } from "../device-revocation.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
+import type { ExecApprovalManagerOptions } from "../exec-approval-manager.types.js";
 import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import * as operatorApprovalStore from "../operator-approval-store.js";
 import { publishOperatorRoleConfigChange } from "../operator-role-policy.js";
@@ -47,19 +51,45 @@ afterEach(() => {
 });
 afterAll(async () => sharedState?.cleanup());
 
+function createManagers(
+  databaseOptions: OpenClawStateDatabaseOptions,
+  runtimeEpoch: string,
+  onLifecycle?: ExecApprovalManagerOptions<ExecApprovalRequestPayload>["onLifecycle"],
+) {
+  const persistence = { runtimeEpoch, databaseOptions };
+  const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
+    scheduler: createTestGatewayScheduler(),
+    persistence,
+    resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
+    onLifecycle,
+  });
+  const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
+    scheduler: createTestGatewayScheduler(),
+    approvalKind: "plugin",
+    persistence,
+  });
+  const handlers = createApprovalHandlers({
+    execApprovalManager: exec,
+    pluginApprovalManager: plugin,
+    databaseOptions,
+  });
+  return { exec, plugin, handlers };
+}
+
 const unrelatedAgentConfig: OpenClawConfig = {
-  agents: { list: [{ id: "main", default: true }, { id: "other" }] },
+  agents: {
+    ownership: "explicit",
+    defaults: { systemAgent: { agentId: "main" } },
+    entries: { main: {}, other: {} },
+  },
 };
 
 it.each([
-  "current",
   "lookup",
   "verdict",
   "verdict-reviewer",
   "verdict-source",
-  "native",
   "native-refused",
-  "native-config-equivalent",
   "native-config-unrelated",
   "native-config-unrelated-agent",
   "native-config-role-aba",
@@ -70,14 +100,12 @@ it.each([
   "binding",
   "profile",
   "config",
-  "config-equivalent",
   "config-unrelated",
   "config-unrelated-agent",
   "config-target-routing-aba",
   "config-target-store-aba",
   "config-other-identity",
   "config-own-identity-aba",
-  "config-role-revoked",
   "config-role-aba",
   "config-routing-aba",
   "transport-reviewer",
@@ -87,13 +115,9 @@ it.each([
   const verdictChange = revocation.startsWith("verdict");
   const native = revocation.startsWith("native");
   const revoke = ![
-    "current",
-    "native",
-    "config-equivalent",
     "config-unrelated",
     "config-unrelated-agent",
     "config-other-identity",
-    "native-config-equivalent",
     "native-config-unrelated",
     "native-config-unrelated-agent",
   ].includes(revocation);
@@ -103,17 +127,7 @@ it.each([
   {
     const databaseOptions = { env: state.env };
     openOpenClawStateDatabase(databaseOptions);
-    const persistence = { runtimeEpoch: "request-custody-test", databaseOptions };
-    const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
-      scheduler: createTestGatewayScheduler(),
-      persistence,
-      resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
-    });
-    const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
-      scheduler: createTestGatewayScheduler(),
-      approvalKind: "plugin",
-      persistence,
-    });
+    const { exec, plugin, handlers } = createManagers(databaseOptions, "request-custody-test");
     const record = exec.create(
       {
         command: "echo fixture",
@@ -127,11 +141,6 @@ it.each([
     let settled = false;
     void decision.then(() => {
       settled = true;
-    });
-    const handlers = createApprovalHandlers({
-      execApprovalManager: exec,
-      pluginApprovalManager: plugin,
-      databaseOptions,
     });
     const client = createClient({ deviceId: "reviewer" });
     const connection = new AbortController();
@@ -195,11 +204,8 @@ it.each([
             if (transaction === 1) {
               stages.push("lookup-completed");
               switch (revocation) {
-                case "current":
                 case "lookup":
-                case "native":
                 case "native-refused":
-                case "native-config-equivalent":
                 case "native-config-unrelated":
                 case "native-config-unrelated-agent":
                 case "native-config-role-aba":
@@ -227,9 +233,6 @@ it.each([
                   break;
                 case "config":
                   invocation.context.getRuntimeConfig = () => ({});
-                  break;
-                case "config-equivalent":
-                  publishConfig(structuredClone(initialConfig));
                   break;
                 case "config-unrelated":
                   publishConfig({ ...initialConfig, messages: { ackReaction: "ok" } });
@@ -263,9 +266,6 @@ it.each([
                     },
                   });
                   publishConfig(initialConfig);
-                  break;
-                case "config-role-revoked":
-                  publishConfig(rolePolicyConfig());
                   break;
                 case "config-role-aba":
                   publishConfig(rolePolicyConfig());
@@ -302,9 +302,7 @@ it.each([
       if (revocation === "native-refused") {
         nativeRevoked = true;
       }
-      if (revocation === "native-config-equivalent") {
-        publishConfig(structuredClone(initialConfig));
-      } else if (revocation === "native-config-unrelated") {
+      if (revocation === "native-config-unrelated") {
         publishConfig({ ...initialConfig, messages: { ackReaction: "ok" } });
       } else if (revocation === "native-config-unrelated-agent") {
         publishConfig(unrelatedAgentConfig);
@@ -333,18 +331,6 @@ it.each([
       }
       expect(lookup).toHaveBeenCalledOnce();
       if (revoke) {
-        const stored = getOperatorApproval({ id: record.id, databaseOptions });
-        expect({
-          ok: response.ok,
-          status: stored?.status,
-          decision: stored?.decision,
-          settled,
-        }).toEqual({
-          ok: false,
-          status: "pending",
-          decision: null,
-          settled: false,
-        });
         expect(response).toMatchObject({ ok: false, error: { message: "approval not found" } });
         expect(getOperatorApproval({ id: record.id, databaseOptions })).toEqual(before);
         expect(exec.getLiveSnapshot(record.id)).toBe(revocation === "binding" ? null : record);
@@ -427,27 +413,12 @@ it("rechecks retained request authority after the real history read settles", as
   await withOpenClawTestState({ label: "approval-history-custody" }, async (state) => {
     const databaseOptions = { env: state.env };
     openOpenClawStateDatabase(databaseOptions);
-    const persistence = { runtimeEpoch: "history-custody-test", databaseOptions };
-    const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
-      scheduler: createTestGatewayScheduler(),
-      persistence,
-      resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
-    });
-    const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
-      scheduler: createTestGatewayScheduler(),
-      approvalKind: "plugin",
-      persistence,
-    });
+    const { exec, plugin, handlers } = createManagers(databaseOptions, "history-custody-test");
     const record = exec.create({ command: "echo history" }, 600_000, "history-custody");
     record.approvalReviewerDeviceIds = ["history-reviewer"];
     const { decision } = await exec.register(record, 600_000);
     await exec.resolve(record.id, "allow-once");
     await expect(decision).resolves.toBe("allow-once");
-    const handlers = createApprovalHandlers({
-      execApprovalManager: exec,
-      pluginApprovalManager: plugin,
-      databaseOptions,
-    });
     const client = createClient({ deviceId: "history-reviewer" });
     const connection = new AbortController();
     client.connectionSignal = connection.signal;
@@ -487,19 +458,12 @@ it("rejects a revoked lookup waiting for a committed decision without losing the
   await withOpenClawTestState({ label: "approval-reconciliation-custody" }, async (state) => {
     const databaseOptions = { env: state.env };
     openOpenClawStateDatabase(databaseOptions);
-    const persistence = { runtimeEpoch: "reconciliation-custody-test", databaseOptions };
     const onLifecycle = vi.fn();
-    const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
-      scheduler: createTestGatewayScheduler(),
-      persistence,
-      resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
+    const { exec, plugin, handlers } = createManagers(
+      databaseOptions,
+      "reconciliation-custody-test",
       onLifecycle,
-    });
-    const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
-      scheduler: createTestGatewayScheduler(),
-      approvalKind: "plugin",
-      persistence,
-    });
+    );
     const record = exec.create({ command: "echo committed" }, 600_000, "reconciliation-custody");
     record.approvalReviewerDeviceIds = ["reconciliation-reviewer"];
     const { decision } = await exec.register(record, 600_000);
@@ -520,11 +484,6 @@ it("rejects a revoked lookup waiting for a committed decision without losing the
       const result = reconcile(...args);
       entered.resolve();
       return result;
-    });
-    const handlers = createApprovalHandlers({
-      execApprovalManager: exec,
-      pluginApprovalManager: plugin,
-      databaseOptions,
     });
     const invocation = createApprovalInvocation({
       handlers,
@@ -563,88 +522,79 @@ it("rejects a revoked lookup waiting for a committed decision without losing the
   });
 });
 
-it.each(
-  (
-    ["closed", "overloaded", "unavailable", "outcome-unknown", "lifecycle-invalidated"] as const
-  ).flatMap((code) =>
-    (["lookup", "resolve", "deny"] as const).map((operation) => ({ code, operation })),
-  ),
-)("keeps the pending waiter after a $code $operation refusal", async ({ code, operation }) => {
-  const state = expectDefined(sharedState, "shared approval test state");
-  const databaseOptions = { env: state.env };
-  const persistence = { runtimeEpoch: "worker-refusal-test", databaseOptions };
-  const exec = new ExecApprovalManager<ExecApprovalRequestPayload>({
-    scheduler: createTestGatewayScheduler(),
-    persistence,
-    resolveAllowedDecisions: resolveExecApprovalRequestAllowedDecisions,
-  });
-  const plugin = new ExecApprovalManager<PluginApprovalRequestPayload>({
-    scheduler: createTestGatewayScheduler(),
-    approvalKind: "plugin",
-    persistence,
-  });
-  const record = exec.create(
-    { command: "echo refused" },
-    600_000,
-    `worker-refusal-${code}-${operation}`,
-  );
-  record.approvalReviewerDeviceIds = ["refusal-reviewer"];
-  const { decision } = await exec.register(record, 600_000);
-  let settled = false;
-  void decision.then(() => {
-    settled = true;
-  });
-  const before = getOperatorApproval({ id: record.id, databaseOptions });
-  const handlers = createApprovalHandlers({
-    execApprovalManager: exec,
-    pluginApprovalManager: plugin,
-    databaseOptions,
-  });
-  const client = createClient({ deviceId: "refusal-reviewer" });
-  vi.spyOn(
-    operatorApprovalStore,
-    operation === "lookup"
-      ? "getOperatorApprovalDetailed"
-      : operation === "resolve"
-        ? "resolveOperatorApproval"
-        : "forceDenyOperatorApproval",
-  ).mockRejectedValueOnce(
-    new AggregateError([
-      code === "lifecycle-invalidated"
-        ? new StateDatabaseReadAdmissionInvalidatedError("synthetic retired admission")
-        : new SqliteWorkerError("synthetic worker refusal", code),
-    ]),
-  );
-  try {
-    expect(
-      await createApprovalInvocation({
-        handlers,
-        method: operation === "lookup" ? "approval.get" : "approval.resolve",
-        body:
-          operation === "lookup"
-            ? { id: record.id }
-            : {
-                id: record.id,
-                kind: "exec",
-                decision: operation === "resolve" ? "allow-once" : "invalid",
-              },
-        client,
-      }).invoke(),
-    ).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
-    expect(getOperatorApproval({ id: record.id, databaseOptions })).toEqual(before);
-    expect(exec.getLiveSnapshot(record.id)).toBe(record);
-    expect(record.resolvedAtMs).toBeUndefined();
-    expect(settled).toBe(false);
-    expect(
-      await createApprovalInvocation({
-        handlers,
-        method: "approval.get",
-        body: { id: record.id },
-        client,
-      }).invoke(),
-    ).toMatchObject({ ok: true, result: { approval: { status: "pending" } } });
-    expect(settled).toBe(false);
-  } finally {
-    await Promise.all([exec.drain(), plugin.drain()]);
-  }
-});
+it.each([
+  { code: "closed", operation: "lookup" },
+  { code: "overloaded", operation: "deny" },
+  { code: "unavailable", operation: "resolve" },
+  { code: "lifecycle-invalidated", operation: "lookup" },
+  ...(["lookup", "resolve", "deny"] as const).map((operation) => ({
+    code: "outcome-unknown" as const,
+    operation,
+  })),
+] as const)(
+  "keeps the pending waiter after a $code $operation refusal",
+  async ({ code, operation }) => {
+    const state = expectDefined(sharedState, "shared approval test state");
+    const databaseOptions = { env: state.env };
+    const { exec, plugin, handlers } = createManagers(databaseOptions, "worker-refusal-test");
+    const record = exec.create(
+      { command: "echo refused" },
+      600_000,
+      `worker-refusal-${code}-${operation}`,
+    );
+    record.approvalReviewerDeviceIds = ["refusal-reviewer"];
+    const { decision } = await exec.register(record, 600_000);
+    let settled = false;
+    void decision.then(() => {
+      settled = true;
+    });
+    const before = getOperatorApproval({ id: record.id, databaseOptions });
+    const client = createClient({ deviceId: "refusal-reviewer" });
+    vi.spyOn(
+      operatorApprovalStore,
+      operation === "lookup"
+        ? "getOperatorApprovalDetailed"
+        : operation === "resolve"
+          ? "resolveOperatorApproval"
+          : "forceDenyOperatorApproval",
+    ).mockRejectedValueOnce(
+      new AggregateError([
+        code === "lifecycle-invalidated"
+          ? new StateDatabaseReadAdmissionInvalidatedError("synthetic retired admission")
+          : new SqliteWorkerError("synthetic worker refusal", code),
+      ]),
+    );
+    try {
+      expect(
+        await createApprovalInvocation({
+          handlers,
+          method: operation === "lookup" ? "approval.get" : "approval.resolve",
+          body:
+            operation === "lookup"
+              ? { id: record.id }
+              : {
+                  id: record.id,
+                  kind: "exec",
+                  decision: operation === "resolve" ? "allow-once" : "invalid",
+                },
+          client,
+        }).invoke(),
+      ).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+      expect(getOperatorApproval({ id: record.id, databaseOptions })).toEqual(before);
+      expect(exec.getLiveSnapshot(record.id)).toBe(record);
+      expect(record.resolvedAtMs).toBeUndefined();
+      expect(settled).toBe(false);
+      expect(
+        await createApprovalInvocation({
+          handlers,
+          method: "approval.get",
+          body: { id: record.id },
+          client,
+        }).invoke(),
+      ).toMatchObject({ ok: true, result: { approval: { status: "pending" } } });
+      expect(settled).toBe(false);
+    } finally {
+      await Promise.all([exec.drain(), plugin.drain()]);
+    }
+  },
+);

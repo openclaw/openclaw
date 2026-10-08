@@ -38,19 +38,14 @@ type PendingToolUse = {
   blockInput?: Record<string, unknown>;
 };
 
-type ToolUseTracker = {
-  pendingByIndex: Map<number, PendingToolUse>;
-  nameById: Map<string, string>;
-  startedIds: Set<string>;
-  resultDeliveredIds: Set<string>;
-};
+type ToolUseTracker = ReturnType<typeof createToolUseTracker>;
 
-export function createToolUseTracker(): ToolUseTracker {
+export function createToolUseTracker() {
   return {
-    pendingByIndex: new Map(),
-    nameById: new Map(),
-    startedIds: new Set(),
-    resultDeliveredIds: new Set(),
+    pendingByIndex: new Map<number, PendingToolUse>(),
+    nameById: new Map<string, string>(),
+    startedIds: new Set<string>(),
+    resultDeliveredIds: new Set<string>(),
   };
 }
 
@@ -407,17 +402,10 @@ function resetThinkingTrackerForMessage(
 }
 
 function beginClaudeContentBlock(tracker: ThinkingTracker, index: unknown): void {
-  if (typeof index === "number") {
-    tracker.currentSyntheticBlockIndex = index;
-    tracker.nextSyntheticBlockIndex = Math.max(tracker.nextSyntheticBlockIndex, index + 1);
-    return;
-  }
-  if (index !== undefined) {
-    tracker.currentSyntheticBlockIndex = undefined;
-    return;
-  }
-  tracker.currentSyntheticBlockIndex = tracker.nextSyntheticBlockIndex;
-  tracker.nextSyntheticBlockIndex += 1;
+  tracker.currentSyntheticBlockIndex =
+    index === undefined
+      ? tracker.nextSyntheticBlockIndex++
+      : (resolveClaudeContentBlockIndex(tracker, index) ?? undefined);
 }
 
 function resolveClaudeContentBlockIndex(tracker: ThinkingTracker, index: unknown): number | null {

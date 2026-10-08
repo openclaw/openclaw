@@ -25,7 +25,7 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { validateExplicitMessageAccountSelection } from "../../infra/outbound/message-account-selection.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
-import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { enqueueSystemEvent, enqueueSystemEventWithReceipt } from "../../infra/system-events.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
@@ -236,6 +236,24 @@ export function createGatewayHookDispatcher(params: {
     fenceScheduledGatewayContextResolver(resolveGatewayContext);
   const runScheduledHook = createScheduledGatewayRunner(scheduledGatewayContextResolver);
   const enqueueHookAgentDispatch = createSessionKeyedHookDispatchQueue();
+  const announcedFailureReplays = new Map<string, number>();
+  const claimFailureNotice = (replayKey: string | undefined) => {
+    if (!replayKey) {
+      return true;
+    }
+    const now = Date.now();
+    for (const [key, announcedAt] of announcedFailureReplays) {
+      if (announcedAt < now - DEDUPE_TTL_MS) {
+        announcedFailureReplays.delete(key);
+      }
+    }
+    if (announcedFailureReplays.has(replayKey)) {
+      return false;
+    }
+    announcedFailureReplays.set(replayKey, now);
+    pruneMapToMaxSize(announcedFailureReplays, DEDUPE_MAX);
+    return true;
+  };
   let isolatedAgentModulePromise:
     | Promise<typeof import("../../cron/isolated-agent.js")>
     | undefined;
@@ -255,7 +273,7 @@ export function createGatewayHookDispatcher(params: {
     });
     const sessionKey = target.eventSessionKey;
     const eventOptions = { sessionKey };
-    const queued = enqueueSystemEvent(
+    const queued = enqueueSystemEventWithReceipt(
       value.text,
       isUnscopedSessionKeySentinel(sessionKey)
         ? withSystemEventOwner(eventOptions, agentId)
@@ -373,6 +391,9 @@ export function createGatewayHookDispatcher(params: {
       status: string,
       reason: string,
     ) => {
+      if (status !== "ok" && !claimFailureNotice(value.replayKey)) {
+        return;
+      }
       const eventSessionKey = eventTarget.eventSessionKey;
       const isGlobalEvent = isUnscopedSessionKeySentinel(eventSessionKey);
       let heartbeatTarget = eventTarget.heartbeatTarget;
@@ -453,6 +474,9 @@ export function createGatewayHookDispatcher(params: {
       if (admissionTimer) {
         clearTimeout(admissionTimer);
         admissionTimer = undefined;
+      }
+      if (result.ok && value.replayKey) {
+        announcedFailureReplays.delete(value.replayKey);
       }
       admission.resolve(result);
     };

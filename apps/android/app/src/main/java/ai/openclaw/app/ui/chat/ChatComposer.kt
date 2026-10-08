@@ -418,13 +418,9 @@ internal fun admitChatAttachments(
   val accepted = mutableListOf<PendingAttachment>()
   var base64Chars = currentAttachments.sumOf { it.base64.length.toLong() }
   var decodedBytes = currentAttachments.sumOf { decodedBase64ByteCount(it.base64) }
-  var nonVideoBase64Chars =
-    currentAttachments.filterNot { it.mimeType.startsWith("video/", ignoreCase = true) }.sumOf { it.base64.length.toLong() }
-  var nonVideoDecodedBytes =
-    currentAttachments
-      .filterNot { it.mimeType.startsWith("video/", ignoreCase = true) }
-      .sumOf { decodedBase64ByteCount(it.base64) }
-  var omittedCount = 0
+  val nonVideoAttachments = currentAttachments.filterNot { it.mimeType.startsWith("video/", ignoreCase = true) }
+  var nonVideoBase64Chars = nonVideoAttachments.sumOf { it.base64.length.toLong() }
+  var nonVideoDecodedBytes = nonVideoAttachments.sumOf { decodedBase64ByteCount(it.base64) }
   for (candidate in candidates) {
     val candidateBase64Chars = candidate.base64.length.toLong()
     val candidateDecodedBytes = decodedBase64ByteCount(candidate.base64)
@@ -443,11 +439,9 @@ internal fun admitChatAttachments(
         nonVideoBase64Chars += candidateBase64Chars
         nonVideoDecodedBytes += candidateDecodedBytes
       }
-    } else {
-      omittedCount += 1
     }
   }
-  return ChatAttachmentAdmission(accepted = accepted, omittedCount = omittedCount)
+  return ChatAttachmentAdmission(accepted = accepted, omittedCount = candidates.size - accepted.size)
 }
 
 internal fun chatComposerAttachmentDecodedByteLimit(mimeType: String): Long =
@@ -496,15 +490,6 @@ internal suspend fun stageChatShareDraft(
     droppedAttachmentCount = droppedAttachmentCount,
   )
 }
-
-internal fun canCommitStagedChatShare(
-  stagedId: Long,
-  currentHead: ChatShareDraft?,
-  ownerSnapshot: ChatComposerOwner,
-  currentOwner: ChatComposerOwner,
-): Boolean =
-  currentHead?.id == stagedId &&
-    ownerSnapshot == currentOwner
 
 internal fun appendChatDictationTranscript(
   currentInput: String,

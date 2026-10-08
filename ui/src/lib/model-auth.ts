@@ -99,6 +99,7 @@ export async function loadModelAuthStatus(
     const result = signal
       ? await client.request<ModelAuthStatusResult>("models.authStatus", params, { signal })
       : await client.request<ModelAuthStatusResult>("models.authStatus", params);
+    // RPC result types do not validate payloads; keep malformed auth data out of the cache.
     const snapshot = result ?? EMPTY_AUTH_STATUS;
     if (Array.isArray(snapshot.providers)) {
       authRefreshDeadlines.set(snapshot, authStatusRefreshAt(snapshot, requestedAt));
