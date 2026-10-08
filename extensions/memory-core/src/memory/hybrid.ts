@@ -224,7 +224,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
     }
     return applyMMRToHybridResults(
       entries.map((entry) => Object.assign(entry, { score: entry.rankingScore })),
-      mmrConfig,
+      mmrConfig.lambda,
     ).map((entry) =>
       Object.assign(entry, {
         score: projectScoreMultiplier(entry.projectKey, activeProjects),
@@ -244,7 +244,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
   });
   const ranked = [
     ...exact,
-    ...(mmrConfig.enabled ? applyMMRToHybridResults(nonExact, mmrConfig) : nonExact),
+    ...(mmrConfig.enabled ? applyMMRToHybridResults(nonExact, mmrConfig.lambda) : nonExact),
   ];
 
   return ranked.map(

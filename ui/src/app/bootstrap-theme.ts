@@ -20,7 +20,6 @@ import {
 } from "./settings.ts";
 import { setCurrentThemeBranding } from "./theme-branding.ts";
 import type { CatalogTheme, createThemeCatalog, ThemeCatalogSnapshot } from "./theme-catalog.ts";
-import { startThemeTransition } from "./theme-transition.ts";
 import { resolveTheme, syncThemePaletteStylesheet, type ThemeMode } from "./theme.ts";
 import {
   applyChatFontSmoothing,
@@ -270,15 +269,7 @@ export function createApplicationTheme(
       publish();
     },
     setMode(mode: ThemeMode) {
-      const currentTheme = resolveTheme(settings.theme, settings.themeMode);
-      const nextTheme = resolveTheme(settings.theme, mode);
-      startThemeTransition({
-        nextTheme,
-        currentTheme,
-        applyTheme: () => {
-          patchSettings({ themeMode: mode });
-        },
-      });
+      patchSettings({ themeMode: mode });
     },
     refresh,
     retryCatalog() {

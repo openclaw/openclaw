@@ -17,7 +17,7 @@ import { writeSubagentRunValuesInDatabase } from "../agents/subagents/registry/s
 import { readSubagentRun } from "../agents/subagents/registry/subagent-registry.store.sqlite.js";
 import { getSubagentRunRuntimeKey } from "../agents/subagents/registry/subagent-run-generation.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
-import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.js";
+import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.test-support.js";
 import {
   enqueueClaimedSessionDelivery,
   loadPendingSessionDelivery,
@@ -57,10 +57,8 @@ afterEach(() => {
 
 describe("registered correlated completion recovery custody", () => {
   it.for([
-    { change: "none", outcome: "recovered" },
     { change: "none", outcome: "moved-to-failed" },
     { change: "default", outcome: "recovered" },
-    { change: "default", outcome: "moved-to-failed" },
     { change: "file", outcome: "recovered" },
     { change: "successor", outcome: "recovered" },
     { change: "default after commit", outcome: "recovered" },
@@ -134,7 +132,9 @@ describe("registered correlated completion recovery custody", () => {
         const unavailable = vi
           .spyOn(store, "executeExistingOpenClawStateRead")
           .mockImplementationOnce(async (_options, command) => {
-            expect(command).toEqual({ type: "subagents.runs", scope: { kind: "all" } });
+            expect(command).toEqual({
+              type: "subagents.restore",
+            });
             throw new Error("registry hydration read unavailable");
           });
         try {

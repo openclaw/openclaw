@@ -49,35 +49,6 @@ function loadTemplateFromFile(filePath: string, sourceInfo: SourceInfo): PromptT
   }
 }
 
-/**
- * Scan a directory for .md files (non-recursive) and load them as prompt templates.
- */
-function loadTemplatesFromDir(
-  dir: string,
-  getSourceInfo: (filePath: string) => SourceInfo,
-): PromptTemplate[] {
-  const templates: PromptTemplate[] = [];
-
-  try {
-    const { entries } = walkDirectorySync(dir, {
-      maxDepth: 1,
-      symlinks: "follow",
-      include: (entry) => entry.kind === "file" && entry.name.endsWith(".md"),
-    });
-    for (const entry of entries) {
-      const fullPath = join(dir, entry.name);
-      const template = loadTemplateFromFile(fullPath, getSourceInfo(fullPath));
-      if (template) {
-        templates.push(template);
-      }
-    }
-  } catch {
-    return templates;
-  }
-
-  return templates;
-}
-
 interface LoadPromptTemplatesOptions {
   /** Working directory for project-local templates. */
   cwd: string;
@@ -104,19 +75,13 @@ export function loadPromptTemplates({
   const projectPromptsDir = resolve(cwd, CONFIG_DIR_NAME, "prompts");
 
   const getSourceInfo = (resolvedPath: string): SourceInfo => {
-    if (isPathInside(globalPromptsDir, resolvedPath)) {
-      return createSyntheticSourceInfo(resolvedPath, {
-        source: "local",
-        scope: "user",
-        baseDir: globalPromptsDir,
-      });
-    }
-    if (isPathInside(projectPromptsDir, resolvedPath)) {
-      return createSyntheticSourceInfo(resolvedPath, {
-        source: "local",
-        scope: "project",
-        baseDir: projectPromptsDir,
-      });
+    for (const [baseDir, scope] of [
+      [globalPromptsDir, "user"],
+      [projectPromptsDir, "project"],
+    ] as const) {
+      if (isPathInside(baseDir, resolvedPath)) {
+        return createSyntheticSourceInfo(resolvedPath, { source: "local", scope, baseDir });
+      }
     }
     return createSyntheticSourceInfo(resolvedPath, {
       source: "local",
@@ -132,13 +97,28 @@ export function loadPromptTemplates({
 
     try {
       const stats = statSync(resolvedPath);
+      let filePaths: string[] = [];
       if (stats.isDirectory()) {
-        templates.push(...loadTemplatesFromDir(resolvedPath, getSourceInfo));
+        const { entries } = walkDirectorySync(resolvedPath, {
+          maxDepth: 1,
+          symlinks: "follow",
+          include: (entry) => entry.kind === "file" && entry.name.endsWith(".md"),
+        });
+        filePaths = entries.map((entry) => join(resolvedPath, entry.name));
       } else if (stats.isFile() && resolvedPath.endsWith(".md")) {
-        const template = loadTemplateFromFile(resolvedPath, getSourceInfo(resolvedPath));
-        if (template) {
-          templates.push(template);
+        filePaths = [resolvedPath];
+      }
+      const loadedTemplates: PromptTemplate[] = [];
+      try {
+        for (const filePath of filePaths) {
+          const template = loadTemplateFromFile(filePath, getSourceInfo(filePath));
+          if (template) {
+            loadedTemplates.push(template);
+          }
         }
+      } finally {
+        // Keep the loaded prefix if metadata resolution fails on a later file.
+        templates.push(...loadedTemplates);
       }
     } catch {
       // Ignore read failures

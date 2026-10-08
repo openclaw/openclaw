@@ -1,25 +1,52 @@
 import { existsSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { PreservedSessionWorktree } from "../../packages/gateway-protocol/src/index.js";
-import { SessionWorktreeLifecycleError } from "../agents/worktrees/errors.js";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import {
+  SessionWorktreeLifecycleError,
+  WorktreeRemovalContentionError,
+} from "../agents/worktrees/errors.js";
+import { assertManagedWorktreeRemovalComplete } from "../agents/worktrees/git-lock.js";
 import { runGit } from "../agents/worktrees/git.js";
-import { getRegistryWorktree } from "../agents/worktrees/registry.js";
+import {
+  captureWorktreeRegistryReadGuard,
+  readRegistryWorktree,
+} from "../agents/worktrees/registry-read.js";
+import { assertWorktreeRemovalAvailable } from "../agents/worktrees/registry.js";
+import { captureWorktreeRunEndContext } from "../agents/worktrees/run-end-lifecycle.js";
 import {
   classifyWorktreeRemovalError,
-  managedWorktrees,
   ManagedWorktreeService,
 } from "../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord, WorktreeWorkerAuthority } from "../agents/worktrees/types.js";
 import { loadSessionEntry, type SessionAccessScope } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { getChildLogger } from "../logging/logger.js";
-
-function serviceFor(env?: NodeJS.ProcessEnv) {
-  return env ? new ManagedWorktreeService({ env }) : managedWorktrees;
-}
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 
 function belongsToSession(record: ManagedWorktreeRecord, sessionKey: string) {
   return record.ownerKind === "session" && record.ownerId === sessionKey;
+}
+
+/** Settle the detached checkout before the session fence admits same-key successors. */
+export async function finalizeDetachedSessionWorktree(params: {
+  id: string;
+  env: NodeJS.ProcessEnv;
+  context: OpenClawStateWorkerContext;
+}): Promise<void> {
+  params.context.admission.assertCurrent();
+  const worktrees = new ManagedWorktreeService({ env: params.env });
+  if (await worktrees.removeIfLossless(params.id)) {
+    return;
+  }
+  const retained = await readRegistryWorktree(params.context, params.id);
+  if (retained && retained.removedAt === undefined) {
+    const safePath = truncateUtf16Safe(sanitizeForLog(retained.path), 256);
+    throw new Error(
+      `worktree retained: branch=${retained.branch} path=${safePath} outcome=${retained.runEndCleanup?.outcome}`,
+    );
+  }
 }
 
 /** The session lifecycle fence remains held until this exact bound checkout finishes cleanup. */
@@ -35,14 +62,19 @@ export async function removeSessionWorktree(params: {
     return undefined;
   }
   const env = params.env ?? process.env;
-  const record = getRegistryWorktree(env, params.id);
+  const context = captureWorktreeRunEndContext(env);
+  const service = new ManagedWorktreeService({ env: { ...env, ...context.environment } });
+  const accept = captureWorktreeRegistryReadGuard(context, "session-owner");
+  const record = await readRegistryWorktree(context, params.id);
+  const assertWorktreeCurrent = accept(record);
+  params.commitGuard?.();
   if (!record || record.removedAt !== undefined) {
     return undefined;
   }
   const assertCurrent = () => {
     params.commitGuard?.();
-    const current = getRegistryWorktree(env, record.id);
-    if (current && !belongsToSession(current, params.sessionKey)) {
+    assertWorktreeCurrent();
+    if (!belongsToSession(record, params.sessionKey)) {
       throw new SessionWorktreeLifecycleError(
         "Session worktree ownership changed; retry cleanup.",
         "owner-mismatch",
@@ -51,7 +83,7 @@ export async function removeSessionWorktree(params: {
   };
   try {
     assertCurrent();
-    await serviceFor(params.env).remove({
+    await service.remove({
       id: record.id,
       reason: params.reason,
       commitGuard: assertCurrent,
@@ -69,7 +101,8 @@ export async function removeSessionWorktree(params: {
   } catch (error) {
     // Authorization loss is a failed lifecycle action, not successful best-effort cleanup.
     params.commitGuard?.();
-    const current = getRegistryWorktree(env, record.id);
+    const current = await readRegistryWorktree(context, record.id);
+    params.commitGuard?.();
     if (current && current.removedAt === undefined) {
       const reason =
         error instanceof SessionWorktreeLifecycleError && error.reason === "owner-mismatch"
@@ -93,11 +126,19 @@ export async function restoreSessionWorktree(params: {
   commitGuard?: () => void;
   assertRestoreAllowed?: () => void;
 }): Promise<() => void> {
-  const { entry, scope } = params;
+  const { entry, scope: requestedScope } = params;
   const id = entry.worktree?.id;
   if (!id) {
     return () => params.commitGuard?.();
   }
+  const context = captureWorktreeRunEndContext(requestedScope.env ?? process.env);
+  const scope = {
+    ...requestedScope,
+    env: { ...(requestedScope.env ?? process.env), ...context.environment },
+  };
+  const accept = captureWorktreeRegistryReadGuard(context, "session-owner");
+  const record = await readRegistryWorktree(context, id);
+  const assertWorktreeCurrent = accept(record);
   const assertSessionCurrent = () => {
     params.commitGuard?.();
     const current = loadSessionEntry(scope);
@@ -115,7 +156,15 @@ export async function restoreSessionWorktree(params: {
   };
   const assertCurrent = () => {
     assertSessionCurrent();
-    const record = getRegistryWorktree(scope.env ?? process.env, id);
+    assertWorktreeCurrent();
+    try {
+      assertWorktreeRemovalAvailable(scope.env ?? process.env, id);
+    } catch (error) {
+      if (error instanceof WorktreeRemovalContentionError) {
+        throw new SessionWorktreeLifecycleError(error.message, "busy");
+      }
+      throw error;
+    }
     if (record && !belongsToSession(record, scope.sessionKey)) {
       throw new SessionWorktreeLifecycleError(
         "Session worktree has a different owner; restore the correct binding before retrying.",
@@ -128,7 +177,6 @@ export async function restoreSessionWorktree(params: {
     predicates: [{ kind: "session-owner", id, sessionKey: scope.sessionKey }],
   };
   assertCurrent();
-  const record = getRegistryWorktree(scope.env ?? process.env, id);
   if (!record || (record.removedAt !== undefined && !record.snapshotRef)) {
     throw new SessionWorktreeLifecycleError(
       "Session worktree snapshot is missing or expired. The conversation is preserved; start a new worktree task from the source repository to continue.",
@@ -138,7 +186,11 @@ export async function restoreSessionWorktree(params: {
   if (record.removedAt !== undefined) {
     params.assertRestoreAllowed?.();
     try {
-      await serviceFor(scope.env).restore({ id, commitGuard: assertCurrent, workerAuthority });
+      await new ManagedWorktreeService({ env: scope.env }).restore({
+        id,
+        commitGuard: assertCurrent,
+        workerAuthority,
+      });
     } catch (error) {
       assertCurrent();
       if (error instanceof SessionWorktreeLifecycleError) {
@@ -167,6 +219,16 @@ export async function restoreSessionWorktree(params: {
         "Session worktree could not be restored. Free disk space if needed, check the source repository, then retry. The conversation and snapshot are preserved.",
         "restore-failed",
       );
+    }
+  } else {
+    try {
+      await assertManagedWorktreeRemovalComplete(record, { beforeRun: assertCurrent });
+    } catch (error) {
+      assertCurrent();
+      if (error instanceof WorktreeRemovalContentionError) {
+        throw new SessionWorktreeLifecycleError(error.message, "restore-failed");
+      }
+      throw error;
     }
   }
   assertCurrent();

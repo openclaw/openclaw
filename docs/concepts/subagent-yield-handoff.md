@@ -34,6 +34,15 @@ The implementation owners are `subagent-registry-requester-yield.ts`,
 `subagent-announce.requester-settle-wake.ts`, and
 `agent-task-tracking.ts`. `adoptPausedSubagentRunForFollowUp` uses the existing
 registry replacement operation; it does not create a second delegated task.
+Adoption clears a child-only pause notice instead of carrying it into completion.
+Actual requester completion batches keep their frozen membership and generation.
+
+Before admitting another turn in a yielded requester, the recovery owner transfers
+its ended execution's fence to the current durable child batch. The batch is
+revalidated before the write commits; absent or adopted batches, unrelated run
+fences, and outstanding recovery or delivery work remain fenced. The successor
+then receives its own execution fence, so completing it leaves later user input
+admissible without discarding pending child results.
 
 An explicit `waitFor: "message"` counts as continuation evidence after the
 registry accepts the wait. The attempt carries that fact into terminal reply
@@ -178,10 +187,18 @@ continuations do not send activity to an external channel. This
 activity signal does not change the configured message queue mode or restore
 individual tool-progress messages.
 
-The former Tasks-backed detached presenter and its notification policies are no
-longer available. A yielded turn does not start a separate task or flow projection
-to keep editing a channel progress message. Ordinary channel streaming still
-follows the channel's settings while its turn is active.
+On Telegram and Discord, a confirmed `progress` draft can stay with the yielding
+turn's announcing children instead of the waiting acknowledgment. The channel keeps
+rendering, throttling and deleting it; the native registry only forwards child
+status and prepared operation names (never child prose, commands, arguments or
+results). Public task state remains visible with the detailed tool log disabled;
+`streaming.progress.toolProgress` controls the rolling diagnostic rows. A resumed parent that
+yields again keeps the same draft for its new children. The draft is deleted when
+the settle wake completes the last tracked cohort (final, `NO_REPLY` or terminal
+failure) or when stop or reset cancels the children. It is process-local: a
+Gateway restart does not revive it. Other channels keep the waiting
+acknowledgment. A yielded turn still does not start a separate task or flow
+projection.
 
 [Progress cards](/tools/progress-card) remain durable session state. The parent
 updates its own card as work advances and when child results return. Inspect

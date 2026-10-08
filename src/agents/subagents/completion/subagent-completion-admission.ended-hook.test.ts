@@ -9,9 +9,9 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { createSubagentRegistryContextCleanup } from "../registry/subagent-registry-context-cleanup.js";
 import * as registryDeps from "../registry/subagent-registry-deps.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
-import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
+import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import { isSameSubagentRunOwner } from "../registry/subagent-run-generation.js";
-import { mutateRequesterSettleWakeBatch } from "./subagent-completion-admission.store.js";
+import { mutateRequesterCompletionBatch } from "./subagent-completion-admission.store.js";
 import {
   currentCompletionRun,
   admitCompletionFixtureDatabase,
@@ -68,7 +68,7 @@ it.each(["transition", "complete"] as const)(
             options,
           ),
         );
-      const publication = mutateRequesterSettleWakeBatch({
+      const publication = mutateRequesterCompletionBatch({
         entries: [input.subagent],
         operation:
           operation === "complete"

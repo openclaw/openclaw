@@ -48,6 +48,8 @@ import type { PluginSourceInput } from "./plugin-source-verification.js";
 
 type NativeSnapshot = ReturnType<typeof createPluginNativeCaptureRoot>;
 type NativeReceipt = { signature: string; sourceDigest: string };
+// Membership and source paths stay fixed; admission only updates identities and digests.
+const nativeSourceMembers = new WeakMap<PluginNativeNamespaceFact, Map<string, string>>();
 
 function nativeMemberForSource(namespace: PluginNativeNamespaceFact, source: string) {
   const relative = path.relative(namespace.sourceDirectory, source);
@@ -56,7 +58,17 @@ function nativeMemberForSource(namespace: PluginNativeNamespaceFact, source: str
   if (namespace.members[relative]?.source === source) {
     return relative;
   }
-  return Object.entries(namespace.members).find(([, member]) => member.source === source)?.[0];
+  let members = nativeSourceMembers.get(namespace);
+  if (!members) {
+    members = new Map<string, string>();
+    for (const [key, { source: memberSource }] of Object.entries(namespace.members)) {
+      if (!members.has(memberSource)) {
+        members.set(memberSource, key);
+      }
+    }
+    nativeSourceMembers.set(namespace, members);
+  }
+  return members.get(source);
 }
 
 export type PluginNativeRecovery = {
@@ -168,7 +180,7 @@ export function createPluginNativeAdmission(
   const targets = new Map<string, string>();
   const hardlinkedTargets = new Set<string>();
   const pendingTargets = new Set<string>();
-  let assertReference = createPluginNativeReferenceValidator(directory);
+  let assertReference = createPluginNativeReferenceValidator(directory, owner?.pluginId ?? rootDir);
   const recoveredFiles = new Map<string, PluginNativeArtifactFact>();
   let hostRoot: string | undefined;
   let finalReceipt: NativeReceipt | undefined;
@@ -310,13 +322,10 @@ export function createPluginNativeAdmission(
       retainNativePath(state, path.join(fact.namespace, "content"));
     }
     const used = new Set([...files.values()].map((fact) => fact.namespace));
-    const nativeNamespaces = Object.fromEntries(
-      [...used].map((id) => [id, state.namespaces.get(id)!]),
-    );
     const next = structuredClone({
       ...finalReceipt,
       nativeArtifacts: Object.fromEntries(files),
-      nativeNamespaces,
+      nativeNamespaces: Object.fromEntries([...used].map((id) => [id, state.namespaces.get(id)!])),
     });
     const unchanged = isDeepStrictEqual(state.receipts.get(key), next);
     state.receipts.set(key, next);
@@ -543,8 +552,8 @@ export function createPluginNativeAdmission(
       const found = namespaceFor(resolvedSource);
       let namespace = recovered
         ? state.namespaces.get(recovered.namespace)
-        : (namespaces().find((candidate) =>
-            Object.values(candidate.members).some((member) => member.source === resolvedSource),
+        : (namespaces().find(
+            (candidate) => nativeMemberForSource(candidate, resolvedSource) !== undefined,
           ) ?? found?.[1]);
       let alias = found?.[0] ?? path.dirname(resolvedSource);
       if (!namespace) {
@@ -660,7 +669,7 @@ export function createPluginNativeAdmission(
     },
     linkHost(selectedHost: string) {
       // Explicit host selection is a new admission boundary, even without newly captured files.
-      assertReference = createPluginNativeReferenceValidator(directory);
+      assertReference = createPluginNativeReferenceValidator(directory, owner?.pluginId ?? rootDir);
       linkHost(selectedHost);
       assertReferenceNamespaces(hardlinkedTargets);
       publish();

@@ -4,7 +4,6 @@ import { resolveProviderRuntimePluginHandle } from "../../../plugins/provider-ho
 import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import { resolvePreparedRunAdmission } from "../../admitted-run-context.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
-import { isProfileInCooldown } from "../../auth-profiles.js";
 import { resolvePreparedModelThinkingCompat } from "../../model-catalog-lookup.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import { resolveProviderEndpoint } from "../../provider-attribution.js";
@@ -22,17 +21,13 @@ import { log } from "../logger.js";
 import { formatEmbeddedRunStageSummary } from "./attempt-stage-timing.js";
 import {
   createEmbeddedRunAuthController,
-  resolveEmbeddedAuthCooldownProbePolicy,
+  createEmbeddedAuthProfileAdmission,
   type EmbeddedRunAuthState,
 } from "./auth-controller.js";
 import { prepareEmbeddedRunAuthPlan } from "./auth-plan.js";
 import { createScopedAuthProfileStore } from "./auth-store.js";
 import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
-import {
-  resolveEmbeddedRunEffectiveModel,
-  selectEmbeddedRunHarness,
-  selectEmbeddedRunHarnessForPreparedAttempts,
-} from "./model-harness.js";
+import { resolveEmbeddedRunEffectiveModel, selectEmbeddedRunHarness } from "./model-harness.js";
 import { resolveEmbeddedRunModelSetup } from "./model-setup.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { resolveInitialThinkLevel } from "./runtime-resolution.js";
@@ -88,7 +83,6 @@ export async function prepareEmbeddedRunRuntime(input: {
     modelRegistry,
   } = modelSetup;
   let agentHarness = modelSetup.agentHarness;
-  let pluginHarnessOwnsTransport = modelSetup.pluginHarnessOwnsTransport;
   let preparedThinkingCapabilityReady = false;
   const resolveEffectiveModel = (candidate: typeof model) =>
     resolveEmbeddedRunEffectiveModel({
@@ -102,15 +96,13 @@ export async function prepareEmbeddedRunRuntime(input: {
       requestStreamTransportOverrides,
       pinnedHarnessId,
     });
-  const initialResolvedRuntimeModel = resolveEffectiveModel(model);
-  let contextTokenBudget = initialResolvedRuntimeModel.contextTokenBudget;
-  let authoredContextTokenCap = initialResolvedRuntimeModel.authoredContextTokenCap;
-  let contextWindowInfo = initialResolvedRuntimeModel.contextWindowInfo;
-  let outerContextTokenMeta: { contextTokens?: number } =
-    contextTokenBudget === undefined ? {} : { contextTokens: contextTokenBudget };
+  let resolvedRuntimeModel = resolveEffectiveModel(model);
+  const buildContextTokenMeta = (contextTokens: number | undefined): { contextTokens?: number } =>
+    contextTokens === undefined ? {} : { contextTokens };
+  let outerContextTokenMeta = buildContextTokenMeta(resolvedRuntimeModel.contextTokenBudget);
   const models: EmbeddedRunAuthState["models"] = {
     runtime: model,
-    effective: initialResolvedRuntimeModel.effectiveModel,
+    effective: resolvedRuntimeModel.effectiveModel,
   };
   const applyResolvedRuntimeModel = (
     candidate: typeof model,
@@ -126,25 +118,21 @@ export async function prepareEmbeddedRunRuntime(input: {
     const resolvedModel = preparedThinkingCompat
       ? { ...candidate, compat: { ...candidate.compat, ...preparedThinkingCompat } }
       : candidate;
-    const resolved =
+    resolvedRuntimeModel =
       resolvedModel === candidate && resolvedCandidate
         ? resolvedCandidate
         : resolveEffectiveModel(resolvedModel);
     models.runtime = resolvedModel;
-    models.effective = resolved.effectiveModel;
-    contextTokenBudget = resolved.contextTokenBudget;
-    authoredContextTokenCap = resolved.authoredContextTokenCap;
-    contextWindowInfo = resolved.contextWindowInfo;
-    outerContextTokenMeta =
-      contextTokenBudget === undefined ? {} : { contextTokens: contextTokenBudget };
+    models.effective = resolvedRuntimeModel.effectiveModel;
+    outerContextTokenMeta = buildContextTokenMeta(resolvedRuntimeModel.contextTokenBudget);
   };
-  const selectHarnessForPreparedAttempts = (
+  const selectHarness = (
     candidate: typeof model,
-    attempts: readonly PreparedAgentRuntimeAuthAttempt[],
+    attempts?: readonly PreparedAgentRuntimeAuthAttempt[],
   ) =>
     nativeSessionRuntime?.auth === "native"
       ? nativeSessionRuntime.harness
-      : selectEmbeddedRunHarnessForPreparedAttempts({
+      : selectEmbeddedRunHarness({
           runParams: params,
           provider,
           modelId,
@@ -156,18 +144,8 @@ export async function prepareEmbeddedRunRuntime(input: {
   input.markStartupStage("model-resolution");
   input.notifyExecutionPhase("model_resolution", { provider, model: modelId });
 
-  agentHarness =
-    nativeSessionRuntime?.auth === "native"
-      ? nativeSessionRuntime.harness
-      : selectEmbeddedRunHarness({
-          runParams: params,
-          provider,
-          modelId,
-          model: models.effective,
-          requestStreamTransportOverrides,
-          pinnedHarnessId,
-        });
-  pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
+  agentHarness = selectHarness(models.effective);
+  let pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
   const authStages = log.isEnabled("trace") ? createStageTimingTracker(Date.now) : undefined;
   const preparedAuthPlan = await prepareEmbeddedRunAuthPlan({
     assertCurrent: input.assertCurrent,
@@ -191,7 +169,7 @@ export async function prepareEmbeddedRunRuntime(input: {
     getRuntimeModel: () => models.runtime,
     getEffectiveModel: () => models.effective,
     applyResolvedRuntimeModel,
-    selectHarnessForPreparedAttempts,
+    selectHarnessForPreparedAttempts: selectHarness,
     markStage: (stage) => authStages?.mark(stage),
   });
   const {
@@ -292,10 +270,7 @@ export async function prepareEmbeddedRunRuntime(input: {
         : await materializeAuthPlan(attempt.plan)
       : models.runtime;
     const nextResolvedModel = resolveEffectiveModel(nextRuntimeModel);
-    const nextHarness = selectHarnessForPreparedAttempts(
-      nextResolvedModel.effectiveModel,
-      preparedAuthAttempts,
-    );
+    const nextHarness = selectHarness(nextResolvedModel.effectiveModel, preparedAuthAttempts);
     if (nextHarness.id !== agentHarness.id) {
       throw new Error(
         `Prepared auth retry changed the selected agent harness for ${provider}/${modelId}.`,
@@ -355,14 +330,15 @@ export async function prepareEmbeddedRunRuntime(input: {
     log,
   });
   authStages?.mark("controller");
-  const cooldownProbePolicy = resolveEmbeddedAuthCooldownProbePolicy({
+  const admitAuthProfile = createEmbeddedAuthProfileAdmission({
     authStore: attemptAuthProfileStore,
     profileCandidates,
     lockedProfileId,
     modelId,
+    provider,
+    log,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe === true,
   });
-  let didTransientCooldownProbe = false;
   const advancePluginHarnessAuthAttempt = async (): Promise<boolean> => {
     if (!pluginHarnessOwnsTransport) {
       return false;
@@ -377,17 +353,8 @@ export async function prepareEmbeddedRunRuntime(input: {
         continue;
       }
       const candidate = candidateAttempt.profileId;
-      if (
-        candidate &&
-        isProfileInCooldown(attemptAuthProfileStore, candidate, undefined, modelId)
-      ) {
-        if (didTransientCooldownProbe || !cooldownProbePolicy.probeProfileIds.has(candidate)) {
-          continue;
-        }
-        didTransientCooldownProbe = true;
-        log.warn(
-          `probing cooldowned auth profile for ${provider}/${modelId} due to ${cooldownProbePolicy.unavailableReason ?? "transient"} unavailability`,
-        );
+      if (!admitAuthProfile(candidate)) {
+        continue;
       }
       if (
         !canRunPreparedAgentRuntimeAuthAttempt({
@@ -401,22 +368,20 @@ export async function prepareEmbeddedRunRuntime(input: {
       if (candidateAttempt.plan.modelRoute?.authRequirement === "api-key") {
         try {
           await authController.applyAuthProfileCandidate(candidate, candidateIndex);
-          authState.thinkLevel = initialThinkLevel;
-          attemptedThinking.clear();
-          return true;
         } catch {
           continue;
         }
+      } else {
+        if (!candidate || candidateAttempt.plan.forwardedAuthProfileId !== candidate) {
+          continue;
+        }
+        const prepared = await prepareAuthAttempt(candidateAttempt);
+        authController.stopRuntimeAuthRefreshTimer();
+        authState.apiKeyInfo = null;
+        authState.runtimeAuthState = null;
+        prepared.commit();
+        authState.lastProfileId = candidate;
       }
-      if (!candidate || candidateAttempt.plan.forwardedAuthProfileId !== candidate) {
-        continue;
-      }
-      const prepared = await prepareAuthAttempt(candidateAttempt);
-      authController.stopRuntimeAuthRefreshTimer();
-      authState.apiKeyInfo = null;
-      authState.runtimeAuthState = null;
-      prepared.commit();
-      authState.lastProfileId = candidate;
       authState.thinkLevel = initialThinkLevel;
       attemptedThinking.clear();
       return true;
@@ -432,27 +397,15 @@ export async function prepareEmbeddedRunRuntime(input: {
     await authController.initializeAuthProfile();
   } else if (forwardedPluginHarnessProfileId) {
     const initialAttempt = preparedAuthAttempts[authState.profileIndex];
-    const initialProfileInCooldown =
-      initialAttempt?.kind === "profile" &&
-      isProfileInCooldown(attemptAuthProfileStore, initialAttempt.profileId, undefined, modelId);
-    const initialProfileId = initialAttempt?.profileId;
-    const canProbeInitialProfile =
-      initialProfileInCooldown &&
-      initialProfileId !== undefined &&
-      cooldownProbePolicy.probeProfileIds.has(initialProfileId);
-    if (initialProfileInCooldown && !canProbeInitialProfile) {
+    if (
+      !admitAuthProfile(initialAttempt?.kind === "profile" ? initialAttempt.profileId : undefined)
+    ) {
       if (!(await advancePluginHarnessAuthAttempt())) {
         throw new Error(
           `Prepared auth profiles are temporarily unavailable for ${provider}/${modelId}.`,
         );
       }
     } else {
-      if (initialProfileInCooldown) {
-        didTransientCooldownProbe = true;
-        log.warn(
-          `probing cooldowned auth profile for ${provider}/${modelId} due to ${cooldownProbePolicy.unavailableReason ?? "transient"} unavailability`,
-        );
-      }
       preparedProfileAttempted = initialAttempt?.kind === "profile";
       authState.lastProfileId = forwardedPluginHarnessProfileId;
     }
@@ -557,9 +510,9 @@ export async function prepareEmbeddedRunRuntime(input: {
       pluginHarnessOwnsTransport,
       effectiveModel: models.effective,
       modelContextWindow: models.runtime.contextWindow,
-      contextTokenBudget,
-      authoredContextTokenCap,
-      contextWindowInfo,
+      contextTokenBudget: resolvedRuntimeModel.contextTokenBudget,
+      authoredContextTokenCap: resolvedRuntimeModel.authoredContextTokenCap,
+      contextWindowInfo: resolvedRuntimeModel.contextWindowInfo,
       outerContextTokenMeta,
       activePreparedAuthPlan: authState.apiKeyInfo
         ? {

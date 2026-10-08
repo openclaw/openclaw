@@ -2,7 +2,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { channel } from "node:diagnostics_channel";
 import { availableParallelism } from "node:os";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRetainedOperation, type RetainedOperation } from "./retained-operation.js";
 import type { WorkerLifecycle } from "./worker-lifecycle.js";
@@ -12,6 +11,7 @@ import {
   type WorkerComputeCapacity,
 } from "./worker-task-capacity.js";
 import { captureWorkerTaskContext } from "./worker-task-context.js";
+import { WorkerTaskError } from "./worker-task-error.js";
 import { serviceNativeWorkerPass, type WorkerTaskHost } from "./worker-task-host.js";
 import { createWorkerNativeSectionState } from "./worker-task-native-sections.js";
 import { createWorkerTaskPoolBootstrap } from "./worker-task-pool-bootstrap.js";
@@ -21,6 +21,7 @@ import {
   type WorkerTaskCompletion,
 } from "./worker-task-pool-completion.js";
 import {
+  armWorkerTaskTimeout,
   closeOwnedWorkerTask,
   dispatchOwnedWorkerRequest,
   joinOwnedWorkerTask,
@@ -50,16 +51,6 @@ import type {
 const runInWorkerPoolContext = AsyncLocalStorage.snapshot();
 
 type WorkerReply<Output> = { status: "ok"; value: Output } | { status: "failed"; error: string };
-export class WorkerTaskError extends Error {
-  constructor(
-    message: string,
-    readonly code: "unavailable" | "timeout" | "failed" | "overloaded",
-  ) {
-    super(message);
-    this.name = "WorkerTaskError";
-  }
-}
-
 /** Bounded execution workers; each worker accepts one task at a time. */
 export class WorkerTaskPoolCore<Input, Output> {
   private readonly slots = new Set<Slot<Input, Output>>();
@@ -104,6 +95,7 @@ export class WorkerTaskPoolCore<Input, Output> {
     (task, error) => this.finish(task, error),
   );
   private readonly maxWorkers: number;
+  private readonly observeTask;
   private readonly maxPendingTasks: number;
   private readonly maxPendingBytes: number;
   private pendingTasks = 0;
@@ -127,7 +119,8 @@ export class WorkerTaskPoolCore<Input, Output> {
     private readonly publicDispatch?: WorkerTaskPoolDispatch,
     private readonly ownerOptions: WorkerTaskPoolOwnerOptions = {},
   ) {
-    this.maxWorkers = options.maxWorkers ?? availableParallelism();
+    this.observeTask = host.createTaskObserver?.(options.workerUrl);
+    this.maxWorkers = host.maxWorkers ?? options.maxWorkers ?? availableParallelism();
     this.maxPendingTasks = options.maxPendingTasks ?? DEFAULT_WORKER_PENDING_TASKS;
     this.maxPendingBytes = options.maxPendingBytes ?? DEFAULT_WORKER_PENDING_BYTES;
     for (const [name, value] of Object.entries({
@@ -256,8 +249,11 @@ export class WorkerTaskPoolCore<Input, Output> {
     task.admitted = true;
     this.pendingTasks++;
     this.pendingBytes += inputBytes;
+    task.observation = this.observeTask?.(task.options.diagnosticOperation);
     if (options.timeoutMs !== undefined) {
-      this.armTimeout(task, options.timeoutMs);
+      armWorkerTaskTimeout(task, options.timeoutMs, () =>
+        this.cancel(task, new WorkerTaskError("worker task timed out", "timeout")),
+      );
     }
     options.signal?.addEventListener("abort", task.abort, { once: true });
     this.queue.push(task);
@@ -400,6 +396,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.activeTasks++;
       task.slot = slot;
       task.startedAt = performance.now();
+      task.observation?.started();
       task.runInContext(() => {
         try {
           slot.worker?.ref();
@@ -469,7 +466,9 @@ export class WorkerTaskPoolCore<Input, Output> {
     if (
       task &&
       isRecord(message) &&
-      (message.status === "request" || message.status === "consumed")
+      (message.status === "request" ||
+        message.status === "consumed" ||
+        message.status === "notification")
     ) {
       try {
         this.receiveExchange(slot, task, message);
@@ -490,13 +489,11 @@ export class WorkerTaskPoolCore<Input, Output> {
     }
     // SAFETY: The private worker entry owns Output; the transport discriminant is checked above.
     const reply = message as WorkerReply<Output>;
+    const retainInput = Boolean(
+      task.exchange || (task.options.onInputConsumed && !task.inputConsumed),
+    );
     if (reply.status === "failed") {
-      this.finish(
-        task,
-        new WorkerTaskError(reply.error, "failed"),
-        undefined,
-        Boolean(task.exchange) || (Boolean(task.options.onInputConsumed) && !task.inputConsumed),
-      );
+      this.finish(task, new WorkerTaskError(reply.error, "failed"), undefined, retainInput);
       return;
     }
     try {
@@ -507,22 +504,7 @@ export class WorkerTaskPoolCore<Input, Output> {
       return;
     }
     // A result cannot release inputs whose consumption receipt never arrived.
-    this.finish(
-      task,
-      undefined,
-      reply.value,
-      Boolean(task.exchange) || Boolean(task.options.onInputConsumed && !task.inputConsumed),
-    );
-  }
-
-  private armTimeout(task: Task<Input, Output>, timeoutMs: number): void {
-    clearTimeout(task.timer);
-    const timeout = resolveTimerTimeoutMs(timeoutMs, 60_000);
-    task.deadline = performance.now() + timeout;
-    task.timer = setTimeout(
-      () => this.cancel(task, new WorkerTaskError("worker task timed out", "timeout")),
-      timeout,
-    );
+    this.finish(task, undefined, reply.value, retainInput);
   }
 
   private receiveExchange(
@@ -532,6 +514,10 @@ export class WorkerTaskPoolCore<Input, Output> {
   ): void {
     if (message.taskId !== task.id) {
       this.fail(slot, new WorkerTaskError("stale worker exchange", "unavailable"));
+      return;
+    }
+    if (message.status === "notification") {
+      task.options.onNotification?.(message.value);
       return;
     }
     if (message.status === "consumed") {
@@ -558,9 +544,11 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.fail(slot, new WorkerTaskError("invalid worker exchange", "unavailable"));
       return;
     }
-    // The owner, not a second pool clock, budgets host waits and pauses approvals.
-    clearTimeout(task.timer);
-    task.deadline = undefined;
+    if (task.options.hostTimeout === "owner") {
+      // Approval-aware owners pause their own budget while waiting for a decision.
+      clearTimeout(task.timer);
+      task.deadline = undefined;
+    }
     const exchange: Task<Input, Output>["exchange"] = {
       id: ++task.exchangeSequence,
       pressure: new AbortController(),
@@ -572,6 +560,9 @@ export class WorkerTaskPoolCore<Input, Output> {
     this.dispatch();
     this.computeCapacity?.requestCheckpoints();
     const accept = (response: WorkerTaskResponse) => {
+      if (!task.done && task.deadline !== undefined && performance.now() >= task.deadline) {
+        this.cancel(task, new WorkerTaskError("worker task timed out", "timeout"));
+      }
       if (task.done || slot.task !== task || slot.retiring) {
         // A slow host handler may settle after cancellation. Never feed a successor.
         const release = () => {
@@ -591,7 +582,9 @@ export class WorkerTaskPoolCore<Input, Output> {
       this.finishHostWait(task);
       exchange.onConsumed = response.onConsumed;
       exchange.sent = true;
-      this.armTimeout(task, response.timeoutMs);
+      armWorkerTaskTimeout(task, response.timeoutMs, () =>
+        this.cancel(task, new WorkerTaskError("worker task timed out", "timeout")),
+      );
       try {
         slot.worker!.postMessage(
           {
@@ -680,6 +673,8 @@ export class WorkerTaskPoolCore<Input, Output> {
     }
     this.finishHostWait(task);
     task.done = true;
+    task.observation?.completed();
+    task.observation = undefined;
     task.runInContext(() => task.controller?.abort());
     clearTimeout(task.timer);
     task.deadline = undefined;

@@ -12,6 +12,10 @@ import type {
 } from "../../packages/gateway-protocol/src/index.js";
 import { isManagedGitHubProfileId } from "../config/github-identity-profile-id.js";
 import { resolveStateDir } from "../config/paths.js";
+import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+} from "../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef, isValidEnvSecretRefId } from "../config/types.secrets.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
@@ -98,19 +102,11 @@ export function resolveConfiguredGitHubToolIdentity(params: {
 function resolveSystemGitHubToolIdentity(
   params: Pick<GitHubIdentityPreparation, "config" | "env">,
 ) {
-  const config = params.config.tools?.github;
-  return config
-    ? {
-        source: "system-configured" as const,
-        config,
-        profileDir: resolveManagedGitHubProfileDir({
-          agentId: "",
-          scope: "system",
-          profileId: config.profileId,
-          env: params.env,
-        }),
-      }
-    : { source: "system-detected" as const };
+  return (
+    resolveScopedGitHubToolIdentity({ ...params, agentId: "", scope: "system" }) ?? {
+      source: "system-detected" as const,
+    }
+  );
 }
 
 function resolveGitHubToolIdentity(params: GitHubIdentityPreparation) {
@@ -126,18 +122,16 @@ function resolveScopedGitHubToolIdentity(params: {
   scope: "system" | "agent";
   env?: NodeJS.ProcessEnv;
 }) {
-  if (params.scope === "system") {
-    return resolveSystemGitHubToolIdentity(params);
-  }
   const config = resolveConfiguredGitHubToolIdentity(params);
   return config
     ? {
-        source: "agent-override" as const,
+        source:
+          params.scope === "agent" ? ("agent-override" as const) : ("system-configured" as const),
         config,
         profileDir: resolveManagedGitHubProfileDir({
           agentId: params.agentId,
           env: params.env,
-          scope: "agent",
+          scope: params.scope,
           profileId: config.profileId,
         }),
       }
@@ -330,10 +324,10 @@ export async function resolveGitHubToolIdentityStatus(
   params: GitHubIdentityPreparation & { selectedScope: "system" | "agent" },
 ): Promise<ToolsGitHubStatusResult> {
   const effectiveIdentity = resolveGitHubToolIdentity(params);
-  const selectedIdentity = resolveScopedGitHubToolIdentity({
-    ...params,
-    scope: params.selectedScope,
-  });
+  const selectedIdentity =
+    params.selectedScope === "system"
+      ? resolveSystemGitHubToolIdentity(params)
+      : resolveScopedGitHubToolIdentity({ ...params, scope: "agent" });
   const probe = {
     config: params.config,
     sourceConfig: params.sourceConfig,
@@ -576,7 +570,7 @@ export async function prepareGitHubPublicationIdentity(
 
 /** Options expose account facts only; publication obtains its own live credential. */
 export async function prepareGitHubPublicationOptionsIdentity(
-  params: GitHubIdentityPreparation,
+  params: GitHubIdentityPreparation & { assertCurrent?: () => void },
 ): Promise<Pick<PreparedGitHubPublicationIdentity, "source" | "account">> {
   const { prepared } = await prepareSharedGitHubIdentity(params, readCachedNativeGitHubToken);
   if (!prepared) {
@@ -596,19 +590,20 @@ export async function prepareGitHubReadIdentity(
   params: GitHubReadIdentityPreparation & { allowAnonymous?: boolean },
 ): Promise<PreparedGitHubSourceReadIdentity> {
   const selected = resolveGitHubToolIdentity(params);
-  const profileId = selected.source === "system-detected" ? undefined : selected.config.profileId;
-  const kind = selected.source === "system-detected" ? undefined : selected.config.kind;
-  const assertSelected = () => {
-    params.assertActive();
-    const current = resolveGitHubToolIdentity({ ...params, config: params.getCurrentConfig() });
-    if (
-      current.source !== selected.source ||
-      (current.source !== "system-detected" &&
-        (current.config.profileId !== profileId || current.config.kind !== kind))
-    ) {
-      throw new GitHubIdentityError("changed");
-    }
-  };
+  const { profileId, kind } = selected.source === "system-detected" ? {} : selected.config;
+  const assertSelected = composeSessionSourceAssertion([
+    captureExternalSessionCommitGuard(params.assertActive),
+    () => {
+      const current = resolveGitHubToolIdentity({ ...params, config: params.getCurrentConfig() });
+      if (
+        current.source !== selected.source ||
+        (current.source !== "system-detected" &&
+          (current.config.profileId !== profileId || current.config.kind !== kind))
+      ) {
+        throw new GitHubIdentityError("changed");
+      }
+    },
+  ]);
   const caller = { assertCurrent: assertSelected, startCurrent: params.startActive };
   await startGitHubIdentityOperation(params.refresh, caller);
   assertSelected();

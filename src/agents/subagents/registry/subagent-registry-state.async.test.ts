@@ -22,7 +22,10 @@ import {
 } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { buildControlledSubagentRunsReadContext } from "./subagent-control-scope.js";
-import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "./subagent-registry-persistence.js";
 // Real-storage proof that committed projections survive read-owner retirement.
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import {
@@ -35,7 +38,6 @@ import {
   createSubagentSessionListReadView,
   getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForRead,
-  getSubagentMaintenanceRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
   getSubagentSessionListReadSnapshotIdentity,
   prepareOptionalSubagentSessionListReadCache,
@@ -285,7 +287,6 @@ it.each(["requester", "controller"] as const)(
     saveSubagentRegistryToSqlite(
       new Map([old, latest, descendant].map((entry) => [entry.runId, entry])),
     );
-    const nativeLoad = vi.spyOn(store, "loadSubagentRegistryFromSqlite");
     const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
 
     const context = await buildControlledSubagentRunsReadContext(requesterSessionKey);
@@ -301,7 +302,6 @@ it.each(["requester", "controller"] as const)(
       { type: "subagents.sessionList" },
       { type: "subagents.runs", scope: { kind: "ids", runIds: [latest.runId] } },
     ]);
-    expect(nativeLoad).not.toHaveBeenCalled();
     const moved = {
       ...latest,
       runId: "moved",
@@ -801,11 +801,11 @@ it.each(["refused mutation", "committed publication"] as const)(
         mutation = mutateAfterClose();
         await expect(mutation).rejects.toThrow("maintenance resource scope is closed");
       } else {
-        publishSubagentRunsAfterAtomicStore(current, ["one"], events);
+        events.push(publishSubagentRunsAfterAtomicStore(current, ["one"]));
       }
       expect(store.readSubagentRun(database, "one")?.model).toBe(committed ? "after" : "before");
       expect(
-        getSubagentRunsSnapshotForChildSession(new Map(), entry.childSessionKey).get("one"),
+        (await getSubagentRunsSnapshotForChildSession(new Map(), entry.childSessionKey)).get("one"),
       ).toMatchObject({
         model: committed ? "after" : "before",
         execution: { status: committed ? "terminal" : "running" },
@@ -814,9 +814,6 @@ it.each(["refused mutation", "committed publication"] as const)(
         model: committed ? "after" : "before",
         execution: { status: committed ? "terminal" : "running" },
       });
-      const maintenance = getSubagentMaintenanceRunsSnapshotForRead(new Map()).get("one");
-      expect(maintenance?.execution.status).toBe(committed ? "terminal" : "running");
-      expect(maintenance?.cleanupCompletedAt).toBe(committed ? 2 : undefined);
       expect(events).toHaveLength(committed ? 1 : 0);
       events.forEach((event) => event());
       expect(wake).toHaveBeenCalledTimes(committed ? 1 : 0);
@@ -834,9 +831,10 @@ it.each(["refused mutation", "committed publication"] as const)(
 );
 
 it("keeps retired publications with their draining source across source switches and reopen", async () => {
-  const selectedChild = () =>
-    getSubagentRunsSnapshotForChildSession(new Map(), "agent:main:subagent:one");
+  const selectedChild = async () =>
+    await getSubagentRunsSnapshotForChildSession(new Map(), "agent:main:subagent:one");
   persistRegistryFixture(runs("before"), ["one"]);
+  await restoreSubagentRunsFromDisk({ runs: new Map() });
   expect(getSubagentRunsSnapshotForRead(new Map()).get("one")?.model).toBe("before");
   const context = captureOpenClawStateWorkerContext();
   const other = await createOpenClawTestState({ scenario: "minimal", applyEnv: false });
@@ -847,17 +845,18 @@ it("keeps retired publications with their draining source across source switches
   let closing = closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
   try {
     persistRegistryFixture(runs("after"), ["one"]);
-    expect(selectedChild().get("one")?.model).toBe("after");
+    expect((await selectedChild()).get("one")?.model).toBe("after");
     expect(getSubagentRunsSnapshotForRead(new Map()).get("one")?.model).toBe("after");
     await withEnvAsync({ OPENCLAW_STATE_DIR: other.stateDir }, async () => {
-      expect(selectedChild().has("one")).toBe(false);
+      expect((await selectedChild()).has("one")).toBe(false);
+      await restoreSubagentRunsFromDisk({ runs: new Map() });
       expect(getSubagentRunsSnapshotForRead(new Map()).has("one")).toBe(false);
       persistRegistryFixture(runs("other"), ["one"]);
     });
-    expect(selectedChild().has("one")).toBe(false);
+    expect((await selectedChild()).has("one")).toBe(false);
     expect(getSubagentRunsSnapshotForRead(new Map()).has("one")).toBe(false);
     persistRegistryFixture(runs("after"), ["one"]);
-    expect(selectedChild().get("one")?.model).toBe("after");
+    expect((await selectedChild()).get("one")?.model).toBe("after");
     expect(getSubagentRunsSnapshotForRead(new Map()).get("one")?.model).toBe("after");
     releaseClose.resolve();
     await closing;
@@ -865,11 +864,12 @@ it("keeps retired publications with their draining source across source switches
     saveSubagentRegistryChangesToSqlite(runs("reopened"), ["one"]);
     releaseClose = createDeferredCore();
     closing = closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
-    expect(selectedChild().has("one")).toBe(false);
+    expect((await selectedChild()).has("one")).toBe(false);
     expect(getSubagentRunsSnapshotForRead(new Map()).has("one")).toBe(false);
     releaseClose.resolve();
     await closing;
-    expect(selectedChild().get("one")?.model).toBe("reopened");
+    expect((await selectedChild()).get("one")?.model).toBe("reopened");
+    await restoreSubagentRunsFromDisk({ runs: new Map() });
     expect(getSubagentRunsSnapshotForRead(new Map()).get("one")?.model).toBe("reopened");
   } finally {
     releaseClose.resolve();

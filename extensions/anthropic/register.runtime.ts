@@ -18,6 +18,7 @@ import {
   type ProviderPlugin,
   requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeHaiku55ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
@@ -150,7 +151,9 @@ function resolveAnthropicModelCost(modelId: string) {
   // their discovered cost instead of inheriting a different version's pricing.
   const normalized = resolveClaudeModelIdentity({ id: modelId }).replace(/-\d{8}$/, "");
   const id = CLAUDE_MODEL_ID_ALIASES.get(normalized) ?? normalized;
-  return manifest.modelCatalog.providers.anthropic.models.find((model) => model.id === id)?.cost;
+  return manifest.modelCatalog.providers.anthropic.models.find((model) => model.id === id)?.cost
+    ? resolveAnthropicManifestModel(id)?.cost
+    : undefined;
 }
 
 function resolveAnthropic4xForwardCompatModel(
@@ -291,10 +294,7 @@ function buildAnthropicForwardCompatModel(
   // capability metadata (for example compat.codeMode) instead of dropping it.
   // Registry compat wins when present (it may carry config overrides); the
   // manifest index covers empty-registry runs such as env-key-only sessions.
-  const catalogModel = ctx.modelRegistry.find(provider, trimmedModelId) as
-    | Pick<ProviderRuntimeModel, "compat">
-    | null
-    | undefined;
+  const catalogModel = ctx.modelRegistry.find(provider, trimmedModelId);
   const compat =
     catalogModel?.compat ??
     (provider === PROVIDER_ID ? resolveAnthropicManifestModel(trimmedModelId)?.compat : undefined);
@@ -344,6 +344,7 @@ function isAnthropicMandatoryClaude5Model(modelId: string): boolean {
 function isAnthropicExact1MClaude5Model(modelId: string): boolean {
   return (
     isAnthropicMandatoryClaude5Model(modelId) ||
+    resolveClaudeHaiku55ModelIdentity({ id: modelId }) !== undefined ||
     resolveClaudeSonnet5ModelIdentity({ id: modelId }) !== undefined ||
     resolveClaudeOpus5ModelIdentity({ id: modelId }) !== undefined
   );
@@ -448,7 +449,9 @@ function normalizeAnthropicResolvedModel(
     const preview = isAnthropicMythosPreviewModel(contractModelId);
     const mandatory = requiresClaudeMandatoryAdaptiveThinking({ id: contractModelId });
     const remapsMinimal =
-      mandatory || resolveClaudeSonnet55ModelIdentity({ id: contractModelId }) !== undefined;
+      mandatory ||
+      resolveClaudeSonnet55ModelIdentity({ id: contractModelId }) !== undefined ||
+      resolveClaudeHaiku55ModelIdentity({ id: contractModelId }) !== undefined;
     if (
       current?.max === undefined ||
       (!preview &&
@@ -526,11 +529,9 @@ export function buildAnthropicProvider(): ProviderPlugin {
           },
         },
         run: async (ctx: ProviderAuthContext) =>
-          await (await loadAuthRuntime()).runAnthropicCliMigration(ctx),
+          (await loadAuthRuntime()).runAnthropicCliMigration(ctx),
         runNonInteractive: async (ctx) =>
-          await (
-            await loadAuthRuntime()
-          ).runAnthropicCliMigrationNonInteractive({
+          (await loadAuthRuntime()).runAnthropicCliMigrationNonInteractive({
             config: ctx.config,
             runtime: ctx.runtime,
             agentDir: ctx.agentDir,
@@ -540,13 +541,14 @@ export function buildAnthropicProvider(): ProviderPlugin {
         ...setupToken,
         wizard: { ...setupToken.wizard, assistantPriority: 40 },
         run: async (ctx: ProviderAuthContext) =>
-          await (await loadAuthRuntime()).runAnthropicSetupTokenAuth(ctx, defaultAnthropicModel),
+          (await loadAuthRuntime()).runAnthropicSetupTokenAuth(ctx, defaultAnthropicModel),
         validateNonInteractive: async (ctx) =>
           Boolean((await loadAuthRuntime()).validateAnthropicSetupTokenNonInteractive(ctx)),
         runNonInteractive: async (ctx) =>
-          await (
-            await loadAuthRuntime()
-          ).runAnthropicSetupTokenNonInteractive(ctx, defaultAnthropicModel),
+          (await loadAuthRuntime()).runAnthropicSetupTokenNonInteractive(
+            ctx,
+            defaultAnthropicModel,
+          ),
       },
       createProviderApiKeyAuthMethod({
         providerId,

@@ -1,22 +1,30 @@
-import { chmodSync, existsSync, statSync } from "node:fs";
+import { chmodSync, existsSync, realpathSync, statSync, symlinkSync } from "node:fs";
 import path from "node:path";
+import { StatementSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
 import type { BoardWidgetMaterializedPutParams } from "../../packages/gateway-protocol/src/index.js";
-import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import {
+  observeHostDataSql,
+  observeSqliteReadSql,
+} from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as configEnv from "../config/config-env-vars.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.entry.js";
+import * as historyReaders from "../config/sessions/session-transcript-worker-readers.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
+import * as workerStore from "../state/openclaw-agent-worker-store.js";
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -70,6 +78,62 @@ async function holdWriter(options: Parameters<typeof runOpenClawAgentWorkerWrite
   await entered.promise;
   return { release, held };
 }
+
+it("admits Board writes without reading session existence on the caller thread", async () => {
+  const { store, target } = fixture();
+  const reads = observeSqliteReadSql(StatementSync.prototype);
+  try {
+    await store.applyOps(target, [{ kind: "tab_create", tabId: "main", title: "Main" }]);
+    const put = await store.putWidget({
+      ...target,
+      name: "status",
+      content: { kind: "html", html: "<p>status</p>" },
+      declared: { tools: ["health"] },
+    });
+    await store.grant(target, "status", "granted", 1, put.widgets[0]?.instanceId);
+    expect(
+      reads.queries.filter((sql) => /select "entry_json" from "session_nodes"/iu.test(sql)),
+    ).toEqual([]);
+  } finally {
+    reads.restore();
+  }
+});
+
+it("rejects a Board write whose session is replaced during preparation", async () => {
+  const { database, options, store, target } = fixture();
+  const replaceSession = () =>
+    replaceSessionEntrySync(
+      { ...target, agentId: options.agentId, storePath: database.path },
+      { sessionId: "replacement-session", updatedAt: 2 },
+    );
+  const pending = store.putWidget(
+    {
+      ...target,
+      name: "app",
+      content: {
+        kind: "mcp-app",
+        descriptor: {
+          serverName: "server",
+          toolName: "tool",
+          uiResourceUri: "ui://app",
+          toolCallId: "call",
+        },
+        interactive: true,
+      },
+    },
+    {
+      resolveMcpAppInteraction: async () => {
+        replaceSession();
+        return true;
+      },
+    },
+  );
+  await expect(pending).rejects.toMatchObject({
+    code: "invalid_operation",
+    message: "board session changed; retry",
+  });
+  expect(await store.getSnapshot(target)).toMatchObject({ revision: 0, widgets: [] });
+});
 
 it("keeps incognito Board mutations on the process-held database without creating its disk path", async () => {
   const { database, options, store, target } = fixture(true);
@@ -366,7 +430,7 @@ it.each(["snapshot", "metadata", "mcp"] as const)(
 );
 
 it.each(["transaction", "commit"] as const)(
-  "refuses a Board read whose target changes at the %s grant",
+  "refuses a Board write whose target changes at the %s grant",
   async (stage) => {
     const { options, store, target } = fixture();
     await store.putWidget({
@@ -390,16 +454,87 @@ it.each(["transaction", "commit"] as const)(
           admit(request, grant);
         }, attachment),
       );
+    try {
+      const pending = reader.putWidget({
+        ...target,
+        name: "denied",
+        content: { kind: "html", html: "denied" },
+      });
+      await expect(pending).rejects.toBeInstanceOf(BoardValidationError);
+    } finally {
+      interception.mockRestore();
+    }
+    expect((await store.getSnapshot(target)).widgets).toMatchObject([{ name: "status" }]);
+  },
+);
+
+it("reads Board snapshots and documents without a write-capable publication", async () => {
+  const { store, target } = fixture();
+  const put = await store.putWidget({
+    ...target,
+    name: "status",
+    content: { kind: "html", html: "read-only" },
+  });
+  const publication = vi
+    .spyOn(workerStore, "openOpenClawAgentSqliteWorkerStore")
+    .mockImplementation(() => {
+      throw new Error("Board read acquired a write-capable publication");
+    });
+  try {
+    expect(await store.getSnapshotWithHtmlViewMetadata(target)).toMatchObject({
+      snapshot: { revision: put.revision, widgets: [{ name: "status" }] },
+    });
+    expect(await store.useWidgetDocument(target, "status", (document) => document)).toMatchObject({
+      html: "read-only",
+    });
+  } finally {
+    publication.mockRestore();
+  }
+});
+
+it.each(["target", "native-mutation"] as const)(
+  "refuses Board disclosure when %s changes during a read",
+  async (change) => {
+    const { database, options, store, target } = fixture();
+    await store.putWidget({
+      ...target,
+      name: "status",
+      content: { kind: "html", html: "private" },
+    });
+    let sessionKey = target.sessionKey;
+    const reader = new SqliteBoardStore({
+      resolveSession: () => ({ ...options, sessionKey }),
+      env: options.env,
+    });
+    const create = historyReaders.createSessionHistoryWorkerReaders;
+    const interception = vi
+      .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
+      .mockImplementation((run) => {
+        const readers = create(run);
+        return {
+          ...readers,
+          async readBoardSnapshot(input) {
+            const snapshot = await readers.readBoardSnapshot(input);
+            if (change === "target") {
+              sessionKey = "agent:main:replacement";
+            } else {
+              database.db
+                .prepare("DELETE FROM board_widgets WHERE session_key = ?")
+                .run(sessionKey);
+            }
+            return snapshot;
+          },
+        };
+      });
     const consume = vi.fn();
     try {
-      await expect(reader.useSnapshot(target, consume)).rejects.toBeInstanceOf(
-        BoardValidationError,
+      await expect(reader.useSnapshot(target, consume)).rejects.toThrow(
+        change === "target" ? "board session changed; retry" : "Session entry changed",
       );
       expect(consume).not.toHaveBeenCalled();
     } finally {
       interception.mockRestore();
     }
-    expect((await store.getSnapshot(target)).widgets).toMatchObject([{ name: "status" }]);
   },
 );
 
@@ -528,3 +663,57 @@ it.each(["mutation", "snapshot", "document"] as const)(
     }
   },
 );
+
+it("rejects a Board read through an alias when its physical database closes", async () => {
+  const { database, options, store, target } = fixture();
+  await store.putWidget({
+    ...target,
+    name: "status",
+    content: { kind: "html", html: "private" },
+  });
+  const physicalPath = realpathSync(options.path);
+  const aliasDirectory = path.join(options.env.OPENCLAW_STATE_DIR, "board-alias");
+  symlinkSync(path.dirname(physicalPath), aliasDirectory, "junction");
+  const aliasOptions = { ...options, path: path.join(aliasDirectory, path.basename(physicalPath)) };
+  const reader = new SqliteBoardStore({
+    resolveSession: () => ({ ...aliasOptions, sessionKey: target.sessionKey }),
+    env: options.env,
+  });
+
+  // With no host connection, only the reader's retained close registration can revoke it.
+  await closeOpenClawAgentDatabasesAsync();
+  expect(database.db.isOpen).toBe(false);
+  expect(getOpenClawAgentDatabaseIfOpen(options)).toBeUndefined();
+  expect(getOpenClawAgentDatabaseIfOpen(aliasOptions)).toBeUndefined();
+
+  const create = historyReaders.createSessionHistoryWorkerReaders;
+  let readCompleted = false;
+  const interception = vi
+    .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
+    .mockImplementation((run) => {
+      const readers = create(run);
+      return {
+        ...readers,
+        async readBoardSnapshot(input) {
+          const snapshot = await readers.readBoardSnapshot(input);
+          expect(snapshot?.snapshot.widgets).toEqual([
+            expect.objectContaining({ name: "status", revision: 1 }),
+          ]);
+          readCompleted = true;
+          // Keep the completed read retained until its physical owner has closed.
+          await closeOpenClawAgentDatabaseByPathAsync(physicalPath);
+          return snapshot;
+        },
+      };
+    });
+  const consume = vi.fn();
+  try {
+    await expect(reader.useSnapshot(target, consume)).rejects.toThrow(
+      "Session history database read was revoked",
+    );
+    expect(readCompleted).toBe(true);
+    expect(consume).not.toHaveBeenCalled();
+  } finally {
+    interception.mockRestore();
+  }
+});

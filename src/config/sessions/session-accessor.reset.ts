@@ -7,15 +7,15 @@ import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-ke
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import { supportsOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
+import type { SessionLifecycleTimestamps } from "./lifecycle.types.js";
 import {
   cloneSessionEntries,
   createReplySessionInitializationRevision,
 } from "./session-accessor.entry-mutation.js";
 import { resolveSessionEntryFromStore } from "./session-accessor.entry.js";
-import {
-  SessionEntryLifecycleUpsertConflictError,
-  type SessionEntryLifecycleUpsert,
-  type SessionResetBoundaryWrite,
+import type {
+  SessionEntryLifecycleUpsert,
+  SessionResetBoundaryWrite,
 } from "./session-accessor.lifecycle-types.js";
 import { applySessionEntryLifecycleMutation } from "./session-accessor.lifecycle.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
@@ -30,6 +30,12 @@ import type {
   ReplySessionInitializationCommitResult,
 } from "./session-accessor.types.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import { assertSessionEntryCohortScope } from "./session-entry-read-ordered.js";
+import type { SessionEntryCohortReader } from "./session-entry-read-runtime.types.js";
+import {
+  SessionEntryLifecycleUpsertConflictError,
+  SessionMaintenancePreservationConflictError,
+} from "./session-mutation-conflict-error.js";
 import { resolveReplySessionInitializationUpserts } from "./session-reset-entry.js";
 import type { ReplySessionInitializationUpsertDescriptor } from "./session-reset.types.js";
 import { resolveSessionStorePathForScope } from "./session-store-path.js";
@@ -164,22 +170,57 @@ function captureReplySessionInitializationSource(params: ReplySessionInitializat
   return { captured, database, source, assertSourceCurrent };
 }
 
-/** Prepares the declared reply rows and stored model parent through their existing reader. */
+/** Prepares data for initialization; the commit owner still rereads and checks its revision. */
 export async function loadReplySessionInitializationSnapshot(
   params: ReplySessionInitializationSelection,
-): Promise<ReplySessionInitializationSnapshot> {
+  options: {
+    reader?: SessionEntryCohortReader;
+    includeLifecycle?: boolean;
+    assertCurrent?: () => void;
+  } = {},
+): Promise<
+  ReplySessionInitializationSnapshot & { lifecycleTimestamps?: SessionLifecycleTimestamps }
+> {
+  const { reader, includeLifecycle = false, assertCurrent = () => {} } = options;
   assertSessionInitializationAgentScope(params.agentId, params.sessionKey);
+  assertCurrent();
   const storePath = resolveSessionStorePathForScope(params);
-  const { database, source, assertSourceCurrent } = captureReplySessionInitializationSource({
-    ...params,
-    storePath,
-  });
-  const store = await loadReplySessionInitializationEntriesAsync(
-    { ...params, storePath },
-    database,
-    source,
-  );
-  assertSourceCurrent();
+  let store: Record<string, SessionEntry>;
+  let lifecycleTimestamps: SessionLifecycleTimestamps | undefined;
+  if (reader) {
+    const sessionKey = assertSessionEntryCohortScope(reader, { ...params, storePath });
+    const prepared = await reader.withRead(
+      {
+        sessionKeys: [
+          ...new Set([
+            sessionKey,
+            ...(params.relatedSessionKeys ?? []).map(normalizeStoreSessionKey),
+          ]),
+        ],
+        replyInitializationSessionKey: sessionKey,
+        ...(includeLifecycle ? { lifecycleSessionKey: sessionKey } : {}),
+      },
+      assertCurrent,
+      (read) => ({
+        store: Object.fromEntries(read.entries.map(({ sessionKey: key, entry }) => [key, entry])),
+        lifecycleTimestamps: includeLifecycle ? read.lifecycleTimestamps : undefined,
+      }),
+    );
+    store = prepared.store;
+    lifecycleTimestamps = prepared.lifecycleTimestamps;
+  } else {
+    const { database, source, assertSourceCurrent } = captureReplySessionInitializationSource({
+      ...params,
+      storePath,
+    });
+    store = await loadReplySessionInitializationEntriesAsync(
+      { ...params, storePath },
+      database,
+      source,
+    );
+    assertSourceCurrent();
+  }
+  assertCurrent();
   const resolved = resolveSessionEntryFromStore({ store, sessionKey: params.sessionKey });
   const currentEntry = resolved.existing ? { ...resolved.existing } : undefined;
   return {
@@ -189,6 +230,7 @@ export async function loadReplySessionInitializationSnapshot(
       return entry ? { ...entry } : undefined;
     },
     revision: createReplySessionInitializationRevision(currentEntry),
+    ...(lifecycleTimestamps ? { lifecycleTimestamps } : {}),
   };
 }
 
@@ -320,22 +362,23 @@ export async function commitReplySessionInitialization(params: {
     await applySessionEntryLifecycleMutation(mutation, { ...captured, path: database.path });
   } catch (error) {
     if (
-      !(error instanceof SessionEntryLifecycleUpsertConflictError) ||
-      error.sessionKey !== resolved.normalizedKey
+      !(error instanceof SessionMaintenancePreservationConflictError) &&
+      (!(error instanceof SessionEntryLifecycleUpsertConflictError) ||
+        error.sessionKey !== resolved.normalizedKey)
     ) {
       throw error;
     }
     const current = await loadReplySessionInitializationEntriesAsync(
       {
         agentId: params.agentId,
-        sessionKey: error.sessionKey,
+        sessionKey: resolved.normalizedKey,
         storePath,
       },
       database,
       source?.key.startsWith("file:") ? source : undefined,
     );
     assertSourceCurrent(true);
-    return createStaleReplySessionInitializationResult(current[error.sessionKey]);
+    return createStaleReplySessionInitializationResult(current[resolved.normalizedKey]);
   }
   if (staleCommit !== undefined) {
     return createStaleReplySessionInitializationResult(staleCommit ?? undefined);

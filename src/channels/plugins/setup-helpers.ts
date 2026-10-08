@@ -102,15 +102,9 @@ export function migrateBaseNameToDefaultAccount(params: {
 }
 
 /** Applies setup-time account naming and optional root-name migration in one step. */
-export function prepareScopedSetupConfig(params: {
-  cfg: OpenClawConfig;
-  channelKey: string;
-  accountKeyPolicy?: ChannelAccountKeyPolicy;
-  accountId: string;
-  name?: string;
-  alwaysUseAccounts?: boolean;
-  migrateBaseName?: boolean;
-}): OpenClawConfig {
+export function prepareScopedSetupConfig(
+  params: Parameters<typeof applyAccountNameToChannelSection>[0] & { migrateBaseName?: boolean },
+): OpenClawConfig {
   const namedConfig = applyAccountNameToChannelSection(params);
   if (!params.migrateBaseName || normalizeAccountId(params.accountId) === DEFAULT_ACCOUNT_ID) {
     return namedConfig;
@@ -192,7 +186,7 @@ export function createSetupInputPresenceValidator<
 >(params: {
   defaultAccountOnlyEnvError?: string;
   whenNotUseEnv?: SetupInputPresenceRequirement[];
-  validate?: (params: { cfg: OpenClawConfig; accountId: string; input: Input }) => string | null;
+  validate?: NonNullable<ChannelSetupAdapter<Input>["validateInput"]>;
 }): NonNullable<ChannelSetupAdapter<Input>["validateInput"]> {
   return (inputParams) => {
     if (
@@ -216,18 +210,13 @@ export function createSetupInputPresenceValidator<
 }
 
 /** Creates a setup adapter that supports env-backed default account auth and patched credentials. */
-export function createEnvPatchedAccountSetupAdapter(params: {
-  channelKey: string;
-  accountKeyPolicy?: ChannelAccountKeyPolicy;
-  alwaysUseAccounts?: boolean;
-  ensureChannelEnabled?: boolean;
-  ensureAccountEnabled?: boolean;
-  defaultAccountOnlyEnvError: string;
-  missingCredentialError: string;
-  hasCredentials: (input: ChannelSetupInput) => boolean;
-  validateInput?: ChannelSetupAdapter["validateInput"];
-  buildPatch: (input: ChannelSetupInput) => Record<string, unknown>;
-}): ChannelSetupAdapter {
+export function createEnvPatchedAccountSetupAdapter(
+  params: Parameters<typeof createPatchedAccountSetupAdapter<ChannelSetupInput>>[0] & {
+    defaultAccountOnlyEnvError: string;
+    missingCredentialError: string;
+    hasCredentials: (input: ChannelSetupInput) => boolean;
+  },
+): ChannelSetupAdapter {
   return createPatchedAccountSetupAdapter({
     ...params,
     validateInput: (inputParams) => {

@@ -1,7 +1,9 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
+import { assertWorktreeRegistryPredicates } from "./registry-run-end.worker.js";
 import { collectLiveRunLeases, worktreeRunLeaseScope } from "./run-lease-owner.js";
+import type { ManagedWorktreeRecord } from "./types.js";
 
 export type WorktreeRunLeaseRowInput = {
   worktreeId: string;
@@ -10,12 +12,16 @@ export type WorktreeRunLeaseRowInput = {
   startTime: number | null;
   now: number;
   exclusive?: true;
+  observed?: ManagedWorktreeRecord;
 };
 
 export function admitWorktreeRunLeaseInDatabase(
   db: DatabaseSync,
   params: WorktreeRunLeaseRowInput,
 ): void {
+  if (params.observed) {
+    assertWorktreeRegistryPredicates(db, [{ kind: "binding", record: params.observed }]);
+  }
   const k = getNodeSqliteKysely<Pick<DB, "worktrees" | "state_leases">>(db);
   const scope = worktreeRunLeaseScope(params.worktreeId);
   const record = executeSqliteQuerySync(

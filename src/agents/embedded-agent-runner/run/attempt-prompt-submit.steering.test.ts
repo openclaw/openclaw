@@ -21,8 +21,8 @@ import {
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { markPendingFinalDelivery } from "../../subagent-test-fixtures.test-helpers.js";
 import { testing as announceTesting } from "../../subagents/announce/subagent-announce-output.test-support.js";
-import { markPendingFinalDelivery } from "../../subagents/registry/subagent-registry-lifecycle-delivery.js";
 import { subagentRuns } from "../../subagents/registry/subagent-registry-memory.js";
 import { mutateSubagentRuns } from "../../subagents/registry/subagent-registry-persistence.js";
 import {

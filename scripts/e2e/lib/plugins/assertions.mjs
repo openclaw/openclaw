@@ -1,4 +1,3 @@
-// Assertions for plugin install/runtime E2E scenarios.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -51,9 +50,7 @@ async function withTimeout(label, timeoutMs, run) {
   try {
     return await Promise.race([run(controller.signal, timeoutPromise), timeoutPromise]);
   } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
+    clearTimeout(timeout);
   }
 }
 
@@ -787,11 +784,7 @@ async function assertClawHubPreflight() {
       `ClawHub package preflight failed for ${packageName}: ${response.status} ${rawDetail}`,
     );
   }
-  const detail = await withTimeout(
-    `ClawHub package preflight JSON for ${packageName}`,
-    limits.timeoutMs,
-    () => JSON.parse(rawDetail),
-  );
+  const detail = JSON.parse(rawDetail);
   const family = detail.package?.family;
   if (family !== "code-plugin" && family !== "bundle-plugin") {
     throw new Error(`ClawHub package ${packageName} is not installable as a plugin: ${family}`);

@@ -121,19 +121,31 @@ export class SessionActivityController implements ReactiveController {
     this.summaryRetries.clear();
   }
 
-  private withActivitySummary(
-    row: GatewaySessionRow,
-    activitySummary: GatewaySessionRow["activitySummary"],
+  private applySummaryBatch(
+    result: SessionsListResult,
+    rows: readonly GatewaySessionRow[],
     readCutoff: number,
-  ): GatewaySessionRow {
-    const next = this.historyRows.inheritRow({ ...row, activitySummary }, row);
-    this.historyRows.observeFields(
-      next,
-      ["activitySummary"],
-      createSessionWriteObservation(++this.historyRevision, null, readCutoff),
-      row.agentId,
-    );
-    return next;
+    summaries: ReadonlyMap<string, GatewaySessionRow["activitySummary"]> | null,
+  ): void {
+    this.result = {
+      ...result,
+      sessions: result.sessions.map((row) => {
+        if (!rows.includes(row) || (summaries && !summaries.has(summaryRowKey(row)))) {
+          return row;
+        }
+        const activitySummary = summaries
+          ? summaries.get(summaryRowKey(row))
+          : { ...row.activitySummary, state: "unavailable" as const };
+        const next = this.historyRows.inheritRow({ ...row, activitySummary }, row);
+        this.historyRows.observeFields(
+          next,
+          ["activitySummary"],
+          createSessionWriteObservation(++this.historyRevision, null, readCutoff),
+          row.agentId,
+        );
+        return next;
+      }),
+    };
   }
 
   private resetQuery(): void {
@@ -260,30 +272,12 @@ export class SessionActivityController implements ReactiveController {
           const summaries = new Map(
             result.sessions.map((row) => [summaryRowKey(row), row.activitySummary]),
           );
-          this.result = {
-            ...this.result,
-            sessions: this.result.sessions.map((row) =>
-              rows.includes(row) && summaries.has(summaryRowKey(row))
-                ? this.withActivitySummary(row, summaries.get(summaryRowKey(row)), readRevision)
-                : row,
-            ),
-          };
+          this.applySummaryBatch(this.result, rows, readRevision, summaries);
         } catch {
           if (!current() || !this.result) {
             return;
           }
-          this.result = {
-            ...this.result,
-            sessions: this.result.sessions.map((row) =>
-              rows.includes(row)
-                ? this.withActivitySummary(
-                    row,
-                    { ...row.activitySummary, state: "unavailable" },
-                    readRevision,
-                  )
-                : row,
-            ),
-          };
+          this.applySummaryBatch(this.result, rows, readRevision, null);
         }
         this.host.requestUpdate();
       }
@@ -498,6 +492,7 @@ export class SessionActivityController implements ReactiveController {
     }
     const request = {
       source: "activity",
+      excludeDock: true,
       rowMode: "compact",
       archived: "all",
       includeGlobal: true,

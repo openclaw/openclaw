@@ -19,7 +19,7 @@ import {
   runMemoryRecallMetadata,
 } from "./manager-cpu-worker-runtime.js";
 import { MemoryProviderLifecycle } from "./manager-provider-lifecycle.js";
-import { readMemoryRecallData } from "./manager-retrieval-read.js";
+import type { MemoryRecallData } from "./manager-retrieval-read.js";
 import { prepareExactPathMatcher, type ExactPathSpecificity } from "./manager-search.js";
 import type {
   MemoryKeywordWorkerQuery,
@@ -52,7 +52,24 @@ type KeywordSearchOptions = {
   signal?: AbortSignal;
   exactPathQuery?: string;
   rankingQuery?: string;
+  fuseRecallMetadata?: boolean;
 };
+
+function projectRecallMetadata(
+  row:
+    | { importance: number | null; triggers: string | null; project_key: string | null }
+    | undefined,
+) {
+  return {
+    ...(typeof row?.importance === "number" ? { importance: row.importance } : {}),
+    ...(typeof row?.triggers === "string" && row.triggers.trim()
+      ? { triggers: row.triggers.trim() }
+      : {}),
+    ...(typeof row?.project_key === "string" && row.project_key.trim()
+      ? { projectKey: row.project_key.trim() }
+      : {}),
+  };
+}
 
 function compareKeywordSearchHits(
   a: KeywordSearchHit,
@@ -137,38 +154,26 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
         });
         return [];
       }
-      return this.toCuratedMemorySearchResults(result.rows);
-    });
-  }
-
-  private toCuratedMemorySearchResults(
-    rows: Awaited<ReturnType<typeof runMemoryCuratedCandidates>>["rows"],
-  ): MemorySearchResult[] {
-    return rows.map((row) => {
-      const result: MemorySearchResult = {
-        path: row.path,
-        startLine: row.start_line,
-        endLine: row.end_line,
-        score: 0,
-        snippet: row.text,
-        source: "memory",
-      };
-      if (typeof row.importance === "number") {
-        result.importance = row.importance;
-      }
-      if (typeof row.triggers === "string" && row.triggers.trim()) {
-        result.triggers = row.triggers.trim();
-      }
-      if (typeof row.project_key === "string" && row.project_key.trim()) {
-        result.projectKey = row.project_key.trim();
-      }
-      result.provenance = {
-        originClass: row.origin_class,
-        sessionKind: row.session_kind,
-        observedAt: row.observed_at,
-        ...(typeof row.supersedes_key === "string" ? { supersedesKey: row.supersedes_key } : {}),
-      };
-      return result;
+      return result.rows.map((row): MemorySearchResult => {
+        const candidate: MemorySearchResult = {
+          path: row.path,
+          startLine: row.start_line,
+          endLine: row.end_line,
+          score: 0,
+          snippet: row.text,
+          source: "memory",
+        };
+        Object.assign(candidate, projectRecallMetadata(row));
+        candidate.provenance = {
+          originClass: row.origin_class,
+          sessionKind: row.session_kind,
+          observedAt: row.observed_at,
+        };
+        if (typeof row.supersedes_key === "string") {
+          candidate.provenance.supersedesKey = row.supersedes_key;
+        }
+        return candidate;
+      });
     });
   }
 
@@ -229,7 +234,6 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
   protected async attachRecallMetadata<T extends MemoryRetrievalResult & { id: string }>(
     results: T[],
     signal?: AbortSignal,
-    sourceFilterList?: MemorySource[],
   ): Promise<T[]> {
     if (results.length === 0) {
       return results;
@@ -238,20 +242,21 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       candidates: results.map(({ id, path, source }) => ({ id, path, source })),
       includeMemoryMtimes: Boolean(this.memoryFiles),
     };
-    // The 50k-chunk benchmark regressed session-only latency by 3.22 ms when
-    // offloaded (10.87 -> 14.10 ms), beyond a worker hop. Keep its final freshness
-    // read local until retrieval and enrichment can share one admitted request.
-    const sessionOnly = sourceFilterList?.length === 1 && sourceFilterList[0] === "sessions";
-    const { rows: metadataById, sourceMtimes } = sessionOnly
-      ? readMemoryRecallData(this.db, query)
-      : await runMemoryRecallMetadata(
-          {
-            agentId: this.agentId,
-            databasePath: resolveUserPath(this.settings.store.databasePath),
-          },
-          query,
-          signal,
-        );
+    const metadata = await runMemoryRecallMetadata(
+      {
+        agentId: this.agentId,
+        databasePath: resolveUserPath(this.settings.store.databasePath),
+      },
+      query,
+      signal,
+    );
+    return this.applyRecallMetadata(results, metadata);
+  }
+
+  private applyRecallMetadata<T extends MemoryRetrievalResult & { id: string }>(
+    results: T[],
+    { rows: metadataById, sourceMtimes }: MemoryRecallData,
+  ): T[] {
     // The left-joined metadata reader omits only missing chunks. A forget may
     // delete one while the worker is reading its earlier snapshot.
     return results
@@ -260,13 +265,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
         const row = metadataById.get(entry.id);
         return Object.assign(entry, {
           sourceMtime: sourceMtimes[entry.source].get(entry.path),
-          ...(typeof row?.importance === "number" ? { importance: row.importance } : {}),
-          ...(typeof row?.triggers === "string" && row.triggers.trim()
-            ? { triggers: row.triggers.trim() }
-            : {}),
-          ...(typeof row?.project_key === "string" && row.project_key.trim()
-            ? { projectKey: row.project_key.trim() }
-            : {}),
+          ...projectRecallMetadata(row),
           ...(row?.provenance ? { provenance: row.provenance } : {}),
         });
       });
@@ -279,6 +278,7 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
     sourceFilterList?: MemorySource[],
   ): MemoryKeywordWorkerQuery {
     return {
+      includeRecallMetadata: options?.fuseRecallMetadata,
       body: {
         ftsTable: FTS_TABLE,
         query,
@@ -354,37 +354,44 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       [bodyResults.map((entry) => Object.assign(entry, { pathScore: 0 })), pathResults],
       exactPathQuery,
     );
-    return this.limitKeywordSearchHits(merged, limit);
+    const results = this.limitKeywordSearchHits(merged, limit);
+    return result.recallData ? this.applyRecallMetadata(results, result.recallData) : results;
   }
 
   protected async searchKeywordWithFallback(
     query: string,
     limit: number,
-    options: { boostFallbackRanking?: boolean; signal?: AbortSignal } | undefined,
+    options:
+      | { boostFallbackRanking?: boolean; signal?: AbortSignal; fuseRecallMetadata?: boolean }
+      | undefined,
     sourceFilterList: MemorySource[],
     initialResult?: MemoryKeywordWorkerResult,
   ): Promise<KeywordSearchHit[]> {
+    // Fused probes exclude index mutations through selection; other searches
+    // refresh metadata after their final candidate merge to observe forget.
+    const enrich = (results: KeywordSearchHit[]) =>
+      options?.fuseRecallMetadata ? results : this.attachRecallMetadata(results, options?.signal);
     const fullQueryResults = initialResult
       ? this.resolveKeywordSearchResult(initialResult, query, limit)
       : await this.searchKeyword(query, limit, options, sourceFilterList);
     options?.signal?.throwIfAborted();
     const nonExactResults = fullQueryResults.filter((result) => result.exactPathSpecificity === 0);
     if (nonExactResults.length >= limit) {
-      return this.attachRecallMetadata(fullQueryResults, options?.signal, sourceFilterList);
+      return enrich(fullQueryResults);
     }
 
     // Supplement thin candidate pools for conversational queries, but cap the
     // extra FTS probes so long prompts cannot fan out into unbounded sqlite work.
     const fallbackTerms = this.resolveKeywordFallbackTerms(query);
     if (fallbackTerms.length === 0) {
-      return this.attachRecallMetadata(fullQueryResults, options?.signal, sourceFilterList);
+      return enrich(fullQueryResults);
     }
     const strictFtsQuery = buildFtsQuery(query)?.toLowerCase();
     const keywordFtsQuery = buildFtsQuery(fallbackTerms.join(" "))?.toLowerCase();
     if (fullQueryResults.length > 0 && strictFtsQuery === keywordFtsQuery) {
       // Expansion did not normalize this already-matching keyword query; OR
       // probes can only weaken its strict relevance before importance ranking.
-      return this.attachRecallMetadata(fullQueryResults, options?.signal, sourceFilterList);
+      return enrich(fullQueryResults);
     }
 
     const settled = await Promise.allSettled(
@@ -406,15 +413,11 @@ export abstract class MemoryKeywordRetrieval extends MemoryProviderLifecycle {
       }
       return result.value;
     });
-    // Enrich only the retained candidates after all probes deduplicate. Provenance
-    // and recall annotations share one read under the search generation lease.
-    return this.attachRecallMetadata(
+    return enrich(
       this.limitKeywordSearchHits(
         this.mergeKeywordSearchHits([fullQueryResults, ...resultSets], query),
         limit,
       ),
-      options?.signal,
-      sourceFilterList,
     );
   }
 

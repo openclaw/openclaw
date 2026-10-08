@@ -1,3 +1,4 @@
+import { threadId } from "node:worker_threads";
 import { decodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import type {
   UsageCostWorkerInput,
@@ -93,9 +94,46 @@ serveOwnedWorkerTasks(
     const readRequest = async (): Promise<
       SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]
     > => {
+      if (request.kind === "transcript-search") {
+        if (!channel) {
+          throw new Error("Transcript search requires its host status channel");
+        }
+        const { searchSessionTranscriptsReadOnlySync, isSessionTranscriptSearchCurrentSync } =
+          await import("./session-transcript-search.js");
+        const options = {
+          ...request.database,
+          env: cloneEnvWithPlatformSemantics(request.params.env ?? process.env),
+        };
+        const { found, revision, ...result } = searchSessionTranscriptsReadOnlySync(
+          request.params,
+          options,
+        );
+        let indexing = false;
+        if (found) {
+          // Keep the connection in this task while the host checks its writer's status.
+          // A second pool request can run on another connection with an unrelated revision.
+          const status = await channel.request("transcript-index-status");
+          try {
+            if (typeof status.input !== "boolean") {
+              throw new Error("Invalid transcript search index status");
+            }
+            indexing =
+              status.input ||
+              revision === undefined ||
+              !isSessionTranscriptSearchCurrentSync(revision, options);
+          } finally {
+            status.consumed();
+          }
+        }
+        return { kind: request.kind, result: { ...result, indexing } };
+      }
       if (isSessionHistoryReadOperation(request)) {
         const execute = await prepareSessionHistoryReadOperation(request);
         return execute();
+      }
+      if (request.kind === "session-cleanup") {
+        const { readSessionCleanupSnapshot } = await import("./cleanup-service-read.worker.js");
+        return readSessionCleanupSnapshot(request);
       }
       if (request.kind === "lifecycle-artifact-plan") {
         const { readSessionLifecycleArtifactCleanup } =
@@ -168,17 +206,12 @@ serveOwnedWorkerTasks(
       if (request.kind === "session-pending-archives") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
-        const { runSqliteDeferredTransactionSync } =
-          await import("../../infra/sqlite-transaction.js");
         const { hasPendingSessionTranscriptArchives } =
           await import("./session-accessor.sqlite-archive-store-kernel.js");
-        const result = withOpenClawAgentDatabaseReadOnly(
-          (database) =>
-            runSqliteDeferredTransactionSync(database.db, () =>
-              hasPendingSessionTranscriptArchives(database),
-            ),
-          { ...request.database, env: cloneEnvWithPlatformSemantics(request.env) },
-        );
+        const result = withOpenClawAgentDatabaseReadOnly(hasPendingSessionTranscriptArchives, {
+          ...request.database,
+          env: cloneEnvWithPlatformSemantics(request.env),
+        });
         return {
           kind: "session-pending-archives" as const,
           pending: result.found && result.value,
@@ -272,6 +305,21 @@ serveOwnedWorkerTasks(
         const { readSessionRowDatabaseFacts } = await import("./session-entry-read.worker.js");
         return readSessionRowDatabaseFacts(request);
       }
+      if (request.kind === "session-maintenance-read") {
+        const { readSessionMaintenanceInWorker } =
+          await import("./session-accessor.sqlite-maintenance-transaction.js");
+        return {
+          kind: "session-maintenance-read" as const,
+          result: readSessionMaintenanceInWorker({
+            ...request.plan,
+            databaseOptions: {
+              ...request.database,
+              env: cloneEnvWithPlatformSemantics(request.env),
+            },
+          }),
+          workerThreadId: threadId,
+        };
+      }
       if (request.kind === "session-entry-current") {
         const { readSessionEntryCurrentFacts } = await import("./session-entry-read.worker.js");
         return readSessionEntryCurrentFacts(request);
@@ -324,7 +372,7 @@ serveOwnedWorkerTasks(
         const { readSessionEntryList } = await import("./session-entry-read.worker.js");
         return {
           kind: "session-entry-list" as const,
-          entries: readSessionEntryList(request),
+          ...readSessionEntryList(request),
         };
       }
       if (request.kind === "session-store-projection") {
@@ -345,6 +393,11 @@ serveOwnedWorkerTasks(
             request,
           ),
         };
+      }
+      if (request.kind === "voice-sessions") {
+        const { readOpenVoiceSessions } =
+          await import("../../talk/client-voice-session-lookup.worker.js");
+        return readOpenVoiceSessions({ ...request.database, env: request.env }, request.request);
       }
       if (request.kind === "usage-cache") {
         const { readSessionCostUsageCache } =
@@ -380,34 +433,34 @@ serveOwnedWorkerTasks(
           await import("../../state/openclaw-agent-db-readonly.js");
         const { runSqliteDeferredTransactionSync } =
           await import("../../infra/sqlite-transaction.js");
-        const {
-          hasSessionsNeedingTranscriptIndexReconcile,
-          hasOrphanedTranscriptIndexRows,
-          sessionTranscriptIndexNeedsReconcile,
-        } = await import("./session-transcript-index.js");
+        const { sessionTranscriptIndexNeedsReconcile } =
+          await import("./session-transcript-index.js");
         const result = withOpenClawAgentDatabaseReadOnly(
           ({ db }) =>
             runSqliteDeferredTransactionSync(db, () =>
-              request.sessionId !== undefined
-                ? sessionTranscriptIndexNeedsReconcile(db, request.sessionId)
-                : hasSessionsNeedingTranscriptIndexReconcile(db) ||
-                  hasOrphanedTranscriptIndexRows(db),
+              sessionTranscriptIndexNeedsReconcile(db, request.sessionId),
             ),
           { ...request.database, env: request.env },
         );
-        return result.found
-          ? result.value
-          : request.sessionId === undefined && result.reason === "schema-missing";
+        return result.found && result.value;
       }
       if (request.kind === "session-members") {
         const { withOpenClawAgentDatabaseReadOnly } =
           await import("../../state/openclaw-agent-db-readonly.js");
-        const { listSessionMembersInDatabase } = await import("./session-sharing-store.kernel.js");
+        const { readSessionMembersInDatabase } = await import("./session-sharing-store.kernel.js");
+        const { readWithCanonicalSessionReaderContinuation } =
+          await import("./session-canonical-key.js");
         const result = withOpenClawAgentDatabaseReadOnly(
-          (database) => listSessionMembersInDatabase(database, request.sessionKey),
+          (database) =>
+            readWithCanonicalSessionReaderContinuation(database, request.continuation, () =>
+              readSessionMembersInDatabase(database, request.sessionKey),
+            ),
           { ...request.database, env: request.env },
         );
-        return result.found ? result.value : [];
+        return {
+          kind: "session-members" as const,
+          ...(result.found ? result.value : { entry: undefined, members: [] }),
+        };
       }
       if (request.kind === "session-suggestions") {
         const { withOpenClawAgentDatabaseReadOnly } =
@@ -599,7 +652,10 @@ serveOwnedWorkerTasks(
       if (request?.kind !== "close") {
         throw new Error("Session reader cleanup requires captured physical paths");
       }
-      releaseReadValidation?.(request.candidates);
+      releaseReadValidation?.(
+        request.candidates,
+        request.deleted ? undefined : request.retainedPaths,
+      );
       pruneClosedHistoryDatabaseScopes();
     },
   },

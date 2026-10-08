@@ -290,7 +290,7 @@ export function resolveTranscriptSourceOwnership(params: {
   const providerSource = ownership
     ? { ...sourceForResolution, accountId: resolvedAccountId }
     : sourceForResolution;
-  if (params.configuredLifecycle && ownership && !providerSource.accountId?.trim()) {
+  if (params.configuredLifecycle && ownership && !resolvedAccountId) {
     throw new Error(
       `transcripts provider ${params.provider.id} could not resolve an account for configured auto-start`,
     );

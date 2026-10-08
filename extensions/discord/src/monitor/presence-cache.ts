@@ -9,16 +9,12 @@ import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 const MAX_PRESENCE_PER_ACCOUNT = 5000;
 const presenceCache = new Map<string, Map<string, GatewayPresenceUpdate>>();
 
-function resolveAccountKey(accountId?: string): string {
-  return accountId ?? "default";
-}
-
 export function setPresence(
   accountId: string | undefined,
   userId: string,
   data: GatewayPresenceUpdate,
 ): void {
-  const accountKey = resolveAccountKey(accountId);
+  const accountKey = accountId ?? "default";
   let accountCache = presenceCache.get(accountKey);
   if (!accountCache) {
     accountCache = new Map();
@@ -32,12 +28,12 @@ export function getPresence(
   accountId: string | undefined,
   userId: string,
 ): GatewayPresenceUpdate | undefined {
-  return presenceCache.get(resolveAccountKey(accountId))?.get(userId);
+  return presenceCache.get(accountId ?? "default")?.get(userId);
 }
 
 export function clearPresences(accountId?: string): void {
   if (accountId) {
-    presenceCache.delete(resolveAccountKey(accountId));
+    presenceCache.delete(accountId);
     return;
   }
   presenceCache.clear();

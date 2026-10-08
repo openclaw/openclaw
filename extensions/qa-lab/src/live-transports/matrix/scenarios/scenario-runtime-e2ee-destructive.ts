@@ -25,7 +25,10 @@ import {
   runMatrixQaCliJson,
   type MatrixQaCliRuntime,
 } from "./scenario-runtime-e2ee-destructive-recovery.js";
-import { createMatrixQaE2eeActorClient } from "./scenario-runtime-e2ee-shared.js";
+import {
+  createMatrixQaE2eeActorClient,
+  registerMatrixQaE2eeScenarioAccount,
+} from "./scenario-runtime-e2ee-shared.js";
 import {
   corruptMatrixQaCliIdbSnapshot,
   deleteMatrixQaServerRoomKeyBackup,
@@ -61,38 +64,16 @@ async function cleanupMatrixQaTempDevices(
   }
 }
 
-function requireMatrixQaRegistrationToken(context: MatrixQaScenarioContext) {
-  const token = context.registrationToken?.trim();
-  if (!token) {
-    throw new Error("Matrix E2EE destructive QA scenarios require a registration token");
-  }
-  return token;
-}
-
 async function registerMatrixQaDestructiveOwner(
   context: MatrixQaScenarioContext,
   scenarioId: MatrixQaE2eeScenarioId,
 ) {
-  const localpartSuffix = scenarioId
-    .replace(/^matrix-e2ee-/, "")
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 24);
-  const account = await createMatrixQaClient({ baseUrl: context.baseUrl }).registerWithToken({
+  return await registerMatrixQaE2eeScenarioAccount({
+    context,
     deviceName: "OpenClaw Matrix QA Destructive Owner",
-    localpart: `qa-destructive-${localpartSuffix}-${randomUUID().replaceAll("-", "").slice(0, 8)}`,
-    password: `matrix-qa-${randomUUID()}`,
-    registrationToken: requireMatrixQaRegistrationToken(context),
+    kind: "destructive",
+    scenarioId,
   });
-  if (!account.deviceId) {
-    throw new Error(
-      `Matrix destructive QA registration for ${scenarioId} did not return a device id`,
-    );
-  }
-  return {
-    ...account,
-    deviceId: account.deviceId,
-  };
 }
 
 async function ensureMatrixQaOwnerReady(params: {

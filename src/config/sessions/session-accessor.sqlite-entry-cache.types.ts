@@ -1,8 +1,11 @@
+import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { SessionEntryMaintenanceAgeChange } from "./session-accessor.sqlite-maintenance-age.js";
+import type { SessionMembershipFact } from "./session-membership-facts.types.js";
+import type { SessionTranscriptWatermark } from "./session-transcript-context-version.types.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
@@ -114,6 +117,13 @@ export type PreparedSessionEntryChanges = {
   source: SessionEntryPublicationSource;
   entries: ReadonlyMap<string, SessionEntry>;
   sharing?: ReadonlyMap<string, SessionSharingEntry>;
+  projection?: ReadonlyMap<string, SessionEntryProjectionFacts>;
+};
+
+export type SessionEntryProjectionFacts = {
+  membership: SessionMembershipFact;
+  hasBoard: boolean;
+  activitySummaryWatermark: SessionTranscriptWatermark | undefined;
 };
 
 export type SessionEntryReplacementPublication = {
@@ -123,9 +133,11 @@ export type SessionEntryReplacementPublication = {
   current: Map<string, SessionEntry>;
   ageChanges: SessionEntryMaintenanceAgeChange[];
   source?: SessionEntryPublicationSource;
+  projection?: ReadonlyMap<string, SessionEntryProjectionFacts>;
   changedKeys: string[];
   membershipInvalidatedKeys: string[];
   sharingUnchangedKeys: string[];
+  generationUnchangedKeys: string[];
 };
 
 export type CreationDatabase =
@@ -135,7 +147,7 @@ export type CreationDatabase =
       agentId: string | undefined;
     }
   | {
-      kind: "file";
+      kind: "file" | "actor";
       path: string;
       agentId: string;
       databaseIdentity: string;
@@ -172,9 +184,12 @@ export type SessionEntryPublicationRecord = {
 export type PendingSessionEntryPublication = {
   superseded: Map<string, Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined>;
   metadataSuperseded: Set<string>;
+  projectionSuperseded: Set<string>;
   ownerChanges: Map<string, Extract<SessionRowFacts, { kind: "owner" }>>;
   membershipInvalidated: Set<string>;
   sharingUnchanged: Set<string>;
+  /** Keys whose committed sessionId and lifecycleRevision are unchanged by this publication. */
+  generationUnchanged: Set<string>;
   settled: boolean;
   completion: Promise<void>;
 };
@@ -183,4 +198,51 @@ export function readSessionEntryCreationIdentity(creation: CreationRecord): Data
   return creation.source.kind === "native"
     ? creation.source.database.db
     : creation.source.databaseIdentity;
+}
+
+export function assertSessionEntryCreationCurrent(
+  creation: CreationRecord | undefined,
+): asserts creation is CreationRecord {
+  if (!creation?.active) {
+    throw new Error("Session creation publication owner is no longer current");
+  }
+  const source = creation.source;
+  if (source.kind !== "native") {
+    source.assertCurrent();
+  } else if (!source.database.db.isOpen || source.database.agentId !== source.agentId) {
+    throw new Error("Session creation publication owner is no longer current");
+  }
+}
+
+export type SessionEntryCreationTarget = {
+  agentId: string;
+  sessionKey: string;
+  paths: ReadonlySet<string>;
+  databaseIdentity?: string;
+};
+
+export function assertSessionEntryCreationTarget(
+  creation: CreationRecord | undefined,
+  target: SessionEntryCreationTarget,
+): void {
+  assertSessionEntryCreationCurrent(creation);
+  const sourcePath =
+    creation.source.kind === "native" ? creation.source.database.path : creation.source.path;
+  const matchesDatabaseIdentity =
+    creation.source.kind !== "native" &&
+    target.databaseIdentity ===
+      (creation.source.kind === "actor"
+        ? creation.source.databaseIdentity
+        : `file:${creation.source.databaseIdentity}`);
+  const matchesTarget =
+    target.databaseIdentity !== undefined
+      ? matchesDatabaseIdentity
+      : target.paths.has(path.resolve(sourcePath));
+  if (
+    creation.agentId !== target.agentId ||
+    creation.sessionKey !== target.sessionKey ||
+    !matchesTarget
+  ) {
+    throw new Error("Session creation publication owner is no longer current");
+  }
 }

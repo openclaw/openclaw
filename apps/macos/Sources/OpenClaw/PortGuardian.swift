@@ -510,24 +510,12 @@ actor PortGuardian {
         mode: AppState.ConnectionMode,
         tunnelHealthy: Bool?) -> PortReport
     {
-        let expectedDesc: String
-        let okPredicate: (Listener) -> Bool
-        let expectedCommands = ["node", "openclaw", "tsx", "pnpm", "bun"]
-
-        switch mode {
-        case .remote:
-            expectedDesc = "Remote gateway (SSH tunnel, Docker, or direct)"
-            okPredicate = { _ in true }
-        case .local:
-            expectedDesc = "Gateway websocket (node/tsx)"
-            okPredicate = { listener in
-                let c = listener.command.lowercased()
-                return expectedCommands.contains { c.contains($0) }
-            }
-        case .unconfigured:
-            expectedDesc = "Gateway not configured"
-            okPredicate = { _ in false }
+        let expectedDesc = switch mode {
+        case .remote: "Remote gateway (SSH tunnel, Docker, or direct)"
+        case .local: "Gateway websocket (node/tsx)"
+        case .unconfigured: "Gateway not configured"
         }
+        let expectedCommands = ["node", "openclaw", "tsx", "pnpm", "bun"]
 
         if listeners.isEmpty {
             let text = "Nothing is listening on \(port) (\(expectedDesc))."
@@ -536,11 +524,14 @@ actor PortGuardian {
 
         let tunnelUnhealthy = mode == .remote && tunnelHealthy == false
         let reportListeners = listeners.map { listener in
-            ReportListener(
+            let expected = mode == .remote || mode == .local && expectedCommands.contains {
+                listener.command.lowercased().contains($0)
+            }
+            return ReportListener(
                 pid: listener.pid,
                 command: listener.command,
                 fullCommand: listener.fullCommand,
-                expected: okPredicate(listener) && !tunnelUnhealthy)
+                expected: expected && !tunnelUnhealthy)
         }
 
         let offenders = reportListeners.filter { !$0.expected }

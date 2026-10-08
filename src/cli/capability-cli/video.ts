@@ -4,10 +4,11 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { Command } from "commander";
-import { resolveAgentModelPrimaryValue } from "../../config/model-input.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEnumOptionParser } from "../../shared/enum-option.js";
+import { registerMediaUnderstandingCommand } from "./media-understanding-command.js";
 import type { CapabilityEnvelope } from "./metadata.js";
 import { formatEnvelopeForText } from "./output.js";
 import { registerLocalProvidersCommand, runCapabilityCommand } from "./providers-command.js";
@@ -93,7 +94,6 @@ export function registerVideoCapabilityCommands(capability: Command): void {
     .action((opts, command) =>
       runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
         const {
-          parseOptionalFiniteNumber,
           parseOptionalTimeoutMs,
           resolveCapabilityAgentOption,
           requireProviderModelOverride,
@@ -104,7 +104,10 @@ export function registerVideoCapabilityCommands(capability: Command): void {
         const model = opts.model as string | undefined;
         const output = opts.output as string | undefined;
         const resolution = parseVideoOption(opts.resolution, VIDEO_RESOLUTIONS, "video resolution");
-        const durationSeconds = parseOptionalFiniteNumber(opts.duration, "--duration");
+        const durationSeconds = parseStrictFiniteNumber(opts.duration);
+        if (opts.duration !== undefined && durationSeconds === undefined) {
+          throw new Error("--duration must be a finite number");
+        }
         const timeoutMs = parseOptionalTimeoutMs(opts.timeoutMs);
         const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
         const { generateVideo } = await import("../../video-generation/runtime.js");
@@ -217,89 +220,17 @@ export function registerVideoCapabilityCommands(capability: Command): void {
       }),
     );
 
-  videoCommand
-    .command("describe")
-    .description("Describe one video file")
-    .requiredOption("--file <path>", "Video file")
-    .option("--agent <id>", "Agent whose model and auth state should be used")
-    .option("--model <provider/model>", "Model override")
-    .option("--json", "Output JSON", false)
-    .action((opts, command) =>
-      runCapabilityCommand(opts.json, formatEnvelopeForText, async () => {
-        const {
-          requireProviderModelOverride,
-          resolveLocalCapabilityAgent,
-          resolveCapabilityAgentOption,
-        } = await import("./shared.js");
-        const file = String(opts.file);
-        const agent = resolveCapabilityAgentOption(command, opts.agent);
-        const { getModelsCommandSecretTargetIds } = await import("../command-secret-targets.js");
-        const { describeVideoFile } = await import("../../media-understanding/runtime.js");
-        const { cfg, agentId, agentDir } = await resolveLocalCapabilityAgent({
-          commandName: "infer video.describe",
-          targetIds: getModelsCommandSecretTargetIds(),
-          agent,
-          surface: "infer video describe",
-        });
-        const activeModel = requireProviderModelOverride(opts.model as string | undefined);
-        const result = await describeVideoFile({
-          filePath: path.resolve(file),
-          cfg,
-          agentId,
-          agentDir,
-          activeModel,
-        });
-        if (!result.text) {
-          throw new Error(`No description returned for video: ${path.resolve(file)}`);
-        }
-        return {
-          ok: true,
-          capability: "video.describe",
-          transport: "local" as const,
-          provider: result.provider,
-          model: result.model,
-          attempts: [],
-          outputs: [{ path: path.resolve(file), text: result.text, kind: "video.description" }],
-        } satisfies CapabilityEnvelope;
-      }),
-    );
+  registerMediaUnderstandingCommand(videoCommand, "video");
 
   registerLocalProvidersCommand(
     videoCommand,
     "List video generation and description providers",
     async (cfg, agentId) => {
-      const { providerHasGenericConfig, resolveSelectedProviderFromModelRef } =
-        await import("./shared.js");
-      const { listRuntimeVideoGenerationProviders } =
-        await import("../../video-generation/runtime.js");
-      const { buildMediaUnderstandingRegistry } =
-        await import("../../media-understanding/provider-registry.js");
-      const selectedGenerationProvider = resolveSelectedProviderFromModelRef(
-        resolveAgentModelPrimaryValue(cfg.agents?.defaults?.mediaModels?.video),
-      );
+      const { listGenerationProviders, listUnderstandingProviders } =
+        await import("./media-providers.js");
       return {
-        generation: listRuntimeVideoGenerationProviders({ config: cfg }).map((provider) => ({
-          available: true,
-          configured:
-            selectedGenerationProvider === provider.id ||
-            providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
-          selected: selectedGenerationProvider === provider.id,
-          id: provider.id,
-          label: provider.label,
-          defaultModel: provider.defaultModel,
-          models: provider.models ?? [],
-          capabilities: provider.capabilities,
-        })),
-        description: [...buildMediaUnderstandingRegistry(undefined, cfg).values()]
-          .filter((provider) => provider.capabilities?.includes("video"))
-          .map((provider) => ({
-            available: true,
-            configured: providerHasGenericConfig({ cfg, providerId: provider.id, agentId }),
-            selected: false,
-            id: provider.id,
-            capabilities: provider.capabilities,
-            defaultModels: provider.defaultModels,
-          })),
+        generation: await listGenerationProviders("video", cfg, agentId),
+        description: await listUnderstandingProviders("video", cfg, agentId),
       };
     },
   );

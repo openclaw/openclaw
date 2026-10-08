@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { WorkerLiveEvent } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import {
   mergeAgentRunAttemptTerminal,
@@ -10,6 +11,11 @@ import { hasModelFallbackStop } from "../agents/failover-error.js";
 import type { AgentMessage } from "../agents/runtime/index.js";
 import type { AgentSessionEvent } from "../agents/sessions/agent-session.js";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
+import {
+  bindAgentAssistantSource,
+  readAgentAssistantSource,
+  type AgentAssistantSourceReceipt,
+} from "../infra/agent-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   resolveAssistantMessagePhase,
@@ -154,13 +160,7 @@ export type WorkerLiveClient = {
   emitTerminal: (event: WorkerLiveEvent) => Promise<void>;
 };
 
-type WorkerLiveRuntime = {
-  handleSessionEvent: (event: AgentSessionEvent) => void;
-  enqueueRunFailure: (failure: { aborted: boolean; error: Error }) => void;
-  emitTerminal: () => Promise<void>;
-};
-
-export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRuntime {
+export function createWorkerLiveRuntime(client: WorkerLiveClient) {
   let previewEnabled = true;
   const enqueueLive = (event: WorkerLiveEvent) => {
     if (previewEnabled) {
@@ -199,7 +199,7 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
   };
   let streamedText = "";
   let streamedPhase: AssistantPhase | undefined;
-  let assistantMessageIndex = 0;
+  let assistantSource: AgentAssistantSourceReceipt | undefined;
   let streamedThinking = "";
   const emitAssistantSnapshot = (message: AgentMessage, complete = false) => {
     const { text, phase } = readAssistantSnapshot(message);
@@ -219,15 +219,25 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
         ...(mediaUrls?.length ? { mediaUrls } : {}),
         ...(replace ? { replace: true as const } : {}),
         ...(phase ? { phase } : {}),
-        // Provider signatures can arrive only at text_end. Message lifecycle,
-        // not those late ids, owns this cumulative snapshot's stable scope.
-        itemId: `assistant-${assistantMessageIndex}`,
+        itemId: readAgentAssistantSource(message)?.itemId,
       },
     });
     streamedText = text;
     streamedPhase = phase;
   };
   const handleSessionEvent = (event: AgentSessionEvent) => {
+    if (
+      (event.type === "message_start" ||
+        event.type === "message_update" ||
+        event.type === "message_end") &&
+      event.message.role === "assistant"
+    ) {
+      if (event.type === "message_start" || !assistantSource) {
+        assistantSource = { itemId: randomUUID() };
+      }
+      // Persistence still needs occurrence identity after optional previews degrade.
+      bindAgentAssistantSource(event.message, assistantSource);
+    }
     // Disabled previews no longer need snapshots or diagnostics, but agent_end
     // still owns the terminal result deferred until the transcript is durable.
     if (!previewEnabled && event.type !== "agent_end") {
@@ -238,7 +248,6 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
       return;
     }
     if (event.type === "message_start" && event.message.role === "assistant") {
-      assistantMessageIndex += 1;
       streamedText = "";
       streamedPhase = undefined;
       streamedThinking = "";

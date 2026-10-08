@@ -1,5 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
+import { parseSqliteTableDefinition } from "../infra/sqlite-schema-contract-assembly.js";
 import { assertSqliteSchemaContains } from "../infra/sqlite-schema-contract.js";
+import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   ORDERED_STARTUP_ADDITIVE_STATE_COLUMNS as columns,
@@ -14,7 +16,6 @@ import {
   ensureOperatorApprovalResolutionRefs,
   repairLegacySubagentExecutionPayloads,
   repairLegacySubagentRetainedResults,
-  repairLegacySubagentSuspensionReasons,
 } from "./openclaw-state-db-legacy-backfills.js";
 import { ensureColumn, tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
@@ -125,6 +126,10 @@ export function reconstructAgentDeletionJournalSchema(
 }
 
 export function ensureAgentDatabaseLeaseSchema(database: DatabaseSync): void {
+  const sql = getAdmittedSqliteSchemaFacts(database)?.tableSql.get("agent_database_leases");
+  if (sql && parseSqliteTableDefinition(sql, "agent_database_leases").columns.has("provenance")) {
+    return;
+  }
   ensureTable(database, "agent_database_leases");
   ensureColumn(database, "agent_database_leases", "provenance TEXT");
 }
@@ -291,7 +296,6 @@ export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | 
   ensureColumns(db, columns.taskRequester);
   ensureColumns(db, columns.taskRunDetails);
   if (repairHistoricalRows) {
-    repairLegacySubagentSuspensionReasons(db);
     repairLegacySubagentExecutionPayloads(db);
     repairLegacySubagentRetainedResults(db);
   }

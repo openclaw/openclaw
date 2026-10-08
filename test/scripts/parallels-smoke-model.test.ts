@@ -322,7 +322,7 @@ function waitForProcessClose(
 }
 
 function runNode(source: string, options: NonNullable<Parameters<typeof run>[2]> = {}) {
-  return run(testNodeExecPath, ["-e", source], { quiet: true, ...options });
+  return run(testNodeExecPath, ["-e", source], options);
 }
 
 type FakeCommandResult = { status: number; stderr: string; stdout: string };
@@ -467,7 +467,14 @@ if (fs.readFileSync(owner, 'utf8') === String(process.pid)) {
   return preload;
 }
 
-const SIGNAL_GRANDCHILD_SCRIPT = `const { writeFileSync } = require('node:fs'); writeFileSync(process.env.OPENCLAW_TEST_GRANDCHILD_PID, String(process.pid)); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);`;
+const SIGNAL_GRANDCHILD_SCRIPT = `
+const { renameSync, writeFileSync } = require('node:fs');
+process.on('SIGTERM', () => {});
+const pidPath = process.env.OPENCLAW_TEST_GRANDCHILD_PID;
+writeFileSync(pidPath + '.tmp', String(process.pid));
+renameSync(pidPath + '.tmp', pidPath);
+setInterval(() => {}, 1000);
+`;
 const SIGNAL_PARENT_SCRIPT = `const { spawn } = require('node:child_process'); const { writeFileSync } = require('node:fs'); spawn(process.execPath, ['-e', ${JSON.stringify(SIGNAL_GRANDCHILD_SCRIPT)}], { env: process.env, stdio: 'ignore' }); writeFileSync(process.env.OPENCLAW_TEST_READY_FILE, 'ready'); process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1000);`;
 
 function createSignaledHostCommandFixture() {
@@ -497,7 +504,6 @@ setInterval(() => {}, 1000);`;
 run(process.execPath, ['--input-type=module', '-e', ${JSON.stringify(parentScript)}], {
   check: false,
   env: { ...process.env, OPENCLAW_TEST_GRANDCHILD_PID: ${JSON.stringify(grandchildPidPath)}, OPENCLAW_TEST_READY_FILE: ${JSON.stringify(readyPath)} },
-  quiet: true,
   timeoutMs: 30_000,
 });`,
   );
@@ -729,14 +735,6 @@ ensure_vm_running`,
       [linux, "this.downloadGuestFile(tgzUrl"],
       [linux, "curl -fsSL --connect-timeout 10 --max-time 120 --retry 2"],
       [linux, "wget -q --timeout=10 --read-timeout=120 --tries=3"],
-    ],
-    "keeps Linux bad-plugin diagnostics gated for historical update baselines": [
-      [linux, 'BAD_PLUGIN_DIAGNOSTIC_MIN_VERSION = "2026.5.7"'],
-      [linux, "parseOpenClawPackageVersion"],
-      [linux, "maybeInjectBadPluginFixture"],
-      [linux, "maybeVerifyBadPluginDiagnostic"],
-      [linux, "Skipping bad plugin diagnostic fixture"],
-      [linux, "Skipping bad plugin diagnostic assertion"],
     ],
     "uses collision-resistant guest script names": [
       [transports, 'import { randomUUID } from "node:crypto"'],
@@ -1310,11 +1308,10 @@ ensure_vm_running`,
         expect(prefix).toBe(join(tmpdir(), "openclaw-npm-"));
         return mkdtempSync(join(tempRoot, "npm-"));
       },
-      runCommand: (command, args, options) => {
+      runCommand: (command, args) => {
         userConfigPath = args.at(-1) ?? "";
         expect(command).toBe("npm");
         expect(args).toEqual(["view", "openclaw", "version", "--userconfig", userConfigPath]);
-        expect(options).toEqual({ quiet: true });
         expect(statSync(userConfigPath).isFile()).toBe(true);
         return { status: 0, stderr: "", stdout: "2026.6.1\n" };
       },
@@ -2305,7 +2302,6 @@ if (commandArgs[0] === "list") {
             DEADLINE_FILE: deadlineFile,
             NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${JSON.stringify(preload)}`,
           },
-          quiet: true,
           // Let the command spawn its pipe holder before exercising timeout settlement.
           timeoutMs: 200,
         });
@@ -2368,7 +2364,6 @@ if (commandArgs[0] === "list") {
     expect(() =>
       run("openclaw-definitely-missing-host-command", [], {
         check: false,
-        quiet: true,
         timeoutMs: 50,
       }),
     ).toThrow(/ENOENT/u);

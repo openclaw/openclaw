@@ -319,44 +319,27 @@ export function shouldFailClosedInterpreterPreflight(command: string): {
 
     if (/^python(?:3(?:\.\d+)?)?$/i.test(executable)) {
       const pythonInfoOnlyFlags = new Set(["-V", "--version", "-h", "--help"]);
-      if (argsLocal.some((arg) => pythonInfoOnlyFlags.has(arg))) {
-        return false;
-      }
-      if (
-        argsLocal.some(
-          (arg) =>
-            arg === "-c" ||
-            arg === "-m" ||
-            arg.startsWith("-c") ||
-            arg.startsWith("-m") ||
-            arg === "--check-hash-based-pycs",
-        )
-      ) {
-        return false;
-      }
-      return true;
+      return !argsLocal.some(
+        (arg) =>
+          pythonInfoOnlyFlags.has(arg) ||
+          arg.startsWith("-c") ||
+          arg.startsWith("-m") ||
+          arg === "--check-hash-based-pycs",
+      );
     }
 
     if (executable === "node") {
       const nodeInfoOnlyFlags = new Set(["-v", "--version", "-h", "--help", "-c", "--check"]);
-      if (argsLocal.some((arg) => nodeInfoOnlyFlags.has(arg))) {
-        return false;
-      }
-      if (
-        argsLocal.some(
-          (arg) =>
-            arg === "-e" ||
-            arg === "-p" ||
-            arg === "--eval" ||
-            arg === "--print" ||
-            arg.startsWith("--eval=") ||
-            arg.startsWith("--print=") ||
-            ((arg.startsWith("-e") || arg.startsWith("-p")) && arg.length > 2),
-        )
-      ) {
-        return false;
-      }
-      return true;
+      return !argsLocal.some(
+        (arg) =>
+          nodeInfoOnlyFlags.has(arg) ||
+          arg.startsWith("-e") ||
+          arg.startsWith("-p") ||
+          arg === "--eval" ||
+          arg === "--print" ||
+          arg.startsWith("--eval=") ||
+          arg.startsWith("--print="),
+      );
     }
 
     return false;

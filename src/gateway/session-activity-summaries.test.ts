@@ -265,6 +265,7 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     const first = complete.mock.calls[0]?.[0];
     const second = complete.mock.calls[1]?.[0];
     expect(first).toMatchObject({ model: "utility", provider: "test" });
+    expect(first?.purpose).toBe("session-activity-summary");
     expect(JSON.parse(first!.prompt).messages[0]).toContain("Outcome 0");
     expect(JSON.parse(first!.prompt).messages.at(-1)).toContain("Outcome 63");
     expect(JSON.parse(second!.prompt)).toMatchObject({ previousRecap: "Recap through batch 1." });
@@ -697,35 +698,46 @@ describe("Activity recap lifecycle with the canonical session store", () => {
         touchSessionEntry: false,
       });
     }
-    const preparations: Array<(value: typeof prepared) => void> = [];
-    prepare.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          preparations.push(resolve);
-        }),
-    );
+    const firstPreparations = createDeferred<typeof prepared>();
+    const nextPreparation = createDeferred<typeof prepared>();
+    const slotsOccupied = createDeferred();
+    const slotReused = createDeferred();
+    prepare
+      .mockImplementationOnce(() => firstPreparations.promise)
+      .mockImplementationOnce(() => {
+        slotsOccupied.resolve();
+        return firstPreparations.promise;
+      })
+      .mockImplementation(() => {
+        slotReused.resolve();
+        return nextPreparation.promise;
+      });
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       service.ensure(target);
       service.ensure(secondTarget);
       service.ensure(thirdTarget);
-      await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(2));
+      await withinTest(slotsOccupied.promise, testSignal);
+      expect(prepare).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(20_000);
       expect(view()?.state).toBe("updating");
       expect(prepare).toHaveBeenCalledTimes(2);
-      for (const resolve of preparations) {
-        resolve(prepared);
-      }
-      await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(3));
-      expect(complete).not.toHaveBeenCalled();
-      const disposal = service.dispose();
-      preparations[2]!(prepared);
-      await vi.advanceTimersByTimeAsync(0);
-      await disposal;
+      firstPreparations.resolve(prepared);
+      await withinTest(slotReused.promise, testSignal);
+      expect(prepare).toHaveBeenCalledTimes(3);
       expect(complete).not.toHaveBeenCalled();
     } finally {
-      vi.useRealTimers();
+      const disposal = service.dispose();
+      // A source read already in flight can still reach a mock during disposal.
+      firstPreparations.resolve(prepared);
+      nextPreparation.resolve(prepared);
+      try {
+        await disposal;
+      } finally {
+        vi.useRealTimers();
+      }
     }
+    expect(complete).not.toHaveBeenCalled();
   });
 
   it("keeps a replacement owner's pending status when the old service disposes", async () => {

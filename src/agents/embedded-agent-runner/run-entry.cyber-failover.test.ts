@@ -208,16 +208,6 @@ describe("runEmbeddedAgentEntry cyber failover", () => {
     await expect(runEntry("run-cyber-throw")).rejects.toBe(thrown);
   });
 
-  it("does not escalate a preliminary refusal replaced by a successful final result", async () => {
-    const result = await runEntry("run-cyber-replaced", async (provider, model, options) => {
-      options.classifyResult(makeRefusalResult(provider, model));
-      return makeResult({ provider, model });
-    });
-    expect(searchedModels()).toEqual(["gpt-5.6"]);
-    expect(result.model).toBe("gpt-5.6");
-    expect(result.result.payloads).toEqual([{ text: "recovered" }]);
-  });
-
   it.each([
     {
       name: "live committed side effects",

@@ -13,6 +13,7 @@ import type { HealthFinding } from "../flows/health-checks.js";
 import { publishFileNoClobber, syncDirectoryIfSupported } from "../infra/directory-durability.js";
 import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { shortenHomePath } from "../utils.js";
+import { noteDoctorMigrationResult } from "./doctor-migration-notes.js";
 import {
   describeToolsMdMergedBootstrapLimits,
   resolveToolsMdMigrationWorkspaceTargets,
@@ -79,7 +80,7 @@ async function assertSourceReadersPreserved(
   source: ToolsMdSource,
   destination: PosixFilePermissions,
 ): Promise<void> {
-  const current = await readMigrationFileSnapshot({ filePath: source.path, label: "TOOLS.md" });
+  const current = await readMigrationFileSnapshot(source.path);
   if (
     current.content !== source.content ||
     !current.stat ||
@@ -96,25 +97,26 @@ async function assertSourceReadersPreserved(
   }
 }
 
-async function readMigrationFileSnapshot(params: {
-  filePath: string;
-  label: string;
-  allowMissing?: boolean;
-}): Promise<MigrationFileSnapshot> {
+async function readMigrationFileSnapshot(
+  filePath: string,
+  allowMissing = false,
+): Promise<MigrationFileSnapshot> {
   let stat: syncFs.Stats;
   try {
-    stat = await fs.lstat(params.filePath);
+    stat = await fs.lstat(filePath);
   } catch (error) {
-    if (params.allowMissing && (error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (allowMissing && (error as NodeJS.ErrnoException).code === "ENOENT") {
       return { content: "" };
     }
     throw error;
   }
   if (!stat.isFile() || stat.nlink > 1) {
-    throw new Error(`${params.label} must be an unlinked regular file for automatic migration`);
+    throw new Error(
+      `${path.basename(filePath)} must be an unlinked regular file for automatic migration`,
+    );
   }
-  const file = await readRegularFile({ filePath: params.filePath });
-  const currentStat = await fs.lstat(params.filePath);
+  const file = await readRegularFile({ filePath });
+  const currentStat = await fs.lstat(filePath);
   if (
     file.stat.nlink !== 1 ||
     file.stat.dev !== stat.dev ||
@@ -122,7 +124,7 @@ async function readMigrationFileSnapshot(params: {
     currentStat.dev !== file.stat.dev ||
     currentStat.ino !== file.stat.ino
   ) {
-    throw new Error(`${params.label} changed while opening it for migration`);
+    throw new Error(`${path.basename(filePath)} changed while opening it for migration`);
   }
   return { content: file.buffer.toString("utf8"), stat: currentStat };
 }
@@ -140,11 +142,7 @@ async function readToolsMd(workspaceDir: string): Promise<ToolsMdSource | undefi
     );
   }
   const toolsPath = path.join(workspaceDir, DEFAULT_TOOLS_FILENAME);
-  const snapshot = await readMigrationFileSnapshot({
-    filePath: toolsPath,
-    label: "TOOLS.md",
-    allowMissing: true,
-  });
+  const snapshot = await readMigrationFileSnapshot(toolsPath, true);
   if (!snapshot.stat) {
     return undefined;
   }
@@ -157,39 +155,28 @@ async function readToolsMd(workspaceDir: string): Promise<ToolsMdSource | undefi
 }
 
 function appendWithSpacing(before: string, addition: string, after = ""): string {
-  const prefix =
-    before.length === 0 ? "" : before.endsWith("\n\n") ? "" : before.endsWith("\n") ? "\n" : "\n\n";
-  const suffix =
-    after.length === 0
-      ? ""
-      : addition.endsWith("\n\n")
-        ? ""
-        : addition.endsWith("\n")
-          ? "\n"
-          : "\n\n";
+  const spacing = (text: string) =>
+    text.endsWith("\n\n") ? "" : text.endsWith("\n") ? "\n" : "\n\n";
+  const prefix = before.length === 0 ? "" : spacing(before);
+  const suffix = after.length === 0 ? "" : spacing(addition);
   return `${before}${prefix}${addition}${suffix}${after}`;
 }
 
 function mergeToolsMdIntoAgentsMd(agentsContent: string, toolsContent: string): string {
   const mergedAgentsContent = rewriteLegacyAgentsToolsGuidance(agentsContent);
-  if (mergedAgentsContent.includes(MIGRATED_SUBSECTION_HEADING)) {
-    if (mergedAgentsContent.includes(toolsContent)) {
-      return mergedAgentsContent;
-    }
-    const headingIndex = mergedAgentsContent.indexOf(MIGRATED_SUBSECTION_HEADING);
-    const insertAt = headingIndex + MIGRATED_SUBSECTION_HEADING.length;
-    return appendWithSpacing(
-      mergedAgentsContent.slice(0, insertAt),
-      toolsContent,
-      mergedAgentsContent.slice(insertAt),
-    );
+  const headingIndex = mergedAgentsContent.indexOf(MIGRATED_SUBSECTION_HEADING);
+  if (headingIndex >= 0 && mergedAgentsContent.includes(toolsContent)) {
+    return mergedAgentsContent;
   }
-  const block = `${MIGRATED_SUBSECTION_HEADING}\n\n${toolsContent}`;
-  const toolsSection = findToolsSection(mergedAgentsContent);
-  if (!toolsSection) {
+  const block =
+    headingIndex >= 0 ? toolsContent : `${MIGRATED_SUBSECTION_HEADING}\n\n${toolsContent}`;
+  const insertAt =
+    headingIndex >= 0
+      ? headingIndex + MIGRATED_SUBSECTION_HEADING.length
+      : findToolsSection(mergedAgentsContent)?.insertAt;
+  if (insertAt === undefined) {
     return appendWithSpacing(mergedAgentsContent, `## Tools\n\n${block}`);
   }
-  const insertAt = toolsSection.insertAt;
   return appendWithSpacing(
     mergedAgentsContent.slice(0, insertAt),
     block,
@@ -260,11 +247,7 @@ async function writeAgentsAtomically(params: {
   content: string;
   importedSource?: ToolsMdSource;
 }): Promise<void> {
-  const snapshot = await readMigrationFileSnapshot({
-    filePath: params.agentsPath,
-    label: "AGENTS.md",
-    allowMissing: true,
-  });
+  const snapshot = await readMigrationFileSnapshot(params.agentsPath, true);
   if (snapshot.content !== params.expected) {
     throw new Error("AGENTS.md changed during TOOLS.md migration");
   }
@@ -295,11 +278,7 @@ async function writeAgentsAtomically(params: {
     }
     // Doctor is a single-operator flow. This final snapshot catches edits before
     // commit without retaining the retired cross-process claim protocol.
-    const current = await readMigrationFileSnapshot({
-      filePath: params.agentsPath,
-      label: "AGENTS.md",
-      allowMissing: true,
-    });
+    const current = await readMigrationFileSnapshot(params.agentsPath, true);
     if (
       current.content !== params.expected ||
       current.stat?.dev !== stat?.dev ||
@@ -345,10 +324,7 @@ async function recoverInterruptedAgentsWrite(agentsPath: string): Promise<void> 
 }
 
 async function removeToolsSource(source: ToolsMdSource, workspaceDir: string): Promise<void> {
-  const current = await readMigrationFileSnapshot({
-    filePath: source.path,
-    label: "TOOLS.md",
-  });
+  const current = await readMigrationFileSnapshot(source.path);
   if (sha256Hex(current.content) !== source.sha256) {
     throw new Error("TOOLS.md changed during migration");
   }
@@ -368,26 +344,18 @@ async function removeToolsSource(source: ToolsMdSource, workspaceDir: string): P
   await syncDirectoryIfSupported(workspaceDir);
 }
 
-function archivePathForSource(
-  agentId: string,
-  source: ToolsMdSource,
-  env: NodeJS.ProcessEnv,
-): string {
-  const safeAgentId = agentId.replace(/[^A-Za-z0-9._-]+/g, "-");
-  return path.join(
-    resolveStateDir(env),
-    "backups",
-    "tools-md-migration",
-    `${safeAgentId}-${source.sha256}.md`,
-  );
-}
-
 async function archiveSource(params: {
   agentId: string;
   source: ToolsMdSource;
   env: NodeJS.ProcessEnv;
-}): Promise<string> {
-  const archivePath = archivePathForSource(params.agentId, params.source, params.env);
+}): Promise<void> {
+  const safeAgentId = params.agentId.replace(/[^A-Za-z0-9._-]+/g, "-");
+  const archivePath = path.join(
+    resolveStateDir(params.env),
+    "backups",
+    "tools-md-migration",
+    `${safeAgentId}-${params.source.sha256}.md`,
+  );
   const archiveDir = path.dirname(archivePath);
   await fs.mkdir(archiveDir, { recursive: true, mode: 0o700 });
   const tempPath = `${archivePath}.doctor-writing-${process.pid}-${Date.now()}`;
@@ -409,7 +377,6 @@ async function archiveSource(params: {
       throw new Error(`TOOLS.md migration archive collision at ${archivePath}`, { cause: error });
     }
   }
-  return archivePath;
 }
 
 export async function collectToolsMdMigrationFindings(
@@ -434,13 +401,7 @@ export async function collectToolsMdMigrationFindings(
         });
         if (shouldMergeToolsMd(source.content)) {
           const agentsPath = path.join(target.workspaceDir, DEFAULT_AGENTS_FILENAME);
-          const agentsContent = (
-            await readMigrationFileSnapshot({
-              filePath: agentsPath,
-              label: "AGENTS.md",
-              allowMissing: true,
-            })
-          ).content;
+          const agentsContent = (await readMigrationFileSnapshot(agentsPath, true)).content;
           const mergedChars = mergeToolsMdIntoAgentsMd(agentsContent, source.content).length;
           for (const budget of describeToolsMdMergedBootstrapLimits({
             cfg,
@@ -497,13 +458,7 @@ export async function maybeMigrateToolsMd(params: {
       await archiveSource({ agentId: target.primaryAgentId, source, env });
       const agentsPath = path.join(target.workspaceDir, DEFAULT_AGENTS_FILENAME);
       await recoverInterruptedAgentsWrite(agentsPath);
-      const agentsContent = (
-        await readMigrationFileSnapshot({
-          filePath: agentsPath,
-          label: "AGENTS.md",
-          allowMissing: true,
-        })
-      ).content;
+      const agentsContent = (await readMigrationFileSnapshot(agentsPath, true)).content;
       const merged = shouldMerge
         ? mergeToolsMdIntoAgentsMd(agentsContent, source.content)
         : rewriteLegacyAgentsToolsGuidance(agentsContent);
@@ -515,10 +470,7 @@ export async function maybeMigrateToolsMd(params: {
           importedSource:
             shouldMerge && !agentsContent.includes(source.content) ? source : undefined,
         });
-        if (
-          (await readMigrationFileSnapshot({ filePath: agentsPath, label: "AGENTS.md" }))
-            .content !== merged
-        ) {
+        if ((await readMigrationFileSnapshot(agentsPath)).content !== merged) {
           throw new Error("AGENTS.md changed after TOOLS.md migration was written");
         }
       }
@@ -536,11 +488,6 @@ export async function maybeMigrateToolsMd(params: {
       );
     }
   }
-  if (changes.length > 0) {
-    note(changes.join("\n"), "TOOLS.md migration");
-  }
-  if (warnings.length > 0) {
-    note(warnings.join("\n"), "Doctor warnings");
-  }
+  noteDoctorMigrationResult({ changes, warnings }, { changesTitle: "TOOLS.md migration" });
   return { changes, warnings };
 }

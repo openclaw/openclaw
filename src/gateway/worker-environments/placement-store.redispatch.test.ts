@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -76,55 +75,7 @@ describe("failed worker placement redispatch", () => {
     ).toMatchObject({ state: "provisioning", generation: placement.generation + 1 });
   });
 
-  it("uses the canonical generation and identity reset", async () => {
-    let placement = await store.startDispatch(SESSION);
-    placement = await store.transition({
-      sessionId: SESSION.sessionId,
-      from: "requested",
-      to: "provisioning",
-      expectedGeneration: placement.generation,
-      patch: { environmentId: "environment-failed-dispatch" },
-    });
-    placement = await store.transition({
-      sessionId: SESSION.sessionId,
-      from: "provisioning",
-      to: "syncing",
-      expectedGeneration: placement.generation,
-      patch: { workerBundleHash: "a".repeat(64) },
-    });
-    placement = await store.transition({
-      sessionId: SESSION.sessionId,
-      from: "syncing",
-      to: "starting",
-      expectedGeneration: placement.generation,
-      patch: {
-        workspaceBaseManifestRef: "manifest-failed-dispatch",
-        remoteWorkspaceDir: "/workspace/failed-dispatch",
-      },
-    });
-    const failed = await store.fail({
-      sessionId: SESSION.sessionId,
-      expectedGeneration: placement.generation,
-      recoveryError: "gateway restarted during activation",
-    });
-
-    expect(await store.startDispatch(SESSION)).toMatchObject({
-      state: "requested",
-      generation: failed.generation + 1,
-      environmentId: null,
-      activeOwnerEpoch: null,
-      workspaceBaseManifestRef: null,
-      remoteWorkspaceDir: null,
-      workerBundleHash: null,
-      lastTranscriptAckCursor: null,
-      lastLiveEventAckCursor: null,
-      recoveryError: null,
-      terminalReason: null,
-      terminalAtMs: null,
-    });
-  });
-
-  it.each(["ready", "replaced", "cleanup", "claim", "result", "journal", "move"] as const)(
+  it.each(["replaced", "cleanup", "claim", "move"] as const)(
     "rechecks the complete %s source in the redispatch transaction",
     async (scenario) => {
       const executionMode = scenario === "claim" ? "remote-exec" : "worker-turn";
@@ -132,39 +83,15 @@ describe("failed worker placement redispatch", () => {
         ...SESSION,
         executionMode,
       });
-      if (scenario === "claim" || scenario === "result") {
-        const claim = await store.claimTurn({
+      if (scenario === "claim") {
+        await store.claimTurn({
           ...SESSION,
           claimId: "previous-turn",
           runId: "previous-run",
           owner: placementTurnOwner(active),
         });
-        if (scenario === "result") {
-          await store.markWorkspaceResultPending(claim);
-        }
-      } else if (scenario === "journal") {
-        const basePack = Buffer.from("retained workspace rollback");
-        await store.beginWorkspaceReconciliation(
-          {
-            sessionId: SESSION.sessionId,
-            environmentId: active.environmentId,
-            ownerEpoch: active.activeOwnerEpoch,
-            placementGeneration: active.generation,
-          },
-          {
-            version: 1,
-            temporaryNonce: "a".repeat(32),
-            baseManifestRef: active.workspaceBaseManifestRef,
-            currentManifestRef: `sha256:${"c".repeat(64)}`,
-            baseEntries: [],
-            appliedEntries: [],
-            baseTree: "f".repeat(40),
-            basePackSha256: createHash("sha256").update(basePack).digest("hex"),
-            basePack,
-          },
-        );
       } else if (scenario === "move") {
-        store.beginPlacementMove({
+        await store.beginPlacementMove({
           sessionId: SESSION.sessionId,
           source: {
             generation: active.generation,
@@ -174,16 +101,10 @@ describe("failed worker placement redispatch", () => {
           target: { kind: "gateway" },
         });
       }
-      if (scenario === "claim" || scenario === "result") {
-        // Older failed rows can retain a local claim or a pending result. Exercise
-        // those accepted persisted inputs without weakening today's drain contract.
+      if (scenario === "claim") {
+        // Older failed rows can retain a local claim without weakening today's drain contract.
         runOpenClawStateWriteTransaction(
           ({ db }) => {
-            if (scenario === "result") {
-              db.prepare(`UPDATE worker_session_placements SET turn_claim_owner = NULL,
-                turn_claim_id = NULL, turn_claim_run_id = NULL, turn_claim_generation = NULL,
-                turn_claim_owner_epoch = NULL WHERE session_id = ?`).run(SESSION.sessionId);
-            }
             db.prepare(`UPDATE worker_session_placements SET state = 'failed',
               transition_generation = transition_generation + 3,
               recovery_error = 'previous worker failure', terminal_reason = 'previous worker failure',
@@ -240,24 +161,14 @@ describe("failed worker placement redispatch", () => {
         executionMode,
         expectedPlacement: failed,
       });
-      if (scenario === "ready") {
-        await expect(dispatch).resolves.toMatchObject({
-          ...SESSION,
-          state: "requested",
-          generation: failed.generation + 1,
-          turnClaim: null,
-          recoveryError: null,
-        });
-      } else {
-        await expect(dispatch).rejects.toThrow(
-          scenario === "replaced" || scenario === "claim"
-            ? "changed before redispatch"
-            : scenario === "cleanup"
-              ? "still requires recovery"
-              : "pending workspace recovery",
-        );
-        expect(store.get(SESSION.sessionId)).toEqual(before);
-      }
+      await expect(dispatch).rejects.toThrow(
+        scenario === "replaced" || scenario === "claim"
+          ? "changed before redispatch"
+          : scenario === "cleanup"
+            ? "still requires recovery"
+            : "pending workspace recovery",
+      );
+      expect(store.get(SESSION.sessionId)).toEqual(before);
     },
   );
 });

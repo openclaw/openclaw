@@ -54,6 +54,7 @@ import {
   applySessionEntryExactReplacements,
 } from "./session-accessor.sqlite-replacement-projection.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
+import { addSessionMember } from "./session-sharing-store.native.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 
 it.each([false, true])(
@@ -69,7 +70,6 @@ it.each([false, true])(
       });
       let prepared = false;
       let current = true;
-      const native = vi.fn(() => []);
       const dispose = vi.fn();
       const prepare = vi.fn(async () => {
         prepared = true;
@@ -84,7 +84,7 @@ it.each([false, true])(
           dispose,
         };
       });
-      const unregister = registerSessionMaintenancePreserveKeysProvider(native, prepare);
+      const unregister = registerSessionMaintenancePreserveKeysProvider(prepare);
       try {
         const replacement = applySessionEntryExactReplacements({
           storePath: database.path,
@@ -109,7 +109,6 @@ it.each([false, true])(
           revoke ? "before" : "after",
         );
         expect(prepare).toHaveBeenCalledOnce();
-        expect(native).not.toHaveBeenCalled();
         expect(dispose).toHaveBeenCalledOnce();
       } finally {
         unregister();
@@ -129,19 +128,16 @@ it("rechecks prepared durable maintenance facts after the final replacement gran
       updatedAt: Date.now(),
       label: "before",
     });
-    const unregister = registerSessionMaintenancePreserveKeysProvider(
-      () => [],
-      async () => ({
-        capture: () => [],
-        dispose: () => {},
-        subagentRunBasis: {
-          databasePath: shared.path,
-          databaseIdentity: identity.key,
-          databaseBirthtime: identity.birthtime,
-          digest: loadSubagentMaintenanceRunsInDatabase(shared).digest,
-        },
-      }),
-    );
+    const unregister = registerSessionMaintenancePreserveKeysProvider(async () => ({
+      capture: () => [],
+      dispose: () => {},
+      subagentRunBasis: {
+        databasePath: shared.path,
+        databaseIdentity: identity.key,
+        databaseBirthtime: identity.birthtime,
+        digest: loadSubagentMaintenanceRunsInDatabase(shared).digest,
+      },
+    }));
     const child: SubagentRunRecord = {
       runId: "late-preserved-child",
       requesterSessionKey: sessionKey,
@@ -329,6 +325,10 @@ it("publishes committed sharing and reader invalidation before observers, and ro
     const targetKey = "agent:main:replacement-moved";
     const original = { sessionId: "publication", updatedAt: 1 };
     writeSessionEntry(database, sessionKey, original);
+    addSessionMember(
+      { agentId: "main", storePath: database.path, sessionKey },
+      { identityId: "member", addedBy: "owner", addedAt: 1 },
+    );
     const identity = readOpenClawAgentDatabaseIdentity(database).identity;
     if (typeof identity !== "string") {
       throw new Error("Expected durable fixture");
@@ -657,6 +657,10 @@ it.each([
       updatedAt: 1,
     };
     writeSessionEntry(database, sessionKey, entry);
+    addSessionMember(
+      { agentId: "main", storePath: database.path, sessionKey },
+      { identityId: "member", addedBy: "owner", addedAt: 1 },
+    );
     const identity = readOpenClawAgentDatabaseIdentity(database).identity;
     if (typeof identity !== "string") {
       throw new Error("Expected durable fixture");
@@ -833,13 +837,15 @@ it.each([
       expect(followup).not.toHaveBeenCalled();
       expect(committedLifecycle).toHaveBeenCalledTimes(missingReceipt ? 0 : 1);
       expect(observed).toEqual([
-        missingReceipt ? undefined : { visibility: "read-only", membership: ["member"] },
+        missingReceipt || nativeUnknown
+          ? undefined
+          : { visibility: "read-only", membership: ["member"] },
       ]);
       expect(sharing.readCurrent()?.entry?.visibility).toBe(
-        missingReceipt ? undefined : "read-only",
+        missingReceipt || nativeUnknown ? undefined : "read-only",
       );
       expect(preparedPublications).toHaveLength(1);
-      if (missingReceipt) {
+      if (missingReceipt || nativeUnknown) {
         expect(preparedPublications[0]).toBeUndefined();
       } else {
         expect(preparedPublications[0]?.entry).toMatchObject({

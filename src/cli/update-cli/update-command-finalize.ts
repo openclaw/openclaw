@@ -340,6 +340,17 @@ async function updateFinalizeCommandInternal(
     lifecycle.recordWarnings(doctorWarnings);
   };
 
+  const doctorParams = () => ({
+    root,
+    nodeRunner,
+    runId: invokingRunId,
+    yes: opts.yes === true,
+    json: opts.json === true,
+    onWarnings: onDoctorWarnings,
+    onDoctorStep: (step: Parameters<typeof lifecycle.recordDoctorStep>[0]) =>
+      lifecycle.recordDoctorStep(step),
+  });
+
   let maintenance: Awaited<
     ReturnType<typeof import("../../commands/doctor-maintenance.js").beginDoctorMaintenance>
   >;
@@ -354,11 +365,7 @@ async function updateFinalizeCommandInternal(
   let outcome: { complete: () => Promise<void> } | { error: unknown };
   try {
     if (prepared.installKind === "git") {
-      await withPluginLifecycleLease({}, async (lease) => {
-        await withCommandProcessScope(() =>
-          completeSourceUpdateRuntime({ root, timeoutMs: lifecycle.budget("plugins"), lease }),
-        );
-      });
+      await completeSourceUpdateRuntime({ root, timeoutMs: lifecycle.budget("plugins") });
     }
     const initialPluginUpdate = await withPrePluginUpdateDoctorEnv(async () => {
       await lifecycle.run("configSnapshot", () => createUpdateConfigSnapshot());
@@ -367,15 +374,9 @@ async function updateFinalizeCommandInternal(
         () =>
           runUpdateFinalizationDoctorInFreshProcess({
             phase: "pre-plugin",
-            root,
-            nodeRunner,
-            runId: invokingRunId,
-            yes: opts.yes === true,
-            json: opts.json === true,
+            ...doctorParams(),
             workspaceSuggestions: true,
             timeoutMs: lifecycle.budget("doctor"),
-            onWarnings: onDoctorWarnings,
-            onDoctorStep: (step) => lifecycle.recordDoctorStep(step),
           }),
         undefined,
         {
@@ -439,15 +440,9 @@ async function updateFinalizeCommandInternal(
       "targetConfigConvergence",
       async (phase) => {
         const result = await completePostCorePluginUpdate({
-          root,
-          nodeRunner,
-          runId: invokingRunId,
+          ...doctorParams(),
           pluginUpdate: initialPluginUpdate,
-          yes: opts.yes === true,
-          json: opts.json === true,
           timeoutMs: lifecycle.budget("targetConfigConvergence"),
-          onWarnings: onDoctorWarnings,
-          onDoctorStep: (step) => lifecycle.recordDoctorStep(step),
         });
         const resolvedWarnings = await readResolvedDeferredPluginMigrationWarnings(doctorWarnings);
         phase.assertCurrent();

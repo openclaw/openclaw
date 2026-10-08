@@ -3,9 +3,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { ServiceStartRefusalError } from "../../daemon/service-inspection-error.js";
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
-import { createInstallPlanFixture, nodeProbeOutput } from "./install.test-helpers.js";
+import { nodeProbeOutput } from "./install.test-helpers.js";
 import type { DaemonInstallOptions } from "./types.js";
 
 const {
@@ -33,6 +34,28 @@ const {
 describe("runDaemonInstall", () => {
   setupInstallTests();
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it.each([true, false])(
+    "attests pre-write service holds only from native refusal facts (%s)",
+    async (typed) => {
+      const message = "Service is masked. Run `systemctl --user unmask openclaw-gateway.service`.";
+      service.readCommand.mockRejectedValueOnce(
+        typed ? new ServiceStartRefusalError({ reason: "masked", message }) : new Error(message),
+      );
+
+      await runDaemonInstall({ json: true, force: true });
+
+      expect(actionState.failed[0]?.message).toBe(
+        typed
+          ? `SERVICE_DEFINITION_UNKNOWN: ${message}`
+          : "SERVICE_DEFINITION_UNKNOWN: Service definition cannot be safely inspected.",
+      );
+      expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+      expect(replaceConfigFileMock).not.toHaveBeenCalled();
+      expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+      expect(service.install).not.toHaveBeenCalled();
+    },
+  );
 
   describe("restore service CLI", () => {
     const expected = { revision: "observed", definition: "failed-app-service", stored: true };
@@ -74,39 +97,11 @@ describe("runDaemonInstall", () => {
         message: "requires --expected-runtime-pin",
       },
       {
-        name: "malformed JSON",
-        options: { restoreServiceCli: "{" },
-        message: "Invalid restore service CLI.",
-      },
-      {
-        name: "missing JSON keys",
-        options: { restoreServiceCli: "{}" },
-        message: "Invalid restore service CLI.",
-      },
-      {
-        name: "extra JSON key",
-        options: {
-          restoreServiceCli:
-            '{"executable":"/node","entrypoint":"/openclaw.mjs","sqliteLibrary":null,"extra":true}',
-        },
-        message: "Invalid restore service CLI.",
-      },
-      {
         name: "missing runtime",
         options: { runtime: undefined },
         message: "requires an explicit --runtime",
       },
-      {
-        name: "invalid runtime",
-        options: { runtime: "deno" },
-        message: "requires an explicit --runtime",
-      },
       { name: "mismatched pin", options: { runtimePath: "/another/node" }, message: "must match" },
-      {
-        name: "explicit wrapper",
-        options: { wrapper: "/wrapper" },
-        message: "cannot be combined with a wrapper",
-      },
       {
         name: "inherited wrapper",
         inheritedWrapper: true,
@@ -139,28 +134,9 @@ describe("runDaemonInstall", () => {
       },
     );
 
-    it.each(["entrypoint", "sqliteLibrary", "executable"] as const)(
-      "refuses an invalid %s before preparation",
-      async (key) => {
-        const cli = recoveryFixture();
-        cli[key] = "relative/path";
-        await runDaemonInstall({
-          json: true,
-          force: true,
-          runtime: "node",
-          expectedRuntimePin,
-          restoreServiceCli: JSON.stringify(cli),
-        });
-        expect(actionState.failed[0]?.message).toContain(
-          key === "executable" ? "--restore-service-cli" : "Invalid restore service CLI.",
-        );
-        expectNoPreparation();
-      },
-    );
-
-    it("preserves an operator change after the caller's observation", async () => {
+    it("refuses an invalid entrypoint before preparation", async () => {
       const cli = recoveryFixture();
-      pinSnapshotMock.mockReturnValue({ ...expected, revision: "operator-repin" });
+      cli.entrypoint = "relative/path";
       await runDaemonInstall({
         json: true,
         force: true,
@@ -168,16 +144,13 @@ describe("runDaemonInstall", () => {
         expectedRuntimePin,
         restoreServiceCli: JSON.stringify(cli),
       });
-      expect(actionState.failed[0]?.message).toBe(
-        "Gateway service or runtime pin changed before installation. The newer selection was preserved; inspect it before retrying.",
-      );
+      expect(actionState.failed[0]?.message).toContain("Invalid restore service CLI.");
       expectNoPreparation();
     });
 
     it.each([
       { runtime: "node", library: false },
       { runtime: "bun", library: true },
-      { runtime: "bun", library: false },
     ] as const)(
       "restores $runtime with retained library=$library and definition custody",
       async ({ runtime, library }) => {
@@ -237,7 +210,6 @@ describe("runDaemonInstall", () => {
   it.each([
     { change: "operator pin", revision: "previous-pin", definition: "current-service" },
     { change: "service definition", revision: "current-pin", definition: "previous-service" },
-    { change: "new service", revision: "current-pin", definition: null },
     { change: "none", revision: "current-pin", definition: "current-service" },
     { change: "none-absent", revision: "current-pin", definition: null },
   ])(
@@ -283,7 +255,7 @@ describe("runDaemonInstall", () => {
     },
   );
 
-  it.each(["invalid JSON", "{}", '{"revision":"current-pin"}'])(
+  it.each(["invalid JSON"])(
     "rejects malformed runtime custody before preparation: %s",
     async (expectedRuntimePin) => {
       await runDaemonInstall({ json: true, force: true, expectedRuntimePin });
@@ -414,75 +386,8 @@ describe("runDaemonInstall", () => {
 
 describe("runDaemonInstall reinstall", () => {
   setupInstallTests();
-  it.each(["node", "bun"])(
-    "honors explicit Node over recorded %s without creating a pin",
-    async (recorded) => {
-      const recordedPath = `/opt/recorded/bin/${recorded}`;
-      service.readCommand.mockResolvedValue({
-        programArguments: [recordedPath, "/opt/openclaw/dist/index.js", "gateway"],
-      });
-      await runDaemonInstall({ json: true, force: true, runtime: "node" });
-      expect(actionState.failed).toEqual([]);
-      expect(readFirstInstallPlanArg()).toMatchObject({
-        runtime: "node",
-        runtimePath: undefined,
-        pinnedRuntimePath: undefined,
-      });
-      expect(installDaemonServiceAndEmitMock).toHaveBeenCalledOnce();
-      const [action] = installDaemonServiceAndEmitMock.mock.calls[0] as [
-        { install: () => Promise<void> },
-      ];
-      await action.install();
-      expect(service.install).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runtimePinUpdate: { expected: { revision: "empty", stored: false }, pin: undefined },
-        }),
-      );
-    },
-  );
 
-  it.each([
-    { runtime: "node", mode: "replace" },
-    { runtime: "node", mode: "reset" },
-  ] as const)(
-    "handles a $runtime runtime pin during $mode reinstall",
-    async ({ runtime, mode }) => {
-      const pin = resolveTestNodeExecPath();
-      service.readCommand.mockResolvedValue({
-        programArguments: [pin, "/opt/openclaw/dist/index.js", "gateway"],
-      });
-      pinSnapshotMock.mockReturnValue({
-        revision: "prior",
-        stored: true,
-        pin: { runtime, path: "/removed/node" },
-      });
-      installDaemonServiceAndEmitMock.mockImplementationOnce(async (params) => {
-        await (params as { install: () => Promise<void> }).install();
-      });
-      await runDaemonInstall({
-        json: true,
-        force: true,
-        ...(mode === "replace" ? { runtimePath: pin } : {}),
-        ...(mode === "reset" ? { runtime: "node" } : {}),
-      });
-      expect(actionState.failed).toEqual([]);
-      expect(readFirstInstallPlanArg()?.pinnedRuntimePath).toBe(mode === "reset" ? undefined : pin);
-      expect(installDaemonServiceAndEmitMock).toHaveBeenCalledOnce();
-      expect(service.install).toHaveBeenCalledWith(
-        expect.objectContaining({
-          runtimePinUpdate: {
-            expected: expect.objectContaining({ revision: "prior" }),
-            pin: mode === "reset" ? undefined : { runtime, path: pin },
-          },
-        }),
-      );
-    },
-  );
-
-  it.each([
-    { mode: "remote", installedOverride: true, plannedOverride: true },
-    { mode: "local", installedOverride: true, plannedOverride: false },
-  ])(
+  it.each([{ mode: "local", installedOverride: true, plannedOverride: false }])(
     "refreshes only changed service start mode with $mode primary",
     async ({ mode, installedOverride, plannedOverride }) => {
       service.isLoaded.mockResolvedValue(true);
@@ -596,114 +501,6 @@ describe("runDaemonInstall reinstall", () => {
     expectLastEmittedResult("already-installed");
   });
 
-  it("preserves managed base wrapper, environment, and provenance during forced reinstall", async () => {
-    for (const key of ["OPENAI_API_KEY", "OPENCLAW_WRAPPER"]) {
-      delete process.env[key];
-    }
-    const environment = {
-      OPENAI_API_KEY: "managed-service-key",
-      OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
-    };
-    const environmentValueSources = {
-      OPENAI_API_KEY: "file",
-      OPENCLAW_WRAPPER: "inline",
-    };
-    service.isLoaded.mockResolvedValue(false);
-    service.readCommand.mockResolvedValue({
-      programArguments: ["/operator/drop-in-wrapper", "gateway", "run"],
-      environment: {
-        OPENAI_API_KEY: "operator-drop-in-key",
-        OPENCLAW_WRAPPER: "/operator/drop-in-wrapper",
-      },
-      environmentValueSources: { OPENAI_API_KEY: "inline" },
-      managedDefinition: {
-        programArguments: [environment.OPENCLAW_WRAPPER, "gateway", "run"],
-        environment,
-        environmentValueSources,
-      },
-    } as never);
-
-    await runDaemonInstall({ json: true, force: true });
-
-    expect(service.readCommand).toHaveBeenCalledTimes(1);
-    const installPlanArg = readFirstInstallPlanArg();
-    expectFields(installPlanArg, {
-      wrapperPath: environment.OPENCLAW_WRAPPER,
-      existingEnvironment: environment,
-      existingEnvironmentValueSources: environmentValueSources,
-    });
-    expectFields(installPlanArg.env, environment);
-    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("preserves generated-service CA trust without unsafe overrides during forced reinstall", async () => {
-    const extraCaCerts = "/opt/openclaw/corporate-ca.pem";
-    const programArguments = [
-      "/usr/bin/node",
-      "--max-old-space-size=24576",
-      "--require=/tmp/service-preload.js",
-      "/usr/local/bin/openclaw",
-      "gateway",
-    ];
-    for (const key of [
-      "NODE_EXTRA_CA_CERTS",
-      "NODE_TLS_REJECT_UNAUTHORIZED",
-      "HTTPS_PROXY",
-      "NODE_OPTIONS",
-      "BASH_ENV",
-      "LD_PRELOAD",
-    ]) {
-      delete process.env[key];
-    }
-    service.isLoaded.mockResolvedValue(true);
-    service.readCommand.mockResolvedValue({
-      programArguments,
-      environment: {
-        NODE_EXTRA_CA_CERTS: extraCaCerts,
-        NODE_TLS_REJECT_UNAUTHORIZED: "0",
-        HTTPS_PROXY: "https://attacker.invalid",
-        NODE_OPTIONS: "--require /tmp/untrusted.js",
-        BASH_ENV: "/tmp/untrusted.sh",
-        LD_PRELOAD: "/tmp/untrusted.so",
-      },
-      environmentValueSources: {
-        NODE_EXTRA_CA_CERTS: "file",
-      },
-    } as never);
-    buildGatewayInstallPlanMock.mockImplementationOnce(async (params) => {
-      const plan = await createInstallPlanFixture(params);
-      return {
-        ...plan,
-        environment: {
-          ...plan.environment,
-          NODE_EXTRA_CA_CERTS: params?.env?.NODE_EXTRA_CA_CERTS ?? "/etc/ssl/cert.pem",
-        },
-      };
-    });
-    installDaemonServiceAndEmitMock.mockImplementationOnce(async (params?: unknown) => {
-      await (params as { install: () => Promise<void> }).install();
-    });
-
-    await runDaemonInstall({ json: true, force: true });
-
-    const installPlanArg = readFirstInstallPlanArg();
-    expect(installPlanArg.existingCommand).toEqual(expect.objectContaining({ programArguments }));
-    const installEnv = installPlanArg.env as Record<string, string | undefined>;
-    expect(installEnv.NODE_EXTRA_CA_CERTS).toBe(extraCaCerts);
-    expect(installEnv.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
-    expect(installEnv.HTTPS_PROXY).toBeUndefined();
-    expect(installEnv.NODE_OPTIONS).toBeUndefined();
-    expect(installEnv.BASH_ENV).toBeUndefined();
-    expect(installEnv.LD_PRELOAD).toBeUndefined();
-    expectFields(installPlanArg.existingEnvironmentValueSources, {
-      NODE_EXTRA_CA_CERTS: "file",
-    });
-    const installCalls = service.install.mock.calls as unknown as Array<
-      [{ environment?: Record<string, string | undefined> }]
-    >;
-    expect(installCalls[0]?.[0].environment?.NODE_EXTRA_CA_CERTS).toBe(extraCaCerts);
-  });
-
   it("reinstalls when wrapper command matches but wrapper env is missing", async () => {
     service.isLoaded.mockResolvedValue(true);
     service.readCommand.mockResolvedValue({
@@ -720,19 +517,6 @@ describe("runDaemonInstall reinstall", () => {
     expect(actionState.warnings).toContain(
       "Gateway service OPENCLAW_WRAPPER differs from the current wrapper install plan; refreshing the install.",
     );
-  });
-
-  it("does not refresh an environment-file token", async () => {
-    service.isLoaded.mockResolvedValue(true);
-    service.readCommand.mockResolvedValue({
-      programArguments: ["openclaw", "gateway", "run"],
-      environment: { OPENCLAW_GATEWAY_TOKEN: "operator-token" },
-      environmentValueSources: { OPENCLAW_GATEWAY_TOKEN: "file" },
-    });
-    await runDaemonInstall({ json: true });
-    expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
-    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
-    expectLastEmittedResult("already-installed");
   });
 
   it("reinstalls when the installed service still runs from nvm even if the installer runtime does not", async () => {

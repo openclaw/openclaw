@@ -108,7 +108,7 @@ function pauseRegistry() {
     .mockImplementationOnce((...args) => {
       const prepared = prepare(...args);
       return {
-        assertCurrent: prepared.assertCurrent,
+        ...prepared,
         read: async () => {
           entered.resolve();
           await resume.promise;

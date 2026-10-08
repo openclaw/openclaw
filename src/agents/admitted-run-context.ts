@@ -9,7 +9,11 @@ import {
   type ExecutionIdentityAdmissionToken,
 } from "../audit/execution-identity-admission.js";
 import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spawn-admission.js";
-import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import {
+  composeSessionSourceAssertion,
+  prepareSessionSourceScope,
+  runWithSessionSourceScope,
+} from "../config/sessions/session-source-authority.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -24,6 +28,7 @@ import {
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
 
 /** Operational lifecycle correlation. This is never identity or authorization evidence. */
@@ -42,6 +47,8 @@ export type AdmittedRunContext = Readonly<{
 
 export type AdmittedRunOperatorAuthority = Readonly<{
   profileId: string;
+  /** Host-captured original authenticated input, consumed only by restart-claim admission. */
+  recoverySnapshot?: import("../gateway/operator-run-recovery-source.js").OperatorRunRecoverySnapshot;
   scopes: readonly string[];
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;
@@ -97,6 +104,9 @@ export function createAdmittedRunOperatorAuthority(
   const readCurrentGithubLogin = source.readCurrentGithubLogin;
   const authority = Object.freeze({
     profileId: source.profileId,
+    recoverySnapshot: source.recoverySnapshot
+      ? freezeJsonSnapshot(structuredClone(source.recoverySnapshot))
+      : undefined,
     scopes: Object.freeze([...source.scopes]),
     gatewayAccessGrant: source.gatewayAccessGrant
       ? Object.freeze({ ...source.gatewayAccessGrant })
@@ -259,6 +269,27 @@ const activeNativeHookRecoveryLeases = new Map<
   { lease: DelegatedAuthorityLease; releaseOperatorAuthority?: () => void }
 >();
 
+/** Reprepare source predicates after the caller establishes an exact transcript fence. */
+export function runWithPreparedRunSourceScope<T>(
+  params: {
+    preparedRunAdmission?: PreparedAgentRunAdmission;
+    admittedRunContext?: AdmittedRunContext;
+  },
+  run: () => Promise<T>,
+): Promise<T> {
+  let assertion = params.preparedRunAdmission?.assertSourceCurrent;
+  if (params.admittedRunContext) {
+    const lease = delegatedAuthorityLeases.get(params.admittedRunContext);
+    const captured =
+      lease && captureAdmittedRunActiveAssertion(params.admittedRunContext, lease.authority);
+    if (!captured) {
+      return Promise.reject(new Error("admitted run authority is no longer active"));
+    }
+    assertion = captured;
+  }
+  return runWithSessionSourceScope(assertion, run);
+}
+
 function bindAdmittedRunDelegatedAuthority(
   context: AdmittedRunContext,
   assertSourceCurrent?: () => void,
@@ -353,7 +384,7 @@ export function captureAdmittedRunActiveAssertion(
   if (!lease || lease.foregroundClosed || lease.authority !== authority || !source) {
     return undefined;
   }
-  return composeSessionSourceAssertion([source.assertCurrent], (assertSource) => {
+  const assertLocalCurrent = (assertSource: () => void) => {
     if (
       signal?.aborted ||
       context.operationalRunInstance !== operationalRunInstance ||
@@ -363,6 +394,9 @@ export function captureAdmittedRunActiveAssertion(
       refuse();
     }
     assertSource();
+  };
+  return Object.assign(composeSessionSourceAssertion([source.assertCurrent], assertLocalCurrent), {
+    assertScopeCurrent: () => assertLocalCurrent(source.assertBinding),
   });
 }
 
@@ -534,9 +568,24 @@ export function prepareAgentRunAdmission(params: {
   let admitted: Promise<AdmittedRunContext> | undefined;
   let admittedContext: AdmittedRunContext | undefined;
   let closed = false;
+  const assertPreparationOpen = () => {
+    if (closed) {
+      throw new Error("prepared execution context is already closed");
+    }
+  };
+  const scopedSource = composeSessionSourceAssertion([assertSourceCurrent], (assertSource) => {
+    assertPreparationOpen();
+    assertSource();
+  });
   return Object.freeze({
     operationalRunInstance,
-    assertSourceCurrent: () => assertSourceCurrent?.(),
+    assertSourceCurrent: Object.assign(composeSessionSourceAssertion([assertSourceCurrent]), {
+      assertScopeCurrent: assertPreparationOpen,
+      prepareSessionSourceScope: () => {
+        assertPreparationOpen();
+        return prepareSessionSourceScope(scopedSource);
+      },
+    }),
     readOperatorAuthority: () => {
       if (operatorAuthority) {
         if (closed) {

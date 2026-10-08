@@ -167,26 +167,15 @@ function commandSegmentFromArgv(
 
 type AuthorizationOperator = ShellChainOperator | "pipe";
 
-function authorizationOperatorForTopology(operator: CommandOperator): AuthorizationOperator {
-  switch (operator.kind) {
-    case "and":
-      return "&&";
-    case "or":
-      return "||";
-    case "pipe":
-    case "stderr-pipe":
-      return "pipe";
-    case "sequence":
-    case "newline-sequence":
-      return ";";
-    case "background":
-      return "&";
-    default: {
-      const unreachable: never = operator.kind;
-      return unreachable;
-    }
-  }
-}
+const AUTHORIZATION_OPERATOR_BY_KIND: Record<CommandOperator["kind"], AuthorizationOperator> = {
+  and: "&&",
+  or: "||",
+  pipe: "pipe",
+  "stderr-pipe": "pipe",
+  sequence: ";",
+  "newline-sequence": ";",
+  background: "&",
+};
 
 function riskInsideStep(risk: CommandRisk, step: CommandStep): boolean {
   return risk.span.startIndex >= step.span.startIndex && risk.span.endIndex <= step.span.endIndex;
@@ -456,7 +445,10 @@ function groupsFromSteps(params: {
   let current: CommandStepWithSegment[] = [];
   const operatorByFromCommandId = new Map<string, AuthorizationOperator>();
   for (const operator of params.operators ?? []) {
-    operatorByFromCommandId.set(operator.fromCommandId, authorizationOperatorForTopology(operator));
+    operatorByFromCommandId.set(
+      operator.fromCommandId,
+      AUTHORIZATION_OPERATOR_BY_KIND[operator.kind],
+    );
   }
 
   if (sorted.length > 1 && operatorByFromCommandId.size === 0) {

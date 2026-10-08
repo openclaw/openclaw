@@ -13,7 +13,8 @@ type SessionTranscriptUpdateTarget = {
   storePath?: string;
 };
 
-type SessionTranscriptUpdateFields = {
+/** Internal transcript update that may identify a transcript without a file path. */
+export type InternalSessionTranscriptUpdate = {
   sessionFile?: string;
   target?: SessionTranscriptUpdateTarget;
   sessionKey?: string;
@@ -25,18 +26,16 @@ type SessionTranscriptUpdateFields = {
   messageId?: string;
   messageSeq?: number;
   runId?: string;
+  /** Exact native display occurrences retired by this commit; never run authority. */
+  assistantItemIds?: readonly string[];
 };
 
-/** Normalized transcript update emitted after a session transcript changes. */
 export type SessionTranscriptUpdate = Omit<
-  SessionTranscriptUpdateFields,
-  "sessionFile" | "lifecycleRevision" | "target"
+  InternalSessionTranscriptUpdate,
+  "sessionFile" | "lifecycleRevision" | "target" | "assistantItemIds"
 > & {
   target: Omit<SessionTranscriptUpdateTarget, "storePath">;
 };
-
-/** Internal transcript update that may identify a transcript without a file path. */
-export type InternalSessionTranscriptUpdate = SessionTranscriptUpdateFields;
 
 /** Persists authoritative run ownership on assistant and tool-result rows. */
 export function attachSessionTranscriptRunId<T>(message: T, runId: string | null | undefined): T {
@@ -58,7 +57,6 @@ export function attachSessionTranscriptRunId<T>(message: T, runId: string | null
   };
 }
 
-/** Reads the run identity persisted on a transcript row, when one was attached. */
 export function readSessionTranscriptRunId(message: unknown): string | undefined {
   return isRecord(message)
     ? normalizeOptionalString((asOptionalRecord(message["__openclaw"]) ?? {}).runId)
@@ -123,19 +121,16 @@ export function readSessionTranscriptUpdateVersion(): number {
   return SESSION_TRANSCRIPT_UPDATE_STATE.version;
 }
 
-/** Registers a listener for normalized session transcript updates. */
 export function onSessionTranscriptUpdate(listener: SessionTranscriptListener): () => void {
   return registerListener(SESSION_TRANSCRIPT_LISTENERS, listener);
 }
 
-/** Registers an internal listener for identity-only or file-backed transcript updates. */
 export function onInternalSessionTranscriptUpdate(
   listener: InternalSessionTranscriptListener,
 ): () => void {
   return registerListener(INTERNAL_SESSION_TRANSCRIPT_LISTENERS, listener);
 }
 
-/** Emits a normalized transcript update to all registered listeners. */
 export function emitSessionTranscriptUpdate(update: InternalSessionTranscriptUpdate): void {
   const nextUpdate = normalizeSessionTranscriptUpdate(update);
   if (!nextUpdate) {
@@ -177,6 +172,7 @@ function normalizeSessionTranscriptUpdate(
     ...(messageId ? { messageId } : {}),
     ...(messageSeq !== undefined ? { messageSeq } : {}),
     ...(runId ? { runId } : {}),
+    ...(update.assistantItemIds ? { assistantItemIds: update.assistantItemIds } : {}),
   };
 }
 

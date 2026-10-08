@@ -222,13 +222,9 @@ enum ExecApprovalsStore {
         let socketPath = file.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let token = file.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         var agents = file.agents ?? [:]
-        if let legacyDefault = agents["default"] {
-            if let main = agents[defaultAgentId] {
-                agents[self.defaultAgentId] = self.mergeAgents(current: main, legacy: legacyDefault)
-            } else {
-                agents[self.defaultAgentId] = legacyDefault
-            }
-            agents.removeValue(forKey: "default")
+        if let legacyDefault = agents.removeValue(forKey: "default") {
+            agents[self.defaultAgentId] = agents[self.defaultAgentId]
+                .map { self.mergeAgents(current: $0, legacy: legacyDefault) } ?? legacyDefault
         }
         agents = agents.mapValues { entry in
             var agent = entry
@@ -350,10 +346,8 @@ enum ExecApprovalsStore {
         let socketPath = self.expandPath(file.socket?.path ?? self.socketPath())
         let token = file.socket?.token ?? ""
         return ExecApprovalsResolved(
-            url: self.databaseURL(),
             socketPath: socketPath,
             token: token,
-            defaults: resolvedDefaults,
             agent: resolvedAgent,
             allowlist: allowlist,
             file: file)
@@ -572,14 +566,12 @@ extension ExecApprovalsStore {
             let allowlist = currentAllowlist.map { item -> ExecAllowlistEntry in
                 guard let use = usesByKey[self.allowlistEntryMatchKey(item)] else { return item }
                 entryChanged = true
-                return ExecAllowlistEntry(
-                    id: item.id,
-                    pattern: item.pattern,
-                    source: item.source,
-                    argPattern: item.argPattern,
-                    lastUsedAt: now,
-                    lastUsedCommand: self.shouldRecordLastUsedCommand(for: item) ? command : nil,
-                    lastResolvedPath: use.resolvedPath)
+                var updated = item
+                updated.commandText = nil
+                updated.lastUsedAt = now
+                updated.lastUsedCommand = item.argPattern?.hasPrefix("sha256:") == true ? nil : command
+                updated.lastResolvedPath = use.resolvedPath
+                return updated
             }
             if entryChanged {
                 changed = true
@@ -591,10 +583,6 @@ extension ExecApprovalsStore {
             file.agents = agents
         }
         return changed
-    }
-
-    private static func shouldRecordLastUsedCommand(for entry: ExecAllowlistEntry) -> Bool {
-        !(entry.argPattern?.hasPrefix("sha256:") ?? false)
     }
 
     static func allowlistEntryMatchKey(_ entry: ExecAllowlistEntry) -> ExecAllowlistEntryMatchKey {
@@ -618,10 +606,7 @@ extension ExecApprovalsStore {
 
     static func expandPath(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        let configuredHome = OpenClawEnv.path("OPENCLAW_HOME")
-            .map { ($0 as NSString).expandingTildeInPath }
-        let home = configuredHome.map { URL(fileURLWithPath: $0, isDirectory: true) }
-            ?? FileManager().homeDirectoryForCurrentUser
+        let home = self.homeURL()
         if trimmed == "~" {
             return home.path
         }

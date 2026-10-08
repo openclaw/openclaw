@@ -235,7 +235,7 @@ export function createSqliteReadOnlyWorkerSession(
         value = reply.value;
       } else {
         value = readSqliteReadOnlyWorkerValue(
-          { stdout: JSON.stringify(message.result), stderr },
+          { kind: "launched", stdout: JSON.stringify(message.result), stderr, status: 0 },
           pending.mode,
         );
       }
@@ -331,12 +331,14 @@ export function createSqliteReadOnlyWorkerSession(
                 ? {
                     auth: {
                       expectedIdentity: options.expectedIdentity,
+                      artifactPreserving: options.artifactPreserving,
                     },
                   }
                 : options.mode === "operation"
                   ? {
                       operation: {
                         expectedIdentity: options.expectedIdentity,
+                        artifactPreserving: options.artifactPreserving,
                         command: serialize(options.command).toString("base64"),
                       },
                     }

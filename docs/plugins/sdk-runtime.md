@@ -28,6 +28,18 @@ register(api) {
 
 `api.runtime.version` is the current OpenClaw product version, sourced from the shared version resolver so plugins see the same value the CLI reports.
 
+`api.runtime.capabilities` is an optional, read-only list of host behavior
+guarantees. Older hosts may omit it. Check a documented capability ID before
+enabling behavior that depends on it; equal product versions and tool names do
+not establish support. These process-stable facts do not grant caller authority,
+and they remain unavailable during metadata-only registration.
+
+`sender-restricted-hidden-helpers-v1` guarantees that sender-restricted requesters
+can start only hidden helpers of the same agent, retaining their restricted tool
+surface and session root. Channels may use this capability to enable helper
+tools for restricted senders. Core remains responsible for authorization and
+containment. The same ID is advertised in Gateway `hello-ok.features.capabilities`.
+
 ## What each page covers
 
 - [Config and utilities](/plugins/sdk-runtime/config-and-utilities) — runtime config reads and writes, plus the shared process, error, and model-picker utilities.
@@ -143,6 +155,14 @@ Registered callables retain their instance scope, receiver binding, and lifecycl
 fencing. Plugin code runs inside a Gateway request scope established for its
 invocation.
 
+Host-created request scopes borrow their plugin registry. A direct registry-scope
+callback keeps its registry until its returned operation settles; detached async
+resources do not extend that lifetime. Access to a released registry fails instead
+of silently selecting the current generation. Admitted turns and explicitly
+retained consumers keep their selected generation until they settle.
+Registry-dependent runtime APIs re-enter their live plugin owner after adoption
+and preserve an explicitly prepared registry, including an empty selection.
+
 Submitting a SessionManager append transfers its ordinary JSON payload to the
 manager by reference. Treat the payload as immutable from submission, including
 while an asynchronous append is pending; nested objects and arrays are frozen.
@@ -175,7 +195,11 @@ callbacks while cleanup finishes.
 
 Replacement validates metadata and configuration first, then stops services and
 channels, drains admitted work, runs `gateway_stop`, and disposes the old instance
-before invoking the new registration. Pre-publication failure triggers automatic
+before invoking the new registration. Session-extension and runtime-lifecycle
+`cleanup` callbacks receive `reason: "restart"` before the replacement registers,
+so they can unsubscribe observers and release in-memory buffers. Persistent
+session-state and scheduler reconciliation remain part of registry retirement.
+Pre-publication failure triggers automatic
 recovery by registering the captured previous code with its previous config;
 a stopped instance is not assumed to be restartable. A plugin cannot synchronously
 replace itself from its own active call: the operation rejects before shutdown
@@ -265,6 +289,21 @@ close that store when the sequence settles, including on failure. This retains
 the existing executor between commands without holding a writer turn across
 preparation. Each command keeps its own live authority checks. Omit the option
 for cached stores whose lifetime can outlast accepted work.
+
+First-party runtime callers can use `withOpenClawAgentDatabaseRuntime` from the
+same subpath to admit cold agent storage in its existing executor before
+receiving a native handle. The operation callback still runs on the caller;
+dispatch its database work through the existing store worker. Its authority
+callback runs inside worker grants and must not read the same database or do
+blocking work. Put same-database predicates in the worker transaction. The
+released `withOpenClawAgentDatabaseAsync` retains native admission for arbitrary
+synchronous SDK guards, including its post-integrity, pre-repair checkpoint.
+
+Transcript assertion composition preserves prepared source checks independently
+of opaque SDK callbacks. Cold restoration can recheck those prepared components
+and their stored predicates while retaining the full synchronous assertion for
+native commit. Custom SDK assertion wrappers are not executed in restoration
+worker grants; existing writer adapter selection remains unchanged.
 
 ### Memory runtime replacement
 

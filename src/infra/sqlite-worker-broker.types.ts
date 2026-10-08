@@ -17,6 +17,7 @@ import type {
   createSqliteWorkerTransferOwner,
   createSqliteWorkerTransferReceiver,
 } from "./sqlite-worker-transfer.js";
+import type { WorkerRequestObservation } from "./worker-request-diagnostics.js";
 export type RequestBody = SqliteWorkerRequest extends infer Request
   ? Request extends SqliteWorkerRequest
     ? Omit<Request, "id">
@@ -24,6 +25,7 @@ export type RequestBody = SqliteWorkerRequest extends infer Request
   : never;
 type DispatchState = { dispatched: boolean; openNotEntered?: boolean };
 export type Job = {
+  observation: WorkerRequestObservation;
   signal?: AbortSignal;
   maintenanceScope?: OpenClawDatabaseMaintenanceScope;
   createAdmission?: SqliteWorkerAdmissionFactory;
@@ -100,6 +102,7 @@ export type OperationScope = {
   stateContext?: SqliteWorkerStateContext;
 };
 export type EnqueueOptions = {
+  requestClass?: string;
   maintenanceScope?: OpenClawDatabaseMaintenanceScope;
   createAdmission?: SqliteWorkerAdmissionFactory;
   signal?: AbortSignal;

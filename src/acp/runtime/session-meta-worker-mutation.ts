@@ -14,7 +14,7 @@ import {
 } from "../../infra/sqlite-worker-operation-admission.js";
 import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
-import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { sessionChanges, type SessionRowFacts } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -125,16 +125,52 @@ export async function commitAcpSessionMutation(
   assertCurrent: () => void,
   authorize?: (stage: "transaction" | "commit") => void,
 ) {
+  if ("kind" in input.source && input.source.kind === "reset" && !authorize) {
+    throw new Error("ACP reset publication requires its retained lifecycle guard");
+  }
   const nonce = randomUUID();
   let admitted:
     | { admission: SqliteWorkerOperationAdmission; retained: RetainedWorkerTransactionAdmission }
     | undefined;
   let published = false;
+  let pending = false;
+  let superseded = false;
+  const target = {
+    agentId: input.agentId,
+    sessionKey: input.sessionKey,
+    storePath: input.source.path,
+    scope: "acp" as const,
+  };
+  const invalidation = { ...target, factsInvalidated: true as const };
+  const unsubscribe = sessionChanges.subscribeFacts((change) => {
+    if (
+      pending &&
+      !published &&
+      ("all" in change ||
+        (change.sessionKey === input.sessionKey &&
+          (!change.agentId || change.agentId === input.agentId)))
+    ) {
+      superseded = true;
+    }
+  });
   const publish = () => {
     const receipt = admitted?.admission.committed?.facts;
     if (!published && isRecord(receipt) && receipt.nonce === nonce) {
       published = true;
-      sessionChanges.emit({ agentId: input.agentId, sessionKey: input.sessionKey });
+      try {
+        assertCurrent();
+      } catch {
+        // Commit stays acknowledged, but a retired physical source cannot certify its successor.
+        superseded = true;
+      }
+      // The broker drains committed facts before dispatching the next writer command.
+      // A native publication may still supersede this command before its receipt arrives.
+      let facts: Extract<SessionRowFacts, { kind: "acp" }> | undefined;
+      if (!superseded && isRecord(receipt.facts) && receipt.facts.kind === "acp") {
+        // SAFETY: The nonce-bound private worker commit returns this typed ACP postimage.
+        facts = receipt.facts as Extract<SessionRowFacts, { kind: "acp" }>;
+      }
+      sessionChanges.emit(facts ? { ...target, facts } : invalidation);
     }
   };
   try {
@@ -142,6 +178,8 @@ export async function commitAcpSessionMutation(
       context,
       async (scope) => {
         try {
+          assertCurrent();
+          sessionChanges.invalidate(invalidation);
           await scope.execute({ type: "acp.commitMutation", input: { ...input, nonce } });
         } finally {
           await admitted?.retained.settled;
@@ -162,6 +200,9 @@ export async function commitAcpSessionMutation(
               throw new Error("ACP metadata commit differs from its retained owner");
             }
             authorize?.(request.stage === "transaction" ? "transaction" : "commit");
+            if (request.stage === "transaction") {
+              pending = true;
+            }
             phase = request.stage === "transaction" ? "commit" : "settled";
             if (!grant()) {
               throw new Error("ACP metadata commit admission expired");
@@ -172,7 +213,9 @@ export async function commitAcpSessionMutation(
           return {
             nativeLocations: [
               context.admission.databasePath,
-              ...("kind" in input.source ? [] : [input.source.path]),
+              ...("kind" in input.source && input.source.kind === "ephemeral"
+                ? []
+                : [input.source.path]),
             ],
             admission,
           };
@@ -180,8 +223,15 @@ export async function commitAcpSessionMutation(
       },
     );
   } finally {
-    await admitted?.retained.settled;
-    publish();
+    try {
+      await admitted?.retained.settled;
+      publish();
+      if (!published) {
+        sessionChanges.invalidate(invalidation);
+      }
+    } finally {
+      unsubscribe();
+    }
   }
 }
 

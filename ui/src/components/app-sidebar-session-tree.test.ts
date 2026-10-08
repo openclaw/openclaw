@@ -20,6 +20,7 @@ function present(row: GatewaySessionRow, isChild = false): SidebarRecentSession 
     hasActiveRun: row.hasActiveRun === true,
     active: row.key === conversationKey,
     unread: row.unread === true,
+    status: row.status,
     runningChildCount: 0,
     failedChildCount: 0,
   } as SidebarRecentSession;
@@ -167,5 +168,30 @@ describe("Home-linked conversation placement", () => {
     const tree = project([home, child]);
     expect(tree.map((row) => row.key)).toEqual([homeKey]);
     expect(tree[0]?.children.map((row) => row.key)).toEqual([child.key]);
+  });
+});
+
+describe("hidden run unread acknowledgement", () => {
+  it("lists unread hidden runs on the parent that folds them, but not persistent children", () => {
+    const nestedKey = "agent:main:subagent:nested";
+    const failedKey = "agent:main:subagent:failed";
+    const home: GatewaySessionRow = { key: homeKey, kind: "direct", unread: false };
+    const rows: GatewaySessionRow[] = [
+      home,
+      { key: workerKey, kind: "direct", spawnedBy: homeKey, unread: true },
+      { key: nestedKey, kind: "direct", spawnedBy: workerKey, unread: true },
+      { key: failedKey, kind: "direct", spawnedBy: homeKey, unread: true, status: "failed" },
+      { key: conversationKey, kind: "direct", spawnedBy: homeKey, unread: true },
+    ];
+
+    const [parent] = project([home], rows);
+
+    expect(parent?.unreadChildCount).toBe(4);
+    expect(parent?.subagentSummary?.unreadHiddenRuns?.map((row) => row.key)).toEqual([
+      workerKey,
+      nestedKey,
+    ]);
+    expect(parent?.unreadHiddenRuns).toBeUndefined();
+    expect(parent?.children.map((row) => row.key)).toEqual([conversationKey]);
   });
 });

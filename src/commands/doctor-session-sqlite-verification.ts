@@ -216,6 +216,9 @@ export function validateLegacySessionRecords(
   purpose: "validate" | "before-archive",
   env: NodeJS.ProcessEnv,
 ): boolean {
+  if (report.issues.some((issue) => issue.code === "legacy_import_deferred" && !issue.sessionKey)) {
+    return false;
+  }
   if (purpose === "before-archive" && records.length === 0) {
     return true;
   }
@@ -242,29 +245,37 @@ function validateLegacySessionRecord(
   env: NodeJS.ProcessEnv,
 ): void {
   const beforeArchive = purpose === "before-archive";
+  const recordIssue = (code: string, message: string) =>
+    report.issues.push({ code, message, sessionKey: record.sessionKey });
   // Import preserves aliases until canonical repair; standalone validation compares canonical keys.
   const normalizedKey = beforeArchive
     ? record.sessionKey
     : normalizeStoreSessionKey(record.sessionKey);
-  const sqliteSessionId = record.historical
-    ? snapshot.sessionKeysBySessionId.get(record.entry.sessionId) === normalizedKey
-      ? record.entry.sessionId
-      : undefined
-    : snapshot.sessionIdsBySessionKey.get(normalizedKey);
+  const sqliteSessionId =
+    record.historical || record.preserveCurrentSession
+      ? snapshot.sessionKeysBySessionId.get(record.entry.sessionId) === normalizedKey
+        ? record.entry.sessionId
+        : undefined
+      : snapshot.sessionIdsBySessionKey.get(normalizedKey);
   if (!sqliteSessionId) {
-    report.issues.push({
-      code: "sqlite_entry_missing",
-      message: `SQLite entry is missing for ${normalizedKey}.`,
-      sessionKey: record.sessionKey,
-    });
+    recordIssue("sqlite_entry_missing", `SQLite entry is missing for ${normalizedKey}.`);
     return;
   }
   if (sqliteSessionId !== record.entry.sessionId) {
-    report.issues.push({
-      code: "sqlite_entry_mismatch",
-      message: `SQLite sessionId ${sqliteSessionId} does not match ${record.entry.sessionId}.`,
-      sessionKey: record.sessionKey,
-    });
+    recordIssue(
+      "sqlite_entry_mismatch",
+      `SQLite sessionId ${sqliteSessionId} does not match ${record.entry.sessionId}.`,
+    );
+    return;
+  }
+  // A proven canonical owner permits protected archival, not certification of conflicting bytes.
+  if (
+    beforeArchive &&
+    record.preserveCurrentSession &&
+    report.issues.some(
+      (issue) => issue.code === "legacy_import_deferred" && issue.sessionKey === record.sessionKey,
+    )
+  ) {
     return;
   }
   if (!beforeArchive) {
@@ -284,11 +295,7 @@ function validateLegacySessionRecord(
         (issue) => issue.code === "transcript_malformed" && issue.sessionKey === record.sessionKey,
       )
     ) {
-      report.issues.push({
-        code: "transcript_malformed",
-        message: result.message,
-        sessionKey: record.sessionKey,
-      });
+      recordIssue("transcript_malformed", result.message);
     }
     return;
   }
@@ -313,13 +320,12 @@ function validateLegacySessionRecord(
           env,
         });
   if (!verified) {
-    report.issues.push({
-      code: "sqlite_transcript_count_mismatch",
-      message: beforeArchive
+    recordIssue(
+      "sqlite_transcript_count_mismatch",
+      beforeArchive
         ? `SQLite transcript has ${sqliteEvents} events; verified import expects ${expectedEvents}.`
         : `SQLite transcript has ${sqliteEvents} events; source has ${result.events}, but its events are not all present with matching content. Run openclaw doctor --session-sqlite recover to import a missing suffix or identify conflicting events.`,
-      sessionKey: record.sessionKey,
-    });
+    );
     return;
   }
   if (!beforeArchive) {

@@ -331,7 +331,8 @@ vi.mock("./reply-delivery.js", () => ({
     state.createBlockReplyDeliveryHandlerMock(params),
 }));
 
-vi.mock("./reply-media-paths.runtime.js", () => ({
+vi.mock("./reply-media-paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply-media-paths.js")>()),
   createReplyMediaContext: () => ({
     normalizePayload: (payload: unknown) => payload,
   }),
@@ -412,7 +413,7 @@ export type EmbeddedAgentParams = {
   lifecycleGeneration?: string;
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   onCompactionAccounting?: RunEmbeddedAgentInternalParams["onCompactionAccounting"];
-  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => void;
+  onExecutionStarted?: RunEmbeddedAgentInternalParams["onExecutionStarted"];
   onExecutionPhase?: (info: {
     phase:
       | "runner_entered"

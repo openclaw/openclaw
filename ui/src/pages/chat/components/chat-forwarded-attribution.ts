@@ -1,4 +1,3 @@
-// Attribution row for forwarded agent and automation messages.
 import { html, nothing } from "lit";
 import "./chat-attribution.css";
 import { pathForRoute } from "../../../app-route-paths.ts";

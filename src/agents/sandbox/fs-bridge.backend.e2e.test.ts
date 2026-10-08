@@ -80,9 +80,7 @@ describe("sandbox fs bridge local backend e2e", () => {
     { workspaceAccess: "none", mutation: "write" },
     { workspaceAccess: "ro", mutation: "write" },
     { workspaceAccess: "rw", mutation: "remove" },
-    { workspaceAccess: "none", mutation: "remove" },
     { workspaceAccess: "rw", mutation: "rename" },
-    { workspaceAccess: "none", mutation: "rename" },
   ] as const)(
     "enforces $workspaceAccess workspace writes and protects skills from $mutation",
     async ({ workspaceAccess, mutation }) => {

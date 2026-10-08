@@ -2,9 +2,16 @@ import type {
   WorkerOperationHandlers,
   WorkerOperations,
 } from "../../state/worker-operation-registry.js";
+import {
+  readPendingWorktreesInDatabase,
+  reservePendingWorktreeInDatabase,
+  releasePendingWorktreeInDatabase,
+  readWorktreeSlotCountInDatabase,
+} from "./pending-slots.worker.js";
 import { writeProvisionedSnapshotInDatabase } from "./provisioned-snapshot.worker.js";
 import {
   findLiveRegistryWorktreeByOwnerInDatabase,
+  findLiveRegistryWorktreeByPathInDatabase,
   getRegistryWorktreeInDatabase,
   getRegistryWorktreeProvisionedChunkInDatabase,
   getRegistryWorktreeProvisionedPathsInDatabase,
@@ -22,6 +29,10 @@ import {
   claimWorktreeRemovalInDatabase,
   finalizeWorktreeRemovalInDatabase,
   abortWorktreeRemovalInDatabase,
+  insertRegistryWorktreeInDatabase,
+  updateRegistryWorktreeInDatabase,
+  deleteRegistryWorktreeInDatabase,
+  assertWorktreeRegistryPredicates,
 } from "./registry-run-end.worker.js";
 import { reapWorktreeRunLeasesInDatabase } from "./run-lease-owner.js";
 import {
@@ -29,9 +40,28 @@ import {
   releaseWorktreeRunLeaseInDatabase,
 } from "./run-lease-store.kernel.js";
 import { worktreeRunLeaseOperation } from "./run-lease-store.worker.js";
-import type { ManagedWorktreeOwnerKind } from "./types.js";
+import type { ManagedWorktreeOwnerKind, WorktreeRegistryPredicate } from "./types.js";
 
 export const worktreeOperations = {
+  "worktrees.assertPredicates": (
+    { predicates }: { predicates: readonly WorktreeRegistryPredicate[] },
+    { open },
+  ) => assertWorktreeRegistryPredicates(open().db, predicates),
+  "worktrees.delete": worktreeRunEndMutation("worktrees.delete", deleteRegistryWorktreeInDatabase),
+  "worktrees.slotCount": (_input: undefined, { open }) =>
+    readWorktreeSlotCountInDatabase(open().db),
+  "worktrees.pendingSlots": (_input: undefined, { open }) =>
+    readPendingWorktreesInDatabase(open().db),
+  "worktrees.reservePending": worktreeRunEndMutation(
+    "worktrees.reservePending",
+    reservePendingWorktreeInDatabase,
+  ),
+  "worktrees.releasePending": worktreeRunEndMutation(
+    "worktrees.releasePending",
+    releasePendingWorktreeInDatabase,
+  ),
+  "worktrees.insert": worktreeRunEndMutation("worktrees.insert", insertRegistryWorktreeInDatabase),
+  "worktrees.update": worktreeRunEndMutation("worktrees.update", updateRegistryWorktreeInDatabase),
   "worktrees.claimRemoval": worktreeRunEndMutation(
     "worktrees.claimRemoval",
     claimWorktreeRemovalInDatabase,
@@ -50,6 +80,19 @@ export const worktreeOperations = {
   ) => findLiveRegistryWorktreeByOwnerInDatabase(open().db, ownerKind, ownerId),
   "worktrees.get": ({ id }: { id: string }, { open }) =>
     getRegistryWorktreeInDatabase(open().db, id),
+  "worktrees.sessionBinding": (
+    { boundId, ownerId }: { boundId?: string; ownerId: string },
+    { open },
+  ) => {
+    const { db } = open();
+    const bound = boundId ? getRegistryWorktreeInDatabase(db, boundId) : undefined;
+    if (bound && bound.removedAt === undefined) {
+      return bound;
+    }
+    return findLiveRegistryWorktreeByOwnerInDatabase(db, "session", ownerId);
+  },
+  "worktrees.findLiveByPath": ({ path }: { path: string }, { open }) =>
+    findLiveRegistryWorktreeByPathInDatabase(open().db, path),
   "worktrees.list": (input: WorktreeRegistryListOptions, { open }) =>
     listRegistryWorktreesInDatabase(open().db, input),
   "worktrees.liveIds": (_input: undefined, { open }) =>

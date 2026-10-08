@@ -87,7 +87,7 @@ describe("AppSidebar agent roster", () => {
           ),
         ).toEqual(["New agent", "See all agents", "What can Harbor do?", "Harbor settings"]);
         expect(
-          menu?.querySelectorAll(".sidebar-agent-menu__agent-grid wa-dropdown-item"),
+          menu?.querySelectorAll(".sidebar-agent-menu__agent-list wa-dropdown-item"),
         ).toHaveLength(4);
         expect(
           [...(menu?.querySelectorAll("a") ?? [])].map((link) => link.getAttribute("href")),

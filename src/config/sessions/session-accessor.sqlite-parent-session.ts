@@ -43,10 +43,13 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
+import { captureIncognitoSessionOperation } from "./session-incognito-binding.js";
 import {
   forkParentEntryInWorker,
   forkParentTranscriptInWorker,
   supportsParentForkWorker,
+  readIncognitoParentForkSource,
+  type IncognitoParentForkBinding,
 } from "./session-parent-fork.js";
 import type { ParentForkEntryPatch, ParentForkEntryParams } from "./session-parent-fork.types.js";
 import { loadTranscriptEvents } from "./session-transcript-events.js";
@@ -57,38 +60,73 @@ import { mergeSessionEntry } from "./types.js";
 
 // Parent-session fork owner: decision, transcript copy, and child entry commit.
 
+function captureParentForkBinding(scope: {
+  storePath: string;
+  sessionKey?: string;
+  agentId?: string;
+}) {
+  const binding = captureIncognitoSessionOperation(scope);
+  if (!binding) {
+    return undefined;
+  }
+  if (!scope.sessionKey) {
+    throw new Error("Incognito parent fork requires its captured parent session key");
+  }
+  return { source: { ...binding, sessionKey: scope.sessionKey } };
+}
+
 /** Prepare one source snapshot; the creation owner commits its copy with the child entry. */
-export async function prepareSessionForkTranscript(params: ForkSessionFromParentTranscriptParams) {
-  if (!params.parentEntry.sessionId) {
+export async function prepareSessionForkTranscript(
+  input: ForkSessionFromParentTranscriptParams,
+  incognito?: IncognitoParentForkBinding,
+) {
+  const binding =
+    incognito ?? captureParentForkBinding({ ...input, sessionKey: input.parentSessionKey });
+  if (!input.parentEntry.sessionId) {
     return { status: "missing-parent" as const };
   }
+  const { commitGuard, ...data } = input;
+  const params = { ...structuredClone(data), commitGuard };
   params.commitGuard?.();
-  const resolved = await prepareSqliteScope({
-    agentId: params.agentId,
-    sessionKey: params.parentSessionKey,
-    storePath: params.storePath,
-  });
-  if (params.targetStorePath) {
-    await prepareSqliteScope({ sessionKey: params.sessionKey, storePath: params.targetStorePath });
-  }
+  const actor = binding?.source.actor;
+  const resolved = actor
+    ? { agentId: actor.agentId, path: actor.path }
+    : await prepareSqliteScope({
+        agentId: params.agentId,
+        sessionKey: params.parentSessionKey,
+        storePath: params.storePath,
+      });
   const sourceScope = {
-    agentId: resolved.agentId,
-    env: resolved.env,
+    ...resolved,
     sessionKey: normalizeStoreSessionKey(params.parentSessionKey),
     sessionId: params.parentEntry.sessionId,
     storePath: resolved.path ?? params.storePath,
   };
-  const hydration = prepareSessionTranscriptHydration(sourceScope);
-  const { readRestoredSessionTranscript } = await import("./session-cold-storage-read.js");
-  const snapshot = await readRestoredSessionTranscript(sourceScope, hydration.read, {
-    assertCurrent: params.commitGuard,
-  });
-  params.commitGuard?.();
-  hydration.assertCurrent();
-  if (snapshot.kind !== "full") {
-    throw new Error("Parent fork requires its complete transcript snapshot");
+  let source: ParentForkSourceTranscript | null;
+  if (actor && binding) {
+    source = await readIncognitoParentForkSource(
+      { ...params, sessionId: sourceScope.sessionId },
+      binding,
+    );
+  } else {
+    if (params.targetStorePath) {
+      await prepareSqliteScope({
+        sessionKey: params.sessionKey,
+        storePath: params.targetStorePath,
+      });
+    }
+    const hydration = prepareSessionTranscriptHydration(sourceScope);
+    const { readRestoredSessionTranscript } = await import("./session-cold-storage-read.js");
+    const snapshot = await readRestoredSessionTranscript(sourceScope, hydration.read, {
+      assertCurrent: params.commitGuard,
+    });
+    hydration.assertCurrent();
+    if (snapshot.kind !== "full") {
+      throw new Error("Parent fork requires its complete transcript snapshot");
+    }
+    source = resolveParentForkSourceTranscript(snapshot.snapshot.events, params.forkFrom);
   }
-  const source = resolveParentForkSourceTranscript(snapshot.snapshot.events, params.forkFrom);
+  params.commitGuard?.();
   if (!source) {
     return { status: "failed" as const };
   }
@@ -113,7 +151,13 @@ export async function prepareSessionForkTranscript(params: ForkSessionFromParent
 
 export async function forkSessionTranscriptFromParent(
   params: ForkSessionFromParentTranscriptParams,
+  incognito?: IncognitoParentForkBinding,
 ): Promise<ForkSessionFromParentTranscriptResult> {
+  const binding =
+    incognito ?? captureParentForkBinding({ ...params, sessionKey: params.parentSessionKey });
+  if (binding) {
+    return forkParentTranscriptInWorker(params, binding);
+  }
   if (
     supportsParentForkWorker(params) &&
     (!params.targetStorePath ||
@@ -364,9 +408,16 @@ export async function forkSessionEntryFromParentTarget(
 export async function forkSessionEntryFromParentTargetWithPatch(
   params: ParentForkEntryParams & { commitGuard?: () => void },
   patch?: ParentForkEntryPatch,
+  incognito?: IncognitoParentForkBinding,
 ): Promise<ForkSessionEntryFromParentTargetResult> {
-  if (supportsParentForkWorker({ ...params, sessionKey: "" })) {
-    return forkParentEntryInWorker(params, patch);
+  const binding =
+    incognito ??
+    captureParentForkBinding({
+      ...params,
+      sessionKey: params.parentTarget.canonicalKey,
+    });
+  if (binding || supportsParentForkWorker({ ...params, sessionKey: "" })) {
+    return forkParentEntryInWorker(params, patch, binding);
   }
   return forkSessionEntryFromParentTarget({
     ...params,
@@ -516,23 +567,31 @@ function persistSqliteParentForkSkipPatch(params: {
   return structuredClone(next);
 }
 
-export async function resolveSessionParentForkDecision(params: {
-  parentEntry: SessionEntry;
-  storePath: string;
-}): Promise<SessionParentForkDecision> {
+export async function resolveSessionParentForkDecision(
+  params: {
+    parentEntry: SessionEntry;
+    parentSessionKey?: string;
+    storePath: string;
+  },
+  incognito?: IncognitoParentForkBinding,
+): Promise<SessionParentForkDecision> {
+  const binding =
+    incognito ?? captureParentForkBinding({ ...params, sessionKey: params.parentSessionKey });
   const parentSessionId =
     typeof params.parentEntry.sessionId === "string" ? params.parentEntry.sessionId : "";
   if (parentSessionId.length === 0) {
     return planParentForkDecision(params.parentEntry);
   }
-  const events = await loadTranscriptEvents({
-    storePath: params.storePath,
-    sessionId: parentSessionId,
-  });
-  return planParentForkDecision(
-    params.parentEntry,
-    estimateParentForkPromptTokens(resolveParentForkSourceTranscript(events)),
-  );
+  const parentEntry = structuredClone(params.parentEntry);
+  const source = binding
+    ? await readIncognitoParentForkSource(
+        { storePath: params.storePath, sessionId: parentSessionId },
+        binding,
+      )
+    : resolveParentForkSourceTranscript(
+        await loadTranscriptEvents({ storePath: params.storePath, sessionId: parentSessionId }),
+      );
+  return planParentForkDecision(parentEntry, estimateParentForkPromptTokens(source));
 }
 
 export function forkSqliteParentTranscriptInTransaction(

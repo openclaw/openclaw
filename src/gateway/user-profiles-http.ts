@@ -1,4 +1,3 @@
-// Authenticated HTTP avatar serving and Gravatar proxying for durable user profiles.
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { consumeResponseBytes } from "@openclaw/normalization-core";
@@ -87,10 +86,6 @@ const gravatarCache = new LruCache<CachedGravatarResult>(GRAVATAR_CACHE_MAX_ENTR
 });
 const gravatarRequests = new Map<string, Promise<GravatarResult>>();
 
-function hashEmail(email: string): string {
-  return createHash("sha256").update(email.trim().toLowerCase()).digest("hex");
-}
-
 function getCachedGravatar(hash: string, nowMs: number): GravatarResult | undefined {
   const cached = gravatarCache.get(hash);
   if (!cached) {
@@ -112,10 +107,6 @@ function cacheGravatar(
 ) {
   const ttlMs = result.kind === "hit" ? GRAVATAR_HIT_TTL_MS : GRAVATAR_MISS_TTL_MS;
   gravatarCache.set(hash, { ...result, expiresAtMs: nowMs + ttlMs });
-}
-
-function normalizeContentType(value: string | null): string {
-  return value?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
 }
 
 async function readBoundedGravatarBody(
@@ -156,12 +147,9 @@ async function cancelGravatarBody(body: ReadableStream<Uint8Array> | null): Prom
   }
 }
 
-async function fetchGravatar(
-  hash: string,
-  fetchImpl: typeof globalThis.fetch,
-): Promise<GravatarResult> {
+async function fetchGravatar(hash: string): Promise<GravatarResult> {
   try {
-    const response = await fetchImpl(`${GRAVATAR_BASE_URL}/${hash}?s=256&d=404`, {
+    const response = await fetch(`${GRAVATAR_BASE_URL}/${hash}?s=256&d=404`, {
       headers: { Accept: "image/webp,image/png,image/jpeg,image/gif" },
       signal: AbortSignal.timeout(GRAVATAR_FETCH_TIMEOUT_MS),
     });
@@ -173,7 +161,7 @@ async function fetchGravatar(
       await cancelGravatarBody(response.body);
       return { kind: "error" };
     }
-    const mime = normalizeContentType(response.headers.get("content-type"));
+    const mime = response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
     const declaredLength = Number(response.headers.get("content-length"));
     if (
       !GRAVATAR_MIME_TYPES.has(mime) ||
@@ -193,11 +181,8 @@ async function fetchGravatar(
   }
 }
 
-async function resolveGravatar(
-  hash: string,
-  options: { fetchImpl: typeof globalThis.fetch; nowMs: () => number },
-): Promise<GravatarResult> {
-  const cached = getCachedGravatar(hash, options.nowMs());
+async function resolveGravatar(hash: string): Promise<GravatarResult> {
+  const cached = getCachedGravatar(hash, Date.now());
   if (cached) {
     return cached;
   }
@@ -205,9 +190,9 @@ async function resolveGravatar(
     gravatarRequests,
     hash,
     async () => {
-      const result = await fetchGravatar(hash, options.fetchImpl);
+      const result = await fetchGravatar(hash);
       if (result.kind !== "error") {
-        cacheGravatar(hash, result, options.nowMs());
+        cacheGravatar(hash, result, Date.now());
       }
       return result;
     },
@@ -244,8 +229,6 @@ export async function handleUserProfileAvatarHttpRequest(
   pathname: string,
   opts: GatewayHttpRequestAuthOptions & {
     basePath?: string;
-    fetchImpl?: typeof globalThis.fetch;
-    nowMs?: () => number;
   },
 ): Promise<boolean> {
   const parsed = parseControlUiUserAvatarPath(pathname, opts.basePath ?? "");
@@ -360,7 +343,9 @@ export async function handleUserProfileAvatarHttpRequest(
   // email keeps precedence, and a secondary email's hash is disclosed to
   // Gravatar only once the earlier one is a definite miss. Shared fetches own
   // their upstream timeout; each HTTP waiter owns its deadline and disconnect.
-  const hashes = emails.slice(0, MAX_GRAVATAR_EMAIL_LOOKUPS).map(hashEmail);
+  const hashes = emails
+    .slice(0, MAX_GRAVATAR_EMAIL_LOOKUPS)
+    .map((email) => createHash("sha256").update(email.trim().toLowerCase()).digest("hex"));
   const clientAbort = new AbortController();
   const stopWatchingDisconnect = watchClientDisconnect(req, res, clientAbort);
   const waiterSignal = AbortSignal.any([
@@ -371,13 +356,7 @@ export async function handleUserProfileAvatarHttpRequest(
   try {
     for (const hash of hashes) {
       waiterSignal.throwIfAborted();
-      const result = await racePromiseWithAbortSignal(
-        resolveGravatar(hash, {
-          fetchImpl: opts.fetchImpl ?? globalThis.fetch,
-          nowMs: opts.nowMs ?? Date.now,
-        }),
-        waiterSignal,
-      );
+      const result = await racePromiseWithAbortSignal(resolveGravatar(hash), waiterSignal);
       waiterSignal.throwIfAborted();
       authResult.assertCurrent();
       if (result.kind === "hit") {

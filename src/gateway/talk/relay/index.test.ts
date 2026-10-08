@@ -34,7 +34,7 @@ import {
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { registerChatAbortController, type ChatAbortControllerEntry } from "../../chat-abort.js";
 import { createChatRunState } from "../../server-chat-state.js";
-import { cleanupTalkConnection } from "../session-registry.js";
+import { cleanupTalkConnection, prepareTalkConnectionClose } from "../session-registry.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
 import {
   completeTalkVoiceChange,
@@ -45,9 +45,15 @@ import {
 } from "../voice-selection.js";
 import { bindTalkRealtimeRelayAgentConsult } from "./agent-consult.js";
 import {
+  createIdleRelayProvider,
+  createRelayAgentConfig,
+  makeRelayTransport,
+} from "./index.test-support.js";
+import { resolveTalkRealtimeRelayPresentation } from "./issues.js";
+import {
   acknowledgeTalkRealtimeRelayMark,
   cancelTalkRealtimeRelayTurn,
-  createTalkRealtimeRelaySession as createTalkRealtimeRelaySessionRaw,
+  closeRelaySession,
   ensureTalkRealtimeRelayVoiceSession,
   flushTalkRealtimeRelayVoiceWrites,
   registerTalkRealtimeRelayAgentRun,
@@ -55,14 +61,8 @@ import {
   steerTalkRealtimeRelayAgentRun,
   stopTalkRealtimeRelaySession,
   submitTalkRealtimeRelayToolResult,
-} from "./index.js";
-import {
-  createIdleRelayProvider,
-  createRelayAgentConfig,
-  makeRelayTransport,
-} from "./index.test-support.js";
-import { resolveTalkRealtimeRelayPresentation } from "./issues.js";
-import { closeRelaySession } from "./operations.js";
+} from "./operations.js";
+import { createTalkRealtimeRelaySession as createTalkRealtimeRelaySessionRaw } from "./session-create.js";
 import { usePersistentRelayTestState } from "./session-state.test-support.js";
 import { drainingRelaySessions, relaySessions } from "./state.js";
 import { MAX_RELAY_TOOL_CALL_IDENTITIES } from "./tool-call-ledger.js";
@@ -2897,15 +2897,13 @@ describe("talk realtime gateway relay", () => {
         context: { broadcastToConnIds: vi.fn(), logGateway } as never,
         connId: "conn-relay-drain",
         provider,
-        providerConfig: {},
-        instructions: "brief",
-        tools: [],
       });
       ensureTalkRealtimeRelayVoiceSession({
         relaySessionId: session.relaySessionId,
         connId: "conn-relay-drain",
         sessionKey: "agent:main:main",
       });
+      const talkClose = prepareTalkConnectionClose([{ connId: "conn-relay-drain" }], logGateway);
       let closing: void | Promise<void> = undefined;
       let drain: Promise<void> | undefined;
       try {
@@ -2917,7 +2915,7 @@ describe("talk realtime gateway relay", () => {
         }
         cleanupTalkConnection("conn-relay-drain", logGateway);
         let drained = false;
-        drain = drainGlobalSingletonLifecycleState("restart").then(() => {
+        drain = talkClose.drain().then(() => {
           drained = true;
         });
         await nextEventLoopTurn();
@@ -2926,13 +2924,15 @@ describe("talk realtime gateway relay", () => {
         await drain;
         expect(clientVoiceSessionTesting.readRecord("main", session.relaySessionId)).toMatchObject({
           status: "closed",
+          hasUserTranscript: true,
         });
         expect(
           [...drainingRelaySessions].some((relay) => relay.id === session.relaySessionId),
         ).toBe(false);
+        await drainGlobalSingletonLifecycleState("restart");
       } finally {
         finishProvider.resolve();
-        await Promise.allSettled([closing, drain]);
+        await Promise.allSettled([closing, drain, talkClose.drain()]);
       }
     },
   );

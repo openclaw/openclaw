@@ -155,7 +155,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     }) === undefined
       ? policyRoutingRules(policy)
       : undefined;
-  const execApprovalsFile = includeExecApprovals ? await readExecApprovalsFile(ctx) : undefined;
+  const execApprovalsFile = includeExecApprovals ? await readExecApprovalsFile() : undefined;
   const evidenceOptions = {
     includeIngress: policyHasRules(policy, "ingress"),
     includeGatewayExposure: policyHasRules(policy, "gateway"),
@@ -299,7 +299,7 @@ function channelFindings(
     if (channel.enabled === false) {
       return [];
     }
-    const rule = denyRules.find((candidate) => candidate.when?.provider === channel.provider);
+    const rule = denyRules.find((candidate) => candidate.when.provider === channel.provider);
     if (rule === undefined) {
       return [];
     }
@@ -352,7 +352,7 @@ function policyAttestationFindings(
   ];
 }
 
-function toAttestedFinding(finding: HealthFinding): Record<string, unknown> {
+export function toAttestedFinding(finding: HealthFinding) {
   return {
     checkId: finding.checkId,
     severity: finding.severity,

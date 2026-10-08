@@ -11,22 +11,23 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { getOpenClawSystemUpdateKind } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
+import {
+  prepareCacheTtlCheckpoint,
+  serializeCacheTtlToolResultProjections,
+  type CacheTtlCheckpoint,
+  type CacheTtlProjectionInput,
+} from "./cache-ttl-checkpoint.js";
 import { extractAttemptPermissionNotice } from "./run/attempt-system-prompt.js";
 import { buildSystemUpdateMessage } from "./run/runtime-context-prompt.js";
 
 type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
 
-export type ToolResultPromptProjectionState = {
-  replacements: Map<string, { content: ToolResultMessage["content"]; cacheTtl?: "soft" | "hard" }>;
-  frozen: Set<string>;
-  ambiguousBaseKeys: Set<string>;
-  sourceHashByKey: Map<string, string>;
-  /** Cache-TTL marks read from the transcript marker; the projection owner materializes them on the next replay. */
-  restoredCacheTtl: Map<string, RestoredCacheTtlMark>;
-  lastWrittenSnapshotHash?: string;
+export type ToolResultPromptProjectionState = CacheTtlProjectionInput & {
+  /** Null means an uncertain append requires a checkpoint, including for empty state. */
+  cacheTtlCheckpoint?: CacheTtlCheckpoint | null;
+  /** Every baseline publication, including an empty-branch restore, invalidates pending writes. */
+  cacheTtlRevision?: number;
 };
-
-type RestoredCacheTtlMark = { mode: "soft" } | { mode: "hard"; placeholder: string };
 
 type EmbeddedSessionPromptState = {
   activeAttempts: number;
@@ -247,26 +248,18 @@ const sessionActiveProjects = resolveGlobalSingleton(
   () => new Map<string, string[]>(),
 );
 
-export function createToolResultPromptProjectionState(): ToolResultPromptProjectionState {
-  return {
-    replacements: new Map(),
-    frozen: new Set<string>(),
-    ambiguousBaseKeys: new Set<string>(),
-    sourceHashByKey: new Map<string, string>(),
-    restoredCacheTtl: new Map(),
-  };
-}
-
-export function cloneToolResultPromptProjectionState(
-  state: ToolResultPromptProjectionState,
+export function createToolResultPromptProjectionState(
+  source?: ToolResultPromptProjectionState,
 ): ToolResultPromptProjectionState {
   return {
-    replacements: new Map(state.replacements),
-    frozen: new Set(state.frozen),
-    ambiguousBaseKeys: new Set(state.ambiguousBaseKeys),
-    sourceHashByKey: new Map(state.sourceHashByKey),
-    restoredCacheTtl: new Map(state.restoredCacheTtl),
-    lastWrittenSnapshotHash: state.lastWrittenSnapshotHash,
+    replacements: new Map(source?.replacements),
+    frozen: new Set(source?.frozen),
+    ambiguousBaseKeys: new Set(source?.ambiguousBaseKeys),
+    sourceHashByKey: new Map(source?.sourceHashByKey),
+    restoredCacheTtl: new Map(source?.restoredCacheTtl),
+    ...(source
+      ? { cacheTtlCheckpoint: source.cacheTtlCheckpoint, cacheTtlRevision: source.cacheTtlRevision }
+      : {}),
   };
 }
 
@@ -290,56 +283,17 @@ export function recordToolResultPromptProjection(
   });
 }
 
-/** TTL trims are re-derived; ordinary trims retain only text, never images or tool metadata. */
-export function serializeCacheTtlToolResultProjections(state: ToolResultPromptProjectionState) {
-  const marks = new Map(state.restoredCacheTtl);
-  for (const [key, projection] of state.replacements) {
-    if (projection.cacheTtl === "soft") {
-      marks.set(key, { mode: "soft" });
-    } else if (projection.cacheTtl === "hard") {
-      const placeholder = projection.content
-        .flatMap((block) => (block.type === "text" ? [block.text] : []))
-        .join("\n");
-      marks.set(key, { mode: "hard", placeholder });
-    }
-  }
-  return {
-    prunedToolResults: [...marks].map(([key, mark]) => Object.assign({ key }, mark)),
-    ambiguousToolResultBaseKeys: [...state.ambiguousBaseKeys],
-    frozenToolResults: [...state.sourceHashByKey].flatMap(([key, sourceHash]) => {
-      if (!state.frozen.has(key)) {
-        return [];
-      }
-      const projection = state.replacements.get(key);
-      return [
-        {
-          key,
-          sourceHash,
-          ...(!projection?.cacheTtl && projection
-            ? {
-                texts: projection.content.flatMap((block) =>
-                  block.type === "text" ? [block.text] : [],
-                ),
-              }
-            : {}),
-        },
-      ];
-    }),
-  };
-}
-
 export function getEmbeddedSessionPromptState(sessionId: string): EmbeddedSessionPromptState {
   const existing = sessionPromptStates.get(sessionId);
-  if (existing) {
-    sessionPromptStates.delete(sessionId);
-    sessionPromptStates.set(sessionId, existing);
-    return existing;
-  }
-  const created: EmbeddedSessionPromptState = {
+  const current: EmbeddedSessionPromptState = existing ?? {
     activeAttempts: 0,
     toolResults: createToolResultPromptProjectionState(),
   };
-  sessionPromptStates.set(sessionId, created);
+  sessionPromptStates.delete(sessionId);
+  sessionPromptStates.set(sessionId, current);
+  if (existing) {
+    return current;
+  }
   for (const [key, state] of sessionPromptStates) {
     if (sessionPromptStates.size <= MAX_SESSION_PROMPT_STATES) {
       break;
@@ -348,7 +302,7 @@ export function getEmbeddedSessionPromptState(sessionId: string): EmbeddedSessio
       sessionPromptStates.delete(key);
     }
   }
-  return created;
+  return current;
 }
 
 /** Overlapping cleanup keeps the next attempt's state until its own settlement. */
@@ -390,27 +344,39 @@ export function recordRuntimeContextProjection(
   return Boolean(changed);
 }
 
-export function hashToolResultProjectionSnapshot(
-  snapshot: ReturnType<typeof serializeCacheTtlToolResultProjections>,
-): string {
-  return sha256Hex(JSON.stringify(snapshot));
-}
-
 export async function persistToolResultProjections(
   state: ToolResultPromptProjectionState,
   appendEntry: (customType: string, data: unknown) => Promise<unknown>,
+  cacheTouch?: { timestamp: number; provider: string; modelId: string },
 ): Promise<void> {
-  if (state.frozen.size === 0) {
-    return;
-  }
   const snapshot = serializeCacheTtlToolResultProjections(state);
-  const hash = hashToolResultProjectionSnapshot(snapshot);
-  if (hash === state.lastWrittenSnapshotHash) {
+  const previous = state.cacheTtlCheckpoint;
+  const revision = state.cacheTtlRevision ?? 0;
+  if (
+    previous === undefined &&
+    !cacheTouch &&
+    !snapshot.prunedToolResults.length &&
+    !snapshot.frozenToolResults.length &&
+    !snapshot.ambiguousToolResultBaseKeys.length
+  ) {
     return;
   }
-  await appendEntry("openclaw.cache-ttl", snapshot);
-  // A failed owned write must leave the snapshot eligible for persistence.
-  state.lastWrittenSnapshotHash = hash;
+  const { marker, checkpoint } = prepareCacheTtlCheckpoint(snapshot, previous ?? undefined);
+  if (!marker && !cacheTouch) {
+    return;
+  }
+  let committedCheckpoint: CacheTtlCheckpoint | null = null;
+  try {
+    await appendEntry("openclaw.cache-ttl", { ...cacheTouch, ...marker });
+    committedCheckpoint = checkpoint;
+  } finally {
+    // Rejection can follow a durable commit; the next write must re-establish the full base.
+    // A branch restore during the write owns its new baseline.
+    if ((state.cacheTtlRevision ?? 0) === revision) {
+      state.cacheTtlCheckpoint = committedCheckpoint;
+      state.cacheTtlRevision = revision + 1;
+    }
+  }
 }
 
 /** Records the prepared repository identity and snapshots this session's LRU active set. */

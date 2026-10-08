@@ -52,13 +52,10 @@ function isClaudeCliAuthenticated(commandPath: string, env: NodeJS.ProcessEnv): 
 }
 
 function usesClaudeCliModelSelection(cfg: OpenClawConfig): boolean {
-  const primary = resolvePrimaryStringValue(cfg.agents?.defaults?.model);
-  if (normalizeOptionalLowercaseString(primary)?.startsWith(`${CLAUDE_CLI_PROVIDER}/`)) {
-    return true;
-  }
-  return Object.keys(cfg.agents?.defaults?.models ?? {}).some((key) =>
-    normalizeOptionalLowercaseString(key)?.startsWith(`${CLAUDE_CLI_PROVIDER}/`),
-  );
+  return [
+    resolvePrimaryStringValue(cfg.agents?.defaults?.model),
+    ...Object.keys(cfg.agents?.defaults?.models ?? {}),
+  ].some((key) => normalizeOptionalLowercaseString(key)?.startsWith(`${CLAUDE_CLI_PROVIDER}/`));
 }
 
 function probeDirectoryHealth(dirPath: string): ClaudeCliDirHealth {
@@ -70,15 +67,12 @@ function probeDirectoryHealth(dirPath: string): ClaudeCliDirHealth {
   } catch (error) {
     return hasErrnoCode(error, "ENOENT") ? "missing" : "unreadable";
   }
-  try {
-    fs.accessSync(dirPath, fs.constants.R_OK);
-  } catch {
-    return "unreadable";
-  }
-  try {
-    fs.accessSync(dirPath, fs.constants.W_OK);
-  } catch {
-    return "readonly";
+  for (const mode of [fs.constants.R_OK, fs.constants.W_OK]) {
+    try {
+      fs.accessSync(dirPath, mode);
+    } catch {
+      return mode === fs.constants.R_OK ? "unreadable" : "readonly";
+    }
   }
   return "present";
 }
@@ -116,20 +110,11 @@ function resolveClaudeCliAgentIds(cfg: OpenClawConfig): string[] {
   return [];
 }
 
-type ClaudeCliWorkspaceTarget = {
-  agentId: string;
-  workspaceDir: string;
-  projectDir: string;
-  workspaceHealth: ClaudeCliDirHealth;
-  projectDirHealth: ClaudeCliDirHealth;
-};
-
 function resolveClaudeCliWorkspaceTargets(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-  homeDir?: string;
   workspaceDir?: string;
-}): ClaudeCliWorkspaceTarget[] {
+}) {
   const agentIds = resolveClaudeCliAgentIds(params.cfg);
   const defaultAgentId = tryResolveDefaultAgentId(params.cfg);
   return agentIds.map((agentId) => {
@@ -139,7 +124,6 @@ function resolveClaudeCliWorkspaceTargets(params: {
         : resolveAgentWorkspaceDir(params.cfg, agentId, params.env);
     const projectDir = resolveClaudeCliProjectDirForWorkspace({
       workspaceDir,
-      homeDir: params.homeDir,
     });
     return {
       agentId,
@@ -155,17 +139,13 @@ export function noteClaudeCliHealth(
   cfg: OpenClawConfig,
   deps?: {
     noteFn?: typeof note;
-    env?: NodeJS.ProcessEnv;
-    homeDir?: string;
-    isAuthenticated?: (commandPath: string, env: NodeJS.ProcessEnv) => boolean;
     workspaceDir?: string;
   },
 ) {
-  const env = deps?.env ?? process.env;
+  const env = process.env;
   const workspaceTargets = resolveClaudeCliWorkspaceTargets({
     cfg,
     env,
-    homeDir: deps?.homeDir,
     workspaceDir: deps?.workspaceDir,
   });
   if (workspaceTargets.length === 0) {
@@ -190,9 +170,7 @@ export function noteClaudeCliHealth(
   for (const envName of backend?.config.clearEnv ?? []) {
     delete authEnv[envName];
   }
-  const authenticated = commandPath
-    ? (deps?.isAuthenticated ?? isClaudeCliAuthenticated)(commandPath, authEnv)
-    : false;
+  const authenticated = commandPath ? isClaudeCliAuthenticated(commandPath, authEnv) : false;
   const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const showAgentLabels =
     workspaceTargets.length > 1 ||
@@ -217,40 +195,33 @@ export function noteClaudeCliHealth(
 
   for (const target of workspaceTargets) {
     const agentLabel = showAgentLabels ? target.agentId : undefined;
-    const workspaceProblem = formatDirectoryProblemLine(
-      target.workspaceDir,
-      target.workspaceHealth,
-      agentLabel ? `Agent ${agentLabel} workspace` : "Workspace",
-    );
-    if (workspaceProblem) {
-      lines.push(workspaceProblem);
-    }
-    if (
-      target.workspaceHealth === "readonly" ||
-      target.workspaceHealth === "unreadable" ||
-      target.workspaceHealth === "not_directory"
-    ) {
-      fixHints.push(
+    for (const [dirPath, health, label, fixHint, repairReadonly] of [
+      [
+        target.workspaceDir,
+        target.workspaceHealth,
+        agentLabel ? `Agent ${agentLabel} workspace` : "Workspace",
         `- Fix: make ${
           agentLabel ? `agent ${agentLabel}'s workspace` : "the workspace"
         } a readable, writable directory for the gateway user.`,
-      );
-    }
-
-    const projectDirProblem = formatDirectoryProblemLine(
-      target.projectDir,
-      target.projectDirHealth,
-      agentLabel ? `Agent ${agentLabel} Claude project dir` : "Claude project dir",
-    );
-    if (projectDirProblem) {
-      lines.push(projectDirProblem);
-    }
-    if (target.projectDirHealth === "unreadable" || target.projectDirHealth === "not_directory") {
-      fixHints.push(
+        true,
+      ],
+      [
+        target.projectDir,
+        target.projectDirHealth,
+        agentLabel ? `Agent ${agentLabel} Claude project dir` : "Claude project dir",
         `- Fix: make ${
           agentLabel ? `agent ${agentLabel}'s Claude project dir` : "the Claude project dir"
         } readable, or remove the broken path and let Claude recreate it.`,
-      );
+        false,
+      ],
+    ] as const) {
+      const problem = formatDirectoryProblemLine(dirPath, health, label);
+      if (problem) {
+        lines.push(problem);
+        if (repairReadonly || health !== "readonly") {
+          fixHints.push(fixHint);
+        }
+      }
     }
   }
 

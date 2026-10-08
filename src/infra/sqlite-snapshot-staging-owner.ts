@@ -53,7 +53,7 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
   const pool = createOwnedWorkerTaskPool<SqliteSnapshotStagingCommand, SqliteSnapshotStagingReply>(
     {
       workerUrl,
-      maxWorkers: 1,
+      workerClass: "writer",
       idleTimeoutMs: 0,
       maxPendingTasks: DEFAULT_WORKER_PENDING_TASKS,
       maxPendingBytes: DEFAULT_WORKER_PENDING_BYTES,
@@ -645,7 +645,10 @@ function createStagingOwner(workerUrl: URL, nativeSource: RetainedNativeWorkerSo
     return { ...retained.operation, service: serviceRequests, startClose };
   };
 
-  const owner = { start, retainDirectory };
+  const owner = {
+    start,
+    retainDirectory,
+  };
   nativeSource.retain(owner, async () => {
     admissionClosed = true;
     for (const preparation of preparations.values()) {

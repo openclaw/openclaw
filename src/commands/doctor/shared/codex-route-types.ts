@@ -30,13 +30,7 @@ export type CodexRuntimeRouteHit = {
   agentId?: string;
 };
 
-export type DisabledCodexPluginRouteIssue = {
-  /** Config path that selects a model requiring the Codex plugin runtime. */
-  path: string;
-  /** Original model reference from config. */
-  modelRef: string;
-  /** Canonical OpenAI model reference that should remain after migration. */
-  canonicalModel: string;
+export type DisabledCodexPluginRouteIssue = Omit<CodexRuntimeRouteHit, "agentId"> & {
   /** True when explicit plugin policy blocks auto-enabling the Codex plugin. */
   repairBlocked: boolean;
 };

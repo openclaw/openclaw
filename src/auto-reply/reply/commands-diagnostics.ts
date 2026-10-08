@@ -19,10 +19,11 @@ import {
 import type { ReplyPayload } from "../types.js";
 import { formatCommandExecResult, formatCommandExecText } from "./command-exec-result.js";
 import { commandReply, rejectNonOwnerCommand } from "./command-gates.js";
+import { buildPluginCommandContext } from "./commands-context.js";
 import { buildCurrentOpenClawCliExecRequest } from "./commands-openclaw-cli.js";
 import {
+  buildCommandExecApprovalDefaults,
   deliverPrivateCommandReply,
-  resolveCommandExecApprovalRoute,
   resolvePrivateCommandRouteTargets,
   type PrivateCommandRouteTarget,
 } from "./commands-private-route.js";
@@ -141,10 +142,10 @@ function parseDiagnosticsArgs(commandBody: string): string | undefined {
   if (trimmed === DIAGNOSTICS_COMMAND) {
     return "";
   }
-  if (trimmed.startsWith(`${DIAGNOSTICS_COMMAND} `)) {
-    return trimmed.slice(DIAGNOSTICS_COMMAND.length + 1).trim();
-  }
-  if (trimmed.startsWith(`${DIAGNOSTICS_COMMAND}:`)) {
+  if (
+    trimmed.startsWith(`${DIAGNOSTICS_COMMAND} `) ||
+    trimmed.startsWith(`${DIAGNOSTICS_COMMAND}:`)
+  ) {
     return trimmed.slice(DIAGNOSTICS_COMMAND.length + 1).trim();
   }
   return undefined;
@@ -199,29 +200,14 @@ async function buildDiagnosticsReply(
   const { command, env } = buildGatewayDiagnosticsExportJsonRequest();
   try {
     const execTool = createExecTool({
-      host: "gateway",
-      security: "allowlist",
-      ask: "always",
+      ...buildCommandExecApprovalDefaults(params, options.privateApprovalTarget),
       trigger: "diagnostics",
       scopeKey: DIAGNOSTICS_EXEC_SCOPE_KEY,
       approvalWarningText: buildDiagnosticsApprovalWarning(codexDiagnostics.approvalText),
       approvalFollowup: codexDiagnostics.approvalFollowup,
       approvalFollowupMode: "direct",
-      allowBackground: true,
       timeoutSec,
-      cwd: params.workspaceDir,
       agentId,
-      sessionKey: params.sessionKey,
-      eventRouting: {
-        mainKey: params.cfg.session?.mainKey,
-        sessionScope: params.cfg.session?.scope,
-      },
-      ...resolveCommandExecApprovalRoute({
-        commandParams: params,
-        privateApprovalTarget: options.privateApprovalTarget,
-      }),
-      notifyOnExit: params.cfg.tools?.exec?.notifyOnExit,
-      notifyOnExitEmptySuccess: params.cfg.tools?.exec?.notifyOnExitEmptySuccess,
     });
     const result = await execTool.execute("chat-diagnostics-gateway-export", {
       command,
@@ -264,40 +250,40 @@ async function buildCodexDiagnosticsApprovalIntegration(
   options: { diagnosticsPrivateRouted?: boolean } = {},
 ): Promise<CodexDiagnosticsApprovalIntegration | undefined> {
   const hasHarnessMetadata = hasCodexHarnessMetadata(params);
+  const renderSection = (result: PluginCommandResult | undefined) => {
+    if (!result) {
+      return hasHarnessMetadata
+        ? {
+            approvalText:
+              "OpenAI Codex harness: selected for this session, but the bundled Codex diagnostics command is not registered.",
+          }
+        : undefined;
+    }
+    const reply = rewriteCodexDiagnosticsResult(result);
+    if (!hasHarnessMetadata && isCodexDiagnosticsUnavailableText(reply.text)) {
+      return undefined;
+    }
+    return {
+      approvalText: reply.text ? ["OpenAI Codex harness:", reply.text].join("\n") : undefined,
+    };
+  };
   const previewResult = await executeCodexDiagnosticsAddon(params, args, {
     ...options,
     diagnosticsPreviewOnly: true,
   });
-  if (!previewResult) {
-    return hasHarnessMetadata
-      ? {
-          approvalText:
-            "OpenAI Codex harness: selected for this session, but the bundled Codex diagnostics command is not registered.",
-        }
-      : undefined;
-  }
-  const preview = rewriteCodexDiagnosticsResult(previewResult);
-  if (!hasHarnessMetadata && isCodexDiagnosticsUnavailableText(preview.text)) {
-    return undefined;
+  const preview = renderSection(previewResult);
+  if (!preview || !previewResult) {
+    return preview;
   }
   return {
-    approvalText: preview.text ? ["OpenAI Codex harness:", preview.text].join("\n") : undefined,
-    approvalFollowup: async () => {
-      const uploadResult = await executeCodexDiagnosticsAddon(params, args, {
-        ...options,
-        diagnosticsUploadApproved: true,
-      });
-      if (!uploadResult) {
-        return hasHarnessMetadata
-          ? "OpenAI Codex harness: selected for this session, but the bundled Codex diagnostics command is not registered."
-          : undefined;
-      }
-      const uploaded = rewriteCodexDiagnosticsResult(uploadResult);
-      if (!hasHarnessMetadata && isCodexDiagnosticsUnavailableText(uploaded.text)) {
-        return undefined;
-      }
-      return uploaded.text ? ["OpenAI Codex harness:", uploaded.text].join("\n") : undefined;
-    },
+    ...preview,
+    approvalFollowup: async () =>
+      renderSection(
+        await executeCodexDiagnosticsAddon(params, args, {
+          ...options,
+          diagnosticsUploadApproved: true,
+        }),
+      )?.approvalText,
   };
 }
 
@@ -350,30 +336,11 @@ async function executeCodexDiagnosticsAddon(
   return await executePluginCommand({
     command: match.command,
     args: match.args,
-    senderId: params.command.senderId,
-    channel: params.command.channel,
-    channelId: params.command.channelId,
-    isAuthorizedSender: params.command.isAuthorizedSender,
-    senderIsOwner: params.command.senderIsOwner,
-    assertOwnerCurrent: params.command.assertOwnerCurrent,
-    gatewayClientScopes: params.ctx.GatewayClientScopes,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
+    ...buildPluginCommandContext(params),
     sessionId: targetSessionEntry?.sessionId,
     sessionFile: targetSessionEntry ? params.sessionKey : undefined,
     authProfileId: targetSessionEntry?.authProfileOverride,
     commandBody,
-    config: params.cfg,
-    from: params.command.from,
-    to: params.command.to,
-    originatingTo: normalizeOptionalString(params.ctx.OriginatingTo),
-    accountId: params.ctx.AccountId ?? undefined,
-    messageThreadId:
-      typeof params.ctx.MessageThreadId === "string" ||
-      typeof params.ctx.MessageThreadId === "number"
-        ? params.ctx.MessageThreadId
-        : undefined,
-    threadParentId: normalizeOptionalString(params.ctx.ThreadParentId),
     diagnosticsSessions: buildCodexDiagnosticsSessions(params),
     ...(options.diagnosticsUploadApproved === undefined
       ? {}

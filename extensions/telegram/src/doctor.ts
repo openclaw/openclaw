@@ -66,12 +66,8 @@ function collectTelegramAllowFromLists(
     { pathLabel: `${prefix}.allowFrom`, holder: account, key: "allowFrom" },
     { pathLabel: `${prefix}.groupAllowFrom`, holder: account, key: "groupAllowFrom" },
   ];
-  const groups = asObjectRecord(account.groups);
-  if (!groups) {
-    return refs;
-  }
-  for (const groupId of Object.keys(groups)) {
-    const group = asObjectRecord(groups[groupId]);
+  for (const [groupId, value] of Object.entries(asObjectRecord(account.groups) ?? {})) {
+    const group = asObjectRecord(value);
     if (!group) {
       continue;
     }
@@ -80,12 +76,8 @@ function collectTelegramAllowFromLists(
       holder: group,
       key: "allowFrom",
     });
-    const topics = asObjectRecord(group.topics);
-    if (!topics) {
-      continue;
-    }
-    for (const topicId of Object.keys(topics)) {
-      const topic = asObjectRecord(topics[topicId]);
+    for (const [topicId, topicValue] of Object.entries(asObjectRecord(group.topics) ?? {})) {
+      const topic = asObjectRecord(topicValue);
       if (!topic) {
         continue;
       }
@@ -127,22 +119,22 @@ function collectTelegramMalformedGroupsWarnings(params: {
 
 function scanTelegramInvalidAllowFromEntries(cfg: OpenClawConfig): TelegramAllowFromInvalidHit[] {
   const hits: TelegramAllowFromInvalidHit[] = [];
-  const scanList = (pathLabel: string, list: unknown) => {
-    if (!Array.isArray(list)) {
-      return;
-    }
-    for (const entry of list) {
-      const normalized = normalizeTelegramAllowFromEntry(entry);
-      if (!normalized || normalized === "*" || isNumericTelegramSenderUserId(normalized)) {
+  for (const scope of collectChannelAccountScopes({ cfg, channelId: "telegram" })) {
+    for (const { pathLabel, holder, key } of collectTelegramAllowFromLists(
+      scope.prefix,
+      scope.account,
+    )) {
+      const list = holder[key];
+      if (!Array.isArray(list)) {
         continue;
       }
-      hits.push({ path: pathLabel, entry: normalizeOptionalString(String(entry)) ?? "" });
-    }
-  };
-
-  for (const scope of collectChannelAccountScopes({ cfg, channelId: "telegram" })) {
-    for (const ref of collectTelegramAllowFromLists(scope.prefix, scope.account)) {
-      scanList(ref.pathLabel, ref.holder[ref.key]);
+      for (const entry of list) {
+        const normalized = normalizeTelegramAllowFromEntry(entry);
+        if (!normalized || normalized === "*" || isNumericTelegramSenderUserId(normalized)) {
+          continue;
+        }
+        hits.push({ path: pathLabel, entry: normalizeOptionalString(String(entry)) ?? "" });
+      }
     }
   }
   return hits;
@@ -433,17 +425,14 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
         out.push(normalizeOptionalString(String(entry)) ?? "");
       }
     }
-    const deduped: DoctorAllowFromList = [];
-    const seen = new Set<string>();
+    const deduped = new Map<string, DoctorAllowFromList[number]>();
     for (const entry of out) {
       const keyValue = normalizeOptionalString(String(entry)) ?? "";
-      if (!keyValue || seen.has(keyValue)) {
-        continue;
+      if (keyValue && !deduped.has(keyValue)) {
+        deduped.set(keyValue, entry);
       }
-      seen.add(keyValue);
-      deduped.push(entry);
     }
-    holder[key] = deduped;
+    holder[key] = [...deduped.values()];
     for (const replacement of replaced.slice(0, 5)) {
       changes.push(
         `- ${sanitizeForLog(pathLabel)}: resolved ${sanitizeForLog(replacement.from)} -> ${sanitizeForLog(replacement.to)}`,

@@ -8,6 +8,7 @@ import type {
   SessionsListResult,
 } from "../api/types.ts";
 import type { AppSidebarSessionNavigationElement } from "../components/app-sidebar-session-navigation.ts";
+import { finishElementAnimations } from "../test-helpers/animations.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -214,13 +215,15 @@ suite.define(() => {
           (await headers.first().locator(".sidebar-agent-roster__copy").textContent())?.trim(),
         ).toBe("Harbor");
         expect(await headers.first().getAttribute("aria-current")).toBe("page");
+        // Showing all agents re-inserts the Pages pins, which replay the scaled
+        // zone-entry entrance; measure the settled layout.
+        await sidebar.evaluate(finishElementAnimations);
         for (const row of await sessionRows.all()) {
           const lead = await row.locator(".sidebar-session-indicator .session-glyph").boundingBox();
           const title = await row.locator(".sidebar-recent-session__name").boundingBox();
           expect(lead).not.toBeNull();
           expect(title).not.toBeNull();
-          // The renderer reports fractional layout values; allow 0.01 px of rounding.
-          expect(title!.x - (lead!.x + lead!.width)).toBeGreaterThanOrEqual(8 - 0.01);
+          expect(title!.x - (lead!.x + lead!.width)).toBeGreaterThanOrEqual(8);
         }
         await page.mouse.move(600, 60);
         await captureSidebarUiProof(suite, page, "sidebar-roster-after.png");
@@ -282,13 +285,13 @@ suite.define(() => {
           "command:agent-settings",
         ]);
         expect(
-          await workspaceMenu.locator(".sidebar-agent-menu__agent-grid wa-dropdown-item").count(),
+          await workspaceMenu.locator(".sidebar-agent-menu__agent-list wa-dropdown-item").count(),
         ).toBe(5);
         expect(await workspaceMenu.locator('[value="command:help"]').count()).toBe(0);
         expect(await workspaceMenu.locator("wa-dropdown-item[aria-checked]").count()).toBe(0);
         expect(await allAgentsTile.getAttribute("aria-current")).toBe("true");
         const agentTiles = workspaceMenu.locator(
-          ".sidebar-agent-menu__agent-grid wa-dropdown-item",
+          ".sidebar-agent-menu__agent-list wa-dropdown-item",
         );
         await expectFocused(agentTiles.first());
         await page.keyboard.press("ArrowDown");
@@ -441,7 +444,7 @@ suite.define(() => {
         await expect.poll(() => allAgentsTile.isVisible()).toBe(true);
         expect(await allAgentsTile.getAttribute("aria-current")).toBeNull();
         expect(
-          await sidebar.locator(".sidebar-agent-menu__agent-grid wa-dropdown-item").count(),
+          await sidebar.locator(".sidebar-agent-menu__agent-list wa-dropdown-item").count(),
         ).toBe(5);
         await expectFocused(activeAgentTile);
         await page.keyboard.press("Escape");

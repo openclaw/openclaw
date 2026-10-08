@@ -28,6 +28,7 @@ import {
   startSubagentAnnounceCleanupFlow,
 } from "./subagent-registry-lifecycle-announce-cleanup.js";
 import { completeCleanupBookkeeping } from "./subagent-registry-lifecycle-bookkeeping.js";
+import { scheduleResumeSubagentRun } from "./subagent-registry-lifecycle-cleanup.js";
 import { completeSubagentRunAttempt } from "./subagent-registry-lifecycle-completion.js";
 import type {
   CleanupBookkeepingParams,
@@ -36,7 +37,7 @@ import type {
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle-context.js";
 import { refreshFrozenResultFromSession } from "./subagent-registry-lifecycle-delivery.js";
-import { finalizeResumedAnnounceGiveUp } from "./subagent-registry-lifecycle-give-up.js";
+import { finalizeResumedAnnounceGiveUp } from "./subagent-registry-lifecycle-finalize-cleanup.js";
 import {
   cancelRequesterSettleWake,
   scheduleRequesterSettleWake,
@@ -113,7 +114,7 @@ function terminalPublication(entry: SubagentRunRecord): readonly unknown[] {
 
 export class SubagentLifecycleController {
   readonly pendingRequesterSettleWakeCommits = new Map<object, PendingRequesterSettleWakeCommit>();
-  readonly scheduledResumeTimers = new Set<ReturnType<typeof setTimeout>>();
+  readonly scheduledResumeTimers = new Map<object, ReturnType<typeof setTimeout>>();
   pendingRequesterSettleWakeRearms = new Set<object>();
   readonly cancelledRequesterSettleWakeRuns = new Set<object>();
   readonly scheduledRequesterSettleWakeRuns = new Set<object>();
@@ -325,8 +326,14 @@ export class SubagentLifecycleController {
     }
   }
 
+  scheduleResume = (
+    entry: SubagentRunRecord,
+    delayMs: number,
+    stateContext?: OpenClawStateWorkerContext,
+  ) => scheduleResumeSubagentRun(this, entry, delayMs, undefined, stateContext);
+
   clearScheduledResumeTimers = () => {
-    for (const timer of this.scheduledResumeTimers) {
+    for (const timer of this.scheduledResumeTimers.values()) {
       clearTimeout(timer);
     }
     this.scheduledResumeTimers.clear();
@@ -654,6 +661,10 @@ export class SubagentLifecycleController {
             this.options.resumeSubagentRun(runId);
           }
           return;
+        }
+        if (source === "restore" && entry.requesterSettleWake) {
+          // The transfer owns this initial wake even if it settles while restore reads siblings.
+          this.options.resumedRuns.add(getSubagentRunRuntimeKey(entry));
         }
         if (this.scheduledRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry))) {
           this.pendingRequesterSettleWakeRearms.add(getSubagentRunRuntimeKey(entry));

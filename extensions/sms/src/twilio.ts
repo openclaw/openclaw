@@ -41,12 +41,6 @@ type ParsedTwilioApiError = {
   message?: string;
 };
 
-type TwilioApiResponse = {
-  ok: boolean;
-  status: number;
-  text: string;
-};
-
 type TwilioMessagePayload = {
   sid?: string;
   to?: string;
@@ -56,32 +50,9 @@ type TwilioMessagePayload = {
 
 const TWILIO_CHANNEL_ADDRESS_RE = /^([a-z][a-z0-9-]*):(.*)$/i;
 
-export type TwilioIncomingPhoneNumber = {
-  sid: string;
-  phoneNumber: string;
-  smsUrl: string;
-  smsMethod: string;
-  voiceUrl: string;
-};
-
-export type TwilioMessageLogEntry = {
-  sid: string;
-  direction: string;
-  status: string;
-  to: string;
-  from: string;
-  errorCode: string;
-  body: string;
-  dateCreated: string;
-  dateSent: string;
-};
-
-export type TwilioMessagingService = {
-  sid: string;
-  inboundRequestUrl: string;
-  inboundMethod: string;
-  useInboundWebhookOnNumber: boolean;
-};
+export type TwilioIncomingPhoneNumber = ReturnType<typeof parseTwilioIncomingPhoneNumber>;
+export type TwilioMessageLogEntry = ReturnType<typeof parseTwilioMessageLogEntry>;
+export type TwilioMessagingService = ReturnType<typeof parseTwilioMessagingService>;
 
 function firstString(value: unknown): string {
   if (Array.isArray(value)) {
@@ -117,24 +88,22 @@ function parseTwilioSuccessPayload(text: string): TwilioMessagePayload {
   if (!text.trim()) {
     return {};
   }
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(text);
-    if (!parsed || typeof parsed !== "object") {
-      throw new Error("Twilio SMS send returned malformed JSON.");
-    }
-    const record = parsed as Record<string, unknown>;
-    return {
-      sid: typeof record.sid === "string" ? record.sid : undefined,
-      to: typeof record.to === "string" ? record.to : undefined,
-      from: typeof record.from === "string" ? record.from : undefined,
-      status: typeof record.status === "string" ? record.status : undefined,
-    };
+    parsed = JSON.parse(text);
   } catch (cause) {
-    if (cause instanceof Error && cause.message === "Twilio SMS send returned malformed JSON.") {
-      throw cause;
-    }
     throw new Error("Twilio SMS send returned malformed JSON.", { cause });
   }
+  if (!parsed || typeof parsed !== "object") {
+    throw new Error("Twilio SMS send returned malformed JSON.");
+  }
+  const record = parsed as Record<string, unknown>;
+  return {
+    sid: typeof record.sid === "string" ? record.sid : undefined,
+    to: typeof record.to === "string" ? record.to : undefined,
+    from: typeof record.from === "string" ? record.from : undefined,
+    status: typeof record.status === "string" ? record.status : undefined,
+  };
 }
 
 function requestSearch(req: IncomingMessage): string {
@@ -376,7 +345,7 @@ async function requestTwilioApi(params: {
   init?: Omit<RequestInit, "headers"> & { headers?: Record<string, string> };
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
-}): Promise<TwilioApiResponse> {
+}) {
   const init = {
     ...params.init,
     headers: {
@@ -426,9 +395,7 @@ async function requestTwilioApi(params: {
   }
 }
 
-function parseTwilioIncomingPhoneNumber(
-  record: Record<string, unknown>,
-): TwilioIncomingPhoneNumber {
+function parseTwilioIncomingPhoneNumber(record: Record<string, unknown>) {
   return {
     sid: firstTrimmedString(record.sid),
     phoneNumber: firstTrimmedString(record.phone_number ?? record.phoneNumber),
@@ -438,7 +405,7 @@ function parseTwilioIncomingPhoneNumber(
   };
 }
 
-function parseTwilioMessageLogEntry(record: Record<string, unknown>): TwilioMessageLogEntry {
+function parseTwilioMessageLogEntry(record: Record<string, unknown>) {
   return {
     sid: firstTrimmedString(record.sid),
     direction: firstTrimmedString(record.direction),
@@ -452,7 +419,7 @@ function parseTwilioMessageLogEntry(record: Record<string, unknown>): TwilioMess
   };
 }
 
-function parseTwilioMessagingService(record: Record<string, unknown>): TwilioMessagingService {
+function parseTwilioMessagingService(record: Record<string, unknown>) {
   return {
     sid: firstTrimmedString(record.sid),
     inboundRequestUrl: firstTrimmedString(record.inbound_request_url ?? record.inboundRequestUrl),

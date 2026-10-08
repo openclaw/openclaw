@@ -19,6 +19,7 @@ import {
   isRunningAsRoot,
   isSystemctlAvailable,
   reloadSystemdUserManager,
+  systemdInspectionError,
 } from "./systemd-exec.js";
 import {
   assertNoSystemGatewayOwnershipForActivation,
@@ -82,12 +83,25 @@ async function runSystemdServiceAction(
       return execSystemctl(args, env);
     };
   } else {
-    await assertSystemdAvailable(env);
     if (action !== "stop") {
+      await assertSystemdAvailable(env);
       const scopedEnv = { ...env, OPENCLAW_SYSTEMD_UNIT: unitName };
       await assertNoSystemGatewayOwnershipForActivation(scopedEnv);
     }
-    runSystemctl = (args) => execSystemctlUser(env, args, undefined, params.assertCurrent);
+    runSystemctl = (args) =>
+      execSystemctlUser(
+        env,
+        args,
+        undefined,
+        params.assertCurrent,
+        action === "stop"
+          ? {
+              warn:
+                params.warn ??
+                ((message) => params.stdout.write(`${formatLine("Warning", message)}\n`)),
+            }
+          : undefined,
+      );
   }
   if (action !== "stop") {
     // Clear crash-loop start-limit latches only after scope ownership is proven;
@@ -95,13 +109,19 @@ async function runSystemdServiceAction(
     params.assertCurrent?.();
     await runSystemctl(["reset-failed", unitName]);
   }
-  params.assertCurrent?.();
+  if (action !== "stop") {
+    params.assertCurrent?.();
+  }
   if (action === "restart") {
     params.onRestartAttempted?.();
   }
   const res = await runSystemctl([action, unitName]);
   if (res.code !== 0) {
-    throw new Error(`systemctl ${action} failed: ${res.stderr || res.stdout}`.trim());
+    throw systemdInspectionError(
+      res,
+      `systemctl ${action} failed: ${res.stderr || res.stdout}`.trim(),
+      installed?.scope,
+    );
   }
   report(unitName);
 }

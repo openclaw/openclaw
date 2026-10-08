@@ -859,6 +859,34 @@
       "destination": "/tools/skill-workshop"
     },
     {
+      "source": "/tools/skill-workshop/how-it-works",
+      "destination": "/tools/skill-workshop"
+    },
+    {
+      "source": "/tools/skill-workshop/collection-review",
+      "destination": "/tools/skill-workshop#unused-skill-cleanup"
+    },
+    {
+      "source": "/tools/skill-workshop/authoring",
+      "destination": "/tools/skill-workshop#learn"
+    },
+    {
+      "source": "/tools/skill-workshop/proposals",
+      "destination": "/tools/skill-workshop#upgrading-from-earlier-releases"
+    },
+    {
+      "source": "/tools/skill-workshop/configuration",
+      "destination": "/tools/skill-workshop#configuration"
+    },
+    {
+      "source": "/tools/skill-workshop/reference",
+      "destination": "/tools/skill-workshop#operator-surfaces"
+    },
+    {
+      "source": "/tools/skill-workshop/troubleshooting",
+      "destination": "/tools/skill-workshop#troubleshooting"
+    },
+    {
       "source": "/skills-config",
       "destination": "/tools/skills-config"
     },
@@ -1886,19 +1914,7 @@
                   "tools/skills",
                   "tools/custodian-skills",
                   "tools/skill-workshop",
-                  {
-                    "group": "Skill Workshop",
-                    "pages": [
-                      "tools/skill-workshop/personal-library",
-                      "tools/skill-workshop/how-it-works",
-                      "tools/skill-workshop/collection-review",
-                      "tools/skill-workshop/authoring",
-                      "tools/skill-workshop/proposals",
-                      "tools/skill-workshop/configuration",
-                      "tools/skill-workshop/reference",
-                      "tools/skill-workshop/troubleshooting"
-                    ]
-                  },
+                  "tools/skill-workshop/personal-library",
                   "tools/self-learning",
                   "tools/creating-skills",
                   "tools/skills-config",
@@ -2159,6 +2175,7 @@
                 "group": "Concepts and configuration",
                 "pages": [
                   "concepts/models",
+                  "concepts/recommended-models",
                   "concepts/decision-models",
                   "concepts/model-providers",
                   {
@@ -2520,11 +2537,11 @@
                           "gateway/cloud-workers/session-lifecycle",
                           "gateway/cloud-workers/desktop",
                           "gateway/cloud-workers/security-model",
+                          "gateway/cloud-workers/native-inference",
                           "gateway/cloud-workers/troubleshooting"
                         ]
                       },
-                      "gateway/multiple-gateways",
-                      "gateway/multi-tenant-hosting"
+                      "gateway/multiple-gateways"
                     ]
                   },
                   {
@@ -2734,7 +2751,6 @@
                     "group": "Running the service",
                     "pages": [
                       "cli/daemon",
-                      "cli/fleet",
                       "cli/gateway",
                       {
                         "group": "Gateway",
@@ -3177,6 +3193,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.9.9",
                   "releases/2026.9.8",
                   "releases/2026.9.7",
                   "releases/2026.9.6",

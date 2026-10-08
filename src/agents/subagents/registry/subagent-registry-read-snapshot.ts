@@ -1,11 +1,15 @@
 import { isDeepStrictEqual } from "node:util";
+import { SessionMaintenancePreservationConflictError } from "../../../config/sessions/session-mutation-conflict-error.js";
 import { getAsyncWorkSignal } from "../../../shared/async-work-scope.js";
 import {
   executeExistingOpenClawStateRead,
   getActiveOpenClawStateDatabaseReadSnapshot,
 } from "../../../state/openclaw-state-db-readonly.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
-import { projectSubagentRunForSessionList } from "./subagent-delivery-state.js";
+import {
+  projectSubagentRunForMaintenance,
+  projectSubagentRunForSessionList,
+} from "./subagent-delivery-state.js";
 import { getSubagentSessionReadLookup } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import {
@@ -37,6 +41,7 @@ export type SubagentRunReadSelection = {
 
 export type SubagentRunReadScope =
   | { runIds: ReadonlySet<string> }
+  | { childSessionKeys: readonly string[] }
   | { sessionKeys: readonly string[]; descendants: boolean }
   | "all";
 
@@ -100,17 +105,18 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
   };
   const withLiveFacts = (compact: Map<string, SubagentRunReadRecord>) => {
     if (readScope !== "all") {
+      const live = getSubagentSessionReadLookup(inMemoryRuns);
+      const durable = getSessionListLookup(compactCache, compact);
       let liveKeys: string[];
       let persistedKeys: string[];
       if ("runIds" in readScope) {
-        liveKeys = getSubagentSessionReadLookup(inMemoryRuns).selectRunIds(readScope.runIds);
-        persistedKeys = getSessionListLookup(compactCache, compact).selectRunIds(
-          readScope.runIds,
-          liveKeys,
-        );
+        liveKeys = live.selectRunIds(readScope.runIds);
+        persistedKeys = durable.selectRunIds(readScope.runIds, liveKeys);
+      } else if ("childSessionKeys" in readScope) {
+        const keys = new Set(readScope.childSessionKeys.map((key) => key.trim()).filter(Boolean));
+        liveKeys = live.selectChildren(keys);
+        persistedKeys = durable.selectChildren(keys);
       } else {
-        const live = getSubagentSessionReadLookup(inMemoryRuns);
-        const durable = getSessionListLookup(compactCache, compact)!;
         liveKeys = live.selectReadScope(readScope.sessionKeys, durable, readScope.descendants);
         persistedKeys = durable.selectReadScope(
           readScope.sessionKeys,
@@ -121,8 +127,8 @@ export async function prepareSubagentRunReadSnapshot<S extends SubagentRunReadSe
       }
       const snapshot = new Map<string, SubagentRunReadRecord>();
       for (const key of new Set([...persistedKeys, ...liveKeys])) {
-        const live = inMemoryRuns.get(key);
-        const entry = live ? projectSubagentRunForSessionList(live) : compact.get(key);
+        const liveEntry = inMemoryRuns.get(key);
+        const entry = liveEntry ? projectSubagentRunForSessionList(liveEntry) : compact.get(key);
         if (entry) {
           snapshot.set(key, entry);
         }
@@ -262,13 +268,8 @@ export async function prepareSubagentSessionRunReadSnapshot(params: {
   const roots = Object.freeze(
     [...new Set(params.sessionKeys.map((key) => key.trim()).filter(Boolean))].toSorted(),
   );
-  const localRuns = () =>
-    mergeSelectedFullRuns(fullCache, inMemoryRuns, new Map(), () => true, {
-      context,
-      freshPersisted: true,
-    });
   const topology = () =>
-    [...localRuns().values()]
+    [...inMemoryRuns.values()]
       .map(({ childSessionKey, requesterSessionKey }) => ({ childSessionKey, requesterSessionKey }))
       .toSorted(
         (left, right) =>
@@ -389,7 +390,8 @@ export type PreparedSubagentMaintenanceRead = {
 /** Fresh physical maintenance facts combine with current published resident rows. */
 export async function prepareSubagentMaintenanceReadSnapshot(
   inMemoryRuns: Map<string, SubagentRunRecord>,
-  cache: SubagentRunsCache<SubagentRunMaintenanceRecord>,
+  cache: SubagentRunsCache<SubagentRunRecord>,
+  options?: { live?: true },
 ): Promise<PreparedSubagentMaintenanceRead> {
   const context = shouldReadPersistedSubagentRuns()
     ? captureOpenClawStateWorkerContext()
@@ -406,13 +408,13 @@ export async function prepareSubagentMaintenanceReadSnapshot(
       assertSubagentReadContext(context);
     }
   };
-  const stateForRead = (): SubagentRunsCache<SubagentRunMaintenanceRecord>["state"] =>
+  const stateForRead = (): SubagentRunsCache<SubagentRunRecord>["state"] =>
     context ? selectSubagentCacheStateForRead(cache.state, context) : {};
   const capture = (persisted: ReadonlyMap<string, SubagentRunMaintenanceRecord>) => {
     assertCurrent();
     const runs = new Map(persisted);
     for (const [runId, entry] of inMemoryRuns) {
-      runs.set(runId, cache.project(entry));
+      runs.set(runId, entry);
     }
     return runs;
   };
@@ -438,7 +440,7 @@ export async function prepareSubagentMaintenanceReadSnapshot(
     const reply = await executeExistingOpenClawStateRead(
       { path: context.admission.databasePath, env: context.environment },
       { type: "subagents.runs", scope: { kind: "maintenance" } },
-      { context, current: true },
+      { context, current: true, live: options?.live },
     );
     assertCurrent();
     if (
@@ -449,7 +451,9 @@ export async function prepareSubagentMaintenanceReadSnapshot(
     }
     // Return revoked facts after publication races; the maintenance owner bounds retries.
     const persisted = reply?.runs ?? new Map<string, SubagentRunMaintenanceRecord>();
-    // Cache representation may change on publication; compare the actual compact rows.
+    const matchesProtection = (runId: string, entry: SubagentRunRecord | undefined) =>
+      isDeepStrictEqual(persisted.get(runId), entry && projectSubagentRunForMaintenance(entry));
+    // Compare protection against the canonical publication without retaining another row cache.
     published = (runIds) => {
       const state = stateForRead();
       if (state.sourceIdentity !== context.admission.identity.key) {
@@ -460,15 +464,13 @@ export async function prepareSubagentMaintenanceReadSnapshot(
         invalidated ||=
           !replacement ||
           replacement.size !== persisted.size ||
-          [...persisted].some(
-            ([runId, entry]) => !isDeepStrictEqual(entry, replacement.get(runId)),
-          );
+          [...persisted.keys()].some((runId) => !matchesProtection(runId, replacement.get(runId)));
         return;
       }
       invalidated ||= runIds.some((runId) => {
         const change = state.changes?.get(runId);
         const entry = change ? change.entry : state.snapshot?.get(runId);
-        return !isDeepStrictEqual(persisted.get(runId), entry);
+        return !matchesProtection(runId, entry);
       });
     };
     const basis: SubagentMaintenanceDurableBasis = Object.freeze({
@@ -485,7 +487,9 @@ export async function prepareSubagentMaintenanceReadSnapshot(
       capture() {
         assertCurrent();
         if (invalidated) {
-          throw new Error("Subagent maintenance facts changed during preparation");
+          throw new SessionMaintenancePreservationConflictError(
+            "Subagent maintenance facts changed during preparation",
+          );
         }
         return capture(persisted);
       },

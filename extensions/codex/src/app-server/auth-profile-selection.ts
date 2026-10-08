@@ -11,6 +11,13 @@ type AuthProfileOrderConfig = Parameters<ProfileAuth["resolveAuthProfileOrder"]>
 export const CODEX_APP_SERVER_AUTH_PROVIDER = "openai";
 const CODEX_APP_SERVER_EXTERNAL_CLI_PROVIDER_IDS = [CODEX_APP_SERVER_AUTH_PROVIDER];
 
+export type CodexAppServerAuthProfileLookup = {
+  authProfileId?: string;
+  authProfileStore?: AuthProfileStore;
+  agentDir?: string;
+  config?: AuthProfileOrderConfig;
+};
+
 export function createCodexAuthProfileSelection({
   ensureAuthProfileStore,
   resolveAuthProfileOrder,
@@ -31,23 +38,17 @@ export function createCodexAuthProfileSelection({
     })[0]?.trim();
   }
 
-  function resolveCodexAppServerAuthProfileIdForAgent(params: {
-    authProfileId?: string;
-    authProfileStore?: AuthProfileStore;
-    agentDir?: string;
-    config?: AuthProfileOrderConfig;
-  }): string | undefined {
+  function resolveCodexAppServerAuthProfileIdForAgent(
+    params: CodexAppServerAuthProfileLookup,
+  ): string | undefined {
     const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
     const store = resolveCodexAppServerAuthProfileStore({ ...params, agentDir });
     return resolveCodexAppServerAuthProfileId({ ...params, store });
   }
 
-  function resolveCodexAppServerAuthProfileStore(params: {
-    agentDir?: string;
-    authProfileId?: string;
-    authProfileStore?: AuthProfileStore;
-    config?: AuthProfileOrderConfig;
-  }): AuthProfileStore {
+  function resolveCodexAppServerAuthProfileStore(
+    params: CodexAppServerAuthProfileLookup,
+  ): AuthProfileStore {
     if (params.authProfileStore) {
       return params.authProfileStore;
     }

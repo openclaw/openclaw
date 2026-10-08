@@ -516,10 +516,6 @@ export function scheduleProcessExitAfterTuiReturn(
   return timer;
 }
 
-export function cancelProcessExitAfterTuiReturn(timer: ReturnType<typeof setTimeout>): void {
-  clearTimeout(timer);
-}
-
 type CtrlCAction = "clear" | "warn" | "exit";
 type TuiCtrlCAction = CtrlCAction | "force-exit";
 
@@ -530,20 +526,14 @@ export function resolveCtrlCAction(params: {
   exitWindowMs?: number;
 }): { action: CtrlCAction; nextLastCtrlCAt: number } {
   const exitWindowMs = Math.max(1, Math.floor(params.exitWindowMs ?? 1000));
-  if (params.hasInput) {
-    return {
-      action: "clear",
-      nextLastCtrlCAt: params.now,
-    };
-  }
-  if (params.now - params.lastCtrlCAt <= exitWindowMs) {
+  if (!params.hasInput && params.now - params.lastCtrlCAt <= exitWindowMs) {
     return {
       action: "exit",
       nextLastCtrlCAt: params.lastCtrlCAt,
     };
   }
   return {
-    action: "warn",
+    action: params.hasInput ? "clear" : "warn",
     nextLastCtrlCAt: params.now,
   };
 }
@@ -559,31 +549,26 @@ export function resolveTuiCtrlCAction(params: {
   if (params.exitRequested === true) {
     return { action: "force-exit", nextLastCtrlCAt: params.lastCtrlCAt };
   }
-  if (params.hasInput) {
-    return resolveCtrlCAction(params);
-  }
-  if (params.wasDisconnected === true) {
+  if (!params.hasInput && params.wasDisconnected === true) {
     return { action: "exit", nextLastCtrlCAt: params.lastCtrlCAt };
   }
   return resolveCtrlCAction(params);
 }
 
 export function createTuiConnectionLineage() {
-  let hasConnected = false;
-  let wasDisconnected = false;
+  let phase: "initial" | "connected" | "disconnected" = "initial";
   return {
     connect: () => {
-      const reconnected = wasDisconnected;
-      hasConnected = true;
-      wasDisconnected = false;
+      const reconnected = phase === "disconnected";
+      phase = "connected";
       return reconnected;
     },
     disconnect: () => {
-      if (hasConnected) {
-        wasDisconnected = true;
+      if (phase !== "initial") {
+        phase = "disconnected";
       }
     },
-    wasDisconnected: () => wasDisconnected,
+    wasDisconnected: () => phase === "disconnected",
   };
 }
 
@@ -834,7 +819,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   void import("../agents/utils/tools-manager.js")
-    .then(({ ensureTool }) => ensureTool("fd", true))
+    .then(({ ensureTool }) => ensureTool("fd"))
     .then((fdPath) => {
       if (fdPath) {
         autocompleteFdPath = fdPath;
@@ -988,8 +973,6 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       return;
     }
     statusContainer.clear();
-    statusLoader?.stop();
-    statusLoader = null;
     statusText = new Text("", 1, 0);
     statusContainer.addChild(statusText);
   };
@@ -1108,9 +1091,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   const setConnectionStatus = (text: string, ttlMs?: number) => {
     state.connectionStatus = sanitizeRenderableLine(text);
     renderStatus();
-    if (state.statusTimeout) {
-      stopStatusTimeout();
-    }
+    stopStatusTimeout();
     if (ttlMs && ttlMs > 0) {
       state.statusTimeout = setTimeout(() => {
         state.connectionStatus = state.isConnected
@@ -1228,7 +1209,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   const { openOverlay, closeOverlay } = createOverlayHandlers(tui, editor);
-  const questions = createTuiQuestionController({
+  const promptContext = {
     client,
     chatLog,
     getAgentId: () => state.currentAgentId,
@@ -1236,28 +1217,17 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     openOverlay,
     closeOverlay,
     requestRender: () => tui.requestRender(),
+  };
+  const questions = createTuiQuestionController({
+    ...promptContext,
     onPendingChange: (text) => questionStatus.setText(theme.accent(text)),
   });
   const reportQuestionRefreshError = () => {
     chatLog.addSystem("question refresh failed; reconnect or use /question to retry");
     tui.requestRender();
   };
-  const refreshQuestions = async () => {
-    try {
-      await questions.refresh();
-    } catch {
-      reportQuestionRefreshError();
-    }
-  };
-  const pluginApprovals = createTuiPluginApprovalController({
-    client,
-    chatLog,
-    getAgentId: () => state.currentAgentId,
-    getSessionKey: () => state.currentSessionKey,
-    openOverlay,
-    closeOverlay,
-    requestRender: () => tui.requestRender(),
-  });
+  const refreshQuestions = () => questions.refresh().catch(reportQuestionRefreshError);
+  const pluginApprovals = createTuiPluginApprovalController(promptContext);
   const btw = {
     showResult: (params: { question: string; text: string; isError?: boolean }) => {
       chatLog.showBtw(params);
@@ -1321,15 +1291,10 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     return result;
   };
   const taskSuggestions = createTuiTaskSuggestionController({
-    client,
-    chatLog,
-    getAgentId: () => state.currentAgentId,
-    getSessionKey: () => state.currentSessionKey,
-    openOverlay,
-    closeOverlay,
-    requestRender: () => tui.requestRender(),
+    ...promptContext,
     onAccepted: setSession,
   });
+  const promptControllers = [pluginApprovals, questions, taskSuggestions];
   const refreshPendingPrompts = async (ownsConnection: () => boolean = () => true) => {
     for (const [label, controller] of [
       ["plugin approval", pluginApprovals],
@@ -1427,9 +1392,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       ...(result?.systemAgentMessage ? { systemAgentMessage: result.systemAgentMessage } : {}),
     };
     disposeEventHandlers();
-    pluginApprovals.dispose();
-    questions.dispose();
-    taskSuggestions.dispose();
+    promptControllers.forEach((controller) => controller.dispose());
     chatLog.dispose();
     beginTuiShutdown({
       stopCommandScopes: async () => {
@@ -1560,9 +1523,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     tui.requestRender();
   };
   editor.onCtrlC = handleCtrlC;
-  editor.onCtrlD = () => {
-    requestExit();
-  };
+  editor.onCtrlD = requestExit;
   editor.onCtrlO = () => {
     state.toolsExpanded = !state.toolsExpanded;
     chatLog.setToolsExpanded(state.toolsExpanded);
@@ -1576,9 +1537,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     );
     tui.requestRender();
   };
-  editor.onCtrlL = () => {
-    openModelSelector();
-  };
+  editor.onCtrlL = openModelSelector;
   editor.onCtrlG = () => {
     void openAgentSelector();
   };
@@ -1606,28 +1565,19 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     return undefined;
   });
 
+  const eventHandlers = new Map([
+    ["chat", handleChatEvent],
+    ["chat.side_result", handleBtwEvent],
+    ["agent", handleAgentEvent],
+    ["sessions.changed", handleSessionsChangedEvent],
+    ["session.message", handleSessionMessageEvent],
+  ]);
   client.onEvent = (evt) => {
     if (exitRequested) {
       return;
     }
-    pluginApprovals.handleEvent(evt.event, evt.payload);
-    questions.handleEvent(evt.event, evt.payload);
-    taskSuggestions.handleEvent(evt.event, evt.payload);
-    if (evt.event === "chat") {
-      handleChatEvent(evt.payload);
-    }
-    if (evt.event === "chat.side_result") {
-      handleBtwEvent(evt.payload);
-    }
-    if (evt.event === "agent") {
-      handleAgentEvent(evt.payload);
-    }
-    if (evt.event === "sessions.changed") {
-      handleSessionsChangedEvent(evt.payload);
-    }
-    if (evt.event === "session.message") {
-      handleSessionMessageEvent(evt.payload);
-    }
+    promptControllers.forEach((controller) => controller.handleEvent(evt.event, evt.payload));
+    eventHandlers.get(evt.event)?.(evt.payload);
   };
 
   client.onConnected = () => {
@@ -1677,28 +1627,22 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
       if (reconnected) {
         reconnectStreamingWatchdog();
       }
-      await refreshAgents();
-      if (!ownsConnection()) {
-        return;
-      }
-      await sessionRestore.restore(connectedGeneration);
-      if (!ownsConnection()) {
-        return;
-      }
-      updateHeader();
-      updateFooter();
-      updateAutocompleteProvider();
-      await refreshQuestions();
-      if (!ownsConnection()) {
-        return;
-      }
-      await refreshPendingPrompts(ownsConnection);
-      if (!ownsConnection()) {
-        return;
-      }
-      await loadHistory(reconnected);
-      if (!ownsConnection()) {
-        return;
+      for (const initialize of [
+        refreshAgents,
+        () => sessionRestore.restore(connectedGeneration),
+        () => {
+          updateHeader();
+          updateFooter();
+          updateAutocompleteProvider();
+          return refreshQuestions();
+        },
+        () => refreshPendingPrompts(ownsConnection),
+        () => loadHistory(reconnected),
+      ]) {
+        await initialize();
+        if (!ownsConnection()) {
+          return;
+        }
       }
       state.isConnected = true;
       if (state.activityStatus === "starting up") {
@@ -1810,9 +1754,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     const finish = () => {
       disposeStatus();
       disposeEventHandlers();
-      pluginApprovals.dispose();
-      questions.dispose();
-      taskSuggestions.dispose();
+      promptControllers.forEach((controller) => controller.dispose());
       if (isLocalMode) {
         setConsoleSubsystemFilter(previousConsoleSubsystemFilter);
       }

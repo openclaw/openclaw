@@ -26,7 +26,10 @@ import { resolveAuthProfileOrder } from "./order.js";
 import { resolveSharedAuthStorePath } from "./path-resolve.js";
 import { preparePersonalAuthProfileUsage } from "./personal-usage.js";
 import { resolveAuthProfileDatabasePath } from "./sqlite.js";
-import { logAuthProfileFailureStateChange } from "./state-observation.js";
+import {
+  logAuthProfileFailureStateChange,
+  logDroppedAuthProfileBookkeeping,
+} from "./state-observation.js";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,
   updateAuthProfileStoreWithLock,
@@ -77,15 +80,6 @@ const testing = {
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.authProfileUsageTestApi")] =
     testing;
-}
-
-function logDroppedAuthProfileBookkeeping(kind: string, profileId: string): void {
-  authProfileUsageLog.warn("dropped auth profile bookkeeping after locked store update failed", {
-    event: "auth_profile_bookkeeping_dropped",
-    kind,
-    profileId,
-    tags: ["auth_profiles", "persistence"],
-  });
 }
 
 async function updateOwnedAuthProfileUsage(
@@ -241,17 +235,12 @@ async function probeWhamForCooldown(
     if (!res.ok) {
       await cancelUnreadResponseBody(res);
       if (res.status === 401 || res.status === 403) {
-        const result =
-          res.status === 401
-            ? {
-                cooldownMs: WHAM_TOKEN_EXPIRED_COOLDOWN_MS,
-                cooldownClassification: "wham_token_expired" as const,
-              }
-            : {
-                cooldownMs: WHAM_DEAD_ACCOUNT_COOLDOWN_MS,
-                cooldownClassification: "wham_account_dead" as const,
-              };
-        authProfileUsageLog.warn("WHAM probe classified auth profile unavailable", {
+        const tokenExpired = res.status === 401;
+        const result: WhamCooldownProbeResult = {
+          cooldownMs: tokenExpired ? WHAM_TOKEN_EXPIRED_COOLDOWN_MS : WHAM_DEAD_ACCOUNT_COOLDOWN_MS,
+          cooldownClassification: tokenExpired ? "wham_token_expired" : "wham_account_dead",
+        };
+        authProfileUsageLog.warn("WHAM check classified auth profile unavailable", {
           event: "auth_profile_wham_auth_classification",
           profileId,
           status: res.status,
@@ -265,7 +254,7 @@ async function probeWhamForCooldown(
     }
 
     const parsed = whamUsageSchema.safeParse(
-      await readProviderJsonResponse<unknown>(res, "WHAM usage probe"),
+      await readProviderJsonResponse<unknown>(res, "WHAM usage check"),
     );
     const failedProbe = { cooldownMs: WHAM_PROBE_FAILURE_COOLDOWN_MS };
     if (!parsed.success || parsed.data.spend_control?.reached) {
@@ -646,46 +635,6 @@ export async function markAuthProfileFailure(params: {
   }
 }
 
-function buildBlockedProfileUsageStats(params: {
-  previousStats: ProfileUsageStats | undefined;
-  blockedUntil: number;
-  source: AuthProfileBlockedSource;
-  modelId: string | undefined;
-  now: number;
-}): ProfileUsageStats {
-  const activeBlockedUntil = resolveActiveWindowUntil(
-    params.previousStats?.blockedUntil,
-    params.now,
-  );
-  // One active block can stay model-scoped only while every observation names
-  // that same model. Mixed or unknown observations widen the profile.
-  const blockedModel =
-    activeBlockedUntil === 0
-      ? params.modelId
-      : params.previousStats?.blockedScope === "model" &&
-          params.previousStats.blockedModel === params.modelId &&
-          params.modelId
-        ? params.modelId
-        : undefined;
-  return {
-    ...params.previousStats,
-    blockedUntil: Math.max(activeBlockedUntil, params.blockedUntil),
-    blockedReason: "subscription_limit",
-    blockedSource: params.source,
-    blockedModel,
-    blockedScope: blockedModel ? "model" : undefined,
-    cooldownUntil: undefined,
-    cooldownReason: undefined,
-    cooldownClassification: undefined,
-    cooldownModel: undefined,
-    lastFailureAt: params.now,
-    failureCounts: {
-      ...params.previousStats?.failureCounts,
-      rate_limit: (params.previousStats?.failureCounts?.rate_limit ?? 0) + 1,
-    },
-  };
-}
-
 /** Marks a profile blocked until a provider-reported reset timestamp. */
 export async function markAuthProfileBlockedUntil(params: {
   store: AuthProfileStore;
@@ -706,9 +655,7 @@ export async function markAuthProfileBlockedUntil(params: {
     return;
   }
 
-  let nextStats: ProfileUsageStats | undefined;
-  let previousStats: ProfileUsageStats | undefined;
-  let updateTime = 0;
+  let result: PersonalAuthProfileUsageResult | undefined;
   const updated = await updateOwnedAuthProfileUsage(store, profileId, {
     agentDir,
     updater: (freshStore) => {
@@ -720,35 +667,49 @@ export async function markAuthProfileBlockedUntil(params: {
       if (now === undefined) {
         return false;
       }
-      previousStats = freshStore.usageStats?.[profileId];
-      updateTime = now;
-      nextStats = buildBlockedProfileUsageStats({
-        previousStats,
-        blockedUntil,
-        source,
-        modelId,
-        now,
-      });
+      const previousStats = freshStore.usageStats?.[profileId];
+      const activeBlockedUntil = resolveActiveWindowUntil(previousStats?.blockedUntil, now);
+      // Mixed or unknown model observations widen an existing block to the profile.
+      const blockedModel =
+        activeBlockedUntil === 0
+          ? modelId
+          : previousStats?.blockedScope === "model" &&
+              previousStats.blockedModel === modelId &&
+              modelId
+            ? modelId
+            : undefined;
+      const nextStats: ProfileUsageStats = {
+        ...previousStats,
+        blockedUntil: Math.max(activeBlockedUntil, blockedUntil),
+        blockedReason: "subscription_limit",
+        blockedSource: source,
+        blockedModel,
+        blockedScope: blockedModel ? "model" : undefined,
+        cooldownUntil: undefined,
+        cooldownReason: undefined,
+        cooldownClassification: undefined,
+        cooldownModel: undefined,
+        lastFailureAt: now,
+        failureCounts: {
+          ...previousStats?.failureCounts,
+          rate_limit: (previousStats?.failureCounts?.rate_limit ?? 0) + 1,
+        },
+      };
       freshStore.usageStats ??= {};
       freshStore.usageStats[profileId] = nextStats;
+      result = { previous: previousStats, next: nextStats, now };
       return true;
     },
   });
-  if (updated) {
-    if (nextStats) {
-      logAuthProfileFailureStateChange({
-        runId,
-        profileId,
-        provider: profile.provider,
-        reason: "rate_limit",
-        previous: previousStats,
-        next: nextStats,
-        now: updateTime,
-      });
-    }
-    return;
-  }
-  if (updated === null) {
+  if (updated && result) {
+    logAuthProfileFailureStateChange({
+      runId,
+      profileId,
+      provider: profile.provider,
+      reason: "rate_limit",
+      ...result,
+    });
+  } else if (updated === null) {
     logDroppedAuthProfileBookkeeping("blocked_until", profileId);
   }
 }
@@ -788,5 +749,3 @@ export async function markInlineProviderApiKeyFailure(params: {
   }
   logDroppedAuthProfileBookkeeping("inline_api_key_failure", usageId);
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

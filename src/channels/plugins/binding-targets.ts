@@ -5,9 +5,6 @@ import type {
   StatefulBindingTargetResetResult,
 } from "./binding-types.js";
 
-/**
- * Ensures the stateful target driver for a configured binding is ready to receive traffic.
- */
 export async function ensureConfiguredBindingTargetReady(params: {
   assertActive?: () => void;
   cfg: OpenClawConfig;
@@ -36,9 +33,6 @@ export async function ensureConfiguredBindingTargetReady(params: {
   });
 }
 
-/**
- * Resets a stateful configured binding target in place when its driver supports reset.
- */
 export async function resetConfiguredBindingTargetInPlace(params: {
   cfg: OpenClawConfig;
   sessionKey: string;

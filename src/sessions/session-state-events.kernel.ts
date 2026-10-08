@@ -1,4 +1,4 @@
-// Shared row mutations for synchronous session signals and the shared-state worker.
+// Connection-bound signal mutations execute in the shared-state worker.
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";

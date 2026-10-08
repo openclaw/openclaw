@@ -1,4 +1,3 @@
-/** Plugin node-host bridge for loading plugin registry commands and dispatching node capabilities. */
 import { asOptionalRecord as normalizeRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
@@ -70,12 +69,7 @@ export async function ensureNodeHostPluginRegistry(params: {
 export function listRegisteredNodeHostCapsAndCommands(
   context: OpenClawPluginNodeHostCommandAvailabilityContext,
   options: { commandAllowlist?: ReadonlySet<string> } = {},
-): {
-  caps: string[];
-  commands: string[];
-  computerUse?: ComputerUseCapabilityDescriptor;
-  nodePluginTools: NodePluginToolDescriptor[];
-} {
+) {
   const registry = resolveNodeHostPluginRegistry();
   return withPluginRuntimeRegistryScope(registry, () => {
     const caps = new Set<string>();

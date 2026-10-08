@@ -4,8 +4,7 @@ if [[ ${OSTYPE:-} == darwin* && $BASH != /bin/bash ]] && ((BASH_VERSINFO[0] > 5 
   exec /bin/bash "$0" "$@"
 fi
 set -Eeuo pipefail
-# Signal traps inherit the foreground command's redirections. Keep harness stdout separate so the
-# final summary location cannot corrupt a command artifact when the run is interrupted.
+# Phase markers and signal diagnostics must not corrupt redirected command artifacts.
 exec 3>&1
 
 source scripts/lib/openclaw-e2e-instance.sh
@@ -358,6 +357,7 @@ const summary = {
   backupSchedule: process.env.SUMMARY_SCENARIO === "backup-schedule"
     ? readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "backup-schedule.json"))
     : undefined,
+  packageActivationRecovery: readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "package-activation-recovery.json")),
   nativeAssignmentEligibility: readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "native-assignment-eligibility.json")),
   nativeAssignments: process.env.SUMMARY_SCENARIO === "legacy-operator-state"
     ? readJsonOrNull(path.join(path.dirname(process.env.SUMMARY_JSON), "native-assignment-proof.json"))
@@ -573,16 +573,16 @@ trap 'on_signal SIGINT 130' INT
 trap 'on_signal SIGTERM 143' TERM
 
 phase() {
-  local name="$1" phase_status
+  local name="$1" phase_status previous_phase="$CURRENT_PHASE"
   shift
   CURRENT_PHASE="$name"
-  echo "==> upgrade-survivor:$name"
+  echo "==> upgrade-survivor:$name" >&3
   json_event "$name" started
   "$@"
   phase_status=$?
   [ "$phase_status" -eq 0 ] || return "$phase_status"
   json_event "$name" passed
-  CURRENT_PHASE=""
+  CURRENT_PHASE="$previous_phase"
 }
 
 companion_survivor_scenario() {
@@ -629,12 +629,8 @@ configured_plugin_installs_enabled() {
   [ "$SCENARIO" = "configured-plugin-installs" ] || [ "$SCENARIO" = "sqlite-volume" ]
 }
 
-source_only_plugin_shadow_enabled() {
-  [ "$SCENARIO" = "stale-source-plugin-shadow" ]
-}
-
 seed_source_only_plugin_shadow() {
-  source_only_plugin_shadow_enabled || return 0
+  [ "$SCENARIO" = "stale-source-plugin-shadow" ] || return 0
 
   local shadow_root="$OPENCLAW_STATE_DIR/extensions/opik-openclaw"
   mkdir -p "$shadow_root/src"
@@ -706,7 +702,7 @@ assert_prepublish_fixture_idle() {
 prepublish_capability_consent_supported=""
 assert_prepublish_plugin_install() {
   local allow_pending="${1:-0}" plugin_id="whatsapp" help consent
-  local consent_supported pending_args=("" "" "") published_companion_tarball=""
+  local pending_args=("" "" "") published_companion_tarball=""
   if [ "$SCENARIO" = "legacy-operator-state" ]; then
     [ "$baseline_companion_availability" != "unavailable" ] || return 0
     plugin_id="discord"
@@ -719,7 +715,6 @@ assert_prepublish_plugin_install() {
     prepublish_capability_consent_supported=0
     [ -z "$consent" ] || prepublish_capability_consent_supported=1
   fi
-  consent_supported="$prepublish_capability_consent_supported"
   if [ "$allow_pending" = "1" ] && [ "$update_repair_required" = "1" ]; then
     pending_args=("$UPDATE_JSON" "$initial_update_observation_root" "$baseline_version")
   fi
@@ -737,7 +732,7 @@ assert_prepublish_plugin_install() {
   # ClawHub ledger alone cannot prove that the npm primary installed successfully.
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
     assert-npm-plugin-install "$plugin_id" "@openclaw/$plugin_id" "$candidate_version" \
-    "$consent_supported" "${pending_args[@]}" "$published_companion_tarball" || return "$?"
+    "$prepublish_capability_consent_supported" "${pending_args[@]}" "$published_companion_tarball" || return "$?"
   [ "$SCENARIO" = "legacy-operator-state" ] && return 0
   assert_prepublish_fixture_idle
 }
@@ -1343,12 +1338,11 @@ prepare_update_restart_probe() {
 }
 
 assert_baseline_state() {
-  OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
-    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-exec-approvals || return "$?"
-  OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
-    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config || return "$?"
-  OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
-    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state || return "$?"
+  local assertion
+  for assertion in assert-exec-approvals assert-config assert-state; do
+    OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE=baseline \
+      node scripts/e2e/lib/upgrade-survivor/assertions.mjs "$assertion" || return "$?"
+  done
 }
 
 resolve_candidate_version() {
@@ -1812,7 +1806,8 @@ prepare_restart_fixture() {
   local fixture_dir fixture_package runtime_source
   fixture_dir="$(mktemp -d "$RUNTIME_ROOT/restart-fixture.XXXXXX")" || return "$?"
   fixture_package="$fixture_dir/future.tgz"
-  node scripts/e2e/lib/update-first-hop-package-fixtures.mjs future-tarball \
+  phase prepare-restart-package openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
+    node scripts/e2e/lib/update-first-hop-package-fixtures.mjs future-tarball \
     "$candidate_tarball" "$fixture_package" >"$fixture_dir/receipt.json" || return "$?"
   restart_fixture_version="$(node -p 'require(process.argv[1]).targetVersion' "$fixture_dir/receipt.json")" || return "$?"
   mv "$fixture_dir/receipt.json" "$ARTIFACT_ROOT/restart-fixture.json" || return "$?"
@@ -1833,7 +1828,8 @@ if (crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex") !== 
 process.stdout.write(file);
 NODE
   )" || return "$?"
-  node scripts/e2e/lib/update-first-hop-package-fixtures.mjs future-runtime-tarball \
+  phase prepare-restart-runtime openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
+    node scripts/e2e/lib/update-first-hop-package-fixtures.mjs future-runtime-tarball \
     "$runtime_source" "$fixture_dir/codex.tgz" >"$fixture_dir/runtime-receipt.json" || return "$?"
   mv "$fixture_dir/runtime-receipt.json" "$ARTIFACT_ROOT/restart-runtime-fixture.json" || return "$?"
   restart_runtime_evidence="$ARTIFACT_ROOT/restart-runtime-fixture.json"
@@ -2238,6 +2234,11 @@ phase validate-worker-cell validate_worker_cell
 phase reset-run-state reset_run_state
 phase install-baseline install_baseline
 phase initialize-state initialize_state
+if [ "$SCENARIO" = "package-publication-recovery" ] || [ "$SCENARIO" = "package-verification-recovery" ] || [ "$SCENARIO" = "package-stranded-first-hop" ]; then
+  source scripts/e2e/lib/upgrade-survivor/package-activation-recovery.sh
+  run_package_activation_recovery_survivor
+  exit 0
+fi
 if [ "$SCENARIO" = "backup-schedule" ]; then
   if [ "$baseline_spec" != "openclaw@2026.9.7" ] || [ "$CANDIDATE_KIND" != "tarball" ] ||
     [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
@@ -2484,7 +2485,7 @@ if [ "$SCENARIO" = "workshop-doctor-recovery" ]; then
   phase assert-workshop-candidate-repair node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs doctor "$workshop_doctor_observation_root" candidate
   phase assert-workshop-recovery node scripts/e2e/lib/upgrade-survivor/workshop-doctor-recovery.mjs complete
   run_completed="1"
-  echo "Workshop Doctor recovery passed: published updater refused unchanged malformed state; explicit baseline Doctor, recovered upgrade, and explicit candidate Doctor succeeded."
+  echo "Workshop Doctor recovery passed: published updater refused unchanged malformed state; explicit baseline Doctor repaired it; the recovered upgrade exported pending proposal drafts and retired proposal storage; explicit candidate Doctor repaired and retired restored legacy state."
   exit 0
 fi
 if [ "$SCENARIO" = "custom-plugin-siblings" ]; then
@@ -2624,7 +2625,16 @@ fi
 if [ "$native_assignment_enabled" = "1" ]; then
   phase capture-native-assignment-input node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs before-update
 fi
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  # Seed after baseline CLI work so only the published update can consume this legacy input.
+  phase seed-legacy-pending-delivery node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    seed-legacy-operator-pending-delivery
+fi
 phase update-candidate update_candidate_for_install_mode
+if [ "$SCENARIO" = "legacy-operator-state" ]; then
+  phase assert-legacy-pending-delivery node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+    assert-legacy-operator-pending-delivery "$UPDATE_JSON" "$UPDATE_ERR"
+fi
 if [ "$native_assignment_enabled" = "1" ]; then
   phase assert-native-assignment-first-hop node scripts/e2e/lib/upgrade-survivor/native-assignments.mjs post-update "$candidate_version"
 fi

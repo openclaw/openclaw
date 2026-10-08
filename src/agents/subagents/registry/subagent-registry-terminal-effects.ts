@@ -20,8 +20,6 @@ import { SubagentRegistryWriteError } from "./subagent-registry-persistence.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
-type BrowserCleanup = typeof cleanupBrowserSessionsForLifecycleEnd;
-
 export async function completeTerminalEffects(
   context: SubagentLifecycleCompletionContext,
   args: {
@@ -34,7 +32,9 @@ export async function completeTerminalEffects(
     terminalGeneration: number;
     stateContext: OpenClawStateWorkerContext;
     assertCurrent: () => void;
-    loadCleanupBrowserSessionsForLifecycleEnd(): Promise<BrowserCleanup>;
+    loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
+      typeof cleanupBrowserSessionsForLifecycleEnd
+    >;
   },
 ): Promise<void> {
   const params = context.options;
@@ -50,10 +50,10 @@ export async function completeTerminalEffects(
     entry = getCurrentSubagentRunOwner(params.runs, entry)!;
     return true;
   };
+  const isSessionEffectsOwnerCurrent = () =>
+    isCurrentTerminalCallback() && !context.newerGenerationOwnsSession(entry);
   const isCurrentSessionEffectsOwner = () =>
-    isCurrentTerminalCallback() &&
-    !context.newerGenerationOwnsSession(entry) &&
-    context.sessionEffectsHostCurrent(entry);
+    isSessionEffectsOwnerCurrent() && context.sessionEffectsHostCurrent(entry);
   const persistSessionEffectsSuppression = async () => {
     entry = await commitSubagentLifecycleMutation(context, {
       entry,
@@ -207,8 +207,6 @@ export async function completeTerminalEffects(
   await refreshSessionEffectsSuppression();
   // Cleanup also rejects newer session generations, but host custody is checked
   // at each resource dispatch rather than shared with terminal-signal admission.
-  const isSessionEffectsOwnerCurrent = () =>
-    isCurrentTerminalCallback() && !context.newerGenerationOwnsSession(entry);
   const refreshCleanupSuppression = async () => {
     if (
       suppressSessionEffects ||
@@ -304,14 +302,13 @@ export async function completeTerminalEffects(
           throw error;
         }
         if (dispatchedBrowserCleanup) {
-          if (!isSessionEffectsOwnerCurrent() || !context.sessionEffectsHostCurrent(entry)) {
+          if (!isCurrentSessionEffectsOwner()) {
             return;
           }
           try {
             await cleanupBrowserSessions({
               sessionKeys: [entry.childSessionKey],
-              isCurrent: () =>
-                isSessionEffectsOwnerCurrent() && context.sessionEffectsHostCurrent(entry),
+              isCurrent: isCurrentSessionEffectsOwner,
               prepareCurrent: async () =>
                 !(await context.shouldSuppressSessionEffects(entry)) &&
                 isSessionEffectsOwnerCurrent(),

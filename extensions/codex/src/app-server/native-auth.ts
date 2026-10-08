@@ -65,11 +65,9 @@ export async function probeCodexNativeAuth(params: {
       .split("\n")
       .map((value) => value.trim())
       .find((value) => value.startsWith("Logged in using "));
-    const mode = line?.startsWith("Logged in using an API key - ")
-      ? "api-key"
-      : line
-        ? OPENAI_LOGIN_MODES[line]
-        : undefined;
+    const mode =
+      line &&
+      (line.startsWith("Logged in using an API key - ") ? "api-key" : OPENAI_LOGIN_MODES[line]);
     // Workload identity and Bedrock logins do not authorize an OpenAI route.
     return mode
       ? {

@@ -143,6 +143,7 @@ export async function maybeHandleResetCommand(
         (params.opts as InternalResetCommandOptions | undefined)?.onSessionPrepared?.({
           sessionKey: resetResult.sessionKey ?? boundAcpKey,
           sessionId: resetResult.sessionId,
+          lifecycleRevision: resetResult.lifecycleRevision,
           storePath: resetResult.storePath,
         });
       }
@@ -154,15 +155,13 @@ export async function maybeHandleResetCommand(
         }
         return { shouldContinue: false };
       }
-      return {
-        shouldContinue: false,
-        reply: { text: "✅ ACP session reset in place.", isStatusNotice: true },
-      };
     }
     return {
       shouldContinue: false,
       reply: {
-        text: "⚠️ ACP session reset failed. Check /acp status and try again.",
+        text: resetResult.ok
+          ? "✅ ACP session reset in place."
+          : "⚠️ ACP session reset failed. Check /acp status and try again.",
         isStatusNotice: true,
       },
     };

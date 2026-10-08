@@ -99,10 +99,7 @@ function normalizeModel(value: string | undefined, providerId: string | undefine
   return model;
 }
 
-function normalizeDimensions(value: number | undefined): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
+function normalizeDimensions(value: number): number {
   if (!Number.isInteger(value) || value <= 0) {
     throw new Error("openai-compatible embeddings: dimensions must be a positive integer.");
   }

@@ -3,10 +3,10 @@ import { buildControlUiPublicSessionSharePath } from "@openclaw/session-url-cont
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import {
   AUTH_TOKEN,
   createRequest,
@@ -14,6 +14,10 @@ import {
   createTestGatewayServer,
   dispatchRequest,
 } from "./server-http.test-harness.js";
+import { createGatewayRequestContext } from "./server-request-context.js";
+import { makeContextParams } from "./server-request-context.test-support.js";
+import { bindSessionRowProjection } from "./session-row-projection-access.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
 const reader = vi.hoisted(() => vi.fn());
 const shareActive = vi.hoisted(() => vi.fn());
@@ -45,15 +49,23 @@ const PUBLIC_SESSION = {
   truncated: false,
 };
 
+const servers = new Set<Server>();
 function createPublicGateway(basePath = "", config: OpenClawConfig = TEST_CONFIG): Server {
-  return createTestGatewayServer({
+  const context = createGatewayRequestContext(makeContextParams());
+  context.resolveGatewayContext = () => context;
+  const projection = createSessionRowProjectionFixture({ cfg: config, store: {} });
+  bindSessionRowProjection(context, () => projection);
+  const server = createTestGatewayServer({
     resolvedAuth: AUTH_TOKEN,
     overrides: {
       controlUiEnabled: true,
       controlUiBasePath: basePath,
       getRuntimeConfig: () => config,
+      getGatewayRequestContext: () => context,
     },
   });
+  servers.add(server);
+  return server;
 }
 
 function requestPath(params?: {
@@ -115,6 +127,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  for (const server of servers) {
+    server.emit("close");
+  }
+  servers.clear();
   resetGatewayWorkAdmission();
 });
 
@@ -126,7 +142,10 @@ describe("anonymous public session HTTP boundary", () => {
       const route = requestPath({ basePath });
       const response = await send(server, { path: route });
       expect(response.res.statusCode).toBe(200);
-      expect(reader).toHaveBeenCalledWith(expect.any(Object), LOCATOR, { offset: 0 });
+      expect(reader).toHaveBeenCalledWith(expect.any(Object), LOCATOR, {
+        offset: 0,
+        projection: expect.any(Object),
+      });
       const html = response.getBody();
       expect(html).toContain("Launch notes");
       expect(html).toContain("The public viewer is ready.");
@@ -156,7 +175,10 @@ describe("anonymous public session HTTP boundary", () => {
       const older = await send(server, { path: `${route}&offset=100` });
       const olderHtml = older.getBody();
       expect(older.res.statusCode).toBe(200);
-      expect(reader).toHaveBeenLastCalledWith(expect.any(Object), LOCATOR, { offset: 100 });
+      expect(reader).toHaveBeenLastCalledWith(expect.any(Object), LOCATOR, {
+        offset: 100,
+        projection: expect.any(Object),
+      });
       expect(olderHtml).toContain("&amp;offset=200");
       expect(olderHtml).toContain("Back to latest");
       expect(olderHtml).not.toContain('http-equiv="refresh"');
@@ -175,10 +197,13 @@ describe("anonymous public session HTTP boundary", () => {
       expect((await send(server, { path: route, method: "POST" })).res.statusCode).toBe(404);
       expect(reader.mock.calls.length).toBe(before);
       reader.mockResolvedValue(null);
+      shareActive.mockReturnValue(false);
       const revoked = await send(server, { path: route });
       expect(revoked.res.statusCode).toBe(404);
       expect(revoked.getBody()).toBe("This public session is unavailable.");
       expect(responseHeader(revoked, "Cache-Control")).toBe("no-store");
+      shareActive.mockReturnValue(true);
+      sessionChanges.emit({ sessionKey: LOCATOR.sessionKey });
       reader.mockRejectedValue(new Error("private store location"));
       const unavailable = await send(server, { path: route });
       expect(unavailable.res.statusCode).toBe(503);
@@ -219,14 +244,14 @@ describe("anonymous public session HTTP boundary", () => {
         headers: { "x-forwarded-for": clientIp, "x-forwarded-proto": "https" },
       });
 
-    for (let request = 0; request < 20; request += 1) {
+    for (let request = 0; request < 120; request += 1) {
       expect((await fromProxy("203.0.113.10")).res.statusCode).toBe(200);
     }
     expect((await fromProxy("203.0.113.11")).res.statusCode).toBe(200);
     const limited = await fromProxy("203.0.113.10");
     expect(limited.res.statusCode).toBe(429);
     expect(Number(responseHeader(limited, "Retry-After"))).toBeGreaterThan(0);
-    expect(reader).toHaveBeenCalledTimes(21);
+    expect(reader).toHaveBeenCalledTimes(1);
   });
 
   it("rate-limits malformed opaque tokens before transcript work", async () => {
@@ -234,13 +259,13 @@ describe("anonymous public session HTTP boundary", () => {
     const invalidPath = buildControlUiPublicSessionSharePath({
       token: `v1.${"z".repeat(96)}`,
     });
-    for (let request = 0; request < 20; request += 1) {
+    for (let request = 0; request < 120; request += 1) {
       expect((await send(server, { path: invalidPath })).res.statusCode).toBe(404);
     }
     const limited = await send(server, { path: invalidPath });
     expect(limited.res.statusCode).toBe(429);
     expect(Number(responseHeader(limited, "Retry-After"))).toBeGreaterThan(0);
-    expect(tokenResolver).toHaveBeenCalledTimes(20);
+    expect(tokenResolver).toHaveBeenCalledTimes(120);
     expect(reader).not.toHaveBeenCalled();
   });
 
@@ -334,7 +359,7 @@ describe("anonymous public session HTTP boundary", () => {
         trustedProxies: ["10.0.0.1"],
       },
     });
-    for (let request = 0; request < 120; request += 1) {
+    for (let request = 0; request < 240; request += 1) {
       const response = await send(server, {
         remoteAddress: "10.0.0.1",
         headers: {
@@ -350,108 +375,36 @@ describe("anonymous public session HTTP boundary", () => {
     });
     expect(limited.res.statusCode).toBe(429);
     expect(Number(responseHeader(limited, "Retry-After"))).toBeGreaterThan(0);
-    expect(reader).toHaveBeenCalledTimes(120);
-  });
-
-  it("coalesces identical reads and caps unique concurrent reads per publication", async () => {
-    const server = createPublicGateway();
-    const resolvers: Array<(value: typeof PUBLIC_SESSION) => void> = [];
-    reader.mockImplementation(
-      () =>
-        new Promise<typeof PUBLIC_SESSION>((resolve) => {
-          resolvers.push(resolve);
-        }),
-    );
-
-    const firstResponse = createResponse();
-    const first = dispatchRequest(
-      server,
-      createRequest({
-        path: requestPath(),
-        host: "127.0.0.1:18789",
-        remoteAddress: "127.0.0.1",
-      }),
-      firstResponse.res,
-    );
-    await vi.waitFor(() => expect(reader).toHaveBeenCalledTimes(1));
-    const secondResponse = createResponse();
-    const second = dispatchRequest(
-      server,
-      createRequest({
-        path: requestPath(),
-        host: "127.0.0.1:18789",
-        remoteAddress: "127.0.0.1",
-      }),
-      secondResponse.res,
-    );
-    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(2));
     expect(reader).toHaveBeenCalledTimes(1);
-    resolvers.shift()?.(PUBLIC_SESSION);
-    await Promise.all([first, second]);
-    expect(firstResponse.res.statusCode).toBe(200);
-    expect(secondResponse.res.statusCode).toBe(200);
-
-    const held: Array<Promise<void>> = [];
-    for (const [index, offset] of [1, 2].entries()) {
-      const response = createResponse();
-      held.push(
-        dispatchRequest(
-          server,
-          createRequest({
-            path: requestPath({ offset }),
-            host: "127.0.0.1:18789",
-            remoteAddress: "127.0.0.1",
-          }),
-          response.res,
-        ),
-      );
-      await vi.waitFor(() => expect(reader).toHaveBeenCalledTimes(index + 2));
-    }
-    const excess = await send(server, { path: requestPath({ offset: 3 }) });
-    expect(excess.res.statusCode).toBe(503);
-    expect(responseHeader(excess, "Retry-After")).toBe("1");
-    expect(reader).toHaveBeenCalledTimes(3);
-    for (const resolve of resolvers.splice(0)) {
-      resolve(PUBLIC_SESSION);
-    }
-    await Promise.all(held);
   });
 
-  it("caps unique concurrent reads across publications", async () => {
+  it("reuses a completed representation and rechecks revocation before 304", async () => {
     const server = createPublicGateway();
-    const resolvers: Array<(value: typeof PUBLIC_SESSION) => void> = [];
-    reader.mockImplementation(
-      () =>
-        new Promise<typeof PUBLIC_SESSION>((resolve) => {
-          resolvers.push(resolve);
-        }),
-    );
-    const held: Array<Promise<void>> = [];
-    for (let request = 0; request < 8; request += 1) {
-      const shareId = request.toString(16).padStart(48, "0");
-      const response = createResponse();
-      held.push(
-        dispatchRequest(
-          server,
-          createRequest({
-            path: requestPath({ locator: { ...LOCATOR, shareId } }),
-            host: "127.0.0.1:18789",
-            remoteAddress: "127.0.0.1",
-          }),
-          response.res,
-        ),
-      );
-      await vi.waitFor(() => expect(reader).toHaveBeenCalledTimes(request + 1));
-    }
-    const excess = await send(server, {
-      path: requestPath({ locator: { ...LOCATOR, shareId: "f".repeat(48) } }),
+    const first = await send(server);
+    expect(first.res.statusCode).toBe(200);
+    const etag = responseHeader(first, "ETag");
+    expect(etag).toBeDefined();
+    const unchanged = await send(server, { headers: { "if-none-match": etag! } });
+    expect(unchanged.res.statusCode).toBe(304);
+    expect(unchanged.getBody()).toBe("");
+    expect(reader).toHaveBeenCalledTimes(1);
+    shareActive.mockReturnValue(false);
+    const revoked = await send(server, { headers: { "if-none-match": etag! } });
+    expect(revoked.res.statusCode).toBe(404);
+    expect(revoked.getBody()).not.toContain("The public viewer is ready");
+  });
+
+  it("rebuilds a cached public document after its committed session changes", async () => {
+    const server = createPublicGateway();
+    const first = await send(server);
+    reader.mockResolvedValue({ ...PUBLIC_SESSION, title: "Updated public title" });
+    sessionChanges.emit({ sessionKey: LOCATOR.sessionKey });
+    const changed = await send(server, {
+      headers: { "if-none-match": responseHeader(first, "ETag")! },
     });
-    expect(excess.res.statusCode).toBe(503);
-    expect(reader).toHaveBeenCalledTimes(8);
-    for (const resolve of resolvers) {
-      resolve(PUBLIC_SESSION);
-    }
-    await Promise.all(held);
+    expect(changed.res.statusCode).toBe(200);
+    expect(changed.getBody()).toContain("Updated public title");
+    expect(reader).toHaveBeenCalledTimes(2);
   });
 
   it("truncates titles and messages without splitting UTF-16 surrogate pairs", async () => {

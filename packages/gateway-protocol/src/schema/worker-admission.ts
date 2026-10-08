@@ -60,7 +60,9 @@ export const WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE = "worker-execution-aut
 export const WORKER_LINEAGE_START_PROTOCOL_FEATURE = "worker-lineage-start-v1";
 export const WORKER_NATIVE_PROCESS_OWNER_PROTOCOL_FEATURE = "worker-native-process-owner-v1";
 export const NODE_WORKER_IDLE_RETENTION_PROTOCOL_FEATURE = "node-worker-idle-retention-v1";
+export const WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE = "worker-local-inference-v1";
 export const WORKER_PROTOCOL_FEATURES = [
+  WORKER_LOCAL_INFERENCE_PROTOCOL_FEATURE,
   "skill-resources-v1",
   "worker-heartbeat-v1",
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
@@ -243,7 +245,10 @@ export const WorkerRuntimeContextMessageSchema = Type.Union([
 export const WorkerTranscriptMessageSchema = Type.Union([
   WorkerTranscriptUserMessageSchema,
   WorkerRuntimeContextMessageSchema,
-  transcriptSchemas.contextAssistant,
+  closedObject({
+    ...transcriptSchemas.contextAssistant.properties,
+    itemId: Type.Optional(WorkerIdentifierSchema),
+  }),
   transcriptSchemas.toolResult,
 ]);
 

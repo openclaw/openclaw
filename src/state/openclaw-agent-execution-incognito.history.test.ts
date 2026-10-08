@@ -1,18 +1,20 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { readSessionEntryResetRecallCutoff } from "../../packages/memory-host-sdk/src/host/session-files.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withIncognitoSessionActor } from "../config/sessions/session-incognito-binding.js";
 import type { IncognitoSessionAuthority } from "../config/sessions/session-incognito-contract.js";
 import type { IncognitoLifecycleEntry } from "../config/sessions/session-incognito-lifecycle-contract.js";
 import {
   readActiveTranscriptEntryAnchorAsync,
   readSessionTranscriptAnchorsAsync,
 } from "../config/sessions/session-transcript-anchor-read.js";
-import { SessionTranscriptReadFenceError } from "../config/sessions/session-transcript-read-fence.js";
+import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import {
   createIncognitoSessionComputeReader,
   createIncognitoSessionHistoryReader,
@@ -21,11 +23,26 @@ import {
   readSessionTranscriptAccountingAsync,
   readSessionTranscriptBoundedMessageTailPageAsync,
 } from "../gateway/session-transcript-readers.js";
+import {
+  readSessionTranscriptRawDelta,
+  readSessionTranscriptVisibleMessageDelta,
+} from "../plugin-sdk/session-transcript-runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
+import {
+  createIncognitoCompletionSource,
+  registerIncognitoCompletionTests,
+} from "./openclaw-agent-execution-incognito.history-completion.test-support.js";
+import { registerIncognitoHistoryWiringTests } from "./openclaw-agent-execution-incognito.history-wiring.test-support.js";
 import type { IncognitoAgentDatabaseExecution } from "./openclaw-agent-execution-incognito.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
-import { closeOpenClawStateDatabaseAsync } from "./openclaw-state-db.js";
+import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
+
+// Two retained private actors plus shared ACP state need three broker slots.
+vi.mock("node:os", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:os")>()),
+  availableParallelism: () => 24,
+}));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const authority: IncognitoSessionAuthority = { assertCurrent() {} };
@@ -39,6 +56,7 @@ let sql: ReturnType<typeof observeHostDataSql>;
 beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: tempDirs.make("incognito-history-") };
   mainStorePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env });
+  openOpenClawStateDatabase({ env });
   const posted = vi.spyOn(Worker.prototype, "postMessage");
   try {
     const opened = await captureOpenClawAgentDatabaseExecution({
@@ -151,6 +169,68 @@ async function computeReader(target: IncognitoLifecycleEntry, owner = actor, gra
   });
   return { reader, scope };
 }
+
+it("keeps public raw and visible deltas on the captured actor with its fence and queued authority", async () => {
+  const session = await create("public-deltas");
+  await append(session, "before the admitted turn");
+  const current = await actor.sessions.transcript(authority, {
+    type: "session.message.append",
+    input: {
+      ...targetInput(session),
+      fence: { expectedLifecycleRevision: session.entry.lifecycleRevision },
+      message: { role: "user", content: "current turn", timestamp: 10_001 },
+    },
+  });
+  assert(current.ok && current.value.append);
+  const scope = { ...targetInput(session), agentId: actor.agentId, storePath: actor.path, env };
+  const anchor = await readActiveTranscriptEntryAnchorAsync(
+    { ...scope, entryId: current.value.append.messageId },
+    undefined,
+    { actor, authority, target: targetInput(session) },
+  );
+  assert(anchor);
+  await append(session, "after the admitted turn");
+  const read = () =>
+    Promise.all([
+      readSessionTranscriptRawDelta({ ...scope, maxEvents: 10 }),
+      readSessionTranscriptVisibleMessageDelta({ ...scope, maxMessages: 10 }),
+    ]);
+  await withIncognitoSessionActor(actor, async () => {
+    const [raw, visible] = await runWithSessionTranscriptReadFence(
+      { ...anchor, role: "user", logicalTurnId: "public-delta-turn" },
+      read,
+    );
+    assert(raw.kind === "page" && visible.kind === "page");
+    expect(raw.events).toContainEqual(
+      expect.objectContaining({
+        event: message("before the admitted turn"),
+      }),
+    );
+    expect(visible.entries).toMatchObject([
+      { message: { content: [{ type: "text", text: "before the admitted turn" }] } },
+    ]);
+    expect(JSON.stringify(raw.events)).not.toContain("current turn");
+    expect(JSON.stringify(raw.events)).not.toContain("after the admitted turn");
+  });
+  const controller = new AbortController();
+  await withIncognitoSessionActor(
+    actor,
+    async () => {
+      const barrier = await hold();
+      try {
+        const rejected = expect(read()).rejects.toThrow("delta caller ended");
+        controller.abort(new Error("delta caller ended"));
+        barrier.release.resolve();
+        await rejected;
+      } finally {
+        barrier.release.resolve();
+        await barrier.held;
+      }
+    },
+    controller.signal,
+  );
+  expect(existsSync(actor.path)).toBe(false);
+});
 
 it("composes anchor publication inside its actor FIFO and accounting/tail reads without host SQL", async () => {
   const session = await create("anchor-accounting-tail");
@@ -382,17 +462,17 @@ it("keeps Memory and Codex history isolated for identical session IDs in differe
   }
 });
 
-it("revalidates Codex history after asynchronous consumption and joins it before release", async () => {
+it("keeps Codex history's prefix across appends and joins it before release", async () => {
   const target = await create("codex-consumption");
   await append(target, "snapshot content");
   const { reader, scope } = await computeReader(target);
   await expect(
     reader.nativeContext(scope, async (messages) => {
       const result = [...messages];
-      await append(target, "invalidates snapshot");
+      await append(target, "after snapshot");
       return result;
     }),
-  ).rejects.toBeInstanceOf(SessionTranscriptReadFenceError);
+  ).resolves.toMatchObject([{ content: [{ text: "snapshot content" }] }]);
 
   const borrowed = await captureOpenClawAgentDatabaseExecution({
     kind: "ephemeral",
@@ -418,7 +498,8 @@ it("revalidates Codex history after asynchronous consumption and joins it before
     const releasing = borrowed.release().then(() => {
       released = true;
     });
-    await append(target, "release barrier");
+    // Settle another FIFO turn without invalidating the captured transcript.
+    await actor.run(authority, async () => undefined);
     expect(released).toBe(false);
     resume.resolve();
     await Promise.all([releasing, rejected]);
@@ -532,14 +613,14 @@ it("reads committed actor writes in FIFO order and retains the hydration snapsho
       }),
       actor.sessions.history(authority, { type: "session.history.context", input }),
       actor.sessions.history(authority, { type: "session.history.branches", input }),
+      actor.sessions.history(authority, {
+        type: "session.history.search",
+        input: { sessions: [input], sessionId: input.sessionId, query: "committed" },
+      }),
     ]);
     barrier.release.resolve();
-    const [written, result, [recent, page, title, preview, context, branches]] = await Promise.all([
-      write,
-      read,
-      selected,
-      barrier.held,
-    ]);
+    const [written, result, [recent, page, title, preview, context, branches, searched]] =
+      await Promise.all([write, read, selected, barrier.held]);
     assert(written.ok && written.value.append);
     assert(result.kind === "full");
     expect(result.snapshot.events).toContainEqual(message("committed before history"));
@@ -554,6 +635,23 @@ it("reads committed actor writes in FIFO order and retains the hydration snapsho
     expect(title.fields.lastMessagePreview).toBe("committed before history");
     expect(preview.items).toEqual([{ role: "assistant", text: "committed before history" }]);
     expect(context.events).toContainEqual(message("committed before history"));
+    expect(searched).toMatchObject({
+      kind: "transcript-search",
+      result: {
+        hits: [
+          {
+            sessionKey: target.sessionKey,
+            sessionId: target.entry.sessionId,
+            messageId: written.value.append.messageId,
+            snippet: "committed before history",
+          },
+        ],
+        // A FIFO read does not certify global projection maintenance.
+        indexing: true,
+      },
+    });
+    expect(searched.result).not.toHaveProperty("found");
+    expect(searched.result).not.toHaveProperty("revision");
     expect(branches).toMatchObject({
       status: "ok",
       branches: [
@@ -790,23 +888,128 @@ it("composes matching RPC and HTTP pages while rechecking disclosure after displ
   await expect(reader.http({ target, limit: 1 })).rejects.toThrow("display caller revoked");
 });
 
+it.each(["consume", "pending-list", "pending-read"] as const)(
+  "rechecks history caller after %s composition settles",
+  async (operation) => {
+    const session = await create(`settled-${operation}`);
+    await append(session, "Private history");
+    let current = true;
+    const target = { ...targetInput(session), agentId: actor.agentId, storePath: actor.path };
+    const reader = createIncognitoSessionHistoryReader({
+      actor,
+      target,
+      authority: {
+        assertCurrent() {
+          if (!current) {
+            throw new Error("History caller retired after settlement");
+          }
+        },
+      },
+      subagentCoordination: { isSubagentSession: () => false, isSubagentRunMessage: () => false },
+      resolveCurrentUserProfileDisplay: () => ({ kind: "unresolved" as const }),
+    });
+    const retain = actor.sessions.withSharedState.bind(actor.sessions);
+    let first = true;
+    const completed = vi
+      .spyOn(actor.sessions, "withSharedState")
+      .mockImplementation(<T>(work: () => Promise<T>) => {
+        const revoke = first;
+        first = false;
+        return retain(work).then((result) => {
+          if (revoke) {
+            current = false;
+          }
+          return result;
+        });
+      });
+    try {
+      await expect(
+        operation === "consume"
+          ? reader.consume(target, (reads) => reads.readSessionMessageCountAsync(target))
+          : operation === "pending-list"
+            ? reader.listPendingInputs()
+            : reader.readPendingInput("absent"),
+      ).rejects.toThrow("History caller retired after settlement");
+      actor.assertReadable();
+    } finally {
+      completed.mockRestore();
+    }
+  },
+);
+
+registerIncognitoHistoryWiringTests({
+  authority,
+  get siblingActor() {
+    return lossActor;
+  },
+  get actor() {
+    return actor;
+  },
+  get env() {
+    return env;
+  },
+  create,
+  append,
+  targetInput,
+});
+
+const completionFixture = {
+  authority,
+  get actor() {
+    return actor;
+  },
+  get env() {
+    return env;
+  },
+  targetInput,
+};
+registerIncognitoCompletionTests(completionFixture);
+
 it("ends queued history reads with the typed error when their actor is lost", async () => {
-  const target = await create("actor-loss", lossActor, "loss");
+  const completion = await createIncognitoCompletionSource(
+    completionFixture,
+    "actor-loss",
+    lossActor,
+  );
+  const target = completion.session;
+  const sourceInput = { ...completion.target, claim: completion.claim };
+  const prepared = await lossActor.sessions.retainCompletionSource(authority, sourceInput);
+  prepared.assertCurrent();
+  await prepared.release();
   const { reader, scope } = await computeReader(target, lossActor);
   const barrier = await hold(lossActor);
   const rejected = Promise.all(
     [
       hydrate(target, lossActor),
+      lossActor.sessions.retainCompletionSource(authority, sourceInput),
       reader.memoryEntry("actor-memory"),
       reader.memoryResetRecall(),
       reader.nativeContext(scope, () => "private result"),
     ].map((result) => expect(result).rejects.toMatchObject({ code: "INCOGNITO_SESSION_ENDED" })),
   );
+  let replacing: Promise<IncognitoAgentDatabaseExecution | undefined> | undefined;
   try {
     await lossWorker.terminate();
+    replacing = captureOpenClawAgentDatabaseExecution({
+      kind: "ephemeral",
+      agentId: lossActor.agentId,
+      env,
+      authority,
+    });
   } finally {
     barrier.release.resolve();
     await Promise.allSettled([barrier.held]);
   }
-  await rejected;
+  const successor = await replacing;
+  assert(successor);
+  try {
+    expect(successor.identity).not.toEqual(lossActor.identity);
+    await successor.sessions.create(authority, {
+      sessionKey: target.sessionKey,
+      entry: target.entry,
+    });
+    await rejected;
+  } finally {
+    await successor.close();
+  }
 });

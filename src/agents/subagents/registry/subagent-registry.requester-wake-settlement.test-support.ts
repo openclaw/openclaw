@@ -1,15 +1,12 @@
 import { expect, it, vi } from "vitest";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpers.js";
-import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
-import {
-  mutateRequesterSettleWakeBatch,
-  settleRequesterCompletionBatch,
-} from "../completion/subagent-completion-admission.store.js";
+import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { countActiveDescendantRunsFromRuns } from "./subagent-registry-queries.js";
 import type { GatewayRequest } from "./subagent-registry.lifecycle-fixture.test-support.js";
+import { createRequesterYieldTool } from "./subagent-registry.requester-wake-receipts.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
 
 export function registerRequesterWakeSettlementBoundaryTests({
@@ -73,16 +70,10 @@ export function registerRequesterWakeSettlementBoundaryTests({
       expectsCompletionMessage: true,
     };
     await spawnVisibleChild({ ...child, requesterTurnRunId });
-    await createSessionsYieldTool({
-      sessionId: "sess-main",
-      claimYield: async () =>
-        (await registry.markRequesterTurnYielded({
-          requesterSessionKey,
-          requesterAgentId: "main",
-          requesterTurnRunId,
-        })) > 0,
-      onYield: () => {},
-    }).execute("yield-current-result", {});
+    await createRequesterYieldTool(requesterSessionKey, requesterTurnRunId).execute(
+      "yield-current-result",
+      {},
+    );
     const { withLocalSessionPlacementTurnSettlement } =
       await import("../../session-placement-admission.js");
     await withLocalSessionPlacementTurnSettlement(
@@ -186,7 +177,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
         requesterSessionKey,
         settledEntry: batch,
         transitionBatch: async (entries, state, onPublished) => {
-          const publication = await mutateRequesterSettleWakeBatch({
+          const publication = await mutateRequesterCompletionBatch({
             entries,
             operation: { kind: "transition", state },
             context: captureOpenClawStateWorkerContext(),
@@ -205,10 +196,10 @@ export function registerRequesterWakeSettlementBoundaryTests({
           if (!outcome) {
             throw new Error("Expected the exhausted requester deferral outcome");
           }
-          const publication = await settleRequesterCompletionBatch({
-            entries: entries.map((subagent) => ({ subagent })),
-            outcome,
-            isCurrent: () => true,
+          const publication = await mutateRequesterCompletionBatch({
+            entries,
+            operation: { kind: "settle", outcome },
+            assertCurrent: () => {},
           });
           expect(publication).toEqual({ applied: true, publication: "published" });
           completions.push({ delivered: outcome.delivered, error: outcome.error });

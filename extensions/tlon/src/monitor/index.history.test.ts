@@ -54,7 +54,7 @@ vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
-  createChannelInboundEnvelopeBuilder: vi.fn(() => vi.fn(() => "tlon-envelope")),
+  createChannelInboundEnvelopeBuilderAsync: vi.fn(async () => vi.fn(() => "tlon-envelope")),
 }));
 
 vi.mock("../runtime.js", () => ({

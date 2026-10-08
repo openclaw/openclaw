@@ -39,7 +39,7 @@ export const lifecycleMocks: {
   onAccountConfigChanged: vi.fn().mockResolvedValue(undefined) as unknown as MockFn,
 };
 
-export const secretMocks = {
+const secretMocks = {
   resolveCommandConfigWithSecrets: vi.fn(async ({ config }: { config: unknown }) => ({
     resolvedConfig: config,
     effectiveConfig: config,

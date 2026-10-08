@@ -342,18 +342,12 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
   dir: string;
   bootstrapPath: string;
   state: WorkspaceSetupState;
-  bootstrapExists?: boolean;
+  bootstrapExists: boolean;
   guard?: WorkspaceStateGuard;
 }): Promise<WorkspaceBootstrapCompletionReconcileResult> {
   const assertEvidence = captureWorkspaceStateFilesystemGuard(params.dir);
   const beforeFileMutation = createWorkspaceFileMutationGuard(params.guard);
-  const bootstrapExists = params.bootstrapExists ?? (await pathExists(params.bootstrapPath));
-  if (
-    typeof params.state.setupCompletedAt === "string" &&
-    params.state.setupCompletedAt.trim().length > 0
-  ) {
-    return { repaired: false, bootstrapExists, state: params.state };
-  }
+  const { bootstrapExists } = params;
 
   if (
     bootstrapExists
@@ -924,7 +918,8 @@ export async function loadWorkspaceBootstrapFiles(
     if (
       !access &&
       (entry.name === DEFAULT_MEMORY_FILENAME || entry.name === DEFAULT_USER_FILENAME) &&
-      !(await exactWorkspaceEntryExists(resolvedDir, entry.name))
+      // Lookup failures still need a guarded read for content or an unreadable diagnostic.
+      !(await exactWorkspaceEntryExists(resolvedDir, entry.name).catch(() => true))
     ) {
       continue;
     }
@@ -942,10 +937,7 @@ export async function loadWorkspaceBootstrapFiles(
       setWorkspaceFileSourceIdentity(file, loaded.sourceIdentity);
       result.push(file);
     } else if (isRootFileMissingFailure(loaded)) {
-      if (
-        access &&
-        (entry.name === DEFAULT_MEMORY_FILENAME || entry.name === DEFAULT_USER_FILENAME)
-      ) {
+      if (entry.name === DEFAULT_MEMORY_FILENAME || entry.name === DEFAULT_USER_FILENAME) {
         continue;
       }
       result.push({ name: entry.name, path: entry.filePath, missing: true });

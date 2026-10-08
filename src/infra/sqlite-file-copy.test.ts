@@ -9,8 +9,16 @@ import { copySqliteFile } from "./sqlite-file-copy.js";
 const directories = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["automatic", "admitted", "refused", "published", "EIO"] as const)(
-  "preserves snapshot admission and publication when the clone is denied (%s)",
+it.each([
+  "success",
+  "admitted",
+  "unavailable",
+  "refused",
+  "published",
+  "EIO",
+  "native-unavailable",
+] as const)(
+  "preserves snapshot admission and publication at the copy boundary (%s)",
   async (scenario) => {
     const directory = directories.make("sqlite-clone-denied-");
     const source = path.join(directory, "source");
@@ -18,11 +26,19 @@ it.each(["automatic", "admitted", "refused", "published", "EIO"] as const)(
     const bytes = Buffer.alloc(32768, 71);
     await fs.writeFile(source, bytes);
     const identity = await fs.stat(source, { bigint: true });
-    const failure = new fsSafe.FsSafeError("helper-failed", "native file copy failed", {
-      cause: Object.assign(new Error("FICLONE: denied"), {
-        code: scenario === "EIO" ? "EIO" : "EPERM",
-      }),
-    });
+    const failure =
+      scenario === "unavailable" || scenario === "native-unavailable"
+        ? new fsSafe.FsSafeError(
+            "helper-unavailable",
+            scenario === "unavailable"
+              ? "native file cloning is unavailable"
+              : "native no-replace publication is unavailable",
+          )
+        : scenario === "EIO"
+          ? new fsSafe.FsSafeError("helper-failed", "native file copy failed", {
+              cause: Object.assign(new Error("copy failed"), { code: "EIO" }),
+            })
+          : new fsSafe.FsSafeError("unsupported-platform", "native file cloning is unavailable");
     const openRoot = fsSafe.root;
     let byteCopies = 0;
     vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
@@ -32,6 +48,9 @@ it.each(["automatic", "admitted", "refused", "published", "EIO"] as const)(
         if (options?.clone === "never") {
           byteCopies++;
           return copyIn(relative, input, options);
+        }
+        if (scenario === "success") {
+          return copyIn(relative, input, { ...options, clone: "never" });
         }
         if (scenario === "published") {
           await copyIn(relative, input, { ...options, clone: "never" });
@@ -48,13 +67,8 @@ it.each(["automatic", "admitted", "refused", "published", "EIO"] as const)(
         throw refusal;
       }
     });
-    const copy = copySqliteFile(
-      source,
-      target,
-      identity,
-      scenario === "automatic" ? undefined : admission,
-    );
-    if (scenario === "published" || scenario === "EIO") {
+    const copy = copySqliteFile(source, target, identity, admission);
+    if (scenario === "published" || scenario === "EIO" || scenario === "native-unavailable") {
       await expect(copy).rejects.toBe(failure);
       expect(admission).not.toHaveBeenCalled();
       expect(byteCopies).toBe(0);
@@ -68,12 +82,14 @@ it.each(["automatic", "admitted", "refused", "published", "EIO"] as const)(
       expect([receipt.dev, receipt.ino]).toEqual([published.dev, published.ino]);
       expect(published.ino).not.toBe(identity.ino);
       expect(await fs.readFile(target)).toEqual(bytes);
-      expect(byteCopies).toBe(1);
-      expect(admission).toHaveBeenCalledTimes(scenario === "automatic" ? 0 : 1);
+      expect(byteCopies).toBe(scenario === "success" ? 0 : 1);
+      expect(admission).toHaveBeenCalledTimes(scenario === "success" ? 0 : 1);
     }
     expect(await fs.readFile(source)).toEqual(bytes);
     expect((await fs.readdir(directory)).toSorted()).toEqual(
-      scenario === "refused" || scenario === "EIO" ? ["source"] : ["source", "target"],
+      scenario === "refused" || scenario === "EIO" || scenario === "native-unavailable"
+        ? ["source"]
+        : ["source", "target"],
     );
   },
 );

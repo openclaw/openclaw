@@ -122,16 +122,6 @@ async function migrateAgentDatabase(params: {
         assertSupportedAgentSchemaVersion(database, params.pathname);
       },
     });
-  const migrateArchives = () =>
-    migrateCanonicalTranscriptArchives({
-      agentId: params.agentId,
-      database,
-      pathname: params.pathname,
-      start: { generation: "", sessionId: "" },
-      verification: { key: MEDIA_ARCHIVE_VERIFICATION_KEY, prepared: params.preparedArchives },
-      onArchive: (archivePath) => params.canonicalArchivePaths.add(archivePath),
-      transformContent: transformMediaArchiveContent,
-    });
   try {
     configureSqliteMaintenanceCache(database);
     database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
@@ -335,7 +325,16 @@ async function migrateAgentDatabase(params: {
         );
       }
     }
-    const archives = await migrateArchives();
+    const archives = await migrateCanonicalTranscriptArchives({
+      agentId: params.agentId,
+      database,
+      pathname: params.pathname,
+      signal: params.maintenance.signal,
+      start: { generation: "", sessionId: "" },
+      verification: { key: MEDIA_ARCHIVE_VERIFICATION_KEY, prepared: params.preparedArchives },
+      onArchive: (archivePath) => params.canonicalArchivePaths.add(archivePath),
+      transformContent: transformMediaArchiveContent,
+    });
     refreshSqlitePlannerStatistics(database);
     return {
       ...rewritten,
@@ -421,6 +420,8 @@ export async function migrateLegacyMediaPersistence(
     env?: NodeJS.ProcessEnv;
   } = {},
 ): Promise<MigrationMessages> {
+  const inspectionSignal = resolveSqliteInspectionSignal();
+  inspectionSignal?.throwIfAborted();
   const env = params.env ?? process.env;
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -522,6 +523,9 @@ export async function migrateLegacyMediaPersistence(
             );
           }
         } catch (error) {
+          if (inspectionSignal?.aborted && error === inspectionSignal.reason) {
+            throw error;
+          }
           // An unverified database may own files in this directory. Never fall
           // back to file-only repair after its canonical archive repair refuses.
           refusedArchiveDirectories.add(
@@ -562,6 +566,9 @@ export async function migrateLegacyMediaPersistence(
               changes.push(`Migrated archived transcript media in ${archive}.`);
             }
           } catch (error) {
+            if (inspectionSignal?.aborted && error === inspectionSignal.reason) {
+              throw error;
+            }
             warnings.push(
               `Skipped archived transcript media migration for ${archive}: ${String(error)}`,
             );
@@ -574,6 +581,9 @@ export async function migrateLegacyMediaPersistence(
       );
     });
   } catch (error) {
+    if (inspectionSignal?.aborted && error === inspectionSignal.reason) {
+      throw error;
+    }
     warnings.push(`Agent database maintenance deferred: ${formatErrorMessage(error)}`);
   }
   return {

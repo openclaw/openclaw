@@ -1,9 +1,15 @@
 import { createHash, type Hash } from "node:crypto";
 import fs from "node:fs";
-import { copyFileDescriptorSync } from "@openclaw/fs-safe/advanced";
+import path from "node:path";
+import { copyRootFileSync } from "@openclaw/fs-safe/advanced";
 import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  formatErrorMessage,
+  readErrorCauses,
+} from "../infra/errors.js";
 import { isGitRuntimeStagingName } from "../infra/update-runtime-staging.js";
 
 // Git rollback trees retain links relative to their final location. Only explicit
@@ -14,8 +20,11 @@ export const isPluginSourceEntry = (name: string): boolean =>
 // Capture and native module hooks are synchronous; no read retains this scratch buffer.
 const scratch = Buffer.allocUnsafe(64 * 1024);
 
-export const pluginSourceStatIdentity = (stat: fs.BigIntStats): string =>
-  `${stat.dev}:${stat.ino}:${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
+export const pluginSourceStatIdentity = (
+  stat: fs.BigIntStats,
+  identity: Pick<fs.BigIntStats, "dev" | "ino"> = stat,
+): string =>
+  `${identity.dev}:${identity.ino}:${stat.mode}:${stat.size}:${stat.mtimeNs}:${stat.ctimeNs}`;
 
 export const pluginSourceIdentityChangedOnlyByCtime = (
   previous: string,
@@ -65,36 +74,43 @@ export function copyPluginSourceFile(
   source: string,
   boundary: string,
   target: string,
-  options: { hashCopiedContent?: boolean } = {},
+  options: { hashCopiedContent?: boolean; preserveSourceMode?: boolean } = {},
 ) {
   return withPluginSourceFile(source, boundary, (fd) => {
-    // Reopening the admitted pathname would lose the pinned inode on concurrent replacement.
-    if (process.platform === "linux" || process.platform === "darwin") {
-      const descriptor = `${process.platform === "linux" ? "/proc/self/fd" : "/dev/fd"}/${fd}`;
-      try {
-        fs.copyFileSync(descriptor, target, fs.constants.COPYFILE_FICLONE);
-        return undefined;
-      } catch (error) {
-        // Chroots and restricted mounts can lack descriptor paths despite a valid open file.
-        if (
-          !["ENOENT", "ENOTDIR", "EACCES", "EPERM"].some((code) => hasErrnoCode(error, code)) &&
-          !(
-            process.platform === "darwin" &&
-            Object.hasOwn(process.versions, "bun") &&
-            hasErrnoCode(error, "EBADF")
-          )
-        ) {
-          throw error;
-        }
-      }
-    }
-    const output = fs.openSync(target, options.hashCopiedContent ? "w+" : "w", 0o600);
+    const admitted = fs.fstatSync(fd, { bigint: true });
     try {
-      copyFileDescriptorSync(fd, output, { maxBytes: fs.fstatSync(fd).size });
-      // Hash the actual destination through its owned descriptor. Reopening every
-      // fresh copy repeats Windows file admission before its receipt can be recorded.
-      return options.hashCopiedContent ? hashPluginSourceDescriptor(output) : undefined;
+      // Keep our pin alive; fs-safe binds its own admitted open to this exact inode.
+      using copied = copyRootFileSync({
+        source: { rootPath: boundary, absolutePath: source },
+        destination: { rootPath: path.dirname(target), absolutePath: target },
+        expectedSourceIdentity: { dev: admitted.dev, ino: admitted.ino },
+        clone: "auto",
+        maxBytes: Number(admitted.size),
+        mode: options.preserveSourceMode
+          ? Number(admitted.mode & 0o777n)
+          : 0o600 | Number(admitted.mode & 0o100n),
+        sourceHardlinks: "allow",
+      });
+      // The initial hash belongs to the copied descriptor; receipts still recheck its path.
+      return options.hashCopiedContent
+        ? {
+            ...hashPluginSourceDescriptor(copied.fd),
+            sourceIdentity: pluginSourceStatIdentity(admitted, copied.sourceIdentity),
+          }
+        : undefined;
     } catch (error) {
+      // fs-safe wraps native failures; retain the disk-full code and detail that
+      // plugin-load diagnostics use to explain how to recover.
+      if (
+        error instanceof FsSafeError &&
+        collectErrorGraphCandidates(error, readErrorCauses).some(
+          (cause) => extractErrorCode(cause) === "ENOSPC",
+        )
+      ) {
+        throw Object.assign(new Error(formatErrorMessage(error), { cause: error }), {
+          code: "ENOSPC",
+        });
+      }
       if (error instanceof FsSafeError && error.code === "too-large") {
         throw new Error(
           "Plugin source changed while preparing its reload; retry after the edit finishes.",
@@ -102,8 +118,6 @@ export function copyPluginSourceFile(
         );
       }
       throw error;
-    } finally {
-      fs.closeSync(output);
     }
   });
 }

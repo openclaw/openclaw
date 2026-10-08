@@ -369,14 +369,11 @@ async function resolveForwardTargets(params: {
 function createApprovalHandlers<
   TRequest extends ApprovalRequestInput,
   TResolved extends { id: string; request?: ApprovalRouteRequest | null },
->(params: {
-  strategy: ApprovalStrategy<TRequest, TResolved>;
-  getConfig: () => OpenClawConfig;
-  deliver: DeliverApprovalPayloads;
-  nowMs: () => number;
-  resolveSessionTarget: ResolveSessionTargetFn;
-  getNativeApprovalRouteCoordinator: () => ApprovalNativeRouteCoordinator | undefined;
-}) {
+>(
+  params: {
+    strategy: ApprovalStrategy<TRequest, TResolved>;
+  } & Required<ExecApprovalForwarderDeps>,
+) {
   const pending = createPendingApprovalRegistry<PendingApproval>();
   const work = new AsyncWorkScope();
   let stopped = false;

@@ -272,11 +272,6 @@ function readGroupOrWorldAccessibleMode(targetPath: string): number | null {
   return !resolvedPath.startsWith("/nix/store/") && (stat.mode & 0o077) !== 0 ? stat.mode : null;
 }
 
-function addUserRwx(mode: number): number {
-  const perms = mode & 0o777;
-  return perms | 0o700;
-}
-
 function countJsonlLines(filePath: string): number {
   let fd: number;
   try {
@@ -287,14 +282,12 @@ function countJsonlLines(filePath: string): number {
   try {
     const chunk = Buffer.alloc(64 * 1024);
     let count = 0;
-    let hasBytes = false;
-    let endsWithNewline = false;
+    let endsWithNewline = true;
     for (;;) {
       const bytesRead = fs.readSync(fd, chunk, 0, chunk.length, null);
       if (bytesRead <= 0) {
         break;
       }
-      hasBytes = true;
       endsWithNewline = chunk[bytesRead - 1] === 0x0a;
       for (let index = 0; index < bytesRead; index += 1) {
         if (chunk[index] === 0x0a) {
@@ -302,7 +295,7 @@ function countJsonlLines(filePath: string): number {
         }
       }
     }
-    if (hasBytes && !endsWithNewline) {
+    if (!endsWithNewline) {
       count += 1;
     }
     return count;
@@ -315,13 +308,12 @@ function countJsonlLines(filePath: string): number {
 
 function resolvePathThroughExistingAncestor(
   targetPath: string,
-  resolveRealPath: (targetPath: string) => string | null,
   pathOps: Pick<typeof path, "resolve" | "dirname" | "basename">,
 ): string | null {
   const missingSegments: string[] = [];
   let candidate = pathOps.resolve(targetPath);
   while (true) {
-    const resolved = resolveRealPath(candidate);
+    const resolved = safeRealpathSync(candidate);
     if (resolved) {
       return pathOps.resolve(resolved, ...missingSegments);
     }
@@ -437,19 +429,11 @@ function tryReadLinuxMountInfo(): string | null {
   }
 }
 
-function resolveLinuxStateMount(
-  stateDir: string,
-  deps?: {
-    mountInfo?: string;
-    resolveRealPath?: (targetPath: string) => string | null;
-  },
-): LinuxSdBackedStateDir | null {
+function resolveLinuxStateMount(stateDir: string): LinuxSdBackedStateDir | null {
   const linuxPath = path.posix;
-  const resolveRealPath = deps?.resolveRealPath ?? safeRealpathSync;
   const resolvedStatePath =
-    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, linuxPath) ??
-    linuxPath.resolve(stateDir);
-  const mountInfo = deps?.mountInfo ?? tryReadLinuxMountInfo();
+    resolvePathThroughExistingAncestor(stateDir, linuxPath) ?? linuxPath.resolve(stateDir);
+  const mountInfo = tryReadLinuxMountInfo();
   const mountEntry = mountInfo
     ? findLinuxMountInfoEntryForPath(resolvedStatePath, parseLinuxMountInfo(mountInfo), linuxPath)
     : null;
@@ -464,28 +448,19 @@ function resolveLinuxStateMount(
 }
 
 /** Detects Linux state directories mounted from SD/eMMC-style block devices. */
-export function detectLinuxSdBackedStateDir(
-  stateDir: string,
-  deps?: {
-    platform?: NodeJS.Platform;
-    mountInfo?: string;
-    resolveRealPath?: (targetPath: string) => string | null;
-    resolveDeviceRealPath?: (targetPath: string) => string | null;
-  },
-): LinuxSdBackedStateDir | null {
-  const platform = deps?.platform ?? process.platform;
-  if (platform !== "linux") {
+export function detectLinuxSdBackedStateDir(stateDir: string): LinuxSdBackedStateDir | null {
+  if (process.platform !== "linux") {
     return null;
   }
   const linuxPath = path.posix;
-  const stateMount = resolveLinuxStateMount(stateDir, deps);
+  const stateMount = resolveLinuxStateMount(stateDir);
   if (!stateMount) {
     return null;
   }
 
   const sourceCandidates = [stateMount.source];
   if (stateMount.source.startsWith("/dev/")) {
-    const resolvedDevicePath = (deps?.resolveDeviceRealPath ?? safeRealpathSync)(stateMount.source);
+    const resolvedDevicePath = safeRealpathSync(stateMount.source);
     if (resolvedDevicePath) {
       sourceCandidates.push(linuxPath.resolve(resolvedDevicePath));
     }
@@ -522,19 +497,11 @@ type LinuxVolatileStateDir = Omit<LinuxSdBackedStateDir, "source">;
 const VOLATILE_FS_TYPES = new Set(["tmpfs", "ramfs"]);
 
 /** Detects Linux state directories mounted on filesystems that do not survive a reboot. */
-export function detectLinuxVolatileStateDir(
-  stateDir: string,
-  deps?: {
-    platform?: NodeJS.Platform;
-    mountInfo?: string;
-    resolveRealPath?: (targetPath: string) => string | null;
-  },
-): LinuxVolatileStateDir | null {
-  const platform = deps?.platform ?? process.platform;
-  if (platform !== "linux") {
+export function detectLinuxVolatileStateDir(stateDir: string): LinuxVolatileStateDir | null {
+  if (process.platform !== "linux") {
     return null;
   }
-  const stateMount = resolveLinuxStateMount(stateDir, deps);
+  const stateMount = resolveLinuxStateMount(stateDir);
   if (!stateMount || !VOLATILE_FS_TYPES.has(stateMount.fsType)) {
     return null;
   }
@@ -560,25 +527,17 @@ export function formatLinuxVolatileStateDirWarning(
 }
 
 /** Detects macOS state directories under iCloud Drive or CloudStorage providers. */
-export function detectMacCloudSyncedStateDir(
-  stateDir: string,
-  deps?: {
-    platform?: NodeJS.Platform;
-    homedir?: string;
-    resolveRealPath?: (targetPath: string) => string | null;
-  },
-): {
+export function detectMacCloudSyncedStateDir(stateDir: string): {
   path: string;
   storage: "iCloud Drive" | "CloudStorage provider";
 } | null {
-  const platform = deps?.platform ?? process.platform;
-  if (platform !== "darwin") {
+  if (process.platform !== "darwin") {
     return null;
   }
 
   // Cloud-sync roots should always be anchored to the OS account home on macOS.
   // OPENCLAW_HOME can relocate app data defaults, but iCloud/CloudStorage remain under the OS home.
-  const homedir = deps?.homedir ?? os.homedir();
+  const homedir = os.homedir();
   const roots = [
     {
       storage: "iCloud Drive" as const,
@@ -589,10 +548,9 @@ export function detectMacCloudSyncedStateDir(
       root: path.join(homedir, "Library", "CloudStorage"),
     },
   ];
-  const resolveRealPath = deps?.resolveRealPath ?? safeRealpathSync;
   // Missing state leaves must still follow existing symlink ancestors, like the Linux detectors.
   const resolvedStatePath =
-    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, path) ?? path.resolve(stateDir);
+    resolvePathThroughExistingAncestor(stateDir, path) ?? path.resolve(stateDir);
 
   for (const { storage, root } of roots) {
     if (isPathUnderRoot(resolvedStatePath, root)) {
@@ -606,16 +564,12 @@ export function detectMacCloudSyncedStateDir(
 /** Detects Windows state directories under OneDrive sync roots. */
 export function detectWindowsCloudSyncedStateDir(
   stateDir: string,
-  deps?: {
-    platform?: NodeJS.Platform;
-    env?: NodeJS.ProcessEnv;
-    resolveRealPath?: (targetPath: string) => string | null;
-  },
+  env: NodeJS.ProcessEnv = process.env,
 ): {
   path: string;
   storage: "OneDrive" | "OneDrive for Business";
 } | null {
-  const platform = deps?.platform ?? process.platform;
+  const platform = process.platform;
   if (platform !== "win32") {
     return null;
   }
@@ -623,7 +577,6 @@ export function detectWindowsCloudSyncedStateDir(
   // The OneDrive sync client maintains these variables, so they are the
   // canonical sync-root source; path-shape heuristics would misfire on
   // ordinary local folders that merely contain "OneDrive" in a segment.
-  const env = deps?.env ?? process.env;
   const roots: { storage: "OneDrive" | "OneDrive for Business"; root: string }[] = [];
   const addRoot = (storage: "OneDrive" | "OneDrive for Business", root: string | undefined) => {
     if (root && root.trim() !== "") {
@@ -637,14 +590,13 @@ export function detectWindowsCloudSyncedStateDir(
     return null;
   }
 
-  const resolveRealPath = deps?.resolveRealPath ?? safeRealpathSync;
   // A state dir that does not exist yet cannot be resolved directly, and
   // falling back to the lexical path misreads a not-yet-created leaf beneath a
   // OneDrive-named junction that actually resolves to local storage. Resolve
   // through the nearest existing ancestor, as the Linux detectors do, so the
   // junction is followed even when the leaf is absent.
   const resolvedStatePath =
-    resolvePathThroughExistingAncestor(stateDir, resolveRealPath, path) ?? path.resolve(stateDir);
+    resolvePathThroughExistingAncestor(stateDir, path) ?? path.resolve(stateDir);
 
   for (const { storage, root } of roots) {
     // Windows filesystems are case-insensitive by default; compare folded.
@@ -761,7 +713,7 @@ export function detectStateIntegrityHealthIssues(
     });
   }
 
-  const windowsCloudSyncedStateDir = detectWindowsCloudSyncedStateDir(stateDir, { env });
+  const windowsCloudSyncedStateDir = detectWindowsCloudSyncedStateDir(stateDir, env);
   if (windowsCloudSyncedStateDir) {
     issues.push({
       kind: "windows-cloud-state-dir",
@@ -1007,6 +959,59 @@ export async function noteStateIntegrity(
   const windowsCloudSyncedStateDir = detectWindowsCloudSyncedStateDir(stateDir);
   const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
   const linuxVolatileStateDir = detectLinuxVolatileStateDir(stateDir);
+  const repairWritableDirectory = async (
+    dir: string,
+    displayDir: string,
+    label?: RuntimeDirLabel,
+  ) => {
+    if (canWriteDir(dir)) {
+      return;
+    }
+    warnings.push(`- ${label ?? "State directory"} not writable (${displayDir}).`);
+    const hint = dirPermissionHint(dir);
+    if (hint) {
+      warnings.push(`  ${hint}`);
+    }
+    if (
+      await prompter.confirmRuntimeRepair({
+        message: `Repair permissions on ${label ?? displayDir}?`,
+        initialValue: true,
+      })
+    ) {
+      try {
+        fs.chmodSync(dir, (fs.statSync(dir).mode & 0o777) | 0o700);
+        changes.push(`- Repaired permissions on ${label ? `${label}: ` : ""}${displayDir}`);
+      } catch (err) {
+        warnings.push(`- Failed to repair ${displayDir}: ${String(err)}`);
+      }
+    }
+  };
+  const tightenPermissions = async (
+    targetPath: string,
+    displayPath: string,
+    mode: number,
+    warning: string,
+    failureLabel: string,
+  ) => {
+    const octalMode = mode.toString(8);
+    try {
+      if (readGroupOrWorldAccessibleMode(targetPath) === null) {
+        return;
+      }
+      warnings.push(warning);
+      if (
+        await prompter.confirmRuntimeRepair({
+          message: `Tighten permissions on ${displayPath} to ${octalMode}?`,
+          initialValue: true,
+        })
+      ) {
+        fs.chmodSync(targetPath, mode);
+        changes.push(`- Tightened permissions on ${displayPath} to ${octalMode}`);
+      }
+    } catch (err) {
+      warnings.push(`- Failed to read ${failureLabel}: ${String(err)}`);
+    }
+  };
 
   if (cloudSyncedStateDir) {
     warnings.push(
@@ -1060,67 +1065,27 @@ export async function noteStateIntegrity(
     }
   }
 
-  if (stateDirExists && !canWriteDir(stateDir)) {
-    warnings.push(`- State directory not writable (${displayStateDir}).`);
-    const hint = dirPermissionHint(stateDir);
-    if (hint) {
-      warnings.push(`  ${hint}`);
-    }
-    const repair = await prompter.confirmRuntimeRepair({
-      message: `Repair permissions on ${displayStateDir}?`,
-      initialValue: true,
-    });
-    if (repair) {
-      try {
-        const stat = fs.statSync(stateDir);
-        const target = addUserRwx(stat.mode);
-        fs.chmodSync(stateDir, target);
-        changes.push(`- Repaired permissions on ${displayStateDir}`);
-      } catch (err) {
-        warnings.push(`- Failed to repair ${displayStateDir}: ${String(err)}`);
-      }
-    }
+  if (stateDirExists) {
+    await repairWritableDirectory(stateDir, displayStateDir);
   }
   if (stateDirExists && process.platform !== "win32") {
-    try {
-      if (readGroupOrWorldAccessibleMode(stateDir) !== null) {
-        warnings.push(
-          `- State directory permissions are too open (${displayStateDir}). Recommend chmod 700.`,
-        );
-        const tighten = await prompter.confirmRuntimeRepair({
-          message: `Tighten permissions on ${displayStateDir} to 700?`,
-          initialValue: true,
-        });
-        if (tighten) {
-          fs.chmodSync(stateDir, 0o700);
-          changes.push(`- Tightened permissions on ${displayStateDir} to 700`);
-        }
-      }
-    } catch (err) {
-      warnings.push(`- Failed to read ${displayStateDir} permissions: ${String(err)}`);
-    }
+    await tightenPermissions(
+      stateDir,
+      displayStateDir,
+      0o700,
+      `- State directory permissions are too open (${displayStateDir}). Recommend chmod 700.`,
+      `${displayStateDir} permissions`,
+    );
   }
 
   if (configPath && existsFile(configPath) && process.platform !== "win32") {
-    try {
-      if (readGroupOrWorldAccessibleMode(configPath) !== null) {
-        warnings.push(
-          `- Config file is group/world readable (${displayConfigPath ?? configPath}). Recommend chmod 600.`,
-        );
-        const tighten = await prompter.confirmRuntimeRepair({
-          message: `Tighten permissions on ${displayConfigPath ?? configPath} to 600?`,
-          initialValue: true,
-        });
-        if (tighten) {
-          fs.chmodSync(configPath, 0o600);
-          changes.push(`- Tightened permissions on ${displayConfigPath ?? configPath} to 600`);
-        }
-      }
-    } catch (err) {
-      warnings.push(
-        `- Failed to read config permissions (${displayConfigPath ?? configPath}): ${String(err)}`,
-      );
-    }
+    await tightenPermissions(
+      configPath,
+      displayConfigPath ?? configPath,
+      0o600,
+      `- Config file is group/world readable (${displayConfigPath ?? configPath}). Recommend chmod 600.`,
+      `config permissions (${displayConfigPath ?? configPath})`,
+    );
   }
 
   if (stateDirExists) {
@@ -1159,27 +1124,7 @@ export async function noteStateIntegrity(
         }
         continue;
       }
-      if (!canWriteDir(dir)) {
-        warnings.push(`- ${label} not writable (${displayDir}).`);
-        const hint = dirPermissionHint(dir);
-        if (hint) {
-          warnings.push(`  ${hint}`);
-        }
-        const repair = await prompter.confirmRuntimeRepair({
-          message: `Repair permissions on ${label}?`,
-          initialValue: true,
-        });
-        if (repair) {
-          try {
-            const stat = fs.statSync(dir);
-            const target = addUserRwx(stat.mode);
-            fs.chmodSync(dir, target);
-            changes.push(`- Repaired permissions on ${label}: ${displayDir}`);
-          } catch (err) {
-            warnings.push(`- Failed to repair ${displayDir}: ${String(err)}`);
-          }
-        }
-      }
+      await repairWritableDirectory(dir, displayDir, label);
     }
   }
 

@@ -119,14 +119,14 @@ describe("createGatewayKernel", () => {
           },
           controlUiEnabled: false,
           sidecarStartup: "defer",
-          tryRecoverChannelAutostartSuppression: () => true,
+          tryRecoverChannelAutostartSuppression: async () => undefined,
         });
 
-        await expect(kernel.channelManager.recoverAutostartSuppression()).resolves.toBe(true);
+        await expect(kernel.channelManager.recoverAutostartSuppression()).resolves.toBeUndefined();
         expect(startAccount).not.toHaveBeenCalled();
 
         if (closing) {
-          await kernel.beginClosePrelude();
+          await kernel.prepareClose();
         }
         kernel.releaseStartupAccountStarts();
         await (closing ? nextTurn() : started.promise);
@@ -312,7 +312,6 @@ describe("createGatewayKernel", () => {
           .mockReturnValue(updateWork);
         const terminalDispose = vi.spyOn(kernel.terminalSessions, "disposeAll");
         const gatewayStop = vi.spyOn(kernel.shutdownRuntime, "runGlobalGatewayStopSafely");
-        const prepareShutdown = vi.spyOn(kernel.shutdownRuntime, "prepareGatewayClose");
         const maintenance = createMaintenanceHandles();
         maintenance.stopPeriodicTasks.mockReturnValue(periodicStopped.promise);
         kernel.kernel.setMaintenanceHandles(maintenance);
@@ -338,7 +337,6 @@ describe("createGatewayKernel", () => {
         await expect(boundHost.request("start", () => {})).rejects.toThrow("closed instance");
         expect(acceptRequest).not.toHaveBeenCalled();
         expect(invalidateCron).toHaveBeenCalledOnce();
-        expect(stopRecovery).toHaveBeenCalledOnce();
         await nextTurn();
         expect(startMaintenance).not.toHaveBeenCalled();
         expect(reloadStop).toHaveBeenCalledOnce();
@@ -358,7 +356,6 @@ describe("createGatewayKernel", () => {
         expect(closeFirstStop).not.toHaveBeenCalled();
         updateCheckStopped.resolve();
         await nextTurn();
-        expect(prepareShutdown).not.toHaveBeenCalled();
         periodicStopped.resolve();
         await Promise.race([publicationDrainEntered.promise, closing]);
         expect(projectionDispose).not.toHaveBeenCalled();

@@ -1,8 +1,5 @@
 import { html, nothing } from "lit";
-import type {
-  SessionCatalog,
-  SessionsCatalogListResult,
-} from "../../../../packages/gateway-protocol/src/index.ts";
+import type { SessionsCatalogListResult } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { icons } from "../../components/icons.ts";
@@ -234,7 +231,6 @@ export async function resolveCreateTarget(
   }
 }
 
-type CatalogCreateTarget = Pick<SessionCatalog, "id" | "label">;
 type CatalogTargetOwner = { agentId: string; client: GatewayBrowserClient };
 type CatalogTargetDiscoveryState =
   | { status: "idle" }
@@ -243,7 +239,7 @@ type CatalogTargetDiscoveryState =
       owner: CatalogTargetOwner;
       controller: AbortController;
     }
-  | { status: "ready"; owner: CatalogTargetOwner; targets: CatalogCreateTarget[] }
+  | { status: "ready"; owner: CatalogTargetOwner; targets: ChatModelPickerTargetGroup["options"] }
   | { status: "error"; owner: CatalogTargetOwner };
 
 export class CatalogTargetDiscovery {
@@ -283,7 +279,7 @@ export class CatalogTargetDiscovery {
             owner,
             targets: result.catalogs
               .filter((catalog) => catalog.capabilities.startTerminal === true)
-              .map(({ id, label }) => ({ id, label })),
+              .map(({ id, label }) => ({ value: id, label })),
           };
           this.notify();
         },
@@ -349,10 +345,7 @@ export class CatalogTargetDiscovery {
         errorLabel: t("newSession.cliAgentsUnavailable"),
         id: "cliAgents",
         label: t("newSession.cliAgentsGroup"),
-        options:
-          discovery.status === "ready"
-            ? discovery.targets.map(({ id, label }) => ({ value: id, label }))
-            : [],
+        options: discovery.status === "ready" ? discovery.targets : [],
         status: discovery.status,
       },
     ];

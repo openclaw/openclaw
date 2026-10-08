@@ -101,20 +101,11 @@ function restoreInactiveWebCommandSecretTargets(params: {
   resolvedConfig: OpenClawConfig;
   targetIds: ReadonlySet<string>;
   inactiveRefPaths: string[];
-  providerOverrides: CommandSecretProviderOverrides | undefined;
-  allowedPaths?: ReadonlySet<string>;
-  forcedActivePaths?: ReadonlySet<string>;
-  optionalActivePaths?: ReadonlySet<string>;
+  isInactivePath: (path: string) => boolean;
 }): string[] {
-  if (!hasProviderOverrides(params.providerOverrides)) {
-    return params.inactiveRefPaths;
-  }
   const inactive = new Set(params.inactiveRefPaths);
   const defaults = params.sourceConfig.secrets?.defaults;
   for (const target of discoverConfigSecretTargetsByIds(params.sourceConfig, params.targetIds)) {
-    if (params.allowedPaths && !params.allowedPaths.has(target.path)) {
-      continue;
-    }
     if (!pluginIdFromRuntimeWebPath(target.path)) {
       continue;
     }
@@ -124,51 +115,13 @@ function restoreInactiveWebCommandSecretTargets(params: {
     if (!ref) {
       continue;
     }
-    if (
-      params.forcedActivePaths?.has(target.path) ||
-      params.optionalActivePaths?.has(target.path)
-    ) {
-      continue;
-    }
-    if (
-      isProviderOverridePath({
-        config: params.sourceConfig,
-        path: target.path,
-        providerOverrides: params.providerOverrides,
-      })
-    ) {
+    if (!params.isInactivePath(target.path)) {
       continue;
     }
     inactive.add(target.path);
     setPathExistingStrict(params.resolvedConfig, target.pathSegments, target.value);
   }
   return [...inactive];
-}
-
-function filterInactiveRefPaths(params: {
-  config: OpenClawConfig;
-  inactiveRefPaths: readonly string[];
-  providerOverrides: CommandSecretProviderOverrides | undefined;
-  allowedPaths?: ReadonlySet<string>;
-  forcedActivePaths?: ReadonlySet<string>;
-  optionalActivePaths?: ReadonlySet<string>;
-}): string[] {
-  return params.inactiveRefPaths.filter((path) => {
-    if (params.allowedPaths && !params.allowedPaths.has(path)) {
-      return false;
-    }
-    if (params.forcedActivePaths?.has(path) || params.optionalActivePaths?.has(path)) {
-      return false;
-    }
-    if (!hasProviderOverrides(params.providerOverrides)) {
-      return true;
-    }
-    return !isProviderOverridePath({
-      config: params.config,
-      path,
-      providerOverrides: params.providerOverrides,
-    });
-  });
 }
 
 async function resolveForcedActiveCommandSecretTargets(params: {
@@ -251,32 +204,20 @@ export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
   if (params.targetIds.size === 0) {
     return Promise.resolve({ assignments: [], diagnostics: [], inactiveRefPaths: [] });
   }
-  return resolveCommandSecretsFromSnapshot({
-    ...params,
-    activeSnapshot,
-  });
+  return resolveCommandSecretsFromSnapshot(activeSnapshot, { ...params });
 }
 
-async function resolveCommandSecretsFromSnapshot(params: {
-  activeSnapshot: NonNullable<ReturnType<typeof getActiveSecretsRuntimeSnapshotState>>;
-  commandName: string;
-  targetIds: ReadonlySet<string>;
-  allowedPaths?: ReadonlySet<string>;
-  forcedActivePaths?: ReadonlySet<string>;
-  optionalActivePaths?: ReadonlySet<string>;
-  providerOverrides?: CommandSecretProviderOverrides;
-}): Promise<{
-  assignments: CommandSecretAssignment[];
-  diagnostics: string[];
-  inactiveRefPaths: string[];
-}> {
+async function resolveCommandSecretsFromSnapshot(
+  activeSnapshot: NonNullable<ReturnType<typeof getActiveSecretsRuntimeSnapshotState>>,
+  params: Parameters<typeof resolveCommandSecretsFromActiveRuntimeSnapshot>[0],
+): ReturnType<typeof resolveCommandSecretsFromActiveRuntimeSnapshot> {
   const hasOverrides = hasProviderOverrides(params.providerOverrides);
   const sourceConfig = applyProviderOverridesToConfig(
-    params.activeSnapshot.sourceConfig,
+    activeSnapshot.sourceConfig,
     params.providerOverrides,
   );
   const resolvedConfig = applyProviderOverridesToConfig(
-    params.activeSnapshot.config,
+    activeSnapshot.config,
     params.providerOverrides,
   );
   const context = hasOverrides
@@ -301,31 +242,40 @@ async function resolveCommandSecretsFromSnapshot(params: {
     optionalActivePaths: params.optionalActivePaths,
   });
 
-  const warningSource = context?.warnings ?? params.activeSnapshot.warnings;
-  let inactiveRefPaths = filterInactiveRefPaths({
-    config: sourceConfig,
-    providerOverrides: params.providerOverrides,
-    allowedPaths: params.allowedPaths,
-    forcedActivePaths: params.forcedActivePaths,
-    optionalActivePaths: params.optionalActivePaths,
-    inactiveRefPaths: [
-      ...new Set(
-        warningSource
-          .filter((warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE")
-          .map((warning) => warning.path),
-      ),
-    ],
-  });
-  inactiveRefPaths = restoreInactiveWebCommandSecretTargets({
-    sourceConfig,
-    resolvedConfig,
-    targetIds: params.targetIds,
-    inactiveRefPaths,
-    providerOverrides: params.providerOverrides,
-    allowedPaths: params.allowedPaths,
-    forcedActivePaths: params.forcedActivePaths,
-    optionalActivePaths: params.optionalActivePaths,
-  });
+  const warningSource = context?.warnings ?? activeSnapshot.warnings;
+  const isInactivePath = (path: string) => {
+    if (
+      (params.allowedPaths && !params.allowedPaths.has(path)) ||
+      params.forcedActivePaths?.has(path) ||
+      params.optionalActivePaths?.has(path)
+    ) {
+      return false;
+    }
+    return (
+      !hasOverrides ||
+      !isProviderOverridePath({
+        config: sourceConfig,
+        path,
+        providerOverrides: params.providerOverrides,
+      })
+    );
+  };
+  let inactiveRefPaths = [
+    ...new Set(
+      warningSource
+        .filter((warning) => warning.code === "SECRETS_REF_IGNORED_INACTIVE_SURFACE")
+        .map((warning) => warning.path),
+    ),
+  ].filter(isInactivePath);
+  if (hasOverrides) {
+    inactiveRefPaths = restoreInactiveWebCommandSecretTargets({
+      sourceConfig,
+      resolvedConfig,
+      targetIds: params.targetIds,
+      inactiveRefPaths,
+      isInactivePath,
+    });
+  }
 
   const analyzeAssignments = () =>
     analyzeCommandSecretAssignmentsFromSnapshot({

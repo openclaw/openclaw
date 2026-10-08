@@ -26,6 +26,8 @@ import type {
   DiagnosticMemoryUsage,
   DiagnosticChildProcessSpawnFields,
   DiagnosticMemoryPressureFields,
+  DiagnosticAsyncQueueDroppedFields,
+  DiagnosticWorkerRequestFields,
 } from "./diagnostic-process-types.js";
 import type { DiagnosticGatewayRpcFields } from "./diagnostic-rpc-types.js";
 import type {
@@ -35,6 +37,7 @@ import type {
 import {
   consumeCoreSemanticRunProgressDiagnosticEvent,
   CORE_SEMANTIC_RUN_PROGRESS_METADATA_KEY,
+  type CoreSemanticRunProgressProvenance,
 } from "./diagnostic-semantic-run-progress-provenance.js";
 import {
   consumeToolExecutionLivenessDiagnosticEvent,
@@ -759,19 +762,9 @@ type DiagnosticTelemetryExporterEvent = DiagnosticBaseEvent & {
   errorCategory?: string;
 };
 
-type DiagnosticAsyncQueueDroppedEvent = DiagnosticBaseEvent & {
-  type: "diagnostic.async_queue.dropped";
-  droppedEvents: number;
-  droppedTrustedEvents?: number;
-  droppedUntrustedEvents?: number;
-  droppedPriorityEvents?: number;
-  queueLength: number;
-  maxQueueLength: number;
-  drainBatchSize: number;
-};
-
 export type DiagnosticEventPayload =
   | DiagnosticGatewayRpcEvent
+  | (DiagnosticBaseEvent & DiagnosticWorkerRequestFields)
   | DiagnosticUsageEvent
   | DiagnosticWebhookReceivedEvent
   | DiagnosticWebhookProcessedEvent
@@ -827,7 +820,7 @@ export type DiagnosticEventPayload =
   | DiagnosticLogRecordEvent
   | DiagnosticSecurityEvent
   | DiagnosticTelemetryExporterEvent
-  | DiagnosticAsyncQueueDroppedEvent
+  | (DiagnosticBaseEvent & DiagnosticAsyncQueueDroppedFields)
   | DiagnosticFailoverEvent;
 
 type DiagnosticNonSecurityEventPayload = Exclude<DiagnosticEventPayload, DiagnosticSecurityEvent>;
@@ -858,7 +851,7 @@ type InternalDiagnosticEventMetadata = DiagnosticEventMetadata &
     [CORE_MODEL_REQUEST_LIFECYCLE_METADATA_KEY]?: CoreModelRequestLifecycleProvenance;
     // String metadata survives duplicate module instances sharing dispatcher state;
     // only the non-SDK core emitter can set this semantic authority.
-    [CORE_SEMANTIC_RUN_PROGRESS_METADATA_KEY]?: boolean;
+    [CORE_SEMANTIC_RUN_PROGRESS_METADATA_KEY]?: CoreSemanticRunProgressProvenance;
   }>;
 
 export type DiagnosticModelCallContent = Readonly<{
@@ -949,6 +942,7 @@ const MAX_ASYNC_DIAGNOSTIC_EVENTS = 10_000;
 const MAX_ASYNC_DIAGNOSTIC_EVENTS_PER_TURN = 100;
 const DIAGNOSTIC_EVENTS_STATE_KEY = Symbol.for("openclaw.diagnosticEvents.state.v1");
 const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
+  "worker.request",
   "diagnostic.gc",
   "gateway.event_loop.sample",
   "gateway.rpc",
@@ -1251,7 +1245,7 @@ type EmitDiagnosticEventOptions = {
   toolExecutionLiveness?: DiagnosticToolExecutionLiveness;
   allowSecurityEvent?: boolean;
   coreModelRequestLifecycle?: CoreModelRequestLifecycleProvenance;
-  coreSemanticRunProgress?: boolean;
+  coreSemanticRunProgress?: CoreSemanticRunProgressProvenance;
   hostPluginId?: string;
   internal?: boolean;
   privateData?: DiagnosticEventPrivateData;
@@ -1286,8 +1280,8 @@ function emitDiagnosticEventWithTrust(
     ...(options.coreModelRequestLifecycle
       ? { [CORE_MODEL_REQUEST_LIFECYCLE_METADATA_KEY]: options.coreModelRequestLifecycle }
       : {}),
-    ...(options.coreSemanticRunProgress === true
-      ? { [CORE_SEMANTIC_RUN_PROGRESS_METADATA_KEY]: true }
+    ...(options.coreSemanticRunProgress
+      ? { [CORE_SEMANTIC_RUN_PROGRESS_METADATA_KEY]: options.coreSemanticRunProgress }
       : {}),
     ...(trustedTraceContext ? { trustedTraceContext } : {}),
   };
@@ -1386,7 +1380,7 @@ export function emitTrustedDiagnosticEvent(event: DiagnosticEventInput) {
   emitDiagnosticEventWithTrust(event, true, {
     ...(toolExecutionLiveness ? { toolExecutionLiveness } : {}),
     ...(hostPluginId ? { hostPluginId, internal: true } : {}),
-    ...(coreSemanticRunProgress ? { coreSemanticRunProgress: true } : {}),
+    ...(coreSemanticRunProgress ? { coreSemanticRunProgress } : {}),
   });
 }
 

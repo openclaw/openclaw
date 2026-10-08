@@ -75,7 +75,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
             "openclaw memory status --fix",
             "Repair stale recall locks and normalize promotion metadata.",
           ],
-          ["openclaw memory status --deep", "Probe embedding provider readiness."],
+          ["openclaw memory status --deep", "Check embedding provider readiness."],
           ["openclaw memory index --force", "Force a full reindex."],
           ['openclaw memory search "meeting notes"', "Quick search using positional query."],
           [
@@ -123,7 +123,7 @@ export function registerMemoryCli(program: Command, hostOptions?: MemoryCoreRunt
     .description("Show memory search index status")
     .option("--agent <id>", "Agent id (default: all configured agents)")
     .option("--json", "Print JSON")
-    .option("--deep", "Probe embedding provider availability")
+    .option("--deep", "Check embedding provider availability")
     .option("--index", "Reindex if dirty (implies --deep)")
     .option("--fix", "Repair stale recall locks and normalize promotion metadata")
     .option("--verbose", "Verbose logging", false)

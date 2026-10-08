@@ -218,7 +218,7 @@ openclaw doctor --session-sqlite recover --github-issue
 openclaw doctor --session-sqlite restore --session-sqlite-all-agents
 ```
 
-For channel-specific permissions, use the channel probes instead of `doctor`:
+For channel-specific permissions, use the channel checks instead of `doctor`:
 
 ```bash
 openclaw channels capabilities --channel discord --target channel:<channel-id>
@@ -240,7 +240,7 @@ openclaw channels status --probe
 | `--allow-exec`                  | Allow doctor to execute configured `exec` SecretRefs while verifying secrets.                                                                                                                                                                         |
 | `--deep`                        | Scan system services for extra gateway installs; report recent Gateway supervisor restart handoffs.                                                                                                                                                   |
 | `--lint`                        | Run the [structured health checks](/cli/doctor/health-contract) in read-only mode and emit diagnostic findings.                                                                                                                                       |
-| `--post-upgrade`                | Run post-upgrade plugin compatibility probes; findings go to stdout; exit code 1 if any error-level finding is present.                                                                                                                               |
+| `--post-upgrade`                | Run post-upgrade plugin compatibility checks; findings go to stdout; exit code 1 if any error-level finding is present.                                                                                                                               |
 | `--state-sqlite <mode>`         | Run explicit shared state SQLite maintenance. The only mode is `compact`.                                                                                                                                                                             |
 | `--session-sqlite <mode>`       | Run targeted session SQLite maintenance or legacy import: `inspect`, `dry-run`, `import`, `validate`, `compact`, `recover`, or `restore`.                                                                                                             |
 | `--session-sqlite-store <path>` | With `--session-sqlite`: select a SQLite database or legacy `sessions.json` source, subject to the mode's [selection rules](/cli/doctor/sqlite-maintenance#session-sqlite-migration).                                                                 |

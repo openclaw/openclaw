@@ -9,6 +9,7 @@ import { digestClawBytes } from "./digest.js";
 import { readClawOpenClawProfile } from "./openclaw-profile.js";
 import { isCanonicalClawHubPackageName, isExactSemVer } from "./schema-portability.js";
 import { clawManifestWorkspaceConflictsWithPath, parseClawManifest } from "./schema.js";
+import { clawWorkspaceSourceFailure } from "./source-diagnostics.js";
 import {
   MAX_CLAW_MANIFEST_BYTES,
   MAX_MANAGED_FILE_BYTES,
@@ -37,16 +38,6 @@ type ResolvedClawSource = Omit<ClawSourceIdentity, "integrity" | "integrityKind"
 const CLAW_MARKDOWN_FILENAME = "CLAW.md";
 const MAX_CLAW_PACKAGE_JSON_BYTES = 256 * 1024;
 
-async function readBoundedFile(path: string, maxBytes: number): Promise<Buffer> {
-  const fileRoot = await fsSafeRoot(dirname(path));
-  const read = await fileRoot.read(basename(path), {
-    hardlinks: "reject",
-    maxBytes,
-    symlinks: "reject",
-  });
-  return read.buffer;
-}
-
 function fileDiagnostic(code: string, message: string, path = "$"): ClawDiagnostic {
   return { level: "error", code, phase: "parse", path, message };
 }
@@ -60,39 +51,9 @@ function isContained(root: string, candidate: string): boolean {
   return child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child);
 }
 
-function updateSnapshotHash(
-  hash: ReturnType<typeof createHash>,
-  label: string,
-  bytes: Buffer,
-): void {
-  hash.update(`${Buffer.byteLength(label, "utf8")}:${label}:${bytes.byteLength}:`, "utf8");
-  hash.update(bytes);
-}
-
 function workspaceSourceDiagnostic(error: unknown, sourcePath: string): ClawDiagnostic {
-  if (error instanceof FsSafeError && error.code === "too-large") {
-    return fileDiagnostic(
-      "workspace_source_too_large",
-      `Workspace source ${JSON.stringify(sourcePath)} exceeds ${MAX_MANAGED_FILE_BYTES} bytes.`,
-      "$.workspace",
-    );
-  }
-  if (
-    (error instanceof FsSafeError &&
-      (error.code === "symlink" || error.code === "hardlink" || error.code === "path-mismatch")) ||
-    (error instanceof Error && error.message.includes("symlinked directory"))
-  ) {
-    return fileDiagnostic(
-      "workspace_source_unsafe",
-      `Workspace source ${JSON.stringify(sourcePath)} must be a regular, non-symlinked, non-hardlinked file.`,
-      "$.workspace",
-    );
-  }
-  return fileDiagnostic(
-    "workspace_source_invalid",
-    `Workspace source ${JSON.stringify(sourcePath)} must resolve inside the Claw source.`,
-    "$.workspace",
-  );
+  const { code, message } = clawWorkspaceSourceFailure(error, sourcePath, "source");
+  return fileDiagnostic(code, message, "$.workspace");
 }
 
 async function buildDevelopmentSnapshot(params: {
@@ -115,7 +76,8 @@ async function buildDevelopmentSnapshot(params: {
   const hash = createHash("sha256");
   let byteLength = 0;
   const add = (label: string, bytes: Buffer) => {
-    updateSnapshotHash(hash, label, bytes);
+    hash.update(`${Buffer.byteLength(label, "utf8")}:${label}:${bytes.byteLength}:`, "utf8");
+    hash.update(bytes);
     byteLength += bytes.byteLength;
   };
   const snapshotFile = (bytes: Buffer) => ({
@@ -247,11 +209,10 @@ async function buildDevelopmentSnapshot(params: {
           "$.workspace",
         );
       }
-      const normalizedSourcePath = sourcePath.replaceAll("\\", "/");
       const digest = digestClawBytes(bytes);
-      add(`workspace:${sourcePath.replaceAll("\\", "/")}`, bytes);
+      add(`workspace:${sourcePath}`, bytes);
       workspaceSources.push({
-        sourcePath: normalizedSourcePath,
+        sourcePath,
         realPath: opened.realPath,
         byteLength: bytes.byteLength,
         digest,
@@ -349,7 +310,13 @@ async function readClawDocument(
 > {
   let raw: Buffer;
   try {
-    raw = await readBoundedFile(path, maxBytes);
+    const fileRoot = await fsSafeRoot(dirname(path));
+    const read = await fileRoot.read(basename(path), {
+      hardlinks: "reject",
+      maxBytes,
+      symlinks: "reject",
+    });
+    raw = read.buffer;
   } catch (error) {
     const tooLarge =
       error instanceof RangeError || (error instanceof FsSafeError && error.code === "too-large");

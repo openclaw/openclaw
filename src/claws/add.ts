@@ -24,7 +24,6 @@ import {
   type ClawCronGateway,
   type PersistedClawCronRef,
 } from "./cron.js";
-import { replaceLegacyCommittedAgent } from "./legacy-resume.js";
 import {
   ClawMcpInstallError,
   installClawMcpServers,
@@ -422,17 +421,23 @@ export async function applyClawAddPlan(
         if (sameCommittedAgent(existingAgent, plan)) {
           return config;
         }
-        const nextConfig = replaceLegacyCommittedAgent({
-          config: configWithPreservedAgents,
-          agents: agentsToPreserve,
-          normalizedAgentId,
-          plan,
-          resumePlan: options.resumePlan,
-          resumeRecord: options.resumeRecord,
-          matchesPlan: sameCommittedAgent,
-        });
-        if (nextConfig) {
-          return nextConfig;
+        if (
+          options.resumePlan &&
+          options.resumeRecord?.schemaVersion === "openclaw.clawInstallRecord.v1" &&
+          options.resumeRecord.status !== "complete" &&
+          sameCommittedAgent(existingAgent, options.resumePlan)
+        ) {
+          return {
+            ...configWithPreservedAgents,
+            agents: {
+              ...configWithPreservedAgents.agents,
+              entries: toAgentEntriesRecord(
+                agentsToPreserve.map((agent) =>
+                  normalizeAgentId(agent.id) === normalizedAgentId ? plan.agent.config : agent,
+                ),
+              ),
+            },
+          };
         }
         throw new ClawAddMutationError(
           "agent_id_collision",

@@ -12,11 +12,14 @@ import {
   assertCurrentStateRuntimeSchema,
   assertNoLegacyStateRuntimeRepair,
 } from "./openclaw-state-db-fast-path.js";
-import { assertOpenClawStateRuntimeIntegrity } from "./openclaw-state-db-integrity-admission.js";
+import {
+  assertOpenClawStateRuntimeIntegrity,
+  type OpenClawStateIntegrityPolicy,
+} from "./openclaw-state-db-integrity-admission.js";
 import { classifySqliteTableReadError } from "./openclaw-state-db-schema-helpers.js";
 import {
   assertSupportedStateSchemaVersion,
-  readStateSchemaMigrationVersion,
+  readStateSchemaContentVersion,
 } from "./openclaw-state-db-schema-version.js";
 import type { DB } from "./openclaw-state-db.generated.js";
 
@@ -28,7 +31,7 @@ export function assertExistingOpenClawStateRuntimeMetadata(
   pathname: string,
 ): number {
   const version = assertSupportedStateSchemaVersion(database, pathname);
-  if (readStateSchemaMigrationVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
+  if (readStateSchemaContentVersion(database) !== OPENCLAW_STATE_SCHEMA_VERSION) {
     throw new Error(
       `Existing shared-state database ${pathname} requires schema migration by its owning installation; run openclaw doctor --fix there before using it.`,
     );
@@ -64,6 +67,7 @@ export function assertExistingOpenClawStateRuntimeSchema(
   database: DatabaseSync,
   pathname: string,
   integrity?: OpenClawStateIntegrityAdmission,
+  integrityPolicy?: OpenClawStateIntegrityPolicy,
 ): void {
   let publishIntegrity: (() => void) | undefined;
   const schemaCookie = runSqliteDeferredTransactionSync(
@@ -80,12 +84,17 @@ export function assertExistingOpenClawStateRuntimeSchema(
       if (cached?.cookie !== currentCookie) {
         cached?.unregister();
         validatedSchemas.delete(database);
+      }
+      if (cached?.cookie !== currentCookie || integrityPolicy === "require-proof") {
         publishIntegrity = assertOpenClawStateRuntimeIntegrity(
           database,
           pathname,
           { schemaVersion: currentCookie, userVersion },
           integrity,
+          integrityPolicy,
         );
+      }
+      if (cached?.cookie !== currentCookie) {
         const readTable = createSqliteTableContractReader(database);
         assertCurrentStateRuntimeSchema(database, pathname, readTable);
         assertNoLegacyStateRuntimeRepair(database, pathname);

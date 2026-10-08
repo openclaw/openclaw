@@ -22,9 +22,10 @@ import { compareSemverStrings } from "./update-check.js";
 import { isFullGitObjectId, type DevUpdateTarget } from "./update-dev-target.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { isFailedUpdateStep } from "./update-run-step.js";
-import { reportUpdateStepCompletion, runStep } from "./update-runner-command.js";
-import { gitCleanCheckArgs } from "./update-runner-git-commands.js";
+import { runStep } from "./update-runner-command.js";
+import { createGitStepFactory, gitCleanCheckArgs } from "./update-runner-git-commands.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
+import { runClassifiedGitStep } from "./update-runner-git-steps.js";
 import type { CommandRunner, RunStepOptions, UpdateRunnerOptions } from "./update-runner-types.js";
 import type { UpdateStepResult } from "./update-step-result.js";
 
@@ -396,25 +397,8 @@ async function resolveChannelTag(
   const result = await runCommand(["git", "-C", root, "tag", "--list", "v*", "--sort=-v:refname"], {
     timeoutMs,
   }).catch(() => null);
-  const tags = result?.code === 0 ? normalizeStringEntries(result.stdout.split("\n")) : [];
+  const tags = result?.code === 0 ? result.stdout.split("\n") : [];
   return selectChannelTag(tags, channel);
-}
-
-/**
- * Picks the single remote release tags are force-fetched from. The checkout's
- * retained tracking remote (`branch.<main>.remote`) wins when it is still
- * declared, because a detached release checkout keeps that config and a fork
- * `origin` can be tag-less; otherwise the clone's canonical `origin`, then the
- * only declared remote. Multiple non-origin remotes need explicit tracking.
- */
-function resolveReleaseTagRemote(
-  remotes: readonly string[],
-  trackedUpdateRemote: string,
-): string | undefined {
-  if (trackedUpdateRemote && remotes.includes(trackedUpdateRemote)) {
-    return trackedUpdateRemote;
-  }
-  return remotes.includes("origin") ? "origin" : remotes.length === 1 ? remotes[0] : undefined;
 }
 
 export async function fetchGitUpdateTarget(params: {
@@ -427,61 +411,49 @@ export async function fetchGitUpdateTarget(params: {
   steps: UpdateStepResult[];
 }): Promise<{ ok: boolean; refreshedRemotes: string[]; releaseRemote?: string }> {
   const { root, channel, devTarget, name, step: targetStep, workStep, steps } = params;
+  const step = createGitStepFactory(root, targetStep);
+  const work = createGitStepFactory(root, workStep);
   const refreshedRemotes: string[] = [];
   const result = (ok: boolean) => ({ ok, refreshedRemotes });
   if (channel === "dev" && devTarget?.mode === "detached" && isFullGitObjectId(devTarget.ref)) {
     // A pinned commit needs no remote freshness. Probe privately without allowing
     // promised-object hydration; the normal candidate/transfer owners still verify its contents.
-    const options = targetStep(
+    const options = step(
       "git-resolve-target",
-      [
-        "git",
-        "-C",
-        root,
-        "--no-lazy-fetch",
-        "cat-file",
-        "--batch-check=%(objectname) %(objecttype)",
-      ],
-      root,
+      "--no-lazy-fetch",
+      "cat-file",
+      "--batch-check=%(objectname) %(objecttype)",
     );
-    const cached = await runStep({
-      ...options,
-      input: `${devTarget.ref}\n`,
-      progress: { ...options.progress, onStepComplete: undefined },
-    });
-    const interrupted =
-      cached.termination === "signal" || cached.exitCode === 130 || cached.exitCode === 143;
-    const available =
-      !isFailedUpdateStep(cached) &&
-      !cached.signal &&
-      !interrupted &&
-      cached.stdoutTail?.trim() === `${devTarget.ref.toLowerCase()} commit`;
-    if (!interrupted && isFailedUpdateStep(cached)) {
-      cached.advisory = {
-        kind: "recoverable-maintenance",
-        message: `Could not inspect the cached target; continuing remote discovery. ${cached.stderrTail ?? ""}`,
-      };
-    }
-    await reportUpdateStepCompletion(options.progress, {
-      ...cached,
-      index: options.stepIndex,
-      total: options.totalSteps,
-    });
-    if (interrupted || available) {
-      return result(available);
+    const cachedTarget = await runClassifiedGitStep(
+      { ...options, input: `${devTarget.ref}\n` },
+      (cached) => {
+        const interrupted =
+          cached.termination === "signal" || cached.exitCode === 130 || cached.exitCode === 143;
+        const available =
+          !isFailedUpdateStep(cached) &&
+          !cached.signal &&
+          !interrupted &&
+          cached.stdoutTail?.trim() === `${devTarget.ref.toLowerCase()} commit`;
+        if (!interrupted && isFailedUpdateStep(cached)) {
+          cached.advisory = {
+            kind: "recoverable-maintenance",
+            message: `Could not inspect the cached target; continuing remote discovery. ${cached.stderrTail ?? ""}`,
+          };
+        }
+        return { interrupted, available };
+      },
+    );
+    if (cachedTarget.interrupted || cachedTarget.available) {
+      return result(cachedTarget.available);
     }
   }
-  const remote = await runStep(targetStep("git-remote", ["git", "-C", root, "remote"], root));
+  const remote = await runStep(step("git-remote", "remote"));
   if (remote.exitCode !== 0) {
     return result(false);
   }
   const remotes = normalizeStringEntries((remote.stdoutTail ?? "").split("\n"));
   const tracked = await runStep(
-    targetStep(
-      "git-config-update-upstream",
-      ["git", "-C", root, "config", "--get", `branch.${DEV_BRANCH}.remote`],
-      root,
-    ),
+    step("git-config-update-upstream", "config", "--get", `branch.${DEV_BRANCH}.remote`),
   );
   if (tracked.exitCode !== 0 && tracked.exitCode !== 1) {
     return result(false);
@@ -499,7 +471,16 @@ export async function fetchGitUpdateTarget(params: {
         .toSorted((left, right) => right.length - left.length)
         .find((candidate) => remoteRef.startsWith(`${candidate}/`))
     : undefined;
-  const tagRemote = resolveReleaseTagRemote(remotes, trackedRemote);
+  // Detached release checkouts retain tracking config; a fork's origin can be tag-less.
+  // Otherwise prefer origin, then the sole remote; multiple remotes need explicit tracking.
+  const tagRemote =
+    trackedRemote && remotes.includes(trackedRemote)
+      ? trackedRemote
+      : remotes.includes("origin")
+        ? "origin"
+        : remotes.length === 1
+          ? remotes[0]
+          : undefined;
   // A configured tracking remote is authoritative even when its refs are cold.
   // Unqualified explicit branches use origin; explicit tags resolve separately.
   const authority =
@@ -510,11 +491,7 @@ export async function fetchGitUpdateTarget(params: {
         : trackedRemote || undefined;
   if (channel === "dev" && !devTarget && !authority) {
     const main = await runStep(
-      targetStep(
-        "git-show-branch",
-        ["git", "-C", root, "show-ref", "--verify", `refs/heads/${DEV_BRANCH}`],
-        root,
-      ),
+      step("git-show-branch", "show-ref", "--verify", `refs/heads/${DEV_BRANCH}`),
     );
     if (main.exitCode === 0) {
       return result(true);
@@ -531,37 +508,34 @@ export async function fetchGitUpdateTarget(params: {
     if (fetchRemote === ".") {
       continue;
     }
-    const options = workStep(
+    const options = work(
       authority ? name : `${name}:${fetchRemote}`,
-      ["git", "-C", root, "fetch", fetchRemote, "--prune", "--no-tags", "--no-prune-tags"],
-      root,
+      "fetch",
+      fetchRemote,
+      "--prune",
+      "--no-tags",
+      "--no-prune-tags",
     );
-    const fetch = await runStep({
-      ...options,
-      progress: { ...options.progress, onStepComplete: undefined },
-    });
-    const interrupted =
-      fetch.termination === "signal" || fetch.exitCode === 130 || fetch.exitCode === 143;
-    const fetchedSuccessfully = fetch.exitCode === 0 && !isFailedUpdateStep(fetch);
-    if (fetchedSuccessfully && !interrupted) {
-      refreshedRemotes.push(fetchRemote);
-      if (authority && remotes.some((candidate) => candidate !== authority)) {
-        fetch.warnings = [
-          `Fetched only the update remote ${authority}; unrelated remotes were left untouched.`,
-        ];
+    const fetchOutcome = await runClassifiedGitStep(options, (fetch) => {
+      const interrupted =
+        fetch.termination === "signal" || fetch.exitCode === 130 || fetch.exitCode === 143;
+      const fetchedSuccessfully = fetch.exitCode === 0 && !isFailedUpdateStep(fetch);
+      if (fetchedSuccessfully && !interrupted) {
+        refreshedRemotes.push(fetchRemote);
+        if (authority && remotes.some((candidate) => candidate !== authority)) {
+          fetch.warnings = [
+            `Fetched only the update remote ${authority}; unrelated remotes were left untouched.`,
+          ];
+        }
+      } else if (!authority && !interrupted) {
+        fetch.advisory = {
+          kind: "recoverable-maintenance",
+          message: `Could not refresh optional target remote ${fetchRemote}; continuing target resolution. ${fetch.stderrTail ?? ""}`,
+        };
       }
-    } else if (!authority && !interrupted) {
-      fetch.advisory = {
-        kind: "recoverable-maintenance",
-        message: `Could not refresh optional target remote ${fetchRemote}; continuing target resolution. ${fetch.stderrTail ?? ""}`,
-      };
-    }
-    await reportUpdateStepCompletion(options.progress, {
-      ...fetch,
-      index: options.stepIndex,
-      total: options.totalSteps,
+      return { interrupted, fetchedSuccessfully };
     });
-    if (interrupted || (!fetchedSuccessfully && authority)) {
+    if (fetchOutcome.interrupted || (!fetchOutcome.fetchedSuccessfully && authority)) {
       return result(false);
     }
   }
@@ -583,20 +557,14 @@ export async function fetchGitUpdateTarget(params: {
   // Only the release authority may replace shared tag refs. Disable pruning
   // even when Git config enables it, so operator-only tags survive.
   const tags = await runStep(
-    workStep(
+    work(
       "git-fetch-tags",
-      [
-        "git",
-        "-C",
-        root,
-        "fetch",
-        "--no-tags",
-        "--no-prune",
-        "--no-prune-tags",
-        tagRemote,
-        "+refs/tags/*:refs/tags/*",
-      ],
-      root,
+      "fetch",
+      "--no-tags",
+      "--no-prune",
+      "--no-prune-tags",
+      tagRemote,
+      "+refs/tags/*:refs/tags/*",
     ),
   );
   return {

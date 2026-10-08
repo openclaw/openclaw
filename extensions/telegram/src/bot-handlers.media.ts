@@ -43,20 +43,13 @@ export function isDurablyRetryableInboundMediaError(err: unknown): boolean {
   if (!(err instanceof MediaFetchError)) {
     return false;
   }
-  if (err.code === "http_error") {
-    return (
-      typeof err.status === "number" &&
-      (err.status === 408 || err.status === 429 || err.status >= 500)
-    );
-  }
-  if (err.code !== "fetch_failed") {
-    return false;
-  }
-  return (
-    isAbortError(err) ||
-    isAbortError(err.cause) ||
-    isRecoverableTelegramNetworkError(err, { context: "polling" })
-  );
+  return err.code === "http_error"
+    ? typeof err.status === "number" &&
+        (err.status === 408 || err.status === 429 || err.status >= 500)
+    : err.code === "fetch_failed" &&
+        (isAbortError(err) ||
+          isAbortError(err.cause) ||
+          isRecoverableTelegramNetworkError(err, { context: "polling" }));
 }
 
 export function hasInboundMedia(msg: Message): boolean {

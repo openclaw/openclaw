@@ -41,12 +41,6 @@ type QaProfileEvidenceShard = {
   scenarioIds: string[];
 };
 
-type QaProfileEvidenceShardPlan = {
-  channelDriver: "qa-channel" | "crabline" | "live";
-  profile: string;
-  shards: QaProfileEvidenceShard[];
-};
-
 function resolveQaProfileEvidenceSelection(profile: string) {
   const scenarioPack = readQaScenarioPack();
   const scorecardReport = readQaScorecardTaxonomyReport(scenarioPack.scenarios);
@@ -136,12 +130,6 @@ function listExclusiveQaProfileChannels(
   });
 }
 
-type QaProfileScenarioGroup = {
-  categoryIds: Set<string>;
-  key: string;
-  scenarios: QaSeedScenarioWithSource[];
-};
-
 function buildQaProfileScenarioGroups(params: {
   categoriesByScenarioRef: ReadonlyMap<string, readonly string[]>;
   factories: readonly QaTransportAdapterFactory[] | undefined;
@@ -179,10 +167,7 @@ function buildQaProfileScenarioGroups(params: {
     target.scenarios.push(scenario);
   }
 
-  const buildGroup = (
-    key: string,
-    scenarios: QaSeedScenarioWithSource[],
-  ): QaProfileScenarioGroup => ({
+  const buildGroup = (key: string, scenarios: QaSeedScenarioWithSource[]) => ({
     categoryIds: new Set(
       scenarios.map((scenario) =>
         selectQaProfileScenarioCategory(
@@ -207,14 +192,14 @@ function buildQaProfileScenarioGroups(params: {
 export function createQaProfileEvidenceShardPlan(
   profile: string,
   shardCount = DEFAULT_QA_PROFILE_SHARD_COUNT,
-): QaProfileEvidenceShardPlan {
+) {
   return buildQaProfileEvidenceShardPlan(shardCount, resolveQaProfileEvidenceSelection(profile));
 }
 
 function buildQaProfileEvidenceShardPlan(
   shardCount: number,
   selection: ReturnType<typeof resolveQaProfileEvidenceSelection>,
-): QaProfileEvidenceShardPlan {
+) {
   if (!Number.isInteger(shardCount) || shardCount < 1 || shardCount > MAX_QA_PROFILE_SHARD_COUNT) {
     throw new Error(`QA profile shard count must be between 1 and ${MAX_QA_PROFILE_SHARD_COUNT}.`);
   }

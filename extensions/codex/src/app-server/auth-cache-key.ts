@@ -8,9 +8,6 @@ import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-co
 import type { CodexAppServerStartOptions } from "./config-contracts.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
-const CODEX_HOME_ENV_VAR = "CODEX_HOME";
-const HOME_ENV_VAR = "HOME";
-const CODEX_HOME_DIRNAME = ".codex";
 export const CODEX_AUTH_JSON_FILENAME = "auth.json";
 export const CODEX_APP_SERVER_API_KEY_ENV_VARS = ["CODEX_API_KEY", "OPENAI_API_KEY"];
 
@@ -59,20 +56,12 @@ function fingerprintAuthCacheKey(prefix: string, domain: string, ...parts: strin
 }
 
 function resolveCodexCliAuthFilePath(env: NodeJS.ProcessEnv): string {
-  const configuredCodexHome = env[CODEX_HOME_ENV_VAR]?.trim();
-  if (configuredCodexHome) {
-    return path.join(resolveHomeRelativePath(configuredCodexHome, env), CODEX_AUTH_JSON_FILENAME);
+  const codexHome = env.CODEX_HOME?.trim() || "~/.codex";
+  if (codexHome === "~" || codexHome.startsWith("~/") || codexHome.startsWith("~\\")) {
+    const home = env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
+    return path.join(home, codexHome.slice(codexHome === "~" ? 1 : 2), CODEX_AUTH_JSON_FILENAME);
   }
-  const home = env[HOME_ENV_VAR]?.trim() || env.USERPROFILE?.trim() || os.homedir();
-  return path.join(home, CODEX_HOME_DIRNAME, CODEX_AUTH_JSON_FILENAME);
-}
-
-function resolveHomeRelativePath(value: string, env: NodeJS.ProcessEnv): string {
-  if (value === "~" || value.startsWith("~/") || value.startsWith("~\\")) {
-    const home = env[HOME_ENV_VAR]?.trim() || env.USERPROFILE?.trim() || os.homedir();
-    return path.join(home, value.slice(value === "~" ? 1 : 2));
-  }
-  return value;
+  return path.join(codexHome, CODEX_AUTH_JSON_FILENAME);
 }
 
 function parseCodexCliAuthFileApiKey(raw: string): string | undefined {

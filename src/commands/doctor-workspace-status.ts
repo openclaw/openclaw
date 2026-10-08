@@ -123,17 +123,6 @@ function isGatewayRestartPending(
   );
 }
 
-function pluginCompatibilityWarningToHealthFinding(message: string): HealthFinding {
-  return {
-    checkId: WORKSPACE_STATUS_CHECK_ID,
-    severity: "warning",
-    message,
-    path: "plugins",
-    requirement: "plugin-compatibility",
-    fixHint: "Update or replace the plugin so it no longer depends on legacy compatibility paths.",
-  };
-}
-
 function pluginDiagnosticToHealthFinding(
   diagnostic: WorkspacePluginDiagnostic,
   message: string,
@@ -215,9 +204,15 @@ export function collectWorkspaceStatusHealthFindings(
   visitWorkspacePluginStatus(cfg, options, ({ agentLabel, compatibilityWarnings, diagnostics }) => {
     const prefix = agentLabel ? `${agentLabel} ` : "";
     workspaceFindings.push(
-      ...compatibilityWarnings.map((message) =>
-        pluginCompatibilityWarningToHealthFinding(`${prefix}${message}`),
-      ),
+      ...compatibilityWarnings.map((message): HealthFinding => ({
+        checkId: WORKSPACE_STATUS_CHECK_ID,
+        severity: "warning",
+        message: `${prefix}${message}`,
+        path: "plugins",
+        requirement: "plugin-compatibility",
+        fixHint:
+          "Update or replace the plugin so it no longer depends on legacy compatibility paths.",
+      })),
       ...diagnostics.map((diagnostic) =>
         pluginDiagnosticToHealthFinding(diagnostic, `${prefix}${diagnostic.message}`),
       ),

@@ -36,13 +36,9 @@ const GOOGLE_CHAT_LITERAL_FALLBACKS = new Map([
   ["|", "｜"],
 ]);
 
-type GoogleChatMarkers = {
-  blockquoteClose: string;
-  blockquoteOpen: string;
-  list: string;
-};
+type GoogleChatMarkers = ReturnType<typeof createGoogleChatMarkers>;
 
-function createGoogleChatMarkers(text: string): GoogleChatMarkers {
+function createGoogleChatMarkers(text: string) {
   const used = new Set<string>();
   let candidate = 0;
   const rangeSize = 0x1900;
@@ -252,10 +248,7 @@ function emitGoogleChatBlockquotes(text: string, markers: GoogleChatMarkers): st
   return rendered;
 }
 
-function prepareGoogleChatIR(text: string): {
-  ir: MarkdownIR;
-  markers: GoogleChatMarkers;
-} {
+function prepareGoogleChatIR(text: string) {
   const sanitized = sanitizeGoogleChatText(text);
   const parsed = markdownToIR(sanitized, {
     enableSpoilers: true,

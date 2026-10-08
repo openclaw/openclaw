@@ -354,7 +354,9 @@ describe("AgentSession queued user turns", () => {
       },
       target: createTestUserTurnTranscriptTarget(),
     });
-    const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+    const steer = vi
+      .spyOn(session.agent, "admitSteeringMessage")
+      .mockImplementation(() => () => {});
     let canInject = true;
     const queued = session.steer(
       "runtime prompt",
@@ -381,7 +383,9 @@ describe("AgentSession queued user turns", () => {
       },
       target: createTestUserTurnTranscriptTarget(),
     });
-    const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+    const steer = vi
+      .spyOn(session.agent, "admitSteeringMessage")
+      .mockImplementation(() => () => {});
 
     await session.steer("runtime group prompt", undefined, recorder);
 
@@ -405,7 +409,9 @@ describe("AgentSession queued user turns", () => {
 
   it("preserves prompt image ownership across steered and follow-up messages", async () => {
     const session = await createSessionFromManager(SessionManager.inMemory());
-    const steer = vi.spyOn(session.agent, "steer").mockImplementation(() => undefined);
+    const steer = vi
+      .spyOn(session.agent, "admitSteeringMessage")
+      .mockImplementation(() => () => {});
     const followUp = vi.spyOn(session.agent, "followUp").mockImplementation(() => undefined);
     const media = [{ path: "/tmp/a.png", contentType: "image/png" }];
     const imageOrder = ["inline"] as const;

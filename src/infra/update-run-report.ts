@@ -9,11 +9,11 @@ import {
 } from "../shared/update-outcome.js";
 import { formatDurationPrecise } from "./format-time/format-duration.ts";
 import type { RestartSentinelPayload } from "./restart-sentinel-store.js";
-import { UPDATE_DESTINATION_RECOVERY } from "./update-destination-failure.js";
 import { formatUpdateDoctorConfigWriteRefusal } from "./update-doctor-config.js";
 import {
   formatUpdateFailureFact,
   selectUpdateFailureReportSteps,
+  UPDATE_DESTINATION_RECOVERY,
 } from "./update-failure-facts-format.js";
 import {
   LEGACY_UPDATE_RUN_ADVISORY,
@@ -160,10 +160,10 @@ export function formatUpdateRunRecovery(
   }
   const code = observation.failureFacts?.[0]?.code;
   if (!code) {
-    return "Gateway readiness is pending; recovery probe completed without verified readiness";
+    return "Gateway readiness is pending; recovery check completed without verified readiness";
   }
   return code === "gateway-probe-failed"
-    ? `recovery probe failed (${code})`
+    ? `recovery check failed (${code})`
     : `not serving (${code})`;
 }
 

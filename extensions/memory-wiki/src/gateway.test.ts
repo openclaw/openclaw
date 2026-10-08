@@ -6,8 +6,6 @@ import { compileMemoryWikiVault } from "./compile.js";
 import {
   loadMemoryWikiCompiledDashboards,
   MemoryWikiDashboardUnavailableError,
-  type MemoryWikiImportInsightsStatus,
-  type MemoryWikiOverviewStatus,
 } from "./compiled-cache.js";
 import { deferred } from "./deferred.test-helpers.js";
 import { registerMemoryWikiGatewayMethods } from "./gateway.js";
@@ -19,6 +17,7 @@ import { resolveMemoryWikiStatus } from "./status.js";
 import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 type ApplyMemoryWikiMutation = ReturnType<typeof normalizeMemoryWikiMutationInput>;
+type CompiledDashboards = Awaited<ReturnType<typeof loadMemoryWikiCompiledDashboards>>;
 
 vi.mock("./apply.js", () => ({
   applyMemoryWikiMutation: vi.fn(),
@@ -128,7 +127,7 @@ const VAULT_BACKED_GATEWAY_CASES = [
   ["wiki.obsidian.daily", {}],
 ] as const satisfies ReadonlyArray<readonly [string, Record<string, unknown>]>;
 
-const importInsights: MemoryWikiImportInsightsStatus = {
+const importInsights: CompiledDashboards["importInsights"] = {
   sourceType: "chatgpt",
   totalItems: 2,
   totalClusters: 1,
@@ -167,7 +166,7 @@ const importInsights: MemoryWikiImportInsightsStatus = {
   truncated: false,
 };
 
-const overview: MemoryWikiOverviewStatus = {
+const overview: CompiledDashboards["overview"] = {
   totalItems: 1,
   totalPages: 3,
   pageCounts: {

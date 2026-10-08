@@ -1,4 +1,3 @@
-// ClawRouter provider catalog maps credential-scoped routes to OpenClaw transports.
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   getCachedLiveProviderModelRows,

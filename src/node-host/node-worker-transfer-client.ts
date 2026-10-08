@@ -658,23 +658,18 @@ export async function runNodeWorkerWorkspaceTransfer(
       throw error;
     }
     if (error instanceof NodeWorkerTransferHttpError) {
-      if (error.reason === "cloudflare-access-requires-tls") {
-        throw new NodeWorkerWorkspaceTransferError(
-          "workspace-transfer-failed: Cloudflare Access credentials require HTTPS",
-          { cause: error },
-        );
-      }
-      if (error.reason === "tls-fingerprint-mismatch") {
-        throw new NodeWorkerWorkspaceTransferError(
-          "workspace-transfer-failed: gateway TLS fingerprint mismatch",
-          { cause: error },
-        );
-      }
-      if (error.reason === "invalid-tls-fingerprint") {
-        throw new NodeWorkerWorkspaceTransferError(
-          "workspace-transfer-failed: gateway TLS fingerprint is invalid",
-          { cause: error },
-        );
+      const detail =
+        error.reason === "cloudflare-access-requires-tls"
+          ? "Cloudflare Access credentials require HTTPS"
+          : error.reason === "tls-fingerprint-mismatch"
+            ? "gateway TLS fingerprint mismatch"
+            : error.reason === "invalid-tls-fingerprint"
+              ? "gateway TLS fingerprint is invalid"
+              : undefined;
+      if (detail) {
+        throw new NodeWorkerWorkspaceTransferError(`workspace-transfer-failed: ${detail}`, {
+          cause: error,
+        });
       }
     }
     throw new NodeWorkerWorkspaceTransferError(

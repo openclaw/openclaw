@@ -10,12 +10,15 @@ import { getPreparedRuntimeAuthMaterializations } from "./auth-profiles/runtime-
 import { runtimeAuthMetadataState } from "./auth-profiles/runtime-snapshot-owner.js";
 import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
 import { createPreparedConfiguredRuntimeModelLookup } from "./embedded-agent-runner/model.static-id.js";
+import { augmentPreparedModelCatalogWithAgentHarness } from "./harness/model-catalog.js";
 import {
   enrichHarnessRows,
   modelCatalogRouteVariantKey,
   modelCatalogRowToEntry,
 } from "./model-catalog-entry.js";
 import { compareModelCatalogEntries } from "./model-catalog-order.js";
+import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
+import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
 import {
@@ -38,10 +41,7 @@ import {
   completeConfiguredRuntimeModels,
   prepareConfiguredModelAliases,
 } from "./prepared-model-runtime.configured-completion.js";
-import {
-  acquirePreparedMediaCapabilityProviders,
-  buildPreparedPluginModelCatalog,
-} from "./prepared-model-runtime.plugin-generation.js";
+import { acquirePreparedMediaCapabilityProviders } from "./prepared-model-runtime.plugin-generation.js";
 import type {
   PreparedRuntimeCapabilityModel,
   PreparedModelCatalogInventory,
@@ -120,10 +120,11 @@ export async function prepareFullCatalogFacts(
   catalogMode: PreparedModelRuntimeCatalogMode,
   catalogSource: PreparedModelRuntimeCatalogSource,
   options: { includeNative?: boolean; providerIds?: readonly string[] } = {},
-): Promise<PreparedModelRuntimeCatalogFacts> {
-  const prepare = async (): Promise<PreparedModelRuntimeCatalogFacts> => {
+): Promise<PreparedModelRuntimeCatalogFacts & { catalogModels: readonly Model[] }> {
+  const prepare = async () => {
     const { env, input, templateAuthStorage } = agentFacts;
-    const { pluginMetadataSnapshot, preparedStaticProviderCatalog } = pluginGeneration;
+    const { pluginMetadataSnapshot, pluginRegistry, preparedStaticProviderCatalog } =
+      pluginGeneration;
     const observedProviders = new Set(
       catalogSource.providerOutcomes?.map(({ provider }) => normalizeProviderId(provider)),
     );
@@ -141,14 +142,24 @@ export async function prepareFullCatalogFacts(
         ),
       ),
     });
-    const modelCatalog = await buildPreparedPluginModelCatalog({
-      ...options,
-      agentFacts,
-      catalogMode,
-      modelRegistry: templateModelRegistry,
+    const catalogModels = templateModelRegistry.getAll();
+    const snapshot = await buildPreparedModelCatalogSnapshot({
+      agentDir: input.agentDir,
+      authCredentials: agentFacts.credentials,
+      config: input.config,
+      models: catalogModels,
+      metadataSnapshot: pluginMetadataSnapshot,
       providerOutcomes: catalogSource.providerOutcomes,
-      pluginGeneration,
+      includeProviderPluginAugmentation: catalogMode === "live",
+      providerIds: options.providerIds,
+      ...(input.env ? { env: input.env } : {}),
+      ...(input.readOnly ? { readOnly: true } : {}),
+      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     });
+    const modelCatalog =
+      catalogMode === "live" && options.includeNative !== false
+        ? await augmentPreparedModelCatalogWithAgentHarness({ input, snapshot, pluginRegistry })
+        : snapshot;
     const providerStaticModels =
       input.config.models?.mode === "replace"
         ? []
@@ -168,13 +179,24 @@ export async function prepareFullCatalogFacts(
       templateModelRegistry,
     );
     const providerOutcomes = catalogSource.providerOutcomes ?? [];
+    const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
+      pluginMetadataSnapshot,
+      input.config,
+      input.env,
+    );
     const completeModelCatalog = {
       ...modelCatalog,
       staticEntries:
         input.config.models?.mode === "replace"
           ? []
-          : dedupeByKey(providerStaticModels, createModelCatalogIdentityKeyResolver()).map(
-              modelCatalogRowToEntry,
+          : dedupeByKey(
+              // Static hooks also answer runtime provider aliases; publish canonical rows once.
+              providerStaticModels.map((model) => {
+                const entry = modelCatalogRowToEntry(model);
+                entry.provider = normalizeProvider(entry.provider);
+                return entry;
+              }),
+              createModelCatalogIdentityKeyResolver(),
             ),
       ...(providerOutcomes.length > 0 ? { providerOutcomes } : {}),
     };
@@ -183,20 +205,19 @@ export async function prepareFullCatalogFacts(
     }
     return {
       templateModelRegistry,
+      catalogModels,
       modelCatalog: completeModelCatalog,
       configuredRuntimeModels,
       inlineProviderModels: pluginGeneration.inlineProviderModels,
     };
   };
-  return pluginGeneration.pluginRegistry
-    ? withPluginRuntimeGenerationScope(
-        {
-          metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
-          pluginRegistry: pluginGeneration.pluginRegistry,
-        },
-        prepare,
-      )
-    : prepare();
+  return withPluginRuntimeGenerationScope(
+    {
+      metadataSnapshot: pluginGeneration.pluginMetadataSnapshot,
+      pluginRegistry: pluginGeneration.pluginRegistry,
+    },
+    prepare,
+  );
 }
 
 export function mergePreparedNativeCatalog(
@@ -592,6 +613,7 @@ export type PreparedModelRuntimeCatalogAccess = Readonly<{
   isCurrent: () => boolean;
   withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
   readFullModelCatalog: () => ModelCatalogSnapshot | undefined;
+  recheckNativeLogin: () => void;
   refreshExpiredModelCatalog: () => void;
   readPublishedModels: () => ReadonlyMap<string, readonly Model[]> | undefined;
   loadFullModelCatalog: (
@@ -666,6 +688,7 @@ export function createPreparedModelRuntimeSnapshot(
       : {}),
     modelCatalog: catalogAccess.withRefreshStatus(modelCatalog),
     readFullModelCatalog: catalogAccess.readFullModelCatalog,
+    recheckNativeLogin: catalogAccess.recheckNativeLogin,
     refreshExpiredModelCatalog: catalogAccess.refreshExpiredModelCatalog,
     readPublishedModels: catalogAccess.readPublishedModels,
     loadFullModelCatalog: catalogAccess.loadFullModelCatalog,

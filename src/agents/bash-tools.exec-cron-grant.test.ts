@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { bindCronJobAdmittedRun, resetCronActiveJobs } from "../cron/active-jobs.js";
@@ -32,18 +32,21 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
-import { updateExecApprovals } from "../infra/exec-approvals-store.js";
+import { readExecApprovalsSnapshot, updateExecApprovals } from "../infra/exec-approvals-store.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
@@ -152,6 +155,11 @@ describe("cron standing grants", () => {
   let controller: AbortController;
   const releases: Array<() => void> = [];
 
+  afterAll(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeOpenClawStateDatabaseAsync();
+  });
+
   beforeEach(() => {
     hadStateDirBackup = "OPENCLAW_STATE_DIR" in process.env;
     stateDirBackup = process.env.OPENCLAW_STATE_DIR;
@@ -179,7 +187,11 @@ describe("cron standing grants", () => {
       runOwner = undefined;
       resetCronActiveJobs();
       resetProcessRegistryForTests();
-      await closeOpenClawStateDatabaseAsync();
+      for (const dir of grantTempDirs.dirs) {
+        await closeOpenClawStateDatabaseByPathAsync(
+          resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: dir }),
+        );
+      }
       closeOpenClawStateDatabaseForTest();
       if (hadStateDirBackup) {
         process.env.OPENCLAW_STATE_DIR = stateDirBackup;
@@ -486,16 +498,20 @@ describe("cron standing grants", () => {
       } else if (intervention === "cancel") {
         controller.abort();
       } else if (intervention === "policy deny" || intervention === "policy ask") {
+        const file = readExecApprovalsSnapshot().file;
         await updateExecApprovals({
-          update: (file) => ({
-            ...file,
-            defaults: {
-              ...file.defaults,
-              ...(intervention === "policy deny"
-                ? { security: "deny" as const }
-                : { ask: "always" as const }),
+          update: {
+            kind: "replace",
+            file: {
+              ...file,
+              defaults: {
+                ...file.defaults,
+                ...(intervention === "policy deny"
+                  ? { security: "deny" as const }
+                  : { ask: "always" as const }),
+              },
             },
-          }),
+          },
         });
       } else if (intervention === "fallback") {
         // A proven no-initiation retry reacquires its interval without another consume.
@@ -607,7 +623,12 @@ describe("cron standing grants", () => {
     await expect(result.revalidateBeforeExecution?.()).resolves.toBeUndefined();
     const acknowledgement = createDeferredCore();
     const deny = () =>
-      updateExecApprovals({ update: (file) => ({ ...file, defaults: { security: "deny" } }) });
+      updateExecApprovals({
+        update: {
+          kind: "replace",
+          file: { ...readExecApprovalsSnapshot().file, defaults: { security: "deny" } },
+        },
+      });
     try {
       const launch = vi.fn();
       result.initiateSpawn?.(launch, acknowledgement.promise);

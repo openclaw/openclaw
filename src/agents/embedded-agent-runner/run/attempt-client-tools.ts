@@ -1,3 +1,4 @@
+import { getAgentToolAssistantTurnId } from "../../../../packages/agent-core/src/tool-execution-context.js";
 import {
   getPluginToolMeta,
   getPluginToolSideEffectOwnerKey,
@@ -51,11 +52,15 @@ export function prepareEmbeddedAttemptClientTools(params: {
   // Reserve synchronously so parallel client-tool batches preserve assistant source order.
   const clientToolCallSlots: EmbeddedAttemptClientToolCallSlot[] = [];
   const clientToolCallSlotsById = new Map<string, EmbeddedAttemptClientToolCallSlot>();
+  // Provider call ids repeat across assistant responses; slots are per issuing response.
+  const clientToolCallSlotKey = (toolCallId: string) =>
+    `${getAgentToolAssistantTurnId() ?? ""}\u0000${toolCallId}`;
   const reserveClientToolCallSlot = (toolCallId: string, toolName: string) => {
-    let slot = clientToolCallSlotsById.get(toolCallId);
+    const slotKey = clientToolCallSlotKey(toolCallId);
+    let slot = clientToolCallSlotsById.get(slotKey);
     if (!slot) {
       slot = { toolCallId, name: toolName, completed: false };
-      clientToolCallSlotsById.set(toolCallId, slot);
+      clientToolCallSlotsById.set(slotKey, slot);
       clientToolCallSlots.push(slot);
     }
     return slot;
@@ -76,7 +81,7 @@ export function prepareEmbeddedAttemptClientTools(params: {
             slot.completed = true;
           },
           discard: (toolCallId) => {
-            const slot = clientToolCallSlotsById.get(toolCallId);
+            const slot = clientToolCallSlotsById.get(clientToolCallSlotKey(toolCallId));
             if (slot) {
               slot.completed = false;
               slot.params = undefined;
@@ -207,13 +212,17 @@ export function prepareEmbeddedAttemptClientTools(params: {
     ...current,
     refreshTools: () => {
       const next = buildSurface();
-      current.allCustomTools.splice(0, current.allCustomTools.length, ...next.allCustomTools);
-      current.clientToolDefs.splice(0, current.clientToolDefs.length, ...next.clientToolDefs);
-      current.sessionToolAllowlist.splice(
-        0,
-        current.sessionToolAllowlist.length,
-        ...next.sessionToolAllowlist,
-      );
+      const replaceItems = <T>(target: T[], source: T[]) =>
+        target.splice(0, target.length, ...source);
+      replaceItems(current.allCustomTools, next.allCustomTools);
+      replaceItems(current.clientToolDefs, next.clientToolDefs);
+      replaceItems(current.sessionToolAllowlist, next.sessionToolAllowlist);
+      const replaceSet = <T>(target: Set<T>, source: Set<T>) => {
+        target.clear();
+        for (const item of source) {
+          target.add(item);
+        }
+      };
       for (const key of [
         "builtinToolNames",
         "coreBuiltinToolNames",
@@ -222,15 +231,9 @@ export function prepareEmbeddedAttemptClientTools(params: {
         "sourceReplyCapableToolNames",
         "trustedLocalMediaToolNames",
       ] as const) {
-        current[key].clear();
-        for (const name of next[key]) {
-          current[key].add(name);
-        }
+        replaceSet(current[key], next[key]);
       }
-      current.replaySafeTools.clear();
-      for (const tool of next.replaySafeTools) {
-        current.replaySafeTools.add(tool);
-      }
+      replaceSet(current.replaySafeTools, next.replaySafeTools);
       current.sideEffectToolOwners.clear();
       for (const [name, owner] of next.sideEffectToolOwners) {
         current.sideEffectToolOwners.set(name, owner);

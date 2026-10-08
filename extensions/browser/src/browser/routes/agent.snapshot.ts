@@ -26,10 +26,7 @@ import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
 } from "../navigation-guard.js";
-import {
-  getBrowserProfileCapabilities,
-  shouldUsePlaywrightForScreenshot,
-} from "../profile-capabilities.js";
+import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { getLoadedPwAiModule, getPwAiModule } from "../pw-ai-module.js";
 import { finalizeRoleSnapshot } from "../pw-role-snapshot.js";
 import type { BrowserObservedState } from "../pw-session-contracts.js";
@@ -332,12 +329,9 @@ export function registerBrowserAgentSnapshotRoutes(
         const shouldUsePlaywright =
           labels ||
           getLoadedPwAiModule()?.hasCachedPlaywrightBrowserConnection(cdpUrl) ||
-          shouldUsePlaywrightForScreenshot({
-            profile: profileCtx.profile,
-            wsUrl: tab.wsUrl,
-            ref,
-            element,
-          });
+          !tab.wsUrl ||
+          Boolean(ref) ||
+          Boolean(element);
         if (shouldUsePlaywright) {
           const pw = await requirePwAi(res, "screenshot");
           if (!pw) {

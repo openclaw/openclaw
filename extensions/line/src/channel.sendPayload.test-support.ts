@@ -23,7 +23,9 @@ export function lineResult(messageId: string, chatId = "c1") {
 export function createRuntime() {
   const pushMessageLine = vi
     .spyOn(send, "pushMessageLine")
-    .mockImplementation(async () => lineResult("m-text"));
+    .mockImplementation(async (_to, _text, opts) =>
+      lineResult(opts.mediaUrl ? "m-media" : "m-text"),
+    );
   const pushMessagesLine = vi
     .spyOn(send, "pushMessagesLine")
     .mockImplementation(async () => lineResult("m-batch"));
@@ -54,9 +56,6 @@ export function createRuntime() {
         ],
       },
     }));
-  const sendMessageLine = vi
-    .spyOn(send, "sendMessageLine")
-    .mockImplementation(async () => lineResult("m-media"));
   moduleMocks.push(
     pushMessageLine,
     pushMessagesLine,
@@ -66,7 +65,6 @@ export function createRuntime() {
     pushTextMessageWithQuickReplies,
     createQuickReplyItems,
     buildTemplateMessageFromPayload,
-    sendMessageLine,
   );
   const chunkMarkdownText = vi.fn<PluginRuntime["channel"]["text"]["chunkMarkdownText"]>((text) => [
     text,
@@ -95,7 +93,6 @@ export function createRuntime() {
       pushTextMessageWithQuickReplies,
       createQuickReplyItems,
       buildTemplateMessageFromPayload,
-      sendMessageLine,
       chunkMarkdownText,
       resolveTextChunkLimit,
     },

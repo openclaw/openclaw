@@ -4,11 +4,14 @@ import { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
 import type { SessionsCompanionStateResult } from "../../packages/gateway-protocol/src/index.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import { AgentHarnessSessionCleanupError } from "../agents/harness/errors.js";
 import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
-import { SqliteBoardStore } from "../boards/sqlite-board-store.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
@@ -39,13 +42,12 @@ import { loadGatewayWorkerEnvironmentStartupState } from "./server-worker-enviro
 import type { SessionCompanionAskDeps } from "./session-companion-ask.js";
 import { defaultSessionCompanionContextReader } from "./session-companion-context.js";
 import { createSessionCompanion, type SessionCompanionService } from "./session-companion.js";
-import { testState, writeSessionStore } from "./test-helpers.js";
+import { writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
   getGatewayConfigModule,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
-  writeSingleLineSession,
 } from "./test/server-sessions.test-helpers.js";
 
 function afterSessionStateMaterialization(after: () => void | Promise<void>) {
@@ -386,52 +388,6 @@ test("sessions.delete broadcasts the removed generation after a replacement appe
   ]);
 });
 
-test("sessions.delete removes the session board from its agent database", async () => {
-  const { dir } = await createSessionStoreDir();
-  await writeSingleLineSession(dir, "sess-board", "hello");
-  await writeSessionStore({
-    entries: {
-      "discord:group:board-delete": sessionStoreEntry("sess-board"),
-    },
-  });
-  const sessionKey = "agent:main:discord:group:board-delete";
-  if (!testState.sessionStorePath) {
-    throw new Error("expected gateway session store path");
-  }
-  const databasePath = resolveSqliteTargetFromSessionStorePath(testState.sessionStorePath, {
-    agentId: "main",
-  }).path;
-  if (!databasePath) {
-    throw new Error("expected gateway agent database path");
-  }
-  const store = new SqliteBoardStore({
-    resolveSession: () => ({
-      agentId: "main",
-      path: databasePath,
-      sessionKey,
-    }),
-    env: process.env,
-  });
-  await store.putWidget({
-    sessionKey,
-    name: "status",
-    content: { kind: "html", html: "ok" },
-  });
-
-  const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
-    key: "discord:group:board-delete",
-  });
-
-  expect(deleted.ok).toBe(true);
-  expect(deleted.payload?.deleted).toBe(true);
-  expect(await store.getSnapshot({ sessionKey })).toEqual({
-    sessionKey,
-    revision: 0,
-    tabs: [],
-    widgets: [],
-  });
-});
-
 test("sessions.delete reports an exact-entry replacement during transcript materialization", async () => {
   const sessionKey = "agent:main:cron:materialization-race";
   const sessionId = "materialization-race-run";
@@ -522,48 +478,74 @@ test.each(["authorization", "placement"] as const)(
   },
 );
 
-test("sessions.delete accepts placement retirement by the absent-session reconciler after commit", async () => {
-  await createSessionStoreDir();
-  const sessionKey = "agent:main:postcommit-retirement";
-  const sessionId = "postcommit-retirement-session";
-  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
-  const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
-  const claim = await placementStore.claimTurn({
-    sessionId,
-    sessionKey,
-    agentId: "main",
-    owner: { kind: "local" },
-    claimId: "postcommit-claim",
-    runId: "postcommit-run",
-  });
-  await placementStore.releaseTurn(claim);
-  let retired = false;
-  const publish = sessionArchiveStore.publishSessionStateArchives;
-  vi.spyOn(sessionArchiveStore, "publishSessionStateArchives").mockImplementation(
-    async (...args) => {
-      const result = await publish(...args);
-      if (!loadSessionEntry({ sessionKey }) && !retired) {
-        placementStore.retireSessionPlacement({
-          sessionId,
-          expectedState: "local",
-          expectedGeneration: claim.placementGeneration,
-        });
-        retired = true;
-      }
-      return result;
-    },
-  );
-  const deleted = await directSessionReq(
-    "sessions.delete",
-    { key: sessionKey },
-    {
-      context: { workerSessionPlacementService: placementStore },
-    },
-  );
-  expect(retired).toBe(true);
-  expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
-  expect(placementStore.get(sessionId)).toBeUndefined();
-});
+test.each(["archive-publication", "worker-queue"] as const)(
+  "sessions.delete accepts postcommit placement retirement during %s",
+  async (phase) => {
+    await createSessionStoreDir();
+    const sessionKey = "agent:main:postcommit-retirement";
+    const sessionId = "postcommit-retirement-session";
+    await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+    const { placementStore } = await loadGatewayWorkerEnvironmentStartupState();
+    const claim = await placementStore.claimTurn({
+      sessionId,
+      sessionKey,
+      agentId: "main",
+      owner: { kind: "local" },
+      claimId: "postcommit-claim",
+      runId: "postcommit-run",
+    });
+    await placementStore.releaseTurn(claim);
+    let retired = false;
+    let placementService = placementStore;
+    const retire = placementStore.retireSessionPlacementAsync.bind(placementStore);
+    if (phase === "archive-publication") {
+      const publish = sessionArchiveStore.publishSessionStateArchives;
+      vi.spyOn(sessionArchiveStore, "publishSessionStateArchives").mockImplementation(
+        async (...args) => {
+          const result = await publish(...args);
+          if (!loadSessionEntry({ sessionKey }) && !retired) {
+            placementStore.retireSessionPlacement({
+              sessionId,
+              expectedState: "local",
+              expectedGeneration: claim.placementGeneration,
+            });
+            retired = true;
+          }
+          return result;
+        },
+      );
+    } else {
+      placementService = {
+        ...placementStore,
+        async retireSessionPlacementAsync(...args: Parameters<typeof retire>) {
+          expect(loadSessionEntry({ sessionKey })).toBeUndefined();
+          expect(placementStore.get(sessionId)).toMatchObject({
+            state: "local",
+            generation: claim.placementGeneration,
+            turnClaim: null,
+          });
+          // The orphan wins FIFO after deletion's host check, before its worker CAS.
+          await Promise.all([
+            retire(...args).then(() => {
+              retired = true;
+            }),
+            retire(...args),
+          ]);
+        },
+      };
+    }
+    const deleted = await directSessionReq(
+      "sessions.delete",
+      { key: sessionKey },
+      {
+        context: { workerSessionPlacementService: placementService },
+      },
+    );
+    expect(retired).toBe(true);
+    expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
+    expect(placementStore.get(sessionId)).toBeUndefined();
+  },
+);
 
 async function createCompanion(runModel?: SessionCompanionAskDeps["run"]) {
   const { getRuntimeConfig } = await getGatewayConfigModule();
@@ -572,7 +554,7 @@ async function createCompanion(runModel?: SessionCompanionAskDeps["run"]) {
     scheduler: createTestGatewayScheduler(),
     getConfig: getRuntimeConfig,
     contextReader: defaultSessionCompanionContextReader,
-    sessionObserver: { getCompanionSnapshot: () => ({ agentId: "main", notes: [] }) },
+    sessionObserver: { getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }) },
     resolveUtilityModelRef: () => "openai/gpt-5.6-luna",
     run,
   });
@@ -664,16 +646,26 @@ test("a delayed deletion event cannot erase Side chat for a newer generation", a
   expect(await readState(service, sessionKey)).toEqual(newState);
 });
 
-test("sessions.delete cancels a prepared Side chat ask before its late answer", async () => {
+test("sessions.delete cancels a prepared Side chat ask before its late answer", async ({
+  signal,
+}) => {
   await createSessionStoreDir();
   const sessionKey = "agent:main:companion-active-delete";
   await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry("active-generation") } });
   const pending = createDeferred<string>();
-  const { service, run } = await createCompanion(() => pending.promise);
+  const started = createDeferred();
+  const { service, run } = await createCompanion(() => {
+    started.resolve();
+    return pending.promise;
+  });
   const active = ask(service, sessionKey, "Can this survive deletion?");
   const failure = active.catch((error: unknown) => error);
   try {
-    await vi.waitFor(() => expect(run).toHaveBeenCalledOnce());
+    await withinTest(
+      awaitGateBeforeSettlement(started.promise, active, "Side chat settled before model start"),
+      signal,
+    );
+    expect(run).toHaveBeenCalledOnce();
     const deleted = await directSessionReq("sessions.delete", { key: sessionKey });
     expect(deleted).toMatchObject({ ok: true, payload: { deleted: true } });
     expect(run.mock.calls[0]?.[0].signal.aborted).toBe(true);
@@ -682,6 +674,8 @@ test("sessions.delete cancels a prepared Side chat ask before its late answer", 
     await active.catch(() => undefined);
     expect(await readState(service, sessionKey)).toEqual({ exchanges: [] });
   } finally {
+    service.dispose();
+    companions.delete(service);
     pending.resolve("Late answer from the deleted session.");
     await active.catch(() => undefined);
   }

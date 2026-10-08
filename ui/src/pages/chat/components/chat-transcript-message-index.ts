@@ -209,13 +209,7 @@ export function projectTranscriptChain(
       const transcriptItems = cached.value.transcriptItems.slice();
       collapsedItems[live.owner.collapsedIndex] = owner;
       transcriptItems[live.owner.transcriptIndex] = owner;
-      const value = {
-        collapsedItems,
-        transcriptItems,
-        workGroups: cached.value.workGroups,
-        continuations: cached.value.continuations,
-        searchActive: cached.value.searchActive,
-      };
+      const value = { ...cached.value, collapsedItems, transcriptItems };
       const updatedOwner = { ...live.owner, item: owner };
       const updatedLive = { ...live, item: next, owner: updatedOwner };
       liveChains.set(value, {
@@ -237,6 +231,10 @@ export function projectTranscriptChain(
   const collapsedItems = options.searchActive ? frames : coalesceInterSessionUpdates(frames);
   const continuations = new Map<string, StreamGroupPart[]>();
   const transcriptItems = collapsedItems.filter((item, index) => {
+    // A handoff boundary only shapes the grouping above; it has no row of its own.
+    if (item.kind === "notice" && item.handoffBoundary) {
+      return false;
+    }
     const previous = collapsedItems[index - 1];
     const activeStatusParts =
       item.kind === "stream-run" && item.parts.every((part) => part.kind === "reading-indicator")

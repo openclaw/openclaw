@@ -30,56 +30,25 @@ const FIRST_WORK_SESSION = {
   url: "https://team.openclaw.ai/openclaw/chat/agent-1/10184088",
   label: "Review",
 };
-const SECOND_WORK_SESSION = {
-  sessionKey: "agent:agent-1:dashboard:10184089-second",
-  url: "https://team.openclaw.ai/openclaw/chat/agent-1/10184089",
-  label: "Verify",
+const BOUNDED_WORK_SESSIONS = {
+  batches: [
+    Array.from({ length: 6 }, (_, index) => ({
+      sessionKey: `agent:agent-1:dashboard:work-${index + 1}`,
+      url: `https://team.openclaw.ai/openclaw/chat/agent-1/work-${index + 1}`,
+      ...(index === 0 ? { label: "🚀".repeat(40) } : {}),
+    })),
+  ],
+  links: [
+    {
+      url: "https://team.openclaw.ai/openclaw/chat/agent-1/work-1",
+      text: `Open ${"🚀".repeat(34)}…`,
+    },
+    { url: "https://team.openclaw.ai/openclaw/chat/agent-1/work-2", text: "Open work session 2" },
+    { url: "https://team.openclaw.ai/openclaw/chat/agent-1/work-3", text: "Open work session 3" },
+    { url: "https://team.openclaw.ai/openclaw/chat/agent-1/work-4", text: "Open work session 4" },
+    { url: "https://team.openclaw.ai/openclaw/chat/agent-1/work-5", text: "Open work session 5" },
+  ],
 };
-const VISIBLE_WORK_SESSION_LINK_CASES = [
-  {
-    name: "conversation when no visible work was spawned",
-    batches: [],
-    links: [
-      {
-        url: "https://team.openclaw.ai/openclaw/chat/agent-1/slack/C123",
-        text: "Open in OpenClaw",
-      },
-    ],
-  },
-  {
-    name: "one visible work session across repeated receipts",
-    batches: [[FIRST_WORK_SESSION], [FIRST_WORK_SESSION]],
-    links: [{ url: FIRST_WORK_SESSION.url, text: "Open work session" }],
-  },
-  {
-    name: "two labeled work sessions in acceptance order across repeated receipts",
-    batches: [[FIRST_WORK_SESSION], [FIRST_WORK_SESSION, SECOND_WORK_SESSION]],
-    links: [
-      { url: FIRST_WORK_SESSION.url, text: "Open Review" },
-      { url: SECOND_WORK_SESSION.url, text: "Open Verify" },
-    ],
-  },
-  {
-    name: "first five work sessions with bounded labels and numbered fallbacks",
-    batches: [
-      Array.from({ length: 6 }, (_, index) => ({
-        sessionKey: `agent:agent-1:dashboard:work-${index + 1}`,
-        url: `https://team.openclaw.ai/openclaw/chat/agent-1/work-${index + 1}`,
-        ...(index === 0 ? { label: "🚀".repeat(40) } : {}),
-      })),
-    ],
-    links: [
-      {
-        url: "https://team.openclaw.ai/openclaw/chat/agent-1/work-1",
-        text: `Open ${"🚀".repeat(34)}…`,
-      },
-      { url: "https://team.openclaw.ai/openclaw/chat/agent-1/work-2", text: "Open work session 2" },
-      { url: "https://team.openclaw.ai/openclaw/chat/agent-1/work-3", text: "Open work session 3" },
-      { url: "https://team.openclaw.ai/openclaw/chat/agent-1/work-4", text: "Open work session 4" },
-      { url: "https://team.openclaw.ai/openclaw/chat/agent-1/work-5", text: "Open work session 5" },
-    ],
-  },
-];
 
 const requireRecord = createRequireRecord("object", "label-not-object");
 const finalizeCard = vi.fn<typeof import("./preview-finalize.js").finalizeSlackPreviewEdit>();
@@ -280,81 +249,77 @@ describe("Slack progress visible work session links", () => {
   });
   afterEach(() => resetPluginRuntimeStateForTest());
 
-  it.each(VISIBLE_WORK_SESSION_LINK_CASES)(
-    "finalizes Block Kit links to $name",
-    async ({ batches, links }) => {
-      sessionBatches = batches;
-      await dispatchPreparedSlackMessage(preparedMessage(false));
-      expect(draftStream.update).toHaveBeenCalled();
-      expect(JSON.stringify(draftStream.update.mock.calls)).not.toContain('"url":');
-      expect(finalizeCard).toHaveBeenCalledOnce();
-      const finalEdit = finalizeCard.mock.calls[0]?.[0];
-      expect(finalEdit).toMatchObject({ channelId: "C123", messageId: "171234.567" });
-      expect(finalEdit?.blocks?.[0]).toEqual({
-        type: "section",
-        text: { type: "plain_text", text: "Shelling", emoji: false },
-      });
-      expect(finalEdit?.blocks).not.toContainEqual({
-        type: "section",
-        text: { type: "plain_text", text: "Failed", emoji: false },
-      });
-      const actions = finalEdit?.blocks?.filter((block) => block.type === "actions");
-      expect(actions).toHaveLength(1);
-      const buttons = requireRecord(actions?.[0], "session actions").elements as Array<
-        Record<string, unknown>
-      >;
-      expect(buttons.map(({ url, text }) => ({ url, text }))).toEqual(
-        links.map(({ url, text }) => ({ url, text: { type: "plain_text", text } })),
-      );
-      expect(buttons[0]?.action_id).toBe("openclaw:session_link");
-      expect(new Set(buttons.map(({ action_id }) => action_id)).size).toBe(buttons.length);
-      for (const button of buttons) {
-        expect(button.type).toBe("button");
-        expect(button.action_id).toMatch(/^openclaw:session_link(?::.+)?$/u);
-        const text = requireRecord(button.text, "session button text").text as string;
-        expect(text.length).toBeLessThanOrEqual(75);
-        expect(text).not.toMatch(/[\uD800-\uDFFF]/u);
-      }
-      expect(deliverReplies).toHaveBeenCalledOnce();
-      expect(deliverReplies.mock.calls[0]?.[0].replies.map((reply) => reply.payload)).toEqual([
-        { text: FINAL_REPLY_TEXT },
-      ]);
-      expect(draftStream.clear).not.toHaveBeenCalled();
-      expect(startStream).not.toHaveBeenCalled();
-    },
-  );
+  it("finalizes Block Kit links with bounded labels and numbered fallbacks", async () => {
+    const { batches, links } = BOUNDED_WORK_SESSIONS;
+    sessionBatches = batches;
+    await dispatchPreparedSlackMessage(preparedMessage(false));
+    expect(draftStream.update).toHaveBeenCalled();
+    expect(JSON.stringify(draftStream.update.mock.calls)).not.toContain('"url":');
+    expect(finalizeCard).toHaveBeenCalledOnce();
+    const finalEdit = finalizeCard.mock.calls[0]?.[0];
+    expect(finalEdit).toMatchObject({ channelId: "C123", messageId: "171234.567" });
+    expect(finalEdit?.blocks?.[0]).toEqual({
+      type: "section",
+      text: { type: "plain_text", text: "Shelling", emoji: false },
+    });
+    expect(finalEdit?.blocks).not.toContainEqual({
+      type: "section",
+      text: { type: "plain_text", text: "Failed", emoji: false },
+    });
+    const actions = finalEdit?.blocks?.filter((block) => block.type === "actions");
+    expect(actions).toHaveLength(1);
+    const buttons = requireRecord(actions?.[0], "session actions").elements as Array<
+      Record<string, unknown>
+    >;
+    expect(buttons.map(({ url, text }) => ({ url, text }))).toEqual(
+      links.map(({ url, text }) => ({ url, text: { type: "plain_text", text } })),
+    );
+    expect(buttons[0]?.action_id).toBe("openclaw:session_link");
+    expect(new Set(buttons.map(({ action_id }) => action_id)).size).toBe(buttons.length);
+    for (const button of buttons) {
+      expect(button.type).toBe("button");
+      expect(button.action_id).toMatch(/^openclaw:session_link(?::.+)?$/u);
+      const text = requireRecord(button.text, "session button text").text as string;
+      expect(text.length).toBeLessThanOrEqual(75);
+      expect(text).not.toMatch(/[\uD800-\uDFFF]/u);
+    }
+    expect(deliverReplies).toHaveBeenCalledOnce();
+    expect(deliverReplies.mock.calls[0]?.[0].replies.map((reply) => reply.payload)).toEqual([
+      { text: FINAL_REPLY_TEXT },
+    ]);
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(startStream).not.toHaveBeenCalled();
+  });
 
-  it.each(VISIBLE_WORK_SESSION_LINK_CASES)(
-    "completes native task sources with $name before final text",
-    async ({ batches, links }) => {
-      sessionBatches = batches;
-      await dispatchPreparedSlackMessage(preparedMessage(true));
-      const initial = nativeChunks(startStream.mock.calls);
-      expect(initial).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ type: "task_update", status: "in_progress" }),
-        ]),
-      );
-      expect(initial.every((chunk) => !chunk.sources)).toBe(true);
-      const completion = nativeChunks([...appendStream.mock.calls, ...stopStream.mock.calls]);
-      const linked = completion.filter((chunk) => chunk.sources);
-      expect(linked).toHaveLength(1);
-      expect(linked[0]).toMatchObject({
-        type: "task_update",
-        status: "complete",
-        sources: links.map((link) => ({ type: "url_source", ...link })),
-      });
-      const sourceCall = appendStream.mock.calls.findIndex(([input]) =>
-        nativeChunks([[input]]).some((chunk) => chunk.sources),
-      );
-      const finalCall = appendStream.mock.calls.findIndex(
-        ([input]) => requireRecord(input, "native final").text === `\n${FINAL_REPLY_TEXT}`,
-      );
-      expect(sourceCall).toBeGreaterThanOrEqual(0);
-      expect(finalCall).toBeGreaterThan(sourceCall);
-      expect(stopStream).toHaveBeenCalledOnce();
-      expect(deliverReplies).not.toHaveBeenCalled();
-      expect(draftStream.update).not.toHaveBeenCalled();
-    },
-  );
+  it("completes native sources with one visible work session before final text", async () => {
+    const links = [{ url: FIRST_WORK_SESSION.url, text: "Open work session" }];
+    sessionBatches = [[FIRST_WORK_SESSION], [FIRST_WORK_SESSION]];
+    await dispatchPreparedSlackMessage(preparedMessage(true));
+    const initial = nativeChunks(startStream.mock.calls);
+    expect(initial).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "task_update", status: "in_progress" }),
+      ]),
+    );
+    expect(initial.every((chunk) => !chunk.sources)).toBe(true);
+    const completion = nativeChunks([...appendStream.mock.calls, ...stopStream.mock.calls]);
+    const linked = completion.filter((chunk) => chunk.sources);
+    expect(linked).toHaveLength(1);
+    expect(linked[0]).toMatchObject({
+      type: "task_update",
+      status: "complete",
+      sources: links.map(({ url, text }) => ({ type: "url_source", url, text })),
+    });
+    const sourceCall = appendStream.mock.calls.findIndex(([input]) =>
+      nativeChunks([[input]]).some((chunk) => chunk.sources),
+    );
+    const finalCall = appendStream.mock.calls.findIndex(
+      ([input]) => requireRecord(input, "native final").text === `\n${FINAL_REPLY_TEXT}`,
+    );
+    expect(sourceCall).toBeGreaterThanOrEqual(0);
+    expect(finalCall).toBeGreaterThan(sourceCall);
+    expect(stopStream).toHaveBeenCalledOnce();
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(draftStream.update).not.toHaveBeenCalled();
+  });
 });

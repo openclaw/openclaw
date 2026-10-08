@@ -267,7 +267,11 @@ describe("filtered sidebar session event refresh", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(list).toHaveBeenCalledOnce();
         expect(list).toHaveBeenLastCalledWith(
-          expect.objectContaining({ agentId: "main", archivedFilter: statusFilter }),
+          expect.objectContaining({
+            agentId: "main",
+            archivedFilter: statusFilter,
+            excludeDock: true,
+          }),
         );
         expect(controller.sessionsResult?.sessions).toHaveLength(1);
         controller.hostDisconnected();
@@ -302,7 +306,9 @@ describe("filtered sidebar session event refresh", () => {
       try {
         await selectMembership({ ownerId: null, involvingMe: true });
         expect(controller.sessionsResult?.sessions).toHaveLength(pageSize);
-        expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ involvingMe: true }));
+        expect(list).toHaveBeenLastCalledWith(
+          expect.objectContaining({ involvingMe: true, excludeDock: true }),
+        );
         expect(controller.sessionsResult?.sessions.every((row) => row.updatedAt! % 2 === 1)).toBe(
           true,
         );

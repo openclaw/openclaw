@@ -9,6 +9,7 @@ import {
   withRemoteHttpResponse,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
+  type RemoteEmbeddingClient,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveMemorySecretInputString } from "openclaw/plugin-sdk/memory-core-host-secret";
 import {
@@ -23,7 +24,6 @@ import {
   readProviderJsonObjectResponse,
   readProviderResponseErrorText,
 } from "openclaw/plugin-sdk/provider-http";
-import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   asOptionalRecord,
   normalizeOptionalString,
@@ -31,11 +31,7 @@ import {
 import { parseGeminiAuth } from "./gemini-auth.js";
 import { resolveGoogleApiClientHeaders } from "./google-api-client-header.js";
 
-export type GeminiEmbeddingClient = {
-  baseUrl: string;
-  headers: Record<string, string>;
-  ssrfPolicy?: SsrFPolicy;
-  model: string;
+export type GeminiEmbeddingClient = Omit<RemoteEmbeddingClient, "fetchImpl"> & {
   modelPath: string;
   apiKeys: string[];
   outputDimensionality?: number;

@@ -4,6 +4,7 @@ import type { CliSessionBinding, SessionEntry } from "../../config/sessions.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import type { CronScheduledToolCallerOrigin } from "../../cron/scheduled-tool-policy.js";
 import type { DiagnosticEmbeddedRunOwner } from "../../logging/diagnostic-run-activity.js";
@@ -14,7 +15,6 @@ import type {
 } from "../../plugins/cli-backend.types.js";
 import type { PluginInstanceConsumer } from "../../plugins/plugin-instance.types.js";
 import type { SpawnSecretInput } from "../../process/supervisor/types.js";
-import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import type { AdmittedRunContext } from "../admitted-run-context.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { ExecElevatedDefaults } from "../bash-tools.exec-types.js";
@@ -43,8 +43,7 @@ import type { PreparedQuestionAnswerAuthority } from "../harness/host-private-ca
 import type { AgentHarnessIsolatedCompletionParamsV2 } from "../harness/types.js";
 import type { RuntimeContextFragment } from "../internal-runtime-context.js";
 import type { ReplyExpectation } from "../reply-completion.js";
-import type { RootedExecutionRequest } from "../rooted-run-params.js";
-import type { EmbeddedRunTrigger } from "../run-trigger.js";
+import type { EmbeddedRunTrigger, IsolatedCompletionPurpose } from "../run-trigger.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 import type { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
@@ -65,6 +64,8 @@ type CliSessionRetryParams = {
 
 /** Input contract for one CLI-backed agent run. */
 export type RunCliAgentParams = {
+  /** Effective tool policy prepared by the trusted channel ingress owner. */
+  conversationToolPolicy?: GroupToolPolicyConfig;
   preparedTtsPreferences?: import("../../tts/tts-preferences.js").PreparedTtsPreferences;
   /** Verified in-process completion authority; never supplied by native CLI input. */
   trustedInternalHandoff?: TrustedSubagentCompletionHandoff;
@@ -78,8 +79,6 @@ export type RunCliAgentParams = {
   /** Heartbeat-transported turn that continues a conversation (its own command completion). */
   continuesConversation?: boolean;
   sessionFile: string;
-  /** Host-owned task root; preparation must mediate all tools through its filesystem policy. */
-  rootedExecution?: RootedExecutionRequest;
   /** Start a fresh CLI process so per-turn MCP authority is reloaded from this run. */
   disableCliLiveSession?: boolean;
   /**
@@ -98,6 +97,8 @@ export type RunCliAgentParams = {
   executionMode?: CliBackendExecutionMode;
   /** Internal one-shot inference path: suppress transcript, hook, context-engine, and delivery work. */
   isolatedCompletion?: true;
+  /** Diagnostic attribution only; must not change execution policy or timeout selection. */
+  isolatedCompletionPurpose?: IsolatedCompletionPurpose;
   outputTextPolicy?: AgentHarnessIsolatedCompletionParamsV2["outputTextPolicy"];
   /** Internal backend control command: reuse the native session without recording a conversation turn. */
   controlOperation?: "compact";
@@ -152,8 +153,6 @@ export type RunCliAgentParams = {
   bashElevated?: ExecElevatedDefaults;
   /** Runtime tool allow-list. CLI harnesses need a backend-owned exact translation. */
   toolsAllow?: string[];
-  /** Exact Skill Workshop proposal revision bound by the Gateway for this turn. */
-  skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
   skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
   /** Server-authored origin for fresh automation mutations from this CLI run. */
   cronCreatorCallerOrigin?: CronScheduledToolCallerOrigin;

@@ -131,9 +131,14 @@ Reads a value from the redacted config snapshot (secrets never print). `--json` 
 Pass exactly one config path. Extra arguments, including an empty quoted argument (`""`),
 are rejected; they do not suppress validation of later options.
 
-A schema-valid but unset path explains that the runtime default applies; an unknown path suggests
-`openclaw config schema`. With `--json`, both use the standard [CLI JSON failure envelope](/cli#json-failures)
-on stdout and exit with status 1. Without `--json`, diagnostics remain on stderr.
+A schema-valid but unset authorable path explains that the runtime default applies and suggests
+`openclaw config set`. For automatically managed metadata, such as `meta.lastTouchedVersion`,
+`meta.migrations.modelPolicyAllowlist`, and `meta.migrations.utilityModelSeparation`, the message
+instead explains that OpenClaw manages the values on config writes. Reading their unset parent
+paths (`meta` or `meta.migrations`) gives the same explanation, not a refused set command.
+An unknown path suggests `openclaw config schema`. With `--json`, unset and unknown paths use
+the standard [CLI JSON failure envelope](/cli#json-failures) on stdout and exit with status 1.
+Without `--json`, diagnostics remain on stderr.
 
 Nested paths inside open-ended parameter bags, such as `agents.defaults.params.custom.nested`,
 are schema-valid even before they are set. This does not confirm that a provider supports the parameter.
@@ -183,6 +188,8 @@ machine-output spelling and keeps stdout reserved for the schema document.
 ### `config validate`
 
 Schema refusals from `config set`, `config patch`, and `config unset` explain the affected setting and confirm that no settings were saved. Correct the reported value or use `openclaw config schema` to inspect supported settings, then retry. These refusals still exit with status 1. Explicit validation reports settings that need correction without changing the file; `config validate --json` retains its `valid: false`, `error`, and `issues` fields for scripts.
+
+Config read failures name the file being read and preserve the underlying error. Resolve the reported file-access or runtime problem, then retry; a read failure alone does not mean the settings need repair.
 
 Human validation diagnostics quote literal record keys, such as `agents.defaults.models["provider/model.v1"].alias`, instead of displaying the dot inside a key as nested traversal. Numeric array positions use brackets, such as `agents.entries.main.skills[0]`. The `issues[].path` field in `config validate --json` keeps its existing dot-joined representation.
 

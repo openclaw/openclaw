@@ -1039,9 +1039,8 @@ describe("buildCodexMigrationProvider", () => {
     "installs selected $marketplace plugins as soon as the catalog loads",
     async ({ marketplace, initiallyMissing }) => {
       const fixture = await createCodexFixture();
-      const reportDir = path.join(fixture.root, "report");
       const configState = configWithCodex(fixture, {
-        appServer: { sandbox: "workspace-write" },
+        appServer: { command: "migration-codex", sandbox: "workspace-write" },
       });
       let targetPluginListCalls = 0;
       let targetPluginListCallsAtInstall = 0;
@@ -1090,13 +1089,11 @@ describe("buildCodexMigrationProvider", () => {
           throw new Error(`unexpected request ${method}`);
         },
       );
-      const provider = buildCodexMigrationProvider({
+      const result = await buildCodexMigrationProvider({
         runtime: createConfigRuntime(configState),
-      });
-
-      const result = await provider.apply(
+      }).apply(
         contextFor(fixture, {
-          reportDir,
+          reportDir: path.join(fixture.root, "report"),
           config: configState,
         }),
       );
@@ -1112,6 +1109,7 @@ describe("buildCodexMigrationProvider", () => {
             ? { remoteMarketplaceName: marketplace, pluginName: "remote-calendar-id" }
             : { marketplacePath: `/marketplaces/${marketplace}`, pluginName: "google-calendar" },
       });
+      expect(installCall.startOptions).toMatchObject({ command: "migration-codex" });
       const pluginItem = findItem(result.items, "plugin:google-calendar");
       expectRecordFields(pluginItem, {
         status: "migrated",
@@ -1126,6 +1124,7 @@ describe("buildCodexMigrationProvider", () => {
       });
       expect(configState.plugins?.entries?.codex?.enabled).toBe(true);
       expect(configState.plugins?.entries?.codex?.config?.appServer).toEqual({
+        command: "migration-codex",
         sandbox: "workspace-write",
       });
       expect(configState.plugins?.entries?.codex?.config?.codexPlugins).toEqual({

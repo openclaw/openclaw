@@ -359,12 +359,11 @@ export function resolveKitchenSinkRpcConfig(env: ProcessEnv = process.env) {
   };
 }
 
-async function findAvailableLoopbackPort(options: { createServer?: typeof net.createServer } = {}) {
-  const createServer = options.createServer ?? (() => net.createServer());
-  const server = createServer();
+async function findAvailableLoopbackPort() {
+  const server = net.createServer();
   return await new Promise<number>((resolve, reject) => {
     const fail = (error: unknown) => {
-      server.close?.(() => {});
+      server.close(() => {});
       const reservationError: Error = coerceKitchenSinkError(
         error,
         "Unable to reserve Kitchen Sink RPC loopback port",
@@ -373,7 +372,7 @@ async function findAvailableLoopbackPort(options: { createServer?: typeof net.cr
     };
     server.once("error", fail);
     server.listen(0, "127.0.0.1", () => {
-      server.off?.("error", fail);
+      server.off("error", fail);
       const address = server.address();
       const port = typeof address === "object" && address ? address.port : 0;
       server.close((error) => {
@@ -828,12 +827,8 @@ async function runOpenClaw(
   return runCommand(command.command, command.args, {
     ...command.options,
     env,
-    resourceLabel: options.resourceLabel,
-    resourceSampleIntervalMs: options.resourceSampleIntervalMs,
-    resourceSampleOptions: options.resourceSampleOptions,
-    resourceSamples: options.resourceSamples,
+    ...options,
     outputCaptureChars: config.outputCaptureChars,
-    requireResourceSample: options.requireResourceSample,
     timeoutMs: options.timeoutMs ?? config.commandTimeoutMs,
   });
 }
@@ -896,7 +891,7 @@ export function parseGatewayCliRequestFailure(error: unknown): GatewayRequestErr
   } catch {
     return null;
   }
-  return payload?.ok === false ? createGatewayClientRequestError(payload.error) : null;
+  return payload.ok === false ? createGatewayClientRequestError(payload.error) : null;
 }
 
 function createGatewayClientRequestError(requestError: unknown): GatewayRequestError | null {
@@ -1175,7 +1170,7 @@ export function usesBuiltOpenClawEntry(
   cwd = process.cwd(),
   env: ProcessEnv = process.env,
 ) {
-  if (runner?.pnpm || !runner?.baseArgs?.[0]) {
+  if (runner.pnpm || !runner.baseArgs[0]) {
     return false;
   }
   const entry = runner.baseArgs[0];
@@ -1320,7 +1315,7 @@ export async function fetchJson(url: string | URL, options: FetchJsonOptions = {
 }
 
 function getExternalAbortReason(signal: AbortSignal) {
-  return signal?.reason instanceof Error ? signal.reason : new Error("fetch aborted");
+  return signal.reason instanceof Error ? signal.reason : new Error("fetch aborted");
 }
 
 function createExternalAbortError(signal: AbortSignal) {
@@ -2048,13 +2043,11 @@ export function assertDiagnosticStabilityClean(payload: unknown) {
     problems.push(`dropped=${candidate.dropped}`);
   }
   const payloadLarge = asRecord(asRecord(candidate.summary).payloadLarge);
-  if (payloadLarge) {
-    if (typeof payloadLarge.rejected === "number" && payloadLarge.rejected > 0) {
-      problems.push(`payload.large rejected=${payloadLarge.rejected}`);
-    }
-    if (typeof payloadLarge.truncated === "number" && payloadLarge.truncated > 0) {
-      problems.push(`payload.large truncated=${payloadLarge.truncated}`);
-    }
+  if (typeof payloadLarge.rejected === "number" && payloadLarge.rejected > 0) {
+    problems.push(`payload.large rejected=${payloadLarge.rejected}`);
+  }
+  if (typeof payloadLarge.truncated === "number" && payloadLarge.truncated > 0) {
+    problems.push(`payload.large truncated=${payloadLarge.truncated}`);
   }
   const asyncDropCount = countDiagnosticEvents(payload, "diagnostic.async_queue.dropped");
   if (asyncDropCount > 0) {
@@ -2192,33 +2185,17 @@ async function samplePosixProcess(
   const needles = commandLineNeedles
     .map((needle) => needle.trim())
     .filter((needle) => needle.length > 0);
-  if (needles.length > 0) {
-    return samplePosixProcessTree(pid, run, needles);
-  }
-  return samplePosixProcessWithDescendants(pid, run);
-}
-
-async function samplePosixProcessWithDescendants(pid: number, run: CommandRunner) {
-  const snapshot = await readPosixProcessTreeSnapshot(pid, run);
-  if (!snapshot) {
-    return null;
-  }
-  return formatPosixProcessTreeSample(snapshot.rootRow, snapshot.rootTreeRows);
-}
-
-async function samplePosixProcessTree(
-  pid: number,
-  run: CommandRunner,
-  commandLineNeedles: string[],
-) {
   const snapshot = await readPosixProcessTreeSnapshot(pid, run);
   if (!snapshot) {
     return null;
   }
   const { rootRow, rootTreeRows, rows } = snapshot;
+  if (needles.length === 0) {
+    return formatPosixProcessTreeSample(rootRow, rootTreeRows);
+  }
   const descendants = rootTreeRows.filter((row) => row.processId !== rootRow.processId);
   const matchesCommandNeedles = (row: PosixProcessRow) =>
-    commandLineNeedles.every((needle) => row.command.toLowerCase().includes(needle.toLowerCase()));
+    needles.every((needle) => row.command.toLowerCase().includes(needle.toLowerCase()));
   const commandMatches = descendants.filter(matchesCommandNeedles);
   const rootCommandMatches = matchesCommandNeedles(rootRow) ? [rootRow] : [];
   const gatewayTitleMatches = descendants.filter((row) =>
@@ -2248,9 +2225,6 @@ async function readPosixProcessTreeSnapshot(pid: number, run: CommandRunner) {
       timeoutMs: 5000,
     });
     const snapshot = parsePosixProcessRows(stdout);
-    if (!snapshot) {
-      return null;
-    }
     const { malformedRows, rows } = snapshot;
     const rootTreeRows = collectPosixProcessTree(rows, safePid);
     const rootRow = rootTreeRows.find((row) => row.processId === safePid);
@@ -2285,13 +2259,7 @@ function parsePosixProcessRows(stdout: string) {
     const parentProcessId = parseStrictUnsignedInteger(ppidRaw);
     const rssKb = parsePositivePosixProcessToken(rssKbRaw);
     const cpuPercent = parseStrictNonNegativeDecimal(cpuRaw);
-    if (
-      !Number.isInteger(processId) ||
-      !Number.isInteger(parentProcessId) ||
-      processId === null ||
-      parentProcessId === null ||
-      rssKb === null
-    ) {
+    if (processId === null || parentProcessId === null || rssKb === null) {
       malformedRows.push({
         pidRaw,
         ppidRaw,
@@ -2406,23 +2374,16 @@ function selectPeakRssProcess(rows: PosixProcessRow[]) {
   );
 }
 
-function formatPosixProcessSample(row: PosixProcessRow): ProcessSample {
-  return {
-    rssMiB: Math.round((row.rssKb / 1024) * 10) / 10,
-    aggregateRssMiB: Math.round((row.rssKb / 1024) * 10) / 10,
-    cpuPercent: row.cpuPercent,
-    processId: row.processId,
-  };
-}
-
 function formatPosixProcessTreeSample(
   selected: PosixProcessRow,
   rows: PosixProcessRow[],
 ): ProcessSample {
   const aggregateRssKb = rows.reduce((sum, row) => sum + row.rssKb, 0);
   return {
-    ...formatPosixProcessSample(selected),
+    rssMiB: Math.round((selected.rssKb / 1024) * 10) / 10,
     aggregateRssMiB: Math.round((aggregateRssKb / 1024) * 10) / 10,
+    cpuPercent: selected.cpuPercent,
+    processId: selected.processId,
   };
 }
 
@@ -2601,14 +2562,11 @@ async function sampleWindowsProcess(
 
 function assertProcessResourceCeiling(
   sample: ProcessSample | null,
-  options: { label: string; maxRssMiB: number; requireSample?: boolean },
+  options: { label: string; maxRssMiB: number },
 ) {
-  const { label, maxRssMiB, requireSample = true } = options;
+  const { label, maxRssMiB } = options;
   if (!sample) {
-    if (requireSample) {
-      throw new Error(`${label} RSS sample was not captured`);
-    }
-    return;
+    throw new Error(`${label} RSS sample was not captured`);
   }
   if (!Number.isFinite(sample.rssMiB) || sample.rssMiB <= 0) {
     throw new Error(`${label} RSS sample was invalid: ${String(sample.rssMiB)} MiB`);
@@ -2741,8 +2699,8 @@ function assertNoErrorLogs(logPath: string) {
   }
 }
 
-function tailFile(file: string, maxBytes = LOG_TAIL_BYTES) {
-  return tailText(readTextFileTail(file, Math.max(1, maxBytes)));
+function tailFile(file: string) {
+  return tailText(readTextFileTail(file, LOG_TAIL_BYTES));
 }
 
 function tailText(text: string) {
@@ -3401,7 +3359,7 @@ async function main(resourceReport?: string) {
     });
     const stability = await retryRpcCall("diagnostics.stability", {}, rpcOptions);
     assertDiagnosticStabilityClean(stability);
-    await settlePendingSample(sampleInFlight);
+    await Promise.resolve(sampleInFlight).catch(() => {});
     const finalSample = await sampleGateway();
     assertResourceCeiling(finalSample);
     const peakSample = summarizeProcessSamples(processSamples);
@@ -3443,7 +3401,7 @@ async function main(resourceReport?: string) {
     }
     if (!failed && !keepTmp) {
       await cleanupKitchenSinkEnv(root, { throwOnFailure: true });
-    } else if (failed || keepTmp) {
+    } else {
       console.error(`Kitchen Sink RPC temp root preserved: ${root}`);
     }
   }
@@ -3477,8 +3435,4 @@ function isCallGatewayModule(
 
 function isGatewayChild(value: unknown): value is GatewayChild {
   return typeof asRecord(value).kill === "function";
-}
-
-async function settlePendingSample(pending: Promise<unknown> | null) {
-  await pending?.catch(() => {});
 }

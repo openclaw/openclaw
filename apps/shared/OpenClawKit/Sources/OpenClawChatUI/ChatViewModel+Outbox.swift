@@ -178,18 +178,23 @@ extension OpenClawChatViewModel {
 
     @discardableResult
     func reconcileOutboxBranchScope(
-        _ session: SessionSnapshot,
+        _ scope: OpenClawChatOutboxScope?,
         branches: [OpenClawChatSessionBranch],
         previousState: OpenClawChatOutboxBranchState?,
-        connectionGeneration: UInt64) async -> Bool
+        capturedSession: SessionSnapshot? = nil) async -> Bool
     {
-        guard let outbox, let scope = self.outboxBranchScope(for: session), let previousState,
-              connectionGeneration == self.outboxBranchConnectionGeneration
-        else { return self.outbox == nil }
+        guard let outbox, let scope, let previousState else { return self.outbox == nil }
         let activeLeaf: String? = branches.isEmpty ? nil : Self.activeBranchLeafEntryID(in: branches)
         guard branches.isEmpty || activeLeaf != nil else { return false }
         let leaves = Set(branches.map(\.leafEntryId).filter { !$0.isEmpty })
-        let activeTranscriptEntryIDs = self.isCurrentSession(session)
+        /// Bootstrap pins one presentation; background replay follows a matching visible scope.
+        func visibleSession() -> SessionSnapshot? {
+            let session = capturedSession ?? self.currentSessionSnapshot()
+            let isVisible = capturedSession.map(self.isCurrentSession)
+                ?? (self.outboxBranchScope(for: session) == scope)
+            return isVisible ? session : nil
+        }
+        let activeTranscriptEntryIDs = visibleSession() != nil
             ? Set(self.messages.compactMap(\.transcriptMessageID))
             : []
         guard let commands = await outbox.reconcileBranchScope(
@@ -201,7 +206,7 @@ extension OpenClawChatViewModel {
             lastError: "Session branch changed; review and retry this message.")
         else { return false }
         self.reconciledOutboxBranchScopes.insert(scope)
-        if self.isCurrentSession(session) {
+        if let session = visibleSession() {
             self.presentOutboxCommands(commands.filter { self.commandMatchesTarget($0, session: session) })
         }
         return true
@@ -228,28 +233,10 @@ extension OpenClawChatViewModel {
                     let response = try await self.requestSessionBranchListing(
                         sessionKey: command.deliverySessionKey,
                         agentID: command.agentID)
-                    let activeLeaf: String? = response.branches.isEmpty ? nil : Self
-                        .activeBranchLeafEntryID(in: response.branches)
-                    guard response.branches.isEmpty || activeLeaf != nil else { continue }
-                    let leaves = Set(response.branches.map(\.leafEntryId).filter { !$0.isEmpty })
-                    let activeTranscriptEntryIDs = self.outboxBranchScope(for: self.currentSessionSnapshot()) == scope
-                        ? Set(self.messages.compactMap(\.transcriptMessageID))
-                        : []
-                    guard let reconciled = await outbox.reconcileBranchScope(
+                    _ = await self.reconcileOutboxBranchScope(
                         scope,
-                        previousState: state,
-                        activeLeafEntryID: activeLeaf,
-                        branchLeafEntryIDs: leaves,
-                        activeTranscriptEntryIDs: activeTranscriptEntryIDs,
-                        lastError: "Session branch changed; review and retry this message.")
-                    else { continue }
-                    self.reconciledOutboxBranchScopes.insert(scope)
-                    let visible = self.currentSessionSnapshot()
-                    if self.outboxBranchScope(for: visible) == scope {
-                        self
-                            .presentOutboxCommands(reconciled
-                                .filter { self.commandMatchesTarget($0, session: visible) })
-                    }
+                        branches: response.branches,
+                        previousState: state)
                 } catch {
                     if Self.branchListingIsUnsupported(error) {
                         self.reconciledOutboxBranchScopes.insert(scope)
@@ -594,7 +581,7 @@ extension OpenClawChatViewModel {
         _ message: OpenClawChatMessage,
         for command: OpenClawChatOutboxCommand) async
     {
-        guard let transcriptCache = transcriptCache as? any OpenClawChatCanonicalTranscriptMerging else { return }
+        guard let transcriptCache = transcriptCache as? OpenClawChatSQLiteTranscriptCache else { return }
         let sessionKey = command.sessionKey
         let cacheAgentID = Self.transcriptCacheAgentID(
             sessionKey: sessionKey,

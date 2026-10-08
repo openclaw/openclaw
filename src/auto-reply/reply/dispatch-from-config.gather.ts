@@ -14,6 +14,10 @@ import {
   toPluginInboundClaimPair,
 } from "../../hooks/message-hook-mappers.js";
 import { isAbortError } from "../../infra/abort-signal.js";
+import {
+  assertAgentRunLifecycleGenerationCurrent,
+  getAgentEventLifecycleGeneration,
+} from "../../infra/agent-events.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import {
@@ -70,6 +74,7 @@ export async function gatherDispatchRequest(
   messageAuditTerminal: InboundMessageAuditTerminalRecorder | undefined,
   allowActiveQueueResolution = false,
 ) {
+  const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const ctx = isFinalizedInboundContext(params.ctx)
     ? params.ctx
     : finalizeInboundContext(params.ctx);
@@ -344,22 +349,21 @@ export async function gatherDispatchRequest(
     return finishReplyOperationAborted();
   }
   const dispatchKind = resolveSessionDispatchKind(acpDispatchSessionKey, sessionStoreEntry.entry);
-  let preparedSessionBinding: ReplySessionBinding | undefined =
-    sessionStoreEntry.sessionKey && sessionStoreEntry.entry?.sessionId
+  const toSessionBinding = ({
+    sessionKey: bindingSessionKey,
+    entry,
+    storePath,
+  }: typeof sessionStoreEntry): ReplySessionBinding | undefined =>
+    bindingSessionKey && entry?.sessionId
       ? {
-          sessionKey: sessionStoreEntry.sessionKey,
-          sessionId: sessionStoreEntry.entry.sessionId,
-          storePath: sessionStoreEntry.storePath,
+          sessionKey: bindingSessionKey,
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+          storePath,
         }
       : undefined;
-  let preparedOperationSessionBinding: ReplySessionBinding | undefined =
-    operationSessionStoreEntry.sessionKey && operationSessionStoreEntry.entry?.sessionId
-      ? {
-          sessionKey: operationSessionStoreEntry.sessionKey,
-          sessionId: operationSessionStoreEntry.entry.sessionId,
-          storePath: operationSessionStoreEntry.storePath,
-        }
-      : undefined;
+  let preparedSessionBinding = toSessionBinding(sessionStoreEntry);
+  let preparedOperationSessionBinding = toSessionBinding(operationSessionStoreEntry);
   const sessionKeysMatch = (left?: string, right?: string) =>
     Boolean(
       left &&
@@ -377,26 +381,28 @@ export async function gatherDispatchRequest(
   };
   const resolveOperationExpectedSessionId = () =>
     preparedOperationSessionBinding?.sessionId ?? operationSessionStoreEntry.entry?.sessionId;
-  const resolvePreparedTranscriptBinding = (mirrorSessionKey?: string) => {
-    if (
-      !preparedSessionBinding ||
-      !sessionKeysMatch(mirrorSessionKey, preparedSessionBinding.sessionKey)
-    ) {
-      return undefined;
-    }
-    return preparedSessionBinding;
-  };
+  const resolvePreparedTranscriptBinding = (mirrorSessionKey?: string) =>
+    preparedSessionBinding && sessionKeysMatch(mirrorSessionKey, preparedSessionBinding.sessionKey)
+      ? preparedSessionBinding
+      : undefined;
   const sessionAgentId = resolveSessionAgentId({
     sessionKey: acpDispatchSessionKey,
     config: cfg,
     fallbackAgentId: ctx.AgentId,
   });
   const sessionAgentCfg = resolveAgentConfig(cfg, sessionAgentId);
+  const assertProgressCurrent = () => {
+    assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+    params.replyOptions?.abortSignal?.throwIfAborted();
+    replyOperationCoordinator.getDispatchAbortSignal()?.throwIfAborted();
+    assertRequestCurrent();
+  };
   const verboseProgress = createShouldEmitVerboseProgress({
     agentId: sessionAgentId,
     sessionKey: acpDispatchSessionKey,
     storePath: sessionStoreEntry.storePath,
     initialExplicitLevel: sessionStoreEntry.entry?.verboseLevel,
+    assertCurrent: assertProgressCurrent,
     fallbackLevel:
       normalizeVerboseLevel(
         sessionStoreEntry.entry?.verboseLevel ??
@@ -405,8 +411,6 @@ export async function gatherDispatchRequest(
           "",
       ) ?? "off",
   });
-  const shouldEmitVerboseProgress = verboseProgress.shouldEmit;
-  const shouldEmitFullVerboseProgress = verboseProgress.shouldEmitFull;
   const replyRoute = resolveEffectiveReplyRoute({ ctx, entry: sessionStoreEntry.entry });
   // Restore route thread context only from the active turn or the thread-scoped session key.
   // Do not read thread ids from the normalised session store here: `origin.threadId` can be
@@ -583,8 +587,11 @@ export async function gatherDispatchRequest(
     dispatchOperationSessionKey,
     operationSessionStoreEntry,
     noteRunVerbosity: verboseProgress.noteRunVerbosity,
-    shouldEmitVerboseProgress,
-    shouldEmitFullVerboseProgress,
+    assertProgressCurrent,
+    shouldEmitVerboseProgress: verboseProgress.shouldEmit,
+    shouldEmitFullVerboseProgress: verboseProgress.shouldEmitFull,
+    shouldEmitVerboseProgressAsync: verboseProgress.shouldEmitAsync,
+    shouldEmitFullVerboseProgressAsync: verboseProgress.shouldEmitFullAsync,
     replyRoute,
     routeReplyThreadId,
     inboundAudio,

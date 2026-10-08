@@ -64,14 +64,6 @@ function readJson(filePath: string): JsonObject {
   return value;
 }
 
-function isScannableSourceFile(fileName: string) {
-  return SCANNED_EXTENSIONS.has(path.extname(fileName));
-}
-
-function shouldSkipDir(dirName: string) {
-  return dirName === "dist" || dirName === "node_modules" || dirName === ".git";
-}
-
 function walkFiles(rootDir: string): string[] {
   if (!fs.existsSync(rootDir)) {
     return [];
@@ -86,13 +78,13 @@ function walkFiles(rootDir: string): string[] {
     for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
       const fullPath = path.join(current, entry.name);
       if (entry.isDirectory()) {
-        if (shouldSkipDir(entry.name)) {
+        if (entry.name === "dist" || entry.name === "node_modules" || entry.name === ".git") {
           continue;
         }
         queue.push(fullPath);
         continue;
       }
-      if (entry.isFile() && isScannableSourceFile(entry.name)) {
+      if (entry.isFile() && SCANNED_EXTENSIONS.has(path.extname(entry.name))) {
         files.push(fullPath);
       }
     }
@@ -188,9 +180,6 @@ function collectExtensionDependencyDeclarations(repoRoot: string, rootPackageJso
   return { declarations, internalized };
 }
 
-/**
- * Classifies whether a root dependency is core-owned, shared, or extension-local.
- */
 export function classifyRootDependencyOwnership(record: OwnershipClassificationInput): {
   category: string;
   recommendation: string;
@@ -251,9 +240,6 @@ export function classifyRootDependencyOwnership(record: OwnershipClassificationI
   };
 }
 
-/**
- * Builds dependency ownership records from root package.json and scanned imports.
- */
 export function collectRootDependencyOwnershipAudit(
   params: { repoRoot?: string; scanRoots?: string[] } = {},
 ) {
@@ -330,9 +316,6 @@ export function collectRootDependencyOwnershipAudit(
 
 type AuditRecord = ReturnType<typeof collectRootDependencyOwnershipAudit>[number];
 
-/**
- * Returns actionable errors for dependencies that should not remain root-owned.
- */
 export function collectRootDependencyOwnershipCheckErrors(
   records: OwnershipCheckRecord[],
 ): string[] {

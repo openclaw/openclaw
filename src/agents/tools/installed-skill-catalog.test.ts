@@ -196,7 +196,7 @@ describe("installed skill catalog", () => {
     expect(await readInstalledSkill([guide], "guide")).toBe("# Guide\n\nRun this.\nTHE END");
     expect(reader).toHaveBeenCalledWith({ location: guide.location, signal: undefined });
     await expect(readInstalledSkill([guide], "../hidden")).rejects.toThrow(
-      "Unknown installed skill",
+      "is not available to this agent",
     );
     expect(reader).toHaveBeenCalledTimes(1);
   });

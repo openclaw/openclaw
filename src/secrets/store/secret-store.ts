@@ -31,7 +31,7 @@ import {
   classifyHiddenGitHubStoreName,
   GITHUB_SETUP_HANDOFF_MAX_AGE_MS,
 } from "./secret-store-hidden-github.js";
-import { isMissingSecretStoreTableError } from "./secret-store-sqlite.js";
+import { withMissingSecretStoreFallback } from "./secret-store-sqlite.js";
 import { SecretStoreValidationError } from "./secret-store-validation-error.js";
 import {
   assertSecretStoreEnvName,
@@ -161,7 +161,7 @@ export function consumeGitHubSetupHandoff(params: {
     return undefined;
   }
   const now = params.nowMs ?? Date.now();
-  try {
+  return withMissingSecretStoreFallback(() => {
     const value = runOpenClawStateWriteTransaction(
       ({ db: sqlite }) => {
         const db = getNodeSqliteKysely<SecretStoreDatabase>(sqlite);
@@ -199,12 +199,7 @@ export function consumeGitHubSetupHandoff(params: {
       registerSecretValueForRedaction(value);
     }
     return value;
-  } catch (error) {
-    if (isMissingSecretStoreTableError(error)) {
-      return undefined;
-    }
-    throw error;
-  }
+  }, undefined);
 }
 
 /** Captures one coherent team-store snapshot for an agent run's exec environment. */

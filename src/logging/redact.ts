@@ -1,5 +1,4 @@
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
-import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   findStructuredAuthParamRanges,
   redactStructuredAuthHeaders,
@@ -25,6 +24,12 @@ import {
 } from "./redact-json.js";
 import { LINEAR_MATCHER_SOURCES } from "./redact-linear-matchers.js";
 import {
+  maskToken,
+  maskSecretValue,
+  splitSecretValueForMask,
+  splitFormAwareCredentialValue,
+} from "./redact-mask.js";
+import {
   getSecretCaptureStart,
   selectSecretCapture,
   iterateRedactMatches,
@@ -33,6 +38,7 @@ import {
   redactPemBlock,
   replaceRedactPattern,
   rewriteOpenEndedRepeats,
+  setRedactPatternPrefilter,
   type RedactMatch,
   type RedactPattern,
   type ResolvedRedactPattern,
@@ -51,15 +57,18 @@ import {
   PAYMENT_CREDENTIAL_ENV_KEYS,
   PAYMENT_CREDENTIAL_JSON_KEYS,
   PAYMENT_CREDENTIAL_QUERY_KEYS,
+  REDACT_PATTERN_PREFILTERS,
   SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES,
   TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS,
   TOOL_PAYLOAD_REDACT_PATTERNS,
+  VENDOR_TOKEN_REDACT_PATTERNS,
 } from "./redact-patterns.js";
 import { PEM_REDACT_MATCHER, PEM_REDACT_PATTERN_SOURCE } from "./redact-pem.js";
 import { startRedactionMeasurement } from "./redact-performance.js";
 import {
   couldMatchDefaultFullContextPatterns,
   couldMatchDefaultRedactPatterns,
+  couldMatchVendorRedactPatterns,
   createRedactPrefilter,
 } from "./redact-prefilter.js";
 import {
@@ -73,13 +82,12 @@ type RedactSensitiveMode = "off" | "tools";
 type LoggingConfig = OpenClawConfig["logging"];
 
 const DEFAULT_REDACT_MODE: RedactSensitiveMode = "tools";
-const DEFAULT_REDACT_MIN_LENGTH = 18;
-const DEFAULT_REDACT_KEEP_START = 6;
-const DEFAULT_REDACT_KEEP_END = 4;
 const shellReferencePreservingPatterns = new WeakSet<ResolvedRedactPattern>();
 // Built-in resolved patterns scan whole text; only operator-configured regexes use the
 // bounded chunked scan, whose cost on operator expressions is the measured safeguard.
 const builtInResolvedPatterns = new WeakSet<ResolvedRedactPattern>();
+const vendorResolvedPatterns = new WeakMap<ResolvedRedactPattern, () => boolean>();
+const vendorSources = new Set(VENDOR_TOKEN_REDACT_PATTERNS);
 // Patterns whose left-context assertions or complete token can cross a chunk boundary must run
 // against the full string; chunking can invent a `^` boundary or split the secret itself.
 const chunkUnsafePatterns = new WeakSet<ResolvedRedactPattern>();
@@ -122,9 +130,6 @@ const URL_QUERY_PAIR_RE = new RegExp(
   String.raw`([?&])(${FORM_BODY_KEY})=(${URL_QUERY_VALUE})`,
   "gu",
 );
-const SECRET_VALUE_TRAILING_DELIMITER_RE = /(["'`,;)}\]]+)$/u;
-const SECRET_VALUE_SUFFIX_RE = /^["'`,;)}\]]*$/u;
-const SECRET_VALUE_QUOTE_CHARS = new Set(['"', "'", "`"]);
 const FORM_BODY_LINE_BREAK_SPLIT_RE = /(\r\n|\r|\n)/u;
 const FORM_BODY_LINE_BREAK_SEGMENT_RE = /^(?:\r\n|\r|\n)$/u;
 const STRUCTURED_SECRET_FIELD_RE = new RegExp(
@@ -163,36 +168,9 @@ type ResolvedRedactOptions = {
   patterns: ResolvedRedactPattern[];
 };
 
-function normalizeMode(value?: string): RedactSensitiveMode {
-  return value === "off" ? "off" : DEFAULT_REDACT_MODE;
-}
-
 function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
   if (raw === PEM_REDACT_PATTERN_SOURCE) {
     return PEM_REDACT_MATCHER;
-  }
-  if (typeof raw === "string") {
-    // Default sources with quadratic regex cost compile to linear matchers with identical
-    // match semantics; the source string stays the rule's identity for config and exports.
-    const linear = LINEAR_MATCHER_SOURCES.get(raw);
-    if (linear) {
-      // Register the returned matcher under the same policies the regex path would apply to
-      // its compiled pattern; otherwise the early return silently drops shell-reference
-      // preservation, form-aware splitting, and chunk-unsafe carve-outs for these rules.
-      if (SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES.has(raw)) {
-        shellReferencePreservingPatterns.add(linear);
-      }
-      if (TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS.has(raw)) {
-        sourceAssignmentPatterns.add(linear);
-      }
-      if (FORM_AWARE_EQUALS_ASSIGNMENT_PATTERN_SOURCES.has(raw)) {
-        formAwareEqualsAssignmentPatterns.add(linear);
-      }
-      if (raw.startsWith(IDENTIFIER_SAFE_TOKEN_BOUNDARY) || CHUNK_UNSAFE_PATTERN_SOURCES.has(raw)) {
-        chunkUnsafePatterns.add(linear);
-      }
-      return linear;
-    }
   }
   if (typeof raw !== "string" && !(raw instanceof RegExp)) {
     if (AMBIGUOUS_ASSIGNMENT_MATCHERS.has(raw)) {
@@ -200,14 +178,17 @@ function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
     }
     return raw;
   }
-  let pattern: RegExp | null = null;
+  // Linear matchers and compiled regexes share the source's masking policies below.
+  let pattern: ResolvedRedactPattern | null =
+    typeof raw === "string" ? (LINEAR_MATCHER_SOURCES.get(raw) ?? null) : null;
+  let canPrefilter = true;
   if (raw instanceof RegExp) {
     if (raw.flags.includes("g")) {
       pattern = raw;
     } else {
       pattern = new RegExp(raw.source, `${raw.flags}g`);
     }
-  } else if (raw.trim()) {
+  } else if (!pattern && raw.trim()) {
     const [source, flags] = parseRedactPatternSource(raw);
     // Open-ended repeats on canonical built-in flat single-character atoms compile without
     // one backtrack stack entry per repetition, so multi-megabyte values no longer overflow
@@ -218,6 +199,12 @@ function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
       ? rewriteOpenEndedRepeats(source, flags)
       : source;
     pattern = compileConfigRegex(optimized, flags)?.regex ?? null;
+    canPrefilter =
+      pattern !== null &&
+      pattern.source === optimized &&
+      pattern.flags === flags &&
+      pattern.exec === RegExp.prototype.exec &&
+      pattern[Symbol.replace] === RegExp.prototype[Symbol.replace];
   }
   if (pattern && typeof raw === "string" && SHELL_REFERENCE_PRESERVING_PATTERN_SOURCES.has(raw)) {
     shellReferencePreservingPatterns.add(pattern);
@@ -235,6 +222,29 @@ function parsePattern(raw: RedactPattern): ResolvedRedactPattern | null {
   ) {
     chunkUnsafePatterns.add(pattern);
   }
+  if (pattern && typeof raw === "string") {
+    if (canonicalBuiltInSources.has(raw)) {
+      builtInResolvedPatterns.add(pattern);
+    }
+    if (canPrefilter && vendorSources.has(raw) && !vendorResolvedPatterns.has(pattern)) {
+      const source = pattern.source;
+      const exec = pattern.exec;
+      const flags = pattern instanceof RegExp ? pattern.flags : undefined;
+      const replace = pattern instanceof RegExp ? pattern[Symbol.replace] : undefined;
+      vendorResolvedPatterns.set(
+        pattern,
+        () =>
+          pattern.source === source &&
+          pattern.exec === exec &&
+          (!(pattern instanceof RegExp) ||
+            (pattern.flags === flags && pattern[Symbol.replace] === replace)),
+      );
+    }
+    const probe = REDACT_PATTERN_PREFILTERS.get(raw);
+    if (canPrefilter && probe) {
+      setRedactPatternPrefilter(pattern, probe);
+    }
+  }
   return pattern;
 }
 
@@ -243,40 +253,23 @@ function resolvePatterns(value?: readonly RedactPattern[]): ResolvedRedactPatter
     toolPayloadResolvedPatterns ??= TOOL_PAYLOAD_REDACT_PATTERNS.map(parsePattern).filter(
       (re): re is ResolvedRedactPattern => Boolean(re),
     );
-    for (const re of toolPayloadResolvedPatterns) {
-      builtInResolvedPatterns.add(re);
-    }
     return toolPayloadResolvedPatterns;
   }
   if (!value?.length || value === DEFAULT_REDACT_PATTERNS) {
     defaultResolvedPatterns ??= DEFAULT_REDACT_PATTERNS.map(parsePattern).filter(
       (re): re is ResolvedRedactPattern => Boolean(re),
     );
-    for (const re of defaultResolvedPatterns) {
-      builtInResolvedPatterns.add(re);
-    }
     return defaultResolvedPatterns;
   }
   // Combined policies: operator patterns composed with the canonical default arrays. Rule
   // identity decides provenance, not array identity: each raw entry that is itself a canonical
   // built-in rule keeps whole-text scanning, while actual operator rules keep bounded scanning.
-  // Provenance is marked on the same object instances the combined array holds, so resolve in
-  // one pass and mark at parse time (parsePattern returns a fresh RegExp per call).
-  const builtInRawSet = new Set<RedactPattern>([
-    ...DEFAULT_REDACT_PATTERNS,
-    ...TOOL_PAYLOAD_REDACT_PATTERNS,
-  ]);
+  // Mark the resolved instances at parse time; the shared compiler can reuse a regex instance.
   const seen = new Set<ResolvedRedactPattern>();
   const combined: ResolvedRedactPattern[] = [];
   for (const raw of value) {
     const resolved = parsePattern(raw);
-    if (resolved === null) {
-      continue;
-    }
-    if (builtInRawSet.has(raw)) {
-      builtInResolvedPatterns.add(resolved);
-    }
-    if (!seen.has(resolved)) {
+    if (resolved !== null && !seen.has(resolved)) {
       seen.add(resolved);
       combined.push(resolved);
     }
@@ -291,64 +284,6 @@ function usesBuiltInRedactPatterns(value?: readonly RedactPattern[]): boolean {
   return (
     !value?.length || value === DEFAULT_REDACT_PATTERNS || value === TOOL_PAYLOAD_REDACT_PATTERNS
   );
-}
-
-function maskToken(token: string): string {
-  if (token.length < DEFAULT_REDACT_MIN_LENGTH) {
-    return "***";
-  }
-  const start = sliceUtf16Safe(token, 0, DEFAULT_REDACT_KEEP_START);
-  const end = sliceUtf16Safe(token, -DEFAULT_REDACT_KEEP_END);
-  return `${start}…${end}`;
-}
-
-function splitSecretValueForMask(token: string): {
-  maskable: string;
-  suffix: string;
-  maskStart: number;
-  maskEnd: number;
-} {
-  const openingQuote = token[0] ?? "";
-  const contentStart = SECRET_VALUE_QUOTE_CHARS.has(openingQuote) ? 1 : 0;
-  if (contentStart) {
-    const closingQuoteIndex = token.lastIndexOf(openingQuote);
-    if (closingQuoteIndex > 0) {
-      const suffix = token.slice(closingQuoteIndex + 1);
-      if (SECRET_VALUE_SUFFIX_RE.test(suffix)) {
-        return {
-          maskable: token.slice(1, closingQuoteIndex),
-          suffix,
-          maskStart: 0,
-          maskEnd: closingQuoteIndex + 1,
-        };
-      }
-    }
-  }
-
-  const content = token.slice(contentStart);
-  const trailingDelimiter = content.match(SECRET_VALUE_TRAILING_DELIMITER_RE)?.[1] ?? "";
-  const maskable =
-    trailingDelimiter && trailingDelimiter.length < content.length
-      ? content.slice(0, -trailingDelimiter.length)
-      : content;
-  return {
-    maskable,
-    suffix: maskable === content ? "" : trailingDelimiter,
-    maskStart: 0,
-    maskEnd: contentStart + maskable.length,
-  };
-}
-
-function splitFormAwareCredentialValue(token: string): { secret: string; suffix: string } {
-  const pairBoundary = token.search(/&[A-Za-z_][A-Za-z0-9_.-]*=/u);
-  return pairBoundary < 0
-    ? { secret: token, suffix: "" }
-    : { secret: token.slice(0, pairBoundary), suffix: token.slice(pairBoundary) };
-}
-
-function maskSecretValue(token: string, options?: { hinted?: boolean }): string {
-  const { maskable, suffix } = splitSecretValueForMask(token);
-  return `${options?.hinted ? maskToken(maskable) : "***"}${suffix}`;
 }
 
 function normalizeSensitiveKeyName(value: string): string {
@@ -484,7 +419,7 @@ function markAssignmentValues(
 }
 
 function redactFormBodyLine(text: string, onEdits?: PreparationEditSink): string {
-  if (!text) {
+  if (!text.includes("=")) {
     return text;
   }
   const contextRedacted = redactAssignmentValues(
@@ -743,10 +678,24 @@ export function redactText(
     const replace = (match: RedactMatch) =>
       redactMatch(match, pattern, options?.preserveSourceAssignment);
     const replaceRegex = (...args: unknown[]) => replace(readRedactMatch(args));
+    let vendorInput: string | undefined;
+    let vendorMatch = false;
     // Built-in rules (linear matchers and regexes) scan whole text: chunking missed
     // credentials that straddled a boundary. Operator-configured regexes keep the bounded
     // chunked scan, whose cost on operator expressions is the measured safeguard.
     for (pattern of patterns) {
+      if (vendorResolvedPatterns.get(pattern)?.()) {
+        if (vendorInput !== next) {
+          vendorInput = next;
+          vendorMatch = couldMatchVendorRedactPatterns(next);
+        }
+        if (!vendorMatch) {
+          if (pattern instanceof RegExp) {
+            pattern.lastIndex = 0;
+          }
+          continue;
+        }
+      }
       next =
         pattern instanceof RegExp &&
         !options?.fullContext &&
@@ -819,6 +768,9 @@ function looksLikeAppSpecificPassword(candidate: string): boolean {
 }
 
 function redactAppSpecificPasswords(text: string): string {
+  if (!text.includes("-")) {
+    return text;
+  }
   return text.replace(APP_SPECIFIC_PASSWORD_RE, (match: string, token: string) =>
     looksLikeAppSpecificPassword(token) ? maskToken(token) : match,
   );
@@ -834,7 +786,7 @@ function resolveConfigRedaction(): RedactOptions {
 
 export function resolveRedactOptions(options?: RedactOptions): ResolvedRedactOptions {
   const resolved = options ?? resolveConfigRedaction();
-  const mode = normalizeMode(resolved.mode);
+  const mode = resolved.mode === "off" ? "off" : DEFAULT_REDACT_MODE;
   return { mode, patterns: mode === "off" ? [] : resolvePatterns(resolved.patterns) };
 }
 
@@ -869,7 +821,7 @@ function redactSensitiveTextWithOptions(
   exactRedacted: string,
   resolvedOptions: RedactOptions,
 ): string {
-  if (normalizeMode(resolvedOptions.mode) === "off") {
+  if (resolvedOptions.mode === "off") {
     return exactRedacted;
   }
   if (

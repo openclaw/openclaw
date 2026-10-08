@@ -129,22 +129,37 @@ before its transcript commit.
 A visible message or send acknowledgment does not mean the active runtime has
 consumed it. The Control UI shows specific notices when an accepted message is
 waiting for worker setup or workspace sync.
+A steer sent while a turn is creating its worktree or preparing its runtime stays
+pending for that turn. Once the runtime is ready, OpenClaw checks whether it can
+accept the input. If the turn ends or cannot accept it, the message stays queued
+for a followup.
 Messages waiting for a followup turn appear in the queue above the composer,
 including when the Gateway queues a message that could not be steered. They stay
 there across reconnects until consumed or canceled, without being sent again.
+
+The `runId` returned by `chat.send` remains that input's public identity when
+steering falls back to a followup. Queue admission does not complete it. Its
+terminal event arrives when the followup execution finishes, with that
+execution's success, failure, or cancellation outcome. A `collect` batch completes
+every consumed input's `runId` with the batch's outcome. An input rejected,
+canceled, or dropped before consumption, including queue overflow, receives its
+terminal outcome immediately. Steering accepted into the active turn still
+completes the input's `runId` after its transcript receipt, without completing the
+active turn.
 
 Use `followup` or `collect` when you want messages to queue by default instead of steering the active run. Use `interrupt` when the newest prompt should replace the active run.
 
 ## Canceling a pending steer
 
 An authorized Gateway client can withdraw a message still waiting in the OpenClaw
-runtime's steering queue, before delivery starts, with `chat.abort({ sessionKey,
+runtime's steering queue or the followup queue, before delivery starts, with `chat.abort({ sessionKey,
 runId })`. Use the `runId` returned by that message's `chat.send`. This withdraws
 that message without stopping the active run or retrying it as a followup.
 
 Once delivery starts, cancellation cannot guarantee withdrawal or undo completed
-work. If delivery cannot be confirmed, the existing steering safeguards can stop
-the active run to avoid replaying input whose consumption is uncertain.
+work. If delivery cannot be confirmed, OpenClaw reports the uncertainty and retains
+the input without replaying it. An uncertain steering receipt does not stop the
+active run or its running tools. Use `/stop` to stop that work explicitly.
 
 ## Debounce
 

@@ -1,4 +1,5 @@
 import { clampPositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import {
   BrowserProfileUnavailableError,
   BrowserTabNotFoundError,
@@ -80,9 +81,7 @@ async function ensureBrowserRunning(
   // A running browser can outlive one short CDP probe; retry once before
   // rejecting a tab mutation and leaving session-owned tabs behind.
   if (!isReachable && !signal.aborted) {
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, TAB_REACHABILITY_RETRY_DELAY_MS);
-    });
+    await sleepWithAbort(TAB_REACHABILITY_RETRY_DELAY_MS);
     signal.throwIfAborted();
     isReachable = await checkTabReachability(ctx, profileCtx, signal);
   }

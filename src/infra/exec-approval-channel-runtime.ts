@@ -272,14 +272,6 @@ export function createExecApprovalChannelRuntime<
     replayPromise = promise;
   };
 
-  const waitForPendingApprovalReplay = async (): Promise<void> => {
-    const replay = replayPromise;
-    if (!replay) {
-      return;
-    }
-    await replay.catch(() => {});
-  };
-
   return {
     async start(): Promise<void> {
       if (started) {
@@ -407,7 +399,7 @@ export function createExecApprovalChannelRuntime<
       gatewayRuntime = undefined;
       gatewayClient?.stop();
       gatewayClient = null;
-      await waitForPendingApprovalReplay();
+      await replayPromise?.catch(() => {});
       if (!wasActive) {
         await adapter.onStopped?.();
         return;

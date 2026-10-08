@@ -369,7 +369,7 @@
 .plugin-catalog-card__head {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
+  align-items: center;
   gap: var(--space-2);
   min-width: 0;
 }
@@ -513,7 +513,6 @@
   white-space: nowrap;
 }
 
-/* Labelled control in a toolbar (label text over a settings input/select). */
 .plugins-field {
   display: grid;
   gap: 6px;
@@ -531,8 +530,6 @@
   min-width: 180px;
 }
 
-/* <details> shell keeps the settings-section look while restoring the native
- * expand/collapse the pre-migration skill groups had (cfg-object pattern). */
 .skills-group__summary {
   align-items: center;
   cursor: var(--cursor-action);
@@ -554,8 +551,6 @@
 .skills-group__chevron svg {
   width: 16px;
   height: 16px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 2px;
 }
 
@@ -707,7 +702,6 @@ h3.settings-row__title {
   overflow-wrap: anywhere;
 }
 
-/* Row-local message: full-width line under the row's text + controls. */
 .plugin-catalog-card > .plugins-row-message {
   position: relative;
   z-index: 3;

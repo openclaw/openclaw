@@ -4,7 +4,7 @@ import {
   openOpenClawAgentSqliteWorkerStore,
   resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteAdmission,
-  withOpenClawAgentDatabaseAsync,
+  withOpenClawAgentDatabaseRuntime,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { memoryCpuProcessEntrypoints } from "./memory/manager-cpu-entrypoints.js";
@@ -50,7 +50,7 @@ async function executeStandingIntent<Key extends keyof StandingIntentOperations>
     options,
     async (_identity, assertAdmission) =>
       // Caller expiry refuses its operation, never a coalesced physical open.
-      withOpenClawAgentDatabaseAsync(
+      withOpenClawAgentDatabaseRuntime(
         options,
         async ({ db }) => {
           assertCurrent?.();

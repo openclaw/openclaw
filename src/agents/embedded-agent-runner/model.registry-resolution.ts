@@ -31,7 +31,6 @@ import {
   type ProviderRuntimeHooks,
 } from "./model.provider-hooks.js";
 import {
-  resolveBundledStaticCatalogModel,
   resolveManifestModelCatalogProviderAliasMetadata,
   type ManifestModelCatalogProviderAliasMetadata,
 } from "./model.static-catalog.js";
@@ -49,6 +48,13 @@ function getRegistryProviderMetadataOwners(
       getProviderMetadataOwners?: () => PluginMetadataSnapshotOwnerMaps | undefined;
     }
   ).getProviderMetadataOwners?.();
+}
+
+export function normalizeConfiguredProviderModel(
+  params: Parameters<typeof applyConfiguredProviderOverrides>[0] & { agentDir?: string },
+): Model | undefined {
+  const model = applyConfiguredProviderOverrides(params);
+  return model ? normalizeResolvedModel({ ...params, model }) : undefined;
 }
 
 export function resolveExplicitModelWithRegistry(params: {
@@ -74,6 +80,8 @@ export function resolveExplicitModelWithRegistry(params: {
   }
   const providerMetadataOwners = getRegistryProviderMetadataOwners(modelRegistry);
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
+  const suppressionError = (baseUrl: string | undefined) =>
+    buildSuppressedBuiltInModelError({ provider, id: modelId, config: cfg, baseUrl, workspaceDir });
   const inlineMatch = findInlineModelMatch({
     providers: cfg?.models?.providers ?? {},
     preparedModels: params.preparedInlineProviderModels,
@@ -95,16 +103,10 @@ export function resolveExplicitModelWithRegistry(params: {
     if (inlineMatch) {
       return undefined;
     }
-    const error = buildSuppressedBuiltInModelError({
-      provider,
-      id: modelId,
-      config: cfg,
-      baseUrl: providerConfig?.baseUrl,
-      workspaceDir,
-    });
+    const error = suppressionError(providerConfig?.baseUrl);
     return error ? { kind: "suppressed", error } : undefined;
   }
-  const overriddenModel = applyConfiguredProviderOverrides({
+  const model = normalizeConfiguredProviderModel({
     ...params,
     discoveredModel,
     providerConfig,
@@ -112,25 +114,15 @@ export function resolveExplicitModelWithRegistry(params: {
     preferDiscoveredTransport: Boolean(inlineModel),
     staticCatalogModel,
   });
-  if (!overriddenModel) {
+  if (!model) {
     return undefined;
   }
-  const model = normalizeResolvedModel({
-    ...params,
-    model: overriddenModel,
-  });
   // Suppression follows the normalized model-level route, including custom endpoint overrides.
   if (
     !inlineModel ||
     shouldSuppressConfiguredModel({ provider, modelId, cfg, workspaceDir, baseUrl: model.baseUrl })
   ) {
-    const error = buildSuppressedBuiltInModelError({
-      provider,
-      id: modelId,
-      config: cfg,
-      baseUrl: model.baseUrl,
-      workspaceDir,
-    });
+    const error = suppressionError(model.baseUrl);
     if (error) {
       return { kind: "suppressed", error };
     }
@@ -275,7 +267,7 @@ async function resolvePluginDynamicModelWithRegistry(
   if (!pluginDynamicModel) {
     return undefined;
   }
-  const overriddenDynamicModel = applyConfiguredProviderOverrides({
+  return normalizeConfiguredProviderModel({
     ...params,
     discoveredModel: pluginDynamicModel,
     providerConfig,
@@ -285,14 +277,6 @@ async function resolvePluginDynamicModelWithRegistry(
       ...params,
       runtimeHooks,
     }),
-  });
-  if (!overriddenDynamicModel) {
-    return undefined;
-  }
-  return normalizeResolvedModel({
-    ...params,
-    model: overriddenDynamicModel,
-    runtimeHooks,
   });
 }
 
@@ -361,7 +345,7 @@ export function normalizeProviderModelRef(params: {
   };
 }
 
-type ResolveModelWithRegistryParams = {
+type ResolveModelWithPreparedRegistryParams = {
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
   provider: string;
@@ -376,9 +360,6 @@ type ResolveModelWithRegistryParams = {
   preferredProfile?: string;
   runtimeHooks?: ProviderRuntimeHooks;
   skipConfiguredFallback?: boolean;
-};
-
-type ResolveModelWithPreparedRegistryParams = ResolveModelWithRegistryParams & {
   manifestAlias: ManifestModelCatalogProviderAliasMetadata;
   // An empty result is prepared too; a dynamic-model miss must not read auth again.
   preparedAuthProfile?: DynamicModelAuthProfile;
@@ -423,34 +404,4 @@ export async function resolveModelWithPreparedRegistry(
         ...params,
         providerMetadataOwners: getRegistryProviderMetadataOwners(params.modelRegistry),
       });
-}
-
-export async function resolveModelWithRegistry(
-  params: ResolveModelWithRegistryParams,
-): Promise<Model | undefined> {
-  const workspaceDir = params.workspaceDir ?? params.cfg?.agents?.defaults?.workspace;
-  const normalizedRef = normalizeProviderModelRef({ ...params, workspaceDir });
-  let staticCatalogResolved = false;
-  let staticCatalogModel: ProviderRuntimeModel | undefined;
-  const getStaticCatalogModel = () => {
-    if (!staticCatalogResolved) {
-      staticCatalogResolved = true;
-      staticCatalogModel = resolveBundledStaticCatalogModel({
-        provider: normalizedRef.provider,
-        modelId: normalizedRef.model,
-        cfg: params.cfg,
-        workspaceDir,
-        includeRuntimeDiscovery: true,
-      });
-    }
-    return staticCatalogModel;
-  };
-  return resolveModelWithPreparedRegistry({
-    ...params,
-    provider: normalizedRef.provider,
-    modelId: normalizedRef.model,
-    manifestAlias: normalizedRef.manifestAlias,
-    getStaticCatalogModel,
-    ...(workspaceDir !== undefined ? { workspaceDir } : {}),
-  });
 }

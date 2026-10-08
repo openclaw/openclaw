@@ -6,6 +6,8 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { bindSessionRowProjection } from "../session-row-projection-access.js";
+import { createSessionRowProjectionFixture } from "../session-row-projection.test-support.js";
 import { createProjectsHandlers } from "./projects.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -13,12 +15,9 @@ const seededSessions = vi.hoisted(() => ({
   store: {} as Record<string, SessionEntry>,
 }));
 
-vi.mock("../session-utils.js", () => ({
-  loadCombinedSessionStoreForGatewayCore: () => ({ store: seededSessions.store }),
-}));
-
-vi.mock("../../config/sessions/combined-store-gateway.js", () => ({
-  loadCombinedSessionStoreForGatewayCoreAsync: async () => ({ store: seededSessions.store }),
+// mock-isolation: Supply observed session rows without opening real session stores.
+vi.mock("./projects-session-store.js", () => ({
+  loadProjectSessionStore: () => seededSessions.store,
 }));
 
 vi.mock("../../projects/project-registry.js", () => ({
@@ -81,14 +80,20 @@ async function listObservedProjects(params: {
   } as never);
   const responses: Parameters<RespondFn>[] = [];
   const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-  await handlers["projects.list"]?.({
-    params: { includeObserved: true },
-    respond: (...response: Parameters<RespondFn>) => responses.push(response),
-    context: {
-      getRuntimeConfig: () => cfg,
-    } as GatewayRequestContext,
-    client: params.client ?? authenticatedClient("operator@example.com"),
-  } as never);
+  const projection = createSessionRowProjectionFixture({ cfg, store: {}, modelCatalog: [] });
+  try {
+    await handlers["projects.list"]?.({
+      params: { includeObserved: true },
+      respond: (...response: Parameters<RespondFn>) => responses.push(response),
+      context: bindSessionRowProjection(
+        { getRuntimeConfig: () => cfg },
+        () => projection,
+      ) as GatewayRequestContext,
+      client: params.client ?? authenticatedClient("operator@example.com"),
+    } as never);
+  } finally {
+    projection.dispose();
+  }
   expect(responses).toHaveLength(1);
   const response = responses[0];
   if (!response) {

@@ -1,6 +1,187 @@
+import { REPLY_TOOL_AUTHORITY_COMPAT_RECORD } from "./reply-tool-authority-record.js";
 import type { PluginCompatRecord } from "./types.js";
 
 export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
+  REPLY_TOOL_AUTHORITY_COMPAT_RECORD,
+  {
+    code: "codex-transcript-sync-validation",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-09-08",
+    deprecated: "2026-10-06",
+    warningStarts: "2026-10-06",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await readCodexSessionContextProjection for retained worker projection and final validation. Keep the released synchronous validators until the next Plugin SDK major and explicit breaking-release approval. readCodexSessionContext remains a supported synchronous worker reader with its released three-argument generic result contract.",
+    docsPath: "/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence",
+    surfaces: [
+      "openclaw/plugin-sdk/codex-session-transcript-runtime.validateCodexSessionTranscriptReadAdmission",
+      "openclaw/plugin-sdk/codex-session-transcript-runtime.validateCodexSessionTranscriptContextVersion",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/plugin-sdk/codex-session-transcript-runtime.compat.test.ts",
+      "src/config/sessions/session-transcript-context-read.worker.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Codex history validates retained worker projections off the Gateway thread while preserving the released synchronous reader and validator signatures. Storage and update behavior are unchanged.",
+  },
+  {
+    code: "deprecated-session-store-beta5-api",
+    status: "removed",
+    removeAfter: "2026-09-30",
+    owner: "sdk",
+    introduced: "2026-05-21",
+    deprecated: "2026-07-12",
+    warningStarts: "2026-07-12",
+    replacement:
+      "Use `getSessionEntry(...)` and `listSessionEntries(...)` for reads; `patchSessionEntry(...)`, `upsertSessionEntry(...)`, and `deleteSessionEntry(...)` for row mutations; and session identity with `session-transcript-runtime` for active transcripts. The supported-plugin cutoff excludes v2026.7.1-beta.5 and other packages importing the retired bridge.",
+    docsPath: "/plugins/sdk-migration/removed-surfaces#removed-session-and-transcript-file-apis",
+    surfaces: [
+      "openclaw/plugin-sdk/session-store-runtime loadSessionStore",
+      "openclaw/plugin-sdk/session-store-runtime updateSessionStore",
+      "openclaw/plugin-sdk/session-store-runtime resolveSessionFilePath",
+      "openclaw/plugin-sdk/session-store-runtime resolveSessionStoreEntry",
+      "openclaw/plugin-sdk/session-store-runtime LoadSessionStoreOptions",
+      "openclaw/plugin-sdk/session-store-runtime UpdateSessionStoreOptions",
+      "openclaw package root loadSessionStore",
+      "openclaw package root saveSessionStore",
+    ],
+    diagnostics: ["plugin compatibility registry and migration guide"],
+    tests: [
+      "src/plugin-sdk/session-store-runtime.test.ts",
+      "src/index.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "The September 30, 2026 approved cutoff in 1783c5fd6fc5b03d2b376ba7cbbab4461940207e retired the beta.5 session-store bridge, its option types, and package-root loadSessionStore/saveSessionStore aliases ahead of the former October 12 window. Plugins must use scoped row APIs and identity-backed transcript APIs; the session-store-runtime subpath and resolveStorePath remain available.",
+  },
+  {
+    code: "transcript-lock-sync-message-preparation",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-09-08",
+    deprecated: "2026-10-05",
+    warningStarts: "2026-10-05",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Use prepareMessageAfterIdempotencyCheckAsync in locked transcript appends. The released synchronous callback retains its result and transaction ordering until the next Plugin SDK major and explicit breaking-release approval. Keep current authority assertions in beforeFreshMessageCommit.",
+    docsPath: "/plugins/sdk-migration/how-to-migrate#await-locked-transcript-preparation",
+    surfaces: [
+      "SessionTranscriptWriteLockContext.appendMessage.prepareMessageAfterIdempotencyCheck",
+      "CodexSessionTranscriptMirrorWriteLockContext.appendMessageWithMessageSequence.prepareMessageAfterIdempotencyCheck",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/plugin-sdk/session-transcript-lock.native.test.ts",
+      "src/plugin-sdk/session-transcript-preparation-compat.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Locked transcript appends can await message preparation and settle accepted operations before releasing the writer. Released synchronous callbacks remain compatible; stored data and update behavior are unchanged.",
+  },
+  {
+    code: "session-upstream-links-sync-persistence",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-07-14",
+    deprecated: "2026-10-05",
+    warningStarts: "2026-10-05",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await upsertSessionUpstreamLinkAsync and deleteSessionUpstreamLinkAsync from session-catalog. Official harnesses await the native initializer's linkAsync method. Retain the synchronous signatures and completion timing shipped in v2026.9.8 until the next Plugin SDK major and explicit breaking-release approval.",
+    docsPath: "/plugins/sdk-migration/how-to-migrate#await-session-upstream-links",
+    surfaces: [
+      "openclaw/plugin-sdk/session-catalog.upsertSessionUpstreamLink",
+      "openclaw/plugin-sdk/session-catalog.deleteSessionUpstreamLink",
+      "openclaw/plugin-sdk/agent-harness-session-runtime.createNativeSessionInitializationOwner().prepare().link",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/plugin-sdk/session-catalog-upstream-compat.test.ts",
+      "src/plugin-sdk/agent-harness-session-compat.test.ts",
+      "src/sessions/session-upstream-links.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Bundled session adoption and native initialization await upstream-link writes through the shared-state worker. Released synchronous SDK methods remain compatible until the next Plugin SDK major; schemas, stored data, retention, and update behavior are unchanged.",
+  },
+  {
+    code: "session-observer-progress-sync-reads",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-09-08",
+    deprecated: "2026-10-04",
+    warningStarts: "2026-10-04",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await sessionObserver.handleEventAsync, getCompanionSnapshotAsync, and disposeAsync. Use reply_dispatch shouldSendToolSummariesAsync/shouldSendFullToolDetailsAsync and onVerboseProgressVisibilityAsync. Retain synchronous contracts until the next Plugin SDK major and explicit breaking-release approval.",
+    docsPath:
+      "/plugins/sdk-migration/how-to-migrate#await-session-observer-and-progress-visibility",
+    surfaces: [
+      "GatewayRequestHandlerOptions.context.sessionObserver.handleEvent",
+      "GatewayRequestHandlerOptions.context.sessionObserver.getCompanionSnapshot",
+      "GatewayRequestHandlerOptions.context.sessionObserver.dispose",
+      "PluginHookReplyDispatchEvent.shouldSendToolSummaries",
+      "PluginHookReplyDispatchEvent.shouldSendFullToolDetails",
+      "GetReplyOptions.onVerboseProgressVisibility",
+      "tryDispatchAcpReplyHook boolean-only event inputs",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/plugins/compat/registry.test.ts",
+      "src/plugin-sdk/reply-runtime.contract.test.ts",
+      "src/plugin-sdk/gateway-session-observer-compat.test.ts",
+      "src/plugin-sdk/acp-runtime.test.ts",
+      "src/gateway/session-observer.test.ts",
+    ],
+    releaseNote:
+      "Session observer lifecycle and progress visibility expose awaited worker-backed methods. Released synchronous observer methods, reply-hook booleans, and visibility callbacks remain compatible; schemas, stored data, retention, and update behavior are unchanged.",
+  },
+  {
+    code: "channel-inbound-sync-envelope-timestamps",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-10-05",
+    deprecated: "2026-10-05",
+    warningStarts: "2026-10-05",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await readSessionUpdatedAtAsync, createChannelInboundEnvelopeBuilderAsync, or resolveInboundSessionEnvelopeContextAsync at each message's formatting boundary. Resolve routes through resolveAgentRoute and use dispatchInboundDirectDm. Retain the synchronous signatures and callback timing shipped in 2026.9.8 until the next Plugin SDK major and explicit breaking-release approval.",
+    docsPath: "/plugins/sdk-migration/compatibility-policy#inbound-envelope-timestamps",
+    surfaces: [
+      "openclaw/plugin-sdk/session-store-runtime.readSessionUpdatedAt",
+      "api.runtime.channel.session.readSessionUpdatedAt",
+      "openclaw/plugin-sdk/channel-inbound.createChannelInboundEnvelopeBuilder",
+      "openclaw/plugin-sdk/channel-inbound.resolveChannelInboundRouteEnvelope",
+      "openclaw/plugin-sdk/channel-inbound.resolveInboundSessionEnvelopeContext",
+      "openclaw/plugin-sdk/channel-inbound.dispatchInboundDirectDmWithRuntime",
+      "openclaw/plugin-sdk/inbound-envelope.createInboundEnvelopeBuilder",
+      "openclaw/plugin-sdk/inbound-envelope.resolveInboundRouteEnvelopeBuilder",
+      "openclaw/plugin-sdk/inbound-envelope.resolveInboundRouteEnvelopeBuilderWithRuntime",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotations and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/plugin-sdk/shipped-channel-compat.test.ts",
+      "src/channels/inbound-event/envelope.test.ts",
+      "src/channels/inbound-event/envelope.worker.test.ts",
+      "src/plugin-sdk/direct-dm.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Bundled channels prepare activity timestamps through the existing session reader while released plugins retain their synchronous envelope callbacks. Stored data, schemas, retention, and update behavior are unchanged.",
+  },
   {
     code: "reply-run-start-unprepared-transcript",
     status: "deprecated",
@@ -48,6 +229,29 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     ],
     releaseNote:
       "Plugins can await full-fidelity SessionManager context reads and asynchronous consumers. Source validation follows consumption; the synchronous reader remains available until the next Plugin SDK major. Storage and update behavior are unchanged.",
+  },
+  {
+    code: "session-reset-freshness-sync-read",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-10-05",
+    deprecated: "2026-10-05",
+    warningStarts: "2026-10-05",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Await runtime.channel.session.resolveEntryResetFreshnessAsync. The released synchronous resolveEntryResetFreshness method retains its parameters and result until the next Plugin SDK major and explicit breaking-release approval.",
+    docsPath: "/plugins/sdk-migration#session-reset-freshness",
+    surfaces: ["api.runtime.channel.session.resolveEntryResetFreshness"],
+    diagnostics: [
+      "TypeScript @deprecated annotation and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/plugin-sdk/session-reset-freshness-compat.test.ts",
+      "src/config/sessions/entry-freshness.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Channel plugins can await session reset freshness through the transcript worker. Existing plugins retain the synchronous method and reset policy; stored data and update behavior are unchanged.",
   },
   {
     code: "agent-end-sync-side-effects",
@@ -204,6 +408,28 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
       "Provider replay hooks can await committed transcript metadata through additive V2 context types. Legacy hooks, context types, and the synchronous Gemini helper remain available for third-party migration through the next Plugin SDK major.",
   },
   {
+    code: "agent-execution-preparation-released-signature",
+    status: "active",
+    owner: "sdk",
+    introduced: "2026-10-06",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Keep the released prepare(source, signal?) Promise<void> contract of execution objects accepted by openOpenClawAgentSqliteWorkerStore. Host schema readmission uses an optional third argument; existing callers and two-argument implementations remain supported without migration or deprecation.",
+    docsPath:
+      "/plugins/sdk-migration/compatibility-policy#agent-execution-preparation-compatibility",
+    surfaces: [
+      "openclaw/plugin-sdk/sqlite-runtime.openOpenClawAgentSqliteWorkerStore publicationSource.execution.prepare",
+    ],
+    diagnostics: ["SDK type assertions and compatibility documentation; no runtime warnings"],
+    tests: [
+      "src/plugin-sdk/sqlite-runtime.preparation-compat.test.ts",
+      "src/state/openclaw-agent-execution.creation-witness.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Agent execution reuses completed native preparation while explicit host admission refreshes schema proof. Released execution preparation calls and implementations retain their Promise contract; schemas, stored data, and update behavior are unchanged.",
+  },
+  {
     code: "acp-session-metadata-released-signatures",
     status: "active",
     owner: "sdk",
@@ -225,5 +451,52 @@ export const SESSION_PERSISTENCE_COMPAT_RECORDS = [
     ],
     releaseNote:
       "Released ACP readers and manager injection callbacks keep their one-argument contracts while incognito actor composition remains internal and inactive.",
+  },
+  {
+    code: "memory-session-released-signatures",
+    status: "active",
+    owner: "sdk",
+    introduced: "2026-10-05",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Keep the released Memory entry, corpus, and reset-recall reader signatures. Internal actor sources are not plugin arguments; actor activation must preserve the existing Promise results and synchronous message observers. These APIs remain supported and are not deprecated.",
+    docsPath: "/plugins/sdk-migration/compatibility-policy#memory-session-binding-compatibility",
+    surfaces: [
+      "openclaw/plugin-sdk/memory-core-host-engine-sessions.buildSessionEntry",
+      "openclaw/plugin-sdk/memory-core-host-engine-sessions.listSessionTranscriptCorpusEntriesForAgent",
+      "openclaw/plugin-sdk/memory-core-host-engine-sessions.readSessionResetRecallCutoff",
+    ],
+    diagnostics: ["SDK type assertions and compatibility documentation; no runtime warnings"],
+    tests: [
+      "src/plugin-sdk/memory-core-host-engine-sessions.contract.test.ts",
+      "src/state/openclaw-agent-execution-incognito.memory.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Released Memory readers retain their argument and return contracts while incognito actor sources remain internal and inactive. Storage and update behavior are unchanged.",
+  },
+  {
+    code: "transcript-strict-sync-message-preparation",
+    status: "deprecated",
+    owner: "sdk",
+    introduced: "2026-09-08",
+    deprecated: "2026-10-05",
+    warningStarts: "2026-10-05",
+    removalGate: "next-plugin-sdk-major",
+    replacement:
+      "Use prepareMessageAfterIdempotencyCheckAsync with appendSessionTranscriptMessageByIdentityStrict. The released synchronous callback retains its result and transaction ordering until the next Plugin SDK major and explicit breaking-release approval. Keep live authority assertions in beforeFreshMessageCommit.",
+    docsPath: "/plugins/sdk-migration/how-to-migrate#await-strict-transcript-message-preparation",
+    surfaces: [
+      "appendSessionTranscriptMessageByIdentityStrict.prepareMessageAfterIdempotencyCheck",
+    ],
+    diagnostics: [
+      "TypeScript @deprecated annotation and migration documentation; no runtime warnings",
+    ],
+    tests: [
+      "src/plugin-sdk/session-transcript-runtime.worker-preparation.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+    releaseNote:
+      "Strict transcript preparation can await work outside the existing writer transaction. Released synchronous callbacks remain compatible; stored data and update behavior are unchanged.",
   },
 ] as const satisfies readonly PluginCompatRecord[];

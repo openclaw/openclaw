@@ -44,14 +44,16 @@ const reviewed = new Map([
     "src/infra/exec-approvals-sqlite.ts",
     {
       priority: 1,
-      evidence: "Approval-policy writes; write-coordination cutover owned separately",
+      evidence:
+        "Final synchronous pre-spawn/2026.9.8 SDK policy reads; native opaque approval guards retain MCP grant kernels until the next SDK major",
     },
   ],
   [
     "src/infra/exec-approvals-store.ts",
     {
       priority: 1,
-      evidence: "Approval-policy writes; write-coordination cutover owned separately",
+      evidence:
+        "Runtime policy mutations use the shared-state writer; native update adapter is Doctor-only",
     },
   ],
   [
@@ -172,6 +174,28 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/config/sessions/session-accessor.sqlite-maintenance-transaction.ts",
+    [
+      {
+        tier: "W",
+        operations: ["readSessionMaintenanceInWorker"],
+        evidence:
+          "Only session-transcript.worker.ts:276 and openclaw-agent-execution-maintenance.ts:61 call this read-only planner; the latter owner is constructed only in openclaw-agent-execution.worker.ts:372. Shared native maintenance transactions remain T1.",
+      },
+    ],
+  ],
+  [
+    "src/infra/gateway-boot-lifecycle.kernel.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["inspectGatewayCrashLoopBreakerInDatabase"],
+        evidence:
+          "Extracted from the existing gateway-boot-lifecycle.ts boot exception. Native inspectGatewayCrashLoopBreaker is only called by cli/gateway-cli/run.ts beginBoot before starting the Gateway; runtime inspection and recovery commit revalidation execute via gatewayBootReadOperations and gateway-boot-lifecycle.worker.ts in the existing state workers.",
+      },
+    ],
+  ],
+  [
     "src/state/openclaw-state-db.ts",
     [
       {
@@ -278,9 +302,12 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["createPlacementPendingFailureOps.failWorkspaceResultAndReleaseTurn"],
+        operations: [
+          "createPlacementPendingFailureOps.failWorkspaceResultAndReleaseTurn",
+          "createPlacementPendingFailureOps.failWorkspaceResultAndReleaseTurn.transition",
+        ],
         evidence:
-          "Only placementTurns.failResult in placement-turn-claims.worker.ts constructs the terminal-failure kernel; all runtime callers await its worker facade",
+          "Only placementTurns.failResult in placement-turn-claims.worker.ts constructs the terminal-failure kernel, including its transaction-local transition helper; all runtime callers await its worker facade",
       },
     ],
   ],
@@ -383,9 +410,11 @@ const reviewedOperations = new Map([
           "readPreparedReservations",
           "createPreparedEnvironmentStoreOps.ensurePreparedIntent",
           "createPreparedEnvironmentStoreOps.requestPreparedDestroy",
+          "hasPlacementReference",
+          "consumePreparedEnvironment",
         ],
         evidence:
-          "Factory only in store.kernel.ts:99 -> store.worker.ts:48; native consume and shared reader stay T1",
+          "Prepared mutations run in store.worker.ts; consumption and its placement-reference predicate run only in placement-lifecycle.worker.ts.",
       },
     ],
   ],
@@ -394,15 +423,18 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["readWorkerPlacementChangeSnapshotInDatabase"],
-        evidence: "Reporting snapshot only called by openclaw-state-read.worker.ts:644",
+        operations: [
+          "readWorkerPlacementChangeSnapshotInDatabase",
+          "readWorkerPlacementsInDatabase",
+        ],
+        evidence:
+          "Snapshots use openclaw-state-read.worker.ts; placement-lifecycle.worker.ts serves point lookups on the existing placement actor. Native reconciliation guards remain T1.",
       },
       {
         tier: "W",
         operations: ["updateTransition"],
-        binding: "activated",
         evidence:
-          "Only activation at placement-transitions.worker.ts:58 reaches this initializer; native placement-store.ts:325 passes provisioning, not active; the placement update stays T1",
+          "Transitions run only in placement-transitions.worker.ts and prepared binding in placement-lifecycle.worker.ts.",
       },
       {
         tier: "W",
@@ -505,6 +537,17 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/sessions/session-upstream-links.kernel.ts",
+    [
+      {
+        tier: "W",
+        operations: ["listWatchedSessionUpstreamLinksInDatabase"],
+        evidence:
+          "Only sessionUpstream.listWatched dispatches this read; mutation kernels retain v2026.9.8 synchronous SDK callers until the next Plugin SDK major.",
+      },
+    ],
+  ],
+  [
     "src/sessions/session-state-events.kernel.ts",
     [
       {
@@ -513,8 +556,7 @@ const reviewedOperations = new Map([
           "hasSessionStateWatchersInDatabase",
           "isSessionStateUpstreamCurrentInDatabase",
         ],
-        evidence:
-          "session-state-events.worker.ts and session-upstream-links.worker.ts; event/head SQL retains native adopted-event callers",
+        evidence: "session-state-events.worker.ts and session-upstream-links.worker.ts",
       },
       {
         tier: "W",
@@ -524,20 +566,19 @@ const reviewedOperations = new Map([
           "pruneSessionStateEventsInDatabase.stampPrunedWatermarks",
         ],
         evidence:
-          "Seed cursors run through sessionState.record/registerWatch; periodic and restart pruning dispatch sessionState.prune; adopted-event/native-binding producers remain native",
+          "Seed cursors run through sessionState.record/registerWatch; periodic and restart pruning dispatch sessionState.prune",
       },
       {
         tier: "W",
         operations: ["readCursor", "readMaterialCursors", "updateMaterialCursor"],
         evidence:
-          "Watch calls only in session-state-events.worker.ts:40,58,95; event cursor paths gated by NOTIFY_BY_KIND at kernel:367,386; native producers are non-notifying",
+          "Watch commands and event recording execute only in session-state-events.worker.ts and subagent-registry.store.worker.ts",
       },
       {
         tier: "W",
         operations: ["recordSessionStateEventInDatabase"],
-        binding: "registeredWatcherKeys",
         evidence:
-          "Only the registeredWatcherKeys initializer at kernel:354 is notifying-only; worker record at session-state-events.worker.ts:158 / subagent-registry.store.worker.ts:65; other event sites remain T1",
+          "All producers await sessionState.record; the only direct production kernel callers are session-state-events.worker.ts and subagent-registry.store.worker.ts",
       },
     ],
   ],
@@ -664,17 +705,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/agents/workspace-state-store.ts",
-    [
-      {
-        tier: "T2",
-        operations: ["retireWorkspaceRelocationAttestation"],
-        evidence:
-          "Only commands/doctor-skill-workshop-workspaces.ts:266 retires migration attestations",
-      },
-    ],
-  ],
-  [
     "src/agents/workspace-state-store.kernel.ts",
     [
       {
@@ -735,10 +765,11 @@ const reviewedOperations = new Map([
         operations: [
           "readUserProfileEmailBindings",
           "readUserProfileSnapshotSync",
-          "readUserProfileAuthorityInDatabase",
+          "readUserProfileAuthorityCommand",
+          "readCurrentUserProfileAliasesInDatabase",
         ],
         evidence:
-          "Only registered user-profile-writes.worker.ts:126,187 / user-profiles.worker.ts:110,111 and state-read.worker.ts:566,592,605 call these readers; projects.ts:432 native aliases and admission fallbacks stay T1",
+          "Registered profile writers and openclaw-state-read.worker.ts execute these readers; projects.list prepares exact aliases through user-profile-reads.ts. Released SDK identity/display fallbacks retain native reads.",
       },
     ],
   ],
@@ -838,17 +869,6 @@ const reviewedOperations = new Map([
         binding: "existing",
         evidence:
           "node-artifacts.ts:151 is shared, but entry-store.ts:372 runtime alias moves pass the same database and return at pending-inputs-repair.ts:130. The existing initializer is cross-database Doctor repair only, via canonical-repair.ts:514,521 and legacy-main-session-migration-operations.ts:343.",
-      },
-    ],
-  ],
-  [
-    "src/config/sessions/session-accessor.sqlite-status.ts",
-    [
-      {
-        tier: "T2",
-        operations: ["readSessionEntriesByStatus"],
-        evidence:
-          "gateway/server-startup-session-migration.ts:103 and startup main-session recovery via agents/main-session-recovery/main-session-restart-recovery-runtime.ts:270 -> :94 -> main-session-restart-recovery-store.ts:207. Runtime expected-target retry takes :200 and skips enumeration; other direct reader is session-entry-read.worker.ts:306.",
       },
     ],
   ],
@@ -970,6 +990,29 @@ const reviewedOperations = new Map([
         evidence:
           "Only placement-dispatch-store.worker.ts:69, placement-turn-claims.worker.ts:72 and placement-read-projection.ts:85 call the batch reader; projection itself is only called by state/openclaw-state-read.worker.ts:670. Native getPlacementMove uses another reader.",
       },
+      {
+        tier: "W",
+        operations: [
+          "deleteExactMove",
+          "requireExactAttachedEnvironment",
+          "createPlacementMoveOps.completeSourceToLocal",
+          "createPlacementMoveOps.beginPlacementMove",
+          "createPlacementMoveOps.recordPlacementMoveError",
+        ],
+        evidence:
+          "Only placement-lifecycle.worker.ts invokes move mutations; placement-store.ts retains only the native getPlacementMove getter for final effect guards.",
+      },
+    ],
+  ],
+  [
+    "src/gateway/worker-environments/placement-drain.ts",
+    [
+      {
+        tier: "W",
+        operations: ["drainWorkerSessionPlacement"],
+        evidence:
+          "Only placement turn/transition workers and the move mutation kernel in placement-lifecycle.worker.ts drain placements.",
+      },
     ],
   ],
   [
@@ -988,9 +1031,20 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["recordMemorySessionTombstonesInDatabase"],
+        operations: ["recordMemorySessionTombstonesInDatabase", "hasMemorySessionTombstone"],
         evidence:
-          "memory-entry-origins.worker.ts:76 -> memory-forget-kernel.ts:40 is the only production writer; manager-cpu-entrypoints.ts:38 registers the worker backend. The separate hasMemorySessionTombstone host reader stays T1.",
+          "memory-entry-origins.worker.ts -> memory-forget-kernel.ts owns tombstone writes; manager-publication.worker.ts owns every hasMemorySessionTombstone call, including the session.current predicate retained under workspace custody for shadow publication.",
+      },
+    ],
+  ],
+  [
+    "extensions/memory-core/src/memory/manager-source-state.ts",
+    [
+      {
+        tier: "W",
+        operations: ["loadMemorySourceFileState", "refreshMemorySessionSourceState"],
+        evidence:
+          "manager-publication.worker.ts source.state and manager-search.worker.ts source-state/recall-metadata are the only runtime callers. Source synchronization and inspection await MemoryIndexDatabase.readSourceState; the kernel remains directly callable only by isolated tests.",
       },
     ],
   ],
@@ -1037,11 +1091,12 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: [
           "removeRegistryRowInDatabase",
+          "insertSandboxRegistryRowInDatabase",
           "insertSandboxRegistryRowIfMissingInDatabase",
           "readRegistryRows",
         ],
         evidence:
-          "Removal is only registry-write.worker.ts:15 -> writeSandboxRegistryInDatabase (:88,101,112,127); import only registry-import.worker.ts:17. List helpers (:348,357,366) are called only at src/state/openclaw-state-read-registry.ts:75,86,90 through openclaw-state-read.worker.ts:679. Native shared insert/row readers stay T1.",
+          "Registry mutations, including reservation and removal-intent selection, run only through registry-write.worker.ts -> executeSandboxRegistryCommand; import only registry-import.worker.ts. List helpers run through openclaw-state-read-registry.ts in the read worker. The row reader remains T1 for released synchronous sandbox callbacks held across provider waits and deferred process launch; see worker-access.md.",
       },
     ],
   ],
@@ -1064,12 +1119,6 @@ const reviewedOperations = new Map([
         operations: ["readSubagentRunRow", "readSubagentSessionListRows"],
         evidence:
           "Row reads are only completion/subagent-completion-admission.worker.ts:94,155 or its mutation kernel at :246,274,293,412,523,562,576 (admission.worker.ts:188). Session-list loader at store.sqlite.ts:409 is called only by src/state/openclaw-state-read.worker.ts:196; other native registry readers remain T1.",
-      },
-      {
-        tier: "T2",
-        operations: ["hasSubagentSessionOwnerInDatabase"],
-        evidence:
-          "Only subagent-session-reconciliation.ts:255 invokes the ownership query, through server-startup-session-migration.ts:130. Callers are server-startup-plugins.ts:99 and server-agent-database-startup.ts:112; the latter is the one-time deferred boot-inspection continuation in src/state/agent-database-startup.ts:235,290,322, not request/timer maintenance.",
       },
     ],
   ],
@@ -1094,11 +1143,16 @@ const reviewedOperations = new Map([
       {
         tier: "W",
         operations: [
+          "getRegistryWorktreeInDatabase",
+          "findLiveRegistryWorktreeByOwnerInDatabase",
+          "findLiveRegistryWorktreeByPathInDatabase",
+          "listRegistryWorktreesInDatabase",
+          "readProvisionedData",
           "listLiveRegistryWorktreeIdsInDatabase",
           "getRegistryWorktreeProvisionedChunkInDatabase",
         ],
         evidence:
-          "Only worktrees/dispatch.worker.ts:31,39 calls these kernels; src/state/openclaw-state-worker-registry.ts:149 registers the handlers. Shared native worktree getters/list/provisioned-data readers remain T1.",
+          "Runtime reads and exact-row predicates use worktrees/dispatch.worker.ts and registry-run-end.worker.ts through the shared-state worker registry. Cleanup inventory uses openclaw-state-read-registry.ts in the read worker. Native fixture readers live only in registry.test-support.ts; Doctor migration lists keep their separate registry.ts queries.",
       },
     ],
   ],
@@ -1110,9 +1164,10 @@ const reviewedOperations = new Map([
         operations: [
           "listRegistryWorktreesForMigration",
           "rewriteRegistryWorktreePathsForMigration",
+          "runRegistryMigration",
         ],
         evidence:
-          "Only migration discovery src/infra/state-migrations.doctor-discovery.ts:78 and Doctor repair src/config/sessions/worktree-workspace-migration.ts:116 call the list; the latter requires doctor-fix mode and is invoked at src/commands/doctor-session-worktree-workspace.ts:30. Rewrite is called only by state-migrations.doctor.ts:1362, reached through Doctor/startup migration owner at :2488,2509,2717.",
+          "Only migration discovery src/infra/state-migrations.doctor-discovery.ts:84 and Doctor repair src/config/sessions/worktree-workspace-migration.ts:116 call the list; the latter requires doctor-fix mode. The private runRegistryMigration transaction is called only by discardLegacyRegistryWorktrees and rewriteRegistryWorktreePathsForMigration; their sole production caller is the managed-worktrees step at src/infra/state-migrations.doctor.ts:1256,1258 (Doctor/startup). It acquires the existing schema-maintenance owner before opening the transaction database.",
       },
       {
         tier: "T3",
@@ -1127,9 +1182,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["readWorktreeRunLeaseStateInDatabase"],
+        operations: ["readWorktreeRunLeaseStateInDatabase", "assertRegistryMutationCustody"],
         evidence:
-          "Only src/state/openclaw-state-read-registry.ts:96 calls this reader, dispatched in openclaw-state-read.worker.ts:679. Host worktrees/registry-read.ts:71 uses the existing read worker; live lease/custody helpers retain their native tiers.",
+          "Run-lease inventory is dispatched by openclaw-state-read-registry.ts in the read worker. Registry mutation custody is called only by registry-run-end.worker.ts. The actual lease read/reap primitives remain synchronous exemptions.",
       },
     ],
   ],
@@ -1188,9 +1243,9 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["readCuratedCandidateBatch"],
+        operations: ["readCuratedCandidateBatch", "readMemoryRecallMetadata"],
         evidence:
-          "extensions/memory-core/src/memory/manager-search.worker.ts:160,161 → curated readers → memory-recall-metadata.ts:162; SDK barrels only re-export.",
+          "extensions/memory-core/src/memory/manager-search.worker.ts owns curated and recall-metadata reads, including fused session-only keyword requests. The private-local-only memory-core-host-engine-storage facade only re-exports kernels; no host runtime reader remains.",
       },
     ],
   ],
@@ -1217,6 +1272,17 @@ const reviewedOperations = new Map([
         operations: ["selectAcpSessionRows"],
         evidence:
           "src/acp/runtime/session-meta-list.ts:21 submits acpSessions.list → src/state/openclaw-state-read.worker.ts:264.",
+      },
+    ],
+  ],
+  [
+    "src/acp/runtime/session-meta.ts",
+    [
+      {
+        tier: "T2",
+        operations: ["writeAcpSessionMetaForMigration"],
+        evidence:
+          "The native writer is retained only by src/infra/state-migrations.acp-session-metadata.ts and test fixtures. Gateway reset rebinding uses session-meta-reset.ts -> commitAcpSessionMutation in the shared-state worker; synchronous SDK readers retain their separate native classification.",
       },
     ],
   ],
@@ -1414,21 +1480,37 @@ const reviewedOperations = new Map([
           "expireStagingAndLoadDeliveryQueueEntriesInDatabase",
           "expireStagingAndLoadDeliveryQueueEntriesInDatabase.read",
           "countFailedDeliveryQueueEntriesInDatabase",
+          "inspectDeliveryQueueReceiptInDatabase",
         ],
         evidence:
           "Expiry snapshot: src/infra/delivery-queue.worker.ts:487 → outbound/delivery-queue-media-staging.kernel.ts:74. Failed count: delivery-queue.worker.ts:455.",
       },
       {
         tier: "T2",
-        operations: ["loadDeliveryQueueEntriesInDatabase", "deleteDeliveryQueueEntryInDatabase"],
+        operations: [
+          "loadDeliveryQueueEntriesInDatabase",
+          "deleteDeliveryQueueEntryInDatabase",
+          "countPendingDeliveryQueueEntriesInDatabase",
+          "selectDeliveryQueueEntryOwners.readExact.readChunk",
+        ],
         evidence:
-          "Native loads/deletes are Doctor migration: src/commands/doctor-outbound-delivery.ts:47,48,52,137,162 and src/infra/outbound/delivery-queue-migration.ts:289,349,435,506,528,551. Remaining calls use queue workers.",
+          "Native loads/deletes/count and receipt ownership serve Doctor migration via commands/doctor-outbound-delivery.ts and infra/outbound/delivery-queue-migration.ts. Post-ready recovery count and cron receipt selection use delivery-queue.worker.ts; test-only status inspection lives in test support. Initial post-ready recovery is not boot admission.",
       },
     ],
   ],
   [
     "src/infra/device-identity-store.ts",
     [
+      {
+        tier: "T2",
+        operations: [
+          "readStoredIdentityRowFromDatabase",
+          "isEmptyBootstrapIdentityTableMiss",
+          "insertStoredDeviceIdentityIfAbsent",
+        ],
+        evidence:
+          "Live callers use device-identity-async.ts through openclaw-state.worker.ts. Native callers are startup-local-cli-pairing.ts (server-runtime-state-prepare boot), node-host/runner.ts and startup-state-readiness.ts (node boot/connect CLI), config-preflight-snapshot.ts, doctor-device-pairing.ts, heartbeat-schedule.ts (Doctor cadence migration only), and state-migrations.device-identity*.ts (Doctor).",
+      },
       {
         tier: "T2",
         operations: ["repairInvalidStoredDeviceIdentity"],
@@ -1441,10 +1523,10 @@ const reviewedOperations = new Map([
     "src/infra/exec-approvals-sqlite.ts",
     [
       {
-        tier: "T3",
+        tier: "W",
         operations: ["deleteExecApprovalsConfigRow"],
         evidence:
-          "src/cli/exec-policy-cli.ts:405 → src/infra/exec-approvals-store.ts:431 restores an absent row after CLI config-write failure.",
+          "exec-approvals-mutation.worker.ts restores an absent policy row through the shared-state writer.",
       },
     ],
   ],
@@ -1452,10 +1534,10 @@ const reviewedOperations = new Map([
     "src/infra/exec-approvals-store.ts",
     [
       {
-        tier: "T3",
-        operations: ["restoreExecApprovalsSnapshotLocked"],
+        tier: "T2",
+        operations: ["updateExecApprovalsForMaintenance"],
         evidence:
-          "Only src/cli/exec-policy-cli.ts:405 restores the snapshot after CLI config-write failure.",
+          "Only exec-approvals-generated-migration.ts uses the synchronous update adapter in production; runtime edits, removal and restoration dispatch to the writer.",
       },
     ],
   ],
@@ -1563,15 +1645,22 @@ const reviewedOperations = new Map([
     [
       {
         tier: "W",
-        operations: ["createSqliteAuditRecordKernel.deleteRecord"],
+        operations: [
+          "createSqliteAuditRecordKernel.deleteRecord",
+          "createSqliteAuditRecordKernel.compareAndSet",
+        ],
         evidence:
-          "src/config/config-journal-snapshot.worker.ts:11 → config-journal-snapshot.kernel.ts:38,43. Native greeting callbacks (src/system-agent/greeting.ts:424,554) never return delete, retaining their SQL T1.",
+          "src/config/config-journal-snapshot.worker.ts → config-journal-snapshot.kernel.ts; greeting comparisons use diagnostic.compareAndSet in src/infra/sqlite-audit-record.worker.ts. No native comparison adapter remains.",
       },
       {
         tier: "T2",
-        operations: ["createSqliteAuditRecordKernel.entries"],
+        operations: [
+          "createSqliteAuditRecordKernel.entries",
+          "createSqliteAuditRecordKernel.upsertPreparedRecord",
+          "createSqliteAuditRecordKernel.latest",
+        ],
         evidence:
-          "Migration readers src/infra/state-migrations.audit-checkpoints.ts:53,146, audit-recovery.ts:577, audit-logs.ts:416,436; CLI backup via backup-create.ts:350,360 → audit-backup.ts:113,141; worker diagnostics openclaw-state-read.worker.ts:401.",
+          "Native entries/upsert serve state-migrations.audit-checkpoints.ts, audit-recovery.ts, audit-logs.ts and CLI audit-backup.ts. Native latest serves readRecentConfigAuditRecords in Doctor config flow and update-immutable-protection.ts. Transcript/greeting reads and CAS, plus config-journal snapshots, use the existing workers. Native config observation still reaches register/count/next/prune, which remain T1.",
       },
     ],
   ],
@@ -1626,9 +1715,14 @@ const reviewedOperations = new Map([
     [
       {
         tier: "T2",
-        operations: ["updateChannelPairingStateSnapshot"],
+        operations: [
+          "updateChannelPairingStateSnapshot",
+          "readChannelPairingRequests",
+          "readChannelPairingSnapshotFromDatabase",
+          "writeChannelPairingStateToDatabase",
+        ],
         evidence:
-          "Only src/infra/state-migrations.channel-pairing.ts:314,348 invokes the snapshot transaction; registered by state-migrations.doctor.ts:1527.",
+          "Runtime mutations execute in pairing-store.worker.ts through the shared-state writer registry. Native snapshots remain only in state-migrations.channel-pairing.ts for Doctor. The released synchronous SDK reader calls readChannelAllowEntries only; its shared allowlist query remains T1.",
       },
     ],
   ],
@@ -1640,23 +1734,6 @@ const reviewedOperations = new Map([
         operations: ["writePersonalGitHubSecret"],
         evidence:
           "Counted expression is null DELETE only: src/state/user-github-connections.ts:260 → user-profiles-merge.ts:58 → user-profile-writes.worker.ts:325,375,432. Other value callers pass JSON strings.",
-      },
-    ],
-  ],
-  [
-    "src/skills/workshop/store-sqlite-record.ts",
-    [
-      {
-        tier: "T3",
-        operations: ["readStoredProposalInDatabase", "updateProposal"],
-        evidence:
-          "Doctor native read/update src/commands/doctor-skill-workshop-sqlite.ts:333,349; other callers use src/skills/workshop/store.worker.ts:68,129,149,167,182,188.",
-      },
-      {
-        tier: "W",
-        operations: ["insertProposal"],
-        evidence:
-          "Only src/skills/workshop/store-proposal.kernel.ts:73,168 inserts; sole executors store.worker.ts:139,157.",
       },
     ],
   ],
@@ -1797,11 +1874,12 @@ const reviewedOperations = new Map([
           "resolveUserProfileGitHubAttributionInDatabase",
           "prepareUserProfileGitHubMerge",
           "readGitHubIdentityBinding",
+          "selectGitHubProfileAlias",
           "applyVerifiedGitHubIdentity",
           "applyVerifiedGitHubIdentity.writeIdentity",
         ],
         evidence:
-          "Read dispatcher src/state/openclaw-state-read.worker.ts:577; mutations user-profile-writes.worker.ts:424,432 and merges :325,375. ensureEmail path user-profiles.worker.ts:61; private writeIdentity only from applyVerifiedGitHubIdentity.",
+          "Read dispatcher src/state/openclaw-state-read.worker.ts:577; mutations user-profile-writes.worker.ts:424,432 and merges :325,375. ensureEmail path user-profiles.worker.ts:61; private writeIdentity only from applyVerifiedGitHubIdentity; private selectGitHubProfileAlias only from readGitHubIdentityBinding and the read-worker cached-binding command (openclaw-state-read.worker.ts:520).",
       },
     ],
   ],
@@ -1889,6 +1967,7 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/gateway/worker-environments/local-workspace-store.kernel.ts", // Projection read/write workers and worktree retirement worker only.
   "src/skills/library/import.kernel.ts", // Upload commands execute only in the shared-state writer.
   "src/skills/library/service.kernel.ts", // Library catalog and revision reads use the shared-state read registry.
   "src/config/sessions/conversation-delivery-store.kernel.ts", // Agent execution registry writes and session transcript worker reads only.
@@ -1939,8 +2018,6 @@ const workerModules = new Set([
   "src/cron/store/run-receipt-delivery.ts", // Cron admission and recovery workers own delivery-attempt SQL.
   "src/cron/store/run-receipt-trigger-state.ts", // Cron mutation, admission and recovery workers own trigger retirement SQL.
 
-  "src/fleet/registry.kernel.ts", // Fleet write dispatcher and shared-state registry read worker only.
-
   "src/gateway/github-publication-shared-read.kernel.ts", // Shared publication queries are called only by the state read worker.
   "src/gateway/managed-image-record-store.kernel.ts", // Shared-state worker dispatch only; host exports are row codecs.
   "src/gateway/operator-approval-store.receipts.ts", // Audit read worker alone reaches receipt readers through the approval-store barrel.
@@ -1986,18 +2063,9 @@ const workerModules = new Set([
   "src/secrets/store/secret-store-expiry.kernel.ts", // Expiry SQL uses shared-state worker dispatch; host captures cutoffs only.
   "src/secrets/store/secret-store-metadata.kernel.ts", // Metadata, exec environment, and exact values only run through stateReadRegistry in the shared-state reader.
 
-  "src/sessions/session-upstream-links.kernel.ts", // openclaw-state.worker.ts dispatches sessionUpstream.listWatched; host imports only the codec.
-
   "src/skills/lifecycle/upload-store-commit.ts", // Skill-upload worker commit command only.
   "src/skills/lifecycle/upload-store.kernel.ts", // Skill-upload worker dispatcher only.
   "src/skills/lifecycle/upload-store.sqlite.ts", // Skill-upload worker kernels; host imports pure options only.
-
-  "src/skills/workshop/collection-review.kernel.ts", // Skill-workshop worker collection-review reads only.
-  "src/skills/workshop/curator.kernel.ts", // Skill-workshop worker curator and usage commands only.
-  "src/skills/workshop/store-proposal.kernel.ts", // Skill-workshop worker proposal commands only.
-  "src/skills/workshop/store-sqlite-event.ts", // Skill-workshop and shared-state Doctor worker commands only.
-  "src/skills/workshop/store-sqlite-rollback.ts", // Skill-workshop worker rollback commands only.
-  "src/skills/workshop/store-sqlite-transition.ts", // Skill-workshop worker transition commands only.
 
   "src/state/backup-run-records.kernel.ts", // Backup record writes are called only by the shared-state worker runtime.
   "src/state/github-personal-publication-lifecycle.ts", // Receipt SQL runs in shared-state worker dispatch; host helper enqueues commands.
@@ -2289,7 +2357,7 @@ function render(rows) {
     "",
     "| Priority | Entry point / owner | Status to verify before a lane |",
     "| --- | --- | --- |",
-    "| 1 | `ensureProfileForEmail`; `updateExecApprovals` | Separate write-coordination lane; exclude from this cutover. The 47% is shared, not a measurement of either method alone. |",
+    "| 1 | `ensureProfileForEmail`; `updateExecApprovals` | Exec policy mutations use the shared-state writer; final SDK authority reads and opaque approval-commit kernels retain their native contract. Profile creation is a separate owner. The 47% is shared, not a measurement of either method alone. |",
     "| 2 | `sessions.list` → `listProjectedSessions` → resident session row projection | Warm requests already reuse resident rows with no host Kysely reads. Hydration, dirty/archived rows, and membership reads remain migration debt; preserve identity-keyed reuse and projection revisions. |",
     "| 3 | `chat.history` → history worker | Ordinary durable pages already use the worker. This cutover moves raw cursor delta reads and JSON parsing through the same owner; display/profile projection, byte budgets, and fresh sharing checks stay on the host. |",
     "| 4 | Transcript search → `session-transcript-search.ts` | The async facade moves durable FTS reads through the existing worker lifecycle for the runtime callers: `sessions-read.ts`, `sessions-search-projected.ts`, and `embedded-gateway-stub.ts`. Callers recheck current scope and authorization after awaiting. |",

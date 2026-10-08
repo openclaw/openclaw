@@ -26,7 +26,7 @@ import { normalizeCatalogRouteBaseUrl } from "./model-compat-catalog.js";
 import { createConfiguredProviderCatalogModelIdNormalizer } from "./model-ref-shared.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
-import type { AuthStorageData, ModelRegistry } from "./sessions/index.js";
+import type { AuthStorageData } from "./sessions/index.js";
 
 const log = createSubsystemLogger("model-catalog");
 
@@ -41,7 +41,7 @@ export type BuildPreparedModelCatalogParams = {
   agentDir: string;
   authCredentials: Readonly<AuthStorageData>;
   config: OpenClawConfig;
-  modelRegistry: ModelRegistry;
+  models: ReadonlyArray<Parameters<typeof modelCatalogRowToEntry>[0]>;
   readOnly?: boolean;
   includeProviderPluginAugmentation?: boolean;
   providerIds?: readonly string[];
@@ -82,11 +82,16 @@ function mergeCatalogEntries(
   entries: ModelCatalogEntry[],
   options?: {
     catalogRoutes?: ModelCatalogRouteVariantCollector;
+    routeVariantIndex?: Map<string, number>;
     preserveBaseCompat?: boolean;
   },
 ): void {
-  const keyOf = createModelCatalogIdentityKeyResolver();
-  const indexByKey = new Map(models.map((entry, index) => [keyOf(entry), index]));
+  const identityKeyOf = createModelCatalogIdentityKeyResolver();
+  const keyOf = options?.routeVariantIndex
+    ? (entry: ModelCatalogEntry) => catalogRouteVariantKey(entry, identityKeyOf(entry))
+    : identityKeyOf;
+  const indexByKey =
+    options?.routeVariantIndex ?? new Map(models.map((entry, index) => [keyOf(entry), index]));
   for (const entry of entries) {
     const key = keyOf(entry);
     const existingIndex = indexByKey.get(key);
@@ -119,28 +124,6 @@ type ModelCatalogRouteVariantCollector = {
   entries: ModelCatalogEntry[];
   indexByKey: Map<string, number>;
 };
-
-function mergeCatalogRouteVariants(
-  collector: ModelCatalogRouteVariantCollector,
-  entries: readonly ModelCatalogEntry[],
-  options?: { preserveBaseCompat?: boolean },
-): void {
-  const keyOf = createModelCatalogIdentityKeyResolver();
-  for (const entry of entries) {
-    const key = catalogRouteVariantKey(entry, keyOf(entry));
-    const existingIndex = collector.indexByKey.get(key);
-    if (existingIndex === undefined) {
-      collector.entries.push(entry);
-      collector.indexByKey.set(key, collector.entries.length - 1);
-      continue;
-    }
-    const existingEntry = collector.entries[existingIndex];
-    if (existingEntry === undefined) {
-      continue;
-    }
-    collector.entries[existingIndex] = overlayCatalogMetadata(existingEntry, entry, options);
-  }
-}
 
 function createModelCatalogSnapshot(
   entries: ModelCatalogEntry[],
@@ -339,7 +322,7 @@ export async function buildPreparedModelCatalogSnapshot(
     );
     const { buildShouldSuppressBuiltInModelCore } = await loadModelSuppression();
     logStage("catalog-deps-ready");
-    const entries = params.modelRegistry.getAll();
+    const entries = params.models;
     const manifestPlan = planEffectiveModelCatalogRows({
       registry: {
         plugins: resolveEligibleManifestCatalogPlugins(manifestMetadataSnapshot, cfg),
@@ -388,7 +371,9 @@ export async function buildPreparedModelCatalogSnapshot(
       appendUnknown: false,
     });
     models.splice(0, models.length, ...orderedRegistryModels);
-    mergeCatalogRouteVariants(routeVariants, orderedRegistryModels);
+    mergeCatalogEntries(routeVariants.entries, orderedRegistryModels, {
+      routeVariantIndex: routeVariants.indexByKey,
+    });
     const dynamicManifestKeys = new Set(
       manifestPlan.entries.flatMap((entry) =>
         entry.discovery === "runtime" || entry.discovery === "refreshable"
@@ -414,7 +399,9 @@ export async function buildPreparedModelCatalogSnapshot(
           !dynamicManifestKeys.has(buildModelCatalogMergeKey(entry.provider, entry.id))) &&
         (!observedProviders.has(entry.provider) || discoveredKeys.has(manifestKeyOf(entry))),
     );
-    mergeCatalogRouteVariants(routeVariants, manifestModels);
+    mergeCatalogEntries(routeVariants.entries, manifestModels, {
+      routeVariantIndex: routeVariants.indexByKey,
+    });
     mergeCatalogEntries(models, manifestModels);
     logStage("manifest-models-merged", `entries=${models.length}`);
     const configuredCatalogParams = {
@@ -502,7 +489,9 @@ export async function buildPreparedModelCatalogSnapshot(
           ...declaredManifestModels,
           ...models,
         ]);
-        mergeCatalogRouteVariants(routeVariants, orderedSupplemental);
+        mergeCatalogEntries(routeVariants.entries, orderedSupplemental, {
+          routeVariantIndex: routeVariants.indexByKey,
+        });
         mergeCatalogEntries(models, orderedSupplemental);
       }
     }
@@ -524,7 +513,10 @@ export async function buildPreparedModelCatalogSnapshot(
         catalogRoutes: routeVariants,
         preserveBaseCompat: true,
       });
-      mergeCatalogRouteVariants(routeVariants, configuredOverrides, { preserveBaseCompat: true });
+      mergeCatalogEntries(routeVariants.entries, configuredOverrides, {
+        routeVariantIndex: routeVariants.indexByKey,
+        preserveBaseCompat: true,
+      });
     }
     logStage("configured-models-finalized", `entries=${models.length}`);
 

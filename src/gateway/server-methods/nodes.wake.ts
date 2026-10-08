@@ -32,18 +32,9 @@ async function clearStaleApnsRegistrationIfNeeded(
   nodeId: string,
   params: { status: number; reason?: string },
 ) {
-  if (
-    !shouldClearStoredApnsRegistration({
-      registration,
-      result: params,
-    })
-  ) {
-    return;
+  if (shouldClearStoredApnsRegistration({ registration, result: params })) {
+    await clearApnsRegistrationIfCurrent({ nodeId, registration });
   }
-  await clearApnsRegistrationIfCurrent({
-    nodeId,
-    registration,
-  });
 }
 
 export async function maybeWakeNodeWithApns(

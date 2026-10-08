@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn, setTimeout as sleep } from "node:timers/promises";
+import { raceWithTimeout } from "../../packages/retry/src/index.js";
 import { loadGetReplyFromConfigRuntime } from "../auto-reply/reply/dispatch-from-config.runtime-loaders.js";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { CliDeps } from "../cli/deps.types.js";
@@ -9,7 +10,6 @@ import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
 } from "../infra/delivery-queue-state-context.js";
-import { isTruthyEnvValue } from "../infra/env.js";
 import type { GatewayActiveWorkInspectors } from "../infra/gateway-active-work.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { hasRestartSentinel } from "../infra/restart-sentinel.js";
@@ -34,7 +34,10 @@ import type { GatewayControlUiRootLifecycle } from "./server-control-ui-root.js"
 import type { GatewayRecoveryRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayClient, GatewayContextResolver } from "./server-methods/shared-types.js";
 import type { GatewayPluginRuntimeClaim } from "./server-plugin-runtime-generation.js";
-import type { GatewaySidecarStartupMode } from "./server-sidecar-startup-mode.js";
+import {
+  isChannelStartupSuppressedByEnvironment,
+  type GatewaySidecarStartupMode,
+} from "./server-sidecar-startup-mode.js";
 import { scheduleGatewayPrewarm } from "./server-startup-handler-prewarm.js";
 import type { logGatewayStartup } from "./server-startup-log.js";
 import {
@@ -187,9 +190,7 @@ export async function startGatewaySidecars(params: {
     }
   });
 
-  const skipChannels =
-    isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
-    isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS);
+  const skipChannels = isChannelStartupSuppressedByEnvironment();
   const getModelRuntimeConfig = params.getModelRuntimeConfig ?? (() => params.cfg);
   // Agent RPC remains available when transports are disabled. Publish configured/static facts before
   // accepting work; live provider catalogs stay advisory and never enter the Gateway lifecycle.
@@ -268,24 +269,18 @@ export async function startGatewaySidecars(params: {
         if (deadlineAtMs === undefined) {
           return stopPromise;
         }
-        return new Promise<Awaited<ReturnType<PluginServicesHandle["stop"]>>>((resolve, reject) => {
-          const timer = setTimeout(
-            () => {
-              reject(
-                new AggregateError(
-                  [new Error("Gateway plugin service startup did not settle before replacement")],
-                  "Gateway plugin service replacement cleanup failed",
-                ),
-              );
-            },
-            Math.max(0, deadlineAtMs - Date.now()),
-          );
-          void stopPromise
-            .finally(() => clearTimeout(timer))
-            .then(resolve, (error: unknown) => {
-              reject(error instanceof Error ? error : new Error(String(error)));
-            });
-        });
+        return raceWithTimeout(
+          stopPromise.catch((error: unknown) => {
+            throw error instanceof Error ? error : new Error(String(error));
+          }),
+          Math.max(0, deadlineAtMs - Date.now()),
+          () => {
+            throw new AggregateError(
+              [new Error("Gateway plugin service startup did not settle before replacement")],
+              "Gateway plugin service replacement cleanup failed",
+            );
+          },
+        );
       },
     };
     // Startup may outlive a replacement deadline. Final shutdown retains this
@@ -418,13 +413,10 @@ export async function startGatewaySidecars(params: {
           return;
         }
         if (!(await hasRestartSentinel(restartSentinelContext.workerContext.environment))) {
-          const { detectLegacyRestartSentinel } =
+          const { assertNoRetiredRestartSentinelFiles } =
             await import("../infra/state-migrations.restart-sentinel.js");
-          if (
-            !detectLegacyRestartSentinel({ stateDir: restartSentinelContext.stateDir }).hasLegacy
-          ) {
-            return;
-          }
+          assertNoRetiredRestartSentinelFiles(restartSentinelContext.stateDir);
+          return;
         }
         if (isStopped()) {
           return;
@@ -598,6 +590,7 @@ export async function startGatewayPostAttachRuntime(
     startChannels: () => Promise<void>;
     refreshChatMetadata?: () => Promise<void>;
     recoveryRuntime: GatewayRecoveryRuntime;
+    isRestartRecoverySuppressed: () => boolean;
     resolveGatewayContext: GatewayContextResolver;
     logHooks: {
       info: (msg: string) => void;
@@ -805,12 +798,10 @@ export async function startGatewayPostAttachRuntime(
           const prepared = await Promise.allSettled([
             candidateCanary
               ? Promise.resolve()
-              : markGatewayStartupMainSessionOrphans({
-                  cfg: params.gatewayPluginConfigAtStart,
-                  startupCheckedStorePaths: mainSessionRecoveryStartupCheckedStorePaths,
-                  startupTrace: params.startupTrace,
-                  log: params.log,
-                }),
+              : markGatewayStartupMainSessionOrphans(
+                  params,
+                  mainSessionRecoveryStartupCheckedStorePaths,
+                ),
             loadStartupPluginsIfNeeded(),
           ]);
           const failed = prepared.find((outcome) => outcome.status === "rejected");

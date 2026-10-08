@@ -82,14 +82,10 @@ function runQueueDragAutoScroll(): void {
 
 function updateQueueDragAutoScroll(container: HTMLElement, pointerY: number): void {
   const bounds = container.getBoundingClientRect();
-  const topProximity = Math.min(
-    QUEUE_DRAG_SCROLL_EDGE,
-    Math.max(0, QUEUE_DRAG_SCROLL_EDGE - (pointerY - bounds.top)),
-  );
-  const bottomProximity = Math.min(
-    QUEUE_DRAG_SCROLL_EDGE,
-    Math.max(0, QUEUE_DRAG_SCROLL_EDGE - (bounds.bottom - pointerY)),
-  );
+  const edgeProximity = (distance: number) =>
+    Math.min(QUEUE_DRAG_SCROLL_EDGE, Math.max(0, QUEUE_DRAG_SCROLL_EDGE - distance));
+  const topProximity = edgeProximity(pointerY - bounds.top);
+  const bottomProximity = edgeProximity(bounds.bottom - pointerY);
   const proximity = bottomProximity > 0 ? bottomProximity : -topProximity;
   const velocity = (proximity / QUEUE_DRAG_SCROLL_EDGE) * QUEUE_DRAG_SCROLL_MAX_SPEED;
   if (velocity === 0) {
@@ -600,7 +596,7 @@ function renderChatQueueItem(
                   <button
                     class="chat-queue__remove"
                     type="button"
-                    ?disabled=${editing || (item.serverQueued && !props.canRemoveServerQueued)}
+                    ?disabled=${item.serverQueued && !props.canRemoveServerQueued}
                     aria-label=${t("chat.queue.removeQueuedMessage")}
                     @click=${(event: MouseEvent) => {
                       // Chromium retargets click 2 after row removal; detail still owns the gesture.

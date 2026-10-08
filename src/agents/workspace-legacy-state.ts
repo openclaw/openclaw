@@ -157,7 +157,7 @@ function workspaceMigrationError(
           `Legacy workspace setup state requires migration at ${blockedPaths.join(", ")}`,
           "Stop the Gateway, then restore the retained setup file or claim from a verified backup.",
         )
-      : `Legacy workspace setup state requires migration for ${blockedPaths.join(", ")}; run ${formatCliCommand("openclaw doctor --fix", env)}.`,
+      : `Run ${formatCliCommand("openclaw doctor --fix", env)}. Legacy workspace setup state requires migration for ${blockedPaths.join(", ")}.`,
   );
 }
 
