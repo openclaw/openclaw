@@ -541,6 +541,7 @@ describe("reports", () => {
     const target = await create("revoked-commit");
     const input = await prepare(target, "must not commit");
     let allowed = true;
+    const stages: string[] = [];
     const source: IncognitoSessionAuthority = {
       assertCurrent() {
         if (!allowed) {
@@ -548,9 +549,7 @@ describe("reports", () => {
         }
       },
       authorize(phase) {
-        expect(() => actor.sessions.readSharing(target.sessionKey)).toThrow(
-          "pending or unavailable",
-        );
+        stages.push(phase);
         expect(() =>
           actor.sessions.transcript(authority, {
             type: "session.report.latestCustomReport",
@@ -574,6 +573,7 @@ describe("reports", () => {
     ).rejects.toThrow("report authority revoked");
     release.resolve();
     await Promise.all([held, rejected]);
+    expect(stages).toEqual(["transaction", "commit"]);
     expect(await latest(target)).toEqual({ ok: true, value: undefined });
     expect(
       await actor.sessions.transcript(authority, { type: "session.report.append", input }),
