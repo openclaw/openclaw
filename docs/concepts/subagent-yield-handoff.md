@@ -35,6 +35,13 @@ The implementation owners are `subagent-registry-requester-yield.ts`,
 `agent-task-tracking.ts`. `adoptPausedSubagentRunForFollowUp` uses the existing
 registry replacement operation; it does not create a second delegated task.
 
+Before admitting another turn in a yielded requester, the recovery owner transfers
+its ended execution's fence to the current durable child batch. The batch is
+revalidated before the write commits; absent or adopted batches, unrelated run
+fences, and outstanding recovery or delivery work remain fenced. The successor
+then receives its own execution fence, so completing it leaves later user input
+admissible without discarding pending child results.
+
 An explicit `waitFor: "message"` counts as continuation evidence after the
 registry accepts the wait. The attempt carries that fact into terminal reply
 presentation, so a registered message wait does not produce a missing-continuation
