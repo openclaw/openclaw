@@ -5,7 +5,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ExecMode } from "../infra/exec-approvals.js";
 import type { MemoryAudience } from "../plugins/memory-provider-types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
-import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import type { AgentRunClientContext, AgentRunMessageContext } from "./command/shared-types.js";
 import type { PreparedPairedComputerUse } from "./computer-use-node-capabilities.js";
@@ -19,6 +18,7 @@ import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import type { CronToolOptions } from "./tools/cron-tool.types.js";
 import type { QuestionPromptDelivery } from "./tools/question-prompt-send.js";
 import type { SessionsYieldCallback } from "./tools/sessions-yield-tool.js";
+import type { SkillWorkshopRunOptions } from "./tools/skill-workshop-tool-factory.js";
 
 /** Options shared by the coding-tool factory and its OpenClaw tool surface. */
 export type OpenClawSharedToolsOptions = {
@@ -70,7 +70,7 @@ export type OpenClawSharedToolsOptions = {
    * boundary should opt out explicitly.
    */
   wrapBeforeToolCallHook?: boolean;
-  /** Internal review-run restrictions and proposal provenance. */
+  /** Run-owned Workshop authority: review guard and personal library access. */
   skillWorkshop?: SkillWorkshopRunOptions;
   webFetchHostnameAllowlistRef?: { value?: string[] };
   webSearchEnabled?: boolean;

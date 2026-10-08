@@ -87,7 +87,7 @@ describe("admitted SQLite schema facts", () => {
     const schemaMutation = vi.fn();
     registerSqliteSchemaMutationListener(database, schemaMutation);
     database.exec(sql);
-    expect(schemaMutation).toHaveBeenCalled();
+    expect(schemaMutation).toHaveBeenCalledWith(undefined);
   });
 
   it("observes reentrant TEMP DDL during a declared tracker installation", () => {
@@ -291,6 +291,10 @@ describe("admitted SQLite schema facts", () => {
       expect(getAdmittedSqliteSchemaFacts(reader)?.indexes.has("committed_index")).toBe(true);
       expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(2);
       expect(schemaMutation).toHaveBeenCalledTimes(1);
+      expect(schemaMutation).toHaveBeenLastCalledWith({
+        schemaVersion: getAdmittedSqliteSchemaFacts(reader)?.schemaVersion,
+        userVersion: 2,
+      });
 
       const readSnapshot = () => {
         expect(hasTable("later")).toBe(false);
@@ -317,6 +321,10 @@ describe("admitted SQLite schema facts", () => {
       expect(getAdmittedSqliteSchemaFacts(reader)?.indexes.has("committed_index")).toBe(false);
       expect(assertSupportedAgentSchemaVersion(reader, filename)).toBe(3);
       expect(schemaMutation).toHaveBeenCalledTimes(2);
+      expect(schemaMutation).toHaveBeenLastCalledWith({
+        schemaVersion: getAdmittedSqliteSchemaFacts(reader)?.schemaVersion,
+        userVersion: 3,
+      });
       writer.exec("PRAGMA user_version = 2147483647");
       expect(() =>
         runSqliteReadOperationSync(reader, () =>

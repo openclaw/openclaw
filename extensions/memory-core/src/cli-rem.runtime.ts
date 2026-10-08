@@ -28,9 +28,7 @@ export async function runMemorySessionBackfill(
 ) {
   await withMemoryCommand({
     commandName: "memory session-backfill",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    options: opts,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
@@ -114,9 +112,7 @@ export async function runMemoryRemHarness(
 ) {
   await withMemoryCommand({
     commandName: "memory rem-harness",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    options: opts,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
@@ -256,9 +252,7 @@ export async function runMemoryRemBackfill(
 ) {
   await withMemoryCommand({
     commandName: "memory rem-backfill",
-    agent: opts.agent,
-    diagnosticsToStderr: Boolean(opts.json),
-    onUnavailable: opts.json ? defaultRuntime.writeJson : undefined,
+    options: opts,
     purpose: "status",
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {

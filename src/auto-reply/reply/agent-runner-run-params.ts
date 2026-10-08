@@ -150,7 +150,6 @@ export async function buildEmbeddedRunBaseParams(params: {
     silentReplyPromptMode: params.run.silentReplyPromptMode,
     sourceReplyDeliveryMode: params.run.sourceReplyDeliveryMode,
     toolBindings: params.run.toolBindings,
-    skillWorkshopProposalRevision: params.run.skillWorkshopProposalRevision,
     skillLibraryAuthoring: params.run.skillLibraryAuthoring,
     provider: params.provider,
     model: params.model,

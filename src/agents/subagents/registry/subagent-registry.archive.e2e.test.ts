@@ -29,9 +29,9 @@ import type { SubagentRegistryWrite } from "./subagent-registry.store.kernel.js"
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const sessionAccessorMocks = vi.hoisted(() => ({
-  loadSessionEntryReadOnly: vi.fn<
-    typeof import("../../../config/sessions/session-accessor.js").loadSessionEntryReadOnly
-  >(() => undefined),
+  readSessionEntryReadOnlyInWorker: vi.fn<
+    typeof import("../../../config/sessions/session-entry-read-runtime.js").readSessionEntryReadOnlyInWorker
+  >(async () => undefined),
 }));
 
 const noop = () => {};
@@ -53,12 +53,20 @@ vi.mock("../../../gateway/call.js", () => ({
   callGateway: vi.fn(respondToGatewayRequest),
 }));
 
-vi.mock("../../../config/sessions/session-accessor.js", async (importOriginal) => {
+vi.mock("../../../config/sessions/session-entry-read-runtime.js", async (importOriginal) => {
   const actual =
-    await importOriginal<typeof import("../../../config/sessions/session-accessor.js")>();
+    await importOriginal<typeof import("../../../config/sessions/session-entry-read-runtime.js")>();
   return {
     ...actual,
-    loadSessionEntryReadOnly: sessionAccessorMocks.loadSessionEntryReadOnly,
+    readSessionEntryReadOnlyInWorker: async (
+      ...args: Parameters<typeof actual.readSessionEntryReadOnlyInWorker>
+    ) => {
+      const [, assertCurrent] = args;
+      assertCurrent?.();
+      const entry = await sessionAccessorMocks.readSessionEntryReadOnlyInWorker(...args);
+      assertCurrent?.();
+      return entry;
+    },
   };
 });
 
@@ -164,7 +172,7 @@ describe("subagent registry archive behavior", () => {
     vi.mocked(captureSubagentCompletionReply).mockReset();
     vi.mocked(runSubagentAnnounceFlow).mockReset();
     vi.mocked(getAgentRunContext).mockReset().mockReturnValue(undefined);
-    sessionAccessorMocks.loadSessionEntryReadOnly.mockReset();
+    sessionAccessorMocks.readSessionEntryReadOnlyInWorker.mockReset();
     await mod.resetSubagentRegistryForTests({ persist: false });
     settleRootWork = observeRootWork();
   });
@@ -344,7 +352,7 @@ describe("subagent registry archive behavior", () => {
     const attachmentsDir = path.join(attachmentsRootDir, "child");
     await fs.mkdir(attachmentsDir, { recursive: true });
     await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
-    sessionAccessorMocks.loadSessionEntryReadOnly.mockReturnValue({
+    sessionAccessorMocks.readSessionEntryReadOnlyInWorker.mockResolvedValue({
       sessionId: "session-delete-retry",
       lifecycleRevision: "lifecycle-delete-retry",
       updatedAt: Date.now(),
@@ -778,7 +786,7 @@ describe("subagent registry archive behavior", () => {
     };
     const deleteGate = createDeferred();
     const deleteEntered = createDeferred();
-    sessionAccessorMocks.loadSessionEntryReadOnly.mockReturnValue({
+    sessionAccessorMocks.readSessionEntryReadOnlyInWorker.mockResolvedValue({
       sessionId: "session-delete-inflight",
       lifecycleRevision: "lifecycle-delete-inflight",
       updatedAt: Date.now(),

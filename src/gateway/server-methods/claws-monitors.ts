@@ -22,7 +22,6 @@ import { cronJobReadView } from "../../cron/job-read-view.js";
 import { getSuspensionVisibleCronTaskRunCount } from "../../cron/service/active-run-cancellation.js";
 import { reconcileToolsAllowAuthority } from "../../cron/service/jobs-tool-policy.js";
 import { hasPendingCronSessionCleanupForAgent } from "../../cron/service/locked.js";
-import { resolveSkillCollectionReviewMonitorSpecs } from "../../cron/skill-collection-review-monitor.js";
 import { cronStoreKey } from "../../cron/store/key.js";
 import { hasActiveCronRunReceiptsForAgent } from "../../cron/store/run-receipt-drain.js";
 import type { CronJob, CronJobCreate } from "../../cron/types.js";
@@ -76,10 +75,9 @@ function inspectMonitors(
   schedulerSeed: string,
 ): ClawMonitorSnapshot[] {
   const cfg = context.getRuntimeConfig();
-  const specs = [
-    ...resolveHeartbeatMonitorPlan(cfg, jobs, { schedulerSeed }).specs,
-    ...resolveSkillCollectionReviewMonitorSpecs(cfg, jobs, { schedulerSeed }),
-  ].filter((spec) => spec.agentId === agentId);
+  const specs = resolveHeartbeatMonitorPlan(cfg, jobs, { schedulerSeed }).specs.filter(
+    (spec) => spec.agentId === agentId,
+  );
   const storeKey = cronStoreKey(context.cronStorePath);
   return readAttachedCronJobs(agentId, {}).flatMap((row) => {
     if (

@@ -53,12 +53,9 @@ import {
 import { loadSessionEntry } from "../session-utils.js";
 import { getWorkerInferenceSessionControl } from "../worker-environments/inference-control-internal.js";
 import { resolveChatAbortRequester } from "./chat-abort-authorization.js";
+import { abortControlledSubagents, descendantAbortError } from "./chat-abort-descendants.js";
 import { handleChatAbortRequestWithLifecycle } from "./chat-abort-handler.js";
-import {
-  abortControlledSubagents,
-  abortQueuedCollectorSession,
-  descendantAbortError,
-} from "./chat-abort-runtime.js";
+import { abortQueuedCollectorSession } from "./chat-abort-runtime.js";
 import { abortedPartialPersistenceError } from "./chat-aborted-partial.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import {

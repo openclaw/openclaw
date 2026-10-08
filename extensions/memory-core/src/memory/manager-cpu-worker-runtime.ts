@@ -3,8 +3,8 @@ import { ensureSqliteLibrarySelected } from "openclaw/plugin-sdk/memory-core-hos
 import type { readTranscriptStatsBatchReadOnlySync } from "openclaw/plugin-sdk/memory-core-host-engine-sessions";
 import { resolveRuntimeWorkerUrl, WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import type {
-  MemoryOriginReadTarget,
   MemoryOriginReadFilters,
+  MemoryOriginReadInput,
 } from "../memory-entry-origins-task.js";
 import type { ForgetIndexReadInput } from "../memory-forget-index-task.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
@@ -91,60 +91,27 @@ export async function runMemoryForgetIndexPlan(request: ForgetIndexReadInput) {
   return result.plan;
 }
 
-function originReadBytes(target: MemoryOriginReadTarget, filters: MemoryOriginReadFilters = {}) {
-  return (
-    2 *
-    (target.agentId.length +
-      target.databasePath.length +
-      target.stateDir.length +
-      (filters.entryKeys?.reduce((bytes, key) => bytes + key.length, 0) ?? 0) +
-      (filters.sessionIds?.reduce((bytes, key) => bytes + key.length, 0) ?? 0))
-  );
-}
-
-export async function runMemoryOriginRows(
-  target: MemoryOriginReadTarget,
-  filters: MemoryOriginReadFilters,
+export async function runMemoryOriginRead<Kind extends MemoryOriginReadInput["kind"]>(
+  request: MemoryOriginReadInput & MemoryOriginReadFilters & { kind: Kind },
 ) {
-  const result = await runRetrieval(
-    { ...target, ...filters, kind: "origin-rows" },
-    { inputBytes: originReadBytes(target, filters) },
-    "origin rows",
+  return runRetrieval<Kind>(
+    request,
+    {
+      inputBytes:
+        2 *
+        (request.agentId.length +
+          request.databasePath.length +
+          request.stateDir.length +
+          (request.entryKeys?.reduce((bytes, key) => bytes + key.length, 0) ?? 0) +
+          (request.sessionIds?.reduce((bytes, key) => bytes + key.length, 0) ?? 0)),
+    },
+    {
+      "origin-rows": "origin rows",
+      "session-tombstones": "tombstone rows",
+      "origin-exists": "origin existence",
+      "origin-index-keys": "indexed origin keys",
+    }[request.kind],
   );
-  return result.rows;
-}
-
-export async function runMemoryTombstoneRows(
-  target: MemoryOriginReadTarget,
-  sessionIds?: readonly string[],
-) {
-  const result = await runRetrieval(
-    { ...target, sessionIds, kind: "session-tombstones" },
-    { inputBytes: originReadBytes(target, { sessionIds }) },
-    "tombstone rows",
-  );
-  return result.rows;
-}
-
-export async function runMemoryOriginExists(
-  target: MemoryOriginReadTarget,
-  filters: MemoryOriginReadFilters & { entryKeys: readonly string[] },
-) {
-  const result = await runRetrieval(
-    { ...target, ...filters, kind: "origin-exists" },
-    { inputBytes: originReadBytes(target, filters) },
-    "origin existence",
-  );
-  return result.exists;
-}
-
-export async function runMemoryIndexedOriginKeys(target: MemoryOriginReadTarget) {
-  const result = await runRetrieval(
-    { ...target, kind: "origin-index-keys" },
-    { inputBytes: originReadBytes(target) },
-    "indexed origin keys",
-  );
-  return result.keys;
 }
 
 export async function prewarmMemorySearchWorker(): Promise<void> {

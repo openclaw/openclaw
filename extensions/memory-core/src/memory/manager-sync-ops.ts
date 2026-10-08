@@ -23,11 +23,12 @@ import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { memoryDatabaseTableExists, readMemoryDatabaseRevision } from "./manager-db-kernel.js";
 import { cleanupAgedMemoryReindexTempFiles, removeMemoryDatabaseFiles } from "./manager-db.js";
 import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
-import { withMemoryIndexPublishGeneration } from "./manager-index-generation-lease.js";
+import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
 import {
   resolveMemoryProviderLifecycle,
   resolveFallbackCurrentProviderId,
   resolveMemoryFallbackProviderRequest,
+  resolveMemoryPrimaryProviderRequest,
 } from "./manager-provider-state.js";
 import type { MemoryManagerProviderFactory } from "./manager-registry.js";
 import {
@@ -121,6 +122,18 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
   }
 
   protected abstract retireCurrentProvider(): Promise<void>;
+
+  protected createConfiguredEmbeddingProvider(
+    request = resolveMemoryPrimaryProviderRequest({ settings: this.settings }),
+  ) {
+    return createEmbeddingProvider({
+      createProvider: this.createProvider,
+      config: this.cfg,
+      agentDir: resolveAgentDir(this.cfg, this.agentId),
+      ...(this.acquireLocalService ? { acquireLocalService: this.acquireLocalService } : {}),
+      ...request,
+    });
+  }
 
   private createSyncProgress(
     onProgress: (update: MemorySyncProgressUpdate) => void,
@@ -447,13 +460,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
 
     let fallbackResult;
     try {
-      fallbackResult = await createEmbeddingProvider({
-        createProvider: this.createProvider,
-        config: this.cfg,
-        agentDir: resolveAgentDir(this.cfg, this.agentId),
-        ...(this.acquireLocalService ? { acquireLocalService: this.acquireLocalService } : {}),
-        ...fallbackRequest,
-      });
+      fallbackResult = await this.createConfiguredEmbeddingProvider(fallbackRequest);
     } catch (err) {
       // Retirement already removed the primary before fallback construction.
       // Make the configured provider retryable instead of stranding FTS-only mode.
@@ -564,7 +571,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerSourceSyncOps {
       });
 
       await withMemoryWorkspaceLock(this.workspaceDir, async () => {
-        await withMemoryIndexPublishGeneration(dbPath, async () => {
+        await withMemoryIndexGeneration(dbPath, "write", async () => {
           await this.publishedDatabase.publishShadow(
             {
               sourcePath: tempDbPath,

@@ -92,11 +92,8 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "device_pair_setup_completions",
   "github_publication_requests",
   "device_pairing_join_codes",
-  "skill_workshop_proposal_events",
-  "skill_workshop_collection_reviews",
-  "skill_workshop_proposal_rollbacks",
-  "skill_workshop_proposals",
   "audit_skill_selection_events",
+  "skill_workshop_changes",
   "worker_environment_ssh_fallback_ports",
   "worker_session_placement_moves",
 ] as const;
@@ -106,12 +103,12 @@ export const LAZY_ADDITIVE_STATE_INDEXES = [
   "idx_cron_run_receipts_job_history",
   "idx_github_publication_requests_pending",
   "secret_store_entries_live_idx",
-  "idx_skill_workshop_collection_reviews_owner_time",
   "idx_audit_skill_selection_events_agent_sequence",
   "idx_audit_skill_selection_events_session_sequence",
   "idx_audit_skill_selection_events_run_sequence",
   "idx_audit_skill_selection_events_status_sequence",
   "idx_audit_skill_selection_events_occurred_sequence",
+  "idx_skill_workshop_changes_agent_time",
 ] as const;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;
@@ -160,8 +157,6 @@ export const STATE_SCHEMA_MIGRATION_DESCRIPTIONS = {
   "creator-namespace-v14": "historical cron creators → unknown source attribution",
   "conversation-binding-targets-v15":
     "conversation bindings → exact target keys without agent/session projections",
-  "skill-workshop-directory-ownership-v16":
-    "Skill Workshop ownership → per-agent directory containment",
   "prepared-worker-ownership-v17":
     "prepared workers → one-use capacity and fixed workspace ownership",
   "github-publication-requester-authority-v18":

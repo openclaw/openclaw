@@ -62,10 +62,7 @@ import {
 import { getActiveOpenClawStateDatabaseReadSnapshot } from "./openclaw-state-db-readonly.js";
 import { normalizeOpenClawStateSchemaReadError } from "./openclaw-state-db-schema-migration-required.js";
 import { assertCanonicalStateSchemaShape } from "./openclaw-state-db-schema-repair.js";
-import {
-  readStateSchemaContentVersion,
-  readStateSchemaMigrationVersion,
-} from "./openclaw-state-db-schema-version.js";
+import { readStateSchemaContentVersion } from "./openclaw-state-db-schema-version.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { inspectOpenClawStateOwnershipFromDatabase } from "./openclaw-state-ownership.js";
 import { inspectCurrentStateStartupSchema } from "./openclaw-state-schema-inspection.js";
@@ -270,10 +267,12 @@ export async function preflightOpenClawDatabaseSchemas(
           supportedVersion: supportedVersions.state,
           ...(writerAppVersion ? { writerAppVersion } : {}),
         });
-        // This build cannot interpret a newer registry or prescribe repairs for it.
-        return result;
+        // An older target does not make this build's readable registry unavailable.
+        if (contentVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
+          return result;
+        }
       }
-      const migrationVersion = readStateSchemaMigrationVersion(stateDatabase);
+      const migrationVersion = readStateSchemaContentVersion(stateDatabase);
       if (migrationVersion < supportedVersions.state) {
         (result.pendingMigrations ??= []).push({
           kind: "state",

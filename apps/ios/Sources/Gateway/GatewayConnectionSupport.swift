@@ -162,7 +162,7 @@ extension GatewayConnectionController {
         guard let first = gateways.first else { return }
 
         defaults.set(first.stableID, forKey: "gateway.lastDiscoveredStableID")
-        GatewaySettingsStore.saveLastDiscoveredGatewayStableID(first.stableID)
+        GatewaySettingsStore.saveDiscoveredGatewayStableID(first.stableID)
     }
 
     func tlsProbeFailureProblem(

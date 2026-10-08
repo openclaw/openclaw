@@ -100,8 +100,8 @@ export async function listMemoryEntryOrigins(
     ...(params.sessionIds ? { sessionIds: [...params.sessionIds] } : {}),
     ...(params.entryKeys ? { entryKeys: [...params.entryKeys] } : {}),
   };
-  const { runMemoryOriginRows } = await loadMemoryCpuWorkerRuntime();
-  return runMemoryOriginRows(target, filters);
+  const { runMemoryOriginRead } = await loadMemoryCpuWorkerRuntime();
+  return (await runMemoryOriginRead({ ...target, ...filters, kind: "origin-rows" })).rows;
 }
 
 export async function listMemorySessionTombstones(params: {
@@ -113,8 +113,8 @@ export async function listMemorySessionTombstones(params: {
   }
   const target = captureOriginReadTarget(captureOriginDatabaseOptions(params.agentId));
   const sessionIds = params.sessionIds ? [...params.sessionIds] : undefined;
-  const { runMemoryTombstoneRows } = await loadMemoryCpuWorkerRuntime();
-  return runMemoryTombstoneRows(target, sessionIds);
+  const { runMemoryOriginRead } = await loadMemoryCpuWorkerRuntime();
+  return (await runMemoryOriginRead({ ...target, sessionIds, kind: "session-tombstones" })).rows;
 }
 
 export async function recordMemoryEntryOrigins(
@@ -155,11 +155,11 @@ async function deleteMemoryEntryOrigins(
     entryKeys: [...params.entryKeys],
     ...(params.sessionIds ? { sessionIds: [...params.sessionIds] } : {}),
   };
-  const { runMemoryOriginExists } = await loadMemoryCpuWorkerRuntime();
+  const { runMemoryOriginRead } = await loadMemoryCpuWorkerRuntime();
   assertOriginal();
-  const existing = await runMemoryOriginExists(target, filters);
+  const { exists } = await runMemoryOriginRead({ ...target, ...filters, kind: "origin-exists" });
   assertOriginal();
-  if (!existing) {
+  if (!exists) {
     return 0;
   }
   return executeOriginCommand(options, { type: "delete", input: params }, assertOriginal);
@@ -276,7 +276,7 @@ export async function pruneMemoryEntryOrigins(params: {
     ),
   );
   const diaryKeys = new Set(diaries.flatMap(extractPromotionKeys));
-  const { runMemoryIndexedOriginKeys } = await loadMemoryCpuWorkerRuntime();
+  const { runMemoryOriginRead } = await loadMemoryCpuWorkerRuntime();
   for (const options of owners) {
     await runOpenClawAgentWriteAdmission(
       options,
@@ -285,7 +285,11 @@ export async function pruneMemoryEntryOrigins(params: {
         // A sibling may still index an older shared MEMORY snapshot. Retain its
         // lineage until that agent can identify and purge those derived records.
         assertCurrent();
-        const indexed = new Set(await runMemoryIndexedOriginKeys(captureOriginReadTarget(options)));
+        const { keys } = await runMemoryOriginRead({
+          ...captureOriginReadTarget(options),
+          kind: "origin-index-keys",
+        });
+        const indexed = new Set(keys);
         assertCurrent();
         await deleteMemoryEntryOrigins(
           {

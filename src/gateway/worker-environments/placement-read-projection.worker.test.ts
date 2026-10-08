@@ -7,6 +7,7 @@ import type { SpawnResult } from "../../process/exec.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { requireOpenClawStateDatabaseIdentity } from "../../state/openclaw-state-db-cache.js";
+import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -243,62 +244,83 @@ describe("worker placement read projection", () => {
     }
   });
 
-  it("joins publication settlement and keeps unknown, closed, and cancelled reads fenced", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-admission-pending-"));
-    const database = openOpenClawStateDatabase();
-    const store = createWorkerSessionPlacementStore({ database });
-    const placement = await store.startDispatch({
-      sessionId: "pending-publication",
-      sessionKey: "agent:main:pending-publication",
-      agentId: "main",
-    });
-    const read = vi.spyOn(store, "readProjection");
-    for (const settlement of ["commit", "rollback", "invalidate", "cancel", "close"] as const) {
-      const previous = await store.prepareRuntimeRefresh(placement.sessionId);
-      const publication = stagePlacementTurnClaimWorkerPublication(
-        requireOpenClawStateDatabaseIdentity({ db: database.db }),
-        placement,
-      );
-      read.mockClear();
-      const scope = new AsyncWorkScope();
-      const preparing = scope.track(() => store.prepareRuntimeRefresh(placement.sessionId));
-      const settled = preparing.catch(() => undefined);
-      try {
-        expect(read).not.toHaveBeenCalled();
-        if (settlement === "close") {
-          await closeOpenClawStateDatabaseAsync();
-        } else if (settlement === "cancel") {
-          scope.beginClose();
-        } else {
-          publication[settlement]();
-        }
-        if (settlement === "commit" || settlement === "rollback") {
-          const prepared = await preparing;
-          try {
-            expect(prepared.placement).toEqual(placement);
-            prepared.assertCurrent();
-            expect(read).toHaveBeenCalledOnce();
-          } finally {
-            prepared.release();
+  it.each(["session", "inventory"] as const)(
+    "joins %s publication settlement and keeps unknown, closed, and cancelled reads fenced",
+    async (kind) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-admission-pending-"));
+      const database = openOpenClawStateDatabase();
+      const store = createWorkerSessionPlacementStore({ database });
+      const placement = await store.startDispatch({
+        sessionId: "pending-publication",
+        sessionKey: "agent:main:pending-publication",
+        agentId: "main",
+      });
+      const read = vi.spyOn(store, "readProjection");
+      const inventoryRead = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+      const prepare = async () =>
+        kind === "inventory"
+          ? store.prepareMaintenancePlacements()
+          : store.prepareRuntimeRefresh(placement.sessionId);
+      const readCalls = () =>
+        kind === "inventory"
+          ? inventoryRead.mock.calls.filter(
+              (args) => args[1].type === "workers.placementPreservation",
+            )
+          : read.mock.calls;
+      for (const settlement of ["commit", "rollback", "invalidate", "cancel", "close"] as const) {
+        const previous = await prepare();
+        const publication = stagePlacementTurnClaimWorkerPublication(
+          requireOpenClawStateDatabaseIdentity({ db: database.db }),
+          placement,
+        );
+        read.mockClear();
+        inventoryRead.mockClear();
+        const scope = new AsyncWorkScope();
+        const preparing = scope.track(prepare);
+        const settled = preparing.catch(() => undefined);
+        try {
+          expect(readCalls()).toHaveLength(0);
+          if (settlement === "close") {
+            await closeOpenClawStateDatabaseAsync();
+          } else if (settlement === "cancel") {
+            scope.beginClose();
+          } else {
+            publication[settlement]();
           }
-        } else {
-          await expect(preparing).rejects.toThrow();
-          expect(read).not.toHaveBeenCalled();
-        }
-        if (settlement === "cancel") {
-          // Abandoning this reader cannot settle the independent accepted writer.
-          expect(() => previous.assertCurrent()).toThrow("placement authority changed");
+          if (settlement === "commit" || settlement === "rollback") {
+            const prepared = await preparing;
+            try {
+              if ("placements" in prepared) {
+                expect(prepared.placements).toEqual([placement]);
+              } else {
+                expect(prepared.placement).toEqual(placement);
+              }
+              prepared.assertCurrent();
+              expect(readCalls()).toHaveLength(1);
+            } finally {
+              prepared.release();
+            }
+          } else {
+            await expect(preparing).rejects.toThrow();
+            expect(readCalls()).toHaveLength(0);
+          }
+          if (settlement === "cancel") {
+            // Abandoning this reader cannot settle the independent accepted writer.
+            expect(() => previous.assertCurrent()).toThrow(
+              kind === "inventory" ? "placement inventory changed" : "placement authority changed",
+            );
+            publication.rollback();
+            previous.assertCurrent();
+          }
+        } finally {
           publication.rollback();
-          previous.assertCurrent();
+          previous.release();
+          await settled;
+          await scope.drain();
         }
-      } finally {
-        publication.rollback();
-        previous.release();
-        await settled;
-        await scope.drain();
       }
-    }
-  });
+    },
+  );
 
   it("invalidates an empty maintenance scan when a new placement commits", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", roots.make("placement-maintenance-inventory-"));

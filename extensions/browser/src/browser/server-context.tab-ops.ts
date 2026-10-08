@@ -398,47 +398,36 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
       opts?.signal?.throwIfAborted();
 
       if (createdViaCdp) {
-        if (!createdViaCdp.finalUrl) {
-          // The target exists, but its committed document is not authoritative.
-          // Preserve the explicit result without sticky, alias, or cleanup adoption.
-          return await withTabOwnership(
-            {
-              targetId: createdViaCdp.targetId,
-              title: "",
-              url,
-              type: "page",
-            },
-            opts,
-          );
-        }
-        await assertBrowserNavigationResultAllowed({
-          url: createdViaCdp.finalUrl,
-          ...ssrfPolicyOpts,
-        });
-        const deadline = Date.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
-        while (Date.now() < deadline) {
-          opts?.signal?.throwIfAborted();
-          const tabs = await readTabs(opts).catch(() => [] as BrowserTab[]);
-          const found = tabs.find((t) => t.targetId === createdViaCdp.targetId);
-          if (found) {
-            await assertBrowserNavigationResultAllowed({ url: found.url, ...ssrfPolicyOpts });
-            // The attached target owns the committed URL; /json/list supplies the
-            // remaining metadata and may briefly lag that exact document snapshot.
-            return adoptValidatedTab(
-              await withTabOwnership({ ...found, url: createdViaCdp.finalUrl }, opts),
-              { ...opts, label: normalizedLabel },
-            );
+        if (createdViaCdp.finalUrl) {
+          await assertBrowserNavigationResultAllowed({
+            url: createdViaCdp.finalUrl,
+            ...ssrfPolicyOpts,
+          });
+          const deadline = Date.now() + OPEN_TAB_DISCOVERY_WINDOW_MS;
+          while (Date.now() < deadline) {
+            opts?.signal?.throwIfAborted();
+            const tabs = await readTabs(opts).catch(() => [] as BrowserTab[]);
+            const found = tabs.find((t) => t.targetId === createdViaCdp.targetId);
+            if (found) {
+              await assertBrowserNavigationResultAllowed({ url: found.url, ...ssrfPolicyOpts });
+              // The attached target owns the committed URL; /json/list supplies the
+              // remaining metadata and may briefly lag that exact document snapshot.
+              return adoptValidatedTab(
+                await withTabOwnership({ ...found, url: createdViaCdp.finalUrl }, opts),
+                { ...opts, label: normalizedLabel },
+              );
+            }
+            await sleepWithAbort(OPEN_TAB_DISCOVERY_POLL_MS, opts?.signal);
           }
-          await sleepWithAbort(OPEN_TAB_DISCOVERY_POLL_MS, opts?.signal);
+          opts?.signal?.throwIfAborted();
         }
-        opts?.signal?.throwIfAborted();
-        // Preserve the explicit target-id result for callers, but do not adopt an
-        // undiscovered target into sticky, alias, or managed-cleanup state.
+        // Uncommitted or undiscovered targets are returned without sticky,
+        // alias, or managed-cleanup adoption.
         return await withTabOwnership(
           {
             targetId: createdViaCdp.targetId,
             title: "",
-            url: createdViaCdp.finalUrl,
+            url: createdViaCdp.finalUrl || url,
             type: "page",
           },
           opts,

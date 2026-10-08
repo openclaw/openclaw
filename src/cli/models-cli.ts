@@ -29,9 +29,10 @@ async function withGlobalModelsRuntime(
   commandName: GlobalOnlyModelCommandName,
   action: (runtime: ModelsCliRuntime) => Promise<void>,
 ): Promise<void> {
-  const runtime = await import("./models-cli.runtime.js");
-  runtime.rejectAgentScopedModelCommand(command, commandName);
-  return runtime.runModelsCommand(() => action(runtime));
+  return withModelsRuntime(async (runtime) => {
+    runtime.rejectAgentScopedModelCommand(command, commandName);
+    await action(runtime);
+  });
 }
 
 export function registerModelsCli(program: Command) {

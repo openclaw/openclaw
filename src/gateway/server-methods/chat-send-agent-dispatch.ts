@@ -69,7 +69,6 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     client,
     context,
     toolsAllow,
-    skillWorkshopProposalRevision,
     prepareSkillLibraryAuthoring,
     cronCreatorAuthority,
     assertDashboardReadCurrent,
@@ -331,7 +330,6 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 operatorAuthority: admission.operatorAuthority,
                 providerReviewAcknowledgment: request.providerReviewAcknowledgment,
                 dashboardReadAdmission,
-                skillWorkshopProposalRevision,
                 skillLibraryAuthoring,
                 ...(cronCreatorAuthority
                   ? { cronCreatorAuthorityCapability: cronCreatorAuthority }

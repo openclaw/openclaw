@@ -48,6 +48,7 @@ import { buildAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.j
 import { createAgentCommandLifecycle } from "../../command/lifecycle.js";
 import { prepareInternalSessionEffectsSession } from "../../internal-session-effects.js";
 import { runSubagentAnnounceFlow } from "../announce/subagent-announce.js";
+import { registerRawChildRestoreOwnershipTest } from "./subagent-orphan-recovery.raw-owner.test-support.js";
 import { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
@@ -217,6 +218,8 @@ describe("subagent orphan recovery — faithful restart path", () => {
       }),
     );
   });
+  registerRawChildRestoreOwnershipTest(fixture);
+
   it("reconciles retained predecessor sessions during startup without waiting for a sweep", async () => {
     const startedAt = Math.floor(performance.timeOrigin) - 60_000;
     const generation = getAgentEventLifecycleGeneration();

@@ -662,6 +662,10 @@ export class SubagentLifecycleController {
           }
           return;
         }
+        if (source === "restore" && entry.requesterSettleWake) {
+          // The transfer owns this initial wake even if it settles while restore reads siblings.
+          this.options.resumedRuns.add(getSubagentRunRuntimeKey(entry));
+        }
         if (this.scheduledRequesterSettleWakeRuns.has(getSubagentRunRuntimeKey(entry))) {
           this.pendingRequesterSettleWakeRearms.add(getSubagentRunRuntimeKey(entry));
           return;

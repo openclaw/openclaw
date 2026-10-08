@@ -31,6 +31,7 @@ import { emitAgentRunStatusEvent } from "../../infra/agent-run-status-events.js"
 import { drainAgentRunTerminalWrites } from "../../infra/agent-run-terminal-writes.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { withExecRequestTurn } from "../../infra/exec-request-context.js";
 import { logSessionTurnCreated } from "../../logging/diagnostic.js";
 import {
   bindGatewayContextResolver,
@@ -86,6 +87,7 @@ import {
   retainReplyOperationUntilComplete,
 } from "./reply-run-registry.js";
 import { isReplyProfilerEnabled } from "./reply-timing-tracker.js";
+import { getReplySystemEventContext } from "./system-event-session-key.js";
 
 async function executeAgentTurnInternalLoop(
   inputParams: AppContextTurnParams,
@@ -685,7 +687,19 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
   const executionParams =
     params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
   try {
-    const result = await executeAgentTurnOutcome(executionParams, runId);
+    const result = await withExecRequestTurn(
+      {
+        identity: {
+          runId,
+          sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+          sessionId: params.followupRun.run.sessionId,
+          agentId: params.followupRun.run.agentId,
+        },
+        owners: getReplySystemEventContext(params.opts)?.execRequestOwners,
+        abortSignal: params.replyOperation?.abortSignal ?? params.opts?.abortSignal,
+      },
+      () => executeAgentTurnOutcome(executionParams, runId),
+    );
     await recordAgentTurnExecutionOutcome(executionParams, result);
     return result;
   } catch (error) {
