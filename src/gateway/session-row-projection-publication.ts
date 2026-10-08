@@ -10,7 +10,10 @@ export function createSessionRowPublication(owner: {
   registryFactsReady: () => boolean;
   acquireEntry: (row: records.Row, entry: records.Row["storedEntry"]) => records.Row | undefined;
   markRelated: (row: records.Row, includeChildren: boolean) => void;
-  invalidatePlacement: (sessionId: string) => void;
+  placement: {
+    publish: (sessionId: string, change: SessionRowChange) => boolean;
+    invalidate: (sessionId: string) => void;
+  };
   invalidateFacts: (row: records.Row, domain: true | "category") => boolean;
   enqueue: (row: records.Row | undefined) => void;
   defer: (row: records.Row) => void;
@@ -72,6 +75,15 @@ export function createSessionRowPublication(owner: {
         store.birthtime !== source.birthtime ||
         store.filename !== source.filename)
     ) {
+      return;
+    }
+    if (
+      row.entry &&
+      !change.factsInvalidated &&
+      owner.placement.publish(row.entry.sessionId, change)
+    ) {
+      // This receipt changes only placement; the agent's prepared facets remain current.
+      owner.defer(row);
       return;
     }
     const facts = change.facts;
@@ -167,7 +179,7 @@ export function createSessionRowPublication(owner: {
       return;
     }
     if (row.entry && change.scope !== "session-entry") {
-      owner.invalidatePlacement(row.entry.sessionId);
+      owner.placement.invalidate(row.entry.sessionId);
     }
     if (prepared?.entry) {
       acquirePublishedEntry(

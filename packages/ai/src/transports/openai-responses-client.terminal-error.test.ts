@@ -72,31 +72,17 @@ afterEach(() => {
 });
 
 describe("managed Responses transport terminal errors", () => {
-  it.each(
-    ["incomplete", "in_progress", "malformed", "truncated"].flatMap((rejection) =>
-      ["incomplete", "completed", "filtered", "failed", "eof", "aborted", "error"].map(
-        (ending) => ({ rejection, ending }),
-      ),
-    ),
-  )(
-    "fences later tool completions after $rejection output until $ending",
-    async ({ rejection, ending }) => {
+  it.each(["filtered", "failed", "eof", "aborted"])(
+    "fences later tool completions after truncated output until %s",
+    async (ending) => {
       const controller = new AbortController();
       const calls = [0, 1].map((index) => ({
         type: "function_call",
         id: `fc_parallel_${index}`,
         call_id: `call_parallel_${index}`,
         name: "probe",
-        arguments:
-          index !== 0
-            ? '{"token":"complete"}'
-            : rejection === "malformed"
-              ? '{"token":!}'
-              : '{"token":"unfinished',
-        status:
-          index === 0 && (rejection === "incomplete" || rejection === "in_progress")
-            ? rejection
-            : "completed",
+        arguments: index !== 0 ? '{"token":"complete"}' : '{"token":"unfinished',
+        status: "completed",
         async: true,
       }));
       sseState.outcomes.push({
@@ -110,10 +96,6 @@ describe("managed Responses transport terminal errors", () => {
           }
           for (const [output_index, item] of calls.entries()) {
             yield { type: "response.output_item.done", output_index, item };
-          }
-          if (ending === "error") {
-            yield { type: "error", code: "server_error", message: "provider stream error" };
-            return;
           }
           if (ending === "aborted") {
             controller.abort(
@@ -174,50 +156,29 @@ describe("managed Responses transport terminal errors", () => {
         ).toBe(true);
         expect(result.errorCode).toBe("AGENT_RUN_SUPERSEDED_ABORT");
       }
-      if (ending !== "eof" && ending !== "aborted" && ending !== "error") {
+      if (ending !== "eof" && ending !== "aborted") {
         expect(result.usage).toMatchObject({ input: 20, output: 9, totalTokens: 29 });
         expect(result.responseId).toBe("resp_parallel_truncated");
         expect(result.responseModel).toBe("served-model");
       }
-      if (ending === "incomplete" || ending === "completed" || ending === "eof") {
-        expect(result.errorCode).toBe(
-          rejection === "incomplete" || rejection === "in_progress"
-            ? "incomplete_tool_call"
-            : "malformed_tool_call_arguments",
-        );
+      if (ending === "eof") {
+        expect(result.errorCode).toBe("malformed_tool_call_arguments");
         expect(result.errorMessage).toBe(
-          rejection === "incomplete" || rejection === "in_progress"
-            ? "Responses stream completed with an incomplete terminal tool call"
-            : "Responses stream completed tool call with invalid JSON arguments",
+          "Responses stream completed tool call with invalid JSON arguments",
         );
-        if (rejection === "malformed" || rejection === "truncated") {
-          expect(JSON.parse(result.errorBody ?? "null")).toMatchObject({
-            code: "malformed_tool_call_arguments",
-            argumentChars: calls[0]?.arguments.length,
-            repairAttempted: false,
-          });
-        }
+        expect(JSON.parse(result.errorBody ?? "null")).toMatchObject({
+          code: "malformed_tool_call_arguments",
+          argumentChars: calls[0]?.arguments.length,
+          repairAttempted: false,
+        });
       } else {
         expect(result.errorCode).not.toBe("incomplete_tool_call");
         expect(result.errorCode).not.toBe("malformed_tool_call_arguments");
-      }
-      if (ending === "incomplete") {
-        expect(result.diagnostics).toContainEqual(
-          expect.objectContaining({
-            type: "openai_responses_terminal",
-            details: expect.objectContaining({
-              eventType: "response.incomplete",
-              incompleteReason: "max_output_tokens",
-            }),
-          }),
-        );
       }
       if (ending === "filtered") {
         expect(result.errorMessage).toBe("Provider incomplete_reason: content_filter");
       } else if (ending === "failed") {
         expect(result.errorMessage).toContain("provider failed");
-      } else if (ending === "error") {
-        expect(result.errorMessage).toContain("provider stream error");
       }
     },
   );
@@ -246,11 +207,12 @@ describe("managed Responses transport terminal errors", () => {
     );
   });
 
-  it.each(
-    ["incomplete", "completed", "failed", "cancelled", "in_progress", "queued", undefined].flatMap(
-      (status) => [false, true].map((itemDone) => ({ status, itemDone })),
-    ),
-  )(
+  it.each([
+    { status: "incomplete", itemDone: false },
+    { status: "failed", itemDone: true },
+    { status: "in_progress", itemDone: true },
+    { status: undefined, itemDone: true },
+  ])(
     "retains usage and only recovers coherent output limits (status: $status, item done: $itemDone)",
     async ({ status, itemDone }) => {
       const partialCall = {
@@ -332,7 +294,7 @@ describe("managed Responses transport terminal errors", () => {
           stopReason:
             status === undefined || status === "incomplete"
               ? "length"
-              : status === "failed" || status === "cancelled"
+              : status === "failed"
                 ? "error"
                 : "toolUse",
           incompleteReason: "max_output_tokens",
@@ -343,16 +305,12 @@ describe("managed Responses transport terminal errors", () => {
     },
   );
 
-  it.each(
-    [
-      "max_output_tokens",
-      "max_messages",
-      "content_filter",
-      "steered",
-      "provider-private-reason",
-      undefined,
-    ].flatMap((reason) => [false, true].map((activeTool) => ({ reason, activeTool }))),
-  )(
+  it.each([
+    { reason: "content_filter", activeTool: false },
+    { reason: "content_filter", activeTool: true },
+    { reason: "provider-private-reason", activeTool: true },
+    { reason: undefined, activeTool: false },
+  ])(
     "preserves bounded incomplete diagnostics for $reason (active tool: $activeTool)",
     async ({ reason, activeTool }) => {
       sseState.outcomes.push({

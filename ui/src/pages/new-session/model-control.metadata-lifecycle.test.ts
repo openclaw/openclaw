@@ -642,7 +642,7 @@ describe("model selection policy", () => {
       async ({ event, payload, clearsChoices }) => {
         const { context, request, emitCatalogChanged } = contextWith(models);
         const ready = deferred();
-        const failed = deferred();
+        let failed = deferred();
         const control = new NewSessionModelControl(() => {
           const container = renderControl(control, context, "main", agent);
           if (container.querySelector('[data-chat-model-option="fixture/permitted"]')) {
@@ -681,6 +681,33 @@ describe("model selection policy", () => {
               ),
             ),
           ).toBe(!clearsChoices);
+          expect(control.modelSelectionBlockedReason(agent)).toBe(
+            clearsChoices ? "Models unavailable" : undefined,
+          );
+
+          failed = deferred();
+          const replacement = deferred<ModelCatalogResult>();
+          request.mockReturnValueOnce(replacement.promise);
+          emitCatalogChanged(event, payload);
+          const checking = renderControl(control, context, "main", agent);
+          expect(checking.querySelector('[data-chat-model-catalog-state="error"]')).toBeNull();
+          expect(checking.querySelector(".btn__spinner")).not.toBeNull();
+          if (clearsChoices) {
+            expect(control.modelSelectionBlockedReason(agent)).toBe("Loading models…");
+          } else {
+            expect(
+              checking.querySelector('[data-chat-model-option="fixture/permitted"]'),
+            ).not.toBeNull();
+          }
+          const rechecked = loadModelCatalog(context.gateway.snapshot.client!, scope);
+          replacement.reject(new Error("Catalog still unavailable"));
+          await expect(rechecked).rejects.toThrow("Catalog still unavailable");
+          await failed.promise;
+          expect(
+            renderControl(control, context, "main", agent).querySelector(
+              '[data-chat-model-catalog-state="error"]',
+            ),
+          ).not.toBeNull();
           expect(control.modelSelectionBlockedReason(agent)).toBe(
             clearsChoices ? "Models unavailable" : undefined,
           );
