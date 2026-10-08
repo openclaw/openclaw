@@ -15,13 +15,26 @@ const http = createTelegramDispatchHttpFixture();
 const sessionKey = "agent:main:telegram:group:-100";
 const waitingText = "Waiting for the image.";
 
-it.each<[string, ("delivered" | "failed")[], number | undefined]>([
-  ["a delivered image", ["delivered"], undefined],
-  ["a failed image", ["failed"], undefined],
-  ["a delivered then a failed image", ["delivered", "failed"], undefined],
-  ["a failed then a delivered image", ["failed", "delivered"], undefined],
-  ["a failed then a delivered image on a one-line card", ["failed", "delivered"], 1],
-])("keeps the quiet card until %s settles", async (_label, outcomes, maxLines) => {
+const planStep = "Draw the wedding portrait";
+
+it.each<{ label: string; outcomes: ("delivered" | "failed")[]; maxLines?: number; plan?: true }>([
+  { label: "a delivered image", outcomes: ["delivered"] },
+  { label: "a failed image", outcomes: ["failed"] },
+  { label: "a delivered then a failed image", outcomes: ["delivered", "failed"] },
+  { label: "a failed then a delivered image", outcomes: ["failed", "delivered"] },
+  // Bounded cards keep the failure ahead of later rows and the turn's plan.
+  {
+    label: "a failed then a delivered image on a one-line card",
+    outcomes: ["failed", "delivered"],
+    maxLines: 1,
+  },
+  {
+    label: "a failed image on a one-line card with a plan",
+    outcomes: ["failed"],
+    maxLines: 1,
+    plan: true,
+  },
+])("keeps the quiet card until $label settles", async ({ outcomes, maxLines, plan }) => {
   onTestFinished(resetGeneratedMediaTaskActivityForTests);
   const runs = outcomes.map((outcome, index) => ({
     outcome,
@@ -36,6 +49,12 @@ it.each<[string, ("delivered" | "failed")[], number | undefined]>([
   let adopted = false;
   await http.dispatchProgressTurn(
     async (options) => {
+      if (plan) {
+        await options?.onPlanUpdate?.({
+          phase: "update",
+          steps: [{ step: planStep, status: "in_progress" }],
+        });
+      }
       await http.emitToolStart(options, { name: "exec", phase: "start", toolCallId: "generate" });
       await http.waitForBotApiCall((call) => call.method === "sendMessage");
       // The wrapper ends once the detached media run has started.
@@ -72,7 +91,7 @@ it.each<[string, ("delivered" | "failed")[], number | undefined]>([
   expect(others).toEqual([]);
   await expect
     .poll(() => http.visibleMessages.get(cardId), { timeout: 5_000 })
-    .toContain("Image generation: running");
+    .toContain(plan ? planStep : "Image generation: running");
 
   const lifecycle = createMediaGenerationTaskLifecycle("image");
   for (const { outcome, handle } of runs) {
@@ -93,6 +112,7 @@ it.each<[string, ("delivered" | "failed")[], number | undefined]>([
     .toContain("Image generation: failed");
   const card = http.visibleMessages.get(cardId);
   expect(card).not.toContain("running");
-  // The delivered image is in the chat; only the failed run stays on the card.
-  expect(card).not.toContain("completed");
+  if (outcomes.includes("delivered") && !maxLines) {
+    expect(card).toContain("Image generation: completed");
+  }
 });

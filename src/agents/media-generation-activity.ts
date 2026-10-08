@@ -87,9 +87,9 @@ export function registerGeneratedMediaTaskActivity(
   });
 }
 /**
- * Every ending path clears activity after its completion wake. A delivered
- * result leaves the retained card; once every run delivered, the card goes.
- * An undelivered one keeps its failed row as the chat's visible outcome.
+ * Every ending path clears activity after its completion wake. A retained card
+ * leaves once every run delivered its result; otherwise it keeps the failed run
+ * as the chat's visible outcome.
  */
 export function clearGeneratedMediaTaskActivity(runId: string): void {
   state.active.delete(runId);
@@ -107,19 +107,19 @@ export function clearGeneratedMediaTaskActivity(runId: string): void {
     live.draft.retire();
     return;
   }
-  // The delivered result is in the chat; its row would only compete with a
-  // failed row for the card's bounded lines.
-  live.draft.push(
-    delivered
-      ? { itemId: runId, kind: "subagent", phase: "end", hideFromChannelProgress: true }
-      : { itemId: runId, kind: "subagent", title, phase: "end", status: "failed" },
-  );
+  live.draft.push({
+    itemId: runId,
+    kind: "subagent",
+    title,
+    phase: "end",
+    status: delivered ? "completed" : "failed",
+  });
 }
 
 /**
  * Keep a waiting turn's confirmed progress card while the media runs it delegated
  * to are still owed. The completion wake stays the only result owner; each run
- * shows as delegated work until its result is delivered.
+ * shows as delegated work, whose terminal state the quiet card keeps.
  */
 export function adoptMediaGenerationProgressDraft(
   sessionKey: string,
