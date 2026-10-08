@@ -112,26 +112,23 @@ function mergeSelectedToolMedia(
         )
       : mediaUrls;
   const appendOwnedMedia = (nextPayloads: EmbeddedRunPayload[]): EmbeddedRunPayload[] => {
-    const withHostOwnedMedia = !shouldSplitHostOwnedMedia
-      ? nextPayloads
-      : [
-          ...nextPayloads,
-          markReplyPayloadForSourceSuppressionDelivery(
-            buildMediaPayload(hostOwnedMediaUrls, false),
-          ),
-        ];
-    if (!shouldSplitAutoDeliveryMedia) {
-      return withHostOwnedMedia;
+    const owned: EmbeddedRunPayload[] = [];
+    if (shouldSplitHostOwnedMedia) {
+      owned.push(
+        markReplyPayloadForSourceSuppressionDelivery(buildMediaPayload(hostOwnedMediaUrls, false)),
+      );
     }
     // Contract-owned media remains separate from private assistant text and
     // generic tool media so only its explicit provenance bypasses suppression.
-    return [
-      ...withHostOwnedMedia,
-      markReplyPayloadForSourceSuppressionDelivery({
-        ...buildMediaPayload(autoDeliveryOnlyMediaUrls, true),
-        trustedLocalMedia: true,
-      }),
-    ];
+    if (shouldSplitAutoDeliveryMedia) {
+      owned.push(
+        markReplyPayloadForSourceSuppressionDelivery({
+          ...buildMediaPayload(autoDeliveryOnlyMediaUrls, true),
+          trustedLocalMedia: true,
+        }),
+      );
+    }
+    return owned.length ? [...nextPayloads, ...owned] : nextPayloads;
   };
 
   // A transcript mirror is already delivered; every batch observes the same

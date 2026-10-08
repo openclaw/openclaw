@@ -33,7 +33,7 @@ it.each(["read-error", "cancelled"] as const)(
       sessionId: "fixture-session",
       updatedAt: 1,
       abortedLastRun: true,
-      status: "running" as const,
+      status: "interrupted" as const,
     };
     const read = vi.mocked(loadSessionEntry).mockReturnValue(initial);
     const runtime = createObserverRuntime();
@@ -88,7 +88,12 @@ it.each([false, true])(
     const entries = new Map<string, SessionEntry>(
       scopes.map((scope, index) => [
         scope.storePath,
-        { sessionId: `session-${index}`, updatedAt: 1, status: "running", abortedLastRun: true },
+        {
+          sessionId: `session-${index}`,
+          updatedAt: 1,
+          status: "interrupted",
+          abortedLastRun: true,
+        },
       ]),
     );
     const read = vi.mocked(loadSessionEntry).mockImplementation((scope) => {

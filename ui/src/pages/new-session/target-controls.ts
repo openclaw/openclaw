@@ -57,7 +57,6 @@ export function renderAgentSelect(params: {
 }
 
 export function renderNewSessionPlaceControls({
-  idPrefix,
   context,
   data,
   gateway,
@@ -69,7 +68,6 @@ export function renderNewSessionPlaceControls({
   onFocusComposer,
   requestUpdate,
 }: {
-  idPrefix?: string;
   context: ApplicationContext | undefined;
   data: NewSessionRouteData | undefined;
   gateway: DraftGatewayState;
@@ -137,7 +135,6 @@ export function renderNewSessionPlaceControls({
           onSelect: (hostId) => place.selectTerminalHost(hostId),
         })
       : renderWhereChip({
-          idPrefix,
           state: whereState,
           environmentQuery: browser.environmentQuery,
           onEnvironmentQueryInput: (query) => browser.changeEnvironmentQuery(query),
@@ -201,7 +198,6 @@ export function renderNewSessionPlaceControls({
             }}
         /></label>`
       : renderProjectChip({
-          idPrefix,
           state: projectState,
           browseAvailable: place.browseAvailable(),
           isAdmin: place.isAdmin(),
@@ -253,7 +249,6 @@ export function renderNewSessionPlaceControls({
   }${
     place.checkoutVisible && !(nativeTerminal && place.terminalOnNode)
       ? renderCheckoutChip({
-          idPrefix,
           state: checkoutState,
           remotePlacement: place.remotePlacement,
           repository: Boolean(place.remoteRepository),

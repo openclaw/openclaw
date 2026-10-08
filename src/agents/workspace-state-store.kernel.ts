@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -18,7 +19,7 @@ import {
 } from "./workspace-state-identity.js";
 
 export const WORKSPACE_SETUP_STATE_VERSION = 1 as const;
-export const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
+const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
 export const WORKSPACE_LEGACY_STATE_MIGRATION_KIND = "legacy-workspace-setup-files";
 export const WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND = "workspace-content-relocation";
 const MAX_WORKSPACE_ATTESTATION_FILENAME_LENGTH = 255;
@@ -409,4 +410,96 @@ export function replaceWorkspaceAttestationInDatabase(
     attestedAtMs: params.attestedAtMs,
     generatedHashes: new Map(sortedHashes),
   };
+}
+
+export function deleteWorkspaceStateRowsInDatabase(
+  database: WorkspaceStateDatabaseHandle,
+  { workspaceKey }: WorkspaceStateIdentity,
+): void {
+  const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(database.db);
+  const receiptRows = executeSqliteQuerySync(
+    database.db,
+    kysely
+      .selectFrom("migration_sources")
+      .select(["source_key", "last_run_id", "report_json"])
+      .where("migration_kind", "in", [
+        WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
+        WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND,
+      ]),
+  ).rows.filter((row) => {
+    try {
+      const report: unknown = JSON.parse(row.report_json);
+      return isRecord(report) && report.workspaceKey === workspaceKey;
+    } catch {
+      return false;
+    }
+  });
+  if (receiptRows.length > 0) {
+    const receiptKeys = receiptRows.map((row) => row.source_key);
+    executeSqliteQuerySync(
+      database.db,
+      kysely.deleteFrom("migration_sources").where("source_key", "in", receiptKeys),
+    );
+    const runIds = [...new Set(receiptRows.map((row) => row.last_run_id))];
+    const referencedRunIds = new Set(
+      executeSqliteQuerySync(
+        database.db,
+        kysely
+          .selectFrom("migration_sources")
+          .select("last_run_id")
+          .where("last_run_id", "in", runIds),
+      ).rows.map((row) => row.last_run_id),
+    );
+    const orphanedRunIds = runIds.filter((runId) => !referencedRunIds.has(runId));
+    if (orphanedRunIds.length > 0) {
+      executeSqliteQuerySync(
+        database.db,
+        kysely.deleteFrom("migration_runs").where("id", "in", orphanedRunIds),
+      );
+    }
+  }
+  executeSqliteQuerySync(
+    database.db,
+    kysely
+      .deleteFrom("workspace_generated_bootstrap_hashes")
+      .where("workspace_key", "=", workspaceKey),
+  );
+  executeSqliteQuerySync(
+    database.db,
+    kysely.deleteFrom("workspace_setup_state").where("workspace_key", "=", workspaceKey),
+  );
+  executeSqliteQuerySync(
+    database.db,
+    kysely.deleteFrom("workspace_path_aliases").where("workspace_key", "=", workspaceKey),
+  );
+}
+
+export function recentWorkspaceAttestation(
+  attestation: WorkspaceAttestation | undefined,
+  nowMs = Date.now(),
+): WorkspaceAttestation | undefined {
+  if (!attestation) {
+    return undefined;
+  }
+  const ageMs = nowMs - attestation.attestedAtMs;
+  // Clock rollback must not turn disappearance protection into permission to
+  // reseed. A healthy workspace refreshes the future-dated row below.
+  if (ageMs > WORKSPACE_ATTESTATION_RECENT_MS) {
+    return undefined;
+  }
+  return attestation;
+}
+
+export function hasWorkspaceSetupStateMarker(state: WorkspaceSetupState): boolean {
+  return Boolean(state.bootstrapSeededAt || state.setupCompletedAt);
+}
+
+export function hasRecentWorkspaceSetupState(
+  snapshot: WorkspaceStateSnapshot,
+  nowMs = Date.now(),
+): boolean {
+  if (!hasWorkspaceSetupStateMarker(snapshot.setup) || snapshot.setupUpdatedAtMs === undefined) {
+    return false;
+  }
+  return nowMs - snapshot.setupUpdatedAtMs <= WORKSPACE_ATTESTATION_RECENT_MS;
 }

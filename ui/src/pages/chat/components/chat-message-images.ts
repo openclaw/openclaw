@@ -342,15 +342,11 @@ class MessageImageResourceDirective extends AsyncDirective {
               : html`<span class="chat-image-skeleton skeleton" aria-hidden="true"></span>`
           }
         </button>
-        ${
-          this.managed && previewUrl
-            ? renderChatImageActions(title, () =>
-                loadManagedImageBlob(img.url, opts, img.artifactId),
-              )
-            : nothing
-        }
       `,
       previewUrl ? undefined : "loading",
+      this.managed && previewUrl
+        ? renderChatImageActions(title, () => loadManagedImageBlob(img.url, opts, img.artifactId))
+        : nothing,
     );
   }
 
@@ -380,6 +376,7 @@ class MessageImageResourceDirective extends AsyncDirective {
     img: ImageBlock,
     content: TemplateResult | typeof nothing,
     state?: "loading" | "unavailable",
+    actions: TemplateResult | typeof nothing = nothing,
   ) {
     const { width: imageWidth = 0, height: imageHeight = 0 } = img;
     const sized =
@@ -407,7 +404,7 @@ class MessageImageResourceDirective extends AsyncDirective {
       aria-busy=${pending ? "true" : "false"}
       role=${pending ? "status" : nothing}
       aria-label=${pending ? t("common.loading") : nothing}
-      >${content}</span
+      >${compact ? content : html`<span class="chat-image-surface">${content}</span>`}${actions}</span
     >`;
   }
 

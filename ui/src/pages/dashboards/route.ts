@@ -35,7 +35,7 @@ async function loadDashboardsRoute(context: ApplicationContext): Promise<Dashboa
   const query = dashboardSessionListQuery(context.agentSelection.state.scopeId);
   let snapshot = context.sessions.listSnapshot(query);
   if (!snapshot.result && !snapshot.loading) {
-    await context.sessions.refreshList({ ...query, force: true });
+    await context.sessions.refreshList(query);
     snapshot = context.sessions.listSnapshot(query);
   }
   return dashboardsRouteData(context, snapshot);

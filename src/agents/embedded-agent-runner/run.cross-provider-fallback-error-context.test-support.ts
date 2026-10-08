@@ -229,7 +229,9 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
     const promise = runCompactionRemovedFallbackAttempt(state);
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
-    await expect(promise).rejects.toThrow("⚠️ Agent run failed (model: anthropic/test-model).");
+    await expect(promise).rejects.toThrow(
+      "⚠️ OpenClaw couldn't finish this reply. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow` in your terminal.",
+    );
     expect(mockedIsFailoverAssistantError).toHaveBeenCalledTimes(2);
     expect(getLastFormattedAssistant()).toMatchObject({
       provider: "anthropic",

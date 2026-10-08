@@ -11,13 +11,13 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { HookRunner } from "../../plugins/hooks.js";
 import { throwIfAborted } from "./abort.js";
 import { createChannelHandler } from "./deliver-channel.js";
-import type { ChannelHandler, DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
+import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import { applyMessageSendingHook, applyReplyPayloadSendingHook } from "./deliver-hooks.js";
 import {
   buildPayloadSummary,
   normalizePayloadsForChannelDelivery,
   normalizeTransformedPayloadForDelivery,
-  resolveOutboundMediaAccessForSend,
+  resolveChannelHandlerParams,
   stripInternalRuntimeScaffoldingFromPayload,
 } from "./deliver-payload.js";
 import { createOutboundPayloadPlan, createStructuredOutboundPayloadPlan } from "./payloads.js";
@@ -53,42 +53,6 @@ function throwIfPreparationAborted(
   }
 }
 
-async function createPreparationHandler(params: DeliverOutboundPayloadsParams) {
-  const reply = normalizeOutboundReplyFacts(params);
-  return await createChannelHandler({
-    cfg: params.cfg,
-    agentId: params.session?.agentId,
-    channel: params.channel,
-    to: params.to,
-    deps: params.deps,
-    accountId: params.accountId,
-    replyToId: reply?.replyToId,
-    replyToMode: reply?.source === "implicit" ? reply.mode : undefined,
-    formatting: params.formatting,
-    threadId: params.threadId,
-    identity: params.identity,
-    gifPlayback: params.gifPlayback,
-    forceDocument: params.forceDocument,
-    silent: params.silent,
-    mediaAccess: resolveOutboundMediaAccessForSend(params, params.channel, []),
-    gatewayClientScopes: params.gatewayClientScopes,
-    conversationReadOrigin: params.conversationReadOrigin,
-    preparedMessageId: params.preparedMessageId,
-    requiredUnknownSendReconciliation: params.requiredUnknownSendReconciliation,
-  });
-}
-
-function suppressionReasonForEmpty(params: {
-  replyHookChanged: boolean;
-  messageHookChanged: boolean;
-}) {
-  return params.messageHookChanged
-    ? ("empty_after_message_sending_hook" as const)
-    : params.replyHookChanged
-      ? ("empty_after_reply_payload_sending_hook" as const)
-      : ("no_visible_payload" as const);
-}
-
 function compactPreparedPayload(payload: ReplyPayload): ReplyPayload {
   const summary = buildPayloadSummary(payload);
   const {
@@ -106,16 +70,13 @@ function compactPreparedPayload(payload: ReplyPayload): ReplyPayload {
     Object.fromEntries(
       Object.entries({
         ...rest,
-        ...(typeof payload.text === "string" ? { text: summary.text } : {}),
-        ...(summary.mediaUrls.length === 1
-          ? { mediaUrl: summary.mediaUrls[0] }
-          : summary.mediaUrls.length > 1
-            ? { mediaUrls: summary.mediaUrls }
-            : {}),
-        ...(replyToId !== undefined ? { replyToId } : {}),
-        ...(replyToTag === true ? { replyToTag: true } : {}),
-        ...(replyToCurrent === true ? { replyToCurrent: true } : {}),
-        ...(audioAsVoice === true ? { audioAsVoice: true } : {}),
+        text: typeof payload.text === "string" ? summary.text : undefined,
+        mediaUrl: summary.mediaUrls.length === 1 ? summary.mediaUrls[0] : undefined,
+        mediaUrls: summary.mediaUrls.length > 1 ? summary.mediaUrls : undefined,
+        replyToId,
+        replyToTag: replyToTag === true ? true : undefined,
+        replyToCurrent: replyToCurrent === true ? true : undefined,
+        audioAsVoice: audioAsVoice === true ? true : undefined,
       }).filter(([, value]) => value !== undefined),
     ) as ReplyPayload,
   );
@@ -176,15 +137,7 @@ export async function prepareOutboundPayloadBatch(
   params: DeliverOutboundPayloadsParams,
   options?: OutboundPayloadPreparationOptions,
 ): Promise<PreparedOutboundBatch> {
-  const handler = await createPreparationHandler(params);
-  const plan = createOutboundPayloadPlan(params.payloads, {
-    cfg: params.cfg,
-    sessionKey: params.session?.policyKey ?? params.session?.key,
-    surface: params.channel,
-    conversationType: params.session?.conversationType,
-    extractMarkdownImages: handler.extractMarkdownImages,
-  });
-  return await prepareOutboundPlan(params, plan, handler, options);
+  return await prepareOutboundPlan(params, undefined, options);
 }
 
 export async function prepareStructuredOutboundPayloadBatch(
@@ -192,33 +145,37 @@ export async function prepareStructuredOutboundPayloadBatch(
   plan: readonly OutboundPayloadPlan[],
   options?: OutboundPayloadPreparationOptions,
 ): Promise<PreparedOutboundBatch> {
-  const handler = await createPreparationHandler(params);
-  const channelPlan = handler.extractMarkdownImages
-    ? plan.flatMap((entry) => {
-        const payload = projectMarkdownImages(entry.payload);
-        if (payload === entry.payload) {
-          return [entry];
-        }
-        const [projected] = createStructuredOutboundPayloadPlan([payload]);
-        return projected ? [{ ...projected, sourceIndex: entry.sourceIndex }] : [];
-      })
-    : plan;
-  return await prepareOutboundPlan(
-    params,
-    channelPlan,
-    handler,
-    options,
-    preserveTransformedPayloadMetadata,
-  );
+  return await prepareOutboundPlan(params, plan, options);
 }
 
 async function prepareOutboundPlan(
   params: DeliverOutboundPayloadsParams,
-  plan: readonly OutboundPayloadPlan[],
-  handler: ChannelHandler,
+  structuredPlan: readonly OutboundPayloadPlan[] | undefined,
   options?: OutboundPayloadPreparationOptions,
-  preservePayloadMetadata?: (source: ReplyPayload, payload: ReplyPayload) => ReplyPayload,
 ): Promise<PreparedOutboundBatch> {
+  const handler = await createChannelHandler(
+    resolveChannelHandlerParams(params, normalizeOutboundReplyFacts(params), []),
+  );
+  let plan =
+    structuredPlan ??
+    createOutboundPayloadPlan(params.payloads, {
+      cfg: params.cfg,
+      sessionKey: params.session?.policyKey ?? params.session?.key,
+      surface: params.channel,
+      conversationType: params.session?.conversationType,
+      extractMarkdownImages: handler.extractMarkdownImages,
+    });
+  if (structuredPlan && handler.extractMarkdownImages) {
+    plan = structuredPlan.flatMap((entry) => {
+      const payload = projectMarkdownImages(entry.payload);
+      if (payload === entry.payload) {
+        return [entry];
+      }
+      const [projected] = createStructuredOutboundPayloadPlan([payload]);
+      return projected ? [{ ...projected, sourceIndex: entry.sourceIndex }] : [];
+    });
+  }
+  const preservePayloadMetadata = structuredPlan ? preserveTransformedPayloadMetadata : undefined;
   const copyMetadata = preservePayloadMetadata ?? ((_source, payload) => payload);
   const normalized = normalizePayloadsForChannelDelivery(plan, handler, preservePayloadMetadata);
   const normalizedIndexes = new Set(normalized.map((entry) => entry.index));
@@ -237,93 +194,67 @@ async function prepareOutboundPlan(
   const hasModifyingHooks = hasReplyPayloadSendingHooks || hasMessageSendingHooks;
   const { resolveCurrentReplyTo } = createReplyToDeliveryPolicy(params);
   const sessionKeyForHooks = params.mirror?.sessionKey ?? params.session?.key;
+  const modifiers = [
+    {
+      changedKey: "replyHookChanged",
+      cancellationReason: "cancelled_by_reply_payload_sending_hook",
+      apply: (payload: ReplyPayload) =>
+        applyReplyPayloadSendingHook({ hook: params.replyPayloadSendingHook, payload }, hookRunner),
+    },
+    {
+      changedKey: "messageHookChanged",
+      cancellationReason: "cancelled_by_message_sending_hook",
+      apply: (payload: ReplyPayload) =>
+        applyMessageSendingHook({
+          hookRunner,
+          enabled: hasMessageSendingHooks,
+          payload,
+          payloadSummary: buildPayloadSummary(payload),
+          to: params.to,
+          channel: params.channel,
+          accountId: params.accountId,
+          replyToId: resolveCurrentReplyTo(payload).replyToId,
+          threadId: params.threadId,
+          sessionKey: sessionKeyForHooks,
+        }),
+    },
+  ] as const;
   let modifierBoundaryEntered = false;
 
-  for (const { index: sourceIndex, payload } of normalized) {
+  payloads: for (const { index: sourceIndex, payload } of normalized) {
     throwIfPreparationAborted(params.abortSignal, sourceIndex, payload);
     if (hasModifyingHooks && !modifierBoundaryEntered) {
       await options?.onBeforeFirstModifier?.();
       throwIfPreparationAborted(params.abortSignal, sourceIndex, payload);
       modifierBoundaryEntered = true;
     }
-    let replyHookResult: Awaited<ReturnType<typeof applyReplyPayloadSendingHook>>;
-    try {
-      replyHookResult = await applyReplyPayloadSendingHook(
-        {
-          hook: params.replyPayloadSendingHook,
-          payload,
-        },
-        hookRunner,
-      );
-    } catch (error) {
-      throw new OutboundPayloadPreparationError(error, sourceIndex, payload);
-    }
-    const replyHookPayload = copyMetadata(payload, replyHookResult.payload);
-    throwIfPreparationAborted(params.abortSignal, sourceIndex, replyHookPayload);
-    if (replyHookResult.cancelled) {
-      entries.push({
-        sourceIndex,
-        status: "suppressed",
-        reason: "cancelled_by_reply_payload_sending_hook",
-      });
-      continue;
-    }
-
-    let replyPayload = copyMetadata(
-      replyHookPayload,
-      stripInternalRuntimeScaffoldingFromPayload(replyHookPayload),
-    );
-    if (handler.extractMarkdownImages && replyHookResult.changed) {
-      replyPayload = projectMarkdownImages(replyPayload);
-    }
-    let messageHookResult: Awaited<ReturnType<typeof applyMessageSendingHook>>;
-    try {
-      messageHookResult = await applyMessageSendingHook({
-        hookRunner,
-        enabled: hasMessageSendingHooks,
-        payload: replyPayload,
-        payloadSummary: buildPayloadSummary(replyPayload),
-        to: params.to,
-        channel: params.channel,
-        accountId: params.accountId,
-        replyToId: resolveCurrentReplyTo(replyPayload).replyToId,
-        threadId: params.threadId,
-        sessionKey: sessionKeyForHooks,
-      });
-    } catch (error) {
-      // Modifier handlers are fail-open. Only a host invariant failure can
-      // escape here, and atomic preparation must attribute it before aborting.
-      throw new OutboundPayloadPreparationError(error, sourceIndex, replyPayload);
-    }
-    const messageHookPayload = copyMetadata(replyPayload, messageHookResult.payload);
-    throwIfPreparationAborted(params.abortSignal, sourceIndex, messageHookPayload);
-    if (messageHookResult.cancelled) {
-      const hookEffect =
-        messageHookResult.cancelReason || messageHookResult.hookMetadata
-          ? {
-              ...(messageHookResult.cancelReason
-                ? { cancelReason: messageHookResult.cancelReason }
-                : {}),
-              ...(messageHookResult.hookMetadata
-                ? { metadata: messageHookResult.hookMetadata }
-                : {}),
-            }
-          : undefined;
-      entries.push({
-        sourceIndex,
-        status: "suppressed",
-        reason: "cancelled_by_message_sending_hook",
-        ...(hookEffect ? { hookEffect } : {}),
-      });
-      continue;
-    }
-
-    let postHookPayload = copyMetadata(
-      messageHookPayload,
-      stripInternalRuntimeScaffoldingFromPayload(messageHookPayload),
-    );
-    if (handler.extractMarkdownImages && messageHookResult.contentRewritten) {
-      postHookPayload = projectMarkdownImages(postHookPayload);
+    const changes = { replyHookChanged: false, messageHookChanged: false };
+    let postHookPayload = payload;
+    for (const modifier of modifiers) {
+      let result: Awaited<ReturnType<typeof applyMessageSendingHook>>;
+      try {
+        result = await modifier.apply(postHookPayload);
+      } catch (error) {
+        // Modifier handlers are fail-open. Only a host invariant failure can
+        // escape here, and atomic preparation must attribute it before aborting.
+        throw new OutboundPayloadPreparationError(error, sourceIndex, postHookPayload);
+      }
+      postHookPayload = copyMetadata(postHookPayload, result.payload);
+      throwIfPreparationAborted(params.abortSignal, sourceIndex, postHookPayload);
+      if (result.cancelled) {
+        entries.push({
+          sourceIndex,
+          status: "suppressed",
+          reason: modifier.cancellationReason,
+          ...(result.hookEffect ? { hookEffect: result.hookEffect } : {}),
+        });
+        continue payloads;
+      }
+      changes[modifier.changedKey] = result.changed;
+      postHookPayload = stripInternalRuntimeScaffoldingFromPayload(postHookPayload);
+      if (handler.extractMarkdownImages && result.changed) {
+        postHookPayload = projectMarkdownImages(postHookPayload);
+      }
     }
     // Adapter normalization may project visible text into transport fields. Re-run it
     // after policy so durable custody cannot retain a stale pre-rewrite projection.
@@ -336,10 +267,11 @@ async function prepareOutboundPlan(
       entries.push({
         sourceIndex,
         status: "suppressed",
-        reason: suppressionReasonForEmpty({
-          replyHookChanged: replyHookResult.changed,
-          messageHookChanged: messageHookResult.contentRewritten,
-        }),
+        reason: changes.messageHookChanged
+          ? "empty_after_message_sending_hook"
+          : changes.replyHookChanged
+            ? "empty_after_reply_payload_sending_hook"
+            : "no_visible_payload",
       });
       continue;
     }
@@ -348,19 +280,17 @@ async function prepareOutboundPlan(
       sourceIndex,
       status: "accepted",
       payload: compactPayload,
-      replyHookChanged: replyHookResult.changed,
-      messageHookChanged: messageHookResult.contentRewritten,
+      ...changes,
       preparedMediaCount: buildPayloadSummary(compactPayload).mediaUrls.length,
     });
   }
 
+  const runId = params.runId ?? params.replyPayloadSendingHook?.runId;
   return {
     schemaVersion: PREPARED_OUTBOUND_BATCH_SCHEMA_VERSION,
     sourcePayloadCount: params.payloads.length,
     channelNormalized: true,
-    ...((params.runId ?? params.replyPayloadSendingHook?.runId)
-      ? { runId: params.runId ?? params.replyPayloadSendingHook?.runId }
-      : {}),
+    ...(runId ? { runId } : {}),
     ...(params.executionIdentityToken
       ? { executionIdentityToken: params.executionIdentityToken }
       : {}),

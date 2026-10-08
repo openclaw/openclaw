@@ -89,6 +89,12 @@ openclaw doctor
   </Tab>
 </Tabs>
 
+If a plugin cannot load because its source capture runs out of disk space,
+Doctor reports `ENOSPC` with the underlying filesystem error. Free space on the
+affected filesystem and rerun Doctor. Standalone `--non-interactive` Doctor
+exits with code `1`; update-invoked Doctor records the problem as a warning so
+the update can continue while keeping the diagnostic visible.
+
 With `OPENCLAW_GATEWAY_STARTUP_TRACE=1`, Doctor prints per-phase timings (`doctor.*` and `cli.bootstrap.*` lines) to stderr.
 
 To review changes before writing, open the config file first:

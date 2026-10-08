@@ -7,6 +7,7 @@ import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import {
   adoptUpdateCampaignMock,
   cancelManagedServiceUpdateHandoffMock,
+  captureUpdateRunPayload,
   detectRespawnSupervisorMock,
   invokeUpdateRun,
   mockGlobalInstallSurface,
@@ -19,6 +20,28 @@ import {
 } from "./update.test-harness.js";
 
 describe("update.run unexpected-error diagnostics", () => {
+  it("refuses exhausted Git discovery before adopting a campaign", async () => {
+    const root = "/tmp/openclaw-source";
+    resolveStartupInstallStatusMock.mockResolvedValueOnce({
+      root,
+      installReceipt: null,
+      status: {
+        root,
+        installKind: "git",
+        packageManager: "pnpm",
+        error: {
+          status: "failed",
+          message: "Git update facts unavailable after two probes",
+          timeoutMs: 45_000,
+        },
+      },
+    });
+    const payload = await captureUpdateRunPayload();
+    expect(payload?.result).toMatchObject({ status: "error", reason: "unexpected-error" });
+    expect(adoptUpdateCampaignMock).not.toHaveBeenCalled();
+    expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
+  });
+
   it("logs a terminal failure at warning level with its public reason", async () => {
     mockGlobalInstallSurface();
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
@@ -154,6 +177,7 @@ describe("update.run unexpected-error diagnostics", () => {
               location: "src/infra/update-managed-service-handoff.ts:42:7",
               message: expect.stringContaining("Connection refused"),
             }),
+            expect.objectContaining({ code: "handoff-permission-denied" }),
           ],
         }),
       );

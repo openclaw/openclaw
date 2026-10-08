@@ -8,9 +8,9 @@ import type { WorkerInferenceStore } from "./inference-store.js";
 import type { WorkerInferenceExecutor } from "./inference.js";
 import type { WorkerLiveEventReceiver } from "./live-events.js";
 import type { WorkerNodeDesktopCarrier } from "./node-desktop-carrier.js";
-import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerNodePortalCarrier } from "./portal-node-carrier.js";
 import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
+import type { PreparedPoolPresenceOptions } from "./prepared-pool-presence.js";
 import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.types.js";
 import type { WorkerEnvironmentSessionAttachmentOptions } from "./session-attachment-service.js";
 import type { WorkerTranscriptCommitApplication } from "./transcript-commit.js";
@@ -29,21 +29,8 @@ export type WorkerEnvironmentCreateRequest = {
   admittedIntent?: WorkerProviderPreparedIntent;
 };
 
-export type WorkerEnvironmentServiceErrorCode =
-  | "profile_not_found"
-  | "provider_not_found"
-  | "environment_not_found"
-  | "invalid_profile"
-  | "invalid_project"
-  | "capacity"
-  | "invalid_state"
-  | "desktop_app_not_found"
-  | "unsupported_platform"
-  | "launcher_failure"
-  | "provider_failure"
-  | "bootstrap_failure";
-
 export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions &
+  Pick<PreparedPoolPresenceOptions, "resolveHumanPresenceDemand" | "presenceDemandStore"> &
   WorkerEnvironmentSessionAttachmentOptions & {
     prepareComputer?: (
       claim: import("./placement-store.js").WorkerSessionTurnClaim,
@@ -65,7 +52,6 @@ export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOption
     bootstrapCallTimeoutMs?: number;
     workerCredentialTtlMs?: number;
     generateWorkerCredential?: (bytes: number) => string;
-    now?: () => number;
     logger?: { warn: (message: string) => void };
     applyTranscriptCommit?: WorkerTranscriptCommitApplication;
     liveEvents?: Pick<
@@ -74,10 +60,12 @@ export type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOption
     >;
     executeInference: WorkerInferenceExecutor;
     inferenceStore?: WorkerInferenceStore;
-    placementStore?: WorkerSessionPlacementGate;
     createGatewayTools?: (params: {
       identity: WorkerConnectionIdentity;
+      inheritedToolPolicySource?: "sender";
       skillWorkshop?: AnyAgentTool;
+      portalAvailable?: boolean;
+      prepareTools?: (adapters: AnyAgentTool[]) => AnyAgentTool[] | Promise<AnyAgentTool[]>;
     }) => Promise<AnyAgentTool[]>;
   };
 

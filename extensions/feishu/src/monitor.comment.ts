@@ -65,14 +65,7 @@ type ResolveDriveCommentEventParams = {
   abortSignal?: AbortSignal;
 };
 
-type FeishuRequestClient = ReturnType<typeof createFeishuClient> & {
-  request(params: {
-    method: "GET" | "POST";
-    url: string;
-    data: unknown;
-    timeout: number;
-  }): Promise<unknown>;
-};
+type FeishuRequestClient = ReturnType<typeof createFeishuClient>;
 
 type FeishuOpenApiResponse<T> = {
   code?: number;
@@ -115,16 +108,6 @@ type ResolvedWholeCommentTimelineEntry = {
   content: ParsedCommentContent;
 };
 
-function safeJsonStringify(value: unknown): string {
-  try {
-    return JSON.stringify(value);
-  } catch (error) {
-    return JSON.stringify({
-      error: formatErrorMessage(error),
-    });
-  }
-}
-
 function truncatePromptText(
   text: string | undefined,
   maxLength = FEISHU_PROMPT_TEXT_LIMIT,
@@ -142,16 +125,17 @@ function formatPromptTextValue(text: string | undefined): string {
   return JSON.stringify(truncatePromptText(text));
 }
 
-function compareCommentTimelineEntries(
-  left: { createTime?: number; stableId?: string },
-  right: { createTime?: number; stableId?: string },
+function compareCommentTimelineEntries<T extends { createTime?: number }>(
+  left: T,
+  right: T,
+  stableId: (entry: T) => string | undefined,
 ): number {
   const leftTime = left.createTime ?? Number.MAX_SAFE_INTEGER;
   const rightTime = right.createTime ?? Number.MAX_SAFE_INTEGER;
   if (leftTime !== rightTime) {
     return leftTime - rightTime;
   }
-  return (left.stableId ?? "").localeCompare(right.stableId ?? "");
+  return (stableId(left) ?? "").localeCompare(stableId(right) ?? "");
 }
 
 function formatLinkedDocumentInline(link: ParsedCommentLinkedDocument): string {
@@ -196,7 +180,7 @@ function formatLinkedDocumentsInlineSummary(
 }
 
 function summarizeCommentRepliesForLog(replies: FeishuDriveCommentReply[]): string {
-  return safeJsonStringify(
+  return JSON.stringify(
     replies.map((reply) => ({
       reply_id: reply.reply_id,
       text_len: extractReplyText(reply)?.length ?? 0,
@@ -408,11 +392,11 @@ async function requestFeishuOpenApi<T>(params: {
       feishu_msg: readString(responseData?.msg),
       feishu_log_id: readString(responseData?.log_id),
     };
-    return safeJsonStringify(details);
+    return JSON.stringify(details);
   };
 
   const result = await raceWithTimeoutAndAbort(
-    params.client.request({
+    params.client.request<T>({
       method: params.method,
       url: params.url,
       data: params.data ?? {},
@@ -429,25 +413,6 @@ async function requestFeishuOpenApi<T>(params: {
     params.logger?.(`${params.errorLabel}: request timed out or returned no data`);
   }
   return result;
-}
-
-async function resolveCommentReplyContext(
-  params: CommentContentContext & { reply: FeishuDriveCommentReply },
-): Promise<ResolvedCommentReplyContext> {
-  const userId = normalizeString(params.reply.user_id);
-  const normalizedBotOpenIds = new Set(
-    normalizeTrimmedStringList(Array.from(params.botOpenIds ?? [])),
-  );
-  return {
-    replyId: normalizeString(params.reply.reply_id),
-    userId,
-    createTime: typeof params.reply.create_time === "number" ? params.reply.create_time : undefined,
-    isBotAuthored: typeof userId === "string" && normalizedBotOpenIds.has(userId),
-    content: await resolveParsedCommentContent({
-      ...params,
-      elements: isRecord(params.reply.content) ? params.reply.content.elements : undefined,
-    }),
-  };
 }
 
 function selectCommentThreadPromptReplies(
@@ -587,20 +552,7 @@ async function fetchDriveCommentContext(
     botOpenIds?: Iterable<string | undefined>;
     abortSignal?: AbortSignal;
   },
-): Promise<{
-  documentTitle?: string;
-  documentUrl?: string;
-  isWholeComment?: boolean;
-  quoteText?: string;
-  rootCommentText?: string;
-  targetReplyText?: string;
-  rootCommentContent?: ParsedCommentContent;
-  targetReplyContent?: ParsedCommentContent;
-  currentCommentThreadReplies: ResolvedCommentReplyContext[];
-  wholeCommentTimeline: ResolvedWholeCommentTimelineEntry[];
-  nearestBotWholeCommentAfter?: ResolvedWholeCommentTimelineEntry;
-  nearestBotWholeCommentBefore?: ResolvedWholeCommentTimelineEntry;
-}> {
+) {
   const [metaResponse, commentResponse] = await Promise.all([
     requestFeishuOpenApi<FeishuDriveMetaBatchQueryResponse>({
       client: params.client,
@@ -642,15 +594,12 @@ async function fetchDriveCommentContext(
       `count=${embeddedReplies.length} summary=${summarizeCommentRepliesForLog(embeddedReplies)}`,
   );
   const embeddedTargetReply = params.replyId
-    ? embeddedReplies.find((reply) => reply.reply_id?.trim() === params.replyId?.trim())
+    ? embeddedReplies.find((reply) => reply.reply_id?.trim() === params.replyId)
     : embeddedReplies.at(-1);
 
   let replies = embeddedReplies;
-  let fetchedMatchedReply = params.replyId
-    ? replies.find((reply) => reply.reply_id?.trim() === params.replyId?.trim())
-    : undefined;
-  const needsExtraReplies =
-    !embeddedTargetReply || replies.length === 0 || commentCard?.has_more === true;
+  let fetchedMatchedReply = params.replyId ? embeddedTargetReply : undefined;
+  const needsExtraReplies = !embeddedTargetReply || commentCard?.has_more === true;
   if (needsExtraReplies) {
     params.logger?.(
       `feishu[${params.accountId}]: fetching extra comment replies comment=${params.commentId} ` +
@@ -664,12 +613,12 @@ async function fetchDriveCommentContext(
       params.logger?.(
         `feishu[${params.accountId}]: fetched extra comment replies comment=${params.commentId} ` +
           `count=${fetched.items.length} ` +
-          `log_ids=${safeJsonStringify(fetched.logIds)} ` +
+          `log_ids=${JSON.stringify(fetched.logIds)} ` +
           `summary=${summarizeCommentRepliesForLog(fetched.items)}`,
       );
       replies = fetched.items;
       fetchedMatchedReply = params.replyId
-        ? replies.find((reply) => reply.reply_id?.trim() === params.replyId?.trim())
+        ? replies.find((reply) => reply.reply_id?.trim() === params.replyId)
         : undefined;
     }
     if (params.replyId && !embeddedTargetReply && !fetchedMatchedReply) {
@@ -694,7 +643,7 @@ async function fetchDriveCommentContext(
           params.logger?.(
             `feishu[${params.accountId}]: fetched retried comment replies comment=${params.commentId} ` +
               `attempt=${attempt} count=${retried.items.length} ` +
-              `log_ids=${safeJsonStringify(retried.logIds)} ` +
+              `log_ids=${JSON.stringify(retried.logIds)} ` +
               `summary=${summarizeCommentRepliesForLog(retried.items)}`,
           );
           replies = retried.items;
@@ -709,7 +658,7 @@ async function fetchDriveCommentContext(
 
   const rootReply = replies[0] ?? embeddedReplies[0];
   const targetReply = params.replyId
-    ? (embeddedTargetReply ?? fetchedMatchedReply ?? undefined)
+    ? (embeddedTargetReply ?? fetchedMatchedReply)
     : (replies.at(-1) ?? embeddedTargetReply ?? rootReply);
   const matchSource = params.replyId
     ? embeddedTargetReply
@@ -725,8 +674,8 @@ async function fetchDriveCommentContext(
   params.logger?.(
     `feishu[${params.accountId}]: comment reply resolution comment=${params.commentId} ` +
       `requested_reply=${params.replyId ?? "none"} match_source=${matchSource} ` +
-      `root=${safeJsonStringify({ reply_id: rootReply?.reply_id, text_len: extractReplyText(rootReply)?.length ?? 0 })} ` +
-      `target=${safeJsonStringify({ reply_id: targetReply?.reply_id, text_len: extractReplyText(targetReply)?.length ?? 0 })}`,
+      `root=${JSON.stringify({ reply_id: rootReply?.reply_id, text_len: extractReplyText(rootReply)?.length ?? 0 })} ` +
+      `target=${JSON.stringify({ reply_id: targetReply?.reply_id, text_len: extractReplyText(targetReply)?.length ?? 0 })}`,
   );
   const meta = metaResponse?.code === 0 ? metaResponse.data?.metas?.[0] : undefined;
   const currentDocument = {
@@ -741,20 +690,26 @@ async function fetchDriveCommentContext(
     logger: params.logger,
     accountId: params.accountId,
   };
+  const normalizedBotOpenIds = new Set(
+    normalizeTrimmedStringList(Array.from(params.botOpenIds ?? [])),
+  );
   const resolvedReplies = await Promise.all(
-    replies.map((reply) => resolveCommentReplyContext({ ...contentContext, reply })),
+    replies.map(async (reply): Promise<ResolvedCommentReplyContext> => {
+      const userId = normalizeString(reply.user_id);
+      return {
+        replyId: normalizeString(reply.reply_id),
+        userId,
+        createTime: typeof reply.create_time === "number" ? reply.create_time : undefined,
+        isBotAuthored: userId !== undefined && normalizedBotOpenIds.has(userId),
+        content: await resolveParsedCommentContent({
+          ...contentContext,
+          elements: isRecord(reply.content) ? reply.content.elements : undefined,
+        }),
+      };
+    }),
   );
   resolvedReplies.sort((left, right) =>
-    compareCommentTimelineEntries(
-      {
-        createTime: left.createTime,
-        stableId: left.replyId,
-      },
-      {
-        createTime: right.createTime,
-        stableId: right.replyId,
-      },
-    ),
+    compareCommentTimelineEntries(left, right, (reply) => reply.replyId),
   );
   const rootReplyContext =
     resolvedReplies.find((reply) => reply.replyId === normalizeString(rootReply?.reply_id)) ??
@@ -773,9 +728,6 @@ async function fetchDriveCommentContext(
     wholeCommentTimeline = await Promise.all(
       wholeComments.map(async (comment) => {
         const rootWholeReply = comment.reply_list?.replies?.[0];
-        const normalizedBotOpenIds = new Set(
-          normalizeTrimmedStringList(Array.from(params.botOpenIds ?? [])),
-        );
         const content = await resolveParsedCommentContent({
           ...contentContext,
           elements: isRecord(rootWholeReply?.content) ? rootWholeReply.content.elements : undefined,
@@ -791,8 +743,7 @@ async function fetchDriveCommentContext(
               : typeof rootWholeReply?.create_time === "number"
                 ? rootWholeReply.create_time
                 : undefined,
-          isBotAuthored:
-            typeof commentUserId === "string" && normalizedBotOpenIds.has(commentUserId),
+          isBotAuthored: commentUserId !== undefined && normalizedBotOpenIds.has(commentUserId),
           content,
         };
       }),
@@ -800,16 +751,7 @@ async function fetchDriveCommentContext(
     wholeCommentTimeline = wholeCommentTimeline
       .filter((entry) => Boolean(entry.commentId))
       .toSorted((left, right) =>
-        compareCommentTimelineEntries(
-          {
-            createTime: left.createTime,
-            stableId: left.commentId,
-          },
-          {
-            createTime: right.createTime,
-            stableId: right.commentId,
-          },
-        ),
+        compareCommentTimelineEntries(left, right, (entry) => entry.commentId),
       );
   }
 
@@ -903,8 +845,8 @@ function buildDriveCommentSurfacePrompt(
   if (params.isWholeComment === true) {
     lines.push("This is a whole-document comment.");
   }
-  if (params.replyId?.trim()) {
-    lines.push(`reply_id: ${params.replyId.trim()}`);
+  if (params.replyId) {
+    lines.push(`reply_id: ${params.replyId}`);
   }
   if (params.targetReplyContent?.semanticText) {
     lines.push(
@@ -949,21 +891,17 @@ function buildDriveCommentSurfacePrompt(
         currentCommentId: params.commentId,
       }),
     );
-    if (params.nearestBotWholeCommentAfter) {
-      lines.push(
-        `Nearest bot-authored whole-comment after the current comment: comment_id=${params.nearestBotWholeCommentAfter.commentId} text=${formatPromptTextValue(
-          params.nearestBotWholeCommentAfter.content.semanticText ??
-            params.nearestBotWholeCommentAfter.content.plainText,
-        )}`,
-      );
-    }
-    if (params.nearestBotWholeCommentBefore) {
-      lines.push(
-        `Nearest bot-authored whole-comment before the current comment: comment_id=${params.nearestBotWholeCommentBefore.commentId} text=${formatPromptTextValue(
-          params.nearestBotWholeCommentBefore.content.semanticText ??
-            params.nearestBotWholeCommentBefore.content.plainText,
-        )}`,
-      );
+    for (const [direction, entry] of [
+      ["after", params.nearestBotWholeCommentAfter],
+      ["before", params.nearestBotWholeCommentBefore],
+    ] as const) {
+      if (entry) {
+        lines.push(
+          `Nearest bot-authored whole-comment ${direction} the current comment: comment_id=${entry.commentId} text=${formatPromptTextValue(
+            entry.content.semanticText ?? entry.content.plainText,
+          )}`,
+        );
+      }
     }
     lines.push(
       "For this whole-document comment, use the whole-comment timeline above as the primary source for phrases like 'just now', 'previous result', 'that summary', or 'write it back'.",
@@ -1080,9 +1018,7 @@ export async function resolveDriveCommentEventTurn(params: ResolveDriveCommentEv
 
   const client = createClient
     ? createClient(account ?? ({ accountId } as ResolvedFeishuAccount))
-    : (createFeishuClient(
-        (await import("./accounts.js")).resolveFeishuAccount({ cfg, accountId }),
-      ) as FeishuRequestClient);
+    : createFeishuClient((await import("./accounts.js")).resolveFeishuAccount({ cfg, accountId }));
   const context = await fetchDriveCommentContext({
     client,
     fileToken,
@@ -1134,8 +1070,14 @@ export function parseFeishuDriveCommentNoticeEventPayload(
     return null;
   }
   const noticeMeta = value.notice_meta;
-  const fromUserId = isRecord(noticeMeta.from_user_id) ? noticeMeta.from_user_id : undefined;
-  const toUserId = isRecord(noticeMeta.to_user_id) ? noticeMeta.to_user_id : undefined;
+  const readUserId = (userIdValue: unknown): FeishuDriveCommentUserId | undefined =>
+    isRecord(userIdValue)
+      ? {
+          open_id: readString(userIdValue.open_id),
+          user_id: readString(userIdValue.user_id),
+          union_id: readString(userIdValue.union_id),
+        }
+      : undefined;
   return {
     comment_id: readString(value.comment_id),
     event_id: readString(value.event_id),
@@ -1143,21 +1085,9 @@ export function parseFeishuDriveCommentNoticeEventPayload(
     notice_meta: {
       file_token: readString(noticeMeta.file_token),
       file_type: readString(noticeMeta.file_type),
-      from_user_id: fromUserId
-        ? {
-            open_id: readString(fromUserId.open_id),
-            user_id: readString(fromUserId.user_id),
-            union_id: readString(fromUserId.union_id),
-          }
-        : undefined,
+      from_user_id: readUserId(noticeMeta.from_user_id),
       notice_type: readString(noticeMeta.notice_type),
-      to_user_id: toUserId
-        ? {
-            open_id: readString(toUserId.open_id),
-            user_id: readString(toUserId.user_id),
-            union_id: readString(toUserId.union_id),
-          }
-        : undefined,
+      to_user_id: readUserId(noticeMeta.to_user_id),
     },
     reply_id: readString(value.reply_id),
     timestamp: readString(value.timestamp),

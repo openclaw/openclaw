@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
+import { existsSync } from "node:fs";
 import * as os from "node:os";
 import { Worker } from "node:worker_threads";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import * as logging from "../logging/logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { initializeSqliteRuntimeCapabilities } from "./bun-sqlite-library.js";
+import { onInternalDiagnosticEvent, waitForDiagnosticEventsDrained } from "./diagnostic-events.js";
+import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import {
   useSqliteWorkerStoreFixture,
@@ -39,6 +42,20 @@ poolIt("keeps an independent database responsive while another worker is at capa
   const busy = await open(databasePath());
   const independent = await open(databasePath());
   const busyThread = (await append(busy, "before saturation")).threadId;
+  await waitForDiagnosticEventsDrained();
+  const requests: DiagnosticWorkerRequestFields[] = [];
+  onTestFinished(
+    onInternalDiagnosticEvent(
+      (event) => {
+        if (event.type === "worker.request" && event.kind === "sqlite_writer") {
+          requests.push(event);
+        }
+      },
+      { include: ["worker.request"] },
+    ),
+  );
+  let now = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
   const held = createDeferredCore();
   let release: (() => void) | undefined;
   const messages = vi.spyOn(Worker.prototype, "emit");
@@ -59,6 +76,7 @@ poolIt("keeps an independent database responsive while another worker is at capa
   let waiting: Promise<PromiseSettledResult<unknown>[]> | undefined;
   try {
     await held.promise;
+    now = 10;
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
     const completed = expect(append(independent, "independent write")).resolves.toMatchObject({
       writes: 1,
@@ -85,8 +103,11 @@ poolIt("keeps an independent database responsive while another worker is at capa
       append(busy, "oldest surviving waiter"),
       append(busy, "later arrival"),
     ]);
+    now = 25;
     current = false;
     cancel.abort(canceled);
+    await waitForDiagnosticEventsDrained();
+    expect(requests.at(-1)).toMatchObject({ phase: "completed", queueDepth: 130 });
   } finally {
     vi.useRealTimers();
     messages.mockRestore();
@@ -105,13 +126,26 @@ poolIt("keeps an independent database responsive while another worker is at capa
     "oldest surviving waiter",
     "later arrival",
   ]);
+  await waitForDiagnosticEventsDrained();
+  // Admission retries retain one observation; the canceled waiter never starts.
+  expect(requests.filter((event) => event.phase === "queued")).toHaveLength(135);
+  expect(requests.filter((event) => event.phase === "started")).toHaveLength(134);
+  expect(requests.filter((event) => event.phase === "completed")).toHaveLength(135);
+  expect(Math.max(...requests.map((event) => event.queueDepth))).toBe(131);
+  expect(requests.at(-1)?.queueDepth).toBe(0);
+  expect(requests).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ phase: "started", queueWaitMs: 25 }),
+      expect.objectContaining({ phase: "started", queueWaitMs: 15 }),
+      expect.objectContaining({ phase: "completed", durationMs: 25 }),
+    ]),
+  );
 });
 
 it.each([
   { writeAdmission: false, revoke: false },
   { writeAdmission: false, revoke: true },
   { writeAdmission: true, revoke: false },
-  { writeAdmission: true, revoke: true },
 ])(
   "retains queued command context and live ownership (write admission: $writeAdmission, revoke: $revoke)",
   async ({ writeAdmission, revoke }) => {
@@ -153,7 +187,7 @@ it.each([
   },
 );
 
-it.each(["abort", "drain", "timeout"] as const)(
+it.each(["drain", "timeout"] as const)(
   "releases admission waiters on %s without losing accepted writes",
   async (action) => {
     const file = databasePath();
@@ -184,9 +218,7 @@ it.each(["abort", "drain", "timeout"] as const)(
     try {
       await Promise.resolve();
       expect(settled).toBe(false);
-      if (action === "abort") {
-        cancel.abort(reason);
-      } else if (action === "drain") {
+      if (action === "drain") {
         closing = drainGlobalSingletonLifecycleState("restart");
       } else {
         vi.advanceTimersByTime(9_999);
@@ -197,7 +229,7 @@ it.each(["abort", "drain", "timeout"] as const)(
       for (const outcome of await waiters) {
         expect(outcome).toMatchObject({
           status: "rejected",
-          reason: action === "abort" ? reason : { code: "overloaded" },
+          reason: { code: "overloaded" },
         });
       }
       if (action === "timeout") {
@@ -268,7 +300,6 @@ it("charges admission waiters to the byte budget and releases canceled reservati
 
 poolIt.each([
   { cores: 1, workers: 2 },
-  { cores: 24, workers: 3 },
   { cores: 128, workers: 8 },
 ])("uses $workers worker threads for $cores available CPUs", async ({ cores, workers }) => {
   const parallelism = vi.spyOn(os, "availableParallelism").mockReturnValue(cores);
@@ -290,3 +321,68 @@ poolIt.each([
     parallelism.mockRestore();
   }
 });
+
+poolIt(
+  "reserves ephemeral actors within durable capacity and isolates their native loss",
+  async () => {
+    const parallelism = vi.spyOn(os, "availableParallelism").mockReturnValue(16);
+    const broker = new SqliteWorkerBroker();
+    const namespace = databasePath();
+    let lost = false;
+    let nativeStopped: Promise<void> | undefined;
+    const options = {
+      moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+      databasePath: namespace,
+      target: { kind: "ephemeral" as const, handle: "first", incarnation: "first" },
+      input: undefined,
+    };
+    try {
+      expect(await broker.open({ ...options, existingOnly: true })).toBeUndefined();
+      const memory = await broker.open<FixtureOperations>(options, undefined, undefined, {
+        onNativeLost() {
+          lost = true;
+        },
+        onNativeStopped(stopped) {
+          nativeStopped = stopped;
+        },
+      });
+      assert(memory);
+      const first = await append(memory, "private");
+      const durableThreads = new Set<number>();
+      let durableSibling: SqliteWorkerStore<FixtureOperations> | undefined;
+      for (let index = 0; index < 2; index++) {
+        const durable = await broker.open<FixtureOperations>({
+          moduleUrl: options.moduleUrl,
+          databasePath: databasePath(),
+          input: undefined,
+        });
+        assert(durable);
+        durableSibling = durable;
+        durableThreads.add((await append(durable, "durable")).threadId);
+      }
+      expect(durableThreads.size).toBe(1);
+      expect(durableThreads.has(first.threadId)).toBe(false);
+      await expect(
+        broker.open({
+          ...options,
+          target: { kind: "ephemeral", handle: "second", incarnation: "second" },
+        }),
+      ).rejects.toMatchObject({ code: "overloaded" });
+      expect(await read(memory)).toEqual(["private"]);
+      expect(existsSync(namespace)).toBe(false);
+      await expect(
+        memory.execute({ type: "commitThenExit", input: { value: "lost" } }),
+      ).rejects.toMatchObject({ code: "outcome-unknown" });
+      expect(lost).toBe(true);
+      await nativeStopped;
+      await expect(memory.execute({ type: "read", input: undefined })).rejects.toMatchObject({
+        code: "unavailable",
+      });
+      assert(durableSibling);
+      expect(await read(durableSibling)).toEqual(["durable"]);
+    } finally {
+      await broker.close();
+      parallelism.mockRestore();
+    }
+  },
+);

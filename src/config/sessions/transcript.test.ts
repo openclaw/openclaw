@@ -2,7 +2,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
@@ -27,10 +26,16 @@ import {
   replaceTranscriptEvents,
   updateSessionEntry,
 } from "./session-accessor.js";
+import * as activeTranscriptEvents from "./session-accessor.sqlite-active-events.js";
+import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { waitForSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import { transcriptMessage } from "./transcript-message.test-support.js";
+import {
+  createExactAssistantMessage,
+  transcriptMessage,
+  type ExactAssistantMessage,
+} from "./transcript-message.test-support.js";
 import {
   bindOwnedSessionTranscriptWrites,
   runWithOwnedSessionTranscriptWrite,
@@ -72,9 +77,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   function createFixtureTranscriptScope() {
     return { agentId: "main", sessionId, sessionKey, storePath: fixture.storePath() };
   }
-  type ExactAssistantMessage = Parameters<
-    typeof appendExactAssistantMessageToSessionTranscript
-  >[0]["message"];
   type BeforeMessageWriteParams = Parameters<
     NonNullable<
       Parameters<typeof appendExactAssistantMessageToSessionTranscript>[0]["beforeMessageWrite"]
@@ -134,31 +136,6 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       { agentId: "main", sessionKey: params.sessionKey, storePath: fixture.storePath() },
       normalizeLegacySessionEntryDelivery({ updatedAt: 1, ...params.entry } as SessionEntry),
     );
-  }
-
-  function createExactAssistantMessage(params: {
-    text?: string;
-    content?: ExactAssistantMessage["content"];
-    provider?: string;
-    model?: string;
-  }): ExactAssistantMessage {
-    return {
-      role: "assistant",
-      content: params.content ?? [{ type: "text", text: params.text ?? "" }],
-      api: "openai-responses",
-      provider: params.provider ?? "codex",
-      model: params.model ?? "gpt-5.4",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
-      stopReason: "stop",
-      timestamp: Date.now(),
-    };
   }
 
   function requireTranscriptUpdateCall(
@@ -696,11 +673,22 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       },
     );
 
-    const mirrorResult = await appendAssistantMessageToSessionTranscript({
-      sessionKey,
-      text: "Active branch reply",
-      storePath: fixture.storePath(),
-    });
+    const hostRead = vi
+      .spyOn(activeTranscriptEvents, "readLatestSessionTranscriptMessageEvent")
+      .mockImplementation(() => {
+        throw new Error("Delivery mirror must read the active tail in its worker");
+      });
+    let mirrorResult;
+    try {
+      mirrorResult = await appendAssistantMessageToSessionTranscript({
+        sessionKey,
+        text: "Active branch reply",
+        storePath: fixture.storePath(),
+      });
+      expect(hostRead).not.toHaveBeenCalled();
+    } finally {
+      hostRead.mockRestore();
+    }
 
     expect(mirrorResult.ok).toBe(true);
     if (mirrorResult.ok) {
@@ -1853,9 +1841,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
   it("rejects revision materialization between the initial check and SQLite append", async () => {
     await writeTranscriptStore({ lifecycleRevision: undefined });
-    const databasePath = resolveSqliteTargetFromSessionStorePath(fixture.storePath(), {
-      agentId: "main",
-    }).path;
+    const scope = createFixtureTranscriptScope();
+    const entry = loadSessionEntry(scope);
+    if (!entry) {
+      throw new Error("expected session entry");
+    }
     let revisionMaterialized = false;
 
     const result = await appendExactAssistantMessageToSessionTranscript({
@@ -1864,25 +1854,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expectedSessionId: sessionId,
       storePath: fixture.storePath(),
       beforeMessageWrite: ({ message }) => {
-        const external = new DatabaseSync(databasePath);
-        try {
-          const row = external
-            .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-            .get(sessionKey) as { entry_json: string };
-          const replacement = {
-            ...(JSON.parse(row.entry_json) as SessionEntry),
-            lifecycleRevision: "replacement-revision",
-            updatedAt: 2,
-          };
-          external
-            .prepare(
-              "UPDATE session_nodes SET entry_json = ?, updated_at = ? WHERE session_key = ?",
-            )
-            .run(JSON.stringify(replacement), replacement.updatedAt, sessionKey);
-          revisionMaterialized = true;
-        } finally {
-          external.close();
-        }
+        replaceSessionEntrySync(scope, {
+          ...entry,
+          lifecycleRevision: "replacement-revision",
+          updatedAt: 2,
+        });
+        revisionMaterialized = true;
         return message;
       },
       message: createExactAssistantMessage({ text: "late output" }),

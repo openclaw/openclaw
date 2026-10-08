@@ -890,6 +890,28 @@ describe("Mistral provider", () => {
     expect(JSON.stringify(payload)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
   });
 
+  it("keeps runtime context as a labeled user compatibility message", async () => {
+    await runSimpleMistralFixture({
+      messages: [
+        { role: "user", content: "hello", timestamp: 0 },
+        {
+          role: "user",
+          content: "OpenClaw runtime context:\ncurrent runtime facts",
+          timestamp: 1,
+          runtimeContext: {},
+        },
+      ],
+    });
+
+    const payload = mistralMockState.payloads[0] as {
+      messages: Array<{ role: string; content: string }>;
+    };
+    expect(payload.messages).toEqual([
+      { role: "user", content: "hello" },
+      { role: "user", content: "OpenClaw runtime context:\ncurrent runtime facts" },
+    ]);
+  });
+
   it("uses prompt cache affinity unless caching is disabled", async () => {
     for (const cacheRetention of [undefined, "none"] as const) {
       mistralMockState.payloads = [];

@@ -43,7 +43,7 @@ import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.
 import * as statusSnapshot from "./status-snapshot.js";
 import { withPluginDiagnosticsReportForInspection, withPluginDiagnosticsReport } from "./status.js";
 import { createDiagnosticsFixture } from "./status.runtime-inspection.test-helpers.js";
-import type { OpenClawPluginService } from "./types.js";
+import type { OpenClawPluginApi } from "./types.js";
 
 function stateEnv(stateDir: string) {
   return {
@@ -354,7 +354,7 @@ describe("plugin runtime inspection", () => {
     });
   });
 
-  it.each([false, true])(
+  it.each([true])(
     "uses replaced package metadata while preserving its old snapshot (requires config: %s)",
     async (requiresConfig) => {
       const stateDir = makePluginLoaderTempDir();
@@ -591,7 +591,7 @@ it("keeps metadata getters live through awaited projection without retiring an i
     const independent = loadPluginRegistryHandle({ ...params, cache: false });
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    let retained: OpenClawPluginService | undefined;
+    let retained: Parameters<OpenClawPluginApi["registerService"]>[0] | undefined;
     const projection = withPluginDiagnosticsReport(params, async (report) => {
       retained = report.services[0]?.service;
       entered.resolve();

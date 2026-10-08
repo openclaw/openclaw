@@ -33,13 +33,9 @@ export function readBody(req: BrowserRequest): Record<string, unknown> {
   return asNonArrayRecord(req.body);
 }
 
-export function handleRouteError(ctx: BrowserRouteContext, res: BrowserResponse, err: unknown) {
+export function handleRouteError(res: BrowserResponse, err: unknown) {
   if (isProfileRestartRequiredError(err)) {
     throw err;
-  }
-  const mapped = ctx.mapTabError(err);
-  if (mapped) {
-    return jsonBrowserError(res, mapped);
   }
   const browserMapped = toBrowserErrorResponse(err);
   if (browserMapped) {
@@ -173,7 +169,7 @@ export async function withRouteTabContext<T>(
       },
     });
   } catch (err) {
-    handleRouteError(params.ctx, params.res, err);
+    handleRouteError(params.res, err);
     return undefined;
   }
 }

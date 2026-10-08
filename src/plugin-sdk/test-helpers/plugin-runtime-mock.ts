@@ -18,7 +18,6 @@ import {
   resolveStableChannelIngressPolicy,
 } from "../../channels/message-access/runtime.js";
 import { createChannelReplyPipeline } from "../../channels/message/reply-pipeline.js";
-import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { createChannelRuntimeContextRegistry } from "../../plugins/runtime/channel-runtime-contexts.js";
 import { resolveAgentCatalogCreateTarget } from "../../plugins/runtime/runtime-agent-session-catalog.js";
@@ -33,6 +32,7 @@ import {
   type PluginRuntimeMockOverrides,
 } from "./plugin-runtime-mock-overrides.js";
 import { createPluginModelRuntimeMock } from "./plugin-runtime-model-mock.js";
+import { createPluginSessionRuntimeMock } from "./plugin-runtime-session-mock.js";
 import { createPluginStateRuntimeMock } from "./plugin-runtime-state-mock.js";
 import { createPluginThreadBindingsRuntimeMock } from "./plugin-runtime-thread-bindings-mock.js";
 
@@ -453,19 +453,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
       ...structuredContextField,
     } as Awaited<BuildContextResult>;
   });
-  const sessionRuntime = {
-    resolveStorePath: vi.fn<PluginRuntime["channel"]["session"]["resolveStorePath"]>(
-      () => "/tmp/sessions.json",
-    ),
-    readSessionUpdatedAt: vi.fn<PluginRuntime["channel"]["session"]["readSessionUpdatedAt"]>(
-      () => undefined,
-    ),
-    recordSessionMetaFromInbound:
-      vi.fn<PluginRuntime["channel"]["session"]["recordSessionMetaFromInbound"]>(),
-    recordInboundSession: vi.fn<PluginRuntime["channel"]["session"]["recordInboundSession"]>(),
-    updateLastRoute: vi.fn<PluginRuntime["channel"]["session"]["updateLastRoute"]>(),
-    resolveEntryResetFreshness: vi.fn(resolveSessionEntryResetFreshness),
-  };
+  const sessionRuntime = createPluginSessionRuntimeMock();
   const inboundRuntime = {
     ingress: {
       createResolver: createChannelIngressPolicyResolver,

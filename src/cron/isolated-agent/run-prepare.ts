@@ -155,6 +155,7 @@ export async function prepareCronRunContext(params: {
   const isGmailHook = hookExternalContentSource === "gmail";
   const now = Date.now();
   const sandbox = resolveCreatorSandbox(runtimeCfg, { actor: input.job.createdActor });
+  const usesExactRunSession = usesDetachedRunSession || baseSessionKey.startsWith("cron:");
   const cronSession = await prepareCronSession({
     cfg: runtimeCfg,
     sessionKey: agentSessionKey,
@@ -163,6 +164,7 @@ export async function prepareCronRunContext(params: {
     agentId,
     nowMs: now,
     forceNew: usesDetachedRunSession,
+    exactRunSession: usesExactRunSession,
     hookExternalContentSource,
   });
   const sourceEntry = sourceSessionKey ? cronSession.store[sourceSessionKey] : undefined;
@@ -182,7 +184,6 @@ export async function prepareCronRunContext(params: {
   }
   const runSessionId = cronSession.sessionEntry.sessionId;
   const currentRunSessionId = () => cronSession.sessionEntry.sessionId ?? runSessionId;
-  const usesExactRunSession = usesDetachedRunSession || baseSessionKey.startsWith("cron:");
   const runSessionKey = usesExactRunSession
     ? `${agentSessionKey}:run:${runSessionId}`
     : agentSessionKey;
@@ -216,7 +217,6 @@ export async function prepareCronRunContext(params: {
     });
     workspaceLease = selectedWorkspace.lease;
     const workspaceDir = selectedWorkspace.workspaceDir;
-    const executionWorkspaceDir = input.executionRoot ?? workspaceDir;
     const persistCronSessionRow: CronSessionRowWriter = async ({
       storePath,
       sessionKey,
@@ -247,7 +247,7 @@ export async function prepareCronRunContext(params: {
       await patchSessionEntryCore(
         { storePath, sessionKey, agentId },
         (_entry, context) => update(context.existingEntry),
-        { fallbackEntry, replaceEntry: true, assertCommitAllowed },
+        { fallbackEntry, replaceEntry: true, workerGuard: { assertCurrent: assertCommitAllowed } },
       );
     };
     const persistSessionEntry = createPersistCronSessionEntry({
@@ -280,7 +280,7 @@ export async function prepareCronRunContext(params: {
       isGmailHook,
       agentId,
       agentDir,
-      workspaceDir: executionWorkspaceDir,
+      workspaceDir,
     });
     if (!resolvedModelSelection.ok) {
       sessionWorkAdmission.release();
@@ -427,6 +427,7 @@ export async function prepareCronRunContext(params: {
       modelApi,
       agentId: modelOwner.agentId,
       agentDir: modelOwner.agentDir,
+
       sessionKey: agentSessionKey,
       agentPayload,
     });
@@ -496,16 +497,14 @@ export async function prepareCronRunContext(params: {
     }
     commandBody = appendCronUnattendedRunPreamble(commandBody, { externalHook: isExternalHook });
 
-    const skillsSnapshot =
-      input.skillsSnapshot ??
-      (await resolveCronSkillsSnapshot({
-        workspaceDir: executionWorkspaceDir,
-        config: cfgWithAgentDefaults,
-        agentId,
-        existingSnapshot: cronSession.sessionEntry.skillsSnapshot,
-        librarySelections: cronSession.sessionEntry.skillLibrarySelections,
-        isFastTestEnv: params.isFastTestEnv,
-      }));
+    const skillsSnapshot = await resolveCronSkillsSnapshot({
+      workspaceDir,
+      config: cfgWithAgentDefaults,
+      agentId,
+      existingSnapshot: cronSession.sessionEntry.skillsSnapshot,
+      librarySelections: cronSession.sessionEntry.skillLibrarySelections,
+      isFastTestEnv: params.isFastTestEnv,
+    });
     await persistCronSkillsSnapshotIfChanged({
       isFastTestEnv: params.isFastTestEnv,
       cronSession,
@@ -603,7 +602,6 @@ export async function prepareCronRunContext(params: {
         workspaceDir,
         cwd: selectedWorkspace.cwd,
         workspaceLease,
-        executionRoot: input.executionRoot,
         commandBody,
         inputProvenance:
           agentPayload && !isExternalHook

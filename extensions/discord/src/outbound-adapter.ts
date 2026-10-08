@@ -107,21 +107,17 @@ async function resolveDiscordOutboundMessageSend(params: DiscordOutboundMessageC
   const send =
     resolveOutboundSendDep<DiscordSendFn>(params.deps, "discord") ??
     (await loadDiscordSendRuntime()).sendMessageDiscord;
-  const reply = resolveDiscordReplyReference({
-    replyToId: params.replyToId,
-    replyToIdSource: params.replyToIdSource,
-    replyToMode: params.replyToMode,
-  });
+  const reply = resolveDiscordReplyReference(params);
   return {
     send,
-    target: resolveDiscordAttachedOutboundTarget({ to: params.to, threadId: params.threadId }),
+    target: resolveDiscordAttachedOutboundTarget(params),
     options: {
       verbose: false as const,
       reply,
       accountId: params.accountId ?? undefined,
       silent: params.silent ?? undefined,
       cfg: params.cfg,
-      ...resolveDiscordFormattingOptions({ formatting: params.formatting }),
+      ...resolveDiscordFormattingOptions(params),
       ...resolveDiscordDeliveryOptions(params),
     },
   };

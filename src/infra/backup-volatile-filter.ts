@@ -60,16 +60,6 @@ function isManagedBrowserSingletonPath(filePosix: string, stateDirPosix: string)
   );
 }
 
-function filePathCandidates(input: string): string[] {
-  const normalized = normalizePosix(input);
-  if (normalized.startsWith("/") || /^[A-Za-z]:\//u.test(normalized)) {
-    return [normalized];
-  }
-  // node-tar may pass absolute input paths to filters without the leading
-  // slash, even when the source list used absolute paths.
-  return [normalized, normalizePosix(`/${normalized}`)];
-}
-
 type VolatileFilterPlan = {
   /** Canonical state directories the filter should treat as volatile anchors. */
   stateDirs: string[];
@@ -79,7 +69,7 @@ export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterP
   if (!absolutePath) {
     return false;
   }
-  const candidates = filePathCandidates(absolutePath);
+  const filePosix = normalizePosix(absolutePath);
 
   for (const stateDir of plan.stateDirs) {
     if (!stateDir) {
@@ -87,51 +77,49 @@ export function isVolatileBackupPath(absolutePath: string, plan: VolatileFilterP
     }
     const stateDirPosix = normalizePosix(stateDir);
 
-    for (const filePosix of candidates) {
+    if (
+      isUnder(filePosix, stateDirPosix) &&
+      isLegacyAuditMigrationBackupPath(filePosix, stateDirPosix)
+    ) {
+      return true;
+    }
+    if (isManagedBrowserSingletonPath(filePosix, stateDirPosix)) {
+      return true;
+    }
+
+    for (const parts of [
+      ["sandbox", "skills-workspaces"],
+      // Rebuildable bundles bridge open Control UI documents across updates.
+      ["cache", "control-ui-assets"],
+      ["tmp", "plugin-captures"],
+    ]) {
+      if (isUnder(filePosix, path.posix.join(stateDirPosix, ...parts))) {
+        return true;
+      }
+    }
+
+    if (
+      hasExtension(filePosix, [".jsonl", ".log"]) &&
+      (isAgentSessionTranscriptPath(filePosix, stateDirPosix) ||
+        [["sessions"], ["cron", "runs"], ["logs"]].some((parts) =>
+          isUnder(filePosix, path.posix.join(stateDirPosix, ...parts)),
+        ))
+    ) {
+      return true;
+    }
+
+    for (const queueDir of ["delivery-queue", "session-delivery-queue"]) {
+      const queueRoot = path.posix.join(stateDirPosix, queueDir);
       if (
-        isUnder(filePosix, stateDirPosix) &&
-        isLegacyAuditMigrationBackupPath(filePosix, stateDirPosix)
+        isUnder(filePosix, queueRoot) &&
+        hasExtension(filePosix, [".json", ".delivered", ".tmp"])
       ) {
         return true;
       }
-      if (isManagedBrowserSingletonPath(filePosix, stateDirPosix)) {
-        return true;
-      }
+    }
 
-      for (const parts of [
-        ["sandbox", "skills-workspaces"],
-        // Rebuildable bundles bridge open Control UI documents across updates.
-        ["cache", "control-ui-assets"],
-        ["tmp", "plugin-captures"],
-      ]) {
-        if (isUnder(filePosix, path.posix.join(stateDirPosix, ...parts))) {
-          return true;
-        }
-      }
-
-      if (
-        hasExtension(filePosix, [".jsonl", ".log"]) &&
-        (isAgentSessionTranscriptPath(filePosix, stateDirPosix) ||
-          [["sessions"], ["cron", "runs"], ["logs"]].some((parts) =>
-            isUnder(filePosix, path.posix.join(stateDirPosix, ...parts)),
-          ))
-      ) {
-        return true;
-      }
-
-      for (const queueDir of ["delivery-queue", "session-delivery-queue"]) {
-        const queueRoot = path.posix.join(stateDirPosix, queueDir);
-        if (
-          isUnder(filePosix, queueRoot) &&
-          hasExtension(filePosix, [".json", ".delivered", ".tmp"])
-        ) {
-          return true;
-        }
-      }
-
-      if (isUnder(filePosix, stateDirPosix) && isTransientBackupPath(filePosix)) {
-        return true;
-      }
+    if (isUnder(filePosix, stateDirPosix) && isTransientBackupPath(filePosix)) {
+      return true;
     }
   }
 

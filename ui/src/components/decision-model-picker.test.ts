@@ -55,30 +55,6 @@ async function mount(overrides: Partial<Parameters<typeof renderDecisionModelPic
 }
 
 describe("decision model provider groups", () => {
-  it("groups interleaved model names and traverses the rendered order, leaving Disabled ungrouped", async () => {
-    const p = await mount();
-    expect(
-      [...p.picker.querySelectorAll('[role="group"]')].map((g) => g.getAttribute("aria-label")),
-    ).toEqual(["Alpha", "Beta"]);
-    expect(p.rows().map((r) => r.dataset.value)).toEqual([
-      "",
-      "alpha/first",
-      "alpha/last",
-      "beta/middle",
-    ]);
-    expect(p.rows()[0]!.closest('[role="group"]')).toBeNull();
-    expect(p.group("Alpha").querySelector("button")!.textContent).toContain("2");
-    expect(p.group("Alpha").querySelector(".provider-brand-icon--fallback")).not.toBeNull();
-    expect(p.picker.querySelector("input")!.getAttribute("placeholder")).toBe("Search models");
-    await p.key("ArrowDown");
-    const input = p.picker.querySelector("input")!;
-    expect(
-      document.getElementById(input.getAttribute("aria-activedescendant")!)?.dataset.value,
-    ).toBe("alpha/last");
-    await p.key("Enter");
-    expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("alpha/last");
-  });
-
   it("excludes collapsed rows from keyboard and stale pointer selection but searches inside them", async () => {
     const p = await mount({ value: "" });
     const stale = p.rows().find((r) => r.dataset.value === "alpha/first")!;
@@ -127,9 +103,31 @@ describe("decision model provider groups", () => {
     { inherit: undefined, disabledValue: null },
     { inherit: { model: "alpha/first" }, disabledValue: "" },
   ])(
-    "preserves Disabled and inheritance semantics with $inherit",
+    "groups models in keyboard order and preserves Disabled/inherit semantics: $inherit",
     async ({ inherit, disabledValue }) => {
       const p = await mount({ inherit, value: inherit ? null : "alpha/first" });
+      if (!inherit) {
+        expect(
+          [...p.picker.querySelectorAll('[role="group"]')].map((g) => g.getAttribute("aria-label")),
+        ).toEqual(["Alpha", "Beta"]);
+        expect(p.rows().map((r) => r.dataset.value)).toEqual([
+          "",
+          "alpha/first",
+          "alpha/last",
+          "beta/middle",
+        ]);
+        expect(p.rows()[0]!.closest('[role="group"]')).toBeNull();
+        expect(p.group("Alpha").querySelector("button")!.textContent).toContain("2");
+        expect(p.group("Alpha").querySelector(".provider-brand-icon--fallback")).not.toBeNull();
+        expect(p.picker.querySelector("input")!.getAttribute("placeholder")).toBe("Search models");
+        await p.key("ArrowDown");
+        const input = p.picker.querySelector("input")!;
+        expect(
+          document.getElementById(input.getAttribute("aria-activedescendant")!)?.dataset.value,
+        ).toBe("alpha/last");
+        await p.key("Enter");
+        expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("alpha/last");
+      }
       if (inherit) {
         const inherited = p.rows().find((row) => row.textContent?.includes("Use global default"))!;
         expect(inherited.closest('[role="group"]')).toBeNull();

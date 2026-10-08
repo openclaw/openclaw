@@ -99,21 +99,21 @@ describe("worker portal tool execution", () => {
     const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
     placements = createWorkerSessionPlacementStore({ database });
     let placement = await placements.startDispatch(SOURCE);
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId: SOURCE.sessionId,
       from: "requested",
       to: "provisioning",
       expectedGeneration: placement.generation,
       patch: { environmentId: SOURCE.environmentId },
     });
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId: SOURCE.sessionId,
       from: "provisioning",
       to: "syncing",
       expectedGeneration: placement.generation,
       patch: { workerBundleHash: "a".repeat(64) },
     });
-    placement = placements.transition({
+    placement = await placements.transition({
       sessionId: SOURCE.sessionId,
       from: "syncing",
       to: "starting",
@@ -128,7 +128,7 @@ describe("worker portal tool execution", () => {
       sessionId: SOURCE.sessionId,
       ownerEpoch: SOURCE.ownerEpoch,
     });
-    placements.transition({
+    await placements.transition({
       sessionId: SOURCE.sessionId,
       from: "starting",
       to: "active",

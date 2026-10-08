@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import path from "node:path";
 import type { AssistantMessage, Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
@@ -211,9 +212,7 @@ describe("AgentSession runtime and transcript projections", () => {
         });
         await nextSession.prompt("Recall the earlier calculation.");
         const providerContext = streamMocks.streamSimple.mock.calls.at(-1)![1];
-        const assistant = providerContext.messages.find(
-          (message: { role: string }) => message.role === "assistant",
-        );
+        const assistant = providerContext.messages.find((message) => message.role === "assistant");
         expect(assistant).toMatchObject({
           content: [
             { text: expect.not.stringContaining("API_TOKEN = computeToken()") },
@@ -232,6 +231,7 @@ describe("AgentSession runtime and transcript projections", () => {
             },
           ],
         });
+        assert(assistant?.content[1]?.type === "toolCall");
         const persistedArgs = assistant.content[1].arguments;
         for (const field of ["code", "command"] as const) {
           const value = field === "code" ? args.code : "command" in args ? args.command : undefined;
@@ -259,9 +259,8 @@ describe("AgentSession runtime and transcript projections", () => {
             expect(persistedArgs[field]).toBe(value);
           }
         }
-        const replayResult = providerContext.messages.find(
-          (message: { role: string }) => message.role === "toolResult",
-        );
+        const replayResult = providerContext.messages.find((item) => item.role === "toolResult");
+        assert(replayResult);
         expect(replayResult.toolCallId).toBe(assistant.content[1].id);
         expect(providerContext.messages.indexOf(replayResult)).toBe(
           providerContext.messages.indexOf(assistant) + 1,

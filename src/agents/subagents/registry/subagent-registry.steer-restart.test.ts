@@ -3,15 +3,25 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFinished,
+  vi,
+} from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import * as gatewayCallRuntime from "../../../gateway/call.js";
-import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
-import { subagentRuns } from "./subagent-registry-memory.js";
-import { persistSubagentRunsToDiskOrThrow } from "./subagent-registry-state.js";
+import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
+import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 const noop = () => {};
 let lifecycleHandler:
@@ -203,7 +213,7 @@ describe("subagent registry steer restarts", () => {
     mod = await import("./subagent-registry.test-helpers.js");
   });
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.useRealTimers();
     for (const key of Object.keys(sessionStore)) {
       delete sessionStore[key];
@@ -215,7 +225,7 @@ describe("subagent registry steer restarts", () => {
     runSubagentEndedHookMock.mockImplementation(async () => {});
     emitSessionLifecycleEventMock.mockReset();
     removeInternalSessionEffectsSessionMock.mockClear();
-    mod.resetSubagentRegistryForTests({ persist: false });
+    await mod.resetSubagentRegistryForTests({ persist: false });
   });
 
   const flushAnnounce = async () => {
@@ -284,6 +294,24 @@ describe("subagent registry steer restarts", () => {
 
   const listMainRuns = () => mod.listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY);
 
+  const observeTerminalPublication = (runId: string) => {
+    const committed = createDeferred();
+    const stop = subscribeSubagentRunChanges("projection", () => {
+      if (mod.getSubagentRunByRunId(runId)?.execution.status === "terminal") {
+        committed.resolve();
+      }
+    });
+    onTestFinished(stop);
+    return committed.promise;
+  };
+
+  const updateRun = (runId: string, amend: (draft: SubagentRunRecord) => void) =>
+    mutateSubagentRuns([runId], (rows) => {
+      const draft = structuredClone(expectDefined(rows.get(runId), "registered fixture row"));
+      amend(draft);
+      return { value: draft, postimages: new Map([[runId, draft]]) };
+    });
+
   const emitLifecycleEnd = (
     runId: string,
     data: {
@@ -306,10 +334,9 @@ describe("subagent registry steer restarts", () => {
     });
   };
 
-  const replaceRunAfterSteer = (params: {
+  const replaceRunAfterSteer = async (params: {
     previousRunId: string;
     nextRunId: string;
-    fallback?: ReturnType<typeof listMainRuns>[number];
     transcriptTarget?: {
       agentId: string;
       sessionId: string;
@@ -320,13 +347,9 @@ describe("subagent registry steer restarts", () => {
     lifecycleGeneration?: string;
     preserveFrozenResultFallback?: boolean;
   }) => {
-    if (params.fallback && listMainRuns().includes(params.fallback)) {
-      persistSubagentRunsToDiskOrThrow(subagentRuns, [params.previousRunId]);
-    }
-    const replaced = mod.replaceSubagentRunAfterSteerCore({
+    const replaced = await mod.replaceSubagentRunAfterSteerCore({
       previousRunId: params.previousRunId,
       nextRunId: params.nextRunId,
-      fallback: params.fallback,
       transcriptTarget: params.transcriptTarget,
       task: params.task,
       lifecycleGeneration: params.lifecycleGeneration,
@@ -351,7 +374,7 @@ describe("subagent registry steer restarts", () => {
     emitSessionLifecycleEventMock.mockReset();
     lifecycleHandler = undefined;
     removeInternalSessionEffectsSessionMock.mockClear();
-    mod.resetSubagentRegistryForTests({ persist: false });
+    await mod.resetSubagentRegistryForTests({ persist: false });
   });
 
   it("honors persisted steer suppression and only announces the replacement run", async () => {
@@ -365,7 +388,10 @@ describe("subagent registry steer restarts", () => {
 
       const previous = expectDefined(listMainRuns()[0], "registered run");
       expect(previous.runId).toBe("run-old");
-      previous.suppressAnnounceReason = "steer-restart";
+      await updateRun(previous.runId, (draft) => {
+        draft.suppressAnnounceReason = "steer-restart";
+      });
+      emitSessionLifecycleEventMock.mockClear();
 
       emitLifecycleEnd("run-old");
 
@@ -374,10 +400,9 @@ describe("subagent registry steer restarts", () => {
       expect(runSubagentEndedHookMock).not.toHaveBeenCalled();
       expect(emitSessionLifecycleEventMock).not.toHaveBeenCalled();
 
-      replaceRunAfterSteer({
+      await replaceRunAfterSteer({
         previousRunId: "run-old",
         nextRunId: "run-new",
-        fallback: previous,
       });
 
       emitLifecycleEnd("run-new");
@@ -458,38 +483,39 @@ describe("subagent registry steer restarts", () => {
     });
     const previous = expectDefined(listMainRuns()[0], "registered run");
     const endedAt = Date.now();
-    previous.endedHookEmittedAt = endedAt;
-    previous.endedReason = "subagent-error";
-    previous.terminalOwner = "interrupted-recovery";
-    previous.execution = { status: "terminal", endedAt, outcome: { status: "error" } };
-    previous.completion = { required: true, resultText: "stale completion", capturedAt: endedAt };
-    previous.cleanupCompletedAt = endedAt;
-    previous.cleanupHandled = true;
-    previous.delivery = {
-      status: "suspended",
-      attemptCount: 2,
-      lastAttemptAt: endedAt,
-      enqueuedAt: endedAt,
-      deliveredAt: endedAt,
-      announcedAt: endedAt,
-      lastDropReason: "sink_unavailable",
-      lastError: "gateway request timeout for agent",
-      payload: {
-        childRunId: previous.runId,
-        childSessionKey: previous.childSessionKey,
-        requesterSessionKey: previous.requesterSessionKey,
-        requesterDisplayKey: previous.requesterDisplayKey,
-        task: previous.task,
-        endedAt,
-      },
-      suspendedAt: endedAt,
-      suspendedReason: "expiry",
-    };
+    await updateRun(previous.runId, (draft) => {
+      draft.endedHookEmittedAt = endedAt;
+      draft.endedReason = "subagent-error";
+      draft.terminalOwner = "interrupted-recovery";
+      draft.execution = { status: "terminal", endedAt, outcome: { status: "error" } };
+      draft.completion = { required: true, resultText: "stale completion", capturedAt: endedAt };
+      draft.cleanupCompletedAt = endedAt;
+      draft.cleanupHandled = true;
+      draft.delivery = {
+        status: "suspended",
+        attemptCount: 2,
+        lastAttemptAt: endedAt,
+        enqueuedAt: endedAt,
+        deliveredAt: endedAt,
+        announcedAt: endedAt,
+        lastDropReason: "sink_unavailable",
+        lastError: "gateway request timeout for agent",
+        payload: {
+          childRunId: draft.runId,
+          childSessionKey: draft.childSessionKey,
+          requesterSessionKey: draft.requesterSessionKey,
+          requesterDisplayKey: draft.requesterDisplayKey,
+          task: draft.task,
+          endedAt,
+        },
+        suspendedAt: endedAt,
+        suspendedReason: "expiry",
+      };
+    });
 
-    const run = replaceRunAfterSteer({
+    const run = await replaceRunAfterSteer({
       previousRunId: previous.runId,
       nextRunId: "run-terminal-state-new",
-      fallback: previous,
       lifecycleGeneration: "test-generation",
     });
     expect(run.task).toBe(previous.task);
@@ -512,8 +538,10 @@ describe("subagent registry steer restarts", () => {
     expect(run.delivery).toEqual({ status: "pending" });
 
     const settleRootWork = observeRootWork();
+    const terminalPublished = observeTerminalPublication(run.runId);
     try {
       emitLifecycleEnd(run.runId);
+      await terminalPublished;
       await settleRootWork(true);
       const hookCall = requireSubagentEndedHookCall(run.runId);
       expect(hookCall.event.runId).toBe(run.runId);
@@ -541,10 +569,9 @@ describe("subagent registry steer restarts", () => {
     expect(previous?.generation).toBe(1);
 
     const run = expectDefined(
-      replaceRunAfterSteer({
+      await replaceRunAfterSteer({
         previousRunId: "run-steer-task-old",
         nextRunId: "run-steer-task-new",
-        fallback: previous,
         task: "new steer instruction from user",
       }),
       'replaceRunAfterSteer({ previousRunId: "run-steer-task-old", nextRunId... test invariant',
@@ -553,33 +580,6 @@ describe("subagent registry steer restarts", () => {
     expect(run.task).toBe("new steer instruction from user");
     expect(run.taskRunId).toBe("run-steer-task-old");
     expect(run.generation).toBe(2);
-  });
-
-  it("advances the generation from a fallback outside the live registry", async () => {
-    await registerRun({
-      runId: "run-fallback-generation-old",
-      childSessionKey: "agent:main:subagent:fallback-generation",
-      task: "restored replacement source",
-    });
-    const fallback = expectDefined(
-      replaceRunAfterSteer({
-        previousRunId: "run-fallback-generation-old",
-        nextRunId: "run-fallback-generation-restored",
-      }),
-      "restored fallback run",
-    );
-    subagentRuns.delete(fallback.runId);
-
-    const run = expectDefined(
-      replaceRunAfterSteer({
-        previousRunId: fallback.runId,
-        nextRunId: "run-fallback-generation-new",
-        fallback,
-      }),
-      'replaceRunAfterSteer({ previousRunId: fallback.runId, nextRunId: "run... test invariant',
-    );
-
-    expect(run.generation).toBe(3);
   });
 
   it("preserves cumulative session timing across steer replacement runs", async () => {
@@ -595,17 +595,17 @@ describe("subagent registry steer restarts", () => {
       throw new Error("missing previous run");
     }
 
-    previous.execution.startedAt = 1_000;
-    previous.sessionStartedAt = 1_000;
-    previous.execution.endedAt = 121_000;
-    previous.accumulatedRuntimeMs = 0;
-    previous.execution.outcome = { status: "ok" };
-    persistSubagentRunsToDiskOrThrow(subagentRuns, [previous.runId]);
+    await updateRun(previous.runId, (draft) => {
+      draft.execution.startedAt = 1_000;
+      draft.sessionStartedAt = 1_000;
+      draft.execution.endedAt = 121_000;
+      draft.accumulatedRuntimeMs = 0;
+      draft.execution.outcome = { status: "ok" };
+    });
 
-    const replaced = mod.replaceSubagentRunAfterSteerCore({
+    const replaced = await mod.replaceSubagentRunAfterSteerCore({
       previousRunId: "run-runtime-old",
       nextRunId: "run-runtime-new",
-      fallback: previous,
     });
     expect(replaced).toBe(true);
 
@@ -619,8 +619,7 @@ describe("subagent registry steer restarts", () => {
     if (!next.execution.startedAt) {
       throw new Error("missing next startedAt");
     }
-    next.execution.endedAt = next.execution.startedAt + 30_000;
-    expect(mod.getSubagentSessionRuntimeMs(next, next.execution.endedAt)).toBe(150_000);
+    expect(mod.getSubagentSessionRuntimeMs(next, next.execution.startedAt + 30_000)).toBe(150_000);
   });
 
   it("rejects a replacement owned by a retired Gateway lifecycle", async () => {
@@ -631,7 +630,7 @@ describe("subagent registry steer restarts", () => {
     });
 
     expect(
-      mod.replaceSubagentRunAfterSteerCore({
+      await mod.replaceSubagentRunAfterSteerCore({
         previousRunId: "run-retired-generation-old",
         nextRunId: "run-retired-generation-new",
         lifecycleGeneration: "retired-generation",
@@ -639,33 +638,6 @@ describe("subagent registry steer restarts", () => {
     ).toBe(false);
     expect(listMainRuns()).toEqual([
       expect.objectContaining({ runId: "run-retired-generation-old" }),
-    ]);
-  });
-
-  it("rolls back a generation-owned replacement when persistence fails", async () => {
-    await registerRun({
-      runId: "run-generation-persist-old",
-      childSessionKey: "agent:main:subagent:generation-persist",
-      task: "preserve the source owner",
-    });
-    const database = openOpenClawStateDatabase().db;
-    database.exec(`CREATE TEMP TRIGGER reject_generation_replacement
-      BEFORE INSERT ON subagent_runs
-      WHEN NEW.run_id = 'run-generation-persist-new'
-      BEGIN SELECT RAISE(ABORT, 'replacement unavailable'); END`);
-    try {
-      expect(
-        mod.replaceSubagentRunAfterSteerCore({
-          previousRunId: "run-generation-persist-old",
-          nextRunId: "run-generation-persist-new",
-          lifecycleGeneration: "test-generation",
-        }),
-      ).toBe(false);
-    } finally {
-      database.exec("DROP TRIGGER reject_generation_replacement");
-    }
-    expect(listMainRuns()).toEqual([
-      expect.objectContaining({ runId: "run-generation-persist-old" }),
     ]);
   });
 
@@ -678,19 +650,17 @@ describe("subagent registry steer restarts", () => {
 
     const previous = listMainRuns()[0];
     expect(previous?.runId).toBe("run-wake-old");
-    if (previous) {
-      previous.completion = {
+    await updateRun(expectDefined(previous, "registered run").runId, (draft) => {
+      draft.completion = {
         required: true,
         resultText: "final summary before wake",
         capturedAt: 1234,
       };
-      persistSubagentRunsToDiskOrThrow(subagentRuns, [previous.runId]);
-    }
+    });
 
-    const replaced = mod.replaceSubagentRunAfterSteerCore({
+    const replaced = await mod.replaceSubagentRunAfterSteerCore({
       previousRunId: "run-wake-old",
       nextRunId: "run-wake-new",
-      fallback: previous,
       preserveFrozenResultFallback: true,
     });
     expect(replaced).toBe(true);
@@ -713,15 +683,17 @@ describe("subagent registry steer restarts", () => {
     });
 
     const activeRun = expectDefined(listMainRuns()[0], "registered run");
-    activeRun.execution = {
-      ...activeRun.execution,
-      transcriptTarget: {
-        agentId: "main",
-        sessionId: "recovered-subagent",
-        sessionKey: "agent:main:internal-session-effects:recovered-subagent",
-        storePath: "/tmp/test-store",
-      },
-    };
+    await updateRun(activeRun.runId, (draft) => {
+      draft.execution = {
+        ...draft.execution,
+        transcriptTarget: {
+          agentId: "main",
+          sessionId: "recovered-subagent",
+          sessionKey: "agent:main:internal-session-effects:recovered-subagent",
+          storePath: "/tmp/test-store",
+        },
+      };
+    });
     // Registration alone does not own an executor; the admitted transition has an owner test.
     expect(mod.isSubagentSessionRunActive(childSessionKey)).toBe(false);
     expect(await mod.markSubagentRunTerminated({ childSessionKey, reason: "manual kill" })).toBe(1);
@@ -788,8 +760,11 @@ describe("subagent registry steer restarts", () => {
     });
 
     const settleRootWork = observeRootWork();
+    const parentPublished = observeTerminalPublication("run-parent");
+    const childPublished = observeTerminalPublication("run-child");
     try {
       emitLifecycleEnd("run-parent");
+      await parentPublished;
       await settleRootWork(true);
       const initialChildRunIds = announceSpy.mock.calls.map(
         (call) => ((call[0] ?? {}) as { childRunId?: string }).childRunId,
@@ -797,6 +772,7 @@ describe("subagent registry steer restarts", () => {
       expect(countMatching(initialChildRunIds, (id) => id === "run-parent")).toBe(1);
 
       emitLifecycleEnd("run-child");
+      await childPublished;
       await settleRootWork(true);
       {
         const childRunIds = announceSpy.mock.calls.map(
@@ -865,40 +841,5 @@ describe("subagent registry steer restarts", () => {
         await settleRootWork();
       }
     }
-  });
-
-  it("keeps completion cleanup pending while descendants are still active", async () => {
-    announceSpy.mockResolvedValue("retryable");
-
-    await registerCompletionModeRun(
-      "run-parent-expiry",
-      "agent:main:subagent:parent-expiry",
-      "parent completion expiry",
-    );
-    await registerRun({
-      runId: "run-child-active",
-      childSessionKey: "agent:main:subagent:parent-expiry:subagent:child-active",
-      requesterSessionKey: "agent:main:subagent:parent-expiry",
-      requesterDisplayKey: "parent-expiry",
-      task: "child still running",
-    });
-
-    emitLifecycleEnd("run-parent-expiry", {
-      startedAt: Date.now() - 7 * 60_000,
-      endedAt: Date.now() - 6 * 60_000,
-    });
-
-    await flushAnnounce();
-
-    const parentHookCall = runSubagentEndedHookMock.mock.calls.find((call) => {
-      const event = call[0] as { runId?: string; reason?: string };
-      return event.runId === "run-parent-expiry" && event.reason === "subagent-complete";
-    });
-    expect(parentHookCall).toBeUndefined();
-    const parent = mod
-      .listSubagentRunsForRequester(MAIN_REQUESTER_SESSION_KEY)
-      .find((entry) => entry.runId === "run-parent-expiry");
-    expect(parent?.cleanupCompletedAt).toBeUndefined();
-    expect(parent?.cleanupHandled).toBe(false);
   });
 });

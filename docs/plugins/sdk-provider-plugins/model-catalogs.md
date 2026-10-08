@@ -469,6 +469,13 @@ The live discovery examples above cover `/models`-style provider APIs. Keep
 that discovery inside `catalog.run`, gated on usable auth, and keep
 `staticRun` network-free for offline catalog generation.
 
+Runtime model preparation also runs `staticRun` when configured model refs
+need its rows, and then sets `ctx.providerIds` to the selected provider ids.
+Only in that case may the hook await provider-owned caches that its synchronous
+hooks read, such as model capabilities used for thinking levels. Catalog
+generation, `models list --all`, and doctor validation leave `ctx.providerIds`
+unset; keep those runs network-free.
+
 Official provider plugins that share credentials can use
 `resolveFirstProviderCatalogAuth(ctx.resolveProviderApiKey, providerIds)` from
 the private runtime `openclaw/plugin-sdk/provider-catalog-shared` subpath.

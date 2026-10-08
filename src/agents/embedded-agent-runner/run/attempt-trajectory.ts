@@ -1,6 +1,7 @@
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import { buildTrajectoryRunMetadata } from "../../../trajectory/metadata.js";
 import { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
+import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { resolveAttemptTrajectorySessionFile } from "./attempt-transcript-helpers.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
@@ -14,7 +15,7 @@ export async function prepareEmbeddedAttemptTrajectory(input: {
   localModelLeanEnabled: boolean;
   sessionAgentId: string;
   systemPromptReport?: SessionSystemPromptReport;
-}): Promise<ReturnType<typeof createTrajectoryRuntimeRecorder> | null> {
+}): Promise<Awaited<ReturnType<typeof createTrajectoryRuntimeRecorder>>> {
   const { activeSession, attempt } = input;
   const trajectorySessionFile = await resolveAttemptTrajectorySessionFile({
     agentId: input.sessionAgentId,
@@ -27,6 +28,14 @@ export async function prepareEmbeddedAttemptTrajectory(input: {
   if (attempt.disableTrajectory || attempt.sessionPersistence === "detached") {
     return null;
   }
+  const assertActive = resolveAdmittedRunActiveAssertion(
+    attempt.admittedRunContext,
+    attempt.abortSignal,
+  );
+  if (!assertActive) {
+    throw new Error("trajectory preparation requires an active admitted run");
+  }
+  assertActive();
   const sessionTarget =
     attempt.sessionTarget?.agentId &&
     attempt.sessionTarget.sessionId &&
@@ -39,7 +48,7 @@ export async function prepareEmbeddedAttemptTrajectory(input: {
           storePath: attempt.sessionTarget.storePath,
         }
       : undefined;
-  const recorder = createTrajectoryRuntimeRecorder({
+  const recorder = await createTrajectoryRuntimeRecorder({
     cfg: attempt.config,
     env: process.env,
     runId: attempt.runId,
@@ -52,6 +61,7 @@ export async function prepareEmbeddedAttemptTrajectory(input: {
     modelApi: attempt.model.api,
     workspaceDir: attempt.workspaceDir,
   });
+  assertActive();
   recorder?.recordEvent("session.started", {
     trigger: attempt.trigger,
     sessionFile: attempt.sessionFile,

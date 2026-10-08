@@ -15,11 +15,11 @@ import { clampText } from "../lib/format.ts";
 
 const SIDEBAR_NARRATION_MAX_LENGTH = 120;
 
-// TRANSITIONAL(marker-retirement): live narration strips inline markers because
-// streamed drafts still carry them mid-run; persisted data is already clean.
-// Drop the stripInlineDirectiveTagsForDisplay call when the visibleReplies
-// default flips to "message_tool".
-function normalizeSidebarNarrationText(text: string): string | null {
+export function deriveSidebarNarrationLine(text: string): string {
+  // TRANSITIONAL(marker-retirement): live narration strips inline markers because
+  // streamed drafts still carry them mid-run; persisted data is already clean.
+  // Drop the stripInlineDirectiveTagsForDisplay call when the visibleReplies
+  // default flips to "message_tool".
   const displayText = stripSuppressedControlReplyToken(
     stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(text).text),
   );
@@ -28,23 +28,15 @@ function normalizeSidebarNarrationText(text: string): string | null {
     !displayText ||
     isSuppressedControlReplyText(displayText) ||
     isSuppressedControlReplyLeadFragment(displayText) ||
-    heartbeat.shouldSkip
+    heartbeat.shouldSkip ||
+    !heartbeat.text
   ) {
-    return null;
-  }
-  return heartbeat.text;
-}
-
-/** Compact the newest prose into one quiet, stable sidebar line. */
-export function deriveSidebarNarrationLine(text: string): string {
-  const displayText = normalizeSidebarNarrationText(text);
-  if (!displayText) {
     return "";
   }
   // Fences are dropped before the paragraph split, not just by the shared
   // flattener: a fenced block contains blank lines, so splitting first would
   // let code fragments become the "newest paragraph" and win the line.
-  const paragraphs = displayText.replace(/```[\s\S]*?```/g, " ").split(/\n\s*\n/);
+  const paragraphs = heartbeat.text.replace(/```[\s\S]*?```/g, " ").split(/\n\s*\n/);
   let paragraph = "";
   for (let index = paragraphs.length - 1; index >= 0; index -= 1) {
     paragraph = flattenMarkdownToPlainText(paragraphs[index] ?? "");

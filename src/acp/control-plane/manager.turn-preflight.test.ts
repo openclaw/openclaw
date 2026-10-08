@@ -118,7 +118,8 @@ describe("AcpSessionManager", () => {
             successor ? [sessionKey] : [],
           );
           expect(
-            sessionStateEvents.listSessionStateEventsSince(sessionKey, "codex", 0, 200).events,
+            (await sessionStateEvents.listSessionStateEventsSince(sessionKey, "codex", 0, 200))
+              .events,
           ).toMatchObject(
             reason === "signal failure"
               ? [{ kind: "run_failed", runId: requestId, payload: { outcome: "error" } }]
@@ -129,7 +130,8 @@ describe("AcpSessionManager", () => {
             await successor;
             expect(getActiveAcpTurnCount()).toBe(0);
             expect(
-              sessionStateEvents.listSessionStateEventsSince(sessionKey, "codex", 0, 200).events,
+              (await sessionStateEvents.listSessionStateEventsSince(sessionKey, "codex", 0, 200))
+                .events,
             ).toMatchObject([{ kind: "run_completed", runId: requestId }]);
           }
         } finally {

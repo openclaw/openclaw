@@ -177,6 +177,7 @@ if(output&&path.basename(path.dirname(output))==='1'&&process.argv.some(arg=>arg
       write(path.join(env.HOME!, "canary"), "synthetic caller home\n");
     }
     const isParallel = ["parallel", "batch-parallel", "failure", "overlap"].includes(mode);
+    const releaseAfterBeta = ["parallel", "batch-parallel", "automatic"].includes(mode);
     const testFiles =
       mode === "automatic"
         ? [
@@ -212,7 +213,7 @@ ${["missing", "corrupt"].includes(mode) && index === 0 ? `if(!merging)process.on
         (["failure", "batch-failure"].includes(mode) && index === 1) ||
         (["fail-fast", "batch-fail-fast"].includes(mode) && index === 0);
       const body = `import fs from 'node:fs';import {test,expect,describe,afterAll} from 'vitest';
-${["cancel", "batch-cancel"].includes(mode) && index === 0 ? fixtureReceiptClientSource(observation.receipts.endpoint) : ""}
+${releaseAfterBeta || (["cancel", "batch-cancel"].includes(mode) && index === 0) ? fixtureReceiptClientSource(observation.receipts.endpoint) : ""}
 ${realHomeReplay ? "import {homedir} from 'node:os';" : ""}
 ${["metadata", "coverage-missing"].includes(mode) ? "import {classify} from './covered';" : ""}
 let attempt=0;
@@ -220,11 +221,11 @@ test('${name}/one',${mode === "retry" && index === 0 ? "{retry:1}," : ""}async()
  fs.appendFileSync(${JSON.stringify(events)},JSON.stringify({name:'${name}/one',pid:process.pid})+'\\n');
  ${mode === "automatic" ? `expect(fs.existsSync(${JSON.stringify(output)})).toBe(false);` : ""}
  ${realHomeReplay ? `expect(process.env.HOME).toBe(${JSON.stringify(env.HOME)});expect(homedir()).toBe(${JSON.stringify(env.HOME)});` : ""}
- ${["parallel", "batch-parallel", "automatic"].includes(mode) && index === 0 ? `const {waitForFile}=await import(${JSON.stringify(path.join(repoRoot, "test/helpers/process-wait.ts"))});await waitForFile(${JSON.stringify(done)},15000);` : ""}
+ ${releaseAfterBeta && index === 0 ? `await awaitRelease(${JSON.stringify(ready)},'beta-done');` : ""}
  ${["cancel", "batch-cancel"].includes(mode) && index === 0 ? `fs.writeFileSync(${JSON.stringify(ready)},String(process.pid));sendReceipt(${JSON.stringify(ready)},'ready');await new Promise(()=>setInterval(()=>{},1000));` : ""}
  ${["unhandled", "ignored-unhandled"].includes(mode) && index === 1 ? "void Promise.reject(new Error('owned unhandled rejection'));await new Promise(resolve=>setImmediate(resolve));" : ""}
  ${["metadata", "coverage-missing"].includes(mode) ? `expect(classify(${index})).toMatchInlineSnapshot(${JSON.stringify(index === 0 ? '"zero"' : '"one"')});` : mode === "overlap" ? "expect(0, 'independent failure pid='+process.pid).toBe(1);" : mode === "retry" && index === 0 ? "expect(++attempt).toBe(2);" : `expect(1).toBe(${failure ? 2 : 1});`}
- ${index === 1 ? `fs.writeFileSync(${JSON.stringify(done)},'done');` : ""}
+ ${index === 1 ? `fs.writeFileSync(${JSON.stringify(done)},'done');${releaseAfterBeta ? `sendReceipt(${JSON.stringify(done)},'done');` : ""}` : ""}
 });
 ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/skip',()=>{});test.todo('beta/todo');"}`;
       write(path.join(root, testFiles[index]!), body);
@@ -450,6 +451,17 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       Math.max(0, deadline - performance.now()),
     );
     try {
+      if (releaseAfterBeta) {
+        // A deliberate early crash still returns its native outcome. Successful
+        // beta writes its durable record first, even if completion overtakes its receipt.
+        await withinTest(
+          Promise.race([observation.receipts.waitFor(done, "done"), completion]),
+          observation.signal,
+        );
+        if (fs.existsSync(done)) {
+          observation.receipts.release(ready, "beta-done");
+        }
+      }
       if (["cancel", "batch-cancel"].includes(mode)) {
         const readyWasWritten = () => {
           const pid = fs.existsSync(ready)
@@ -497,6 +509,9 @@ ${index === 0 ? "test('alpha/two',()=>expect(2).toBe(2));" : "test.skip('beta/sk
       const reportSet = stderr.match(/\[test\] native report set: (.+)/u)?.[1];
       return { ...result, stdout, stderr, output, reportSet };
     } finally {
+      if (releaseAfterBeta) {
+        observation.receipts.release(ready, "beta-done");
+      }
       clearTimeout(timeout);
       if (child.exitCode === null && child.signalCode === null) {
         child.kill("SIGTERM");

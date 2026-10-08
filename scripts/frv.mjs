@@ -16,7 +16,6 @@ import process from "node:process";
 import { pathToFileURL } from "node:url";
 import { promisify, stripVTControlCharacters } from "node:util";
 import { validateArtifactProducerRun } from "./full-release-artifacts.mjs";
-import { loadFlakeClassifications } from "./full-release-flake-classification.mjs";
 import {
   publicationAdmissionContract,
   publicationSourceContract,
@@ -28,7 +27,6 @@ import {
   composeReleaseChildAttemptEvidence,
   isReleaseGhArtifactMissingError,
   MAX_RELEASE_ARTIFACT_BYTES,
-  WINDOWS_NODE_CI_ADVISORY,
   planReleaseChildRerun,
   releaseChildSpec,
   releaseChildSpecs,
@@ -272,9 +270,7 @@ function isUnknownAllowEscapeSequencesFlag(error) {
 }
 
 async function execGhRead(args, options = {}) {
-  const attempts = options.attempts ?? 4;
-  let lastError;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+  for (let attempt = 1; ; attempt += 1) {
     const remaining =
       options.operationDeadline === undefined
         ? Number.MAX_SAFE_INTEGER
@@ -285,8 +281,7 @@ async function execGhRead(args, options = {}) {
         timeoutMs: Math.min(options.timeoutMs ?? 60_000, remaining),
       });
     } catch (error) {
-      lastError = error;
-      if (attempt === attempts || classifyReleaseGhTransportError(error) !== "transient") {
+      if (attempt === 4 || classifyReleaseGhTransportError(error) !== "transient") {
         throw error;
       }
       await sleep(
@@ -300,7 +295,6 @@ async function execGhRead(args, options = {}) {
       );
     }
   }
-  throw lastError;
 }
 
 function readGhApi(repository, path, args = [], options = {}, fresh = true) {
@@ -808,17 +802,6 @@ export async function inspectContinuation(plan, client, options = {}) {
         runId: child.runId,
         status: run.status,
       };
-      if (!active && child.key === "normalCi" && run.conclusion !== "success") {
-        Object.assign(
-          policyChild,
-          await client.loadFlakeClassifications({
-            child: policyChild,
-            parentRunId: plan.parentRunId,
-            parentRunAttempt: plan.parentRunAttempt,
-            targetSha: plan.targetSha,
-          }),
-        );
-      }
       const passed = !active && terminalPolicyPass(policyChild);
       return {
         compositeJobsSha256: evidence.compositeJobsSha256,
@@ -868,10 +851,6 @@ export function createClient(repository, dependencies = {}) {
           .map((line) => JSON.parse(line))
       : [];
   };
-  const attemptJobs =
-    dependencies.getAttemptJobs ??
-    ((runId, runAttempt, options) =>
-      readJobs(`actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`, options));
   const verify = async (runId, plan, operationDeadline, expectedRunAttempts) => {
     const sourceSha = plan.trustedWorkflow?.sha;
     return execute(
@@ -907,16 +886,14 @@ export function createClient(repository, dependencies = {}) {
   };
   return {
     repository,
-    loadFlakeClassifications(request) {
-      return loadFlakeClassifications({ ...request, repo: repository });
-    },
     getReleaseEvidenceClient() {
       releaseEvidenceClient ??= createReleaseEvidenceClient(repository);
       return releaseEvidenceClient;
     },
-    getAttemptJobs(runId, runAttempt, options) {
-      return attemptJobs(runId, runAttempt, options);
-    },
+    getAttemptJobs:
+      dependencies.getAttemptJobs ??
+      ((runId, runAttempt, options) =>
+        readJobs(`actions/runs/${runId}/attempts/${runAttempt}/jobs?per_page=100`, options)),
     getRun(runId, options) {
       return apiJson(`actions/runs/${runId}`, options);
     },
@@ -940,7 +917,6 @@ export function createClient(repository, dependencies = {}) {
       }
     },
     rerunFailed: (runId) => rerun(runId, "rerun-failed-jobs"),
-    cancelRun: (runId) => rerun(runId, "cancel"),
     rerunRun: (runId) => rerun(runId, "rerun"),
     listRuns: (query) => listReleasePriorityRuns(query, apiJson, apiText),
     async getVariable(name) {
@@ -2420,14 +2396,9 @@ function failedJobEvent(owner, job, attempt) {
   }
   const labels = Array.isArray(job.labels) && job.labels.length > 0 ? job.labels.join(",") : "none";
   const runner = job.runner_name ? ` / ${job.runner_name}` : "";
-  const advisory =
-    owner === WINDOWS_NODE_CI_ADVISORY.child &&
-    WINDOWS_NODE_CI_ADVISORY.jobNamePattern.test(job.name)
-      ? ` [advisory ${WINDOWS_NODE_CI_ADVISORY.id}]`
-      : "";
   return [
     `job:${job.id}`,
-    `${owner} job "${job.name}" ${job.conclusion}${advisory} (attempt ${job.run_attempt ?? attempt}; runner ${labels}${runner})`,
+    `${owner} job "${job.name}" ${job.conclusion} (attempt ${job.run_attempt ?? attempt}; runner ${labels}${runner})`,
     job.html_url,
   ];
 }

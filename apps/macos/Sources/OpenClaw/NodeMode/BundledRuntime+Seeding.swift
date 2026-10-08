@@ -112,7 +112,6 @@ extension BundledRuntime {
         {
             let name = entry.lastPathComponent
             guard self.isBuildDirectoryName(name), !retained.contains(name),
-                  name != "current", name != "previous", !name.contains(".partial-"),
                   let values = try? entry.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]),
                   values.isDirectory == true, values.isSymbolicLink != true,
                   let data = try? Data(contentsOf: entry

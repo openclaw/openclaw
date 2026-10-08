@@ -21,42 +21,9 @@ type MemoryWikiStatusWarning = {
   message: string;
 };
 
-export type MemoryWikiStatus = {
-  vaultScope: ResolvedMemoryWikiConfig["vault"]["scope"];
-  agentId: string | null;
-  vaultMode: ResolvedMemoryWikiConfig["vaultMode"];
-  renderMode: ResolvedMemoryWikiConfig["vault"]["renderMode"];
-  vaultPath: string;
-  vaultExists: boolean;
-  bridge: ResolvedMemoryWikiConfig["bridge"];
-  bridgePublicArtifactCount: number | null;
-  obsidianCli: {
-    enabled: boolean;
-    requested: boolean;
-    available: boolean;
-    command: string | null;
-  };
-  unsafeLocal: {
-    allowPrivateMemoryCoreAccess: boolean;
-    pathCount: number;
-  };
-  pageCounts: Record<WikiPageKind, number>;
-  sourceCounts: {
-    native: number;
-    bridge: number;
-    bridgeEvents: number;
-    unsafeLocal: number;
-    other: number;
-  };
-  warnings: MemoryWikiStatusWarning[];
-};
+export type MemoryWikiStatus = Awaited<ReturnType<typeof resolveMemoryWikiStatus>>;
 
-export type MemoryWikiDoctorReport = {
-  healthy: boolean;
-  warningCount: number;
-  status: MemoryWikiStatus;
-  fixes: MemoryWikiStatusWarning[];
-};
+export type MemoryWikiDoctorReport = ReturnType<typeof buildMemoryWikiDoctorReport>;
 
 type ResolveMemoryWikiStatusDeps = {
   appConfig?: OpenClawConfig;
@@ -74,7 +41,7 @@ function createEmptyVaultCounts() {
     synthesis: 0,
     report: 0,
   };
-  const sourceCounts: MemoryWikiStatus["sourceCounts"] = {
+  const sourceCounts = {
     native: 0,
     bridge: 0,
     bridgeEvents: 0,
@@ -84,10 +51,7 @@ function createEmptyVaultCounts() {
   return { pageCounts, sourceCounts };
 }
 
-async function collectVaultCounts(vaultPath: string): Promise<{
-  pageCounts: Record<WikiPageKind, number>;
-  sourceCounts: MemoryWikiStatus["sourceCounts"];
-}> {
+async function collectVaultCounts(vaultPath: string) {
   const { pageCounts, sourceCounts } = createEmptyVaultCounts();
   const dirs = ["entities", "concepts", "sources", "syntheses", "reports"] as const;
   for (const dir of dirs) {
@@ -203,7 +167,7 @@ function buildWarnings(params: {
 export async function resolveMemoryWikiStatus(
   config: ResolvedMemoryWikiConfig,
   deps?: ResolveMemoryWikiStatusDeps,
-): Promise<MemoryWikiStatus> {
+) {
   const agentId = resolveMemoryWikiVaultAgentId(config);
   const exists = deps?.pathExists ?? pathExists;
   const vaultExists = await exists(config.vault.path);
@@ -255,7 +219,7 @@ export async function resolveMemoryWikiStatus(
   };
 }
 
-export function buildMemoryWikiDoctorReport(status: MemoryWikiStatus): MemoryWikiDoctorReport {
+export function buildMemoryWikiDoctorReport(status: MemoryWikiStatus) {
   const fixes = status.warnings.map((warning) => ({
     code: warning.code,
     message:

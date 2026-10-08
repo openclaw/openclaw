@@ -95,24 +95,10 @@ export function resolveDiscordBoundConversationRoute(params: {
   matchedBy?: ResolvedAgentRoute["matchedBy"];
 }): ResolvedAgentRoute {
   const route = resolveDiscordConversationRoute({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    guildId: params.guildId,
-    memberRoleIds: params.memberRoleIds,
-    peer: buildDiscordRoutePeer({
-      isDirectMessage: params.isDirectMessage,
-      isGroupDm: params.isGroupDm,
-      directUserId: params.directUserId,
-      conversationId: params.conversationId,
-    }),
-    parentConversationId: params.parentConversationId,
+    ...params,
+    peer: buildDiscordRoutePeer(params),
   });
-  return resolveDiscordEffectiveRoute({
-    route,
-    boundSessionKey: params.boundSessionKey,
-    configuredRoute: params.configuredRoute,
-    matchedBy: params.matchedBy,
-  });
+  return resolveDiscordEffectiveRoute({ ...params, route });
 }
 
 export function resolveDiscordEffectiveRoute(params: {

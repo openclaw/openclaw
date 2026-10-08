@@ -631,7 +631,7 @@ module.exports = { stateMigrations: [{
     fs.writeFileSync(
       fixture.configPath,
       `${JSON.stringify({
-        agents: { list: [{ id: "legacy", default: true }] },
+        agents: { entries: { legacy: {} } },
         plugins: { entries: { "candidate-plugin": { enabled: true } } },
       })}\n`,
     );
@@ -655,16 +655,8 @@ module.exports = { stateMigrations: [{
     const legacy = new DatabaseSync(stateDatabasePath);
     try {
       legacy.exec(`
-        ALTER TABLE agent_databases RENAME TO agent_databases_current;
-        CREATE TABLE agent_databases (
-          agent_id TEXT NOT NULL PRIMARY KEY,
-          path TEXT NOT NULL,
-          schema_version INTEGER NOT NULL,
-          last_seen_at INTEGER NOT NULL,
-          size_bytes INTEGER
-        );
-        INSERT INTO agent_databases SELECT * FROM agent_databases_current;
-        DROP TABLE agent_databases_current;
+        PRAGMA user_version = 8;
+        UPDATE schema_meta SET schema_version = 8;
       `);
     } finally {
       legacy.close();
@@ -687,7 +679,7 @@ module.exports = { stateMigrations: [{
     const externalDatabasePath = path.join(fixture.root, "registered", "agent.sqlite");
     fs.mkdirSync(path.dirname(externalDatabasePath), { recursive: true });
     fs.writeFileSync(externalDatabasePath, "external\n");
-    const cfg: OpenClawConfig = { agents: { list: [{ id: "legacy", default: true }] } };
+    const cfg: OpenClawConfig = { agents: { entries: { legacy: {} } } };
     fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
     vi.spyOn(sessionTargets, "resolveConfiguredAgentDatabaseTargets").mockReturnValue([
       { agentId: "legacy", path: externalDatabasePath },
@@ -763,15 +755,21 @@ module.exports = { stateMigrations: [{
     "closes receipts before rethrowing automatic $blockerId failure",
     async ({ blockerId, property }) => {
       const fixture = await makeCallerModeFixture();
-      const sourcePath = path.join(fixture.stateDir, "settings", "voicewake.json");
-      const sourceBytes = '{"triggers":["hey fixture"]}\n';
+      const sourcePath = path.join(fixture.stateDir, "logs", "config-health.json");
+      const sourceBytes = `${JSON.stringify({
+        entries: {
+          [path.join(fixture.stateDir, "openclaw.json")]: {
+            lastObservedSuspiciousSignature: "leave-me",
+          },
+        },
+      })}\n`;
       fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
       fs.writeFileSync(sourcePath, sourceBytes);
       if (!property) {
         const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
         fs.mkdirSync(path.dirname(databasePath), { recursive: true });
         const database = new DatabaseSync(databasePath);
-        database.exec("CREATE TABLE agent_databases (broken TEXT)");
+        database.exec("CREATE TABLE audit_events (broken TEXT)");
         database.close();
       }
       const plan = await planLegacyStateMigrationsReadOnly({

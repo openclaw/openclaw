@@ -22,12 +22,6 @@ export type SlackFormattingDisabledMessage = {
   mrkdwn: false;
 };
 
-type SlackNativeDataDeliveryPlan = {
-  accessibilityText: string;
-  fallbackMessages: SlackFormattingDisabledMessage[];
-  skipOriginalBlocks: boolean;
-};
-
 type OrderedFallbackBlock = {
   block: Block | KnownBlock;
   text?: string;
@@ -140,7 +134,7 @@ export function buildSlackNativeDataDeliveryPlan(params: {
   baseText?: string;
   blocks: readonly (Block | KnownBlock)[];
   textLimit?: number;
-}): SlackNativeDataDeliveryPlan {
+}) {
   const baseText = params.baseText?.trim() ?? "";
   const textLimit = Math.min(
     SLACK_MESSAGE_TEXT_RECOMMENDED_LIMIT,
@@ -152,7 +146,7 @@ export function buildSlackNativeDataDeliveryPlan(params: {
     buildSlackNativeDataAccessibilityText(baseText, params.blocks) ||
     (hasNativeData ? SLACK_MALFORMED_NATIVE_DATA_FALLBACK : SLACK_EMPTY_BLOCK_FALLBACK);
   const survivorBlocks = stripSlackNativeDataBlocks(params.blocks);
-  const fallbackMessages =
+  const fallbackMessages: SlackFormattingDisabledMessage[] =
     survivorBlocks.length === 0
       ? chunkSlackTextAtHardLimit(accessibilityText, textLimit).map((text) => ({
           text,

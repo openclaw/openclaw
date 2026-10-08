@@ -44,7 +44,7 @@ describe("talk config validation fail-closed behavior", () => {
       message: /talk\.provider|required/i,
     },
   ])("rejects $name during config load", async ({ talk, message }) => {
-    await withTempHomeConfig({ agents: { list: [{ id: "main" }] }, talk }, async () => {
+    await withTempHomeConfig({ agents: { entries: { main: {} } }, talk }, async () => {
       const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => {});
       let thrown: unknown;
       try {

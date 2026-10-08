@@ -67,9 +67,16 @@ vi.mock("../infra/github-issue.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../commands/doctor-prompter.js", () => ({
-  createDoctorPrompter: () => ({ confirm: async () => true }),
-}));
+vi.mock("../commands/doctor-prompter.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../commands/doctor-prompter.js")>();
+  return {
+    ...actual,
+    createDoctorPrompter: (params: Parameters<typeof actual.createDoctorPrompter>[0]) => ({
+      ...actual.createDoctorPrompter(params),
+      confirm: async () => true,
+    }),
+  };
+});
 
 vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),

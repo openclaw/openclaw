@@ -2,18 +2,18 @@ import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { GitReadOperation, GitReadOperations } from "./git-read-operations.js";
 import { runGitWorkerOperation } from "./git-worker.js";
-import { createRetainedCache } from "./retained-cache.js";
+import { pruneMapToMaxSize } from "./map-size.js";
+
+const MAX_CACHED_CHECKOUTS = 1_000;
 
 export type GitReadOptions = {
-  /** Unversioned refreshes retain facts when metadata still proves them current. */
-  refresh?: boolean | "unversioned";
+  /** Refresh unversioned layouts; known revisions are always revalidated. */
+  refresh?: boolean;
   signal?: AbortSignal;
-  /** Subscription lifetime pins freshness state; it does not cancel an active caller. */
-  cacheSignal?: AbortSignal;
 };
 
 type ReadEntry<T> = {
-  revision?: string | null;
+  revision: string;
   expiresAt: number;
   promise: Promise<T>;
   controller: AbortController;
@@ -62,16 +62,24 @@ function createReadCache<Input, Output>(
   freshnessMs: number,
   clone: (value: Output) => Output = structuredClone,
   revision?: (input: Input, signal: AbortSignal) => Promise<string | null>,
+  keyOf: (input: Input) => string = JSON.stringify,
 ) {
-  const entries = createRetainedCache<ReadEntry<Output>>();
+  // Versioned reads retain only the current inputs/revision per checkout. LRU
+  // eviction and Gateway shutdown own their lifetime, independently of viewers.
+  const entries = new Map<string, ReadEntry<Output>>();
   const pending = new Set<ReadEntry<Output>>();
   const revisions = new Map<AbortController, Promise<string | null>>();
   let closed = false;
+  const remove = (key: string, entry: ReadEntry<Output>) => {
+    if (entries.get(key) === entry) {
+      entries.delete(key);
+    }
+  };
   return {
     async read(input: Input, options: GitReadOptions = {}): Promise<Output> {
       options.signal?.throwIfAborted();
       const prepared = structuredClone(input);
-      const key = JSON.stringify(prepared);
+      const key = keyOf(prepared);
       let currentRevision: string | null | undefined;
       if (revision) {
         const controller = new AbortController();
@@ -86,21 +94,21 @@ function createReadCache<Input, Output>(
           revisions.delete(controller);
         }
       }
+      const revisionKey = JSON.stringify([prepared, currentRevision]);
       options.signal?.throwIfAborted();
       if (closed) {
         throw new Error("Git reads are unavailable while the Gateway is restarting");
       }
-      let entry = entries.get(key, options.cacheSignal);
+      let entry = entries.get(key);
       if (
-        options.refresh === true ||
-        (options.refresh === "unversioned" && currentRevision === null) ||
+        (options.refresh && currentRevision === null) ||
         !entry ||
-        entry.revision !== currentRevision ||
+        entry.revision !== revisionKey ||
         entry.expiresAt <= Date.now()
       ) {
         const controller = new AbortController();
         const next: ReadEntry<Output> = {
-          revision: currentRevision,
+          revision: revisionKey,
           expiresAt:
             freshnessMs === 0
               ? Number.POSITIVE_INFINITY
@@ -118,7 +126,7 @@ function createReadCache<Input, Output>(
             pending.delete(next);
             controller.signal.throwIfAborted();
             if (freshnessMs === 0) {
-              entries.delete(key, next);
+              remove(key, next);
             }
             return value;
           },
@@ -126,14 +134,16 @@ function createReadCache<Input, Output>(
             next.pending = false;
             pending.delete(next);
             next.expiresAt = 0;
-            entries.delete(key, next);
+            remove(key, next);
             throw error;
           },
         );
         // Replace at admission. An older completion updates only its own entry.
-        entries.set(key, next, options.cacheSignal);
         entry = next;
       }
+      entries.delete(key);
+      entries.set(key, entry);
+      pruneMapToMaxSize(entries, MAX_CACHED_CHECKOUTS);
       return subscribe(entry, clone, options.signal);
     },
     async close(): Promise<void> {
@@ -149,12 +159,9 @@ function createReadCache<Input, Output>(
       entries.clear();
       await Promise.allSettled([...revisions.values(), ...retiring.map((entry) => entry.promise)]);
     },
-    release: entries.release,
   };
 }
 
-// Active panels check metadata on demand. Tool completion forces dirty stats;
-// a five-minute fallback observes working-tree edits made outside OpenClaw.
 function createReadCaches() {
   return {
     identities: createReadCache(
@@ -174,17 +181,23 @@ function createReadCaches() {
           { type: "checkout.revision", input: { root: input.root, includeIndex: false } },
           { signal },
         ),
+      (input) => input.root,
     ),
     branchFacts: createReadCache(
       (input: GitReadOperations["pull-request.branch-facts"]["input"], signal) =>
         runGitWorkerOperation({ type: "pull-request.branch-facts", input }, { signal }),
+      // Unstaged edits do not advance the ref/index revision.
       5 * 60_000,
       structuredClone,
       (input, signal) =>
         runGitWorkerOperation(
-          { type: "checkout.revision", input: { root: input.root, includeIndex: true } },
+          {
+            type: "checkout.revision",
+            input: { ...input, includeIndex: true },
+          },
           { signal },
         ),
+      (input) => input.root,
     ),
     diff: createReadCache(
       (input: GitReadOperations["checkout.diff"]["input"], signal) =>
@@ -232,16 +245,6 @@ function runtime(): GitReadRuntime {
       return state.closing;
     },
   );
-}
-
-export function releaseGitReadCache(
-  type: "checkout.context" | "pull-request.branch-facts",
-  signal?: AbortSignal,
-): void {
-  const caches = runtime().caches;
-  if (caches) {
-    (type === "checkout.context" ? caches.context : caches.branchFacts).release(signal);
-  }
 }
 
 export function runGitReadOperation<K extends keyof GitReadOperations>(

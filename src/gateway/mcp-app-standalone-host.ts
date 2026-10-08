@@ -28,6 +28,7 @@ export function runStandaloneMcpAppHost(config: {
       getElementById(id: string): { replaceChildren(...children: unknown[]): void } | null;
     };
     innerWidth: number;
+    innerHeight?: number;
     location: { hash: string; origin: string; reload(): void };
     matchMedia(query: string): { matches: boolean };
     navigator: { language: string };
@@ -51,6 +52,11 @@ export function runStandaloneMcpAppHost(config: {
     toolResult: unknown;
     serverTools?: boolean;
     serverResources?: boolean;
+    displayModes?: {
+      availableDisplayModes?: Array<"inline" | "fullscreen">;
+      preferredDisplayMode?: "inline" | "fullscreen";
+    };
+    hostContext?: { "openai/deepLink"?: { url: string } };
   };
 
   const host = browser.document.getElementById("host");
@@ -59,6 +65,8 @@ export function runStandaloneMcpAppHost(config: {
   let payload: ViewPayload | undefined;
   let initializeAccepted = false;
   let initialized = false;
+  let displayMode: "inline" | "fullscreen" = "inline";
+  let availableDisplayModes: Array<"inline" | "fullscreen"> = ["inline", "fullscreen"];
   let requestId = 0;
   let sandboxOrigin: string | undefined;
   let teardownId: JsonRpcId | undefined;
@@ -240,6 +248,28 @@ export function runStandaloneMcpAppHost(config: {
         reject(message.id, -32602, "Invalid MCP App initialization");
         return;
       }
+      const capabilities = asStandaloneRecord(asStandaloneRecord(message.params)?.appCapabilities);
+      const hints =
+        payload.displayModes?.availableDisplayModes ??
+        (payload.displayModes?.preferredDisplayMode
+          ? [payload.displayModes.preferredDisplayMode]
+          : capabilities?.availableDisplayModes);
+      availableDisplayModes = (["inline", "fullscreen"] as const).filter(
+        (mode) => !Array.isArray(hints) || hints.includes(mode),
+      );
+      if (!availableDisplayModes.length) {
+        reject(message.id, -32602, "No supported display mode");
+        return;
+      }
+      const preferred = payload.displayModes?.preferredDisplayMode;
+      displayMode =
+        preferred && availableDisplayModes.includes(preferred)
+          ? preferred
+          : availableDisplayModes[0]!;
+      if (frame) {
+        frame.style.height =
+          displayMode === "fullscreen" ? `${browser.innerHeight ?? 600}px` : "600px";
+      }
       initializeAccepted = true;
       respond(message.id, {
         protocolVersion: config.protocolVersion,
@@ -251,9 +281,15 @@ export function runStandaloneMcpAppHost(config: {
         },
         hostContext: {
           theme: browser.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light",
-          displayMode: "inline",
-          availableDisplayModes: ["inline"],
-          containerDimensions: { width: Math.max(1, browser.innerWidth), height: 600 },
+          displayMode,
+          availableDisplayModes,
+          ...(payload.hostContext?.["openai/deepLink"]
+            ? { "openai/deepLink": payload.hostContext["openai/deepLink"] }
+            : {}),
+          containerDimensions: {
+            width: Math.max(1, browser.innerWidth),
+            height: displayMode === "fullscreen" ? (browser.innerHeight ?? 600) : 600,
+          },
           locale: browser.navigator.language,
           timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
           platform: "web",
@@ -269,9 +305,30 @@ export function runStandaloneMcpAppHost(config: {
       deliverInitialState();
       return;
     }
+    if (message.method === "ui/request-display-mode" && message.id !== undefined) {
+      if (!initialized) {
+        reject(message.id, -32002, "MCP App initialization is incomplete");
+        return;
+      }
+      const mode = asStandaloneRecord(message.params)?.mode;
+      if ((mode === "inline" || mode === "fullscreen") && availableDisplayModes.includes(mode)) {
+        displayMode = mode;
+        if (frame) {
+          frame.style.height = mode === "fullscreen" ? `${browser.innerHeight ?? 600}px` : "600px";
+        }
+        notify("ui/notifications/host-context-changed", { displayMode });
+      }
+      respond(message.id, { mode: displayMode });
+      return;
+    }
     if (message.method === "ui/notifications/size-changed") {
       const height = asStandaloneRecord(message.params)?.height;
-      if (frame && typeof height === "number" && Number.isFinite(height)) {
+      if (
+        frame &&
+        displayMode === "inline" &&
+        typeof height === "number" &&
+        Number.isFinite(height)
+      ) {
         frame.style.height = `${Math.min(1200, Math.max(160, Math.round(height)))}px`;
       }
       return;

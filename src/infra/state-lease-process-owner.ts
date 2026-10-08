@@ -1,12 +1,17 @@
-import { hostname } from "node:os";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getFileLockProcessStartTime, isPidDefinitelyDead } from "../shared/pid-alive.js";
+import {
+  classifyGatewayOwnerProcessNamespace,
+  GatewayProcessNamespaceSchema,
+  type LockPayload,
+} from "./gateway-lock-payload.js";
 
 export type StateLeaseProcessOwner = {
   pid: number;
   host: string;
   startedAt: number | null;
+  processNamespace?: LockPayload["processNamespace"];
 };
 
 export function parseStateLeaseProcessOwner(
@@ -28,14 +33,32 @@ export function parseStateLeaseProcessOwner(
   ) {
     return null;
   }
-  return { pid, host, startedAt };
+  return {
+    pid,
+    host,
+    startedAt,
+    ...(owner.processNamespace === undefined
+      ? {}
+      : {
+          processNamespace:
+            GatewayProcessNamespaceSchema.safeParse(owner.processNamespace).data ?? null,
+        }),
+  };
 }
 
 export function readStateLeaseProcessOwnerStatus(
   owner: StateLeaseProcessOwner | null,
+  heartbeatAt?: number,
 ): "live" | "dead" | "unknown" {
-  if (!owner || owner.host !== hostname()) {
+  if (!owner) {
     return "unknown";
+  }
+  const namespace = classifyGatewayOwnerProcessNamespace(owner.processNamespace, {
+    ownerHost: owner.host,
+    readHeartbeatAt: () => heartbeatAt,
+  });
+  if (namespace !== "same") {
+    return namespace;
   }
   if (isPidDefinitelyDead(owner.pid)) {
     return "dead";

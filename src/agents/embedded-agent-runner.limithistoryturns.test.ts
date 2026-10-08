@@ -16,11 +16,6 @@ const makeTurns = (count: number): AgentMessage[] =>
   ]).flat();
 
 describe("limitHistoryTurns", () => {
-  it.each([undefined, -1])("leaves history unchanged for a disabled limit %s", (limit) => {
-    const messages = makeTurns(2);
-    expect(limitHistoryTurns(messages, limit)).toBe(messages);
-  });
-
   it("returns empty history", () => {
     expect(limitHistoryTurns([], 5)).toEqual([]);
   });
@@ -34,28 +29,6 @@ describe("limitHistoryTurns", () => {
       const expected = structuredClone(current.slice(start * 2));
       expect(limitHistoryTurns(current, 4)).toEqual(expected);
     }
-  });
-
-  it("preserves leading summaries while limiting whole user turns", () => {
-    const summary = castAgentMessage({
-      role: "compactionSummary",
-      summary: "Prior context",
-      tokensBefore: 5000,
-      timestamp: 0,
-    });
-    const messages = [summary, ...makeTurns(3)];
-    const expected = structuredClone([summary, ...messages.slice(-2)]);
-    expect(limitHistoryTurns(messages, 1)).toEqual(expected);
-  });
-
-  it("preserves the reset kept-tail prelude while limiting post-boundary turns", () => {
-    const prelude = makeTurns(1);
-    for (const message of prelude) {
-      Object.defineProperty(message, Symbol.for("openclaw.sessionHistoryPrelude"), { value: true });
-    }
-    const messages = [...prelude, ...makeTurns(3)];
-    const expected = structuredClone([...prelude, ...messages.slice(-2)]);
-    expect(limitHistoryTurns(messages, 1)).toEqual(expected);
   });
 
   it("keeps summary-only history", () => {

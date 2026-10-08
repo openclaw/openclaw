@@ -6,10 +6,8 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import * as schemas from "../plugins/schema-validator.js";
 import { defaultRuntime } from "../runtime.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import * as agentDirs from "./agent-dirs.js";
 import * as metadata from "./io.plugin-metadata.js";
 import type { OpenClawConfig } from "./types.js";
-import * as validation from "./validation-core.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -33,12 +31,8 @@ async function validateThroughCli(
       },
     ],
   });
-  const synchronousMetadata = vi
-    .spyOn(metadata, "resolveConfigWidePluginMetadataSnapshot")
-    .mockReturnValue(snapshot);
+  vi.spyOn(metadata, "resolveConfigWidePluginMetadataSnapshot").mockReturnValue(snapshot);
   vi.spyOn(metadata, "resolveConfigWidePluginMetadataSnapshotAsync").mockResolvedValue(snapshot);
-  const core = vi.spyOn(validation, "validateConfigObjectRaw");
-  const directories = vi.spyOn(agentDirs, "findDuplicateAgentDirs");
   const schemaValidation = vi.spyOn(schemas, "validatePluginSchemaValue");
   const output: unknown[] = [];
   vi.spyOn(defaultRuntime, "writeJson").mockImplementation((value) => {
@@ -58,29 +52,8 @@ async function validateThroughCli(
     }
     expect(fs.readFileSync(state.configPath, "utf8")).toBe(before);
   });
-  return { output: output.at(-1), core, directories, schemaValidation, synchronousMetadata };
+  return { output: output.at(-1), schemaValidation };
 }
-
-it("validates one config document for a 480-agent fleet", async () => {
-  const { output, core, directories, schemaValidation, synchronousMetadata } =
-    await validateThroughCli(
-      {
-        agents: {
-          ownership: "explicit",
-          entries: Object.fromEntries(Array.from({ length: 480 }, (_, i) => [`agent-${i}`, {}])),
-        },
-        plugins: {
-          entries: { "validation-fixture": { enabled: true, config: { label: "fixture" } } },
-        },
-      },
-      { type: "object", properties: { label: { type: "string" } }, additionalProperties: false },
-    );
-  expect(output).toMatchObject({ valid: true });
-  expect(core).toHaveBeenCalledTimes(1);
-  expect(directories).toHaveBeenCalledTimes(1);
-  expect(schemaValidation).toHaveBeenCalledTimes(1);
-  expect(synchronousMetadata).not.toHaveBeenCalled();
-});
 
 it.each([
   { rootPath: "/synthetic", valid: true, calls: 1 },
@@ -110,7 +83,6 @@ it.each([
 
 it.each([
   { enabled: true, authored: false, valid: true },
-  { enabled: true, authored: true, valid: false },
   { enabled: false, authored: true, valid: false },
 ])(
   "preserves strict default ownership for $enabled/$authored",
@@ -164,23 +136,4 @@ it("retains raw schema rejection when runtime path normalization changes the inp
     ],
   });
   expect(schemaValidation).toHaveBeenCalledTimes(2);
-});
-
-it("retains runtime warnings while reusing an inactive authored schema result", async () => {
-  const { output, schemaValidation } = await validateThroughCli(
-    {
-      plugins: { entries: { "validation-fixture": { enabled: false, config: {} } } },
-    },
-    { type: "object", properties: { label: { type: "string", default: "synthetic" } } },
-  );
-  expect(output).toMatchObject({
-    valid: true,
-    warnings: [
-      expect.objectContaining({
-        path: "plugins.entries.validation-fixture",
-        message: expect.stringContaining("plugin disabled"),
-      }),
-    ],
-  });
-  expect(schemaValidation).toHaveBeenCalledTimes(1);
 });

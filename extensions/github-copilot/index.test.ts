@@ -1697,7 +1697,7 @@ describe("github-copilot plugin", () => {
       const method = requireAuthMethod(provider.auth, 0);
       const agentDir = await createAgentDir();
       const runtime = { error: vi.fn(), exit: vi.fn() };
-      const result = await method.runNonInteractive({
+      const pending = method.runNonInteractive({
         authChoice: "github-copilot",
         config: {},
         baseConfig: {},
@@ -1709,10 +1709,9 @@ describe("github-copilot plugin", () => {
         ),
         toApiKeyCredential: vi.fn(),
       });
-      expect(result).toBeNull();
-      expect(runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining("Missing --github-copilot-token"),
-      );
+      await expect(pending).rejects.toThrow("Missing --github-copilot-token");
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
       expect(ensureAuthProfileStore(agentDir).profiles).toEqual({});
     },
   );
@@ -1824,27 +1823,45 @@ describe("github-copilot plugin", () => {
     });
   });
 
-  it("does not emit a second missing-token error after ref-mode flag validation fails", async () => {
-    const provider = registerProviderWithPluginConfig({});
-    const method = requireAuthMethod(provider.auth, 0);
-    const agentDir = await createAgentDir();
-    const runtime = { error: vi.fn(), exit: vi.fn() };
+  it.each([
+    {
+      name: "a flag without a matching environment credential",
+      resolveApiKey: async () => null,
+      error:
+        "--github-copilot-token cannot be used with --secret-input-mode ref unless COPILOT_GITHUB_TOKEN is set in env. Set COPILOT_GITHUB_TOKEN and omit --github-copilot-token, or use --secret-input-mode plaintext.",
+    },
+    {
+      name: "an environment credential without its reference name",
+      resolveApiKey: async () => ({
+        key: ["synthetic", "credential"].join("-"),
+        source: "env" as const,
+      }),
+      error:
+        '--secret-input-mode ref requires an explicit environment variable for provider "github-copilot".',
+    },
+  ])(
+    "propagates ref-mode validation for $name before persisting auth",
+    async ({ resolveApiKey, error }) => {
+      const provider = registerProviderWithPluginConfig({});
+      const method = requireAuthMethod(provider.auth, 0);
+      const agentDir = await createAgentDir();
+      const runtime = { error: vi.fn(), exit: vi.fn() };
 
-    const result = await method.runNonInteractive({
-      ...nonInteractiveContext(agentDir),
-      opts: {
-        githubCopilotToken: "ghu_secret",
-        secretInputMode: "ref",
-      },
-      runtime,
-      resolveApiKey: vi.fn(async () => null),
-    });
-
-    expect(result).toBeNull();
-    expect(runtime.error).toHaveBeenCalledTimes(1);
-    expect(runtime.error).toHaveBeenCalledWith(
-      "--github-copilot-token cannot be used with --secret-input-mode ref unless COPILOT_GITHUB_TOKEN is set in env. Set COPILOT_GITHUB_TOKEN and omit --github-copilot-token, or use --secret-input-mode plaintext.",
-    );
-  });
+      await expect(
+        method.runNonInteractive({
+          ...nonInteractiveContext(agentDir),
+          opts: {
+            githubCopilotToken: ["synthetic", "credential"].join("-"),
+            secretInputMode: "ref",
+          },
+          runtime,
+          resolveApiKey: vi.fn(resolveApiKey),
+        }),
+      ).rejects.toThrow(error);
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(ensureAuthProfileStore(agentDir).profiles).toEqual({});
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

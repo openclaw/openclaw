@@ -291,7 +291,7 @@ async function configureFixedSessionStore(label = "default"): Promise<string> {
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
   fs.writeFileSync(storePath, "{}\n", "utf8");
   testState.sessionStorePath = storePath;
-  await setAgentsConfig({ list: [{ id: "main", default: true }] });
+  await setAgentsConfig({ entries: { main: {} } });
   const { getRuntimeConfig } = await getGatewayConfigModule();
   expect(getRuntimeConfig().session?.store).toBe(storePath);
   return storePath;
@@ -405,7 +405,7 @@ test("sessions.describe retains full target and child metadata without decoding 
   ] as const) {
     await upsertSessionEntryCore(
       { agentId, sessionKey: `agent:main:${name}`, storePath },
-      { sessionId: name, updatedAt, status: "running", [relation]: sessionKey },
+      { sessionId: name, updatedAt, [relation]: sessionKey },
     );
   }
   const unrelatedPrompt = "unrelated describe prompt".repeat(512);
@@ -580,7 +580,7 @@ test("sessions.describe reads a pre-existing store after its agent is removed fr
     },
     { sessionId: "session-ghost", updatedAt: 42 },
   );
-  await setAgentsConfig({ list: [{ id: "main", default: true }] });
+  await setAgentsConfig({ entries: { main: {} } });
   const registeredBefore = listOpenClawRegisteredAgentDatabases({
     env: { OPENCLAW_STATE_DIR: requireStateDir() },
   });
@@ -711,7 +711,7 @@ test("sessions.search searches a retired per-agent store without explicit sessio
     sessionKey,
     storePath,
   });
-  await setAgentsConfig({ list: [{ id: "main", default: true }] });
+  await setAgentsConfig({ entries: { main: {} } });
 
   const searched = await directSessionReq<{ results: Array<{ sessionKey: string }> }>(
     "sessions.search",
@@ -719,6 +719,44 @@ test("sessions.search searches a retired per-agent store without explicit sessio
   );
 
   expect(searched.payload?.results).toEqual([expect.objectContaining({ sessionKey })]);
+});
+
+test("sessions.search accepts an ACP allowlist owner absent from the agent roster", async () => {
+  const agentId = "codex";
+  const sessionKey = `agent:${agentId}:acp:search-owner`;
+  const sessionId = "session-acp-owner-search";
+  const storePath = path.join(requireStateDir(), "agents", agentId, "sessions", "sessions.json");
+  await setAgentsConfig({ entries: { main: {} } });
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  getRuntimeConfig().acp = { allowedAgents: [agentId] };
+  await replaceSessionEntry({ agentId, sessionKey, storePath }, { sessionId, updatedAt: 42 });
+  await seedLinearSessionTranscript({
+    agentId,
+    contents: ["ACP owner search needle"],
+    sessionId,
+    sessionKey,
+    storePath,
+  });
+
+  const searched = await directSessionReq<{ results: Array<{ sessionKey: string }> }>(
+    "sessions.search",
+    { agentId, query: "ACP owner search needle", sessionKeys: [sessionKey] },
+  );
+
+  expect(searched).toMatchObject({
+    ok: true,
+    payload: { results: [expect.objectContaining({ sessionKey })] },
+  });
+  const mismatchedOwner = await directSessionReq("sessions.search", {
+    agentId,
+    query: "ACP owner search needle",
+    sessionKeys: [`agent:claude:acp:search-owner`],
+  });
+  expect(mismatchedOwner).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST" },
+  });
+  expect(await listAgentIdsViaRpc()).toEqual(["main"]);
 });
 
 test("session reads find a retired store only reachable through its deterministic template", async () => {
@@ -732,7 +770,7 @@ test("session reads find a retired store only reachable through its deterministi
   );
   const storePath = storeTemplate.replace("{agentId}", agentId);
   testState.sessionStorePath = storeTemplate;
-  await setAgentsConfig({ list: [{ id: "main", default: true }] });
+  await setAgentsConfig({ entries: { main: {} } });
   const { getRuntimeConfig } = await getGatewayConfigModule();
   expect(getRuntimeConfig().session?.store).toBe(storeTemplate);
   await replaceSessionEntry({ agentId, sessionKey, storePath }, { sessionId, updatedAt: 42 });
@@ -762,7 +800,7 @@ test("session reads find a retired store only reachable through its deterministi
 });
 
 test("session reads do not provision missing stores for default or configured agents", async () => {
-  await setAgentsConfig({ list: [{ id: "main", default: true }, { id: "work" }] });
+  await setAgentsConfig({ entries: { main: {}, work: {} } });
   for (const agentId of ["main", "work"]) {
     const result = await directSessionReq<{ session: unknown }>("sessions.describe", {
       key: `agent:${agentId}:missing`,
@@ -791,10 +829,10 @@ test("searches rich displayed fields before selecting a page across visible agen
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const config: OpenClawConfig = {
       agents: {
-        list: [
-          { id: "main", default: true },
-          { id: "work", identity: { name: "Orchid Navigator" } },
-        ],
+        entries: {
+          main: {},
+          work: { identity: { name: "Orchid Navigator" } },
+        },
       },
     };
     const client = identifiedClient("owner@example.com");

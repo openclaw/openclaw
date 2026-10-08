@@ -42,6 +42,10 @@ export function resolveChatModelSetup(
       retired: state.catalogRetired === true,
       error: state.catalogError,
       modelSelectionPolicy: policy,
+      inference:
+        state.activeSession?.placement?.state === "active"
+          ? state.activeSession.placement.inference
+          : undefined,
     },
   );
   return {
@@ -89,6 +93,7 @@ function chatModelUnavailableBanner(
     retired: boolean;
     error: string | null;
     modelSelectionPolicy?: ModelCatalogResult["modelSelectionPolicy"];
+    inference?: "worker";
   },
 ): ChatComposerDisabledBanner | undefined {
   if (catalogState?.retired) {
@@ -117,6 +122,7 @@ function chatModelUnavailableBanner(
   }
   const message = chatModelUnavailableMessage(
     resolveChatModelUnavailableReason(model, provider, catalog),
+    catalogState?.inference,
   );
   return message ? createChatModelSetupBanner(onSetup, message) : undefined;
 }

@@ -45,6 +45,8 @@ type ColdOpenOutcome = {
 };
 
 const offeredSlotLabels = [
+  "Subagents",
+  "Processes",
   "Review",
   "Terminal",
   "Browser",
@@ -78,6 +80,7 @@ function coldOpenScenario(): ControlUiMockGatewayScenario {
       "terminal.open",
     ],
     methodResponses: {
+      "sessions.processes.list": { sessionId: "main-session", processes: [], truncated: false },
       "browser.request": {
         cases: [
           { match: { method: "GET", path: "/tabs" }, response: { running: false, tabs: [] } },
@@ -112,8 +115,35 @@ function populatedColdOpenScenario(): ControlUiMockGatewayScenario {
   const sparse = coldOpenScenario();
   return {
     ...sparse,
+    sessions: [
+      { key: "agent:main:main", kind: "direct", label: "Main", updatedAt: 1 },
+      {
+        key: "agent:main:subagent:panel-content",
+        kind: "direct",
+        label: "Check panel content",
+        spawnedBy: "agent:main:main",
+        status: "done",
+        updatedAt: 2,
+      },
+    ],
     methodResponses: {
       ...sparse.methodResponses,
+      "sessions.processes.list": {
+        sessionId: "main-session",
+        truncated: false,
+        processes: [
+          {
+            processId: "process-1",
+            instanceId: "incarnation-1",
+            name: "Build application",
+            status: "running",
+            startedAt: 1,
+            tail: "Compiling",
+            truncated: false,
+            canStop: false,
+          },
+        ],
+      },
       "browser.request": {
         cases: [
           {
@@ -364,6 +394,25 @@ async function readSlotColdOpenOutcome(
       }
     } finally {
       held?.release();
+    }
+    if (label === "Processes") {
+      const processes = page.locator("openclaw-chat-processes-panel");
+      await processes
+        .getByText(
+          expectedOutcome === "content"
+            ? "Build application"
+            : "No background processes in this conversation.",
+          { exact: true },
+        )
+        .waitFor();
+    }
+    if (label === "Subagents") {
+      const subagents = page.locator("openclaw-chat-subagents-panel");
+      if (expectedOutcome === "content") {
+        await subagents.getByRole("button", { name: "Check panel content", exact: true }).waitFor();
+      } else {
+        await subagents.getByText("No subagents in this conversation.", { exact: true }).waitFor();
+      }
     }
     if (expectedOutcome) {
       await expect

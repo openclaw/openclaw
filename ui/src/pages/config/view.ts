@@ -58,8 +58,6 @@ export function renderConfig(props: ConfigProps) {
   const analysis = getConfigSchemaAnalysis(
     viewState,
     asConfigSchema(props.schema),
-    props.includeSections,
-    props.excludeSections,
     include,
     exclude,
   );
@@ -81,7 +79,6 @@ export function renderConfig(props: ConfigProps) {
   const displayFormMode = showModeToggle && rawAvailable ? props.formMode : "form";
   const formMode = rawDraftPending ? "raw" : displayFormMode;
   const requestUpdate = props.onViewStateChange;
-  // Scroll helper: target-based (nav clicks) with global fallback (form/raw toggle)
   const resetContentScroll = (target: EventTarget | null) => {
     queueMicrotask(() => {
       // Flat layout: the settings shell owns the scroll viewport; the sibling
@@ -467,10 +464,11 @@ export function renderConfig(props: ConfigProps) {
                             activeSubsection: null,
                             showAdvanced: effectiveShowAdvanced,
                             forceAdvancedSection: props.forceAdvancedSection,
-                            onShowAdvanced: () => props.setShowAdvancedSettings(true),
+                            onShowAdvanced: () =>
+                              props.onAppearanceChange({ showAdvancedSettings: true }),
                             onHideAdvanced: props.forceShowAdvanced
                               ? undefined
-                              : () => props.setShowAdvancedSettings(false),
+                              : () => props.onAppearanceChange({ showAdvancedSettings: false }),
                             sectionActions:
                               props.activeSection === "env"
                                 ? html`<button
@@ -494,6 +492,7 @@ export function renderConfig(props: ConfigProps) {
                             sectionPrelude: props.sectionPrelude,
                             revealSensitive:
                               props.activeSection === "env" ? envSensitiveVisible : false,
+                            maskSensitive: true,
                             isSensitivePathRevealed: (path) =>
                               isSensitivePathRevealed(viewState, path),
                             onToggleSensitivePath: (path) => {

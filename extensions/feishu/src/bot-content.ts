@@ -1,10 +1,8 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import {
   buildFeishuConversationId,
   resolveConfiguredFeishuGroupSessionScope,
-  type FeishuGroupSessionScope as GroupSessionScope,
 } from "./conversation-id.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
@@ -13,21 +11,16 @@ import { saveMessageResourceFeishu } from "./media.js";
 import { isFeishuBroadcastMention } from "./mention.js";
 import { formatFeishuMediaContent } from "./message-content.js";
 import { parsePostContent } from "./post.js";
-import type { FeishuChatType, FeishuMediaInfo } from "./types.js";
-
-type FeishuMention = NonNullable<FeishuMessageEvent["message"]["mentions"]>[number];
+import type { FeishuChatType, FeishuConfig, FeishuMediaInfo } from "./types.js";
 
 type FeishuMessageLike = {
   message: Pick<FeishuMessageEvent["message"], "content" | "message_type" | "mentions">;
 };
 
-type ResolvedFeishuGroupSession = {
-  peerId: string;
-  parentPeer: { kind: "group"; id: string } | null;
-  groupSessionScope: GroupSessionScope;
-  replyInThread: boolean;
-  threadReply: boolean;
-};
+type FeishuGroupSessionConfig = Pick<
+  FeishuConfig,
+  "groupSessionScope" | "topicSessionMode" | "replyInThread"
+>;
 
 export function resolveFeishuGroupSession(params: {
   chatId: string;
@@ -36,17 +29,9 @@ export function resolveFeishuGroupSession(params: {
   rootId?: string;
   threadId?: string;
   chatType?: FeishuChatType;
-  groupConfig?: {
-    groupSessionScope?: GroupSessionScope;
-    topicSessionMode?: "enabled" | "disabled";
-    replyInThread?: "enabled" | "disabled";
-  };
-  feishuCfg?: {
-    groupSessionScope?: GroupSessionScope;
-    topicSessionMode?: "enabled" | "disabled";
-    replyInThread?: "enabled" | "disabled";
-  };
-}): ResolvedFeishuGroupSession {
+  groupConfig?: FeishuGroupSessionConfig;
+  feishuCfg?: FeishuGroupSessionConfig;
+}) {
   const { chatId, senderOpenId, messageId, rootId, threadId, chatType, groupConfig, feishuCfg } =
     params;
   const normalizedThreadId = threadId?.trim();
@@ -66,34 +51,19 @@ export function resolveFeishuGroupSession(params: {
         (replyInThread ? messageId : null))
       : null;
 
-  let peerId;
-  switch (groupSessionScope) {
-    case "group_sender":
-      peerId = buildFeishuConversationId({ chatId, scope: "group_sender", senderOpenId });
-      break;
-    case "group_topic":
-      peerId = topicScope
-        ? buildFeishuConversationId({ chatId, scope: "group_topic", topicId: topicScope })
-        : chatId;
-      break;
-    case "group_topic_sender":
-      peerId = topicScope
-        ? buildFeishuConversationId({
-            chatId,
-            scope: "group_topic_sender",
-            topicId: topicScope,
-            senderOpenId,
-          })
-        : buildFeishuConversationId({ chatId, scope: "group_sender", senderOpenId });
-      break;
-    default:
-      peerId = chatId;
-      break;
-  }
+  const peerId =
+    groupSessionScope === "group_sender" || groupSessionScope === "group_topic_sender" || topicScope
+      ? buildFeishuConversationId({
+          chatId,
+          scope: groupSessionScope,
+          senderOpenId,
+          topicId: topicScope ?? undefined,
+        })
+      : chatId;
 
   return {
     peerId,
-    parentPeer: topicScope ? { kind: "group", id: chatId } : null,
+    parentPeer: topicScope ? { kind: "group" as const, id: chatId } : null,
     groupSessionScope,
     replyInThread,
     threadReply,
@@ -160,31 +130,6 @@ export function checkBotMentioned(event: FeishuMessageLike, botOpenId?: string):
     );
   }
   return false;
-}
-
-export function normalizeMentions(
-  text: string,
-  mentions?: FeishuMention[],
-  botStripId?: string,
-): string {
-  if (!mentions || mentions.length === 0) {
-    return text;
-  }
-  const escapeName = (value: string) => value.replace(/</g, "&lt;").replace(/>/g, "&gt;");
-  const replacements = new Map<string, string>();
-  for (const mention of mentions) {
-    const mentionId = mention.id.open_id;
-    const replacement =
-      botStripId && mentionId === botStripId
-        ? ""
-        : mentionId
-          ? `<at user_id="${mentionId}">${escapeName(mention.name)}</at>`
-          : `@${mention.name}`;
-    replacements.set(mention.key, replacement);
-  }
-  // Longest keys win; a single pass keeps placeholder-like display names literal.
-  const keys = [...replacements.keys()].toSorted((a, b) => b.length - a.length).map(escapeRegExp);
-  return text.replace(new RegExp(keys.join("|"), "g"), (key) => replacements.get(key)!).trim();
 }
 
 export function normalizeFeishuCommandProbeBody(text: string): string {

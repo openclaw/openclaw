@@ -23,7 +23,6 @@ import type {
   SkillInstallSpec,
   SkillInvocationPolicy,
 } from "../types.js";
-import type { Skill } from "./skill-contract.js";
 
 export function parseSkillFrontmatter(content: string): ParsedSkillFrontmatter {
   const parsed = parseFrontmatterBlockResult(content);
@@ -68,15 +67,10 @@ function normalizeSafeDownloadUrl(raw: unknown): string | undefined {
   if (!value || /\s/.test(value)) {
     return undefined;
   }
-  try {
-    const parsed = new URL(value);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    return parsed.toString();
-  } catch {
-    return undefined;
-  }
+  const parsed = URL.parse(value);
+  return parsed?.protocol === "http:" || parsed?.protocol === "https:"
+    ? parsed.toString()
+    : undefined;
 }
 
 function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
@@ -183,6 +177,6 @@ export function resolveSkillInvocationPolicy(
   };
 }
 
-export function resolveSkillKey(skill: Skill, entry?: SkillEntry): string {
-  return entry?.metadata?.skillKey ?? skill.name;
+export function resolveSkillKey(entry: SkillEntry): string {
+  return entry.metadata?.skillKey ?? entry.skill.name;
 }

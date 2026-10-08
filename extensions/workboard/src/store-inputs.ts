@@ -176,7 +176,6 @@ export type WorkboardBoardInput = {
 export type WorkboardSpecifyInput = WorkboardCardPatch & {
   summary?: unknown;
 };
-export type WorkboardDecomposeChildInput = WorkboardLinkedCreateInput;
 export type WorkboardDecomposeInput = {
   summary?: unknown;
   children?: unknown;

@@ -449,7 +449,7 @@ describe("promptCustomApiConfig", () => {
           init?.signal?.addEventListener("abort", () => reject(new Error("AbortError")));
         });
       })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({}) });
+      .mockResolvedValueOnce(Response.json({}));
     vi.stubGlobal("fetch", fetchMock);
 
     const promise = runPromptCustomApi(prompter);

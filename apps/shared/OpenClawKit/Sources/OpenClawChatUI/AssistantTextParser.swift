@@ -35,7 +35,7 @@ enum AssistantTextParser {
                 break
             }
 
-            let isSelfClosing = self.isSelfClosingTag(in: raw, tagEnd: tagEnd)
+            let isSelfClosing = raw[..<tagEnd.lowerBound].reversed().first { !$0.isWhitespace } == "/"
             cursor = tagEnd.upperBound
             if isSelfClosing { continue }
 
@@ -109,17 +109,6 @@ enum AssistantTextParser {
             searchRange = boundaryIndex..<text.endIndex
         }
         return nil
-    }
-
-    private static func isSelfClosingTag(in text: String, tagEnd: Range<String.Index>) -> Bool {
-        var cursor = tagEnd.lowerBound
-        while cursor > text.startIndex {
-            cursor = text.index(before: cursor)
-            let char = text[cursor]
-            if char.isWhitespace { continue }
-            return char == "/"
-        }
-        return false
     }
 
     private static func appendSegment(

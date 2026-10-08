@@ -58,7 +58,6 @@ type AssistantDestination =
   | "home"
   | "custodian"
   | {
-      kind: "session";
       params: Parameters<AssistantDockOwner["openSession"]>[0];
       activation: object;
     };
@@ -355,7 +354,7 @@ export class OpenClawAssistantPanel extends OpenClawLightDomElement {
     if (typeof this.destination === "string") {
       this.builtInDestination = this.destination;
     }
-    this.openDestination({ kind: "session", params: structuredClone(params), activation });
+    this.openDestination({ params: structuredClone(params), activation });
   }
 
   closeSession(activation?: object): void {

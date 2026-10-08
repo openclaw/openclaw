@@ -1,5 +1,4 @@
 import { expectDefined } from "@openclaw/normalization-core";
-/** Resolves system.run allowlist matches, argv plans, and truncated command output. */
 import {
   analyzeArgvCommand,
   evaluateExecAllowlist,
@@ -31,7 +30,6 @@ type SystemRunAllowlistAnalysis = ExecAllowlistAnalysis & {
   allowlistAuthorizationSatisfied: boolean;
 };
 
-/** Evaluates analyzed command segments against allowlist and trusted safe-bin policy. */
 export async function evaluateSystemRunAllowlist(params: {
   shellCommand: string | null;
   argv: string[];
@@ -105,7 +103,6 @@ export function resolvePlannedAllowlistArgv(params: {
   return plannedAllowlistArgv && plannedAllowlistArgv.length > 0 ? plannedAllowlistArgv : null;
 }
 
-/** Resolve final argv after safe-bin shell rewriting. */
 export async function resolveSystemRunExecArgv(params: {
   plannedAllowlistArgv: string[] | undefined;
   argv: string[];

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -21,57 +22,62 @@ const { mocks, childSessionKey, gatewayRuntime, dispatchAgent, run, recover } =
 describe("subagent registry restart recovery", () => {
   beforeEach(() => restartRecoveryTestHarness.reset());
 
-  it("does not reread large sessions retained by unchanged live owners over five sweeps", async () => {
-    const { sweeper, runs } = createSubagentSweeperHarness({ current: gatewayRuntime });
-    runs.clear();
-    const serialized = JSON.stringify({
-      sessionId: "retained-session",
-      lifecycleRevision: "retained-revision",
-      status: "running",
-      updatedAt: Date.now(),
-      skillsSnapshot: { prompt: "x".repeat(1024 * 1024), skills: [] },
-    });
-    let bytes = 0;
-    mocks.loadSessionEntry.mockImplementation(() => {
-      bytes += Buffer.byteLength(serialized);
-      return JSON.parse(serialized);
-    });
-    for (let index = 0; index < 30; index++) {
-      const entry = run({
-        runId: `retained-${index}`,
-        childSessionKey: `agent:main:subagent:retained-${index}`,
-      });
-      entry.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
-      runs.set(entry.runId, entry);
-      registerAgentRunContext(`owner-${index}`, {
-        sessionKey: entry.childSessionKey,
-        sessionId: "retained-session",
-      });
-    }
-    const ticks: Array<{ reads: number; bytes: number }> = [];
-    const started = performance.now();
+  it("pauses startup settlement until the crash-loop breaker releases the periodic sweep", async () => {
+    vi.useFakeTimers();
+    const pausedUntilMs = Date.now() + 2_000;
+    const runtime = {
+      ...gatewayRuntime,
+      prepareRestartRecovery: () =>
+        Date.now() < pausedUntilMs ? Promise.resolve(pausedUntilMs) : undefined,
+    };
+    const { sweeper, finalizeInterruptedSubagentRun } = createSubagentSweeperHarness(
+      { current: runtime },
+      run(),
+    );
+    finalizeInterruptedSubagentRun.mockResolvedValue(1);
     try {
-      for (let tick = 0; tick < 5; tick++) {
-        mocks.loadSessionEntry.mockClear();
-        bytes = 0;
-        await sweeper.sweepOnce();
-        ticks.push({ reads: mocks.loadSessionEntry.mock.calls.length, bytes });
-      }
-      console.info(
-        "retained recovery fixture",
-        JSON.stringify({
-          ticks,
-          elapsedMs: performance.now() - started,
-          rss: process.memoryUsage().rss,
-        }),
-      );
-      expect(ticks.slice(1)).toEqual(Array.from({ length: 4 }, () => ({ reads: 0, bytes: 0 })));
+      await sweeper.recoverInterruptedRuns();
+      await sweeper.sweepOnce();
+      expect(mocks.loadSessionEntry).not.toHaveBeenCalled();
+      expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(finalizeInterruptedSubagentRun).toHaveBeenCalledOnce();
+      expect(dispatchAgent).not.toHaveBeenCalled();
     } finally {
-      for (let index = 0; index < 30; index++) {
-        clearAgentRunContext(`owner-${index}`);
-      }
+      await sweeper.reset();
+      vi.useRealTimers();
+    }
+  });
+
+  it("abandons startup settlement if the Gateway changes while the breaker is checked", async () => {
+    const preparation = createDeferred<number | undefined>();
+    const entered = createDeferred();
+    const runtime = {
+      current: {
+        ...gatewayRuntime,
+        prepareRestartRecovery: () => {
+          entered.resolve();
+          return preparation.promise;
+        },
+      },
+    };
+    const { sweeper, finalizeInterruptedSubagentRun } = createSubagentSweeperHarness(
+      runtime,
+      run(),
+    );
+    const pending = sweeper.recoverInterruptedRuns();
+    try {
+      await entered.promise;
+      rotateAgentEventLifecycleGeneration();
+    } finally {
+      preparation.resolve(undefined);
+      await pending;
       await sweeper.reset();
     }
+    expect(mocks.loadSessionEntry).not.toHaveBeenCalled();
+    expect(finalizeInterruptedSubagentRun).not.toHaveBeenCalled();
   });
 
   it.each(["run", "admission"] as const)(
@@ -163,7 +169,7 @@ describe("subagent registry restart recovery", () => {
     });
   });
 
-  describe("orphaned running sessions", () => {
+  describe("orphaned session executions", () => {
     it.each([60_000, 3 * 24 * 60 * 60_000])(
       "reconciles a hard-kill orphan last observed %i ms ago",
       async (ageMs) => {
@@ -171,7 +177,7 @@ describe("subagent registry restart recovery", () => {
         const updatedAt = Date.now() - ageMs;
         entry.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
         Object.assign(mocks.entries[childSessionKey]!, {
-          status: "running",
+          status: undefined,
           lifecycleRunId: entry.runId,
           abortedLastRun: false,
           updatedAt,
@@ -200,7 +206,7 @@ describe("subagent registry restart recovery", () => {
         rotateAgentEventLifecycleGeneration();
       }
       Object.assign(mocks.entries[childSessionKey]!, {
-        status: scenario.startsWith("completed session") ? "done" : "running",
+        status: scenario.startsWith("completed session") ? "done" : undefined,
         lifecycleRunId: scenario === "different run" ? "newer-run" : entry.runId,
         abortedLastRun: scenario === "completed session with stale abort marker",
       });
@@ -225,7 +231,7 @@ describe("subagent registry restart recovery", () => {
         entry.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
         rotateAgentEventLifecycleGeneration();
         Object.assign(mocks.entries[childSessionKey]!, {
-          status: "running",
+          status: undefined,
           lifecycleRunId: recovered ? "steered-source" : entry.runId,
           abortedLastRun: false,
           subagentRecovery: recovered
@@ -271,7 +277,7 @@ describe("subagent registry restart recovery", () => {
         rotateAgentEventLifecycleGeneration();
       }
       Object.assign(mocks.entries[childSessionKey]!, {
-        status: "running",
+        status: undefined,
         lifecycleRunId: scenario === "newer visible run" ? "visible-run" : "original-task-run",
         abortedLastRun: false,
         subagentRecovery: {
@@ -301,7 +307,7 @@ describe("subagent registry restart recovery", () => {
         entry.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
         rotateAgentEventLifecycleGeneration();
         Object.assign(mocks.entries[childSessionKey]!, {
-          status: "running",
+          status: undefined,
           lifecycleRunId: replacementKind === "visible turn" ? "steered-source" : entry.runId,
           abortedLastRun: false,
           subagentRecovery: {

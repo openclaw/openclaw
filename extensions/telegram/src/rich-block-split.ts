@@ -4,10 +4,9 @@ import { avoidTrailingHighSurrogateBreak } from "openclaw/plugin-sdk/text-chunki
 import {
   countRichTextChars,
   measureInputRichBlocks,
+  normalizeInputRichBlocks,
   normalizeRichText,
   type InputRichBlock,
-  type InputRichBlockListItem,
-  type RichBlockTableCell,
   type RichText,
 } from "./rich-block-model.js";
 import { splitTelegramPlainTextChunks } from "./rich-plain-fallback.js";
@@ -34,6 +33,33 @@ function exceedsRichBlockLimits(size: RichBlockBudget, limits: RichBlockLimits):
 }
 
 type RichTextWrapper = Extract<RichText, { text: RichText }>;
+
+function groupRichBlockItems<T>(
+  items: readonly T[],
+  limits: RichBlockLimits,
+  measure: (item: T) => RichBlockBudget,
+  containerBlocks = 0,
+  firstChunkChars = 0,
+): T[][] {
+  const chunks: T[][] = [];
+  let current: T[] = [];
+  let size: RichBlockBudget = { chars: firstChunkChars, blocks: containerBlocks, media: 0 };
+  for (const item of items) {
+    const itemSize = measure(item);
+    // Keep an indivisible oversized item whole for the existing plain fallback.
+    if (current.length > 0 && exceedsRichBlockLimits(addRichBlockBudget(size, itemSize), limits)) {
+      chunks.push(current);
+      current = [];
+      size = { chars: 0, blocks: containerBlocks, media: 0 };
+    }
+    current.push(item);
+    size = addRichBlockBudget(size, itemSize);
+  }
+  if (current.length > 0) {
+    chunks.push(current);
+  }
+  return chunks;
+}
 
 function wrapRichTextFragment(fragment: RichText, wrappers: readonly RichTextWrapper[]): RichText {
   let node = fragment;
@@ -174,51 +200,36 @@ function splitOversizedRichBlock(block: InputRichBlock, limits: RichBlockLimits)
     }
     const { caption, ...tableRest } = block;
     const pieces: InputRichBlock[] = [];
-    const pushPiece = (pieceRows: RichBlockTableCell[][]) => {
-      // The caption rides only the first piece.
+    const groups = groupRichBlockItems(
+      block.cells,
+      limits,
+      (row) => ({
+        chars: row.reduce((total, cell) => total + countRichTextChars(cell.text ?? ""), 0),
+        blocks: 1,
+        media: 0,
+      }),
+      1,
+      countRichTextChars(caption ?? ""),
+    );
+    for (const cells of groups) {
       pieces.push(
         pieces.length === 0 && caption !== undefined
-          ? { ...tableRest, cells: pieceRows, caption }
-          : { ...tableRest, cells: pieceRows },
+          ? { ...tableRest, cells, caption }
+          : { ...tableRest, cells },
       );
-    };
-    let rows: RichBlockTableCell[][] = [];
-    let chars = countRichTextChars(caption ?? "");
-    for (const row of block.cells) {
-      const rowChars = row.reduce((total, cell) => total + countRichTextChars(cell.text ?? ""), 0);
-      if (rows.length > 0 && (chars + rowChars > textLimit || rows.length + 2 > blockLimit)) {
-        pushPiece(rows);
-        rows = [];
-        chars = 0;
-      }
-      rows.push(row);
-      chars += rowChars;
-    }
-    if (rows.length > 0) {
-      pushPiece(rows);
     }
     return pieces;
   }
   if (block.type === "list") {
-    const pieces: InputRichBlock[] = [];
-    let items: InputRichBlockListItem[] = [];
-    let size: RichBlockBudget = { chars: 0, blocks: 1, media: 0 };
-    for (const item of block.items) {
-      const measured = measureInputRichBlocks(item.blocks);
-      const itemSize = { ...measured, blocks: measured.blocks + 1 };
-      const nextSize = addRichBlockBudget(size, itemSize);
-      if (items.length > 0 && exceedsRichBlockLimits(nextSize, limits)) {
-        pieces.push({ type: "list", items });
-        items = [];
-        size = { chars: 0, blocks: 1, media: 0 };
-      }
-      items.push(item);
-      size = addRichBlockBudget(size, itemSize);
-    }
-    if (items.length > 0) {
-      pieces.push({ type: "list", items });
-    }
-    return pieces;
+    return groupRichBlockItems(
+      block.items,
+      limits,
+      (item) => {
+        const measured = measureInputRichBlocks(item.blocks);
+        return { ...measured, blocks: measured.blocks + 1 };
+      },
+      1,
+    ).map((items) => ({ type: "list", items }));
   }
   // Remaining atomic blocks stay intact and degrade through the existing
   // structural-error plain fallback if Telegram rejects them.
@@ -238,26 +249,8 @@ export function splitTelegramRichBlocks(
     return [];
   }
   const limits = { textLimit, blockLimit };
-  const expanded = blocks.flatMap((block) => splitOversizedRichBlock(block, limits));
-  const chunks: InputRichBlock[][] = [];
-  let current: InputRichBlock[] = [];
-  let size: RichBlockBudget = { chars: 0, blocks: 0, media: 0 };
-
-  const flush = () => {
-    if (current.length > 0) {
-      chunks.push(current);
-      current = [];
-      size = { chars: 0, blocks: 0, media: 0 };
-    }
-  };
-  for (const block of expanded) {
-    const blockSize = measureInputRichBlocks([block]);
-    if (current.length > 0 && exceedsRichBlockLimits(addRichBlockBudget(size, blockSize), limits)) {
-      flush();
-    }
-    current.push(block);
-    size = addRichBlockBudget(size, blockSize);
-  }
-  flush();
-  return chunks;
+  const expanded = normalizeInputRichBlocks(blocks).flatMap((block) =>
+    splitOversizedRichBlock(block, limits),
+  );
+  return groupRichBlockItems(expanded, limits, (block) => measureInputRichBlocks([block]));
 }

@@ -1,9 +1,5 @@
 import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import {
-  renderMessagePresentationFallbackText,
-  type MessagePresentation,
-} from "openclaw/plugin-sdk/interactive-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./app-server/config.js";
@@ -36,6 +32,7 @@ import {
 import type { CodexPluginCommandContext } from "./command-plugins-runtime.js";
 import {
   buildCodexCommandPickerPresentation,
+  buildCodexPresentationReply,
   type CodexCommandPickerButton,
 } from "./command-presentation.js";
 import {
@@ -70,27 +67,21 @@ export async function handleCodexPluginsSubcommand(
   const [verb = "list", ...args] = rest;
   const normalized = verb.toLowerCase();
 
+  if (["menu", "help", "list"].includes(normalized) && args.length > 0) {
+    return { text: `Usage: /codex plugins ${normalized}` };
+  }
   if (normalized === "menu") {
-    if (args.length > 0) {
-      return { text: "Usage: /codex plugins menu" };
-    }
     return buildPluginsMenuReply();
   }
 
   if (normalized === "help") {
-    if (args.length > 0) {
-      return { text: "Usage: /codex plugins help" };
-    }
     return { text: buildPluginsHelp() };
   }
 
   if (normalized === "list") {
-    if (args.length > 0) {
-      return { text: "Usage: /codex plugins list" };
-    }
     const current = await io.readConfig();
     return {
-      text: formatPluginList(current.plugins ?? {}, { globalEnabled: current.enabled === true }),
+      text: formatPluginList(current.plugins ?? {}, current.enabled === true),
     };
   }
 
@@ -545,7 +536,7 @@ async function installCodexPlugin(
       appsNeedingAuth.length === 1
         ? "1 app still requires"
         : `${appsNeedingAuth.length} apps still require`;
-    const presentation: MessagePresentation = {
+    return buildCodexPresentationReply({
       title: "Codex plugin app setup",
       tone: "warning",
       blocks: [
@@ -565,12 +556,7 @@ async function installCodexPlugin(
         buildCodexPluginStatusButtons(requestedId, appLinks.length > 0),
         { type: "context", text: `${refreshWarning.trim()} ${POLICY_REFRESH_HINT}`.trim() },
       ],
-    };
-    return {
-      text: renderMessagePresentationFallbackText({ presentation }),
-      presentation,
-      presentationTextMode: "fallback",
-    };
+    });
   }
 
   const status = alreadyInstalled
@@ -583,9 +569,8 @@ async function installCodexPlugin(
 
 function formatPluginList(
   plugins: Record<string, CodexPluginConfigEntry>,
-  options: { globalEnabled?: boolean } = {},
+  globalEnabled: boolean,
 ): string {
-  const globalEnabled = options.globalEnabled === true;
   const keys = Object.keys(plugins).toSorted();
   if (keys.length === 0) {
     return "No Codex sub-plugins configured under plugins.entries.codex.config.codexPlugins.plugins";

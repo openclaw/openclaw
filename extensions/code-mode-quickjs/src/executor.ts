@@ -68,6 +68,7 @@ function getCodeModePool(): QuickJsWorkerPool {
       url: workerUrl.href,
       pool: new WorkerTaskPool<QuickJsWorkerPayload, CodeModeWorkerThreadResult<Snapshot>>({
         workerUrl,
+        workerClass: "compute",
         sharedCompute: true,
       }),
     };

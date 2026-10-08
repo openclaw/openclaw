@@ -61,7 +61,6 @@ describe("Codex local tool environment placement", () => {
         appServer: {
           ...createAppServerOptions(),
           connectionClass: "local-loopback",
-          remoteAppsSubstrate: "preconfigured",
         },
         shellEnvironment: { PATH: "/tools:/gateway/bin" },
         shellPathPrepend: ["/tools"],

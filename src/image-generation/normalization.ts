@@ -1,6 +1,5 @@
 /** Normalizes image generation request overrides against provider/model capabilities. */
 import { resolveMediaGeometryOverrides } from "../media-generation/geometry-normalization.js";
-import { hasMediaNormalizationEntry } from "../media-generation/runtime-shared.js";
 import type {
   ImageGenerationBackground,
   ImageGenerationIgnoredOverride,
@@ -90,11 +89,6 @@ export function resolveImageGenerationOverrides(params: {
     outputFormat,
     background,
     ignoredOverrides,
-    normalization:
-      hasMediaNormalizationEntry(normalization.size) ||
-      hasMediaNormalizationEntry(normalization.aspectRatio) ||
-      hasMediaNormalizationEntry(normalization.resolution)
-        ? normalization
-        : undefined,
+    normalization: Object.keys(normalization).length ? normalization : undefined,
   };
 }
