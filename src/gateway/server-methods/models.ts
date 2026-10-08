@@ -103,6 +103,10 @@ export const modelsHandlers: GatewayRequestHandlers = {
           preparedScope.draftAccountSelection?.assertCurrent();
           preparedScope.assertCurrent?.();
         };
+        const { ensureGatewayPreparedModelRuntimeReady } =
+          await import("../../agents/prepared-model-runtime.js");
+        assertCurrent();
+        await ensureGatewayPreparedModelRuntimeReady({ agentId: resolved.agentId });
         assertCurrent();
         if (params.refresh !== true) {
           getPublishedPreparedModelCatalogOwnerSnapshot({

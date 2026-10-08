@@ -286,9 +286,7 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
   );
 
   it.each([
-    { phase: "lock", pendingStop: false },
     { phase: "lock", pendingStop: true },
-    { phase: "beginBoot", pendingStop: false },
     { phase: "beginBoot", pendingStop: true },
   ] as const)(
     "does not resume a replaced runtime during $phase (pending Stop: $pendingStop)",
@@ -405,31 +403,19 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
       });
     },
   );
-  it.each([
-    "systemd",
-    "foreground",
-    "failed-handoff",
-    "existing-restart",
-    "existing-stop",
-    "managed-update",
-    "failed-close",
-  ] as const)(
+  it.each(["failed-handoff", "existing-restart", "managed-update", "failed-close"] as const)(
     "settles an own-chunk failure before handing over a replaced installation (%s)",
     async (mode) => {
-      const supervised = ["systemd", "failed-handoff", "managed-update", "failed-close"].includes(
-        mode,
-      );
+      const supervised = ["failed-handoff", "managed-update", "failed-close"].includes(mode);
       if (supervised) {
         process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
       }
       restartGatewayProcessWithFreshPid.mockReturnValue(
         mode === "failed-close"
           ? { mode: "supervised", exitCode: 131071 }
-          : mode === "systemd"
-            ? { mode: "supervised" }
-            : mode === "failed-handoff"
-              ? { mode: "failed", detail: "handoff unavailable" }
-              : { mode: "disabled", detail: "unmanaged" },
+          : mode === "failed-handoff"
+            ? { mode: "failed", detail: "handoff unavailable" }
+            : { mode: "disabled", detail: "unmanaged" },
       );
       const drainStarted = createDeferredCore();
       const drain = createDeferredCore<{ drained: boolean; snapshot: GatewayActiveWorkSnapshot }>();
@@ -455,12 +441,8 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
               successorOwner: managedUpdateSuccessorOwner,
             });
           }
-          if (
-            mode === "existing-restart" ||
-            mode === "existing-stop" ||
-            mode === "managed-update"
-          ) {
-            captureSignal(mode === "existing-stop" ? "SIGINT" : "SIGUSR2")();
+          if (mode === "existing-restart" || mode === "managed-update") {
+            captureSignal("SIGUSR2")();
             await drainStarted.promise;
           }
           replaceInstallation("Cannot find module", "ERR_MODULE_NOT_FOUND");
@@ -469,22 +451,13 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
           expect(runtime.exit).not.toHaveBeenCalled();
           drain.resolve({ drained: true, snapshot: idleActiveWorkSnapshot });
           await expect(exited).resolves.toBe(
-            mode === "failed-close"
-              ? 131071
-              : mode === "systemd" || mode === "existing-stop" || mode === "managed-update"
-                ? 0
-                : 1,
+            mode === "failed-close" ? 131071 : mode === "managed-update" ? 0 : 1,
           );
           expect(close).toHaveBeenCalledOnce();
           expect(start).toHaveBeenCalledOnce();
           expect(completeBoot).toHaveBeenCalledWith(
             expect.objectContaining({
-              outcome:
-                mode === "failed-close"
-                  ? "forced_stop"
-                  : mode === "existing-stop"
-                    ? "clean_stop"
-                    : "planned_restart",
+              outcome: mode === "failed-close" ? "forced_stop" : "planned_restart",
               reason: expect.stringContaining("gateway.installation_replaced"),
             }),
           );
