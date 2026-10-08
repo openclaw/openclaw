@@ -140,6 +140,12 @@ delivery route, wait behind its existing work, and use its current permissions.
 Heartbeat cadence, active hours, model, and visibility settings do not control
 these events. An originating run's automatic-delivery opt-out remains in effect.
 
+Session-state notices for the same watcher and captured delivery route collect
+for up to 20 seconds and enter one reconciliation turn. The turn retains every
+notice's permission limits and acknowledges the watched sessions only when it
+is adopted. If one notice is consumed before adoption, the remaining original
+notices keep their own reconciliation work.
+
 Each occurrence has one execution owner. Periodic heartbeat polls and incoming
 user turns cannot consume an event waiting in the ordinary queue. Acceptance
 confirms that the owner retained the event; it does not prove execution or delivery

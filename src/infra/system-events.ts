@@ -299,10 +299,10 @@ export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
   return enqueueOwnedSystemEventEntry(text, options) !== null;
 }
 
-/** Transfer one exact occurrence to ordinary session admission. */
+/** Transfer one bounded set of exact occurrences to ordinary session admission. */
 export function claimSystemEventTurn(
   sessionKey: string,
-  occurrence: SystemEvent,
+  occurrences: readonly SystemEvent[],
   cancel: () => void,
   agentId?: string,
 ) {
@@ -310,28 +310,61 @@ export function claimSystemEventTurn(
   if (agentId && parseAgentSessionKey(key)?.agentId !== agentId) {
     return undefined;
   }
-  const event = getSessionQueue(key)?.queue.find((entry) => entry.id === occurrence.id);
-  if (!event || turnOwners.has(event)) {
+  const queue = getSessionQueue(key)?.queue;
+  const ids = new Set(occurrences.map((occurrence) => occurrence.id));
+  if (
+    !queue ||
+    ids.size === 0 ||
+    ids.size > MAX_EVENTS ||
+    ids.size !== occurrences.length ||
+    ids.has(undefined)
+  ) {
     return undefined;
   }
-  const owner = { cancel, started: false };
-  turnOwners.set(event, owner);
-  const isCurrent = () =>
-    !owner.started &&
-    turnOwners.get(event) === owner &&
-    getSessionQueue(key)?.queue.includes(event) === true;
+  const events: SystemEvent[] = [];
+  for (const occurrence of occurrences) {
+    const event = queue.find((entry) => entry.id === occurrence.id);
+    if (!event || turnOwners.has(event)) {
+      return undefined;
+    }
+    events.push(event);
+  }
+  let cancelled = false;
+  const owner = {
+    cancel: () => {
+      if (!cancelled) {
+        cancelled = true;
+        cancel();
+      }
+    },
+    started: false,
+  };
+  for (const event of events) {
+    turnOwners.set(event, owner);
+  }
+  const currentEvents = () => {
+    const current = getSessionQueue(key)?.queue;
+    return owner.started
+      ? []
+      : events.filter((event) => turnOwners.get(event) === owner && current?.includes(event));
+  };
   return {
     start() {
-      if (!isCurrent()) {
+      if (currentEvents().length !== events.length) {
         throw new Error("Session event occurrence was cancelled before admission");
       }
       owner.started = true;
-      consumeSelectedSystemEventEntries(key, [event]);
+      consumeSelectedSystemEventEntries(key, events);
     },
-    cancel: () => isCurrent() && consumeSelectedSystemEventEntries(key, [event]).length > 0,
-    /** Rejected adoption returns the original passive occurrence; it never recreates one. */
+    // A member can already be gone; settle every surviving claim without touching replacements.
+    cancel: () => consumeSelectedSystemEventEntries(key, currentEvents()).length > 0,
+    /** Rejected adoption returns the surviving originals to passive custody. */
     release() {
-      return isCurrent() && turnOwners.delete(event);
+      const current = currentEvents();
+      for (const event of current) {
+        turnOwners.delete(event);
+      }
+      return current.length > 0;
     },
   };
 }

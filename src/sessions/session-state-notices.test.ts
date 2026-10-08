@@ -1,7 +1,14 @@
 // Session-state notice parsing and coalesced producer handoff.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { enqueueSessionEventForHost } from "../auto-reply/reply/session-event-handoff.js";
+import { createDeferred } from "../../test/helpers/promise.js";
+import type { SessionEventOutcome } from "../auto-reply/reply/session-event-contract.js";
+import type {
+  captureSessionEventTargetForHost,
+  enqueueSessionEventForHost,
+  SessionEventTarget,
+} from "../auto-reply/reply/session-event-handoff.js";
 import type { SystemEvent } from "../infra/system-events.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import {
   decodeSessionStateNoticeContextKey,
   enqueueSessionStateNotice,
@@ -10,7 +17,10 @@ import {
 const mocks = vi.hoisted(() => ({
   ownerKey: Symbol("session-state-notices-fixture"),
   pending: [] as SystemEvent[],
-  capture: vi.fn(async () => ({ sessionId: "original", generation: "current" })),
+  capture: vi.fn<typeof captureSessionEventTargetForHost>(async () => ({
+    sessionId: "original",
+    generation: "current",
+  })),
   enqueue: vi.fn<typeof enqueueSessionEventForHost>(() => ({
     id: "notice-turn",
     accepted: Promise.resolve({ ok: true }),
@@ -37,6 +47,7 @@ vi.mock("../shared/global-singleton.js", async (importOriginal) => {
 // mock-isolation: Exercise the real notice debouncer without starting model or SQLite work.
 vi.mock("../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: mocks.capture,
+  combineSessionEventTargetsForHost: (targets: readonly SessionEventTarget[]) => targets[0],
   enqueueSessionEventForHost: mocks.enqueue,
   assertSessionEventTargetCurrent: vi.fn(),
 }));
@@ -96,6 +107,105 @@ describe("decodeSessionStateNoticeContextKey", () => {
 });
 
 describe("enqueueSessionStateNotice", () => {
+  it("cancels a newer watcher buffer when an older queued batch starts during close", async () => {
+    const firstSettled = createDeferred<SessionEventOutcome>();
+    const secondSettled = createDeferred<SessionEventOutcome>();
+    const secondEnqueued = createDeferred();
+    mocks.enqueue
+      .mockImplementationOnce(() => ({
+        id: "first-batch",
+        accepted: Promise.resolve({ ok: true }),
+        cancel: () => true,
+        settled: firstSettled.promise,
+      }))
+      .mockImplementationOnce(() => {
+        secondEnqueued.resolve();
+        return {
+          id: "second-batch",
+          accepted: Promise.resolve({ ok: true }),
+          cancel: () => true,
+          settled: secondSettled.promise,
+        };
+      });
+    const enqueue = (targetSessionKey: string) =>
+      enqueueSessionStateNotice({
+        watcherSessionKey: "agent:main:main",
+        targetSessionKey,
+        lastSeenSequence: 1,
+      });
+    try {
+      enqueue("agent:main:first");
+      await vi.advanceTimersByTimeAsync(20_000);
+      enqueue("agent:main:second");
+      await vi.advanceTimersByTimeAsync(20_000);
+      enqueue("agent:main:third");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mocks.enqueue).toHaveBeenCalledOnce();
+      await mocks.enqueue.mock.calls[0]![1].onAdopted?.();
+      await secondEnqueued.promise;
+      firstSettled.resolve({ status: "completed", executionStarted: true, delivered: false });
+      secondSettled.resolve({ status: "completed", executionStarted: true, delivered: false });
+      const closing = drainGlobalSingletonLifecycleState("restart");
+      await vi.runAllTimersAsync();
+      await closing;
+      expect(mocks.enqueue).toHaveBeenCalledTimes(2);
+    } finally {
+      firstSettled.resolve({ status: "cancelled", executionStarted: false, delivered: false });
+      secondSettled.resolve({ status: "cancelled", executionStarted: false, delivered: false });
+      await vi.runAllTimersAsync();
+    }
+  });
+
+  it("keeps the first notice's 20-second deadline when another watched session changes", async () => {
+    const watcherSessionKey = "agent:main:main";
+    enqueueSessionStateNotice({
+      watcherSessionKey,
+      targetSessionKey: "agent:main:first",
+      lastSeenSequence: 1,
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    enqueueSessionStateNotice({
+      watcherSessionKey,
+      targetSessionKey: "agent:main:second",
+      lastSeenSequence: 2,
+    });
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mocks.enqueue).toHaveBeenCalledOnce();
+    expect(mocks.enqueue.mock.calls[0]?.[1].occurrences).toHaveLength(2);
+    expect(mocks.acknowledge).not.toHaveBeenCalled();
+  });
+
+  it("keeps different captured delivery routes in separate watcher batches", async () => {
+    mocks.capture
+      .mockResolvedValueOnce({
+        sessionId: "original",
+        generation: "current",
+        deliveryContext: { channel: "slack", to: "first" },
+      })
+      .mockResolvedValueOnce({
+        sessionId: "original",
+        generation: "current",
+        deliveryContext: { channel: "slack", to: "second" },
+      });
+    for (const targetSessionKey of ["agent:main:first", "agent:main:second"]) {
+      enqueueSessionStateNotice({
+        watcherSessionKey: "agent:main:main",
+        targetSessionKey,
+        lastSeenSequence: 1,
+      });
+    }
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(mocks.enqueue).toHaveBeenCalledTimes(2);
+    expect(
+      mocks.enqueue.mock.calls.map(([, options]) => options.expectedTarget?.deliveryContext?.to),
+    ).toEqual(["first", "second"]);
+    expect(mocks.enqueue.mock.calls.map(([, options]) => options.occurrences?.length)).toEqual([
+      1, 1,
+    ]);
+  });
+
   it.each([undefined, null, "/synthetic/store.sqlite"])(
     "coalesces for 20 seconds and acknowledges store %s only upon adoption",
     async (watcherStorePath) => {
@@ -116,7 +226,7 @@ describe("enqueueSessionStateNotice", () => {
         source: "session",
         sessionKey: notice.watcherSessionKey,
         expectedTarget: { sessionId: "original", generation: "current" },
-        occurrence: { sessionStorePath: watcherStorePath ?? null },
+        occurrences: [{ sessionStorePath: watcherStorePath ?? null }],
       });
       expect(mocks.acknowledge).not.toHaveBeenCalled();
       await options.onAdopted?.();

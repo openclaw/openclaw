@@ -242,7 +242,9 @@ describe("session event target custody", () => {
             expectedTarget: target,
             createIfMissing: true,
             abortSignal: cancellation.signal,
-            ...(occurrence ? { occurrence, preserveOccurrenceOnRejection: true as const } : {}),
+            ...(occurrence
+              ? { occurrences: [occurrence], preserveOccurrenceOnRejection: true as const }
+              : {}),
           });
           let accepted = false;
           let settled = false;
@@ -605,7 +607,7 @@ describe("session event target custody", () => {
           sessionKey,
           source: "hook",
           expectedTarget: target,
-          occurrence,
+          occurrences: [occurrence],
           preserveOccurrenceOnRejection: true,
         });
         if (boundary === "cancel") {

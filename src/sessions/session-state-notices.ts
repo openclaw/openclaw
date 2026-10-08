@@ -3,6 +3,7 @@ import { createInboundDebouncer } from "../auto-reply/inbound-debounce.js";
 import {
   assertSessionEventTargetCurrent,
   captureSessionEventTargetForHost,
+  combineSessionEventTargetsForHost,
   enqueueSessionEventForHost,
   type SessionEventTarget,
 } from "../auto-reply/reply/session-event-handoff.js";
@@ -13,6 +14,7 @@ import {
   type SystemEvent,
 } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
 import { isSubagentSessionKey, parseAgentSessionKey } from "../routing/session-key.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -35,25 +37,27 @@ function noticeKey(notice: PendingNotice): string {
     notice.target.sessionId,
     notice.target.lifecycleRevision,
     notice.target.generation,
-    notice.occurrence.contextKey,
+    notice.target.chatType,
+    channelRouteDedupeKey(notice.target.deliveryContext),
   ]);
 }
 
 const notices = resolveGlobalSingleton(
   Symbol.for("openclaw.sessionStateNotices"),
   () => {
-    const pendingKeys = new Set<string>();
+    const pendingNotices = new Set<PendingNotice>();
     const debouncer = createInboundDebouncer<PendingNotice>({
       debounceMs: 20_000,
+      maxWaitMs: 20_000,
       buildKey: noticeKey,
       onCancel: (items) => {
         for (const item of items) {
-          pendingKeys.delete(noticeKey(item));
+          pendingNotices.delete(item);
         }
       },
       onFlush: (items, createFlush) => {
         for (const item of items) {
-          pendingKeys.delete(noticeKey(item));
+          pendingNotices.delete(item);
         }
         return createFlush({
           dispatch: async (lifecycle) => {
@@ -63,42 +67,54 @@ const notices = resolveGlobalSingleton(
             }
             const pending = peekSystemEventEntries(latest.sessionKey);
             // A user turn or store replacement can consume the notice before admission.
-            const outcomes = await Promise.allSettled(
-              items
-                .filter((item) => pending.some((event) => event.id === item.occurrence.id))
-                .map(async (selected) => {
-                  const receipt = enqueueSessionEventForHost(selected.occurrence.text, {
-                    agentId: selected.agentId,
-                    sessionKey: selected.sessionKey,
-                    source: "session",
-                    expectedTarget: selected.target,
-                    occurrence: selected.occurrence,
-                    onAdopted: async () => {
-                      await lifecycle.onAdopted();
-                      await acknowledgeSessionStateNoticesInWorker(
-                        selected.sessionKey,
-                        [
-                          {
-                            targetSessionKey: selected.changedSessionKey,
-                            watcherStorePath: selected.occurrence.sessionStorePath ?? null,
-                          },
-                        ],
-                        enqueueSessionStateNotice,
-                        {
-                          assertCurrent: () => assertSessionEventTargetCurrent(selected.target),
-                        },
-                      );
-                    },
-                  });
-                  const outcome = await receipt.settled;
-                  if (outcome.status === "failed") {
-                    throw new Error(outcome.error ?? "Session state notice failed");
-                  }
-                }),
+            let remaining = items.filter((item) =>
+              pending.some((event) => event.id === item.occurrence.id),
             );
-            const failed = outcomes.find((outcome) => outcome.status === "rejected");
-            if (failed?.status === "rejected") {
-              throw failed.reason;
+            while (remaining.length > 0) {
+              const selected = remaining;
+              let adopted = false;
+              const target = combineSessionEventTargetsForHost(selected.map((item) => item.target));
+              const occurrences = selected.map((item) => item.occurrence);
+              const receipt = enqueueSessionEventForHost(
+                occurrences.map((event) => event.text).join("\n"),
+                {
+                  agentId: latest.agentId,
+                  sessionKey: latest.sessionKey,
+                  source: "session",
+                  expectedTarget: target,
+                  occurrences,
+                  preserveOccurrenceOnRejection: true,
+                  onAdopted: async () => {
+                    adopted = true;
+                    await lifecycle.onAdopted();
+                    await acknowledgeSessionStateNoticesInWorker(
+                      latest.sessionKey,
+                      selected.map((item) => ({
+                        targetSessionKey: item.changedSessionKey,
+                        watcherStorePath: item.occurrence.sessionStorePath ?? null,
+                      })),
+                      enqueueSessionStateNotice,
+                      { assertCurrent: () => assertSessionEventTargetCurrent(target) },
+                    );
+                  },
+                },
+              );
+              const outcome = await receipt.settled;
+              if (outcome.status === "failed") {
+                throw new Error(outcome.error ?? "Session state notice failed");
+              }
+              if (adopted || outcome.executionStarted || outcome.status !== "cancelled") {
+                return;
+              }
+              const current = peekSystemEventEntries(latest.sessionKey);
+              remaining = selected.filter((item) =>
+                current.some((event) => event.id === item.occurrence.id),
+              );
+              // Exact consumption may remove one member before adoption. Reconcile only
+              // a shrinking set of the same originals after the cancelled owner settles.
+              if (remaining.length === selected.length) {
+                return;
+              }
             }
           },
         });
@@ -107,14 +123,14 @@ const notices = resolveGlobalSingleton(
     });
     return {
       enqueue(notice: PendingNotice) {
-        pendingKeys.add(noticeKey(notice));
+        pendingNotices.add(notice);
         return runInDetachedAsyncContext(() => debouncer.enqueue(notice));
       },
       async close() {
-        for (const key of pendingKeys) {
+        for (const key of new Set([...pendingNotices].map(noticeKey))) {
           debouncer.cancelKey(key);
         }
-        pendingKeys.clear();
+        pendingNotices.clear();
         await debouncer.drain();
       },
     };

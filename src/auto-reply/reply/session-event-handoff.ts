@@ -52,6 +52,7 @@ import {
 export {
   assertSessionEventTargetCurrent,
   captureSessionEventTargetForHost,
+  combineSessionEventTargetsForHost,
   prepareSessionEventTargetForHost,
 } from "./session-event-target.js";
 export type {
@@ -82,8 +83,8 @@ export function enqueueSessionEventForHost(
     assertAcceptanceCurrent?: () => void;
     /** Durable producer commits its attempt only after normal turn adoption. */
     onAdopted?: () => void | Promise<void>;
-    /** Transfer an existing producer-owned queue occurrence without duplicating its text. */
-    occurrence?: SystemEvent;
+    /** Transfer exact queued occurrences into one ordinary turn without duplicating them. */
+    occurrences?: readonly SystemEvent[];
     /** Failed promotion retains an existing passive occurrence until ordinary adoption begins. */
     preserveOccurrenceOnRejection?: true;
     /** An explicitly silent source records its result without transport delivery. */
@@ -135,43 +136,60 @@ export function enqueueSessionEventForHost(
   assertAgentRunLifecycleGenerationCurrent(generation);
   let route = structuredClone(options.deliveryContext ?? options.expectedTarget?.deliveryContext);
   const controller = new AbortController();
-  const execRequestOwners = options.occurrence
-    ? (readExecRequestOwners(options.occurrence) ?? readExecRequestOwners(options))
+  const execRequestOwners = options.occurrences
+    ? [
+        ...new Set(
+          options.occurrences.flatMap(
+            (occurrence) =>
+              readExecRequestOwners(occurrence) ?? readExecRequestOwners(options) ?? [],
+          ),
+        ),
+      ]
     : readExecRequestOwners(options);
   const requestSignal = execRequestAbortSignal(execRequestOwners, options.abortSignal);
   const signal = requestSignal
     ? AbortSignal.any([requestSignal, controller.signal])
     : controller.signal;
   signal.throwIfAborted();
-  if (options.preserveOccurrenceOnRejection && !options.occurrence) {
+  if (options.preserveOccurrenceOnRejection && !options.occurrences?.length) {
     throw new Error("Preserving a rejected event requires its original queued occurrence");
   }
-  if (options.occurrence && options.occurrence.text !== text.trim()) {
+  if (
+    options.occurrences &&
+    options.occurrences.map((event) => event.text).join("\n") !== text.trim()
+  ) {
     throw new Error("Session event occurrence text changed before admission");
   }
-  const occurrence =
-    options.occurrence ??
-    enqueueRequiredSystemEventEntry(
-      text,
-      withExecRequestOwners(
-        withSystemEventOwner(
-          {
-            sessionKey,
-            contextKey: options.contextKey,
-            deliveryContext: route,
-          },
-          agentId,
+  const freshOccurrence = options.occurrences
+    ? undefined
+    : enqueueRequiredSystemEventEntry(
+        text,
+        withExecRequestOwners(
+          withSystemEventOwner(
+            {
+              sessionKey,
+              contextKey: options.contextKey,
+              deliveryContext: route,
+            },
+            agentId,
+          ),
+          execRequestOwners,
         ),
-        execRequestOwners,
-      ),
-      { allowDuplicate: true },
-    );
-  if (!occurrence?.id) {
+        { allowDuplicate: true },
+      );
+  const occurrences = options.occurrences
+    ? [...options.occurrences]
+    : freshOccurrence
+      ? [freshOccurrence]
+      : [];
+  const occurrence = occurrences[0];
+  if (!occurrence?.id || occurrences.some((event) => !event.id)) {
     throw new Error("Session event was not enqueued: an identical occurrence is already pending");
   }
+  const eventText = occurrences.map((event) => event.text).join("\n");
   const ownership = claimSystemEventTurn(
     resolveSystemEventQueueKey(sessionKey, agentId),
-    occurrence,
+    occurrences,
     () => controller.abort(),
     agentId,
   );
@@ -418,8 +436,8 @@ export function enqueueSessionEventForHost(
         ctx: {
           AgentId: agentId,
           SessionKey: sessionKey,
-          Body: occurrence.text,
-          BodyForAgent: occurrence.text,
+          Body: eventText,
+          BodyForAgent: eventText,
           InternalTurnSource: "event",
           BodyForCommands: "",
           CommandBody: "",

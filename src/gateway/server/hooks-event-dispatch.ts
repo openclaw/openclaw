@@ -143,7 +143,7 @@ export function createHookWakeDispatcher(reportFailure: (outcome: SessionEventOu
           agentId: target.agentId,
           sessionKey: target.eventSessionKey,
           source: "hook",
-          occurrence,
+          occurrences: [occurrence],
           ...(eventOutcome === "coalesced" ? { preserveOccurrenceOnRejection: true as const } : {}),
           expectedTarget,
           createIfMissing: true,

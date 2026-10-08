@@ -101,11 +101,11 @@ function controlledOwnedHandoff() {
   const cancel = vi.fn(() => false);
   let acceptanceReads = 0;
   mocks.enqueue.mockImplementationOnce((_text, options) => {
-    const occurrence = options.occurrence;
+    const occurrence = options.occurrences?.[0];
     if (!occurrence?.id) {
       throw new Error("expected the hook's queued occurrence");
     }
-    const claim = claimSystemEventTurn(options.sessionKey, occurrence, () => {}, options.agentId);
+    const claim = claimSystemEventTurn(options.sessionKey, [occurrence], () => {}, options.agentId);
     expect(claim).toBeDefined();
     submitted.resolve();
     return {
@@ -301,7 +301,7 @@ describe("authenticated immediate hook wake admission", () => {
         expect(mocks.enqueue).toHaveBeenCalledExactlyOnceWith(
           "Wake notification",
           expect.objectContaining({
-            occurrence: original[0],
+            occurrences: [original[0]],
             expectedTarget,
             preserveOccurrenceOnRejection: true,
           }),
@@ -426,7 +426,7 @@ describe("authenticated immediate hook wake admission", () => {
       throw new Error("expected a queued occurrence");
     }
     const cancel = vi.fn();
-    const owner = claimSystemEventTurn(sessionKey, occurrence, cancel, "main");
+    const owner = claimSystemEventTurn(sessionKey, [occurrence], cancel, "main");
     if (!owner) {
       throw new Error("expected foreign queue ownership");
     }

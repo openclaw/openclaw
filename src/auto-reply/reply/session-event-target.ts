@@ -26,6 +26,7 @@ import {
 } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
+import { channelRouteDedupeKey } from "../../plugin-sdk/channel-route.js";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -385,6 +386,55 @@ export function readSessionEventTargetEnvironment(
   target: SessionEventTarget,
 ): NodeJS.ProcessEnv | undefined {
   return targetScopes.get(target)?.env;
+}
+
+/** Coalesced work retains every producer's original destination and permission bound. */
+export function combineSessionEventTargetsForHost(
+  targets: readonly SessionEventTarget[],
+): SessionEventTarget {
+  const first = targets[0];
+  if (!first) {
+    throw new Error("Session event batch requires a captured destination");
+  }
+  const retained = [...targets];
+  const route = channelRouteDedupeKey(first.deliveryContext);
+  for (const target of retained) {
+    if (
+      target.agentId !== first.agentId ||
+      target.sessionKey !== first.sessionKey ||
+      target.storePath !== first.storePath ||
+      target.sessionId !== first.sessionId ||
+      target.lifecycleRevision !== first.lifecycleRevision ||
+      target.generation !== first.generation ||
+      target.chatType !== first.chatType ||
+      channelRouteDedupeKey(target.deliveryContext) !== route
+    ) {
+      throw new Error("Session event batch has different captured destinations");
+    }
+  }
+  const assertCurrent = () => {
+    for (const target of retained) {
+      assertSessionEventTargetCurrent(target);
+      const source = targetScopes.get(target)?.source;
+      if (source) {
+        assertCapturedEventSource(source);
+      }
+    }
+  };
+  assertCurrent();
+  const combined: SessionEventTarget = {
+    ...first,
+    deliveryContext: structuredClone(first.deliveryContext),
+    assertCurrent,
+    settings: retained.reduce(
+      (settings, target) => narrowSessionEventSettings(settings, target.settings),
+      first.settings,
+    ),
+    toolsAllow: intersectSessionEventToolsAllow(...retained.map((target) => target.toolsAllow)),
+    deliver: retained.some((target) => target.deliver === false) ? false : first.deliver,
+  };
+  targetScopes.set(combined, targetScopes.get(first) ?? {});
+  return combined;
 }
 
 /** Retain each canonical cap independently; overlapping globs cannot be flattened safely. */

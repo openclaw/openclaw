@@ -16,13 +16,18 @@ import { readToolAllowlistIntersection } from "../../agents/tool-policy-shared.j
 import { withGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import { resolveAttemptWorkspaceSandbox } from "../../agents/workspace-sandbox.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import { replaceSessionEntry, loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  replaceSessionEntry,
+  loadSessionEntry,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import * as sessionLifecycleProjection from "../../config/sessions/session-lifecycle-projection.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "../../config/sessions/store-maintenance-preserve.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createGatewayHookDispatcher } from "../../gateway/server/hooks.js";
 import {
+  consumeSelectedSystemEventEntries,
   enqueueRequiredSystemEventEntry,
   peekDeliverableSystemEventEntries,
   peekSystemEventEntries,
@@ -481,7 +486,7 @@ it.for([
                     : {}),
                   ...(occurrence
                     ? {
-                        occurrence,
+                        occurrences: [occurrence],
                         preserveOccurrenceOnRejection: true as const,
                         onAdopted: () => {
                           throw new Error("Producer attempt failed after adoption");
@@ -593,180 +598,283 @@ it.for([
   },
 );
 
-it("acknowledges the frozen notice watermark only after FIFO adoption", async ({ signal }) => {
-  await withOpenClawTestState(
-    { label: "session-event-notice-adoption", env: { OPENCLAW_TEST_FAST: "0" } },
-    async (state) => {
-      const config: OpenClawConfig = {
-        agents: {
-          entries: { main: { workspace: state.workspaceDir } },
-          defaults: {
-            workspace: state.workspaceDir,
-            skipBootstrap: true,
-            model: { primary: "mock-openai/gpt-5.6-luna" },
-            models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
+it.for([
+  { watchCount: 1, cancellation: "none" },
+  { watchCount: 2, cancellation: "none" },
+  { watchCount: 2, cancellation: "first" },
+  { watchCount: 2, cancellation: "all" },
+  { watchCount: 2, cancellation: "request" },
+])(
+  "batches $watchCount watched sessions after FIFO adoption (cancellation: $cancellation)",
+  async ({ watchCount, cancellation }, { signal }) => {
+    const cancelFirst = cancellation === "first";
+    const cancelledBatch = cancellation === "all" || cancellation === "request";
+    await withOpenClawTestState(
+      { label: "session-event-notice-adoption", env: { OPENCLAW_TEST_FAST: "0" } },
+      async (state) => {
+        const config: OpenClawConfig = {
+          agents: {
+            entries: { main: { workspace: state.workspaceDir } },
+            defaults: {
+              workspace: state.workspaceDir,
+              skipBootstrap: true,
+              model: { primary: "mock-openai/gpt-5.6-luna" },
+              models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
+            },
           },
-        },
-        messages: { queue: { cap: 1, drop: "new" } },
-        plugins: { enabled: false },
-        skills: { load: { watch: false } },
-      };
-      setRuntimeConfigSnapshot(config);
-      await state.writeConfig(config);
-      openOpenClawStateDatabase();
-      const scope = { agentId: "main", sessionKey: "agent:main:notice-watcher" };
-      await replaceSessionEntry(scope, {
-        sessionId: "notice-watcher",
-        lifecycleRevision: "original",
-        updatedAt: Date.now(),
-        sessionStartedAt: Date.now(),
-      });
-      const child = "agent:main:notice-child";
-      expect(
-        await registerSessionStateWatch({
-          watcherSessionKey: scope.sessionKey,
-          targetSessionKey: child,
-        }),
-      ).toBe(true);
-      const firstStarted = createDeferred();
-      const releaseFirst = createDeferred();
-      const starts: string[] = [];
-      runEmbeddedAgentMock
-        .mockReset()
-        .mockImplementation(async (params: RunEmbeddedAgentParams) => {
-          const admission = expectDefined(params.preparedRunAdmission, "normal reply admission");
-          await admission.admit("gateway", params.runId);
-          params.onExecutionPhase?.({ phase: "model_call_started" });
-          await params.onExecutionStarted?.();
-          await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
-          starts.push(params.prompt);
-          if (starts.length === 1) {
-            firstStarted.resolve();
-            await releaseFirst.promise;
-          }
-          return { payloads: [{ text: "Observed" }], meta: { durationMs: 1 } };
-        });
-      const target = await captureSessionEventTargetForHost(scope.agentId, scope.sessionKey);
-      const first = enqueueSessionEventForHost("First admitted work", {
-        ...scope,
-        source: "task",
-        expectedTarget: target,
-        abortSignal: signal,
-        deliver: false,
-      });
-      const captured = createDeferred();
-      const enqueued = createDeferred<ReturnType<typeof enqueueSessionEventForHost>>();
-      const capture = sessionEventHandoff.captureSessionEventTargetForHost;
-      const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
-      const captureSpy = vi
-        .spyOn(sessionEventHandoff, "captureSessionEventTargetForHost")
-        .mockImplementation(async (...args) => {
-          const result = await capture(...args);
-          captured.resolve();
-          return result;
-        });
-      const enqueueSpy = vi
-        .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
-        .mockImplementation((text, options) => {
-          const receipt = enqueue(text, options);
-          if (options.source === "session") {
-            enqueued.resolve(receipt);
-          }
-          return receipt;
-        });
-      let notice: ReturnType<typeof enqueueSessionEventForHost> | undefined;
-      try {
-        await expect(first.accepted).resolves.toEqual({ ok: true });
-        await withinTest(firstStarted.promise, signal);
-        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
-        const input = {
-          sessionKey: child,
-          sessionId: "notice-child",
-          agentId: "main",
-          kind: "human_direct_message" as const,
-          actorType: "human" as const,
-          summary: "Other actor changed the watched session",
-          watcherSessionKeys: [],
+          messages: { queue: { cap: watchCount, drop: "new" } },
+          plugins: { enabled: false },
+          skills: { load: { watch: false } },
         };
-        const frozen = expectDefined(await recordSessionStateEventAsync(input), "frozen event");
-        const newer = expectDefined(await recordSessionStateEventAsync(input), "newer event");
-        await withinTest(captured.promise, signal);
-        await vi.advanceTimersByTimeAsync(20_000);
-        notice = await withinTest(enqueued.promise, signal);
-        await expect(notice.accepted).resolves.toEqual({ ok: true });
-        expect(starts).toHaveLength(1);
-        const retainedOverflow = expectDefined(
-          enqueueRequiredSystemEventEntry("Overflow retained hook", {
-            sessionKey: scope.sessionKey,
-          }),
-          "retained overflow occurrence",
-        );
-        const rejected = enqueueSessionEventForHost(retainedOverflow.text, {
+        setRuntimeConfigSnapshot(config);
+        await state.writeConfig(config);
+        openOpenClawStateDatabase();
+        const scope = { agentId: "main", sessionKey: "agent:main:notice-watcher" };
+        await replaceSessionEntry(scope, {
+          sessionId: "notice-watcher",
+          lifecycleRevision: "original",
+          permissionMode: "full",
+          updatedAt: Date.now(),
+          sessionStartedAt: Date.now(),
+        });
+        const child = "agent:main:notice-child";
+        const sibling = "agent:main:notice-sibling";
+        for (const targetSessionKey of [child, sibling].slice(0, watchCount)) {
+          expect(
+            await registerSessionStateWatch({
+              watcherSessionKey: scope.sessionKey,
+              targetSessionKey,
+            }),
+          ).toBe(true);
+        }
+        const firstStarted = createDeferred();
+        const releaseFirst = createDeferred();
+        const starts: string[] = [];
+        runEmbeddedAgentMock
+          .mockReset()
+          .mockImplementation(async (params: RunEmbeddedAgentParams) => {
+            const admission = expectDefined(params.preparedRunAdmission, "normal reply admission");
+            await admission.admit("gateway", params.runId);
+            params.onExecutionPhase?.({ phase: "model_call_started" });
+            await params.onExecutionStarted?.();
+            await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+            starts.push(params.prompt);
+            if (starts.length === 1) {
+              firstStarted.resolve();
+              await releaseFirst.promise;
+            }
+            return { payloads: [{ text: "Observed" }], meta: { durationMs: 1 } };
+          });
+        const target = await captureSessionEventTargetForHost(scope.agentId, scope.sessionKey);
+        const first = enqueueSessionEventForHost("First admitted work", {
           ...scope,
-          source: "hook",
+          source: "task",
           expectedTarget: target,
-          occurrence: retainedOverflow,
-          preserveOccurrenceOnRejection: true,
+          abortSignal: signal,
+          deliver: false,
         });
-        await expect(rejected.accepted).resolves.toMatchObject({ ok: false });
-        await expect(rejected.settled).resolves.toMatchObject({
-          status: "failed",
-          executionStarted: false,
-        });
-        expect(peekDeliverableSystemEventEntries(scope.sessionKey)).toContainEqual(
-          retainedOverflow,
-        );
-        expect(starts).toHaveLength(1);
-        expect(
-          readCursor(
-            { env: { ...state.env, OPENCLAW_STATE_DIR: state.stateDir } },
-            scope.sessionKey,
-            child,
-          ),
-        ).toEqual({
-          last_seen_sequence: 0,
-          notified_sequence: frozen.sequence,
-          material_sequence: newer.sequence,
-        });
-        // Subsequent queue execution uses real time; only the notice coalescing window was advanced.
-        vi.useRealTimers();
-        releaseFirst.resolve();
-        await expect(first.settled).resolves.toMatchObject({ status: "completed" });
-        await expect(notice.settled).resolves.toMatchObject({
-          status: "completed",
-          executionStarted: true,
-        });
-        expect(starts).toHaveLength(2);
-        expect(starts[0]).toContain("First admitted work");
-        expect(starts[1]).toContain(`Session "${child}" changed`);
-        expect(
-          readCursor(
-            { env: { ...state.env, OPENCLAW_STATE_DIR: state.stateDir } },
-            scope.sessionKey,
-            child,
-          ),
-        ).toEqual({
-          last_seen_sequence: frozen.sequence,
-          notified_sequence: newer.sequence,
-          material_sequence: newer.sequence,
-        });
-        expect(
-          peekSystemEventEntries(scope.sessionKey).some((event) =>
-            event.text.includes(`changesSince ${frozen.sequence}`),
-          ),
-        ).toBe(true);
-      } finally {
-        vi.useRealTimers();
-        releaseFirst.resolve();
-        await Promise.allSettled([first.settled, notice?.settled]);
-        captureSpy.mockRestore();
-        enqueueSpy.mockRestore();
-        await drainGlobalSingletonLifecycleState("restart");
-        resetSystemEventsForTest();
-      }
-    },
-  );
-});
+        const captured = createDeferred();
+        const firstNoticeCaptured = createDeferred();
+        const enqueued = createDeferred();
+        const continued = createDeferred();
+        const notices: Array<ReturnType<typeof enqueueSessionEventForHost>> = [];
+        let captures = 0;
+        const capture = sessionEventHandoff.captureSessionEventTargetForHost;
+        const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
+        const captureSpy = vi
+          .spyOn(sessionEventHandoff, "captureSessionEventTargetForHost")
+          .mockImplementation(async (...args) => {
+            const result = await capture(...args);
+            if (++captures === 1) {
+              firstNoticeCaptured.resolve();
+            }
+            if (captures === watchCount) {
+              captured.resolve();
+            }
+            return result;
+          });
+        const enqueueSpy = vi
+          .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
+          .mockImplementation((text, options) => {
+            const receipt = enqueue(text, options);
+            if (options.source === "session") {
+              notices.push(receipt);
+              enqueued.resolve();
+              if (notices.length === 2) {
+                continued.resolve();
+              }
+            }
+            return receipt;
+          });
+        try {
+          await expect(first.accepted).resolves.toEqual({ ok: true });
+          await withinTest(firstStarted.promise, signal);
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+          const input = {
+            sessionKey: child,
+            sessionId: "notice-child",
+            agentId: "main",
+            kind: "human_direct_message" as const,
+            actorType: "human" as const,
+            summary: "Other actor changed the watched session",
+            watcherSessionKeys: [],
+          };
+          const frozen = expectDefined(await recordSessionStateEventAsync(input), "frozen event");
+          const newer = expectDefined(await recordSessionStateEventAsync(input), "newer event");
+          const observed = [{ child, frozen, newer }];
+          if (watchCount === 2) {
+            await withinTest(firstNoticeCaptured.promise, signal);
+            await updateSessionEntry(scope, () => ({ permissionMode: "read-only" }));
+            const siblingInput = { ...input, sessionKey: sibling, sessionId: "notice-sibling" };
+            const siblingFrozen = expectDefined(
+              await recordSessionStateEventAsync(siblingInput),
+              "sibling frozen event",
+            );
+            const siblingNewer = expectDefined(
+              await recordSessionStateEventAsync(siblingInput),
+              "sibling newer event",
+            );
+            observed.push({ child: sibling, frozen: siblingFrozen, newer: siblingNewer });
+          }
+          await withinTest(captured.promise, signal);
+          await updateSessionEntry(scope, () => ({ permissionMode: "full" }));
+          await vi.advanceTimersByTimeAsync(20_000);
+          await withinTest(enqueued.promise, signal);
+          for (const notice of notices) {
+            await expect(notice.accepted).resolves.toEqual({ ok: true });
+          }
+          expect(starts).toHaveLength(1);
+          if (cancelFirst) {
+            const original = peekSystemEventEntries(scope.sessionKey);
+            const cancelled = expectDefined(
+              original.find((event) => event.text.includes(`Session "${child}" changed`)),
+              "first original notice",
+            );
+            const remaining = expectDefined(
+              original.find((event) => event.text.includes(`Session "${sibling}" changed`)),
+              "second original notice",
+            );
+            consumeSelectedSystemEventEntries(scope.sessionKey, [cancelled]);
+            await expect(notices[0]!.settled).resolves.toMatchObject({
+              status: "cancelled",
+              executionStarted: false,
+            });
+            expect(peekSystemEventEntries(scope.sessionKey)).toContainEqual(remaining);
+            await withinTest(continued.promise, signal);
+            expect(notices[1]?.id).toBe(remaining.id);
+            await expect(notices[1]!.accepted).resolves.toEqual({ ok: true });
+          }
+          if (cancelledBatch) {
+            const originals = peekSystemEventEntries(scope.sessionKey);
+            if (cancellation === "all") {
+              consumeSelectedSystemEventEntries(scope.sessionKey, originals);
+            } else {
+              expect(notices[0]!.cancel()).toBe(true);
+            }
+            await expect(notices[0]!.settled).resolves.toMatchObject({
+              status: "cancelled",
+              executionStarted: false,
+            });
+            expect(notices).toHaveLength(1);
+            expect(peekSystemEventEntries(scope.sessionKey)).toEqual(
+              cancellation === "all" ? [] : originals,
+            );
+          }
+          if (watchCount === 1) {
+            const retainedOverflow = expectDefined(
+              enqueueRequiredSystemEventEntry("Overflow retained hook", {
+                sessionKey: scope.sessionKey,
+              }),
+              "retained overflow occurrence",
+            );
+            const rejected = enqueueSessionEventForHost(retainedOverflow.text, {
+              ...scope,
+              source: "hook",
+              expectedTarget: target,
+              occurrences: [retainedOverflow],
+              preserveOccurrenceOnRejection: true,
+            });
+            await expect(rejected.accepted).resolves.toMatchObject({ ok: false });
+            await expect(rejected.settled).resolves.toMatchObject({
+              status: "failed",
+              executionStarted: false,
+            });
+            expect(peekDeliverableSystemEventEntries(scope.sessionKey)).toContainEqual(
+              retainedOverflow,
+            );
+          }
+          expect(starts).toHaveLength(1);
+          for (const noticeState of observed) {
+            expect(
+              readCursor(
+                { env: { ...state.env, OPENCLAW_STATE_DIR: state.stateDir } },
+                scope.sessionKey,
+                noticeState.child,
+              ),
+            ).toEqual({
+              last_seen_sequence: 0,
+              notified_sequence: noticeState.frozen.sequence,
+              material_sequence: noticeState.newer.sequence,
+            });
+          }
+          // Subsequent queue execution uses real time; only the notice coalescing window was advanced.
+          vi.useRealTimers();
+          releaseFirst.resolve();
+          await expect(first.settled).resolves.toMatchObject({ status: "completed" });
+          for (const notice of cancelledBatch ? [] : cancelFirst ? notices.slice(1) : notices) {
+            await expect(notice.settled).resolves.toMatchObject({
+              status: "completed",
+              executionStarted: true,
+            });
+          }
+          expect(starts).toHaveLength(cancelledBatch ? 1 : 2);
+          if (!cancelledBatch) {
+            expect(runEmbeddedAgentMock.mock.calls[1]?.[0].permissionMode).toBe(
+              watchCount === 2 ? "read-only" : "full",
+            );
+          }
+          expect(starts[0]).toContain("First admitted work");
+          for (const noticeState of observed) {
+            const wasCancelled = cancelledBatch || (cancelFirst && noticeState.child === child);
+            if (wasCancelled) {
+              expect(starts[1] ?? "").not.toContain(`Session "${noticeState.child}" changed`);
+            } else {
+              expect(starts[1]).toContain(`Session "${noticeState.child}" changed`);
+            }
+            expect(
+              readCursor(
+                { env: { ...state.env, OPENCLAW_STATE_DIR: state.stateDir } },
+                scope.sessionKey,
+                noticeState.child,
+              ),
+            ).toEqual({
+              last_seen_sequence: wasCancelled ? 0 : noticeState.frozen.sequence,
+              notified_sequence: wasCancelled
+                ? noticeState.frozen.sequence
+                : noticeState.newer.sequence,
+              material_sequence: noticeState.newer.sequence,
+            });
+            expect(
+              peekSystemEventEntries(scope.sessionKey).some(
+                (event) =>
+                  event.text.includes(`Session "${noticeState.child}" changed`) &&
+                  event.text.includes(`changesSince ${noticeState.frozen.sequence}`),
+              ),
+            ).toBe(!wasCancelled);
+          }
+        } finally {
+          vi.useRealTimers();
+          releaseFirst.resolve();
+          await Promise.allSettled([first.settled, ...notices.map((notice) => notice.settled)]);
+          captureSpy.mockRestore();
+          enqueueSpy.mockRestore();
+          await drainGlobalSingletonLifecycleState("restart");
+          resetSystemEventsForTest();
+        }
+      },
+    );
+  },
+);
 
 it.for([
   { global: false, result: "ok" as const },

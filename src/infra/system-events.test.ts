@@ -40,6 +40,55 @@ describe("delivery-owned system event selection", () => {
   beforeEach(() => resetSystemEventsForTest());
   afterEach(() => resetSystemEventsForTest());
 
+  it.each(["cancel", "release"] as const)(
+    "%s settles surviving batch members after one occurrence disappears",
+    (action) => {
+      const sessionKey = "agent:main:event-batch";
+      const first = expectDefined(enqueueSystemEventEntry("First", { sessionKey }), "first");
+      const second = expectDefined(enqueueSystemEventEntry("Second", { sessionKey }), "second");
+      const cancelled = vi.fn();
+      const owner = expectDefined(
+        claimSystemEventTurn(sessionKey, [first, second], cancelled),
+        "batch owner",
+      );
+      expect(peekDeliverableSystemEventEntries(sessionKey)).toEqual([]);
+      consumeSelectedSystemEventEntries(sessionKey, [first]);
+      const replacement = expectDefined(
+        enqueueSystemEventEntry("Replacement", { sessionKey }),
+        "replacement",
+      );
+      expect(() => owner.start()).toThrow("cancelled before admission");
+      expect(owner[action]()).toBe(true);
+      expect(peekDeliverableSystemEventEntries(sessionKey)).toEqual(
+        action === "cancel" ? [replacement] : [second, replacement],
+      );
+      expect(owner.cancel()).toBe(false);
+      expect(cancelled).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["missing", "already-owned", "duplicate"] as const)(
+    "refuses an entire batch with a %s member before taking other occurrences",
+    (invalid) => {
+      const sessionKey = "agent:main:event-batch-admission";
+      const first = expectDefined(enqueueSystemEventEntry("First", { sessionKey }), "first");
+      const second = expectDefined(enqueueSystemEventEntry("Second", { sessionKey }), "second");
+      if (invalid === "missing") {
+        consumeSelectedSystemEventEntries(sessionKey, [second]);
+      } else if (invalid === "already-owned") {
+        expect(claimSystemEventTurn(sessionKey, [second], () => {})).toBeDefined();
+      }
+      expect(
+        claimSystemEventTurn(
+          sessionKey,
+          [first, invalid === "duplicate" ? first : second],
+          () => {},
+        ),
+      ).toBeUndefined();
+      expect(peekDeliverableSystemEventEntries(sessionKey)).toContainEqual(first);
+    },
+  );
+
   it("leaves an ordinary occurrence with its owner through periodic and user selection", async () => {
     const sessionKey = "agent:main:ordinary-event-owner";
     const occurrence = expectDefined(
@@ -47,8 +96,12 @@ describe("delivery-owned system event selection", () => {
       "ordinary occurrence",
     );
     const cancelled = vi.fn();
+    const sibling = expectDefined(
+      enqueueSystemEventEntry("Sibling completed", { sessionKey }),
+      "sibling occurrence",
+    );
     const owner = expectDefined(
-      claimSystemEventTurn(sessionKey, occurrence, cancelled, "main"),
+      claimSystemEventTurn(sessionKey, [occurrence, sibling], cancelled, "main"),
       "ordinary owner",
     );
     enqueueSystemEvent("Passive notice", { sessionKey });
@@ -69,8 +122,10 @@ describe("delivery-owned system event selection", () => {
     });
     expect(prompt).toContain("Passive notice");
     expect(prompt).not.toContain("Task completed");
+    expect(prompt).not.toContain("Sibling completed");
     expect(peekSystemEventEntries(sessionKey).map(({ id }) => id)).toEqual([
       occurrence.id,
+      sibling.id,
       held.id,
     ]);
     expect(cancelled).not.toHaveBeenCalled();
@@ -87,7 +142,7 @@ describe("delivery-owned system event selection", () => {
       "ordinary occurrence",
     );
     const cancelled = vi.fn();
-    const owner = expectDefined(claimSystemEventTurn(sessionKey, occurrence, cancelled), "owner");
+    const owner = expectDefined(claimSystemEventTurn(sessionKey, [occurrence], cancelled), "owner");
     const passiveReceipt = expectDefined(
       enqueueSystemEventWithReceipt("Deferred notice", { sessionKey }),
       "passive receipt",
@@ -105,13 +160,13 @@ describe("delivery-owned system event selection", () => {
     const occurrence = expectDefined(enqueueSystemEventEntry("Deferred", { sessionKey }), "event");
     const cancelled = vi.fn();
     const first = expectDefined(
-      claimSystemEventTurn(sessionKey, occurrence, cancelled),
+      claimSystemEventTurn(sessionKey, [occurrence], cancelled),
       "first owner",
     );
     expect(first.release()).toBe(true);
     expect(peekDeliverableSystemEventEntries(sessionKey)).toEqual([occurrence]);
     const successor = expectDefined(
-      claimSystemEventTurn(sessionKey, occurrence, cancelled),
+      claimSystemEventTurn(sessionKey, [occurrence], cancelled),
       "new owner",
     );
     expect(first.release()).toBe(false);
@@ -130,7 +185,10 @@ describe("delivery-owned system event selection", () => {
       const options = { sessionKey, contextKey: "task:completion" };
       const occurrence = expectDefined(enqueueSystemEventEntry("Original", options), "original");
       const cancelled = vi.fn();
-      const owner = expectDefined(claimSystemEventTurn(sessionKey, occurrence, cancelled), "owner");
+      const owner = expectDefined(
+        claimSystemEventTurn(sessionKey, [occurrence], cancelled),
+        "owner",
+      );
       if (boundary === "replace") {
         enqueueSystemEvent("Replacement", { ...options, replace: true });
       } else if (boundary === "drain") {
