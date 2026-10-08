@@ -110,8 +110,7 @@ export function sessionPullRequestsForGateway(
   let lastHello: object | null = null;
   let lastSignature: string | null = null;
   let syncRequestGeneration = 0;
-  let refreshingGeneration: number | null = null;
-  let refreshingKeys: readonly string[] = [];
+  let refreshing: { generation: number; keys: readonly string[] } | null = null;
   let requestController: AbortController | null = null;
 
   const canReadPullRequests = () =>
@@ -218,7 +217,7 @@ export function sessionPullRequestsForGateway(
   const isActive = () => watchedByOwner.size > 0 || listeners.size > 0 || waiters.size > 0;
 
   const retainRefreshIntent = (keys: readonly string[]) => {
-    for (const key of refreshingKeys) {
+    for (const key of refreshing?.keys ?? []) {
       if (keys.includes(key)) {
         pendingRefreshKeys.add(key);
       }
@@ -229,8 +228,7 @@ export function sessionPullRequestsForGateway(
     retainRefreshIntent(watchedKeys());
     syncRequestGeneration += 1;
     retireRequest();
-    refreshingGeneration = null;
-    refreshingKeys = [];
+    refreshing = null;
     lastHello = null;
     lastSignature = null;
     clearSnapshotsAndWaiters();
@@ -354,8 +352,7 @@ export function sessionPullRequestsForGateway(
     onDetach: () => {
       syncRequestGeneration += 1;
       retireRequest();
-      refreshingGeneration = null;
-      refreshingKeys = [];
+      refreshing = null;
       lastHello = null;
       lastSignature = null;
       snapshots.clear();
@@ -385,10 +382,7 @@ export function sessionPullRequestsForGateway(
     const sessionKeys =
       typeof document !== "undefined" && document.visibilityState === "hidden" ? [] : desiredKeys;
     const signature = JSON.stringify(sessionKeys.toSorted());
-    if (
-      refreshingGeneration !== null &&
-      (signature !== lastSignature || snapshot.hello !== lastHello)
-    ) {
+    if (refreshing !== null && (signature !== lastSignature || snapshot.hello !== lastHello)) {
       // A replacement retires the old acknowledgement, not its retained intent.
       // Hidden tabs keep desired keys so their refresh resumes when shown again.
       retainRefreshIntent(desiredKeys);
@@ -407,11 +401,7 @@ export function sessionPullRequestsForGateway(
     }
     // Repeated hints for the same watched union coalesce behind its current
     // request. Membership changes still supersede immediately (notably hide).
-    if (
-      refreshingGeneration !== null &&
-      snapshot.hello === lastHello &&
-      signature === lastSignature
-    ) {
+    if (refreshing !== null && snapshot.hello === lastHello && signature === lastSignature) {
       return;
     }
     lastHello = snapshot.hello;
@@ -427,8 +417,7 @@ export function sessionPullRequestsForGateway(
       snapshot.hello === lastHello &&
       signature === lastSignature;
     retry.cancel();
-    refreshingGeneration = requestGeneration;
-    refreshingKeys = refreshSessionKeys;
+    refreshing = { generation: requestGeneration, keys: refreshSessionKeys };
     for (const key of refreshSessionKeys) {
       pendingRefreshKeys.delete(key);
     }
@@ -463,9 +452,8 @@ export function sessionPullRequestsForGateway(
         }
       })
       .finally(() => {
-        if (refreshingGeneration === requestGeneration) {
-          refreshingGeneration = null;
-          refreshingKeys = [];
+        if (refreshing?.generation === requestGeneration) {
+          refreshing = null;
           if (isCurrentRequest() && pendingRefreshKeys.size > 0) {
             lifecycle.schedule();
           }

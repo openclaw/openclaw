@@ -78,11 +78,12 @@ export function collectProviderQuotaGroups(
     if (!usage) {
       continue;
     }
-    const windows: QuotaLimitSummary[] = (usage.windows ?? []).map((limit) => ({
-      label: (limit.label || "").trim(),
-      usedPercent: clampPercent(limit.usedPercent),
-      ...(limit.resetAt !== undefined ? { resetAt: limit.resetAt } : {}),
-    }));
+    const windows: QuotaLimitSummary[] = (usage.windows ?? []).map((limit) =>
+      Object.assign(
+        { label: (limit.label || "").trim(), usedPercent: clampPercent(limit.usedPercent) },
+        limit.resetAt !== undefined ? { resetAt: limit.resetAt } : {},
+      ),
+    );
     const budgets: QuotaBudgetSummary[] = (usage.billing ?? []).flatMap((entry) => {
       if (
         entry.type !== "budget" ||

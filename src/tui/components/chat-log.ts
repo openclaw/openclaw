@@ -158,21 +158,18 @@ export class ChatLog extends Container {
         completedTools.add(tool.component);
       }
     }
+    const laterComponents = this.children.filter(
+      (entry) => entry !== firstRunComponent && protectedComponents.has(entry),
+    );
     const evictable =
-      this.children.find(
+      laterComponents.find(
         (entry) =>
-          entry !== firstRunComponent &&
           entry !== streaming &&
           entry instanceof MarkdownMessageComponent &&
-          entry.role === "assistant" &&
-          protectedComponents.has(entry),
+          entry.role === "assistant",
       ) ??
-      this.children.find(
-        (entry) =>
-          entry !== firstRunComponent &&
-          entry instanceof ToolExecutionComponent &&
-          completedTools.has(entry) &&
-          protectedComponents.has(entry),
+      laterComponents.find(
+        (entry) => entry instanceof ToolExecutionComponent && completedTools.has(entry),
       ) ??
       (streaming &&
       firstRunComponent instanceof MarkdownMessageComponent &&
@@ -183,12 +180,7 @@ export class ChatLog extends Container {
       (firstRunComponent instanceof ToolExecutionComponent && completedTools.has(firstRunComponent)
         ? firstRunComponent
         : undefined) ??
-      this.children.find(
-        (entry) =>
-          entry !== firstRunComponent &&
-          entry instanceof ToolExecutionComponent &&
-          protectedComponents.has(entry),
-      );
+      laterComponents.find((entry) => entry instanceof ToolExecutionComponent);
     if (evictable) {
       protectedComponents.delete(evictable);
     }
@@ -326,15 +318,11 @@ export class ChatLog extends Container {
     const protectedComponents = new Set<Component>([component]);
     if (options.runId) {
       const run = this.assistantRuns.get(options.runId);
-      for (const segment of run?.frozen ?? []) {
+      for (const segment of [...(run?.frozen ?? []), ...(run?.finalized ?? [])]) {
         protectedComponents.add(segment);
       }
-      const streaming = run?.streaming;
-      if (streaming) {
-        protectedComponents.add(streaming);
-      }
-      for (const segment of run?.finalized ?? []) {
-        protectedComponents.add(segment);
+      if (run?.streaming) {
+        protectedComponents.add(run.streaming);
       }
       for (const tool of this.tools.values()) {
         if (tool.runId === options.runId) {
@@ -516,19 +504,18 @@ export class ChatLog extends Container {
     run.frozen.clear();
     run.committedText = undefined;
     run.latestText = undefined;
-    if (existing) {
-      if (segmentText || images.length > 0) {
+    if (segmentText || images.length > 0) {
+      lastAssistant =
+        existing ?? new MarkdownMessageComponent("assistant", segmentText, this.imageRenderer);
+      if (existing) {
         existing.setText(segmentText);
-        lastAssistant = existing;
       } else {
-        this.removeChild(existing);
+        this.appendNonSystem(lastAssistant);
       }
-      run.streaming = undefined;
-    } else if (segmentText || images.length > 0) {
-      const component = new MarkdownMessageComponent("assistant", segmentText, this.imageRenderer);
-      this.appendNonSystem(component);
-      lastAssistant = component;
+    } else if (existing) {
+      this.removeChild(existing);
     }
+    run.streaming = undefined;
 
     if (lastAssistant) {
       lastAssistant.setImages(images);

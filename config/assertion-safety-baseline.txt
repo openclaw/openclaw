@@ -2796,8 +2796,8 @@ ui/src/lib/chat/outbox-store-codec.ts	1
 ui/src/lib/chat/outbox-store.ts	1
 ui/src/lib/chat/tool-call-patch.ts	1
 ui/src/lib/chat/tool-cards.ts	2
-ui/src/lib/config-form-utils.ts	3
-ui/src/lib/config/config-draft-model.ts	3
+ui/src/lib/config-form-utils.ts	1
+ui/src/lib/config/config-draft-model.ts	2
 ui/src/lib/keyboard-shortcuts.ts	1
 ui/src/lib/nodes/index.ts	2
 ui/src/lib/nodes/inventory.ts	1

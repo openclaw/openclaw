@@ -171,13 +171,18 @@ export function applyConfigSnapshot(
   }
 }
 
-function coerceBooleanString(value: string): boolean | string {
-  const trimmed = value.trim();
-  if (trimmed === "true") {
-    return true;
+function coerceFormString(value: string, type: string | undefined) {
+  if (type === "number" || type === "integer") {
+    return coerceConfigFormNumberString(value, type === "integer");
   }
-  if (trimmed === "false") {
-    return false;
+  if (type === "boolean") {
+    const trimmed = value.trim();
+    if (trimmed === "true") {
+      return true;
+    }
+    if (trimmed === "false") {
+      return false;
+    }
   }
   return value;
 }
@@ -218,18 +223,9 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
         return value;
       }
       for (const variant of variants) {
-        const variantType = schemaType(variant);
-        if (variantType === "number" || variantType === "integer") {
-          const coerced = coerceConfigFormNumberString(value, variantType === "integer");
-          if (coerced === undefined || typeof coerced === "number") {
-            return coerced;
-          }
-        }
-        if (variantType === "boolean") {
-          const coerced = coerceBooleanString(value);
-          if (typeof coerced === "boolean") {
-            return coerced;
-          }
+        const coerced = coerceFormString(value, schemaType(variant));
+        if (typeof coerced !== "string") {
+          return coerced;
         }
       }
     }
@@ -245,13 +241,8 @@ function coerceFormValues(value: unknown, schema: JsonSchema): unknown {
     return value;
   }
 
-  if (type === "number" || type === "integer") {
-    return typeof value === "string"
-      ? coerceConfigFormNumberString(value, type === "integer")
-      : value;
-  }
-  if (type === "boolean") {
-    return typeof value === "string" ? coerceBooleanString(value) : value;
+  if (type === "number" || type === "integer" || type === "boolean") {
+    return typeof value === "string" ? coerceFormString(value, type) : value;
   }
   if (type === "string") {
     return typeof value === "string" && value.length === 0 && schema.minLength ? undefined : value;

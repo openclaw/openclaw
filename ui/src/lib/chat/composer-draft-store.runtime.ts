@@ -621,10 +621,7 @@ export async function retireDurableComposerDrafts(
     retireBeforeRevision: number;
   }[],
 ): Promise<"completed" | "storage-failed"> {
-  try {
-    const database = await openDraftDatabase();
-    const transaction = database.transaction(STORE_NAME, "readwrite");
-    const store = transaction.objectStore(STORE_NAME);
+  const result = await withDraftStore(async (store) => {
     const now = Date.now();
     for (const retirement of retirements) {
       await retireDurableDraftInStore(
@@ -636,10 +633,9 @@ export async function retireDurableComposerDrafts(
       );
     }
     await pruneOwnerRecords(store, ownerKey(owner), now);
-    await transactionComplete(transaction);
+    await transactionComplete(store.transaction);
     notifyDurableComposerDraftChanges();
-    return "completed";
-  } catch {
-    return "storage-failed";
-  }
+    return { status: "completed" };
+  });
+  return result.status;
 }
