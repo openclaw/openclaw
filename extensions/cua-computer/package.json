@@ -9,8 +9,8 @@
   "type": "module",
   "dependencies": {
     "@openclaw/fs-safe": "0.24.2",
-    "@trycua/cua-driver": "0.28.2",
-    "rastermill": "0.3.3",
+    "@trycua/cua-driver": "0.31.0",
+    "rastermill": "0.4.0",
     "zod": "4.6.5"
   },
   "devDependencies": {
