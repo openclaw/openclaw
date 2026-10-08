@@ -26,6 +26,7 @@ import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
 import { listProfiles } from "../../state/user-profiles.js";
 import {
+  encodePublicSessionShareLocator,
   loadPublicSessionShareTokenCodec,
   type PublicSessionShareTokenCodec,
 } from "../control-ui-public-session-token.js";
@@ -360,6 +361,14 @@ export const sessionSharingHandlers: GatewayRequestHandlers = {
             publicShareGrant = params.enabled
               ? prepareSessionPublicShareGrant(entry, current.canonicalKey)
               : undefined;
+            if (publicShareGrant) {
+              encodePublicSessionShareLocator({
+                agentId: current.agentId,
+                sessionKey: current.canonicalKey,
+                sessionId: publicShareGrant.sessionId,
+                shareId: publicShareGrant.id,
+              });
+            }
             changed = publicShareGrant?.id !== previous?.id;
             return changed ? { publicShare: publicShareGrant } : null;
           },
