@@ -19,7 +19,7 @@ export type SessionHistoryWorkerRequestRunner = <TResult>(
   inputBytes: number,
   receive: (value: SessionTranscriptWorkerValues[SessionHistoryWorkerInput["kind"]]) => TResult,
   signal?: AbortSignal,
-  onRequest?: (value: unknown) => void | Promise<WorkerTaskResponse>,
+  onRequest?: (value: unknown, signal: AbortSignal) => void | Promise<WorkerTaskResponse>,
   timeoutMs?: number,
 ) => Promise<TResult>;
 
@@ -240,12 +240,11 @@ export function createSessionHistoryWorkerReaders(
           return value.result;
         },
         undefined,
-        async (request) => {
+        async (request, signal) => {
           if (request !== "transcript-index-status") {
             throw new Error("Unexpected transcript search status request");
           }
-          // Status waiting is host work; the resumed freshness read keeps its own budget.
-          return { input: await readIndexStatus(), timeoutMs: 60_000 };
+          return { input: await readIndexStatus(signal), timeoutMs: 60_000 };
         },
       ),
     readPreview: reader("session-preview", "a preview", (value) => value.items),
