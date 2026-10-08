@@ -391,6 +391,28 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     tui.requestRender();
   };
 
+  const settingCommand =
+    (
+      command: string,
+      field: "verboseLevel" | "traceLevel" | "reasoningLevel" | "elevatedLevel" | "groupActivation",
+      usage: string,
+      normalize: (args: string) => string | null | undefined = (args) => args,
+      after?: (value: string) => void | Promise<void>,
+    ) =>
+    async (args: string) => {
+      const value = normalize(args);
+      if (!value) {
+        chatLog.addSystem(`usage: ${usage}`);
+        return;
+      }
+      await applySessionSetting(
+        { [field]: value },
+        `${command} set to ${value}`,
+        `${command} failed`,
+        after ? () => after(value) : undefined,
+      );
+    };
+
   type CommandHandler = (args: string, raw: string) => void | Promise<void>;
   const commandHandlers = {
     help: () => {
@@ -593,32 +615,21 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           args);
       await applySessionSetting({ thinkingLevel }, `thinking set to ${args}`, "think failed");
     },
-    verbose: async (args) => {
-      if (!args) {
-        chatLog.addSystem(`usage: ${formatTuiLevelCommandUsage("verbose")}`);
-        return;
-      }
-      await applySessionSetting(
-        { verboseLevel: args },
-        `verbose set to ${args}`,
-        "verbose failed",
-        async () => {
-          if (args === "off") {
-            chatLog.clearTools();
-            await refreshSessionInfo();
-          } else {
-            await loadHistory();
-          }
-        },
-      );
-    },
-    trace: async (args) => {
-      if (!args) {
-        chatLog.addSystem("usage: /trace <on|off>");
-        return;
-      }
-      await applySessionSetting({ traceLevel: args }, `trace set to ${args}`, "trace failed");
-    },
+    verbose: settingCommand(
+      "verbose",
+      "verboseLevel",
+      formatTuiLevelCommandUsage("verbose"),
+      undefined,
+      async (value) => {
+        if (value === "off") {
+          chatLog.clearTools();
+          await refreshSessionInfo();
+        } else {
+          await loadHistory();
+        }
+      },
+    ),
+    trace: settingCommand("trace", "traceLevel", "/trace <on|off>"),
     fast: async (args) => {
       if (!args || args === "status") {
         chatLog.addSystem(`fast mode: ${formatFastModeValue(state.sessionInfo.fastMode)}`);
@@ -632,17 +643,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       const fastMode = reset ? null : args === "auto" ? args : args === "on";
       await applySessionSetting({ fastMode }, `fast mode set to ${args}`, "fast failed");
     },
-    reasoning: async (args) => {
-      if (!args) {
-        chatLog.addSystem(`usage: ${formatTuiLevelCommandUsage("reasoning")}`);
-        return;
-      }
-      await applySessionSetting(
-        { reasoningLevel: args },
-        `reasoning set to ${args}`,
-        "reasoning failed",
-      );
-    },
+    reasoning: settingCommand(
+      "reasoning",
+      "reasoningLevel",
+      formatTuiLevelCommandUsage("reasoning"),
+    ),
     usage: async (args, raw) => {
       if (args.toLowerCase() === "cost") {
         if (!opts.local) {
@@ -695,29 +700,15 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         normalized ?? (current === "off" ? "tokens" : current === "tokens" ? "full" : "off");
       await applySessionSetting({ responseUsage: next }, `usage footer: ${next}`, "usage failed");
     },
-    elevated: async (args) => {
-      if (!["on", "off", "ask", "full"].includes(args)) {
-        chatLog.addSystem("usage: /elevated <on|off|ask|full>");
-        return;
-      }
-      await applySessionSetting(
-        { elevatedLevel: args },
-        `elevated set to ${args}`,
-        "elevated failed",
-      );
-    },
-    activation: async (args) => {
-      const activation = normalizeGroupActivation(args);
-      if (!activation) {
-        chatLog.addSystem("usage: /activation <mention|always>");
-        return;
-      }
-      await applySessionSetting(
-        { groupActivation: activation },
-        `activation set to ${activation}`,
-        "activation failed",
-      );
-    },
+    elevated: settingCommand("elevated", "elevatedLevel", "/elevated <on|off|ask|full>", (args) =>
+      ["on", "off", "ask", "full"].includes(args) ? args : undefined,
+    ),
+    activation: settingCommand(
+      "activation",
+      "groupActivation",
+      "/activation <mention|always>",
+      normalizeGroupActivation,
+    ),
     new: async () => {
       if (!admitSessionAction() || rejectUnsafeSessionRollover("new")) {
         return;

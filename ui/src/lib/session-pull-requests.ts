@@ -139,6 +139,28 @@ export function sessionPullRequestsForGateway(
     }
   };
 
+  const clearSnapshotsAndWaiters = () => {
+    const hadSnapshots = snapshots.size > 0;
+    snapshots.clear();
+    for (const key of waiters.keys()) {
+      settle(key);
+    }
+    if (hadSnapshots) {
+      notify();
+    }
+  };
+
+  const matchesSession = (sessionKey: string, eventKey: string, agentId?: string) =>
+    uiSessionEventMatches(
+      {
+        assistantAgentId: gateway.snapshot.assistantAgentId,
+        hello: gateway.snapshot.hello,
+        sessionKey,
+      },
+      eventKey,
+      agentId,
+    );
+
   const watchedKeys = (): string[] => {
     if (orderedWatchedKeys) {
       return orderedWatchedKeys;
@@ -211,14 +233,7 @@ export function sessionPullRequestsForGateway(
     refreshingKeys = [];
     lastHello = null;
     lastSignature = null;
-    const hadSnapshots = snapshots.size > 0;
-    snapshots.clear();
-    for (const key of waiters.keys()) {
-      settle(key);
-    }
-    if (hadSnapshots) {
-      notify();
-    }
+    clearSnapshotsAndWaiters();
   };
 
   const handleGatewaySnapshot = (snapshot: ApplicationGateway["snapshot"]) => {
@@ -247,12 +262,8 @@ export function sessionPullRequestsForGateway(
       }
       for (const sessionKey of requestedKeys()) {
         if (
-          uiSessionEventMatches(
-            {
-              assistantAgentId: gateway.snapshot.assistantAgentId,
-              hello: gateway.snapshot.hello,
-              sessionKey,
-            },
+          matchesSession(
+            sessionKey,
             payload.sessionKey,
             typeof payload.agentId === "string" ? payload.agentId : undefined,
           )
@@ -269,15 +280,7 @@ export function sessionPullRequestsForGateway(
         return;
       }
       const matchingKeys = watchedKeys().filter((sessionKey) =>
-        uiSessionEventMatches(
-          {
-            assistantAgentId: gateway.snapshot.assistantAgentId,
-            hello: gateway.snapshot.hello,
-            sessionKey,
-          },
-          changed.key,
-          changed.agentId,
-        ),
+        matchesSession(sessionKey, changed.key, changed.agentId),
       );
       if (matchingKeys.length === 0) {
         return;
@@ -372,14 +375,7 @@ export function sessionPullRequestsForGateway(
       lastHello = null;
       lastSignature = null;
       retireRequest();
-      const hadSnapshots = snapshots.size > 0;
-      snapshots.clear();
-      for (const key of waiters.keys()) {
-        settle(key);
-      }
-      if (hadSnapshots) {
-        notify();
-      }
+      clearSnapshotsAndWaiters();
       if (!isActive()) {
         lifecycle.detach();
       }

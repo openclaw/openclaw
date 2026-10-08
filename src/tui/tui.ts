@@ -1219,7 +1219,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
   };
 
   const { openOverlay, closeOverlay } = createOverlayHandlers(tui, editor);
-  const questions = createTuiQuestionController({
+  const promptContext = {
     client,
     chatLog,
     getAgentId: () => state.currentAgentId,
@@ -1227,6 +1227,9 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     openOverlay,
     closeOverlay,
     requestRender: () => tui.requestRender(),
+  };
+  const questions = createTuiQuestionController({
+    ...promptContext,
     onPendingChange: (text) => questionStatus.setText(theme.accent(text)),
   });
   const reportQuestionRefreshError = () => {
@@ -1234,15 +1237,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     tui.requestRender();
   };
   const refreshQuestions = () => questions.refresh().catch(reportQuestionRefreshError);
-  const pluginApprovals = createTuiPluginApprovalController({
-    client,
-    chatLog,
-    getAgentId: () => state.currentAgentId,
-    getSessionKey: () => state.currentSessionKey,
-    openOverlay,
-    closeOverlay,
-    requestRender: () => tui.requestRender(),
-  });
+  const pluginApprovals = createTuiPluginApprovalController(promptContext);
   const btw = {
     showResult: (params: { question: string; text: string; isError?: boolean }) => {
       chatLog.showBtw(params);
@@ -1306,13 +1301,7 @@ async function runTuiUnlocked(opts: RunTuiOptions): Promise<TuiResult> {
     return result;
   };
   const taskSuggestions = createTuiTaskSuggestionController({
-    client,
-    chatLog,
-    getAgentId: () => state.currentAgentId,
-    getSessionKey: () => state.currentSessionKey,
-    openOverlay,
-    closeOverlay,
-    requestRender: () => tui.requestRender(),
+    ...promptContext,
     onAccepted: setSession,
   });
   const refreshPendingPrompts = async (ownsConnection: () => boolean = () => true) => {
