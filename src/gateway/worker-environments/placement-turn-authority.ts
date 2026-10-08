@@ -297,7 +297,7 @@ export function observePlacementAuthority(pathname: string, sessionId?: string) 
 /** Refresh only unconsumed reads; retained observations and uncertain writes stay fenced. */
 export async function preparePlacementAuthorityRead<T>(
   pathname: string,
-  sessionId: string,
+  sessionId: string | undefined,
   read: () => Promise<T>,
 ) {
   const { authority, observation, owner, assertUsable } = capturePlacementObservation(
