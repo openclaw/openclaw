@@ -8,7 +8,10 @@ import type {
 } from "./prepared-model-runtime.catalog-contract.js";
 import { prepareConfiguredRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
 import { materializePreparedModelCatalog } from "./prepared-model-runtime.full-catalog.js";
-import type { PreparedModelRuntimePluginGeneration } from "./prepared-model-runtime.types.js";
+import type {
+  PreparedModelRuntimePluginGeneration,
+  PreparedModelCatalogInventory,
+} from "./prepared-model-runtime.types.js";
 
 /** Composes retained discovery with current configured metadata and runtime capabilities. */
 export function createPreparedModelCatalogProjection(params: {
@@ -16,11 +19,12 @@ export function createPreparedModelCatalogProjection(params: {
   normalizeProvider: (provider: string) => string;
   catalogFacts: PreparedModelRuntimeCatalogFacts;
   pluginGeneration: PreparedModelRuntimePluginGeneration;
+  withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
 }) {
   return (
     catalog: ModelCatalogSnapshot,
-    configuredRuntimeModels: PreparedModelRuntimeCatalogFacts["configuredRuntimeModels"],
-    acceptedDiscoveryProviders: ReadonlySet<string>,
+    configuredRuntimeModels = params.catalogFacts.configuredRuntimeModels,
+    discoveryOrigins: PreparedModelCatalogInventory["discoveryOrigins"] = [],
   ) => {
     const configured = prepareConfiguredRuntimeFacts({
       agentFacts: params.agentFacts,
@@ -36,7 +40,7 @@ export function createPreparedModelCatalogProjection(params: {
       catalog,
       params.agentFacts.runtimeCapabilityModels,
       current.staticEntries,
-      acceptedDiscoveryProviders,
+      new Set(discoveryOrigins.map(({ provider }) => params.normalizeProvider(provider))),
     );
     // Native discovery cannot replace the authentication facts of an API provider.
     const apiProviders = new Set(
@@ -59,6 +63,6 @@ export function createPreparedModelCatalogProjection(params: {
       metadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,
       pluginRegistry: params.pluginGeneration.pluginRegistry,
     });
-    return projected;
+    return params.withRefreshStatus(projected);
   };
 }

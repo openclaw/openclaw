@@ -4,7 +4,6 @@ import {
   asPositiveFiniteNumber,
 } from "@openclaw/normalization-core/number-coercion";
 import {
-  type FastMode,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -24,14 +23,6 @@ import {
 import { buildModelAliasIndex, resolveModelRefFromString } from "../agents/model-selection.js";
 import { resolveOpenAITextVerbosity } from "../agents/openai-text-verbosity.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
-import type { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
-import type {
-  ElevatedLevel,
-  ReasoningLevel,
-  ThinkLevel,
-  ThinkingCatalogEntry,
-  VerboseLevel,
-} from "../auto-reply/thinking.js";
 import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import {
   resolveFreshSessionTotalTokens,
@@ -40,7 +31,6 @@ import {
   resolveSessionPluginStatusLines,
   resolveSessionPluginTraceLines,
   type SessionEntry,
-  type SessionScope,
 } from "../config/sessions.js";
 import { resolveTimestamp } from "../config/sessions/lifecycle-timestamps.js";
 import {
@@ -75,69 +65,8 @@ import {
 import { resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
+import type { QueueStatus, StatusArgs } from "./status-message.types.js";
 import { formatModelEndpointUrl } from "./status-model-endpoint.js";
-
-type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
-type AgentConfig = Partial<AgentDefaults> & {
-  model?: AgentDefaults["model"] | string;
-};
-
-type QueueStatus = {
-  mode?: string;
-  depth?: number;
-  debounceMs?: number;
-  cap?: number;
-  dropPolicy?: string;
-  showDetails?: boolean;
-};
-
-type StatusArgs = {
-  config: OpenClawConfig;
-  modelRefs: ReturnType<typeof resolveSelectedAndActiveModel>;
-  agent: AgentConfig;
-  agentId?: string;
-  configuredDefaultModelLabel?: string;
-  selectedContextWindow?: number;
-  selectedContextTokens?: number;
-  thinkingCatalog?: ThinkingCatalogEntry[];
-  runtimeContextProvider?: string;
-  runtimeContextTokens?: number;
-  sessionEntry?: SessionEntry;
-  /** Admitted-owner capacity for the displayed session; see session-context-capacity. */
-  resolveOwnerContextCapacity?: (
-    provider: string | undefined,
-    model: string | undefined,
-  ) =>
-    | { state: "ready"; contextTokens: number; synthetic: boolean }
-    | { state: "unavailable" }
-    | undefined;
-  sessionKey?: string;
-  parentSessionKey?: string;
-  sessionScope?: SessionScope;
-  sessionStorePath?: string;
-  sessionStartedAt?: number;
-  groupActivation?: "mention" | "always";
-  resolvedThink?: ThinkLevel;
-  resolvedFast?: FastMode;
-  resolvedHarness?: string;
-  resolvedVerbose?: VerboseLevel;
-  resolvedReasoning?: ReasoningLevel;
-  resolvedElevated?: ElevatedLevel;
-  modelAuth?: string;
-  selectedEndpoint?: string;
-  activeModelAuth?: string;
-  activeModel?: { modelProvider: string; model: string };
-  usageLine?: string;
-  timeLine?: string;
-  uptimeValue?: string;
-  queue?: QueueStatus;
-  mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
-  subagentsLine?: string;
-  pluginHealthLine?: string;
-  channelFeatureLine?: string;
-  includeTranscriptUsage?: boolean;
-  now?: number;
-};
 
 function normalizeAuthMode(value?: string) {
   const normalized = normalizeOptionalLowercaseString(value);
