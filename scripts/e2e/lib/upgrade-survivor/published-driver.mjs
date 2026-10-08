@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // One managed update across the published-driver/candidate boundary, with synthetic state only.
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import os from "node:os";
@@ -24,9 +24,12 @@ import {
   seedPublishedDriverLegacySqlite,
   seedPublishedDriverSessionSources,
 } from "./published-driver-sqlite.mjs";
+import { createServiceProbe } from "./service-probe.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../..");
-const [candidateArg, artifactsArg, driverTag = "latest"] = process.argv.slice(2);
+const [candidateArg, artifactsArg, driverTag = "latest", scenario = "base"] = process.argv.slice(2);
+assert(["base", "snapshot-cleanup-refusal"].includes(scenario));
+const snapshotCleanupRefusal = scenario === "snapshot-cleanup-refusal";
 const legacySqlite = process.env.OPENCLAW_PUBLISHED_DRIVER_LEGACY_SQLITE === "1";
 assert.equal(process.platform, "linux", "The managed-service fixture requires Linux");
 assert(fs.existsSync("/.dockerenv"), "Run through the bare Docker E2E runner");
@@ -90,9 +93,13 @@ function writeJson(name, value) {
 
 async function run(name, command, args, allowFailure = false) {
   const started = Date.now();
-  const diagnostic = name === "recorded-run" || name === "stop-service";
+  const diagnostic =
+    name === "recorded-run" ||
+    name === "stop-service" ||
+    name === "capture-diagnostics" ||
+    name.startsWith("service-probe-restore");
   const deadline = diagnostic ? cellDeadline - 5_000 : workDeadline;
-  const cap = name === "recorded-run" ? 20_000 : name === "stop-service" ? 5_000 : Infinity;
+  const cap = name === "stop-service" ? 5_000 : diagnostic ? 20_000 : Infinity;
   // Each managed command can spend another 5s terminating and 5s draining.
   const timeoutMs = Math.min(cap, deadline - started - (diagnostic ? 10_000 : 0));
   fs.writeFileSync(path.join(artifacts, "phase.txt"), `${name}\n`);
@@ -210,6 +217,7 @@ async function ready(name, port) {
 process.exitCode = await runCancelableCommand(async (signal) => {
   commandSignal = signal;
   let fixtureInstalled = false;
+  let snapshotProbe;
   const failures = [];
   try {
     let driverVersion = driverTag;
@@ -237,9 +245,78 @@ process.exitCode = await runCancelableCommand(async (signal) => {
       ]);
     }
     assert.equal(readJson(path.join(packageRoot, "package.json")).version, driverVersion);
+    let snapshotBaseline;
+    let snapshotCandidate;
+    if (snapshotCleanupRefusal) {
+      assert.equal(driverVersion, "2026.9.7");
+      await run("driver-package", "npm", [
+        "pack",
+        "openclaw@2026.9.7",
+        "--ignore-scripts",
+        "--json",
+        "--pack-destination",
+        runtime,
+      ]);
+      const packed = JSON.parse(
+        fs.readFileSync(path.join(artifacts, "driver-package.stdout"), "utf8"),
+      );
+      assert.equal(packed.length, 1);
+      assert.equal(
+        packed[0].integrity,
+        "sha512-/8N2LnfTFQPvnZizi8qKSFfnLQaPvSG3Cb4xo1YV7b4JhYiUc43ZNRpXJ01bWghLK0Ezk3HVeo/DGHcIRQwRWA==",
+      );
+      const driverTarball = path.join(runtime, packed[0].filename);
+      const extracted = path.join(runtime, "published-identity");
+      fs.mkdirSync(extracted);
+      await run("driver-package-extract", "tar", [
+        "-xf",
+        driverTarball,
+        "-C",
+        extracted,
+        "package/package.json",
+        "package/openclaw.mjs",
+        "package/dist",
+      ]);
+      const { readWorkerCellPackageIdentity, assertWorkerCellPackageIdentity } =
+        await import("./worker-cell-package.mjs");
+      const expected = readWorkerCellPackageIdentity(path.join(extracted, "package"));
+      assertWorkerCellPackageIdentity(readWorkerCellPackageIdentity(packageRoot), expected);
+      snapshotBaseline = {
+        version: expected.version,
+        commit: expected.buildInfo.commit,
+        integrity: packed[0].integrity,
+        tarball: "https://registry.npmjs.org/openclaw/-/openclaw-2026.9.7.tgz",
+        sha256: createHash("sha256").update(fs.readFileSync(driverTarball)).digest("hex"),
+      };
+    }
     await run("candidate-build", "tar", ["-xOf", candidate, "package/dist/build-info.json"]);
     let build = output("candidate-build");
     let candidatePackage = candidate;
+    if (snapshotCleanupRefusal) {
+      assert.equal(
+        build.commit,
+        process.env.OPENCLAW_DOCKER_E2E_SELECTED_SHA,
+        "Candidate commit differs from the frozen product selection",
+      );
+      assert(
+        compareReleaseVersions(build.version, driverVersion) >= 0,
+        "Fault proof must not relabel the candidate",
+      );
+      const extracted = path.join(runtime, "candidate-identity");
+      fs.mkdirSync(extracted);
+      await run("candidate-package-extract", "tar", [
+        "-xf",
+        candidate,
+        "-C",
+        extracted,
+        "package/package.json",
+        "package/openclaw.mjs",
+        "package/dist",
+      ]);
+      const { readWorkerCellPackageIdentity } = await import("./worker-cell-package.mjs");
+      snapshotCandidate = readWorkerCellPackageIdentity(path.join(extracted, "package"));
+      assert.deepEqual(snapshotCandidate.buildInfo, build);
+    }
     // Between a release and its forward-port, main lags npm latest. The cell proves
     // the update mechanics, not the version label: relabel the candidate to the
     // driver version so the future-version guard sees an upgrade, not a downgrade.
@@ -411,13 +488,33 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     if (sqliteBefore) {
       writeJson("sqlite-before-update", sqliteBefore);
     }
+    if (snapshotCleanupRefusal) {
+      const { seedSnapshotCleanupRefusal } = await import("./snapshot-cleanup-refusal.mjs");
+      seedSnapshotCleanupRefusal({
+        source: path.join(state, "state/openclaw.sqlite"),
+        artifacts,
+        candidateIdentity: snapshotCandidate,
+        baseline: snapshotBaseline,
+        gatewayPid: Number(beforePid.trim()),
+      });
+      snapshotProbe = createServiceProbe({
+        run,
+        bin,
+        artifacts,
+        env,
+        preload: fileURLToPath(new URL("./snapshot-cleanup-refusal.mjs", import.meta.url)),
+        selectors: { OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_ROOT: artifacts },
+      });
+      await snapshotProbe.install();
+      writeJson("snapshot-cleanup-candidate", {
+        build,
+        sha256: createHash("sha256").update(fs.readFileSync(candidate)).digest("hex"),
+      });
+    }
     try {
-      update = await run(
-        "update",
-        "openclaw",
-        ["update", "--tag", candidatePackage, "--yes", "--json"],
-        true,
-      );
+      const execute = () =>
+        run("update", "openclaw", ["update", "--tag", candidatePackage, "--yes", "--json"], true);
+      update = snapshotProbe ? await snapshotProbe.withCaller(execute) : await execute();
       if (update.exitCode !== 0) {
         updateFailure = Object.assign(new Error("Published updater failed"), {
           command: "update",
@@ -427,122 +524,142 @@ process.exitCode = await runCancelableCommand(async (signal) => {
     } catch (error) {
       updateFailure = toErrorObject(error, "Published updater failed");
     }
-    // Public status belongs after updater settlement and before fixture teardown.
-    // A failed query is secondary to the original update outcome.
-    if (updateFailure) {
-      failures.push(updateFailure);
-      if (hasUnjoinedWork(updateFailure)) {
+    if (snapshotCleanupRefusal) {
+      if (updateFailure && hasUnjoinedWork(updateFailure)) {
         throw updateFailure;
       }
-    }
-    await run("recorded-run", "openclaw", ["update", "status", "--json"]);
-    if (updateFailure) {
-      throw updateFailure;
-    }
-    const result = output("update");
-    const recorded = output("recorded-run").lastRun;
-    assert(recorded, "Update omitted its durable run");
-    for (const record of [result.run, recorded].filter(Boolean)) {
-      assert(
-        !/candidate-startup-failed|authority-check-failed/i.test(JSON.stringify(record)),
-        "Update recorded startup or authority failure",
-      );
-      for (const step of record.steps ?? []) {
-        if (step.step?.startsWith("warning:")) {
-          assert(
-            !/canary|identity|lease/i.test(JSON.stringify(step)),
-            `Update boundary warning: ${JSON.stringify(step)}`,
-          );
+      const { assertSnapshotCleanupRefusal } = await import("./snapshot-cleanup-refusal.mjs");
+      assertSnapshotCleanupRefusal(artifacts, update, updateFailure);
+      writeJson("summary", {
+        baseline: { spec: `openclaw@${driverVersion}`, version: driverVersion },
+        candidate: { kind: "tarball", version: build.version },
+        scenario,
+        status: "passed",
+        installedVersion: readJson(path.join(packageRoot, "package.json")).version,
+        candidateInstallMode: "npm",
+        updateRestartMode: "manual",
+        updateOutcome: "expected-refusal",
+        phases: [{ phase: scenario, status: "passed", at: new Date().toISOString() }],
+      });
+    } else {
+      // Public status belongs after updater settlement and before fixture teardown.
+      // A failed query is secondary to the original update outcome.
+      if (updateFailure) {
+        failures.push(updateFailure);
+        if (hasUnjoinedWork(updateFailure)) {
+          throw updateFailure;
         }
       }
-    }
-    assert.equal(update.status, 0, "Published updater failed");
-    assert.equal(result.status, "ok");
-    assert.equal(recorded.runId, result.run?.runId, "Status read a different update run");
-    assert.equal(recorded.phase, "finished");
-    assert.equal(recorded.status, "succeeded");
-    assert.equal(result.after?.version, build.version);
-    assert.deepEqual(readJson(path.join(packageRoot, "dist/build-info.json")), build);
-    assert.equal(fs.readFileSync(orphanSidecar, "utf8"), orphanSidecarBytes);
-    assert.notEqual(
-      fs.readFileSync(env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE, "utf8"),
-      beforePid,
-      "Update did not replace the managed service",
-    );
-    await ready("after-ready", port);
-    await run("running-version", "openclaw", [
-      "gateway",
-      "probe",
-      "--url",
-      `ws://127.0.0.1:${port}`,
-      "--token",
-      token,
-      "--json",
-    ]);
-    const target = output("running-version").targets.find(
-      (entry) => entry.url === `ws://127.0.0.1:${port}`,
-    );
-    assert.equal(target?.connect.ok, true);
-    assert.equal(target.server.version, build.version);
-    for (const session of sessions) {
-      const history = await gateway(`${session.kind}-after`, "chat.history", {
-        ...session.params,
-        limit: 20,
-      });
-      if (session.kind === "incognito") {
-        assert.deepEqual(history.messages, [], "Incognito content survived restart");
-      } else {
-        assert.equal(history.sessionId, session.sessionId);
-        assert(JSON.stringify(history.messages).includes(session.marker), "Durable content lost");
+      await run("recorded-run", "openclaw", ["update", "status", "--json"]);
+      if (updateFailure) {
+        throw updateFailure;
       }
-    }
-    inspectIncognito("incognito-artifacts-after");
-    if (sqliteBefore) {
-      assert.equal(typeof build.buildId, "string", "Candidate build identity is missing");
-      assert.equal(target.server.buildId, build.buildId);
-      const sqliteAfter = inspectPublishedDriverSqlite(state, 2);
-      writeJson("sqlite-after-update", sqliteAfter);
-      await run("stop-before-repeat", path.join(bin, "systemctl"), [
-        "--user",
-        "stop",
-        "openclaw-gateway.service",
+      const result = output("update");
+      const recorded = output("recorded-run").lastRun;
+      assert(recorded, "Update omitted its durable run");
+      for (const record of [result.run, recorded].filter(Boolean)) {
+        assert(
+          !/candidate-startup-failed|authority-check-failed/i.test(JSON.stringify(record)),
+          "Update recorded startup or authority failure",
+        );
+        for (const step of record.steps ?? []) {
+          if (step.step?.startsWith("warning:")) {
+            assert(
+              !/canary|identity|lease/i.test(JSON.stringify(step)),
+              `Update boundary warning: ${JSON.stringify(step)}`,
+            );
+          }
+        }
+      }
+      assert.equal(update.status, 0, "Published updater failed");
+      assert.equal(result.status, "ok");
+      assert.equal(recorded.runId, result.run?.runId, "Status read a different update run");
+      assert.equal(recorded.phase, "finished");
+      assert.equal(recorded.status, "succeeded");
+      assert.equal(result.after?.version, build.version);
+      assert.deepEqual(readJson(path.join(packageRoot, "dist/build-info.json")), build);
+      assert.equal(fs.readFileSync(orphanSidecar, "utf8"), orphanSidecarBytes);
+      assert.notEqual(
+        fs.readFileSync(env.OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE, "utf8"),
+        beforePid,
+        "Update did not replace the managed service",
+      );
+      await ready("after-ready", port);
+      await run("running-version", "openclaw", [
+        "gateway",
+        "probe",
+        "--url",
+        `ws://127.0.0.1:${port}`,
+        "--token",
+        token,
+        "--json",
       ]);
-      const settledSqlite = inspectPublishedDriverSqlite(state, 2);
-      writeJson("sqlite-after-stop", settledSqlite);
-      assertPublishedDriverReclaimed(
-        readJson(path.join(artifacts, "sqlite-seeded.json")),
-        settledSqlite,
+      const target = output("running-version").targets.find(
+        (entry) => entry.url === `ws://127.0.0.1:${port}`,
       );
-      env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
-      try {
-        await run("repeat-maintenance", "openclaw", ["doctor", "--fix", "--non-interactive"]);
-      } finally {
-        delete env.OPENCLAW_UPDATE_IN_PROGRESS;
+      assert.equal(target?.connect.ok, true);
+      assert.equal(target.server.version, build.version);
+      for (const session of sessions) {
+        const history = await gateway(`${session.kind}-after`, "chat.history", {
+          ...session.params,
+          limit: 20,
+        });
+        if (session.kind === "incognito") {
+          assert.deepEqual(history.messages, [], "Incognito content survived restart");
+        } else {
+          assert.equal(history.sessionId, session.sessionId);
+          assert(JSON.stringify(history.messages).includes(session.marker), "Durable content lost");
+        }
       }
-      writeJson("sqlite-after-repeat", inspectPublishedDriverSqlite(state, 2));
-      assert(
-        !fs
-          .readFileSync(path.join(artifacts, "repeat-maintenance.stdout"), "utf8")
-          .includes("Enabling incremental SQLite reclamation once:"),
-        "Second maintenance repeated conversion",
+      inspectIncognito("incognito-artifacts-after");
+      if (sqliteBefore) {
+        assert.equal(typeof build.buildId, "string", "Candidate build identity is missing");
+        assert.equal(target.server.buildId, build.buildId);
+        const sqliteAfter = inspectPublishedDriverSqlite(state, 2);
+        writeJson("sqlite-after-update", sqliteAfter);
+        await run("stop-before-repeat", path.join(bin, "systemctl"), [
+          "--user",
+          "stop",
+          "openclaw-gateway.service",
+        ]);
+        const settledSqlite = inspectPublishedDriverSqlite(state, 2);
+        writeJson("sqlite-after-stop", settledSqlite);
+        assertPublishedDriverReclaimed(
+          readJson(path.join(artifacts, "sqlite-seeded.json")),
+          settledSqlite,
+        );
+        env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+        try {
+          await run("repeat-maintenance", "openclaw", ["doctor", "--fix", "--non-interactive"]);
+        } finally {
+          delete env.OPENCLAW_UPDATE_IN_PROGRESS;
+        }
+        writeJson("sqlite-after-repeat", inspectPublishedDriverSqlite(state, 2));
+        assert(
+          !fs
+            .readFileSync(path.join(artifacts, "repeat-maintenance.stdout"), "utf8")
+            .includes("Enabling incremental SQLite reclamation once:"),
+          "Second maintenance repeated conversion",
+        );
+      }
+      writeJson("summary", {
+        driverVersion,
+        candidate: build,
+        runId: recorded.runId,
+        phase: recorded.phase,
+        readyz: 200,
+        runningVersion: target.server.version,
+      });
+      console.log(
+        `PASS published ${driverVersion} → candidate ${build.version} (${build.commit}): finished, readyz=200, running version verified`,
       );
     }
-    writeJson("summary", {
-      driverVersion,
-      candidate: build,
-      runId: recorded.runId,
-      phase: recorded.phase,
-      readyz: 200,
-      runningVersion: target.server.version,
-    });
-    console.log(
-      `PASS published ${driverVersion} → candidate ${build.version} (${build.commit}): finished, readyz=200, running version verified`,
-    );
   } catch (error) {
     if (!failures.includes(error)) {
       failures.push(error);
     }
   }
+  let serviceStopped = false;
   if (!failures.some(hasUnjoinedWork) && fixtureInstalled) {
     try {
       await run("stop-service", path.join(bin, "systemctl"), [
@@ -550,11 +667,32 @@ process.exitCode = await runCancelableCommand(async (signal) => {
         "stop",
         "openclaw-gateway.service",
       ]);
+      serviceStopped = true;
     } catch (error) {
       failures.push(error);
     }
   }
-  if (failures.some((error) => hasUnjoinedWork(error) || error.command === "stop-service")) {
+  const probeRetained =
+    (await snapshotProbe?.finish({ failures, serviceStopped }))?.retained ?? false;
+  if (snapshotCleanupRefusal && !failures.some(hasUnjoinedWork)) {
+    try {
+      const { writeSnapshotCleanupEvidence } = await import("./snapshot-cleanup-refusal.mjs");
+      writeSnapshotCleanupEvidence(artifacts);
+      await run("capture-diagnostics", process.execPath, [
+        fileURLToPath(new URL("./diagnostics.mjs", import.meta.url)),
+        "capture",
+        artifacts,
+        scenario,
+        String(failures.length ? failures[0].exitCode || 1 : 0),
+      ]);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (
+    probeRetained ||
+    failures.some((error) => hasUnjoinedWork(error) || error.command === "stop-service")
+  ) {
     writeJson("retained-runtime", {
       runtime,
       reason: "Owned work or service cleanup did not settle",

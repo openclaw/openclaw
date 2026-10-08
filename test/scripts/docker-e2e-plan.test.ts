@@ -817,6 +817,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     { scenario: "projects-startup-migration", baselines: ["2026.9.4"] },
     { scenario: "dreaming-cron-doctor", baselines: ["2026.9.6"] },
     { scenario: "cron-owner-doctor", baselines: ["2026.9.4", "2026.9.7"] },
+    { scenario: "snapshot-cleanup-refusal", baselines: ["2026.9.7"] },
   ])(
     "plans $scenario only for its exact supported published writers without registry or credential fixtures",
     ({ scenario, baselines }) => {
@@ -847,6 +848,22 @@ describe("scripts/lib/docker-e2e-plan", () => {
       }
     },
   );
+
+  it("runs snapshot refusal proof from the trusted harness without candidate scenario code", () => {
+    const plan = planFor({
+      selectedLaneNames: ["published-upgrade-survivor"],
+      upgradeSurvivorBaselines: "2026.9.7",
+      upgradeSurvivorScenarios: "snapshot-cleanup-refusal",
+      allowFrozenTargetScenarioOmissions: false,
+      frozenTarget: { mode: "inert", source: { readText: () => null } },
+    });
+    expect(plan.lanes.map((lane) => lane.name)).toEqual([
+      "published-upgrade-survivor-2026.9.7-snapshot-cleanup-refusal",
+    ]);
+    expect(plan.omittedUnsupportedLanes).toEqual([]);
+    expect(plan.credentials).toEqual([]);
+    expect(plan.requiredPrepublishPluginPackages).toEqual([]);
+  });
 
   it("reads content-addressed scenario catalogs from pre-command frozen targets", () => {
     const targetRoot = tempDirs.make("openclaw-legacy-frozen-upgrade-harness-");

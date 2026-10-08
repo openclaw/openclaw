@@ -1,8 +1,10 @@
 // The direct survivor lane supports generated user units, not arbitrary systemd configuration.
 // Inspection and launch share this parser so reported argv/environment cannot drift from execution.
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import { constants as osConstants } from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const unitName = "openclaw-gateway.service";
 const unitPath = path.join(process.env.HOME, ".config/systemd/user", unitName);
@@ -492,8 +494,246 @@ function recordCaller(file, parentPid, action) {
   fs.appendFileSync(file, `${JSON.stringify({ action, roles })}\n`);
 }
 
+function readUnitEnvironment(unit) {
+  const environment = { ...unit.environment };
+  for (const { filename, optional } of unit.environmentFiles) {
+    let content;
+    try {
+      content = fs.readFileSync(filename, "utf8");
+    } catch (error) {
+      if (optional && error.code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
+    for (const line of content.split(/\r?\n/)) {
+      if (!line.trim() || line.startsWith("#")) {
+        continue;
+      }
+      const separator = line.indexOf("=");
+      if (separator <= 0) {
+        fail();
+      }
+      const raw = line.slice(separator + 1);
+      // serializeSystemdEnvironmentFile escapes exactly these four characters.
+      const value =
+        raw.startsWith('"') && raw.endsWith('"')
+          ? raw.slice(1, -1).replace(/\\(["\\`$])/g, "$1")
+          : raw;
+      Object.assign(environment, assignments([`${line.slice(0, separator)}=${value}`]));
+    }
+  }
+  return environment;
+}
+
+const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+const entry = (env, key) =>
+  Object.hasOwn(env, key) ? { present: true, value: env[key] } : { present: false };
+const sameEntry = (left, right) => left.present === right.present && left.value === right.value;
+
+function renderEnvironment(key, value) {
+  const word = (key + "=" + value).replaceAll("%", "%%");
+  return (
+    "Environment=" +
+    (/\s|["'\\]/.test(word)
+      ? '"' + word.replaceAll("\\", "\\\\").replaceAll('"', '\\"') + '"'
+      : word)
+  );
+}
+
+function instrumentEnvironment(content, changes) {
+  let service = false;
+  let sectionSeen = false;
+  const seen = new Set();
+  const output = [];
+  const appendMissing = () => {
+    for (const [key, value] of Object.entries(changes)) {
+      if (!seen.has(key) && value !== null) {
+        output.push(renderEnvironment(key, value) + "\n");
+      }
+    }
+  };
+  for (const raw of content.split(/(?<=\n)/)) {
+    const line = raw.trim();
+    if (line.startsWith("[")) {
+      if (service) {
+        appendMissing();
+      }
+      service = line === "[Service]";
+      if (service && sectionSeen) {
+        fail("Unsupported repeated Service section.");
+      }
+      sectionSeen ||= service;
+    }
+    if (service && line.startsWith("Environment=")) {
+      const values = words(line.slice("Environment=".length));
+      const keys = values.map((value) => value.slice(0, value.indexOf("=")));
+      const changed = keys.filter((key) => Object.hasOwn(changes, key));
+      if (changed.length) {
+        if (values.length !== 1 || seen.has(changed[0])) {
+          fail("Expected one generated assignment per instrumented key.");
+        }
+        const key = changed[0];
+        seen.add(key);
+        if (changes[key] !== null) {
+          output.push(renderEnvironment(key, changes[key]) + (raw.endsWith("\n") ? "\n" : ""));
+        }
+        continue;
+      }
+    }
+    output.push(raw);
+  }
+  if (!sectionSeen) {
+    fail("Missing generated Service section.");
+  }
+  if (service) {
+    appendMissing();
+  }
+  return output.join("");
+}
+
+function publishInstrumentedUnit(before, after, stat) {
+  const pending = unitPath + ".probe-" + randomUUID();
+  try {
+    fs.writeFileSync(pending, after, { flag: "wx", mode: stat.mode & 0o777 });
+    const current = fs.lstatSync(unitPath);
+    if (
+      !current.isFile() ||
+      current.dev !== stat.dev ||
+      current.ino !== stat.ino ||
+      current.mode !== stat.mode ||
+      fs.readFileSync(unitPath, "utf8") !== before
+    ) {
+      fail("Disposable service definition changed during instrumentation.");
+    }
+    fs.renameSync(pending, unitPath);
+  } finally {
+    fs.rmSync(pending, { force: true });
+  }
+  // The caller must daemon-reload through the owned systemctl adapter, then
+  // verify this exact current generation. Never write the loaded-unit cache here.
+  console.log(JSON.stringify({ unitSha256: hash(after) }));
+}
+
+function serviceInstrumentation(operation, args) {
+  const [receiptPath, id] = args;
+  const runtime = nativeRuntime();
+  const installing =
+    operation === "instrument-env" || (operation === "verify-env" && args[2] === "installed");
+  if (
+    runtime.stopFailed ||
+    (!runtime.settled && !(installing && runtime.pid && runtime.active === "active"))
+  ) {
+    fail("Service instrumentation requires a stable baseline or settled cleanup.");
+  }
+  const loaded = readUnit(false, true);
+  if (!loaded || loaded.reloadPending) {
+    fail("Reload the current service definition before instrumentation.");
+  }
+  const stat = fs.lstatSync(unitPath);
+  if (!stat.isFile() || stat.nlink !== 1) {
+    fail("Expected one regular fixture unit.");
+  }
+  const before = fs.readFileSync(unitPath, "utf8");
+  let receipt;
+  if (operation === "instrument-env") {
+    const request = JSON.parse(args[2]);
+    const preload = fs.realpathSync(request.preload);
+    if (!fs.statSync(preload).isFile()) {
+      fail("Expected a regular preload module.");
+    }
+    const selectors = request.environment;
+    if (
+      !selectors ||
+      Array.isArray(selectors) ||
+      typeof selectors !== "object" ||
+      Object.entries(selectors).some(
+        ([key, value]) =>
+          !/^OPENCLAW_[A-Z0-9_]+$/.test(key) || typeof value !== "string" || /[\r\n]/.test(value),
+      )
+    ) {
+      fail("Expected explicit fixture observer environment entries.");
+    }
+    const options = readUnitEnvironment(loaded).NODE_OPTIONS || "";
+    const installed = {
+      ...selectors,
+      NODE_OPTIONS:
+        (options ? options + " " : "") + "--import=" + JSON.stringify(pathToFileURL(preload).href),
+    };
+    const projected = readUnitEnvironment({
+      ...loaded,
+      environment: { ...loaded.environment, ...installed },
+    });
+    if (Object.entries(installed).some(([key, value]) => projected[key] !== value)) {
+      fail("An environment file shadows fixture instrumentation.");
+    }
+    receipt = {
+      version: 1,
+      id,
+      unit: unitPath,
+      entries: Object.fromEntries(
+        Object.entries(installed).map(([key, value]) => [
+          key,
+          { before: entry(loaded.environment, key), installed: value },
+        ]),
+      ),
+    };
+    fs.writeFileSync(receiptPath, JSON.stringify(receipt), { flag: "wx", mode: 0o600 });
+    publishInstrumentedUnit(before, instrumentEnvironment(before, installed), stat);
+    return;
+  }
+  receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
+  if (receipt.version !== 1 || receipt.id !== id || receipt.unit !== unitPath) {
+    fail("Fixture instrumentation receipt does not match this owner.");
+  }
+  const changes = {};
+  const effective = readUnitEnvironment(loaded);
+  for (const [key, value] of Object.entries(receipt.entries)) {
+    const current = entry(loaded.environment, key);
+    const installed = { present: true, value: value.installed };
+    if (operation === "verify-env") {
+      const expected = args[2] === "installed" ? installed : value.before;
+      if (
+        !sameEntry(current, expected) ||
+        (expected.present && effective[key] !== expected.value)
+      ) {
+        fail("Effective fixture environment did not match its readback.");
+      }
+    } else {
+      if (!sameEntry(current, installed) && !sameEntry(current, value.before)) {
+        fail("Injected environment entry drifted; retaining instrumentation evidence.");
+      }
+      changes[key] = value.before.present ? value.before.value : null;
+    }
+  }
+  if (operation === "verify-env") {
+    if (!["installed", "restored"].includes(args[2]) || hash(before) !== args[3]) {
+      fail("Service generation changed before instrumentation readback.");
+    }
+    console.log(
+      JSON.stringify({
+        state: args[2],
+        keys: Object.keys(receipt.entries),
+        unitSha256: hash(before),
+      }),
+    );
+    return;
+  }
+  // Restore only injected entries on the CURRENT unit, preserving any candidate
+  // launcher, heap argv, working directory, policy and unrelated environment edits.
+  publishInstrumentedUnit(before, instrumentEnvironment(before, changes), stat);
+}
+
 function run() {
   const [operation, ...args] = process.argv.slice(2);
+  if (
+    (operation === "instrument-env" && args.length === 3) ||
+    (operation === "restore-env" && args.length === 2) ||
+    (operation === "verify-env" && args.length === 4)
+  ) {
+    serviceInstrumentation(operation, args);
+    return;
+  }
   if (operation === "begin-start" && !args.length) {
     const file = `${runtimePaths().daemonLog}.runtime.json`;
     const claim = `${file}.start`;
@@ -599,34 +839,7 @@ function run() {
     if (!unit) {
       fail("Cannot launch an absent fixture unit.");
     }
-    const environment = { ...unit.environment };
-    for (const { filename, optional } of unit.environmentFiles) {
-      let content;
-      try {
-        content = fs.readFileSync(filename, "utf8");
-      } catch (error) {
-        if (optional && error.code === "ENOENT") {
-          continue;
-        }
-        throw error;
-      }
-      for (const line of content.split(/\r?\n/)) {
-        if (!line.trim() || line.startsWith("#")) {
-          continue;
-        }
-        const separator = line.indexOf("=");
-        if (separator <= 0) {
-          fail();
-        }
-        const raw = line.slice(separator + 1);
-        // serializeSystemdEnvironmentFile escapes exactly these four characters.
-        const value =
-          raw.startsWith('"') && raw.endsWith('"')
-            ? raw.slice(1, -1).replace(/\\(["\\`$])/g, "$1")
-            : raw;
-        Object.assign(environment, assignments([`${line.slice(0, separator)}=${value}`]));
-      }
-    }
+    const environment = readUnitEnvironment(unit);
     const quote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
     const command = [
       "env",

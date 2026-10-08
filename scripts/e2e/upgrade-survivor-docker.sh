@@ -457,6 +457,15 @@ if [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
     SURVIVOR_RUNTIME_ROOT="$SURVIVOR_RUNTIME_ROOT/runtime"
   fi
 
+  if [ "$SCENARIO" = "snapshot-cleanup-refusal" ]; then
+    if [ "$BASELINE_SPEC" != "openclaw@2026.9.7" ] || [ "$CANDIDATE_KIND" != "tarball" ] ||
+      [ "$UPDATE_RESTART_MODE" != "manual" ] || [ "$ROOT_MANAGED_VPS" != "0" ] || [ "$LIVE_ENABLED" != "0" ]; then
+      echo "snapshot-cleanup-refusal requires published 2026.9.7, a frozen candidate, manual restart, and no live provider" >&2
+      exit 2
+    fi
+    UPGRADE_RUNNER="$HARNESS_ROOT_DIR/scripts/e2e/lib/upgrade-survivor/snapshot-cleanup-refusal.sh"
+  fi
+
   docker_e2e_build_or_reuse "$IMAGE_NAME" upgrade-survivor "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "bare" "$SKIP_BUILD"
   if [ "$UPDATE_RESTART_MODE" = auto-auth ]; then
     # Have Docker load its default AppArmor profile before the setup process reattaches it.

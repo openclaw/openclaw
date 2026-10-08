@@ -5,6 +5,7 @@ import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { cleanupSnapshotOperations } from "./sqlite-readonly-location-cleanup.js";
 import {
   inspectSqliteSchemaHeaderInProcess,
   prepareSqliteReadOnlyCopyInProcess,
@@ -238,6 +239,45 @@ describe("stable read-only snapshot copies", () => {
       expect(allocations).toHaveBeenCalledTimes(1);
     },
   );
+
+  it.each([
+    { mode: "sync", prepare: prepareSqliteReadOnlyLocationSyncInProcess },
+    { mode: "async", prepare: prepareSqliteReadOnlyCopyInProcess },
+  ])("refuses $mode artifact capture after failed attempt cleanup", async ({ prepare }) => {
+    const { fixture, injected } = createWalActivationFixture();
+    const allocations = vi.spyOn(fs, "mkdtempSync");
+    const remove = fs.rmSync.bind(fs);
+    const cleanupError = Object.assign(new Error("snapshot cleanup denied"), { code: "EACCES" });
+    vi.spyOn(fs, "rmSync").mockImplementation((pathname, options) => {
+      if (path.resolve(String(pathname)).startsWith(fixture.stagingRoot + path.sep)) {
+        throw cleanupError;
+      }
+      remove(pathname, options);
+    });
+    let prepared: Awaited<ReturnType<typeof prepare>> | undefined;
+    let failure: unknown;
+    try {
+      try {
+        prepared = await prepare(fixture.sourcePath, fixture.stagingRoot);
+      } catch (error) {
+        failure = error;
+      }
+      expect(injected()).toBe(true);
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect(failure).toMatchObject({
+        cause: expect.objectContaining({
+          message: expect.stringContaining("journal state changed"),
+        }),
+        errors: expect.arrayContaining([cleanupError]),
+      });
+      expect(allocations).toHaveBeenCalledOnce();
+    } finally {
+      vi.restoreAllMocks();
+      await prepared?.cleanupAsync();
+      await cleanupSnapshotOperations();
+      expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
+    }
+  });
 
   it.each([512])("preserves a malformed catalog beside a cold %i-byte journal", (bytes) => {
     const fixture = createFixture(Buffer.alloc(0));
