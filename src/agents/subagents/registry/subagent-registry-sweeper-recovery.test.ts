@@ -9,6 +9,7 @@ import {
   resetSessionEntryLifecycle,
 } from "../../../config/sessions/session-accessor.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import { createMockGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime.test-support.js";
 import {
   getAgentEventLifecycleGeneration,
   rotateAgentEventLifecycleGeneration,
@@ -153,7 +154,7 @@ describe("subagent registry recovery scheduling", () => {
         await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
           recoverRow.mockResolvedValue({ status: "ignored" });
           const { entry, runs, completeSubagentRunWithRecovery, sweeper } = createHarness({
-            current: {} as GatewayRecoveryRuntime,
+            current: createMockGatewayRecoveryRuntime(),
           });
           const sibling = {
             ...run(),
@@ -206,7 +207,7 @@ describe("subagent registry recovery scheduling", () => {
   it.each(["lifecycle", "runtime"] as const)(
     "does not finalize interrupted work after its Gateway %s changes during classification",
     async (change) => {
-      const runtime = { current: {} as GatewayRecoveryRuntime };
+      const runtime = { current: createMockGatewayRecoveryRuntime() };
       const classification = createDeferred<{ status: "terminal"; error: string }>();
       recoverRow.mockReturnValue(classification.promise);
       const { finalizeInterruptedSubagentRun, completeSubagentRunWithRecovery, sweeper } =
@@ -217,7 +218,7 @@ describe("subagent registry recovery scheduling", () => {
         if (change === "lifecycle") {
           rotateAgentEventLifecycleGeneration();
         } else {
-          runtime.current = {} as GatewayRecoveryRuntime;
+          runtime.current = createMockGatewayRecoveryRuntime();
         }
       } finally {
         classification.resolve({ status: "terminal", error: "Gateway restart" });
@@ -370,7 +371,7 @@ describe("subagent registry recovery scheduling", () => {
   );
 
   it("drops a stale terminal retry when a newer generation wins during finalization", async () => {
-    const runtime = { current: {} as GatewayRecoveryRuntime };
+    const runtime = { current: createMockGatewayRecoveryRuntime() };
     recoverRow.mockResolvedValue({ status: "terminal", error: "interrupted" });
     const { entry, runs, finalizeInterruptedSubagentRun, sweeper } = createHarness(runtime);
     const finalization = createDeferred<number>();
@@ -393,7 +394,7 @@ describe("subagent registry recovery scheduling", () => {
   });
 
   it("coalesces duplicate schedules before the owner pass starts", async () => {
-    const runtime = { current: {} as GatewayRecoveryRuntime };
+    const runtime = { current: createMockGatewayRecoveryRuntime() };
     recoverRow.mockResolvedValue({ status: "ignored" });
     const { sweeper } = createHarness(runtime);
 
@@ -413,7 +414,7 @@ describe("subagent registry recovery scheduling", () => {
 
     await sweeper.sweepOnce();
     await vi.advanceTimersByTimeAsync(1_000);
-    runtime.current = {} as GatewayRecoveryRuntime;
+    runtime.current = createMockGatewayRecoveryRuntime();
     await sweeper.sweepOnce();
 
     expect(recoverRow).toHaveBeenCalledTimes(3);
@@ -475,7 +476,7 @@ describe("subagent registry recovery scheduling", () => {
   );
 
   it("does not terminalize a durable kill intent while runtime abort is rejected", async () => {
-    const runtime = { current: {} as GatewayRecoveryRuntime };
+    const runtime = { current: createMockGatewayRecoveryRuntime() };
     const { entry, completeSubagentRunWithRecovery, sweeper } = createHarness(runtime);
     entry.killIntent = {
       requestedAt: Date.now(),
@@ -599,7 +600,7 @@ describe("subagent registry recovery scheduling", () => {
   });
 
   it("terminalizes a legacy unowned kill without touching the current child session", async () => {
-    const runtime = { current: {} as GatewayRecoveryRuntime };
+    const runtime = { current: createMockGatewayRecoveryRuntime() };
     const { entry, completeSubagentRunWithRecovery, sweeper } = createHarness(runtime);
     entry.killIntent = {
       requestedAt: Date.now(),
@@ -714,7 +715,7 @@ describe("subagent registry recovery scheduling", () => {
   it.each(["suppressed recovery", "session replacement"] as const)(
     "archives a stale row without touching its successor after %s",
     async (change) => {
-      const runtime = { current: {} as GatewayRecoveryRuntime };
+      const runtime = { current: createMockGatewayRecoveryRuntime() };
       const archived = archivedRun({ generation: 1 });
       if (change === "suppressed recovery") {
         archived.execution.suppressSessionEffects = true;

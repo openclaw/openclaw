@@ -469,7 +469,7 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
 
   for (const candidate of candidates) {
     const { agent, document, monitor, scratchRevision, validatedTasks } = candidate;
-    const session = resolveHeartbeatSession(
+    const session = await resolveHeartbeatSession(
       params.cfg,
       agent.agentId,
       agent.heartbeat,

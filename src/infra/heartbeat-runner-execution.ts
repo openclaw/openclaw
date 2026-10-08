@@ -263,7 +263,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   // Phase 2: Stronger heartbeat deferral while a final delivery replay is pending.
   // Plain `updatedAt` changes are normal for heartbeat sessions and should not
   // suppress heartbeat runs; only defer when final delivery recovery is active.
-  const { sessionKey: recentSessionKey, entry: recentSessionEntry } = resolveHeartbeatSession(
+  const { sessionKey: recentSessionKey, entry: recentSessionEntry } = await resolveHeartbeatSession(
     cfg,
     agentId,
     heartbeat,

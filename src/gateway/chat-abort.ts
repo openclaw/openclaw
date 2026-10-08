@@ -7,7 +7,10 @@ import {
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
-import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
+import {
+  createAgentRunDirectAbortError,
+  createAgentRunRestartAbortError,
+} from "../agents/run-termination.js";
 import { readToolValidationErrorSummary } from "../agents/tool-error-summary.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -101,12 +104,12 @@ type RegisteredChatAbortController = {
   | { registered: false; entry?: undefined }
 );
 
-function createChatAbortSignalReason(stopReason: string | undefined): Error | undefined {
+function createChatAbortSignalReason(stopReason: string | undefined): Error {
   if (stopReason === "restart") {
     return createAgentRunRestartAbortError();
   }
   if (stopReason !== "timeout") {
-    return undefined;
+    return createAgentRunDirectAbortError();
   }
   const reason = new Error("chat run timed out");
   reason.name = "TimeoutError";

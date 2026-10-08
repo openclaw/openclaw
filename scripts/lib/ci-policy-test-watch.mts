@@ -690,22 +690,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/state/openclaw-agent-execution.worker.ts",
     ],
   })),
-  ...[
-    "src/fleet/doctor.runtime.test.ts",
-    "src/fleet/registry-read.test.ts",
-    "src/fleet/service-removal.runtime.test.ts",
-    "src/fleet/service-upgrade.runtime.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: [
-      "src/fleet/registry.kernel.ts",
-      "src/fleet/registry.worker.ts",
-      "src/state/openclaw-state-read-registry.ts",
-      "src/state/openclaw-state-read.worker.ts",
-      "src/state/openclaw-state-worker-runtime.ts",
-      "src/state/openclaw-state.worker.ts",
-    ],
-  })),
   {
     testFile: "src/gateway/board-store.test.ts",
     watchGlobs: [
