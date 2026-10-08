@@ -26,6 +26,11 @@ export type RequestDevicePairingResult = {
   superseded?: DevicePairingSupersededRequest[];
 };
 
+export type ClearDevicePairingResult = {
+  removedDevices: string[];
+  rejectedRequests: Array<{ requestId: string; deviceId: string }>;
+};
+
 /** Metadata fields a device may refresh without changing approval or token state. */
 export type PairedDeviceMetadataPatch = Pick<
   PairedDevice,

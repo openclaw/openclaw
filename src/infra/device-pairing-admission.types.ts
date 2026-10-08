@@ -18,6 +18,7 @@ export type DevicePairingAdmissionFacts =
       existing: PairedDevice | undefined;
     }
   | { kind: "pairing-prune"; deviceIds: readonly string[] }
+  | { kind: "pairing-clear"; paired: readonly PairedDevice[] }
   | { kind: "pairing-token-issuance" }
   | { kind: "pairing-publication"; receipt: DevicePairingCommitReceipt }
   | ({ kind: "node-pending" } & NodePairingPendingSnapshot)

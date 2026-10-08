@@ -153,6 +153,22 @@ openclaw devices clear --yes --pending --json
 
 `--pending` also rejects all pending pairing requests.
 
+Clear runs as one Gateway transaction and reports the exact removed device IDs
+and rejected request IDs. Removing a paired device also removes its pending
+repair requests; `--pending` includes those repairs in the rejected result.
+Requests arriving after the transaction remain available for the next command.
+If the transaction fails, its pairing and bootstrap-token changes roll back.
+
+A non-admin device-token caller clears only its own operator device and requests,
+matching `devices list` visibility. Shared Gateway credentials or an administrator
+can clear the full table. The Gateway must support `device.pair.clear`; older
+Gateways refuse the command before any deletion.
+
+If worker cleanup fails after the pairing transaction commits, JSON still returns
+the committed IDs and adds `cleanupFailedDevices`; the command exits with code 1.
+Check Gateway logs for those devices. Their credentials and connections are still
+revoked; retrying clear reports only entries removed by that later invocation.
+
 ### `openclaw devices rotate --device <id> --role <role> [--scope <scope...>]`
 
 Rotate a device token for a role, optionally updating its scopes.

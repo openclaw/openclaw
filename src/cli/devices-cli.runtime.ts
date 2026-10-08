@@ -13,6 +13,7 @@ import {
   readConnectPairingRequiredMessage,
   type ConnectPairingRequiredDetails,
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { validateDevicePairClearResult } from "../../packages/gateway-protocol/src/index.js";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -838,41 +839,31 @@ export async function runDevicesClearCommand(opts: DevicesRpcOpts): Promise<void
     defaultRuntime.exit(1);
     return;
   }
-  const list = parseDevicePairingList(await callGatewayCli("device.pair.list", opts, {}));
-  const removedDeviceIds: string[] = [];
-  const rejectedRequestIds: string[] = [];
-  for (const device of list.paired) {
-    const deviceId = normalizeOptionalString(device.deviceId) ?? "";
-    if (!deviceId) {
-      continue;
-    }
-    await callGatewayCli("device.pair.remove", opts, { deviceId });
-    removedDeviceIds.push(deviceId);
-  }
-  if (opts.pending) {
-    for (const req of list.pending) {
-      const requestId = normalizeOptionalString(req.requestId) ?? "";
-      if (!requestId) {
-        continue;
-      }
-      await callGatewayCli("device.pair.reject", opts, { requestId });
-      rejectedRequestIds.push(requestId);
-    }
+  const result = await callGatewayCli("device.pair.clear", opts, {
+    pending: Boolean(opts.pending),
+  });
+  if (!validateDevicePairClearResult(result)) {
+    throw new Error("Gateway returned an invalid device clear result.");
   }
   if (opts.json) {
-    defaultRuntime.writeJson({
-      removedDevices: removedDeviceIds,
-      rejectedPending: rejectedRequestIds,
-    });
-    return;
-  }
-  defaultRuntime.log(
-    `${theme.warn("Cleared")} ${removedDeviceIds.length} paired device${removedDeviceIds.length === 1 ? "" : "s"}`,
-  );
-  if (opts.pending) {
+    defaultRuntime.writeJson(result);
+  } else {
     defaultRuntime.log(
-      `${theme.warn("Rejected")} ${rejectedRequestIds.length} pending request${rejectedRequestIds.length === 1 ? "" : "s"}`,
+      `${theme.warn("Cleared")} ${result.removedDevices.length} paired device${result.removedDevices.length === 1 ? "" : "s"}`,
     );
+    if (opts.pending) {
+      defaultRuntime.log(
+        `${theme.warn("Rejected")} ${result.rejectedPending.length} pending request${result.rejectedPending.length === 1 ? "" : "s"}`,
+      );
+    }
+    if (result.cleanupFailedDevices?.length) {
+      defaultRuntime.error(
+        `Pairing records were cleared, but worker cleanup failed for: ${result.cleanupFailedDevices.map(sanitizeForLog).join(", ")}. Check Gateway logs.`,
+      );
+    }
+  }
+  if (result.cleanupFailedDevices?.length) {
+    defaultRuntime.exit(1);
   }
 }
 

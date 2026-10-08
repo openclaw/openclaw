@@ -307,17 +307,44 @@ describe("mutations", () => {
     expect(runtime.error).toHaveBeenCalledWith("Refusing to clear pairing table without --yes");
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
-  it("clears every paired device and pending request", async () => {
-    list([{ requestId: "req-1" }], [{ deviceId: "device-1" }, { deviceId: "device-2" }])
-      .mockResolvedValueOnce({ deviceId: "device-1" })
-      .mockResolvedValueOnce({ deviceId: "device-2" })
-      .mockResolvedValueOnce({ requestId: "req-1", deviceId: "device-1" });
-    await run("clear", "--yes", "--pending");
-    expect(callGateway).toHaveBeenCalledTimes(4);
-    expectCall(0, { method: "device.pair.list" });
-    expectCall(1, { method: "device.pair.remove", params: { deviceId: "device-1" } });
-    expectCall(2, { method: "device.pair.remove", params: { deviceId: "device-2" } });
-    expectCall(3, { method: "device.pair.reject", params: { requestId: "req-1" } });
+  it.each([true, false])("clears in one RPC with pending=%s", async (includePending) => {
+    const result = {
+      removedDevices: ["device-1", "device-2"],
+      rejectedPending: includePending ? ["req-1"] : [],
+    };
+    callGateway.mockResolvedValueOnce(result);
+    await run("clear", "--yes", ...(includePending ? ["--pending"] : []), "--json");
+    expect(callGateway).toHaveBeenCalledOnce();
+    expectCall(0, { method: "device.pair.clear", params: { pending: includePending } });
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(result);
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+  it.each([false, true])(
+    "preserves committed clear results on cleanup failure (json=%s)",
+    async (json) => {
+      const result = {
+        removedDevices: ["device-1"],
+        rejectedPending: ["req-1"],
+        cleanupFailedDevices: ["device-1"],
+      };
+      callGateway.mockResolvedValueOnce(result);
+      await run("clear", "--yes", "--pending", ...(json ? ["--json"] : []));
+      if (json) {
+        expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(result);
+        expect(runtime.error).not.toHaveBeenCalled();
+      } else {
+        expect(stripAnsi(output())).toContain("Cleared 1 paired device");
+        expect(stripAnsi(output())).toContain("Rejected 1 pending request");
+        expect(errors()).toContain("worker cleanup failed for: device-1");
+      }
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+    },
+  );
+  it("does not fall back to partial mutations against an older Gateway", async () => {
+    callGateway.mockRejectedValueOnce(new Error("unknown method: device.pair.clear"));
+    await expect(run("clear", "--yes", "--pending", "--json")).rejects.toThrow("unknown method");
+    expect(callGateway).toHaveBeenCalledOnce();
+    expect(runtime.writeJson).not.toHaveBeenCalled();
   });
   it.each([
     { name: "omitted", flags: [], scopes: undefined },

@@ -132,6 +132,44 @@ export async function removePairedDevice(deviceId: string, baseDir?: string) {
   );
 }
 
+/** Publish only committed clear results; later arrivals remain pending/paired. */
+export async function clearDevicePairing(
+  options: {
+    pending: boolean;
+    deviceId?: string;
+    assertCurrent?: () => void;
+    canRemove?: (device: PairedDevice) => boolean;
+  },
+  baseDir?: string,
+) {
+  return await withDevicePairingLock(async () => {
+    const canRemove = options.canRemove;
+    const result = await executeDevicePairingMutation(
+      {
+        type: "devicePairing.clear",
+        input: { pending: options.pending, deviceId: options.deviceId, nowMs: Date.now() },
+      },
+      {
+        baseDir,
+        assertCurrent: options.assertCurrent,
+        admit: (facts) => {
+          if (
+            facts.kind === "pairing-clear" &&
+            canRemove &&
+            facts.paired.some((device) => !canRemove(device))
+          ) {
+            throw new DevicePairingAuthorityRefusedError("Device pairing clear denied");
+          }
+        },
+      },
+    );
+    for (const rejected of result.rejectedRequests) {
+      publishDevicePairingResolution(rejected, "rejected", baseDir);
+    }
+    return result;
+  });
+}
+
 export async function pruneSupersededSilentPairedDevices(params: {
   deviceId: string;
   baseDir?: string;

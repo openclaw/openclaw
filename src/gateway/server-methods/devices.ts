@@ -3,6 +3,8 @@ import {
   errorShape,
   type DeviceTokenRotateParams,
   validateDevicePairApproveParams,
+  validateDevicePairClearParams,
+  type DevicePairClearResult,
   validateDevicePairListParams,
   validateDevicePairRemoveParams,
   validateDevicePairRejectParams,
@@ -21,8 +23,10 @@ import {
   rotateDeviceToken,
   summarizeDeviceTokens,
 } from "../../infra/device-pairing-tokens.js";
+import { DevicePairingAuthorityRefusedError } from "../../infra/device-pairing-worker.js";
 import {
   getPairedDevice,
+  clearDevicePairing,
   getPendingDevicePairing,
   listDevicePairing,
   removePairedDevice,
@@ -388,6 +392,93 @@ export const deviceHandlers: GatewayRequestHandlers = {
       { dropIfSlow: true },
     );
     respond(true, rejected, undefined);
+  },
+  "device.pair.clear": async ({ params, respond, context, client, hasCurrentClientAuthority }) => {
+    if (!assertValidParams(params, validateDevicePairClearParams, "device.pair.clear", respond)) {
+      return;
+    }
+    const authz = resolveDeviceSessionAuthz(client);
+    const selfDeviceId = authz.isAdminCaller ? null : authz.callerDeviceId;
+    let cleared: Awaited<ReturnType<typeof clearDevicePairing>>;
+    try {
+      cleared = await clearDevicePairing({
+        pending: params.pending === true,
+        ...(selfDeviceId ? { deviceId: selfDeviceId } : {}),
+        canRemove: (device) => !selfDeviceId || !pairedDeviceHasNonOperatorRole(device),
+        assertCurrent: () => {
+          if (hasCurrentClientAuthority?.() === false) {
+            throw new DevicePairingAuthorityRefusedError();
+          }
+          // Commit publication may retire this caller. Claim its final response
+          // inside the mutation admission, before its credential is removed.
+          holdGatewayPolicyResponse(respond);
+        },
+      });
+    } catch (error) {
+      if (!(error instanceof DevicePairingAuthorityRefusedError)) {
+        throw error;
+      }
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "device pairing clear denied"),
+      );
+      return;
+    }
+    const result: DevicePairClearResult = {
+      removedDevices: cleared.removedDevices,
+      rejectedPending: cleared.rejectedRequests.map((request) => request.requestId),
+    };
+    const cleanupFailedDevices: string[] = [];
+    try {
+      // Fence every removed credential before awaiting any worker cleanup.
+      for (const deviceId of cleared.removedDevices) {
+        clearRemovedNodeRuntimeState({ nodeId: deviceId, context });
+        context.invalidateClientsForDevice?.(deviceId, { reason: "device-pair-removed" });
+      }
+      for (const rejected of cleared.rejectedRequests) {
+        context.scopeUpgradeCoordinator?.notify(rejected.requestId, "rejected");
+        emitDevicePairingLifecycleSecurityEvent({
+          action: "device.pairing.rejected",
+          authz,
+          targetDeviceId: rejected.deviceId,
+          controlId: "device.pair.clear",
+          severity: "low",
+        });
+        context.broadcast(
+          "device.pair.resolved",
+          { ...rejected, decision: "rejected", ts: Date.now() },
+          { dropIfSlow: true },
+        );
+      }
+      for (const deviceId of cleared.removedDevices) {
+        try {
+          await reconcileRevokedDeviceWorker(context, deviceId);
+        } catch (error) {
+          cleanupFailedDevices.push(deviceId);
+          context.logGateway.error(
+            `device clear worker cleanup failed device=${deviceId}: ${String(error)}`,
+          );
+        }
+        emitDevicePairingLifecycleSecurityEvent({
+          action: "device.pairing.removed",
+          severity: "medium",
+          authz,
+          targetDeviceId: deviceId,
+          controlId: "device.pair.clear",
+        });
+      }
+      if (cleanupFailedDevices.length > 0) {
+        result.cleanupFailedDevices = cleanupFailedDevices;
+      }
+      respond(true, result, undefined);
+    } finally {
+      queueMicrotask(() => {
+        for (const deviceId of cleared.removedDevices) {
+          context.disconnectClientsForDevice?.(deviceId);
+        }
+      });
+    }
   },
   "device.pair.remove": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateDevicePairRemoveParams, "device.pair.remove", respond)) {
