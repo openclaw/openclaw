@@ -230,6 +230,7 @@ export function restoreFinalizedStartupRun(params: {
       job,
       {
         status: entry.status,
+        completionStatus,
         endedAt,
         triggerEval: params.triggerEval,
       },
@@ -241,7 +242,7 @@ export function restoreFinalizedStartupRun(params: {
     // update their shared state during the same successful run.
     applyScriptRunResult(
       job,
-      { status: entry.status, ...params.scriptResult },
+      { status: entry.status, completionStatus, ...params.scriptResult },
       { triggerOwnership },
     );
   }

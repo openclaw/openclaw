@@ -7,7 +7,7 @@ import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { computeNextRunAtMs } from "../schedule.js";
-import type { CronJob, CronRunStatus } from "../types.js";
+import type { CronCompletionStatus, CronJob, CronRunStatus } from "../types.js";
 import { maybeAutoDisableCronJobAfterRunFailure } from "./auto-disable.js";
 import {
   finalizeCronFailureNotifications,
@@ -524,12 +524,17 @@ export function applyJobResult(
 /** Commits payload-script state only after the complete cron run succeeds. */
 export function applyScriptRunResult(
   job: CronJob,
-  result: { status: CronRunStatus; scriptStateChanged?: boolean; scriptState?: unknown },
+  result: {
+    status: CronRunStatus;
+    completionStatus: CronCompletionStatus;
+    scriptStateChanged?: boolean;
+    scriptState?: unknown;
+  },
   opts?: { triggerOwnership?: CronTriggerOwnership },
 ): void {
   if (
     opts?.triggerOwnership !== "stale" &&
-    result.status === "ok" &&
+    result.completionStatus === "succeeded" &&
     result.scriptStateChanged === true
   ) {
     // Trigger and payload scripts share frozen trigger.state. The payload's

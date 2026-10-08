@@ -6,6 +6,7 @@ import {
 } from "../store/delivery-codec.js";
 import { createCronStreamSourceIdentity } from "../stream-schedule.js";
 import type {
+  CronCompletionStatus,
   CronJob,
   CronDeliveryTrace,
   CronResolvedDeliveryState,
@@ -71,15 +72,20 @@ export function applyTriggerEvaluationState(
 /** Persists fired/error trigger metadata and disarms successful once triggers. */
 export function applyTriggerRunResult(
   job: CronJob,
-  result: { status: CronRunStatus; endedAt: number; triggerEval?: CronTriggerEvalOutcome },
+  result: {
+    status: CronRunStatus;
+    completionStatus: CronCompletionStatus;
+    endedAt: number;
+    triggerEval?: CronTriggerEvalOutcome;
+  },
   opts?: { scheduleOwnership?: "current" | "stale"; triggerOwnership?: "current" | "stale" },
 ): void {
   if (!result.triggerEval || opts?.triggerOwnership === "stale") {
     return;
   }
-  // Failed payloads keep the old state so the next evaluation re-detects the event.
+  // Failed or unconfirmed delivery keeps the old state so the next evaluation re-detects the event.
   const persistedEval =
-    result.status === "ok"
+    result.completionStatus === "succeeded"
       ? result.triggerEval
       : { ...result.triggerEval, stateChanged: false, state: undefined };
   applyTriggerEvaluationState(job, persistedEval, result.endedAt);
@@ -87,7 +93,7 @@ export function applyTriggerRunResult(
     opts?.scheduleOwnership !== "stale" &&
     result.triggerEval.fired &&
     job.trigger?.once === true &&
-    result.status === "ok"
+    result.completionStatus === "succeeded"
   ) {
     if (job.schedule.kind === "stream") {
       job.state.streamSourceIdentity = createCronStreamSourceIdentity();
