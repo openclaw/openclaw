@@ -388,6 +388,21 @@ async function sendFollowupPayloads(params: {
     return [];
   }
   const deliverQueuedBatch = sourceDisposition?.deliver;
+  if (turn.queued.run.internalEventExecution) {
+    if (!deliverQueuedBatch) {
+      throw new Error("Internal event lost its originating delivery owner");
+    }
+    if (params.kind !== "final") {
+      await deliverQueuedBatch({
+        kind: "queued-followup",
+        runId: params.runId,
+        originatingChannel,
+        payloads,
+        completion: { kind: "progress" },
+      });
+    }
+    return payloads;
+  }
   const fallbackDispatcher = sourceDisposition ? undefined : defaults.opts?.onBlockReply;
   const dispatcherAvailable = Boolean(deliverQueuedBatch || fallbackDispatcher);
   if (!originRoutable && !dispatcherAvailable) {
@@ -536,6 +551,7 @@ export async function deliverFollowupDecision(params: {
 }): Promise<FollowupDeliveryResult> {
   const { decision, turn, defaults } = params;
   if (decision.kind === "suppress") {
+    turn.queued.run.internalEventExecution?.onSuppressed?.(decision.reason);
     logVerbose(`followup queue: delivery suppressed (${decision.reason})`);
     return { kind: "completed", payloads: [] };
   }

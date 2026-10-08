@@ -400,7 +400,7 @@ function commitLockedTranscript(
           },
           preparedMessage,
           projection,
-        );
+        )?.result;
         if (result && input.sequenced) {
           rememberCommittedTranscriptMessageSequencesInTransaction(
             database,

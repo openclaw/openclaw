@@ -80,6 +80,7 @@ it.each(["cold", "warm", "warm-cap", "removal"] as const)(
         const warmed = observeMaintenance();
         await patchSessionEntryCore(active, () => ({ label: "warm" }), {
           maintenanceConfig: policy,
+          workerGuard: {},
         });
         await warmed;
         vi.restoreAllMocks();
@@ -87,6 +88,10 @@ it.each(["cold", "warm", "warm-cap", "removal"] as const)(
       if (scenario === "warm-cap") {
         seedStale(Date.now() - 1);
       }
+      const maintenanceReads: string[] = [];
+      observeSessionMaintenancePlanningWorker({
+        onRead: (kind) => maintenanceReads.push(kind),
+      });
       const completed = observeMaintenance();
       const observation = new AsyncLocalStorage<boolean>();
       const kick = maintenanceKick.kickSessionEntryMaintenanceAfterWrite;
@@ -146,6 +151,7 @@ it.each(["cold", "warm", "warm-cap", "removal"] as const)(
         try {
           await patchSessionEntryCore(active, () => ({ label: "updated" }), {
             maintenanceConfig: policy,
+            workerGuard: {},
           });
           return await completed;
         } finally {
@@ -164,6 +170,7 @@ it.each(["cold", "warm", "warm-cap", "removal"] as const)(
       if (!remove) {
         expect(counts).toEqual(emptyCounts);
         expect(preservation).not.toHaveBeenCalled();
+        expect(maintenanceReads).toEqual(["maintenance-plan"]);
       }
       expect(loadSessionEntry(active)?.label).toBe("updated");
       if (remove) {
@@ -229,15 +236,24 @@ it.runIf(process.platform !== "win32")(
         }
       });
       const reclaim = reclamationRun.runSqliteSessionReclamation;
-      vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation(async (params) => {
-        const result = await reclaim(params);
-        if (!injected && result.kind === "maintenance-plan") {
-          injected = true;
-          fs.renameSync(databasePath, heldPath);
-          fs.renameSync(replacementPath, databasePath);
-          replaced = true;
-        }
-        return result;
+      vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation((params) => {
+        const consume = params.consumeReadOnlyMaintenancePlan;
+        return reclaim({
+          ...params,
+          ...(consume
+            ? {
+                consumeReadOnlyMaintenancePlan(read, assertCurrent) {
+                  if (!injected) {
+                    injected = true;
+                    fs.renameSync(databasePath, heldPath);
+                    fs.renameSync(replacementPath, databasePath);
+                    replaced = true;
+                  }
+                  consume(read, assertCurrent);
+                },
+              }
+            : {}),
+        });
       });
       const completed = observeMaintenance(() => {
         if (replaced) {
@@ -472,7 +488,7 @@ it.each([
   { mutation: "backdate", boundary: "before-authorization" },
   { mutation: "restore", boundary: "after-settlement" },
   { mutation: "backdate", boundary: "missing-after-settlement" },
-  { mutation: "backdate", boundary: "age-settlement" },
+  { mutation: "backdate", boundary: "before-read-consumption" },
 ] as const)(
   "keeps $mutation authority at $boundary across real Worker planning",
   async ({ mutation, boundary }) => {
@@ -542,10 +558,13 @@ it.each([
             expect(native.admission).toBeUndefined();
             expect(native.retained).toBeUndefined();
             readOnlySettled = true;
+            if (boundary === "before-read-consumption" && !changed) {
+              mutate();
+            }
           }
           if (
             boundary !== "before-authorization" &&
-            boundary !== "age-settlement" &&
+            boundary !== "before-read-consumption" &&
             result.kind === "committed" &&
             !changed
           ) {
@@ -573,15 +592,6 @@ it.each([
           // Read-only completion has no COMMIT receipt; retain the same caller-adoption race.
           mutate();
         }
-        if (
-          boundary === "age-settlement" &&
-          params.plan.kind === "maintenance-age" &&
-          result.kind === "maintenance-age" &&
-          !changed
-        ) {
-          // The worker deadline has settled; the scheduler has not consumed it.
-          mutate();
-        }
         if (changed && result.kind === "maintenance-plan-stale") {
           rejectedSnapshots.push(params.plan.kind);
         }
@@ -602,8 +612,8 @@ it.each([
       if (boundary !== "before-authorization") {
         expect(workerThreadIds.length).toBeGreaterThanOrEqual(2);
       }
-      if (boundary === "after-settlement" || boundary === "missing-after-settlement") {
-        expect(rejectedSnapshots).toContain("maintenance-age");
+      if (boundary === "before-read-consumption") {
+        expect(rejectedSnapshots).toContain("maintenance-plan");
       }
       expect(loadSessionEntry(victim)).toMatchObject({
         archivedAt: expect.any(Number),
@@ -889,8 +899,22 @@ it("retains worker cadence for foreign writes until a committed worker backdate 
       const settled = createDeferredCore<number | undefined>();
       const reclaim = reclamationRun.runSqliteSessionReclamation;
       vi.spyOn(reclamationRun, "runSqliteSessionReclamation").mockImplementation(async (params) => {
-        const result = await reclaim(params);
-        if (params.plan.kind === "maintenance-age" && result.kind === "maintenance-age") {
+        const consumption: { deadline?: { nextAt: number | undefined } } = {};
+        const consume = params.consumeReadOnlyMaintenancePlan;
+        const result = await reclaim({
+          ...params,
+          ...(consume
+            ? {
+                consumeReadOnlyMaintenancePlan(read, assertCurrent) {
+                  consume(read, assertCurrent);
+                  consumption.deadline = { nextAt: read.nextAt };
+                },
+              }
+            : {}),
+        });
+        if (result.kind === "maintenance-plan" && consumption.deadline) {
+          settled.resolve(consumption.deadline.nextAt);
+        } else if (params.plan.kind === "maintenance-age" && result.kind === "maintenance-age") {
           settled.resolve(result.nextAt);
         }
         return result;

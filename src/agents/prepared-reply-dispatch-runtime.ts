@@ -56,13 +56,20 @@ function buildReplyDispatchPublication(
   return Object.freeze(runtimes);
 }
 
+type PreparedReplyDispatchLoadParams = {
+  agentId: string;
+  abortSignal?: AbortSignal;
+  demand?: "interactive" | "scheduled";
+};
+
 type PreparedReplyDispatchPublicationHost = Readonly<{
   isGatewayLifecycleActive: () => boolean;
   getConfiguredOwner: (agentId: string) => PreparedModelRuntimeOwner | undefined;
   getPendingReplacement: () => Promise<void> | undefined;
+  ensureReady: (params: PreparedReplyDispatchLoadParams) => Promise<void>;
 }>;
 
-/** Reads one immutable configured Gateway dispatch generation without activating an owner. */
+/** Reads an immutable dispatch generation after the lifecycle's demand preparation. */
 export class PreparedReplyDispatchPublicationOwner {
   #publication = EMPTY_REPLY_DISPATCH_PUBLICATION;
 
@@ -112,13 +119,11 @@ export class PreparedReplyDispatchPublicationOwner {
     );
   }
 
-  readonly load = async ({
-    agentId,
-    abortSignal,
-  }: {
-    agentId: string;
-    abortSignal?: AbortSignal;
-  }): Promise<PreparedReplyDispatchRuntime | undefined> => {
+  readonly load = async (
+    params: PreparedReplyDispatchLoadParams,
+  ): Promise<PreparedReplyDispatchRuntime | undefined> => {
+    const { agentId, abortSignal } = params;
+    let demandPrepared = false;
     for (;;) {
       if (abortSignal?.aborted) {
         throw createAbortError("Prepared reply dispatch admission aborted", {
@@ -129,14 +134,23 @@ export class PreparedReplyDispatchPublicationOwner {
         return undefined;
       }
       const replacement = this.host.getPendingReplacement();
+      const pendingOwner = replacement ? undefined : this.host.getConfiguredOwner(agentId);
       if (replacement) {
         assertPreparedModelRuntimeAdmissionCanWait();
+      } else if (pendingOwner?.pending) {
+        assertPreparedModelRuntimeAdmissionCanWait(pendingOwner);
+      }
+      if (!demandPrepared) {
+        // Demand can join recovery, so preserve admission before that first wait.
+        await this.host.ensureReady(params);
+        demandPrepared = true;
+        continue;
+      }
+      if (replacement) {
         await racePromiseWithAbortSignal(replacement, abortSignal);
         continue;
       }
-      const pendingOwner = this.host.getConfiguredOwner(agentId);
       if (pendingOwner?.pending) {
-        assertPreparedModelRuntimeAdmissionCanWait(pendingOwner);
         await racePromiseWithAbortSignal(pendingOwner.pending, abortSignal);
         continue;
       }

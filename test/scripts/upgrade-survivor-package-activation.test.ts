@@ -78,18 +78,20 @@ describe("release package interruption fixture", () => {
       const hook = pathToFileURL(
         path.resolve("scripts/e2e/lib/upgrade-survivor/package-activation-fault.mjs"),
       ).href;
+      const spec = path.join(root, "fault.json");
+      fs.writeFileSync(spec, JSON.stringify({ journal, evidence, cut: "publication-complete" }));
       const result = spawnSync(
         process.execPath,
         [
           "--import=tsx",
+          "--import",
+          hook,
           "--input-type=module",
           "-e",
           `
       import fs from 'node:fs';
       import { DatabaseSync } from 'node:sqlite';
       import { executeSqliteQuerySync, getNodeSqliteKysely } from './src/infra/kysely-sync.ts';
-      import { installPackageActivationFault } from ${JSON.stringify(hook)};
-      installPackageActivationFault({ journal: ${JSON.stringify(journal)}, evidence: ${JSON.stringify(evidence)}, cut: 'publication-complete', terminate: () => process.kill(process.pid, 'SIGKILL') });
       const db = new DatabaseSync(${JSON.stringify(journal)});
       db.exec('CREATE TABLE package_activation(slot INTEGER, phase TEXT, intent_json TEXT)');
       db.exec('BEGIN');
@@ -106,7 +108,11 @@ describe("release package interruption fixture", () => {
       throw new Error('fault did not terminate the updater');
     `,
         ],
-        { encoding: "utf8", timeout: 10_000 },
+        {
+          encoding: "utf8",
+          env: { ...process.env, OPENCLAW_SURVIVOR_PACKAGE_FAULT: spec },
+          timeout: 10_000,
+        },
       );
       expect(result.error).toBeUndefined();
       expect(result.signal, result.stderr).toBe("SIGKILL");

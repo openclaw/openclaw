@@ -102,6 +102,28 @@ describe("upload handoff", () => {
     expect(setInputFiles).not.toHaveBeenCalled();
   });
 
+  it.each([47, 48, 50])("keeps extension path handoff for a %i MiB upload", async (mib) => {
+    stat.mockResolvedValueOnce({ size: mib * 1024 * 1024 });
+    await upload({
+      browserFilesystemLocal: false,
+      uploadPathsFallbackOnPayloadLimit: true,
+      ssrfPolicy: {},
+    });
+    expect(readFile).not.toHaveBeenCalled();
+    expect(setInputFiles).toHaveBeenCalledExactlyOnceWith([canonical], nativeOptions);
+  });
+
+  it("sends extension uploads below the relay bound as bytes", async () => {
+    stat.mockResolvedValue({ size: 46 * 1024 * 1024, mtimeMs: payload.lastModifiedMs });
+    await upload({
+      browserFilesystemLocal: false,
+      uploadPathsFallbackOnPayloadLimit: true,
+      ssrfPolicy: {},
+    });
+    expect(readFile).toHaveBeenCalledWith(canonical);
+    expect(setInputFiles).toHaveBeenCalledExactlyOnceWith([payload], nativeOptions);
+  });
+
   it("keeps guarded local-filesystem uploads as paths inside the policy guard", async () => {
     await upload({
       browserFilesystemLocal: true,

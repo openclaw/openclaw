@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { buildRestartRecoveryClaimCleanupPatch } from "./restart-recovery-state.js";
 import { preserveSqliteSameKeySessionRolloverLineage } from "./session-entry-lineage.js";
 import { projectCompactionAccountingPatch } from "./session-entry-projection.js";
@@ -5,6 +6,15 @@ import {
   projectSessionEntryUsageUpdate,
   type SessionEntryUsageUpdate,
 } from "./session-entry-usage.js";
+import {
+  projectPendingFinalDeliverySettlement,
+  type PendingFinalDeliverySettlementInput,
+} from "./session-pending-final-settlement.js";
+import type {
+  SessionTranscriptTurnExpectedState,
+  SessionTranscriptTurnLifecyclePatch,
+} from "./session-transcript-turn-lifecycle.types.js";
+import { sessionMatchesExpectedTranscriptTurn } from "./session-transcript-turn-state.js";
 import {
   mergeSessionEntry,
   mergeSessionEntryPreserveActivity,
@@ -18,6 +28,20 @@ type ExpectedSession = Pick<SessionEntry, "sessionId"> &
 export type SessionEntryPatchOperation = (
   | { kind: "fields"; patch: Partial<SessionEntry> }
   | { kind: "usage-accounting"; usage: SessionEntryUsageUpdate }
+  | { kind: "pending-final-settle"; settlement: PendingFinalDeliverySettlementInput }
+  | {
+      kind: "restart-admission";
+      sessionId: string;
+      expectedSessionState: SessionTranscriptTurnExpectedState;
+      patch: SessionTranscriptTurnLifecyclePatch;
+    }
+  | {
+      kind: "pending-final-clear";
+      sessionId: string;
+      intentId: string;
+      recoveryRunId?: string;
+      now: number;
+    }
   | {
       kind: "restart-safe-terminal";
       runId: string;
@@ -52,6 +76,58 @@ export function reduceSessionEntryPatch(
       return projectCompactionAccountingPatch(entry, operation.accounting);
     case "usage-accounting":
       return projectSessionEntryUsageUpdate(entry, operation.usage);
+    case "pending-final-settle":
+      return projectPendingFinalDeliverySettlement(entry, operation.settlement).patch;
+    case "restart-admission":
+      return sessionMatchesExpectedTranscriptTurn(
+        { entry },
+        {
+          expectedSessionId: operation.sessionId,
+          expectedSessionState: operation.expectedSessionState,
+        },
+      )
+        ? operation.patch
+        : null;
+    case "pending-final-clear": {
+      const recoveryRunId = normalizeOptionalString(entry.restartRecoveryDeliveryRunId);
+      const deliveries = entry.pendingFinalDelivery?.deliveries;
+      if (
+        entry.sessionId !== operation.sessionId ||
+        entry.pendingFinalDelivery?.intentId !== operation.intentId ||
+        !deliveries?.length ||
+        !deliveries.every(({ state }) => state === "delivered" || state === "suppressed") ||
+        (recoveryRunId !== undefined && recoveryRunId !== operation.recoveryRunId)
+      ) {
+        return null;
+      }
+      const completesHookTurn =
+        recoveryRunId === undefined &&
+        (entry.restartRecoveryBeforeAgentReplyState === "handled-reply" ||
+          entry.restartRecoveryBeforeAgentReplyState === "handled-unrecoverable");
+      return {
+        ...(recoveryRunId
+          ? buildRestartRecoveryClaimCleanupPatch({ entry, recordTerminalSource: true })
+          : {
+              restartRecoveryBeforeAgentReplyState: undefined,
+              restartRecoverySourceIngress: undefined,
+              restartRecoveryOperatorSource: undefined,
+              restartRecoveryForceSafeTools: undefined,
+            }),
+        pendingFinalDelivery: undefined,
+        ...(completesHookTurn
+          ? {
+              abortedLastRun: false,
+              endedAt: operation.now,
+              lifecycleRunId: undefined,
+              runtimeMs:
+                typeof entry.startedAt === "number"
+                  ? Math.max(0, operation.now - entry.startedAt)
+                  : undefined,
+              status: "done" as const,
+            }
+          : {}),
+      };
+    }
     case "restart-safe-terminal":
       return entry.restartRecoveryDeliveryRunId === operation.runId
         ? {
