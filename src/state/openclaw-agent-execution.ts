@@ -76,11 +76,11 @@ export const captureOpenClawAgentDatabaseExecution = createAgentDatabaseExecutio
   captureFileAgentDatabaseExecution,
 );
 
-/** Borrow an existing physical owner without creating or preparing a writer for a read. */
-export function captureExistingOpenClawAgentDatabaseExecution(options: {
-  path: string;
-  env?: NodeJS.ProcessEnv;
-}): OpenClawAgentDatabaseExecution | undefined {
+/** Borrow an existing physical owner without opening or preparing a writer. */
+export function captureExistingOpenClawAgentDatabaseExecution(
+  options: { path: string; env?: NodeJS.ProcessEnv },
+  constraints?: { expectedCreationIdentity: DatabasePathIdentity },
+): OpenClawAgentDatabaseExecution | undefined {
   const pathname = path.resolve(options.path);
   const existing =
     executions.get(pathname) ??
@@ -94,7 +94,9 @@ export function captureExistingOpenClawAgentDatabaseExecution(options: {
   }
   try {
     assertAgentDatabaseExecutionSharedState(target, existing.sharedDatabaseKey);
-    return existing.borrow(pathname);
+    return constraints
+      ? captureFileAgentDatabaseExecution(target, constraints)
+      : existing.borrow(pathname);
   } catch {
     // Initial read selection does not inherit failures of an unrelated writable lifecycle.
     return undefined;

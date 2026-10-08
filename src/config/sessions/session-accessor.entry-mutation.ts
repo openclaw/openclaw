@@ -7,6 +7,7 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { registerOpenClawAgentDatabaseReadCandidateResource } from "../../state/openclaw-agent-db-resources.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import {
+  captureExistingOpenClawAgentDatabaseExecution,
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution.js";
@@ -77,21 +78,47 @@ function captureSessionEntryDatabasePreparation(
     captureSessionStoreReadCandidates(resolveSessionStorePathForScope(related)).map(
       // Each capture returns fresh candidate objects, so attaching the identity in place is safe.
       (candidate) =>
-        Object.assign(candidate, { identity: readDatabasePathIdentitySync(candidate.path) }),
+        Object.assign(candidate, {
+          identity: readDatabasePathIdentitySync(candidate.path),
+          env: related.env,
+        }),
     ),
   );
   const releases: Array<() => void> = [];
+  const firstCreations = new Map<(typeof candidates)[number], OpenClawAgentDatabaseExecution>();
   let active = true;
   let execution: OpenClawAgentDatabaseExecution | undefined;
   let preparedPath: string | undefined;
   let preparedIdentity: ReturnType<typeof readDatabasePathIdentitySync> | undefined;
   let creatingPath: string | undefined;
+  const followsOriginalCreation = (candidate: (typeof candidates)[number]) => {
+    if (!candidate.identity.key.startsWith("path:")) {
+      return false;
+    }
+    let retained = firstCreations.get(candidate);
+    if (!retained) {
+      // A sibling may finish the original first creation while caller authority waits.
+      retained = captureExistingOpenClawAgentDatabaseExecution(
+        { path: candidate.path, env: candidate.env },
+        { expectedCreationIdentity: candidate.identity },
+      );
+      if (!retained) {
+        return false;
+      }
+      firstCreations.set(candidate, retained);
+    }
+    retained.assertCurrent();
+    return true;
+  };
   const assertSourceCurrent = () => {
     if (!active) {
       throw new Error("Session creation database preparation is closed");
     }
     shared.admission.assertCurrent();
     execution?.assertCurrent();
+    for (const retained of firstCreations.values()) {
+      retained.assertCurrent();
+    }
     for (const candidate of candidates) {
       const isCreating = candidate.path === creatingPath || candidate.physicalPath === creatingPath;
       const isPrepared = candidate.path === preparedPath || candidate.physicalPath === preparedPath;
@@ -101,7 +128,8 @@ function captureSessionEntryDatabasePreparation(
           !isDeepStrictEqual(
             readDatabasePathIdentitySync(candidate.path),
             isPrepared ? preparedIdentity : candidate.identity,
-          ))
+          ) &&
+          !followsOriginalCreation(candidate))
       ) {
         throw new Error("Session creation database changed during preparation");
       }
@@ -125,7 +153,21 @@ function captureSessionEntryDatabasePreparation(
   const release = async () => {
     active = false;
     try {
-      await execution?.release();
+      const released = await Promise.allSettled(
+        [...firstCreations.values(), ...(execution ? [execution] : [])].map((retained) =>
+          retained.release(),
+        ),
+      );
+      const errors = released.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (errors.length) {
+        throw createSqliteLifecycleAggregateError(
+          errors,
+          "Session creation source cleanup failed",
+          errors[0],
+        );
+      }
     } finally {
       unregister();
     }
@@ -183,7 +225,11 @@ function captureSessionEntryDatabasePreparation(
         if (!identity.key.startsWith("path:")) {
           throw new Error("Session creation lost its originally captured database target");
         }
-        original = { ...captureSessionStoreReadCandidate(resolved.path), identity };
+        original = {
+          ...captureSessionStoreReadCandidate(resolved.path),
+          identity,
+          env: target.env,
+        };
         candidates.push(original);
       }
       return {
