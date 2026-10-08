@@ -21,7 +21,12 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { OPENAI_UNKNOWN_MODEL_COST, projectOpenAIAccountModels } from "./account-models.js";
+import {
+  buildOpenAIUncataloguedModel,
+  OPENAI_PRE_GPT5_MODEL_ID_PATTERN,
+  OPENAI_UNKNOWN_MODEL_COST,
+  projectOpenAIAccountModels,
+} from "./account-models.js";
 import {
   OPENAI_CODEX_RESPONSES_BASE_URL,
   classifyOpenAIBaseUrl,
@@ -638,6 +643,13 @@ const OPENAI_GPT_FORWARD_COMPAT_CASES = [
 function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
   const trimmedModelId = ctx.modelId.trim();
   const modelId = normalizeLowercaseStringOrEmpty(trimmedModelId);
+  // Listings hide pre-GPT-5 families; refs selected in config or a session still resolve.
+  if (OPENAI_PRE_GPT5_MODEL_ID_PATTERN.test(modelId)) {
+    return {
+      ...buildOpenAIUncataloguedModel(trimmedModelId, resolveOpenAIDefaultBaseUrl()),
+      provider: PROVIDER_ID,
+    };
+  }
   const exactModel = ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId);
   if (
     OPENAI_DAYBREAK_MODEL_IDS.some((id) => id === modelId) ||

@@ -15,8 +15,24 @@ export const OPENAI_UNKNOWN_MODEL_COST = {
 const OPENAI_RESPONSES_UNSUPPORTED_MODEL_ID_PATTERN =
   /(?:^|-)(?:search|live|cyber|exp|alpha)(?:-|$)/;
 // Pre-GPT-5 families fail on the default Codex runtime (400 "Invalid value: 'custom'") and
-// many reject hosted web search; explicit config with the OpenClaw runtime still runs them.
-const OPENAI_PRE_GPT5_MODEL_ID_PATTERN = /^(?:ft:)?(?:gpt-3\.5|gpt-4|o[134])/;
+// many reject hosted web search, so listings hide them; explicitly selected refs still resolve.
+export const OPENAI_PRE_GPT5_MODEL_ID_PATTERN = /^(?:ft:)?(?:gpt-3\.5|gpt-4|o[134])/;
+
+/** Conservative Responses metadata for an OpenAI chat id without a catalog row. */
+export function buildOpenAIUncataloguedModel(id: string, baseUrl: string): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    api: "openai-responses",
+    baseUrl,
+    // GPT-5+ and o-series reason; older GPT families reject reasoning parameters.
+    reasoning: /^(?:gpt-(?:[5-9]|\d{2})|o\d)/.test(id),
+    input: ["text"],
+    cost: OPENAI_UNKNOWN_MODEL_COST,
+    contextWindow: 128_000,
+    maxTokens: 16_384,
+  };
+}
 
 /**
  * Keeps catalog rows for listed ids and gives every other runnable listed chat id
@@ -42,19 +58,6 @@ export function projectOpenAIAccountModels(params: {
     ) {
       return [];
     }
-    return [
-      {
-        id: model.id,
-        name: model.id,
-        api: "openai-responses",
-        baseUrl: params.baseUrl,
-        // GPT-5+ and o-series reason; older GPT families reject reasoning parameters.
-        reasoning: /^(?:gpt-(?:[5-9]|\d{2})|o\d)/.test(model.id),
-        input: ["text"],
-        cost: OPENAI_UNKNOWN_MODEL_COST,
-        contextWindow: 128_000,
-        maxTokens: 16_384,
-      },
-    ];
+    return [buildOpenAIUncataloguedModel(model.id, params.baseUrl)];
   });
 }
