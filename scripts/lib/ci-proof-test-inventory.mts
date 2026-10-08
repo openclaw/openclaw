@@ -1986,7 +1986,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/commands/doctor-maintenance.schema-preflight.test.ts",
   "src/commands/doctor-maintenance.service-inspection.test.ts",
   "src/commands/doctor-maintenance.session-workers.test.ts",
-  "src/commands/doctor-maintenance.settlement.refusals.test.ts",
   "src/commands/doctor-maintenance.settlement.test.ts",
   "src/commands/doctor-maintenance.worker.test.ts",
   "src/commands/doctor-memory-startup.test.ts",
