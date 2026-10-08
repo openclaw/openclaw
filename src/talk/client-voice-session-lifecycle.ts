@@ -85,8 +85,8 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
           scopes.add(work);
           closing = false;
         } else {
-          for (const [key, lifetime] of lifetimes) {
-            if (lifetime === owner) {
+          for (const [key, candidate] of lifetimes) {
+            if (candidate === owner) {
               lifetimes.delete(key);
             }
           }

@@ -2897,9 +2897,6 @@ describe("talk realtime gateway relay", () => {
         context: { broadcastToConnIds: vi.fn(), logGateway } as never,
         connId: "conn-relay-drain",
         provider,
-        providerConfig: {},
-        instructions: "brief",
-        tools: [],
       });
       ensureTalkRealtimeRelayVoiceSession({
         relaySessionId: session.relaySessionId,
