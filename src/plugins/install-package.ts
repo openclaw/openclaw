@@ -23,7 +23,13 @@ import {
   validateOpenClawPackageInstallCompatibility,
   type PreparedInstallTarget,
 } from "./install-shared.js";
-import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
+import {
+  attachPluginInstallTransaction,
+  copyPluginInstallTransactionRequest,
+  resolvePluginInstallTransaction,
+  type PluginInstallTransaction,
+} from "./install-transaction.js";
+import { installPluginMcpDependencies } from "./install-mcp-dependencies.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
@@ -262,6 +268,7 @@ async function installPluginFromSourceDir(
       version: plugin.version,
       extensions: plugin.extensions,
       setup: plugin.setup,
+      mcpServers: plugin.mcpServers,
       targetDir: preparedTarget.targetPath,
       logger,
       timeoutMs,
@@ -293,7 +300,48 @@ async function installPluginFromSourceDir(
         }),
     }),
   );
-  return result.ok ? { ...result, artifactInspection: inspectNativePluginArtifact() } : result;
+  if (!result.ok) {
+    return result;
+  }
+  const transaction = resolvePluginInstallTransaction(result);
+  if (transaction) {
+    const wrappedTransaction: PluginInstallTransaction = {
+      commit: async () => {
+        if (!dryRun && plugin.mcpServers) {
+          const dependencyResult = await installPluginMcpDependencies({
+            pluginId: plugin.pluginId,
+            mcpServers: plugin.mcpServers,
+            config: params.config,
+            timeoutMs,
+            logger,
+          });
+          if (!dependencyResult.ok) {
+            await transaction.rollback();
+            throw new Error(dependencyResult.error);
+          }
+        }
+        await transaction.commit();
+      },
+      rollback: () => transaction.rollback(),
+    };
+    return attachPluginInstallTransaction(
+      { ...result, artifactInspection: inspectNativePluginArtifact() },
+      wrappedTransaction,
+    );
+  }
+  if (!dryRun && plugin.mcpServers) {
+    const dependencyResult = await installPluginMcpDependencies({
+      pluginId: plugin.pluginId,
+      mcpServers: plugin.mcpServers,
+      config: params.config,
+      timeoutMs,
+      logger,
+    });
+    if (!dependencyResult.ok) {
+      return dependencyResult;
+    }
+  }
+  return { ...result, artifactInspection: inspectNativePluginArtifact() };
 }
 
 export async function installPluginFromArchive<
