@@ -72,30 +72,19 @@ export function createAgentTurnService(
     assertInputCommitAllowed?.();
     const respond: RespondFn = (ok, payload, error, meta) =>
       io.emitAcceptance([ok, payload, error], meta);
+    const runFacts = { ...preflight };
     const {
       request,
       cfg,
       runId,
-      allowModelOverride,
-      canUseInternalRuntimeHandoff,
       canUseCronRunContinuation,
       expectedSession,
       expectedExistingSessionId,
-      providerOverride,
-      modelOverride,
-      execApprovalFollowupApprovalId,
       normalizedSpawned,
-      inputProvenance,
       isRestartRecoveryResumeRun,
-      preserveUserFacingSessionModelState,
-      sessionEffects,
       suppressVisibleSessionEffects,
-      requestedPromptPersistenceSuppression,
-      isOneShotModelRun,
-      isRawModelRun,
       agentDedupeKeys,
-      swarmExecutionLane,
-    } = preflight;
+    } = runFacts;
     // Cached replay returns before a new lifecycle generation is observed, matching
     // the idempotency path that preceded this service extraction.
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
@@ -122,6 +111,11 @@ export function createAgentTurnService(
       reserveDedupe: dedupeLifecycle.reserve,
       bindDedupeSessionTarget: dedupeLifecycle.bindSessionTarget,
       clearDedupe: dedupeLifecycle.clearUnaccepted,
+      assertCurrent: composeSessionSourceAssertion([
+        assertContextCurrent,
+        assertAdmissionCurrent,
+        assertInputCommitAllowed,
+      ]),
     });
     if (!routing) {
       return;
@@ -180,7 +174,6 @@ export function createAgentTurnService(
         imageOrder,
         media,
         offloadedRefs,
-        replyTo,
         recipientChannel,
         recipientAccountId,
         recipientThreadId,
@@ -290,14 +283,9 @@ export function createAgentTurnService(
           storeKeys,
           maintenanceConfig: sessionMaintenanceConfig,
           canonicalSessionAgentId: sessionAgentId,
-          resetPolicy,
-          now,
-          visibleRequest,
           mainSessionKey,
-          isSystemGatewayRun,
           sessionId,
           touchInteraction,
-          failedSessionTranscriptMissing: resolveFailedSessionTranscriptMissingForEntry,
         } = preparedSession;
         cfgForAgent = cfgLocal;
         // Authorize the canonical session the run will actually target — covering
@@ -335,12 +323,11 @@ export function createAgentTurnService(
         const explicitSessionKey = normalizeOptionalString(request.sessionKey);
         const buildSessionPatch = (freshEntry: SessionEntry | undefined) =>
           buildAgentSessionPatch({
+            ...preparedSession,
             freshEntry,
             initialEntry: entry,
-            cfg: cfgLocal,
             sessionAgentId,
             canonicalSessionKey,
-            storePath,
             normalizedSpawned,
             requestDeliveryHint,
             requestLabel: request.label,
@@ -351,14 +338,8 @@ export function createAgentTurnService(
                 : undefined,
             expectedExistingSessionId,
             hasRestoredCronContinuation: restoredCronContinuationIdentity !== undefined,
-            resetPolicy,
-            now,
             requestedSessionId,
-            isSystemGatewayRun,
-            visibleRequest,
             fallbackSessionId: sessionId,
-            touchInteraction,
-            failedSessionTranscriptMissing: resolveFailedSessionTranscriptMissingForEntry,
           });
         const patchBuild = await buildSessionPatch(entry);
         assertRequestCurrent();
@@ -462,6 +443,7 @@ export function createAgentTurnService(
       }
 
       const delivery = await resolveAgentDeliveryPhase({
+        ...content,
         request,
         cfg,
         cfgForAgent,
@@ -469,11 +451,6 @@ export function createAgentTurnService(
         resolvedSessionKey,
         resolvedSessionAgentId,
         agentId,
-        replyTo,
-        to,
-        recipientChannel,
-        recipientAccountId,
-        recipientThreadId,
         bestEffortDeliver,
         runId,
         client: principal,
@@ -488,8 +465,7 @@ export function createAgentTurnService(
       const { activeSessionAgentId } = delivery;
 
       const runParams = {
-        request,
-        cfg,
+        ...runFacts,
         cfgForAgent,
         sessionEntry,
         resolvedSessionKey,
@@ -498,13 +474,7 @@ export function createAgentTurnService(
         delivery,
         restoredCronContinuation,
         lifecycleGeneration,
-        suppressVisibleSessionEffects,
-        isOneShotModelRun,
-        isRestartRecoveryResumeRun,
-        canUseInternalRuntimeHandoff,
         images,
-        runId,
-        agentDedupeKeys,
         context,
         io,
         client: principal,
@@ -517,22 +487,16 @@ export function createAgentTurnService(
         requestedSessionKeyRaw,
         preAcceptedReservedSessionKey,
         restoredCronContinuationIdentity,
-        providerOverride,
-        modelOverride,
-        allowModelOverride,
         getAdmittedSessionId: () => admittedSessionId,
         ownerConnId,
         ownerDeviceId,
         pendingChatRun,
-        inputProvenance,
-        execApprovalFollowupApprovalId,
         message,
         effectiveTranscriptInputText,
         offloadedRefs,
         onUserTurnMediaPersisted: () => {
           preparedOffloadedRefs = [];
         },
-        requestedPromptPersistenceSuppression,
         privateCompletion,
         settleWakeReplay,
         abortForLifecycleRotation: dedupeLifecycle.abortForLifecycleRotation,
@@ -566,19 +530,15 @@ export function createAgentTurnService(
             resolvedSessionId,
             agentId,
             isNewSession,
-            isRawModelRun,
             imageOrder,
             media,
             inputProvenance: preparedDispatch.userTurn.inputProvenance,
-            swarmExecutionLane,
             spawnedBy: spawnedByValue,
             groupId: resolvedGroupId,
             groupChannel: resolvedGroupChannel,
             groupSpace: resolvedGroupSpace,
             bestEffortDeliver,
             effectiveBootstrapContextRunKind,
-            preserveUserFacingSessionModelState,
-            sessionEffects,
             skipAgentInitialSessionTouch,
             releaseCronContinuationClaimWithRecovery: cronContinuation.releaseWithRecovery,
           }),

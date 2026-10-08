@@ -6,6 +6,7 @@ import {
   stripLeadingSilentToken,
   stripSilentToken,
 } from "../../auto-reply/tokens.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { isSuppressedControlReplyText } from "../../gateway/control-reply-text.js";
@@ -17,17 +18,20 @@ import {
 } from "../../infra/delivery-queue-sqlite.js";
 import * as deliveryRecovery from "../../infra/delivery-recovery.shared.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
-import { OUTBOUND_DELIVERY_QUEUE_NAME } from "../../infra/outbound/delivery-queue-media-staging.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { retryAsync } from "../../infra/retry.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
+import { hasExplicitCronDeliveryTarget } from "../delivery-target-validation.js";
 import { createCronExecutionId } from "../run-id.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs-scheduling.js";
 import type { CronJob } from "../types.js";
-import type { SuccessfulCronDeliveryTarget } from "./delivery-dispatch-types.js";
+import type {
+  DispatchCronDeliveryParams,
+  SuccessfulCronDeliveryTarget,
+} from "./delivery-dispatch-types.js";
 import { expectsSubagentFollowup, isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 
 export const DIRECT_CRON_DELIVERY_COMPLETION_RETENTION = {
@@ -35,6 +39,34 @@ export const DIRECT_CRON_DELIVERY_COMPLETION_RETENTION = {
   maxAgeMs: 24 * 60 * 60_000,
   maxEntries: 2_000,
 } as const satisfies DeliveryQueueCompletionRetention;
+
+/** Carry the implicit source's generation through outbound custody and recovery. */
+export function resolveDirectCronDeliveryGeneration(
+  params: Pick<
+    DispatchCronDeliveryParams,
+    | "job"
+    | "sourceSessionKey"
+    | "sourceSessionGeneration"
+    | "deliveryPlan"
+    | "agentId"
+    | "cfgWithAgentDefaults"
+  >,
+) {
+  return params.job.sessionTarget === "isolated" &&
+    params.sourceSessionKey &&
+    params.sourceSessionGeneration &&
+    !hasExplicitCronDeliveryTarget(params.deliveryPlan)
+    ? {
+        agentId: params.agentId,
+        storePath: resolveSessionStorePathCore(params.cfgWithAgentDefaults.session?.store, {
+          agentId: params.agentId,
+        }),
+        sessionKey: params.sourceSessionKey,
+        sessionId: params.sourceSessionGeneration.sessionId,
+        lifecycleRevision: params.sourceSessionGeneration.lifecycleRevision ?? null,
+      }
+    : undefined;
+}
 
 export function normalizeDeliveryTarget(channel: string, to: string): string {
   const toTrimmed = to.trim();
@@ -259,20 +291,19 @@ export function buildDirectCronDeliveryIdempotencyKey(params: {
 }
 
 /** Receipts own recipient delivery; projections never stand in for custody. */
-export async function isCompletedDirectCronDelivery(id: string): Promise<boolean> {
+export async function isCompletedDirectCronDelivery(
+  id: string,
+  queueName: string,
+): Promise<boolean> {
   const context = captureDeliveryQueueStateContext();
-  const receipt = await inspectDeliveryQueueReceipt(
-    OUTBOUND_DELIVERY_QUEUE_NAME,
-    id,
-    false,
-    context,
-  );
+  const receipt = await inspectDeliveryQueueReceipt(queueName, id, false, context);
   return receipt.status === "completed";
 }
 
 /** Wait only for an active recipient owner, never for crashed ambiguous sends. */
 export async function waitForCompletedDirectCronDelivery(params: {
   id: string;
+  queueName: string;
   signal?: AbortSignal;
 }): Promise<boolean> {
   const context = captureDeliveryQueueStateContext();
@@ -280,7 +311,7 @@ export async function waitForCompletedDirectCronDelivery(params: {
   for (let attempt = 0; attempt < 120; attempt += 1) {
     params.signal?.throwIfAborted();
     const { status, pendingEntry: owner } = await inspectDeliveryQueueReceipt(
-      OUTBOUND_DELIVERY_QUEUE_NAME,
+      params.queueName,
       params.id,
       true,
       context,

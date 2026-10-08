@@ -228,14 +228,15 @@ export function runSessionMaintenanceMetadataInTransaction(
           for (const change of plan.ageChanges ?? []) {
             applySessionEntryMaintenanceAgeChange(database.db, change);
           }
-          const snapshot = captureWorkerAgeSnapshot(database, plan.maintenance);
-          if (
-            !isOpenClawAgentDatabasePathCurrent(database) ||
-            (plan.expected &&
-              (plan.expected.incarnation !== snapshot.incarnation ||
-                plan.expected.capture !== snapshot.capture ||
-                !cacheValidityTokensEqual(plan.expected.revision, snapshot.revision)))
-          ) {
+          let expectedSnapshotMatches = true;
+          if (plan.expected) {
+            const snapshot = captureWorkerAgeSnapshot(database, plan.maintenance);
+            expectedSnapshotMatches =
+              plan.expected.incarnation === snapshot.incarnation &&
+              plan.expected.capture === snapshot.capture &&
+              cacheValidityTokensEqual(plan.expected.revision, snapshot.revision);
+          }
+          if (!isOpenClawAgentDatabasePathCurrent(database) || !expectedSnapshotMatches) {
             return { kind: "maintenance-plan-stale" };
           }
           callbacks.beforeCommit?.(database);

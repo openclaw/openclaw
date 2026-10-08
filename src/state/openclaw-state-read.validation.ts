@@ -289,6 +289,10 @@ export function isReadRequest(input: unknown): input is OpenClawStateReadRequest
       input.command.type === "userProfiles.catalog" ||
       (input.command.type === "userModelAccounts.links" &&
         typeof input.command.profileId === "string") ||
+      (input.command.type === "userModelAccounts.catalog" &&
+        isRecord(input.command.selection) &&
+        (typeof input.command.selection.profileId === "string" ||
+          typeof input.command.selection.requesterProfileId === "string")) ||
       (input.command.type === "userPreferences.values" &&
         typeof input.command.key === "string" &&
         isStringArray(input.command.profileIds)) ||

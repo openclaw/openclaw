@@ -266,10 +266,11 @@ const providerCreateTargetsByConfig = new WeakMap<
   WeakMap<SessionCatalogProvider, Map<string, ProviderCreateTargetResolution>>
 >();
 
-function providerCreateTargetCache(
-  config: OpenClawConfig,
+export function resolveProviderCreateTarget(
   provider: SessionCatalogProvider,
-): Map<string, ProviderCreateTargetResolution> {
+  agentId: string,
+  config: OpenClawConfig,
+): ProviderCreateTargetResolution {
   let byProvider = providerCreateTargetsByConfig.get(config);
   if (!byProvider) {
     byProvider = new WeakMap();
@@ -280,16 +281,7 @@ function providerCreateTargetCache(
     byAgent = new Map();
     byProvider.set(provider, byAgent);
   }
-  return byAgent;
-}
-
-export function resolveProviderCreateTarget(
-  provider: SessionCatalogProvider,
-  agentId: string,
-  config: OpenClawConfig,
-): ProviderCreateTargetResolution {
-  const cache = providerCreateTargetCache(config, provider);
-  const cached = cache.get(agentId);
+  const cached = byAgent.get(agentId);
   if (cached) {
     // The provider contract makes create targets config-derived. A reload changes config identity;
     // retaining the old target would advertise a model no longer allowed.
@@ -309,6 +301,6 @@ export function resolveProviderCreateTarget(
     // provider initialization failure cannot suppress session creation until config reload.
     return { ok: false, message: catalogError(error).message };
   }
-  cache.set(agentId, resolution);
+  byAgent.set(agentId, resolution);
   return resolution;
 }

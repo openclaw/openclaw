@@ -128,7 +128,9 @@ edit a list that was already sent.
 
 Refreshing a selected account also keeps its last completed catalog available to
 other readers until discovery succeeds. Failed refreshes retain that catalog;
-replacing the account credentials invalidates it immediately.
+replacing the account credentials invalidates it immediately. Ordinary reads use
+the published inventory even for a newly selected personal account. Use **Refresh**
+to acquire that account's provider-specific catalog details.
 
 If preparing a large fleet takes longer than the two-minute startup budget, the
 Gateway starts with the agent model runtimes that have finished preparing. A

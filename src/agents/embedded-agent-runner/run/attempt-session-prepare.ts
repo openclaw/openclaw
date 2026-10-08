@@ -327,69 +327,67 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
     input.setActiveSessionSystemPrompt("");
   }
 
-  const orphanRepairCandidate = preserveExactPrompt
+  let repairedTarget: ReturnType<typeof sessionManager.getSessionTarget>;
+  const orphanRepair = preserveExactPrompt
     ? undefined
-    : resolveOrphanRepairPlan({
-        sessionManager,
-        prompt: attempt.prompt,
-        preserveLeaf:
-          attempt.skipPreparedUserTurnMessage === true ||
-          isMainSessionRestartRecoveryInputProvenance(attempt.inputProvenance),
-      });
-  // Admission can persist the turn before prompt preparation intentionally omits it.
-  // Prefer the recorder-owned row so orphan repair cannot detach the canonical leaf.
-  // Internal retries merge the durable orphan into model-only continuation
-  // context; they do not resubmit the admitted user prompt after removing it.
-  const currentUserTurnMessage = attempt.skipPreparedUserTurnMessage
-    ? undefined
-    : (attempt.userTurnTranscriptRecorder?.getPersistedMessage?.() ??
-      input.preparedUserTurnMessage);
-  const reconciledCurrentUser =
-    !preserveExactPrompt &&
-    reconcilePrePersistedCurrentUserTurn({
-      activeSession,
-      currentUserTurnMessage,
-      durableUserTurnMessage: orphanRepairCandidate?.messageEntry.message,
-      userTurnAlreadyPersisted: attempt.userTurnTranscriptRecorder?.hasPersisted() === true,
-    });
-  const orphanProvenance = normalizeInputProvenance(
-    orphanRepairCandidate?.messageEntry.message.provenance,
-  );
-  // A failed user dispatch can leave the next continuation an unanswered user.
-  // Keep that input in user history instead of reclassifying it as announcement context.
-  const preserveUnansweredUser =
-    shouldPreserveUserFacingSessionStateForInputProvenance(attempt.inputProvenance) &&
-    (!orphanProvenance || orphanProvenance.kind === "external_user");
-  const orphanRepair =
-    reconciledCurrentUser || preserveUnansweredUser ? undefined : orphanRepairCandidate;
-  if (orphanRepair?.removeLeaf) {
-    const repairedTarget = await withSessionManagerWrite(sessionManager, async () => {
-      input.abortSignal?.throwIfAborted();
-      if (orphanRepair.messageEntry.parentId) {
-        await sessionManager.branchAsync(orphanRepair.messageEntry.parentId);
-      } else {
-        await sessionManager.resetLeafAsync();
-      }
-      const target = sessionManager.getSessionTarget();
-      if (target) {
-        // Commit the repaired cursor even when no metadata follows the orphan.
-        // Its owning attempt must settle the projection before the next append adopts it.
-        await sessionManager.appendLeafControlAsync({
-          targetId: sessionManager.getLeafId(),
-          appendParentId: sessionManager.getAppendParentId(),
+    : await withSessionManagerWrite(sessionManager, async () => {
+        // Speech can advance the transcript while this repair waits for write admission.
+        await sessionManager.reloadPersistedTranscriptAsync(input.abortSignal);
+        input.abortSignal?.throwIfAborted();
+        const candidate = resolveOrphanRepairPlan({
+          sessionManager,
+          prompt: attempt.prompt,
+          preserveLeaf:
+            attempt.skipPreparedUserTurnMessage === true ||
+            isMainSessionRestartRecoveryInputProvenance(attempt.inputProvenance),
         });
-      }
-      await replayTrailingEntriesForOrphanRepair(sessionManager, orphanRepair.trailingEntries);
-      return target;
-    });
+        // Prefer the recorder-owned row; internal retries fold it into model-only context.
+        const currentUserTurnMessage = attempt.skipPreparedUserTurnMessage
+          ? undefined
+          : (attempt.userTurnTranscriptRecorder?.getPersistedMessage?.() ??
+            input.preparedUserTurnMessage);
+        const reconciledCurrentUser = reconcilePrePersistedCurrentUserTurn({
+          activeSession,
+          currentUserTurnMessage,
+          durableUserTurnMessage: candidate?.messageEntry.message,
+          userTurnAlreadyPersisted: attempt.userTurnTranscriptRecorder?.hasPersisted() === true,
+        });
+        const orphanProvenance = normalizeInputProvenance(
+          candidate?.messageEntry.message.provenance,
+        );
+        // Keep unanswered user input in history through failed internal continuations.
+        const preserveUnansweredUser =
+          shouldPreserveUserFacingSessionStateForInputProvenance(attempt.inputProvenance) &&
+          (!orphanProvenance || orphanProvenance.kind === "external_user");
+        if (reconciledCurrentUser || preserveUnansweredUser) {
+          return undefined;
+        }
+        if (candidate?.removeLeaf) {
+          if (candidate.messageEntry.parentId) {
+            await sessionManager.branchAsync(candidate.messageEntry.parentId);
+          } else {
+            await sessionManager.resetLeafAsync();
+          }
+          repairedTarget = sessionManager.getSessionTarget();
+          if (repairedTarget) {
+            // Persist the cursor even without metadata; settle its projection before the next append.
+            await sessionManager.appendLeafControlAsync({
+              targetId: sessionManager.getLeafId(),
+              appendParentId: sessionManager.getAppendParentId(),
+            });
+          }
+          await replayTrailingEntriesForOrphanRepair(sessionManager, candidate.trailingEntries);
+        }
+        return candidate;
+      });
+  if (orphanRepair?.removeLeaf) {
     if (repairedTarget) {
       const { waitForSessionTranscriptProjection } =
         await import("../../../config/sessions/session-transcript-reconcile.js");
       await waitForSessionTranscriptProjection(repairedTarget, input.abortSignal);
       input.abortSignal?.throwIfAborted();
     }
-    // The old canonical user turn is gone. Its persistence suppression must not
-    // discard the merged replacement prompt.
+    // The merged replacement prompt needs a new canonical user row.
     sessionManager.clearNextUserMessagePersistenceSuppression?.();
     attempt.onUserMessagePersistenceInvalidated?.();
   }

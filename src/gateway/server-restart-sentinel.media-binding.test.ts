@@ -16,6 +16,7 @@ import { drainPendingSessionDelivery } from "../infra/session-delivery-queue-rec
 import * as queueRuntime from "../infra/session-delivery-queue-runtime.js";
 import * as queue from "../infra/session-delivery-queue-storage.js";
 import * as systemEvents from "../infra/system-events.js";
+import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
@@ -107,6 +108,68 @@ async function withMediaSession(
 }
 
 describe("original requester media handoff", () => {
+  it.each(["originating turn", "attempt-marker admission"] as const)(
+    "keeps media queued while the %s owns requester work",
+    async (ownerTiming) => {
+      await withMediaSession(
+        async ({ lifecycle, handle, scope, mediaPath, queueContext, dispatch, drain }) => {
+          let owner: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+          const acquire = () =>
+            beginSessionWorkAdmission({
+              scope: scope.storePath,
+              identities: [scope.sessionKey, "original-requester"],
+              assertAllowed: () => {},
+            });
+          const markAttempt = queue.markSessionDeliveryAttemptStarted;
+          if (ownerTiming === "attempt-marker admission") {
+            vi.spyOn(queue, "markSessionDeliveryAttemptStarted").mockImplementationOnce(
+              async (...args) => {
+                owner = await acquire();
+                return markAttempt(...args);
+              },
+            );
+          } else {
+            owner = await acquire();
+          }
+          let entryId: string | undefined;
+          const complete = async () => {
+            expect(
+              await lifecycle.wakeTaskCompletion({
+                handle,
+                status: "ok",
+                statusLabel: "completed",
+                result: "generated lighthouse",
+                attachments: [{ type: "image", path: mediaPath, mimeType: "image/png" }],
+              }),
+            ).toEqual({ status: "pending" });
+            const [entry] = await queue.loadPendingSessionDeliveries(queueContext);
+            if (!entry) {
+              throw new Error("Expected queued media completion");
+            }
+            entryId = entry.id;
+            await drain(entry.id);
+            const [pending] = await queue.loadPendingSessionDeliveries(queueContext);
+            expect(pending).toMatchObject({ id: entry.id, retryCount: 0 });
+            expect(pending?.deliveryStartedAt).toBeUndefined();
+            expect(dispatch).not.toHaveBeenCalled();
+          };
+          try {
+            // Scheduling may inherit the originating turn's async admission context.
+            await (owner ? owner.run(complete) : complete());
+          } finally {
+            owner?.release();
+          }
+          if (!entryId) {
+            throw new Error("Expected retained media completion id");
+          }
+          await drain(entryId);
+          expect(dispatch).toHaveBeenCalledOnce();
+          expect(await queue.loadPendingSessionDeliveries(queueContext)).toEqual([]);
+        },
+      );
+    },
+  );
+
   it.each([
     "current",
     "replaced-after",

@@ -245,6 +245,10 @@ export type OpenClawStateReadCommand =
       input: import("./user-profile-catalog-identity.read.js").UserProfileCatalogIdentityInput;
     }
   | { type: "userModelAccounts.links"; profileId: string }
+  | {
+      type: "userModelAccounts.catalog";
+      selection: import("./user-model-accounts.js").PersonalCatalogSelection;
+    }
   | { type: "userPreferences.values"; profileIds: readonly string[]; key: string }
   | {
       type: "githubPublication.lifecycle";
@@ -485,6 +489,10 @@ export type OpenClawStateReadResult =
   | {
       type: "userModelAccounts.links";
       links: import("./user-model-accounts.js").UserProfileAuthLink[];
+    }
+  | {
+      type: "userModelAccounts.catalog";
+      catalog: import("./user-model-accounts.js").PersonalCatalogProfiles;
     }
   | {
       type: "userProfiles.reconcile";

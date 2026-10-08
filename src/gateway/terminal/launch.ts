@@ -93,13 +93,12 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
   const restartRestrictions = createRestrictions();
   const commitRestrictions = createRestrictions();
   const committedTerminalConfig = () => appliedConfigWhileRestartPending ?? activeConfig;
-  const resolveForConfig = (config: OpenClawConfig, agentId?: string, shellConfig = config) => {
-    return resolveTerminalLaunch({
+  const resolveForConfig = (config: OpenClawConfig, agentId?: string, shellConfig = config) =>
+    resolveTerminalLaunch({
       config,
       agentId,
       configuredShell: shellConfig.gateway?.terminal?.shell,
     });
-  };
   const accumulateRestrictions = (
     config: OpenClawConfig,
     restrictions: ReturnType<typeof createRestrictions>,
@@ -166,14 +165,14 @@ export function createTerminalLaunchPolicy(initialConfig: OpenClawConfig): Termi
       accumulateRestrictions(preparedConfig, commitRestrictions);
     },
     commitConfig: () => {
-      if (hasPendingRestart) {
+      if (preparedConfig) {
         // The applied marker separates runtime truth from a later candidate
         // that may fail before publication while this restart remains pending.
-        if (preparedConfig) {
+        if (hasPendingRestart) {
           appliedConfigWhileRestartPending = preparedConfig;
+        } else {
+          activeConfig = preparedConfig;
         }
-      } else if (preparedConfig) {
-        activeConfig = preparedConfig;
       }
       preparedConfig = null;
       clearRestrictions(commitRestrictions);

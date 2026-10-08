@@ -24,6 +24,7 @@ import {
   tagUnresolvedTextAsCommentary,
   type PendingCommentaryTags,
 } from "../utils/assistant-text-phase.js";
+import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
   createFirstStreamEventAbortController,
   getFirstStreamEventTimeoutHandler,
@@ -510,7 +511,11 @@ function createManagedCompletionsClient(
   );
   // The SDK consumes DONE without yielding it; native tool calls need to distinguish it from EOF.
   const doneDetector = createSseDoneDetector();
-  const baseFetch = buildGuardedModelFetch(model);
+  // The SDK replaces the fetch signal; keep liveness keyed to the exact
+  // caller signal watched by the idle timer.
+  const baseFetch = buildGuardedModelFetch(model, undefined, {
+    onSseComment: () => notifyLlmRequestActivity(options?.signal, false),
+  });
   const doneDetectingFetch: typeof globalThis.fetch = async (url, init) => {
     const response = await baseFetch(url as never, init);
     if (!response.body || !response.ok) {
@@ -530,11 +535,7 @@ function createManagedCompletionsClient(
         },
       }),
     );
-    return new Response(transformed, {
-      headers: response.headers,
-      status: response.status,
-      statusText: response.statusText,
-    });
+    return new Response(transformed, response);
   };
   const clientConfig = buildOpenAICompletionsClientConfig(
     model,
