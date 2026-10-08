@@ -988,7 +988,7 @@ initialize_state() {
 }
 
 seed_state() {
-  node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed
+  node scripts/e2e/lib/upgrade-survivor/assertions.mjs seed "$(package_root)"
 }
 
 apply_baseline_config_recipe() {

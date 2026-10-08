@@ -24,7 +24,11 @@ import {
   seedLegacyExecApprovalPolicy,
 } from "./exec-approval-fixture.mjs";
 import * as sessionSourceFixture from "./session-source-fixture.mjs";
-import { assertUpgradeVolumeMigrated, seedUpgradeVolume } from "./sqlite-volume.mjs";
+import {
+  assertUpgradeVolumeMigrated,
+  seedPublishedCronJobs,
+  seedUpgradeVolume,
+} from "./sqlite-volume.mjs";
 
 const command = process.argv[2];
 // Keep unrelated packaged assertion commands independent of agent-turn helpers.
@@ -220,7 +224,7 @@ function seedLegacyMeetingTranscripts(stateDir) {
   write(path.join(sessionDir, "summary.md"), "# Design review\n\nShipped transcript summary.\n");
 }
 
-function seedLegacyCronScheduledAuthority(stateDir) {
+async function seedLegacyCronScheduledAuthority(stateDir, packageRoot) {
   const createdAtMs = Date.parse("2026-07-01T10:00:00.000Z");
   const base = {
     enabled: true,
@@ -232,53 +236,52 @@ function seedLegacyCronScheduledAuthority(stateDir) {
     delivery: { mode: "none" },
     state: { nextRunAtMs: createdAtMs + 3_600_000 },
   };
-  writeJson(path.join(stateDir, "cron", "jobs.json"), {
-    version: 1,
-    jobs: [
-      {
-        ...base,
-        id: "cron-pre-cap",
-        name: "Pre-cap agent job",
-        payload: { kind: "agentTurn", message: "pre-cap" },
+  const jobs = [
+    {
+      ...base,
+      id: "cron-pre-cap",
+      name: "Pre-cap agent job",
+      payload: { kind: "agentTurn", message: "pre-cap" },
+    },
+    {
+      ...base,
+      id: "cron-ownerless-cap",
+      name: "Ownerless capped job",
+      payload: { kind: "agentTurn", message: "ownerless", toolsAllow: ["write"] },
+    },
+    {
+      ...base,
+      id: "cron-owner-session",
+      name: "Persisted owner session",
+      owner: {
+        agentId: "main",
+        sessionKey: "agent:main:discord:group:ops",
       },
-      {
-        ...base,
-        id: "cron-ownerless-cap",
-        name: "Ownerless capped job",
-        payload: { kind: "agentTurn", message: "ownerless", toolsAllow: ["write"] },
+      payload: { kind: "agentTurn", message: "owned", toolsAllow: ["write"] },
+    },
+    {
+      ...base,
+      id: "cron-encoded-account",
+      name: "Encoded owner account",
+      owner: {
+        agentId: "main",
+        sessionKey: "agent:main:discord:personal:direct:user-1",
       },
-      {
-        ...base,
-        id: "cron-owner-session",
-        name: "Persisted owner session",
-        owner: {
-          agentId: "main",
-          sessionKey: "agent:main:discord:group:ops",
-        },
-        payload: { kind: "agentTurn", message: "owned", toolsAllow: ["write"] },
+      payload: { kind: "agentTurn", message: "encoded", toolsAllow: ["write"] },
+    },
+    {
+      ...base,
+      id: "cron-agent-mismatch",
+      name: "Mismatched owner agent",
+      owner: {
+        agentId: "other",
+        sessionKey: "agent:main:discord:work:direct:user-2",
       },
-      {
-        ...base,
-        id: "cron-encoded-account",
-        name: "Encoded owner account",
-        owner: {
-          agentId: "main",
-          sessionKey: "agent:main:discord:personal:direct:user-1",
-        },
-        payload: { kind: "agentTurn", message: "encoded", toolsAllow: ["write"] },
-      },
-      {
-        ...base,
-        id: "cron-agent-mismatch",
-        name: "Mismatched owner agent",
-        owner: {
-          agentId: "other",
-          sessionKey: "agent:main:discord:work:direct:user-2",
-        },
-        payload: { kind: "agentTurn", message: "mismatch", toolsAllow: ["write"] },
-      },
-    ],
-  });
+      payload: { kind: "agentTurn", message: "mismatch", toolsAllow: ["write"] },
+    },
+  ];
+  const saved = await seedPublishedCronJobs(stateDir, packageRoot, jobs);
+  assertStrict.deepEqual(saved, jobs, "published cron authority fixture round-trip changed");
 }
 
 function getScenario() {
@@ -306,7 +309,7 @@ function acceptsIntent(coverage, id) {
   return Array.isArray(coverage.acceptedIntents) && coverage.acceptedIntents.includes(id);
 }
 
-function seedState() {
+async function seedState(packageRoot) {
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
   const workspace = requireEnv("OPENCLAW_TEST_WORKSPACE_DIR");
   const scenario = getScenario();
@@ -345,7 +348,7 @@ function seedState() {
     seedLegacyMeetingTranscripts(stateDir);
   }
   if (scenario === "cron-scheduled-authority") {
-    seedLegacyCronScheduledAuthority(stateDir);
+    await seedLegacyCronScheduledAuthority(stateDir, packageRoot);
   }
   if (scenario === "auth-profile-v2026-7-2-beta-5") {
     const fixture = readJson(
@@ -967,14 +970,12 @@ function assertAuthProfileMigrationSurvived(stateDir, stage) {
 }
 
 function assertCronScheduledAuthorityMigrated(stateDir, stage) {
-  const legacyStorePath = path.join(stateDir, "cron", "jobs.json");
   const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
+  assert(
+    !fs.existsSync(path.join(stateDir, "cron", "jobs.json")),
+    "retired cron fixture store exists",
+  );
   if (stage === "baseline") {
-    if (fs.existsSync(legacyStorePath)) {
-      const jobs = readJson(legacyStorePath).jobs ?? [];
-      assert(jobs.length === 5, "legacy cron authority fixture row count changed before update");
-      return;
-    }
     assert(fs.existsSync(databasePath), "legacy cron authority fixture missing before update");
     const db = new DatabaseSync(databasePath, { readOnly: true });
     try {
@@ -1979,7 +1980,7 @@ if (command === "list-scenarios") {
 } else if (command === "missing-load-path") {
   await import("./missing-load-path.mjs");
 } else if (command === "seed") {
-  seedState();
+  await seedState(process.argv[3]);
 } else if (command === "seed-legacy-operator") {
   legacyOperator.seedLegacyOperatorState();
 } else if (command === "seed-legacy-operator-external-plugin") {

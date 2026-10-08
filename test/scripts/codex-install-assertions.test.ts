@@ -678,7 +678,10 @@ describe("Codex install helpers", () => {
         ok: false,
         error: { type: "cli_error", message },
       });
-      writeFileSync("/tmp/openclaw-codex-agent-after-uninstall.err", message);
+      writeFileSync(
+        "/tmp/openclaw-codex-agent-after-uninstall.err",
+        "[openclaw] The CLI command failed.\n[openclaw] For help, run `openclaw doctor`.\n",
+      );
 
       const result = spawnSync(
         process.execPath,
