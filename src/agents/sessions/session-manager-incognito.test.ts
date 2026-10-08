@@ -102,6 +102,7 @@ async function captureCommitRevocation(
   } finally {
     spy.mockRestore();
   }
+  return undefined;
 }
 
 it("keeps manager reads and writes on the original actor outside its opening scope", async () => {
