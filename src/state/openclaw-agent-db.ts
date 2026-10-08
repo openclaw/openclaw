@@ -110,7 +110,6 @@ import {
   adoptOpenClawAgentDatabaseSchema,
   getOpenClawAgentDatabaseValidation,
   invalidateOpenClawAgentDatabaseValidation,
-  setOpenClawAgentDatabaseValidation,
   publishOpenClawAgentDatabaseSchema,
 } from "./openclaw-agent-db-validation-cache.js";
 import {
@@ -521,10 +520,9 @@ function* openOpenClawAgentDatabaseSteps(
     if (!isValidatedReopen) {
       assertCurrent(database);
       registerOpenClawAgentDatabase(
-        { agentId, path: pathname, env: options.env },
+        { agentId, path: pathname, env: options.env, admittedDb: db },
         registrationObserver,
       );
-      setOpenClawAgentDatabaseValidation(database);
     } else if (!reusedSchema) {
       publishOpenClawAgentDatabaseSchema(database);
     }

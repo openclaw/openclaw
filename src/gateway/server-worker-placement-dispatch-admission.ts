@@ -29,7 +29,7 @@ import {
 } from "./worker-environments/service-contract.js";
 
 /** Session custody lasts through the consumer, including unsettled placement effects. */
-async function withGatewayWorkerSessionAdmission<T>(
+export async function withGatewayWorkerSessionAdmission<T>(
   params: {
     identity: WorkerSessionPlacementIdentity;
     target?: Pick<

@@ -134,6 +134,10 @@ export const BUILD_ALL_STEPS: BuildAllStep[] = [
       "tsdown.config.ts",
       "--filter",
       TSDOWN_UNIFIED_CONFIG_GROUP,
+      // Limit overlapping Rolldown native allocations, which Node's heap limit
+      // does not cap. Individual bundles retain their internal parallelism.
+      "--concurrency",
+      "1",
     ),
     env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
   },

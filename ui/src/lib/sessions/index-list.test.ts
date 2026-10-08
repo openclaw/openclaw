@@ -205,6 +205,7 @@ describe("session list requests", () => {
       );
       expect(listener).toHaveBeenLastCalledWith({
         readSucceeded: true,
+        pagination: { count: 2, totalCount: 3, hasMore: true, nextOffset: 2 },
         result: listResult(["agent:writer:0", "agent:writer:1"], 3),
         agentId: "writer",
         loading: false,

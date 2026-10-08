@@ -254,6 +254,9 @@ describe("session transcript reconcile worker lifecycle", () => {
             touchSessionEntry: false,
           },
         );
+        await waitForSessionTranscriptIndexReconcile(options);
+        // Leave only the native fixture lease before queuing cold publication workers.
+        await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(options));
         openOpenClawAgentDatabase(options)
           .db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1")
           .run();
@@ -532,6 +535,7 @@ describe("session transcript reconcile worker lifecycle", () => {
         });
       }
       await waitForSessionTranscriptIndexReconcile(databaseOptions);
+      await closeOpenClawAgentDatabaseByPathAsync(resolveOpenClawAgentSqlitePath(databaseOptions));
       const database = openOpenClawAgentDatabase(databaseOptions);
       // Each active pass additionally retains the canonical publication actor until idle retirement.
       const baselineLeaseCount = countAgentDatabaseLeases(database.path, env);
@@ -864,6 +868,9 @@ describe("session transcript reconcile worker lifecycle", () => {
             );
           }
           await waitForSessionTranscriptIndexReconcile({ agentId: "main" });
+          await closeOpenClawAgentDatabaseByPathAsync(
+            resolveOpenClawAgentSqlitePath({ agentId: "main" }),
+          );
 
           const database = openOpenClawAgentDatabase({ agentId: "main" });
           const databasePath = database.path;

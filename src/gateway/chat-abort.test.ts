@@ -3,7 +3,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatEvent } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
-import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
+import {
+  isAgentRunDirectAbortReason,
+  isAgentRunRestartAbortReason,
+} from "../agents/run-termination.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -427,26 +430,29 @@ describe("abortChatRunById", () => {
     });
   }
 
-  it("tags maintenance timeouts as timeout abort reasons", () => {
-    const { runId, sessionKey, entry, ops } = createAbortRunFixture({ runId: "run-timeout" });
+  it.each([
+    { stopReason: undefined, kind: "direct" },
+    { stopReason: "rpc", kind: "direct" },
+    { stopReason: "timeout", kind: "timeout" },
+    { stopReason: "restart", kind: "restart" },
+  ] as const)(
+    "tags $stopReason abort signals with $kind cancellation evidence",
+    ({ stopReason, kind }) => {
+      const { runId, sessionKey, entry, ops } = createAbortRunFixture({});
 
-    const result = abortChatRunById(ops, { runId, sessionKey, stopReason: "timeout" });
+      const result = abortChatRunById(ops, { runId, sessionKey, stopReason });
 
-    expect(result).toEqual({ aborted: true });
-    expect(entry.abortStopReason).toBe("timeout");
-    expect(entry.controller.signal.aborted).toBe(true);
-    expect(entry.controller.signal.reason).toBeInstanceOf(Error);
-    expect((entry.controller.signal.reason as Error).name).toBe("TimeoutError");
-  });
-
-  it("tags restart abort signals with a restart-specific reason", () => {
-    const { runId, sessionKey, entry, ops } = createAbortRunFixture({ runId: "run-restart" });
-
-    const result = abortChatRunById(ops, { runId, sessionKey, stopReason: "restart" });
-
-    expect(result).toEqual({ aborted: true });
-    expect(isAgentRunRestartAbortReason(entry.controller.signal.reason)).toBe(true);
-  });
+      expect(result).toEqual({ aborted: true });
+      expect(entry.abortStopReason).toBe(stopReason);
+      const signal = entry.controller.signal;
+      expect(signal.aborted).toBe(true);
+      expect(signal.reason).toMatchObject({
+        name: kind === "timeout" ? "TimeoutError" : "AbortError",
+      });
+      expect(isAgentRunDirectAbortReason(signal.reason)).toBe(kind === "direct");
+      expect(isAgentRunRestartAbortReason(signal.reason)).toBe(kind === "restart");
+    },
+  );
 
   it.each([
     ["streamed text", true, true],
