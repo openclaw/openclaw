@@ -6,6 +6,7 @@ const owner = vi.hoisted(() => ({
   runs: [] as SubagentRunRecord[],
   listeners: new Set<() => void>(),
   cancel: vi.fn(),
+  list: undefined as Record<string, unknown> | undefined,
 }));
 vi.mock("../subagents/registry/subagent-control.js", () => ({
   DEFAULT_RECENT_MINUTES: 30,
@@ -62,13 +63,17 @@ vi.mock("../subagents/registry/subagent-list.js", () => ({
     total: owner.runs.length,
     active: [],
     recent: [],
+    sharedCwdGroupTotal: 0,
+    sharedCwdGroups: [],
     text: "native subagents",
+    ...owner.list,
   }),
 }));
 beforeEach(() => {
   owner.runs = [];
   owner.listeners.clear();
   owner.cancel.mockReset();
+  owner.list = undefined;
 });
 function run() {
   const entry = createSubagentRunRecord({
@@ -157,6 +162,35 @@ describe("subagents native run contract", () => {
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
     expect(owner.cancel).not.toHaveBeenCalled();
     expect(owner.listeners.size).toBe(0);
+  });
+  it("surfaces the shared-cwd advisory in structured list output", async () => {
+    // `line` is stripped from rows, so the bounded top-level summary is the
+    // structured source of directory details.
+    const group = { id: 1, path: "/work/shared-tree", runCount: 2, runIds: ["run-a", "run-b"] };
+    owner.list = {
+      total: 2,
+      active: ["run-a", "run-b"].map((runId, index) => ({
+        index: index + 1,
+        line: `${index + 1}. ${runId} [shared cwd group 1]`,
+        runId,
+        sharedCwdGroupId: 1,
+      })),
+      sharedCwdGroupTotal: 1,
+      sharedCwdGroups: [group],
+    };
+
+    const result = await tool().execute("list-shared-cwd", { action: "list" });
+
+    expect(result.details).toMatchObject({
+      sharedCwdGroupTotal: 1,
+      sharedCwdGroups: [group],
+      active: [
+        { runId: "run-a", sharedCwdGroupId: 1 },
+        { runId: "run-b", sharedCwdGroupId: 1 },
+      ],
+    });
+    const { active } = result.details as { active: Array<{ line?: string }> };
+    expect(active.every((item) => item.line === undefined)).toBe(true);
   });
   it("never lets a revoked controller selection cancel after an await", async () => {
     const entry = run();
