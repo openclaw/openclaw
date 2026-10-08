@@ -150,7 +150,7 @@ function renderLoadState(viewer: WorkshopViewer) {
 
 function renderMarkdown(source: string) {
   return html`<div class="sw-markdown chat-text">
-    ${unsafeHTML(toSanitizedMarkdownHtml(source))}
+    ${unsafeHTML(toSanitizedMarkdownHtml(source, { mode: "document" }))}
   </div>`;
 }
 
@@ -315,7 +315,7 @@ function renderHistory(
         </div>
         <div class="sw-timeline__actions">
           ${
-            change.versionId && retained.has(change.versionId) && change.action !== "archive"
+            change.versionId && retained.has(change.versionId)
               ? renderVersionLink(name, change.versionId, live, props)
               : nothing
           }
