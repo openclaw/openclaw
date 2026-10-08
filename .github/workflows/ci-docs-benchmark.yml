@@ -1,0 +1,69 @@
+name: CI docs overlap benchmark
+on:
+  push:
+    branches: [perf/ci-docs-overlap-20261008]
+permissions:
+  contents: read
+concurrency:
+  group: ci-docs-overlap-benchmark
+  cancel-in-progress: false
+jobs:
+  paired:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        pair: [1, 2, 3, 4, 5]
+    steps:
+      - name: Checkout benchmark source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 2
+      - name: Setup Node environment
+        uses: openclaw/openclaw/.github/actions/setup-node-env@8dc62fa984301d4f2ebc9523f8904fcaeaeca094
+        with:
+          cache-mode: restore
+          dependency-cache: "true"
+          install-bun: "false"
+      - name: Check repository formatting before external checkout
+        run: pnpm format:check
+      - name: Checkout fixed external docs source without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -c credential.helper= init clawhub-source
+          git -C clawhub-source -c credential.helper= fetch --depth=1 \
+            https://github.com/openclaw/clawhub.git c23e34ad353d9ff71fa0d2a0fbdd601d7b3134ef
+          git -C clawhub-source checkout --detach FETCH_HEAD
+      - name: Paired cold-tool-cache and warm-tool-cache measurements
+        env:
+          PAIR: ${{ matrix.pair }}
+          DOCS_I18N_GLOSSARY_BASE: 8dc62fa984301d4f2ebc9523f8904fcaeaeca094
+          OPENCLAW_DOCS_SYNC_CLAWHUB_REPO: ${{ github.workspace }}/clawhub-source
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p benchmark-results
+          git rev-parse HEAD > benchmark-results/source.txt
+          node --version > benchmark-results/node.txt
+          pnpm --version > benchmark-results/pnpm.txt
+          lscpu > benchmark-results/cpu.txt
+          free -k > benchmark-results/memory.txt
+          order=(serial parallel)
+          if (( PAIR % 2 == 0 )); then order=(parallel serial); fi
+          for temperature in cold warm; do
+            for mode in "${order[@]}"; do
+              node scripts/ci-docs-benchmark.mjs measure "$mode"                 "$RUNNER_TEMP/docs-bench-cache-$mode"                 "benchmark-results/$temperature-$mode"                 2>&1 | tee "benchmark-results/$temperature-$mode.log"
+            done
+          done
+          git diff --exit-code
+      - name: Retain measurement evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: docs-overlap-pair-${{ matrix.pair }}
+          path: benchmark-results
+          retention-days: 7
