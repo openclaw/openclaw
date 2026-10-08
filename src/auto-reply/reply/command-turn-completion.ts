@@ -3,13 +3,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
-import type { RuntimeMsgContext as MsgContext } from "../templating.js";
+import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 
 /** Unauthorized commands owe no further reply; authorized empty results still do. */
 export function finishCommandTurn(params: {
   opts: GetReplyOptions | undefined;
-  ctx: MsgContext;
+  ctx: FinalizedRuntimeMsgContext;
   cfg: OpenClawConfig;
   reply: ReplyPayload | ReplyPayload[] | undefined;
 }): ReplyPayload | ReplyPayload[] | undefined {
