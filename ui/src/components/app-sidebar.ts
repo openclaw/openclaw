@@ -12,18 +12,19 @@ import { isSessionRouteId, pathForRoute } from "../app-route-paths.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { t } from "../i18n/index.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import "./session-menu.ts";
 import "./mcp-app-catalog.ts";
 import "./sidebar-agent-card.ts";
 import "./sidebar-attention.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import {
   buildCatalogSessionKey,
   catalogSessionKeyFromSearch,
 } from "../lib/sessions/catalog-key.ts";
+import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
-import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
+import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { showToast } from "../lib/toast.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import { SETTINGS_ROUTE_TARGETS } from "../pages/config/route-data.ts";
@@ -82,6 +83,31 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   override readonly sessionOrganizer = new SessionOrganizerController(this);
   override readonly sidebarMenus = new SidebarMenusController(this);
   readonly people = new SidebarPeopleController(this);
+
+  override agentUnreadCount(agentId: string): number {
+    if (this.sidebarAgentsMode === "chip" && this.context && this.unreadActivityFactory) {
+      const snapshot = this.unreadActivityFactory(this.context).snapshot;
+      if (snapshot.result) {
+        const normalized = normalizeAgentId(agentId);
+        const visibleUnread =
+          snapshot.cards.find((card) => normalizeAgentId(card.id) === normalized)?.unreadCount ?? 0;
+        if (!snapshot.result.hasMore) {
+          return visibleUnread;
+        }
+        // The shared roster stops at 300 rows. Absence from that window does
+        // not clear a known unread row in the per-agent cache; shared rows win
+        // when both windows contain the same key (including newer read acks).
+        const sharedKeys = new Set(snapshot.result.sessions.map((row) => row.key));
+        const omittedUnread = (
+          this.sessionData.sessionResultsByAgent[normalized]?.sessions ?? []
+        ).filter(
+          (row) => row.unread === true && row.archived !== true && !sharedKeys.has(row.key),
+        ).length;
+        return visibleUnread + omittedUnread;
+      }
+    }
+    return super.agentUnreadCount(agentId);
+  }
 
   sessionGroupDefaults(name: string) {
     if (this.context?.sessions.groupsStatus() !== "ready") {
@@ -144,7 +170,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       () => this.context?.config,
       () => this.syncCommunityInviteState(),
     )
-    .watchStore(() => this.context?.plugins);
+    .watchStore(() => this.context?.plugins)
+    .watchStore(() =>
+      this.sidebarAgentsMode === "chip" && this.context && this.unreadActivityFactory
+        ? this.unreadActivityFactory(this.context)
+        : undefined,
+    );
   private readonly nativeGatewaysChanged = () => this.sidebarMenus.closeSessionMenu();
   private readonly hiddenSessionCatalogsChanged = () => {
     this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
@@ -163,6 +194,18 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     () => import("./app-sidebar-session-catalog-render.ts"),
     (module) => {
       this.catalogRenderer = module.renderSessionCatalogGroups;
+      if (this.isConnected) {
+        this.requestUpdate();
+      }
+    },
+  );
+  private unreadActivityFactory:
+    | typeof import("../lib/agents/roster-activity-store.ts").rosterActivityStore
+    | null = null;
+  private readonly unreadActivityImport = createIdleImport(
+    () => import("../lib/agents/roster-activity-store.ts"),
+    (module) => {
+      this.unreadActivityFactory = module.rosterActivityStore;
       if (this.isConnected) {
         this.requestUpdate();
       }
@@ -189,6 +232,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   }
 
   override disconnectedCallback() {
+    this.unreadActivityImport.dispose();
     this.rosterRendererImport.dispose();
     window.removeEventListener("openclaw:native-gateways-changed", this.nativeGatewaysChanged);
     window.removeEventListener(
@@ -203,6 +247,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
 
   protected override willUpdate(changed: PropertyValues<this>) {
     super.willUpdate(changed);
+    if (this.sidebarAgentsMode === "chip" && this.context && !this.unreadActivityFactory) {
+      void this.unreadActivityImport.load().catch(() => undefined);
+    }
     // Admit new geometry only between interactions; once shown it stays put.
     // Popover focus can leave :focus-within false; inspect the owned DOM instead.
     // Native drag can clear :hover, so retain the organizer's authoritative drag facts.

@@ -188,7 +188,11 @@ describe("AppSidebar agent chip", () => {
       spawnedBy: "agent:main:parent",
     });
     await vi.advanceTimersByTimeAsync(5_000);
-    await waitForFast(() => expect(harness.list).toHaveBeenCalledTimes(2));
+    await waitForFast(() =>
+      expect(
+        harness.list.mock.calls.filter(([options]) => options?.source !== "agent-roster"),
+      ).toHaveLength(2),
+    );
     await waitForFast(() =>
       expect(
         sidebar.querySelector('[data-session-key="agent:main:child-one"] [aria-label="Done"]'),

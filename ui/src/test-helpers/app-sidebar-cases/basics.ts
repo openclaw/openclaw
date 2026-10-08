@@ -441,6 +441,17 @@ describe("AppSidebar agent chip", () => {
   it("keeps the sessions list flat for the selected agent and flags other-agent unread", async () => {
     const gateway = createGateway({} as GatewayBrowserClient);
     const harness = createSessionsHarness("main", ["agent:main:main"]);
+    harness.list.mockImplementation(async (options) =>
+      options?.source === "agent-roster"
+        ? {
+            ts: 2,
+            path: "",
+            count: 1,
+            defaults: { modelProvider: null, model: null, contextTokens: null },
+            sessions: [{ key: "agent:research:one", kind: "direct", updatedAt: 3, unread: true }],
+          }
+        : harness.sessions.state.result,
+    );
     const { sidebar, context } = await mountSidebar(gateway, harness.sessions, "panel", TWO_AGENTS);
     sidebar.connected = true;
     const defaults = { modelProvider: null, model: null, contextTokens: null };
@@ -479,9 +490,11 @@ describe("AppSidebar agent chip", () => {
     expect(sidebar.querySelector(".sidebar-agent-card__subtitle-row")).toBeNull();
     expect(sidebar.querySelector(".sidebar-agent-section")).toBeNull();
     expect(sidebar.querySelectorAll(".sidebar-recent-session")).toHaveLength(0);
-    expect(
-      sidebar.querySelector(".sidebar-agent-card__avatar .sidebar-agent-card__menu-unread"),
-    ).not.toBeNull();
+    await vi.waitFor(() =>
+      expect(
+        sidebar.querySelector(".sidebar-agent-card__avatar .sidebar-agent-card__menu-unread"),
+      ).not.toBeNull(),
+    );
 
     // Mid-switch (selected agent != loaded result agent) the list renders the
     // target agent's cached rows instead of flashing empty until refresh.

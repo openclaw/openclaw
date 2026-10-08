@@ -13,6 +13,10 @@ import {
 import { waitForFast } from "../wait-for.ts";
 import "../../components/app-sidebar.ts";
 
+function scopedReadCount(harness: ReturnType<typeof createSessionsHarness>): number {
+  return harness.list.mock.calls.filter(([options]) => options?.source !== "agent-roster").length;
+}
+
 describe("AppSidebar gateway session pagination", () => {
   it("refreshes the archived sidebar once when another client changes sessions", async () => {
     const statusFilter = "archived";
@@ -44,7 +48,7 @@ describe("AppSidebar gateway session pagination", () => {
 
     await vi.advanceTimersByTimeAsync(5_000);
     await waitForFast(() => {
-      expect(harness.list).toHaveBeenCalledTimes(1);
+      expect(scopedReadCount(harness)).toBe(1);
       expect(sidebar.sessionData.sessionsResult?.sessions.map((row) => row.key)).toEqual([
         "agent:main:after-remote-change",
       ]);
@@ -93,7 +97,7 @@ describe("AppSidebar gateway session pagination", () => {
     });
 
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(harness.list).toHaveBeenCalledOnce();
+    expect(scopedReadCount(harness)).toBe(1);
     expect(sidebar.sessionData.sessionsResult?.sessions).toHaveLength(pageSize * 2);
     expect(harness.list).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -126,7 +130,7 @@ describe("AppSidebar gateway session pagination", () => {
     await sidebar.updateComplete;
 
     expect(sidebar.sessionData.sessionScopeGeneration).toBe(generation);
-    expect(harness.list).toHaveBeenCalledTimes(1);
+    expect(scopedReadCount(harness)).toBe(1);
 
     pendingPage.resolve(result);
     await pendingRefresh;
@@ -204,7 +208,7 @@ describe("AppSidebar gateway session pagination", () => {
     gateway.publish({ phase: "connected" });
     await sidebar.updateComplete;
 
-    expect(harness.list).toHaveBeenCalledTimes(2);
+    expect(scopedReadCount(harness)).toBe(2);
 
     pendingPage.resolve(staleResult);
     await staleRefresh;
@@ -255,7 +259,7 @@ describe("AppSidebar gateway session pagination", () => {
 
     expect(sidebar.sessionData.sessionsLoading).toBe(true);
     await sidebar.sessionData.loadMoreSidebarSessions();
-    expect(harness.list).toHaveBeenCalledTimes(1);
+    expect(scopedReadCount(harness)).toBe(1);
     expect(harness.list).toHaveBeenCalledWith(
       expect.objectContaining({ agentId: "main", archivedFilter: statusFilter }),
     );

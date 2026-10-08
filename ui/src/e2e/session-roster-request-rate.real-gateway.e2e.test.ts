@@ -17,6 +17,7 @@ import type { ApplicationGateway } from "../app/gateway.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { captureSidebarUiProof } from "./sidebar-customization.test-support.ts";
 
 declare global {
   interface Window {
@@ -157,11 +158,18 @@ suite.define(() => {
               params.includeDerivedTitles === undefined &&
               params.includeLastMessage === undefined,
           );
-        const primaryReads = () => lists.filter(({ params }) => params.includeLastMessage === true);
+        const primaryReads = () =>
+          lists.filter(
+            ({ params }) => params.includeLastMessage === true && params.source !== "agent-roster",
+          );
+        const agentRosterReads = () =>
+          lists.filter(({ params }) => params.source === "agent-roster");
         const pageBefore = pageReads().length;
         const primaryBefore = primaryReads().length;
+        const agentRosterBefore = agentRosterReads().length;
         expect(pageBefore).toBeGreaterThan(0);
         expect(primaryBefore).toBeGreaterThan(0);
+        expect(agentRosterBefore).toBeGreaterThan(0);
         const before = [...lists];
         await patch(key, "First rate update");
         await roster.getByText("First rate update", { exact: true }).waitFor();
@@ -182,6 +190,7 @@ suite.define(() => {
           .poll(() => sidebar.locator('[data-session-key="' + key + '"]').textContent())
           .toContain("Trailing rate update 2");
         expect(primaryReads()).toHaveLength(primaryBefore + 1);
+        expect(agentRosterReads()).toHaveLength(agentRosterBefore + 1);
         expect(lists.every(({ params }) => params.rowMode === "compact" && params.source)).toBe(
           true,
         );
@@ -202,7 +211,57 @@ suite.define(() => {
         expect(pageReads()).toHaveLength(pageBefore + 1);
         await roster.getByText("Relevant after unrelated", { exact: true }).waitFor();
         expect(primaryReads()).toHaveLength(primaryBefore + 1);
+        expect(agentRosterReads()).toHaveLength(agentRosterBefore + 1);
         await page.clock.resume();
+      });
+    } finally {
+      await disconnectGatewayClient(emitter);
+    }
+  });
+
+  it("shows an unvisited agent unread badge and clears it after opening the session", async () => {
+    if (!instance) {
+      throw new Error("Gateway fixture is not running");
+    }
+    const owner = instance;
+    const emitter = await connectGatewayClient({
+      url: owner.url,
+      token: owner.gatewayToken,
+      role: "operator",
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+    });
+    const key = "agent:research:unvisited-unread-proof";
+    try {
+      await emitter.request("sessions.create", { agentId: "research", key });
+      await emitter.request("sessions.patch", {
+        key,
+        label: "Unread research proof",
+        unread: true,
+      });
+      await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
+        const url = new URL("sessions", suite.server.baseUrl);
+        url.hash = "token=" + encodeURIComponent(owner.gatewayToken);
+        expect((await page.goto(url.toString()))?.status()).toBe(200);
+        await waitForControlUiGatewayReady(page);
+        const sidebar = page.locator("openclaw-app-sidebar");
+        const cardBadge = sidebar.locator(".sidebar-agent-card__menu-unread");
+        await cardBadge.waitFor({ state: "visible" });
+        await captureSidebarUiProof(suite, page, "unvisited-agent-unread-before.png", sidebar);
+        await sidebar.locator(".sidebar-agent-card__main").click();
+        const research = sidebar.locator(
+          'wa-dropdown.sidebar-agent-menu wa-dropdown-item[value="agent:research"]',
+        );
+        await research.locator(".session-unread-dot").waitFor({ state: "visible" });
+        await research.click();
+        const row = sidebar.locator(`[data-session-key="${key}"]`);
+        await row.waitFor({ state: "visible" });
+        await row.getByRole("link").click();
+        await cardBadge.waitFor({ state: "hidden" });
+        await captureSidebarUiProof(suite, page, "unvisited-agent-unread-after.png", sidebar);
+        const result = await emitter.request<{
+          sessions: Array<{ key: string; unread?: boolean }>;
+        }>("sessions.list", { agentId: "research", rowMode: "compact", limit: 100 });
+        expect(result.sessions.find((session) => session.key === key)?.unread).toBe(false);
       });
     } finally {
       await disconnectGatewayClient(emitter);

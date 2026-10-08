@@ -226,7 +226,9 @@ describe("AppSidebar automatic list scope replacement", () => {
                   2,
                 );
           }
-          primaryReads += 1;
+          if (params?.source !== "agent-roster") {
+            primaryReads += 1;
+          }
           const knownParents =
             nextAgent === "main"
               ? [mainParent, researchParent]

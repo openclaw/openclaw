@@ -57,6 +57,9 @@ describe("AppSidebar initial managed-list hydration", () => {
         if (method !== "sessions.list") {
           return {};
         }
+        if (params?.source === "agent-roster") {
+          return sessionsResult([], 1);
+        }
         listQueries.push({ ...params });
         if (params?.involvingMe === true) {
           order.push("filtered:start");
