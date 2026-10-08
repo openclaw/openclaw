@@ -2,15 +2,22 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
+import type { persistSessionUsageUpdate } from "./session-usage.js";
 
 const mocks = vi.hoisted(() => ({
-  persistSessionUsageUpdate: vi.fn(async (_params: unknown) => undefined),
+  persistSessionUsageUpdate: vi.fn(
+    async (_params: Parameters<typeof persistSessionUsageUpdate>[0]) => undefined,
+  ),
   refreshQueuedFollowupSession: vi.fn(),
   resolveContextTokensForModel: vi.fn<() => number | undefined>(() => 200_000),
 }));
 
-vi.mock("../../agents/context.js", () => ({
-  resolveContextTokensForModel: () => mocks.resolveContextTokensForModel(),
+vi.mock("../../agents/context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/context.js")>()),
+  resolveModelContextTokenProjection: () => ({
+    contextTokens: mocks.resolveContextTokensForModel(),
+    authoredContextTokens: undefined,
+  }),
 }));
 
 vi.mock("../../agents/fast-mode.js", () => ({
@@ -69,8 +76,10 @@ vi.mock("./session-updates.js", () => ({
   incrementCompactionCount: vi.fn(async () => undefined),
 }));
 
-vi.mock("./session-usage.js", () => ({
-  persistSessionUsageUpdate: (params: unknown) => mocks.persistSessionUsageUpdate(params),
+vi.mock("./session-usage.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./session-usage.js")>()),
+  persistSessionUsageUpdate: (params: Parameters<typeof persistSessionUsageUpdate>[0]) =>
+    mocks.persistSessionUsageUpdate(params),
 }));
 
 import { accountFollowupTurn } from "./agent-runner-result-accounting.js";
@@ -237,44 +246,86 @@ describe("accountFollowupTurn", () => {
     );
   });
 
-  it("does not label a prior context fallback as a current resolution after a model switch", async () => {
-    mocks.resolveContextTokensForModel.mockReturnValueOnce(undefined);
-    const params = createParams();
-    const session = params.turn.session as unknown as {
-      current: () => SessionEntry;
-      adopt: (entry: SessionEntry) => void;
-    };
-    session.adopt({
-      ...session.current(),
-      modelProvider: "anthropic",
+  it.each([
+    {
+      name: "model switch",
+      provider: "anthropic",
       model: "claude",
-      agentHarnessId: "openclaw",
-      contextTokens: 272_000,
-      contextTokensSource: "resolved",
-    });
-    const result = params.execution.execution.outcome;
-    if (result.kind !== "settled") {
-      throw new Error("expected settled test execution");
-    }
-    result.result.meta.agentMeta = {
-      sessionId: "session-1",
+      harness: "openclaw",
+      actual: "openai:work",
+      locked: false,
+      source: "resolved" as const,
+      expected: 200_000,
+      expectedSource: undefined,
+    },
+    {
+      name: "same producing account",
       provider: "openai",
       model: "gpt-4o",
-      agentHarnessId: "codex",
-    };
-
-    await accountFollowupTurn(params);
-
-    expect(mocks.persistSessionUsageUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        providerUsed: "openai",
-        modelUsed: "gpt-4o",
-        agentHarnessId: "codex",
-        contextTokensUsed: 272_000,
-        contextTokensSource: undefined,
-      }),
-    );
-  });
+      harness: "openclaw",
+      actual: "openai:work",
+      locked: false,
+      source: "resolved-v1" as const,
+      expected: 888_000,
+      expectedSource: "resolved-v1",
+    },
+    {
+      name: "different successful account",
+      provider: "openai",
+      model: "gpt-4o",
+      harness: "openclaw",
+      actual: "openai:other",
+      locked: false,
+      source: "resolved-v1" as const,
+      expected: 200_000,
+      expectedSource: undefined,
+    },
+    {
+      name: "locked native owner",
+      provider: "openai",
+      model: "gpt-4o",
+      harness: "codex",
+      actual: "openai:other",
+      locked: true,
+      source: "runtime" as const,
+      expected: 888_000,
+      expectedSource: "runtime",
+    },
+  ])(
+    "qualifies a prior context fallback for $name",
+    async ({ provider, model, harness, actual, locked, source, expected, expectedSource }) => {
+      mocks.resolveContextTokensForModel.mockReturnValueOnce(undefined);
+      const params = createParams();
+      const current = params.turn.session.current();
+      if (!current) {
+        throw new Error("expected current test session");
+      }
+      params.turn.session.adopt({
+        ...current,
+        modelProvider: provider,
+        model,
+        agentHarnessId: harness,
+        contextTokens: 888_000,
+        contextTokensSource: source,
+        modelSelectionLocked: locked,
+      });
+      const result = params.execution.execution.outcome;
+      if (result.kind !== "settled") {
+        throw new Error("expected settled test execution");
+      }
+      result.maintenanceAuthProfile = { authProfileId: actual };
+      result.result.meta.agentMeta = {
+        sessionId: "session-1",
+        provider: "openai",
+        model: "gpt-4o",
+        agentHarnessId: harness,
+      };
+      await accountFollowupTurn(params);
+      const persisted = mocks.persistSessionUsageUpdate.mock.calls[0]?.[0];
+      expect(persisted?.contextTokensUsed).toBe(expected);
+      expect(persisted?.contextTokensSource).toBe(expectedSource);
+    },
+  );
 
   it.each([
     {

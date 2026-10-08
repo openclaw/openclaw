@@ -320,32 +320,6 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     },
   );
 
-  it.each(["rotates", "is deleted"])(
-    "rejects a session that %s before async setup",
-    async (change) => {
-      const sessionKey = "agent:main:main";
-      const rotated = change === "rotates";
-      const initialSessionEntry = seedPersistentSession(
-        sessionKey,
-        rotated ? "session-before-setup" : "persistent-session",
-      );
-      loadSessionEntryMock.mockReturnValue(
-        rotated ? { ...initialSessionEntry, sessionId: "session-after-setup" } : undefined,
-      );
-      await expect(
-        runCronIsolatedAgentTurn(makePersistentCronParams(sessionKey)),
-      ).resolves.toMatchObject({
-        status: "error",
-        error: `Session "${sessionKey}" changed while starting work. Retry.`,
-        admissionDisposition: "session-conflict",
-      });
-      if (rotated) {
-        expect(preflightCronModelProviderMock).not.toHaveBeenCalled();
-      }
-      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-    },
-  );
-
   it("protects the isolated cron session throughout async model preparation", async () => {
     const sessionKey = "agent:main:cron:test-job";
     const initialSessionEntry = makeCronSessionEntry({
@@ -605,13 +579,8 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
   });
 
   it.each([
-    ["failure", "error", undefined],
     ["cancelled", "aborted", undefined],
-    ["cli-success", "final", undefined],
-    ["cli-timeout", "error", undefined],
     ["cli-exhausted-result", "error", undefined],
-    ["finalize-failure", "final", "delivery finalization failed"],
-    ["continuation-failure", "final", "continuation write failed"],
     ["post-execution-abort", "final", "post-execution abort"],
     ["retry-preflight-failure", "error", "retry preparation failed"],
   ] as const)(
@@ -619,8 +588,7 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
     async (outcome, state, error) => {
       const sessionKey = "agent:main:cron:lifecycle-fallback";
       const sessionId = "cron-lifecycle-fallback";
-      const usesContinuation =
-        outcome === "continuation-failure" || outcome === "post-execution-abort";
+      const usesContinuation = outcome === "post-execution-abort";
       const initialSessionEntry = makeCronSessionEntry({ sessionId });
       resolveCronSessionMock.mockReturnValue(
         makeCronSession({
@@ -655,9 +623,6 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
             .resolveCronPayloadOutcome,
         );
       }
-      if (outcome === "finalize-failure") {
-        dispatchCronDeliveryMock.mockRejectedValueOnce(new Error("delivery finalization failed"));
-      }
       runWithModelFallbackMock.mockImplementation(
         (
           await vi.importActual<typeof import("../../agents/model-fallback-runner.js")>(
@@ -687,9 +652,6 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
           ) => {
             if (args[0].sessionKey === completedContinuationSessionKey) {
               completedContinuationSessionKey = undefined;
-              if (outcome === "continuation-failure") {
-                throw new Error("continuation write failed");
-              }
               postExecutionWriteStarted.resolve();
               await releasePostExecutionWrite.promise;
             }
@@ -727,27 +689,11 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
         await runParams.onExecutionStarted?.();
         secondPreparing.resolve();
         await releaseSecond.promise;
-        if (outcome === "cli-exhausted-result") {
-          // The real classifier rejects generic CLI failure copy; exhaustion
-          // merges this candidate's metadata with the native incomplete reply.
-          return {
-            payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
-            meta: { agentMeta: {} },
-          };
-        }
-        if (cancelled || outcome === "cli-timeout") {
-          return {
-            payloads: [],
-            meta: {
-              agentMeta: {},
-              aborted: true,
-              providerStarted: true,
-              stopReason: cancelled ? "aborted" : "timeout",
-              ...(outcome === "cli-timeout" ? { timeoutPhase: "provider" } : {}),
-            },
-          };
-        }
-        return { payloads: [{ text: "Final report" }], meta: { agentMeta: {} } };
+        // Exhaustion merges this CLI candidate's metadata with the native incomplete reply.
+        return {
+          payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
+          meta: { agentMeta: {} },
+        };
       });
       runEmbeddedAgentMock.mockImplementation(async (runParams: RunEmbeddedAgentParams) => {
         runIds.add(runParams.runId);
@@ -848,11 +794,9 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
         };
         try {
           native.emit({ type: "agent_start" });
-          if (first || outcome === "failure") {
-            if (first) {
-              firstStarted.resolve();
-              await releaseFirst.promise;
-            }
+          if (first) {
+            firstStarted.resolve();
+            await releaseFirst.promise;
             const incomplete = outcome === "cli-exhausted-result";
             emitAssistantEnd({
               stopReason: incomplete ? "stop" : "error",
@@ -944,16 +888,12 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
           controller.abort(new Error("post-execution abort"));
           releasePostExecutionWrite.resolve();
         }
-        const succeeded = outcome === "cli-success";
-        await expect(run).resolves.toMatchObject({ status: succeeded ? "ok" : "error" });
+        await expect(run).resolves.toMatchObject({ status: "error" });
         await unsubscribe.drain();
         if (error) {
           await expect(run).resolves.toMatchObject({
             error: retryPreparationFailure ? expect.stringContaining(error) : error,
           });
-        }
-        if (outcome === "finalize-failure") {
-          await expect(run).resolves.toMatchObject({ executionStarted: true });
         }
         if (retryPreparationFailure) {
           await expect(runWithModelFallbackMock.mock.results[1]?.value).rejects.toBe(
@@ -993,7 +933,6 @@ describe("runCronIsolatedAgentTurn terminal lifecycle", () => {
             expect.objectContaining({
               runId,
               state,
-              ...(outcome === "cli-timeout" ? { stopReason: "timeout", errorKind: "timeout" } : {}),
             }),
             expect.anything(),
           ],

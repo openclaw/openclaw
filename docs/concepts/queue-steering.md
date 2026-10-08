@@ -157,8 +157,9 @@ runId })`. Use the `runId` returned by that message's `chat.send`. This withdraw
 that message without stopping the active run or retrying it as a followup.
 
 Once delivery starts, cancellation cannot guarantee withdrawal or undo completed
-work. If delivery cannot be confirmed, the existing steering safeguards can stop
-the active run to avoid replaying input whose consumption is uncertain.
+work. If delivery cannot be confirmed, OpenClaw reports the uncertainty and retains
+the input without replaying it. An uncertain steering receipt does not stop the
+active run or its running tools. Use `/stop` to stop that work explicitly.
 
 ## Debounce
 

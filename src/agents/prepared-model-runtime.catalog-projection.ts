@@ -22,10 +22,11 @@ export function createPreparedModelCatalogProjection(params: {
   withRefreshStatus: (catalog: ModelCatalogSnapshot) => ModelCatalogSnapshot;
 }) {
   return (
-    catalog: ModelCatalogSnapshot,
+    inventory: Pick<PreparedModelCatalogInventory, "catalog"> &
+      Partial<Pick<PreparedModelCatalogInventory, "discoveryOrigins">>,
     configuredRuntimeModels = params.catalogFacts.configuredRuntimeModels,
-    discoveryOrigins: PreparedModelCatalogInventory["discoveryOrigins"] = [],
   ) => {
+    const { catalog, discoveryOrigins = [] } = inventory;
     const configured = prepareConfiguredRuntimeFacts({
       agentFacts: params.agentFacts,
       workspaceFacts: params.pluginGeneration,
@@ -42,6 +43,7 @@ export function createPreparedModelCatalogProjection(params: {
       current.staticEntries,
       new Set(discoveryOrigins.map(({ provider }) => params.normalizeProvider(provider))),
     );
+    projected.acceptedDiscoveryOrigins = discoveryOrigins;
     // Native discovery cannot replace the authentication facts of an API provider.
     const apiProviders = new Set(
       projected.providerOutcomes?.map(({ provider }) => params.normalizeProvider(provider)),

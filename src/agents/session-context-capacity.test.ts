@@ -73,6 +73,77 @@ describe("existing-session recovery through the admitted owner", () => {
     ).toBe(872_000);
   });
 
+  it("keeps case-distinct model capacities separate during recovery", () => {
+    const resolve = createSessionContextCapacityResolver(
+      owner([
+        { ...syntheticRow, id: "model-a" },
+        { ...accepted, id: "Model-A", contextTokens: 777_000 },
+      ]).snapshot,
+    );
+    const estimated = resolve("github-copilot", "model-a");
+    expect
+      .soft(estimated)
+      .toMatchObject({ state: "ready", contextTokens: 128_000, synthetic: true });
+    expect
+      .soft(
+        resolveProjectedSessionContextTokens({
+          entry: { ...persisted("synthetic"), model: "model-a" },
+          ...selection,
+          model: "model-a",
+          resolvedContextTokens: undefined,
+          ownerCapacity: estimated,
+        }),
+      )
+      .toBe(128_000);
+    expect(resolve("github-copilot", "Model-A")).toMatchObject({
+      state: "ready",
+      contextTokens: 777_000,
+      synthetic: false,
+    });
+    expect.soft(resolve("github-copilot", "MODEL-A")).toEqual({ state: "unavailable" });
+    for (const contextTokensSource of ["runtime", "resolved-v1"] as const) {
+      const stored = {
+        ...persisted("runtime"),
+        model: "Model-A",
+        contextTokens: 777_000,
+        contextTokensSource,
+      };
+      expect
+        .soft(
+          resolveProjectedSessionContextTokens({
+            entry: stored,
+            ...selection,
+            model: "model-a",
+            resolvedContextTokens: undefined,
+          }),
+        )
+        .toBeUndefined();
+      expect(
+        resolveProjectedSessionContextTokens({
+          entry: stored,
+          ...selection,
+          model: "Model-A",
+          resolvedContextTokens: undefined,
+        }),
+      ).toBe(777_000);
+    }
+    expect
+      .soft(
+        resolveProjectedSessionContextTokens({
+          entry: {
+            ...persisted("runtime"),
+            model: "Model-A",
+            contextTokens: 777_000,
+            modelSelectionLocked: true,
+          },
+          ...selection,
+          model: "model-a",
+          resolvedContextTokens: undefined,
+        }),
+      )
+      .toBeUndefined();
+  });
+
   it("keeps genuine (non-synthetic) persisted 128k conservative", () => {
     const ownerCapacity = createSessionContextCapacityResolver(owner([accepted]).snapshot)(
       "github-copilot",

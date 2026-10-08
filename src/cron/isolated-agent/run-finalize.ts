@@ -13,6 +13,7 @@ import {
 import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
 import {
+  qualifySessionContextTokenSource,
   resolveProjectedSessionContextTokens,
   resolveTrustedSessionContextTokens,
 } from "../../config/sessions/context-token-provenance.js";
@@ -112,12 +113,14 @@ export async function finalizeCronRun(params: {
   const agentHarnessId = normalizeOptionalString(finalRunResult.meta?.agentMeta?.agentHarnessId);
   const retainedRuntimeContextTokens = resolveTrustedSessionContextTokens({
     entry: prepared.cronSession.sessionEntry,
+    authProfileId: execution.authProfileId,
     provider: providerUsed,
     model: modelUsed,
     agentHarnessId,
   });
   const projectedContextTokens = resolveProjectedSessionContextTokens({
     entry: prepared.cronSession.sessionEntry,
+    authProfileId: execution.authProfileId,
     provider: providerUsed,
     model: modelUsed,
     agentHarnessId,
@@ -132,12 +135,16 @@ export async function finalizeCronRun(params: {
     (prepared.cronSession.sessionEntry.modelSelectionLocked === true ||
       (authoredContextTokens === undefined &&
         projectedContextTokens === retainedRuntimeContextTokens));
-  const contextTokensSource =
-    runtimeContextTokens !== undefined
-      ? (finalRunResult.meta?.agentMeta?.contextTokensSource ?? "resolved")
-      : projectedUsesPersistedContext
-        ? prepared.cronSession.sessionEntry.contextTokensSource
-        : "resolved";
+  const contextTokensSource = qualifySessionContextTokenSource({
+    entry: prepared.cronSession.sessionEntry,
+    authProfileId: execution.authProfileId,
+    source:
+      runtimeContextTokens !== undefined
+        ? (finalRunResult.meta?.agentMeta?.contextTokensSource ?? "resolved")
+        : projectedUsesPersistedContext
+          ? prepared.cronSession.sessionEntry.contextTokensSource
+          : "resolved",
+  });
 
   if (!params.isAborted()) {
     setCronSessionRuntimeModel({

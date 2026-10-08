@@ -204,8 +204,11 @@ export function mergeProviderModels(
       contextWindowSource: implicitContextWindowSource,
       ...implicitMetadata
     } = implicitModel;
-    // Only an authored native window replaces native-window provenance.
-    const authoredWindow = asPositiveFiniteNumber(explicitModel.contextWindow) !== undefined;
+    const explicitWindow = asPositiveFiniteNumber(explicitModel.contextWindow);
+    const contextWindowSource =
+      explicitWindow !== undefined
+        ? explicitModel.contextWindowSource
+        : implicitContextWindowSource;
     const { contextWindowSource: _explicitContextWindowSource, ...explicitFields } = explicitModel;
     return Object.assign(
       {},
@@ -217,9 +220,7 @@ export function mergeProviderModels(
         reasoning: `reasoning` in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
       },
       contextWindow === undefined ? {} : { contextWindow },
-      !authoredWindow && implicitContextWindowSource === "synthetic"
-        ? { contextWindowSource: implicitContextWindowSource }
-        : {},
+      contextWindowSource === "synthetic" ? { contextWindowSource } : {},
       contextTokens === undefined ? {} : { contextTokens },
       maxTokens === undefined ? {} : { maxTokens },
       maxTokensSource === undefined ? {} : { maxTokensSource },

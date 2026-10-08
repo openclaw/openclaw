@@ -302,6 +302,5 @@ export function applyCrossContextDecoration(params: {
       presentation: buildPresentation(params.message),
     };
   }
-  const message = `${params.decoration.prefix}${params.message}${params.decoration.suffix}`;
-  return { message };
+  return { message: `${params.decoration.prefix}${params.message}${params.decoration.suffix}` };
 }

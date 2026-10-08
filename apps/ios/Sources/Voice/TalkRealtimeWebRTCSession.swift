@@ -1213,24 +1213,21 @@ extension TalkRealtimeWebRTCSession {
     private func handleRealtimeTranscriptEvent(_ event: TalkRealtimeServerEvent) -> Bool {
         if let entry = self.liveCaptionBuffer.append(event) {
             // The Gateway sideband persists public Live transcripts before it closes their owner.
-            switch entry.role {
-            case .user:
-                self.delegate?.realtimeSession(self, didReceiveUserTranscript: entry.text)
-            case .assistant:
+            if entry.role == .assistant {
                 self.markFirstAssistantSignal(event)
-                self.delegate?.realtimeSession(self, didReceiveAssistantTranscript: entry.text)
             }
+            self.deliverTranscript(entry.text, role: entry.role)
             return true
         }
         switch event.type {
         case "input_transcript.added":
             if let text = event.item?.text, !text.isEmpty {
-                self.delegate?.realtimeSession(self, didReceiveUserTranscript: text)
+                self.deliverTranscript(text, role: .user)
             }
         case "output_transcript.added":
             self.markFirstAssistantSignal(event)
             if let text = event.item?.text, !text.isEmpty {
-                self.delegate?.realtimeSession(self, didReceiveAssistantTranscript: text)
+                self.deliverTranscript(text, role: .assistant)
             }
         case "turn.done":
             self.handleFramelessTurnDone(event.turn)
@@ -1240,31 +1237,21 @@ extension TalkRealtimeWebRTCSession {
                 self.loggedFirstServerSpeech = true
                 self.trace("server speech/transcript first delta")
             }
-            if let text = event.delta ?? event.transcript {
-                self.delegate?.realtimeSession(self, didReceiveUserTranscript: text)
-            }
+            self.deliverTranscript(event.delta ?? event.transcript, role: .user)
         case "conversation.input_transcript.done",
              "conversation.item.input_audio_transcription.completed":
-            if let text = event.transcript ?? event.text {
-                self.delegate?.realtimeSession(self, didReceiveUserTranscript: text)
-                self.recordFinalTranscript(role: .user, text: text)
-            }
+            self.deliverTranscript(event.transcript ?? event.text, role: .user, persist: true)
         case "conversation.output_transcript.delta",
              "response.output_text.delta",
              "response.audio_transcript.delta",
              "response.output_audio_transcript.delta":
             self.markFirstAssistantSignal(event)
-            if let text = event.delta ?? event.transcript ?? event.text {
-                self.delegate?.realtimeSession(self, didReceiveAssistantTranscript: text)
-            }
+            self.deliverTranscript(event.delta ?? event.transcript ?? event.text, role: .assistant)
         case "conversation.output_transcript.done",
              "response.output_text.done",
              "response.audio_transcript.done",
              "response.output_audio_transcript.done":
-            if let text = event.transcript ?? event.text {
-                self.delegate?.realtimeSession(self, didReceiveAssistantTranscript: text)
-                self.recordFinalTranscript(role: .assistant, text: text)
-            }
+            self.deliverTranscript(event.transcript ?? event.text, role: .assistant, persist: true)
         default:
             return false
         }
@@ -1273,17 +1260,10 @@ extension TalkRealtimeWebRTCSession {
 
     private func handleFramelessTurnDone(_ turn: TalkRealtimeServerTurn?) {
         guard let turn else { return }
-        if let text = turn.transcript, !text.isEmpty {
-            switch turn.role {
-            case "user":
-                self.delegate?.realtimeSession(self, didReceiveUserTranscript: text)
-                self.recordFinalTranscript(role: .user, text: text)
-            case "assistant":
-                self.delegate?.realtimeSession(self, didReceiveAssistantTranscript: text)
-                self.recordFinalTranscript(role: .assistant, text: text)
-            default:
-                break
-            }
+        if let text = turn.transcript, !text.isEmpty,
+           let role = turn.role.flatMap(TalkRealtimeTranscriptRole.init(rawValue:))
+        {
+            self.deliverTranscript(text, role: role, persist: true)
         }
         if turn.role == "assistant" {
             self.scheduleAssistantAudioFinished()
@@ -1294,6 +1274,17 @@ extension TalkRealtimeWebRTCSession {
         guard !self.loggedFirstAssistantSignal else { return }
         self.loggedFirstAssistantSignal = true
         self.trace("assistant first output signal type=\(event.type)")
+    }
+
+    private func deliverTranscript(_ text: String?, role: TalkRealtimeTranscriptRole, persist: Bool = false) {
+        guard let text else { return }
+        switch role {
+        case .user: self.delegate?.realtimeSession(self, didReceiveUserTranscript: text)
+        case .assistant: self.delegate?.realtimeSession(self, didReceiveAssistantTranscript: text)
+        }
+        if persist {
+            self.recordFinalTranscript(role: role, text: text)
+        }
     }
 }
 

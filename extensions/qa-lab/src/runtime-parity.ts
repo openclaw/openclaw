@@ -1045,48 +1045,11 @@ function classifyRuntimeParityCells(params: {
     };
   }
 
-  const toolCallShapeDetails = parity.compareToolCallShape(
-    params.openclaw.toolCalls,
-    params.codex.toolCalls,
-  );
-  if (toolCallShapeDetails) {
-    return { drift: "tool-call-shape", driftDetails: toolCallShapeDetails };
-  }
-
-  const toolResultShapeDetails = parity.compareToolResultShape(
-    params.openclaw.toolCalls,
-    params.codex.toolCalls,
-    "tool-result-error",
-  );
-  if (toolResultShapeDetails) {
-    return { drift: "tool-result-shape", driftDetails: toolResultShapeDetails };
-  }
-
-  const openclawTranscriptLines = params.openclaw.transcriptBytes.trim().length
-    ? params.openclaw.transcriptBytes.trim().split(/\r?\n/u).length
-    : 0;
-  const codexTranscriptLines = params.codex.transcriptBytes.trim().length
-    ? params.codex.transcriptBytes.trim().split(/\r?\n/u).length
-    : 0;
-  if (
-    openclawTranscriptLines !== codexTranscriptLines ||
-    (!params.openclaw.finalText && Boolean(params.codex.finalText)) ||
-    (Boolean(params.openclaw.finalText) && !params.codex.finalText)
-  ) {
-    return {
-      drift: "structural",
-      driftDetails: `transcript/final-text structure differs (${openclawTranscriptLines} lines vs ${codexTranscriptLines})`,
-    };
-  }
-
-  if (
-    parity.normalizeTextForParity(params.openclaw.finalText) ===
-    parity.normalizeTextForParity(params.codex.finalText)
-  ) {
-    return { drift: "none" };
-  }
-
-  return { drift: "text-only", driftDetails: "final text differs after whitespace normalization" };
+  return parity.compareParityBehavior({
+    left: params.openclaw,
+    right: params.codex,
+    allowedSharedErrorClass: "tool-result-error",
+  });
 }
 
 function isRuntimeParityRootSession(entry: SessionEntry) {

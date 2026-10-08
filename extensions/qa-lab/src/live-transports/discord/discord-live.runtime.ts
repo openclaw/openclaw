@@ -7,7 +7,6 @@ import {
   handleDiscordMessageAction,
   requestDiscord as requestDiscordLive,
 } from "@openclaw/discord/api.js";
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
@@ -17,7 +16,7 @@ import { chromium } from "playwright-core";
 import { z } from "zod";
 import type { QaGatewayChild } from "../../gateway-child.js";
 import { isTruthyOptIn } from "../../mantis-options.runtime.js";
-import { readLiveQaChannelAccounts } from "../shared/live-channel-status.js";
+import { waitForLiveQaChannelAccount } from "../shared/live-channel-status.js";
 import { requireLiveQaEnv } from "../shared/live-credential-env.js";
 import { createDiscordQaEndpointFetcher } from "./discord-live.endpoint.js";
 import {
@@ -974,25 +973,21 @@ export async function runDiscordThreadReplyFilePathAttachmentScenario(params: {
 }
 
 export async function waitForDiscordChannelRunning(gateway: QaGatewayChild, accountId: string) {
-  const startedAt = Date.now();
-  let lastStatus: ChannelAccountSnapshot | undefined;
-  while (Date.now() - startedAt < 45_000) {
-    try {
-      const accounts = await readLiveQaChannelAccounts(gateway, "discord");
-      const match = accounts.find((entry) => entry.accountId === accountId);
-      lastStatus = match;
-      if (match?.running && match.connected === true && match.restartPending !== true) {
-        return;
-      }
-    } catch {
-      // retry
-    }
-    await sleep(500);
-  }
-  const details = lastStatus
-    ? ` (last status: running=${String(lastStatus.running)} connected=${String(lastStatus.connected)} restartPending=${String(lastStatus.restartPending)} lastConnectedAt=${String(lastStatus.lastConnectedAt)} lastError=${lastStatus.lastError ?? "null"} lastDisconnect=${JSON.stringify(lastStatus.lastDisconnect)})`
-    : "";
-  throw new Error(`discord account "${accountId}" did not become connected${details}`);
+  await waitForLiveQaChannelAccount({
+    gateway,
+    channel: "discord",
+    accountId,
+    timeoutMs: 45_000,
+    pollMs: 500,
+    isReady: (status) =>
+      Boolean(status.running && status.connected === true && status.restartPending !== true),
+    describeTimeout: (lastStatus) => {
+      const details = lastStatus
+        ? ` (last status: running=${String(lastStatus.running)} connected=${String(lastStatus.connected)} restartPending=${String(lastStatus.restartPending)} lastConnectedAt=${String(lastStatus.lastConnectedAt)} lastError=${lastStatus.lastError ?? "null"} lastDisconnect=${JSON.stringify(lastStatus.lastDisconnect)})`
+        : "";
+      return `discord account "${accountId}" did not become connected${details}`;
+    },
+  });
 }
 
 export function matchesDiscordScenarioReply(params: {

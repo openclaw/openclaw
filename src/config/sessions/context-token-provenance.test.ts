@@ -18,7 +18,7 @@ describe("resolveTrustedSessionContextTokens", () => {
       resolveTrustedSessionContextTokens({
         entry: {
           modelProvider: "OpenAI",
-          model: "GPT-5.6-SOL",
+          model: "gpt-5.6-sol",
           agentHarnessId: "Codex",
           contextTokens: 272_000,
           contextTokensSource: "runtime",
@@ -201,6 +201,7 @@ describe("resolveProjectedSessionContextBudgetStatus", () => {
 
   it.each([
     { name: "model", current: { model: "qwen3:4b" } },
+    { name: "model ID case", current: { model: "Qwen3:8b" } },
     { name: "missing model", current: { model: undefined } },
     { name: "missing provider", current: { provider: undefined } },
     { name: "unknown cap", current: { contextTokens: undefined } },

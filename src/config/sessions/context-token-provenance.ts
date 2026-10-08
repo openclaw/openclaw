@@ -1,10 +1,20 @@
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { SessionContextBudgetStatus, SessionEntry } from "./types.js";
+
+export const SESSION_CONTEXT_CAPACITY_CLEAR_PATCH = {
+  contextTokens: undefined,
+  contextTokensSource: undefined,
+  contextBudgetStatus: undefined,
+} satisfies Partial<SessionEntry>;
 
 type SessionContextTokenOwner = Pick<
   SessionEntry,
   | "agentHarnessId"
+  | "authProfileOverride"
   | "contextTokens"
   | "contextTokensSource"
   | "model"
@@ -17,16 +27,41 @@ type SessionContextSelection = {
   provider: string | null | undefined;
   model: string | null | undefined;
   agentHarnessId: string | null | undefined;
+  authProfileId?: string | null;
 };
+
+type ObservedSessionAuthProfile = {
+  entry: Pick<SessionEntry, "authProfileOverride" | "modelSelectionLocked"> | undefined;
+  authProfileId?: string | null;
+};
+
+function matchesObservedAuthProfile(params: ObservedSessionAuthProfile): boolean {
+  return (
+    params.authProfileId === undefined ||
+    (params.authProfileId?.trim() ?? "") === (params.entry?.authProfileOverride?.trim() ?? "")
+  );
+}
+
+/** Unpinned successful accounts cannot publish capacity as if the stored pin produced it. */
+export function qualifySessionContextTokenSource(
+  params: ObservedSessionAuthProfile & { source: SessionEntry["contextTokensSource"] },
+): SessionEntry["contextTokensSource"] {
+  return params.entry?.modelSelectionLocked !== true &&
+    !matchesObservedAuthProfile(params) &&
+    (params.source === "runtime" || params.source === "resolved-v1")
+    ? "resolved"
+    : params.source;
+}
 
 function isExactProducerSelection(params: SessionContextSelection): boolean {
   const entryProvider = normalizeLowercaseStringOrEmpty(params.entry?.modelProvider);
-  const entryModel = normalizeLowercaseStringOrEmpty(params.entry?.model);
+  const entryModel = normalizeOptionalString(params.entry?.model) ?? "";
   const entryHarness = normalizeLowercaseStringOrEmpty(params.entry?.agentHarnessId);
   const currentProvider = normalizeLowercaseStringOrEmpty(params.provider);
-  const currentModel = normalizeLowercaseStringOrEmpty(params.model);
+  const currentModel = normalizeOptionalString(params.model) ?? "";
   const currentHarness = normalizeLowercaseStringOrEmpty(params.agentHarnessId);
   return Boolean(
+    matchesObservedAuthProfile(params) &&
     entryProvider &&
     entryModel &&
     entryHarness &&
@@ -65,9 +100,9 @@ export function resolveTrustedSessionContextTokens(
   // different owner, while missing identity remains a supported legacy state.
   if (params.entry?.modelSelectionLocked === true) {
     const entryProvider = normalizeLowercaseStringOrEmpty(params.entry?.modelProvider);
-    const entryModel = normalizeLowercaseStringOrEmpty(params.entry?.model);
+    const entryModel = normalizeOptionalString(params.entry?.model) ?? "";
     const currentProvider = normalizeLowercaseStringOrEmpty(params.provider);
-    const currentModel = normalizeLowercaseStringOrEmpty(params.model);
+    const currentModel = normalizeOptionalString(params.model) ?? "";
     if (
       (entryProvider && currentProvider && entryProvider !== currentProvider) ||
       (entryModel && currentModel && entryModel !== currentModel)
@@ -143,7 +178,7 @@ export function resolveProjectedSessionContextBudgetStatus(params: {
 }): SessionContextBudgetStatus | undefined {
   const status = params.entry?.contextBudgetStatus;
   const provider = normalizeLowercaseStringOrEmpty(params.provider);
-  const model = normalizeLowercaseStringOrEmpty(params.model);
+  const model = normalizeOptionalString(params.model) ?? "";
   if (
     !status ||
     !provider ||
@@ -151,7 +186,7 @@ export function resolveProjectedSessionContextBudgetStatus(params: {
     asPositiveFiniteNumber(params.contextTokens) === undefined ||
     params.entry?.liveModelSwitchPending ||
     normalizeLowercaseStringOrEmpty(status.provider) !== provider ||
-    normalizeLowercaseStringOrEmpty(status.model) !== model ||
+    (normalizeOptionalString(status.model) ?? "") !== model ||
     !status.sessionId?.trim() ||
     status.sessionId !== params.entry?.sessionId ||
     status.contextTokenBudget !== params.contextTokens

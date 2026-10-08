@@ -128,7 +128,7 @@ describe("context token resolution", () => {
     };
     expect(resolveModelContextTokenProjection(params)).toEqual({
       contextTokens: 128_000,
-      authoredContextTokens: 1_000_000,
+      authoredContextTokens: 128_000,
     });
     expect(resolve(params)).toBe(128_000);
   });

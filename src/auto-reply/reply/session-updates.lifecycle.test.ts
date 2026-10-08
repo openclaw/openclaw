@@ -58,6 +58,77 @@ async function withAccountingFixture(
 }
 
 describe("completed compaction accounting", () => {
+  it.each([
+    {
+      name: "changed account",
+      observed: "fixture:before",
+      current: "fixture:after",
+      locked: false,
+      source: "resolved",
+    },
+    {
+      name: "same account",
+      observed: "fixture:before",
+      current: "fixture:before",
+      locked: false,
+      source: "runtime",
+    },
+    {
+      name: "observed ambient auth",
+      observed: null,
+      current: "fixture:after",
+      locked: false,
+      source: "resolved",
+    },
+    {
+      name: "unobserved auth",
+      observed: undefined,
+      current: "fixture:after",
+      locked: false,
+      source: "runtime",
+    },
+    {
+      name: "locked native auth",
+      observed: "fixture:before",
+      current: "fixture:after",
+      locked: true,
+      source: "runtime",
+    },
+  ])(
+    "qualifies prepared runtime capacity against the current $name",
+    async ({ observed, current, locked, source }) => {
+      await withAccountingFixture(async (fixture) => {
+        fixture.entry.authProfileOverride = "fixture:before";
+        await fixture.replace({
+          authProfileOverride: current,
+          modelSelectionLocked: locked,
+          modelProvider: "fixture",
+          model: "current-model",
+          agentHarnessId: locked ? "codex" : "openclaw",
+        });
+        await persistSessionUsageUpdate({
+          ...fixture.params,
+          cfg: {},
+          expectedSession: fixture.entry,
+          authProfileId: observed,
+          providerUsed: "fixture",
+          modelUsed: "current-model",
+          agentHarnessId: locked ? "codex" : "openclaw",
+          contextTokensUsed: 64_000,
+          contextTokensSource: "runtime",
+        });
+        for (const row of [fixture.read(), fixture.cached()]) {
+          expect(row).toMatchObject({
+            sessionId: fixture.entry.sessionId,
+            authProfileOverride: current,
+            contextTokens: 64_000,
+            contextTokensSource: source,
+          });
+        }
+      });
+    },
+  );
+
   it.each([80, undefined])(
     "invalidates prior run accounting with tokensAfter=%s",
     async (tokensAfter) => {

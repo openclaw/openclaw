@@ -1,8 +1,13 @@
-import { resolveContextTokensForModel } from "../../agents/context.js";
+import { resolveModelContextTokenProjection } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { consolidateLiveModelSwitchAfterRun } from "../../agents/live-model-switch.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import {
+  qualifySessionContextTokenSource,
+  resolveProjectedSessionContextTokens,
+  resolveTrustedSessionContextTokens,
+} from "../../config/sessions/context-token-provenance.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
@@ -257,27 +262,54 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     typeof ctxTokens === "number" && Number.isFinite(ctxTokens) && ctxTokens > 0
       ? Math.floor(ctxTokens)
       : undefined;
-  const resolvedContextTokens =
+  const authProfileId = execution.maintenanceAuthProfile
+    ? (execution.maintenanceAuthProfile.authProfileId ?? null)
+    : undefined;
+  const resolution =
     runtimeContextTokens === undefined
-      ? resolveContextTokensForModel({
+      ? resolveModelContextTokenProjection({
           cfg,
           provider: sessionModel.provider,
           model: sessionModel.model,
           allowAsyncLoad: false,
         })
       : undefined;
-  const contextTokensUsed =
-    runtimeContextTokens ??
-    resolvedContextTokens ??
-    activeSessionEntry?.contextTokens ??
-    DEFAULT_CONTEXT_TOKENS;
-  const contextTokensSource =
-    runResult.meta?.agentMeta?.contextTokensSource ??
-    (runtimeContextTokens !== undefined
-      ? "runtime"
-      : resolvedContextTokens !== undefined
-        ? "resolved-v1"
-        : undefined);
+  const contextSelection = {
+    entry: activeSessionEntry,
+    provider: sessionModel.provider,
+    model: sessionModel.model,
+    agentHarnessId: runResult.meta?.agentMeta?.agentHarnessId,
+    authProfileId,
+  };
+  const projected = resolveProjectedSessionContextTokens({
+    ...contextSelection,
+    resolvedContextTokens: resolution?.contextTokens,
+    authoredContextTokens: resolution?.authoredContextTokens,
+  });
+  const retainedRuntimeContextTokens = resolveTrustedSessionContextTokens(contextSelection);
+  const projectedUsesPersistedContext =
+    projected !== undefined &&
+    ((retainedRuntimeContextTokens !== undefined &&
+      (activeSessionEntry?.modelSelectionLocked === true ||
+        (resolution?.authoredContextTokens === undefined &&
+          projected === retainedRuntimeContextTokens))) ||
+      (resolution?.contextTokens === undefined && resolution?.authoredContextTokens === undefined));
+  const contextTokensUsed = runtimeContextTokens ?? projected ?? DEFAULT_CONTEXT_TOKENS;
+  const contextTokensSource = qualifySessionContextTokenSource({
+    entry: activeSessionEntry,
+    authProfileId,
+    source:
+      runResult.meta?.agentMeta?.contextTokensSource ??
+      (runtimeContextTokens !== undefined
+        ? "runtime"
+        : projectedUsesPersistedContext
+          ? activeSessionEntry?.contextTokensSource
+          : resolution?.authoredContextTokens !== undefined
+            ? "resolved"
+            : resolution?.contextTokens !== undefined
+              ? "resolved-v1"
+              : undefined),
+  });
 
   // Count first: terminal usage restores billing buckets without guessing context chronology.
   const compactionCount = await accountAgentTurnCompaction({
@@ -307,6 +339,7 @@ export async function accountAgentTurn(context: AgentTurnAccountingContext) {
     runtimeModelSelection,
     contextTokensUsed,
     contextTokensSource,
+    authProfileId,
     contextBudgetStatus:
       compactionCount === undefined ? runResult.meta?.agentMeta?.contextBudgetStatus : undefined,
     systemPromptReport: runResult.meta?.systemPromptReport,

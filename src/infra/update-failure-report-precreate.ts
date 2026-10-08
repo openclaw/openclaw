@@ -45,16 +45,22 @@ export async function retryUpdateReportStateWriteAfterNoStart(
   return false;
 }
 
-export async function assertUpdateReportPreCreateState(options: {
+export function assertUpdateReportSubmissionAuthority(options: {
   hasCurrentAuthority?: () => boolean;
-  validateCurrentAttempt?: () => boolean | Promise<boolean>;
-}): Promise<void> {
+}): void {
   if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
     throw new UpdateReportPreCreateGuardError(
       "Update report submission requires a current authenticated client.",
       "authority",
     );
   }
+}
+
+export async function assertUpdateReportPreCreateState(options: {
+  hasCurrentAuthority?: () => boolean;
+  validateCurrentAttempt?: () => boolean | Promise<boolean>;
+}): Promise<void> {
+  assertUpdateReportSubmissionAuthority(options);
   if (options.validateCurrentAttempt) {
     let currentAttempt: boolean;
     try {
@@ -73,10 +79,5 @@ export async function assertUpdateReportPreCreateState(options: {
       );
     }
   }
-  if (options.hasCurrentAuthority && !options.hasCurrentAuthority()) {
-    throw new UpdateReportPreCreateGuardError(
-      "Update report submission requires a current authenticated client.",
-      "authority",
-    );
-  }
+  assertUpdateReportSubmissionAuthority(options);
 }

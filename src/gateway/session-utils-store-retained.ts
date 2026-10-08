@@ -109,6 +109,7 @@ export async function withQualifiedGatewaySessionStoreTarget<T>(params: {
               selected.result.entries.map(({ sessionKey, entry }) => [sessionKey, entry]),
             ),
             readSource: selected.database,
+            lifecycleTimestamps: selected.result.lifecycleTimestamps,
             ...(capturedReadSource ? { capturedReadSource } : {}),
             capturedReadSources: capturedReadSource ? [capturedReadSource] : [],
           },

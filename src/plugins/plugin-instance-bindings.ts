@@ -7,7 +7,7 @@ import {
 } from "./plugin-instance-argument-views.js";
 import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import type { PluginInstanceInvocation } from "./plugin-instance-invocation.types.js";
-import { PluginHostObject } from "./plugin-instance-owned-values.js";
+import { PluginFactoryBinding } from "./plugin-instance-owned-values.js";
 import {
   getPluginOriginalValue,
   pluginInstanceState,
@@ -31,19 +31,6 @@ type PluginIteratorAdmission = {
   close: () => void;
   call: (key: PropertyKey, method: Function | undefined, args: unknown[]) => Promise<unknown>;
 };
-
-class ExecutableBinding extends PluginHostObject {
-  #factory: object;
-
-  constructor(value: object, factory: object) {
-    super(value);
-    this.#factory = factory;
-  }
-
-  static belongsTo(value: object, factory: object) {
-    return #factory in value && value.#factory === factory;
-  }
-}
 
 const DATA_FIELDS = new Set([
   "parameters",
@@ -207,7 +194,7 @@ function createPluginBindings(
   const wrapArguments = createPluginArgumentView({
     original: originalValue,
     setOriginal: (value, source) => setPluginOriginalValue(value, source, bindings.instance),
-    isWrapped: (value) => ExecutableBinding.belongsTo(value, factory),
+    isWrapped: (value) => PluginFactoryBinding.belongsTo(value, factory),
     invoke: admitCallback,
   });
   // Executable return contracts keep admission; ordinary result graphs are never inspected.
@@ -275,7 +262,7 @@ function createPluginBindings(
       return value;
     }
     const object: object = value;
-    if (ExecutableBinding.belongsTo(object, factory)) {
+    if (PluginFactoryBinding.belongsTo(object, factory)) {
       return value;
     }
     const cached = wrapped.get(object);
@@ -572,7 +559,7 @@ function createPluginBindings(
       );
     }
     wrapped.set(object, result);
-    void new ExecutableBinding(result, factory);
+    void new PluginFactoryBinding(result, factory);
     setPluginOriginalValue(result, object, bindings.instance);
     valueInstances.setHost(result, bindings.instance);
     // SAFETY: The view retains the input prototype and routes each member to the original object.

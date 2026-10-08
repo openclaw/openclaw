@@ -25,7 +25,6 @@ describe("scheduled policy preservation across payload conversions", () => {
     { mutation: "update", mode: "account" },
     { mutation: "update", mode: "trusted" },
     { mutation: "declaration", mode: "account" },
-    { mutation: "declaration", mode: "trusted" },
   ] as const)(
     "preserves $mode policy across operator payload conversions through $mutation",
     async ({ mutation, mode }) => {

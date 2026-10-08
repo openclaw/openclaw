@@ -5,6 +5,7 @@ import {
   setSessionRuntimeModel,
   type SessionEntry,
 } from "../../config/sessions.js";
+import { qualifySessionContextTokenSource } from "../../config/sessions/context-token-provenance.js";
 import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { COMPACTION_RUN_USAGE_CLEAR_PATCH } from "../../config/sessions/session-entry-projection.js";
 import { projectSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
@@ -33,6 +34,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
   agentId: string;
   cfg: OpenClawConfig;
   agentDir: string;
+  authProfileId?: string | null;
   sessionId: string;
   sessionKey: string;
   storePath: string;
@@ -95,7 +97,11 @@ export async function updateSessionStoreAfterAgentRun(params: {
           fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
           allowAsyncLoad: false,
         }) ?? DEFAULT_CONTEXT_TOKENS);
-  const contextTokensSource = result.meta.agentMeta?.contextTokensSource ?? "resolved";
+  const contextTokensSource = qualifySessionContextTokenSource({
+    entry: sessionStore[sessionKey],
+    authProfileId: params.authProfileId,
+    source: result.meta.agentMeta?.contextTokensSource ?? "resolved",
+  });
 
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const preserveRuntimeModel = params.preserveRuntimeModel === true || preserveUserFacingRunState;

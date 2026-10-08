@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
@@ -26,7 +27,10 @@ import {
   type SqliteWorkerStore,
 } from "../infra/sqlite-worker-store.js";
 import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
-import { captureAgentDatabasePreparationJournal } from "./agent-database-admission.js";
+import {
+  captureAgentDatabasePreparationCompletion,
+  captureAgentDatabasePreparationJournal,
+} from "./agent-database-admission.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import {
   captureOpenClawAgentDatabaseRegistration,
@@ -539,6 +543,9 @@ export function createAgentDatabaseNativeGeneration(
       preparationPublished = true;
     }
     if (integrityCheckPending) {
+      const preparation = captureAgentDatabasePreparationCompletion(agentId, {
+        env: input.environment,
+      });
       requestOpenClawAgentDatabaseIntegrityCheck({
         path: pathname,
         env: input.environment,
@@ -548,7 +555,13 @@ export function createAgentDatabaseNativeGeneration(
               release: retainVerification(),
               proof: {
                 identity: nativeIdentity.physicalIdentity,
-                complete: (assertVerifierCurrent: () => void) => {
+                complete: async (
+                  assertVerifierCurrent: () => void,
+                  verifierSignal: AbortSignal,
+                ) => {
+                  if (preparation) {
+                    await racePromiseWithAbortSignal(preparation, verifierSignal);
+                  }
                   const assert = () => {
                     assertVerifierCurrent();
                     context.admission.assertCurrent();

@@ -15,11 +15,9 @@ import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { createModelVisibilityPolicy } from "./model-visibility-policy.js";
 import { mergeProviderModels } from "./models-config.merge.js";
+import { prepareModelCatalogPublication } from "./prepared-model-runtime.catalog-publication.js";
 import { prepareCapturedRuntimeFacts } from "./prepared-model-runtime.configured-catalog.js";
-import {
-  materializePreparedModelCatalog,
-  prepareModelCatalogPublication,
-} from "./prepared-model-runtime.full-catalog.js";
+import { materializePreparedModelCatalog } from "./prepared-model-runtime.full-catalog.js";
 import type { PreparedConfiguredRuntimeModel } from "./prepared-model-runtime.types.js";
 import { createSessionContextCapacityResolver } from "./session-context-capacity.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
@@ -77,7 +75,7 @@ describe("configured catalog registry composition", () => {
         config,
         agentDir: "captured:agent",
         authCredentials: {},
-        modelRegistry: registry,
+        models: registry.getAll(),
         metadataSnapshot,
         includeProviderPluginAugmentation: false,
       });
@@ -419,6 +417,35 @@ describe("synthetic configured context publication", () => {
     expect(status.text).toContain("/872k");
   });
   it.each([
+    ["matching physical route", discovered, false],
+    ["different physical endpoint", { ...discovered, baseUrl: "https://other.example/v1" }, true],
+  ] as const)("replaces only the %s synthetic fallback", (_name, physical, retained) => {
+    const logical = { ...discovered, api: "openai-completions" as const };
+    const publication = prepareModelCatalogPublication(
+      {
+        entries: [logical],
+        routeVariants: [logical, physical],
+        providerOutcomes: [{ provider: "fixture", status: "ready" }],
+      },
+      new Map(),
+      undefined,
+      auth("account-a"),
+      (provider) => provider,
+      new Map(),
+    );
+    const catalog = materializePreparedModelCatalog(
+      publication.catalog,
+      [],
+      [{ ...fallback, baseUrl: discovered.baseUrl }],
+      new Set(publication.discoveryOrigins.map(({ provider }) => provider)),
+    );
+    expect(catalog.entries[0]?.api).toBe("openai-completions");
+    expect(catalog.routeVariants).toContainEqual(physical);
+    expect(catalog.staticEntries?.some((entry) => entry.contextWindowSource === "synthetic")).toBe(
+      retained,
+    );
+  });
+  it.each([
     ["curated static", { ...fallback, contextWindowSource: undefined }],
     ["other API", { ...fallback, api: "openai-completions" as const }],
     ["other endpoint", { ...fallback, baseUrl: "https://other.example/v1" }],
@@ -507,6 +534,33 @@ describe("synthetic configured context publication", () => {
         [fallback],
         new Set(failed.discoveryOrigins.map(({ provider }) => provider)),
       );
+      const resolveCapacity = createSessionContextCapacityResolver({
+        modelCatalog: catalog,
+        isCurrent: () => true,
+      });
+      expect(
+        resolveCapacity("fixture", "new-model", { profileId: "a", route: discovered }),
+      ).toMatchObject(
+        account === "account-a"
+          ? { state: "ready", contextTokens: 872_000, synthetic: false }
+          : { state: "unavailable" },
+      );
+      expect(
+        resolveCapacity("fixture", "new-model", { profileId: "other", route: discovered }),
+      ).toEqual({ state: "unavailable" });
+      expect(
+        resolveCapacity("fixture", "new-model", {
+          profileId: "a",
+          route: { ...discovered, baseUrl: "https://other.example/v1" },
+        }),
+      ).toEqual({ state: "unavailable" });
+      expect(
+        createSessionContextCapacityResolver({ modelCatalog: catalog, isCurrent: () => false })(
+          "fixture",
+          "new-model",
+          { profileId: "a", route: discovered },
+        ),
+      ).toEqual({ state: "unavailable" });
       replaceContextWindowCaches(
         await prepareContextWindowCaches({ config: {}, modelCatalog: catalog }),
       );
@@ -642,7 +696,7 @@ describe("synthetic configured context publication", () => {
         config,
         agentDir: "captured:agent",
         authCredentials: {},
-        modelRegistry: registry,
+        models: registry.getAll(),
         metadataSnapshot,
         includeProviderPluginAugmentation: false,
       });

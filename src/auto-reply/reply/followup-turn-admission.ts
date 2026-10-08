@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { renderAgentHarnessPreflightUserMessage } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -425,9 +426,11 @@ export async function admitFollowupTurn(params: {
         turn.queued.run.verboseLevelOverride ??
         session.current()?.verboseLevel ??
         turn.queued.run.verboseLevel;
-      const text = buildPreflightCompactionFailureText(formatErrorMessage(error), {
-        includeDetails: admittedVerboseLevel === "on" || admittedVerboseLevel === "full",
-      });
+      const text =
+        renderAgentHarnessPreflightUserMessage(error) ??
+        buildPreflightCompactionFailureText(formatErrorMessage(error), {
+          includeDetails: admittedVerboseLevel === "on" || admittedVerboseLevel === "full",
+        });
       if (!text) {
         turn.preflightError = error;
       } else {

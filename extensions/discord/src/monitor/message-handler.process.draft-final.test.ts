@@ -131,10 +131,10 @@ describe("processDiscordMessage draft streaming final delivery", () => {
     });
   });
 
-  it("keeps unset Discord preview streaming off and delivers the final normally", async () => {
+  it("keeps answer deltas private with default progress and delivers the final normally", async () => {
     await runSingleChunkFinalScenario({ maxLinesPerMessage: 5 });
     expect(getLastDispatchReplyOptions()?.onPartialReply).toBeUndefined();
-    expect(createDiscordDraftStream).not.toHaveBeenCalled();
+    expect(createDiscordDraftStream).toHaveBeenCalledOnce();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
     expectFreshFinalText("Hello\nWorld");
   });
@@ -639,33 +639,31 @@ describe("processDiscordMessage draft streaming progress", () => {
     expect(draftStream.update.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("keeps tool rows while yielding commentary to the durable verbose lane", async () => {
+  it("keeps tool status while yielding commentary and narration to the durable verbose owner", async () => {
     const elapseProgressDraftStartDelay = useProgressDraftStartDelay();
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
-      await params?.replyOptions?.onVerboseProgressVisibilityAsync?.(async () => true);
-      await params?.replyOptions?.onItemEvent?.({
+      const options = params?.replyOptions;
+      expect(options?.progressRequiresReply).toBe(true);
+      expect(options?.commentaryPayloadsEnabled).toBe(true);
+      expect(options?.onVerboseProgressVisibilityAsync).toBeTypeOf("function");
+      await options?.onVerboseProgressVisibilityAsync?.(async () => true);
+      expect(options?.shouldDeliverCommentaryPayloads?.()).toBe(true);
+      await options?.onItemEvent?.({
         itemId: "preamble-1",
         kind: "preamble",
         progressText: "Checking the current weather source before summarizing.",
       });
+      await options?.onNarrationUpdate?.({ text: "Narration belongs to the same verbose owner." });
       await startToolProgress(params);
-      await params?.replyOptions?.onCommandOutput?.({
-        phase: "end",
-        title: "Exec",
-        name: "exec",
-        exitCode: 0,
-      });
       await elapseProgressDraftStartDelay();
       return createNoQueuedDispatchResult();
     });
 
-    await runProgressScenario({ toolProgress: true, label: "Shelling", commentary: true });
+    await runProgressScenario({ toolProgress: false, label: false, commentary: true });
 
-    const updates = draftStream.update.mock.calls.map((call) => call[0]).join("\n");
-    expect(updates).toContain("Exec");
-    expect(updates).not.toContain("Checking the current weather source");
+    expect(draftStream.update.mock.calls.map((call) => call[0])).toEqual(["Exec: running"]);
   });
 
   it("re-arms progress collapse for a queued assistant turn", async () => {
@@ -853,9 +851,17 @@ describe("processDiscordMessage draft streaming reasoning", () => {
 
 describe("Discord durable commentary delivery", () => {
   it("delivers admitted commentary once without exposing ordinary progress blocks", async () => {
-    createMockDraftStreamForTest();
+    const draftStream = createMockDraftStreamForTest();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      expect(params?.replyOptions?.onVerboseProgressVisibilityAsync).toBeTypeOf("function");
       await params?.replyOptions?.onVerboseProgressVisibilityAsync?.(async () => true);
+      expect(params?.replyOptions?.shouldDeliverCommentaryPayloads?.()).toBe(true);
+      await params?.replyOptions?.onItemEvent?.({
+        itemId: "durable-commentary",
+        kind: "preamble",
+        phase: "end",
+        progressText: "Checking the source before asking.",
+      });
       await params?.dispatcher.sendBlockReply({ text: "ordinary interim text" });
       await params?.dispatcher.sendBlockReply({
         text: "Checking the source before asking.",
@@ -882,5 +888,6 @@ describe("Discord durable commentary delivery", () => {
       }),
     );
     expectFinalAnswerText("done");
+    expect(draftStream.update).not.toHaveBeenCalled();
   });
 });

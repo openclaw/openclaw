@@ -242,7 +242,15 @@ describe("status model authentication and endpoint", () => {
       providerOutcomes: [{ provider: "openai", profileId: "openai:first", status: "ready" }],
     };
     for (const [profileId, expected] of [
-      ["openai:first", { state: "ready", contextTokens: 200_000, synthetic: false }],
+      [
+        "openai:first",
+        {
+          state: "ready",
+          contextTokens: 200_000,
+          synthetic: false,
+          contextTokensSource: "resolved",
+        },
+      ],
       ["openai:second", { state: "unavailable" }],
     ] as const) {
       const resolve = statusAuth(undefined, {
@@ -286,6 +294,163 @@ describe("status model authentication and endpoint", () => {
       state: "unavailable",
     });
   });
+
+  it("reads accepted Copilot capacity without requiring an OpenAI auth-route decision", async () => {
+    const profileId = "github-copilot:fixture";
+    const profiles: AuthProfileStore["profiles"] = {
+      [profileId]: { type: "token", provider: "github-copilot", token: "fixture-token" },
+    };
+    vi.spyOn(authProfiles, "loadAuthProfileStoreWithoutExternalProfiles").mockReturnValue({
+      version: 1,
+      profiles,
+    });
+    const entry = {
+      provider: "github-copilot",
+      id: "fixture-model",
+      name: "Fixture",
+      api: "openai-completions" as const,
+      contextWindow: 1_000_000,
+      contextTokens: 872_000,
+    };
+    const resolve = statusAuth(undefined, {
+      config: {},
+      profiles,
+      catalog: {
+        entries: [entry],
+        routeVariants: [entry],
+        providerOutcomes: [{ provider: entry.provider, profileId, status: "ready" }],
+      },
+      sessionEntry: {
+        sessionId: "copilot-status",
+        updatedAt: 1,
+        modelProvider: entry.provider,
+        authProfileOverride: profileId,
+        authProfileOverrideSource: "user",
+      },
+    });
+    const resolved = await resolve({
+      provider: entry.provider,
+      model: entry.id,
+      runtimeId: "openclaw",
+      acceptedProviderIds: [entry.provider],
+    });
+    expect(resolved.authLabel).toMatch(/^token(?: \(.+\))?$/);
+    expect(resolved.endpoint).toBeUndefined();
+    expect(resolved.ownerCapacity).toEqual({
+      state: "ready",
+      contextTokens: 872_000,
+      synthetic: false,
+    });
+  });
+
+  it.each(["openclaw", "codex"])(
+    "selects %s capacity independently of host profile authentication",
+    async (runtimeId) => {
+      const profileId = "openai:host-fixture";
+      const profiles: AuthProfileStore["profiles"] = {
+        [profileId]: { type: "api_key", provider: "openai", key: "host-fixture-key" },
+      };
+      vi.spyOn(authProfiles, "loadAuthProfileStoreWithoutExternalProfiles").mockReturnValue({
+        version: 1,
+        profiles,
+      });
+      const host = {
+        provider: "openai",
+        id: "gpt-5.4",
+        name: "GPT",
+        api: "openai-responses" as const,
+        baseUrl: "https://api.openai.com/v1",
+        contextWindow: 64_000,
+        contextTokens: 64_000,
+      };
+      const native = {
+        provider: host.provider,
+        id: host.id,
+        name: host.name,
+        nativeRuntime: "codex",
+        contextWindow: 960_000,
+        contextTokens: 960_000,
+      };
+      const resolve = statusAuth(undefined, {
+        profiles,
+        catalog: {
+          entries: [host],
+          routeVariants: [host, native],
+          providerOutcomes: [{ provider: "openai", profileId, status: "ready" }],
+        },
+        sessionEntry: {
+          sessionId: "host-auth-native-runtime",
+          updatedAt: 1,
+          modelProvider: "openai",
+          authProfileOverride: profileId,
+          authProfileOverrideSource: "user",
+        },
+      });
+      const resolved = await resolve({ ...selection, runtimeId });
+      expect(resolved.authLabel).toMatch(/^api-key(?: \(.+\))?$/);
+      expect(resolved.endpoint).toBe("https://api.openai.com/v1");
+      expect(resolved.ownerCapacity).toEqual({
+        state: "ready",
+        contextTokens: runtimeId === "codex" ? 960_000 : 64_000,
+        synthetic: false,
+      });
+    },
+  );
+
+  it.each(["ambient", "other-profile"])(
+    "qualifies configured ambient status against %s discovery",
+    async (origin) => {
+      const profiles: AuthProfileStore["profiles"] = {
+        "openai:other": { type: "api_key", provider: "openai", key: "other-fixture-key" },
+      };
+      vi.spyOn(authProfiles, "loadAuthProfileStoreWithoutExternalProfiles").mockReturnValue({
+        version: 1,
+        profiles,
+      });
+      const route = {
+        provider: "openai",
+        id: "gpt-5.4",
+        name: "GPT",
+        api: "openai-responses" as const,
+        baseUrl: "https://api.openai.com/v1",
+        contextWindow: 1_000_000,
+        contextTokens: 872_000,
+      };
+      const resolve = statusAuth(undefined, {
+        profiles,
+        config: {
+          models: {
+            providers: {
+              openai: {
+                auth: "api-key",
+                apiKey: "configured-fixture-key",
+                baseUrl: route.baseUrl,
+                models: [],
+              },
+            },
+          },
+        },
+        catalog: {
+          entries: [route],
+          routeVariants: [route],
+          acceptedDiscoveryOrigins: [
+            {
+              provider: "openai",
+              ...(origin === "other-profile" ? { profileId: "openai:other" } : {}),
+            },
+          ],
+        },
+      });
+      const resolved = await resolve({ ...selection, runtimeId: "openclaw" });
+      expect(resolved.authLabel).toBe("api-key");
+      expect(resolved.endpoint).toBe(route.baseUrl);
+      expect(resolved.ownerCapacity).toEqual(
+        origin === "ambient"
+          ? { state: "ready", contextTokens: 872_000, synthetic: false }
+          : { state: "unavailable" },
+      );
+    },
+  );
 
   it.each<{
     reason: string;

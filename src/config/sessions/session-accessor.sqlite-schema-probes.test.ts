@@ -33,6 +33,7 @@ import * as identityPublication from "./session-accessor.sqlite-identity.js";
 import { ensureSessionEntrySync } from "./session-accessor.sqlite-initial-entry.js";
 import {
   measureSessionSchemaProbes,
+  measureSqliteSchemaProbes,
   type SessionProbeOperations,
 } from "./session-accessor.sqlite-schema-probes.test-support.js";
 import type { SessionEntryListScope } from "./session-accessor.types.js";
@@ -134,6 +135,31 @@ it("bounds schema and freshness probes across admitted session reader entry poin
       expect(result.schemaVersion).toBe(0);
       expect(result.userVersion).toBe(0);
       expect(result.dataVersion).toBeLessThanOrEqual(100);
+    }
+    // Exercise both native execution paths with statements retained before observation.
+    const probeGroups = [
+      ["schema_version", "user_version", "data_version"].map((name) =>
+        writer.db.prepare(`PRAGMA ${name}`),
+      ),
+      [
+        writer.db.prepare(`SELECT schema_version, user_version, data_version
+          FROM main.pragma_schema_version(), main.pragma_user_version(), main.pragma_data_version()`),
+      ],
+    ];
+    for (const statements of probeGroups) {
+      for (const method of ["get", "all", "iterate"] as const) {
+        const probes = measureSqliteSchemaProbes(writer.db, () => {
+          for (const statement of statements) {
+            if (method === "iterate") {
+              Array.from(statement.iterate());
+            } else {
+              statement[method]();
+            }
+          }
+          return true;
+        });
+        expect(probes).toMatchObject({ schemaVersion: 100, userVersion: 100, dataVersion: 100 });
+      }
     }
     if (typeof writer.db.setAuthorizer === "function") {
       let allowed = true;

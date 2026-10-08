@@ -227,6 +227,9 @@ export async function finalizeEmbeddedAgentCommand(params: {
         agentId: sessionAgentId,
         cfg,
         agentDir,
+        authProfileId: params.attempt.maintenanceAuthProfile
+          ? (params.attempt.maintenanceAuthProfile.authProfileId ?? null)
+          : undefined,
         sessionId: effectiveSessionId,
         sessionKey,
         storePath,
@@ -277,6 +280,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
           threadId: params.opts.threadId,
           sessionCwd: effectiveCwd,
           config: cfg,
+          runId,
           skipAssistantTurn: assistantTranscriptOwned,
           skipUserTurn:
             suppressUserTurnPersistence ||
@@ -460,6 +464,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
               agentDir,
               provider: agentMeta?.provider ?? provider,
               model: agentMeta?.model ?? model,
+              cliBackendId: result.meta.executionTrace?.winnerProvider,
               skillsSnapshot,
               messageChannel,
               agentAccountId: runContext.accountId,
