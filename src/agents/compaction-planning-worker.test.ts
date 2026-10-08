@@ -454,8 +454,11 @@ describe("compaction planning worker", () => {
         workerUrl,
       });
       // Node timers reject values above the signed 32-bit cap; clamping keeps
-      // huge caller timeouts from firing immediately.
-      expect(setTimeoutSpy.mock.calls).toContainEqual([expect.any(Function), MAX_TIMER_TIMEOUT_MS]);
+      // huge caller timeouts from firing immediately. Queue time consumes the
+      // task deadline, so the armed delay may sit just below the cap.
+      const delays = setTimeoutSpy.mock.calls.map(([, delay]) => delay ?? 0);
+      expect(Math.max(...delays)).toBeLessThanOrEqual(MAX_TIMER_TIMEOUT_MS);
+      expect(Math.max(...delays)).toBeGreaterThan(MAX_TIMER_TIMEOUT_MS - 1_000);
     } finally {
       setTimeoutSpy.mockRestore();
     }
