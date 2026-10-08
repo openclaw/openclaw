@@ -92,7 +92,7 @@ it("prepares embedded tool authority without caller-thread SQL and refuses a clo
 });
 
 it.each(["main", "policy", "borrowed"] as const)(
-  "rereads %s-agent sandbox policy after a foreign commit before projecting steering",
+  "retains the %s-agent source while rereading foreign sandbox policy before steering",
   async (policyAgent) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const policyAgentId = policyAgent === "borrowed" ? "main" : policyAgent;
@@ -178,6 +178,7 @@ it.each(["main", "policy", "borrowed"] as const)(
           if (reader) {
             expect(discovery).not.toHaveBeenCalled();
           }
+          discovery.mockClear();
           await expect(
             operation.projectToolAuthorityFingerprintAsync({
               senderIsOwner: run.run.senderIsOwner === true,
@@ -186,7 +187,7 @@ it.each(["main", "policy", "borrowed"] as const)(
             }),
           ).resolves.toBeUndefined();
           calls.expectIdle();
-          expect(discovery).toHaveBeenCalled();
+          expect(discovery).not.toHaveBeenCalled();
           if (admission) {
             await admission.databaseClaim.release();
             discovery.mockClear();

@@ -22,6 +22,7 @@ export function loadTranscriptEventRowsAfterSeqInDatabase(
       .where("session_id", "=", sessionId)
       .where("seq", ">", afterSeq);
     return executeSqliteQuerySync(database.db, query.orderBy("seq", "asc")).rows.map((row) => ({
+      // SAFETY: Transcript writers persist TranscriptEvent JSON in the selected event column.
       event: JSON.parse(row.event_json) as TranscriptEvent,
       seq: sqliteNumber(row.seq),
     }));

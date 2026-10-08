@@ -276,7 +276,7 @@ export function appendAbortedSessionTranscriptPartialInTransaction(
   if (entry.activeWriterRunId !== undefined && entry.activeWriterRunId !== partial.runId) {
     throw new SessionTranscriptWriterClaimReboundError();
   }
-  const append = appendTranscriptMessageInTransaction(
+  const committed = appendTranscriptMessageInTransaction(
     database,
     resolved,
     {
@@ -289,6 +289,7 @@ export function appendAbortedSessionTranscriptPartialInTransaction(
     preparedMessage,
     projection,
   );
+  const append = committed?.result;
   if (!append) {
     throw new Error("Aborted assistant partial was not appended");
   }

@@ -14,6 +14,7 @@ import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js
 import { createCpuTrackedWorker } from "../infra/worker-cpu.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
+import { scheduleAbsoluteDeadline } from "../utils/absolute-deadline.js";
 import {
   createLeaseHeartbeatCleanup,
   type LeaseHeartbeatCleanup,
@@ -49,7 +50,7 @@ export function startOpenClawStateLeaseTimer(params: {
   let stopped = false;
   let expiryClosed = false;
   let renewal: Promise<void> | undefined;
-  let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  let cancelExpiry: (() => void) | undefined;
   let heartbeat: ReturnType<typeof setInterval> | undefined = setInterval(() => {
     if (stopped || renewal) {
       return;
@@ -70,13 +71,13 @@ export function startOpenClawStateLeaseTimer(params: {
   }, params.heartbeatMs);
   heartbeat.unref?.();
   const checkExpiry = () => {
-    expiryTimer = undefined;
+    cancelExpiry = undefined;
     if (expiryClosed) {
       return;
     }
     // Commit publication can precede the actor reply in the parent's event queue.
-    const remainingMs = Number(Atomics.load(params.observation, state.expiresAt)) - Date.now();
-    if (remainingMs <= 0) {
+    const expiresAt = Number(Atomics.load(params.observation, state.expiresAt));
+    if (expiresAt <= Date.now()) {
       stopped = true;
       expiryClosed = true;
       clearInterval(heartbeat);
@@ -84,14 +85,13 @@ export function startOpenClawStateLeaseTimer(params: {
       params.onLost(new Error("state lease expired"));
       return;
     }
-    expiryTimer = setTimeout(checkExpiry, remainingMs);
-    expiryTimer.unref?.();
+    cancelExpiry = scheduleAbsoluteDeadline(expiresAt, checkExpiry, undefined, { unref: true });
   };
   try {
     checkExpiry();
   } catch (error) {
     clearInterval(heartbeat);
-    clearTimeout(expiryTimer);
+    cancelExpiry?.();
     throw error;
   }
   const stopRenewal = async () => {
@@ -109,8 +109,8 @@ export function startOpenClawStateLeaseTimer(params: {
     async close() {
       await stopRenewal();
       expiryClosed = true;
-      clearTimeout(expiryTimer);
-      expiryTimer = undefined;
+      cancelExpiry?.();
+      cancelExpiry = undefined;
     },
   };
 }
@@ -161,7 +161,7 @@ export function startOpenClawStateLeaseHeartbeat(
   void ready.promise.catch(() => {});
   const pending = new Map<number, PendingHeartbeatRequest>();
   let nextRequestId = 0;
-  let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  let cancelExpiry: (() => void) | undefined;
   const rejectPending = (error: Error) => {
     for (const reply of pending.values()) {
       clearTimeout(reply.timer);
@@ -181,7 +181,7 @@ export function startOpenClawStateLeaseHeartbeat(
     Atomics.store(shared, state.status, state.closed);
     Atomics.notify(shared, state.ack);
     clearStartupTimers();
-    clearTimeout(expiryTimer);
+    cancelExpiry?.();
     const error = new Error("state lease heartbeat closed");
     ready.reject(error);
     rejectPending(error);
@@ -205,7 +205,7 @@ export function startOpenClawStateLeaseHeartbeat(
     Atomics.store(shared, state.status, state.lost);
     Atomics.notify(shared, state.ack);
     clearStartupTimers();
-    clearTimeout(expiryTimer);
+    cancelExpiry?.();
     ready.reject(error);
     rejectPending(error);
     params.onLost(error);
@@ -231,7 +231,7 @@ export function startOpenClawStateLeaseHeartbeat(
     };
   };
   const watchExpiry = () => {
-    clearTimeout(expiryTimer);
+    cancelExpiry?.();
     const observedStatus = Atomics.load(shared, state.status);
     if (observedStatus === state.closed) {
       return;
@@ -240,12 +240,12 @@ export function startOpenClawStateLeaseHeartbeat(
       fail(new Error("state lease heartbeat is not running"));
       return;
     }
-    const remainingMs = remainingLeaseMs();
-    if (remainingMs <= 0) {
+    const expiresAt = Number(Atomics.load(shared, state.expiresAt));
+    if (expiresAt <= Date.now()) {
       fail(new Error("state lease heartbeat lease expired"));
       return;
     }
-    expiryTimer = setTimeout(watchExpiry, remainingMs);
+    cancelExpiry = scheduleAbsoluteDeadline(expiresAt, watchExpiry);
   };
   const settleStartup = (trigger: "timeout" | "message") => {
     clearTimeout(startTimer);

@@ -1,6 +1,4 @@
 import fs from "node:fs";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { WorkerTaskPoolCore } from "@openclaw/worker-runtime";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createFailureMessage } from "../../../../packages/agent-core/src/turn-interruption.js";
 import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
@@ -8,6 +6,7 @@ import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
+import * as transcriptReaders from "../../../config/sessions/session-transcript-execution-read.js";
 import { resolveSessionTranscriptReadFence } from "../../../config/sessions/session-transcript-read-fence.js";
 import type { ContextEngine } from "../../../context-engine/types.js";
 import type { ImageContent } from "../../../llm/types.js";
@@ -232,27 +231,22 @@ describe("interrupted canonical user replay", () => {
         const original = SessionManager.open(fixture.target);
         const validated = createDeferredCore();
         const release = createDeferredCore();
-        // oxlint-disable-next-line typescript/unbound-method -- Preserve the original pool receiver.
-        const run = WorkerTaskPoolCore.prototype.run;
+        const createReaders = transcriptReaders.createPreparedSessionTranscriptReads;
         const spy = vi
-          .spyOn(WorkerTaskPoolCore.prototype, "run")
-          .mockImplementation(async function (
-            this: WorkerTaskPoolCore<unknown, unknown>,
-            input,
-            options,
-          ) {
-            const reply = await run.call(this, input, options);
-            if (
-              isRecord(reply) &&
-              reply.ok === true &&
-              isRecord(reply.value) &&
-              isRecord(reply.value.facts) &&
-              reply.value.facts.replayValidated === "current"
-            ) {
-              validated.resolve();
-              await release.promise;
-            }
-            return reply;
+          .spyOn(transcriptReaders, "createPreparedSessionTranscriptReads")
+          .mockImplementation((params) => {
+            const readers = createReaders(params);
+            return {
+              ...readers,
+              readAnchors: async (input, signal) => {
+                const facts = await readers.readAnchors(input, signal);
+                if (facts.replayValidated === "current") {
+                  validated.resolve();
+                  await release.promise;
+                }
+                return facts;
+              },
+            };
           });
         const consume = vi.fn();
         const pending = admit!(consume);

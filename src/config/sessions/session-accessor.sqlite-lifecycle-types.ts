@@ -242,6 +242,7 @@ export type SessionMaintenanceMetadataResult =
       kind: "maintenance-plan";
       value: SessionEntryMaintenancePlan;
       ageSnapshot: SessionMaintenanceAgeSnapshot;
+      nextAt: number | undefined;
       readOnlyInput?: SessionEntryMaintenanceInput;
     };
 

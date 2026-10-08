@@ -124,7 +124,11 @@ export async function readSessionTranscriptAnchorsAsync(
         return empty;
       }
       return readSessionTranscriptAnchorsFromSource(
-        { ...source, scope: { ...source.scope, sessionKey: captured.sessionKey } },
+        {
+          ...source,
+          preparedReads: request.afterSeq === undefined ? source.preparedReads : undefined,
+          scope: { ...source.scope, sessionKey: captured.sessionKey },
+        },
         request,
         signal,
         onRead ? consume : undefined,
