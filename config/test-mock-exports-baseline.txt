@@ -1923,8 +1923,6 @@
 ["src/acp/translator.final-snapshots.test.ts","./commands.js","594376136be7c98bd88f85a95746ed58c6d0e2daa8f52458e7a7e543a8c22186",1]
 ["src/acp/translator.lifecycle.test.ts","./commands.js","594376136be7c98bd88f85a95746ed58c6d0e2daa8f52458e7a7e543a8c22186",1]
 ["src/acp/translator.permission-relay.test.ts","./commands.js","594376136be7c98bd88f85a95746ed58c6d0e2daa8f52458e7a7e543a8c22186",1]
-["src/acp/translator.prompt-size.test.ts","./commands.js","ae405312eeafd1b28f30e3268e72cd3097c20a75480a99a389c23cb66b0f10ff",1]
-["src/acp/translator.session-config.test.ts","./commands.js","594376136be7c98bd88f85a95746ed58c6d0e2daa8f52458e7a7e543a8c22186",1]
 ["src/acp/translator.session-setup.test.ts","./commands.js","594376136be7c98bd88f85a95746ed58c6d0e2daa8f52458e7a7e543a8c22186",1]
 ["src/agents/agent-auth-discovery.external-cli.test.ts","../plugins/provider-runtime.js","ea3d6c79f6f836412ddd1ff059fbdfe2e069048685c981080ea9f977fbd8e528",1]
 ["src/agents/agent-auth-discovery.external-cli.test.ts","../plugins/synthetic-auth.runtime.js","b89ecd766c161795cbf9e9bedf1c5d9c2b87034cf1f36e62a565cd2216803be6",1]
