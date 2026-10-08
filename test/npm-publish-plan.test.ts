@@ -6,6 +6,7 @@ import {
   fetchNpmRegistryTarballWithRetry,
   resolveNpmDistTagMirrorAuth,
   resolveNpmPublishPlan,
+  resolveNpmVersionPublicationDecision,
   resolvePublishedNpmVersionRoute,
   shouldRequireNpmDistTagMirrorAuth,
 } from "../scripts/lib/npm-publish-plan.mjs";
@@ -35,53 +36,107 @@ function registryResponse(params: {
 }
 
 describe("fetchNpmRegistryPackumentWithRetry", () => {
-  it("retries a failed response body before returning the parsed packument", async () => {
-    const waits: number[] = [];
-    let fetchCalls = 0;
-    let cancelCalls = 0;
-    const packument = { versions: { "2026.7.1-beta.3": {} } };
-
-    const result = await fetchNpmRegistryPackumentWithRetry({
-      packageName: "@openclaw/meta-provider",
-      packageUrl: "https://registry.npmjs.org/%40openclaw%2Fmeta-provider",
-      fetchImpl: async () => {
-        fetchCalls += 1;
-        return registryResponse(
-          fetchCalls === 1
-            ? {
-                bodyError: new TypeError("terminated"),
-                cancel: () => {
-                  cancelCalls += 1;
-                },
-              }
-            : { body: JSON.stringify(packument) },
-        );
-      },
-      sleep: async (delayMs) => {
-        waits.push(delayMs);
-      },
-      createSignal: () => new AbortController().signal,
-    });
-
-    expect(result).toEqual({ status: 200, ok: true, packument });
-    expect(fetchCalls).toBe(2);
-    expect(cancelCalls).toBe(1);
-    expect(waits).toEqual([1000]);
-  });
-
-  it("keeps response body failures within the bounded retry budget", async () => {
-    const waits: number[] = [];
-    let fetchCalls = 0;
-    let cancelCalls = 0;
-
+  it("bounds decoded packument bytes and cancels an oversized stream without retrying", async () => {
+    let requests = 0;
+    let cancelled = false;
     await expect(
       fetchNpmRegistryPackumentWithRetry({
+        packageName: "fixture",
+        packageUrl: "https://registry.npmjs.org/fixture",
+        maxBytes: 16,
+        fetchImpl: async () => {
+          requests += 1;
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              pull(controller) {
+                controller.enqueue(new TextEncoder().encode("123456789"));
+              },
+              cancel() {
+                cancelled = true;
+              },
+            }),
+          );
+        },
+      }),
+    ).rejects.toMatchObject({ code: "ETOOBIG" });
+    expect(requests).toBe(1);
+    expect(cancelled).toBe(true);
+  });
+
+  it.each(["before-request", "during-body", "during-retry-sleep"] as const)(
+    "honors owning collection abort %s without another HTTP attempt",
+    async (stage) => {
+      const controller = new AbortController();
+      const reason = new Error("owning collection stopped");
+      let requests = 0;
+      let cancelled = false;
+      let slept = false;
+      if (stage === "before-request") {
+        controller.abort(reason);
+      }
+      await expect(
+        fetchNpmRegistryPackumentWithRetry({
+          packageName: "fixture",
+          packageUrl: "https://registry.npmjs.org/fixture",
+          maxBytes: 128,
+          signal: controller.signal,
+          fetchImpl: async () => {
+            requests += 1;
+            if (stage === "during-retry-sleep") {
+              return new Response("", { status: 503 });
+            }
+            return new Response(
+              new ReadableStream<Uint8Array>({
+                pull() {
+                  controller.abort(reason);
+                },
+                cancel() {
+                  cancelled = true;
+                },
+              }),
+            );
+          },
+          sleep: async () => {
+            slept = true;
+            controller.abort(reason);
+            controller.signal.throwIfAborted();
+          },
+        }),
+      ).rejects.toBe(reason);
+      expect(requests).toBe(stage === "before-request" ? 0 : 1);
+      expect(cancelled).toBe(stage === "during-body");
+      expect(slept).toBe(stage === "during-retry-sleep");
+    },
+  );
+
+  it.each([
+    { failure: "body", recovers: true },
+    { failure: "body", recovers: false },
+    { failure: "JSON", recovers: true },
+    { failure: "JSON", recovers: false },
+  ])(
+    "bounds retries for $failure failures (recovers: $recovers)",
+    async ({ failure, recovers }) => {
+      let fetchCalls = 0;
+      let cancelCalls = 0;
+      const waits: number[] = [];
+      const packument = { versions: { "2026.7.1-beta.3": {} } };
+      const result = fetchNpmRegistryPackumentWithRetry({
         packageName: "@openclaw/meta-provider",
         packageUrl: "https://registry.npmjs.org/%40openclaw%2Fmeta-provider",
         fetchImpl: async () => {
           fetchCalls += 1;
+          if (recovers && fetchCalls > 1) {
+            return registryResponse({ body: JSON.stringify(packument) });
+          }
           return registryResponse({
-            bodyError: new DOMException("timed out", "AbortError"),
+            ...(failure === "JSON"
+              ? { body: "{" }
+              : {
+                  bodyError: recovers
+                    ? new TypeError("terminated")
+                    : new DOMException("timed out", "AbortError"),
+                }),
             cancel: () => {
               cancelCalls += 1;
             },
@@ -91,77 +146,21 @@ describe("fetchNpmRegistryPackumentWithRetry", () => {
           waits.push(delayMs);
         },
         createSignal: () => new AbortController().signal,
-      }),
-    ).rejects.toThrow("npm publication-route probe did not return a stable response");
-
-    expect(fetchCalls).toBe(3);
-    expect(cancelCalls).toBe(3);
-    expect(waits).toEqual([1000, 2000]);
-  });
-
-  it("retries malformed JSON before returning the parsed packument", async () => {
-    let fetchCalls = 0;
-    let cancelCalls = 0;
-    const waits: number[] = [];
-    const packument = { versions: { "2026.7.1-beta.3": {} } };
-
-    const result = await fetchNpmRegistryPackumentWithRetry({
-      packageName: "@openclaw/meta-provider",
-      packageUrl: "https://registry.npmjs.org/%40openclaw%2Fmeta-provider",
-      fetchImpl: async () => {
-        fetchCalls += 1;
-        return registryResponse(
-          fetchCalls === 1
-            ? {
-                body: "{",
-                cancel: () => {
-                  cancelCalls += 1;
-                },
-              }
-            : { body: JSON.stringify(packument) },
+      });
+      if (recovers) {
+        await expect(result).resolves.toEqual({ status: 200, ok: true, packument });
+      } else {
+        await expect(result).rejects.toThrow(
+          failure === "JSON"
+            ? "npm publication-route probe returned invalid JSON"
+            : "npm publication-route probe did not return a stable response",
         );
-      },
-      sleep: async (delayMs) => {
-        waits.push(delayMs);
-      },
-      createSignal: () => new AbortController().signal,
-    });
-
-    expect(result).toEqual({ status: 200, ok: true, packument });
-    expect(fetchCalls).toBe(2);
-    expect(cancelCalls).toBe(1);
-    expect(waits).toEqual([1000]);
-  });
-
-  it("keeps malformed JSON within the bounded retry budget", async () => {
-    let fetchCalls = 0;
-    let cancelCalls = 0;
-    const waits: number[] = [];
-
-    await expect(
-      fetchNpmRegistryPackumentWithRetry({
-        packageName: "@openclaw/meta-provider",
-        packageUrl: "https://registry.npmjs.org/%40openclaw%2Fmeta-provider",
-        fetchImpl: async () => {
-          fetchCalls += 1;
-          return registryResponse({
-            body: "{",
-            cancel: () => {
-              cancelCalls += 1;
-            },
-          });
-        },
-        sleep: async (delayMs) => {
-          waits.push(delayMs);
-        },
-        createSignal: () => new AbortController().signal,
-      }),
-    ).rejects.toThrow("npm publication-route probe returned invalid JSON");
-
-    expect(fetchCalls).toBe(3);
-    expect(cancelCalls).toBe(3);
-    expect(waits).toEqual([1000, 2000]);
-  });
+      }
+      expect(fetchCalls).toBe(recovers ? 2 : 3);
+      expect(cancelCalls).toBe(recovers ? 1 : 3);
+      expect(waits).toEqual(recovers ? [1000] : [1000, 2000]);
+    },
+  );
 
   it("returns a stable missing-package status without retrying", async () => {
     let fetchCalls = 0;
@@ -375,46 +374,65 @@ describe("fetchNpmRegistryTarballWithRetry", () => {
 
 describe("resolvePublishedNpmVersionRoute", () => {
   it.each([
-    {
-      label: "missing beta",
-      version: "2026.7.1-beta.3",
-      distTags: {},
-    },
+    { label: "missing beta", version: "2026.7.1-beta.3", distTags: {}, route: "npm-tag-repair" },
     {
       label: "lagging beta",
       version: "2026.7.1-beta.3",
       distTags: { beta: "2026.7.1-beta.2" },
+      route: "npm-tag-repair",
     },
     {
-      label: "lagging alpha",
-      version: "2026.7.1-alpha.3",
-      distTags: { alpha: "2026.7.1-alpha.2" },
-    },
-    {
-      label: "lagging latest with a current beta mirror",
+      label: "lagging latest with current mirror",
       version: "2026.7.1",
       distTags: { latest: "2026.6.11", beta: "2026.7.1" },
+      route: "npm-tag-repair",
     },
-  ])(
-    "requires tag repair when the primary $label selector is repairable",
-    ({ version, distTags }) => {
-      expect(
-        resolvePublishedNpmVersionRoute({
-          packageVersion: version,
-          publishPlan: resolveNpmPublishPlan(version),
-          distTags,
-        }),
-      ).toBe("npm-tag-repair");
+    {
+      label: "matching primary with lagging mirror",
+      version: "2026.7.1",
+      distTags: { latest: "2026.7.1", beta: "2026.7.1-beta.3" },
+      route: "npm-mirror",
     },
-  );
+    {
+      label: "ahead omitted mirror",
+      version: "2026.7.1",
+      distTags: { latest: "2026.7.1", beta: "2026.8.1-beta.1" },
+      currentBeta: "2026.8.1-beta.1",
+      route: "npm-readback",
+    },
+    {
+      label: "complete beta",
+      version: "2026.7.1-beta.3",
+      distTags: { beta: "2026.7.1-beta.3" },
+      route: "npm-readback",
+    },
+    {
+      label: "complete stable",
+      version: "2026.7.1",
+      distTags: { latest: "2026.7.1", beta: "2026.7.1" },
+      route: "npm-readback",
+    },
+  ])("routes $label selectors", ({ version, distTags, currentBeta, route }) => {
+    expect(
+      resolvePublishedNpmVersionRoute({
+        packageVersion: version,
+        publishPlan: resolveNpmPublishPlan(version, currentBeta),
+        distTags,
+      }),
+    ).toBe(route);
+  });
 
   it.each([
-    ["ahead beta", "2026.7.1-beta.3", { beta: "2026.7.1-beta.4" }],
-    ["ahead alpha", "2026.7.1-alpha.3", { alpha: "2026.7.1-alpha.4" }],
-    ["ahead latest", "2026.7.1", { latest: "2026.8.1" }],
     ["incomparable beta", "2026.7.1-beta.3", { beta: "not-a-version" }],
     ["conflicting beta", "2026.7.1-beta.3", { beta: " 2026.7.1-beta.3 " }],
-  ])("rejects an unsafe primary %s selector", (_label, version, distTags) => {
+    ["incomparable mirror", "2026.7.1", { latest: "2026.7.1", beta: "not-a-version" }],
+    [
+      "unsafe mirror before primary repair",
+      "2026.7.1",
+      { latest: "2026.6.11", beta: "not-a-version" },
+    ],
+    ["ahead mirror", "2026.7.1", { latest: "2026.7.1", beta: "2026.8.1-beta.1" }],
+  ])("rejects %s selectors", (_label, version, distTags) => {
     expect(() =>
       resolvePublishedNpmVersionRoute({
         packageVersion: version,
@@ -422,149 +440,127 @@ describe("resolvePublishedNpmVersionRoute", () => {
         distTags,
       }),
     ).toThrow("cannot be safely moved");
-  });
-
-  it("requires mirror repair only after the primary selector matches", () => {
-    const version = "2026.7.1";
-    expect(
-      resolvePublishedNpmVersionRoute({
-        packageVersion: version,
-        publishPlan: resolveNpmPublishPlan(version),
-        distTags: { latest: version, beta: "2026.7.1-beta.3" },
-      }),
-    ).toBe("npm-mirror");
-  });
-
-  it("rejects an incomparable mirror instead of advertising repair", () => {
-    const version = "2026.7.1";
-    expect(() =>
-      resolvePublishedNpmVersionRoute({
-        packageVersion: version,
-        publishPlan: resolveNpmPublishPlan(version),
-        distTags: { latest: version, beta: "not-a-version" },
-      }),
-    ).toThrow("cannot be safely moved");
-  });
-
-  it("validates unsafe mirrors before returning primary tag repair", () => {
-    const version = "2026.7.1";
-    expect(() =>
-      resolvePublishedNpmVersionRoute({
-        packageVersion: version,
-        publishPlan: resolveNpmPublishPlan(version),
-        distTags: { latest: "2026.6.11", beta: "not-a-version" },
-      }),
-    ).toThrow("cannot be safely moved");
-  });
-
-  it("rejects an ahead mirror from an inconsistent publish plan", () => {
-    const version = "2026.7.1";
-    expect(() =>
-      resolvePublishedNpmVersionRoute({
-        packageVersion: version,
-        publishPlan: resolveNpmPublishPlan(version),
-        distTags: { latest: version, beta: "2026.8.1-beta.1" },
-      }),
-    ).toThrow("cannot be safely moved");
-  });
-
-  it("preserves an ahead beta selector when the publish plan omits the mirror", () => {
-    const version = "2026.7.1";
-    expect(
-      resolvePublishedNpmVersionRoute({
-        packageVersion: version,
-        publishPlan: resolveNpmPublishPlan(version, "2026.8.1-beta.1"),
-        distTags: { latest: version, beta: "2026.8.1-beta.1" },
-      }),
-    ).toBe("npm-readback");
   });
 
   it.each([
-    ["beta", "2026.7.1-beta.3", { beta: "2026.7.1-beta.3" }],
-    ["alpha", "2026.7.1-alpha.3", { alpha: "2026.7.1-alpha.3" }],
-    ["stable", "2026.7.1", { latest: "2026.7.1", beta: "2026.7.1" }],
-  ])("accepts complete %s registry readback", (_label, version, distTags) => {
-    expect(
-      resolvePublishedNpmVersionRoute({
+    {
+      label: "published beta superseded",
+      version: "2026.7.1-beta.3",
+      distTags: { beta: "2026.7.1-beta.4" },
+      published: true,
+      supersededBy: "2026.7.1-beta.4",
+    },
+    {
+      label: "published latest superseded",
+      version: "2026.9.6",
+      distTags: { latest: "2026.9.7", beta: "2026.9.7" },
+      published: true,
+      supersededBy: "2026.9.7",
+    },
+    {
+      label: "unpublished behind ahead selector",
+      version: "2026.9.6",
+      distTags: { latest: "2026.9.7" },
+      published: false,
+      error:
+        'npm dist-tag "latest" points to "2026.9.7" and cannot be safely moved to "2026.9.6" (ahead)',
+    },
+    {
+      label: "unpublished behind lagging selector",
+      version: "2026.9.6",
+      distTags: { latest: "2026.9.5" },
+      published: false,
+    },
+    {
+      label: "unpublished behind placeholder",
+      version: "2026.9.6",
+      distTags: { latest: "0.0.0" },
+      published: false,
+    },
+    { label: "unpublished missing selector", version: "2026.9.6", distTags: {}, published: false },
+  ])("decides publication for $label", ({ version, distTags, published, supersededBy, error }) => {
+    const publishPlan = resolveNpmPublishPlan(version);
+    const decide = () =>
+      resolveNpmVersionPublicationDecision({
         packageVersion: version,
-        publishPlan: resolveNpmPublishPlan(version),
+        publishPlan: published ? { ...publishPlan, mirrorDistTags: ["beta"] } : publishPlan,
         distTags,
-      }),
-    ).toBe("npm-readback");
+        published,
+      });
+    if (error) {
+      expect(decide).toThrow(error);
+      return;
+    }
+    expect(decide()).toEqual({
+      route: published ? "npm-readback" : null,
+      supersededBy: supersededBy ?? null,
+    });
+    if (published) {
+      expect(
+        resolvePublishedNpmVersionRoute({ packageVersion: version, publishPlan, distTags }),
+      ).toBe("npm-readback");
+    }
   });
 });
 
 describe("shouldRequireNpmDistTagMirrorAuth", () => {
-  it("does not require npm auth for dry-run preview commands", () => {
-    const plan = resolveNpmPublishPlan("2026.4.1");
-    const auth = resolveNpmDistTagMirrorAuth({});
-
-    expect(
-      shouldRequireNpmDistTagMirrorAuth({
-        mode: "--dry-run",
-        mirrorDistTags: plan.mirrorDistTags,
-        hasAuth: auth.hasAuth,
-      }),
-    ).toBe(false);
-  });
-
-  it("requires npm auth for real publishes that mirror dist-tags", () => {
-    const plan = resolveNpmPublishPlan("2026.4.1");
-    const auth = resolveNpmDistTagMirrorAuth({});
-
-    expect(
-      shouldRequireNpmDistTagMirrorAuth({
-        mode: "--publish",
-        mirrorDistTags: plan.mirrorDistTags,
-        hasAuth: auth.hasAuth,
-      }),
-    ).toBe(true);
-  });
+  it.each([
+    {
+      label: "dry run",
+      mode: "--dry-run",
+      version: "2026.4.1",
+      npmToken: undefined,
+      required: false,
+    },
+    {
+      label: "unauthenticated publish",
+      mode: "--publish",
+      version: "2026.4.1",
+      npmToken: undefined,
+      required: true,
+    },
+    {
+      label: "no mirror",
+      mode: "--publish",
+      version: "2026.4.1-beta.1",
+      npmToken: undefined,
+      required: false,
+    },
+    {
+      label: "authenticated publish",
+      mode: "--publish",
+      version: "2026.4.1",
+      npmToken: "token",
+      required: false,
+    },
+  ] as const)(
+    "requires mirror auth for $label: $required",
+    ({ mode, version, npmToken, required }) => {
+      const plan = resolveNpmPublishPlan(version);
+      const auth = resolveNpmDistTagMirrorAuth({ npmToken });
+      expect(
+        shouldRequireNpmDistTagMirrorAuth({
+          mode,
+          mirrorDistTags: plan.mirrorDistTags,
+          hasAuth: auth.hasAuth,
+        }),
+      ).toBe(required);
+    },
+  );
 
   it("treats stable correction releases as latest publishes with beta mirroring", () => {
-    const plan = resolveNpmPublishPlan("2026.4.1-1");
-
-    expect(plan).toEqual({
+    expect(resolveNpmPublishPlan("2026.4.1-1")).toEqual({
       channel: "stable",
       publishTag: "latest",
       mirrorDistTags: ["beta"],
     });
   });
 
-  it("does not require auth when there are no mirror dist-tags", () => {
-    const plan = resolveNpmPublishPlan("2026.4.1-beta.1");
-    const auth = resolveNpmDistTagMirrorAuth({});
-
-    expect(
-      shouldRequireNpmDistTagMirrorAuth({
-        mode: "--publish",
-        mirrorDistTags: plan.mirrorDistTags,
-        hasAuth: auth.hasAuth,
-      }),
-    ).toBe(false);
-  });
-
-  it("publishes alpha prereleases without dist-tag mirroring", () => {
-    const plan = resolveNpmPublishPlan("2026.4.1-alpha.1");
-
-    expect(plan).toEqual({
-      channel: "alpha",
-      publishTag: "alpha",
-      mirrorDistTags: [],
-    });
-  });
-
-  it("does not require auth when a publish already has npm auth", () => {
-    const plan = resolveNpmPublishPlan("2026.4.1");
-    const auth = resolveNpmDistTagMirrorAuth({ npmToken: "token" });
-
-    expect(
-      shouldRequireNpmDistTagMirrorAuth({
-        mode: "--publish",
-        mirrorDistTags: plan.mirrorDistTags,
-        hasAuth: auth.hasAuth,
-      }),
-    ).toBe(false);
+  it("rejects alpha publication instead of falling through to latest", () => {
+    expect(() => resolveNpmPublishPlan("2026.4.1-alpha.1")).toThrow("Alpha releases are retired;");
+    expect(() => resolveNpmPublishPlan("2026.4.1", undefined, "alpha")).toThrow(
+      "Alpha releases are retired;",
+    );
   });
 });
 

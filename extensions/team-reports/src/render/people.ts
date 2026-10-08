@@ -1,8 +1,18 @@
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DAY_MS } from "../periods.js";
 import type { PersonDay } from "../store.js";
 import type { Person } from "../types.js";
-import { affiliation, href, type PageContext, sectionHeading, shell } from "./page.js";
-import { escapeHtml, renderAvatar } from "./shared.js";
+import type { PersonWorkSessions } from "../work-sessions.js";
+import {
+  affiliation,
+  formatUtcDay,
+  href,
+  type PageContext,
+  sectionHeading,
+  shell,
+} from "./page.js";
+import { metric, renderAvatar } from "./shared.js";
+import { renderPersonWorkSessions } from "./work-sessions.js";
 
 function activityLevel(count: number): number {
   if (count <= 0) {
@@ -22,19 +32,6 @@ function activityLevel(count: number): number {
 
 function total(day: PersonDay): number {
   return day.githubTotal + day.discordMessages;
-}
-
-function dayTitle(key: string): string {
-  return new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(Date.parse(`${key}T00:00:00Z`));
-}
-
-function peopleMetric(label: string, value: number | string): string {
-  return `<div class="oc-summary-metric"><span class="oc-summary-metric-copy"><small>${escapeHtml(label)}</small><strong>${escapeHtml(String(value))}</strong></span></div>`;
 }
 
 function roleBadge(person: Person): string {
@@ -65,7 +62,7 @@ export function renderPeoplePage(
       .map((day) => day.dayKey)
       .toSorted()
       .at(-1) ??
-    new Date(ctx.nowMs ?? Date.now()).toISOString().slice(0, 10);
+    new Date(Date.now()).toISOString().slice(0, 10);
   const end = Date.parse(`${last}T00:00:00Z`);
   const keys = Array.from({ length: 28 }, (_, index) =>
     new Date(end - (27 - index) * DAY_MS).toISOString().slice(0, 10),
@@ -256,7 +253,12 @@ function archiveTimeline(ctx: PageContext, login: string, days: PersonDay[]): st
     .join("");
 }
 
-export function renderPersonPage(ctx: PageContext, person: Person, days: PersonDay[]): string {
+export function renderPersonPage(
+  ctx: PageContext,
+  person: Person,
+  days: PersonDay[],
+  workSessions?: PersonWorkSessions,
+): string {
   const login = person.github[0] ?? "";
   const display = person.display ?? login;
   const ordered = days.toSorted((a, b) => a.dayKey.localeCompare(b.dayKey));
@@ -265,27 +267,27 @@ export function renderPersonPage(ctx: PageContext, person: Person, days: PersonD
   const sum = (value: (day: PersonDay) => number) =>
     days.reduce((result, day) => result + value(day), 0);
   const totals = [
-    peopleMetric(
+    metric(
       "GitHub",
       sum((day) => day.githubTotal),
     ),
-    peopleMetric(
+    metric(
       "Comments",
       sum((day) => day.issueComments + day.reviewComments),
     ),
-    peopleMetric(
+    metric(
       "Discord",
       sum((day) => day.discordMessages),
     ),
-    peopleMetric(
+    metric(
       "Commits",
       sum((day) => day.commits),
     ),
-    peopleMetric(
+    metric(
       "PRs",
       sum((day) => day.prsOpened + day.prsMerged + day.prsClosed),
     ),
-    peopleMetric(
+    metric(
       "Issues",
       sum((day) => day.issuesOpened + day.issuesClosed),
     ),
@@ -298,7 +300,7 @@ export function renderPersonPage(ctx: PageContext, person: Person, days: PersonD
     .toReversed()
     .map(
       (day) =>
-        `<a class="activity-row" href="${reportHref(ctx, login, day.dayKey)}"><span class="activity-date">${escapeHtml(dayTitle(day.dayKey))}</span><span><strong>${total(day)} events</strong><span>${day.githubTotal} GitHub · ${day.issueComments + day.reviewComments} comments · ${day.discordMessages} Discord · ${day.commits} commits · ${day.prsOpened + day.prsMerged + day.prsClosed} PRs</span></span></a>`,
+        `<a class="activity-row" href="${reportHref(ctx, login, day.dayKey)}"><span class="activity-date">${escapeHtml(formatUtcDay(Date.parse(`${day.dayKey}T00:00:00Z`)))}</span><span><strong>${total(day)} events</strong><span>${day.githubTotal} GitHub · ${day.issueComments + day.reviewComments} comments · ${day.discordMessages} Discord · ${day.commits} commits · ${day.prsOpened + day.prsMerged + day.prsClosed} PRs</span></span></a>`,
     )
     .join("");
   return shell(
@@ -311,7 +313,7 @@ export function renderPersonPage(ctx: PageContext, person: Person, days: PersonD
             .map((alias) => `@${escapeHtml(alias)}`)
             .join(" · ")}</p>`
         : ""
-    }</div></div><div class="oc-card oc-summary-metric"><span class="oc-summary-metric-copy"><small>Active Days</small><strong>${active.length}/${days.length}</strong><small>${latest ? `Latest activity ${escapeHtml(dayTitle(latest.dayKey))}` : "No active days"}</small></span></div></header><section class="oc-summary-strip" aria-label="Member totals over retained days">${totals}</section>${personActivityChart(login, ordered)}<section class="archive-panel oc-section">${sectionHeading("Daily Archive", "timeline")}<div class="legend" aria-label="Activity intensity, low to high"><span class="level-0"></span><span class="level-1"></span><span class="level-2"></span><span class="level-3"></span><span class="level-4"></span></div>${archiveTimeline(ctx, login, ordered) || '<div class="oc-empty"><p class="oc-empty-description">No stored daily reports for this person yet.</p></div>'}</section><section class="archive-panel oc-section">${sectionHeading("Active Days", "history")}<div class="activity-list">${rows || '<p class="muted">No active days recorded.</p>'}</div></section>`,
+    }</div></div><div class="oc-card oc-summary-metric"><span class="oc-summary-metric-copy"><small>Active Days</small><strong>${active.length}/${days.length}</strong><small>${latest ? `Latest activity ${escapeHtml(formatUtcDay(Date.parse(`${latest.dayKey}T00:00:00Z`)))}` : "No active days"}</small></span></div></header><section class="oc-summary-strip" aria-label="Member totals over retained days">${totals}</section>${workSessions ? renderPersonWorkSessions(ctx, login, workSessions) : ""}${personActivityChart(login, ordered)}<section class="archive-panel oc-section">${sectionHeading("Daily Archive", "timeline")}<div class="legend" aria-label="Activity intensity, low to high"><span class="level-0"></span><span class="level-1"></span><span class="level-2"></span><span class="level-3"></span><span class="level-4"></span></div>${archiveTimeline(ctx, login, ordered) || '<div class="oc-empty"><p class="oc-empty-description">No stored daily reports for this person yet.</p></div>'}</section><section class="archive-panel oc-section">${sectionHeading("Active Days", "history")}<div class="activity-list">${rows || '<p class="muted">No active days recorded.</p>'}</div></section>`,
     "person",
   );
 }

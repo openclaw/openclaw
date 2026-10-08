@@ -1,7 +1,6 @@
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { afterAll, describe, expect, it, vi } from "vitest";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 
 vi.mock("./store-maintenance-runtime.js", () => ({
   resolveMaintenanceConfig: () => ({
@@ -17,41 +16,15 @@ vi.mock("./store-maintenance-runtime.js", () => ({
   }),
 }));
 
-import { resolveSessionCleanupAction, runSessionsCleanup } from "./cleanup-service.js";
+import { runSessionsCleanup } from "./cleanup-service.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "./session-accessor.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-cleanup-cap-summary-");
 
 describe("session cleanup cap archives", () => {
-  afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
-  });
-
-  it("reports cap archives separately from dashboard-age archives", () => {
-    const key = "agent:main:dashboard:cap-victim";
-    expect(
-      resolveSessionCleanupAction({
-        key,
-        missingKeys: new Set(),
-        modelRunPrunedKeys: new Set(),
-        archivedKeys: new Set(),
-        capArchivedKeys: new Set([key]),
-        staleKeys: new Set(),
-        cappedKeys: new Set(),
-        dmScopeRetiredKeys: new Set(),
-      }),
-    ).toBe("archive-cap");
-  });
-
   it("separates cap archives in cleanup summary JSON", async () => {
     const now = Date.now();
-    const storePath = path.join(
-      tempDirs.make("openclaw-cleanup-cap-summary-"),
-      "agents",
-      "main",
-      "sessions",
-      "sessions.json",
-    );
+    const storePath = path.join(sessionDirs.make(), "agents", "main", "sessions", "sessions.json");
     for (const [index, updatedAt] of [now - 2, now - 1, now].entries()) {
       const sessionKey = `agent:main:dashboard:ordinary-${index}`;
       replaceSessionEntrySync(
@@ -78,13 +51,7 @@ describe("session cleanup cap archives", () => {
 
   it("uses unarchived pressure consistently in preview and apply", async () => {
     const now = Date.now();
-    const storePath = path.join(
-      tempDirs.make("openclaw-cleanup-cap-archive-"),
-      "agents",
-      "main",
-      "sessions",
-      "sessions.json",
-    );
+    const storePath = path.join(sessionDirs.make(), "agents", "main", "sessions", "sessions.json");
     const probeKey = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
     const entries = [
       [

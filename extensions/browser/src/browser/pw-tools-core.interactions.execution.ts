@@ -1,5 +1,5 @@
+import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import type { Frame, Page } from "playwright-core";
-import { formatErrorMessage } from "../infra/errors.js";
 import {
   ACT_MAX_BATCH_ACTIONS,
   ACT_MAX_BATCH_DEPTH,
@@ -29,6 +29,7 @@ import {
   evaluateViaPlaywright,
   fillFormViaPlaywright,
   hoverViaPlaywright,
+  insertTextViaPlaywright,
   pressKeyViaPlaywright,
   scrollIntoViewViaPlaywright,
   selectOptionViaPlaywright,
@@ -36,6 +37,8 @@ import {
 } from "./pw-tools-core.interactions.actions.js";
 import { waitForViaPlaywright } from "./pw-tools-core.interactions.content.js";
 import {
+  assertInteractionCurrent,
+  BrowserInteractionAuthorityError,
   type GuardedInteractionOptions,
   hasInteractionNavigationPolicy,
   interactionNavigationPolicy,
@@ -52,6 +55,7 @@ async function executeSingleAction(
   navigationPolicy: BrowserNavigationPolicyOptions = {},
   depth = 0,
   signal?: AbortSignal,
+  assertCurrent?: GuardedInteractionOptions["assertCurrent"],
 ): Promise<unknown> {
   if (depth > ACT_MAX_BATCH_DEPTH) {
     throw new Error(`Batch nesting depth exceeds maximum of ${ACT_MAX_BATCH_DEPTH}`);
@@ -62,138 +66,75 @@ async function executeSingleAction(
     targetId: effectiveTargetId,
     ...navigationPolicy,
     signal,
+    assertCurrent,
   };
+  if (assertCurrent) {
+    const assertion = assertInteractionCurrent(interaction);
+    if (assertion) {
+      await assertion;
+    }
+  }
   switch (action.kind) {
     case "click":
-      await clickViaPlaywright({
+      return await clickViaPlaywright({
+        ...action,
         ...interaction,
-        ref: action.ref,
-        selector: action.selector,
-        doubleClick: action.doubleClick,
         button: action.button as "left" | "right" | "middle" | undefined,
         modifiers: action.modifiers as Array<
           "Alt" | "Control" | "ControlOrMeta" | "Meta" | "Shift"
         >,
-        delayMs: action.delayMs,
-        timeoutMs: action.timeoutMs,
       });
-      break;
     case "clickCoords":
-      await clickCoordsViaPlaywright({
+      return await clickCoordsViaPlaywright({
+        ...action,
         ...interaction,
-        x: action.x,
-        y: action.y,
-        doubleClick: action.doubleClick,
         button: action.button as "left" | "right" | "middle" | undefined,
-        delayMs: action.delayMs,
       });
-      break;
     case "type":
-      await typeViaPlaywright({
-        ...interaction,
-        ref: action.ref,
-        selector: action.selector,
-        text: action.text,
-        submit: action.submit,
-        slowly: action.slowly,
-        timeoutMs: action.timeoutMs,
-      });
-      break;
+      return await typeViaPlaywright({ ...action, ...interaction });
+    case "insertText":
+      return await insertTextViaPlaywright({ ...action, ...interaction });
     case "press":
-      await pressKeyViaPlaywright({
-        ...interaction,
-        key: action.key,
-        delayMs: action.delayMs,
-      });
-      break;
+      return await pressKeyViaPlaywright({ ...action, ...interaction });
     case "hover":
-      await hoverViaPlaywright({
-        ...interaction,
-        ref: action.ref,
-        selector: action.selector,
-        timeoutMs: action.timeoutMs,
-      });
-      break;
+      return await hoverViaPlaywright({ ...action, ...interaction });
     case "scrollIntoView":
-      await scrollIntoViewViaPlaywright({
-        ...interaction,
-        ref: action.ref,
-        selector: action.selector,
-        timeoutMs: action.timeoutMs,
-      });
-      break;
+      return await scrollIntoViewViaPlaywright({ ...action, ...interaction });
     case "drag":
-      await dragViaPlaywright({
-        ...interaction,
-        startRef: action.startRef,
-        startSelector: action.startSelector,
-        endRef: action.endRef,
-        endSelector: action.endSelector,
-        timeoutMs: action.timeoutMs,
-      });
-      break;
+      return await dragViaPlaywright({ ...action, ...interaction });
     case "select":
-      await selectOptionViaPlaywright({
-        ...interaction,
-        ref: action.ref,
-        selector: action.selector,
-        values: action.values,
-        timeoutMs: action.timeoutMs,
-      });
-      break;
+      return await selectOptionViaPlaywright({ ...action, ...interaction });
     case "fill":
-      await fillFormViaPlaywright({
-        ...interaction,
-        fields: action.fields,
-        timeoutMs: action.timeoutMs,
-      });
-      break;
+      return await fillFormViaPlaywright({ ...action, ...interaction });
     case "resize":
-      await resizeViewportViaPlaywright({
+      return await resizeViewportViaPlaywright({
         cdpUrl,
         targetId: effectiveTargetId,
         width: action.width,
         height: action.height,
         signal,
+        assertCurrent,
       });
-      break;
     case "wait":
       if (action.fn && !evaluateEnabled) {
         throw new Error("wait --fn is disabled by config (browser.evaluateEnabled=false)");
       }
-      await waitForViaPlaywright({
-        ...interaction,
-        timeMs: action.timeMs,
-        text: action.text,
-        textGone: action.textGone,
-        selector: action.selector,
-        url: action.url,
-        loadState: action.loadState,
-        fn: action.fn,
-        timeoutMs: action.timeoutMs,
-      });
-      break;
+      return await waitForViaPlaywright({ ...action, ...interaction });
     case "evaluate":
       if (!evaluateEnabled) {
         throw new Error("act:evaluate is disabled by config (browser.evaluateEnabled=false)");
       }
-      return await evaluateViaPlaywright({
-        ...interaction,
-        fn: action.fn,
-        ref: action.ref,
-        timeoutMs: action.timeoutMs,
-      });
+      return await evaluateViaPlaywright({ ...action, ...interaction });
     case "close":
-      await closePageViaPlaywright({
+      return await closePageViaPlaywright({
         cdpUrl,
         targetId: effectiveTargetId,
+        assertCurrent,
       });
-      break;
     case "batch": {
       const batch = await batchViaPlaywright({
+        ...action,
         ...interaction,
-        actions: action.actions,
-        stopOnError: action.stopOnError,
         evaluateEnabled,
         depth: depth + 1,
       });
@@ -292,6 +233,7 @@ export async function executeActViaPlaywright(
         stopOnError: opts.action.stopOnError,
         evaluateEnabled: opts.evaluateEnabled,
         signal: dialogAbort.signal,
+        assertCurrent: opts.assertCurrent,
       });
       const newDownloads = await drainDownloads();
       return await withOperationTarget({
@@ -308,15 +250,13 @@ export async function executeActViaPlaywright(
       navigationPolicy,
       0,
       dialogAbort.signal,
+      opts.assertCurrent,
     );
     const newDownloads = await drainDownloads();
-    if (opts.action.kind === "evaluate") {
-      return await withOperationTarget({
-        result,
-        ...(newDownloads ? { downloads: newDownloads } : {}),
-      });
-    }
-    return await withOperationTarget(newDownloads ? { downloads: newDownloads } : {});
+    return await withOperationTarget({
+      ...(opts.action.kind === "evaluate" ? { result } : {}),
+      ...(newDownloads ? { downloads: newDownloads } : {}),
+    });
   } catch (err) {
     let failure = err;
     try {
@@ -353,7 +293,7 @@ export async function executeActViaPlaywright(
   }
 }
 
-export async function batchViaPlaywright(
+async function batchViaPlaywright(
   opts: GuardedInteractionOptions & {
     actions: BrowserActRequest[];
     stopOnError?: boolean;
@@ -383,14 +323,13 @@ export async function batchViaPlaywright(
       : { results, aborted: { reason, afterAction, url, skipped } satisfies BrowserBatchAbort };
   let mainFrameNavigations = 0;
   let navigationsAtLastDispatch = 0;
-  const currentMainFrameUrl = () => page.mainFrame?.().url() ?? page.url();
   const onFrameNavigated = (frame: Frame) => {
-    if (frame === page.mainFrame?.()) {
+    if (frame === page.mainFrame()) {
       mainFrameNavigations += 1;
     }
   };
   const finishNavigation = (afterAction: number, skipped: number) => {
-    const url = currentMainFrameUrl();
+    const url = page.url();
     const lastResult = results.at(-1);
     if (lastResult) {
       results[results.length - 1] = { ...lastResult, navigated: true, url };
@@ -401,7 +340,7 @@ export async function batchViaPlaywright(
   // Snapshot refs are document-scoped, so any committed main-frame navigation
   // ends the batch. A commit after the next action dispatch is inherently unguardable;
   // callers that expect navigation can use separate act calls as the escape hatch.
-  page.on?.("framenavigated", onFrameNavigated);
+  page.on("framenavigated", onFrameNavigated);
   try {
     for (const [index, action] of opts.actions.entries()) {
       if (opts.signal?.aborted) {
@@ -410,8 +349,8 @@ export async function batchViaPlaywright(
       if (mainFrameNavigations > navigationsAtLastDispatch) {
         return finishNavigation(index, opts.actions.length - index);
       }
-      if (page.isClosed?.()) {
-        return finishAborted("closed", index, currentMainFrameUrl(), opts.actions.length - index);
+      if (page.isClosed()) {
+        return finishAborted("closed", index, page.url(), opts.actions.length - index);
       }
       navigationsAtLastDispatch = mainFrameNavigations;
       let result: BrowserBatchActionResult;
@@ -424,10 +363,14 @@ export async function batchViaPlaywright(
           navigationPolicy,
           depth,
           opts.signal,
+          opts.assertCurrent,
         );
         result = { ok: true };
       } catch (err) {
-        if (isBrowserObservedDialogBlockedError(err)) {
+        if (
+          isBrowserObservedDialogBlockedError(err) ||
+          err instanceof BrowserInteractionAuthorityError
+        ) {
           throw err;
         }
         if (isPolicyDenyNavigationError(err)) {
@@ -436,13 +379,8 @@ export async function batchViaPlaywright(
         result = { ok: false, error: formatErrorMessage(err) };
       }
       results.push(result);
-      if (page.isClosed?.()) {
-        return finishAborted(
-          "closed",
-          index + 1,
-          currentMainFrameUrl(),
-          opts.actions.length - index - 1,
-        );
+      if (page.isClosed()) {
+        return finishAborted("closed", index + 1, page.url(), opts.actions.length - index - 1);
       }
       if (mainFrameNavigations > navigationsAtLastDispatch) {
         return finishNavigation(index + 1, opts.actions.length - index - 1);
@@ -453,6 +391,6 @@ export async function batchViaPlaywright(
     }
     return { results };
   } finally {
-    page.off?.("framenavigated", onFrameNavigated);
+    page.off("framenavigated", onFrameNavigated);
   }
 }

@@ -4,9 +4,10 @@ import { listAgentEntriesWithSource, resolveDefaultAgentId } from "../agents/age
 import { resolveSandboxScope } from "../agents/sandbox/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { appendConfigPathSegment } from "../shared/dot-path.js";
 import { runtimeSandboxSecretOwnerId } from "./runtime-sandbox-secret-owner.js";
 import {
-  collectRuntimeSecretInputAssignment,
+  collectCanonicalSecretInputAssignment as collectSecretInputAssignment,
   type ResolverContext,
   type SecretAssignmentOwner,
   type SecretDefaults,
@@ -37,15 +38,10 @@ function collectAssignment(params: {
   inactiveReason: string;
   owner: SecretAssignmentOwner;
 }): void {
-  collectRuntimeSecretInputAssignment({
+  collectSecretInputAssignment({
+    ...params,
     value: params.target[params.key],
-    path: params.path,
     expected: "string",
-    defaults: params.defaults,
-    context: params.context,
-    active: params.active,
-    inactiveReason: params.inactiveReason,
-    owner: params.owner,
     apply: (value) => {
       params.target[params.key] = value;
     },
@@ -68,46 +64,33 @@ export function collectAgentSandboxAssignments(params: {
   const defaultsSandbox = isRecord(defaultsAgent?.sandbox) ? defaultsAgent.sandbox : undefined;
   const defaultsSsh = isRecord(defaultsSandbox?.ssh) ? defaultsSandbox.ssh : undefined;
   const defaultsBackend = normalizeOptionalLowercaseString(defaultsSandbox?.backend) ?? "docker";
-  const candidates = listAgentEntriesWithSource(params.config).map(({ entry, source }) => ({
-    entry,
-    entryId: entry.id,
-    agentPath:
-      source.kind === "entries" ? `agents.entries.${source.key}` : `agents.list.${source.index}`,
-  }));
   const activeDefaultKeys = new Set<SandboxSshSecretKey>();
   const seenAgentIds = new Set<string>();
 
-  for (const candidate of candidates) {
-    const rawAgent = candidate.entry;
-    const rawAgentValue: unknown = rawAgent;
-    if (!isRecord(rawAgentValue)) {
+  for (const { entry: rawAgent, source } of listAgentEntriesWithSource(params.config)) {
+    const rawAgentRecord: unknown = rawAgent;
+    if (!isRecord(rawAgentRecord)) {
       continue;
     }
-    const rawAgentRecord = rawAgentValue;
-    const agentId = normalizeAgentId(candidate.entryId);
+    const agentId = normalizeAgentId(rawAgent.id);
     if (seenAgentIds.has(agentId)) {
       continue;
     }
     seenAgentIds.add(agentId);
+    const agentPath =
+      source.kind === "entries"
+        ? appendConfigPathSegment("agents.entries", source.key)
+        : `agents.list[${source.index}]`;
 
     const sandbox = isRecord(rawAgentRecord.sandbox) ? rawAgentRecord.sandbox : undefined;
     const ssh = isRecord(sandbox?.ssh) ? sandbox.ssh : undefined;
-    const backend =
-      normalizeOptionalLowercaseString(sandbox?.backend) ??
-      normalizeOptionalLowercaseString(defaultsSandbox?.backend) ??
-      "docker";
+    const backend = normalizeOptionalLowercaseString(sandbox?.backend) ?? defaultsBackend;
     const scope = resolveSandboxScope({
       scope:
         typeof sandbox?.scope === "string"
           ? (sandbox.scope as "agent" | "session" | "shared")
           : typeof defaultsSandbox?.scope === "string"
             ? (defaultsSandbox.scope as "agent" | "session" | "shared")
-            : undefined,
-      perSession:
-        typeof sandbox?.["perSession"] === "boolean"
-          ? sandbox["perSession"]
-          : typeof defaultsSandbox?.perSession === "boolean"
-            ? defaultsSandbox.perSession
             : undefined,
     });
     // Existing registry entries remain inspectable/removable after an agent or its
@@ -123,29 +106,22 @@ export function collectAgentSandboxAssignments(params: {
     for (const key of SANDBOX_SSH_SECRET_KEYS) {
       const hasAgentOverride = Boolean(ssh && Object.hasOwn(ssh, key));
       if (hasAgentOverride && ssh) {
-        if (scope !== "shared") {
-          collectAssignment({
-            target: ssh,
-            key,
-            path: `${candidate.agentPath}.sandbox.ssh.${key}`,
-            defaults: params.defaults,
-            context: params.context,
-            active,
-            inactiveReason: "sandbox SSH backend is not configured for this agent.",
-            owner,
-          });
-          continue;
-        }
         collectAssignment({
           target: ssh,
           key,
-          path: `${candidate.agentPath}.sandbox.ssh.${key}`,
+          path: `${agentPath}.sandbox.ssh.${key}`,
           defaults: params.defaults,
           context: params.context,
-          active: false,
-          inactiveReason: "shared sandbox scope ignores agent SSH overrides.",
+          active: scope !== "shared" && active,
+          inactiveReason:
+            scope === "shared"
+              ? "shared sandbox scope ignores agent SSH overrides."
+              : "sandbox SSH backend is not configured for this agent.",
           owner,
         });
+        if (scope !== "shared") {
+          continue;
+        }
       }
 
       if (!defaultsSsh || !Object.hasOwn(defaultsSsh, key)) {

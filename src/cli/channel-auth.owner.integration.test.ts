@@ -3,6 +3,7 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { registerChannelsCli } from "./channels-cli.js";
 
 const fixture = vi.hoisted(() => ({
@@ -101,8 +102,6 @@ describe.each(["login", "logout"])("channels %s owner", (mode) => {
   });
 
   it.each([
-    { name: "parent", parent: ["--agent", "ops"], leaf: [], owner: "ops" },
-    { name: "leaf", parent: [], leaf: ["--agent", "ops"], owner: "ops" },
     {
       name: "leaf overrides parent",
       parent: ["--agent", "research"],
@@ -142,20 +141,25 @@ describe.each(["login", "logout"])("channels %s owner", (mode) => {
     expect(mode === "login" ? fixture.login : fixture.logout).toHaveBeenCalled();
   });
 
-  it("keeps an ownerless fleet from reaching either auth action", async () => {
-    // Agent selection is an expected CLI condition rendered by the root failure
-    // owner; the command rethrows instead of printing its own copy.
-    await expect(runAuth(mode)).rejects.toMatchObject({
-      name: "AgentSelectionRequiredError",
-      message: expect.stringContaining("no explicit owner"),
-    });
+  it.each([undefined, "missing"])(
+    "keeps an ownerless fleet from auth with designation %s",
+    async (agentId) => {
+      fixture.config.agents!.defaults = { systemAgent: { agentId } };
+      // Agent selection is an expected CLI condition rendered by the root failure
+      // owner; the command rethrows instead of printing its own copy.
+      await expect(runAuth(mode)).rejects.toMatchObject({
+        name: "AgentSelectionRequiredError",
+        message: expect.stringContaining("no explicit owner"),
+      });
 
-    expect(fixture.runtime.error).not.toHaveBeenCalled();
-    expect(fixture.runtime.exit).not.toHaveBeenCalled();
-    expect(fixture.catalog).not.toHaveBeenCalled();
-    expect(fixture.login).not.toHaveBeenCalled();
-    expect(fixture.logout).not.toHaveBeenCalled();
-  });
+      expect(fixture.runtime.error).not.toHaveBeenCalled();
+      expect(fixture.runtime.exit).not.toHaveBeenCalled();
+      expect(fixture.catalog).not.toHaveBeenCalled();
+      expect(fixture.loadScoped).not.toHaveBeenCalled();
+      expect(fixture.login).not.toHaveBeenCalled();
+      expect(fixture.logout).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { agent: "missing", error: 'Unknown agent id "missing"' },
@@ -169,17 +173,6 @@ describe.each(["login", "logout"])("channels %s owner", (mode) => {
     expect(fixture.catalog).not.toHaveBeenCalled();
     expect(fixture.login).not.toHaveBeenCalled();
     expect(fixture.logout).not.toHaveBeenCalled();
-  });
-
-  it("rejects a stale configured System Agent before discovery", async () => {
-    fixture.config.agents!.defaults = { systemAgent: { agentId: "missing" } };
-
-    await runAuth(mode);
-
-    expect(fixture.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining('Unknown agent id "missing"'),
-    );
-    expect(fixture.catalog).not.toHaveBeenCalled();
   });
 
   it.each(["???", "OPS"])(
@@ -201,10 +194,15 @@ describe.each(["login", "logout"])("channels %s owner", (mode) => {
     },
   );
 
-  it("keeps the legacy owner when the configured System Agent is unused", async () => {
-    fixture.config.agents!.ownership = undefined;
-    fixture.config.agents!.entries!.research!.default = true;
-    fixture.config.agents!.defaults = { systemAgent: { agentId: "???" } };
+  it("keeps the migrated legacy owner through channel auth", async () => {
+    fixture.config = createCanonicalAgentConfigFixture({
+      agents: {
+        entries: {
+          ...fixture.config.agents!.entries,
+          research: { ...fixture.config.agents!.entries!.research, default: true },
+        },
+      },
+    }).config;
 
     await runAuth(mode);
 

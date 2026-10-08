@@ -44,7 +44,7 @@ type GatewayCandidateConnectionParams = {
   onWinningCandidate: (candidate: NodeHostGatewayConfig) => void;
 };
 
-function formatGatewayCandidateUrl(gateway: NodeHostGatewayConfig): string {
+export function formatGatewayCandidateUrl(gateway: NodeHostGatewayConfig): string {
   const host = gateway.host ?? "127.0.0.1";
   const urlHost =
     host.includes(":") && !(host.startsWith("[") && host.endsWith("]")) ? `[${host}]` : host;
@@ -58,10 +58,6 @@ function formatGatewayCandidateUrl(gateway: NodeHostGatewayConfig): string {
   return `${scheme}://${urlHost}:${port}${contextPath}`;
 }
 
-function canTryNextGatewayCandidate(info: GatewayClientCloseInfo | undefined): boolean {
-  return info?.phase === "pre-hello" && info.connectRequestSent === false;
-}
-
 export function createNodeHostGatewayCandidateConnection(params: GatewayCandidateConnectionParams) {
   if (params.candidates.length === 0) {
     throw new Error("node host gateway candidate list cannot be empty");
@@ -69,6 +65,8 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
 
   let currentCandidateIndex = 0;
   let stopped = false;
+  let stopPromise: Promise<void> | undefined;
+  const candidateClients: GatewayClient[] = [];
   let winnerSelected = params.candidates.length === 1;
   let latestManifest:
     | { caps: string[]; commands: string[]; computerUse?: ComputerUseCapabilityDescriptor }
@@ -115,7 +113,7 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
         }
       },
       onClose: (code, reason, info) => {
-        if (currentCandidateIndex !== candidateIndex) {
+        if (stopped || currentCandidateIndex !== candidateIndex) {
           return;
         }
         params.onClose(code, reason, info);
@@ -126,7 +124,8 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
           // endpoint. Its own reconnect path owns durable device auth from here.
           winnerSelected ||
           nextCandidateIndex >= params.candidates.length ||
-          !canTryNextGatewayCandidate(info)
+          info?.phase !== "pre-hello" ||
+          info.connectRequestSent !== false
         ) {
           return;
         }
@@ -144,16 +143,35 @@ export function createNodeHostGatewayCandidateConnection(params: GatewayCandidat
     if (latestManifest) {
       candidateClient.updateNodeManifest(latestManifest);
     }
+    candidateClients.push(candidateClient);
     return candidateClient;
   }
 
   return {
     start(): void {
-      currentClient.start();
+      if (!stopped) {
+        currentClient.start();
+      }
     },
-    stop(): void {
+    stop(): Promise<void> {
       stopped = true;
-      currentClient.stop();
+      // Retired candidates can still own accepted storage work. Keep terminal failures
+      // because the client's next drain may have already consumed its first error.
+      stopPromise ??= Promise.resolve().then(async () => {
+        const results = await Promise.allSettled(
+          candidateClients.map((client) => client.stopAndWait()),
+        );
+        const failures = results.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length === 1) {
+          throw failures[0];
+        }
+        if (failures.length > 1) {
+          throw new AggregateError(failures, "node host gateway cleanup failed");
+        }
+      });
+      return stopPromise;
     },
     request<T = Record<string, unknown>>(
       ...requestArgs: [method: string, params?: unknown, options?: GatewayClientRequestOptions]

@@ -22,6 +22,23 @@ impl DownloadAuthority {
             Err("The native browser document changed.".to_string())
         }
     }
+
+    fn save(
+        &self,
+        destination: Option<&(std::path::PathBuf, std::path::PathBuf)>,
+        missing: &str,
+        remove_failed_staging: bool,
+    ) -> Result<Value, String> {
+        let (staging, destination) = destination.ok_or(missing)?;
+        let result = self.ensure_current().and_then(|()| {
+            std::fs::rename(staging, destination)
+                .map_err(|error| format!("Could not save this asset: {error}"))
+        });
+        if result.is_err() && remove_failed_staging {
+            let _ = std::fs::remove_file(staging);
+        }
+        result.map(|()| json!({"ok": true, "cancelled": false}))
+    }
 }
 
 pub async fn configure_browser(
@@ -216,11 +233,18 @@ pub async fn observe_navigation(
     .await
 }
 
-pub async fn observe_navigation_failure(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NavigationEvent {
+    Started,
+    Succeeded,
+    Failed,
+}
+
+pub async fn observe_navigation_events(
     webview: &Webview,
-    failed: impl Fn() + Send + Sync + 'static,
+    changed: impl Fn(NavigationEvent) + Send + Sync + 'static,
 ) -> Result<(), String> {
-    let failed = std::sync::Arc::new(failed);
+    let changed = std::sync::Arc::new(changed);
     native(webview, move |platform| {
         #[cfg(target_os = "windows")]
         unsafe {
@@ -236,8 +260,9 @@ pub async fn observe_navigation_failure(
                 .controller()
                 .CoreWebView2()
                 .map_err(|e| e.to_string())?;
-            let latest = Rc::new(Cell::new(0_u64));
+            let latest = Rc::new(Cell::new(None));
             let started = latest.clone();
+            let starting = changed.clone();
             let mut token = 0;
             browser
                 .add_NavigationStarting(
@@ -245,7 +270,8 @@ pub async fn observe_navigation_failure(
                         if let Some(args) = args {
                             let mut id = 0;
                             args.NavigationId(&mut id)?;
-                            started.set(id);
+                            started.set(Some(id));
+                            starting(NavigationEvent::Started);
                         }
                         Ok(())
                     })),
@@ -262,11 +288,13 @@ pub async fn observe_navigation_failure(
                             args.IsSuccess(&mut success)?;
                             args.NavigationId(&mut id)?;
                             args.WebErrorStatus(&mut error)?;
-                            if !success.as_bool()
-                                && (latest.get() == 0 || latest.get() == id)
-                                && error != COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED
-                            {
-                                failed();
+                            if latest.get() == Some(id) {
+                                if success.as_bool() {
+                                    changed(NavigationEvent::Succeeded);
+                                } else if error != COREWEBVIEW2_WEB_ERROR_STATUS_OPERATION_CANCELED
+                                {
+                                    changed(NavigationEvent::Failed);
+                                }
                             }
                         }
                         Ok(())
@@ -277,10 +305,32 @@ pub async fn observe_navigation_failure(
         }
         #[cfg(target_os = "linux")]
         {
+            use std::{cell::Cell, rc::Rc};
+            use webkit2gtk::LoadEvent;
             use webkit2gtk::WebViewExt;
+            let failed = Rc::new(Cell::new(None));
+            let loading = failed.clone();
+            let load_changed = changed.clone();
+            platform
+                .inner()
+                .connect_load_changed(move |_, event| match event {
+                    LoadEvent::Started => {
+                        loading.set(Some(false));
+                        load_changed(NavigationEvent::Started);
+                    }
+                    LoadEvent::Redirected if loading.get() == Some(false) => {
+                        load_changed(NavigationEvent::Started);
+                    }
+                    LoadEvent::Finished if loading.replace(None) == Some(false) => {
+                        load_changed(NavigationEvent::Succeeded);
+                    }
+                    _ => {}
+                });
             platform.inner().connect_load_failed(move |_, _, _, error| {
+                // WebKit emits Finished after failure, including cancellation.
+                failed.set(Some(true));
                 if !error.matches(webkit2gtk::NetworkError::Cancelled) {
-                    failed();
+                    changed(NavigationEvent::Failed);
                 }
                 // Preserve WebKit's default error-page handling.
                 false
@@ -288,7 +338,7 @@ pub async fn observe_navigation_failure(
         }
         #[cfg(target_os = "macos")]
         unsafe {
-            mac_navigation_failure::observe(platform.inner().cast(), failed)?;
+            mac_navigation_events::observe(platform.inner().cast(), changed)?;
         }
         Ok(())
     })
@@ -296,13 +346,13 @@ pub async fn observe_navigation_failure(
 }
 
 #[derive(Clone, Copy)]
-enum Navigation {
+pub(crate) enum Navigation {
     Back,
     Forward,
     Stop,
 }
 
-async fn navigate(webview: &Webview, action: Navigation) -> Result<(), String> {
+pub(crate) async fn navigate(webview: &Webview, action: Navigation) -> Result<(), String> {
     native(webview, move |platform| {
         #[cfg(target_os = "windows")]
         unsafe {
@@ -346,16 +396,6 @@ async fn navigate(webview: &Webview, action: Navigation) -> Result<(), String> {
     .await
 }
 
-pub async fn go_back(webview: &Webview) -> Result<(), String> {
-    navigate(webview, Navigation::Back).await
-}
-pub async fn go_forward(webview: &Webview) -> Result<(), String> {
-    navigate(webview, Navigation::Forward).await
-}
-pub async fn stop(webview: &Webview) -> Result<(), String> {
-    navigate(webview, Navigation::Stop).await
-}
-
 async fn evaluate(webview: &Webview, script: String) -> Result<Value, String> {
     let (reply, receiver) = tokio::sync::oneshot::channel();
     let reply = std::sync::Mutex::new(Some(reply));
@@ -370,9 +410,6 @@ async fn evaluate(webview: &Webview, script: String) -> Result<Value, String> {
 }
 
 pub async fn inspect(webview: &Webview, x: f64, y: f64) -> Result<Value, String> {
-    if !x.is_finite() || !y.is_finite() || x < 0.0 || y < 0.0 {
-        return Err("Choose a point inside the browser page.".to_string());
-    }
     // Use the same source as Chromium and native WebKit. String.raw contains plain JavaScript.
     let source = include_str!("../../../../ui/src/components/browser/browser-inspect-script.ts");
     let script = source
@@ -522,9 +559,7 @@ async fn snapshot_png(webview: &Webview) -> Result<String, String> {
 }
 
 #[cfg(target_os = "windows")]
-pub async fn download(webview: &Webview, generation: u64) -> Result<Value, String> {
-    windows_download::download(webview, generation).await
-}
+pub use windows_download::download;
 
 #[cfg(target_os = "windows")]
 mod windows_download {
@@ -794,20 +829,11 @@ mod windows_download {
             operation.State(&mut state).map_err(|e| e.to_string())?;
             if state == COREWEBVIEW2_DOWNLOAD_STATE_COMPLETED {
                 let destination = self.destination.borrow_mut().take();
-                let result = destination
-                    .ok_or_else(|| {
-                        "The download completed without a selected destination.".to_string()
-                    })
-                    .and_then(|(staging, destination)| {
-                        let saved = self.authority.ensure_current().and_then(|()| {
-                            std::fs::rename(&staging, destination)
-                                .map_err(|e| format!("Could not save this asset: {e}"))
-                        });
-                        if saved.is_err() {
-                            let _ = std::fs::remove_file(staging);
-                        }
-                        saved.map(|_| json!({"ok": true, "cancelled": false}))
-                    });
+                let result = self.authority.save(
+                    destination.as_ref(),
+                    "The download completed without a selected destination.",
+                    true,
+                );
                 self.finish(result);
             } else if state == COREWEBVIEW2_DOWNLOAD_STATE_INTERRUPTED {
                 let mut reason = COREWEBVIEW2_DOWNLOAD_INTERRUPT_REASON::default();
@@ -1215,22 +1241,11 @@ pub async fn download(webview: &Webview, generation: u64) -> Result<Value, Strin
             let completed_authority = authority.clone();
             download.connect_finished(move |_| {
                 if let Some(reply) = completion.borrow_mut().take() {
-                    let result = completed_destination
-                        .borrow_mut()
-                        .take()
-                        .ok_or_else(|| {
-                            "The browser did not select a download destination.".to_string()
-                        })
-                        .and_then(|(staging, destination)| {
-                            let result = completed_authority.ensure_current().and_then(|()| {
-                                std::fs::rename(&staging, destination)
-                                    .map_err(|e| format!("Could not save this asset: {e}"))
-                            });
-                            if result.is_err() {
-                                let _ = std::fs::remove_file(staging);
-                            }
-                            result.map(|_| json!({"ok": true, "cancelled": false}))
-                        });
+                    let result = completed_authority.save(
+                        completed_destination.borrow_mut().take().as_ref(),
+                        "The browser did not select a download destination.",
+                        true,
+                    );
                     let _ = reply.send(result);
                 }
                 if let (Some(browser), Some(handler)) = (
@@ -1267,14 +1282,19 @@ pub async fn download(webview: &Webview, generation: u64) -> Result<Value, Strin
                 .toplevel()
                 .and_then(|widget| widget.downcast::<gtk::Window>().ok());
             download.connect_decide_destination(move |download, filename| {
-                if reply.borrow().is_none() {
-                    download.cancel();
-                    return true;
-                }
-                if let Err(error) = authority.ensure_current() {
-                    if let Some(reply) = reply.borrow_mut().take() {
-                        let _ = reply.send(Err(error));
+                let current = || {
+                    if reply.borrow().is_none() {
+                        return false;
                     }
+                    if let Err(error) = authority.ensure_current() {
+                        if let Some(reply) = reply.borrow_mut().take() {
+                            let _ = reply.send(Err(error));
+                        }
+                        return false;
+                    }
+                    true
+                };
+                if !current() {
                     download.cancel();
                     return true;
                 }
@@ -1302,14 +1322,7 @@ pub async fn download(webview: &Webview, generation: u64) -> Result<Value, Strin
                 dialog.replace(Some(chooser.clone()));
                 let accepted = chooser.run() == gtk::ResponseType::Accept;
                 dialog.borrow_mut().take();
-                if reply.borrow().is_none() {
-                    download.cancel();
-                    return true;
-                }
-                if let Err(error) = authority.ensure_current() {
-                    if let Some(reply) = reply.borrow_mut().take() {
-                        let _ = reply.send(Err(error));
-                    }
+                if !current() {
                     download.cancel();
                     return true;
                 }
@@ -1337,9 +1350,7 @@ pub async fn download(webview: &Webview, generation: u64) -> Result<Value, Strin
 }
 
 #[cfg(target_os = "macos")]
-pub async fn download(webview: &Webview, generation: u64) -> Result<Value, String> {
-    mac_download::download(webview, generation).await
-}
+pub use mac_download::download;
 
 fn download_url(webview: &Webview) -> Result<tauri::Url, String> {
     let url = webview.url().map_err(|e| e.to_string())?;
@@ -1350,7 +1361,8 @@ fn download_url(webview: &Webview) -> Result<tauri::Url, String> {
 }
 
 #[cfg(target_os = "macos")]
-mod mac_navigation_failure {
+mod mac_navigation_events {
+    use super::NavigationEvent;
     use objc2::rc::Retained;
     use objc2::runtime::{AnyObject, ProtocolObject, Sel};
     use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadOnly, Message};
@@ -1360,20 +1372,20 @@ mod mac_navigation_failure {
 
     static PROXY_KEY: u8 = 0;
 
-    struct FailureState {
+    struct NavigationState {
         original: Retained<ProtocolObject<dyn WKNavigationDelegate>>,
         latest: RefCell<Option<Retained<WKNavigation>>>,
-        failed: Arc<dyn Fn() + Send + Sync>,
+        changed: Arc<dyn Fn(NavigationEvent) + Send + Sync>,
     }
 
     define_class!(
         #[unsafe(super = NSObject)]
-        #[name = "OpenClawTauriNavigationFailureProxy"]
+        #[name = "OpenClawTauriNavigationProxy"]
         #[thread_kind = MainThreadOnly]
-        #[ivars = FailureState]
-        struct FailureProxy;
+        #[ivars = NavigationState]
+        struct NavigationProxy;
 
-        unsafe impl NSObjectProtocol for FailureProxy {
+        unsafe impl NSObjectProtocol for NavigationProxy {
             #[unsafe(method(respondsToSelector:))]
             fn responds(&self, selector: Sel) -> bool {
                 let own: bool = unsafe { msg_send![super(self), respondsToSelector: selector] };
@@ -1381,7 +1393,7 @@ mod mac_navigation_failure {
             }
         }
 
-        impl FailureProxy {
+        impl NavigationProxy {
             #[unsafe(method(forwardingTargetForSelector:))]
             fn forwarding_target(&self, selector: Sel) -> Option<&AnyObject> {
                 self.ivars().original.respondsToSelector(selector)
@@ -1389,13 +1401,38 @@ mod mac_navigation_failure {
             }
         }
 
-        unsafe impl WKNavigationDelegate for FailureProxy {
+        unsafe impl WKNavigationDelegate for NavigationProxy {
             #[unsafe(method(webView:didStartProvisionalNavigation:))]
             unsafe fn started(&self, browser: &WKWebView, navigation: Option<&WKNavigation>) {
                 self.ivars().latest.replace(navigation.map(|navigation| navigation.retain()));
                 let original = &self.ivars().original;
                 if original.respondsToSelector(sel!(webView:didStartProvisionalNavigation:)) {
                     original.webView_didStartProvisionalNavigation(browser, navigation);
+                }
+                if self.is_current(navigation) {
+                    (self.ivars().changed)(NavigationEvent::Started);
+                }
+            }
+
+            #[unsafe(method(webView:didReceiveServerRedirectForProvisionalNavigation:))]
+            unsafe fn redirected(&self, browser: &WKWebView, navigation: Option<&WKNavigation>) {
+                let original = &self.ivars().original;
+                if original.respondsToSelector(sel!(webView:didReceiveServerRedirectForProvisionalNavigation:)) {
+                    original.webView_didReceiveServerRedirectForProvisionalNavigation(browser, navigation);
+                }
+                if self.is_current(navigation) {
+                    (self.ivars().changed)(NavigationEvent::Started);
+                }
+            }
+
+            #[unsafe(method(webView:didFinishNavigation:))]
+            unsafe fn finished(&self, browser: &WKWebView, navigation: Option<&WKNavigation>) {
+                let original = &self.ivars().original;
+                if original.respondsToSelector(sel!(webView:didFinishNavigation:)) {
+                    original.webView_didFinishNavigation(browser, navigation);
+                }
+                if self.is_current(navigation) {
+                    (self.ivars().changed)(NavigationEvent::Succeeded);
                 }
             }
 
@@ -1419,37 +1456,41 @@ mod mac_navigation_failure {
         }
     );
 
-    impl FailureProxy {
+    impl NavigationProxy {
+        fn is_current(&self, navigation: Option<&WKNavigation>) -> bool {
+            self.ivars()
+                .latest
+                .borrow()
+                .as_ref()
+                .zip(navigation)
+                .is_some_and(|(latest, navigation)| std::ptr::eq(&**latest, navigation))
+        }
+
         fn report(&self, navigation: Option<&WKNavigation>, error: &NSError) {
             if error.domain().to_string() == "NSURLErrorDomain" && error.code() == -999 {
                 return;
             }
-            let latest = self.ivars().latest.borrow();
-            if let (Some(latest), Some(navigation)) = (latest.as_ref(), navigation) {
-                if !std::ptr::eq(&**latest, navigation) {
-                    return;
-                }
+            if self.is_current(navigation) {
+                (self.ivars().changed)(NavigationEvent::Failed);
             }
-            drop(latest);
-            (self.ivars().failed)();
         }
     }
 
     pub unsafe fn observe(
         browser: *mut WKWebView,
-        failed: Arc<dyn Fn() + Send + Sync>,
+        changed: Arc<dyn Fn(NavigationEvent) + Send + Sync>,
     ) -> Result<(), String> {
         clear(browser);
         let mtm = MainThreadMarker::new().ok_or("The browser is not on the application thread.")?;
         let original = (&*browser)
             .navigationDelegate()
             .ok_or("The browser navigation delegate is unavailable.")?;
-        let proxy = FailureProxy::alloc(mtm).set_ivars(FailureState {
+        let proxy = NavigationProxy::alloc(mtm).set_ivars(NavigationState {
             original,
             latest: RefCell::new(None),
-            failed,
+            changed,
         });
-        let proxy: Retained<FailureProxy> = msg_send![super(proxy), init];
+        let proxy: Retained<NavigationProxy> = msg_send![super(proxy), init];
         // WKWebView's delegate is weak. Retain the forwarding proxy for this view's
         // lifetime, preserving every original Wry policy, script and download callback.
         objc2::ffi::objc_setAssociatedObject(
@@ -1465,7 +1506,7 @@ mod mac_navigation_failure {
     pub unsafe fn clear(browser: *mut WKWebView) {
         let key = (&PROXY_KEY as *const u8).cast();
         let proxy =
-            objc2::ffi::objc_getAssociatedObject(browser.cast(), key).cast::<FailureProxy>();
+            objc2::ffi::objc_getAssociatedObject(browser.cast(), key).cast::<NavigationProxy>();
         if let Some(proxy) = proxy.as_ref() {
             (&*browser).setNavigationDelegate(Some(&proxy.ivars().original));
             objc2::ffi::objc_setAssociatedObject(
@@ -1555,7 +1596,7 @@ pub async fn release(webview: &Webview) -> Result<(), String> {
         #[cfg(target_os = "macos")]
         unsafe {
             mac_observer::clear(platform.inner().cast());
-            mac_navigation_failure::clear(platform.inner().cast());
+            mac_navigation_events::clear(platform.inner().cast());
             mac_download::cancel(&label);
         }
         #[cfg(target_os = "windows")]
@@ -1601,14 +1642,13 @@ mod mac_download {
         reply: RefCell<Option<Reply>>,
         download: RefCell<Option<Retained<WKDownload>>>,
         panel: RefCell<Option<Retained<NSSavePanel>>>,
-        destination: RefCell<Option<PathBuf>>,
-        staging: RefCell<Option<PathBuf>>,
+        destination: RefCell<Option<(PathBuf, PathBuf)>>,
     }
 
     impl Drop for DownloadState {
         fn drop(&mut self) {
-            if let Some(path) = self.staging.get_mut().take() {
-                let _ = std::fs::remove_file(path);
+            if let Some((staging, _)) = self.destination.get_mut().take() {
+                let _ = std::fs::remove_file(staging);
             }
         }
     }
@@ -1686,8 +1726,7 @@ mod mac_download {
                 let staging =
                     path.with_file_name(format!(".openclaw-download-{}", self.ivars().id));
                 let url = NSURL::fileURLWithPath(&NSString::from_str(&staging.to_string_lossy()));
-                self.ivars().destination.replace(Some(path));
-                self.ivars().staging.replace(Some(staging));
+                self.ivars().destination.replace(Some((staging, path)));
                 completion.call((Retained::as_ptr(&url).cast_mut(),));
             }
 
@@ -1697,21 +1736,11 @@ mod mac_download {
                 if self.ivars().reply.borrow().is_none() {
                     return;
                 }
-                let result = (|| {
-                    let staging = self.ivars().staging.borrow();
-                    let destination = self.ivars().destination.borrow();
-                    let (Some(staging), Some(destination)) =
-                        (staging.as_ref(), destination.as_ref())
-                    else {
-                        return Err(
-                            "The browser did not select a download destination.".to_string()
-                        );
-                    };
-                    self.ivars().authority.ensure_current()?;
-                    std::fs::rename(staging, destination)
-                        .map_err(|e| format!("Could not save this asset: {e}"))?;
-                    Ok(json!({"ok": true, "cancelled": false}))
-                })();
+                let result = self.ivars().authority.save(
+                    self.ivars().destination.borrow().as_ref(),
+                    "The browser did not select a download destination.",
+                    false,
+                );
                 self.finish(result);
             }
 
@@ -1747,7 +1776,6 @@ mod mac_download {
                 download: RefCell::new(None),
                 panel: RefCell::new(None),
                 destination: RefCell::new(None),
-                staging: RefCell::new(None),
             });
             unsafe { msg_send![super(this), init] }
         }
@@ -1770,7 +1798,7 @@ mod mac_download {
                     download.cancel(None);
                 }
             }
-            if let Some(staging) = self.ivars().staging.borrow_mut().take() {
+            if let Some((staging, _)) = self.ivars().destination.borrow_mut().take() {
                 let _ = std::fs::remove_file(staging);
             }
             TRANSFERS.with(|transfers| {
@@ -1945,37 +1973,17 @@ pub async fn set_bounds(
     #[cfg(target_os = "linux")]
     return native(webview, move |platform| {
         use gtk::prelude::*;
-        let widget = platform.inner();
-        let parent = widget
-            .parent()
-            .ok_or("The browser has no layout container.")?;
-        let fixed = match parent.downcast::<gtk::Fixed>() {
-            Ok(fixed) => fixed,
-            Err(parent) => {
-                let vbox = parent
-                    .downcast::<gtk::Box>()
-                    .map_err(|_| "The browser layout is unavailable.")?;
-                let overlay = vbox
-                    .children()
-                    .into_iter()
-                    .find_map(|child| child.downcast::<gtk::Overlay>().ok())
-                    .ok_or("The browser surface is unavailable.")?;
-                let fixed = overlay
-                    .children()
-                    .into_iter()
-                    .find_map(|child| child.downcast::<gtk::Fixed>().ok())
-                    .ok_or("The browser layout is unavailable.")?;
-                vbox.remove(&widget);
-                fixed.put(&widget, 0, 0);
-                fixed
-            }
-        };
-        let (x, y) = (position.x.round() as i32, position.y.round() as i32);
-        let (width, height) = (size.width.round() as i32, size.height.round() as i32);
-        widget.set_size_request(width, height);
-        fixed.move_(&widget, x, y);
-        widget.size_allocate(&gtk::Allocation::new(x, y, width, height));
-        Ok(())
+        set_gtk_child_bounds(
+            &platform.inner().upcast(),
+            position,
+            size,
+            [
+                "The browser has no layout container.",
+                "The browser layout is unavailable.",
+                "The browser surface is unavailable.",
+                "The browser layout is unavailable.",
+            ],
+        )
     })
     .await;
     #[cfg(not(target_os = "linux"))]
@@ -1983,4 +1991,41 @@ pub async fn set_bounds(
         webview.set_position(position).map_err(|e| e.to_string())?;
         webview.set_size(size).map_err(|e| e.to_string())
     }
+}
+
+#[cfg(target_os = "linux")]
+pub(crate) fn set_gtk_child_bounds(
+    widget: &gtk::Widget,
+    position: LogicalPosition<f64>,
+    size: LogicalSize<f64>,
+    [missing_parent, invalid_parent, missing_surface, missing_layout]: [&str; 4],
+) -> Result<(), String> {
+    use gtk::prelude::*;
+    let parent = widget.parent().ok_or(missing_parent)?;
+    let fixed = match parent.downcast::<gtk::Fixed>() {
+        Ok(fixed) => fixed,
+        Err(parent) => {
+            let vbox = parent.downcast::<gtk::Box>().map_err(|_| invalid_parent)?;
+            let overlay = vbox
+                .children()
+                .into_iter()
+                .find_map(|child| child.downcast::<gtk::Overlay>().ok())
+                .ok_or(missing_surface)?;
+            let fixed = overlay
+                .children()
+                .into_iter()
+                .find_map(|child| child.downcast::<gtk::Fixed>().ok())
+                .ok_or(missing_layout)?;
+            vbox.remove(widget);
+            fixed.put(widget, 0, 0);
+            fixed
+        }
+    };
+    // Wry's GtkBox-created views ignore bounds even after reparenting; GTK owns this layout.
+    let (x, y) = (position.x.round() as i32, position.y.round() as i32);
+    let (width, height) = (size.width.round() as i32, size.height.round() as i32);
+    widget.set_size_request(width, height);
+    fixed.move_(widget, x, y);
+    widget.size_allocate(&gtk::Allocation::new(x, y, width, height));
+    Ok(())
 }

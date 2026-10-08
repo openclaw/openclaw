@@ -1,5 +1,5 @@
-// Provider catalog helpers normalize, hash, and expose model catalogs for provider plugins.
 import { createHash } from "node:crypto";
+import { addAbortListener } from "node:events";
 import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
 import {
   isFutureDateTimestampMs,
@@ -10,7 +10,11 @@ import { resolveProviderRequestCapabilities } from "../agents/provider-attributi
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { recordLiveCatalogExpiry } from "../plugins/provider-catalog-expiry.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import type { ModelProviderConfig } from "./provider-model-shared.js";
+
+export { normalizeOpenRouterModelReasoning } from "@openclaw/model-catalog-core/model-catalog-normalize";
 
 export type {
   ProviderCatalogContext,
@@ -23,13 +27,11 @@ export { resolveMergedModelProviderConfig } from "../config/model-provider-confi
 export {
   buildManifestModelProviderConfig,
   buildManifestProviderCatalogFamily,
-  buildPairedProviderApiKeyCatalog,
   buildSingleProviderApiKeyCatalog,
   findCatalogTemplate,
   readManifestProviderDefaultModelRef,
   resolveFirstProviderCatalogAuth,
   type ManifestProviderCatalogEntry,
-  type ManifestProviderCatalogSurface,
 } from "../plugins/provider-catalog.js";
 
 /**
@@ -53,61 +55,154 @@ export type ConfiguredProviderCatalogEntry = {
 type LiveCatalogCacheEntry<T> = {
   expiresAt: number;
   value: Promise<T>;
+  controller: AbortController;
+  consumers: number;
+  settled: boolean;
+  retained: boolean;
+  waiters?: Set<Deferred<T>>;
 };
 
 const LIVE_CATALOG_CACHE_MAX_ENTRIES = 100;
-const liveCatalogCache = new Map<string, LiveCatalogCacheEntry<unknown>>();
+const liveCatalogCache = new Map<string, unknown>();
+
+async function consumeLiveCatalog<T>(entry: LiveCatalogCacheEntry<T>, signal?: AbortSignal) {
+  signal?.throwIfAborted();
+  entry.controller.signal.throwIfAborted();
+  entry.consumers += 1;
+  const pending = signal && !entry.settled ? createDeferredCore<T>() : undefined;
+  if (pending) {
+    (entry.waiters ??= new Set()).add(pending);
+  }
+  let released = false;
+  const release = () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    if (pending) {
+      entry.waiters?.delete(pending);
+    }
+    entry.consumers -= 1;
+    // A shared load belongs to all its callers, never the first caller's deadline.
+    if (!entry.settled && entry.consumers === 0) {
+      entry.controller.abort(signal?.reason);
+    }
+  };
+  let listener: Disposable | undefined;
+  try {
+    if (signal && pending) {
+      // Match throwIfAborted(): cancellation preserves arbitrary caller-owned reasons.
+      listener = addAbortListener(signal, () => {
+        // Release before a same-turn completion can retain an abandoned load.
+        release();
+        pending.reject(signal.reason);
+      });
+    }
+    // Promise.race keeps a canceled caller's reactions until the shared load settles.
+    // Removable waiters release its reason and async context while other callers wait.
+    const value = await (pending?.promise ?? entry.value);
+    if (entry.retained) {
+      recordLiveCatalogExpiry(entry.expiresAt);
+    }
+    return value;
+  } finally {
+    listener?.[Symbol.dispose]();
+    release();
+  }
+}
 
 function buildLiveCatalogCacheKey(parts: readonly unknown[]): string {
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
 }
 
 /**
- * Caches one live catalog load promise by stable key parts for a short TTL.
+ * Shares pending loads and caches successful values for a short TTL after completion.
  */
 export async function getCachedLiveCatalogValue<T>(params: {
   /** Stable JSON-serializable values that identify one provider/config catalog load. */
   keyParts: readonly unknown[];
   /** Loader for the live catalog value when no fresh cache entry exists. */
-  load: () => Promise<T>;
+  load: (signal?: AbortSignal) => Promise<T>;
+  /** Cancels this consumer; shared I/O stops only when its last consumer leaves. */
+  signal?: AbortSignal;
   /** Optional predicate for values that are healthy enough to retain. */
   shouldCache?: (value: T) => boolean;
-  /** Cache lifetime in milliseconds; defaults to a short provider-discovery TTL. */
+  /** Successful-value cache lifetime in milliseconds; defaults to a short discovery TTL. */
   ttlMs?: number;
   /** Test hook for deterministic cache expiry. */
   now?: () => number;
 }): Promise<T> {
+  params.signal?.throwIfAborted();
   const rawNow = params.now?.() ?? Date.now();
-  const expiresAt = resolveExpiresAtMsFromDurationMs(params.ttlMs ?? 30_000, { nowMs: rawNow });
+  const ttlMs = params.ttlMs ?? 30_000;
+  const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
   // Uncached callers must neither reuse nor disturb an existing entry.
   if (expiresAt === undefined) {
-    return await params.load();
+    return await params.load(params.signal);
   }
   const key = buildLiveCatalogCacheKey(params.keyParts);
   const existing = liveCatalogCache.get(key) as LiveCatalogCacheEntry<T> | undefined;
   if (existing) {
-    if (isFutureDateTimestampMs(existing.expiresAt, { nowMs: rawNow })) {
-      return await existing.value;
+    // An abandoned load may ignore abort; a new caller must not inherit its cancellation.
+    if (
+      !existing.controller.signal.aborted &&
+      isFutureDateTimestampMs(existing.expiresAt, { nowMs: rawNow })
+    ) {
+      return await consumeLiveCatalog(existing, params.signal);
     }
     liveCatalogCache.delete(key);
   }
-  const entry = { expiresAt, value: params.load() };
-  // Auth-scoped live provider catalogs can vary by token; keep this
-  // process-local cache bounded so discovery cannot grow without limit.
+  const completion = createDeferredCore<T>();
+  // Signaled callers observe their own waiter; an abandoned shared rejection still needs an owner.
+  void completion.promise.catch(() => undefined);
+  const entry: LiveCatalogCacheEntry<T> = {
+    expiresAt,
+    controller: new AbortController(),
+    consumers: 0,
+    settled: false,
+    retained: false,
+    value: completion.promise,
+  };
+  // Auth-scoped catalogs vary by token. Bound retained entries without rejecting
+  // new catalogs or canceling consumers of an evicted load.
   pruneMapToMaxSize(liveCatalogCache, LIVE_CATALOG_CACHE_MAX_ENTRIES - 1);
   liveCatalogCache.set(key, entry);
-  let retain = false;
-  try {
-    const resolved = await entry.value;
-    retain = params.shouldCache?.(resolved) ?? true;
-    return resolved;
-  } finally {
-    // Expired work may finish after a replacement load. Only its own entry
-    // can be removed when loading or the cache predicate fails.
-    if (!retain && liveCatalogCache.get(key) === entry) {
-      liveCatalogCache.delete(key);
+  const consumed = consumeLiveCatalog(entry, params.signal);
+  void (async () => {
+    let retain = false;
+    try {
+      entry.controller.signal.throwIfAborted();
+      const resolved = await params.load(entry.controller.signal);
+      retain = !entry.controller.signal.aborted && (params.shouldCache?.(resolved) ?? true);
+      if (retain) {
+        // A slow success gets a complete TTL without reviving an evicted entry.
+        const completedExpiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, {
+          nowMs: params.now?.() ?? Date.now(),
+        });
+        retain = completedExpiresAt !== undefined;
+        if (completedExpiresAt !== undefined) {
+          entry.expiresAt = completedExpiresAt;
+        }
+      }
+      completion.resolve(resolved);
+      for (const waiter of entry.waiters ?? []) {
+        waiter.resolve(resolved);
+      }
+    } catch (error) {
+      completion.reject(error);
+      for (const waiter of entry.waiters ?? []) {
+        waiter.reject(error);
+      }
+    } finally {
+      entry.waiters = undefined;
+      entry.retained = retain;
+      entry.settled = true;
+      if (!retain && liveCatalogCache.get(key) === entry) {
+        liveCatalogCache.delete(key);
+      }
     }
-  }
+  })();
+  return await consumed;
 }
 
 /**

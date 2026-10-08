@@ -1,14 +1,22 @@
+import type { SubagentRunsDurableBasis } from "../../agents/subagents/registry/subagent-registry-read.types.js";
+import type { OpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
+import type { SqliteSessionGenerationClaim } from "./session-accessor.sqlite-generation.types.js";
 import type { SessionResetBoundaryRequest } from "./session-reset-boundary-event.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** Reset is an append: an empty transcript needs the caller's workspace for its header. */
-export type SessionResetBoundaryWrite = SessionResetBoundaryRequest & { cwd: string };
+export type SessionResetBoundaryWrite = SessionResetBoundaryRequest & {
+  /** Caller-prepared identity when a lifecycle consumer must reopen this exact window. */
+  boundaryId?: string;
+  cwd: string;
+};
 
 export type SessionLifecycleArtifactCleanupParams = {
   agentId?: string;
+  env?: NodeJS.ProcessEnv;
   storePath: string;
   archiveRemovedEntryTranscripts?: boolean;
   /** Preserve explicitly foreign plugin-owned state while retaining ownerless legacy rows. */
@@ -81,6 +89,10 @@ export type DeleteSessionEntryLifecycleResult = {
 };
 
 export type DeleteSessionEntryLifecycleParams = {
+  /** Captured host state source; never part of the cloneable deletion plan. */
+  env?: NodeJS.ProcessEnv;
+  /** Internal durable comparison paired with the caller's live descendant guard. */
+  descendantRunBasis?: SubagentRunsDurableBasis;
   /**
    * Revalidate caller and external lifecycle owners at each synchronous deletion boundary.
    * Must not write the deleting agent database: its Worker may hold the transaction lock.
@@ -96,8 +108,12 @@ export type DeleteSessionEntryLifecycleParams = {
   deleteDeliveryArtifacts?: boolean;
   /** Optional exact row guard checked under the storage writer lock. */
   expectedEntry?: SessionEntry;
-  /** Optional exact ordered transcript guard checked in the deleting SQLite transaction. */
-  expectedTranscript?: { sessionId: string; eventJson: readonly string[] };
+  /** Bind a cross-store handoff to the original physical source at deletion admission. */
+  expectedDatabaseIdentity?: OpenClawAgentDatabaseIdentity;
+  /** Compare remaining source generations with their verified cross-store handoff. */
+  expectedGenerations?: readonly SqliteSessionGenerationClaim[];
+  /** Guard logical-node artifacts when planning or committing entry removal. */
+  expectedNodeArtifactFingerprint?: string;
   /** Optional provider-run identity guard checked under the storage writer lock. */
   expectedSessionId?: string | null;
   /** Optional owner revision guard checked under the storage writer lock. */
@@ -131,22 +147,17 @@ type SessionEntryLifecycleRemovalBase = {
 export type SessionEntryLifecycleRemoval = SessionEntryLifecycleRemovalBase &
   (
     | {
-        /** Doctor repair only: compare-and-delete an entry_json blob that cannot be parsed. */
+        /** Doctor repair only: compare the rejected hot blob and its detached snapshot revision. */
         expectedRawEntryJson: string;
+        expectedSnapshotRevision: number;
         expectedEntry: SessionEntry;
       }
     | {
         expectedRawEntryJson?: never;
+        expectedSnapshotRevision?: never;
         expectedEntry?: SessionEntry;
       }
   );
-
-export class SessionEntryLifecycleUpsertConflictError extends Error {
-  constructor(readonly sessionKey: string) {
-    super(`SQLite session entry changed before lifecycle upsert for ${sessionKey}`);
-    this.name = "SessionEntryLifecycleUpsertConflictError";
-  }
-}
 
 export type SessionEntryLifecycleUpsert = {
   sessionKey: string;

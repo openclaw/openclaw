@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -11,10 +11,36 @@ import { prepareMemoryRuntimeReload } from "./memory-runtime.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { MemoryPluginRuntime } from "./registry-contribution-types.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
-import { createPluginRegistry } from "./registry.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { disposePluginRegistryInstances } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
-import type { PluginRuntime } from "./runtime/types.js";
+
+const cleanupClock = vi.hoisted(() => ({ setTimeout: globalThis.setTimeout }));
+
+beforeEach(() => {
+  const nativeSetTimeout = globalThis.setTimeout;
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"], shouldClearNativeTimers: true });
+  cleanupClock.setTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = nativeSetTimeout;
+});
+afterEach(() => vi.useRealTimers());
+
+vi.mock("./host-hook-cleanup-timeout.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./host-hook-cleanup-timeout.js")>();
+  return {
+    ...actual,
+    withPluginHostCleanupTimeout: <T>(hookId: string, cleanup: () => T | Promise<T>) => {
+      const nativeSetTimeout = globalThis.setTimeout;
+      // Only the cleanup deadline is virtual; asynchronous workers and watchers keep real timers.
+      globalThis.setTimeout = cleanupClock.setTimeout;
+      try {
+        return actual.withPluginHostCleanupTimeout(hookId, cleanup, 500);
+      } finally {
+        globalThis.setTimeout = nativeSetTimeout;
+      }
+    },
+  };
+});
 
 const { memoryRuntime } = await vi.importActual<{ memoryRuntime: MemoryPluginRuntime }>(
   "../../extensions/memory-core/runtime-api.js",
@@ -58,11 +84,7 @@ function registerMemoryOwner(
   config: OpenClawConfig,
   runtimeImplementation: MemoryPluginRuntime = memoryRuntime,
 ) {
-  const owner = createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: {} as PluginRuntime,
-    activateGlobalSideEffects: false,
-  });
+  const owner = createTestPluginRegistry();
   const record = createPluginRecord({
     id: "memory-fixture",
     source: "fixture",
@@ -140,6 +162,7 @@ it.each([
   const entered = createDeferredCore();
   const releaseCreate = createDeferredCore();
   const releaseClose = createDeferredCore();
+  const closeEntered = createDeferredCore();
   const probeEntered = createDeferredCore();
   const releaseProbe = createDeferredCore();
   let rejectClose = mode === "failed-close";
@@ -169,6 +192,7 @@ it.each([
     };
   });
   const close = vi.fn(async () => {
+    closeEntered.resolve();
     expect(getPluginRuntimeGatewayRequestScope()?.pluginId).toBe(targetId);
     if (rejectClose) {
       throw new Error("synthetic provider cleanup refused");
@@ -362,7 +386,10 @@ it.each([
       activatePluginRegistry(next, null, "gateway-bindable", undefined, owner.registry);
       reload.commit();
     } else if (mode === "timeout") {
-      await expect(drain).rejects.toThrow("plugin host cleanup timed out");
+      const expired = expect(drain).rejects.toThrow("plugin host cleanup timed out");
+      await closeEntered.promise;
+      await vi.advanceTimersByTimeAsync(500);
+      await expired;
       activatePluginRegistry(next, null, "gateway-bindable", undefined, owner.registry);
       reload.commit();
       const fresh = await owner.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
@@ -379,7 +406,9 @@ it.each([
       await finalClose;
       expect(close).toHaveBeenCalledOnce();
     } else if (mode === "late-probe") {
-      await expect(drain).rejects.toThrow("plugin host cleanup timed out");
+      const expired = expect(drain).rejects.toThrow("plugin host cleanup timed out");
+      await vi.advanceTimersByTimeAsync(500);
+      await expired;
       activatePluginRegistry(next, null, "gateway-bindable", undefined, owner.registry);
       reload.commit();
       const fresh = await owner.runtime.getMemorySearchManager({ cfg: config, agentId: "main" });
@@ -393,7 +422,7 @@ it.each([
       await expect(reload.close()).resolves.toMatchObject({
         errors: [
           expect.objectContaining({
-            message: expect.stringContaining(`Plugin ${targetId} was reloaded or disabled`),
+            message: `Plugin ${targetId} is retiring`,
           }),
         ],
       });

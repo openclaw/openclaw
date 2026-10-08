@@ -1,17 +1,18 @@
-/**
- * Steers active embedded sessions and waits for transcript commits when needed.
- */
+import {
+  collectErrorGraphCandidates,
+  readErrorCauses,
+} from "@openclaw/normalization-core/error-coercion";
+import {
+  MessageInjectionAcceptedUnconfirmedError,
+  MessageInjectionWithdrawnError,
+} from "../../../auto-reply/reply/message-injection-authority.js";
 import { toErrorObject } from "../../../infra/errors.js";
-import type { ImageContent } from "../../../llm/types.js";
-import type { MediaFact } from "../../../media/media-facts.js";
 import { hasPromptImageInput } from "../../../media/prompt-image-input.js";
-import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
-import type { UserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.types.js";
 import {
   cancelPendingAgentQuestionForSession,
   claimPendingAgentQuestionAnswer,
 } from "../../harness/gateway-question.js";
-import type { AgentMessage } from "../../runtime/index.js";
+import type { AgentSession } from "../../sessions/index.js";
 import { retireQueuedUserMessage } from "../../sessions/queued-user-message-retirement.js";
 import {
   getSteeringMessageIdentity,
@@ -23,29 +24,12 @@ import type {
   EmbeddedAgentQueueMessageResult,
 } from "../run-state.js";
 
-/**
- * Minimal active-session surface needed to steer a running attempt and observe
- * whether the queued user message reached the transcript.
- */
 type EmbeddedAgentActiveSessionSteerTarget = {
-  agent?: {
-    cancelSteeringMessage?: (
-      predicate: (message: AgentMessage) => boolean,
-    ) => AgentMessage | undefined;
-  };
-  steer(
-    text: string,
-    images?: ImageContent[],
-    userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
-    media?: MediaFact[],
-    imageOrder?: PromptImageOrderEntry[],
-    queueIdentity?: string,
-    canInject?: () => boolean,
-  ): Promise<void>;
+  agent?: Partial<Pick<AgentSession["agent"], "cancelSteeringMessage">>;
+  steer: AgentSession["steer"];
   subscribe(listener: (event: unknown) => void): () => void;
 };
 
-/** Default wait for a steered user message to appear in the active transcript. */
 const DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS = 120_000;
 
 class EmbeddedSteeringAcceptedUnconfirmedError extends Error {
@@ -55,61 +39,10 @@ class EmbeddedSteeringAcceptedUnconfirmedError extends Error {
   }
 }
 
-function steerActiveSession(
-  activeSession: EmbeddedAgentActiveSessionSteerTarget,
-  text: string,
-  images?: ImageContent[],
-  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
-  media?: MediaFact[],
-  imageOrder?: PromptImageOrderEntry[],
-  queueIdentity?: string,
-  canInject?: () => boolean,
-): Promise<void> {
-  if (canInject) {
-    return activeSession.steer(
-      text,
-      images,
-      userTurnTranscriptRecorder,
-      media,
-      imageOrder,
-      queueIdentity,
-      canInject,
-    );
-  }
-  if (media?.length || queueIdentity) {
-    return activeSession.steer(
-      text,
-      images,
-      userTurnTranscriptRecorder,
-      media,
-      imageOrder,
-      queueIdentity,
-    );
-  }
-  return userTurnTranscriptRecorder
-    ? activeSession.steer(text, images, userTurnTranscriptRecorder)
-    : activeSession.steer(text, images);
-}
-
-function isQueuedUserMessageEnd(event: unknown, queueIdentity: string): boolean {
-  if (!event || typeof event !== "object") {
-    return false;
-  }
-  const record = event as { message?: unknown; type?: unknown };
-  return (
-    record.type === "message_end" && getSteeringMessageIdentity(record.message) === queueIdentity
+function hasAcceptedSteeringCustody(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, readErrorCauses).some(
+    (candidate) => candidate instanceof MessageInjectionAcceptedUnconfirmedError,
   );
-}
-
-function getTerminalActiveSessionEvent(event: unknown): "settled" | "handoff" | undefined {
-  if (!event || typeof event !== "object") {
-    return undefined;
-  }
-  const type = (event as { type?: unknown }).type;
-  if (type === "agent_settled") {
-    return "settled";
-  }
-  return type === "agent_handoff" ? "handoff" : undefined;
 }
 
 /**
@@ -132,7 +65,7 @@ async function cancelQueuedSteeringMessage(
     return false;
   }
   try {
-    if (!retireQueuedUserMessage(message as AgentMessage)) {
+    if (!retireQueuedUserMessage(message)) {
       log.warn("failed to retire queued steering display entry during cancellation");
     }
   } catch (error) {
@@ -144,122 +77,198 @@ async function cancelQueuedSteeringMessage(
 }
 
 /**
- * Sends a steering message and resolves only after the matching user
- * `message_end` event appears. If the run ends or times out first, the pending
- * queue entry is removed so an abandoned steer does not leak into a later turn.
+ * Tracks one steer until commit or terminal cleanup. Admission-only receipts
+ * resolve after enqueue, but retain exact-message cleanup until the run ends.
+ * Commit-waiting callers also retain their delivery deadline.
  */
-async function steerAndWaitForTranscriptCommit(
+async function steerWithTranscriptLifecycle(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
-  timeoutMs: number,
-  userTurnTranscriptRecorder?: UserTurnTranscriptRecorder,
-  images?: ImageContent[],
-  media?: MediaFact[],
-  imageOrder?: PromptImageOrderEntry[],
-  queueIdentity: string = crypto.randomUUID(),
-  abortSignal?: AbortSignal,
-  onQueueAccepted?: (accepted: boolean) => void,
+  options: EmbeddedAgentQueueMessageOptions,
   canInject?: () => boolean,
+  prepareInjection?: () => Promise<void>,
 ): Promise<void> {
+  const {
+    abortSignal,
+    onQueueAccepted,
+    onQueueSettled,
+    waitForTranscriptCommit,
+    images,
+    userTurnTranscriptRecorder,
+    media,
+    imageOrder,
+    currentInboundContext,
+    queueIdentity = crypto.randomUUID(),
+  } = options;
+  const timeoutMs = options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS;
   await new Promise<void>((resolve, reject) => {
     let settled = false;
     let accepted = false;
     let abortRequested = abortSignal?.aborted === true;
     let acceptanceReported = false;
-    let cancellation: Promise<void> | undefined;
+    let cancellation: Promise<boolean> | undefined;
     let acceptanceOpen = true;
+    const observerErrors: unknown[] = [];
+    const notifyObserver = (callback: (() => void) | undefined) => {
+      try {
+        callback?.();
+      } catch (error) {
+        observerErrors.push(error);
+      }
+    };
     const reportAcceptance = (value: boolean) => {
       if (acceptanceReported) {
         return;
       }
       acceptanceReported = true;
-      onQueueAccepted?.(value);
+      notifyObserver(() => onQueueAccepted?.(value));
+    };
+    const reportRejection = () => {
+      if (!accepted) {
+        reportAcceptance(false);
+      }
     };
     const finish = (err?: unknown) => {
       if (settled) {
         return;
       }
       settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
-      unsubscribe?.();
-      unsubscribePersistenceFailure?.();
+      clearTimeout(timer);
+      notifyObserver(unsubscribe);
+      notifyObserver(unsubscribePersistenceFailure);
       abortSignal?.removeEventListener("abort", onAbort);
-      if (err) {
-        reject(toErrorObject(err, "Non-Error rejection"));
+      notifyObserver(onQueueSettled);
+      const errors = err === undefined ? observerErrors : [err, ...observerErrors];
+      if (errors.length > 0) {
+        const failure =
+          errors.length === 1
+            ? errors[0]
+            : new AggregateError(errors, "Steering completion observers failed", {
+                cause: err === undefined ? errors[0] : err,
+              });
+        reject(
+          accepted &&
+            observerErrors.length > 0 &&
+            !hasAcceptedSteeringCustody(err) &&
+            !(err instanceof MessageInjectionWithdrawnError)
+            ? new EmbeddedSteeringAcceptedUnconfirmedError(
+                "Queued steering was accepted but its completion observer failed",
+                { cause: failure },
+              )
+            : toErrorObject(failure, "Non-Error rejection"),
+        );
         return;
       }
       resolve();
     };
-    const rejectAfterCancellation = (message: string, allowReplay = false) => {
+    const rejectAfterCancellation = (message: string) => {
       acceptanceOpen = false;
-      const wasAccepted = accepted;
-      if (!wasAccepted) {
-        reportAcceptance(false);
-      }
       // Cancellation is best-effort but must finish before rejecting so callers
       // do not return while a stale queued message can leak into the next turn.
-      cancellation ??= cancelQueuedSteeringMessage(activeSession, queueIdentity).then((removed) => {
-        if (!removed && wasAccepted && !allowReplay) {
-          log.warn("failed to find queued steering message for cancellation");
-          throw new EmbeddedSteeringAcceptedUnconfirmedError(message);
-        }
-      });
+      cancellation ??= cancelQueuedSteeringMessage(activeSession, queueIdentity).then(
+        async (removed) => {
+          if (!removed) {
+            // Queue installation precedes admission cleanup. A missing message
+            // cannot prove withdrawal until that independent admission settles.
+            await steering.catch((error: unknown) => {
+              accepted ||= hasAcceptedSteeringCustody(error);
+            });
+          }
+          if (!removed && accepted) {
+            log.warn("failed to find queued steering message for cancellation");
+            throw new EmbeddedSteeringAcceptedUnconfirmedError(message);
+          }
+          return removed;
+        },
+      );
       void cancellation.then(
-        () => finish(new Error(message)),
+        (removed) => {
+          reportRejection();
+          finish(removed ? new MessageInjectionWithdrawnError(message) : new Error(message));
+        },
         (error: unknown) => {
           if (!(error instanceof EmbeddedSteeringAcceptedUnconfirmedError)) {
             log.warn(`failed to cancel queued steering message: ${String(error)}`);
           }
+          reportRejection();
           finish(
             error instanceof EmbeddedSteeringAcceptedUnconfirmedError
               ? error
-              : wasAccepted && !allowReplay
+              : accepted
                 ? new EmbeddedSteeringAcceptedUnconfirmedError(message, { cause: error })
                 : new Error(message, { cause: error }),
           );
         },
       );
     };
-    const rejectBeforeAcceptance = (message: string) => {
-      acceptanceOpen = false;
-      reportAcceptance(false);
-      finish(new Error(message));
-    };
-    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(
-      () => {
-        const message =
-          "queued steering message was not committed to the transcript before timeout";
-        rejectAfterCancellation(message);
-      },
+    const timer = setTimeout(
+      () =>
+        rejectAfterCancellation(
+          "queued steering message was not committed to the transcript before timeout",
+        ),
       Math.max(1, timeoutMs),
     );
     timer.unref?.();
     const unsubscribe: (() => void) | undefined = activeSession.subscribe((event) => {
-      if (isQueuedUserMessageEnd(event, queueIdentity)) {
+      if (!event || typeof event !== "object") {
+        return;
+      }
+      const record = event as { message?: unknown; type?: unknown };
+      if (
+        record.type === "message_end" &&
+        getSteeringMessageIdentity(record.message) === queueIdentity
+      ) {
+        accepted = true;
         finish();
         return;
       }
-      const terminalEvent = getTerminalActiveSessionEvent(event);
-      if (terminalEvent) {
-        const handedOff = terminalEvent === "handoff";
+      const type = record.type;
+      if (type === "agent_settled" || type === "agent_handoff") {
+        const handedOff = type === "agent_handoff";
         const message = `active session ${handedOff ? "handed off" : "ended"} before queued steering message was committed to the transcript`;
         // Terminal state closes admission and owns exact queue cleanup even when
         // steer() enqueued synchronously but its Promise has not settled yet.
-        rejectAfterCancellation(message, handedOff);
+        rejectAfterCancellation(message);
       }
     });
     const unsubscribePersistenceFailure = subscribeSteeringMessagePersistenceFailure(
       queueIdentity,
-      (error) => finish(error),
+      (error) => {
+        acceptanceOpen = false;
+        void steering.then(
+          () => {
+            if (settled) {
+              return;
+            }
+            accepted = true;
+            reportAcceptance(true);
+            finish(error);
+          },
+          (admissionError: unknown) => {
+            if (settled) {
+              return;
+            }
+            accepted ||=
+              hasAcceptedSteeringCustody(admissionError) || hasAcceptedSteeringCustody(error);
+            reportRejection();
+            finish(
+              new AggregateError(
+                [error, admissionError],
+                toErrorObject(error, "Steering persistence failed").message,
+                { cause: error },
+              ),
+            );
+          },
+        );
+      },
     );
     if (abortRequested) {
-      rejectBeforeAcceptance("queued steering message was cancelled before acceptance");
+      acceptanceOpen = false;
+      reportAcceptance(false);
+      finish(new Error("queued steering message was cancelled before acceptance"));
       return;
     }
-    const steer = steerActiveSession(
-      activeSession,
+    const steering = activeSession.steer(
       text,
       images,
       userTurnTranscriptRecorder,
@@ -267,20 +276,38 @@ async function steerAndWaitForTranscriptCommit(
       imageOrder,
       queueIdentity,
       () => acceptanceOpen && (canInject?.() ?? true),
+      currentInboundContext,
+      prepareInjection,
     );
-    void steer.then(
+    void steering.then(
       () => {
+        accepted = true;
         if (!acceptanceOpen) {
           return;
         }
-        accepted = true;
         reportAcceptance(true);
+        if (observerErrors.length > 0) {
+          finish();
+          return;
+        }
         if (abortRequested) {
           rejectAfterCancellation("queued steering message was cancelled before delivery");
+        } else if (waitForTranscriptCommit !== true && acceptanceOpen) {
+          // The caller now owns an admission receipt. Only the receiving run
+          // owns later consumption or withdrawal; do not retain a global failure
+          // listener or the completed caller's abort signal after this point.
+          clearTimeout(timer);
+          unsubscribePersistenceFailure();
+          abortSignal?.removeEventListener("abort", onAbort);
+          resolve();
         }
       },
       (err: unknown) => {
-        reportAcceptance(false);
+        accepted ||= hasAcceptedSteeringCustody(err);
+        if (!acceptanceOpen) {
+          return;
+        }
+        reportRejection();
         finish(err);
       },
     );
@@ -315,10 +342,6 @@ function resolveQuestionAuthority(
   );
 }
 
-/**
- * Steers the active session directly or waits for transcript commitment when a
- * caller needs delivery proof before returning.
- */
 export async function steerActiveSessionWithOptionalDeliveryWait(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
@@ -326,6 +349,7 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
   sessionKey?: string,
   canInject?: () => boolean,
   authority?: Parameters<typeof claimPendingAgentQuestionAnswer>[0]["authority"],
+  prepareInjection?: () => Promise<void>,
 ): Promise<void | EmbeddedAgentQueueMessageResult> {
   const isInboundUserMessage = options?.isInboundUserMessage === true;
   const isPlainTextAnswer = !hasPromptImageInput(options);
@@ -354,12 +378,13 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
     (await claimEmbeddedPendingUserInputAnswer(text, options, sessionKey, canInject, authority))
   ) {
     options?.onQueueAccepted?.(true);
+    options?.onQueueSettled?.();
     return;
   }
-  if (options?.waitForTranscriptCommit !== true) {
+  if (!options || (options.waitForTranscriptCommit === undefined && !options.onQueueSettled)) {
+    let steered = false;
     try {
-      await steerActiveSession(
-        activeSession,
+      await activeSession.steer(
         text,
         options?.images,
         options?.userTurnTranscriptRecorder,
@@ -367,28 +392,38 @@ export async function steerActiveSessionWithOptionalDeliveryWait(
         options?.imageOrder,
         options?.queueIdentity,
         canInject,
+        options?.currentInboundContext,
+        prepareInjection,
       );
+      steered = true;
       options?.onQueueAccepted?.(true);
     } catch (error) {
-      options?.onQueueAccepted?.(false);
+      if (steered) {
+        throw new MessageInjectionAcceptedUnconfirmedError({ cause: error });
+      }
+      if (!hasAcceptedSteeringCustody(error)) {
+        let observerFailure: { error: unknown } | undefined;
+        try {
+          options?.onQueueAccepted?.(false);
+        } catch (observerError) {
+          observerFailure = { error: observerError };
+        }
+        if (observerFailure) {
+          throw new AggregateError(
+            [error, observerFailure.error],
+            "Steering rejection observer failed",
+            {
+              cause: error,
+            },
+          );
+        }
+      }
       throw error;
     }
     return;
   }
   try {
-    await steerAndWaitForTranscriptCommit(
-      activeSession,
-      text,
-      options.deliveryTimeoutMs ?? DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS,
-      options.userTurnTranscriptRecorder,
-      options.images,
-      options.media,
-      options.imageOrder,
-      options.queueIdentity,
-      options.abortSignal,
-      options.onQueueAccepted,
-      canInject,
-    );
+    await steerWithTranscriptLifecycle(activeSession, text, options, canInject, prepareInjection);
   } catch (error) {
     if (error instanceof EmbeddedSteeringAcceptedUnconfirmedError) {
       return { transcriptCommit: "unconfirmed", errorMessage: error.message };
@@ -408,11 +443,10 @@ export async function claimEmbeddedPendingUserInputAnswer(
   if (options?.isInboundUserMessage !== true || hasPromptImageInput(options)) {
     return false;
   }
-  const claimed = await claimPendingAgentQuestionAnswer({
+  return await claimPendingAgentQuestionAnswer({
     sessionKey,
     text,
     authority: resolveQuestionAuthority(canInject, authority),
     sourceRecorder: options.userTurnTranscriptRecorder,
   });
-  return claimed;
 }

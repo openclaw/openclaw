@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import type {
-  ResponseCreateParamsStreaming,
   ResponseOutputItem,
   ResponseOutputMessage,
   ResponseReasoningItem,
@@ -13,6 +12,11 @@ import {
   readResponsesReasoningTokens,
   resolveResponsesTerminalStopReason,
 } from "../providers/openai-responses-terminal-usage.js";
+import {
+  type createResponsesToolCallTracker,
+  readResponsesToolCallItemIdentity,
+  type ResponsesToolCallState,
+} from "../providers/openai-responses-tool-call-tracker.js";
 import type {
   AssistantMessage,
   AssistantMessageEvent,
@@ -23,6 +27,7 @@ import type {
   ToolCall,
   Usage,
 } from "../types.js";
+import { appendAssistantMessageDiagnostic } from "../utils/diagnostics.js";
 import { captureOpenAIResponsesCompaction } from "./openai-responses-compaction-replay.js";
 import {
   OPENAI_RESPONSES_COMPACTION_REPLAY_TYPE,
@@ -31,6 +36,7 @@ import {
 } from "./openai-responses-contracts.js";
 import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
 import type { ResponsesOutputTracker } from "./openai-responses-stream-slots-internal.js";
+import type { ResponsesStreamOptions } from "./openai-responses-stream-types-internal.js";
 import {
   IncompleteToolCallError,
   parseTerminalToolCallArguments,
@@ -49,19 +55,15 @@ export type ResponsesThinkingBlock = ThinkingContent & {
 type TerminalOutput = AssistantMessage & {
   usage: Usage & { reasoningTokens?: number };
 };
-type TerminalOptions = {
-  serviceTier?: ResponseCreateParamsStreaming["service_tier"];
-  resolveServiceTier?: (
-    responseTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-    requestTier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-  ) => ResponseCreateParamsStreaming["service_tier"] | undefined;
-  applyServiceTierPricing?: (
-    usage: Usage,
-    tier: ResponseCreateParamsStreaming["service_tier"] | undefined,
-  ) => void;
-  reasoningReplayMetadata?: OpenAIResponsesReasoningReplayMetadata;
-  resolveResponseModel?: () => string | undefined;
-};
+type TerminalOptions = Pick<
+  ResponsesStreamOptions,
+  | "serviceTier"
+  | "onServiceTier"
+  | "resolveServiceTier"
+  | "applyServiceTierPricing"
+  | "reasoningReplayMetadata"
+  | "resolveResponseModel"
+>;
 
 function splitToolCallId(id: string): [string, string | undefined] {
   const separator = id.indexOf("|");
@@ -86,7 +88,7 @@ export function resolveResponsesToolCallId(
 
 export function resolveCompletedResponsesToolCall(
   item: Extract<ResponseOutputItem, { type: "function_call" }>,
-  streamed?: { name?: string; arguments?: string },
+  streamed?: { name?: string; arguments?: string | Record<string, unknown> },
 ): Pick<ToolCall, "name" | "arguments"> {
   if (item.status && item.status !== "completed") {
     throw new IncompleteToolCallError(
@@ -117,11 +119,24 @@ export function createResponsesTerminalController(params: {
   model: Model;
   options?: TerminalOptions;
   outputs: ResponsesOutputTracker;
+  toolCalls: Pick<
+    ReturnType<typeof createResponsesToolCallTracker<ResponsesToolCallState & { block: ToolCall }>>,
+    "resolve" | "values" | "hasActive"
+  >;
   getLastTextBlock: () => TextBlockReference | null;
   setLastTextBlock: (block: TextBlockReference | null) => void;
 }) {
   const { output, stream, model, options } = params;
   const blocks = output.content;
+  let rejectedToolCallId: string | undefined;
+  const recordIncompleteToolCall = (
+    event: { output_index?: unknown },
+    item: Extract<ResponseOutputItem, { type: "function_call" }>,
+  ) => {
+    const streamed = params.toolCalls.resolve(event, readResponsesToolCallItemIdentity(item));
+    rejectedToolCallId =
+      streamed?.block.id ?? (item.call_id ? resolveResponsesToolCallId(item) : undefined);
+  };
   const backfillReasoning = (items: ResponseOutputItem[]) => {
     for (const [outputIndex, item] of items.entries()) {
       if (item.type !== "reasoning" || !item.encrypted_content) {
@@ -309,6 +324,7 @@ export function createResponsesTerminalController(params: {
     >["response"],
     responseId = response.id,
   ) => {
+    options?.onServiceTier?.(response.service_tier);
     output.responseId = responseId || output.responseId;
     output.responseModel = options?.resolveResponseModel
       ? options.resolveResponseModel()?.trim() || undefined
@@ -334,8 +350,9 @@ export function createResponsesTerminalController(params: {
     response: Extract<
       ResponseStreamEvent,
       { type: "response.completed" | "response.incomplete" }
-    >["response"],
+    >["response"] & { end_turn?: unknown },
     terminalEventType: "response.completed" | "response.incomplete",
+    hasRejectedToolCall: boolean,
   ) => {
     backfillReasoning(response.output ?? []);
     finalizeTerminalFacts(response);
@@ -347,10 +364,63 @@ export function createResponsesTerminalController(params: {
     });
     output.stopReason = terminal.stopReason;
     output.errorMessage = terminal.errorMessage;
+    if (terminalEventType === "response.completed" && typeof response.end_turn === "boolean") {
+      output.endTurn = response.end_turn;
+    }
+    const incompleteReason = response.incomplete_details?.reason;
+    const incompleteCall = response.output?.find(
+      (item) => item.type === "function_call" && item.status && item.status !== "completed",
+    );
+    const incompleteToolCallId =
+      rejectedToolCallId ??
+      (terminalEventType === "response.incomplete" && !hasRejectedToolCall
+        ? params.toolCalls.values()[0]?.block.id
+        : undefined) ??
+      (incompleteCall?.type === "function_call" && incompleteCall.call_id
+        ? resolveResponsesToolCallId(incompleteCall)
+        : undefined);
+    appendAssistantMessageDiagnostic(output, {
+      type: "openai_responses_terminal",
+      timestamp: Date.now(),
+      details: {
+        eventType: terminalEventType,
+        // Keep the canonical status interpretation before tool validation replaces
+        // output.stopReason with an error. Conflicting statuses cannot authorize retry.
+        stopReason: terminal.stopReason,
+        ...(incompleteToolCallId ? { incompleteToolCallId } : {}),
+        ...(terminalEventType === "response.incomplete"
+          ? {
+              incompleteReason:
+                incompleteReason === "max_output_tokens" ||
+                incompleteReason === "max_messages" ||
+                incompleteReason === "content_filter" ||
+                incompleteReason === "steered"
+                  ? incompleteReason
+                  : "unknown",
+            }
+          : {}),
+        endTurn:
+          typeof response.end_turn === "boolean"
+            ? response.end_turn
+            : response.end_turn === undefined
+              ? "absent"
+              : "invalid",
+      },
+    });
+    if (
+      !hasRejectedToolCall &&
+      terminalEventType === "response.incomplete" &&
+      params.toolCalls.hasActive()
+    ) {
+      throw output.errorMessage
+        ? new Error(output.errorMessage)
+        : new IncompleteToolCallError("Responses stream completed with unresolved tool calls");
+    }
   };
   return {
     finalizeResponse,
     finalizeFailedResponse: finalizeTerminalFacts,
+    recordIncompleteToolCall,
     recoverTerminalOutput,
     emitToolCallCompletion,
   };

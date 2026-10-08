@@ -1,4 +1,3 @@
-// Line plugin module owns the postback encoding for ask_user question controls.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -9,10 +8,6 @@ const OPTION_INDEX_PARAM = "line.option";
 const POSTBACK_DATA_MAX_BYTES = 300;
 
 export type LineQuestionPostback = { questionId: string; optionIndex: number };
-
-function withinPostbackLimit(data: string): string | undefined {
-  return Buffer.byteLength(data, "utf8") <= POSTBACK_DATA_MAX_BYTES ? data : undefined;
-}
 
 /** Encodes one ask_user choice into LINE postback data, or nothing when it cannot fit. */
 export function buildLineQuestionPostbackData(callback: LineQuestionPostback): string | undefined {
@@ -25,7 +20,8 @@ export function buildLineQuestionPostbackData(callback: LineQuestionPostback): s
     return undefined;
   }
   params.set(OPTION_INDEX_PARAM, String(callback.optionIndex));
-  return withinPostbackLimit(params.toString());
+  const data = params.toString();
+  return Buffer.byteLength(data, "utf8") <= POSTBACK_DATA_MAX_BYTES ? data : undefined;
 }
 
 /** Reads a question choice back out of inbound postback data, if it carries one. */

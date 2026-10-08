@@ -1,4 +1,3 @@
-// Telegram plugin module implements sendchataction 401 and transient backoff behavior.
 import { GrammyError, type Bot, type Transformer } from "grammy";
 import {
   computeBackoff,
@@ -7,27 +6,11 @@ import {
   type BackoffPolicy,
 } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  isRecoverableTelegramNetworkError,
-  isTelegramRateLimitError,
-  isTelegramServerError,
-  readTelegramRetryAfterMs,
-} from "./network-errors.js";
+import { isRetryableTelegramApiError, readTelegramRetryAfterMs } from "./network-errors.js";
 
 type TelegramSendChatActionLogger = (message: string) => void;
 
-type ChatAction =
-  | "typing"
-  | "upload_photo"
-  | "record_video"
-  | "upload_video"
-  | "record_voice"
-  | "upload_voice"
-  | "upload_document"
-  | "find_location"
-  | "record_video_note"
-  | "upload_video_note"
-  | "choose_sticker";
+type ChatAction = Parameters<Bot["api"]["sendChatAction"]>[1];
 
 type TelegramSendChatActionParams = Parameters<Bot["api"]["sendChatAction"]>[2];
 
@@ -72,23 +55,15 @@ function is401Error(error: unknown): boolean {
     typeof error === "object" &&
     error !== null &&
     "error_code" in error &&
-    typeof (error as { error_code: unknown }).error_code === "number"
+    typeof error.error_code === "number"
   ) {
-    return (error as { error_code: number }).error_code === 401;
+    return error.error_code === 401;
   }
   // Fallback for non-Telegram errors without a structured error_code:
   // match "unauthorized" case-insensitively, but do NOT use bare "401"
   // substring matching — that was the root cause of #94787.
   const message = error instanceof Error ? error.message : JSON.stringify(error);
   return normalizeLowercaseStringOrEmpty(message).includes("unauthorized");
-}
-
-function isTransientSendChatActionError(error: unknown): boolean {
-  return (
-    isTelegramRateLimitError(error) ||
-    isTelegramServerError(error) ||
-    isRecoverableTelegramNetworkError(error, { context: "action" })
-  );
 }
 
 function resolveTransientCooldownMs(error: unknown, attempt: number): number {
@@ -116,11 +91,12 @@ export function createTelegramSendChatActionHandler({
 }: CreateTelegramSendChatActionHandlerParams) {
   let consecutive401Failures = 0;
   let consecutiveTransientFailures = 0;
-  let suspended = false;
   let transientCooldownUntilMs = 0;
   let failureVersion = 0;
   let authorizationRetryTail = Promise.resolve();
   const blockedUntilByKey = new Map<string, number>();
+  const isSuspended = () =>
+    consecutive401Failures > 0 && consecutive401Failures >= maxConsecutive401;
 
   const clearTransientCooldown = () => {
     consecutiveTransientFailures = 0;
@@ -130,7 +106,6 @@ export function createTelegramSendChatActionHandler({
   const reset = () => {
     consecutive401Failures = 0;
     clearTransientCooldown();
-    suspended = false;
     blockedUntilByKey.clear();
   };
 
@@ -140,6 +115,12 @@ export function createTelegramSendChatActionHandler({
       throw new Error(`sendChatAction transient cooldown active for ${Math.ceil(remainingMs)}ms`);
     }
   };
+  const assertCanSend = () => {
+    if (isSuspended()) {
+      throw new Error("sendChatAction suspended");
+    }
+    assertNotCoolingDown();
+  };
 
   const sendChatAction = async (
     chatId: number | string,
@@ -147,7 +128,7 @@ export function createTelegramSendChatActionHandler({
     threadParams: TelegramSendChatActionParams | undefined,
     send: () => Promise<true>,
   ): Promise<void> => {
-    if (suspended) {
+    if (isSuspended()) {
       return;
     }
 
@@ -179,10 +160,7 @@ export function createTelegramSendChatActionHandler({
 
   const sendWithBackoff = async <T>(send: () => Promise<T>, signal: AbortSignal): Promise<T> => {
     signal.throwIfAborted();
-    if (suspended) {
-      throw new Error("sendChatAction suspended");
-    }
-    assertNotCoolingDown();
+    assertCanSend();
     let attemptFailureVersion = failureVersion;
     let releaseAuthorizationRetry: (() => void) | undefined;
     try {
@@ -201,10 +179,7 @@ export function createTelegramSendChatActionHandler({
           }),
         ]);
         signal.throwIfAborted();
-        if (suspended) {
-          throw new Error("sendChatAction suspended");
-        }
-        assertNotCoolingDown();
+        assertCanSend();
       }
       let failuresBeforeBackoff = consecutive401Failures;
       while (failuresBeforeBackoff > 0) {
@@ -215,10 +190,7 @@ export function createTelegramSendChatActionHandler({
         );
         await sleepWithAbort(backoffMs, signal);
         // Another topic can change account state while this request backs off.
-        if (suspended) {
-          throw new Error("sendChatAction suspended");
-        }
-        assertNotCoolingDown();
+        assertCanSend();
         // Earlier in-flight calls can add failures; repeat only for a higher failure count.
         if (consecutive401Failures <= failuresBeforeBackoff) {
           break;
@@ -250,7 +222,6 @@ export function createTelegramSendChatActionHandler({
         consecutive401Failures++;
 
         if (consecutive401Failures >= maxConsecutive401) {
-          suspended = true;
           logger(
             `CRITICAL: sendChatAction suspended after ${consecutive401Failures} consecutive 401 errors. ` +
               `Bot token is likely invalid. Telegram may DELETE the bot if requests continue. ` +
@@ -262,7 +233,7 @@ export function createTelegramSendChatActionHandler({
               `Retrying with exponential backoff.`,
           );
         }
-      } else if (isTransientSendChatActionError(error)) {
+      } else if (isRetryableTelegramApiError(error, { context: "action" })) {
         failureVersion++;
         consecutiveTransientFailures++;
         const cooldownMs = resolveTransientCooldownMs(error, consecutiveTransientFailures);
@@ -318,7 +289,7 @@ export function createTelegramSendChatActionHandler({
   return {
     apiTransformer,
     sendChatAction,
-    isSuspended: () => suspended,
+    isSuspended,
     reset,
   };
 }

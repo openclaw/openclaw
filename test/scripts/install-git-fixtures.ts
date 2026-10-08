@@ -259,3 +259,60 @@ HOOK
       printf 'hook-refusal=head-verified status-verified rebase-state-absent\\n'
     `;
 }
+
+export function createInstallGitCloneFixtureScript(
+  scriptPath: string,
+  setup: string,
+  cloneOptions = "",
+) {
+  return `
+      set -euo pipefail
+      source "${scriptPath}"
+${setup}
+      git() {
+        local target="\${*: -1}"
+        mkdir -p "$target/.git"
+        printf 'complete\\n' > "$target/checkout.marker"
+        if [[ "$CLONE_MODE" == "failure" ]]; then
+          return 42
+        fi
+        if [[ "$CLONE_MODE" == "concurrent" ]]; then
+          mkdir -p "$CONCURRENT_REPO"
+          printf 'keep\\n' > "$CONCURRENT_REPO/user.marker"
+        fi
+        if [[ "$CLONE_MODE" == "retarget-alias" ]]; then
+          [[ "$(dirname "$target")" == "$ALIAS_TARGET" ]]
+          rm "$ALIAS_PATH"
+          ln -s "$ALIAS_REPLACEMENT" "$ALIAS_PATH"
+        fi
+      }
+
+      CLONE_MODE=success
+      success_repo="$root/success"
+      clone_git_checkout_transactionally https://example.invalid/openclaw.git "$success_repo" ${cloneOptions}
+      [[ -f "$success_repo/checkout.marker" ]]
+
+      CLONE_MODE=failure
+      failed_repo="$root/failure"
+      set +e
+      clone_git_checkout_transactionally https://example.invalid/openclaw.git "$failed_repo"
+      failure_status="$?"
+      set -e
+      [[ "$failure_status" -eq 42 ]]
+      [[ ! -e "$failed_repo" ]]
+
+      CLONE_MODE=retarget-alias
+      ALIAS_TARGET="$root/alias-target"
+      ALIAS_REPLACEMENT="$root/alias-replacement"
+      ALIAS_PATH="$root/alias"
+      mkdir -p "$ALIAS_TARGET" "$ALIAS_REPLACEMENT"
+      ln -s "$ALIAS_TARGET" "$ALIAS_PATH"
+      clone_git_checkout_transactionally https://example.invalid/openclaw.git "$ALIAS_PATH"
+      [[ -f "$ALIAS_TARGET/checkout.marker" ]]
+      [[ -z "$(ls -A "$ALIAS_REPLACEMENT")" ]]
+      [[ -z "$(find "$ALIAS_TARGET" -maxdepth 1 -name '.openclaw-clone.*' -print -quit)" ]]
+
+      CLONE_MODE=concurrent
+      CONCURRENT_REPO="$root/concurrent"
+  `;
+}

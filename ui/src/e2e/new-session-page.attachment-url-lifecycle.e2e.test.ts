@@ -124,7 +124,7 @@ suite.define(() => {
 
         await pastePng(composer);
         await page.getByRole("img", { name: "pixel.png" }).waitFor();
-        await page.getByRole("button", { name: "Remove attachment" }).click();
+        await page.getByRole("button", { name: "Remove pixel.png" }).click();
         await expectActiveObjectUrls(0);
 
         await pastePng(composer);
@@ -174,7 +174,7 @@ suite.define(() => {
           unknownRevocations: 0,
         });
         await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(1);
-        await page.getByRole("button", { name: "Remove attachment" }).click();
+        await page.getByRole("button", { name: "Remove pixel.png" }).click();
         await expectActiveObjectUrls(0);
 
         await pastePng(composer);
@@ -187,7 +187,7 @@ suite.define(() => {
         await navigate("new-session");
         await composer.waitFor();
         await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(1);
-        await page.getByRole("button", { name: "Remove attachment" }).click();
+        await page.getByRole("button", { name: "Remove pixel.png" }).click();
         await expectActiveObjectUrls(0);
 
         await pastePng(composer);

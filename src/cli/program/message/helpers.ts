@@ -10,7 +10,8 @@ import {
 } from "../../../channels/plugins/types.public.js";
 import { resolveMessageSecretScope } from "../../../cli/message-secret-scope.js";
 import { parseAccountSelector } from "../../../commands/channels/account-selector.js";
-import { messageCommand } from "../../../commands/message.js";
+import { parseChannelSelector } from "../../../commands/channels/channel-selector.js";
+import type { messageCommand } from "../../../commands/message.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { danger, setVerbose } from "../../../globals.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -22,8 +23,6 @@ import {
   resolveConfiguredChannelPluginIds,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../../plugins/channel-plugin-ids.js";
-import { createHookRunner } from "../../../plugins/hooks.js";
-import { loadPluginRegistryHandle } from "../../../plugins/loader.js";
 import type { PluginRegistry } from "../../../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../../runtime.js";
@@ -32,19 +31,12 @@ import {
   awaitWithinDeadline,
 } from "../../../utils/absolute-deadline.js";
 import { runCommandWithRuntime } from "../../cli-utils.js";
-import { createDefaultDeps } from "../../deps.js";
+import { measureCliCommandStartup } from "../../command-startup-timing.js";
 import { requestExitAfterOneShotOutput } from "../../one-shot-exit.js";
 
-/** Shared helpers used by every message subcommand registration. */
-export type MessageCliHelpers = {
-  withMessageBase: (command: Command) => Command;
-  withMessageTarget: (command: Command) => Command;
-  withRequiredMessageTarget: (command: Command) => Command;
-  runMessageAction: (action: string, opts: Record<string, unknown>) => Promise<void>;
-};
+export type MessageCliHelpers = ReturnType<typeof createMessageCliHelpers>;
 
 const GATEWAY_STOP_TIMEOUT_MS = 2500;
-const ACTIONS_REQUIRING_CONFIGURED_CHANNEL_PRELOAD = new Set(["broadcast"]);
 const CHANNEL_MESSAGE_ACTION_NAME_SET = new Set<string>(CHANNEL_MESSAGE_ACTION_NAMES);
 const STRICT_POSITIVE_INTEGER_OPTIONS = new Map([
   ["pollDurationHours", "--poll-duration-hours"],
@@ -56,23 +48,6 @@ const STRICT_NON_NEGATIVE_INTEGER_OPTIONS = new Map([
   ["durationMin", "--duration-min"],
   ["deleteDays", "--delete-days"],
 ]);
-
-type MessagePluginPreloadPlan = { preload: true; channelId?: string } | { preload: false };
-
-function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, unknown> {
-  const { account, ...rest } = opts;
-  return {
-    ...rest,
-    accountId: typeof account === "string" ? account : rest.accountId,
-  };
-}
-
-function parseMessageChannelSelector(channel: string): string {
-  if (!channel.trim()) {
-    throw new Error("--channel must not be blank");
-  }
-  return channel;
-}
 
 function validateMessageNumericOptions(opts: Record<string, unknown>): void {
   for (const [key, flag] of STRICT_POSITIVE_INTEGER_OPTIONS) {
@@ -94,6 +69,7 @@ function validateMessageNumericOptions(opts: Record<string, unknown>): void {
 }
 
 async function runPluginStopHooks(registry: PluginRegistry): Promise<void> {
+  const { createHookRunner } = await import("../../../plugins/hooks.js");
   const runner = createHookRunner(registry, { logger: createSubsystemLogger("plugins") });
   const result = await awaitWithinDeadline(
     () =>
@@ -109,70 +85,33 @@ async function runPluginStopHooks(registry: PluginRegistry): Promise<void> {
   }
 }
 
-function resolveScopedMessageChannel(opts: Record<string, unknown>): string | undefined {
-  return resolveMessageSecretScope({
-    channel: opts.channel,
-    target: opts.target,
-    targets: opts.targets,
-  }).channel;
-}
-
-function asChannelMessageActionName(action: string): ChannelMessageActionName | undefined {
-  return CHANNEL_MESSAGE_ACTION_NAME_SET.has(action)
-    ? (action as ChannelMessageActionName)
-    : undefined;
-}
-
 function isGatewayOwnedMessageAction(action: string, scopedChannel: string | undefined): boolean {
-  const messageAction = asChannelMessageActionName(action);
-  if (!messageAction || !scopedChannel) {
+  if (!CHANNEL_MESSAGE_ACTION_NAME_SET.has(action) || !scopedChannel) {
     return false;
   }
   const plugin = getChannelPlugin(scopedChannel);
   const executionMode = plugin?.actions?.resolveExecutionMode?.({
-    action: messageAction,
+    action: action as ChannelMessageActionName,
   });
   return executionMode === "gateway";
 }
 
-function resolveMessagePluginPreloadPlan(
-  action: string,
-  opts: Record<string, unknown>,
-): MessagePluginPreloadPlan {
-  const scopedChannel = resolveScopedMessageChannel(opts);
-  // Gateway-owned actions can execute without loading channel plugins in the CLI process;
-  // dry-runs, broadcasts, and local actions need registry metadata before building payloads.
-  if (
-    opts.dryRun === true ||
-    ACTIONS_REQUIRING_CONFIGURED_CHANNEL_PRELOAD.has(action) ||
-    !isGatewayOwnedMessageAction(action, scopedChannel)
-  ) {
-    return { preload: true, ...(scopedChannel ? { channelId: scopedChannel } : {}) };
-  }
-  return { preload: false };
-}
-
 /** Create shared option decorators and the common message action runner. */
-export function createMessageCliHelpers(messageChannelOptions: string): MessageCliHelpers {
+export function createMessageCliHelpers(messageChannelOptions: string) {
   return {
-    withMessageBase: (command) =>
-      command
-        .option(
-          "--channel <channel>",
-          `Channel: ${messageChannelOptions}`,
-          parseMessageChannelSelector,
-        )
+    withMessageBase: (command: Command, target?: "required") => {
+      if (target === "required") {
+        command.requiredOption("-t, --target <dest>", CHANNEL_TARGET_DESCRIPTION);
+      }
+      return command
+        .option("--channel <channel>", `Channel: ${messageChannelOptions}`, parseChannelSelector)
         .option("--account <id>", "Channel account id (accountId)", parseAccountSelector)
         .option("--json", "Output result as JSON", false)
         .option("--dry-run", "Print payload and skip sending", false)
-        .option("--verbose", "Verbose logging", false),
+        .option("--verbose", "Verbose logging", false);
+    },
 
-    withMessageTarget: (command) =>
-      command.option("-t, --target <dest>", CHANNEL_TARGET_DESCRIPTION),
-    withRequiredMessageTarget: (command) =>
-      command.requiredOption("-t, --target <dest>", CHANNEL_TARGET_DESCRIPTION),
-
-    runMessageAction: async (action, opts) => {
+    runMessageAction: async (action: string, opts: Record<string, unknown>) => {
       setVerbose(Boolean(opts.verbose));
       let failed = false;
       let result: Awaited<ReturnType<typeof messageCommand>> | undefined;
@@ -185,14 +124,33 @@ export function createMessageCliHelpers(messageChannelOptions: string): MessageC
             if (action === "poll" && opts.pollAnonymous === true && opts.pollPublic === true) {
               throw new Error("--poll-anonymous and --poll-public are mutually exclusive.");
             }
-            const preloadPlan = resolveMessagePluginPreloadPlan(action, opts);
-            if (preloadPlan.preload) {
+            const { channel: scopedChannel } = resolveMessageSecretScope({
+              channel: opts.channel,
+              target: opts.target,
+              targets: opts.targets,
+            });
+            // Gateway-owned actions need no local plugin runtime; previews and broadcasts do.
+            const preloadPlugins =
+              opts.dryRun === true ||
+              action === "broadcast" ||
+              !isGatewayOwnedMessageAction(action, scopedChannel);
+            await measureCliCommandStartup("config-ready", async () => {
+              const { ensureConfigReady } = await import("../config-guard.js");
+              await ensureConfigReady({
+                runtime: defaultRuntime,
+                commandPath: ["message", action],
+                suppressDoctorStdout: opts.json === true,
+                validateConfigOnly: !preloadPlugins,
+                measure: (stage, run) => measureCliCommandStartup(stage, run),
+              });
+            });
+            if (preloadPlugins) {
               const config = getRuntimeConfig();
-              const pluginIds = preloadPlan.channelId
+              const pluginIds = scopedChannel
                 ? resolveDiscoverableScopedChannelPluginIds({
                     config,
                     activationSourceConfig: config,
-                    channelIds: [preloadPlan.channelId],
+                    channelIds: [scopedChannel],
                     env: process.env,
                   })
                 : resolveConfiguredChannelPluginIds({
@@ -201,6 +159,7 @@ export function createMessageCliHelpers(messageChannelOptions: string): MessageC
                     env: process.env,
                   });
               const activatedConfig = withActivatedPluginIds({ config, pluginIds }) ?? config;
+              const { loadPluginRegistryHandle } = await import("../../../plugins/loader.js");
               pluginRegistry = loadPluginRegistryHandle({
                 config: activatedConfig,
                 activationSourceConfig: activatedConfig,
@@ -208,17 +167,23 @@ export function createMessageCliHelpers(messageChannelOptions: string): MessageC
                 throwOnLoadError: true,
               });
             }
+            const [{ messageCommand }, { createDefaultDeps }] = await Promise.all([
+              import("../../../commands/message.js"),
+              import("../../deps.js"),
+            ]);
             const deps = createDefaultDeps();
-            const run = () =>
+            const { account, ...rest } = opts;
+            result = await withPluginRuntimeRegistryScope(pluginRegistry, () =>
               messageCommand(
                 {
-                  ...normalizeMessageOptions(opts),
+                  ...rest,
+                  accountId: typeof account === "string" ? account : rest.accountId,
                   action,
                 },
                 deps,
                 defaultRuntime,
-              );
-            result = await withPluginRuntimeRegistryScope(pluginRegistry, run);
+              ),
+            );
           },
           (err) => {
             failed = true;

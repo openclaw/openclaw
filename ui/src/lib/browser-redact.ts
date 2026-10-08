@@ -1,4 +1,3 @@
-// Browser-safe redaction for tool details rendered by the Control UI.
 import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
@@ -31,10 +30,6 @@ const SENSITIVE_TEXT_PATTERNS: Array<[RegExp, string]> = [
   [
     /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g,
     "[redacted private key]",
-  ],
-  [
-    /(^|[\s"'`=])(?:\/Users\/|\/home\/|\/var\/folders\/|[A-Za-z]:\\)[^\s"'`,;]+/g,
-    "$1[redacted path]",
   ],
 ];
 

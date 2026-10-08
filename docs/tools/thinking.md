@@ -16,12 +16,12 @@ title: "Thinking levels"
   - xhigh ~ "ultrathink+" (GPT-5.2+ and Codex models, plus Anthropic Claude Opus 4.7+ effort)
   - adaptive → provider-managed adaptive thinking (supported for Claude 4.6 on Anthropic/Bedrock, Anthropic Claude Opus 4.7+, and Google Gemini dynamic thinking)
   - max → provider max reasoning (Anthropic Claude Opus 4.7+; Ollama maps this to its highest native `think` effort)
-  - ultra → proactive sub-agent orchestration with runtime-selected reasoning when the selected model/runtime supports it
+  - ultra → harness-level planning, execution, verification, and proactive sub-agent orchestration; available for every model on the OpenClaw and Claude Code runtimes, and supported native reasoning models on Codex
   - `x-high`, `x_high`, `extra-high`, `extra high`, and `extra_high` map to `xhigh`.
-  - `highest` maps to `high`.
+  - `highest` maps to `high`; `maximum` maps to `max`.
 - Provider notes:
   - Thinking menus and pickers are provider-profile driven. Provider plugins declare the exact level set for the selected model, including labels such as binary `on`.
-  - `adaptive`, `xhigh`, `max`, and `ultra` are only advertised for provider/model/runtime profiles that support them. Typed directives for unsupported levels are rejected with that model's valid options.
+  - `adaptive`, `xhigh`, and `max` are advertised only when the provider/model supports them. Ultra is a separate harness mode, not an additional provider API effort. Typed directives for unsupported native levels are rejected with that model's valid options.
   - Existing stored unsupported levels are remapped by provider profile rank. When `adaptive` is not selectable, it uses the provider's declared non-off default; otherwise its ranked fallback preserves enabled thinking, usually `medium`. `xhigh` and `max` fall back to the largest supported non-off level for the selected model.
   - Anthropic Claude 4.6 models default to `adaptive` when no explicit thinking level is set.
   - Anthropic Claude Opus 4.8 and Opus 4.7 keep thinking off unless you explicitly set a thinking level. Opus 4.8's provider-owned effort default is `high` after adaptive thinking is enabled.
@@ -29,10 +29,11 @@ title: "Thinking levels"
   - Anthropic Claude Opus 4.7+ also exposes `/think max`; it maps to the same provider-owned max effort path.
   - Direct DeepSeek V4 models expose `/think xhigh|max`; both map to DeepSeek `reasoning_effort: "max"` while lower non-off levels map to `high`.
   - OpenRouter-routed DeepSeek V4 models expose `/think xhigh` and send OpenRouter-supported `reasoning.effort` values instead of DeepSeek-native top-level `reasoning_effort`. Lower non-off levels map to `high`, and stored `max` overrides fall back to `xhigh`.
-  - Ollama thinking-capable models expose `/think low|medium|high|max`. Verified full-effort Ollama Cloud families such as GLM 5.2 and DeepSeek V4 send each matching native `think` effort, including `max`; other models and local Ollama keep the compatible `high` mapping for `/think max`.
+  - Ollama thinking-capable models expose `/think low|medium|high|max`. Verified full-effort Ollama Cloud families such as GLM 5.2, GLM 5.3, GLM 5.3 Flash, Kimi K3, DeepSeek V4, and DeepSeek V4.1 Flash send native `think: "max"` for `/think max`; other models and local Ollama keep the compatible `high` mapping.
   - OpenAI GPT models map `/think` through the selected model and auth route's effort support. On supported OpenAI Platform/API-key routes, `/think off` sends explicit `reasoning.effort: "none"`, including when using the Codex runtime. Subscription routes that do not support `none` retain the provider or native runtime's default reasoning behavior; `off` does not guarantee zero reasoning there. Supervised native Codex threads keep their own thinking settings.
-  - GPT-6 Astra and GPT-5.6 Sol and Terra expose native `/think ultra` through the Codex runtime with either Platform API-key or ChatGPT subscription auth. OpenClaw preserves Ultra for ordinary turns; `/btw` intentionally runs at `off`. Codex owns proactive delegation and the model-specific inference effort (Astra uses `xhigh`). Ultra is not sent as a raw Responses API reasoning effort. GPT-5.6 Luna exposes levels through `max` because its Codex catalog does not advertise Ultra.
-  - The embedded OpenClaw runtime exposes logical `/think ultra` for GPT-6 Astra and GPT-5.6 Sol, Terra, and Luna. It sends provider max effort and adds run-scoped proactive sub-agent orchestration guidance.
+  - GPT-6 Astra and GPT-5.6 Sol and Terra expose native `/think ultra` through the Codex runtime with either Platform API-key or ChatGPT subscription auth. OpenClaw preserves Ultra for ordinary turns; `/btw` intentionally runs at `off`. Codex owns proactive delegation and the model-specific inference effort (Astra uses `xhigh`). Ultra is not sent as a raw Responses API reasoning effort. Other Codex models with a native reasoning effort can also use Ultra: Codex selects their supported inference effort while retaining its native delegation policy. Models with no native effort choices can use host-bootstrapped Ultra through the OpenClaw runtime.
+  - The OpenClaw and Claude Code runtimes expose logical `/think ultra` for all models. They select the highest supported native effort and add run-scoped planning and verification guidance. Delegation guidance appears only when `sessions_spawn` is available; Ultra does not grant tools or bypass their policy. Nonreasoning models remain nonreasoning, and models without an effort control retain the provider default.
+  - Changing effort in a cached OpenAI conversation can append a `configuration_update` while keeping the original request-level effort for prompt reuse. The latest update determines effective effort; an unchanged top-level field is not a downgrade.
   - Custom OpenAI-compatible catalog entries can opt into `/think xhigh` by setting `models.providers.<provider>.models[].compat.supportedReasoningEfforts` to include `"xhigh"`. This uses the same compat metadata that maps outbound OpenAI reasoning effort payloads, so menus, session validation, agent CLI, and `llm-task` agree with transport behavior.
   - Since 2026.4.26, stale configured OpenRouter Hunter Alpha refs skip proxy reasoning injection because that retired route could return final answer text through reasoning fields.
   - Google Gemini maps `/think adaptive` to Gemini's provider-owned dynamic thinking. Gemini 3 requests omit a fixed `thinkingLevel`, while Gemini 2.5 requests send `thinkingBudget: -1`; fixed levels still map to the closest Gemini `thinkingLevel` or budget for that model family.
@@ -45,8 +46,45 @@ title: "Thinking levels"
 1. Inline directive on the message (applies only to that message).
 2. Session override (set by sending a directive-only message).
 3. Per-agent default (`agents.entries.*.thinkingDefault` in config).
-4. Global default (`agents.defaults.thinkingDefault` in config).
-5. Fallback: provider-declared default when available; otherwise reasoning-capable models resolve to `medium` or the nearest supported non-`off` level for that model, and non-reasoning models stay `off`.
+4. Per-agent model default (`agents.entries.*.models["<provider>/<model>"].params.thinking` in config).
+5. Shared model default (`agents.defaults.models["<provider>/<model>"].params.thinking` in config).
+6. Global default (`agents.defaults.thinkingDefault` in config).
+7. Fallback: provider-declared default when available; otherwise reasoning-capable models resolve to `medium` or the nearest supported non-`off` level for that model, and non-reasoning models stay `off`.
+
+## Setting a model default
+
+Use `params.thinking` to set the default for one configured model without changing
+the default for your other models. The key must match the provider and model you
+actually select, including any model path exposed by a custom provider.
+
+Replace `<provider>/<model>` with a configured model's full ID, then merge this
+entry into your existing model configuration:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "<provider>/<model>": {
+          params: { thinking: "high" },
+        },
+      },
+    },
+  },
+}
+```
+
+The provider must already be configured, and the model must support the selected
+thinking level.
+
+To change that model's default for one agent, put the same entry under
+`agents.entries.<agent>.models`. This overrides the shared model setting.
+Model `params.thinking` accepts the same aliases as `/think`; `false` and
+`"disabled"` also select `off`.
+
+An inline directive, a saved session override, or a per-agent `thinkingDefault`
+still takes precedence. Send `/think default` to clear a saved session override;
+check the per-agent setting if the model default still does not take effect.
 
 ## Setting a session default
 
@@ -63,11 +101,11 @@ title: "Thinking levels"
 
 ## Fast mode (/fast)
 
-- Levels: `auto|on|off|default`.
+- Levels: `auto|on|off|ultrafast|default`.
 - Directive-only message toggles a session fast-mode override and replies `Fast mode set to auto.`, `Fast mode enabled.`, or `Fast mode disabled.`. Use `/fast default` to clear the session override and inherit the configured default; aliases include `inherit`, `clear`, `reset`, and `unpin`.
 - Send `/fast` (or `/fast status`) with no mode to see the current effective fast-mode state.
 - OpenClaw resolves fast mode in this order:
-  1. Inline `/fast auto|on|off` override on the current message
+  1. Inline `/fast auto|on|off|ultrafast` override on the current message
   2. Stored session override from a directive-only message (`/fast default` clears this layer)
   3. Per-agent default (`agents.entries.*.fastModeDefault`)
   4. Global default (`agents.defaults.fastModeDefault`)
@@ -75,8 +113,9 @@ title: "Thinking levels"
   6. Fallback: `off`
 - Valid model-scoped `params.fastMode` / `params.fast_mode` values and valid cutoff keys are typed agent-runtime controls. They do not count as authored provider request params and do not select OpenClaw or Codex by themselves. Pin `agentRuntime.id: "openclaw"` or `agentRuntime.id: "codex"` when a recipe depends on one runtime.
 - `auto` keeps the session/config mode as auto but resolves each new model call independently. Calls that start before the auto cutoff have fast mode enabled; later retry, fallback, tool-result, or continuation calls start with fast mode disabled. The cutoff defaults to 60 seconds; set `agents.defaults.models["<provider>/<model>"].params.fastAutoOnSeconds` on the active model to change it.
-- For `openai/*`, fast mode maps to OpenAI API Fast mode (formerly Priority processing). OpenClaw currently sends `service_tier=priority` on supported Responses requests.
-- On Codex harness turns, the shared runtime control supersedes a configured native app-server tier: Fast on sends `priority`, Fast off sends `null` to clear the OpenClaw-owned tier, and auto decides for each model call. A configured Codex tier is used only when no shared Fast-mode run control is supplied. See [Codex harness](/plugins/codex-harness/commands#shared-fast-mode-and-codex-fast-mode).
+- For `openai/*`, fast mode maps to OpenAI API Fast mode (formerly Priority processing). OpenClaw sends `service_tier=priority` for ordinary Fast and `service_tier=ultrafast` for explicit Ultrafast on supported Responses requests, including the OpenClaw runtime. The provider decides whether the selected account and model can use that tier; sending it does not guarantee faster service.
+- The Control UI stores Standard as `fastMode: false`, Fast as `true`, and Ultrafast as `"ultrafast"` in the same session preference. On the embedded OpenClaw runtime, Ultrafast availability comes from the selected available API-key OpenAI Responses route, whether the key comes from an auth profile, environment, or provider config (including SecretRefs), without requiring catalog metadata. A response that echoes a different tier suppresses Ultrafast for that selected credential, model, and route while the recorded observation remains current. Changing a direct credential's configured binding clears its observation. ChatGPT accounts still require authenticated catalog support. For an explicit Ultrafast selection with `appServer.enableUltrafast` unset or `true`, Codex rechecks its native catalog at each turn request and falls back to Fast when support is unavailable; a saved preference never grants access.
+- On Codex harness turns, the shared runtime control supersedes a configured native app-server tier: Fast on starts from `priority`, Fast off sends `null` to clear the OpenClaw-owned tier, and auto decides for each model call. A configured Codex tier is used only when no shared Fast-mode run control is supplied. Ultrafast requires an effective shared `"ultrafast"` selection, including an authored `fastModeDefault: "ultrafast"`, and an authenticated app-server catalog that advertises it for the selected native model. Fast, active Auto, and unspecified controls never automatically upgrade or request the Ultrafast catalog. A native `serviceTier: "ultrafast"` starts from `priority` until the shared selection requests it. An unset `appServer.enableUltrafast` or `true` permits explicit selection; `false` hides Ultrafast for the Codex runtime in the picker, sends ordinary Fast (`priority`) even for explicit Ultrafast, and skips the catalog check. Standard and inactive Auto still clear the tier. See [Codex harness](/plugins/codex-harness/commands#shared-fast-mode-and-codex-fast-mode).
 - For direct API-key `anthropic/*` requests, Opus 5 and Opus 4.8 use native `speed=fast`. Other supported models use Priority Tier: on sets `service_tier=auto`, off sets `service_tier=standard_only`. Sonnet 5 supports neither mapping; OAuth requests receive neither field.
 - For `minimax/*` on the Anthropic-compatible path, `/fast on` (or `params.fastMode: true`) rewrites `MiniMax-M2.7` to `MiniMax-M2.7-highspeed`.
 - Explicit Anthropic `serviceTier` / `service_tier` model params override the fast-mode default when both are set. OpenClaw still skips Anthropic service-tier injection for non-Anthropic proxy base URLs.
@@ -95,9 +134,9 @@ title: "Thinking levels"
 - Tool failure summaries remain visible in normal mode, but raw error detail suffixes are hidden unless verbose is `full`.
 - When verbose is `full`, tool outputs are also forwarded after completion (separate bubble, truncated to a safe length). If you toggle `/verbose on|full|off` while a run is in-flight, subsequent tool bubbles honor the new setting.
 - `agents.defaults.toolProgressDetail` controls the shape of `/verbose` tool summaries and progress-draft tool lines. Use `"explain"` (default) for compact human labels and `"raw"` for unabridged non-shell detail. Standalone shell summaries require `/verbose full` for command text; progress drafts require the channel's explicit `streaming.*.commandText: "raw"` opt-in. Per-agent `agents.entries.*.toolProgressDetail` overrides the default.
-  - `/verbose on`: `🛠️ Exec`
-  - `/verbose full` + `explain`: `🛠️ Exec: check JS syntax for /tmp/app.js`
-  - `/verbose full` + `raw`: `🛠️ Exec: check JS syntax for /tmp/app.js, node --check /tmp/app.js`
+  - `/verbose on`: `Exec`
+  - `/verbose full` + `explain`: `check JS syntax for /tmp/app.js`
+  - `/verbose full` + `raw`: `check JS syntax for /tmp/app.js, node --check /tmp/app.js`
 
 ## Plugin trace directives (/trace)
 
@@ -130,11 +169,13 @@ Malformed local-model reasoning tags are handled conservatively. Closed `<think>
 
 ## Heartbeats
 
-- Heartbeat probe body is the configured heartbeat prompt (default: `Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply NO_REPLY.`). Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).
+- Heartbeat check body is the configured heartbeat prompt (default: `Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply NO_REPLY.`). Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).
 - Heartbeat delivery uses the last outbound-capable non-reasoning payload. Separate reasoning or `Thinking` payloads remain internal, and a reasoning-only heartbeat result produces no alert.
 
 ## Web chat UI
 
+- Model, thinking-level, and fast-mode overrides can be changed in an existing session with `operator.write`; administrator access is not required for these three controls. Read-only clients cannot change them.
+- These are session preferences for subsequent turns, not a promise to change an already-running model call. The composer disables the controls while a reply is running and while a model change is being applied.
 - The web chat thinking selector shows the explicit session override, or the inherited configured/provider default when no override is stored.
 - Refreshing, reloading, or compacting a conversation keeps an inherited choice inherited; it does not store the resolved level as an override. While model metadata is loading, refreshes retain the known thinking profile for the same model and runtime.
 - Selecting a level on the effort slider writes an explicit session override immediately via `sessions.patch`; it does not wait for the next send and it is not a one-shot `thinkingOnce` override.
@@ -149,7 +190,7 @@ Malformed local-model reasoning tags are handled conservatively. Closed `<think>
 - Provider plugins can expose `resolveThinkingProfile(ctx)` to define the model's supported levels and default.
 - Provider plugins that proxy Claude models should reuse `resolveClaudeThinkingProfile(modelId)` from `openclaw/plugin-sdk/provider-model-shared` so direct Anthropic and proxy catalogs stay aligned.
 - Each profile level has a stored canonical `id` (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `adaptive`, `max`, or `ultra`) and may include a display `label`. Binary providers use `{ id: "low", label: "on" }`.
-- Profile hooks receive merged catalog facts when available, including `reasoning`, `compat.thinkingFormat`, and `compat.supportedReasoningEfforts`. Use those facts to expose binary or custom profiles only when the configured request contract supports the matching payload.
+- Profile hooks receive merged catalog facts when available, including `reasoning`, `thinkingLevelMap`, `compat.thinkingFormat`, `compat.supportsReasoningEffort`, and `compat.supportedReasoningEfforts`. Use those facts to expose binary or custom profiles only when the configured request contract supports the matching payload. A `null` entry in `thinkingLevelMap` removes that level before choosing a default.
 - Tool plugins that need to validate an explicit thinking override should use `api.runtime.agent.resolveThinkingPolicy({ provider, model, agentRuntime })` plus `api.runtime.agent.normalizeThinkingLevel(...)`; they should not keep their own provider/model level lists. Pass `agentRuntime` when the tool owns the execution path, such as an always-embedded run.
 - Tool plugins with access to configured custom model metadata can pass `catalog` into `resolveThinkingPolicy` so `compat.supportedReasoningEfforts` opt-ins are reflected in plugin-side validation.
 - Published legacy hooks (`supportsXHighThinking`, `isBinaryThinking`, and `resolveDefaultThinkingLevel`) remain as compatibility adapters, but new custom level sets should use `resolveThinkingProfile`.

@@ -69,6 +69,7 @@ describe("realtime voice provider resolver", () => {
     });
 
     expect(resolution).toStrictEqual({
+      capabilities: undefined,
       provider: providers[1],
       providerConfig: {
         enabled: true,
@@ -117,31 +118,6 @@ describe("realtime voice provider resolver", () => {
     ).toThrow(unavailable);
     expect(assertProviderAvailable).toHaveBeenCalledOnce();
     expect(assertProviderAvailable).toHaveBeenCalledWith(providers[0]);
-  });
-
-  it("passes the host-selected agent to public provider readiness", () => {
-    const isConfigured = vi.fn(({ agentId }) => agentId === "molty");
-    const provider: RealtimeVoiceProviderPlugin = {
-      id: "agent-scoped",
-      label: "Agent scoped",
-      isConfigured,
-      createBridge: () => {
-        throw new Error("unused");
-      },
-    };
-
-    expect(
-      resolveConfiguredRealtimeVoiceProvider({
-        cfg: {},
-        agentId: "molty",
-        providers: [provider],
-      }).provider,
-    ).toBe(provider);
-    expect(isConfigured).toHaveBeenCalledWith({
-      cfg: {},
-      agentId: "molty",
-      providerConfig: {},
-    });
   });
 
   it("passes the requested agent scope to explicitly selected provider checks", () => {

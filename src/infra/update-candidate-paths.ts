@@ -1,6 +1,22 @@
 import path from "node:path";
+import { z } from "zod";
+import { isAvatarWorkspacePath } from "../shared/avatar-policy.js";
 import { sha256Hex } from "./crypto-digest.js";
 import { isPathInside, normalizeWindowsPathPreservingCase } from "./path-guards.js";
+
+export const UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME = "plugin-copy-plan.json";
+
+export const UpdateStateDatabaseOwnerSchema = z.discriminatedUnion("role", [
+  z.object({ role: z.literal("global") }),
+  z.object({ role: z.literal("agent"), agentId: z.string().min(1) }),
+]);
+export type UpdateStateDatabaseOwner = z.infer<typeof UpdateStateDatabaseOwnerSchema>;
+/** Every raw spelling discovered for one database, grouped by projection identity. */
+export const StateDatabaseDiscoverySchema = z.object({
+  spellings: z.tuple([z.string()], z.string()),
+  owners: z.array(UpdateStateDatabaseOwnerSchema).optional(),
+});
+export type StateDatabaseDiscovery = z.infer<typeof StateDatabaseDiscoverySchema>;
 
 /**
  * One projection identity per locator, matching the raw canonical-spelling
@@ -16,6 +32,34 @@ export function resolveUpdateCandidateStateIdentity(sourceRoot: string, source: 
     isPathInside(sourceRoot, source)
     ? normalizeWindowsPathPreservingCase(source)
     : source;
+}
+
+export function queueStateDatabaseSpelling(
+  files: Map<string, StateDatabaseDiscovery>,
+  stateRoot: string,
+  file: string,
+  owner?: UpdateStateDatabaseOwner,
+): void {
+  const identity = resolveUpdateCandidateStateIdentity(stateRoot, file);
+  const discovery = files.get(identity);
+  if (discovery) {
+    if (!discovery.spellings.includes(file)) {
+      discovery.spellings.push(file);
+    }
+    if (
+      owner &&
+      !discovery.owners?.some(
+        (current) =>
+          current.role === owner.role &&
+          (current.role === "global" ||
+            (owner.role === "agent" && current.agentId === owner.agentId)),
+      )
+    ) {
+      (discovery.owners ??= []).push(owner);
+    }
+    return;
+  }
+  files.set(identity, { spellings: [file], ...(owner ? { owners: [owner] } : {}) });
 }
 
 // Keep path projection independent of snapshot orchestration: the snapshot owner
@@ -65,4 +109,53 @@ export function resolveUpdateCandidatePluginPath(
         sha256Hex(path.parse(source).root),
         path.relative(path.parse(source).root, source),
       );
+}
+
+/** Decode the ancestry retained by published drivers for external plugin copies. */
+export function resolveUpdateCandidatePluginSourcePath(
+  rehearsalRoot: string,
+  copiedPath: string,
+): string | undefined {
+  const root = path.parse(copiedPath).root;
+  const namespace = path.join(rehearsalRoot, "candidate-plugins", sha256Hex(root));
+  if (
+    !root ||
+    path.normalize(copiedPath) !== copiedPath ||
+    !isPathInside(namespace, copiedPath) ||
+    namespace === copiedPath
+  ) {
+    return undefined;
+  }
+  // Other Windows volumes/UNC roots and managed state-relative copies lost their
+  // original root in the published protocol. A matching path is not source authority.
+  const source = path.join(root, path.relative(namespace, copiedPath));
+  return resolveUpdateCandidatePluginPath(rehearsalRoot, rehearsalRoot, source) === copiedPath
+    ? source
+    : undefined;
+}
+
+/**
+ * Validation confines workspace-path avatars to the agent workspace, which the
+ * candidate relocates. Rebase them against the source workspace so the
+ * candidate accepts exactly the avatars the source did.
+ */
+export function resolveUpdateCandidateAvatar(sourceWorkspaceDir: string, avatar: string): string {
+  const value = avatar.trim();
+  if (!isAvatarWorkspacePath(value)) {
+    return avatar;
+  }
+  // Resolve against the workspace like validation does: a drive-less Windows
+  // root takes the workspace drive, not the process drive.
+  const workspaceRoot = path.resolve(sourceWorkspaceDir);
+  const resolved = path.resolve(workspaceRoot, value);
+  if (!isPathInside(workspaceRoot, resolved)) {
+    // A ../ spelling could land back inside the relocated workspace; the
+    // resolved source path stays outside it.
+    return resolved;
+  }
+  // path.relative cannot see across a \\?\ namespace prefix.
+  const plain = (input: string) =>
+    process.platform === "win32" ? normalizeWindowsPathPreservingCase(input) : input;
+  // The ./ prefix keeps a "~x" or "x:" basename local.
+  return `.${path.sep}${path.relative(plain(workspaceRoot), plain(resolved))}`;
 }

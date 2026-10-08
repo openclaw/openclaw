@@ -10,15 +10,6 @@ enum LogLocator {
         return URL(fileURLWithPath: "/tmp/openclaw")
     }
 
-    private static var stdoutLog: URL {
-        logDir.appendingPathComponent("openclaw-stdout.log")
-    }
-
-    private static var gatewayLog: URL {
-        let suffix = AppProfile.current.name.map { "-\($0)" } ?? ""
-        return logDir.appendingPathComponent("openclaw-gateway\(suffix).log")
-    }
-
     private static func ensureLogDirExists() {
         try? FileManager().createDirectory(at: self.logDir, withIntermediateDirectories: true)
     }
@@ -36,10 +27,9 @@ enum LogLocator {
             includingPropertiesForKeys: [.contentModificationDateKey],
             options: [.skipsHiddenFiles])) ?? []
 
-        let prefixes = ["openclaw"]
         return files
             .filter { file in
-                prefixes.contains { file.lastPathComponent.hasPrefix($0) } && file.pathExtension == "log"
+                file.lastPathComponent.hasPrefix("openclaw") && file.pathExtension == "log"
             }
             .max { lhs, rhs in
                 self.modificationDate(for: lhs) < self.modificationDate(for: rhs)
@@ -49,12 +39,13 @@ enum LogLocator {
     /// Path to use for launchd stdout/err.
     static var launchdLogPath: String {
         self.ensureLogDirExists()
-        return stdoutLog.path
+        return self.logDir.appendingPathComponent("openclaw-stdout.log").path
     }
 
     /// Path to use for the Gateway launchd job stdout/err.
     static var launchdGatewayLogPath: String {
         self.ensureLogDirExists()
-        return gatewayLog.path
+        let suffix = AppProfile.current.name.map { "-\($0)" } ?? ""
+        return self.logDir.appendingPathComponent("openclaw-gateway\(suffix).log").path
     }
 }

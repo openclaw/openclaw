@@ -9,7 +9,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getMatrixRuntime } from "../runtime.js";
 import { resolveMatrixReplyToEventId, resolveMatrixThreadRootId } from "./relations.js";
 import type { MatrixClient } from "./sdk.js";
-import type { MatrixMessageWireDispatch } from "./sdk/client-base.js";
+import type { MatrixMessageWireDispatch } from "./sdk/message-wire-dispatch.js";
 import { withResolvedMatrixSendClient } from "./send/client.js";
 import { createMatrixSendReceipt, type MatrixReceiptEvent } from "./send/receipt.js";
 import { resolveMatrixRoomId } from "./send/targets.js";
@@ -38,6 +38,14 @@ type MatrixDeliveryIdentity = {
   queueId: string;
   partIndex: number;
   partCount: number;
+};
+
+type MatrixDeliveryTarget = {
+  identity: MatrixDeliveryIdentity;
+  accountId?: string | null;
+  roomId: string;
+  transactionScopeId: string;
+  wireEventType: "m.room.message" | "m.room.encrypted";
 };
 
 type MatrixDeliveryPlan = {
@@ -151,7 +159,7 @@ function isPlan(value: unknown): value is MatrixDeliveryPlan {
 function decodePlan(bytes: Uint8Array): MatrixDeliveryPlan {
   let value: unknown;
   try {
-    value = JSON.parse(new TextDecoder().decode(bytes));
+    value = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
   } catch {
     throw new MatrixDeliveryPlanInvariantError("Matrix durable delivery plan is invalid JSON");
   }
@@ -161,16 +169,7 @@ function decodePlan(bytes: Uint8Array): MatrixDeliveryPlan {
   return value;
 }
 
-function assertPlanIdentity(
-  plan: MatrixDeliveryPlan,
-  params: {
-    identity: MatrixDeliveryIdentity;
-    accountId?: string | null;
-    roomId: string;
-    transactionScopeId: string;
-    wireEventType: "m.room.message" | "m.room.encrypted";
-  },
-): void {
+function assertPlanIdentity(plan: MatrixDeliveryPlan, params: MatrixDeliveryTarget): void {
   if (
     plan.queueId !== params.identity.queueId ||
     plan.partIndex !== params.identity.partIndex ||
@@ -229,13 +228,9 @@ export function resolveMatrixDurableDeliveryIdentity(params: {
   };
 }
 
-export async function loadMatrixDeliveryPlan(params: {
-  identity: MatrixDeliveryIdentity;
-  accountId?: string | null;
-  roomId: string;
-  transactionScopeId: string;
-  wireEventType: "m.room.message" | "m.room.encrypted";
-}): Promise<MatrixDeliveryPlan | null> {
+export async function loadMatrixDeliveryPlan(
+  params: MatrixDeliveryTarget,
+): Promise<MatrixDeliveryPlan | null> {
   const entry = await createDeliveryPlanStore().lookup(planKey(params.identity));
   if (!entry) {
     return null;
@@ -248,15 +243,12 @@ export async function loadMatrixDeliveryPlan(params: {
   return structuredClone(plan);
 }
 
-export async function persistMatrixDeliveryPlan(params: {
-  identity: MatrixDeliveryIdentity;
-  accountId?: string | null;
-  roomId: string;
-  transactionScopeId: string;
-  wireEventType: "m.room.message" | "m.room.encrypted";
-  events: readonly MatrixPreparedEvent[];
-  dispatch: MatrixMessageWireDispatch;
-}): Promise<MatrixDeliveryPlan> {
+export async function persistMatrixDeliveryPlan(
+  params: MatrixDeliveryTarget & {
+    events: readonly MatrixPreparedEvent[];
+    dispatch: MatrixMessageWireDispatch;
+  },
+): Promise<MatrixDeliveryPlan> {
   if (params.events.length === 0) {
     throw new Error("Matrix durable delivery plan must contain at least one event");
   }
@@ -309,24 +301,24 @@ export async function persistMatrixDeliveryPlan(params: {
 
 async function loadQueuePlans(queueId: string): Promise<MatrixDeliveryPlan[]> {
   const store = createDeliveryPlanStore();
-  const keys = (await store.entries())
-    .filter((entry) => entry.key.startsWith(queuePrefix(queueId)))
-    .map((entry) => entry.key);
-  return await Promise.all(
-    keys.map(async (key) => {
-      const entry = await store.lookup(key);
-      if (!entry) {
-        throw new MatrixDeliveryPlanInvariantError(
-          "Matrix durable delivery plan disappeared during reconciliation",
-        );
-      }
-      const plan = decodePlan(entry.bytes);
-      if (key !== planKey(plan)) {
-        throw new MatrixDeliveryPlanInvariantError("Matrix durable delivery plan key is invalid");
-      }
-      return plan;
-    }),
-  );
+  const entries = await store.entries();
+  const prefix = entries.length > 0 ? queuePrefix(queueId) : "";
+  const keys = entries.filter((entry) => entry.key.startsWith(prefix)).map((entry) => entry.key);
+  const plans: MatrixDeliveryPlan[] = [];
+  for (const key of keys) {
+    const entry = await store.lookup(key);
+    if (!entry) {
+      throw new MatrixDeliveryPlanInvariantError(
+        "Matrix durable delivery plan disappeared during reconciliation",
+      );
+    }
+    const plan = decodePlan(entry.bytes);
+    if (key !== planKey(plan)) {
+      throw new MatrixDeliveryPlanInvariantError("Matrix durable delivery plan key is invalid");
+    }
+    plans.push(plan);
+  }
+  return plans;
 }
 
 function assertCompletePartTopology(plans: readonly MatrixDeliveryPlan[]): void {
@@ -340,12 +332,8 @@ function assertCompletePartTopology(plans: readonly MatrixDeliveryPlan[]): void 
     );
   }
   const storedParts = new Set(plans.map((plan) => plan.partIndex));
-  if (
-    storedParts.size !== partCount ||
-    Array.from({ length: partCount }, (_, partIndex) => partIndex).some(
-      (partIndex) => !storedParts.has(partIndex),
-    )
-  ) {
+  // Decoding bounds every integer index to [0, partCount), so cardinality proves coverage.
+  if (storedParts.size !== partCount) {
     throw new MatrixDeliveryPlanInvariantError(
       "Matrix ambiguous delivery has an incomplete event plan",
     );
@@ -466,8 +454,10 @@ export async function reconcileMatrixUnknownSend(
 export async function cleanupMatrixDeliveryPlans(ctx: { queueId: string }): Promise<void> {
   const store = createDeliveryPlanStore();
   await store.deleteExpired();
-  const keys = (await store.entries())
-    .filter((entry) => entry.key.startsWith(queuePrefix(ctx.queueId)))
-    .map((entry) => entry.key);
-  await Promise.all(keys.map(async (key) => await store.delete(key)));
+  const entries = await store.entries();
+  const prefix = entries.length > 0 ? queuePrefix(ctx.queueId) : "";
+  const keys = entries.filter((entry) => entry.key.startsWith(prefix)).map((entry) => entry.key);
+  for (const key of keys) {
+    await store.delete(key);
+  }
 }

@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 354540,
-  "reason": "Main crossed the startup enforcement limit after concurrent landings (main alone 354388 B vs 354270 B limit); this PR adds 119 B for provider auth markers in the model picker; measured 354540 B on the rebased tree. Fixed 358400 B cap retained.",
-  "updatedAt": "2026-09-11"
+  "startupJsGzipBytes": 372878,
+  "reason": "Native sidebar bridge landing: measured production startup JS 372,878 B after rebasing onto main, +1,107 B (0.298%) over the prior baseline within the approved sub-1% ceiling rule. Matched-toolchain main measured 372,406 B versus 372,597 B before final action-module extraction (+191 B); retain the existing 512 B growth and 64 B build-variance allowances.",
+  "updatedAt": "2026-10-02"
 }

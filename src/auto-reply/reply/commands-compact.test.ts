@@ -13,6 +13,7 @@ import {
   formatContextUsageShort,
   handleCompactCommand,
   incrementCompactionCount,
+  isEmbeddedAgentRunAbortableForCompaction,
   requireCompactEmbeddedAgentSessionCall,
   requireIncrementCompactionCountCall,
   requireResolveAgentDirCall,
@@ -22,15 +23,17 @@ import {
 } from "./commands-compact.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
+const compactCommandConfig: OpenClawConfig = {
+  commands: { text: true },
+  channels: { whatsapp: { allowFrom: ["*"] } },
+};
+
 describe("handleCompactCommand", () => {
   beforeEach(resetCompactCommandMocks);
 
   it("returns null when command is not /compact", async () => {
     const result = await handleCompactCommand(
-      buildCompactParams("/status", {
-        commands: { text: true },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      } as OpenClawConfig),
+      buildCompactParams("/status", compactCommandConfig),
       true,
     );
 
@@ -39,10 +42,7 @@ describe("handleCompactCommand", () => {
   });
 
   it("rejects unauthorized /compact commands", async () => {
-    const params = buildCompactParams("/compact", {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
+    const params = buildCompactParams("/compact", compactCommandConfig);
 
     const result = await handleCompactCommand(
       {
@@ -133,10 +133,7 @@ describe("handleCompactCommand", () => {
       compacted: false,
     });
     const ownerIds = Array.from({ length: 24 }, (_, index) => `owner-${index}`);
-    const params = buildCompactParams("/compact", {
-      commands: { text: true },
-      channels: { whatsapp: { allowFrom: ["*"] } },
-    } as OpenClawConfig);
+    const params = buildCompactParams("/compact", compactCommandConfig);
     params.command = {
       ...params.command,
       ownerList: ownerIds,
@@ -166,10 +163,7 @@ describe("handleCompactCommand", () => {
 
     const result = await handleCompactCommand(
       {
-        ...buildCompactParams("/compact", {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
+        ...buildCompactParams("/compact", compactCommandConfig),
         sessionEntry: {
           sessionId: "session-1",
           updatedAt: Date.now(),
@@ -194,10 +188,7 @@ describe("handleCompactCommand", () => {
 
     const result = await handleCompactCommand(
       {
-        ...buildCompactParams("/compact", {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
+        ...buildCompactParams("/compact", compactCommandConfig),
         sessionEntry: {
           sessionId: "session-1",
           updatedAt: Date.now(),
@@ -221,10 +212,7 @@ describe("handleCompactCommand", () => {
 
     const result = await handleCompactCommand(
       {
-        ...buildCompactParams("/compact", {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
+        ...buildCompactParams("/compact", compactCommandConfig),
         sessionEntry: {
           sessionId: "session-1",
           updatedAt: Date.now(),
@@ -383,10 +371,7 @@ describe("handleCompactCommand", () => {
 
     await handleCompactCommand(
       {
-        ...buildCompactParams("/compact", {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
+        ...buildCompactParams("/compact", compactCommandConfig),
         sessionKey: "agent:target:whatsapp:direct:12345",
         sessionEntry: {
           sessionId: "wrapper-session",
@@ -432,10 +417,7 @@ describe("handleCompactCommand", () => {
 
     await handleCompactCommand(
       {
-        ...buildCompactParams("/compact", {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
+        ...buildCompactParams("/compact", compactCommandConfig),
         sessionEntry: {
           sessionId: "locked-session",
           updatedAt: Date.now(),
@@ -474,10 +456,7 @@ describe("handleCompactCommand", () => {
     try {
       await handleCompactCommand(
         {
-          ...buildCompactParams("/compact", {
-            commands: { text: true },
-            channels: { whatsapp: { allowFrom: ["*"] } },
-          } as OpenClawConfig),
+          ...buildCompactParams("/compact", compactCommandConfig),
           provider: "anthropic",
           sessionEntry: {
             sessionId: "cli-session",
@@ -540,10 +519,7 @@ describe("handleCompactCommand", () => {
       try {
         await handleCompactCommand(
           {
-            ...buildCompactParams("/compact", {
-              commands: { text: true },
-              channels: { whatsapp: { allowFrom: ["*"] } },
-            } as OpenClawConfig),
+            ...buildCompactParams("/compact", compactCommandConfig),
             provider,
             sessionEntry: {
               sessionId: "picker-session",
@@ -578,10 +554,7 @@ describe("handleCompactCommand", () => {
 
     await handleCompactCommand(
       {
-        ...buildCompactParams("/compact", {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
+        ...buildCompactParams("/compact", compactCommandConfig),
         sessionKey: "agent:target:whatsapp:direct:12345",
         sessionEntry: {
           sessionId: "wrapper-session",
@@ -614,10 +587,7 @@ describe("handleCompactCommand", () => {
 
     const result = await handleCompactCommand(
       {
-        ...buildCompactParams("/compact", {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
+        ...buildCompactParams("/compact", compactCommandConfig),
         sessionEntry: {
           sessionId: "target-session",
           updatedAt: Date.now(),
@@ -646,10 +616,7 @@ describe("handleCompactCommand", () => {
 
     const result = await handleCompactCommand(
       {
-        ...buildCompactParams("/compact", {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
+        ...buildCompactParams("/compact", compactCommandConfig),
         sessionEntry: { sessionId: "server-session", updatedAt: Date.now() },
       } as HandleCommandsParams,
       true,
@@ -657,6 +624,29 @@ describe("handleCompactCommand", () => {
 
     expect(result?.reply?.text).toContain("Server-side compaction (8614 → 736)");
     expect(requireIncrementCompactionCountCall().compactionKind).toBe("server-endpoint");
+  });
+
+  it("lets the active run settle naturally before compacting", async () => {
+    vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(true);
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      compactionKind: "context-engine",
+      result: { summary: "summary", firstKeptEntryId: "kept", tokensBefore: 999, tokensAfter: 42 },
+    });
+
+    const result = await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", compactCommandConfig),
+        sessionEntry: { sessionId: "settle-session", updatedAt: Date.now() },
+      },
+      true,
+    );
+
+    expect(vi.mocked(abortEmbeddedAgentRun)).not.toHaveBeenCalled();
+    expect(vi.mocked(waitForEmbeddedAgentRunEnd)).toHaveBeenCalledWith(expect.any(String), 60_000);
+    expect(result?.sessionCompaction).toMatchObject({ compacted: true, tokensAfter: 42 });
+    expect(result?.reply?.text).not.toContain("aborted");
   });
 
   it.each([
@@ -686,10 +676,7 @@ describe("handleCompactCommand", () => {
 
     const result = await handleCompactCommand(
       {
-        ...buildCompactParams("/compact", {
-          commands: { text: true },
-          channels: { whatsapp: { allowFrom: ["*"] } },
-        } as OpenClawConfig),
+        ...buildCompactParams("/compact", compactCommandConfig),
         sessionEntry: {
           sessionId: "native-session",
           updatedAt: Date.now(),
@@ -714,10 +701,7 @@ describe("handleCompactCommand", () => {
     // preparation already used the account limit.
     vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({ ok: true, compacted: false });
     const params = {
-      ...buildCompactParams("/compact", {
-        commands: { text: true },
-        channels: { whatsapp: { allowFrom: ["*"] } },
-      } as OpenClawConfig),
+      ...buildCompactParams("/compact", compactCommandConfig),
       provider: "anthropic",
       model: "claude-opus-4-6",
       contextTokens: 200_000,

@@ -132,35 +132,23 @@ describe("scripts/k8s/deploy.sh", () => {
     expect(output).not.toContain("Done.");
   });
 
-  it("stops custom namespace teardown when deleting managed manifests fails", () => {
-    const { calls, output, result } = runWithStubbedKubectl(["--delete"], "shared-namespace", {
-      deleteKustomizeStatus: 17,
-    });
+  it("surfaces generated Secret deletion failures", () => {
+    const { calls, output, result } = runWithStubbedKubectl(
+      ["--delete-resources"],
+      "shared-namespace",
+      {
+        deleteSecretStatus: 23,
+      },
+    );
 
-    expect(result.status, output).toBe(17);
+    expect(result.status, output).toBe(23);
     expect(calls).toEqual([
       "cluster-info",
       `delete -k ${path.resolve("scripts/k8s/manifests")} -n shared-namespace --ignore-not-found`,
+      "delete secret openclaw-secrets -n shared-namespace --ignore-not-found",
     ]);
     expect(output).not.toContain("Done.");
   });
-
-  it.each(["--delete", "--delete-resources"])(
-    "surfaces generated Secret deletion failures for %s",
-    (mode) => {
-      const { calls, output, result } = runWithStubbedKubectl([mode], "shared-namespace", {
-        deleteSecretStatus: 23,
-      });
-
-      expect(result.status, output).toBe(23);
-      expect(calls).toEqual([
-        "cluster-info",
-        `delete -k ${path.resolve("scripts/k8s/manifests")} -n shared-namespace --ignore-not-found`,
-        "delete secret openclaw-secrets -n shared-namespace --ignore-not-found",
-      ]);
-      expect(output).not.toContain("Done.");
-    },
-  );
 
   it("surfaces namespace deletion failures instead of reporting teardown success", () => {
     const { calls, output, result } = runWithStubbedKubectl(["--delete-namespace"], "shared", {

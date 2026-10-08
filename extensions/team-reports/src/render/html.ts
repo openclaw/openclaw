@@ -1,7 +1,9 @@
+import { escapeHtml } from "openclaw/plugin-sdk/text-utility-runtime";
 import { DAY_MS } from "../periods.js";
 import type { TeamReportsHealth } from "../scheduler.js";
 import type { PeriodListEntry } from "../store.js";
 import type { Period, ReportDocument, SummaryDocument } from "../types.js";
+import type { WorkSessions } from "../work-sessions.js";
 import { deltaMarkup, sparklineSvg } from "./charts.js";
 import {
   banner,
@@ -15,7 +17,7 @@ import {
   sourceBanners,
   type PageContext,
 } from "./page.js";
-import { escapeHtml } from "./shared.js";
+import { renderWorkSessionsPreview } from "./work-sessions.js";
 
 export { renderPeoplePage, renderPersonPage } from "./people.js";
 export { renderReportPage } from "./report.js";
@@ -25,25 +27,26 @@ type OverviewOptions = {
   orgs: string[];
   latest?: { report: ReportDocument; summary: SummaryDocument | null };
   health: TeamReportsHealth;
+  workSessions?: WorkSessions;
 };
 const PERIODS: Period[] = ["day", "week", "month"];
 const SERIES_LENGTH = { day: 28, week: 12, month: 6 };
 const combined = (entry: PeriodListEntry) => entry.githubTotal + entry.discordMessages;
 const number = (value: number) => value.toLocaleString("en-US");
 
-function completenessBadge(ctx: PageContext, entry: PeriodListEntry): string {
+function completenessBadge(entry: PeriodListEntry): string {
   if (entry.status !== "partial") {
     return "";
   }
-  if ((ctx.nowMs ?? Date.now()) >= entry.untilMs) {
+  if (Date.now() >= entry.untilMs) {
     return '<span class="oc-badge oc-badge-warning partial-report-badge">Incomplete</span>';
   }
-  return entry.period === "day" && isOpen(ctx, entry) && entry.generatedAtMs < entry.untilMs
+  return entry.period === "day" && isOpen(entry) && entry.generatedAtMs < entry.untilMs
     ? '<span class="oc-badge oc-badge-info partial-report-badge">Intraday</span>'
     : "";
 }
 
-function quickTrend(ctx: PageContext, index: PeriodIndex, entry: PeriodListEntry): string {
+function quickTrend(index: PeriodIndex, entry: PeriodListEntry): string {
   const ascending = index[entry.period]
     .filter((candidate) => candidate.key <= entry.key)
     .toSorted((a, b) => a.key.localeCompare(b.key));
@@ -51,12 +54,7 @@ function quickTrend(ctx: PageContext, index: PeriodIndex, entry: PeriodListEntry
   const previous = ascending.at(-2);
   let comparison = previous ? combined(previous) : undefined;
   let label = `prev ${entry.period}`;
-  if (
-    previous &&
-    entry.period !== "day" &&
-    isOpen(ctx, entry) &&
-    entry.generatedAtMs < entry.untilMs
-  ) {
+  if (previous && entry.period !== "day" && isOpen(entry) && entry.generatedAtMs < entry.untilMs) {
     // Compare an aggregate's own snapshot against equally many prior stored days.
     const elapsedDays = Math.max(1, Math.ceil((entry.generatedAtMs - entry.sinceMs) / DAY_MS));
     const priorDays = index.day
@@ -75,8 +73,8 @@ function quickCard(ctx: PageContext, index: PeriodIndex, period: Period): string
   if (!entry) {
     return `<section class="quick-card oc-card"><span class="oc-eyebrow">${period}</span><span class="quick-title">No ${period} reports yet</span><p class="oc-empty">Generate a report to see activity.</p></section>`;
   }
-  const open = isOpen(ctx, entry);
-  return `<a class="quick-card oc-card oc-card-interactive${entry.status === "partial" ? " partial" : ""}" href="${escapeHtml(href(ctx.basePath, period, entry.key))}"><span class="oc-eyebrow">${open && period === "day" ? "today" : period}</span><span class="quick-title">${escapeHtml(periodTitle(entry))} ${completenessBadge(ctx, entry)}</span><span class="quick-meta">${escapeHtml(formatWindow(entry))}<br>${entry.activeMembers}/${entry.memberCount} active · ${number(entry.githubTotal)} GitHub · ${number(entry.discordMessages)} Discord</span>${openPeriodStatus(ctx, entry)}${quickTrend(ctx, index, entry)}</a>`;
+  const open = isOpen(entry);
+  return `<a class="quick-card oc-card oc-card-interactive${entry.status === "partial" ? " partial" : ""}" href="${escapeHtml(href(ctx.basePath, period, entry.key))}"><span class="oc-eyebrow">${open && period === "day" ? "today" : period}</span><span class="quick-title">${escapeHtml(periodTitle(entry))} ${completenessBadge(entry)}</span><span class="quick-meta">${escapeHtml(formatWindow(entry))}<br>${entry.activeMembers}/${entry.memberCount} active · ${number(entry.githubTotal)} GitHub · ${number(entry.discordMessages)} Discord</span>${openPeriodStatus(ctx, entry)}${quickTrend(index, entry)}</a>`;
 }
 function history(ctx: PageContext, entries: PeriodListEntry[], period: Period): string {
   const visible = period === "day" ? 7 : 12;
@@ -95,7 +93,7 @@ function history(ctx: PageContext, entries: PeriodListEntry[], period: Period): 
               entry.sinceMs,
             )
           : formatWindow(entry);
-      return `<a class="row" href="${escapeHtml(href(ctx.basePath, period, entry.key))}"${index >= visible ? " data-extra hidden" : ""}><span><span class="row-title-line"><span class="title">${escapeHtml(periodTitle(entry))}</span>${completenessBadge(ctx, entry)}</span><br><span class="date">${escapeHtml(subline)}</span></span><span class="row-trend" aria-hidden="true">${trend}</span><span class="stats"><strong>${entry.activeMembers}/${entry.memberCount}</strong> active<br>${number(entry.githubTotal)} GitHub / ${number(entry.discordMessages)} Discord</span></a>`;
+      return `<a class="row" href="${escapeHtml(href(ctx.basePath, period, entry.key))}"${index >= visible ? " data-extra hidden" : ""}><span><span class="row-title-line"><span class="title">${escapeHtml(periodTitle(entry))}</span>${completenessBadge(entry)}</span><br><span class="date">${escapeHtml(subline)}</span></span><span class="row-trend" aria-hidden="true">${trend}</span><span class="stats"><strong>${entry.activeMembers}/${entry.memberCount}</strong> active<br>${number(entry.githubTotal)} GitHub / ${number(entry.discordMessages)} Discord</span></a>`;
     })
     .join("");
   return `<section class="oc-section" id="${period}"><div class="oc-section-header"><div><div class="oc-eyebrow">${period}</div><h2>${period[0]?.toUpperCase()}${period.slice(1)} History</h2></div>${entries.length > visible ? `<button class="toggle oc-action oc-action-ghost js-only" type="button" data-toggle="${period}" aria-expanded="false">Show all ${entries.length}</button>` : ""}</div><div class="list" data-list="${period}">${rows || `<p class="oc-empty">No ${period} reports yet.</p>`}</div></section>`;
@@ -119,7 +117,7 @@ export function renderIndexPage(
     days.length >= 2
       ? `<section class="home-dateline" aria-label="Activity dateline"><div class="oc-eyebrow">dateline</div>${sparklineSvg(days.map(combined), `Combined GitHub and Discord activity across ${days.length} report days`, true)}<div class="home-dateline-scale"><span>${escapeHtml(days[0]?.key ?? "")}</span><span>${days.length} report days</span><span>${escapeHtml(days.at(-1)?.key ?? "")}</span></div></section>`
       : "";
-  const open = PERIODS.filter((period) => index[period][0] && isOpen(ctx, index[period][0]));
+  const open = PERIODS.filter((period) => index[period][0] && isOpen(index[period][0]));
   const openBanner = open.length
     ? banner(
         "info",
@@ -133,7 +131,7 @@ export function renderIndexPage(
   return shell(
     ctx,
     "Overview",
-    `<div class="home-grid" aria-label="Report overview"><section class="oc-brand-banner home-banner" data-asset="crab" data-anchor="top" data-effect="fade" data-size="hero"><div class="oc-brand-banner-art" aria-hidden="true"><img src="${escapeHtml(ctx.basePath)}/assets/crab.avif" alt="" draggable="false"></div><div class="oc-brand-banner-content"><p class="oc-eyebrow">${escapeHtml(orgs)} · team</p><h1>Team Reports</h1><p>Daily, weekly, and monthly GitHub and Discord activity for ${escapeHtml(orgs)}. Access is enforced by the Gateway; history is stored by the plugin.</p></div><div class="home-banner-stamp">generated ${generated ? relativeTime(ctx, generated) : "—"}</div></section>${dateline}${openBanner}${options.latest ? sourceBanners(options.latest.report, options.latest.summary) : ""}${PERIODS.map((period) => quickCard(ctx, index, period)).join("")}<section class="home-card people-teaser oc-card"><div class="home-card-top"><div><div class="oc-eyebrow">people</div><h2>People Archive</h2><p>Activity timelines and repository history by team member.</p></div><div class="home-actions-row"><a class="panel-link oc-action" href="${escapeHtml(ctx.basePath)}/people/">Open people archive <span aria-hidden="true">→</span></a></div></div><div class="oc-summary-strip">${homeMetric("People", latestDay?.memberCount ?? 0)}${homeMetric("Active today", latestDay?.activeMembers ?? 0)}${homeMetric("Report days", days.length)}</div></section><section class="home-card generation-panel oc-card"><div class="home-card-top"><div><div class="oc-eyebrow">runs</div><h2>Generation Status</h2><p>Scheduler and source health.</p></div><div class="home-actions-row"><a class="panel-link oc-action" href="${escapeHtml(ctx.basePath)}/status">Open status JSON <span aria-hidden="true">→</span></a></div></div><div class="oc-summary-strip">${homeMetric("Last run", lastRun)}${homeMetric("Next due", health.nextDueMs === undefined ? "—" : relativeTime(ctx, health.nextDueMs))}${homeMetric("Source warnings", health.warnings)}</div></section></div><div class="grid">${PERIODS.map((period) => history(ctx, index[period], period)).join("")}</div>`,
+    `<div class="home-grid" aria-label="Report overview"><section class="oc-brand-banner home-banner" data-asset="crab" data-anchor="top" data-effect="fade" data-size="hero"><div class="oc-brand-banner-art" aria-hidden="true"><img src="${escapeHtml(ctx.basePath)}/assets/crab.avif" alt="" draggable="false"></div><div class="oc-brand-banner-content"><p class="oc-eyebrow">${escapeHtml(orgs)} · team</p><h1>Team Reports</h1><p>Daily, weekly, and monthly GitHub and Discord activity for ${escapeHtml(orgs)}. Access is enforced by the Gateway; history is stored by the plugin.</p></div><div class="home-banner-stamp">generated ${generated ? relativeTime(ctx, generated) : "—"}</div></section>${options.workSessions ? renderWorkSessionsPreview(ctx, options.workSessions) : ""}${dateline}${openBanner}${options.latest ? sourceBanners(options.latest.report, options.latest.summary) : ""}${PERIODS.map((period) => quickCard(ctx, index, period)).join("")}<section class="home-card people-teaser oc-card"><div class="home-card-top"><div><div class="oc-eyebrow">people</div><h2>People Archive</h2><p>Activity timelines and repository history by team member.</p></div><div class="home-actions-row"><a class="panel-link oc-action" href="${escapeHtml(ctx.basePath)}/people/">Open people archive <span aria-hidden="true">→</span></a></div></div><div class="oc-summary-strip">${homeMetric("People", latestDay?.memberCount ?? 0)}${homeMetric("Active today", latestDay?.activeMembers ?? 0)}${homeMetric("Report days", days.length)}</div></section><section class="home-card generation-panel oc-card"><div class="home-card-top"><div><div class="oc-eyebrow">runs</div><h2>Generation Status</h2><p>Scheduler and source health.</p></div><div class="home-actions-row"><a class="panel-link oc-action" href="${escapeHtml(ctx.basePath)}/status">Open status JSON <span aria-hidden="true">→</span></a></div></div><div class="oc-summary-strip">${homeMetric("Last run", lastRun)}${homeMetric("Next due", health.nextDueMs === undefined ? "—" : relativeTime(ctx, health.nextDueMs))}${homeMetric("Source warnings", health.warnings)}</div></section></div><div class="grid">${PERIODS.map((period) => history(ctx, index[period], period)).join("")}</div>`,
     "home",
   );
 }

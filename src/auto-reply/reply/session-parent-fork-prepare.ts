@@ -1,4 +1,3 @@
-// Prepares parent-context fork metadata for guarded reply session initialization.
 import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery/main-session-recovery-clear.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import {
@@ -33,12 +32,6 @@ export function canReplaceRestartTombstoneFromParent(params: {
   );
 }
 
-function restartTombstoneParentReplacementError(sessionKey: string): Error {
-  return new SessionRestartRecoveryTombstoneError(
-    `Session "${sessionKey}" ended during restart recovery. Use /new or /reset to start a replacement session.`,
-  );
-}
-
 export async function prepareReplySessionParentFork(params: {
   agentId: string;
   alreadyForked: boolean;
@@ -57,14 +50,20 @@ export async function prepareReplySessionParentFork(params: {
   ) {
     return params.sessionEntry;
   }
-  const parentEntry = params.readEntry(params.parentSessionKey);
-  if (!parentEntry?.sessionId) {
+  const unresolvedParentFork = () => {
     if (params.requireParentForkReplacement === true) {
-      throw restartTombstoneParentReplacementError(params.sessionKey);
+      throw new SessionRestartRecoveryTombstoneError(
+        `Session "${params.sessionKey}" ended during restart recovery. Use /new or /reset to start a replacement session.`,
+      );
     }
     return params.sessionEntry;
+  };
+  const parentEntry = params.readEntry(params.parentSessionKey);
+  if (!parentEntry?.sessionId) {
+    return unresolvedParentFork();
   }
   const decision = await resolveParentForkDecision({
+    parentSessionKey: params.parentSessionKey,
     parentEntry,
     agentId: params.agentId,
     storePath: params.storePath,
@@ -86,21 +85,18 @@ export async function prepareReplySessionParentFork(params: {
     storePath: params.storePath,
   });
   if (!fork) {
-    if (params.requireParentForkReplacement === true) {
-      throw restartTombstoneParentReplacementError(params.sessionKey);
-    }
-    return params.sessionEntry;
+    return unresolvedParentFork();
   }
   params.warn(
     `forking from parent session: parentKey=${params.parentSessionKey} → sessionKey=${params.sessionKey} ` +
       `parentTokens=${decision.parentTokens ?? "unknown"}`,
   );
-  // The fork replaces this thread's transcript identity; recovery state from
-  // the preseed row must not govern a later interruption of the fork.
+  // A fork replaces the incarnation; its prior recovery state and native grant must not carry over.
   const forkedEntry: InternalSessionEntry = {
     ...params.sessionEntry,
     ...buildMainSessionRecoveryClearPatch(params.sessionEntry),
     sessionId: fork.sessionId,
+    nativeRuntimeConsent: undefined,
     lifecycleRunId: undefined,
     lastRunId: undefined,
     forkSource: {

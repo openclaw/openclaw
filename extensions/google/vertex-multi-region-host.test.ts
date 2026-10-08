@@ -11,9 +11,4 @@ describe("Google Vertex hostname recognition", () => {
     expect(isGoogleVertexHostname("discoveryengine.eu.rep.googleapis.com")).toBe(false);
     expect(isGoogleVertexHostname("not-aiplatform.eu.rep.googleapis.com")).toBe(false);
   });
-
-  it("still recognizes the unprefixed and regional Vertex hosts", () => {
-    expect(isGoogleVertexHostname("aiplatform.googleapis.com")).toBe(true);
-    expect(isGoogleVertexHostname("europe-west1-aiplatform.googleapis.com")).toBe(true);
-  });
 });

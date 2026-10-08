@@ -3,9 +3,15 @@ import { tracingChannel } from "node:diagnostics_channel";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  fixtureReceiptClientSource,
+  openFixtureReceiptChannel,
+  type FixtureReceiptChannel,
+} from "../../../test/helpers/fixture-receipts.js";
+import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import {
   MAX_WORKSPACE_GIT_CANDIDATES,
@@ -19,6 +25,13 @@ import {
 import { preflightWorkerWorkspace } from "./workspace-sync-preflight.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+let receipts: FixtureReceiptChannel;
+beforeAll(async () => {
+  receipts = await openFixtureReceiptChannel();
+});
+afterAll(async () => {
+  await receipts.close();
+});
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -85,21 +98,6 @@ async function git(root: string, ...args: string[]): Promise<string> {
   });
   expect(result.code, result.stderr).toBe(0);
   return result.stdout.trim();
-}
-
-async function waitForFile(filePath: string): Promise<void> {
-  const deadline = Date.now() + 5_000;
-  while (Date.now() < deadline) {
-    try {
-      await fs.access(filePath);
-      return;
-    } catch {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 10);
-      });
-    }
-  }
-  throw new Error(`Timed out waiting for ${filePath}`);
 }
 
 describe("runWorkspaceInventoryCommandToFile", () => {
@@ -266,7 +264,7 @@ describe("runWorkspaceInventoryCommandToFile", () => {
     );
   });
 
-  it("force-kills a command that ignores abort termination", async () => {
+  it("force-kills a command that ignores abort termination", async ({ signal, onTestFinished }) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-sync-"));
     const outputPath = path.join(root, "output");
     const readyPath = path.join(root, "ready");
@@ -274,30 +272,67 @@ describe("runWorkspaceInventoryCommandToFile", () => {
     const operation = runWorkspaceInventoryCommandToFile({
       argv: [
         process.execPath,
+        "--input-type=module",
         "-e",
         [
-          'const fs = require("node:fs");',
+          'import fs from "node:fs";',
+          fixtureReceiptClientSource(receipts.endpoint),
           'process.on("SIGTERM", () => {});',
           'fs.writeFileSync(process.argv[1], "ready");',
+          'sendReceipt(process.argv[1], "ready");',
           "setInterval(() => {}, 1000);",
-        ].join(""),
+        ].join("\n"),
         readyPath,
       ],
       outputPath,
       signal: controller.signal,
       timeoutMs: 10_000,
     });
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () =>
+      (cleanupPromise ??= (async () => {
+        controller.abort();
+        await operation.catch(() => undefined);
+        await fs.rm(root, { recursive: true, force: true });
+      })());
+    // A timed-out body starts finally but Vitest does not join it; the hook retains
+    // the worker until the command's delayed force-kill and cleanup have finished.
+    onTestFinished(cleanup);
 
     try {
-      await waitForFile(readyPath);
+      // Receipts and command completion use separate pipes; the durable marker decides
+      // readiness if the operation settles before the receipt reaches this process.
+      const readReady = () =>
+        fs.readFile(readyPath, "utf8").catch((error: unknown) => {
+          if (hasErrnoCode(error, "ENOENT")) {
+            return "";
+          }
+          throw error;
+        });
+      await withinTest(
+        Promise.race([
+          receipts.waitFor(readyPath, "ready"),
+          operation.then(
+            async () => {
+              if ((await readReady()) !== "ready") {
+                throw new Error(`Timed out waiting for ${readyPath}`);
+              }
+            },
+            async (error: unknown) => {
+              if ((await readReady()) !== "ready") {
+                throw error;
+              }
+            },
+          ),
+        ]),
+        signal,
+      );
       const abortedAt = Date.now();
       controller.abort();
       await expect(operation).rejects.toBe(controller.signal.reason);
       expect(Date.now() - abortedAt).toBeLessThan(3_000);
     } finally {
-      controller.abort();
-      await operation.catch(() => undefined);
-      await fs.rm(root, { recursive: true, force: true });
+      await cleanup();
     }
   });
 
@@ -567,6 +602,125 @@ process.stdout.write("eligible.txt\\0".repeat(count));
 });
 
 describe("preflightWorkerWorkspace", () => {
+  it("inspects workspace files outside the Gateway thread", async () => {
+    const root = await fs.realpath(tempDirs.make("openclaw-workspace-preflight-thread-"));
+    await git(root, "init", "--quiet");
+    await git(
+      root,
+      "-c",
+      "user.name=OpenClaw Test",
+      "-c",
+      "user.email=test@openclaw.invalid",
+      "commit",
+      "--quiet",
+      "--allow-empty",
+      "-m",
+      "base",
+    );
+    const file = path.join(root, "content.txt");
+    await fs.writeFile(file, "content\n");
+    const originalLstat = fs.lstat.bind(fs);
+    vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
+      if (args[0] === file) {
+        throw new Error("Workspace file inspection ran on the Gateway thread");
+      }
+      return await originalLstat(...args);
+    });
+    await expect(preflightWorkerWorkspace({ localPath: root })).resolves.toBeUndefined();
+  });
+
+  it.each(["complete", "abort", "write-failure"] as const)(
+    "settles worker inventory output before completing (%s)",
+    async (outcome) => {
+      const root = await fs.realpath(tempDirs.make("openclaw-workspace-preflight-output-"));
+      const scratch = tempDirs.make("openclaw-workspace-transfer-output-");
+      const temporaryDirectory = path.join(scratch, "first");
+      const outputPath = path.join(temporaryDirectory, "transfer-list");
+      await git(root, "init", "--quiet");
+      await fs.writeFile(path.join(root, "alpha.txt"), "alpha\n");
+      await fs.writeFile(path.join(root, "beta.txt"), "beta\n");
+      const entered = createDeferred();
+      const release = createDeferred();
+      const controller = new AbortController();
+      const cancellation = new Error("workspace preparation stopped");
+      const writeFailure = new Error("inventory output failed");
+      let settled = false;
+      let closed = false;
+      const originalOpen = fs.open.bind(fs);
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await originalOpen(...args);
+        if (args[0] === outputPath && args[1] === "wx") {
+          const writeFile = handle.writeFile.bind(handle);
+          const close = handle.close.bind(handle);
+          handle.writeFile = async (...writeArgs) => {
+            entered.resolve();
+            await release.promise;
+            if (outcome === "write-failure") {
+              throw writeFailure;
+            }
+            return await writeFile(...writeArgs);
+          };
+          handle.close = async () => {
+            closed = true;
+            await close();
+          };
+        }
+        return handle;
+      });
+      const producing = createWorkspaceGitTransferList({
+        gitRoot: root,
+        temporaryDirectory,
+        signal: controller.signal,
+        timeoutMs: 10_000,
+      })
+        .then(
+          (value) => ({ ok: true as const, value }),
+          (error: unknown) => ({ ok: false as const, error }),
+        )
+        .finally(() => {
+          settled = true;
+        });
+      try {
+        await Promise.race([
+          entered.promise,
+          producing.then(() => {
+            throw new Error("Inventory ended before reaching its output writer");
+          }),
+        ]);
+        if (outcome === "abort") {
+          controller.abort(cancellation);
+          const independent = await createWorkspaceGitTransferList({
+            gitRoot: root,
+            temporaryDirectory: path.join(scratch, "second"),
+            signal: new AbortController().signal,
+            timeoutMs: 10_000,
+          });
+          await expect(fs.readFile(independent, "utf8")).resolves.toBe("alpha.txt\0beta.txt\0");
+        }
+        expect(settled).toBe(false);
+        expect(closed).toBe(false);
+      } finally {
+        release.resolve();
+        await producing;
+      }
+      const result = await producing;
+      expect(closed).toBe(true);
+      if (outcome === "complete") {
+        expect(result).toEqual({ ok: true, value: outputPath });
+        await expect(fs.readFile(outputPath, "utf8")).resolves.toBe("alpha.txt\0beta.txt\0");
+      } else {
+        expect(result).toEqual({
+          ok: false,
+          error: outcome === "abort" ? cancellation : writeFailure,
+        });
+        if (result.ok) {
+          throw new Error("Cancelled or failed inventory returned success");
+        }
+        expect(result.error).toBe(outcome === "abort" ? cancellation : writeFailure);
+      }
+    },
+  );
+
   it("measures the canonical Git eligibility boundary without hashing content", async () => {
     const root = tempDirs.make("openclaw-workspace-preflight-");
     const transferDirectory = `${root}-transfer`;

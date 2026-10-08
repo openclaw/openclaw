@@ -15,6 +15,10 @@ Many of the bundled provider plugins below already publish a default catalog. Us
 
 Bundled and catalog-known routes take their `compat` capabilities from the owning provider plugin. A config `compat` block is for a custom provider/model or a different `api`/`baseUrl` route whose endpoint contract you have verified; see the [custom-provider capability guide](/gateway/config-tools#custom-provider-capability-declarations). Doctor removes legacy values that merely repeat the catalog and leaves divergent values visible for operator review.
 
+A custom endpoint does not inherit the original catalog route's preferred Code Mode tier. With automatic Code Mode and no custom `compat.codeMode` declaration, the embedded runtime keeps its normal tool surface. Set `compat.codeMode: "preferred"` only after verifying Code Mode on that endpoint.
+
+Provider-normalized aliases, such as an Anthropic endpoint's `/v1` suffix, keep their canonical catalog capabilities.
+
 Gateway model capability checks also read explicit `models.providers.<id>.models[]` metadata. If a custom or proxy model accepts images, set `input: ["text", "image"]` on that model so WebChat and node-origin attachment paths pass images as native model inputs instead of text-only media refs.
 
 `agents.defaults.models["provider/model"]` controls aliases and per-model metadata for agents. It neither restricts overrides nor registers a new runtime model by itself. For custom provider models, also add `models.providers.<provider>.models[]` with at least the matching `id`; use `agents.defaults.modelPolicy.allow` separately when you want an override restriction.
@@ -111,16 +115,20 @@ In onboarding/configure model pickers, the Volcengine auth choice prefers both `
 
 <Tabs>
   <Tab title="Standard models">
-    - `volcengine/doubao-seed-1-8-251228` (Doubao Seed 1.8)
-    - `volcengine/doubao-seed-code-preview-251028`
-    - `volcengine/kimi-k2-5-260127` (Kimi K2.5)
-    - `volcengine/glm-4-7-251222` (GLM 4.7)
-    - `volcengine/deepseek-v3-2-251201` (DeepSeek V3.2)
+    - `volcengine/doubao-seed-evolving` (Doubao Seed Evolving)
+    - `volcengine/doubao-seed-2-1-pro-260628` (Doubao Seed 2.1 Pro)
+    - `volcengine/doubao-seed-2-1-turbo-260628` (Doubao Seed 2.1 Turbo)
+    - `volcengine/glm-5-2-260617` (GLM 5.2)
+    - `volcengine/deepseek-v4-pro-260425` (DeepSeek V4 Pro)
+    - `volcengine/deepseek-v4-flash-260425` (DeepSeek V4 Flash)
 
   </Tab>
   <Tab title="Coding models (volcengine-plan)">
-    - `volcengine-plan/ark-code-latest`
-    - `volcengine-plan/doubao-seed-code`
+    - `volcengine-plan/ark-code-latest` (Ark Coding Plan)
+    - `volcengine-plan/doubao-seed-2.1-turbo` (Doubao Seed 2.1 Turbo)
+    - `volcengine-plan/glm-5.2` (GLM 5.2)
+    - `volcengine-plan/deepseek-v4-pro` (DeepSeek V4 Pro)
+    - `volcengine-plan/deepseek-v4-flash` (DeepSeek V4 Flash)
 
   </Tab>
 </Tabs>
@@ -156,15 +164,16 @@ In onboarding/configure model pickers, the BytePlus auth choice prefers both `by
 
 <Tabs>
   <Tab title="Standard models">
-    - `byteplus/seed-1-8-251228` (Seed 1.8)
-    - `byteplus/kimi-k2-5-260127` (Kimi K2.5)
-    - `byteplus/glm-4-7-251222` (GLM 4.7)
+    - `byteplus/dola-seed-2-1-turbo-260628` (Dola Seed 2.1 Turbo)
+    - `byteplus/seed-2-0-code-preview-260328` (Seed 2.0 Code Preview)
+    - `byteplus/glm-5-2-260617` (GLM 5.2)
+    - `byteplus/deepseek-v4-pro-260425` (DeepSeek V4 Pro)
+    - `byteplus/deepseek-v4-flash-260425` (DeepSeek V4 Flash)
 
   </Tab>
   <Tab title="Coding models (byteplus-plan)">
-    - `byteplus-plan/ark-code-latest`
-    - `byteplus-plan/kimi-k2.5`
-    - `byteplus-plan/glm-4.7`
+    - `byteplus-plan/ark-code-latest` (Ark Coding Plan)
+    - `byteplus-plan/kimi-k2.5` (Kimi K2.5 Coding)
 
   </Tab>
 </Tabs>
@@ -235,6 +244,43 @@ openclaw plugins install @openclaw/llama-cpp-provider
 
 Both use `llama-cpp/<model>` references. See [llama.cpp](/plugins/llama-cpp) for setup,
 discovery, authentication, and managed local embeddings.
+
+### llmman
+
+llmman is configured via `models.providers` as an OpenAI-compatible local server. It pulls models as OCI artifacts and serves them through upstream `llama-server`, `vllm`, or `mlx-lm`, and can pair a local model with a hosted one under a single model id:
+
+- Provider: `llmman` (custom; `api: "openai-completions"`)
+- Auth: none enforced; set `LLMMAN_API_KEY=llmman-local` and use `apiKey: "${LLMMAN_API_KEY}"`
+- Default base URL: `http://127.0.0.1:17434/v1`
+- Example model: `llmman/qwen3.8`
+- Hybrid example: `llmman/llmman.hybrid/qwen3.8,openai/gpt-5.6-luna`
+
+```bash
+llmman pull qwen3.8
+llmman serve
+```
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "llmman/qwen3.8" } },
+  },
+  models: {
+    providers: {
+      llmman: {
+        baseUrl: "http://127.0.0.1:17434/v1",
+        apiKey: "${LLMMAN_API_KEY}",
+        api: "openai-completions",
+        models: [
+          { id: "qwen3.8", name: "Qwen3.8 (llmman)", reasoning: true, input: ["text", "image"] },
+        ],
+      },
+    },
+  },
+}
+```
+
+See [/providers/llmman](/providers/llmman) for setup, hybrid local + hosted routing, vision, and troubleshooting.
 
 ### LM Studio
 
@@ -377,6 +423,8 @@ Example (OpenAI-compatible):
     - `cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }`
     - `maxTokens`: no fixed default. For OpenAI-compatible Completions, an unknown output limit omits both `max_tokens` and `max_completion_tokens`, letting the provider apply its default.
 
+    Anthropic and Mistral requests preserve an explicit request output limit when the model's `maxTokens` is unknown. Anthropic manual thinking must fit within that request limit when no model output capacity is available.
+
     An omitted `contextWindow` remains unset so authored native-window metadata is unambiguous. When neither discovery nor per-model context metadata is available, context-budget callers use the standard `200000`-token fallback.
 
     Recommended: set explicit values that match your proxy/model limits.
@@ -389,7 +437,7 @@ Example (OpenAI-compatible):
     - Proxy-style OpenAI-compatible routes also skip native OpenAI-only request shaping: no `service_tier`, no Responses `store`, no Completions `store`, no prompt-cache hints, no OpenAI reasoning-compat payload shaping, and no hidden OpenClaw attribution headers.
     - For OpenAI-compatible Completions proxies that need vendor-specific fields, set `agents.defaults.models["provider/model"].params.extra_body` (or `extraBody`) to merge extra JSON into the outbound request body.
     - For vLLM chat-template controls, set `agents.defaults.models["provider/model"].params.chat_template_kwargs`. The bundled vLLM plugin automatically sends `enable_thinking: false` and `force_nonempty_content: true` for `vllm/nemotron-3-*` when the session thinking level is off.
-    - For slow local models or remote LAN/tailnet hosts, set `models.providers.<id>.timeoutSeconds`. This extends provider model HTTP request handling, including connect, headers, body streaming, and the total guarded-fetch abort, without increasing the whole agent runtime timeout. If `agents.defaults.timeoutSeconds` or a run-specific timeout is lower, raise that ceiling too; provider timeouts cannot extend the whole run.
+    - For slow local models or remote LAN/tailnet hosts, set `models.providers.<id>.timeoutSeconds`. This extends provider model HTTP request handling, including connect, headers, body streaming, and the total guarded-fetch abort, without increasing the whole agent runtime timeout. Without an explicit provider timeout, TCP/TLS connection setup keeps its 10-second default independently of the longer streaming timeout, including when reconnecting a pooled transport. If `agents.defaults.timeoutSeconds` or a run-specific timeout is lower, raise that ceiling too; provider timeouts cannot extend the whole run.
     - Model provider HTTP calls allow Surge, Clash, and sing-box fake-IP DNS answers in `198.18.0.0/15` and `fc00::/7` only for the configured provider `baseUrl` hostname. Custom/local provider endpoints also trust that exact configured `scheme://host:port` origin for guarded model requests, including loopback, LAN, and tailnet hosts. This is not a new config option; the `baseUrl` you configure extends the request policy only for that origin. Fake-IP hostname allowance and exact-origin trust are independent mechanisms. Other private, loopback, link-local, metadata, local-use NAT64 (`64:ff9b:1::/48`) destinations, and different ports still require an explicit `models.providers.<id>.request.allowPrivateNetwork: true` opt-in. Set `models.providers.<id>.request.allowPrivateNetwork: false` to opt out of the exact-origin trust.
     - If `baseUrl` is empty/omitted, OpenClaw keeps the default OpenAI behavior (which resolves to `api.openai.com`).
     - For safety, an explicit `compat.supportsDeveloperRole: true` is still overridden on non-native `openai-completions` endpoints.

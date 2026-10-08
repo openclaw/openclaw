@@ -4,7 +4,7 @@
  * Checks the minimum callable shape for optional channel plugin adapter surfaces.
  */
 import { expect } from "vitest";
-import type { ChannelPlugin } from "../../types.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "../../types.plugin.js";
 
 /** Asserts the minimum callable shape for one declared channel plugin surface. */
 export function expectChannelSurfaceContract(params: {

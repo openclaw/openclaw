@@ -12,6 +12,10 @@ import {
   buildTypedApprovalPendingReplyPayload,
   buildTypedPluginApprovalPendingReplyPayload,
 } from "../plugin-sdk/approval-renderers.js";
+import {
+  buildSystemAgentApprovalResolvedText,
+  SYSTEM_AGENT_APPROVAL_EXPIRED_TEXT,
+} from "../plugin-sdk/approval-terminal.js";
 import { formatFencedCodeBlock } from "../shared/markdown-code.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
@@ -29,12 +33,11 @@ import {
   type PluginApprovalRequest,
   type PluginApprovalResolved,
 } from "./plugin-approvals.js";
-
-function formatApprovalCommand(command: string): { inline: boolean; text: string } {
-  return !command.includes("\n") && !command.includes("`")
-    ? { inline: true, text: `\`${command}\`` }
-    : { inline: false, text: formatFencedCodeBlock(command) };
-}
+import {
+  SYSTEM_AGENT_APPROVAL_DECISIONS,
+  type SystemAgentApprovalRequest,
+  type SystemAgentApprovalResolved,
+} from "./system-agent-approvals.js";
 
 function buildForwardedExecApprovalRequest(request: ExecApprovalRequest, nowMs: number) {
   const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(request.request);
@@ -53,13 +56,11 @@ function buildForwardedExecApprovalRequest(request: ExecApprovalRequest, nowMs: 
       lines.push(`- ${line}`);
     }
   }
-  const command = formatApprovalCommand(
-    resolveExecApprovalCommandDisplay(request.request).commandText,
-  );
-  if (command.inline) {
-    lines.push(`Command: ${command.text}`);
+  const command = resolveExecApprovalCommandDisplay(request.request).commandText;
+  if (!command.includes("\n") && !command.includes("`")) {
+    lines.push(`Command: \`${command}\``);
   } else {
-    lines.push("Command:", command.text);
+    lines.push("Command:", formatFencedCodeBlock(command));
   }
   if (request.request.cwd) {
     lines.push(`CWD: ${request.request.cwd}`);
@@ -106,21 +107,11 @@ export function buildForwardedExecApprovalExpired(request: ExecApprovalRequest) 
   return `⏱️ Exec approval expired. ID: ${request.id}`;
 }
 
-function buildApprovalRenderPayload<TParams>(params: {
-  target: ExecApprovalForwardTarget;
-  renderParams: TParams;
-  resolveRenderer: (
-    adapter: ReturnType<typeof resolveChannelApprovalAdapter> | undefined,
-  ) => ((params: TParams) => ReplyPayload | null) | undefined;
-  buildFallback: () => ReplyPayload;
-}): ReplyPayload {
-  const channel = normalizeMessageChannel(params.target.channel) ?? params.target.channel;
-  const adapterPayload = channel
-    ? params.resolveRenderer(resolveChannelApprovalAdapter(getLoadedChannelPlugin(channel)))?.(
-        params.renderParams,
-      )
-    : null;
-  return adapterPayload ?? params.buildFallback();
+function resolveApprovalRenderer(target: ExecApprovalForwardTarget) {
+  const channel = normalizeMessageChannel(target.channel) ?? target.channel;
+  return channel
+    ? resolveChannelApprovalAdapter(getLoadedChannelPlugin(channel))?.render
+    : undefined;
 }
 
 export function buildForwardedExecPendingPayload(params: {
@@ -129,21 +120,19 @@ export function buildForwardedExecPendingPayload(params: {
   target: ExecApprovalForwardTarget;
   nowMs: number;
 }): ReplyPayload {
-  return buildApprovalRenderPayload({
-    target: params.target,
-    renderParams: params,
-    resolveRenderer: (adapter) => adapter?.render?.exec?.buildPendingPayload,
-    buildFallback: () =>
-      buildTypedApprovalPendingReplyPayload({
-        approvalKind: "exec",
-        approvalId: params.request.id,
-        approvalSlug: params.request.id.slice(0, 8),
-        text: buildForwardedExecApprovalRequest(params.request, params.nowMs),
-        agentId: params.request.request.agentId ?? null,
-        allowedDecisions: resolveExecApprovalRequestAllowedDecisions(params.request.request),
-        sessionKey: params.request.request.sessionKey ?? null,
-      }),
-  });
+  const render = resolveApprovalRenderer(params.target)?.exec?.buildPendingPayload;
+  return (
+    render?.(params) ??
+    buildTypedApprovalPendingReplyPayload({
+      approvalKind: "exec",
+      approvalId: params.request.id,
+      approvalSlug: params.request.id.slice(0, 8),
+      text: buildForwardedExecApprovalRequest(params.request, params.nowMs),
+      agentId: params.request.request.agentId ?? null,
+      allowedDecisions: resolveExecApprovalRequestAllowedDecisions(params.request.request),
+      sessionKey: params.request.request.sessionKey ?? null,
+    })
+  );
 }
 
 export function buildForwardedExecResolvedPayload(params: {
@@ -151,17 +140,15 @@ export function buildForwardedExecResolvedPayload(params: {
   resolved: ExecApprovalResolved;
   target: ExecApprovalForwardTarget;
 }): ReplyPayload {
-  return buildApprovalRenderPayload({
-    target: params.target,
-    renderParams: params,
-    resolveRenderer: (adapter) => adapter?.render?.exec?.buildResolvedPayload,
-    buildFallback: () =>
-      buildApprovalResolvedReplyPayload({
-        approvalId: params.resolved.id,
-        approvalSlug: params.resolved.id.slice(0, 8),
-        text: buildForwardedExecApprovalResolved(params.resolved),
-      }),
-  });
+  const render = resolveApprovalRenderer(params.target)?.exec?.buildResolvedPayload;
+  return (
+    render?.(params) ??
+    buildApprovalResolvedReplyPayload({
+      approvalId: params.resolved.id,
+      approvalSlug: params.resolved.id.slice(0, 8),
+      text: buildForwardedExecApprovalResolved(params.resolved),
+    })
+  );
 }
 
 export function buildForwardedPluginPendingPayload(params: {
@@ -170,20 +157,18 @@ export function buildForwardedPluginPendingPayload(params: {
   target: ExecApprovalForwardTarget;
   nowMs: number;
 }): ReplyPayload {
-  return buildApprovalRenderPayload({
-    target: params.target,
-    renderParams: params,
-    resolveRenderer: (adapter) => adapter?.render?.plugin?.buildPendingPayload,
-    buildFallback: () =>
-      buildTypedPluginApprovalPendingReplyPayload({
-        request: params.request,
-        nowMs: params.nowMs,
-        text: buildPluginApprovalRequestMessage(params.request, params.nowMs),
-        allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions(
-          params.request.request,
-        ),
-      }),
-  });
+  const render = resolveApprovalRenderer(params.target)?.plugin?.buildPendingPayload;
+  return (
+    render?.(params) ??
+    buildTypedPluginApprovalPendingReplyPayload({
+      request: params.request,
+      nowMs: params.nowMs,
+      text: buildPluginApprovalRequestMessage(params.request, params.nowMs),
+      allowedDecisions: resolveCanonicalPluginApprovalRequestAllowedDecisions(
+        params.request.request,
+      ),
+    })
+  );
 }
 
 export function buildForwardedPluginResolvedPayload(params: {
@@ -191,10 +176,61 @@ export function buildForwardedPluginResolvedPayload(params: {
   resolved: PluginApprovalResolved;
   target: ExecApprovalForwardTarget;
 }): ReplyPayload {
-  return buildApprovalRenderPayload({
-    target: params.target,
-    renderParams: params,
-    resolveRenderer: (adapter) => adapter?.render?.plugin?.buildResolvedPayload,
-    buildFallback: () => buildPluginApprovalResolvedReplyPayload({ resolved: params.resolved }),
+  const render = resolveApprovalRenderer(params.target)?.plugin?.buildResolvedPayload;
+  return render?.(params) ?? buildPluginApprovalResolvedReplyPayload({ resolved: params.resolved });
+}
+
+export function buildForwardedSystemAgentPendingPayload(params: {
+  cfg: OpenClawConfig;
+  request: SystemAgentApprovalRequest;
+  target: ExecApprovalForwardTarget;
+  nowMs: number;
+}): ReplyPayload {
+  const { request, nowMs } = params;
+  const expiresIn = Math.max(0, Math.round((request.expiresAtMs - nowMs) / 1000));
+  return buildTypedApprovalPendingReplyPayload({
+    approvalKind: "system-agent",
+    approvalId: params.request.id,
+    approvalSlug: params.request.id.slice(0, 8),
+    text: [
+      "🛠️ OpenClaw change requires approval",
+      `Change: ${request.request.description}`,
+      ...(request.request.agentId ? [`Agent: ${request.request.agentId}`] : []),
+      `ID: ${request.id}`,
+      `Expires in: ${expiresIn}s`,
+      `Reply with: /approve ${request.id} ${SYSTEM_AGENT_APPROVAL_DECISIONS.join("|")}`,
+    ].join("\n"),
+    agentId: params.request.request.agentId ?? null,
+    allowedDecisions: SYSTEM_AGENT_APPROVAL_DECISIONS,
+    sessionKey: params.request.request.sessionKey ?? null,
+  });
+}
+
+export function buildForwardedSystemAgentResolvedPayload(params: {
+  cfg: OpenClawConfig;
+  resolved: SystemAgentApprovalResolved;
+  target: ExecApprovalForwardTarget;
+}): ReplyPayload {
+  const { resolved } = params;
+  return buildApprovalResolvedReplyPayload({
+    approvalId: resolved.id,
+    approvalSlug: resolved.id.slice(0, 8),
+    text:
+      resolved.terminalStatus === "expired"
+        ? SYSTEM_AGENT_APPROVAL_EXPIRED_TEXT
+        : buildSystemAgentApprovalResolvedText({
+            approvalKind: "system-agent",
+            approvalId: resolved.id,
+            phase: "resolved",
+            title: "OpenClaw change",
+            description: resolved.request?.description ?? null,
+            metadata: [],
+            commandText: resolved.request?.description ?? "",
+            operationSummary: resolved.request?.description ?? "the requested change",
+            decision: resolved.decision,
+            resolvedBy: resolved.resolvedBy,
+            applicationStatus: resolved.applicationStatus,
+            terminalStatus: resolved.terminalStatus,
+          }),
   });
 }

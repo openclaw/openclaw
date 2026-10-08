@@ -137,13 +137,24 @@ describe("session dispatch protocol schemas", () => {
     ).toBe(false);
   });
 
-  it("accepts only a session selector for worker reclaim", () => {
+  it("accepts a session selector and exact failed generation for Gateway recovery", () => {
     expect(validateSessionsReclaimParams({ key: "agent:main:dispatch", agentId: "main" })).toBe(
       true,
     );
     expect(validateSessionsReclaimParams({ key: "agent:main:dispatch", profileId: "dev" })).toBe(
       false,
     );
+    expect(
+      validateSessionsReclaimParams({
+        key: "agent:main:dispatch",
+        recoverToGateway: { expectedGeneration: 3 },
+      }),
+    ).toBe(true);
+    for (const recoverToGateway of [{}, { expectedGeneration: -1 }, { expectedGeneration: 0.5 }]) {
+      expect(validateSessionsReclaimParams({ key: "agent:main:dispatch", recoverToGateway })).toBe(
+        false,
+      );
+    }
   });
 
   it("accepts exactly the reclaim owner's terminal outcomes", () => {
@@ -170,6 +181,23 @@ describe("session dispatch protocol schemas", () => {
       { state: "active", ...basePlacement, ...workerOwnedFields },
     ]) {
       expect(validateSessionsReclaimResult({ ...result, placement })).toBe(false);
+    }
+  });
+
+  it("exposes only canonical worker inference on active placement", () => {
+    const active = { state: "active", ...basePlacement, ...workerOwnedFields };
+    expect(Value.Check(SessionPlacementSchema, { ...active, inference: "worker" })).toBe(true);
+    for (const inference of ["gateway", "runtime-local", "unknown"]) {
+      expect(Value.Check(SessionPlacementSchema, { ...active, inference })).toBe(false);
+    }
+    for (const state of ["local", "requested", "draining", "reconciling", "reclaimed", "failed"]) {
+      const placement =
+        state === "local" || state === "requested"
+          ? { state, ...basePlacement }
+          : { ...active, state, ...(state === "failed" ? { recoveryError: "stopped" } : {}) };
+      expect(Value.Check(SessionPlacementSchema, { ...placement, inference: "worker" })).toBe(
+        false,
+      );
     }
   });
 
@@ -486,8 +514,10 @@ describe("session dispatch protocol schemas", () => {
       Value.Check(SessionPlacementSchema, {
         ...failed,
         recoveryAction: "restart",
+        retryOnSend: true,
       }),
     ).toBe(true);
+    expect(Value.Check(SessionPlacementSchema, { ...failed, retryOnSend: false })).toBe(false);
     expect(
       Value.Check(SessionPlacementSchema, {
         ...failed,

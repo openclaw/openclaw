@@ -18,20 +18,15 @@ const JSON_ARTIFACT_MAX_BYTES = readPositiveIntEnv(
 );
 
 function readJsonMaybe(file) {
-  let text;
   try {
-    text = readTextFileBounded(file, "plugin index JSON artifact", JSON_ARTIFACT_MAX_BYTES, {
+    const text = readTextFileBounded(file, "plugin index JSON artifact", JSON_ARTIFACT_MAX_BYTES, {
       tailBytes: ERROR_DETAIL_TAIL_BYTES,
     });
+    return JSON.parse(text);
   } catch (error) {
     if (error?.code === "ETOOBIG") {
       throw error;
     }
-    return {};
-  }
-  try {
-    return JSON.parse(text);
-  } catch {
     return {};
   }
 }
@@ -41,10 +36,7 @@ function textTooLargeError(message) {
 }
 
 function parseIndexJsonText(text, label) {
-  const bytes = Buffer.byteLength(text, "utf8");
-  if (bytes > JSON_ARTIFACT_MAX_BYTES) {
-    throw textTooLargeError(`${label} exceeded ${JSON_ARTIFACT_MAX_BYTES} bytes (${bytes} bytes)`);
-  }
+  assertIndexJsonByteLength(Buffer.byteLength(text, "utf8"), label);
   return JSON.parse(text);
 }
 
@@ -207,7 +199,7 @@ export function readPluginInstallIndex(options = {}) {
 }
 
 export function readPluginInstallRecords(options = {}) {
-  return readPluginInstallIndex(options).installRecords ?? {};
+  return readPluginInstallIndex(options).installRecords;
 }
 
 export function writePluginInstallIndexForE2E(index, options = {}) {

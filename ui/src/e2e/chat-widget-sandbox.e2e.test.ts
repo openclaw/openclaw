@@ -14,8 +14,8 @@ import {
 } from "../../../src/gateway/control-ui-csp.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import {
-  clickBoardWidgetControl,
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -57,11 +57,24 @@ function widgetDocument(): string {
     <label>Local note<input aria-label="Local note" placeholder="State stays in this widget"></label>
     <button id="refresh">Refresh via chat</button><button id="details">Toggle details</button>
     <button id="data">Try dashboard data</button><button id="record">Record state</button>
+    <button id="popup">Try native popup</button>
+    <output id="popup-result" aria-label="Popup result"></output>
     <output id="result" aria-label="Widget result">Ready</output>
     <div id="extra" class="details" hidden>Additional community details</div>
     <script>
+      (()=>{
+        const nativeOpen=window.open;
+        document.querySelector('#popup').onclick=()=>{
+          document.querySelector('#popup-result').textContent=
+            !navigator.userActivation.isActive?'No user activation':
+              nativeOpen.call(window,'about:blank','_blank')===null?'Popup blocked':'Popup opened';
+        };
+      })();
+    </script>
+    <script>
+      function open(){const extra=document.querySelector('#extra');extra.hidden=!extra.hidden;}
       document.querySelector('#refresh').onclick=()=>window.openclaw.prompt.send('Refresh the synthetic dashboard');
-      document.querySelector('#details').onclick=()=>{const extra=document.querySelector('#extra');extra.hidden=!extra.hidden;};
+      document.querySelector('#details').onclick=open;
       document.querySelector('#data').onclick=async()=>{try{await window.openclaw.data.read('private-dashboard');
         document.querySelector('#result').textContent='Unexpected data access';}
         catch{document.querySelector('#result').textContent='Dashboard data is unavailable in chat';}};
@@ -301,6 +314,23 @@ suite.define(() => {
             docId: documentId,
           });
           expect(proxy.boardRequests).toEqual(["ticket"]);
+          for (const widget of [inline, board]) {
+            await clickBoardWidgetControl(
+              page,
+              widget.getByRole("button", { name: "Toggle details" }),
+            );
+            await widget.getByText("Additional community details").waitFor();
+            await clickBoardWidgetControl(
+              page,
+              widget.getByRole("button", { name: "Toggle details" }),
+            );
+            await widget.getByText("Additional community details").waitFor({ state: "hidden" });
+            await clickBoardWidgetControl(
+              page,
+              widget.getByRole("button", { name: "Try native popup" }),
+            );
+            await widget.getByText("Popup blocked", { exact: true }).waitFor();
+          }
           await page.screenshot({
             path: path.join(suite.artifactDir, "02-inline-and-sidebar.png"),
           });
@@ -348,15 +378,24 @@ suite.define(() => {
             expect(await boardNote.inputValue()).toBe("Dashboard state survives swaps");
           }
           const originalHeight = (await outer.boundingBox())?.height ?? 0;
-          await inline.getByRole("button", { name: "Toggle details" }).click();
+          await clickBoardWidgetControl(
+            page,
+            inline.getByRole("button", { name: "Toggle details" }),
+          );
           await expect
             .poll(async () => (await outer.boundingBox())?.height ?? 0)
             .toBeGreaterThan(originalHeight + 400);
           expect(await retainedFrame?.evaluate((frame) => frame.isConnected)).toBe(true);
           expect(await note.inputValue()).toBe("State survives rerenders");
-          await inline.getByRole("button", { name: "Toggle details" }).click();
+          await clickBoardWidgetControl(
+            page,
+            inline.getByRole("button", { name: "Toggle details" }),
+          );
 
-          await inline.getByRole("button", { name: "Refresh via chat" }).click();
+          await clickBoardWidgetControl(
+            page,
+            inline.getByRole("button", { name: "Refresh via chat" }),
+          );
           const sent = asRecord((await gateway.waitForRequest("chat.send")).params);
           expect(sent).toMatchObject({
             sessionKey,
@@ -403,6 +442,15 @@ suite.define(() => {
               inline.locator("html").evaluate((root) => getComputedStyle(root).colorScheme),
             )
             .toBe("dark");
+          // A light proxy between dark documents paints an opaque UA canvas.
+          await expect
+            .poll(() =>
+              outer
+                .contentFrame()
+                .locator("html")
+                .evaluate((root) => getComputedStyle(root).colorScheme),
+            )
+            .toBe("dark");
           await expect
             .poll(() =>
               board.locator("html").evaluate((root) => getComputedStyle(root).colorScheme),
@@ -433,6 +481,93 @@ suite.define(() => {
               2,
             ),
           );
+          // Saved HTML has no generated wrapper; the sandbox runtime owns shortcuts.
+          await page.route(`${new URL(boardPath, proxy.baseUrl).href}?*`, (route) =>
+            route.fulfill({
+              contentType: "text/html",
+              body: `<!doctype html><input aria-label="Saved dashboard note">
+                <button onclick="parent.postMessage({type:'openclaw:widget-command-palette',
+                  nonce:window.shortcutNonce||window.scrollNonce},'*');
+                  parent.postMessage({type:'fixture-shortcut-attempted'},'*');">Attempt shortcut</button>
+                <script>window.addEventListener('message',event=>{
+                  if(event.data?.type==='openclaw:widget-board-host')window.scrollNonce=event.data.nonce;
+                  if(event.data?.type==='openclaw:widget-shortcut-host')window.shortcutNonce=event.data.nonce;
+                });</script>`,
+            }),
+          );
+          await gateway.setMethodResponse("board.get", {
+            ...snapshot,
+            revision: 2,
+            widgets: [{ ...snapshot.widgets[0], revision: 2 }],
+          });
+          await gateway.emitGatewayEvent("board.changed", { sessionKey });
+          const savedNote = board.getByRole("textbox", { name: "Saved dashboard note" });
+          await savedNote.fill("Saved draft");
+          expect(
+            await savedNote.evaluate((element) => {
+              const event = new KeyboardEvent("keydown", {
+                key: "k",
+                code: "KeyK",
+                ctrlKey: true,
+                bubbles: true,
+                cancelable: true,
+              });
+              element.dispatchEvent(event);
+              return event.defaultPrevented;
+            }),
+          ).toBe(false);
+          await page.keyboard.press("ControlOrMeta+K");
+          const paletteInput = page.locator(".cmd-palette__input");
+          await paletteInput.waitFor();
+          await page.keyboard.type("Settings");
+          expect(await paletteInput.inputValue()).toBe("Settings");
+          await page.keyboard.press("Escape");
+          await paletteInput.waitFor({ state: "hidden" });
+          await expect
+            .poll(() =>
+              savedNote.evaluate(
+                (element) => document.hasFocus() && document.activeElement === element,
+              ),
+            )
+            .toBe(true);
+          await page.keyboard.type("!");
+          expect(await savedNote.inputValue()).toBe("Saved draft!");
+          expect(await savedNote.evaluate(() => Boolean(Reflect.get(window, "scrollNonce")))).toBe(
+            false,
+          );
+          await page.evaluate(() => {
+            window.addEventListener("message", function settle(event) {
+              if (event.data?.type === "fixture-shortcut-attempted") {
+                window.removeEventListener("message", settle);
+                Reflect.set(window, "shortcutForgerySettled", true);
+              }
+            });
+          });
+          await board.getByRole("button", { name: "Attempt shortcut", exact: true }).click();
+          await page.waitForFunction(() => Reflect.get(window, "shortcutForgerySettled") === true);
+          expect(await page.locator(".cmd-palette__input").count()).toBe(0);
+          await savedNote.focus();
+          await savedNote.evaluate(() => {
+            Reflect.set(
+              window,
+              "keyboardDescriptors",
+              Object.getOwnPropertyDescriptors(KeyboardEvent.prototype),
+            );
+            Object.defineProperties(KeyboardEvent.prototype, {
+              key: { configurable: true, get: () => "k" },
+              ctrlKey: { configurable: true, get: () => true },
+              metaKey: { configurable: true, get: () => false },
+            });
+          });
+          await page.keyboard.press("j");
+          expect(await savedNote.inputValue()).toBe("Saved draft!j");
+          expect(await page.locator(".cmd-palette__input").count()).toBe(0);
+          await savedNote.evaluate(() => {
+            Object.defineProperties(
+              KeyboardEvent.prototype,
+              Reflect.get(window, "keyboardDescriptors"),
+            );
+          });
           completed = true;
         },
         async ({ page }) => {

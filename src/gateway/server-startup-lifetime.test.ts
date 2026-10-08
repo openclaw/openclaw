@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   acquirePublishedPreparedModelRuntime,
@@ -13,7 +14,13 @@ import {
   closePreparedModelRuntimeSnapshots,
   registerPreparedModelRuntimeClose,
 } from "../agents/prepared-model-runtime.lifecycle.js";
+import {
+  closeSwarmScheduler,
+  enqueueSwarmRun,
+  releaseSwarmRun,
+} from "../agents/subagents/swarm/swarm-scheduler.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { selectCurrentPluginMetadataCache } from "../plugins/current-plugin-metadata-state.js";
 import {
   getLegacyPluginSdkResourceHost,
@@ -45,6 +52,7 @@ import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { createGatewayKernel } from "./server-kernel.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
 import type { GatewayServer } from "./server-public.js";
 
 const startupTraceEventLoopDelay = vi.hoisted(() => ({
@@ -92,21 +100,6 @@ function createStartupTestState(label: string) {
   });
 }
 
-function registerSecretsClearFailure(
-  register: (hook: () => void) => void,
-  error: Error,
-): () => void {
-  let failure: Error | undefined = error;
-  register(function failRegisteredSecretsClear() {
-    if (failure) {
-      throw failure;
-    }
-  });
-  return () => {
-    failure = undefined;
-  };
-}
-
 describe("Gateway startup lifetime", () => {
   it.each(["donor", "metadata cache", "metadata borrower"] as const)(
     "releases idle prepared %s custody when one of two Gateways closes",
@@ -138,6 +131,7 @@ describe("Gateway startup lifetime", () => {
     `,
       );
       const config: OpenClawConfig = {
+        agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
         gateway: { auth: { mode: "token", token }, controlUi: { enabled: false } },
         plugins: {
           enabled: mode === "donor",
@@ -151,12 +145,13 @@ describe("Gateway startup lifetime", () => {
       const previous = captureActivePluginRegistrySnapshot();
       const bootstrapModule = await import("./server-startup-bootstrap.js");
       const bootstrap = bootstrapModule.prepareGatewayServerBootstrap;
-      const registries: ReturnType<typeof loadAndActivateRootPluginRegistry>[] = [];
+      const registries: Awaited<ReturnType<typeof loadAndActivateRootPluginRegistry>>[] = [];
+      const gatewayResolvers: GatewayContextResolver[] = [];
       const bootstrapSpy = vi
         .spyOn(bootstrapModule, "prepareGatewayServerBootstrap")
         .mockImplementation(async (...args) => {
           const result = await bootstrap(...args);
-          const registry = loadAndActivateRootPluginRegistry({
+          const registry = await loadAndActivateRootPluginRegistry({
             config,
             env: state.env,
             workspaceDir: state.workspaceDir,
@@ -164,12 +159,23 @@ describe("Gateway startup lifetime", () => {
           });
           result.pluginBootstrap.pluginRegistry = registry;
           registries.push(registry);
+          gatewayResolvers.push(result.resolvePluginGatewayContext);
           return result;
         });
       const caches: ReturnType<typeof createPluginCache>[] = [];
       const servers: GatewayServer[] = [];
       let stopRetirementProbe: (() => void) | undefined;
       const leases: Awaited<ReturnType<typeof acquireAgentRunPreparedModelRuntime>>[] = [];
+      const queuedDisposalEntered = createDeferred();
+      const releaseQueuedDisposal = createDeferred();
+      const queuedStart = vi.fn(async () => undefined);
+      const survivorStart = vi.fn(async () => undefined);
+      const queuedDispose = vi.fn(async (_reason: string) => {
+        queuedDisposalEntered.resolve();
+        await releaseQueuedDisposal.promise;
+      });
+      const survivorDispose = vi.fn(async (_reason: string) => undefined);
+      let donorDisposalStarted = false;
       let closing: Promise<void> | undefined;
       const input = (id: string) => ({
         config,
@@ -213,6 +219,23 @@ describe("Gateway startup lifetime", () => {
         if (mode === "donor") {
           assert(donor);
           expect(donor.hasRetainedConsumers).toBe(true);
+          for (const [index, id, start, dispose] of [
+            [0, "closing", queuedStart, queuedDispose],
+            [1, "survivor", survivorStart, survivorDispose],
+          ] as const) {
+            const lifecycleOwner = gatewayResolvers[index];
+            assert(lifecycleOwner);
+            enqueueSwarmRun({
+              groupId: `startup-lifetime-${id}`,
+              runId: `startup-lifetime-${id}`,
+              maxConcurrent: 1,
+              activeRunIds: [`startup-lifetime-${id}-capacity`],
+              lifecycleOwner,
+              start,
+              onStartFailure: () => true,
+              onRemoved: dispose,
+            });
+          }
         }
         const idle = await acquireAgentRunPreparedModelRuntime(input("closing"), {
           retainIdleRunOwner: true,
@@ -249,6 +272,7 @@ describe("Gateway startup lifetime", () => {
         if (donor) {
           const dispose = donor.dispose.bind(donor);
           const spy = vi.spyOn(donor, "dispose").mockImplementation((...args) => {
+            donorDisposalStarted = true;
             disposalEntered.resolve();
             return dispose(...args);
           });
@@ -266,6 +290,18 @@ describe("Gateway startup lifetime", () => {
           stopRetirementProbe = () => spy.mockRestore();
         }
         closing = closingServer.close();
+        if (mode === "donor") {
+          const firstDisposal = await Promise.race([
+            queuedDisposalEntered.promise.then(() => "queued launch"),
+            disposalEntered.promise.then(() => "plugin"),
+            closing.then(() => "closed"),
+          ]);
+          expect(firstDisposal).toBe("queued launch");
+          expect(queuedDispose).toHaveBeenCalledExactlyOnceWith("shutdown");
+          expect(donorDisposalStarted).toBe(false);
+          expect(survivorDispose).not.toHaveBeenCalled();
+          releaseQueuedDisposal.resolve();
+        }
         await disposalEntered.promise;
         // Registry retirement must revoke its cached publication without closing the survivor.
         await expect(
@@ -281,6 +317,11 @@ describe("Gateway startup lifetime", () => {
         await closing;
         if (donor) {
           expect(donor.hasRetainedConsumers).toBe(false);
+          expect(queuedStart).not.toHaveBeenCalled();
+          expect(survivorStart).not.toHaveBeenCalled();
+          expect(releaseSwarmRun("startup-lifetime-survivor-capacity")).toBe(true);
+          await vi.waitFor(() => expect(survivorStart).toHaveBeenCalledOnce());
+          expect(survivorDispose).not.toHaveBeenCalled();
         }
         expect(await prepareModelRuntimeSnapshot(input("survivor"))).toBe(survivor.snapshot);
         const presenter = survivor.snapshot.pluginRegistry?.widgetPresenters[0]?.presenter;
@@ -295,6 +336,14 @@ describe("Gateway startup lifetime", () => {
         leases.push(admitted);
         expect(admitted.snapshot).toBe(survivor.snapshot);
       } finally {
+        releaseQueuedDisposal.resolve();
+        for (const resolver of gatewayResolvers) {
+          await closeSwarmScheduler(resolver);
+        }
+        for (const id of ["closing", "survivor"]) {
+          releaseSwarmRun(`startup-lifetime-${id}-capacity`);
+          releaseSwarmRun(`startup-lifetime-${id}`);
+        }
         // A failing assertion still releases only this fixture's model claims before joining close.
         for (const lease of leases) {
           await lease[Symbol.asyncDispose]();
@@ -447,25 +496,27 @@ describe("Gateway startup lifetime", () => {
       }> = [];
       const metadataSpy = vi
         .spyOn(metadataModule, "retainGatewayPluginMetadata")
-        .mockImplementation(() => {
-          const owner = retainMetadata();
+        .mockImplementation((...metadataArgs) => {
+          const owner = retainMetadata(...metadataArgs);
           const released = vi.fn();
           const close = owner.close.bind(owner);
           vi.spyOn(owner, "close").mockImplementation(async (...args) => {
-            await close(...args);
+            const result = await close(...args);
             released();
+            return result;
           });
           metadataOwners.push({ owner, released });
           return owner;
         });
+      const clearSecrets = secretsModule.clearSecretsRuntimeSnapshotState;
       const clearSecretsSpy = vi.spyOn(secretsModule, "clearSecretsRuntimeSnapshotState");
-      const clearError = new Error("synthetic registered secrets clear failure");
-      const stopClearFailure = clearFails
-        ? registerSecretsClearFailure(
-            secretsModule.registerSecretsRuntimeStateClearHook,
-            clearError,
-          )
-        : undefined;
+      const clearError = new Error("synthetic secrets clear failure");
+      if (clearFails) {
+        clearSecretsSpy.mockImplementation(() => {
+          clearSecrets();
+          throw clearError;
+        });
+      }
       const database = new DatabaseSync(":memory:");
       const entered = createDeferred();
       const resume = createDeferred();
@@ -535,7 +586,6 @@ describe("Gateway startup lifetime", () => {
         expect(clearSecretsSpy).toHaveBeenCalledOnce();
         expect(metadataOwners[0]?.released).toHaveBeenCalledOnce();
       } finally {
-        stopClearFailure?.();
         resume.resolve();
         await outcome;
         bootstrapSpy.mockRestore();
@@ -553,6 +603,65 @@ describe("Gateway startup lifetime", () => {
       }
     },
   );
+
+  it("stops TLS renewal when the started Gateway closes", async () => {
+    const state = await createStartupTestState("gateway-tls-renewal-close");
+    const port = await getFreePort();
+    const token = "gateway-tls-renewal-token";
+    const certPath = await state.writeText("tls/cert.pem", TEST_TLS_CERT_PEM);
+    const keyPath = await state.writeText("tls/key.pem", TEST_TLS_KEY_PEM);
+    await state.writeConfig({
+      agents: { defaults: { model: { primary: "openai/gpt-5.6-sol" } } },
+      gateway: {
+        auth: { mode: "token", token },
+        controlUi: { enabled: false },
+        port,
+        tls: { enabled: true, autoGenerate: false, certPath, keyPath },
+      },
+    });
+    state.applyEnv();
+    const renewalModule = await import("./server-tls-renewal.js");
+    const startRenewal = renewalModule.startGatewayTlsRenewal;
+    let renewal: ReturnType<typeof startRenewal>;
+    const stopped = vi.fn();
+    const renewalSpy = vi
+      .spyOn(renewalModule, "startGatewayTlsRenewal")
+      .mockImplementation((params) => {
+        renewal = startRenewal(params);
+        if (renewal) {
+          const stop = renewal.stop.bind(renewal);
+          renewal.stop = async () => {
+            await stop();
+            stopped();
+          };
+        }
+        return renewal;
+      });
+    let server: GatewayServer | undefined;
+    try {
+      const { startGatewayServerCore } = await import("./server-start.js");
+      server = await startGatewayServerCore(port, {
+        auth: { mode: "token", token },
+        bind: "loopback",
+        controlUiEnabled: false,
+        sidecarStartup: "defer",
+      });
+      await server.startupSettled;
+      expect(renewal).toBeDefined();
+      expect(stopped).not.toHaveBeenCalled();
+      await expect(server.close()).resolves.toBeUndefined();
+      expect(stopped).toHaveBeenCalledOnce();
+    } finally {
+      // Retire the fixture's watchers even when broken registration makes close fail.
+      await renewal?.stop();
+      try {
+        await server?.close();
+      } finally {
+        renewalSpy.mockRestore();
+        await state.cleanup();
+      }
+    }
+  });
 
   it("closes startup tracing when required TLS material is unavailable", async () => {
     startupTraceEventLoopDelay.instances.length = 0;
@@ -703,7 +812,7 @@ describe("Gateway startup lifetime", () => {
           throw new Error("Expected the real Gateway kernel");
         }
         const activeKernel = kernel;
-        activeKernel.registerGatewayLifetimeSidecars([cleanupOwner]);
+        activeKernel.registerGatewayLifetimeSidecars(cleanupOwner);
         const terminalDispose = vi.spyOn(activeKernel.terminalSessions, "disposeAll");
         const drain = activeKernel.connectionWork.drain.bind(activeKernel.connectionWork);
         vi.spyOn(activeKernel.connectionWork, "drain").mockImplementation(async () => {
@@ -765,96 +874,134 @@ describe("Gateway startup lifetime", () => {
     },
   );
 
-  it("releases post-ready startup work after failure before joining cleanup", async () => {
-    const port = await getFreePort();
-    const state = await createStartupTestState("gateway-post-ready-startup-failure");
-    const startupError = new Error("startup failed after post-attach installation");
-    const emergencyRelease = createDeferred();
-    const drainEntered = createDeferred<{ barrierReleased: boolean }>();
-    const resumed = vi.fn<(state: { closing: boolean; listening: boolean }) => void>();
-    let barrierReleased = false;
-    let emergencyUsed = false;
-    let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
-    let postReadyWork: Promise<void> | undefined;
-    let startupOutcome: Promise<unknown> | undefined;
-    let unexpectedServer: GatewayServer | undefined;
-    const startupModule = await import("./server-startup-finish.js");
-    const finishStartup = startupModule.finishGatewayStartup;
-    const startupFactory = vi
-      .spyOn(startupModule, "finishGatewayStartup")
-      .mockImplementation(async (params) => {
-        const result = await finishStartup(params);
-        await result.startupSettled;
-        const owner = params.kernelRuntime;
-        kernel = owner;
-        const transport = owner.transportBridge.current();
-        if (!transport?.httpServer.listening) {
-          throw new Error("Expected the real Gateway listener before startup failure");
-        }
-        // Minimal boot skips this production continuation; retain the exact
-        // public-start barrier and work owner used by nonminimal post-attach.
-        const barrier = params.waitForPostReadyWork().then(() => {
-          barrierReleased = true;
-        });
-        const operation = (async () => {
-          const releasedBy = await Promise.race([
-            barrier.then(() => "gateway" as const),
-            emergencyRelease.promise.then(() => "fixture" as const),
-          ]);
-          emergencyUsed = releasedBy === "fixture";
-          resumed({
-            closing: owner.lifecycle.closePreludeStarted,
-            listening: transport.httpServer.listening,
+  it.each([false, true])(
+    "releases post-ready startup work after failure before joining cleanup (cleanup fails: %s)",
+    async (cleanupFails) => {
+      const port = await getFreePort();
+      const state = await createStartupTestState("gateway-post-ready-startup-failure");
+      const startupError = new Error("startup failed after post-attach installation");
+      const cleanupError = new Error("startup cleanup failed");
+      let failCleanup = cleanupFails;
+      const cleanupOwner = {
+        stop: vi.fn(async () => {
+          if (failCleanup) {
+            throw cleanupError;
+          }
+        }),
+      };
+      const emergencyRelease = createDeferred();
+      const drainEntered = createDeferred<{ barrierReleased: boolean }>();
+      const resumed = vi.fn<(state: { closing: boolean; listening: boolean }) => void>();
+      let barrierReleased = false;
+      let emergencyUsed = false;
+      let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
+      let postReadyWork: Promise<void> | undefined;
+      let startupOutcome: Promise<unknown> | undefined;
+      let unexpectedServer: GatewayServer | undefined;
+      const startupModule = await import("./server-startup-finish.js");
+      const finishStartup = startupModule.finishGatewayStartup;
+      const startupFactory = vi
+        .spyOn(startupModule, "finishGatewayStartup")
+        .mockImplementation(async (params) => {
+          const result = await finishStartup(params);
+          await result.startupSettled;
+          const owner = params.kernelRuntime;
+          kernel = owner;
+          owner.registerGatewayLifetimeSidecars(cleanupOwner);
+          const transport = owner.transportBridge.current();
+          if (!transport?.httpServer.listening) {
+            throw new Error("Expected the real Gateway listener before startup failure");
+          }
+          // Minimal boot skips this production continuation; retain the exact
+          // public-start barrier and work owner used by nonminimal post-attach.
+          const barrier = params.waitForPostReadyWork().then(() => {
+            barrierReleased = true;
           });
-        })();
-        postReadyWork = owner.connectionWork.track(() => operation);
-        const drain = owner.connectionWork.drain.bind(owner.connectionWork);
-        vi.spyOn(owner.connectionWork, "drain").mockImplementation(async () => {
-          drainEntered.resolve({ barrierReleased });
-          await drain();
+          const operation = (async () => {
+            const releasedBy = await Promise.race([
+              barrier.then(() => "gateway" as const),
+              emergencyRelease.promise.then(() => "fixture" as const),
+            ]);
+            emergencyUsed = releasedBy === "fixture";
+            resumed({
+              closing: owner.lifecycle.closePreludeStarted,
+              listening: transport.httpServer.listening,
+            });
+          })();
+          postReadyWork = owner.connectionWork.track(() => operation);
+          const drain = owner.connectionWork.drain.bind(owner.connectionWork);
+          vi.spyOn(owner.connectionWork, "drain").mockImplementation(async () => {
+            drainEntered.resolve({ barrierReleased });
+            await drain();
+          });
+          throw startupError;
         });
-        throw startupError;
-      });
-    try {
-      const token = "gateway-post-ready-startup-token";
-      await state.writeConfig({
-        gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
-      });
-      state.applyEnv();
-      const { startGatewayServerCore } = await import("./server-start.js");
-      startupOutcome = startGatewayServerCore(port, {
-        auth: { mode: "token", token },
-        bind: "loopback",
-        controlUiEnabled: false,
-        sidecarStartup: "defer",
-      }).then(
-        (server) => {
-          unexpectedServer = server;
-          return undefined;
-        },
-        (error: unknown) => error,
-      );
-      const boundary = await Promise.race([drainEntered.promise, startupOutcome]);
-      expect(boundary).toEqual({ barrierReleased: true });
-      expect(await startupOutcome).toBe(startupError);
-      await postReadyWork;
-      expect(emergencyUsed).toBe(false);
-      expect(resumed).toHaveBeenCalledExactlyOnceWith({ closing: true, listening: true });
-      expect(kernel?.transportBridge.current()?.httpServer.listening).toBe(false);
-      expect(getActiveGatewayRootWorkCount()).toBe(0);
-      expect(getActiveSecretsRuntimeConfigSnapshot()).toBeNull();
-    } finally {
-      // A broken catch path is already observable at drain entry. Release only
-      // the synthetic tail here so its original cleanup can finish before state removal.
-      emergencyRelease.resolve();
       try {
-        await Promise.all([startupOutcome, postReadyWork]);
-        await unexpectedServer?.close();
-        await state.cleanup();
+        const token = "gateway-post-ready-startup-token";
+        await state.writeConfig({
+          gateway: { auth: { mode: "token", token }, controlUi: { enabled: false }, port },
+        });
+        state.applyEnv();
+        const { startGatewayServerCore } = await import("./server-start.js");
+        startupOutcome = startGatewayServerCore(port, {
+          auth: { mode: "token", token },
+          bind: "loopback",
+          controlUiEnabled: false,
+          sidecarStartup: "defer",
+        }).then(
+          (server) => {
+            unexpectedServer = server;
+            return undefined;
+          },
+          (error: unknown) => error,
+        );
+        const boundary = await Promise.race([drainEntered.promise, startupOutcome]);
+        expect(boundary).toEqual({ barrierReleased: true });
+        const startupFailure = await startupOutcome;
+        if (cleanupFails) {
+          expect(startupFailure).toBeInstanceOf(AggregateError);
+          const aggregate = startupFailure as AggregateError & { cause?: unknown };
+          expect(aggregate.name).toBe("GatewayStartupCleanupError");
+          expect(aggregate.message).toBe(startupError.message);
+          expect(aggregate.errors).toHaveLength(2);
+          expect(aggregate.errors[0]).toBe(startupError);
+          expect(aggregate.cause).toBe(startupError);
+          const formatted = formatErrorMessage(startupFailure);
+          expect(formatted.startsWith(startupError.message)).toBe(true);
+          expect(formatted).toContain(cleanupError.message);
+          expect(formatted.indexOf(startupError.message)).toBeLessThan(
+            formatted.indexOf(cleanupError.message),
+          );
+        } else {
+          expect(startupFailure).toBe(startupError);
+        }
+        await postReadyWork;
+        expect(emergencyUsed).toBe(false);
+        expect(resumed).toHaveBeenCalledExactlyOnceWith({ closing: true, listening: true });
+        expect(kernel?.transportBridge.current()?.httpServer.listening).toBe(cleanupFails);
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        if (!cleanupFails) {
+          expect(getActiveSecretsRuntimeConfigSnapshot()).toBeNull();
+        }
+        expect(cleanupOwner.stop).toHaveBeenCalled();
       } finally {
-        startupFactory.mockRestore();
-        vi.restoreAllMocks();
+        // A broken catch path is already observable at drain entry. Release only
+        // the synthetic tail here so its original cleanup can finish before state removal.
+        emergencyRelease.resolve();
+        try {
+          await Promise.all([startupOutcome, postReadyWork]);
+          if (cleanupFails) {
+            failCleanup = false;
+            await kernel?.closeOnStartupFailure();
+          } else {
+            await unexpectedServer?.close();
+          }
+          await state.cleanup();
+        } finally {
+          startupFactory.mockRestore();
+          vi.restoreAllMocks();
+        }
       }
-    }
-  });
+    },
+  );
 });

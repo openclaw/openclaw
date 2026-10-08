@@ -18,12 +18,10 @@ extension GatewayConnection {
             agentID: agentID,
             artifactId: artifactId)
         let responseData = try await self.request(
-            method: request.method,
-            params: request.params,
-            timeoutMs: request.timeoutMs,
+            request,
             ifCurrentServerLease: lease)
         let response = try JSONDecoder().decode(ArtifactsDownloadResult.self, from: responseData)
-        let maximumBytes = Self.maximumManagedMediaBytes(for: kind)
+        let maximumBytes = kind.maximumDownloadBytes
         let declaredMIME = response.artifact.mimetype?.lowercased()
         if playback != .transcode,
            let encoded = response.data?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -31,7 +29,7 @@ extension GatewayConnection {
         {
             guard response.encoding == "base64",
                   let declaredMIME,
-                  declaredMIME.hasPrefix(kind.mimeTypePrefix),
+                  kind.acceptsMIMEType(declaredMIME),
                   let data = Data(base64Encoded: encoded),
                   data.count <= maximumBytes
             else { return nil }
@@ -51,7 +49,7 @@ extension GatewayConnection {
             url.scheme?.lowercased() == "https" &&
             lease.route.browserSession == nil &&
             lease.route.tls == nil &&
-            declaredMIME?.hasPrefix(kind.mimeTypePrefix) == true
+            declaredMIME.map(kind.acceptsMIMEType) == true
         if canStreamDirectly, playback != .transcode, let declaredMIME {
             guard await self.isCurrentServerLease(lease) else {
                 throw OpenClawChatTransportSendError.notDispatched
@@ -64,7 +62,7 @@ extension GatewayConnection {
 
         var urlRequest = URLRequest(url: url)
         urlRequest.timeoutInterval = kind == .video ? 60 : 20
-        urlRequest.setValue("\(kind.rawValue)/*", forHTTPHeaderField: "Accept")
+        urlRequest.setValue(kind.acceptHeader, forHTTPHeaderField: "Accept")
         if canStreamDirectly {
             urlRequest.setValue("bytes=0-0", forHTTPHeaderField: "Range")
         }
@@ -86,19 +84,8 @@ extension GatewayConnection {
         guard await self.isCurrentServerLease(lease) else {
             throw OpenClawChatTransportSendError.notDispatched
         }
-        let transferID = UUID()
-        let transfer = Task { [urlRequest] in
-            try await session.data(for: urlRequest, maximumBytes: maximumBytes) { [weak self] in
-                self?.serverLeaseMatchesCurrentState(lease) == true
-            }
-        }
-        self.managedMediaTransfers[transferID] = transfer
-        defer { self.managedMediaTransfers[transferID] = nil }
-        let (data, urlResponse) = try await withTaskCancellationHandler {
-            try await transfer.value
-        } onCancel: {
-            transfer.cancel()
-        }
+        let (data, urlResponse) = try await self.transferMedia(
+            request: urlRequest, session: session, maximumBytes: maximumBytes, lease: lease)
         guard await self.isCurrentServerLease(lease) else {
             throw OpenClawChatTransportSendError.notDispatched
         }
@@ -108,7 +95,7 @@ extension GatewayConnection {
         }
         guard (200..<300).contains(http.statusCode),
               let mimeType = http.mimeType?.lowercased(),
-              mimeType.hasPrefix(kind.mimeTypePrefix)
+              kind.acceptsMIMEType(mimeType)
         else { return nil }
         if canStreamDirectly {
             return .stream(OpenClawChatMediaStream(
@@ -119,10 +106,24 @@ extension GatewayConnection {
         return .data(OpenClawChatMediaData(data: data, mimeType: mimeType))
     }
 
-    private static func maximumManagedMediaBytes(for kind: OpenClawChatMediaKind) -> Int {
-        switch kind {
-        case .image: 12 * 1024 * 1024
-        case .audio, .video: 16 * 1024 * 1024
+    func transferMedia(
+        request: URLRequest,
+        session: GatewayTLSPinningSession,
+        maximumBytes: Int,
+        lease: ServerLease) async throws -> (Data, URLResponse)
+    {
+        let transferID = UUID()
+        let transfer = Task {
+            try await session.data(for: request, maximumBytes: maximumBytes) { [weak self] in
+                self?.serverLeaseMatchesCurrentState(lease) == true
+            }
+        }
+        self.managedMediaTransfers[transferID] = transfer
+        defer { self.managedMediaTransfers[transferID] = nil }
+        return try await withTaskCancellationHandler {
+            try await transfer.value
+        } onCancel: {
+            transfer.cancel()
         }
     }
 }

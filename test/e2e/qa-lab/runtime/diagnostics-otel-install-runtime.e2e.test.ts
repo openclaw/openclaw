@@ -1,5 +1,6 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import {
   copyFile,
   cp,
@@ -17,13 +18,14 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { afterAll, describe, expect, test } from "vitest";
+import { afterAll, describe, expect, test, type TestContext } from "vitest";
 import {
   createQaGatewayChild,
   startQaMockOpenAiServer,
   type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import { readPluginInstallRecords } from "../../../../scripts/e2e/lib/plugin-index-sqlite.mjs";
+import { awaitGateBeforeSettlement, withinTest } from "../../../helpers/promise.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { startLocalOtlpReceiver } from "./otel-test-support.js";
 
@@ -38,40 +40,23 @@ type MutableConfig = {
   [key: string]: unknown;
 };
 
-async function waitForChildExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
-  if (child.exitCode !== null) {
-    return true;
+async function stopChild(
+  owned: { child: ChildProcess; exited: Promise<unknown> } | undefined,
+): Promise<void> {
+  if (!owned) {
+    return;
   }
-  return await new Promise<boolean>((resolve) => {
-    const onExit = () => {
-      clearTimeout(timer);
-      resolve(true);
-    };
-    const timer = setTimeout(() => {
-      child.off("exit", onExit);
-      resolve(false);
-    }, timeoutMs);
-    timer.unref();
-    child.once("exit", onExit);
-    if (child.exitCode !== null) {
-      child.off("exit", onExit);
-      clearTimeout(timer);
-      resolve(true);
+  const { child, exited } = owned;
+  // The grace only escalates termination; cleanup still joins the retained exit.
+  const escalation = setTimeout(() => child.kill("SIGKILL"), 5_000);
+  escalation.unref();
+  try {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGTERM");
     }
-  });
-}
-
-async function stopChild(child: ChildProcess | undefined): Promise<void> {
-  if (!child || child.exitCode !== null) {
-    return;
-  }
-  child.kill("SIGTERM");
-  if (await waitForChildExit(child, 5_000)) {
-    return;
-  }
-  child.kill("SIGKILL");
-  if (!(await waitForChildExit(child, 5_000))) {
-    throw new Error("fixture registry did not exit after SIGKILL");
+    await exited;
+  } finally {
+    clearTimeout(escalation);
   }
 }
 
@@ -96,39 +81,34 @@ async function startReceiver() {
   return { ...receiver, baseUrl: `http://127.0.0.1:${port}` };
 }
 
-async function runCleanup(
-  label: string,
-  cleanup: () => Promise<void>,
-  timeoutMs = 30_000,
-): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} cleanup timed out`)), timeoutMs);
-    timer.unref();
-    cleanup().then(
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      },
-    );
-  });
-}
-
-async function settleCleanup(
-  ...cleanups: Array<readonly [label: string, cleanup: () => Promise<void>]>
-): Promise<void> {
-  const results = await Promise.allSettled(
-    cleanups.map(async ([label, cleanup]) => await runCleanup(label, cleanup)),
-  );
+async function settleCleanup(...cleanups: Array<() => Promise<void>>): Promise<void> {
+  const results = await Promise.allSettled(cleanups.map(async (cleanup) => await cleanup()));
   const failures = results.flatMap((result) =>
     result.status === "rejected" ? [result.reason] : [],
   );
   if (failures.length > 0) {
     throw new AggregateError(failures, "managed diagnostics-otel cleanup failed");
   }
+}
+
+function runOtelTestFixture(
+  context: Pick<TestContext, "signal" | "onTestFinished">,
+  body: () => Promise<void>,
+  cleanup: () => Promise<void>,
+): Promise<void> {
+  let closing: Promise<void> | undefined;
+  const close = () => (closing ??= cleanup());
+  const completed = runQaGatewayFixture(async () => {
+    context.signal.throwIfAborted();
+    await body();
+  }, close);
+  // Vitest cancels its wrapper before the body finishes unwinding. Retain that
+  // original lifetime so suite teardown cannot remove the packed seed early.
+  context.onTestFinished(async () => {
+    await completed.catch(() => {});
+    await close();
+  });
+  return completed;
 }
 
 async function packPlugin(repoRoot: string, scratch: string) {
@@ -189,7 +169,13 @@ async function packPlugin(repoRoot: string, scratch: string) {
   };
 }
 
-async function startRegistry(repoRoot: string, scratch: string, tarball: string, version: string) {
+async function startRegistry(
+  repoRoot: string,
+  scratch: string,
+  tarball: string,
+  version: string,
+  signal: AbortSignal,
+) {
   const portFile = path.join(scratch, "registry-port");
   const child = spawn(
     process.execPath,
@@ -200,23 +186,30 @@ async function startRegistry(repoRoot: string, scratch: string, tarball: string,
         ...process.env,
         OPENCLAW_NPM_REGISTRY_UPSTREAM: "https://registry.npmjs.org",
       },
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["ignore", "pipe", "pipe", "ipc"],
     },
   );
+  const exited = once(child, "exit");
+  const ready = once(child, "message").then(([message]: unknown[]) => {
+    if (typeof message === "number" && Number.isInteger(message) && message > 0) {
+      return message;
+    }
+    throw new Error("fixture npm registry sent invalid readiness");
+  });
   try {
-    const port = await waitFor(async () => {
-      try {
-        return (await readFile(portFile, "utf8")).trim() || undefined;
-      } catch {
-        if (child.exitCode !== null) {
+    const port = await withinTest(
+      awaitGateBeforeSettlement(
+        ready,
+        exited.then(() => {
           throw new Error(`fixture npm registry exited early (${child.exitCode})`);
-        }
-        return undefined;
-      }
-    });
-    return { baseUrl: `http://127.0.0.1:${port}`, child };
+        }),
+        "fixture npm registry exited early",
+      ),
+      signal,
+    );
+    return { baseUrl: `http://127.0.0.1:${port}`, child, exited };
   } catch (error) {
-    await stopChild(child).catch((stopError: unknown) => {
+    await stopChild({ child, exited }).catch((stopError: unknown) => {
       throw new Error(
         `fixture npm registry startup cleanup failed: ${
           stopError instanceof Error ? stopError.message : String(stopError)
@@ -385,7 +378,8 @@ describe("managed diagnostics-otel install runtime", () => {
     return { tarball, version: packed.version };
   }
 
-  test("installs the exact package and exports with config precedence, sampling, and flush", async () => {
+  test("installs the exact package and exports with config precedence, sampling, and flush", async (context) => {
+    const { signal } = context;
     const repoRoot = path.resolve(import.meta.dirname, "../../../..");
     const scratch = await mkdtemp(path.join(tmpdir(), "openclaw-otel-install-"));
     const configured = await startReceiver();
@@ -396,7 +390,7 @@ describe("managed diagnostics-otel install runtime", () => {
     let gateway: QaGatewayChild | undefined;
     const runProof = async () => {
       const packed = await copyPackedPlugin(repoRoot, scratch);
-      registry = await startRegistry(repoRoot, scratch, packed.tarball, packed.version);
+      registry = await startRegistry(repoRoot, scratch, packed.tarball, packed.version, signal);
       mock = await startQaMockOpenAiServer();
       gateway = await startInstallGateway({
         owner: gatewayOwner,
@@ -453,19 +447,23 @@ describe("managed diagnostics-otel install runtime", () => {
       expect(exportDelayMs).toBeLessThan(4_500);
       expect(envOnly.capturedRequests).toHaveLength(0);
     };
-    await runQaGatewayFixture(runProof, async () => {
-      await settleCleanup(
-        ["gateway", async () => await stopQaGatewayFixture(gatewayOwner)],
-        ["mock provider", async () => await mock?.stop()],
-        ["fixture registry", async () => await stopChild(registry?.child)],
-        ["configured receiver", async () => await configured.close()],
-        ["environment receiver", async () => await envOnly.close()],
-        ["scratch directory", async () => await rm(scratch, { recursive: true, force: true })],
+    await runOtelTestFixture(context, runProof, async () => {
+      await runQaGatewayFixture(
+        async () =>
+          await settleCleanup(
+            async () => await stopQaGatewayFixture(gatewayOwner),
+            async () => await mock?.stop(),
+            async () => await stopChild(registry),
+            async () => await configured.close(),
+            async () => await envOnly.close(),
+          ),
+        async () => await rm(scratch, { recursive: true, force: true }),
       );
     });
   }, 180_000);
 
-  test("keeps installed diagnostic listeners active with a preloaded SDK", async () => {
+  test("keeps installed diagnostic listeners active with a preloaded SDK", async (context) => {
+    const { signal } = context;
     const repoRoot = path.resolve(import.meta.dirname, "../../../..");
     const rootPackage = JSON.parse(await readFile(path.join(repoRoot, "package.json"), "utf8")) as {
       devDependencies?: Record<string, string>;
@@ -476,7 +474,7 @@ describe("managed diagnostics-otel install runtime", () => {
       dependencies?: Record<string, string>;
       devDependencies?: Record<string, string>;
     };
-    expect(rootPackage.devDependencies?.["@opentelemetry/sdk-node"]).toBe("0.221.0");
+    expect(rootPackage.devDependencies?.["@opentelemetry/sdk-node"]).toBe("0.222.0");
     expect(sourcePluginPackage.dependencies?.["@opentelemetry/sdk-node"]).toBeUndefined();
     expect(sourcePluginPackage.devDependencies?.["@opentelemetry/sdk-node"]).toBeUndefined();
     const scratch = await mkdtemp(path.join(tmpdir(), "openclaw-otel-preloaded-"));
@@ -488,7 +486,7 @@ describe("managed diagnostics-otel install runtime", () => {
     let gateway: QaGatewayChild | undefined;
     const runProof = async () => {
       const packed = await copyPackedPlugin(repoRoot, scratch);
-      registry = await startRegistry(repoRoot, scratch, packed.tarball, packed.version);
+      registry = await startRegistry(repoRoot, scratch, packed.tarball, packed.version, signal);
       mock = await startQaMockOpenAiServer();
       const preloadRoot = path.join(scratch, `otel-preload-${randomUUID()}`);
       const preloadModules = path.join(preloadRoot, "node_modules", "@opentelemetry");
@@ -560,14 +558,17 @@ describe("managed diagnostics-otel install runtime", () => {
       expect(runSpan.spanId).toBeTruthy();
       expect(ignoredConfig.capturedRequests).toHaveLength(0);
     };
-    await runQaGatewayFixture(runProof, async () => {
-      await settleCleanup(
-        ["gateway", async () => await stopQaGatewayFixture(gatewayOwner)],
-        ["mock provider", async () => await mock?.stop()],
-        ["fixture registry", async () => await stopChild(registry?.child)],
-        ["preloaded receiver", async () => await receiver.close()],
-        ["ignored config receiver", async () => await ignoredConfig.close()],
-        ["scratch directory", async () => await rm(scratch, { recursive: true, force: true })],
+    await runOtelTestFixture(context, runProof, async () => {
+      await runQaGatewayFixture(
+        async () =>
+          await settleCleanup(
+            async () => await stopQaGatewayFixture(gatewayOwner),
+            async () => await mock?.stop(),
+            async () => await stopChild(registry),
+            async () => await receiver.close(),
+            async () => await ignoredConfig.close(),
+          ),
+        async () => await rm(scratch, { recursive: true, force: true }),
       );
     });
   }, 180_000);

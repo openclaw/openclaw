@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadDeviceAuthToken } from "../infra/device-auth-store.js";
+import { readDeviceAuthTokenForTest } from "../infra/device-auth-store.test-support.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
@@ -50,7 +50,9 @@ describe("startup local CLI pairing", () => {
       expect(approved?.status).toBe("approved");
 
       await expect(ensureStartupLocalCliPairing()).resolves.toBe("unavailable");
-      expect(loadDeviceAuthToken({ deviceId: identity.deviceId, role: "operator" })).toBeNull();
+      expect(
+        readDeviceAuthTokenForTest({ deviceId: identity.deviceId, role: "operator" }),
+      ).toBeNull();
       await expect(getPairedDevice(identity.deviceId)).resolves.toMatchObject({
         approvedScopes: [READ_SCOPE],
       });

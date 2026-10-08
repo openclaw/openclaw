@@ -2,6 +2,7 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "File editor recovery" });
@@ -30,6 +31,8 @@ async function openFilePreview(page: Page) {
           response: {
             root: "/workspace",
             file: {
+              previewKind: "text",
+              contentEncoding: "utf8",
               content: `Synthetic ${name} content`,
               kind: "read",
               missing: false,
@@ -54,7 +57,10 @@ suite.define(() => {
         recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } },
       },
       async ({ page }) => {
-        await page.route(/\/assets\/file-editor-view-[^/]+\.js(?:\?.*)?$/u, async (route) => {
+        const fileEditorRequest = controlUiE2eBuiltModuleRequest(
+          "ui/src/pages/chat/components/file-editor-view.ts",
+        );
+        await page.route(fileEditorRequest, async (route) => {
           const url = new URL(route.request().url());
           if (url.searchParams.has("actual")) {
             await route.continue();
@@ -135,7 +141,10 @@ suite.define(() => {
             }
           },
         );
-        await page.route(/\/assets\/file-editor-view-[^/]+\.js$/u, async (route) => {
+        const fileEditorRequest = controlUiE2eBuiltModuleRequest(
+          "ui/src/pages/chat/components/file-editor-view.ts",
+        );
+        await page.route(fileEditorRequest, async (route) => {
           chunkRequests += 1;
           if (reachable) {
             await route.continue();
@@ -189,7 +198,7 @@ suite.define(() => {
   });
 
   it.each(["raw", "file", "close"] as const)(
-    "ignores a late initialization failure after selecting %s",
+    "keeps a late initialization failure scoped after selecting %s",
     async (selection) => {
       await suite.withPage(
         {
@@ -199,7 +208,10 @@ suite.define(() => {
         async ({ page }) => {
           const errors: string[] = [];
           page.on("pageerror", (error) => errors.push(error.message));
-          await page.route(/\/assets\/file-editor-view-[^/]+\.js(?:\?.*)?$/u, async (route) => {
+          const fileEditorRequest = controlUiE2eBuiltModuleRequest(
+            "ui/src/pages/chat/components/file-editor-view.ts",
+          );
+          await page.route(fileEditorRequest, async (route) => {
             const url = new URL(route.request().url());
             if (url.searchParams.has("actual")) {
               await route.continue();
@@ -223,7 +235,7 @@ suite.define(() => {
             await page.locator('a.markdown-file-link[data-file-path="other.txt"]').click();
             await page.locator(".cm-content").waitFor();
           } else {
-            await page.getByRole("button", { name: "Close Review", exact: true }).click();
+            await page.getByRole("button", { name: "Close tab: notes.txt", exact: true }).click();
           }
           await page.evaluate(() => window.rejectEditorInitialization!());
           await page.evaluate(
@@ -232,14 +244,29 @@ suite.define(() => {
                 requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
               }),
           );
-          expect(await page.locator(".lazy-view-error").count()).toBe(0);
+          expect(await page.locator(".lazy-view-error:visible").count()).toBe(0);
           expect(errors).toEqual([]);
           if (selection === "raw") {
             expect(await page.locator(".sidebar-markdown-shell").textContent()).toContain(
               "Synthetic notes.txt content",
             );
           } else if (selection === "file") {
-            expect(await page.locator(".cm-content").textContent()).toContain(
+            expect(await page.locator(".cm-content:visible").textContent()).toContain(
+              "Synthetic other.txt content",
+            );
+            expect(await page.locator(".lazy-view-error").count()).toBe(1);
+            await page
+              .locator(".side-panel__header wa-tab")
+              .filter({ hasText: "notes.txt" })
+              .click();
+            expect(await page.locator(".lazy-view-error:visible").textContent()).toContain(
+              "Retired editor failed",
+            );
+            await page
+              .locator(".side-panel__header wa-tab")
+              .filter({ hasText: "other.txt" })
+              .click();
+            expect(await page.locator(".cm-content:visible").textContent()).toContain(
               "Synthetic other.txt content",
             );
           } else {

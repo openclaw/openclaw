@@ -49,11 +49,7 @@ function normalizeExecApprovalThreadValue(
   if (typeof value === "number") {
     return Number.isFinite(value) ? value : undefined;
   }
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const normalized = value.trim();
-  return normalized ? normalized : undefined;
+  return normalizeOptionalString(value);
 }
 
 function toExecLikeApprovalRequest(request: ApprovalRequestLike): ExecApprovalRequest {
@@ -77,10 +73,6 @@ function toExecLikeApprovalRequest(request: ApprovalRequestLike): ExecApprovalRe
   };
 }
 
-function normalizeOptionalChannel(value?: string | null): string | undefined {
-  return normalizeMessageChannel(value);
-}
-
 /** Resolves the conversation encoded in an approval request session key for an optional channel. */
 export function resolveApprovalRequestSessionConversation(params: {
   request: ApprovalRequestLike;
@@ -97,20 +89,11 @@ export function resolveApprovalRequestSessionConversation(params: {
   if (!resolved) {
     return null;
   }
-  const expectedChannel = normalizeOptionalChannel(params.channel);
-  if (expectedChannel && normalizeOptionalChannel(resolved.channel) !== expectedChannel) {
+  const expectedChannel = normalizeMessageChannel(params.channel);
+  if (expectedChannel && normalizeMessageChannel(resolved.channel) !== expectedChannel) {
     return null;
   }
-  return {
-    channel: resolved.channel,
-    kind: resolved.kind,
-    id: resolved.id,
-    rawId: resolved.rawId,
-    threadId: resolved.threadId,
-    baseSessionKey: resolved.baseSessionKey,
-    baseConversationId: resolved.baseConversationId,
-    parentConversationCandidates: resolved.parentConversationCandidates,
-  };
+  return resolved;
 }
 
 /** Resolves the best known message target for an exec approval request. */
@@ -122,10 +105,6 @@ export function resolveExecApprovalSessionTarget(params: {
   turnSourceAccountId?: string | null;
   turnSourceThreadId?: string | number | null;
 }): ExecApprovalSessionTarget | null {
-  const sessionKey = normalizeOptionalString(params.request.request.sessionKey);
-  if (!sessionKey) {
-    return null;
-  }
   const persisted = resolvePersistedApprovalRequestSessionEntry({
     cfg: params.cfg,
     request: params.request,
@@ -197,14 +176,14 @@ export function resolveApprovalRequestOriginTarget<TTarget>(
   }
 
   const turnSourceTarget = params.resolveTurnSourceTarget(params.request);
-  const expectedChannel = normalizeOptionalChannel(params.channel);
+  const expectedChannel = normalizeMessageChannel(params.channel);
   const sessionTargetBinding = resolveApprovalRequestStoredSessionTarget({
     cfg: params.cfg,
     request: params.request,
   });
   const sessionTarget =
     sessionTargetBinding &&
-    normalizeOptionalChannel(sessionTargetBinding.channel) === expectedChannel
+    normalizeMessageChannel(sessionTargetBinding.channel) === expectedChannel
       ? params.resolveSessionTarget(sessionTargetBinding)
       : null;
 

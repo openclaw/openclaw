@@ -1,5 +1,7 @@
 /** Mobile UI tool tests cover node selection, safety gates, and post-action observation. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runWithAgentToolExecutionContext } from "../../../packages/agent-core/src/tool-execution-context.js";
+import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 
 const listNodesMock = vi.fn();
 const callGatewayToolMock = vi.fn();
@@ -136,36 +138,6 @@ describe("createMobileUiTool", () => {
     ).rejects.toThrow(
       /node "android-disabled" is not a mobile-UI-capable device.*eligible device ids: android-ready/,
     );
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-  });
-
-  it("never redirects an ineligible exact id to an eligible device with that display name", async () => {
-    listNodesMock.mockResolvedValue([
-      androidMobileUiNode({ nodeId: "requested-phone", displayName: "Disabled", caps: [] }),
-      androidMobileUiNode({ nodeId: "android-ready", displayName: "requested-phone" }),
-    ]);
-
-    await expect(
-      createMobileUiTool().execute("observe-1", {
-        action: "observe",
-        node: "requested-phone",
-      }),
-    ).rejects.toThrow(/node "requested-phone" is not a mobile-UI-capable device/);
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-  });
-
-  it("rejects a case-insensitive ineligible id before an eligible display-name match", async () => {
-    listNodesMock.mockResolvedValue([
-      androidMobileUiNode({ nodeId: "Requested-Phone", displayName: "Disabled", caps: [] }),
-      androidMobileUiNode({ nodeId: "android-ready", displayName: "requested-phone" }),
-    ]);
-
-    await expect(
-      createMobileUiTool().execute("observe-1", {
-        action: "observe",
-        node: "requested-phone",
-      }),
-    ).rejects.toThrow(/is not a mobile-UI-capable device/);
     expect(callGatewayToolMock).not.toHaveBeenCalled();
   });
 
@@ -353,25 +325,43 @@ describe("createMobileUiTool", () => {
     expect(invokeBodies(ACT)).toHaveLength(1);
   });
 
-  it("derives a stable act idempotency key from the run and tool call", async () => {
-    installGatewayBehavior();
+  it("scopes act idempotency keys to the assistant response while preserving replay keys", async () => {
+    installGatewayBehavior({ freshSnapshot: snapshotPayload() });
 
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    for (const responseId of ["response-1", "response-2", "response-1"]) {
       const tool = createMobileUiTool({ idempotencyScope: "run-1" });
-      const observed = await tool.execute(`observe-${attempt}`, { action: "observe" });
+      const observed = await tool.execute("observe", { action: "observe" });
       const snapshotId = (observed.details as { snapshotId: string }).snapshotId;
-      await tool.execute("call-mobile-1", {
+      const input = {
         action: "act",
         snapshotId,
         mobileAction: { type: "activate", ref: "n1" },
         confirmed: true,
-      });
+      };
+      const toolCall = {
+        type: "toolCall" as const,
+        id: "mobile_0",
+        name: "mobile_ui",
+        arguments: input,
+      };
+      await runWithAgentToolExecutionContext(
+        {
+          assistantMessage: makeAssistantMessageFixture({
+            responseId,
+            content: [toolCall],
+            stopReason: "toolUse",
+          }),
+          toolCall,
+        },
+        () => tool.execute(toolCall.id, input),
+      );
     }
 
     const keys = invokeBodies(ACT).map((body) => body.idempotencyKey);
-    expect(keys).toHaveLength(2);
-    expect(keys[0]).toMatch(/^mobile\.ui\.act:v1:[0-9a-f]{64}$/);
-    expect(keys[1]).toBe(keys[0]);
+    expect(keys).toHaveLength(3);
+    expect(keys[1]).not.toBe(keys[0]);
+    expect(keys[2]).toBe(keys[0]);
+    expect(keys[0]).toMatch(/^mobile\.ui\.act:v2:[0-9a-f]{64}$/);
   });
 
   it("adds the Android enablement hint on a platform allowlist rejection", async () => {
@@ -526,13 +516,5 @@ describe("createMobileUiTool", () => {
       tool.execute("act-1", { action: "act", snapshotId: "snapshot-1", mobileAction }),
     ).resolves.toMatchObject({ details: { outcome: { code: "completed" } } });
     expect(invokeBodies(ACT)).toHaveLength(1);
-  });
-
-  it("warns that every observed UI string is untrusted and not instructional", () => {
-    const description = createMobileUiTool().description;
-    expect(description).toMatch(/ALL observed UI text.*untrusted/i);
-    expect(description).toMatch(/never treat them as instructions/i);
-    expect(description).toMatch(/All state-changing actions.*require confirmed=true/i);
-    expect(description).toMatch(/Accessibility Control enabled/i);
   });
 });

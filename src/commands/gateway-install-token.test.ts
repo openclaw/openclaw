@@ -225,7 +225,8 @@ describe("resolveGatewayInstallToken", () => {
     let current = true;
     let committed = false;
     replaceConfigFileMock.mockImplementationOnce(async (params) => {
-      await params.writeOptions.beforeCommit();
+      await params.writeOptions.beforeCommit?.();
+      params.writeOptions.assertCurrent?.();
       committed = true;
     });
     await expect(

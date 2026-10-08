@@ -10,6 +10,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { progressCardStore, type ProgressCardStore } from "../progress-card-store.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import {
   resolveSessionMutationAuthorization,
@@ -22,8 +23,177 @@ import { createProgressCardHandlers } from "./progress-card.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 describe("progress card request authorization", () => {
+  it.each(["operator.sessions.read", "operator.sessions.write", "operator.read"])(
+    "reads visible cards without participation under %s and hides private cards",
+    async (scope) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const cfg = rolePolicyConfig();
+        setRuntimeConfigSnapshot(cfg, cfg);
+        const client = roleClient("view", "card-viewer");
+        client.connect.scopes = [scope];
+        const owner = roleClient("view", "other-card-owner");
+        const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+        for (const row of [
+          {
+            name: "foreign-shared",
+            visibility: "shared",
+            own: false,
+            incognito: false,
+            visible: true,
+          },
+          { name: "own-draft", visibility: "draft", own: true, incognito: false, visible: true },
+          {
+            name: "foreign-draft",
+            visibility: "draft",
+            own: false,
+            incognito: false,
+            visible: false,
+          },
+          {
+            name: "hidden-card",
+            visibility: "shared",
+            own: false,
+            incognito: true,
+            visible: false,
+          },
+        ] as const) {
+          const sessionKey = `agent:main:${row.name}`;
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey },
+            {
+              sessionId: row.name,
+              updatedAt: 1,
+              visibility: row.visibility,
+              ...(row.incognito ? { incognito: row.incognito } : {}),
+              createdActor: {
+                type: "human",
+                source: "profile",
+                id: (row.own ? client : owner).authenticatedUserProfile!.profileId,
+              },
+            },
+          );
+          await progressCardStore.put(sessionKey, { markdown: row.name }, "main");
+          using get = vi.spyOn(progressCardStore, "get");
+          const respond = vi.fn<RespondFn>();
+          await handleGatewayRequest({
+            req: { type: "req", id: row.name, method: "progressCard.get", params: { sessionKey } },
+            client,
+            context,
+            respond,
+            isWebchatConnect: () => false,
+            extraHandlers: createProgressCardHandlers(),
+          });
+          if (row.visible) {
+            expect(respond).toHaveBeenCalledExactlyOnceWith(
+              true,
+              { card: expect.objectContaining({ markdown: row.name }) },
+              undefined,
+            );
+            expect(get).toHaveBeenCalledOnce();
+          } else {
+            expect(respond).toHaveBeenCalledExactlyOnceWith(
+              false,
+              undefined,
+              expect.objectContaining({
+                code: "INVALID_REQUEST",
+                message: expect.stringContaining("was not found"),
+              }),
+            );
+            expect(get).not.toHaveBeenCalled();
+          }
+        }
+      });
+    },
+  );
+
+  it.each(["visibility", "source"] as const)(
+    "does not publish a shared card after its %s changes during storage",
+    async (change) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const cfg = rolePolicyConfig();
+        setRuntimeConfigSnapshot(cfg, cfg);
+        const client = roleClient("view", "delayed-card-viewer");
+        client.connect.scopes = ["operator.sessions.read"];
+        const owner = roleClient("view", "delayed-card-owner");
+        const target = { sessionKey: "agent:main:visible-card", agentId: "main" };
+        await upsertSessionEntryCore(target, {
+          sessionId: "visible-generation",
+          updatedAt: 1,
+          visibility: "shared",
+          createdActor: {
+            type: "human",
+            source: "profile",
+            id: owner.authenticatedUserProfile!.profileId,
+          },
+        });
+        await progressCardStore.put(target.sessionKey, { markdown: "shared card" }, target.agentId);
+        const entered = createDeferredCore();
+        const release = createDeferredCore();
+        const store: ProgressCardStore = {
+          async get(...args) {
+            const card = await progressCardStore.get(...args);
+            entered.resolve();
+            await release.promise;
+            return card;
+          },
+          put: progressCardStore.put.bind(progressCardStore),
+        };
+        const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+        const respond = vi.fn<RespondFn>();
+        const pending = handleGatewayRequest({
+          req: {
+            type: "req",
+            id: "delayed-visible-card",
+            method: "progressCard.get",
+            params: target,
+          },
+          client,
+          context,
+          respond,
+          isWebchatConnect: () => false,
+          extraHandlers: createProgressCardHandlers(store),
+        });
+        const settled = Promise.allSettled([pending]);
+        try {
+          await Promise.race([
+            entered.promise,
+            pending.then(() => {
+              throw new Error("request finished before storage settled");
+            }),
+          ]);
+          expect(respond).not.toHaveBeenCalled();
+          if (change === "visibility") {
+            await upsertSessionEntryCore(target, { visibility: "draft" });
+          } else {
+            client.invalidated = true;
+          }
+          release.resolve();
+          const [result] = await settled;
+          if (change === "source") {
+            expect(result).toEqual({
+              status: "rejected",
+              reason: new Error("Gateway requester authority changed"),
+            });
+            expect(respond).not.toHaveBeenCalled();
+          } else {
+            expect(result).toEqual({ status: "fulfilled", value: undefined });
+            expect(respond).toHaveBeenCalledExactlyOnceWith(
+              false,
+              undefined,
+              expect.objectContaining({ code: "INVALID_REQUEST" }),
+            );
+          }
+        } finally {
+          release.resolve();
+          await settled;
+        }
+      });
+    },
+  );
+
   it.each([
     { method: "progressCard.get", beforeCommit: false },
+    { method: "progressCard.refresh", beforeCommit: false },
     { method: "progressCard.put", beforeCommit: true },
     { method: "progressCard.put", beforeCommit: false },
   ] as const)(
@@ -91,6 +261,7 @@ describe("progress card request authorization", () => {
             params: {
               ...target,
               ...(method === "progressCard.put" ? { markdown: "committed card" } : {}),
+              ...(method === "progressCard.refresh" ? { idempotencyKey: "delayed-refresh" } : {}),
             },
           },
           client,
@@ -137,8 +308,13 @@ describe("progress card request authorization", () => {
 
   it.each(
     (["global", "agent:work:progress-authorization"] as const).flatMap((sessionKey) =>
-      (["progressCard.get", "progressCard.put"] as const).flatMap((method) =>
-        [false, true].map((replace) => ({ sessionKey, method, replace })),
+      (["progressCard.get", "progressCard.put", "progressCard.refresh"] as const).flatMap(
+        (method) =>
+          (method === "progressCard.refresh" ? [true] : [false, true]).map((replace) => ({
+            sessionKey,
+            method,
+            replace,
+          })),
       ),
     ),
   )(
@@ -177,6 +353,9 @@ describe("progress card request authorization", () => {
         const params = {
           ...target,
           ...(testCase.method === "progressCard.put" ? { markdown: "request update" } : {}),
+          ...(testCase.method === "progressCard.refresh"
+            ? { idempotencyKey: "revoked-refresh" }
+            : {}),
         };
         const oracle = resolveSessionMutationAuthorization({
           client,
@@ -256,9 +435,14 @@ describe("progress card request authorization", () => {
             expect(fresh).toHaveBeenCalledWith(
               false,
               undefined,
-              expect.objectContaining({
-                details: expect.objectContaining({ code: "SESSION_PARTICIPATION_REQUIRED" }),
-              }),
+              testCase.method === "progressCard.get"
+                ? {
+                    code: "INVALID_REQUEST",
+                    message: `Session "${target.sessionKey}" was not found.`,
+                  }
+                : expect.objectContaining({
+                    details: expect.objectContaining({ code: "SESSION_PARTICIPATION_REQUIRED" }),
+                  }),
             );
             expect(loadHandlers).toHaveBeenCalledOnce();
           } else {
@@ -324,100 +508,109 @@ describe("progress card request authorization", () => {
   );
 });
 
-it.each([false, true])(
-  "rejects a pre-reset card write after a same-id reset (admin=%s)",
-  async (admin) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg: OpenClawConfig = {
-        ...rolePolicyConfig(),
-        agents: { ownership: "explicit", entries: { main: {}, work: {} } },
-      };
-      setRuntimeConfigSnapshot(cfg, cfg);
-      const target = { sessionKey: "global", agentId: "work" };
-      const client = { ...roleClient("view", "reset-card-owner"), connId: "reset-card-owner" };
-      if (admin) {
-        client.connect.scopes = ["operator.admin"];
-      }
-      await upsertSessionEntryCore(target, {
-        sessionId: "same-card-session",
-        lifecycleRevision: "before",
-        updatedAt: 1,
-        visibility: "draft",
-        createdActor: {
-          type: "human",
-          source: "profile",
-          id: client.authenticatedUserProfile!.profileId,
+it.each(
+  [false, true].flatMap((admin) =>
+    (["progressCard.put", "progressCard.refresh"] as const).map((method) => ({ admin, method })),
+  ),
+)("rejects pre-reset $method after a same-id reset (admin=$admin)", async ({ admin, method }) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg: OpenClawConfig = {
+      ...rolePolicyConfig(),
+      agents: { ownership: "explicit", entries: { main: {}, work: {} } },
+    };
+    setRuntimeConfigSnapshot(cfg, cfg);
+    const target = { sessionKey: "global", agentId: "work" };
+    const client = { ...roleClient("view", "reset-card-owner"), connId: "reset-card-owner" };
+    if (admin) {
+      cfg.gateway!.roles!.definitions.view!.scopes.push("operator.admin");
+      client.connect.scopes = ["operator.admin"];
+    }
+    await upsertSessionEntryCore(target, {
+      sessionId: "same-card-session",
+      lifecycleRevision: "before",
+      updatedAt: 1,
+      visibility: "draft",
+      createdActor: {
+        type: "human",
+        source: "profile",
+        id: client.authenticatedUserProfile!.profileId,
+      },
+    });
+    await progressCardStore.put(target.sessionKey, { markdown: "previous card" }, target.agentId);
+    const broadcast = vi.fn();
+    const context = {
+      getRuntimeConfig: () => cfg,
+      broadcast,
+      logGateway: { warn: vi.fn() },
+      resolveGatewayContext: (): GatewayRequestContext => context,
+    } as unknown as GatewayRequestContext;
+    const loaded = createDeferredCore();
+    const release = createDeferredCore();
+    const handlers = createProgressCardHandlers();
+    const respond = vi.fn<RespondFn>();
+    const pending = handleGatewayRequest({
+      req: {
+        type: "req",
+        id: "old-card-write",
+        method,
+        params: {
+          ...target,
+          ...(method === "progressCard.put"
+            ? { markdown: "stale write" }
+            : { idempotencyKey: "stale-refresh" }),
         },
-      });
-      await progressCardStore.put(target.sessionKey, { markdown: "previous card" }, target.agentId);
-      const broadcast = vi.fn();
-      const context = {
-        getRuntimeConfig: () => cfg,
-        broadcast,
-        logGateway: { warn: vi.fn() },
-        resolveGatewayContext: (): GatewayRequestContext => context,
-      } as unknown as GatewayRequestContext;
-      const loaded = createDeferredCore();
-      const release = createDeferredCore();
-      const handlers = createProgressCardHandlers();
-      const respond = vi.fn<RespondFn>();
-      const pending = handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "old-card-write",
-          method: "progressCard.put",
-          params: { ...target, markdown: "stale write" },
+      },
+      client,
+      context,
+      respond,
+      isWebchatConnect: () => false,
+      extraHandlers: createLazyCoreHandlers({
+        methods: [method],
+        loadHandlers: async () => {
+          loaded.resolve();
+          await release.promise;
+          return handlers;
         },
-        client,
-        context,
-        respond,
-        isWebchatConnect: () => false,
-        extraHandlers: createLazyCoreHandlers({
-          methods: ["progressCard.put"],
-          loadHandlers: async () => {
-            loaded.resolve();
-            await release.promise;
-            return handlers;
-          },
+      }),
+    });
+    try {
+      await Promise.race([
+        loaded.promise,
+        pending.then(() => {
+          throw new Error(
+            `request finished before preparation: ${JSON.stringify(respond.mock.calls)}`,
+          );
+        }),
+      ]);
+      const resolved = resolveSessionSharingTarget({ cfg, ...target })!;
+      await resetSessionEntryLifecycle({
+        agentId: resolved.agentId,
+        storePath: resolved.storePath,
+        target: { canonicalKey: resolved.canonicalKey, storeKeys: resolved.storeKeys },
+        resetBoundary: { context: "clear", reason: "reset", cwd: "/workspace" },
+        buildNextEntry: ({ currentEntry }) => ({
+          ...currentEntry!,
+          lifecycleRevision: "after",
+          updatedAt: 2,
         }),
       });
-      try {
-        await Promise.race([
-          loaded.promise,
-          pending.then(() => {
-            throw new Error("request finished before preparation");
-          }),
-        ]);
-        const resolved = resolveSessionSharingTarget({ cfg, ...target })!;
-        await resetSessionEntryLifecycle({
-          agentId: resolved.agentId,
-          storePath: resolved.storePath,
-          target: { canonicalKey: resolved.canonicalKey, storeKeys: resolved.storeKeys },
-          resetBoundary: { context: "clear", reason: "reset", cwd: "/workspace" },
-          buildNextEntry: ({ currentEntry }) => ({
-            ...currentEntry!,
-            lifecycleRevision: "after",
-            updatedAt: 2,
-          }),
-        });
-        await progressCardStore.put(target.sessionKey, { markdown: "fresh card" }, target.agentId);
-        release.resolve();
-        await pending;
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            details: expect.objectContaining({ code: "SESSION_MUTATION_AUTHORIZATION_CHANGED" }),
-          }),
-        );
-        expect((await progressCardStore.get(target.sessionKey, target.agentId))?.markdown).toBe(
-          "fresh card",
-        );
-        expect(broadcast).not.toHaveBeenCalled();
-      } finally {
-        release.resolve();
-        await pending;
-      }
-    });
-  },
-);
+      await progressCardStore.put(target.sessionKey, { markdown: "fresh card" }, target.agentId);
+      release.resolve();
+      await pending;
+      expect(respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          details: expect.objectContaining({ code: "SESSION_MUTATION_AUTHORIZATION_CHANGED" }),
+        }),
+      );
+      expect((await progressCardStore.get(target.sessionKey, target.agentId))?.markdown).toBe(
+        "fresh card",
+      );
+      expect(broadcast).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+      await pending;
+    }
+  });
+});

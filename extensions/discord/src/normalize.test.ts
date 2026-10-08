@@ -12,7 +12,7 @@ describe("discord target normalization", () => {
   });
 
   it("keeps explicit outbound targets and rejects missing recipients", () => {
-    expect(normalizeDiscordOutboundTarget("1234567890")).toEqual({
+    expect(normalizeDiscordOutboundTarget("  1234567890  ")).toEqual({
       ok: true,
       to: "channel:1234567890",
     });

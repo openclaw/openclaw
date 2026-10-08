@@ -1,14 +1,20 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import {
-  normalizeOptionalLowercaseString,
-  readStringValue,
-} from "@openclaw/normalization-core/string-coerce";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { emitAgentActivityEvent, type AgentItemEventData } from "../infra/agent-activity-events.js";
+import {
+  emitAgentActivityEvent,
+  projectAgentToolActivity,
+  type AgentItemEventData,
+} from "../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import { isAgentPlanProgressToolName } from "../session-cards/progress-card-channel-summary.js";
+import { isAgentPlanProgressToolName } from "../session-cards/progress-card-input.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel-normalize.js";
-import { REQUIRED_PARAM_GROUPS, type RequiredParamGroup } from "./agent-tools.params.js";
+import { resolveCompletedActivityWrappers } from "./agent-activity-presentation.js";
+import {
+  missingRequiredParamLabels,
+  REQUIRED_PARAM_GROUPS,
+  type RequiredParamGroup,
+} from "./agent-tools.params.js";
 import { sanitizeForConsole } from "./console-sanitize.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
 import type {
@@ -18,7 +24,6 @@ import type {
 import { sanitizeToolArgs } from "./embedded-agent-tool-results.js";
 import type { AgentEvent } from "./runtime/index.js";
 import { inferToolMetaFromArgsCore, isCommandBearingToolCall } from "./tool-display.js";
-import { resolveFileMutationToolName } from "./tool-mutation-names.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
@@ -48,7 +53,7 @@ function reserveQuestionPromptDelivery(
   try {
     const { questions, timeoutSeconds } =
       toolName === "secrets" ? normalizeSecretsRequestParams(args) : normalizeAskUserParams(args);
-    const reservation = reserveAskUserPromptDelivery({
+    return reserveAskUserPromptDelivery({
       toolCallId,
       sessionKey,
       runId,
@@ -56,70 +61,10 @@ function reserveQuestionPromptDelivery(
       questions,
       timeoutSeconds,
     });
-    if (!reservation) {
-      return undefined;
-    }
-    return reservation;
   } catch {
     // Argument validation owns malformed calls; do not deliver an unusable prompt first.
     return undefined;
   }
-}
-
-function getRequiredParamGroupsForTool(
-  toolName: string,
-): readonly RequiredParamGroup[] | undefined {
-  return TRACE_REQUIRED_PARAM_GROUPS[toolName as keyof typeof TRACE_REQUIRED_PARAM_GROUPS];
-}
-
-function collectMissingRequiredParamLabels(toolName: string, args: unknown): string[] {
-  const groups = getRequiredParamGroupsForTool(toolName);
-  if (!groups?.length) {
-    return [];
-  }
-  const record = args && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
-  if (!record) {
-    return groups.map((group) => group.label ?? group.keys.join(" or "));
-  }
-  return groups
-    .filter((group) => {
-      const satisfied =
-        group.validator?.(record) ??
-        group.keys.some((key) => {
-          const value = record[key];
-          return typeof value === "string" && (group.allowEmpty || value.trim().length > 0);
-        });
-      return !satisfied;
-    })
-    .map((group) => group.label ?? group.keys.join(" or "));
-}
-
-function buildToolExecutionStartTraceMeta(params: {
-  ctx: ToolHandlerContext;
-  toolName: string;
-  toolCallId: string;
-  args: unknown;
-}): Record<string, unknown> {
-  const args = params.args;
-  const argsType = Array.isArray(args) ? "array" : typeof args;
-  const argsKeys =
-    args && typeof args === "object" && !Array.isArray(args)
-      ? Object.keys(args as Record<string, unknown>).toSorted()
-      : undefined;
-  const requiredParamsMissing = collectMissingRequiredParamLabels(params.toolName, args);
-  return {
-    event: "embedded_tool_execution_start",
-    tags: ["tool_start", "embedded", "trace"],
-    runId: params.ctx.params.runId,
-    toolName: params.toolName,
-    toolCallId: params.toolCallId,
-    argsType,
-    ...(argsKeys?.length ? { argsKeys } : {}),
-    ...(params.ctx.params.sessionKey ? { sessionKey: params.ctx.params.sessionKey } : {}),
-    ...(params.ctx.params.sessionId ? { sessionId: params.ctx.params.sessionId } : {}),
-    ...(params.ctx.params.agentId ? { agentId: params.ctx.params.agentId } : {}),
-    ...(requiredParamsMissing.length ? { requiredParamsMissing } : {}),
-  };
 }
 
 function traceToolExecutionStart(params: {
@@ -131,15 +76,29 @@ function traceToolExecutionStart(params: {
   if (!params.ctx.log.trace || params.ctx.log.isEnabled?.("trace") !== true) {
     return;
   }
-  params.ctx.log.trace(
-    "embedded run tool start",
-    buildToolExecutionStartTraceMeta({
-      ctx: params.ctx,
-      toolName: params.toolName,
-      toolCallId: params.toolCallId,
-      args: params.args,
-    }),
-  );
+  const args = params.args;
+  const argsType = Array.isArray(args) ? "array" : typeof args;
+  const argsKeys =
+    args && typeof args === "object" && !Array.isArray(args)
+      ? Object.keys(args as Record<string, unknown>).toSorted()
+      : undefined;
+  const groups =
+    TRACE_REQUIRED_PARAM_GROUPS[params.toolName as keyof typeof TRACE_REQUIRED_PARAM_GROUPS];
+  const record = args && typeof args === "object" ? (args as Record<string, unknown>) : undefined;
+  const requiredParamsMissing = groups?.length ? missingRequiredParamLabels(record, groups) : [];
+  params.ctx.log.trace("embedded run tool start", {
+    event: "embedded_tool_execution_start",
+    tags: ["tool_start", "embedded", "trace"],
+    runId: params.ctx.params.runId,
+    toolName: params.toolName,
+    toolCallId: params.toolCallId,
+    argsType,
+    ...(argsKeys?.length ? { argsKeys } : {}),
+    ...(params.ctx.params.sessionKey ? { sessionKey: params.ctx.params.sessionKey } : {}),
+    ...(params.ctx.params.sessionId ? { sessionId: params.ctx.params.sessionId } : {}),
+    ...(params.ctx.params.agentId ? { agentId: params.ctx.params.agentId } : {}),
+    ...(requiredParamsMissing.length ? { requiredParamsMissing } : {}),
+  });
 }
 
 const TOOL_START_WARNING_PREVIEW_MAX_CHARS = 200;
@@ -158,6 +117,7 @@ function buildToolStartWarningArgsPreview(rawArgsPreview: string | undefined): s
 type ToolStartRecord = {
   startTime: number;
   args: unknown;
+  hideFromChannelProgress?: boolean;
   parentToolCallId?: string;
   hasRepliedRef?: { value: boolean };
 };
@@ -169,7 +129,6 @@ export function buildToolStartKey(runId: string, toolCallId: string): string {
   return `${runId}:${toolCallId}`;
 }
 
-/** Returns the number of active tool executions tracked for one embedded run. */
 export function countActiveToolExecutions(runId: string): number {
   const prefix = `${runId}:`;
   let count = 0;
@@ -212,14 +171,6 @@ export function buildToolCallSummary(
   };
 }
 
-export function buildToolItemId(toolCallId: string): string {
-  return `tool:${toolCallId}`;
-}
-
-export function buildToolItemTitle(toolName: string, meta?: string): string {
-  return meta ? `${toolName} ${meta}` : toolName;
-}
-
 export function isExecToolName(toolName: string): boolean {
   return toolName === "exec" || toolName === "bash";
 }
@@ -240,7 +191,11 @@ export function buildPatchItemTitle(meta?: string): string {
   return meta ? `patch ${meta}` : "apply patch";
 }
 
-export function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentItemEventData): void {
+export function emitTrackedItemEvent(
+  ctx: ToolHandlerContext,
+  itemData: AgentItemEventData,
+  emitLiveUpdate = true,
+): void {
   if (itemData.phase === "start") {
     ctx.state.itemActiveIds.add(itemData.itemId);
     ctx.state.itemStartedCount += 1;
@@ -248,12 +203,15 @@ export function emitTrackedItemEvent(ctx: ToolHandlerContext, itemData: AgentIte
     ctx.state.itemActiveIds.delete(itemData.itemId);
     ctx.state.itemCompletedCount += 1;
   }
-  emitAgentActivityEvent({
-    runId: ctx.params.runId,
-    ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
-    stream: "item",
-    data: itemData,
-  });
+  if (itemData.phase !== "update" || emitLiveUpdate) {
+    emitAgentActivityEvent({
+      runId: ctx.params.runId,
+      ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+      stream: "item",
+      data: itemData,
+    });
+  }
+  // Reply liveness and channel delivery still consume every original callback.
   emitAgentEventCallbackBestEffort(ctx, {
     stream: "item",
     data: itemData,
@@ -282,9 +240,63 @@ export function emitAgentEventCallbackBestEffort(
   });
 }
 
+type ActivityWithoutOwner<T = Parameters<typeof emitAgentActivityEvent>[0]> = T extends unknown
+  ? Omit<T, "runId" | "sessionKey">
+  : never;
+
+export function emitToolActivityEvent(ctx: ToolHandlerContext, event: ActivityWithoutOwner): void {
+  emitAgentActivityEvent({
+    runId: ctx.params.runId,
+    ...(ctx.params.sessionKey ? { sessionKey: ctx.params.sessionKey } : {}),
+    ...event,
+  });
+  emitAgentEventCallbackBestEffort(ctx, { stream: event.stream, data: event.data });
+}
+
+export function finalizeToolActivity(ctx: ToolHandlerContext): void {
+  const prefix = `${ctx.params.runId}:`;
+  const active = [...toolStartData].flatMap(([key, start]) =>
+    key.startsWith(prefix)
+      ? [
+          {
+            runId: ctx.params.runId,
+            callId: key.slice(prefix.length),
+            parentToolCallId: start.parentToolCallId,
+            activity: undefined,
+          },
+        ]
+      : [],
+  );
+  // Keyed active state cannot represent overlapping duplicate starts. Keep the
+  // original summaries when lifecycle accounting cannot prove a complete graph.
+  if (
+    active.length !== ctx.state.itemActiveIds.size ||
+    ctx.state.itemStartedCount !== ctx.state.itemCompletedCount + active.length ||
+    ctx.state.toolMetas.length !== ctx.state.itemCompletedCount
+  ) {
+    return;
+  }
+  const calls = [
+    ...ctx.state.toolMetas.map((meta) => ({
+      runId: ctx.params.runId,
+      callId: meta.toolCallId,
+      parentToolCallId: meta.parentToolCallId,
+      activity: meta.activity,
+    })),
+    ...active,
+  ];
+  for (const call of resolveCompletedActivityWrappers(calls)) {
+    if (call.activity && !call.activity.hideFromChannelProgress) {
+      emitToolActivityEvent(ctx, {
+        stream: "item",
+        data: { ...call.activity, hideFromChannelProgress: true },
+      });
+    }
+  }
+}
+
 function extendExecMeta(toolName: string, args: unknown, meta?: string): string | undefined {
-  const normalized = normalizeOptionalLowercaseString(toolName);
-  if (normalized !== "exec" && normalized !== "bash") {
+  if (!isExecToolName(toolName)) {
     return meta;
   }
   if (!args || typeof args !== "object") {
@@ -305,7 +317,6 @@ function extendExecMeta(toolName: string, args: unknown, meta?: string): string 
   return meta ? `${meta} · ${suffix}` : suffix;
 }
 
-/** Handles a tool-execution start event and emits UI/telemetry start state. */
 export function handleToolExecutionStart(
   ctx: ToolHandlerContext,
   evt: AgentEvent & {
@@ -351,33 +362,29 @@ export function handleToolExecutionStart(
       );
     }
   };
-  const continueAfterBlockReplyFlush = (): void | Promise<void> => {
-    let onBlockReplyFlushResult: void | Promise<void>;
+  const flushBeforeStart = (
+    flush: () => void | Promise<void>,
+    next: () => void | Promise<void>,
+  ): void | Promise<void> => {
+    let result: void | Promise<void>;
     try {
-      onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.({
-        reason: "tool_start",
-        assistantMessageIndex: ctx.state.assistantMessageIndex,
-      });
+      result = flush();
     } catch (error) {
       cancelQuestionPromptReservation();
       throw error;
     }
-    if (isPromiseLike<void>(onBlockReplyFlushResult)) {
-      return onBlockReplyFlushResult.then(
-        () => continueToolExecutionStart(),
-        (error: unknown) => {
-          cancelQuestionPromptReservation();
-          throw error;
-        },
-      );
+    if (isPromiseLike<void>(result)) {
+      return result.then(next, (error: unknown) => {
+        cancelQuestionPromptReservation();
+        throw error;
+      });
     }
-    return continueToolExecutionStart();
+    return next();
   };
 
   const continueToolExecutionStart = (): void | Promise<void> => {
     const rawToolName = evt.toolName;
     const toolName = normalizeToolPolicyName(rawToolName);
-    const hideFromChannelProgress = evt.hideFromChannelProgress === true;
     const toolCallId = evt.toolCallId;
     const args = evt.args;
     const runId = ctx.params.runId;
@@ -393,6 +400,7 @@ export function handleToolExecutionStart(
     toolStartData.set(buildToolStartKey(runId, toolCallId), {
       startTime: startedAt,
       args,
+      hideFromChannelProgress: evt.hideFromChannelProgress,
       parentToolCallId: evt.parentToolCallId,
       ...(ctx.params.hasRepliedRef
         ? { hasRepliedRef: { value: ctx.params.hasRepliedRef.value } }
@@ -479,38 +487,21 @@ export function handleToolExecutionStart(
     );
 
     const shouldEmitToolEvents = ctx.shouldEmitToolResult();
-    emitAgentEvent({
-      runId: ctx.params.runId,
-      stream: "tool",
-      data: {
-        phase: "start",
-        name: toolName,
+    const itemData = {
+      ...projectAgentToolActivity({
         toolCallId,
-        ...(evt.parentToolCallId ? { parentToolCallId: evt.parentToolCallId } : {}),
-        args: sanitizeToolArgs(args) as Record<string, unknown>,
-        ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-      },
-    });
-    const itemData: AgentItemEventData = {
-      itemId: buildToolItemId(toolCallId),
-      phase: "start",
-      kind: "tool",
-      title: buildToolItemTitle(toolName, meta),
-      status: "running",
-      name: toolName,
-      meta,
-      commandBearing: callSummary.commandBearing,
-      toolCallId,
+        name: toolName,
+        phase: "start",
+        args,
+        meta,
+        hideFromChannelProgress: evt.hideFromChannelProgress,
+      }),
       startedAt,
-      ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-      ...(callSummary.commandBearing && !isExecToolName(toolName)
-        ? { suppressChannelProgress: true }
-        : {}),
     };
+    const hideFromChannelProgress = evt.hideFromChannelProgress === true;
     emitTrackedItemEvent(ctx, itemData);
-    // Best-effort typing signal; do not block tool summaries on slow emitters.
-    emitAgentEventCallbackBestEffort(ctx, {
-      stream: "tool",
+    const createStartEvent = () => ({
+      stream: "tool" as const,
       data: {
         phase: "start",
         name: toolName,
@@ -520,32 +511,9 @@ export function handleToolExecutionStart(
         ...(hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
       },
     });
-
-    if (isExecToolName(toolName)) {
-      emitTrackedItemEvent(ctx, {
-        itemId: buildCommandItemId(toolCallId),
-        phase: "start",
-        kind: "command",
-        title: buildCommandItemTitle(toolName, meta),
-        status: "running",
-        name: toolName,
-        meta,
-        toolCallId,
-        startedAt,
-      });
-    } else if (resolveFileMutationToolName(toolName) === "apply_patch") {
-      emitTrackedItemEvent(ctx, {
-        itemId: buildPatchItemId(toolCallId),
-        phase: "start",
-        kind: "patch",
-        title: buildPatchItemTitle(meta),
-        status: "running",
-        name: toolName,
-        meta,
-        toolCallId,
-        startedAt,
-      });
-    }
+    emitAgentEvent({ runId: ctx.params.runId, ...createStartEvent() });
+    // Best-effort typing signal; do not block tool summaries on slow emitters.
+    emitAgentEventCallbackBestEffort(ctx, createStartEvent());
 
     if (
       ctx.params.onToolResult &&
@@ -587,21 +555,16 @@ export function handleToolExecutionStart(
   if (evt.lifecycleProvenance === "nested") {
     return continueToolExecutionStart();
   }
-  let flushBlockReplyBufferResult: void | Promise<void>;
-  try {
-    flushBlockReplyBufferResult = ctx.flushBlockReplyBuffer();
-  } catch (error) {
-    cancelQuestionPromptReservation();
-    throw error;
-  }
-  if (isPromiseLike<void>(flushBlockReplyBufferResult)) {
-    return flushBlockReplyBufferResult.then(
-      () => continueAfterBlockReplyFlush(),
-      (error: unknown) => {
-        cancelQuestionPromptReservation();
-        throw error;
-      },
-    );
-  }
-  return continueAfterBlockReplyFlush();
+  return flushBeforeStart(
+    () => ctx.flushBlockReplyBuffer(),
+    () =>
+      flushBeforeStart(
+        () =>
+          ctx.params.onBlockReplyFlush?.({
+            reason: "tool_start",
+            assistantMessageIndex: ctx.state.assistantMessageIndex,
+          }),
+        continueToolExecutionStart,
+      ),
+  );
 }

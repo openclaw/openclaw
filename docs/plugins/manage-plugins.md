@@ -18,7 +18,8 @@ For its full command contract, flags, source-selection rules, and edge cases, se
 
 Typical workflow: find a package, install it, enable it, then verify the plugin's
 runtime registrations. Control UI actions apply to the running Gateway without
-restarting it. The CLI also supports npm, git, and local-path installs; see
+restarting it. CLI installs also use the running local Gateway for npm, Git,
+local paths and archives, npm-pack tarballs, and marketplace sources. See
 [Apply changes and inspect](#apply-changes-and-inspect) for those paths.
 
 ## Use the Control UI
@@ -75,6 +76,18 @@ applied Gateway generation; a failure keeps its reported application state and
 phase visible. Reload does not rebuild compiled bundled code; see
 [CLI reload](/cli/plugins#reload) for that boundary. The separate **Reload plugin UI**
 action only refreshes browser UI modules.
+
+Before replacing an enabled plugin, the Gateway validates its metadata and config,
+pauses new plugin calls, and waits up to 60 seconds for in-flight work while the
+previous generation stays active. If the work does not finish, the reload fails
+once, resumes calls, and leaves services and channels running. Otherwise, it stops
+services and channels, drains remaining work, and completes shutdown and disposal
+before registering the replacement. Other plugin instances remain active. If
+registration or pre-publication activation fails, the Gateway attempts
+a fresh registration using the captured previous code and config automatically.
+Recovery restores the active runtime; it does not rewrite externally edited config files.
+If cleanup or recovery also fails, the error reports that recovery could not
+complete. Failures after publication remain visible on the accepted generation.
 
 Administrators can reload with externally managed or Nix config when no new
 capability consent needs to be recorded. Config and installation changes stay unavailable. If a
@@ -203,6 +216,8 @@ still show declared capabilities.
 `openclaw plugins install --link <path>` creates a managed install record and
 requires capability consent even though it loads the plugin from its source
 directory. It is not the same as adding a bare `plugins.load.paths` entry.
+Both can use their own plugin-scoped keyed and blob state and ingress queues.
+Linking does not grant trust for hook agent turns or Gateway scope elevation.
 
 ## Install plugins
 
@@ -260,19 +275,26 @@ paths, and the `memory` and `contextEngine` slots.
 ## Apply changes and inspect
 
 Control UI actions and the Gateway plugin-management RPCs apply plugin changes
-without restarting the Gateway. Ordinary CLI enable, disable, and uninstall
-commands use the running Gateway when available; updates refresh it after the
-local package operation finishes. Without a running Gateway, those commands
-update the local installation for its next startup.
+without restarting the Gateway. Ordinary CLI install, enable, disable, and
+uninstall commands use the running local Gateway when available; updates refresh
+it after the local package operation finishes. Without a running Gateway, those
+commands update the local installation for its next startup.
 
-CLI installation from npm, git, archives, and local paths still uses the local
-installer and requests a Gateway restart. Use Control UI installation for
-official or ClawHub packages when you need synchronous application without a
-restart. If automatic restart is disabled, restart before checking the locally
-installed runtime surfaces:
+In the default `hybrid` reload mode, saving plugin configuration in the Control
+UI, through `openclaw config`, or in `openclaw.json` also applies automatically.
+By default, changes under `plugins.entries.<id>` replace that plugin's runtime
+instance, so registration, tools, hooks, and services receive its new configuration.
+Unchanged plugins keep their instances. A plugin can declare a narrower policy
+that retains its instance or requires a restart; see
+[Config hot reload](/gateway/configuration/hot-reload).
+
+CLI installation supports npm, Git, local paths and archives, npm-pack tarballs,
+marketplace sources, and official or ClawHub packages through that same owner.
+See [Install](/cli/plugins#install) for source selection and capability consent.
+After an offline installation, start the Gateway to use the installed runtime
+surfaces. To inspect their registration:
 
 ```bash
-openclaw gateway restart
 openclaw plugins inspect <plugin-id> --runtime --json
 ```
 
@@ -281,8 +303,12 @@ owner update. Run `openclaw plugins reload <plugin-id>` after source or manifest
 edits. For API clients, `plugins.reload` takes `plugins: [{ pluginId }]` to reload
 one installed plugin, or multiple targets in the same request, and
 `plugins.refresh` refreshes the inventory.
-Both wait for runtime application and return `restartRequired: false` with a
-generation receipt. Explicit actions also work with `gateway.reload.mode: "off"`.
+Both wait for runtime application and return a generation receipt. Reloading
+unchanged bundled code or replacing captured external code returns
+`restartRequired: false`. If compiled bundled code remains loaded after its files
+change, or those files cannot be verified, reload reports `restartRequired: true`
+with a warning. Rebuild compiled output after editing source files, then restart
+the Gateway when the result requires it. Explicit actions also work with `gateway.reload.mode: "off"`.
 See [Plugin management RPCs](/gateway/protocol).
 
 Cleanup is best effort: disabling removes the plugin's registered capabilities
@@ -295,6 +321,38 @@ option when those leftovers cause problems.
 surfaces (tools, hooks, services, Gateway methods, HTTP routes, plugin-owned
 CLI commands). Plain `inspect` and `list` are cold manifest/config/registry
 checks only.
+
+## Manage plugins from an agent conversation
+
+The owner-only `plugins` tool can list, inspect, search, install, enable, disable,
+uninstall, and reload plugins through the running Gateway. Agent installs accept
+official catalog plugin IDs or ClawHub package names. The `version` option applies
+only to ClawHub installs; official installs use the catalog selection. To activate edits to an
+already-installed local TypeScript plugin, use `reload` with its plugin ID.
+Installing new local, npm, Git, or archive sources still uses the CLI workflow
+above.
+
+In the embedded agent runtime, an applied change refreshes tools before the next
+model request after running code programs have settled. A parked program may need
+further model steps to wait for completion; completed actions and accepted steering
+remain in the transcript and are not replayed. Finish a running program before
+asking it to use changed tools.
+
+Managed Codex sessions continue in the same OpenClaw conversation after stopping
+the current native turn and its background terminals, then creating a thread with
+updated tools. Completed tool results, accepted follow-up messages, and ordinary
+question answers carry into that thread as bounded conversation context. If native cleanup or thread release
+fails, the attempt reports the failure and preserves the binding for recovery
+instead of replaying completed work.
+
+Imported or supervised native sessions keep their original ownership and tool
+definitions. They report the backend change but require a new managed conversation
+to use changed tools. Other runtimes without a refresh consumer do the same.
+
+Inventory and result output are bounded. Narrow `list` with `query`, inspect a
+specific plugin, or use the Control UI Plugins page for omitted details and
+capability reviews. A saved install can outlive a failed runtime activation:
+inspect that result before retrying activation, rather than reinstalling it.
 
 ## Update plugins
 
@@ -444,7 +502,7 @@ If the same package is available on both ClawHub and npm, use the explicit
 
 ## Related
 
-- [Plugins](/tools/plugin) - install, configure, restart, and troubleshoot
+- [Plugins](/tools/plugin) - install, configure, reload, and troubleshoot
 - [`openclaw plugins`](/cli/plugins) - full CLI reference
 - [Community plugins](/plugins/community) - public discovery and ClawHub publishing
 - [ClawHub](/clawhub/cli) - registry CLI operations

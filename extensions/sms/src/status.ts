@@ -1,4 +1,3 @@
-// Sms plugin module implements status behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { SmsDeliveryRecord } from "./delivery-observations.js";
@@ -19,74 +18,15 @@ type ChannelCapabilitiesDisplayLine = {
   tone?: "default" | "muted" | "success" | "warn" | "error";
 };
 
-type SmsTwilioWebhookProbe =
-  | {
-      status: "skipped";
-      reason: string;
-    }
-  | {
-      status: "unavailable";
-      reason: string;
-    }
-  | {
-      status: "number-not-found";
-      expectedNumber: string;
-    }
-  | {
-      status: "missing";
-      phoneNumber: string;
-      expectedUrl: string;
-      configuredMethod: string;
-    }
-  | {
-      status: "method-mismatch";
-      phoneNumber: string;
-      expectedUrl: string;
-      configuredUrl: string;
-      configuredMethod: string;
-    }
-  | {
-      status: "url-mismatch";
-      phoneNumber: string;
-      expectedUrl: string;
-      configuredUrl: string;
-      configuredMethod: string;
-    }
-  | {
-      status: "matches";
-      phoneNumber: string;
-      expectedUrl: string;
-      configuredUrl: string;
-      configuredMethod: string;
-      voiceUrl: string;
-    }
-  | {
-      status: "messaging-service-missing";
-      serviceSid: string;
-      expectedUrl: string;
-      configuredMethod: string;
-    }
-  | {
-      status: "messaging-service-method-mismatch";
-      serviceSid: string;
-      expectedUrl: string;
-      configuredUrl: string;
-      configuredMethod: string;
-    }
-  | {
-      status: "messaging-service-url-mismatch";
-      serviceSid: string;
-      expectedUrl: string;
-      configuredUrl: string;
-      configuredMethod: string;
-    }
-  | {
-      status: "messaging-service-matches";
-      serviceSid: string;
-      expectedUrl: string;
-      configuredUrl: string;
-      configuredMethod: string;
-    };
+type WidenProbeStrings<T extends { status: string }> = T extends unknown
+  ? { [K in keyof T]: K extends "status" ? T[K] : T[K] extends string ? string : T[K] }
+  : never;
+
+type SmsTwilioWebhookProbe = WidenProbeStrings<
+  | ReturnType<typeof compareTwilioWebhook>
+  | ReturnType<typeof compareTwilioMessagingService>
+  | { status: "unavailable"; reason: string }
+>;
 
 export type SmsProbe = {
   ok: boolean;
@@ -135,13 +75,8 @@ async function runRemoteProbe<T>(params: {
 }
 
 function addTailscaleHint(account: ResolvedSmsAccount, hints: string[]): void {
-  let host;
-  try {
-    host = new URL(account.publicWebhookUrl).hostname;
-  } catch {
-    return;
-  }
-  if (!host.endsWith(".ts.net")) {
+  const host = URL.parse(account.publicWebhookUrl)?.hostname;
+  if (!host?.endsWith(".ts.net")) {
     return;
   }
   hints.push(
@@ -152,98 +87,65 @@ function addTailscaleHint(account: ResolvedSmsAccount, hints: string[]): void {
 function compareTwilioWebhook(
   account: ResolvedSmsAccount,
   phoneNumber: TwilioIncomingPhoneNumber | undefined,
-): SmsTwilioWebhookProbe {
+) {
   if (!account.fromNumber) {
     return {
       status: "skipped",
       reason: "Messaging Service senders do not have one phone-number SMS webhook to inspect.",
-    };
+    } as const;
   }
   if (!phoneNumber) {
-    return { status: "number-not-found", expectedNumber: account.fromNumber };
+    return { status: "number-not-found", expectedNumber: account.fromNumber } as const;
   }
-  const configuredMethod = phoneNumber.smsMethod.toUpperCase();
+  const summary = {
+    phoneNumber: phoneNumber.phoneNumber || account.fromNumber,
+    expectedUrl: account.publicWebhookUrl,
+    configuredMethod: phoneNumber.smsMethod.toUpperCase(),
+  };
   if (!phoneNumber.smsUrl) {
-    return {
-      status: "missing",
-      phoneNumber: phoneNumber.phoneNumber || account.fromNumber,
-      expectedUrl: account.publicWebhookUrl,
-      configuredMethod,
-    };
+    return { status: "missing", ...summary } as const;
   }
-  if (configuredMethod && configuredMethod !== "POST") {
-    return {
-      status: "method-mismatch",
-      phoneNumber: phoneNumber.phoneNumber || account.fromNumber,
-      expectedUrl: account.publicWebhookUrl,
-      configuredUrl: phoneNumber.smsUrl,
-      configuredMethod,
-    };
+  const configured = { ...summary, configuredUrl: phoneNumber.smsUrl };
+  if (summary.configuredMethod && summary.configuredMethod !== "POST") {
+    return { status: "method-mismatch", ...configured } as const;
   }
   if (phoneNumber.smsUrl !== account.publicWebhookUrl) {
-    return {
-      status: "url-mismatch",
-      phoneNumber: phoneNumber.phoneNumber || account.fromNumber,
-      expectedUrl: account.publicWebhookUrl,
-      configuredUrl: phoneNumber.smsUrl,
-      configuredMethod,
-    };
+    return { status: "url-mismatch", ...configured } as const;
   }
   return {
     status: "matches",
-    phoneNumber: phoneNumber.phoneNumber || account.fromNumber,
-    expectedUrl: account.publicWebhookUrl,
-    configuredUrl: phoneNumber.smsUrl,
-    configuredMethod,
+    ...configured,
     voiceUrl: phoneNumber.voiceUrl,
-  };
+  } as const;
 }
 
 function compareTwilioMessagingService(
   account: ResolvedSmsAccount,
   service: TwilioMessagingService,
-): SmsTwilioWebhookProbe {
+) {
   if (service.useInboundWebhookOnNumber) {
     return {
       status: "unavailable",
       reason:
-        "Twilio Messaging Service defers inbound webhooks to sender phone numbers; configure fromNumber or disable defer-to-sender before probing.",
-    };
+        "Twilio Messaging Service defers inbound webhooks to sender phone numbers; configure fromNumber or disable defer-to-sender before checking.",
+    } as const;
   }
-  const configuredMethod = service.inboundMethod.toUpperCase();
-  if (!service.inboundRequestUrl) {
-    return {
-      status: "messaging-service-missing",
-      serviceSid: service.sid || account.messagingServiceSid,
-      expectedUrl: account.publicWebhookUrl,
-      configuredMethod,
-    };
-  }
-  if (configuredMethod && configuredMethod !== "POST") {
-    return {
-      status: "messaging-service-method-mismatch",
-      serviceSid: service.sid || account.messagingServiceSid,
-      expectedUrl: account.publicWebhookUrl,
-      configuredUrl: service.inboundRequestUrl,
-      configuredMethod,
-    };
-  }
-  if (service.inboundRequestUrl !== account.publicWebhookUrl) {
-    return {
-      status: "messaging-service-url-mismatch",
-      serviceSid: service.sid || account.messagingServiceSid,
-      expectedUrl: account.publicWebhookUrl,
-      configuredUrl: service.inboundRequestUrl,
-      configuredMethod,
-    };
-  }
-  return {
-    status: "messaging-service-matches",
+  const summary = {
     serviceSid: service.sid || account.messagingServiceSid,
     expectedUrl: account.publicWebhookUrl,
-    configuredUrl: service.inboundRequestUrl,
-    configuredMethod,
+    configuredMethod: service.inboundMethod.toUpperCase(),
   };
+  if (!service.inboundRequestUrl) {
+    return { status: "messaging-service-missing", ...summary } as const;
+  }
+  const configured = { ...summary, configuredUrl: service.inboundRequestUrl };
+  if (summary.configuredMethod && summary.configuredMethod !== "POST") {
+    return { status: "messaging-service-method-mismatch", ...configured } as const;
+  }
+  if (service.inboundRequestUrl !== account.publicWebhookUrl) {
+    return { status: "messaging-service-url-mismatch", ...configured } as const;
+  }
+  return { status: "messaging-service-matches", ...configured } as const;
 }
 
 function recentInboundSummary(
@@ -321,13 +223,13 @@ export async function probeSmsAccount(params: {
   if (remoteTimeoutMs === 0) {
     webhook = {
       status: "unavailable",
-      reason: "Twilio webhook probe skipped because the probe timeout is too short.",
+      reason: "Twilio webhook check skipped because the check timeout is too short.",
     };
   } else {
     const webhookTask: Promise<RemoteProbeOutcome<SmsTwilioWebhookProbe>> = params.account
       .fromNumber
       ? runRemoteProbe({
-          label: "Twilio webhook probe",
+          label: "Twilio webhook check",
           timeoutMs: remoteTimeoutMs,
           run: async () =>
             compareTwilioWebhook(
@@ -344,7 +246,7 @@ export async function probeSmsAccount(params: {
         })
       : params.account.messagingServiceSid
         ? runRemoteProbe({
-            label: "Twilio webhook probe",
+            label: "Twilio webhook check",
             timeoutMs: remoteTimeoutMs,
             run: async () =>
               compareTwilioMessagingService(
@@ -361,13 +263,13 @@ export async function probeSmsAccount(params: {
             kind: "value",
             value: {
               status: "unavailable",
-              reason: "Twilio SMS probe requires fromNumber or messagingServiceSid.",
+              reason: "Twilio SMS check requires fromNumber or messagingServiceSid.",
             },
           });
     const messageTask: Promise<RemoteProbeOutcome<TwilioMessageLogEntry[]>> = params.account
       .fromNumber
       ? runRemoteProbe({
-          label: "Twilio message history probe",
+          label: "Twilio message history check",
           timeoutMs: remoteTimeoutMs,
           run: async () =>
             await listTwilioMessages({
@@ -422,10 +324,10 @@ export function formatSmsProbeLines(probe: unknown): ChannelCapabilitiesDisplayL
   const smsProbe = probe as Partial<SmsProbe>;
   const lines: ChannelCapabilitiesDisplayLine[] = [];
   if (smsProbe.ok === true) {
-    lines.push({ text: "Probe: ok", tone: "success" });
+    lines.push({ text: "Check: ok", tone: "success" });
   } else if (smsProbe.ok === false) {
     lines.push({
-      text: `Probe: failed${smsProbe.error ? ` (${smsProbe.error})` : ""}`,
+      text: `Check: failed${smsProbe.error ? ` (${smsProbe.error})` : ""}`,
       tone: "error",
     });
   }

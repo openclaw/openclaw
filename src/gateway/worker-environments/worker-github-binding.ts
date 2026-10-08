@@ -9,12 +9,10 @@ import {
   currentGitHubPublicationConfig,
   matchesCurrentGitHubPublicationIdentity,
   prepareCurrentGitHubPublicationIdentity,
-  resolveGitHubPublicationWorkspaceOwner,
+  prepareGitHubPublicationWorkspaceOwner,
   sameGitHubPublicationWorkspace,
 } from "../github-publication-availability.js";
 import { parseGitHubRemoteUrl } from "../github-remote.js";
-
-export type WorkerGitHubBinding = WorkerGitHubLaunchBinding;
 
 const log = createSubsystemLogger("gateway/worker-github");
 
@@ -23,12 +21,16 @@ export async function prepareWorkerGitHubBinding(params: {
   sessionKey: string;
   agentId: string;
   assertCurrent?: () => boolean;
-}): Promise<WorkerGitHubBinding | undefined> {
+}): Promise<WorkerGitHubLaunchBinding | undefined> {
   try {
     if (params.assertCurrent?.() === false) {
       return undefined;
     }
-    const workspace = resolveGitHubPublicationWorkspaceOwner(params);
+    const currentWorkspace = await prepareGitHubPublicationWorkspaceOwner(params);
+    const workspace = currentWorkspace.initial;
+    if (params.assertCurrent?.() === false) {
+      return undefined;
+    }
     const identity = await prepareCurrentGitHubPublicationIdentity(params.agentId).catch(() => {
       const config = currentGitHubPublicationConfig();
       const managed = (["agent", "system"] as const).some((scope) =>
@@ -53,8 +55,12 @@ export async function prepareWorkerGitHubBinding(params: {
     if (params.assertCurrent?.() === false) {
       return undefined;
     }
+    const current = await currentWorkspace.read();
+    if (params.assertCurrent?.() === false) {
+      return undefined;
+    }
     if (
-      !sameGitHubPublicationWorkspace(workspace, resolveGitHubPublicationWorkspaceOwner(params)) ||
+      !sameGitHubPublicationWorkspace(workspace, current) ||
       !matchesCurrentGitHubPublicationIdentity({ agentId: params.agentId, identity })
     ) {
       return undefined;

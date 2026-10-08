@@ -9,6 +9,9 @@ title: "Team setup"
 
 This guide sets up one OpenClaw gateway that a whole team uses: a bot in the workspace chat you already have, shared sessions everyone can open and steer in the Control UI, and roles that bound what each person can do. It is the same product as the [personal assistant setup](/start/openclaw) - team operation is configuration, not a separate edition.
 
+For an always-on Linux deployment with Cloudflare Access, GitHub identity sync,
+role bootstrap, and operations, follow [Deploy a team server](/gateway/team-server).
+
 ## Before you begin
 
 - A host for the Gateway that stays on: a small VPS, an office Mac, or any [supported install target](/install).
@@ -21,7 +24,7 @@ This guide sets up one OpenClaw gateway that a whole team uses: a bot in the wor
 
 A gateway is one trust domain. Everyone who can message a tool-enabled agent shares that agent's delegated tool authority, and everyone with operator access shares one control plane. That is the right model for a team whose members already trust each other - session ownership, presence, and [roles](/gateway/operator-scopes#named-operator-roles) are collaboration guardrails inside the boundary, not isolation between adversaries.
 
-If you need to serve mutually untrusted people or organizations, run one gateway per tenant instead: [Multi-tenant hosting](/gateway/multi-tenant-hosting).
+If you need to serve mutually untrusted people or organizations, run one gateway per tenant instead: [Security trust model](/gateway/security/trust-model).
 
 ## Step 1: Give the team access to the Gateway
 
@@ -71,6 +74,8 @@ A conversation that starts in the team channel can continue as a session the who
 For coding work, verified GitHub identity pays off at the commit: with **Git co-author credit** enabled, commits from a shared session carry `Co-authored-by` trailers for the people who steered it, and generated pull requests link back to the session so reviewers can read the conversation that produced the diff.
 
 Teammates can add their own provider accounts under **Settings → Profile → Connected accounts**, using the sign-in methods offered by each provider. Their new sessions prefer that account without making it a Gateway-wide default. Collaborators use the session's selected account, and shared same-provider failover can still apply - see [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
+
+To let teammates read selected sessions from a personal Gateway without controlling that machine, use [Session Share](/plugins/session-share). The source operator chooses session groups and pairs a node that advertises only the two read-only session commands. Shared transcripts appear under that node in the team Control UI; viewing requires permission to view others' sessions, and does not allow continuing the source session.
 
 ## Step 5: Bound what each person can do
 
@@ -144,7 +149,7 @@ container network when that access needs tighter controls. See
 ## When to split things up
 
 - **Separate workspaces or personas** (projects that must not share memory or files): use multiple agents on one gateway - see [Multi-agent routing](/concepts/multi-agent).
-- **Mutually untrusted users, customers, or organizations:** separate gateways, ideally separate OS users or hosts - see [Multi-tenant hosting](/gateway/multi-tenant-hosting) and [Security](/gateway/security).
+- **Mutually untrusted users, customers, or organizations:** separate gateways, ideally separate OS users or hosts - see [Security trust model](/gateway/security/trust-model) and [Security](/gateway/security).
 
 ## Related
 

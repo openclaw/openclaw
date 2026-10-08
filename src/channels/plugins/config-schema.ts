@@ -1,8 +1,3 @@
-/**
- * Channel config schema helpers.
- *
- * Builds common zod/JSON schema shapes and parses runtime config issues for channel plugins.
- */
 import { z, type ZodRawShape, type ZodTypeAny } from "zod";
 import { ToolPolicySchema } from "../../config/zod-schema.agent-runtime.js";
 import {
@@ -16,19 +11,11 @@ import {
 import type { JsonSchemaObject } from "../../shared/json-schema.types.js";
 import type {
   ChannelConfigRuntimeIssue,
-  ChannelConfigRuntimeParseResult,
   ChannelConfigSchema,
   ChannelConfigUiHint,
 } from "./types.config.js";
 
-type ZodSchemaWithToJsonSchema = ZodTypeAny & {
-  toJSONSchema?: (params?: Record<string, unknown>) => unknown;
-};
-
-/** Shared allowlist entry shape for channel sender/user ids. */
-const AllowFromEntrySchema = z.union([z.string(), z.number()]);
-/** Optional allowlist array used by channel config schema builders. */
-export const AllowFromListSchema = z.array(AllowFromEntrySchema).optional();
+export const AllowFromListSchema = z.array(z.union([z.string(), z.number()])).optional();
 
 type ChannelDmPolicyFields = {
   dmPolicy?: string;
@@ -192,18 +179,6 @@ export function buildMultiAccountChannelSchema<
     : channelSchema) as unknown as MultiAccountChannelSchema<T, TAccount, TOptional>;
 }
 
-type BuildChannelConfigSchemaOptions = {
-  uiHints?: Record<string, ChannelConfigUiHint>;
-  /** Select input mode when transforms must expose accepted config values to editors. */
-  jsonSchemaMode?: "input" | "output";
-};
-
-type BuildJsonChannelConfigSchemaOptions = {
-  cacheKey?: string;
-  uiHints?: Record<string, ChannelConfigUiHint>;
-  runtime?: ChannelConfigSchema["runtime"];
-};
-
 function cloneRuntimeIssue(issue: unknown): ChannelConfigRuntimeIssue {
   const record = issue && typeof issue === "object" ? (issue as Record<string, unknown>) : {};
   const path = Array.isArray(record.path)
@@ -218,57 +193,36 @@ function cloneRuntimeIssue(issue: unknown): ChannelConfigRuntimeIssue {
   };
 }
 
-function safeParseRuntimeSchema(
-  schema: ZodTypeAny,
-  value: unknown,
-): ChannelConfigRuntimeParseResult {
-  const result = schema.safeParse(value);
-  if (result.success) {
-    return {
-      success: true,
-      data: result.data,
-    };
-  }
-  return {
-    success: false,
-    issues: result.error.issues.map((issue) => cloneRuntimeIssue(issue)),
-  };
-}
-
-function safeParseJsonSchema(
-  schema: JsonSchemaObject,
-  cacheKey: string,
-  value: unknown,
-): ChannelConfigRuntimeParseResult {
-  const result = validateJsonSchemaValue({
-    schema,
-    cacheKey,
-    value,
-    applyDefaults: true,
-  });
-  if (result.ok) {
-    return { success: true, data: result.value };
-  }
-  return {
-    success: false,
-    issues: result.errors.map((issue) => ({
-      path: parseJsonSchemaIssuePath(issue.path),
-      message: issue.message,
-    })),
-  };
-}
-
 /** Build a channel config schema from JSON Schema with runtime validation/default support. */
 export function buildJsonChannelConfigSchema(
   schema: JsonSchemaObject,
-  options?: BuildJsonChannelConfigSchemaOptions,
+  options?: {
+    cacheKey?: string;
+    uiHints?: Record<string, ChannelConfigUiHint>;
+    runtime?: ChannelConfigSchema["runtime"];
+  },
 ): ChannelConfigSchema {
   return {
     schema,
     ...(options?.uiHints ? { uiHints: options.uiHints } : {}),
     runtime: options?.runtime ?? {
-      safeParse: (value) =>
-        safeParseJsonSchema(schema, options?.cacheKey ?? "channel-config-schema:json", value),
+      safeParse(value) {
+        const result = validateJsonSchemaValue({
+          schema,
+          cacheKey: options?.cacheKey ?? "channel-config-schema:json",
+          value,
+          applyDefaults: true,
+        });
+        return result.ok
+          ? { success: true, data: result.value }
+          : {
+              success: false,
+              issues: result.errors.map((issue) => ({
+                path: parseJsonSchemaIssuePath(issue.path),
+                message: issue.message,
+              })),
+            };
+      },
     },
   };
 }
@@ -276,33 +230,32 @@ export function buildJsonChannelConfigSchema(
 /** Build a channel config schema from Zod, exporting JSON Schema when available. */
 export function buildChannelConfigSchema(
   schema: ZodTypeAny,
-  options?: BuildChannelConfigSchemaOptions,
+  options?: {
+    uiHints?: Record<string, ChannelConfigUiHint>;
+    /** Select input mode when transforms must expose accepted config values to editors. */
+    jsonSchemaMode?: "input" | "output";
+  },
 ): ChannelConfigSchema {
-  const schemaWithJson = schema as ZodSchemaWithToJsonSchema;
-  if (typeof schemaWithJson.toJSONSchema === "function") {
-    return {
-      schema: schemaWithJson.toJSONSchema({
-        target: "draft-07",
-        ...(options?.jsonSchemaMode ? { io: options.jsonSchemaMode } : {}),
-        unrepresentable: "any",
-      }) as JsonSchemaObject,
-      ...(options?.uiHints ? { uiHints: options.uiHints } : {}),
-      runtime: {
-        safeParse: (value) => safeParseRuntimeSchema(schema, value),
-      },
-    };
-  }
-
-  // Compatibility fallback for plugins built against Zod v3 schemas,
-  // where `.toJSONSchema()` is unavailable.
+  // Plugin roots can contain newer SDK schemas; the host must own their conversion context.
+  // Published Zod v3 plugins retain permissive JSON Schema with their own runtime parser.
+  const jsonSchema: JsonSchemaObject =
+    "_zod" in schema
+      ? (z.toJSONSchema(schema, {
+          target: "draft-07",
+          ...(options?.jsonSchemaMode ? { io: options.jsonSchemaMode } : {}),
+          unrepresentable: "any",
+        }) as JsonSchemaObject)
+      : { type: "object", additionalProperties: true };
   return {
-    schema: {
-      type: "object",
-      additionalProperties: true,
-    },
+    schema: jsonSchema,
     ...(options?.uiHints ? { uiHints: options.uiHints } : {}),
     runtime: {
-      safeParse: (value) => safeParseRuntimeSchema(schema, value),
+      safeParse(value) {
+        const result = schema.safeParse(value);
+        return result.success
+          ? { success: true, data: result.data }
+          : { success: false, issues: result.error.issues.map(cloneRuntimeIssue) };
+      },
     },
   };
 }

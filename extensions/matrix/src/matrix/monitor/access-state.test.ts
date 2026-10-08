@@ -1,9 +1,15 @@
 // Matrix tests cover access state plugin behavior.
-import { describe, expect, it } from "vitest";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { beforeEach, describe, expect, it } from "vitest";
+import { setMatrixRuntime } from "../../runtime.js";
 import {
   resolveMatrixMonitorAccessState,
   resolveMatrixMonitorCommandAccess,
 } from "./access-state.js";
+
+beforeEach(() => {
+  setMatrixRuntime(createPluginRuntimeMock());
+});
 
 async function expectCommandAccess(
   state: Parameters<typeof resolveMatrixMonitorCommandAccess>[0],

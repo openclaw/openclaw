@@ -1,10 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
+import { filterStringRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
+import { mergeGatewayServiceEnv } from "./service-env-merge.js";
+import { buildServiceEnvironment } from "./service-env.js";
 import {
   withGatewayServiceOperationLock,
   withSystemdServiceReadBinding,
@@ -176,6 +179,34 @@ it("retains one read binding across nested operations and closes after the outer
   });
   expect(create).toHaveBeenCalledTimes(1);
   expect(binding.close).toHaveBeenCalledTimes(1);
+});
+
+it.each([
+  { profile: undefined, bound: false },
+  { profile: undefined, bound: true },
+  { profile: "personal", bound: false },
+  { profile: "personal", bound: true },
+])("reuses service inspection after loading the installed environment: %j", async (scenario) => {
+  const env = { ...(await fixture()), OPENCLAW_PROFILE: scenario.profile };
+  vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+  const binding = scenario.bound ? readBinding() : undefined;
+  const create = vi.fn(async () => binding);
+  const serviceEnv = mergeGatewayServiceEnv(env, {
+    programArguments: [process.execPath, "/opt/openclaw/openclaw.mjs", "gateway"],
+    environment: filterStringRecord(
+      buildServiceEnvironment({ env, port: 18789, platform: "linux" }),
+    ),
+  });
+  await withGatewayServiceOperationLock(env, async () => {
+    await withSystemdServiceReadBinding(env, create, async () => {});
+    await withSystemdServiceReadBinding(serviceEnv, create, async (retained) => {
+      expect(retained).toBe(binding);
+    });
+  });
+  expect(create).toHaveBeenCalledOnce();
+  if (binding) {
+    expect(binding.close).toHaveBeenCalledOnce();
+  }
 });
 
 it("rejects a conflicting manager route instead of replacing an operation binding", async () => {

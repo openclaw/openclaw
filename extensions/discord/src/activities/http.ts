@@ -1,12 +1,14 @@
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { logError } from "openclaw/plugin-sdk/logging-core";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveRequestClientIp } from "openclaw/plugin-sdk/webhook-ingress";
 import {
   readJsonBodyWithLimit,
   sendHttpRequestRejection,
   WEBHOOK_BODY_READ_DEFAULTS,
 } from "openclaw/plugin-sdk/webhook-request-guards";
+import { WIDGET_CDN_ORIGINS } from "openclaw/plugin-sdk/widget-html";
 import { parseDiscordActivityCustomId } from "../component-custom-id.js";
 import { getDiscordEndpointRuntime } from "../endpoint-runtime.js";
 import {
@@ -35,8 +37,8 @@ const DOC_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const DISCORD_ACTIVITY_WIDGET_CSP =
   // Discord is an ancestor of the same-origin Activity shell, so every frame ancestor must pass.
   // The one-time document capability and nested sandbox remain the embedding boundary.
-  "sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline'; " +
-  "style-src 'unsafe-inline'; img-src data: blob:; font-src data:; " +
+  `sandbox allow-scripts; default-src 'none'; script-src 'unsafe-inline' ${WIDGET_CDN_ORIGINS.join(" ")}; ` +
+  `style-src 'unsafe-inline' ${WIDGET_CDN_ORIGINS.join(" ")}; img-src data: blob:; font-src data: ${WIDGET_CDN_ORIGINS.join(" ")}; ` +
   "connect-src 'none'; frame-ancestors *";
 
 type DiscordActivityHttpDeps = {
@@ -162,6 +164,15 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
       return respondJson(res, 503, { error: "Discord Activities is not fully configured" });
     }
     const endpointRuntime = getDiscordEndpointRuntime() ?? null;
+    const fetchAccountJson = (
+      params: Pick<Parameters<typeof fetchDiscordJson>[0], "url" | "init" | "auditContext">,
+    ) =>
+      fetchDiscordJson({
+        ...params,
+        fetchGuard,
+        fetchImpl: account.proxyFetch,
+        endpointRuntime,
+      }).catch(() => undefined);
     const bodyResult = await readJsonBodyWithLimit(req, {
       maxBytes: BODY_MAX_BYTES,
       timeoutMs: bodyTimeoutMs,
@@ -169,33 +180,21 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
       // Defer destruction so the rejections below reach the client before the close.
       destroyOnLimit: false,
     });
-    if (!bodyResult.ok && bodyResult.code === "REQUEST_BODY_TIMEOUT") {
+    if (
+      !bodyResult.ok &&
+      (bodyResult.code === "REQUEST_BODY_TIMEOUT" || bodyResult.code === "PAYLOAD_TOO_LARGE")
+    ) {
+      const timedOut = bodyResult.code === "REQUEST_BODY_TIMEOUT";
       await sendHttpRequestRejection(
         req,
         res,
-        408,
-        jsonBody({ error: "request body timeout" }),
+        timedOut ? 408 : 413,
+        jsonBody({ error: timedOut ? "request body timeout" : "request body too large" }),
         JSON_CONTENT_TYPE,
       );
       return true;
     }
-    if (!bodyResult.ok && bodyResult.code === "PAYLOAD_TOO_LARGE") {
-      await sendHttpRequestRejection(
-        req,
-        res,
-        413,
-        jsonBody({ error: "request body too large" }),
-        JSON_CONTENT_TYPE,
-      );
-      return true;
-    }
-    const body =
-      bodyResult.ok &&
-      bodyResult.value &&
-      typeof bodyResult.value === "object" &&
-      !Array.isArray(bodyResult.value)
-        ? (bodyResult.value as Record<string, unknown>)
-        : null;
+    const body = bodyResult.ok ? asOptionalRecord(bodyResult.value) : undefined;
     const code = typeof body?.code === "string" ? body.code.trim() : "";
     if (!code) {
       return respondJson(res, 401, { error: "invalid authorization code" });
@@ -206,26 +205,21 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
     }
     let completed = false;
     try {
-      let tokenResponse: Awaited<ReturnType<typeof fetchDiscordJson>>;
-      try {
-        tokenResponse = await fetchDiscordJson({
-          fetchGuard,
-          fetchImpl: account.proxyFetch,
-          url: DISCORD_TOKEN_URL,
-          init: {
-            method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: new URLSearchParams({
-              grant_type: "authorization_code",
-              client_id: account.applicationId,
-              client_secret: account.clientSecret,
-              code,
-            }),
-          },
-          auditContext: "discord.activities.oauth.token",
-          endpointRuntime,
-        });
-      } catch {
+      const tokenResponse = await fetchAccountJson({
+        url: DISCORD_TOKEN_URL,
+        init: {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            grant_type: "authorization_code",
+            client_id: account.applicationId,
+            client_secret: account.clientSecret,
+            code,
+          }),
+        },
+        auditContext: "discord.activities.oauth.token",
+      });
+      if (!tokenResponse) {
         return respondJson(res, 503, { error: "Discord token exchange unavailable" });
       }
       const granted =
@@ -235,17 +229,12 @@ export function createDiscordActivityHttpHandler(deps: DiscordActivityHttpDeps):
       if (!tokenResponse.ok || !granted) {
         return respondJson(res, 401, { error: "invalid authorization code" });
       }
-      let userResponse: Awaited<ReturnType<typeof fetchDiscordJson>>;
-      try {
-        userResponse = await fetchDiscordJson({
-          fetchGuard,
-          fetchImpl: account.proxyFetch,
-          url: DISCORD_USER_URL,
-          init: { headers: { Authorization: `Bearer ${granted}` } },
-          auditContext: "discord.activities.oauth.user",
-          endpointRuntime,
-        });
-      } catch {
+      const userResponse = await fetchAccountJson({
+        url: DISCORD_USER_URL,
+        init: { headers: { Authorization: `Bearer ${granted}` } },
+        auditContext: "discord.activities.oauth.user",
+      });
+      if (!userResponse) {
         return respondJson(res, 503, { error: "Discord user lookup unavailable" });
       }
       const discordUserId =

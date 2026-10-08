@@ -1,27 +1,20 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  buildSkillProposalRevisionChangedErrorDetails,
-  ErrorCodes,
-  errorShape,
-} from "../../../packages/gateway-protocol/src/index.js";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
 import {
   listAgentIds,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { SkillProposalRevisionChangedError } from "../../skills/workshop/service-evaluation.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
-import { assertValidParams, type Validator } from "./validation.js";
+import type { GatewayRequestContext } from "./types.js";
 
-export function resolveSkillsAgentWorkspace(params: unknown, context: GatewayRequestContext) {
+export function resolveSkillsAgentWorkspace(
+  params: { agentId?: string },
+  context: GatewayRequestContext,
+) {
   const cfg = context.getRuntimeConfig();
-  const agentIdRaw =
-    params && typeof params === "object" && "agentId" in params
-      ? normalizeOptionalString((params as { agentId?: unknown }).agentId)
-      : undefined;
+  const agentIdRaw = normalizeOptionalString(params.agentId);
   let agentId: string;
   try {
     agentId = agentIdRaw
@@ -57,49 +50,3 @@ export type ResolvedSkillsWorkspace = Extract<
   ReturnType<typeof resolveSkillsAgentWorkspace>,
   { ok: true }
 >;
-
-export const SKILL_PROPOSAL_RESPONSE_HANDLED = Symbol("skill proposal response handled");
-
-export async function runSkillsProposalWorkspaceHandler<TParams, TResult>(params: {
-  method: string;
-  rawParams: unknown;
-  respond: RespondFn;
-  context: GatewayRequestContext;
-  validate: Validator<TParams>;
-  run: (
-    parsedParams: TParams,
-    resolved: ResolvedSkillsWorkspace,
-  ) => Promise<TResult | typeof SKILL_PROPOSAL_RESPONSE_HANDLED>;
-}): Promise<void> {
-  if (!assertValidParams(params.rawParams, params.validate, params.method, params.respond)) {
-    return;
-  }
-  const resolved = resolveSkillsAgentWorkspace(params.rawParams, params.context);
-  if (!resolved.ok) {
-    params.respond(false, undefined, resolved.error);
-    return;
-  }
-  try {
-    const result = await params.run(params.rawParams, resolved);
-    if (result !== SKILL_PROPOSAL_RESPONSE_HANDLED) {
-      params.respond(true, result, undefined);
-    }
-  } catch (error) {
-    const details =
-      error instanceof SkillProposalRevisionChangedError
-        ? buildSkillProposalRevisionChangedErrorDetails({
-            expectedRevisionHash: error.expectedRevisionHash,
-            currentRevisionHash: error.currentRevisionHash,
-          })
-        : undefined;
-    params.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        formatErrorMessage(error),
-        details ? { details } : undefined,
-      ),
-    );
-  }
-}

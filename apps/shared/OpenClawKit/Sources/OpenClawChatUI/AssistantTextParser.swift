@@ -35,15 +35,11 @@ enum AssistantTextParser {
                 break
             }
 
-            let isSelfClosing = self.isSelfClosingTag(in: raw, tagEnd: tagEnd)
+            let isSelfClosing = raw[..<tagEnd.lowerBound].reversed().first { !$0.isWhitespace } == "/"
             cursor = tagEnd.upperBound
             if isSelfClosing { continue }
 
-            if match.closing {
-                currentKind = .response
-            } else {
-                currentKind = match.kind == .think ? .thinking : .response
-            }
+            currentKind = match.kind
         }
 
         if cursor < raw.endIndex {
@@ -65,40 +61,27 @@ enum AssistantTextParser {
         self.segments(from: raw, includeThinking: false)
     }
 
-    static func hasVisibleContent(in raw: String, includeThinking: Bool) -> Bool {
+    static func hasVisibleContent(in raw: String, includeThinking: Bool = false) -> Bool {
         !self.segments(from: raw, includeThinking: includeThinking).isEmpty
     }
 
-    static func hasVisibleContent(in raw: String) -> Bool {
-        self.hasVisibleContent(in: raw, includeThinking: false)
-    }
-
-    private enum TagKind {
-        case think
-        case final
-    }
-
     private struct TagMatch {
-        let kind: TagKind
-        let closing: Bool
+        let kind: AssistantTextSegment.Kind
         let range: Range<String.Index>
     }
 
     private static func nextTag(in text: String, from start: String.Index) -> TagMatch? {
-        let candidates: [TagMatch] = [
-            self.findTagStart(tag: "think", closing: false, in: text, from: start).map {
-                TagMatch(kind: .think, closing: false, range: $0)
-            },
-            self.findTagStart(tag: "think", closing: true, in: text, from: start).map {
-                TagMatch(kind: .think, closing: true, range: $0)
-            },
-            self.findTagStart(tag: "final", closing: false, in: text, from: start).map {
-                TagMatch(kind: .final, closing: false, range: $0)
-            },
-            self.findTagStart(tag: "final", closing: true, in: text, from: start).map {
-                TagMatch(kind: .final, closing: true, range: $0)
-            },
-        ].compactMap(\.self)
+        let tags: [(name: String, closing: Bool, kind: AssistantTextSegment.Kind)] = [
+            ("think", false, .thinking),
+            ("think", true, .response),
+            ("final", false, .response),
+            ("final", true, .response),
+        ]
+        let candidates = tags.compactMap { tag in
+            self.findTagStart(tag: tag.name, closing: tag.closing, in: text, from: start).map {
+                TagMatch(kind: tag.kind, range: $0)
+            }
+        }
 
         return candidates.min { $0.range.lowerBound < $1.range.lowerBound }
     }
@@ -126,17 +109,6 @@ enum AssistantTextParser {
             searchRange = boundaryIndex..<text.endIndex
         }
         return nil
-    }
-
-    private static func isSelfClosingTag(in text: String, tagEnd: Range<String.Index>) -> Bool {
-        var cursor = tagEnd.lowerBound
-        while cursor > text.startIndex {
-            cursor = text.index(before: cursor)
-            let char = text[cursor]
-            if char.isWhitespace { continue }
-            return char == "/"
-        }
-        return false
     }
 
     private static func appendSegment(

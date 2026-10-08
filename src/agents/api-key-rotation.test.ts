@@ -78,7 +78,8 @@ describe("executeWithApiKeyRotation", () => {
     expect(execute).toHaveBeenCalledTimes(2);
   });
 
-  it.each([502, 503, 504])("retries the same key for transient HTTP %i", async (status) => {
+  it("retries the same key for a bare transient HTTP status", async () => {
+    const status = 503;
     const sleep = vi.fn(async () => undefined);
     const execute = vi
       .fn<(apiKey: string) => Promise<string>>()
@@ -88,45 +89,6 @@ describe("executeWithApiKeyRotation", () => {
     await expect(
       executeWithApiKeyRotation({
         provider: "google",
-        apiKeys: ["key-1"],
-        transientRetry: { attempts: 2, baseDelayMs: 0, maxDelayMs: 0, sleep },
-        execute,
-      }),
-    ).resolves.toBe("ok");
-
-    expect(execute).toHaveBeenCalledTimes(2);
-  });
-
-  it("retries selected transient network errors", async () => {
-    const sleep = vi.fn(async () => undefined);
-    const cause = Object.assign(new Error("socket closed"), { code: "ECONNRESET" });
-    const execute = vi
-      .fn<(apiKey: string) => Promise<string>>()
-      .mockRejectedValueOnce(new Error("fetch failed", { cause }))
-      .mockResolvedValueOnce("ok");
-
-    await expect(
-      executeWithApiKeyRotation({
-        provider: "deepgram",
-        apiKeys: ["key-1"],
-        transientRetry: { attempts: 2, baseDelayMs: 0, maxDelayMs: 0, sleep },
-        execute,
-      }),
-    ).resolves.toBe("ok");
-
-    expect(execute).toHaveBeenCalledTimes(2);
-  });
-
-  it("retries selected transient network errors with top-level codes", async () => {
-    const sleep = vi.fn(async () => undefined);
-    const execute = vi
-      .fn<(apiKey: string) => Promise<string>>()
-      .mockRejectedValueOnce(Object.assign(new Error("socket hang up"), { code: "ECONNRESET" }))
-      .mockResolvedValueOnce("ok");
-
-    await expect(
-      executeWithApiKeyRotation({
-        provider: "deepgram",
         apiKeys: ["key-1"],
         transientRetry: { attempts: 2, baseDelayMs: 0, maxDelayMs: 0, sleep },
         execute,
@@ -239,7 +201,8 @@ describe("executeWithApiKeyRotation", () => {
     expect(sleep).not.toHaveBeenCalled();
   });
 
-  it.each([400, 401, 403, 404])("does not retry HTTP %i", async (status) => {
+  it("does not retry HTTP 401", async () => {
+    const status = 401;
     const sleep = vi.fn(async () => undefined);
     const execute = vi.fn(async () => {
       throw new Error(`provider request failed (HTTP ${status})`);

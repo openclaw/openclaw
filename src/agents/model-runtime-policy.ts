@@ -18,10 +18,10 @@ import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
 import { isDefaultAgentRuntimeId, normalizeOptionalAgentRuntimeId } from "./agent-runtime-id.js";
-import { resolveAgentEntry } from "./agent-scope-config.js";
+import { resolveAgentEntry, resolveNativeModelPrimary } from "./agent-scope-config.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
+import { resolveProviderModelAuthPolicy } from "./model-auth-policy.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
-import { resolveProviderModelRouteAuthRequirement } from "./provider-model-route-auth.js";
 
 /** A stored-row owner is already selected; request hints still require normal admission. */
 export type AgentRuntimePolicyScope = { sessionKey?: string } & (
@@ -127,11 +127,11 @@ function resolvePolicyMatch(
 }
 
 function modelEntryMatchKind(params: {
-  entry: Pick<ModelDefinitionConfig, "id">;
+  entryId: string;
   provider: string | undefined;
   modelId: string;
 }): ModelEntryMatchKind {
-  const entryId = params.entry.id.trim();
+  const entryId = params.entryId.trim();
   if (entryId === params.modelId) {
     return "exact";
   }
@@ -173,15 +173,21 @@ function resolveAgentModelEntryRuntimePolicy(params: {
   const callerProvider = normalizeProviderId(params.provider ?? "");
   for (const models of modelMaps) {
     const scopeMatches: AgentModelRuntimePolicyMatch[] = [];
-    for (const [key, entry] of Object.entries(models ?? {})) {
+    if (!models) {
+      continue;
+    }
+    for (const key of Object.keys(models)) {
+      const policy = models[key]?.agentRuntime;
+      if (!policy || !hasRuntimePolicy(policy)) {
+        continue;
+      }
       const matches =
         modelEntryMatchKind({
-          entry: { id: key },
+          entryId: key,
           provider: params.provider,
           modelId: modelId ?? "",
         }) === params.matchKind;
-      const policy = entry?.agentRuntime;
-      if (!matches || !policy || !hasRuntimePolicy(policy)) {
+      if (!matches) {
         continue;
       }
       scopeMatches.push({ provider: parseModelCatalogRef(key)?.provider ?? "", policy });
@@ -206,7 +212,8 @@ function resolveModelConfig(params: {
     return undefined;
   }
   return params.providerConfig.models.find(
-    (entry) => modelEntryMatchKind({ entry, provider: params.provider, modelId }) === "exact",
+    (entry) =>
+      modelEntryMatchKind({ entryId: entry.id, provider: params.provider, modelId }) === "exact",
   );
 }
 
@@ -286,18 +293,24 @@ export function resolveModelRouteIntent(
     runtimePolicy?: ReturnType<typeof resolveModelRuntimePolicy>;
     primaryModel?: ProviderModelRef;
     resolveProfileAuthMode?: (profileId: string) => string | undefined;
+    resolveProfileAuthFlow?: (profileId: string) => string | undefined;
   },
 ): ProviderResolveModelRoutesContext["routeIntent"] {
   const selected = splitTrailingAuthProfile(params.modelId ?? "");
+  const provider = resolveEffectiveProvider(params.provider, selected.model);
   const configured =
     params.runtimePolicy ?? resolveModelRuntimePolicy({ ...params, modelId: selected.model });
   const runtimeId = normalizeOptionalAgentRuntimeId(configured.policy?.id);
-  const selectedRequirement = resolveProviderModelRouteAuthRequirement(
-    selected.profile
-      ? (params.config?.auth?.profiles?.[selected.profile]?.mode ??
-          params.resolveProfileAuthMode?.(selected.profile))
-      : undefined,
-  );
+  const selectedRequirement =
+    selected.profile && provider
+      ? resolveProviderModelAuthPolicy({
+          provider,
+          mode:
+            params.config?.auth?.profiles?.[selected.profile]?.mode ??
+            params.resolveProfileAuthMode?.(selected.profile),
+          authFlow: params.resolveProfileAuthFlow?.(selected.profile),
+        }).authRequirement
+      : undefined;
   if (selectedRequirement) {
     return {
       ...(runtimeId && !isDefaultAgentRuntimeId(runtimeId) ? { runtimeId } : {}),
@@ -312,10 +325,9 @@ export function resolveModelRouteIntent(
     return undefined;
   }
   const agentId = resolveAgentRuntimePolicyAgentId(params);
-  const agentEntry = agentId ? resolveAgentEntry(params.config, agentId) : undefined;
-  const primary =
-    resolveAgentModelPrimaryValue(agentEntry?.model) ??
-    resolveAgentModelPrimaryValue(params.config.agents?.defaults?.model);
+  const primary = agentId
+    ? resolveNativeModelPrimary(params.config, agentId)
+    : resolveAgentModelPrimaryValue(params.config.agents?.defaults?.model);
   const primarySelection = primary ? splitTrailingAuthProfile(primary) : undefined;
   const primaryRef = params.primaryModel
     ? {
@@ -325,10 +337,7 @@ export function resolveModelRouteIntent(
     : primarySelection
       ? parseModelCatalogRef(primarySelection.model)
       : null;
-  if (
-    !primaryRef ||
-    primaryRef.provider !== resolveEffectiveProvider(params.provider, params.modelId)
-  ) {
+  if (!primaryRef || primaryRef.provider !== provider) {
     return undefined;
   }
   const inheritedPolicy = resolveModelRuntimePolicy({
@@ -337,12 +346,15 @@ export function resolveModelRouteIntent(
     modelId: primaryRef.modelId,
   });
   const inheritedRuntimeId = normalizeOptionalAgentRuntimeId(inheritedPolicy.policy?.id);
-  const primaryRequirement = resolveProviderModelRouteAuthRequirement(
-    primarySelection?.profile
-      ? (params.config.auth?.profiles?.[primarySelection.profile]?.mode ??
-          params.resolveProfileAuthMode?.(primarySelection.profile))
-      : undefined,
-  );
+  const primaryRequirement = primarySelection?.profile
+    ? resolveProviderModelAuthPolicy({
+        provider: primaryRef.provider,
+        mode:
+          params.config.auth?.profiles?.[primarySelection.profile]?.mode ??
+          params.resolveProfileAuthMode?.(primarySelection.profile),
+        authFlow: params.resolveProfileAuthFlow?.(primarySelection.profile),
+      }).authRequirement
+    : undefined;
   if (primaryRequirement) {
     return {
       ...(inheritedRuntimeId && !isDefaultAgentRuntimeId(inheritedRuntimeId)

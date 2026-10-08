@@ -9,6 +9,7 @@ export default discordApiTypes;
 export const {
   ApplicationCommandOptionType,
   ApplicationCommandType,
+  ApplicationFlags,
   ButtonStyle,
   ChannelType,
   ComponentType,
@@ -16,6 +17,7 @@ export const {
   GatewayDispatchEvents,
   GatewayIntentBits,
   GatewayOpcodes,
+  GuildMemberFlags,
   InteractionContextType,
   InteractionResponseType,
   InteractionType,

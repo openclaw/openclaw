@@ -59,7 +59,7 @@ function captureWarningLogger() {
 }
 
 describe("node-hosted skill snapshots", () => {
-  it("appears while connected, includes the locator note, and disappears on disconnect", () => {
+  it("appears while connected, includes the locator note, and disappears on disconnect", async () => {
     const before = getSkillsSnapshotVersion();
     recordRemoteSkillNodeInfo({
       nodeId: "node-1",
@@ -83,7 +83,7 @@ describe("node-hosted skill snapshots", () => {
       workspaceOnly: true,
       eligibility: { nodeSkills: { canExec: true } },
     });
-    const snapshot = buildSkillSnapshot("/workspace", { entries });
+    const snapshot = await buildSkillSnapshot("/workspace", { entries });
     expect(snapshot.skills.map((skill) => skill.name)).toEqual(["release-helper"]);
     expect(snapshot.prompt).toContain("Build Mac (node-1)");
     expect(snapshot.prompt).toContain(
@@ -307,6 +307,7 @@ metadata:
     recordRemoteSkillNodeInfo({
       nodeId: "node-1",
       connId: "conn-1",
+      displayName: "Build Mac",
       commands: ["system.run"],
     });
     replaceRemoteNodeSkills({
@@ -316,6 +317,7 @@ metadata:
     const firstVersion = getSkillsSnapshotVersion();
     const firstSkill = mergeRemoteNodeSkillEntries([], { canExec: true })[0]!.skill;
     expect(firstSkill.contentHash).toEqual(expect.any(String));
+    expect(firstSkill.locationNote).toContain("Build Mac (node-1)");
 
     replaceRemoteNodeSkills({
       nodeId: "node-1",

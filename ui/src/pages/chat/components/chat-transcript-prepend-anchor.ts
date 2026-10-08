@@ -1,4 +1,5 @@
-import type { Virtualizer } from "@tanstack/virtual-core";
+import type { Range, Virtualizer } from "@tanstack/virtual-core";
+import { extractTranscriptRange } from "./chat-transcript-range.ts";
 
 type ChatTranscriptPrependAnchor = { messageKey: string; rowKey: string | null; top: number };
 type TranscriptMessageKeys = Pick<ReadonlySet<string>, "keys" | "has">;
@@ -6,6 +7,7 @@ type TranscriptMessageKeys = Pick<ReadonlySet<string>, "keys" | "has">;
 /** Own the message anchor across projection capture, measurement, and restoration. */
 export class TranscriptPrependAnchor {
   messageKeys: TranscriptMessageKeys = new Set();
+  committedMessageRows: ReadonlyMap<string, string> = new Map();
   private firstMessageKey: string | undefined;
   private pending: (ChatTranscriptPrependAnchor & { measured: boolean }) | null = null;
 
@@ -14,9 +16,18 @@ export class TranscriptPrependAnchor {
     return this.pending?.messageKey ?? null;
   }
 
-  /** Keep the retained row mounted while virtual and native offsets reconcile. */
-  get rowKey(): string | null {
-    return this.pending?.rowKey ?? null;
+  /** Keep the retained bubble mounted against the committed, not candidate, row map. */
+  extractRange(
+    range: Range,
+    indexes: ReadonlyMap<string, number>,
+    focusedRowKey: string | null,
+  ): number[] {
+    const messageKey = this.messageKey;
+    const rowKey =
+      (messageKey === null ? null : this.committedMessageRows.get(messageKey)) ??
+      this.pending?.rowKey ??
+      null;
+    return extractTranscriptRange(range, indexes, [focusedRowKey, rowKey]);
   }
 
   /** Whether the next projection inserts history before the committed first message. */
@@ -28,34 +39,43 @@ export class TranscriptPrependAnchor {
     );
   }
 
-  /** Capture only a committed prepend that is not superseded by a scroll command. */
-  capture(element: HTMLDivElement | null, commanded: boolean): void {
-    const anchor = commanded
-      ? null
-      : captureTranscriptPrependAnchor(element, this.firstMessageKey, this.messageKeys);
+  /** Retain a reader through committed history or row-projection changes. */
+  capture(
+    element: HTMLDivElement | null,
+    commanded: boolean,
+    readingProjectionChanged = false,
+  ): void {
+    // A second projection may commit before measurement settles. Keep the
+    // original reader target rather than recapturing an already shifted bubble.
+    const retained =
+      this.pending && this.messageKeys.has(this.pending.messageKey) ? this.pending : null;
+    const anchor =
+      !commanded && (this.hasPrepend || readingProjectionChanged)
+        ? (retained ?? captureTranscriptPrependAnchor(element, this.messageKeys))
+        : null;
     if (anchor) {
       this.pending = { ...anchor, measured: false };
     }
     this.firstMessageKey = this.messageKeys.keys().next().value;
   }
 
-  /** Measure estimated rows before restoring the retained message on the next commit. */
+  /** Keep the message fixed while newly mounted viewport rows replace their estimates. */
   update(
     element: HTMLDivElement | null,
     virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
-    measureRows: () => void,
+    measureRows: () => boolean,
   ): boolean {
     const anchor = this.pending;
     if (!anchor) {
       return false;
     }
-    if (!anchor.measured) {
-      measureRows();
-      anchor.measured = true;
-      return true;
+    const changed = measureRows();
+    const moved = restoreTranscriptPrependAnchor(anchor, element, virtualizer);
+    if (anchor.measured && !changed && !moved) {
+      this.pending = null;
     }
-    this.pending = null;
-    return restoreTranscriptPrependAnchor(anchor, element, virtualizer);
+    anchor.measured = true;
+    return true;
   }
 
   /** Carry the viewport target with native reader movement, not layout growth. */
@@ -75,17 +95,16 @@ export class TranscriptPrependAnchor {
     this.clear();
     this.firstMessageKey = undefined;
     this.messageKeys = new Set();
+    this.committedMessageRows = new Map();
   }
 }
 
-/** Capture the message being read before older history changes its containing row. */
+/** Capture a retained message before history or regrouping changes its row. */
 function captureTranscriptPrependAnchor(
   scrollElement: HTMLDivElement | null,
-  previousFirstMessageKey: string | undefined,
   next: TranscriptMessageKeys,
 ): ChatTranscriptPrependAnchor | null {
-  const first = previousFirstMessageKey;
-  if (!scrollElement || !first || first === next.keys().next().value || !next.has(first)) {
+  if (!scrollElement) {
     return null;
   }
   const viewport = scrollElement.getBoundingClientRect();
@@ -114,11 +133,11 @@ function captureTranscriptPrependAnchor(
 
 /** Reconcile the inner-message anchor after the virtualizer commits its row anchor. */
 function restoreTranscriptPrependAnchor(
-  anchor: ChatTranscriptPrependAnchor | null,
+  anchor: ChatTranscriptPrependAnchor,
   scrollElement: HTMLDivElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
 ): boolean {
-  if (!anchor || !scrollElement) {
+  if (!scrollElement) {
     return false;
   }
   // Group renderers may replace the bubble at an array index during prepend;
@@ -133,7 +152,13 @@ function restoreTranscriptPrependAnchor(
   if (Math.abs(delta) <= 1) {
     return false;
   }
-  const offset = Math.max(0, scrollElement.scrollTop + delta);
+  const maxOffset = Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight);
+  const offset = Math.max(0, Math.min(maxOffset, scrollElement.scrollTop + delta));
+  // A retained message can become unreachable at an edge when provisional rows retire.
+  // Reissuing that clamped correction would keep the measurement loop alive forever.
+  if (Math.abs(offset - scrollElement.scrollTop) <= 1) {
+    return false;
+  }
   // Commit one measured message target through the scroll owner. This also
   // retires deferred row corrections already represented by the measured DOM.
   virtualizer.scrollToOffset(offset, { behavior: "instant" });

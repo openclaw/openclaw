@@ -1,6 +1,3 @@
-// Prunes omitted bundled plugin files and their unshared runtime dependencies
-// from Docker-oriented production package output, then links the retained
-// externally distributed plugins' own dependencies under their packaged roots.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -11,23 +8,11 @@ import { removePathIfExists } from "./runtime-postbuild-shared.mjs";
 
 const RUNTIME_DEPENDENCY_FIELDS = ["dependencies", "optionalDependencies"];
 
-function parsePluginList(value) {
+export function parseDockerPluginKeepList(value) {
   if (typeof value !== "string") {
     return new Set();
   }
-  return new Set(
-    value
-      .split(/[\s,]+/u)
-      .map((entry) => entry.trim())
-      .filter(Boolean),
-  );
-}
-
-/**
- * Parses OPENCLAW_EXTENSIONS into the bundled plugin ids that Docker should keep.
- */
-export function parseDockerPluginKeepList(value) {
-  return parsePluginList(value);
+  return new Set(value.split(/[\s,]+/u).filter(Boolean));
 }
 
 function readPackageJson(filePath) {
@@ -233,10 +218,6 @@ function linkRetainedPluginDependencies(repoRoot, bundledPluginDir, retainedPlug
   }
 }
 
-/**
- * Removes omitted plugin dist trees plus node_modules packages not needed by kept runtime code,
- * then links retained externally distributed plugin dependencies under their packaged roots.
- */
 export function pruneDockerPluginDist(params = {}) {
   const repoRoot = params.cwd ?? params.repoRoot ?? process.cwd();
   const env = params.env ?? process.env;

@@ -44,8 +44,15 @@ import {
   resolveInboundMentionDecision,
 } from "../../channels/mention-gating.js";
 import {
+  createChannelIngressPolicyResolver,
+  resolveChannelIngressPolicy,
+  resolveStableChannelIngressPolicy,
+} from "../../channels/message-access/runtime.js";
+import {
   setChannelConversationBindingIdleTimeoutBySessionKey,
+  setChannelConversationBindingIdleTimeoutBySessionKeyAsync,
   setChannelConversationBindingMaxAgeBySessionKey,
+  setChannelConversationBindingMaxAgeBySessionKeyAsync,
 } from "../../channels/plugins/conversation-bindings.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { recordInboundSession } from "../../channels/session.js";
@@ -55,12 +62,16 @@ import {
 } from "../../config/group-policy.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { resolveSessionStorePathCore } from "../../config/sessions.js";
-import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
+import {
+  resolveSessionEntryResetFreshness,
+  resolveSessionEntryResetFreshnessAsync,
+} from "../../config/sessions/entry-freshness.js";
 import {
   readSessionUpdatedAtCore,
   recordInboundSessionMeta,
   updateSessionLastRoute,
 } from "../../config/sessions/session-accessor.js";
+import { readSessionUpdatedAtInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
 import { readRemoteMediaBuffer, saveRemoteMedia, saveResponseMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
@@ -113,15 +124,29 @@ export function createRuntimeChannel(options?: {
         ? { dispatchReplyFromConfig: options.dispatchReplyFromConfig }
         : {}),
     });
+  const inboundRuntime = {
+    ingress: {
+      createResolver: createChannelIngressPolicyResolver,
+      resolve: resolveChannelIngressPolicy,
+      resolveStable: resolveStableChannelIngressPolicy,
+    },
+    buildContext: buildChannelInboundEventContext,
+    run: runChannelTurn,
+    runPreparedReply: runPreparedChannelTurn,
+    dispatch: dispatchInbound,
+    dispatchReply: dispatchAssembledChannelTurn,
+  } satisfies PluginRuntime["channel"]["inbound"];
   const sessionRuntime = {
     resolveStorePath: resolveSessionStorePathCore,
     readSessionUpdatedAt: readSessionUpdatedAtCore,
+    readSessionUpdatedAtAsync: readSessionUpdatedAtInWorker,
     // Plugin runtime property names are a shipped contract; the implementations
     // route through the session accessor boundary.
     recordSessionMetaFromInbound: recordInboundSessionMeta,
     recordInboundSession,
     updateLastRoute: updateSessionLastRoute,
     resolveEntryResetFreshness: resolveSessionEntryResetFreshness,
+    resolveEntryResetFreshnessAsync: resolveSessionEntryResetFreshnessAsync,
   };
   const channelRuntime = {
     text: {
@@ -165,15 +190,7 @@ export function createRuntimeChannel(options?: {
           env,
           pairingAdapter,
         }),
-      upsertPairingRequest: ({ channel, id, accountId, meta, env, pairingAdapter }) =>
-        upsertChannelPairingRequest({
-          channel,
-          id,
-          accountId,
-          meta,
-          env,
-          pairingAdapter,
-        }),
+      upsertPairingRequest: upsertChannelPairingRequest,
     },
     media: {
       readRemoteMediaBuffer,
@@ -217,31 +234,16 @@ export function createRuntimeChannel(options?: {
     outbound: {
       loadAdapter: loadChannelOutboundAdapter,
     },
-    inbound: {
-      buildContext: buildChannelInboundEventContext,
-      run: runChannelTurn,
-      runPreparedReply: runPreparedChannelTurn,
-      dispatch: dispatchInbound,
-      dispatchReply: dispatchAssembledChannelTurn,
-    },
+    inbound: inboundRuntime,
+    turn: inboundRuntime,
     threadBindings: {
-      setIdleTimeoutBySessionKey: ({ channelId, targetSessionKey, accountId, idleTimeoutMs }) =>
-        setChannelConversationBindingIdleTimeoutBySessionKey({
-          channelId,
-          targetSessionKey,
-          accountId,
-          idleTimeoutMs,
-        }),
-      setMaxAgeBySessionKey: ({ channelId, targetSessionKey, accountId, maxAgeMs }) =>
-        setChannelConversationBindingMaxAgeBySessionKey({
-          channelId,
-          targetSessionKey,
-          accountId,
-          maxAgeMs,
-        }),
+      setIdleTimeoutBySessionKeyAsync: setChannelConversationBindingIdleTimeoutBySessionKeyAsync,
+      setMaxAgeBySessionKeyAsync: setChannelConversationBindingMaxAgeBySessionKeyAsync,
+      setIdleTimeoutBySessionKey: setChannelConversationBindingIdleTimeoutBySessionKey,
+      setMaxAgeBySessionKey: setChannelConversationBindingMaxAgeBySessionKey,
     },
     runtimeContexts: createChannelRuntimeContextRegistry(),
   } satisfies PluginRuntime["channel"];
 
-  return channelRuntime as PluginRuntime["channel"];
+  return channelRuntime;
 }

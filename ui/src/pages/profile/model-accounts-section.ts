@@ -67,18 +67,9 @@ export type ModelAccountsSectionProps = {
   onConnectCheck: () => void;
 };
 
-function inputValue(event: Event): string {
-  // SAFETY: each @input listener below is bound to its own text input element.
-  return (event.target as HTMLInputElement).value;
-}
-
 function gatewayEndpoint(gatewayUrl: string): string {
-  try {
-    const url = new URL(gatewayUrl);
-    return `${url.origin}${url.pathname}`;
-  } catch {
-    return t("profilePage.modelAccounts.gatewayUnavailable");
-  }
+  const url = URL.parse(gatewayUrl);
+  return url ? `${url.origin}${url.pathname}` : t("profilePage.modelAccounts.gatewayUnavailable");
 }
 
 function accountIdDetail(accounts: UserModelAccount[], account: UserModelAccount) {
@@ -111,6 +102,7 @@ function renderLinkedRow(props: ModelAccountsSectionProps, link: UserProfileAuth
       <button
         type="button"
         class="btn btn--sm profile-auth-link-unlink"
+        aria-label=${`${t("profilePage.modelAccounts.unlinkAction")}: ${providerDisplayLabel(link.provider)} · ${account?.label ?? link.authProfileId}`}
         ?disabled=${props.busy}
         @click=${() => props.onUnlink(link.provider)}
       >
@@ -134,6 +126,7 @@ function renderSavedAccountRow(props: ModelAccountsSectionProps, account: UserMo
         type="button"
         class="btn btn--sm profile-auth-account-select"
         data-auth-profile-id=${account.authProfileId}
+        aria-label=${`${t("profilePage.modelAccounts.selectAction")}: ${providerDisplayLabel(account.provider)} · ${account.label} (${account.authProfileId})`}
         ?disabled=${props.busy}
         @click=${() => props.onSelectAccount(account.authProfileId)}
       >
@@ -258,7 +251,9 @@ function renderManualLinkRow(props: ModelAccountsSectionProps) {
           .value=${props.linkDraft}
           placeholder=${t("profilePage.modelAccounts.inputPlaceholder")}
           ?disabled=${props.busy}
-          @input=${(event: Event) => props.onLinkDraftInput(inputValue(event))}
+          @input=${(event: Event) =>
+            // SAFETY: This listener is bound to the native text input above.
+            props.onLinkDraftInput((event.target as HTMLInputElement).value)}
         />
         <button
           type="submit"
@@ -298,20 +293,16 @@ function renderModelAccountRows(props: ModelAccountsSectionProps) {
         : ""
     }
     ${renderSignIn(props)} ${props.showManualLink ? renderManualLinkRow(props) : ""}
-    ${
-      props.notice
-        ? html`<div class="settings-row model-accounts-notice" role="status">
-            <span class="settings-row__desc">${props.notice}</span>
+    ${(["notice", "error"] as const).map((kind) =>
+      props[kind]
+        ? html`<div
+            class="settings-row model-accounts-${kind}"
+            role=${kind === "notice" ? "status" : "alert"}
+          >
+            <span class="settings-row__desc">${props[kind]}</span>
           </div>`
-        : ""
-    }
-    ${
-      props.error
-        ? html`<div class="settings-row model-accounts-error" role="alert">
-            <span class="settings-row__desc">${props.error}</span>
-          </div>`
-        : ""
-    }
+        : "",
+    )}
     ${
       props.inventoryError
         ? html`<div class="settings-row model-accounts-error" role="alert">

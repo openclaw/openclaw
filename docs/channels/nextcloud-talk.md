@@ -21,12 +21,40 @@ From a local checkout (dev workflows):
 openclaw plugins install ./path/to/local/nextcloud-talk-plugin
 ```
 
-Restart the gateway after installing. Details: [Plugins](/tools/plugin)
+Check the [application result](/plugins/manage-plugins#apply-changes-and-inspect) after installing.
+
+## How messages reach the agent
+
+```mermaid
+sequenceDiagram
+    participant User as Talk user
+    participant Talk as Nextcloud Talk
+    participant Hook as OpenClaw webhook
+    participant Agent as OpenClaw agent
+    User->>Talk: Send a message
+    Talk->>Hook: Signed webhook
+    Hook->>Hook: Verify signature and store the message durably
+    Hook-->>Talk: HTTP 200 with durable acceptance marker
+    Hook->>Hook: Check sender, room, and mention access
+    alt Message is allowed
+        Hook->>Agent: Route to the agent session
+        Agent-->>Talk: Reply through the Talk API
+        Talk-->>User: Show the reply
+    else Message is not allowed
+        Note over Hook: No agent turn
+    end
+```
+
+The webhook acknowledgement confirms durable receipt, not permission to run an
+agent or completion of its reply. Access checks still apply after acceptance. Unknown DM senders may receive a
+pairing code instead of an agent reply.
+The webhook URL must be reachable from Nextcloud; replies travel back through
+the Talk API rather than in the webhook response.
 
 ## Quick setup (beginner)
 
 1. Install the plugin (above).
-2. On your Nextcloud server, create a bot:
+2. Publish the Gateway webhook route `/nextcloud-talk-webhook` through your HTTPS reverse proxy, forwarding to the Gateway port (default `18789`). On your Nextcloud server, create a bot using that public URL:
 
    ```bash
    ./occ talk:bot:install "OpenClaw" "<shared-secret>" "<webhook-url>" --feature webhook --feature response --feature reaction
@@ -63,7 +91,7 @@ Restart the gateway after installing. Details: [Plugins](/tools/plugin)
      --secret-file /path/to/nextcloud-talk-secret
    ```
 
-5. Restart the gateway (or finish setup).
+5. Check `openclaw channels status --probe`; start the Gateway if it is offline. Config changes follow [hot reload](/gateway/configuration/hot-reload). If you changed the service environment, restart the Gateway to load it.
 
 Minimal config:
 
@@ -83,12 +111,80 @@ Minimal config:
 ## Notes
 
 - Bots cannot initiate DMs. The user must message the bot first.
-- The webhook URL must be reachable from the Nextcloud server; set `webhookPublicUrl` when the gateway sits behind a proxy. Webhook requests are HMAC-SHA256 signed with the bot secret; invalid signatures are rejected and rate limited.
+- The webhook URL must be reachable from the Nextcloud server. The Gateway serves `webhookPath` on its own HTTP port. Existing installations may retain an explicit `legacyWebhook` pin for the former port `8788`; new installations open no separate port. Set `webhookPublicUrl` to the bot's external callback URL when using a proxy. Webhook requests are HMAC-SHA256 signed with the bot secret; invalid signatures are rejected and rate limited.
 - Message webhooks return HTTP 200 only after the raw event is durably stored; storage failures return HTTP 500. The durable `200` carries `x-openclaw-delivery-accepted: durable`, so reverse proxies can require the marker to distinguish OpenClaw acceptance from a generic `200`. Unsupported non-message events return HTTP 200 without the marker and are logged as ignored.
+- The webhook listener admits at most 64 concurrent unauthenticated body reads; overflow requests receive `HTTP/1.1 429` with `Connection: close`. Requests on one keep-alive connection are answered in order, so a queued delivery's `200` acknowledgement always flushes before any overflow rejection closes the socket. The 64-read budget is fixed and not configurable. Accounts sharing a Gateway pathname share its admission and failed-authentication budgets; each retained legacy host and port keeps independent budgets. Deployments that regularly saturate it should reduce or buffer upstream concurrency (for example, cap reverse-proxy fan-in toward the listener) and accept that deliveries refused during saturation may be lost.
 - Media uploads are not supported by the bot API; outbound media is appended as an `Attachment: <url>` line.
 - The webhook payload does not distinguish DMs from rooms; set `apiUser` + `apiPassword` to enable room-type lookups (cached about 5 minutes). Without them, every conversation is treated as a room.
 - Outbound requests go through the SSRF guard. For a Nextcloud host on a trusted private/internal network, opt in with `channels.nextcloud-talk.network.dangerouslyAllowPrivateNetwork: true`.
-- With `apiUser`/`apiPassword` and `webhookPublicUrl` set, `openclaw channels status` probes the bot and warns when the `response` feature is missing.
+- With `apiUser`/`apiPassword` and `webhookPublicUrl` set, `openclaw channels status` checks the bot and warns when the `response` feature is missing.
+
+Pre-July-2026 JSON replay caches under `<state-dir>/nextcloud-talk/replay-dedupe/`
+are outside the supported upgrade window. Doctor leaves these files unchanged and
+stops with recovery guidance. [Upgrade through `2026.9.5`](/install/updating#upgrading-very-old-versions)
+and run its Doctor before installing the latest version. Supported SQLite replay
+state continues to migrate into durable webhook deduplication.
+
+## Moving existing webhook endpoints to the Gateway
+
+Doctor preserves the previous webhook listener address with a one-shot
+`legacyWebhook: { port: 8788, host: "0.0.0.0" }` pin for enabled accounts on an
+existing installation that relied on the implicit endpoint. Evidence of prior
+operation is required; fresh installations open no separate port. An explicit
+`{ port, host? }` object selects that endpoint; an omitted `host` uses `0.0.0.0`.
+Omitted or `false` opens no listener, subject to account inheritance. Explicit
+listeners use the same Gateway route, HMAC verification, and channel handler.
+
+Nextcloud stores the bot callback URL outside OpenClaw, so an update cannot safely
+rewrite it. To use only the Gateway listener, keep the public HTTPS address and
+change the reverse proxy's upstream to the Gateway HTTP port (`18789` by default),
+preserving `/nextcloud-talk-webhook` or your configured `webhookPath`. If Nextcloud
+connects directly, update the bot callback to a reachable HTTPS endpoint for that
+Gateway route instead. Update `webhookPublicUrl` if its public address changes;
+this field records the address for status checks and does not change Nextcloud's
+bot registration.
+
+`openclaw doctor --fix` migrates old `webhookPort` and `webhookHost` settings to
+`legacyWebhook`, using Doctor's normal config backup and write flow. Host-only
+settings preserve that host with port `8788`. Named accounts preserve their
+effective endpoint. Existing canonical settings, including an inherited `false`,
+take precedence over retired keys. Doctor and startup report the effective
+listener and Gateway destination without changing the external callback URL.
+
+The deprecated TypeScript `webhookPort` and `webhookHost` input fields remain
+source-compatible until the next Plugin SDK major. Runtime config uses
+`legacyWebhook`; run `openclaw doctor --fix` to migrate the old keys.
+
+Accounts can share a Gateway path: backend origin and signature must identify
+exactly one account, so give accounts on the same Nextcloud backend distinct bot
+secrets when sharing a Gateway path. Separate legacy endpoints preserve their
+original account selection and independent admission and failed-authentication
+budgets even when the accounts have the same backend and secret.
+
+Webhook paths retain exact request matching, including query strings, case, and
+trailing slashes. `/health`, `/healthz`, `/ready`, `/readyz`, `/startup`, and
+`/startupz` belong to Gateway checks, including when a query string follows.
+Paths under `/api/channels` require Gateway authentication, including encoded
+aliases; Nextcloud's signature does not supply that authentication.
+Doctor warns about these paths, and an account without an explicit legacy listener cannot
+start with one. Set `webhookPath` to `/nextcloud-talk-webhook` and update the
+Nextcloud bot callback and reverse-proxy upstream to the Gateway port and that
+path. An enabled legacy listener keeps serving its configured path during this
+cutover; OpenClaw does not silently rewrite the callback path.
+
+After verifying delivery through the Gateway route, remove the `legacyWebhook`
+pin and restart the account to disable its legacy forwarding. A shared listener
+stays open while another account uses that endpoint. Keep
+`meta.migrations.webhookListeners`, which Doctor saves with the pin, so later
+runs do not recreate it. See [webhook migrations](/gateway/doctor/config-migrations#channel-webhook-listeners)
+for included and read-only config sources. Use explicit `false` on an account to
+override an inherited root listener.
+Legacy ports preserve the exact `/healthz` response: `200 ok` with
+`Content-Type: text/plain` for every ordinary HTTP method (HEAD has no body).
+Query strings, case changes, and trailing slashes do not match that health path.
+This keeps existing reverse-proxy health checks working. When moving the proxy
+upstream, use the Gateway's own health checks and `openclaw channels status --probe`;
+the main Gateway port keeps its existing JSON check responses.
 
 ## Access control (DMs)
 
@@ -140,11 +236,10 @@ Provider options:
 - `channels.nextcloud-talk.baseUrl`: Nextcloud instance URL.
 - `channels.nextcloud-talk.botSecret`: bot shared secret (string or secret reference).
 - `channels.nextcloud-talk.botSecretFile`: regular-file secret path. Symlinks are rejected.
-- `channels.nextcloud-talk.apiUser`: API user for room lookups (DM detection) and the status probe.
+- `channels.nextcloud-talk.apiUser`: API user for room lookups (DM detection) and the status check.
 - `channels.nextcloud-talk.apiPassword`: API/app password for room lookups.
 - `channels.nextcloud-talk.apiPasswordFile`: API password file path.
-- `channels.nextcloud-talk.webhookPort`: webhook listener port (default: 8788).
-- `channels.nextcloud-talk.webhookHost`: webhook host (default: 0.0.0.0).
+- `channels.nextcloud-talk.legacyWebhook`: `false | { port, host? }`. An object opens a forwarding listener; `host` defaults to `0.0.0.0`. Omitted or `false` opens no listener. Named accounts inherit the root setting unless they override it.
 - `channels.nextcloud-talk.webhookPath`: webhook path (default: /nextcloud-talk-webhook).
 - `channels.nextcloud-talk.webhookPublicUrl`: externally reachable webhook URL.
 - `channels.nextcloud-talk.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing). `open` requires `allowFrom=["*"]`.

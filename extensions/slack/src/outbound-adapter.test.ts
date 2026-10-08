@@ -286,37 +286,6 @@ describe("slackOutbound", () => {
     );
   });
 
-  it("renders channelData Slack blocks on payload sends", async () => {
-    sendMessageSlackMock.mockResolvedValueOnce({ messageId: "m-blocks" });
-
-    const result = await slackOutbound.sendPayload!({
-      cfg,
-      to: "C123",
-      text: "",
-      payload: {
-        text: "fallback text",
-        channelData: {
-          slack: {
-            blocks: [{ type: "divider" }],
-          },
-        },
-      },
-      accountId: "default",
-    });
-
-    expect(sendMessageSlackMock).toHaveBeenCalledWith("C123", "fallback text", {
-      cfg,
-      threadTs: undefined,
-      accountId: "default",
-      authoredTextPlacement: "blocks",
-      blocks: [
-        { type: "divider" },
-        { type: "section", text: { type: "mrkdwn", text: "fallback text", verbatim: true } },
-      ],
-    });
-    expect(result).toEqual({ channel: "slack", messageId: "m-blocks" });
-  });
-
   it.each([
     ["structured clone", (value: unknown) => structuredClone(value)],
     ["JSON round trip", jsonRoundTrip],

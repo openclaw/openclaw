@@ -15,11 +15,6 @@ import {
   type FinalizeChannelInboundContextResult,
 } from "../channels/inbound-event/context.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
-import {
-  hasFinalChannelTurnDispatch,
-  hasVisibleChannelTurnDispatch,
-  resolveChannelTurnDispatchCounts,
-} from "../channels/turn/dispatch-result.js";
 import { runPreparedChannelTurn } from "../channels/turn/execution.js";
 import {
   dispatchAssembledChannelTurn,
@@ -39,6 +34,11 @@ import type {
   PreparedChannelTurn,
   RunChannelTurnParams,
 } from "../channels/turn/types.js";
+export {
+  hasFinalChannelTurnDispatch as hasFinalInboundReplyDispatch,
+  hasVisibleChannelTurnDispatch as hasVisibleInboundReplyDispatch,
+  resolveChannelTurnDispatchCounts as resolveInboundReplyDispatchCounts,
+} from "../channels/turn/dispatch-result.js";
 
 export { runGroupThread, type GroupThreadTurn } from "../auto-reply/group-thread.js";
 export {
@@ -118,7 +118,10 @@ export {
 } from "../channels/location.js";
 export type { LogFn } from "../channels/logging.js";
 export { logInboundDrop } from "../channels/logging.js";
-export { resolveInboundSessionEnvelopeContext } from "../channels/session-envelope.js";
+export {
+  resolveInboundSessionEnvelopeContext,
+  resolveInboundSessionEnvelopeContextAsync,
+} from "../channels/session-envelope.js";
 export {
   classifyChannelInboundEvent,
   resolveUnmentionedGroupInboundPolicy,
@@ -126,6 +129,7 @@ export {
 export type { ClassifyChannelInboundEventParams } from "../channels/inbound-event/classification.js";
 export {
   createChannelInboundEnvelopeBuilder,
+  createChannelInboundEnvelopeBuilderAsync,
   resolveChannelInboundRouteEnvelope,
   type ChannelInboundEnvelopeInput,
 } from "../channels/inbound-event/envelope.js";
@@ -275,11 +279,8 @@ export async function dispatchChannelInboundTurn(
 }
 
 export {
-  hasFinalChannelTurnDispatch as hasFinalInboundReplyDispatch,
-  hasVisibleChannelTurnDispatch as hasVisibleInboundReplyDispatch,
   recordDroppedChannelTurnHistoryInternal as recordDroppedChannelInboundHistory,
   recordDroppedChannelTurnHistoryInternal as recordDroppedChannelTurnHistory,
-  resolveChannelTurnDispatchCounts as resolveInboundReplyDispatchCounts,
 };
 export {
   createAcceptedChannelDeliveryResult,

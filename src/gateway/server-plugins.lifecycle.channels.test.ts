@@ -1,20 +1,33 @@
 /** Real Gateway channel ownership across plugin replacement and failed cleanup. */
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+} from "../config/runtime-write-application.js";
+import * as configFileSource from "../config/source-file.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
+import { commitConfigWithPendingPluginInstalls } from "../plugins/install-record-commit.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
-import { getFreePort } from "../test-utils/ports.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
+import { createWatcherMock } from "./config-reload.watcher.test-support.js";
 import {
   clearInstanceBindingProbeCoordinators,
   installInstanceBindingProbeCoordinator,
   writeInstanceBindingProbePlugin,
 } from "./server-plugins.lifecycle.test-fixtures.js";
-import { installInstanceBindingConfigIo } from "./server-plugins.lifecycle.test-support.js";
+import {
+  installInstanceBindingConfigIo,
+  requireBoundRuntime,
+  requestSettledInstanceBindingProbe,
+} from "./server-plugins.lifecycle.test-support.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import {
   connectWebchatClient,
@@ -28,6 +41,25 @@ vi.doUnmock("../plugins/loader.js");
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 installInstanceBindingConfigIo();
+
+async function useGatewayGraphPluginRuntime(): Promise<void> {
+  // Keep the real lazy runtime on this server fixture's mocked Vitest graph.
+  const runtimeModule = await import("../plugins/runtime/index.js");
+  const nativeModule = await import("../plugins/native-module-require.js");
+  const nativeLoad = nativeModule.tryNativeRequireModule;
+  const runtimePaths = new Set([
+    path.resolve("src/plugins/runtime/index.ts"),
+    path.resolve("dist/plugins/runtime/index.js"),
+  ]);
+  const runtimeLoader = vi
+    .spyOn(nativeModule, "tryNativeRequireModule")
+    .mockImplementation((modulePath, options) =>
+      runtimePaths.has(modulePath)
+        ? { ok: true, moduleExport: runtimeModule }
+        : nativeLoad(modulePath, options),
+    );
+  onTestFinished(() => runtimeLoader.mockRestore());
+}
 
 // A real plugin registry replacement must own accounts before their first route exists.
 describe("Gateway plugin replacement channel ownership", () => {
@@ -65,13 +97,251 @@ describe("Gateway plugin replacement channel ownership", () => {
     }
   });
 
+  it(
+    "hot-applies pending installs without restarting a sibling whose package metadata keys were reordered",
+    { timeout: 120_000 },
+    async () => {
+      const bundledRoot = tempDirs.make("openclaw-cold-channel-");
+      for (const channel of ["cold-chat", "sibling-chat"]) {
+        const id = `${channel}-owner`;
+        const pluginDir = path.join(bundledRoot, id);
+        await fs.mkdir(pluginDir, { recursive: true });
+        await fs.writeFile(
+          path.join(pluginDir, "package.json"),
+          JSON.stringify({
+            name: id,
+            type: "commonjs",
+            main: "index.js",
+            openclaw: { extensions: ["./index.js"], runtimeExtensions: ["./index.js"] },
+            peerDependencies: { openclaw: ">=2026.1.1" },
+          }),
+        );
+        await fs.writeFile(
+          path.join(pluginDir, "openclaw.plugin.json"),
+          JSON.stringify({
+            id,
+            channels: [channel],
+            activation: { onStartup: true },
+            channelConfigs: {
+              [channel]: {
+                schema: {
+                  type: "object",
+                  additionalProperties: false,
+                  properties: { enabled: { type: "boolean" }, label: { type: "string" } },
+                },
+              },
+            },
+            configSchema: { type: "object", additionalProperties: false, properties: {} },
+          }),
+        );
+        await fs.writeFile(
+          path.join(pluginDir, "index.js"),
+          `
+module.exports = { id: ${JSON.stringify(id)}, register(api) {
+  const instance = require("node:crypto").randomUUID();
+  const channel = ${JSON.stringify(channel)};
+  const captured = api.config.channels?.[channel] ?? null;
+  let starts = 0, stops = 0;
+  api.registerGatewayMethod(channel + ".probe", ({ context, respond }) => {
+    respond(true, { instance, captured, starts, stops, pid: process.pid, reloadSettled: context.isConfigReloadSettled() });
+  }, { scope: "operator.read" });
+  if (!captured?.enabled) return;
+  api.registerChannel({ id: channel,
+    meta: { id: channel, label: channel, selectionLabel: channel, docsPath: "/channels", blurb: "Synthetic setup channel" },
+    capabilities: { chatTypes: ["direct"] },
+    config: { listAccountIds: () => ["default"], resolveAccount: () => ({ accountId: "default", enabled: true }), isConfigured: () => true },
+    gateway: { async startAccount({ abortSignal, setStatus }) {
+      starts++;
+      setStatus({ accountId: "default", running: true, connected: true, lifecycle: "ready" });
+      await new Promise((resolve) => {
+        if (abortSignal.aborted) { resolve(); return; }
+        abortSignal.addEventListener("abort", resolve, { once: true });
+      });
+      stops++;
+    } },
+  });
+} };`,
+        );
+      }
+      process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
+      delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledRoot;
+      process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = "1";
+      process.env.OPENCLAW_SKIP_CRON = "1";
+      delete process.env.OPENCLAW_SKIP_CHANNELS;
+      delete process.env.OPENCLAW_SKIP_PROVIDERS;
+      const configPath = process.env.OPENCLAW_CONFIG_PATH;
+      if (!configPath) {
+        throw new Error("Gateway fixture did not set config path");
+      }
+      const config = loadGatewayTestConfig();
+      config.plugins = {
+        enabled: true,
+        allow: ["cold-chat-owner", "sibling-chat-owner"],
+        slots: { memory: "none" },
+        entries: {
+          "cold-chat-owner": { enabled: true },
+          "sibling-chat-owner": { enabled: true },
+        },
+      };
+      config.channels = { "sibling-chat": { enabled: true, label: "retained" } };
+      await fs.writeFile(configPath, JSON.stringify(config));
+      const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
+      await useGatewayGraphPluginRuntime();
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const port = portClaim.port;
+      const createConfigFileAdapter = configFileSource.createConfigFileAdapter;
+      let configWatcher: ReturnType<typeof createWatcherMock> | undefined;
+      const watchSpy = vi
+        .spyOn(configFileSource, "createConfigFileAdapter")
+        .mockImplementation((options) => {
+          if (options.path !== configPath) {
+            return createConfigFileAdapter(options);
+          }
+          // Explicit writes own reloads; inject the filesystem echo at its race boundary below.
+          const watcher = createWatcherMock();
+          configWatcher = watcher;
+          const adapter = watcher.attach(options);
+          return {
+            ...adapter,
+            start() {
+              adapter.start();
+              queueMicrotask(() => watcher.emit("ready"));
+            },
+          };
+        });
+      onTestFinished(() => watchSpy.mockRestore());
+      server = await startTestGatewayServer(portClaim, {
+        auth: { mode: "none" },
+        controlUiEnabled: false,
+        sidecarStartup: "start",
+        hotReloadRecovery,
+      });
+      await server.startupSettled;
+      socket = await connectWebchatClient({ port, scopes: ["operator.admin"] });
+      const connected = socket;
+      type Probe = {
+        instance: string;
+        captured: { enabled: boolean; label: string } | null;
+        starts: number;
+        stops: number;
+        pid: number;
+        reloadSettled: boolean;
+      };
+      const probe = async (channel: string) => {
+        const result = await rpcReq<Probe>(connected, `${channel}.probe`, {});
+        expect(result.ok, result.error?.message).toBe(true);
+        assert.ok(result.payload);
+        // Registration is visible before the watcher releases its lifecycle lease.
+        // Wait for the owner's settlement signal, not a retry of a mutating RPC.
+        const { reloadSettled, ...binding } = result.payload;
+        return { binding, reloadSettled };
+      };
+      const settledProbe = async (channel: string) =>
+        await vi.waitUntil(async () => {
+          const result = await probe(channel);
+          return result.reloadSettled ? result.binding : false;
+        });
+      await expect.poll(async () => (await settledProbe("sibling-chat")).starts).toBe(1);
+      const sibling = await settledProbe("sibling-chat");
+      const cold = await settledProbe("cold-chat");
+      expect(cold).toMatchObject({ captured: null, starts: 0, stops: 0, pid: process.pid });
+      for (const label of ["first setup", "edited setup"]) {
+        const current = await rpcReq<{ hash: string }>(connected, "config.get", {});
+        const changed = await rpcReq(connected, "config.patch", {
+          raw: JSON.stringify({ channels: { "cold-chat": { enabled: true, label } } }),
+          baseHash: current.payload?.hash,
+        });
+        expect(changed.ok, changed.error?.message).toBe(true);
+        expect(changed.payload).toMatchObject({
+          sentinel: { payload: { stats: { requiresRestart: false } } },
+        });
+        await expect
+          .poll(async () => (await settledProbe("cold-chat")).captured?.label)
+          .toBe(label);
+        expect(await settledProbe("cold-chat")).toMatchObject({
+          starts: 1,
+          stops: 0,
+          pid: cold.pid,
+        });
+        expect((await settledProbe("cold-chat")).instance).not.toBe(cold.instance);
+        expect(await settledProbe("sibling-chat")).toEqual(sibling);
+      }
+      // Installing another plugin can rebuild metadata through a different producer.
+      // Reordering an unchanged sibling's package keys must not stop its live account.
+      const siblingPackagePath = path.join(bundledRoot, "sibling-chat-owner", "package.json");
+      const siblingPackage = JSON.parse(await fs.readFile(siblingPackagePath, "utf8"));
+      await fs.writeFile(
+        siblingPackagePath,
+        JSON.stringify({
+          ...siblingPackage,
+          openclaw: { runtimeExtensions: ["./index.js"], extensions: ["./index.js"] },
+        }),
+      );
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf8"));
+      const application = createRuntimeConfigWriteApplication();
+      const committed = await commitConfigWithPendingPluginInstalls({
+        writeOptions: attachRuntimeConfigWriteApplication({}, application),
+        nextConfig: {
+          ...persisted,
+          channels: {
+            ...persisted.channels,
+            "cold-chat": { enabled: true, label: "installed setup" },
+          },
+          plugins: {
+            ...persisted.plugins,
+            installs: {
+              "cold-chat-owner": {
+                source: "path",
+                sourcePath: path.join(bundledRoot, "cold-chat-owner"),
+                installPath: path.join(bundledRoot, "cold-chat-owner"),
+              },
+            },
+          },
+        },
+      });
+      expect(committed.afterWrite.mode).toBe("auto");
+      expect(application.claimed).toBe(true);
+      // Persistence schedules application; await its owner before probing the replacement.
+      await expect(application.result).resolves.toBe("applied");
+      expect((await settledProbe("cold-chat")).captured?.label).toBe("installed setup");
+      expect(await settledProbe("cold-chat")).toMatchObject({ starts: 1, stops: 0, pid: cold.pid });
+      expect(await settledProbe("sibling-chat")).toEqual(sibling);
+      assert.ok(configWatcher);
+      const watcher = configWatcher;
+      const metadataModule = await import("../config/io.plugin-metadata.js");
+      const resolveMetadata = metadataModule.resolveConfigWidePluginMetadataSnapshotAsync;
+      let echoed = false;
+      const metadataSpy = vi
+        .spyOn(metadataModule, "resolveConfigWidePluginMetadataSnapshotAsync")
+        .mockImplementation(async (params) => {
+          const metadata = await resolveMetadata(params);
+          if (!echoed && params.allowCurrent === false) {
+            echoed = true;
+            // The config write can echo while explicit reload prepares its metadata.
+            watcher.emit("change", configPath);
+          }
+          return metadata;
+        });
+      onTestFinished(() => metadataSpy.mockRestore());
+      const explicit = await rpcReq(connected, "plugins.reload", {
+        plugins: [{ pluginId: "cold-chat-owner" }],
+      });
+      expect(echoed).toBe(true);
+      expect(explicit.ok, explicit.error?.message).toBe(true);
+      expect(await settledProbe("sibling-chat")).toEqual(sibling);
+      expect(connected.readyState).toBe(connected.OPEN);
+      expect(hotReloadRecovery).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     {
-      name: "hands off live and pending webhook accounts while preserving a manual stop",
+      name: "hands off live and pending webhook accounts without requiring a restart while preserving a manual stop",
       teardownFails: false,
     },
     {
-      name: "replaces live and pending webhook accounts with a warning when service stop rejects",
+      name: "refuses webhook account replacement when service cleanup rejects",
       teardownFails: true,
     },
   ])("$name", { timeout: 120_000 }, async ({ teardownFails }) => {
@@ -158,21 +428,13 @@ describe("Gateway plugin replacement channel ownership", () => {
       },
     };
     await fs.writeFile(configPath, JSON.stringify(config));
-    const port = await getFreePort();
     const hotReloadRecovery = vi.fn(() => ({
       status: "emitted" as const,
     }));
-    // Use the real runtime in Vitest's graph; native loading evaluates its mocked graph again.
-    const runtimeModule = await import("../plugins/runtime/index.js");
-    const loaderModule = await import("../plugins/loader-module-runtime.js");
-    const createLazyRuntime = loaderModule.createLazyPluginRuntime;
-    const runtimeLoader = vi
-      .spyOn(loaderModule, "createLazyPluginRuntime")
-      .mockImplementation((params) =>
-        createLazyRuntime({ ...params, loadPluginModule: () => runtimeModule }),
-      );
-    onTestFinished(() => runtimeLoader.mockRestore());
-    server = await startTestGatewayServer(port, {
+    await useGatewayGraphPluginRuntime();
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const port = portClaim.port;
+    server = await startTestGatewayServer(portClaim, {
       auth: { mode: "none" },
       controlUiEnabled: false,
       sidecarStartup: "start",
@@ -206,10 +468,35 @@ describe("Gateway plugin replacement channel ownership", () => {
     expect(stopped.ok, stopped.error?.message).toBe(true);
     expect((await probe("parked")).status).toBe(404);
 
+    const { runtime } = await requireBoundRuntime(coordinator.runtimes, "webhook channel reload");
+    await requestSettledInstanceBindingProbe(runtime);
     const initialRegistry = getActivePluginRegistry();
     const reload = await rpcReq(socket, "plugins.reload", {
       plugins: [{ pluginId: "instance-binding-probe" }],
     });
+    if (teardownFails) {
+      expect(reload).toMatchObject({
+        ok: false,
+        error: { details: { runtime: { committed: false, phase: "drain" } } },
+      });
+      expect(reload.error?.message).toContain("instance-binding service cleanup rejected");
+      expect(coordinator.serviceStops).toBe(1);
+      expect(coordinator.serviceStarts).toBe(1);
+      expect(getActivePluginRegistry()).toBe(initialRegistry);
+      releasePending.resolve();
+      for (const accountId of ["active", "pending", "parked"]) {
+        expect((await probe(accountId)).status).toBe(accountId === "active" ? 503 : 404);
+        expect(starts.get(accountId)).toBe(1);
+      }
+      const retry = await rpcReq(socket, "plugins.reload", {
+        plugins: [{ pluginId: "instance-binding-probe" }],
+      });
+      expect(retry.ok).toBe(false);
+      expect(coordinator.serviceStarts).toBe(1);
+      expect((await rpcReq(socket, "config.get", {})).ok).toBe(true);
+      expect(hotReloadRecovery).not.toHaveBeenCalled();
+      return;
+    }
     expect(reload, reload.error?.message).toMatchObject({
       ok: true,
       payload: {
@@ -218,15 +505,6 @@ describe("Gateway plugin replacement channel ownership", () => {
         runtime: { pluginIds: ["instance-binding-probe"] },
       },
     });
-    if (teardownFails) {
-      expect(reload.payload).toMatchObject({
-        warnings: expect.arrayContaining([
-          expect.stringContaining("instance-binding service cleanup rejected"),
-        ]),
-      });
-      expect(coordinator.serviceStops).toBe(1);
-      expect(coordinator.serviceStarts).toBe(2);
-    }
     await expect
       .poll(() => getActivePluginRegistry() !== initialRegistry, { timeout: 180_000 })
       .toBe(true);

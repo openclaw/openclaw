@@ -1,9 +1,7 @@
-import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { promisify } from "node:util";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -12,14 +10,21 @@ import { UpdateCommandFailure } from "../cli/update-cli/update-command-result.js
 import { withUpdateFailureTriage } from "../cli/update-cli/update-command-triage.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { resolveInstallationTarget } from "../infra/installation-target-context.js";
-import type { UpdateRunResult } from "../infra/update-runner.js";
+import type { UpdateRunResult } from "../infra/update-runner-types.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { triageAfterFailure } from "./triage-failure.js";
 import { triageCommand } from "./triage.js";
-import { createTriageRuntime, withTriageTerminal } from "./triage.test-support.js";
+import {
+  createTriageInferenceSelection,
+  createTriageRuntime,
+  resetTriageRepairRuntimeMocks,
+  useTriageHeadlessFixture,
+  withTriageTerminal,
+} from "./triage.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const createHeadlessFixture = useTriageHeadlessFixture();
 const failedUpdate: UpdateRunResult = {
   status: "error",
   mode: "npm",
@@ -36,7 +41,8 @@ const mocks = vi.hoisted(() => ({
   writeDiagnosticSupportExport: vi.fn(),
   gatherDaemonStatus: vi.fn(),
   runUpdateRepairLoop: vi.fn(),
-  agentExecCommand: vi.fn(),
+  prepareUpdateRepairInference: vi.fn(),
+  runUpdateRepairTurn: vi.fn(),
   resolveExecutablePath: vi.fn(),
   runUtf8CommandWithTimeout: vi.fn(),
   spawn: vi.fn(),
@@ -53,7 +59,7 @@ vi.mock("node:child_process", async (importOriginal) => ({
   spawn: mocks.spawn,
 }));
 
-vi.mock("./doctor-lint.js", () => ({
+vi.mock("./doctor-lint-runner.js", () => ({
   collectDoctorFindings: mocks.collectDoctorFindings,
 }));
 
@@ -83,7 +89,10 @@ vi.mock("../infra/update-repair-agent.js", () => ({
   runUpdateRepairLoop: mocks.runUpdateRepairLoop,
 }));
 
-vi.mock("./agent-exec.js", () => ({ agentExecCommand: mocks.agentExecCommand }));
+vi.mock("../infra/update-repair-agent.runtime.js", () => ({
+  prepareUpdateRepairInference: mocks.prepareUpdateRepairInference,
+  runUpdateRepairTurn: mocks.runUpdateRepairTurn,
+}));
 
 describe("triageCommand", () => {
   let stateDir: string;
@@ -100,11 +109,7 @@ describe("triageCommand", () => {
     vi.stubEnv("OPENCLAW_CONFIG_PATH", undefined);
     vi.stubEnv("OPENCLAW_WORKSPACE_DIR", undefined);
     mocks.collectDoctorFindings.mockResolvedValue([]);
-    mocks.runUpdateRepairLoop.mockResolvedValue({
-      status: "repaired",
-      attempts: [],
-      finalValidation: { ok: true, score: 0, summary: "Doctor lint reports no errors." },
-    });
+    resetTriageRepairRuntimeMocks(mocks, stateDir);
     mocks.resolveExecutablePath.mockReturnValue(undefined);
     mocks.runUtf8CommandWithTimeout.mockImplementation(async (argv, options) => {
       if (argv.at(-1) === "--help") {
@@ -147,7 +152,7 @@ describe("triageCommand", () => {
 
       expect(mocks.spawn).not.toHaveBeenCalled();
       expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();
-      expect(mocks.agentExecCommand).not.toHaveBeenCalled();
+      expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();
       expect(runtime.exit).not.toHaveBeenCalled();
       const output = runtime.log.mock.calls.flat().join("\n");
       expect(output).toContain("No repair agent was started.");
@@ -189,9 +194,11 @@ describe("triageCommand", () => {
 
   it.each([
     { answer: "y", run: false, launches: true },
-    { answer: "\r", run: true, launches: true },
-    { answer: "timeout", run: false, launches: true },
-    { answer: "timeout", run: true, launches: true },
+    { answer: "y", run: true, launches: true },
+    { answer: "\r", run: false, launches: false },
+    { answer: "\r", run: true, launches: false },
+    { answer: "timeout", run: false, launches: false },
+    { answer: "timeout", run: true, launches: false },
     { answer: "n", run: false, launches: false },
     { answer: "\u0003", run: false, launches: false },
     { answer: "abort", run: false, launches: false },
@@ -234,7 +241,7 @@ describe("triageCommand", () => {
             `Agent: ${agent}. This will use your own account/tokens.`,
           );
           expect(mocks.confirm.mock.calls[0]?.[0].message).toContain(
-            `Open ${agent} to diagnose and repair the installation now? [Y/n]`,
+            `Open ${agent} to diagnose and repair the installation now? [y/N]`,
           );
           if (answer === "timeout") {
             await vi.advanceTimersByTimeAsync(29_999);
@@ -253,7 +260,10 @@ describe("triageCommand", () => {
           expect(mocks.spawn).toHaveBeenCalledTimes(launches && !run ? 1 : 0);
           expect(mocks.runUpdateRepairLoop).toHaveBeenCalledTimes(launches && run ? 1 : 0);
           expect(
-            runtime.log.mock.calls.flat().join("\n").includes("No answer; continuing with"),
+            runtime.log.mock.calls
+              .flat()
+              .join("\n")
+              .includes("No answer; skipping automatic repair."),
           ).toBe(answer === "timeout");
           expect(input.listenerCount("keypress")).toBe(0);
           expect(output.listenerCount("resize")).toBe(0);
@@ -269,11 +279,22 @@ describe("triageCommand", () => {
   );
 
   it("runs one selected automatic route with the original failure prompt", async () => {
+    mocks.resolveExecutablePath.mockImplementation((binary: string) => `/usr/local/bin/${binary}`);
     await fs.writeFile(
       path.join(stateDir, "openclaw.json"),
       JSON.stringify({ agents: { defaults: { model: "openai/gpt-5.6-luna" } } }),
     );
-    mocks.agentExecCommand.mockResolvedValue({ exitCode: 1 });
+    let now = Date.now();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    mocks.prepareUpdateRepairInference.mockImplementation(async () => {
+      now += 15_000;
+      return createTriageInferenceSelection(stateDir);
+    });
+    mocks.runUpdateRepairTurn.mockResolvedValue({
+      status: "completed",
+      toolCalls: 0,
+      envelope: { status: "error", final: "" },
+    });
     const runtime = createTriageRuntime();
     await expect(
       triageCommand(
@@ -292,11 +313,23 @@ describe("triageCommand", () => {
         },
       ),
     ).rejects.toMatchObject({ code: 1 });
-    expect(mocks.agentExecCommand).toHaveBeenCalledOnce();
+    expect(mocks.prepareUpdateRepairInference).toHaveBeenCalledOnce();
+    expect(mocks.runUpdateRepairTurn).toHaveBeenCalledOnce();
+    expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();
+    expect(mocks.runUtf8CommandWithTimeout).not.toHaveBeenCalled();
+    expect(mocks.spawn).not.toHaveBeenCalled();
     expect(runtime.writeJson).not.toHaveBeenCalled();
     expect(runtime.writeStdout).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(mocks.agentExecCommand.mock.calls[0]?.[0]).toContain("listener never became healthy");
+    expect(mocks.runUpdateRepairTurn.mock.calls[0]?.[0].prompt).toContain(
+      "listener never became healthy",
+    );
+    expect(mocks.runUpdateRepairTurn.mock.calls[0]?.[0]).toMatchObject({
+      maxToolCalls: 40,
+      timeoutMs: expect.any(Number),
+    });
+    expect(mocks.prepareUpdateRepairInference.mock.calls[0]?.[1]).toBe(600_000);
+    expect(mocks.runUpdateRepairTurn.mock.calls[0]?.[0].timeoutMs).toBe(585_000);
   });
 
   it("fences the selected embedded effect after source loss without watchdog cancellation", async () => {
@@ -307,12 +340,12 @@ describe("triageCommand", () => {
     const controller = new AbortController();
     let current = true;
     let effectCount = 0;
-    mocks.agentExecCommand.mockImplementation(async (_prompt, _options, _runtime, deps) => {
+    mocks.runUpdateRepairTurn.mockImplementation(async (params) => {
       await Promise.resolve();
       current = false;
-      deps.assertSourceCurrent?.();
+      params.isCurrent();
       effectCount += 1;
-      return { exitCode: 0 };
+      return { status: "completed", toolCalls: 0, envelope: { status: "ok", final: "" } };
     });
     await expect(
       triageCommand(
@@ -356,7 +389,7 @@ describe("triageCommand", () => {
         kind === "cancelled" ? signal : undefined,
       );
       expect(mocks.collectDoctorFindings).not.toHaveBeenCalled();
-      expect(mocks.agentExecCommand).not.toHaveBeenCalled();
+      expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();
       expect(mocks.spawn).not.toHaveBeenCalled();
     },
   );
@@ -369,7 +402,10 @@ describe("triageCommand", () => {
           path.join(stateDir, "openclaw.json"),
           JSON.stringify({ agents: { defaults: { model: "openai/gpt-5.6-luna" } } }),
         );
-        mocks.agentExecCommand.mockRejectedValue(new Error("Authentication required"));
+        mocks.prepareUpdateRepairInference.mockResolvedValue({
+          ok: false,
+          reason: "Authentication required",
+        });
       }
       const runtime = createTriageRuntime();
       await triageCommand(
@@ -400,9 +436,10 @@ describe("triageCommand", () => {
       expect(await fs.readFile(path.join(stateDir, "logs/support", promptFile!), "utf8")).toContain(
         "original build failure",
       );
-      expect(mocks.agentExecCommand).toHaveBeenCalledTimes(configured ? 1 : 0);
+      expect(mocks.prepareUpdateRepairInference).toHaveBeenCalledTimes(configured ? 1 : 0);
+      expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();
       expect(mocks.spawn).not.toHaveBeenCalled();
-      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(runtime.exit).toHaveBeenCalledTimes(configured ? 1 : 0);
     },
   );
 
@@ -413,7 +450,6 @@ describe("triageCommand", () => {
       path.join(stateDir, "openclaw.json"),
       JSON.stringify({ agents: { defaults: { model: "openai/gpt-5.6-luna" } } }),
     );
-    mocks.agentExecCommand.mockResolvedValue({ exitCode: 0 });
     const runtime = createTriageRuntime();
 
     await triageAfterFailure(runtime, {
@@ -423,18 +459,18 @@ describe("triageCommand", () => {
       gateway: "verify-running",
     });
 
-    expect(mocks.agentExecCommand).not.toHaveBeenCalled();
+    expect(mocks.prepareUpdateRepairInference).not.toHaveBeenCalled();
+    expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();
     expect(runtime.error.mock.calls.flat().join("\n")).toContain("manual");
   });
 
   it.each([
-    { agent: "claude", exitCode: 0 },
-    { agent: "claude", exitCode: 17 },
-    { agent: "codex", exitCode: 0 },
-    { agent: "codex", exitCode: 17 },
+    { agent: "claude", exitCode: 0, safeMode: true },
+    { agent: "claude", exitCode: 0, safeMode: false },
+    { agent: "codex", exitCode: 17, safeMode: false },
   ])(
-    "preserves external $agent exit $exitCode without certifying descendant cleanup",
-    async ({ agent, exitCode }) => {
+    "preserves external $agent exit $exitCode without certifying descendant cleanup (safe mode: $safeMode)",
+    async ({ agent, exitCode, safeMode }) => {
       if (process.platform === "win32") {
         return;
       }
@@ -442,15 +478,18 @@ describe("triageCommand", () => {
       const targetPath = path.join(stateDir, "headless-target.json");
       await fs.writeFile(
         executablePath,
-        `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(targetPath)}, JSON.stringify([process.env.OPENCLAW_STATE_DIR, process.env.OPENCLAW_CONFIG_PATH, process.env.OPENCLAW_WORKSPACE_DIR])); let input = ''; process.stdin.on('data', chunk => input += chunk); process.stdin.on('end', () => { console.log(JSON.stringify({ args: process.argv.slice(2), shell: process.env.OPENCLAW_SHELL, hasPrompt: input.includes('original symptom') })); console.error('Diagnostic detail '.repeat(200) + '\\n${exitCode ? "Authentication required" : "Repair completed"}'); process.exitCode = ${exitCode}; });\n`,
+        `#!/usr/bin/env node\nif (process.argv[2] === '--help') { console.log(${JSON.stringify(safeMode ? "--safe-mode" : "Usage: claude [options]")}); process.exit(0); }\nrequire('node:fs').writeFileSync(${JSON.stringify(targetPath)}, JSON.stringify([process.env.OPENCLAW_STATE_DIR, process.env.OPENCLAW_CONFIG_PATH, process.env.OPENCLAW_WORKSPACE_DIR])); let input = ''; process.stdin.on('data', chunk => input += chunk); process.stdin.on('end', () => { console.log(JSON.stringify({ args: process.argv.slice(2), shell: process.env.OPENCLAW_SHELL, hasPrompt: input.includes('original symptom') })); console.error('Diagnostic detail '.repeat(200) + '\\n${exitCode ? "Authentication required" : "Repair completed"}'); process.exitCode = ${exitCode}; });\n`,
         { mode: 0o700 },
       );
       const actual =
         await vi.importActual<typeof import("node:child_process")>("node:child_process");
       mocks.spawn.mockImplementation(actual.spawn);
       mocks.resolveExecutablePath.mockImplementation((binary) =>
-        binary === agent ? executablePath : undefined,
+        binary === agent || (agent === "codex" && binary === "claude") ? executablePath : undefined,
       );
+      const actualExec =
+        await vi.importActual<typeof import("../process/exec.js")>("../process/exec.js");
+      mocks.runUtf8CommandWithTimeout.mockImplementation(actualExec.runUtf8CommandWithTimeout);
       const runtime = createTriageRuntime();
       const cleanup = createAgentCleanupScope();
       const result = cleanup.run(() =>
@@ -485,9 +524,14 @@ describe("triageCommand", () => {
       expect(output).toContain('"hasPrompt":true');
       expect(output).toContain(
         agent === "claude"
-          ? '"args":["--safe-mode","-p"]'
+          ? safeMode
+            ? '"args":["--safe-mode","-p"]'
+            : '"args":["-p"]'
           : '"args":["exec","--skip-git-repo-check","-"]',
       );
+      if (agent === "claude" && !safeMode) {
+        expect(output).toContain("Claude --safe-mode unavailable; running claude -p");
+      }
       if (exitCode) {
         expect(output).toContain("Authentication required");
         expect(output).toContain("17");
@@ -501,17 +545,13 @@ describe("triageCommand", () => {
     },
   );
 
-  it("cancels a headless child before returning to the failure owner", async () => {
+  it("cancels a headless child before returning to the failure owner", async ({ signal }) => {
     if (process.platform === "win32") {
       return;
     }
-    const executablePath = path.join(stateDir, "claude");
+    const executablePath = path.join(stateDir, "claude.mjs");
     const pidPath = path.join(stateDir, "child.pid");
-    await fs.writeFile(
-      executablePath,
-      `#!/usr/bin/env node\nrequire('node:fs').writeFileSync(${JSON.stringify(pidPath)}, String(process.pid)); setInterval(() => {}, 1000);\n`,
-      { mode: 0o700 },
-    );
+    const waitForReady = await createHeadlessFixture(executablePath, pidPath);
     const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
     mocks.spawn.mockImplementation(actual.spawn);
     mocks.resolveExecutablePath.mockImplementation((binary) =>
@@ -534,10 +574,8 @@ describe("triageCommand", () => {
     );
     let pid = 0;
     try {
-      await vi.waitFor(async () => {
-        pid = Number(await fs.readFile(pidPath, "utf8"));
-        expect(pid).toBeGreaterThan(0);
-      });
+      pid = await waitForReady(result, signal);
+      expect(pid).toBeGreaterThan(0);
     } finally {
       controller.abort();
       await expect(result).rejects.toMatchObject({ code: 1 });
@@ -571,17 +609,27 @@ describe("triageCommand", () => {
       suggestedCommands:
         process.platform === "win32"
           ? [
-              expect.stringContaining("| & claude -p"),
               expect.stringContaining("| & codex exec --skip-git-repo-check -"),
-              expect.stringContaining("| & opencode run"),
+              expect.stringContaining("| & claude -p"),
               expect.stringContaining("| & pi --print"),
+              expect.stringContaining("| & opencode run"),
+              expect.stringContaining("& muse exec --prompt-file"),
+              expect.stringContaining("& grok --prompt-file"),
+              expect.stringContaining("| & cursor-agent --print"),
+              expect.stringContaining("& kimi --prompt"),
+              expect.stringContaining("| & qwen"),
               expect.stringContaining("& openclaw triage --run"),
             ]
           : [
-              `${targetEnv} claude -p < '${promptPath}'`,
               `${targetEnv} codex exec --skip-git-repo-check - < '${promptPath}'`,
-              `${targetEnv} opencode run < '${promptPath}'`,
+              `${targetEnv} claude -p < '${promptPath}'`,
               `${targetEnv} pi --print < '${promptPath}'`,
+              `${targetEnv} opencode run < '${promptPath}'`,
+              `${targetEnv} muse exec --prompt-file ${promptPath}`,
+              `${targetEnv} grok --prompt-file ${promptPath}`,
+              `${targetEnv} cursor-agent --print < '${promptPath}'`,
+              `${targetEnv} kimi --prompt 'Read the debugging prompt at ${promptPath} and follow its repair and verification instructions.'`,
+              `${targetEnv} qwen < '${promptPath}'`,
               `${targetEnv} openclaw triage --run`,
             ],
     });
@@ -590,69 +638,27 @@ describe("triageCommand", () => {
     expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();
   });
 
-  it.skipIf(process.platform === "win32").each(["default", "custom"])(
-    "pins state, config and %s workspace in executable, POSIX-quoted manual handoffs",
-    async (workspaceSelector) => {
-      const home = path.join(stateDir, "operator's $fixture");
-      const originalState = path.join(home, ".openclaw");
-      const configPath = path.join(home, "custom config.json");
-      const defaultWorkspaceDir =
-        workspaceSelector === "custom"
-          ? path.join(home, "custom workspace")
-          : path.join(originalState, "workspace");
-      const bin = path.join(home, "bin");
-      await fs.mkdir(bin, { recursive: true });
-      vi.stubEnv("HOME", home);
-      vi.stubEnv("OPENCLAW_HOME", home);
-      vi.stubEnv("OPENCLAW_STATE_DIR", undefined);
-      vi.stubEnv("OPENCLAW_CONFIG_PATH", undefined);
-      // Doctor's dotenv phase can establish the original custom selectors.
-      mocks.collectDoctorFindings.mockImplementation(async () => {
-        process.env.OPENCLAW_CONFIG_PATH = configPath;
-        if (workspaceSelector === "custom") {
-          process.env.OPENCLAW_WORKSPACE_DIR = defaultWorkspaceDir;
-        }
-        return [];
-      });
-      for (const command of ["claude", "codex", "opencode", "pi", "openclaw"]) {
-        await fs.writeFile(
-          path.join(bin, command),
-          `#!/bin/sh\nprintf "%s\\n" "$OPENCLAW_STATE_DIR" "$OPENCLAW_CONFIG_PATH" "$OPENCLAW_WORKSPACE_DIR"\n${command === "openclaw" ? "" : "cat\n"}`,
-          { mode: 0o700 },
-        );
-      }
+  it.each([
+    { executable: "codex", detectedAgents: ["codex"] },
+    { executable: "cursor-agent", detectedAgents: ["cursor"] },
+    { executable: "kimi", detectedAgents: ["kimi"] },
+    { executable: "qwen", detectedAgents: ["qwen"] },
+    { executable: "cursor", detectedAgents: [] },
+    { executable: "agent", detectedAgents: [] },
+  ])(
+    "reports coding agents for $executable without checking credentials or selecting an editor",
+    async ({ executable, detectedAgents }) => {
+      mocks.resolveExecutablePath.mockImplementation((binary: string) =>
+        binary === executable ? `/usr/local/bin/${binary}` : undefined,
+      );
       const runtime = createTriageRuntime();
+
       await triageCommand(runtime, { json: true, noExport: true });
-      const report = runtime.writeJson.mock.calls[0]?.[0] as {
-        promptPath: string;
-        suggestedCommands: string[];
-      };
-      const prompt = await fs.readFile(report.promptPath, "utf8");
-      for (const [index, command] of report.suggestedCommands.entries()) {
-        const { stdout } = await promisify(execFile)("/bin/sh", ["-c", command], {
-          env: { HOME: home, PATH: `${bin}:/usr/bin:/bin` },
-          timeout: 10_000,
-        });
-        expect(stdout).toBe(
-          `${originalState}\n${configPath}\n${defaultWorkspaceDir}\n${index < 4 ? prompt : ""}`,
-        );
-      }
-      expect(await fs.readFile(report.promptPath, "utf8")).not.toContain(home);
-      expect(process.env.OPENCLAW_STATE_DIR).toBeUndefined();
+
+      expect(runtime.writeJson.mock.calls[0]?.[0]).toMatchObject({ detectedAgents });
+      expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();
     },
   );
-
-  it("reports only external agents resolved on PATH without checking their credentials", async () => {
-    mocks.resolveExecutablePath.mockImplementation((binary: string) =>
-      binary === "codex" ? "/usr/local/bin/codex" : undefined,
-    );
-    const runtime = createTriageRuntime();
-
-    await triageCommand(runtime, { json: true, noExport: true });
-
-    expect(runtime.writeJson.mock.calls[0]?.[0]).toMatchObject({ detectedAgents: ["codex"] });
-    expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();
-  });
 
   it.each([false, true])("preserves manual non-TTY semantics (run=%s)", async (run) => {
     await withTriageTerminal(false, async () => {
@@ -664,7 +670,7 @@ describe("triageCommand", () => {
       }
     });
     expect(mocks.runUpdateRepairLoop).not.toHaveBeenCalled();
-    expect(mocks.agentExecCommand).not.toHaveBeenCalled();
+    expect(mocks.runUpdateRepairTurn).not.toHaveBeenCalled();
     expect(mocks.spawn).not.toHaveBeenCalled();
   });
 
@@ -897,7 +903,7 @@ describe("triageCommand", () => {
       const entrypoint = path.join(binDir, "agent.cjs");
       const shimPath = path.join(binDir, "claude.cmd");
       const pathNode = path.join(binDir, "node.exe");
-      const currentNode = process.execPath;
+      const currentNode = path.join(binDir, "current", "node.exe");
       await fs.mkdir(binDir, { recursive: true });
       await fs.writeFile(entrypoint, "", "utf8");
       await fs.writeFile(pathNode, "", "utf8");
@@ -1043,12 +1049,12 @@ describe("triageCommand", () => {
     });
 
     expect(mocks.spawn).toHaveBeenCalledOnce();
-    expect(runtime.error).toHaveBeenCalledWith("Failed to launch claude: permission denied");
+    expect(runtime.error).toHaveBeenCalledWith("Failed to launch codex: permission denied");
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringMatching(
         process.platform === "win32"
-          ? /Run manually: .*\| & claude -p/u
-          : /^Run manually: env .* claude /u,
+          ? /Run manually: .*\| & codex exec/u
+          : /^Run manually: env .* codex exec/u,
       ),
     );
     expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);

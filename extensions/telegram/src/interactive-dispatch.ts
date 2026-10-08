@@ -1,4 +1,3 @@
-// Telegram plugin module implements interactive dispatch behavior.
 import {
   createChannelInteractiveDispatcher,
   type PluginConversationBinding,
@@ -6,10 +5,9 @@ import {
   type PluginConversationBindingRequestResult,
   type PluginInteractiveRegistration,
 } from "openclaw/plugin-sdk/plugin-runtime";
+import type { TelegramCallbackButton } from "./button-types.js";
 
-type TelegramInteractiveButtons = Array<
-  Array<{ text: string; callback_data: string; style?: "danger" | "success" | "primary" }>
->;
+type TelegramInteractiveButtons = TelegramCallbackButton[][];
 
 export type TelegramInteractiveHandlerContext = {
   channel: "telegram";

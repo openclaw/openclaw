@@ -1,26 +1,85 @@
+import { truncateNativeToolTranscriptText } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   inferToolMetaFromArgs,
+  projectAgentToolActivity,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   itemName,
   itemStatus,
-  shouldSynthesizeToolProgressForItem,
+  auditNativeToolName,
+  unknownItemStatus,
+  isProjectedNativeToolItem,
 } from "./event-projector-items.js";
-import {
-  collectDynamicToolContentText,
-  truncateToolTranscriptText,
-} from "./event-projector-tool-output.js";
-import {
-  normalizeNonEmptyString,
-  readNonEmptyString,
-  readNonEmptyStringArray,
-} from "./event-projector-values.js";
+import { collectDynamicToolContentText } from "./event-projector-tool-output.js";
 import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.js";
 import {
   sanitizeCodexAgentEventRecord,
   sanitizeCodexToolArguments,
 } from "./tool-progress-normalization.js";
+import { projectCodexWebSearchItem } from "./web-search-item.js";
+
+export function readInterceptedNativePatchInput(
+  command: unknown,
+): { input: string; cwd?: string } | undefined {
+  if (typeof command !== "string") {
+    return undefined;
+  }
+  const lines = command.replace(/\r\n?/gu, "\n").split("\n");
+  const patchStart = lines.indexOf("*** Begin Patch");
+  // Nested heredocs and shell expansion can hide extra commands. Trust only
+  // a top-level patch, an inert cd, and a single-quoted matching delimiter.
+  const invocation =
+    /^[\t ]*(?:cd[\t ]+(?:'([^'\n]+)'|([A-Za-z0-9_./-]+))[\t ]+&&[\t ]+)?apply_patch[\t ]*<<-?[\t ]*'([^'\n]+)'[\t ]*$/u.exec(
+      lines[0] ?? "",
+    );
+  if (!invocation || patchStart !== 1) {
+    return undefined;
+  }
+  const patchEnd = lines.indexOf("*** End Patch", patchStart + 1);
+  const cwd = invocation[1] ?? invocation[2];
+  const delimiter = invocation[3];
+  if (
+    patchEnd < 0 ||
+    lines[patchEnd + 1] !== delimiter ||
+    lines.slice(patchEnd + 2).some((line) => line.trim().length > 0)
+  ) {
+    return undefined;
+  }
+  return {
+    input: `${lines.slice(patchStart, patchEnd + 1).join("\n")}\n`,
+    ...(cwd ? { cwd } : {}),
+  };
+}
+
+export function projectCodexToolActivity(
+  item: CodexThreadItem,
+  phase: "start" | "result",
+  meta?: string,
+) {
+  const name = itemName(item) ?? auditNativeToolName(item);
+  return name
+    ? projectAgentToolActivity({
+        toolCallId: item.id,
+        name,
+        phase,
+        // Native dynamic items retain requested args, not host-hook execution facts.
+        args: item.type === "dynamicToolCall" ? undefined : itemToolArgs(item),
+        meta,
+        status:
+          item.type === "collabAgentToolCall" && item.status === "interrupted"
+            ? "failed"
+            : unknownItemStatus(item)
+              ? "unknown"
+              : itemStatus(item),
+        result: { details: itemToolResult(item) },
+        ...(item.type === "collabAgentToolCall" && item.tool === "wait"
+          ? { nativeOperation: "wait" }
+          : {}),
+      })
+    : undefined;
+}
 
 export function isNativePostToolUseRelayItem(item: CodexThreadItem): boolean {
   switch (item.type) {
@@ -34,7 +93,7 @@ export function isNativePostToolUseRelayItem(item: CodexThreadItem): boolean {
 }
 
 export function shouldSuppressChannelProgressForItem(item: CodexThreadItem): boolean {
-  if (shouldSynthesizeToolProgressForItem(item)) {
+  if (isProjectedNativeToolItem(item)) {
     return true;
   }
   // Dynamic OpenClaw tool requests are emitted at the item/tool/call request
@@ -74,78 +133,43 @@ export function isCommandBearingToolItem(
 }
 
 function webSearchToolArgs(item: CodexThreadItem): Record<string, unknown> {
-  const action = isJsonObject(item.action) ? item.action : undefined;
-  const actionType = action ? readNonEmptyString(action, "type") : undefined;
-  const queries =
-    action && actionType === "search" ? readNonEmptyStringArray(action, "queries") : [];
-  const query =
-    normalizeNonEmptyString(item.query) ??
-    (action && actionType === "search" ? readNonEmptyString(action, "query") : undefined) ??
-    queries[0];
-  const url = action ? readNonEmptyString(action, "url") : undefined;
-  const pattern = action ? readNonEmptyString(action, "pattern") : undefined;
-  const args: Record<string, unknown> = {};
-  if (query) {
-    args.query = query;
-  }
-  if (queries.length > 0) {
-    args.queries = queries;
-  }
-  if (actionType && actionType !== "search") {
-    args.action = actionType;
-  }
-  if (url) {
-    args.url = url;
-  }
-  if (pattern) {
-    args.pattern = pattern;
-  }
-  if (!query && !url && !pattern) {
+  const args = projectCodexWebSearchItem(item);
+  if (!args.query && !args.url && !args.pattern) {
     args.queryUnavailable = true;
   }
   return sanitizeCodexAgentEventRecord(args);
 }
 
-export function itemToolResult(item: CodexThreadItem): { result?: Record<string, unknown> } {
+export function itemToolResult(item: CodexThreadItem): Record<string, unknown> | undefined {
   if (item.type === "commandExecution") {
-    return {
-      result: sanitizeCodexAgentEventRecord({
-        status: item.status,
-        exitCode: item.exitCode,
-        durationMs: item.durationMs,
-      }),
-    };
+    return sanitizeCodexAgentEventRecord({
+      status: item.status,
+      exitCode: item.exitCode,
+      durationMs: item.durationMs,
+    });
   }
   if (item.type === "fileChange") {
-    return {
-      result: sanitizeCodexAgentEventRecord({
-        status: item.status,
-        changes: itemFileChanges(item),
-      }),
-    };
+    return sanitizeCodexAgentEventRecord({
+      status: item.status,
+      changes: itemFileChanges(item),
+    });
   }
   if (item.type === "mcpToolCall") {
-    return {
-      result: sanitizeCodexAgentEventRecord({
-        status: item.status,
-        durationMs: item.durationMs,
-        ...(item.error ? { error: item.error } : {}),
-        ...(item.result ? { result: item.result } : {}),
-      }),
-    };
+    return sanitizeCodexAgentEventRecord({
+      status: item.status,
+      durationMs: item.durationMs,
+      ...(item.error ? { error: item.error } : {}),
+      ...(item.result ? { result: item.result } : {}),
+    });
   }
   if (item.type === "webSearch") {
-    return { result: webSearchToolResult(item) };
+    return sanitizeCodexAgentEventRecord({
+      status: itemStatus(item),
+      ...(typeof item.durationMs === "number" ? { durationMs: item.durationMs } : {}),
+      ...webSearchToolArgs(item),
+    });
   }
-  return {};
-}
-
-function webSearchToolResult(item: CodexThreadItem): Record<string, unknown> {
-  return sanitizeCodexAgentEventRecord({
-    status: itemStatus(item),
-    ...(typeof item.durationMs === "number" ? { durationMs: item.durationMs } : {}),
-    ...webSearchToolArgs(item),
-  });
+  return undefined;
 }
 
 type CodexFileChangeSummary = {
@@ -160,25 +184,18 @@ type CodexTranscriptFileChange = CodexFileChangeSummary & {
 };
 
 function itemFileChangeRecords(item: CodexThreadItem): JsonObject[] {
-  const changes = (item as Record<string, unknown>).changes;
+  const changes = item.changes;
   return Array.isArray(changes) ? changes.filter(isJsonObject) : [];
 }
 
 function itemFileChanges(item: CodexThreadItem): CodexFileChangeSummary[] {
   return itemFileChangeRecords(item).flatMap((change) => {
-    const path = normalizeNonEmptyString(change.path);
+    const path = normalizeOptionalString(change.path);
     if (!path || change.kind === undefined) {
       return [];
     }
     return [{ path, kind: change.kind }];
   });
-}
-
-function fileChangeKindType(kind: unknown): string | undefined {
-  if (typeof kind === "string") {
-    return kind;
-  }
-  return isJsonObject(kind) ? normalizeNonEmptyString(kind.type) : undefined;
 }
 
 function countFileContentLines(content: string): number {
@@ -193,7 +210,12 @@ function countFileContentLines(content: string): number {
 }
 
 function fileChangeDiffStat(diff: string, kind: unknown): { added: number; removed: number } {
-  const kindType = fileChangeKindType(kind);
+  const kindType =
+    typeof kind === "string"
+      ? kind
+      : isJsonObject(kind)
+        ? normalizeOptionalString(kind.type)
+        : undefined;
   if (kindType === "add") {
     return { added: countFileContentLines(diff), removed: 0 };
   }
@@ -239,7 +261,7 @@ function truncateFileChangeDiffAtLineBoundary(
 function itemFileChangesForTranscript(item: CodexThreadItem): CodexTranscriptFileChange[] {
   let remainingDiffChars = 10_000;
   return itemFileChangeRecords(item).flatMap((change) => {
-    const path = normalizeNonEmptyString(change.path);
+    const path = normalizeOptionalString(change.path);
     if (!path || change.kind === undefined) {
       return [];
     }
@@ -302,21 +324,26 @@ export function itemOutputText(
   item: CodexThreadItem,
   outputTextByItem?: ReadonlyMap<string, string>,
 ): string | undefined {
+  const output = itemObservedOutputText(item, outputTextByItem)?.trim();
+  return output ? truncateNativeToolTranscriptText(output, "Codex") : undefined;
+}
+
+function itemObservedOutputText(
+  item: CodexThreadItem,
+  outputTextByItem?: ReadonlyMap<string, string>,
+): string | undefined {
   if (item.type === "commandExecution") {
-    const output = item.aggregatedOutput?.trim() || outputTextByItem?.get(item.id)?.trim();
-    return output ? truncateToolTranscriptText(output) : undefined;
+    return item.aggregatedOutput ?? outputTextByItem?.get(item.id);
   }
   if (item.type === "dynamicToolCall") {
-    const output = collectDynamicToolContentText(item.contentItems).trim();
-    return output ? truncateToolTranscriptText(output) : undefined;
+    return collectDynamicToolContentText(item.contentItems);
   }
   if (item.type === "mcpToolCall") {
-    const output = item.error
+    return item.error
       ? stringifyJsonValue(item.error)
       : item.result
         ? stringifyJsonValue(item.result)
         : undefined;
-    return output ? truncateToolTranscriptText(output) : undefined;
   }
   return undefined;
 }
@@ -325,13 +352,13 @@ export function itemTranscriptResultText(
   item: CodexThreadItem,
   outputTextByItem?: ReadonlyMap<string, string>,
 ): string | undefined {
-  const output = itemOutputText(item, outputTextByItem);
-  if (output) {
+  const output = itemObservedOutputText(item, outputTextByItem);
+  if (output !== undefined) {
     return output;
   }
-  const result = itemToolResult(item).result;
+  const result = itemToolResult(item);
   const resultText = result ? stringifyJsonValue(result) : undefined;
-  return resultText ? truncateToolTranscriptText(resultText) : itemStatus(item);
+  return resultText ?? itemStatus(item);
 }
 
 function stringifyJsonValue(value: unknown): string | undefined {

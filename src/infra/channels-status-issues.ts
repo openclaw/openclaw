@@ -1,4 +1,3 @@
-// Collects channel account status issues for diagnostics.
 import { Value } from "typebox/value";
 import { ChannelsStatusResultSchema } from "../../packages/gateway-protocol/src/schema/channels.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
@@ -34,7 +33,7 @@ function collectGenericRuntimeStatusIssues(
     // Dead ingress outranks the restart-pending short-circuit: a pending restart
     // cannot fix a channel whose inbound admission is unavailable, and hiding it
     // behind "status may be stale" is how silent inbound loss stays invisible.
-    if (account.ingressUnavailable === true) {
+    if (account.ingressUnavailable === true && !account.terminalDisconnect) {
       issues.push({
         channel,
         accountId,
@@ -76,8 +75,9 @@ function collectGenericRuntimeStatusIssues(
       case "stuck":
         message = "Channel runtime appears stuck with stale run activity.";
         break;
+      case "terminal-disconnect":
       case "blocked":
-        message = "Channel runtime is blocked and needs operator action.";
+        message = account.lastError || "Channel runtime is blocked and needs operator action.";
         fix = "resolve the reported channel error, then restart the channel";
         break;
       default:
@@ -97,7 +97,7 @@ function collectGenericRuntimeStatusIssues(
 /** Collects generic and plugin-specific issues from a channels status payload. */
 export function collectChannelStatusIssues(
   payload: Record<string, unknown>,
-  plugins?: readonly ChannelPlugin[],
+  plugins?: readonly Pick<ChannelPlugin, "id" | "status">[],
 ): ChannelStatusIssue[] {
   // The Gateway owns live diagnostics, including reload state unavailable to CLI readers.
   if (

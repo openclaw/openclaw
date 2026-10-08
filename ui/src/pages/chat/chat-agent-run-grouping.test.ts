@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { coalesceAgentRunFrames } from "./chat-agent-run-grouping.ts";
+import { groupMessages } from "./chat-thread-grouping.ts";
 import type {
   ActivityRunRenderItem,
   StreamRunRenderItem,
@@ -13,22 +14,22 @@ function group(
   runId: string | undefined,
   overrides: Record<string, unknown> = {},
 ): MessageGroup {
+  const message = {
+    role: role === "tool" ? "toolResult" : role,
+    content: key,
+    timestamp: 1,
+    ...overrides,
+  };
+  const [prepared] = groupMessages([{ kind: "message", key, message }]);
+  if (prepared?.kind !== "group") {
+    throw new Error("expected a prepared message group");
+  }
   return {
     kind: "group",
     key: `group:${key}`,
     role,
     visibleContent: "text",
-    messages: [
-      {
-        key,
-        message: {
-          role: role === "tool" ? "toolResult" : role,
-          content: key,
-          timestamp: 1,
-          ...overrides,
-        },
-      },
-    ],
+    messages: prepared.messages,
     timestamp: 1,
     isStreaming: false,
     ...(runId ? { runId } : {}),
@@ -210,10 +211,15 @@ describe("coalesceAgentRunFrames", () => {
     expect(requireFrame(items[2]).runId).toBe("run-2");
   });
 
-  it("does not compose across forwarded sessions_send input", () => {
-    const boundary = group("assistant", "forwarded", "run-1", {
-      provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-    });
+  it.each([
+    {
+      name: "forwarded sessions_send input",
+      boundary: group("assistant", "forwarded", "run-1", {
+        provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      }),
+    },
+    { name: "metadata-less user input", boundary: group("user", "peer", undefined) },
+  ])("does not compose across $name", ({ boundary }) => {
     const items = coalesceAgentRunFrames([
       userBoundary(),
       group("assistant", "before", "run-1"),
@@ -221,9 +227,16 @@ describe("coalesceAgentRunFrames", () => {
       group("assistant", "after", "run-1"),
     ]);
 
-    expect(items.filter((item) => item.kind === "agent-run-frame")).toHaveLength(1);
-    expect(items).toContain(boundary);
-    expect(items.at(-1)).toMatchObject({ kind: "group", key: "group:after" });
+    expect(items.map((item) => item.kind)).toEqual([
+      "group",
+      "agent-run-frame",
+      "group",
+      "agent-run-frame",
+    ]);
+    expect(items[2]).toBe(boundary);
+    expect(requireFrame(items[1]).parts.map((part) => part.key)).toEqual(["group:before"]);
+    expect(requireFrame(items[3]).parts.map((part) => part.key)).toEqual(["group:after"]);
+    expect(requireFrame(items[1]).key).not.toBe(requireFrame(items[3]).key);
   });
 
   it("starts a new frame at an authoritative projected turn boundary", () => {
@@ -255,14 +268,40 @@ describe("coalesceAgentRunFrames", () => {
       group("assistant", "after", "run-1"),
     ]);
 
-    expect(items.filter((item) => item.kind === "agent-run-frame")).toHaveLength(1);
-    expect(items).toContain(notice);
-    expect(items).toContain(divider);
+    expect(items.map((item) => item.kind)).toEqual([
+      "group",
+      "agent-run-frame",
+      "notice",
+      "agent-run-frame",
+      "divider",
+      "agent-run-frame",
+    ]);
+    expect(items[2]).toBe(notice);
+    expect(items[4]).toBe(divider);
+    const frames = [items[1], items[3], items[5]].map(requireFrame);
+    expect(frames.map((frame) => frame.parts.map((part) => part.key))).toEqual([
+      ["group:before"],
+      ["group:between"],
+      ["group:after"],
+    ]);
+    expect(new Set(frames.map((frame) => frame.key)).size).toBe(3);
   });
 
-  it("gives a restored run segment a unique key after a hard boundary", () => {
+  it.each([
+    {
+      name: "notice",
+      boundary: { kind: "notice" as const, key: "notice", text: "Notice", timestamp: 2 },
+    },
+    { name: "peer user", boundary: userBoundary("peer-send") },
+    { name: "metadata-less peer", boundary: group("user", "peer", undefined) },
+    {
+      name: "peer sharing execution ownership",
+      boundary: group("user", "peer", undefined, {
+        __openclaw: { id: "peer", runId: "send-1", idempotencyKey: "peer-send:user" },
+      }),
+    },
+  ])("gives a restored run segment a unique key after a $name boundary", ({ boundary }) => {
     const runId = "run-1";
-    const notice = { kind: "notice" as const, key: "notice", text: "Notice", timestamp: 2 };
     const restoredStream: StreamRunRenderItem = {
       kind: "stream-run",
       key: "stream-run:restored",
@@ -281,7 +320,7 @@ describe("coalesceAgentRunFrames", () => {
     const items = coalesceAgentRunFrames([
       userBoundary(),
       group("assistant", "before", runId),
-      notice,
+      boundary,
       restoredStream,
     ]);
     const frames = items.filter(
@@ -290,7 +329,10 @@ describe("coalesceAgentRunFrames", () => {
 
     expect(frames).toHaveLength(2);
     expect(frames[0]?.key).not.toBe(frames[1]?.key);
-    expect(frames[1]?.key).toContain("notice");
+    expect(frames[0]?.key).toBe(
+      requireFrame(coalesceAgentRunFrames([userBoundary(), group("assistant", "before", runId)])[1])
+        .key,
+    );
   });
 
   it("marks active frames active and tool-only terminal frames terminal", () => {
@@ -321,11 +363,6 @@ describe("coalesceAgentRunFrames", () => {
   });
 
   it.each([
-    {
-      name: "tool-only completion",
-      parts: [group("tool", "tool-only", "run-1")],
-      outcome: { kind: "completed", actionOwner: null },
-    },
     {
       name: "tool-use commentary",
       parts: [
@@ -433,6 +470,20 @@ describe("coalesceAgentRunFrames", () => {
       ],
       outcome: { kind: "completed", actionOwner: { key: "final" } },
     },
+    {
+      name: "mixed-phase answer followed by work",
+      parts: [
+        group("assistant", "mixed-final", "run-1", {
+          content: ["commentary", "final_answer"].map((phase) => ({
+            type: "text",
+            text: phase === "commentary" ? "Checking" : "Finished.",
+            textSignature: JSON.stringify({ v: 1, id: phase, phase }),
+          })),
+        }),
+        group("tool", "trailing-tool", "run-1"),
+      ],
+      outcome: { kind: "completed", actionOwner: { key: "mixed-final" } },
+    },
   ])("records $name without deriving completion from the last part", ({ parts, outcome }) => {
     const frame = requireFrame(coalesceAgentRunFrames([userBoundary(), ...parts])[1]);
 
@@ -465,6 +516,45 @@ describe("coalesceAgentRunFrames", () => {
     );
 
     expect(frame.outcome).toEqual({ kind: "failed" });
+  });
+
+  it("keeps fallback send identities local to each promptless run", () => {
+    const first = group("assistant", "first-answer", "run-1", { phase: "final_answer" });
+    const tool = group("tool", "second-tool", "run-2");
+    const second = group("assistant", "second-answer", "run-2", { phase: "final_answer" });
+    const items = coalesceAgentRunFrames([first, tool, second]);
+    expect(items.map((item) => requireFrame(item).boundaryId)).toEqual([
+      "send:run-1",
+      "send:run-2",
+    ]);
+    expect(requireFrame(items[0]).parts).toEqual([first]);
+    expect(requireFrame(items[1]).parts).toEqual([tool, second]);
+  });
+
+  it("does not join promptless tools to a stream with a different explicit boundary", () => {
+    const tool = group("tool", "old-tool", "run-1");
+    const stream: StreamRunRenderItem = {
+      kind: "stream-run",
+      key: "stream:steered",
+      runId: "run-1",
+      boundaryId: "send:steer",
+      parts: [
+        {
+          kind: "reading-indicator",
+          key: "reading:steered",
+          startedAt: 2,
+          runId: "run-1",
+          boundaryId: "send:steer",
+        },
+      ],
+    };
+    const items = coalesceAgentRunFrames([tool, stream]);
+    expect(items[0]).toBe(tool);
+    expect(requireFrame(items[1])).toMatchObject({
+      boundaryId: "send:steer",
+      outcome: { kind: "active" },
+      parts: [stream],
+    });
   });
 
   it("leaves active search projections uncomposed", () => {

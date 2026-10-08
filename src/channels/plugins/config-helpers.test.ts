@@ -1,114 +1,74 @@
 // Config helper tests cover channel plugin config merge and selection helpers.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { clearAccountEntryFields, clearAccountFieldsFromConfigSection } from "./config-helpers.js";
+import {
+  clearAccountEntryFields,
+  clearAccountFieldsFromConfigSection,
+  deleteAccountFromConfigSection,
+  setAccountEnabledInConfigSection,
+} from "./config-helpers.js";
 
-describe("clearAccountEntryFields", () => {
-  it("clears configured values and removes empty account entries", () => {
-    const result = clearAccountEntryFields({
-      accounts: {
-        default: {
-          botToken: "abc123",
-        },
-      },
-      accountId: "default",
-      fields: ["botToken"],
-    });
+describe("public account config writers", () => {
+  it.each([false, true])(
+    "setAccountEnabledInConfigSection preserves rejected aliases when policy is %s",
+    (declared) => {
+      const alias = { allowFrom: ["bob"] };
+      const cfg = {
+        channels: { sample: { allowFrom: ["alice"], accounts: { "Work Phone": alias } } },
+      };
+      const result = setAccountEnabledInConfigSection({
+        cfg,
+        sectionKey: "sample",
+        accountId: "Work Phone",
+        accountKeyPolicy: declared ? { canonicalAliasesRequireOwnField: "account" } : undefined,
+        enabled: false,
+      });
+      expect(result.channels?.sample).toEqual({
+        allowFrom: ["alice"],
+        accounts: declared
+          ? { "Work Phone": alias, "work-phone": { enabled: false } }
+          : { "Work Phone": { ...alias, enabled: false } },
+      });
+    },
+  );
 
-    expect(result).toEqual({
-      nextAccounts: undefined,
-      changed: true,
-      cleared: true,
-    });
-  });
-
-  it("treats empty string values as not configured by default", () => {
-    const result = clearAccountEntryFields({
-      accounts: {
-        default: {
-          botToken: "   ",
-        },
-      },
-      accountId: "default",
-      fields: ["botToken"],
-    });
-
-    expect(result).toEqual({
-      nextAccounts: undefined,
-      changed: true,
-      cleared: false,
-    });
-  });
-
-  it("can mark cleared when fields are present even if values are empty", () => {
-    const result = clearAccountEntryFields({
-      accounts: {
-        default: {
-          tokenFile: "",
-        },
-      },
-      accountId: "default",
-      fields: ["tokenFile"],
-      markClearedOnFieldPresence: true,
-    });
-
-    expect(result).toEqual({
-      nextAccounts: undefined,
-      changed: true,
-      cleared: true,
-    });
-  });
-
-  it("keeps other account fields intact", () => {
-    const result = clearAccountEntryFields({
-      accounts: {
-        default: {
-          botToken: "abc123",
-          name: "Primary",
-        },
-        backup: {
-          botToken: "keep",
-        },
-      },
-      accountId: "default",
-      fields: ["botToken"],
-    });
-
-    expect(result).toEqual({
-      nextAccounts: {
-        default: {
-          name: "Primary",
-        },
-        backup: {
-          botToken: "keep",
-        },
-      },
-      changed: true,
-      cleared: true,
-    });
-  });
-
-  it("returns unchanged when account entry is missing", () => {
-    const result = clearAccountEntryFields({
-      accounts: {
-        default: {
-          botToken: "abc123",
-        },
-      },
-      accountId: "other",
-      fields: ["botToken"],
-    });
-
-    expect(result).toEqual({
-      nextAccounts: {
-        default: {
-          botToken: "abc123",
-        },
-      },
-      changed: false,
-      cleared: false,
-    });
-  });
+  it.each(
+    [false, true].flatMap((declared) =>
+      ["delete", "clear"].map((operation) => ({ declared, operation })),
+    ),
+  )(
+    "deleteAccountFromConfigSection / clearAccountEntryFields: $operation honors policy=$declared",
+    ({ declared, operation }) => {
+      const accounts = { "Work Phone": { secret: "authored", allowFrom: ["bob"] } };
+      const cfg = { channels: { sample: { allowFrom: ["alice"], accounts } } };
+      const accountKeyPolicy = declared
+        ? { canonicalAliasesRequireOwnField: "account" }
+        : undefined;
+      if (operation === "delete") {
+        expect(
+          deleteAccountFromConfigSection({
+            cfg,
+            sectionKey: "sample",
+            accountId: "Work Phone",
+            accountKeyPolicy,
+          }).channels?.sample,
+        ).toEqual({ allowFrom: ["alice"], accounts: declared ? accounts : undefined });
+      } else {
+        expect(
+          clearAccountEntryFields({
+            accounts,
+            accountId: "Work Phone",
+            accountKeyPolicy,
+            fields: ["secret"],
+          }),
+        ).toEqual({
+          nextAccounts: declared ? accounts : { "Work Phone": { allowFrom: ["bob"] } },
+          changed: !declared,
+          cleared: !declared,
+        });
+      }
+    },
+  );
 });
 
 describe("clearAccountFieldsFromConfigSection", () => {

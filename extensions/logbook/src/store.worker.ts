@@ -14,7 +14,7 @@ import {
   prepareSqliteQuerySync,
   runSqliteImmediateTransactionSync,
   type SqliteWorkerBackend,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { pickKeyframeId } from "./analyze.js";
 import type {
   LogbookBatchInput,
@@ -25,6 +25,7 @@ import type {
   LogbookStandup,
   LogbookTimeline,
 } from "./store-contract.js";
+import { createLogbookFrameQueries } from "./store-frame-queries.js";
 import {
   LOGBOOK_SCHEMA_VERSION,
   SCHEMA,
@@ -45,10 +46,12 @@ import type {
 type Database = import("node:sqlite").DatabaseSync;
 
 const LOGBOOK_SQLITE_BUSY_TIMEOUT_MS = 5_000;
+const FRAME_PRUNE_BATCH_SIZE = 64;
 class LogbookDatabaseStore {
   private readonly db: Database;
   private readonly query;
   private readonly framesQuery;
+  private readonly frameMetadataQuery;
   private readonly batchesQuery;
   private readonly cardsQuery;
   private readonly statements;
@@ -90,27 +93,18 @@ class LogbookDatabaseStore {
       this.db = db;
       this.walMaintenance = walMaintenance;
       this.query = getNodeSqliteKysely<LogbookDatabase>(db);
-      // Timestamp ties follow insertion ids, matching existing SQLite reads.
-      this.framesQuery = this.query
-        .selectFrom("frames")
-        .select([
-          "id",
-          "captured_at_ms",
-          "day",
-          "path",
-          "screen_index",
-          "width",
-          "height",
-          "byte_size",
-          "idle",
-        ])
-        .orderBy("captured_at_ms", "asc")
-        .orderBy("id", "asc");
+      const { framesQuery, sampledBatchFrames } = createLogbookFrameQueries(db, this.query);
+      this.framesQuery = framesQuery;
+      // Keep native integer overflow rejection while omitting unused frame strings.
+      this.frameMetadataQuery = framesQuery
+        .clearSelect()
+        .select(["id", "captured_at_ms", "screen_index", "width", "height", "byte_size", "idle"]);
       this.batchesQuery = this.query
         .selectFrom("batches")
         .select(["id", "day", "start_ms", "end_ms", "status", "error", "frame_count", "model"]);
       this.cardsQuery = this.query.selectFrom("cards");
       this.statements = {
+        sampledBatchFrames,
         insertFrame: prepareSqliteQuerySync<LogbookFrameInput>(db, (p) =>
           this.query.insertInto("frames").values({
             captured_at_ms: p((row) => row.capturedAtMs),
@@ -248,23 +242,6 @@ class LogbookDatabaseStore {
               })),
             ),
         ),
-        currentFramePath: prepareSqliteQuerySync<number, { path: string }>(db, (p) =>
-          this.query
-            .selectFrom("frames")
-            .select("path")
-            .where(
-              "id",
-              "=",
-              p((id) => id),
-            ),
-        ),
-        deleteFrame: prepareSqliteQuerySync<number>(db, (p) =>
-          this.query.deleteFrom("frames").where(
-            "id",
-            "=",
-            p((id) => id),
-          ),
-        ),
       };
     } catch (error) {
       // Preserve the opening failure while attempting both resource cleanups.
@@ -278,7 +255,8 @@ class LogbookDatabaseStore {
     }
   }
 
-  close(): void {
+  async close(): Promise<void> {
+    await this.walMaintenance.stop();
     try {
       this.walMaintenance.close();
     } finally {
@@ -304,11 +282,11 @@ class LogbookDatabaseStore {
     return row ? { capturedAtMs: row.captured_at_ms, contentHash: row.content_hash } : null;
   }
 
-  unbatchedActiveFrames(limit: number): LogbookFrame[] {
+  unbatchedActiveFrames(limit: number): Pick<LogbookFrame, "id" | "capturedAtMs">[] {
     return executeSqliteQuerySync(
       this.db,
-      this.framesQuery.where("batch_id", "is", null).where("idle", "=", 0).limit(limit),
-    ).rows.map(toFrame);
+      this.frameMetadataQuery.where("batch_id", "is", null).where("idle", "=", 0).limit(limit),
+    ).rows.map((row) => ({ id: row.id, capturedAtMs: row.captured_at_ms }));
   }
 
   countUnbatchedActiveFrames(): number {
@@ -328,11 +306,20 @@ class LogbookDatabaseStore {
     return row ? toFrame(row) : null;
   }
 
-  framesInRange(startMs: number, endMs: number): LogbookFrame[] {
+  framesInRange(
+    startMs: number,
+    endMs: number,
+  ): Pick<LogbookFrame, "id" | "capturedAtMs" | "idle">[] {
     return executeSqliteQuerySync(
       this.db,
-      this.framesQuery.where("captured_at_ms", ">=", startMs).where("captured_at_ms", "<", endMs),
-    ).rows.map(toFrame);
+      this.frameMetadataQuery
+        .where("captured_at_ms", ">=", startMs)
+        .where("captured_at_ms", "<", endMs),
+    ).rows.map((row) => ({
+      id: row.id,
+      capturedAtMs: row.captured_at_ms,
+      idle: row.idle === 1,
+    }));
   }
 
   createBatch(params: LogbookBatchInput): number {
@@ -401,11 +388,9 @@ class LogbookDatabaseStore {
     return row ? toBatch(row) : null;
   }
 
-  batchFrames(batchId: number): LogbookFrame[] {
-    return executeSqliteQuerySync(
-      this.db,
-      this.framesQuery.where("batch_id", "=", batchId),
-    ).rows.map(toFrame);
+  sampledBatchFrames(batchId: number): LogbookFrame[] {
+    // The ordinal scan and sampled payload read share one SQLite statement.
+    return this.statements.sampledBatchFrames(batchId).rows.map(toFrame);
   }
 
   // Replace batch evidence atomically so manual retries cannot duplicate it.
@@ -491,7 +476,14 @@ class LogbookDatabaseStore {
     runSqliteImmediateTransactionSync(
       this.db,
       () => {
-        const frames = selectKeyframes ? this.framesInRange(startMs, endMs) : undefined;
+        const frames = selectKeyframes
+          ? executeSqliteQuerySync(
+              this.db,
+              this.frameMetadataQuery
+                .where("captured_at_ms", ">=", startMs)
+                .where("captured_at_ms", "<", endMs),
+            ).rows.map((row) => ({ id: row.id, capturedAtMs: row.captured_at_ms }))
+          : undefined;
         this.statements.deleteCards({ day, startMs, endMs });
         for (const draft of drafts) {
           const keyframeId = frames ? pickKeyframeId(draft, frames) : draft.keyframeId;
@@ -591,16 +583,25 @@ class LogbookDatabaseStore {
       this.db,
       () => {
         let count = 0;
-        for (const row of rows) {
-          const current = this.statements.currentFramePath(row.id).rows[0];
-          if (!current) {
-            continue;
-          }
-          if (current.path !== row.path) {
-            throw new Error(`Logbook frame ${row.id} changed path while pruning`);
+        for (let offset = 0; offset < rows.length; offset += FRAME_PRUNE_BATCH_SIZE) {
+          const batch = rows.slice(offset, offset + FRAME_PRUNE_BATCH_SIZE);
+          const ids = batch.map((row) => row.id);
+          const currentPaths = new Map(
+            executeSqliteQuerySync(
+              this.db,
+              this.query.selectFrom("frames").select(["id", "path"]).where("id", "in", ids),
+            ).rows.map((row) => [row.id, row.path]),
+          );
+          for (const row of batch) {
+            if (currentPaths.has(row.id) && currentPaths.get(row.id) !== row.path) {
+              throw new Error(`Logbook frame ${row.id} changed path while pruning`);
+            }
           }
           // ON DELETE SET NULL clears surviving cards' keyframes in the same commit.
-          const result = this.statements.deleteFrame(row.id);
+          const result = executeSqliteQuerySync(
+            this.db,
+            this.query.deleteFrom("frames").where("id", "in", ids),
+          );
           count += Number(expectDefined(result.numAffectedRows, "Logbook pruned frame count"));
         }
         return count;
@@ -658,8 +659,8 @@ export function createSqliteWorkerBackend(
           return store.resetErrorBatches();
         case "nextPendingBatch":
           return store.nextPendingBatch();
-        case "batchFrames":
-          return store.batchFrames(command.input.batchId);
+        case "sampledBatchFrames":
+          return store.sampledBatchFrames(command.input.batchId);
         case "replaceObservations":
           return store.replaceObservations(
             command.input.batchId,

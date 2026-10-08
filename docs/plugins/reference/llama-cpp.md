@@ -15,7 +15,7 @@ Managed and external llama.cpp servers for GGUF chat and embeddings.
 ## Distribution
 
 - Package: `@openclaw/llama-cpp-provider`
-- Install route: npm or ClawHub
+- Install route: npm or ClawHub: `clawhub:@openclaw/llama-cpp-provider`
 
 ## Surface
 

@@ -1,10 +1,10 @@
-// Control UI view renders the gateway connection settings content.
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { html, nothing } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import type { UiSettings } from "../../app/settings.ts";
+import { renderGatewayVitals, type GatewayStatusSample } from "../../components/gateway-vitals.ts";
 import {
   renderSettingsPage,
   renderSettingsRow,
@@ -12,10 +12,12 @@ import {
   renderSettingsSection,
   renderSettingsStatus,
 } from "../../components/settings-ui.ts";
+import type { SparklineSample } from "../../components/sparkline-tile.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatGatewayHost } from "../../lib/gateway-host.ts";
 import { classifyGatewaySecret } from "../../lib/gateway-secret-shape.ts";
+import type { ConnectionPingSummary } from "./latency.ts";
 import { renderSystemSection } from "./system-section.ts";
 
 registerSettingsEnglish();
@@ -33,11 +35,18 @@ type ConnectionProps = {
   systemInfo: SystemInfoResult | null;
   systemInfoUnavailable: boolean;
   systemInfoLoading: boolean;
+  ping: ConnectionPingSummary | null;
+  pingFailed: boolean;
+  pingSamples: readonly SparklineSample[];
+  statusHistory: readonly GatewayStatusSample[];
+  statusFailed: boolean;
   /** True when the draft differs from the live connection. */
   dirty: boolean;
   sessionDirty: boolean;
   sessionSaved: boolean;
   showGatewaySecret: boolean;
+  canForgetDevice: boolean;
+  onForgetDevice: () => void;
   onConnectionChange: (patch: Partial<Pick<UiSettings, "gatewayUrl" | "token">>) => void;
   onSecretChange: (next: string) => void;
   onSessionKeyChange: (next: string) => void;
@@ -98,6 +107,58 @@ function renderSecretRow(props: ConnectionProps, authMode: GatewayAuthMode | und
   });
 }
 
+function formatPing(value: number): string {
+  return `${value.toFixed(1)} ${t("connection.ping.unit")}`;
+}
+
+function renderPing(props: ConnectionProps) {
+  const metrics = [
+    { key: "average", value: props.ping?.averageMs },
+    { key: "p50", value: props.ping?.p50Ms },
+    { key: "p95", value: props.ping?.p95Ms },
+    { key: "p99", value: props.ping?.p99Ms },
+  ];
+  return html`<div class="settings-row connection-ping">
+    <dl class="connection-ping__stats" aria-label=${t("connection.ping.title")}>
+      ${metrics.map(
+        ({ key, value }) => html`<div title=${t(`connection.ping.${key}Hint`)}>
+          <dt>${t(`connection.ping.${key}`)}</dt>
+          <dd>
+            ${
+              value === undefined
+                ? "—"
+                : html`${value.toFixed(1)} <span>${t("connection.ping.unit")}</span>`
+            }
+          </dd>
+        </div>`,
+      )}
+    </dl>
+    <openclaw-sparkline
+      class="gateway-vital connection-ping__trend"
+      .label=${t("connection.ping.latest")}
+      .samples=${props.pingSamples}
+      .format=${formatPing}
+      .floorMax=${100}
+    ></openclaw-sparkline>
+    <p class="settings-row__desc">
+      ${
+        props.ping
+          ? t("connection.ping.samples", { count: String(props.ping.count) })
+          : props.pingFailed
+            ? nothing
+            : t("connection.ping.measuring")
+      }
+      ${
+        props.pingFailed
+          ? html`<span class="connection-ping__error" role="status">
+              ${t("connection.ping.failed")}
+            </span>`
+          : nothing
+      }
+    </p>
+  </div>`;
+}
+
 export function renderConnection(props: ConnectionProps) {
   const snapshot = props.hello?.snapshot as { authMode?: GatewayAuthMode } | undefined;
   const connected = props.phase === "connected";
@@ -124,6 +185,7 @@ export function renderConnection(props: ConnectionProps) {
   const tick = formatTick(props.hello?.policy?.tickIntervalMs);
 
   const rows = html`
+    ${connected ? renderPing(props) : nothing}
     ${renderSettingsRow({
       title: t("connection.access.gatewayUrl"),
       description: t("connection.access.gatewayUrlHint"),
@@ -227,6 +289,26 @@ export function renderConnection(props: ConnectionProps) {
     ),
     renderSettingsSection(
       {
+        title: t("connection.activity.title"),
+        description: t("connection.activity.description"),
+      },
+      html`<div class="settings-row connection-activity">
+        ${renderGatewayVitals(props.statusHistory.at(-1)?.status ?? {}, props.statusHistory)}
+        ${
+          props.statusFailed
+            ? html`<p class="settings-row__desc" role="status">
+                ${t("connection.activity.failed")}
+              </p>`
+            : !connected
+              ? html`<p class="settings-row__desc">${t("connection.activity.offline")}</p>`
+              : props.statusHistory.length === 0
+                ? html`<p class="settings-row__desc" role="status">${t("common.loading")}</p>`
+                : nothing
+        }
+      </div>`,
+    ),
+    renderSettingsSection(
+      {
         title: t("connection.access.sessionTitle"),
         description: t("connection.access.sessionDescription", {
           host: formatGatewayHost(props.liveGatewayUrl),
@@ -269,5 +351,16 @@ export function renderConnection(props: ConnectionProps) {
       `,
     ),
     renderSystemSection(props),
+    props.canForgetDevice
+      ? renderSettingsSection(
+          { title: t("connection.browser.title") },
+          renderSettingsRow({
+            title: t("connection.browser.savedSignIn"),
+            control: html`<button class="btn" @click=${props.onForgetDevice}>
+              ${t("connection.browser.forgetDevice")}
+            </button>`,
+          }),
+        )
+      : nothing,
   ]);
 }

@@ -111,13 +111,27 @@ describe("scripts/build-and-run-mac.sh", () => {
       for (const sourcePath of [
         scriptPath,
         "scripts/prepare-apple-mermaid.mjs",
+        "scripts/lib/pnpm-lockfile-documents.mjs",
         "scripts/pnpm-runner.mts",
         "scripts/windows-cmd-helpers.mjs",
+        "scripts/run-node-package-bin.mts",
       ]) {
         const target = join(root, sourcePath);
         mkdirSync(dirname(target), { recursive: true });
         copyFileSync(sourcePath, target);
       }
+      for (const directory of ["packages/mermaid-renderer", "packages/normalization-core"]) {
+        mkdirSync(join(root, directory), { recursive: true });
+      }
+      for (const file of ["package.json", "pnpm-workspace.yaml", "tsconfig.json"]) {
+        writeFileSync(join(root, file), "{}\n");
+      }
+      writeFileSync(
+        join(root, "pnpm-lock.yaml"),
+        "importers:\n  packages/mermaid-renderer: {}\npackages: {}\nsnapshots: {}\n",
+      );
+      mkdirSync(join(root, "patches"));
+      writeFileSync(join(root, ".npmrc"), "");
       const resources = join(
         root,
         "apps/shared/OpenClawKit/Sources/OpenClawChatUI/Resources/Mermaid",
@@ -295,7 +309,7 @@ const nativeScripts = [
   "scripts/restart-mac.sh",
   "scripts/stage-cloudflared-macos.sh",
   "scripts/stage-cua-driver-macos.sh",
-  "scripts/stage-mac-node-worker.sh",
+  "scripts/stage-mac-runtime.sh",
   "scripts/test-macos-health-render.sh",
 ];
 
@@ -307,6 +321,7 @@ const portableScripts = [
   "scripts/ci-hydrate-live-auth.sh",
   "scripts/ci-hydrate-testbox-env.sh",
   "scripts/connect.sh",
+  "scripts/dev/computer-use-macos-live-rig.sh",
   "scripts/docker/setup.sh",
   "scripts/docker/shared-image-artifact.sh",
   "scripts/docs-spellcheck.sh",
@@ -357,14 +372,12 @@ const portableScripts = [
   "scripts/e2e/sandbox-browser-sidecar-docker.sh",
   "scripts/e2e/session-runtime-context-docker.sh",
   "scripts/e2e/skill-install-docker.sh",
-  "scripts/e2e/status-corrupt-plugin-deps.sh",
   "scripts/e2e/system-agent-first-run-docker.sh",
   "scripts/e2e/system-agent-rescue-docker.sh",
   "scripts/e2e/systemd-sealed-service-definition.sh",
   "scripts/e2e/update-channel-switch-docker.sh",
   "scripts/e2e/update-corrupt-plugin-docker.sh",
   "scripts/e2e/update-first-hop-compat-docker.sh",
-  "scripts/e2e/update-run-package-self-upgrade-docker.sh",
   "scripts/e2e/upgrade-survivor-docker.sh",
   "scripts/github/find-reusable-release-validation.sh",
   "scripts/github/resolve-openclaw-ref.sh",

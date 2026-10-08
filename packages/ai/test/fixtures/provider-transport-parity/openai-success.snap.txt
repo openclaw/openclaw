@@ -103,6 +103,11 @@
         "output": 4,
         "cacheRead": 2,
         "cacheWrite": 0,
+        "contextUsage": {
+          "state": "available",
+          "promptTokens": 8,
+          "totalTokens": 12
+        },
         "totalTokens": 12,
         "cost": {
           "input": 0,
@@ -217,6 +222,11 @@
         "cacheRead": 2,
         "cacheWrite": 0,
         "reasoningTokens": 1,
+        "contextUsage": {
+          "state": "available",
+          "promptTokens": 8,
+          "totalTokens": 12
+        },
         "totalTokens": 12,
         "cost": {
           "input": 0,

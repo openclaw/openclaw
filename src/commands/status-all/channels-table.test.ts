@@ -28,6 +28,7 @@ describe("buildStatusChannelsTableRows", () => {
           },
         ],
         channelIssues: [
+          { channel: "signal", message: "" },
           { channel: "signal", message: "signal-cli unreachable from gateway runtime" },
           { channel: "discord", message: "should not override off" },
         ],
@@ -42,7 +43,7 @@ describe("buildStatusChannelsTableRows", () => {
         Channel: "Signal",
         Enabled: "[ok:ON]",
         State: "[warn:WARN]",
-        Detail: "configured · [warn:gateway: signal-cli unreachab]",
+        Detail: "configured · [warn:gateway: ]",
       },
       {
         Channel: "Discord",

@@ -12,6 +12,13 @@ public enum NotificationAuthorizationStatus: Sendable {
     case authorized
     case provisional
     case ephemeral
+
+    public var allowsNotifications: Bool {
+        switch self {
+        case .authorized, .provisional, .ephemeral: true
+        case .denied, .notDetermined: false
+        }
+    }
 }
 
 public protocol NotificationCentering: Sendable {
@@ -57,11 +64,7 @@ public struct LiveNotificationCenter: NotificationCentering, @unchecked Sendable
                 return
             }
             self.center.add(request) { error in
-                if let error {
-                    cont.resume(throwing: error)
-                } else {
-                    cont.resume(returning: ())
-                }
+                ThrowingContinuationSupport.resumeVoid(cont, error: error)
             }
         }
     }

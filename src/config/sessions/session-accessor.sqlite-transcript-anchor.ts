@@ -9,9 +9,9 @@ import {
   toDatabaseOptions,
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
-import { readMessageIdempotencyKey } from "./session-accessor.sqlite-transcript-store.js";
-import { sessionTranscriptIndexNeedsReconcile } from "./session-transcript-index.js";
+import { selectSessionTranscriptIndexStatus } from "./session-transcript-index.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
+import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
 
 /** Reads one active message identity from the caller's current SQLite transaction. */
 export function readActiveTranscriptEntryAnchorInTransaction(params: {
@@ -20,11 +20,6 @@ export function readActiveTranscriptEntryAnchorInTransaction(params: {
   entryId: string;
   message?: unknown;
 }): TranscriptEntryAnchor | undefined {
-  // Branch changes retain old projection rows until deferred reconciliation.
-  // An anchor must never certify those rows as the current active path.
-  if (sessionTranscriptIndexNeedsReconcile(params.database.db, params.resolved.sessionId)) {
-    return undefined;
-  }
   const db = getSessionKysely(params.database.db);
   const row = executeSqliteQueryTakeFirstSync(
     params.database.db,
@@ -47,9 +42,49 @@ export function readActiveTranscriptEntryAnchorInTransaction(params: {
       ])
       .where("identity.session_id", "=", params.resolved.sessionId)
       .where("identity.event_id", "=", params.entryId)
+      // Branch changes retain old rows; readiness and the anchor share this statement's snapshot.
+      .where((eb) =>
+        eb.not(
+          eb.exists(
+            eb
+              .selectFrom(
+                selectSessionTranscriptIndexStatus(
+                  params.database.db,
+                  params.resolved.sessionId,
+                ).as("status"),
+              )
+              .select("needs_reconcile")
+              .where("needs_reconcile", "=", 1),
+          ),
+        ),
+      )
       .limit(1),
   );
-  if (row?.message_position === null || row?.message_position === undefined) {
+  return createTranscriptEntryAnchor({ ...params, row });
+}
+
+/** Projects anchor fields after the caller verifies readiness in the same snapshot. */
+export function createTranscriptEntryAnchor(params: {
+  database: Pick<OpenClawAgentDatabase, "path">;
+  resolved: ResolvedTranscriptScope;
+  entryId: string;
+  message?: unknown;
+  row:
+    | {
+        seq: number;
+        parent_id: string | null;
+        message_idempotency_key: string | null;
+        message_position: number | null;
+        generation: string | null;
+      }
+    | undefined;
+}): TranscriptEntryAnchor | undefined {
+  const { row } = params;
+  if (
+    row?.message_position === null ||
+    row?.message_position === undefined ||
+    row.generation === null
+  ) {
     return undefined;
   }
   const idempotencyKey = row.message_idempotency_key ?? readMessageIdempotencyKey(params.message);

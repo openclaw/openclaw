@@ -1,10 +1,8 @@
-import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { ChannelDoctorConfigMutation } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveSignalAccountKey } from "./account-selection.js";
 
 export function repairSignalAccountKeys({
   cfg,
@@ -34,12 +32,8 @@ export function repairSignalAccountKeys({
     }
     for (const key of keys) {
       if (normalizeLowercaseStringOrEmpty(key) !== id) {
-        // An unreachable entry currently inherits the root number/default transport.
-        // Making its overrides reachable must not redirect an already working route.
-        if (
-          normalizeOptionalString(signal?.account) ||
-          (id === DEFAULT_ACCOUNT_ID && signal?.transport)
-        ) {
+        // Cleanup cannot activate overrides that the account selection contract leaves inherited.
+        if (resolveSignalAccountKey(accounts, id) !== key) {
           warnings.push(
             `Signal account "${key}" is listed as "${id}" but currently uses the channel defaults. Doctor preserved it to avoid changing a working account; check its settings before renaming the key to "${id}".`,
           );

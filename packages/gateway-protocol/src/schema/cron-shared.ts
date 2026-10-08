@@ -16,12 +16,14 @@ export function cronAgentTurnPayloadSchema<
   TFallbacks extends TSchema,
   TToolsAllow extends TSchema,
   TThinking extends TSchema,
+  TTimeout extends TSchema,
 >(params: {
   message: TMessage;
   model: TModel;
   fallbacks: TFallbacks;
   toolsAllow: TToolsAllow;
   thinking: TThinking;
+  timeoutSeconds: TTimeout;
 }) {
   return closedObject({
     kind: Type.Literal("agentTurn"),
@@ -29,7 +31,7 @@ export function cronAgentTurnPayloadSchema<
     model: Type.Optional(params.model),
     fallbacks: Type.Optional(params.fallbacks),
     thinking: Type.Optional(params.thinking),
-    timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+    timeoutSeconds: Type.Optional(params.timeoutSeconds),
     allowUnsafeExternalContent: Type.Optional(Type.Boolean()),
     lightContext: Type.Optional(Type.Boolean()),
     toolsAllow: Type.Optional(params.toolsAllow),
@@ -43,14 +45,15 @@ export function cronAgentTurnPayloadSchema<
 export function cronCommandPayloadSchema<
   TArgv extends TSchema,
   TToolsAllow extends TSchema,
->(params: { argv: TArgv; toolsAllow: TToolsAllow }) {
+  TTimeout extends TSchema,
+>(params: { argv: TArgv; toolsAllow: TToolsAllow; timeoutSeconds: TTimeout }) {
   return closedObject({
     kind: Type.Literal("command"),
     argv: params.argv,
     cwd: Type.Optional(Type.String({ minLength: 1 })),
     env: Type.Optional(Type.Record(Type.String({ minLength: 1 }), Type.String())),
     input: Type.Optional(Type.String()),
-    timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+    timeoutSeconds: Type.Optional(params.timeoutSeconds),
     noOutputTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
     outputMaxBytes: Type.Optional(Type.Integer({ minimum: 1 })),
     toolsAllow: Type.Optional(params.toolsAllow),
@@ -61,11 +64,12 @@ export function cronCommandPayloadSchema<
 export function cronScriptPayloadSchema<
   TScript extends TSchema,
   TToolsAllow extends TSchema,
->(params: { script: TScript; toolsAllow: TToolsAllow }) {
+  TTimeout extends TSchema,
+>(params: { script: TScript; toolsAllow: TToolsAllow; timeoutSeconds: TTimeout }) {
   return closedObject({
     kind: Type.Literal("script"),
     script: params.script,
-    timeoutSeconds: Type.Optional(Type.Number({ minimum: 1 })),
+    timeoutSeconds: Type.Optional(params.timeoutSeconds),
     toolBudget: Type.Optional(Type.Integer({ minimum: 1 })),
     toolsAllow: Type.Optional(params.toolsAllow),
     toolsAllowIsDefault: Type.Optional(Type.Boolean()),

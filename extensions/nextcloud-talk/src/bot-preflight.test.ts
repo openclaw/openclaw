@@ -40,21 +40,18 @@ function account(
 
 function mockBotAdmin(features: number | string): void {
   hoisted.fetchWithSsrFGuard.mockResolvedValueOnce({
-    response: new Response(
-      JSON.stringify({
-        ocs: {
-          data: [
-            {
-              id: 7,
-              name: "OpenClaw",
-              url: "https://bot.example.com/nextcloud-talk-webhook",
-              features,
-            },
-          ],
-        },
-      }),
-      { status: 200, headers: { "content-type": "application/json" } },
-    ),
+    response: Response.json({
+      ocs: {
+        data: [
+          {
+            id: 7,
+            name: "OpenClaw",
+            url: "https://bot.example.com/nextcloud-talk-webhook",
+            features,
+          },
+        ],
+      },
+    }),
     release: async () => {},
     finalUrl: "https://cloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/admin",
   });
@@ -129,7 +126,7 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
       ok: false,
       code: "request_failed",
       message:
-        "Nextcloud Talk bot response feature probe failed: Nextcloud Talk bot response feature probe failed: malformed JSON response",
+        "Nextcloud Talk bot response feature check failed: Nextcloud Talk bot response feature check failed: malformed JSON response",
     });
   });
 
@@ -152,7 +149,7 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
       ok: false,
       code: "api_error",
       status: 503,
-      message: "Nextcloud Talk bot response feature probe failed (503)",
+      message: "Nextcloud Talk bot response feature check failed (503)",
     });
     expect(textSpy).not.toHaveBeenCalled();
     expect(tracked.wasCanceled()).toBe(true);
@@ -174,7 +171,7 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
       skipped: true,
       code: "missing_api_credentials",
       message:
-        "Nextcloud Talk bot response feature probe skipped: apiUser/apiPassword are not configured.",
+        "Nextcloud Talk bot response feature check skipped: apiUser/apiPassword are not configured.",
     });
     expect(hoisted.fetchWithSsrFGuard).not.toHaveBeenCalled();
   });

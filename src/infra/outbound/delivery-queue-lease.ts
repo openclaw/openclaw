@@ -1,10 +1,10 @@
-import { PLATFORM_SEND_OWNER_LEASE_MS } from "../delivery-queue-sqlite-claim.js";
+import { PLATFORM_SEND_OWNER_LEASE_MS } from "../delivery-queue-sqlite-claim.kernel.js";
 
 const PLATFORM_SEND_OWNER_HEARTBEAT_MS = Math.floor(PLATFORM_SEND_OWNER_LEASE_MS / 3);
 
 export type DeliveryProducerLease = {
   signal: AbortSignal;
-  stop: () => void;
+  stop: () => Promise<void>;
 };
 
 class DeliveryProducerLeaseLostError extends Error {
@@ -35,11 +35,11 @@ export async function startDeliveryProducerLease(params: {
   }
 
   const lost = new AbortController();
-  let stopped = false;
-  let renewing = false;
+  let stopResult: Promise<void> | undefined;
+  let pendingRenewal: Promise<void> | undefined;
   let expiryTimer: ReturnType<typeof setTimeout> | undefined;
   const abortLost = (cause?: unknown): void => {
-    if (!stopped && !lost.signal.aborted) {
+    if (!stopResult && !lost.signal.aborted) {
       lost.abort(lostProducerLeaseError(params.id, cause));
     }
   };
@@ -51,13 +51,12 @@ export async function startDeliveryProducerLease(params: {
     expiryTimer.unref?.();
   };
   const renew = async (): Promise<void> => {
-    if (stopped || renewing || lost.signal.aborted) {
+    if (stopResult || lost.signal.aborted) {
       return;
     }
-    renewing = true;
     try {
       const expiresAt = await params.renew();
-      if (stopped) {
+      if (stopResult) {
         return;
       }
       if (expiresAt === undefined) {
@@ -69,29 +68,33 @@ export async function startDeliveryProducerLease(params: {
     } catch (error) {
       // A transient storage failure does not revoke the last confirmed lease.
       // Its expiry timer remains authoritative while later heartbeats retry.
-      if (!stopped && Date.now() >= confirmedExpiresAt) {
+      if (!stopResult && Date.now() >= confirmedExpiresAt) {
         abortLost(error);
       }
-    } finally {
-      renewing = false;
     }
   };
 
   scheduleExpiry();
-  const heartbeat = setInterval(() => void renew(), PLATFORM_SEND_OWNER_HEARTBEAT_MS);
+  const heartbeat = setInterval(() => {
+    if (!pendingRenewal) {
+      pendingRenewal = renew().finally(() => {
+        pendingRenewal = undefined;
+      });
+    }
+  }, PLATFORM_SEND_OWNER_HEARTBEAT_MS);
   heartbeat.unref?.();
 
   return {
     signal: lost.signal,
     stop: () => {
-      if (stopped) {
-        return;
+      if (!stopResult) {
+        stopResult = pendingRenewal ?? Promise.resolve();
+        clearInterval(heartbeat);
+        if (expiryTimer) {
+          clearTimeout(expiryTimer);
+        }
       }
-      stopped = true;
-      clearInterval(heartbeat);
-      if (expiryTimer) {
-        clearTimeout(expiryTimer);
-      }
+      return stopResult;
     },
   };
 }

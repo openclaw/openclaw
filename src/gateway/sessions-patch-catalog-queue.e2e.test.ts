@@ -9,7 +9,6 @@ import {
 } from "../agents/prepared-model-runtime.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { runExclusiveSqliteSessionWrite } from "../config/sessions/session-accessor.sqlite-scope.js";
-import { SQLITE_SESSION_WRITER_QUEUES } from "../config/sessions/store-writer-state.js";
 import { onInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 import {
   getActiveDiagnosticTraceContext,
@@ -18,16 +17,14 @@ import {
 import { flushLogger, setLoggerOverride } from "../logging/logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
+import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission.js";
 import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { ADMIN_SCOPE } from "./method-scopes.js";
 import * as modelCatalog from "./server-model-catalog.js";
 import { startGatewayServer } from "./server.js";
-import {
-  connectGatewayClient,
-  disconnectGatewayClient,
-  getGatewayE2ePortBlock,
-} from "./test-helpers.e2e.js";
+import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
+import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
 import {
   configureManualGatewayBackgroundEnv,
   MANUAL_GATEWAY_ENV_KEYS,
@@ -46,16 +43,18 @@ test("an authenticated metadata patch completes while another session awaits cat
         agents: { defaults: { workspace: state.workspaceDir } },
         diagnostics: { enabled: true },
       });
-      const port = await getGatewayE2ePortBlock();
+      const claim = await acquireGatewayE2ePortBlock();
       const token = "catalog-queue-synthetic-token";
-      server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-        sidecarStartup: "defer",
-      });
+      server = await startClaimedGateway(claim, () =>
+        startGatewayServer(claim.port, {
+          bind: "loopback",
+          auth: { mode: "token", token },
+          controlUiEnabled: false,
+          sidecarStartup: "defer",
+        }),
+      );
       client = await connectGatewayClient({
-        url: `ws://127.0.0.1:${port}`,
+        url: `ws://127.0.0.1:${claim.port}`,
         token,
         scopes: [ADMIN_SCOPE],
         clientDisplayName: "catalog queue proof",
@@ -73,10 +72,10 @@ test("an authenticated metadata patch completes while another session awaits cat
       // The overlap measures a loaded method graph, not its first lazy import.
       await client.request("sessions.patch", { key: metadataKey, pinned: false });
       const entered = createDeferredCore();
-      const originalLoader = modelCatalog.loadGatewayModelCatalog;
+      const originalLoader = modelCatalog.loadGatewayModelCatalogSnapshot;
       let catalogTrace: DiagnosticTraceContext | undefined;
       const loader = vi
-        .spyOn(modelCatalog, "loadGatewayModelCatalog")
+        .spyOn(modelCatalog, "loadGatewayModelCatalogSnapshot")
         .mockImplementation((params) => {
           catalogTrace = getActiveDiagnosticTraceContext();
           entered.resolve();
@@ -191,26 +190,19 @@ test("an authenticated metadata patch completes while another session awaits cat
         const row = expectDefined(
           records.find(
             (record) =>
-              record.message === "slow session patch" &&
+              typeof record.message === "string" &&
+              record.message.startsWith("slow session patch ") &&
               record.traceId === expectedTrace.traceId &&
               record.spanId === expectedTrace.spanId,
           ),
           "correlated patch timing record",
         );
-        return expectDefined(
-          Object.values(row).find(
-            (value): value is Record<string, unknown> =>
-              isRecord(value) && value.method === "sessions.patch",
-          ),
-          "patch timing metadata",
-        );
+        return row.message;
       };
       const catalogTiming = findPatchTiming(catalogTrace);
-      expect(catalogTiming).toMatchObject({ phaseCounts: { catalog: 1 } });
-      expect(isRecord(catalogTiming.phaseDurationsMs)).toBe(true);
-      if (isRecord(catalogTiming.phaseDurationsMs)) {
-        expect(catalogTiming.phaseDurationsMs.catalog).toBeGreaterThanOrEqual(1_000);
-      }
+      expect(catalogTiming).toEqual(expect.stringContaining("method=sessions.patch "));
+      const catalogDuration = / catalog=(\d+)ms(?: |$)/.exec(String(catalogTiming))?.[1];
+      expect(Number(catalogDuration)).toBeGreaterThanOrEqual(1_000);
       const writerTiming = findPatchTiming(writerTrace);
       expect(writerTrace?.traceId).not.toBe(catalogTrace?.traceId);
       const sqliteRow = expectDefined(

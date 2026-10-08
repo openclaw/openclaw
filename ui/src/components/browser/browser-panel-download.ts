@@ -1,4 +1,5 @@
 import { buildAssistantMediaUrl } from "../../app/assistant-media.ts";
+import { readControlUiJsonResponse } from "../../app/control-ui-auth.ts";
 import {
   postNativeBrowserMessage,
   type NativeBrowserTab,
@@ -7,7 +8,11 @@ import { t } from "../../i18n/index.ts";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { downloadBlobFile } from "../../lib/download.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { downloadBrowserDocument, type BrowserRequestClient } from "./browser-client.ts";
+import {
+  downloadBrowserDocument,
+  type BrowserDashboardTarget,
+  type BrowserRequestClient,
+} from "./browser-client.ts";
 import type { BrowserPanelView } from "./browser-panel-surface.ts";
 
 registerBrowserEnglish();
@@ -17,6 +22,7 @@ interface BrowserPanelDownloadHost {
     readonly isConnected: boolean;
     readonly resourceBasePath: string;
     readonly authToken: string | null;
+    readonly dashboardTarget?: BrowserDashboardTarget;
     requestUpdate(): void;
   };
   readonly operations: { captureClient(): BrowserRequestClient | null };
@@ -31,10 +37,13 @@ interface BrowserPanelDownloadHost {
 
 /** Saves the displayed document; address-bar edits never select the download. */
 export class BrowserPanelDownload {
-  pending = false;
   private request: AbortController | null = null;
 
   constructor(private readonly panel: BrowserPanelDownloadHost) {}
+
+  get pending(): boolean {
+    return this.request !== null;
+  }
 
   private get url(): string | null {
     const panel = this.panel;
@@ -49,21 +58,23 @@ export class BrowserPanelDownload {
     if (!url) {
       return null;
     }
-    try {
-      return ["http:", "https:"].includes(new URL(url).protocol) ? url : null;
-    } catch {
-      return null;
-    }
+    const protocol = URL.parse(url)?.protocol;
+    return protocol === "http:" || protocol === "https:" ? url : null;
   }
 
   get available(): boolean {
-    return !this.pending && !this.panel.pendingNewTab && !this.panel.loading && this.url !== null;
+    return (
+      !this.panel.host.dashboardTarget?.sessionScoped &&
+      !this.pending &&
+      !this.panel.pendingNewTab &&
+      !this.panel.loading &&
+      this.url !== null
+    );
   }
 
   cancel(): void {
     this.request?.abort();
     this.request = null;
-    this.pending = false;
   }
 
   async save(): Promise<void> {
@@ -77,7 +88,6 @@ export class BrowserPanelDownload {
     const client = nativeTab ? null : panel.operations.captureClient();
     const request = new AbortController();
     this.request = request;
-    this.pending = true;
     panel.setState("errorText", null);
     panel.setState("noticeText", null);
     panel.host.requestUpdate();
@@ -116,8 +126,8 @@ export class BrowserPanelDownload {
           },
         );
         if (!response.ok) {
-          void response.body?.cancel().catch(() => undefined);
-          throw new Error(`HTTP ${response.status}`);
+          const { errorMessage } = await readControlUiJsonResponse(response, request.signal);
+          throw new Error(errorMessage);
         }
         const content = await response.blob();
         if (!current()) {
@@ -135,7 +145,6 @@ export class BrowserPanelDownload {
     } finally {
       if (this.request === request) {
         this.request = null;
-        this.pending = false;
         panel.host.requestUpdate();
       }
     }

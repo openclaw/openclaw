@@ -13,16 +13,6 @@ let userTimeFormatter:
   | { timeZone: string; format: ResolvedTimeFormat; formatter: Intl.DateTimeFormat }
   | undefined;
 
-function buildNormalizedTimestamp(
-  timestampMs: number,
-): { timestampMs: number; timestampUtc: string } | undefined {
-  if (!Number.isSafeInteger(timestampMs)) {
-    return undefined;
-  }
-  const timestampUtc = new Date(timestampMs).toISOString();
-  return { timestampMs, timestampUtc };
-}
-
 /** Resolve a valid IANA timezone from config, host preferences, or UTC. */
 export function resolveUserTimezone(configured?: string): string {
   const trimmed = configured?.trim();
@@ -133,13 +123,7 @@ function normalizeTimestamp(
     if (/^\d+(\.\d+)?$/.test(trimmed)) {
       const num = Number(trimmed);
       if (Number.isFinite(num)) {
-        if (trimmed.includes(".")) {
-          timestampMs = Math.round(num * 1000);
-        } else if (trimmed.length >= 13) {
-          timestampMs = Math.round(num);
-        } else {
-          timestampMs = Math.round(num * 1000);
-        }
+        timestampMs = Math.round(num * (trimmed.includes(".") || trimmed.length < 13 ? 1000 : 1));
       }
     } else {
       const parsed = Date.parse(trimmed);
@@ -149,11 +133,11 @@ function normalizeTimestamp(
     }
   }
 
-  if (timestampMs === undefined || !Number.isFinite(timestampMs)) {
+  if (timestampMs === undefined || !Number.isSafeInteger(timestampMs)) {
     return undefined;
   }
   try {
-    return buildNormalizedTimestamp(timestampMs);
+    return { timestampMs, timestampUtc: new Date(timestampMs).toISOString() };
   } catch {
     return undefined;
   }
@@ -219,9 +203,9 @@ function detectSystemTimeFormat(): boolean {
   }
 
   try {
-    const sample = new Date(2000, 0, 1, 13, 0);
-    const formatted = new Intl.DateTimeFormat(undefined, { hour: "numeric" }).format(sample);
-    return formatted.includes("13");
+    // Read the declared cycle; localized hour digits need not contain ASCII "13".
+    const formatter = new Intl.DateTimeFormat(undefined, { hour: "numeric" });
+    return formatter.resolvedOptions().hour12 === false;
   } catch {
     return false;
   }
@@ -231,16 +215,7 @@ function ordinalSuffix(day: number): string {
   if (day >= 11 && day <= 13) {
     return "th";
   }
-  switch (day % 10) {
-    case 1:
-      return "st";
-    case 2:
-      return "nd";
-    case 3:
-      return "rd";
-    default:
-      return "th";
-  }
+  return ["th", "st", "nd", "rd"][day % 10] ?? "th";
 }
 
 /** Format the prompt-facing localized time string with weekday and date. */

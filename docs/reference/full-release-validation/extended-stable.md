@@ -10,18 +10,22 @@ read_when:
 
 ## Extended-stable validation
 
-Extended-stable validation uses the same checked helper with an immutable
-trusted-main Tooling SHA. Keep the exact candidate, Tooling SHA, canonical
-context, and workflow transport separate:
+Extended-stable validation uses the same candidate-owned helper: the exact
+source candidate C also owns qualification Q=C. Independently trusted P admits
+and verifies that request. Keep those roles and the canonical release context
+separate; deliberately backport missing qualification contracts before freezing C.
 
 ```bash
 VALIDATION_SHA="<exact-candidate-sha>"
-TOOLING_SHA="<recorded-full-main-ancestor-sha>"
+PUBLISHER_SHA="<recorded-full-trusted-main-ancestor-sha>"
 CONTEXT_REF="extended-stable/YYYY.M.33"
 pnpm ci:full-release \
   --sha "$VALIDATION_SHA" \
   --target-ref "$CONTEXT_REF" \
-  --workflow-sha "$TOOLING_SHA" \
+  --admission-workflow-sha "$PUBLISHER_SHA" \
+  --admission-workflow-ref main \
+  -f validation_purpose=publish \
+  -f publication_selection_json='{"route":"extended-stable","npmDistTag":"extended-stable","publishOpenclawNpm":true,"pluginPublishScope":"all-publishable","plugins":[]}' \
   -f release_profile=stable \
   -f run_release_soak=true \
   -f fail_fast=false \
@@ -30,19 +34,24 @@ pnpm ci:full-release \
   -f dispatch_release_evidence=false
 ```
 
-The helper creates `release-ci/<tooling-prefix>-<unique-id>` at the Tooling SHA,
-dispatches from that named branch, supplies the trusted-main identity, and uses
-the exact Validation SHA for both `ref` and `expected_sha` with the canonical
-branch in `target_context_ref`. GitHub workflow dispatch `--ref` accepts a branch
-or tag, not a raw SHA. Outside extended-stable validation, a direct
-canonical-branch dispatch is valid only when its head is also the trusted
-workflow implementation. Current extended-stable validation uses distinct
-trusted-main tooling and therefore requires the immutable helper.
+After independent admission, the helper creates `release-ci/<Q-prefix>-<unique-id>`
+at Q=C and dispatches from that immutable named branch. It passes the exact
+candidate as `ref` and `expected_sha`, with the canonical branch in
+`target_context_ref`. GitHub workflow dispatch `--ref` accepts a branch or tag,
+not a raw SHA. The release branch supplies context, not qualification authority.
+Never create the transport ref manually or substitute a moving-main harness.
 
-Backport product failures; make the smallest behavior-preserving repair for
-frozen-target tooling; retry provider, approval, or runner failures without a
-source change. Any branch change needs a complete new run. Do not omit required
-package, installer, update, channel, or live behavior because the target is old.
+The shared publisher requires admitted candidate-owned evidence, complete
+`rerun_group=all` coverage, and the exact successful attempt. Its protected
+`release-publish/*` ref selects P, not Q. Publication-tooling updates do not
+change the frozen candidate or qualification identities. Retained historical
+cross-revision requests keep their original recovery contract; new explicit
+main/protected diagnostic runs cannot replace Q=C publication proof.
+
+Product or qualification-harness repairs change C/Q and require new qualification.
+Provider, approval, or runner recovery retains the original identities and inputs.
+Do not omit required package, installer, update, channel, or live behavior because
+the target is old.
 
 For a regular release whose qualified Code SHA already contains final notes,
 use that same commit as the **Release SHA**. Retain its successful full
@@ -66,14 +75,14 @@ validation. See [Releasing](/reference/RELEASING) for the publication sequence.
 The conceptual phases map to current inputs:
 
 - `beta-publish`: `release_profile=beta`, `run_release_soak=false`
-- `postpublish-confidence`: exact published package plus
+- `postpublish-confidence`: `validation_purpose=postpublish-confidence`, no publication selection, exact published package plus
   `run_release_soak=true` or explicit focused groups
 - `stable-publish`: `release_profile=stable`
 
 For an actual beta package on its matching canonical release branch or beta
 tag, `all` with `release_profile=beta` and no soak records
 `coveragePolicy=npm-beta-v1`. It retains Linux, macOS, and Windows Node checks,
-Control UI, plugins, package integrity, install/update acceptance, Linux cross-OS
+Control UI, plugins, package integrity, install/update acceptance, Linux/Windows/macOS cross-OS
 package checks, QA parity, core runtime-pair/restart proof, and runtime tool
 coverage. Native app qualification, product performance, and published-package
 Telegram confidence are deferred. Broad live/E2E and QA-live also remain outside
@@ -84,8 +93,8 @@ Run deferred confidence against the exact published beta with
 `package`, or the relevant QA/live group explicitly. Selected children must
 still finish and pass their existing policy; a deferred check is **not run**,
 never passed. Stable, full, soak-enabled, and focused validation retain their
-existing confidence coverage. `main`, alpha, and non-beta targets do not qualify
-for `npm-beta-v1`.
+existing confidence coverage. `main` and non-beta targets do not qualify for
+`npm-beta-v1`.
 
 For a regular final package on its matching release branch or tag, `all` with
 `release_profile=stable` records `coveragePolicy=npm-stable-v1` and uses CI's
@@ -138,17 +147,13 @@ Codex `final`, reads randomized workspace inputs, writes their exact artifact,
 and sends explicit completion. This catches the v2026.7.1 regression where an
 ordinary progress send terminated the turn.
 
-Telegram release tests are best effort in every release profile. Selected source
-and package lanes still attempt the real Test Server flow when a Convex credential
-is available. They use the canonical 90-second lease-acquisition retry budget;
-missing broker access, an exhausted pool, or failed tests remain visible as
-failures or skips in the job summaries and evidence, but never block release
-validation. Assertions, credential isolation, lease cleanup, and exact candidate
-identity checks remain unchanged. A successful release decision does not imply
-that Telegram passed; inspect the recorded Telegram outcome separately.
+Selected source Telegram QA and standalone npm Telegram tests must pass before
+normal release validation can pass. Selected Package Acceptance Telegram must also pass in every profile. Missing credentials,
+an exhausted pool, and failed attempts do not count as successful proof. Exact
+candidate identity, credential isolation, and lease cleanup remain required.
 
 Package Acceptance Telegram E2E is automatically deferred for every beta-profile
-`all` run without soak, including beta-profile checks of `main` or alpha targets.
+`all` run without soak, including beta-profile checks of `main`.
 The effective `skip_package_telegram_e2e=true` is captured in the inputs and
 summary as **not run**. Soak-enabled runs and explicit `rerun_group=package`
 keep Telegram selected by default. The existing
@@ -156,11 +161,15 @@ keep Telegram selected by default. The existing
 deferral; it is rejected for `stable` and `full` and does not disable the focused
 `rerun_group=npm-telegram` workflow.
 
-Best effort is separate from an explicit omission. The reviewed exceptions are
-`-f telegram_waiver=2026.8.1-owner-approved` and
-`-f telegram_waiver=2026.9.1-owner-approved`. Any future exception requires a
-reviewed code change; a matching `<target-version>-owner-approved` string alone
-is not authorization. The value must name the validated target's actual
+Selected-test requirements are separate from explicit omissions. The reviewed
+Telegram-only exceptions are `2026.8.1-owner-approved` and
+`2026.9.1-owner-approved`. The reviewed Telegram and Matrix QA-live exceptions
+are `2026.9.5-owner-approved`, `2026.9.7-owner-approved`,
+`2026.9.8-owner-approved`, and `2026.9.9-owner-approved`. Pass the selected value
+with `-f telegram_waiver=<value>`.
+Any future exception requires a reviewed code change; a matching
+`<target-version>-owner-approved` string alone is not authorization. The value
+must name the validated target's actual
 `package.json` version, the sealed candidate version must match, and the profile
 must be `stable` or `full`. Beta, prerelease, and unlisted targets are rejected.
 Package-spec overrides must be exactly `openclaw@<target-version>`; blank specs
@@ -174,3 +183,9 @@ that selects Telegram, conflicts with the waiver and is rejected. The declaratio
 target version bind the immutable execution plan, manifest, and reuse identity;
 the publisher carries the waiver into release verification notes. The beta-only
 package deferral above remains unchanged.
+
+Source Telegram QA uses the release checks' shared context check: an exact candidate
+SHA must remain an ancestor of its canonical branch, or equal its release tag.
+Both build and execution admission independently repeat that check and retain
+candidate-version, signature/merge-attribution, and live maintainer checks.
+Advancing a release branch does not select a new candidate or invalidate the old one.

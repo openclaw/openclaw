@@ -1,82 +1,71 @@
-// A failing legacy-config copy must surface, not silently leave doctor
-// looking like a clean fresh install while the operator's config exists.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 
-const envKeys = ["HOME", "OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"] as const;
-const savedEnv = new Map<string, string | undefined>();
-
+const envKeys = ["HOME", "OPENCLAW_HOME", "OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"] as const;
 function setEnv(values: Partial<Record<(typeof envKeys)[number], string>>) {
   for (const key of envKeys) {
-    if (!savedEnv.has(key)) {
-      savedEnv.set(key, process.env[key]);
-    }
-    const value = values[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
+    vi.stubEnv(key, values[key]);
   }
 }
+afterEach(() => vi.unstubAllEnvs());
 
-afterEach(() => {
-  for (const [key, value] of savedEnv) {
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-  savedEnv.clear();
-});
+describe("Doctor legacy config rename", () => {
+  it("renames the config after root relocation and leaves a second pass unchanged", async () => {
+    await withTempDir("openclaw-doctor-legacy-rename-", async (home) => {
+      const stateDir = path.join(home, ".openclaw");
+      const legacyPath = path.join(stateDir, "clawdbot.json");
+      const configPath = path.join(stateDir, "openclaw.json");
+      await fs.mkdir(stateDir);
+      await fs.writeFile(legacyPath, "{}\n");
+      const original = await fs.stat(legacyPath, { bigint: true });
+      setEnv({ HOME: home });
+      await runDoctorConfigPreflight({ migrateState: false, invalidConfigNote: false });
+      const renamed = await fs.stat(configPath, { bigint: true });
+      expect([renamed.dev, renamed.ino]).toEqual([original.dev, original.ino]);
+      await expect(fs.readFile(configPath, "utf8")).resolves.toBe("{}\n");
+      await expect(fs.stat(legacyPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await runDoctorConfigPreflight({ migrateState: false, invalidConfigNote: false });
+      const again = await fs.stat(configPath, { bigint: true });
+      expect([again.dev, again.ino, again.mtimeNs]).toEqual([
+        renamed.dev,
+        renamed.ino,
+        renamed.mtimeNs,
+      ]);
+    });
+  });
 
-describe("doctor legacy config migration failures", () => {
-  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
-    "surfaces a copy failure instead of proceeding as a fresh install",
-    async () => {
-      await withTempDir("openclaw-doctor-legacy-copy-", async (home) => {
-        const legacyDir = path.join(home, ".clawdbot");
-        await fs.mkdir(legacyDir, { recursive: true });
-        await fs.writeFile(path.join(legacyDir, "clawdbot.json"), "{}\n", "utf-8");
-        const targetDir = path.join(home, "readonly-state");
-        await fs.mkdir(targetDir, { recursive: true });
-        await fs.chmod(targetDir, 0o555);
+  it.each(["both-roots", "OPENCLAW_HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"] as const)(
+    "leaves legacy config untouched with %s",
+    async (selector) => {
+      await withTempDir("openclaw-doctor-legacy-control-", async (home) => {
+        const stateDir = path.join(home, ".openclaw");
+        const source = path.join(stateDir, "clawdbot.json");
+        const target = path.join(stateDir, "openclaw.json");
+        await fs.mkdir(stateDir);
+        await fs.writeFile(source, "{}\n");
+        if (selector === "both-roots") {
+          await fs.mkdir(path.join(home, ".clawdbot"));
+        }
         setEnv({
           HOME: home,
-          OPENCLAW_CONFIG_PATH: path.join(targetDir, "openclaw.json"),
-          OPENCLAW_STATE_DIR: path.join(home, "state"),
+          ...(selector === "both-roots"
+            ? {}
+            : {
+                [selector]:
+                  selector === "OPENCLAW_HOME"
+                    ? home
+                    : selector === "OPENCLAW_STATE_DIR"
+                      ? stateDir
+                      : target,
+              }),
         });
-
-        try {
-          await expect(
-            runDoctorConfigPreflight({ migrateState: false, invalidConfigNote: false }),
-          ).rejects.toThrow(/Failed to migrate legacy config/);
-        } finally {
-          await fs.chmod(targetDir, 0o755);
-        }
+        await runDoctorConfigPreflight({ migrateState: false, invalidConfigNote: false });
+        await expect(fs.readFile(source, "utf8")).resolves.toBe("{}\n");
+        await expect(fs.stat(target)).rejects.toMatchObject({ code: "ENOENT" });
       });
     },
   );
-
-  it("migrates the legacy config and reports the change when the copy works", async () => {
-    await withTempDir("openclaw-doctor-legacy-copy-", async (home) => {
-      const legacyDir = path.join(home, ".clawdbot");
-      await fs.mkdir(legacyDir, { recursive: true });
-      await fs.writeFile(path.join(legacyDir, "clawdbot.json"), "{}\n", "utf-8");
-      const targetPath = path.join(home, "state-root", "openclaw.json");
-      setEnv({
-        HOME: home,
-        OPENCLAW_CONFIG_PATH: targetPath,
-        OPENCLAW_STATE_DIR: path.join(home, "state"),
-      });
-
-      await runDoctorConfigPreflight({ migrateState: false, invalidConfigNote: false });
-
-      await expect(fs.readFile(targetPath, "utf-8")).resolves.toBe("{}\n");
-    });
-  });
 });

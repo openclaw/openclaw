@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBindMode } from "../config/types.gateway.js";
 import { dashboardCommand } from "./dashboard.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
@@ -11,7 +12,7 @@ const mocks = vi.hoisted(() => ({
   issueDeviceBootstrapToken: vi.fn(),
   openUrl: vi.fn(),
   inspectPortUsage: vi.fn(),
-  ensureGatewayReadyForOperation: vi.fn(),
+  ensureDashboardGatewayReady: vi.fn(),
   waitForControlUiDocument: vi.fn(),
 }));
 
@@ -40,7 +41,7 @@ vi.mock("../infra/ports-inspect.js", () => ({
 }));
 
 vi.mock("./gateway-readiness.js", () => ({
-  ensureGatewayReadyForOperation: mocks.ensureGatewayReadyForOperation,
+  ensureDashboardGatewayReady: mocks.ensureDashboardGatewayReady,
 }));
 
 vi.mock("./control-ui-handoff.js", async (importOriginal) => ({
@@ -48,11 +49,7 @@ vi.mock("./control-ui-handoff.js", async (importOriginal) => ({
   waitForControlUiDocument: mocks.waitForControlUiDocument,
 }));
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-};
+const runtime = createTestRuntime();
 
 type SnapshotParams = {
   token?: string;
@@ -134,8 +131,8 @@ describe("dashboardCommand bind selection", () => {
     });
     mocks.openUrl.mockClear();
     mocks.inspectPortUsage.mockReset();
-    mocks.ensureGatewayReadyForOperation.mockReset();
-    mocks.ensureGatewayReadyForOperation.mockResolvedValue({
+    mocks.ensureDashboardGatewayReady.mockReset();
+    mocks.ensureDashboardGatewayReady.mockResolvedValue({
       ready: true,
       status: {},
       recovered: false,
@@ -188,13 +185,12 @@ describe("dashboardCommand bind selection", () => {
 
     await dashboardCommand(runtime, { noOpen: true });
 
-    expect(mocks.ensureGatewayReadyForOperation).toHaveBeenCalledWith(
+    expect(mocks.ensureDashboardGatewayReady).toHaveBeenCalledWith(
       expect.objectContaining({
         probeUrl: `ws://${params.host}:18789`,
-        readyWhenReachable: true,
       }),
     );
-    expect(mocks.ensureGatewayReadyForOperation.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(mocks.ensureDashboardGatewayReady.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.inspectPortUsage.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
     expect(mocks.resolveControlUiLinks).toHaveBeenCalledWith({
@@ -266,7 +262,7 @@ describe("dashboardCommand bind selection", () => {
 
     await dashboardCommand(runtime);
 
-    expect(mocks.ensureGatewayReadyForOperation).not.toHaveBeenCalled();
+    expect(mocks.ensureDashboardGatewayReady).not.toHaveBeenCalled();
     expect(mocks.issueDeviceBootstrapToken).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
     expect(runtime.exit).toHaveBeenCalledWith(1);
@@ -286,7 +282,7 @@ describe("dashboardCommand bind selection", () => {
             }
           : { httpUrl: "http://127.0.0.1:18789/", wsUrl: "ws://127.0.0.1:18789" },
     );
-    mocks.ensureGatewayReadyForOperation
+    mocks.ensureDashboardGatewayReady
       .mockResolvedValueOnce({ ready: true, status: {}, recovered: true })
       .mockResolvedValueOnce({
         ready: false,
@@ -297,15 +293,14 @@ describe("dashboardCommand bind selection", () => {
 
     await dashboardCommand(runtime, { noOpen: true, yes: true });
 
-    expect(mocks.ensureGatewayReadyForOperation).toHaveBeenNthCalledWith(
+    expect(mocks.ensureDashboardGatewayReady).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({ probeUrl: "ws://10.0.0.5:18789" }),
     );
-    expect(mocks.ensureGatewayReadyForOperation).toHaveBeenNthCalledWith(
+    expect(mocks.ensureDashboardGatewayReady).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         probeUrl: "ws://10.0.0.6:18789",
-        readyWhenReachable: true,
         allowInstall: false,
         interactive: false,
       }),
@@ -330,7 +325,7 @@ describe("dashboardCommand bind selection", () => {
 
     await dashboardCommand(runtime, { noOpen: true });
 
-    expect(mocks.ensureGatewayReadyForOperation).toHaveBeenCalledWith(
+    expect(mocks.ensureDashboardGatewayReady).toHaveBeenCalledWith(
       expect.objectContaining({ probeUrl: `wss://${params.host}:18789` }),
     );
     expect(mocks.resolveControlUiLinks).toHaveBeenCalledWith({

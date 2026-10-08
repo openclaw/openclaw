@@ -1,12 +1,13 @@
-// Msteams plugin module implements resolve allowlist behavior.
-import { mapAllowlistResolutionInputs } from "openclaw/plugin-sdk/allow-from";
+import {
+  mapAllowlistResolutionInputs,
+  type BasicAllowlistResolutionEntry,
+} from "openclaw/plugin-sdk/allow-from";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MSTeamsConfig } from "../runtime-api.js";
 import { findGraphUsersByExactIdentity } from "./graph-users.js";
 import {
   listChannelsForTeamWithPageInfo,
   listTeamsByNameWithPageInfo,
-  normalizeQuery,
   resolveGraphToken,
   type GraphChannel,
   type GraphGroup,
@@ -25,21 +26,9 @@ type MSTeamsChannelResolution = {
   note?: string;
 };
 
-type MSTeamsUserResolution = {
-  input: string;
-  resolved: boolean;
-  id?: string;
-  name?: string;
-  note?: string;
-};
-
 type StableMSTeamsTeamIdMode = "bot-framework" | "graph";
 
 const MSTEAMS_GROUP_CONVERSATION_ID = /^19:.+@thread\.(?:tacv2|skype|v2)$/i;
-
-function normalizeExactMatch(value?: string | null): string {
-  return normalizeLowercaseStringOrEmpty(value ?? "");
-}
 
 function uniqueItemsById<T extends { id?: string }>(items: T[]): T[] {
   const byId = new Map<string, T>();
@@ -52,26 +41,22 @@ function uniqueItemsById<T extends { id?: string }>(items: T[]): T[] {
   return [...byId.values()];
 }
 
-function findExactTeams(items: GraphGroup[], query: string): GraphGroup[] {
-  const normalized = normalizeExactMatch(query);
+function findExactNames<T extends { id?: string; displayName?: string }>(
+  items: T[],
+  query: string,
+): T[] {
+  const normalized = normalizeLowercaseStringOrEmpty(query);
   return uniqueItemsById(
-    items.filter((item) => normalizeExactMatch(item.displayName) === normalized),
-  );
-}
-
-function findExactChannels(items: GraphChannel[], query: string): GraphChannel[] {
-  const normalized = normalizeExactMatch(query);
-  return uniqueItemsById(
-    items.filter((item) => normalizeExactMatch(item.displayName) === normalized),
+    items.filter((item) => normalizeLowercaseStringOrEmpty(item.displayName) === normalized),
   );
 }
 
 function findExactUsers(items: GraphUser[], query: string): GraphUser[] {
-  const normalized = normalizeExactMatch(query);
+  const normalized = normalizeLowercaseStringOrEmpty(query);
   return uniqueItemsById(
     items.filter((item) =>
       [item.displayName, item.mail, item.userPrincipalName].some(
-        (value) => normalizeExactMatch(value) === normalized,
+        (value) => normalizeLowercaseStringOrEmpty(value) === normalized,
       ),
     ),
   );
@@ -100,7 +85,9 @@ export function projectStableMSTeamsUserAllowlist(entries?: string[]): string[] 
   const projected = entries
     .map((entry) => normalizeStaticMSTeamsAllowEntry(entry))
     .filter((entry): entry is string => Boolean(entry));
-  return [...new Map(projected.map((entry) => [normalizeExactMatch(entry), entry])).values()];
+  return [
+    ...new Map(projected.map((entry) => [normalizeLowercaseStringOrEmpty(entry), entry])).values(),
+  ];
 }
 
 export function projectStableMSTeamsGroupAllowlist(entries?: string[]): string[] | undefined {
@@ -122,7 +109,7 @@ export function projectStableMSTeamsGroupAllowlist(entries?: string[]): string[]
       projected.map((entry) => [
         MSTEAMS_GROUP_CONVERSATION_ID.test(entry)
           ? `conversation:${entry}`
-          : normalizeExactMatch(entry),
+          : normalizeLowercaseStringOrEmpty(entry),
         entry,
       ]),
     ).values(),
@@ -161,8 +148,7 @@ export function parseMSTeamsConversationId(raw: string): string | null {
   if (!/^conversation:/i.test(trimmed)) {
     return null;
   }
-  const id = trimmed.slice("conversation:".length).trim();
-  return id;
+  return trimmed.slice("conversation:".length).trim();
 }
 
 /**
@@ -178,33 +164,15 @@ export function parseMSTeamsConversationId(raw: string): string | null {
  */
 export function looksLikeMSTeamsConversationId(raw: string): boolean {
   const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (/^conversation:/i.test(trimmed)) {
-    return true;
-  }
-  // Bare Bot Framework / Graph conversation id formats.
-  // Channel / group ids always start with `19:` and include an `@thread.*`
-  // suffix (`@thread.tacv2`, `@thread.v2`, or the legacy `@thread.skype`). Personal chat
-  // ids come in three shapes: `a:1...` (Bot Framework), `8:orgid:...`
-  // (org-scoped Bot Framework), and `19:{userId}_{appId}@unq.gbl.spaces`
-  // (Graph API 1:1 chat thread). Bot Framework user ids use `29:...`.
-  if (MSTEAMS_GROUP_CONVERSATION_ID.test(trimmed)) {
-    return true;
-  }
-  if (/^19:.+@unq\.gbl\.spaces$/i.test(trimmed)) {
-    return true;
-  }
-  if (/^a:1[A-Za-z0-9_-]+$/i.test(trimmed)) {
-    return true;
-  }
-  if (/^8:orgid:[A-Za-z0-9-]+$/i.test(trimmed)) {
-    return true;
-  }
-  // Fallback: anything containing @thread is still treated as a conversation
-  // id so the current matches for tenant-specific suffixes remain accepted.
-  return /@thread\b/i.test(trimmed);
+  return (
+    /^conversation:/i.test(trimmed) ||
+    MSTEAMS_GROUP_CONVERSATION_ID.test(trimmed) ||
+    /^19:.+@unq\.gbl\.spaces$/i.test(trimmed) ||
+    /^a:1[A-Za-z0-9_-]+$/i.test(trimmed) ||
+    /^8:orgid:[A-Za-z0-9-]+$/i.test(trimmed) ||
+    // Preserve tenant-specific thread suffixes beyond the known Graph formats.
+    /@thread\b/i.test(trimmed)
+  );
 }
 
 /**
@@ -365,7 +333,7 @@ export async function resolveMSTeamsChannelAllowlist(params: {
         if (result.truncated) {
           return { input, resolved: false, note: "team lookup incomplete" };
         }
-        const exactTeams = findExactTeams(result.items, team);
+        const exactTeams = findExactNames(result.items, team);
         const [exactTeam] = exactTeams;
         if (!exactTeam) {
           return { input, resolved: false, note: "team not found" };
@@ -400,7 +368,7 @@ export async function resolveMSTeamsChannelAllowlist(params: {
       } catch {
         return { input, resolved: false, note: "channel lookup failed" };
       }
-      const generalChannels = findExactChannels(teamChannels, "general");
+      const generalChannels = findExactNames(teamChannels, "general");
       if (params.teamIdMode !== "graph" && generalChannels.length !== 1) {
         return {
           input,
@@ -424,7 +392,7 @@ export async function resolveMSTeamsChannelAllowlist(params: {
         };
       }
       const channelById = teamChannels.find((item) => item.id === channel);
-      const exactChannels = channelById ? [channelById] : findExactChannels(teamChannels, channel);
+      const exactChannels = channelById ? [channelById] : findExactNames(teamChannels, channel);
       if (exactChannels.length === 0) {
         return { input, resolved: false, note: "channel not found" };
       }
@@ -544,7 +512,7 @@ export async function resolveMSTeamsTeamsConfig(params: {
 export async function resolveMSTeamsUserAllowlist(params: {
   cfg: unknown;
   entries: string[];
-}): Promise<MSTeamsUserResolution[]> {
+}): Promise<BasicAllowlistResolutionEntry[]> {
   let tokenPromise: Promise<string> | undefined;
   const getToken = () => {
     tokenPromise ??= resolveGraphToken(params.cfg);
@@ -552,8 +520,8 @@ export async function resolveMSTeamsUserAllowlist(params: {
   };
   return await mapAllowlistResolutionInputs({
     inputs: params.entries,
-    mapInput: async (input): Promise<MSTeamsUserResolution> => {
-      const query = normalizeQuery(normalizeMSTeamsUserInput(input));
+    mapInput: async (input): Promise<BasicAllowlistResolutionEntry> => {
+      const query = normalizeMSTeamsUserInput(input);
       if (!query) {
         return { input, resolved: false };
       }

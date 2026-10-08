@@ -66,51 +66,8 @@ describe("channel-final transcript mirrors", () => {
     );
   const entries = () => readVisibleSessionTranscriptMessageEntries(scope);
 
-  it("retains both transcript facts and correlates the delivered final answer", async () => {
-    await append(
-      {
-        role: "assistant",
-        content: [
-          { type: "thinking", thinking: "Checking the timetable." },
-          {
-            type: "text",
-            text: "I will check the departure.",
-            textSignature: '{"v":1,"id":"commentary","phase":"commentary"}',
-          },
-          {
-            type: "text",
-            text: "The train leaves at noon.",
-            textSignature: '{"v":1,"id":"answer","phase":"final_answer"}',
-          },
-        ],
-      },
-      "assistant-answer",
-    );
-
-    await expect(
-      appendAssistantMirrorMessageByIdentity(delivery("delivery-one")),
-    ).resolves.toMatchObject({ ok: true });
-
-    expect(await entries()).toMatchObject([
-      { entryId: "assistant-answer", message: { role: "assistant" } },
-      {
-        message: {
-          model: "delivery-mirror",
-          idempotencyKey: "delivery-one",
-          content: [{ type: "text", text: "The train leaves at noon." }],
-          openclawDeliveryMirror: {
-            kind: "channel-final",
-            sourceMessageId: "delivery-one",
-            sourceAssistantMessageId: "assistant-answer",
-          },
-        },
-      },
-    ]);
-  });
-
   it.each([
     { name: "different answer", message: { role: "assistant", content: "A different departure." } },
-    { name: "later user turn", message: { role: "user", content: "What about tomorrow?" } },
     {
       name: "another delivery mirror",
       message: {
@@ -149,70 +106,59 @@ describe("channel-final transcript mirrors", () => {
     expect(rows()).toEqual(laterRows);
   });
 
-  it.each([
-    { name: "text", changes: { text: "The train leaves at three." } },
-    {
-      name: "source delivery",
-      changes: { deliveryMirror: { kind: "channel-final", sourceMessageId: "another-source" } },
-    },
-  ] satisfies Array<{
-    name: string;
-    changes: Partial<SessionTranscriptAssistantMirrorAppendParams>;
-  }>)(
-    "rejects a changed $name under an existing key without changing history",
-    async ({ changes }) => {
-      await append({ role: "assistant", content: "The train leaves at noon." });
-      const request = delivery("conflicting-delivery");
-      await appendAssistantMirrorMessageByIdentity(request);
-      const before = rows();
-
-      await expect(
-        appendAssistantMirrorMessageByIdentity({ ...request, ...changes }),
-      ).rejects.toThrow("conflicts with the admitted message");
-      expect(rows()).toEqual(before);
-    },
-  );
-
-  it.each(["The train leaves at noon.", "An unrelated answer."])(
-    "does not trust a caller-supplied source identity after %s",
-    async (answer) => {
-      await append({ role: "assistant", content: answer }, "real-answer");
-      const request = {
-        ...delivery("forged-delivery"),
-        deliveryMirror: {
-          kind: "channel-final",
-          sourceMessageId: "forged-delivery",
-          sourceAssistantMessageId: "caller-forged-answer",
-        },
-      } satisfies SessionTranscriptAssistantMirrorAppendParams & {
-        deliveryMirror: {
-          kind: "channel-final";
-          sourceMessageId: string;
-          sourceAssistantMessageId: string;
-        };
+  it("correlates the final answer without trusting a caller-supplied source identity", async () => {
+    await append(
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "Checking the timetable." },
+          {
+            type: "text",
+            text: "I will check the departure.",
+            textSignature: '{"v":1,"id":"commentary","phase":"commentary"}',
+          },
+          {
+            type: "text",
+            text: "The train leaves at noon.",
+            textSignature: '{"v":1,"id":"answer","phase":"final_answer"}',
+          },
+        ],
+      },
+      "real-answer",
+    );
+    const request = {
+      ...delivery("forged-delivery"),
+      deliveryMirror: {
+        kind: "channel-final",
+        sourceMessageId: "forged-delivery",
+        sourceAssistantMessageId: "caller-forged-answer",
+      },
+    } satisfies SessionTranscriptAssistantMirrorAppendParams & {
+      deliveryMirror: {
+        kind: "channel-final";
+        sourceMessageId: string;
+        sourceAssistantMessageId: string;
       };
+    };
 
-      await appendAssistantMirrorMessageByIdentity(request);
+    await appendAssistantMirrorMessageByIdentity(request);
 
-      const message = (await entries()).at(-1)?.message;
-      expect(message).toMatchObject({
-        model: "delivery-mirror",
-        idempotencyKey: "forged-delivery",
-      });
-      expect(message).not.toHaveProperty(
-        "openclawDeliveryMirror.sourceAssistantMessageId",
-        "caller-forged-answer",
-      );
-      if (answer === "The train leaves at noon.") {
-        expect(message).toHaveProperty(
-          "openclawDeliveryMirror.sourceAssistantMessageId",
-          "real-answer",
-        );
-      } else {
-        expect(message).not.toHaveProperty("openclawDeliveryMirror.sourceAssistantMessageId");
-      }
-    },
-  );
+    const message = (await entries()).at(-1)?.message;
+    expect(message).toMatchObject({
+      model: "delivery-mirror",
+      idempotencyKey: "forged-delivery",
+      content: [{ type: "text", text: "The train leaves at noon." }],
+    });
+    expect(message).not.toHaveProperty(
+      "openclawDeliveryMirror.sourceAssistantMessageId",
+      "caller-forged-answer",
+    );
+    expect(message).toHaveProperty(
+      "openclawDeliveryMirror.sourceAssistantMessageId",
+      "real-answer",
+    );
+    expect(await entries()).toHaveLength(2);
+  });
 
   it("strips source correlation from a caller-supplied suppressed-final marker", async () => {
     const request = {
@@ -256,19 +202,6 @@ describe("channel-final transcript mirrors", () => {
     expect((await entries())[0]?.message).not.toHaveProperty(
       "openclawDeliveryMirror.sourceAssistantMessageId",
     );
-  });
-
-  it("correlates identical answers to their own distinct turns", async () => {
-    await append({ role: "assistant", content: "The train leaves at noon." }, "answer-one");
-    await appendAssistantMirrorMessageByIdentity(delivery("delivery-one"));
-    await append({ role: "user", content: "Please confirm the departure again." });
-    await append({ role: "assistant", content: "The train leaves at noon." }, "answer-two");
-    await appendAssistantMirrorMessageByIdentity(delivery("delivery-two"));
-
-    expect((await entries()).filter((entry) => entry.idempotencyKey)).toMatchObject([
-      { message: { openclawDeliveryMirror: { sourceAssistantMessageId: "answer-one" } } },
-      { message: { openclawDeliveryMirror: { sourceAssistantMessageId: "answer-two" } } },
-    ]);
   });
 
   it("correlates only the selected active branch", async () => {

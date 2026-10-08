@@ -66,7 +66,7 @@ const mockGrokProvider = vi.hoisted(() => ({
     config,
     prompter,
   }: {
-    config: Record<string, unknown>;
+    config: OpenClawConfig;
     prompter: { select: (params: Record<string, unknown>) => Promise<string> };
   }) => {
     const enableXSearch = await prompter.select({
@@ -83,22 +83,18 @@ const mockGrokProvider = vi.hoisted(() => ({
       message: "Grok model",
       options: [{ value: "grok-4.3", label: "grok-4.3" }],
     });
-    const pluginEntries = (config.plugins as { entries?: Record<string, unknown> } | undefined)
-      ?.entries;
-    const existingXaiEntry = pluginEntries?.xai as Record<string, unknown> | undefined;
-    const existingXaiConfig = (
-      pluginEntries?.xai as { config?: Record<string, unknown> } | undefined
-    )?.config;
+    const pluginEntries = config.plugins?.entries;
+    const existingXaiEntry = pluginEntries?.xai;
     return {
       ...config,
       plugins: {
-        ...(config.plugins as Record<string, unknown> | undefined),
+        ...config.plugins,
         entries: {
           ...pluginEntries,
           xai: {
             ...existingXaiEntry,
             config: {
-              ...existingXaiConfig,
+              ...existingXaiEntry?.config,
               xSearch: {
                 enabled: true,
                 model,
@@ -131,14 +127,8 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
 }));
 
 const ensureOnboardingPluginInstalled = vi.hoisted(() =>
-  vi.fn(
-    async ({
-      cfg,
-      entry,
-    }: {
-      cfg: { plugins?: { installs?: Record<string, unknown> } };
-      entry: { pluginId: string; install: { npmSpec?: string } };
-    }) => ({
+  vi.fn<typeof import("../commands/onboarding-plugin-install.js").ensureOnboardingPluginInstalled>(
+    async ({ cfg, entry }) => ({
       cfg: {
         ...cfg,
         plugins: {
@@ -164,29 +154,23 @@ vi.mock("../commands/onboarding-plugin-install.js", () => ({
   ensureOnboardingPluginInstalled,
 }));
 
-function latestPluginInstallRequest(): {
-  autoConfirmSingleSource?: boolean;
-  beforePersistentEffect?: () => Promise<void>;
-  entry?: {
-    install?: { npmSpec?: string };
-    label?: string;
-    pluginId?: string;
-    trustedSourceLinkedOfficialInstall?: boolean;
-  };
-} {
-  const [request] = ensureOnboardingPluginInstalled.mock.calls.at(-1) as unknown as [
-    {
-      autoConfirmSingleSource?: boolean;
-      beforePersistentEffect?: () => Promise<void>;
-      entry?: {
-        install?: { npmSpec?: string };
-        label?: string;
-        pluginId?: string;
-        trustedSourceLinkedOfficialInstall?: boolean;
-      };
+function latestPluginInstallRequest() {
+  return expectDefined(
+    ensureOnboardingPluginInstalled.mock.calls.at(-1),
+    "plugin install request",
+  )[0];
+}
+
+function grokPluginsWithCredential(enabled?: boolean): OpenClawConfig["plugins"] {
+  return {
+    allow: ["xai"],
+    entries: {
+      xai: {
+        ...(enabled === undefined ? {} : { enabled }),
+        config: { webSearch: { apiKey: "xai-test-key" } },
+      },
     },
-  ];
-  return request;
+  };
 }
 
 describe("runSearchSetupFlow", () => {
@@ -296,43 +280,19 @@ describe("runSearchSetupFlow", () => {
     );
   });
 
-  it("runs provider-owned setup after selecting Grok web search", async () => {
-    const select = vi
-      .fn()
-      .mockResolvedValueOnce("grok")
-      .mockResolvedValueOnce("yes")
-      .mockResolvedValueOnce("grok-4.3");
-    const text = vi.fn().mockResolvedValue("xai-test-key");
-    const prompter = createWizardPrompter({
-      select: select as never,
-      text: text as never,
-    });
-
-    const { config: next, outcome } = await runSearchSetupFlow(
-      { plugins: { allow: ["xai"] } },
-      createNonExitingRuntime(),
-      prompter,
-    );
-
-    expect(outcome).toBe("completed");
-
-    const xaiConfig = next.plugins?.entries?.xai?.config as
-      | { webSearch?: { apiKey?: string }; xSearch?: { enabled?: boolean; model?: string } }
-      | undefined;
-    expect(xaiConfig?.webSearch?.apiKey).toBe("xai-test-key");
-    expect(next.tools?.web?.search?.provider).toBe("grok");
-    expect(next.tools?.web?.search?.enabled).toBe(true);
-    expect(xaiConfig?.xSearch?.enabled).toBe(true);
-    expect(xaiConfig?.xSearch?.model).toBe("grok-4.3");
-  });
-
   it("shows provider notes in every search provider row label", async () => {
     const select = vi.fn().mockResolvedValueOnce("__skip__");
     const prompter = createWizardPrompter({
       select: select as never,
     });
 
-    await runSearchSetupFlow({ plugins: { allow: ["xai"] } }, createNonExitingRuntime(), prompter);
+    await withEnvAsync({ XAI_API_KEY: undefined }, async () => {
+      await runSearchSetupFlow(
+        { plugins: { allow: ["xai"] } },
+        createNonExitingRuntime(),
+        prompter,
+      );
+    });
 
     const options = select.mock.calls[0]?.[0]?.options as
       | Array<{ value: string; label?: string; hint?: string }>
@@ -488,19 +448,7 @@ describe("runSearchSetupFlow", () => {
 
     await runSearchSetupFlow(
       {
-        plugins: {
-          allow: ["xai"],
-          entries: {
-            xai: {
-              enabled: true,
-              config: {
-                webSearch: {
-                  apiKey: "xai-test-key",
-                },
-              },
-            },
-          },
-        },
+        plugins: grokPluginsWithCredential(true),
       },
       createNonExitingRuntime(),
       prompter,
@@ -522,19 +470,7 @@ describe("runSearchSetupFlow", () => {
 
     const { config: next } = await runSearchSetupFlow(
       {
-        plugins: {
-          allow: ["xai"],
-          entries: {
-            xai: {
-              enabled: true,
-              config: {
-                webSearch: {
-                  apiKey: "xai-test-key",
-                },
-              },
-            },
-          },
-        },
+        plugins: grokPluginsWithCredential(true),
         tools: {
           web: {
             search: {
@@ -565,18 +501,7 @@ describe("runSearchSetupFlow", () => {
 
     const { config: next } = await runSearchSetupFlow(
       {
-        plugins: {
-          allow: ["xai"],
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "xai-test-key",
-                },
-              },
-            },
-          },
-        },
+        plugins: grokPluginsWithCredential(),
         tools: {
           web: {
             search: {

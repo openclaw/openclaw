@@ -1,7 +1,9 @@
-// Control UI view renders the dreaming on/off confirmation screen content.
 import { html, nothing } from "lit";
 import { t } from "../../../i18n/index.ts";
 import "../../../components/modal-dialog.ts";
+import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
+
+registerDreamingEnglish();
 
 type DreamingToggleConfirmationProps = {
   open: boolean;
@@ -20,16 +22,11 @@ export function renderDreamingToggleConfirmation(props: DreamingToggleConfirmati
   }
   const titleId = "dreaming-toggle-confirmation-title";
   const descriptionId = "dreaming-toggle-confirmation-description";
-  const title = props.enabling
-    ? t("dreaming.toggleConfirmation.enableTitle")
-    : t("dreaming.toggleConfirmation.disableTitle");
+  const action = props.enabling ? "enable" : "disable";
+  const title = t(`dreaming.toggleConfirmation.${action}Title`);
   const description = t("dreaming.toggleConfirmation.subtitle");
-  const detail = props.enabling
-    ? t("dreaming.toggleConfirmation.enableDetail")
-    : t("dreaming.toggleConfirmation.disableDetail");
-  const confirmLabel = props.enabling
-    ? t("dreaming.toggleConfirmation.enableConfirm")
-    : t("dreaming.toggleConfirmation.disableConfirm");
+  const detail = t(`dreaming.toggleConfirmation.${action}Detail`);
+  const confirmLabel = t(`dreaming.toggleConfirmation.${action}Confirm`);
   const handleCancel = () => {
     if (!props.loading) {
       props.onCancel();

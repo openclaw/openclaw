@@ -1,11 +1,19 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { TriageUpdateFailure } from "../commands/triage-update.js";
-import { buildRestartSentinelRow, parseRestartSentinelEnvelope } from "./restart-sentinel-store.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
+import { buildRestartSentinelRow } from "./restart-sentinel-store.js";
 import { managedServiceStateUpdateScript } from "./update-managed-service-handoff-state.test-support.js";
+import type { UpdateRequester } from "./update-requester-authority.js";
 import { buildUpdateRestartSentinelPayload } from "./update-restart-sentinel-payload.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import type { UpdateRunResult } from "./update-runner-types.js";
+
+const testNodeExecPath = resolveTestNodeExecPath();
+
+export function isManagedServiceInspectionCommand(command: string): boolean {
+  return /^(?:--user )?(?:show|print) /.test(command);
+}
 
 type ManagedSystemdPostExitState = {
   activeState: string;
@@ -35,10 +43,13 @@ export type ManagedServiceManagerBoundaryOptions = {
   systemdHandoffFailure?: boolean;
   systemdPostExitStates?: ManagedSystemdPostExitState[];
   systemdStopDelayMs?: number;
+  expireParentWhileStopPending?: boolean;
+  originalRecovery?: UpdateRunResult["recovery"];
   revokeOwner?: boolean;
-  requester?: { channel?: string; accountId?: string; senderId?: string };
+  requester?: UpdateRequester;
   updaterExitCode?: number;
   recoveryExitCode?: number;
+  recoveryTimeoutMs?: number;
   recoveryChecksServiceIdentity?: true;
   recoveryHang?: boolean;
   recoveryClockAdvanceMs?: number;
@@ -51,7 +62,7 @@ export type ManagedServiceManagerBoundaryOptions = {
   updaterResult?: unknown;
   updaterOutput?: "malformed" | "overflow" | "missing" | "split-utf8";
   updaterSignal?: boolean;
-  updaterNotification?: "published" | "consumed";
+  updaterNotification?: "published" | "consumed" | "consumed-before-exit";
   gatewayHealth?: "ready" | "unready" | "wrong-version" | "wrong-build" | "exited" | "throw";
   diagnosticReadFailure?: "before-recovery" | "after-recovery";
 };
@@ -63,14 +74,6 @@ export type ManagedServiceCommandTiming = {
 };
 
 export type ManagedServiceManagerBoundaryResult = {
-  helperExitCode?: number | null;
-  repairEffects?: {
-    firstSpawn: boolean;
-    secondSpawn: boolean;
-    firstExec: boolean;
-    secondExec: boolean;
-    secondWrite: boolean;
-  };
   run?: UpdateRunRecord;
   commands: string[];
   parentSignal: NodeJS.Signals | null;
@@ -81,6 +84,15 @@ export type ManagedServiceManagerBoundaryResult = {
   triageDeadline?: { requestedMs: number; descendantPid: number };
   savedFailure: { path: string; mode: number; contents: TriageUpdateFailure } | null;
   sensitiveFilesRemoved: boolean;
+  parkAdmitted?: boolean;
+  stopSettlement?: {
+    pid: number;
+    closed: boolean;
+    code: number | null;
+    signal: string | null;
+    parentKilledWhileStopPending: boolean;
+    failedWhileStopPending: boolean;
+  };
 };
 
 type ManagedSystemdFailureCase = readonly [string, ManagedSystemdPostExitState];
@@ -253,7 +265,7 @@ export function registerManagedSystemdHandoffConvergenceTests(
     expect(
       commands.filter((command) => command.includes("start openclaw-gateway.service")),
     ).toHaveLength(0);
-    expect(state).toEqual({ nativeRelease: {} });
+    expect(state).toEqual({});
     expect(sentinel).toMatchObject({
       payload: {
         status: "skipped",
@@ -291,18 +303,19 @@ export function createManagedServiceManagerFixtureScript(params: {
   options?: ManagedServiceManagerBoundaryOptions;
 }): string {
   const { commandsPath, kind, options, parentPid, statePath } = params;
-  return `#!${process.execPath}
+  return `#!${testNodeExecPath}
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 const sleep = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 fs.appendFileSync(${JSON.stringify(commandsPath)}, args.join(" ") + "\\n");
 const action = args.find((arg) => ["show", "stop", "reset-failed", "start", "print", "disable", "bootout", "enable", "bootstrap", "kickstart"].includes(arg));
 void (async () => {
+  const { isPidDefinitelyDead } = action === ${JSON.stringify(kind === "systemd" ? "stop" : "print")}
+    ? await import(${JSON.stringify(new URL("../shared/pid-alive.ts", import.meta.url).href)})
+    : {};
   if (${JSON.stringify(kind)} === "systemd" && action === "stop") {
     ${managedServiceStateUpdateScript(statePath, "state.parked = true")};
-    for (;;) {
-      try { process.kill(${parentPid}, 0); sleep(10); } catch { break; }
-    }
+    while (!isPidDefinitelyDead(${parentPid})) sleep(10);
     sleep(${options?.systemdStopDelayMs ?? 0});
     ${managedServiceStateUpdateScript(
       statePath,
@@ -381,8 +394,7 @@ if (${JSON.stringify(kind)} === "systemd") {
     } else state.restored = true;
   }
   if (action === "print") {
-    let parentAlive = false;
-    try { process.kill(${parentPid}, 0); parentAlive = true; } catch {}
+    const parentAlive = !isPidDefinitelyDead(${parentPid});
     if (state.parked && !state.restored && !parentAlive) {
       if (state.loadedPrintsRemaining > 0) {
         state.loadedPrintsRemaining -= 1;
@@ -396,11 +408,11 @@ if (${JSON.stringify(kind)} === "systemd") {
     }
     const fault = ${JSON.stringify(options?.launchdFault)};
     if (state.restored && fault === "missing-restored-pid") {
-      process.stdout.write("state = running\\n");
+      process.stdout.write(args[1] + " = {\\n\\tstate = running\\n}\\n");
     } else {
       const restoredPid = fault === "dead-restored-pid" ? 2147483647 : ${process.pid};
       const currentPid = fault === "wrong-parent" ? ${process.pid} : ${parentPid};
-      process.stdout.write("state = running\\npid = " + (state.restored ? restoredPid : currentPid) + "\\n");
+      process.stdout.write(args[1] + " = {\\n\\tstate = running\\n\\tpid = " + (state.restored ? restoredPid : currentPid) + "\\n}\\n");
     }
   }
 }
@@ -437,18 +449,16 @@ export function createManagedServiceUpdaterFixtureScript(params: {
             steps: updaterResult.steps ?? [],
             durationMs: updaterResult.durationMs ?? 0,
           },
-          meta: { root, handoffId: `${kind}-boundary` },
+          meta: {
+            root,
+            handoffId: `${kind}-boundary`,
+            note: "Preserve this updater notification across handoff.",
+          },
         })
       : null;
   // Use the canonical row shape without moving publication ahead of the child.
-  const notificationEnvelope = notification
-    ? parseRestartSentinelEnvelope({ version: 1, payload: notification })
-    : null;
-  if (notification && !notificationEnvelope) {
-    throw new Error("Expected a valid updater notification fixture");
-  }
-  const notificationRow = notificationEnvelope
-    ? buildRestartSentinelRow(notificationEnvelope.payload, notificationEnvelope.payload.ts)
+  const notificationRow = notification
+    ? buildRestartSentinelRow(notification, notification.ts)
     : null;
   return [
     `void (async () => {`,
@@ -460,16 +470,17 @@ export function createManagedServiceUpdaterFixtureScript(params: {
         ]
       : []),
     `fs.writeFileSync(${JSON.stringify(updaterPath)}, "ran");`,
-    ...(notificationEnvelope && notificationRow
+    ...(notification && notificationRow
       ? [
-          `const notification = ${JSON.stringify(notificationEnvelope.payload)};`,
+          `const notification = ${JSON.stringify(notification)};`,
           `const row = ${JSON.stringify(notificationRow)};`,
           `const db = new (require("node:sqlite").DatabaseSync)(${JSON.stringify(stateDatabasePath)});`,
           `db.prepare("INSERT INTO gateway_restart_sentinel (" + Object.keys(row).join(", ") + ") VALUES (" + Object.keys(row).map(() => "?").join(", ") + ")").run(...Object.values(row)); db.close();`,
           `${managedServiceStateUpdateScript(statePath, "state.publishedSentinel = { version: 1, payload: notification, revision: notification.ts }")};`,
-          ...(options?.updaterNotification === "consumed" &&
-          (updaterResult?.status === "ok" ||
-            (updaterResult?.recovery?.serviceRestartSafe && updaterResult.recovery.service))
+          ...(options?.updaterNotification === "consumed-before-exit" ||
+          (options?.updaterNotification === "consumed" &&
+            (updaterResult?.status === "ok" ||
+              (updaterResult?.recovery?.serviceRestartSafe && updaterResult.recovery.service)))
             ? [`{ ${consumeNotification} }`]
             : []),
         ]
@@ -636,13 +647,17 @@ export function createManagedServiceLaunchdClockPreload(params: {
     "  return actualSetTimeout(callback, delay, ...args);",
     "};",
     "children.spawn = (command, args, options) => {",
+    "  let timedOut = false;",
     '  if (command === "launchctl") {',
     "    const timeoutMs = options.timeout;",
     "    const startedAtMs = Date.now();",
     `    fs.appendFileSync(${JSON.stringify(params.commandTimingsPath)}, JSON.stringify({ action: args[0], startedAtMs, timeoutMs }) + "\\n");`,
     `    elapsed += Math.min(${params.clockEachCommandMs}, timeoutMs);`,
+    `    timedOut = ${params.clockEachCommandMs} > timeoutMs;`,
     "  }",
-    "  const child = actualSpawn(command, args, options);",
+    // Expired simulated work must not execute the manager's completed side effect.
+    '  const child = timedOut ? actualSpawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], options) : actualSpawn(command, args, options);',
+    '  if (timedOut) child.once("spawn", () => child.kill("SIGKILL"));',
     // Advance only when the exact guarded restart closes, before the helper resumes.
     `  if (command === ${JSON.stringify(params.recoveryCommandArgv[0])} && (args.at(-1) === ${JSON.stringify(JSON.stringify(params.recoveryCommandArgv))} || JSON.stringify(args.slice(-${params.recoveryCommandArgv.length - 1})) === ${JSON.stringify(JSON.stringify(params.recoveryCommandArgv.slice(1)))})) {`,
     `    child.once("close", () => { elapsed += ${params.recoveryClockAdvanceMs ?? 0}; });`,

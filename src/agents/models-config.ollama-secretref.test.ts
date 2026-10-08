@@ -5,10 +5,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createTestPluginApi } from "../plugin-sdk/plugin-test-api.js";
 import { clearLiveCatalogCacheForTests } from "../plugin-sdk/provider-catalog-shared.js";
-import { loadBundledPluginPublicSurface } from "../plugin-sdk/test-helpers/public-surface-loader.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { OpenClawPluginDefinition, ProviderPlugin } from "../plugins/types.js";
 import { NON_ENV_SECRETREF_MARKER } from "../secrets/provider-credential-values.js";
+import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import {
@@ -27,7 +27,7 @@ vi.mock("../plugins/provider-discovery.runtime.js", () => ({
 describe("registered Ollama catalog SecretRef ownership", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   beforeAll(async () => {
-    const { default: plugin } = await loadBundledPluginPublicSurface<{
+    const { default: plugin } = await loadBundledPluginFacade<{
       default: OpenClawPluginDefinition;
     }>({ pluginId: "ollama", artifactBasename: "index.js" });
     expectDefined(
@@ -44,33 +44,25 @@ describe("registered Ollama catalog SecretRef ownership", () => {
         },
       }),
     );
-    expect(discovery.providers).toHaveLength(1);
   });
   afterEach(() => {
     clearLiveCatalogCacheForTests();
     vi.unstubAllGlobals();
   });
 
-  it.each(
-    ["profile", "config"].flatMap((owner) =>
-      [
-        "https://ollama-profile.example/v1",
-        "http://127.0.0.1:11434",
-        ...(owner === "config" ? ["http://127.0.0.1:11435"] : []),
-      ].flatMap((baseUrl) =>
-        [true, false].flatMap((explicitModels) =>
-          [
-            "resolved-ollama-profile-fixture",
-            ...(owner === "config"
-              ? ["ollama-local", "OLLAMA_API_KEY", NON_ENV_SECRETREF_MARKER]
-              : []),
-          ].map((runtimeKey) => ({ owner, baseUrl, explicitModels, runtimeKey })),
-        ),
-      ),
-    ),
-  )(
-    "keeps $owner refs out of writable plans at $baseUrl (explicit=$explicitModels, value=$runtimeKey)",
-    async ({ owner, baseUrl, explicitModels, runtimeKey }) => {
+  const remote = "https://ollama-profile.example/v1";
+  const local = "http://127.0.0.1:11434";
+  const resolved = "resolved-ollama-profile-fixture";
+  it.each([
+    ["profile", remote, false, resolved],
+    ["profile", remote, true, resolved],
+    ["profile", local, true, resolved],
+    ["config", local, false, "OLLAMA_API_KEY"],
+    ["config", local, true, "ollama-local"],
+    ["config", "http://127.0.0.1:11435", false, NON_ENV_SECRETREF_MARKER],
+  ] as const)(
+    "keeps %s refs out of writable plans at %s (explicit=%s, value=%s)",
+    async (owner, baseUrl, explicitModels, runtimeKey) => {
       const stateDir = tempDirs.make("ollama-catalog-ref-");
       await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir, OLLAMA_API_KEY: undefined }, async () => {
         const agentDir = path.join(stateDir, "agent");

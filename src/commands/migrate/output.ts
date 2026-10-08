@@ -1,4 +1,3 @@
-/** Formatting and validation helpers for migration previews and apply results. */
 import { log } from "@clack/prompts";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { redactMigrationPlan } from "../../plugin-sdk/migration.js";
@@ -26,12 +25,7 @@ function formatPlanHeader(plan: MigrationPlan, heading: string): string[] {
   return lines;
 }
 
-type ItemGroup = {
-  kind: string;
-  heading: string;
-};
-
-const ITEM_GROUPS: ItemGroup[] = [
+const ITEM_GROUPS = [
   { kind: "auth", heading: "Auth credentials:" },
   { kind: "skill", heading: "Skills:" },
   { kind: "plugin", heading: "Plugins:" },
@@ -49,17 +43,13 @@ type FormatMode = "preview" | "result";
 function formatPlanItems(plan: MigrationPlan, mode: FormatMode): string[] {
   const lines: string[] = [];
   const buckets = new Map<string, MigrationItem[]>();
-  const other: MigrationItem[] = [];
   for (const item of plan.items) {
-    if (KNOWN_KINDS.has(item.kind)) {
-      const list = buckets.get(item.kind) ?? [];
-      list.push(item);
-      buckets.set(item.kind, list);
-    } else {
-      other.push(item);
-    }
+    const kind = KNOWN_KINDS.has(item.kind) ? item.kind : "other";
+    const items = buckets.get(kind) ?? [];
+    items.push(item);
+    buckets.set(kind, items);
   }
-  for (const group of ITEM_GROUPS) {
+  for (const group of [...ITEM_GROUPS, { kind: "other", heading: "Other:" }]) {
     const items = buckets.get(group.kind);
     if (!items || items.length === 0) {
       continue;
@@ -67,13 +57,6 @@ function formatPlanItems(plan: MigrationPlan, mode: FormatMode): string[] {
     lines.push("");
     lines.push(theme.heading(group.heading));
     for (const item of items) {
-      lines.push(formatMigrationItem(item, mode));
-    }
-  }
-  if (other.length > 0) {
-    lines.push("");
-    lines.push(theme.heading("Other:"));
-    for (const item of other) {
       lines.push(formatMigrationItem(item, mode));
     }
   }
@@ -141,10 +124,7 @@ const REASON_CODE_MESSAGES: Record<string, string> = {
   "not selected for migration": "Skipped because it was not selected for migration",
 };
 
-// Phrase-form conflict reasons, used as-is in selection-prompt hints
-// (`<source label> <phrase>`) and wrapped into sentence form for preview
-// /result rows. Keep one map so the two surfaces never drift.
-/** Shared short conflict phrases used by migration output and selection hints. */
+// Selection hints use phrases; preview/result rows capitalize them as sentences.
 export const MIGRATION_CONFLICT_REASON_PHRASES: Record<string, string> = {
   "target exists": "already installed in workspace",
   "plugin exists": "already installed in workspace",
@@ -166,43 +146,32 @@ function humanizeReason(reason: string | undefined): string | undefined {
 }
 
 function formatItemMessage(item: MigrationItem, mode: FormatMode): string | undefined {
-  if (mode === "preview") {
-    if (
-      item.status === "conflict" ||
-      item.status === "skipped" ||
-      item.status === "warning" ||
-      item.status === "error"
-    ) {
-      return humanizeReason(item.reason) ?? item.message;
-    }
-    if (item.kind === "skill" && item.action === "copy") {
-      return "Copy Codex skill into OpenClaw";
-    }
-    if (item.kind === "plugin" && item.action === "install") {
-      return "Install Codex plugin into OpenClaw";
-    }
-    return item.message ?? humanizeReason(item.reason);
-  }
-  if (
+  const installation =
     (item.kind === "skill" && item.action === "copy") ||
-    (item.kind === "plugin" && item.action === "install")
+    (item.kind === "plugin" && item.action === "install");
+  if (
+    item.status === "error" ||
+    item.status === "conflict" ||
+    (item.status === "warning" && (mode === "preview" || !installation)) ||
+    (item.status === "skipped" && mode === "preview")
   ) {
+    return humanizeReason(item.reason) ?? item.message;
+  }
+  if (installation) {
+    if (mode === "preview") {
+      return item.kind === "skill"
+        ? "Copy Codex skill into OpenClaw"
+        : "Install Codex plugin into OpenClaw";
+    }
     if (item.status === "migrated") {
       return "Migrated";
     }
     if (item.status === "skipped") {
       return "Skipped";
     }
-    if (item.status === "warning") {
-      return item.message ?? humanizeReason(item.reason);
+    if (item.status !== "warning") {
+      return undefined;
     }
-    if (item.status === "error" || item.status === "conflict") {
-      return humanizeReason(item.reason) ?? item.message;
-    }
-    return undefined;
-  }
-  if (item.status === "warning" || item.status === "error" || item.status === "conflict") {
-    return humanizeReason(item.reason) ?? item.message;
   }
   return item.message ?? humanizeReason(item.reason);
 }

@@ -1,5 +1,5 @@
-// Slack plugin module validates non-serializable per-event Enterprise Grid scope.
 import type { WebClient, WebClientOptions } from "@slack/web-api";
+import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getSlackListenerWriteClient } from "../client.js";
 import type { SlackInstallationIdentity } from "./enterprise-install.js";
@@ -26,6 +26,25 @@ type SlackEventScopeResolution =
         | "missing_team_id"
         | "missing_listener_client";
     };
+
+export function resolveSlackMonitorEventScope(
+  params: Omit<
+    Parameters<typeof resolveSlackListenerEventScope>[0],
+    "identity" | "clientOptions"
+  > & {
+    ctx: {
+      installationIdentity: SlackInstallationIdentity;
+      app: { webClientOptions?: WebClientOptions };
+    };
+  },
+): SlackEventScope | null | undefined {
+  return resolveSlackListenerEventScope({
+    ...params,
+    identity: params.ctx.installationIdentity,
+    clientOptions: params.ctx.app.webClientOptions,
+    onDrop: params.onDrop ?? ((reason) => logVerbose(`slack: drop listener event (${reason})`)),
+  });
+}
 
 export function resolveSlackListenerEventScope(
   params: Parameters<typeof resolveSlackEventScope>[0] & {

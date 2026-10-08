@@ -1,6 +1,3 @@
-/**
- * Sanitizes historical embedded-agent message images and empty content blocks.
- */
 import { replaceCompactionReplayOwnerContent } from "@openclaw/ai/transports";
 import type { ImageSanitizationLimits } from "../image-sanitization.js";
 import type { AgentMessage, AgentToolResult } from "../runtime/index.js";
@@ -32,7 +29,6 @@ function ensureNonEmptyContent<T>(content: T[]): T[] {
   return [{ type: "text", text: EMPTY_CONTENT_PLACEHOLDER }] as T[];
 }
 
-/** Resize/remove unsafe image payloads while keeping transcript turns valid. */
 export async function sanitizeSessionMessagesImages(
   messages: AgentMessage[],
   label: string,
@@ -57,16 +53,16 @@ export async function sanitizeSessionMessagesImages(
   const imageSanitization = {
     maxDimensionPx: options?.maxDimensionPx,
     maxBytes: options?.maxBytes,
+    // Replay does not rewrite stored images, even after a successful reply.
+    verifyDecodability: true,
   };
-  const shouldSanitizeToolCallIds = options?.sanitizeToolCallIds === true;
-  // We sanitize historical session messages because Anthropic can reject a request
-  // if the transcript contains oversized base64 images (default max side 1200px).
-  const sanitizedIds = shouldSanitizeToolCallIds
-    ? sanitizeToolCallIdsForCloudCodeAssist(messages, options.toolCallIdMode, {
-        preserveNativeAnthropicToolUseIds: options?.preserveNativeAnthropicToolUseIds,
-        duplicateToolCallIdStyle: options?.duplicateToolCallIdStyle,
-      })
-    : messages;
+  const sanitizedIds =
+    options?.sanitizeToolCallIds === true
+      ? sanitizeToolCallIdsForCloudCodeAssist(messages, options.toolCallIdMode, {
+          preserveNativeAnthropicToolUseIds: options?.preserveNativeAnthropicToolUseIds,
+          duplicateToolCallIdStyle: options?.duplicateToolCallIdStyle,
+        })
+      : messages;
   const out: AgentMessage[] = [];
   for (const msg of sanitizedIds) {
     if (!msg || typeof msg !== "object") {
@@ -75,20 +71,19 @@ export async function sanitizeSessionMessagesImages(
     }
 
     const role = (msg as { role?: unknown }).role;
-    if (role === "toolResult") {
-      const toolMsg = msg as Extract<AgentMessage, { role: "toolResult" }>;
-      const content = Array.isArray(toolMsg.content) ? toolMsg.content : [];
-      const nextContent = await sanitizeContentBlocksImages(content, label, imageSanitization);
-      out.push({ ...toolMsg, content: ensureNonEmptyContent(dropEmptyTextBlocks(nextContent)) });
-      continue;
-    }
-
-    if (role === "user") {
-      const userMsg = msg as Extract<AgentMessage, { role: "user" }>;
-      const content = userMsg.content;
-      if (Array.isArray(content)) {
-        const nextContent = await sanitizeContentBlocksImages(content, label, imageSanitization);
-        out.push({ ...userMsg, content: ensureNonEmptyContent(dropEmptyTextBlocks(nextContent)) });
+    if (role === "toolResult" || role === "user") {
+      const contentMsg = msg as Extract<AgentMessage, { role: "toolResult" | "user" }>;
+      const content = contentMsg.content;
+      if (Array.isArray(content) || role === "toolResult") {
+        const nextContent = await sanitizeContentBlocksImages(
+          Array.isArray(content) ? content : [],
+          label,
+          imageSanitization,
+        );
+        out.push({
+          ...contentMsg,
+          content: ensureNonEmptyContent(dropEmptyTextBlocks(nextContent)),
+        });
         continue;
       }
     }

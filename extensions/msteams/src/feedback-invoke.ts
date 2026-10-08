@@ -1,30 +1,15 @@
-// Msteams plugin module implements feedback invoke behavior.
 import { recordChannelFeedbackEvent } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatUnknownError } from "./errors.js";
-import { buildFeedbackEvent, runFeedbackReflection } from "./feedback-reflection.js";
+import { runFeedbackReflection } from "./feedback-reflection.js";
 import { extractMSTeamsConversationMessageId, normalizeMSTeamsConversationId } from "./inbound.js";
-import { isFeedbackInvokeAuthorized } from "./monitor-handler.js";
+import { isMSTeamsInvokeAuthorized } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
-/**
- * Run the message-submit (feedback) invoke handler.
- *
- * Teams delivers feedback (`actionName === "feedback"`) on AI-generated
- * messages as a `message/submitAction` invoke. The SDK wraps a void return
- * into the HTTP 200 InvokeResponse, so this function intentionally does
- * not ack itself — the legacy `ctx.sendActivity({ type: "invokeResponse",
- * … })` shape is gone (it became an outbound BF activity on the new SDK
- * instead of the HTTP response).
- *
- * Returns `true` if the invoke matched the feedback shape and was
- * consumed (whether or not it was authorized / written / reflected on),
- * `false` if the invoke didn't look like feedback at all and the caller
- * should fall through to other handlers.
- */
+/** Return whether feedback consumed the invoke; the SDK owns its HTTP acknowledgement. */
 export async function runMSTeamsFeedbackInvokeHandler(
   context: MSTeamsTurnContext,
   deps: MSTeamsMessageHandlerDeps,
@@ -42,7 +27,6 @@ export async function runMSTeamsFeedbackInvokeHandler(
     return false;
   }
 
-  // Teams feedback invoke format: actionName="feedback", actionValue.reaction="like"|"dislike"
   if (value.actionName !== "feedback") {
     return false;
   }
@@ -56,14 +40,13 @@ export async function runMSTeamsFeedbackInvokeHandler(
   const msteamsCfg = deps.cfg.channels?.msteams;
   if (msteamsCfg?.feedbackEnabled === false) {
     deps.log.debug?.("feedback handling disabled");
-    return true; // Still consume the invoke
-  }
-
-  if (!(await isFeedbackInvokeAuthorized(context, deps))) {
     return true;
   }
 
-  // Extract user comment from the nested JSON string
+  if (!(await isMSTeamsInvokeAuthorized({ context, deps, invokeKind: "feedback" }))) {
+    return true;
+  }
+
   let userComment: string | undefined;
   if (value.actionValue?.feedback) {
     try {
@@ -74,15 +57,13 @@ export async function runMSTeamsFeedbackInvokeHandler(
     }
   }
 
-  // Strip ;messageid=... suffix to match the normalized ID used by the message handler.
   const rawConversationId = activity.conversation?.id ?? "unknown";
   const conversationId = normalizeMSTeamsConversationId(rawConversationId);
   const senderId = activity.from?.aadObjectId ?? activity.from?.id ?? "unknown";
   const messageId = value.replyToId ?? activity.replyToId ?? "unknown";
   const isNegative = reaction === "dislike";
 
-  // Route feedback using the same chat-type logic as normal messages
-  // so session keys, agent IDs, and transcript paths match.
+  // Match normal-message routing so feedback reaches the same session.
   const convType = normalizeOptionalLowercaseString(activity.conversation?.conversationType);
   const isDirectMessage = convType === "personal" || (!convType && !activity.conversation?.isGroup);
   const isChannel = convType === "channel";
@@ -97,10 +78,6 @@ export async function runMSTeamsFeedbackInvokeHandler(
     },
   });
 
-  // Match the thread-aware session key used by the message handler so feedback
-  // events land in the correct per-thread transcript. For channel threads, the
-  // thread root ID comes from the ;messageid= suffix on the conversation ID or
-  // from activity.replyToId.
   const feedbackThreadId = isChannel
     ? (extractMSTeamsConversationMessageId(rawConversationId) ?? activity.replyToId ?? undefined)
     : undefined;
@@ -113,15 +90,17 @@ export async function runMSTeamsFeedbackInvokeHandler(
     route.sessionKey = threadKeys.sessionKey;
   }
 
-  // Log feedback event to session JSONL
-  const feedbackEvent = buildFeedbackEvent({
+  const feedbackEvent = {
+    type: "custom",
+    event: "feedback",
+    ts: Date.now(),
     messageId,
     value: isNegative ? "negative" : "positive",
     comment: userComment,
     sessionKey: route.sessionKey,
     agentId: route.agentId,
     conversationId,
-  });
+  };
 
   deps.log.info("received feedback", {
     value: feedbackEvent.value,
@@ -141,7 +120,6 @@ export async function runMSTeamsFeedbackInvokeHandler(
     // Best effort
   }
 
-  // Build conversation reference for proactive messages (ack + reflection follow-up)
   const conversationRef = {
     activityId: activity.id,
     user: {
@@ -162,14 +140,9 @@ export async function runMSTeamsFeedbackInvokeHandler(
     locale: activity.locale,
   };
 
-  // For negative feedback, trigger background reflection (fire-and-forget).
-  // No ack message — the reflection follow-up serves as the acknowledgement.
-  // Sending anything during the invoke handler causes "unable to reach app" errors.
+  // Sending during the invoke causes "unable to reach app" errors; reflection responds later.
   if (isNegative && msteamsCfg?.feedbackReflection !== false) {
-    // Note: thumbedDownResponse is not populated here because we don't cache
-    // sent message text. The agent still has full session context for reflection
-    // since the reflection runs in the same session. The user comment (if any)
-    // provides additional signal.
+    // Sent text is not cached; reflection uses the session history and optional user comment.
     runFeedbackReflection({
       cfg: deps.cfg,
       app: deps.app,
