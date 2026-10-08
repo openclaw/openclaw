@@ -151,14 +151,15 @@ async function resolveHeartbeatOwnerRoute(
     }
   }
 
-  const buildRoute = (plugin: ChannelPlugin, ownerId: string) => ({
+  const buildRoute = (plugin: ChannelPlugin, ownerId: string, configuredOwnerId = ownerId) => ({
     plugin,
     ownerId,
     reuseSessionRoute:
       session?.channel === plugin.id &&
       Boolean(session.to) &&
       normalizeChatType(params.entry?.chatType) === "direct" &&
-      ownerIdMatchesRoute(plugin, ownerId, session.to ?? ""),
+      (ownerIdMatchesRoute(plugin, configuredOwnerId, session.to ?? "") ||
+        ownerIdMatchesRoute(plugin, ownerId, session.to ?? "")),
   });
 
   // commands.ownerAllowFrom is the documented higher-priority owner identity:
@@ -175,14 +176,16 @@ async function resolveHeartbeatOwnerRoute(
           plugin.id,
           ...(plugin.messaging?.targetPrefixes ?? []),
         );
+        const alreadyDirect = isPositivelyDirectHeartbeatOwnerTarget({ plugin, to: ownerId });
         const routeTarget =
           prefixedChannel === plugin.id &&
           plugin.messaging?.directTargetStyle === "user-prefixed" &&
           providerTarget &&
+          !alreadyDirect &&
           !/^(?:user|channel|group|thread):/iu.test(providerTarget)
             ? `${plugin.id}:user:${providerTarget}`
             : ownerId;
-        return { ownerId: routeTarget, prefixedChannel };
+        return { configuredOwnerId: ownerId, ownerId: routeTarget, prefixedChannel };
       })
       .find(({ ownerId, prefixedChannel }) => {
         return (
@@ -191,7 +194,7 @@ async function resolveHeartbeatOwnerRoute(
         );
       });
     if (configuredOwner) {
-      return buildRoute(plugin, configuredOwner.ownerId);
+      return buildRoute(plugin, configuredOwner.ownerId, configuredOwner.configuredOwnerId);
     }
   }
   for (const { plugin, accountId } of plugins) {

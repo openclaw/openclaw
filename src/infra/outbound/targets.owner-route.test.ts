@@ -11,6 +11,7 @@ import { getStatusSummary } from "../../status/summary.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { runHeartbeatOnce } from "../heartbeat-runner.js";
 import { withTempHeartbeatSandbox } from "../heartbeat-runner.test-utils.js";
 import {
@@ -33,6 +34,21 @@ const { discordPlugin } = await loadBundledPluginFacade<{ discordPlugin: Channel
 const discordRegistry = createTestRegistry([
   { pluginId: "discord", plugin: discordPlugin, source: "test" },
 ]);
+const { slackPlugin } = await loadBundledPluginFacade<{ slackPlugin: ChannelPlugin }>({
+  pluginId: "slack",
+  artifactBasename: "channel-plugin-api.ts",
+});
+const slackRegistry = createTestRegistry([
+  { pluginId: "slack", plugin: slackPlugin, source: "test" },
+]);
+const { mattermostPlugin } = await loadBundledPluginFacade<{ mattermostPlugin: ChannelPlugin }>({
+  pluginId: "mattermost",
+  artifactBasename: "channel-plugin-api.ts",
+});
+const { msteamsPlugin } = await loadBundledPluginFacade<{ msteamsPlugin: ChannelPlugin }>({
+  pluginId: "msteams",
+  artifactBasename: "channel-plugin-api.ts",
+});
 
 afterEach(() => restoreActivePluginRegistrySnapshot(registrySnapshot));
 
@@ -75,6 +91,95 @@ it("reports a scoped Telegram owner's heartbeat ready in the Gateway status summ
     });
   });
 });
+
+it("reuses a saved Slack owner DM thread for its native user ID", async () => {
+  const cfg: OpenClawConfig = {
+    commands: { ownerAllowFrom: ["slack:U12345678"] },
+    channels: { slack: { botToken: "xoxb-test", appToken: "xapp-test" } },
+  };
+  const entry = {
+    sessionId: "saved-slack-owner-dm",
+    updatedAt: 1,
+    chatType: "direct" as const,
+    delivery: normalizeSessionDeliveryState({
+      context: {
+        channel: "slack",
+        to: "U12345678",
+        accountId: "default",
+        threadId: "thread-7",
+      },
+    }),
+  };
+  setActivePluginRegistry(slackRegistry);
+
+  await withPluginRuntimeRegistryScope(slackRegistry, async () => {
+    const result = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+      cfg,
+      entry,
+      agentId: "main",
+    });
+
+    expect(result).toMatchObject({
+      channel: "slack",
+      to: "user:U12345678",
+      accountId: "default",
+      threadId: "thread-7",
+      chatType: "direct",
+    });
+  });
+});
+
+it.each([
+  {
+    channel: "mattermost",
+    plugin: mattermostPlugin,
+    owner: "mattermost:owner-123",
+    channelConfig: {
+      enabled: true,
+      botToken: "test-token",
+      baseUrl: "https://mattermost.example.com",
+    },
+  },
+  {
+    channel: "msteams",
+    plugin: msteamsPlugin,
+    owner: "msteams:owner-123",
+    channelConfig: { appId: "test-app", appPassword: "test-password", tenantId: "test-tenant" },
+  },
+])(
+  "preserves the saved $channel direct conversation for its canonical owner form",
+  async ({ channel, plugin, owner, channelConfig }) => {
+    const registry = createTestRegistry([{ pluginId: channel, plugin, source: "test" }]);
+    const cfg = {
+      commands: { ownerAllowFrom: [owner] },
+      channels: { [channel]: channelConfig },
+    } as OpenClawConfig;
+    const entry = {
+      sessionId: `saved-${channel}-owner-dm`,
+      updatedAt: 1,
+      chatType: "direct" as const,
+      delivery: normalizeSessionDeliveryState({
+        context: { channel, to: "user:owner-123", accountId: "default", threadId: "thread-7" },
+      }),
+    };
+    setActivePluginRegistry(registry);
+
+    await withPluginRuntimeRegistryScope(registry, async () => {
+      const result = await resolveHeartbeatDeliveryTargetWithSessionRoute({
+        cfg,
+        entry,
+        agentId: "main",
+      });
+
+      expect(result).toMatchObject({
+        channel,
+        to: "user:owner-123",
+        threadId: "thread-7",
+        chatType: "direct",
+      });
+    });
+  },
+);
 
 it.each([
   {
