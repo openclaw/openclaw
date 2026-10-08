@@ -1869,8 +1869,6 @@
 ["extensions/zalo/src/outbound-media.test.ts","openclaw/plugin-sdk/web-media","871305890256ceb9566015074209c911ee452f0a9715c80ab379067a890b80fc",1]
 ["extensions/zalo/src/send.test.ts","./api.js","d7f844fe6d49afde4a27822feaa9c2a83076e2b261ed747caab3925cb3a38c9c",1]
 ["extensions/zalo/src/send.test.ts","./proxy.js","5054edfd1c8b61366a981b92b1c6662e13b045a0bb62fc6f8530b542e3dcce79",1]
-["extensions/zalouser/src/accounts.test-mocks.ts","./accounts.js","aaf43411b66e463ac85a41959abab6925fa89e8b0a2e1857efa4706aa7123fef",1]
-["extensions/zalouser/src/channel.sendpayload.test.ts","./send.js","b7aa9579075aae99a374a24a4dc289768d4f93c793d246c164f7cc35e8ae8bcb",1]
 ["extensions/zalouser/src/channel.test.ts","./qr-temp-file.js","1bdd281c6bedfb3dd3f016b7fa28088af3ee07be05a2ceac1530b7a0c20c21be",1]
 ["extensions/zalouser/src/monitor.send.test-mocks.ts","./send.js","1742114934cb3e9e0012684d2b44277f0be1c6428aee2a64a3b191d467f3fdfa",1]
 ["extensions/zalouser/src/probe.test.ts","./zalo-js.js","052ac5a612fb344e406f4df623ea286691bb6390233db335b0a69329a7d73fda",1]
