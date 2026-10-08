@@ -26,6 +26,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import { createRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
@@ -327,27 +328,6 @@ describe("Gateway agent skill refresh", () => {
           expect(fifth?.skillsSnapshot?.prompt).toContain("canonical-root-description");
           expect(requests.at(-1)).toContain("canonical-root-description");
 
-          const localStartedAt = Date.now();
-          const local = await execFileAsync(
-            process.execPath,
-            [
-              path.join(process.cwd(), "openclaw.mjs"),
-              "agent",
-              "--local",
-              "--agent",
-              "main",
-              "--session-key",
-              "agent:main:local-skill-control",
-              "--message",
-              "local watcher control",
-              "--json",
-            ],
-            { cwd: process.cwd(), env: process.env, timeout: 20_000 },
-          );
-          signal.throwIfAborted();
-          expect(local.stderr).not.toContain("timed out");
-          expect(Date.now() - localStartedAt).toBeLessThan(20_000);
-
           await closeClient();
           signal.throwIfAborted();
           const lifecycleCountBeforeClose = lifecycleEvents.length;
@@ -380,6 +360,35 @@ describe("Gateway agent skill refresh", () => {
           await settleSkillsWatchers(signal);
           await time.advanceBy(30_000);
           signal.throwIfAborted();
+          expect(lifecycleEvents).toHaveLength(lifecycleCountBeforeClose);
+
+          // Closing the Gateway first prevents a local watcher from reusing its subscription.
+          const observationCountBeforeLocal = observations.length;
+          const requestCountBeforeLocal = requests.length;
+          const runtime = createRuntimeEnv();
+          const { agentCliCommand } = await import("../commands/agent-via-gateway.js");
+          await agentCliCommand(
+            {
+              local: true,
+              agent: "main",
+              sessionKey: "agent:main:local-skill-control",
+              message: "local watcher control",
+              json: true,
+            },
+            runtime,
+          );
+          signal.throwIfAborted();
+          expect(runtime.error).not.toHaveBeenCalled();
+          expect(vi.mocked(runtime.writeJson).mock.calls[0]?.[0]).toMatchObject({
+            payloads: [{ text: "ok" }],
+            meta: { aborted: false },
+          });
+          expect(requests).toHaveLength(requestCountBeforeLocal + 1);
+          expect(requests.at(-1)).toContain("after-gateway-close");
+          expect(observations).toHaveLength(observationCountBeforeLocal);
+          expect(
+            observations.every(({ subscription }) => subscription.health().state === "closed"),
+          ).toBe(true);
           expect(lifecycleEvents).toHaveLength(lifecycleCountBeforeClose);
         },
         async () => {

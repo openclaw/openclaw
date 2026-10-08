@@ -127,6 +127,10 @@ fallback even with explicit `agentRuntime.id: "codex"`; see
     }
     ```
 
+    ChatGPT Responses SSE turns may exceed 16 MiB in total. The parser bounds
+    each buffered event to 16 MiB of bytes before decoding or parsing it, and
+    cancels oversized events, including events without a closing delimiter.
+
     Related OpenAI docs:
     - [Responses API WebSocket mode](https://developers.openai.com/api/docs/guides/websocket-mode)
     - [Streaming API responses (SSE)](https://platform.openai.com/docs/guides/streaming-responses)

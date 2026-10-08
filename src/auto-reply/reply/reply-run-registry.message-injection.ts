@@ -451,9 +451,7 @@ async function beginPreparedReplyMessageInjectionTarget(
           assertCurrent?.();
         }
       : undefined;
-  try {
-    await toolAuthorityPreparation?.prepareCurrent();
-  } catch (error) {
+  const resolvePreAcceptanceFailure = (error: unknown): ReplyMessageInjectionOutcome => {
     const failure = resolveReplyMessageInjectionFailure(error, {
       assertCurrent: assertSourceCurrent,
       accepted: false,
@@ -461,6 +459,12 @@ async function beginPreparedReplyMessageInjectionTarget(
     if (!failure) {
       throw error;
     }
+    return failure;
+  };
+  try {
+    await toolAuthorityPreparation?.prepareCurrent();
+  } catch (error) {
+    const failure = resolvePreAcceptanceFailure(error);
     return {
       targetRunId: target.runId,
       acceptance: Promise.resolve(false),
@@ -535,23 +539,13 @@ async function beginPreparedReplyMessageInjectionTarget(
         : undefined;
     let outcome: Promise<ReplyMessageInjectionOutcome> = Promise.resolve(immediateRejection);
     if (cancelPendingImage) {
-      const onCancellationError = (error: unknown): ReplyMessageInjectionOutcome => {
-        const failure = resolveReplyMessageInjectionFailure(error, {
-          assertCurrent: assertSourceCurrent,
-          accepted: false,
-        });
-        if (!failure) {
-          throw error;
-        }
-        return failure;
-      };
       try {
         outcome = Promise.resolve(cancelPendingImage("image-reply")).then(
           () => immediateRejection,
-          onCancellationError,
+          resolvePreAcceptanceFailure,
         );
       } catch (error) {
-        outcome = Promise.resolve(onCancellationError(error));
+        outcome = Promise.resolve(resolvePreAcceptanceFailure(error));
       }
     }
     return {
@@ -632,14 +626,15 @@ async function beginPreparedReplyMessageInjectionTarget(
       queueAccepted = true;
       recordParticipant();
       settleAcceptance(true);
-      if (
-        targetRunId &&
-        queueOptions?.waitForTranscriptCommit === true &&
-        result?.transcriptCommit !== "unconfirmed"
-      ) {
+      // Receipt uncertainty retains this input, but cannot authorize canceling
+      // the active run or replaying input the runtime may already have consumed.
+      if (result?.transcriptCommit === "unconfirmed") {
+        return { status: "indeterminate", errorMessage: result.errorMessage };
+      }
+      if (targetRunId && queueOptions?.waitForTranscriptCommit === true) {
         await userTurnTranscriptRecorder?.confirmSteerTargetRunIdForPersistence?.(targetRunId);
       }
-      return result ? { status: "accepted", result } : { status: "accepted" };
+      return { status: "accepted" };
     })
     .catch(failed);
   return {
@@ -654,8 +649,6 @@ export async function finalizeReplyMessageInjectionAttempt(params: {
   attempt: ReplyMessageInjectionAttempt;
   target: ReplyMessageInjectionTarget;
   inboundAudio?: boolean;
-  /** Status-only controls cannot cancel independent work when their receipt is uncertain. */
-  abortOnUnconfirmedTranscript?: false;
   onOutcome?: (outcome: "accepted" | "indeterminate") => void;
   onAdopted?: () => void | Promise<void>;
   shouldAbortOnAdoptionError?: (error: unknown) => boolean;
@@ -672,13 +665,7 @@ export async function finalizeReplyMessageInjectionAttempt(params: {
   const accepted = outcome.status === "accepted";
   const owner = accepted ? params.target[replyMessageInjectionTargetOwner] : undefined;
   owner?.recordAccepted({ inboundAudio: params.inboundAudio });
-  let aborted =
-    accepted &&
-    outcome.result?.transcriptCommit === "unconfirmed" &&
-    params.abortOnUnconfirmedTranscript !== false;
-  if (aborted) {
-    owner?.abort();
-  }
+  let aborted = false;
   let adoptionError: unknown;
   try {
     await params.onAdopted?.();

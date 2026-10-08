@@ -101,12 +101,26 @@ it("skips async preparation on replay and rejects a stale fresh preparation", as
   await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const scope = await seed(env);
     const database = openOpenClawAgentDatabase(scope);
-    const original = { role: "assistant", content: "original", idempotencyKey: "original" };
+    const original: {
+      role: string;
+      content: string;
+      idempotencyKey: string;
+      custom?: { toJSON(): never };
+    } = {
+      role: "assistant",
+      content: "original",
+      idempotencyKey: "original",
+      custom: {
+        toJSON() {
+          throw new Error("Discarded input must not be serialized");
+        },
+      },
+    };
     await withSessionTranscriptWriteLock(scope, (locked) =>
       locked.appendMessage({
         eventId: "original",
         message: original,
-        prepareMessageAfterIdempotencyCheck: (message) => {
+        prepareMessageAfterIdempotencyCheck: ({ custom: _custom, ...message }) => {
           expect(database.db.isTransaction).toBe(true);
           return message;
         },
@@ -127,9 +141,14 @@ it("skips async preparation on replay and rejects a stale fresh preparation", as
     await expect(
       withSessionTranscriptWriteLock(scope, (locked) =>
         locked.appendMessage({
-          message: { role: "assistant", content: "suppressed" },
+          message: { ...original, idempotencyKey: "suppressed" },
           prepareMessageAfterIdempotencyCheckAsync: async () => undefined,
         }),
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      withSessionTranscriptWriteLock(scope, (locked) =>
+        locked.appendMessage({ message: undefined }),
       ),
     ).resolves.toBeUndefined();
     await expect(

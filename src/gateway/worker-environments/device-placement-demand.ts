@@ -2,9 +2,9 @@ import { loadExactSessionEntryReadOnly } from "../../config/sessions/session-acc
 import { captureGatewaySessionWorkAdmissions } from "../../sessions/session-lifecycle-admission.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
-import { isExactAttachedEnvironment } from "./placement-dispatch-failure.js";
 import type { WorkerSessionPlacementRecord } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
+import { isExactAttachedEnvironment } from "./placement-target.js";
 import type { WorkerEnvironmentService } from "./service.js";
 
 type DevicePlacementDemandSources = {

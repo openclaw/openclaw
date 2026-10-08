@@ -180,7 +180,7 @@ it("retargets another session on its retained actor outside the opening scope", 
         env: { OPENCLAW_STATE_DIR: tempDirs.make("retarget-other-namespace-") },
       }),
     ),
-  ).rejects.toThrow("another incognito actor");
+  ).rejects.toThrow("Explicit incognito database target does not match its agent and state root");
   expect(manager.getSessionTarget()).toMatchObject(destination);
   await manager.appendMessageAsync(makeUserMessage("retained destination write", 2));
   await manager.reloadPersistedTranscriptAsync();

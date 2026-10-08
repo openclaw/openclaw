@@ -5,6 +5,7 @@ import {
   beginSessionWorkAdmission,
   collectActiveSessionWorkAdmissions,
   getActiveSessionWorkAdmissionCount,
+  getCompetingSessionWorkAdmissionRelease,
   getSessionWorkAdmissionRelease,
   interruptSessionWorkAdmissions,
   isCompetingSessionWorkAdmissionActive,
@@ -267,6 +268,8 @@ it("interrupts a preexisting non-chat pending attempt without classifying it as 
     ).toBe(false);
     expect(isCompetingSessionWorkAdmissionActive(scope, identities)).toBe(false);
     expect(getSessionWorkAdmissionRelease({ scope, identities })).toBeUndefined();
+    const competingRelease = getCompetingSessionWorkAdmissionRelease({ scope, identities });
+    expect(competingRelease).toBeDefined();
     expect(collectActiveSessionWorkAdmissions().get(scope)).toBeUndefined();
     expect(getActiveSessionWorkAdmissionCount()).toBe(0);
     const reason = createAgentRunDirectAbortError();
@@ -274,6 +277,7 @@ it("interrupts a preexisting non-chat pending attempt without classifying it as 
       await interruptSessionWorkAdmissions({ scope, identities, reason, timeoutMs: 1000 }),
     ).toBe(true);
     expect(await pending).toBe(reason);
+    await expect(competingRelease).resolves.toBeUndefined();
     expect(interrupted).toHaveBeenCalledOnce();
     expect(interrupted).toHaveBeenCalledWith(reason);
     expect(validated).toBe(false);

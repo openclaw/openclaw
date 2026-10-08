@@ -29,6 +29,7 @@ import type { FinalizedRuntimeMsgContext as MsgContext } from "../templating.js"
 import { normalizeThinkLevel } from "../thinking.js";
 import { takeCommandSessionMetadataChangesFromTargets } from "./command-session-metadata.js";
 import { buildCommandContext } from "./commands-context.js";
+import { resolveSlashCommandName } from "./commands-slash-parse.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import { initFastReplySessionState } from "./get-reply-fast-path.js";
@@ -54,9 +55,7 @@ function shouldRunNativeSlashCommandFastPath(ctx: MsgContext): boolean {
   if (!isNativeCommandTurn(commandTurn) && !isAuthorizedTextSlashCommandTurn(commandTurn)) {
     return false;
   }
-  const commandText = stripStructuralPrefixes(ctx.commandText ?? "").trim();
-  const match = commandText.match(/^\/([^\s:]+)(?::|\s|$)/);
-  const commandName = normalizeOptionalString(match?.[1])?.toLowerCase();
+  const commandName = resolveSlashCommandName(stripStructuralPrefixes(ctx.commandText ?? ""));
   if (
     !commandName ||
     commandName === "new" ||
@@ -154,6 +153,15 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     triggerBodyNormalized: sessionState.triggerBodyNormalized,
     commandAuthorized: params.commandAuthorized,
   });
+  const commandScope = () => ({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: sessionState.sessionKey,
+    sessionScope: sessionState.sessionScope,
+    storePath: sessionState.storePath,
+    workspaceDir: params.workspaceDir,
+    isGroup: sessionState.isGroup,
+  });
   if (command.commandBodyNormalized === "/status") {
     const targetSessionEntry =
       sessionState.sessionStore[sessionState.sessionKey] ?? sessionState.sessionEntry;
@@ -245,17 +253,12 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
       handled: true,
       reply: markCommandReplyForDelivery(
         await buildStatusReply({
-          cfg: params.cfg,
-          agentId: params.agentId,
+          ...commandScope(),
           command,
           sessionEntry: targetSessionEntry,
-          sessionKey: sessionState.sessionKey,
           parentSessionKey: targetSessionEntry?.parentSessionKey ?? params.ctx.ParentSessionKey,
-          sessionScope: sessionState.sessionScope,
-          storePath: sessionState.storePath,
           provider: statusProvider,
           model: statusModel,
-          workspaceDir: params.workspaceDir,
           thinkingCatalog,
           resolvedThinkLevel,
           resolvedVerboseLevel: "off",
@@ -270,7 +273,6 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
               ...selection,
               catalog: thinkingCatalog,
             }),
-          isGroup: sessionState.isGroup,
           defaultGroupActivation: () => "always",
           mediaDecisions: params.ctx.MediaUnderstandingDecisions,
         }),
@@ -303,11 +305,10 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     : await (
         await commandsRuntimeLoader.load()
       ).handleCommands({
+        ...commandScope(),
         ctx: sessionState.sessionCtx,
         rootCtx: params.ctx,
-        cfg: params.cfg,
         command,
-        agentId: params.agentId,
         agentDir: params.agentDir,
         directives: clearInlineDirectives(sessionState.triggerBodyNormalized),
         elevated: {
@@ -318,10 +319,6 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
         sessionEntry: sessionState.sessionEntry,
         previousSessionEntry: sessionState.previousSessionEntry,
         sessionStore: sessionState.sessionStore,
-        sessionKey: sessionState.sessionKey,
-        storePath: sessionState.storePath,
-        sessionScope: sessionState.sessionScope,
-        workspaceDir: params.workspaceDir,
         opts: params.opts,
         defaultGroupActivation: () => "always",
         resolveModelLevels: async () => ({
@@ -340,7 +337,6 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
           provider: params.provider,
           model: params.model,
         }),
-        isGroup: sessionState.isGroup,
         ...createSkillCommandLoaders(skillCommandsRuntimeLoader.load, {
           workspaceDir: params.workspaceDir,
           cfg: params.cfg,
@@ -392,10 +388,9 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
 
   const inlineActionResult = await handleInlineActions({
     ...directiveResult.result,
+    ...commandScope(),
     ctx: params.ctx,
     sessionCtx: sessionState.sessionCtx,
-    cfg: params.cfg,
-    agentId: params.agentId,
     agentDir: params.agentDir,
     sessionEntry: sessionState.sessionEntry,
     ...(sessionState.initialSessionEntry
@@ -404,11 +399,6 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
     allowCreateSessionEntry: sessionState.initialSessionEntry === undefined,
     previousSessionEntry: sessionState.previousSessionEntry,
     sessionStore: sessionState.sessionStore,
-    sessionKey: sessionState.sessionKey,
-    storePath: sessionState.storePath,
-    sessionScope: sessionState.sessionScope,
-    workspaceDir: params.workspaceDir,
-    isGroup: sessionState.isGroup,
     opts: params.opts,
     typing: params.typing,
     skillCommands: loadedSkillCommands ?? directiveResult.result.skillCommands,

@@ -238,6 +238,12 @@ export async function resolveEmbeddedRunTerminal(input: {
         ? [silentToolResultReplyPayload]
         : input.prepared.payloadsWithToolMedia;
   const payloadCount = payloadsForTerminalPath?.length ?? 0;
+  const terminalFacts = {
+    payloadCount,
+    aborted: terminalAborted,
+    timedOut: terminalTimedOut,
+    attempt,
+  };
   const intentionalTerminalCompletion =
     !terminalAborted &&
     !terminalTimedOut &&
@@ -252,10 +258,7 @@ export async function resolveEmbeddedRunTerminal(input: {
       input.settledTurnFinalizationOutcome === "silent-fallback"
         ? "optional"
         : resolveReplyExpectation(runParams),
-    payloadCount,
-    aborted: terminalAborted,
-    timedOut: terminalTimedOut,
-    attempt,
+    ...terminalFacts,
   });
   const replyRecoverySuppressed =
     emptyAssistantReplyIsSilent ||
@@ -265,19 +268,15 @@ export async function resolveEmbeddedRunTerminal(input: {
     modelId: input.activeErrorContext.model,
     modelApi: input.modelApi,
     executionContract: input.executionContract,
-    payloadCount,
-    aborted: terminalAborted,
-    timedOut: terminalTimedOut,
-    attempt,
+    ...terminalFacts,
   };
-  const nextReasoningOnlyRetryInstruction =
-    replyRecoverySuppressed || settledTurnFinalizationAttempted
-      ? null
-      : resolveReasoningOnlyRetryInstruction(retryInput);
-  const nextEmptyResponseRetryInstruction =
-    replyRecoverySuppressed || settledTurnFinalizationAttempted
-      ? null
-      : resolveEmptyResponseRetryInstruction(retryInput);
+  const replyRecoveryAllowed = !replyRecoverySuppressed && !settledTurnFinalizationAttempted;
+  const nextReasoningOnlyRetryInstruction = replyRecoveryAllowed
+    ? resolveReasoningOnlyRetryInstruction(retryInput)
+    : null;
+  const nextEmptyResponseRetryInstruction = replyRecoveryAllowed
+    ? resolveEmptyResponseRetryInstruction(retryInput)
+    : null;
   if (
     nextReasoningOnlyRetryInstruction &&
     retryState.reasoningOnlyAttempts < DEFAULT_REASONING_ONLY_RETRY_LIMIT
@@ -294,14 +293,10 @@ export async function resolveEmbeddedRunTerminal(input: {
     nextReasoningOnlyRetryInstruction &&
     retryState.reasoningOnlyAttempts >= DEFAULT_REASONING_ONLY_RETRY_LIMIT;
   if (
-    !replyRecoverySuppressed &&
-    !settledTurnFinalizationAttempted &&
+    replyRecoveryAllowed &&
     shouldRetryMissingAssistantTurn({
-      payloadCount,
-      aborted: terminalAborted,
+      ...terminalFacts,
       promptError,
-      timedOut: terminalTimedOut,
-      attempt,
     }) &&
     retryState.missingAssistantAttempts < MAX_MISSING_ASSISTANT_RETRIES
   ) {
@@ -335,14 +330,11 @@ export async function resolveEmbeddedRunTerminal(input: {
     (completedEmptyFinalization && resolveReplyExpectation(runParams) === "optional")
       ? null
       : resolveIncompleteTurnPayloadText({
-          payloadCount,
-          aborted: terminalAborted,
+          ...terminalFacts,
           externalAbort: externalAbort || signalOwnedInterruption,
-          timedOut: terminalTimedOut,
           hadPotentialSideEffects: input.replayState.hadPotentialSideEffects,
           hasIntentionalTerminalCompletion: intentionalTerminalCompletion,
           terminalAuthFailure: input,
-          attempt,
         });
   const incompleteTurnFallbackSafe = Boolean(
     incompleteTurnText &&
@@ -357,8 +349,7 @@ export async function resolveEmbeddedRunTerminal(input: {
     ? availableTerminalToolPresentation
     : undefined;
   if (
-    !replyRecoverySuppressed &&
-    !settledTurnFinalizationAttempted &&
+    replyRecoveryAllowed &&
     (input.attemptCompactionCount > 0 ||
       isCompactionReplayCheckpoint(input.attemptAssistant?.providerReplay)) &&
     payloadCount === 0 &&

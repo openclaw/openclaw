@@ -235,6 +235,8 @@ export async function patchSessionEntry(
       return preserveGenerationPrivateFields(persistedEntry, projectPluginSessionEntryPatch(patch));
     },
     {
+      // Planning stays on the host; snapshots and commits use the existing worker FIFO.
+      workerGuard: {},
       assertCommitAllowed: params.assertCommitAllowed,
       fallbackEntry: params.fallbackEntry
         ? projectPluginSessionEntry(params.fallbackEntry)

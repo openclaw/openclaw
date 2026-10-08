@@ -24,6 +24,8 @@ const MEDIA_SEND_METHODS = {
   document: "sendDocument",
 } as const;
 
+const DEFAULT_MEDIA_EXTENSIONS = { image: ".jpg", video: ".mp4", audio: ".ogg", file: ".bin" };
+
 type TelegramOutboundMediaKind = keyof typeof MEDIA_SEND_METHODS;
 
 export type TelegramOutboundMediaSender = {
@@ -51,15 +53,7 @@ function resolveTelegramOutboundMediaFilename(params: {
     params.kind === "image" || params.kind === "video" || params.kind === "audio"
       ? params.kind
       : "file";
-  const defaultExtension =
-    params.kind === "image"
-      ? ".jpg"
-      : params.kind === "video"
-        ? ".mp4"
-        : params.kind === "audio"
-          ? ".ogg"
-          : ".bin";
-  return `${basename}${extensionForMime(params.contentType) ?? defaultExtension}`;
+  return `${basename}${extensionForMime(params.contentType) ?? DEFAULT_MEDIA_EXTENSIONS[basename]}`;
 }
 
 export function prepareTelegramOutboundMedia(params: {

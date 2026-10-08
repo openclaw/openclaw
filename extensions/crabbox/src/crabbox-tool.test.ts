@@ -13,7 +13,13 @@ const context: OpenClawPluginToolContext = {
 };
 
 function fixture(toolContext = context) {
-  const request = vi.fn().mockResolvedValue({ environmentId: "environment-one" });
+  const request = vi
+    .fn()
+    .mockImplementation(async (method: string) =>
+      method === "environments.session.status"
+        ? { attachment: null }
+        : { environmentId: "environment-one" },
+    );
   const tool = createCrabboxTool({
     context: toolContext,
     gateway: {
@@ -46,6 +52,34 @@ describe("Crabbox conversation tool", () => {
     expect(fixture(toolContext).tool).toBeNull();
   });
 
+  it.each([null, "stopped-environment"])(
+    "dedupes repeated calls until attachment %s is replaced, across tool instances",
+    async (previousEnvironmentId) => {
+      const first = fixture();
+      const retry = fixture();
+      const next = fixture();
+      for (const item of [first, retry]) {
+        item.request.mockResolvedValueOnce({
+          attachment: previousEnvironmentId ? { environmentId: previousEnvironmentId } : null,
+        });
+      }
+      next.request.mockResolvedValueOnce({
+        attachment: { environmentId: "newly-stopped-environment" },
+      });
+      await Promise.all(
+        [first, retry, next].map(({ tool }) => tool!.execute("crabbox_0", { action: "create" })),
+      );
+      const keys = [first, retry, next].map(
+        ({ request }) =>
+          request.mock.calls.find(([method]) => method === "environments.session.create")?.[1]
+            .idempotencyKey,
+      );
+      expect(keys[0]).toEqual(expect.any(String));
+      expect(keys[1]).toBe(keys[0]);
+      expect(keys[2]).not.toBe(keys[0]);
+    },
+  );
+
   it("reuses allocation identity on a replay without accepting caller-supplied ownership", async () => {
     const { tool, request } = fixture();
     const params = {
@@ -56,16 +90,16 @@ describe("Crabbox conversation tool", () => {
     };
     await tool!.execute("call-one", params);
     await tool!.execute("call-one", params);
-    expect(request.mock.calls[0]).toEqual(request.mock.calls[1]);
-    expect(request.mock.calls[0]?.[1]).toEqual({
+    expect(request.mock.calls[1]).toEqual(request.mock.calls[3]);
+    expect(request.mock.calls[1]?.[1]).toEqual({
       profileId: "desktop",
       presentation: "desktop",
       idempotencyKey: expect.stringMatching(/^[a-f0-9]{64}$/u),
     });
     const second = fixture({ ...context, sessionId: "session-two" });
     await second.tool!.execute("call-one", params);
-    expect(second.request.mock.calls[0]?.[1].idempotencyKey).not.toBe(
-      request.mock.calls[0]?.[1].idempotencyKey,
+    expect(second.request.mock.calls[1]?.[1].idempotencyKey).not.toBe(
+      request.mock.calls[1]?.[1].idempotencyKey,
     );
   });
 

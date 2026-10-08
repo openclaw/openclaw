@@ -206,6 +206,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     "continues output-limited work without replay (no tools=%s)",
     async (noTools) => {
       const {
+        attempt,
         recovery,
         markOwnedTranscriptRetry,
         continueFromCurrentTranscript,
@@ -221,6 +222,7 @@ describe("recoverEmbeddedRunAttempt", () => {
       expect(markOwnedTranscriptRetry).toHaveBeenCalledTimes(2);
       expect(continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
         includeToolFailureInstruction: false,
+        messages: attempt.messagesSnapshot,
       });
       expect(failoverRetryController.transientRetryCount).toBe(1);
       expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
@@ -557,6 +559,8 @@ describe("recoverEmbeddedRunAttempt", () => {
 
   it.each<[string, TransportDropScenario]>([
     ["WebSocket drop", {}],
+    ["overload before work", { noTools: true, errorMessage: "server_overloaded", diagnostics: [] }],
+    ["overload after settled tools", { errorMessage: "server_overloaded", diagnostics: [] }],
     [
       "WebSocket transport code",
       {
@@ -624,6 +628,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     ],
   ])("continues the existing transcript after %s", async (_label, scenario) => {
     const {
+      attempt,
       recovery,
       markOwnedTranscriptRetry,
       continueFromCurrentTranscript,
@@ -638,6 +643,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(markOwnedTranscriptRetry).toHaveBeenCalledOnce();
     expect(continueFromCurrentTranscript).toHaveBeenCalledExactlyOnceWith({
       includeToolFailureInstruction: Boolean(scenario.lastToolError),
+      messages: attempt.messagesSnapshot,
     });
     expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
     expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
@@ -829,7 +835,6 @@ describe("recoverEmbeddedRunAttempt", () => {
     const failoverRetryController = {
       resolveAuthProfileFailureReason: vi.fn(),
       advanceAuthProfile: vi.fn(),
-      advanceRateLimitAuthProfile: vi.fn(),
       maybeMarkAuthProfileFailure: vi.fn(),
       maybeRetryTransient: vi.fn(),
       transientRetryCount: 0,
@@ -909,7 +914,6 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(recovery).toEqual({ action: "proceed" });
     expect(promptFailover).not.toHaveBeenCalled();
     expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(failoverRetryController.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
     expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
 });

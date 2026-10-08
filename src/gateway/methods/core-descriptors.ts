@@ -640,6 +640,13 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.storage.run", "sessions-read", "operator.admin", "2026.9"],
   ["plugins.reload", "plugins-mutations", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["claws.packages.remove", "claws-packages", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
+  [
+    "claws.removalJournal",
+    "claws-removal-journal",
+    "operator.admin",
+    "2026.9",
+    CONTROL_PLANE_WRITE,
+  ],
   ["canvas.document.preview", "canvas", "operator.read", "2026.9"],
   ["computer.status", "computer", "operator.read", "2026.9"],
   ["computer.invoke", "computer", "operator.write", "2026.9"],
@@ -711,4 +718,8 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.processes.stop", "session-processes", "operator.write", "2026.9"],
   ["catalog.browse", "plugins", "operator.read", "2026.9"],
   ["catalog.searchKeywords", "plugins", "operator.read", "2026.9"],
+  ["skills.workshop.list", "skills", "operator.read", "2026.9"],
+  ["skills.workshop.changes", "skills", "operator.read", "2026.9"],
+  ["skills.workshop.archive", "skills", "operator.admin", "2026.9"],
+  ["skills.workshop.restore", "skills", "operator.admin", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

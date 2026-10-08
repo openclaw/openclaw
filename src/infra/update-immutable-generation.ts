@@ -252,6 +252,12 @@ function upgradeImmutableLauncher(params: {
   const stage = fsSync.mkdtempSync(path.join(bin, ".launcher-upgrade-"));
   const stageIdentity = fsSync.lstatSync(stage);
   const backup = path.join(control, "openclaw-gateway.v1");
+  const isExpectedBackup = (stat: Stats) =>
+    stat.isFile() &&
+    stat.uid === 0 &&
+    stat.nlink === 1 &&
+    (stat.mode & 0o222) === 0 &&
+    fsSync.readFileSync(backup, "utf8") === params.previous;
   const writeDurable = (file: string, content: string, mode: number) => {
     const fd = fsSync.openSync(file, "wx", mode);
     try {
@@ -265,13 +271,7 @@ function upgradeImmutableLauncher(params: {
   try {
     const previousBackup = fsSync.lstatSync(backup, { throwIfNoEntry: false });
     if (previousBackup) {
-      if (
-        !previousBackup.isFile() ||
-        previousBackup.uid !== 0 ||
-        previousBackup.nlink !== 1 ||
-        (previousBackup.mode & 0o222) !== 0 ||
-        fsSync.readFileSync(backup, "utf8") !== params.previous
-      ) {
+      if (!isExpectedBackup(previousBackup)) {
         throw new Error("Existing immutable v1 launcher backup differs; it was preserved.");
       }
     } else {
@@ -287,14 +287,7 @@ function upgradeImmutableLauncher(params: {
     const candidate = path.join(stage, "next");
     writeDurable(candidate, params.content, 0o755);
     assertUpgrade();
-    const retained = fsSync.lstatSync(backup);
-    if (
-      !retained.isFile() ||
-      retained.uid !== 0 ||
-      retained.nlink !== 1 ||
-      (retained.mode & 0o222) !== 0 ||
-      fsSync.readFileSync(backup, "utf8") !== params.previous
-    ) {
+    if (!isExpectedBackup(fsSync.lstatSync(backup))) {
       throw new Error("Immutable v1 launcher backup changed before publication.");
     }
     fsSync.renameSync(candidate, params.launcher);

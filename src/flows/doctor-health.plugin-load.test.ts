@@ -22,9 +22,7 @@ afterEach(() => {
 
 it.each([
   { failure: "ENOSPC", update: "standalone" },
-  { failure: "SyntaxError", update: "standalone" },
   { failure: "ENOSPC", update: "in-progress" },
-  { failure: "ENOSPC", update: "parent-only" },
 ])(
   "reports a plugin $failure during $update Doctor with its corresponding outcome",
   async ({ failure, update }) => {

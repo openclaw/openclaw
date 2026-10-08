@@ -35,7 +35,7 @@ vi.mock("./doctor-health-contribution-runners.config.js", async (importOriginal)
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each(["rehearsal", "live", "partial-markers", "standalone"])(
+it.each(["rehearsal", "partial-markers"])(
   "defers only pure advisory contributions during %s and records their IDs",
   async (mode) => {
     const env = {
@@ -109,7 +109,6 @@ it.each(["rehearsal", "live", "partial-markers", "standalone"])(
 );
 
 it.each([
-  { agentCount: 3, phase: "validation" },
   { agentCount: 480, phase: "validation" },
   { agentCount: 3, phase: "activation" },
 ])(

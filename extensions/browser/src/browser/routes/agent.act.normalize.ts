@@ -38,6 +38,15 @@ function readClickButton(value: unknown, kind: "click" | "clickCoords") {
   return button || undefined;
 }
 
+function readRequiredElementTarget(body: Record<string, unknown>, kind: string) {
+  const ref = toStringOrEmpty(body.ref) || undefined;
+  const selector = toStringOrEmpty(body.selector) || undefined;
+  if (!ref && !selector) {
+    throw new Error(`${kind} requires ref or selector`);
+  }
+  return { ref, selector };
+}
+
 /**
  * KeyboardEvent.key for Space is the literal " ". Map that exact whole value
  * before trim so Browser panel Space presses survive. Keep trim-first chord
@@ -142,11 +151,7 @@ export function normalizeActRequest(body: Record<string, unknown>, depth = 0): B
 
   switch (kind) {
     case "click": {
-      const ref = toStringOrEmpty(body.ref) || undefined;
-      const selector = toStringOrEmpty(body.selector) || undefined;
-      if (!ref && !selector) {
-        throw new Error("click requires ref or selector");
-      }
+      const { ref, selector } = readRequiredElementTarget(body, kind);
       const button = readClickButton(body.button, kind);
       const modifiers = toStringArray(body.modifiers);
       if (modifiers?.some((modifier) => !ALLOWED_CLICK_MODIFIERS.has(modifier))) {
@@ -190,12 +195,8 @@ export function normalizeActRequest(body: Record<string, unknown>, depth = 0): B
       return definedAction({ kind, x, y, targetId, doubleClick, button, delayMs, timeoutMs });
     }
     case "type": {
-      const ref = toStringOrEmpty(body.ref) || undefined;
-      const selector = toStringOrEmpty(body.selector) || undefined;
+      const { ref, selector } = readRequiredElementTarget(body, kind);
       const text = body.text;
-      if (!ref && !selector) {
-        throw new Error("type requires ref or selector");
-      }
       if (typeof text !== "string") {
         throw new Error("type requires text");
       }
@@ -220,11 +221,7 @@ export function normalizeActRequest(body: Record<string, unknown>, depth = 0): B
     }
     case "hover":
     case "scrollIntoView": {
-      const ref = toStringOrEmpty(body.ref) || undefined;
-      const selector = toStringOrEmpty(body.selector) || undefined;
-      if (!ref && !selector) {
-        throw new Error(`${kind} requires ref or selector`);
-      }
+      const { ref, selector } = readRequiredElementTarget(body, kind);
       const timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
       return definedAction({ kind, ref, selector, targetId, timeoutMs });
     }

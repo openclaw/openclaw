@@ -177,7 +177,7 @@ describe("runDoctorLintCli", () => {
         expect(exitCode).toBe(0);
         if (entry.json) {
           expect(JSON.parse(output)).toMatchObject({
-            checksRun: 0,
+            checksRun: 1,
             checksSkipped: 1,
             findings: [],
           });
@@ -203,7 +203,7 @@ describe("runDoctorLintCli", () => {
       if (entry.json) {
         expect(JSON.parse(output)).toMatchObject({
           ok: false,
-          checksRun: 1,
+          checksRun: entry.selection === "only" ? 1 : 2,
           findings: [
             {
               checkId: "core/doctor/gateway-health",

@@ -73,6 +73,49 @@ function compactLog(seconds: number, key = "core-unit-src-security-2") {
   ].join("\n");
 }
 
+function packedReleaseFixture() {
+  const configs = ["test/vitest/vitest.unit-fast.config.ts"];
+  const stripes = [["first.test.ts"], ["second.test.ts"]];
+  const { timingKeys } = createCompactSplitTimingGeneration({
+    configs,
+    parentShardName: "release-full-fixture",
+    stripes,
+  });
+  const groups = stripes.map((includePatterns, index) => ({
+    configs,
+    includePatterns,
+    env: { OPENCLAW_VITEST_MAX_WORKERS: "2" },
+    shard_name: `fixture-${index + 1}`,
+    timing_key: timingKeys[index],
+  }));
+  const line = (second: number, body: string) =>
+    `${new Date(Date.parse("2026-08-27T23:00:00Z") + second * 1000).toISOString()} ${body}`;
+  return {
+    timingKeys,
+    text: [
+      line(0, `OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${encodeNodeTestGroups(groups)}`),
+      line(0, "OPENCLAW_VITEST_MAX_WORKERS: 3"),
+      line(0, "OPENCLAW_CI_TEST_RUNTIME_POLICY: dual"),
+      line(
+        0,
+        "[shard:resources] logicalCpuCount=4 totalMemoryBytes=7516192768 requested plans=1 admitted plans=1",
+      ),
+      line(0, `[shard:${timingKeys[0]}] begin`),
+      line(10, `[shard:${timingKeys[0]}] end (exit 0)`),
+      line(12, `[shard:bun:${timingKeys[0]}] begin`),
+      line(32, `[shard:bun:${timingKeys[0]}] end (exit 0)`),
+      line(40, `[shard:${timingKeys[1]}] begin`),
+      line(50, `[shard:${timingKeys[1]}] end (exit 0)`),
+      line(52, `[shard:bun-native:${timingKeys[1]}] begin`),
+      line(70, `[shard:bun-native:${timingKeys[1]}] end (exit 0)`),
+      line(
+        71,
+        '[shard:completion] {"version":1,"planned":2,"completed":2,"invocations":4,"failedInvocations":0}',
+      ),
+    ].join("\n"),
+  };
+}
+
 const measuredFile = "ui/src/e2e/measured.e2e.test.ts";
 const baseline: CiTestTimings = {
   compactGroupSeconds: { blacksmith: {}, github: {} },
@@ -441,7 +484,7 @@ describe("runtime placement observations", () => {
     files: readonly string[] = [
       "src/config/state-startup-corpus.test.ts",
       "src/infra/update-managed-service-handoff-lifecycle.test.ts",
-      "src/plugin-state/plugin-state-store.authority.test.ts",
+      "src/plugin-state/plugin-state-store.runtime.test.ts",
       "test/plugins/codex-model-catalog.gateway.test.ts",
     ],
   ) {
@@ -1116,6 +1159,7 @@ type SamplerFixture = {
   jobs: ReturnType<typeof samplerJob>[];
   pushRuns?: ReturnType<typeof samplerRun>[];
   releaseRuns?: ReturnType<typeof samplerRun>[];
+  packedReleaseRuns?: ReturnType<typeof samplerRun>[];
   toolingRuns?: ReturnType<typeof samplerRun>[];
   seedRuns?: Record<string, ReturnType<typeof samplerRun>>;
   runPages?: ReturnType<typeof samplerRun>[][];
@@ -1170,8 +1214,9 @@ if (args[1] === "--help") {
 } else if (endpoint.pathname.includes("/workflows/")) {
   const ci = endpoint.pathname.includes("/ci.yml/");
   const tooling = ci && endpoint.searchParams.get("event") === "pull_request";
-  const main = ci && !tooling;
-  const rows = tooling ? fixture.toolingRuns || [] : main ? endpoint.searchParams.get("event") === "push" ? fixture.pushRuns || [] : fixture.runs : endpoint.pathname.includes("/openclaw-release-checks.yml/") ? fixture.releaseRuns || [] : [];
+  const packedRelease = ci && endpoint.searchParams.get("event") === "workflow_dispatch";
+  const main = ci && !tooling && !packedRelease;
+  const rows = tooling ? fixture.toolingRuns || [] : packedRelease ? fixture.packedReleaseRuns || [] : main ? endpoint.searchParams.get("event") === "push" ? fixture.pushRuns || [] : fixture.runs : endpoint.pathname.includes("/openclaw-release-checks.yml/") ? fixture.releaseRuns || [] : [];
   const selected = main && fixture.runPages ? fixture.runPages[page - 1] || [] : slice(rows);
   console.log(JSON.stringify(args.at(-1).startsWith("[.workflow_runs") ? selected : {total_count: rows.length, workflow_runs: selected}));
 } else if (endpoint.pathname.endsWith("/jobs")) {
@@ -1239,6 +1284,82 @@ if (args[1] === "--help") {
 }
 
 describe("CI test timing refit", () => {
+  it("refits complete packed release runtime walls from independent runs without pruning", () => {
+    const { timingKeys, text } = packedReleaseFixture();
+    const previous: CiTestTimings = {
+      ...baseline,
+      compactGroupSeconds: {
+        blacksmith: {},
+        github: { unobserved: 80, "release-full-fixture": 900 },
+      },
+    };
+    const run = (id: number) =>
+      timingRun(id, [{ kind: "release-packed", labels: ["ubuntu-24.04"], text }]);
+    expect(refitTestTimings([run(1), run(1)], previous).timings.compactGroupSeconds.github).toEqual(
+      previous.compactGroupSeconds.github,
+    );
+    const refitted = refitTestTimings([run(1), run(2), run(3)], previous).timings
+      .compactGroupSeconds.github;
+    expect(refitted).toEqual({
+      ...previous.compactGroupSeconds.github,
+      [timingKeys[0]!]: 32,
+      [timingKeys[1]!]: 30,
+    });
+  });
+
+  it.each([
+    "missing runtime",
+    "unfinished runtime",
+    "failed runtime",
+    "missing receipt",
+    "duplicate receipt",
+    "partial Node selection",
+    "wrong workers",
+    "parallel plans",
+  ])("retains packed release costs on %s", (fault) => {
+    const fixture = packedReleaseFixture();
+    let text = fixture.text;
+    if (fault === "missing runtime") {
+      text = text
+        .split("\n")
+        .filter((line) => !line.includes("[shard:bun:"))
+        .join("\n");
+    } else if (fault === "unfinished runtime") {
+      text = text.replace(`[shard:bun:${fixture.timingKeys[0]}] end (exit 0)`, "missing end");
+    } else if (fault === "failed runtime") {
+      text = text.replace(
+        `[shard:bun:${fixture.timingKeys[0]}] end (exit 0)`,
+        `[shard:bun:${fixture.timingKeys[0]}] end (exit 1)`,
+      );
+    } else if (fault === "missing receipt") {
+      text = text.split("\n").slice(0, -1).join("\n");
+    } else if (fault === "duplicate receipt") {
+      text += `\n${text.split("\n").at(-1)}`;
+    } else if (fault === "partial Node selection") {
+      text = text.replaceAll(
+        `[shard:${fixture.timingKeys[0]}]`,
+        `[shard:node-subset:${fixture.timingKeys[0]}]`,
+      );
+    } else if (fault === "wrong workers") {
+      text = text.replace("OPENCLAW_VITEST_MAX_WORKERS: 3", "OPENCLAW_VITEST_MAX_WORKERS: 1");
+    } else {
+      text = text.replace(
+        "requested plans=1 admitted plans=1",
+        "requested plans=2 admitted plans=2",
+      );
+    }
+    const previous: CiTestTimings = {
+      ...baseline,
+      compactGroupSeconds: { blacksmith: {}, github: { [fixture.timingKeys[0]!]: 400 } },
+    };
+    const runs = [1, 2, 3].map((id) =>
+      timingRun(id, [{ kind: "release-packed", labels: ["ubuntu-24.04"], text }]),
+    );
+    expect(refitTestTimings(runs, previous).timings.compactGroupSeconds.github).toEqual(
+      previous.compactGroupSeconds.github,
+    );
+  });
+
   it.each(["uiE2e", "repoE2e"] as const)(
     "ingests native %s reporters without losing case progress or suite hooks",
     async (kind) => {
@@ -2280,6 +2401,51 @@ it.todo("retains todo coverage");
 });
 
 describe("CI timing sampler provenance", () => {
+  it("discovers packed release jobs in failed dispatches without repricing partial siblings", () => {
+    const { timingKeys, text } = packedReleaseFixture();
+    withSamplerFixture(
+      {
+        runs: [samplerRun(1), samplerRun(2)],
+        packedReleaseRuns: [11, 12].map((id) =>
+          samplerRun(id, { event: "workflow_dispatch", conclusion: "failure" }),
+        ),
+        jobs: [
+          samplerJob(1, 1),
+          samplerJob(2, 2),
+          ...[11, 12].map((id) =>
+            samplerJob(id * 10, id, {
+              name: "checks-node-release-packed-1",
+              labels: ["ubuntu-24.04"],
+              log: text,
+            }),
+          ),
+          samplerJob(111, 11, {
+            name: "checks-node-release-packed-2",
+            conclusion: "failure",
+            log: text,
+          }),
+        ],
+      },
+      (fixture) => {
+        const result = fixture.invoke();
+        expect(result.status, result.stderr).toBe(0);
+        expect(JSON.parse(fixture.contents()).compactGroupSeconds.github).toEqual({
+          [timingKeys[0]!]: 32,
+          [timingKeys[1]!]: 30,
+        });
+        expect(result.stdout).toContain("Independent packed release contributors: 2");
+        expect(result.stdout).toContain("Independent main compact contributors: 2");
+        const requests = fixture.requests();
+        expect(
+          requests.some((args) =>
+            args[1]?.includes("ci.yml/runs?event=workflow_dispatch&status=completed"),
+          ),
+        ).toBe(true);
+        expect(requests.some((args) => args[1]?.endsWith("/jobs/111/logs"))).toBe(false);
+      },
+    );
+  });
+
   const retained: CiTestTimings = {
     ...baseline,
     compactGroupSeconds: {
@@ -2871,7 +3037,12 @@ describe("CI timing sampler provenance", () => {
         );
         const requests = fixture.requests();
         const runRequests = requests.filter((args) => args[1]?.includes("/workflows/"));
-        expect(runRequests).toHaveLength(4);
+        expect(runRequests).toHaveLength(5);
+        expect(
+          runRequests.filter((args) =>
+            args[1]?.includes("ci.yml/runs?event=workflow_dispatch&status=completed"),
+          ),
+        ).toHaveLength(1);
         for (const args of runRequests) {
           const params = new URL(args[1]!, "https://api.github.com").searchParams;
           expect(params.get("created")).toBe(`2026-08-21T12:00:00.000Z..${sampleNow}`);

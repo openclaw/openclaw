@@ -10,7 +10,7 @@ import type {
   OpenClawAgentDatabaseExecution,
 } from "../../state/openclaw-agent-execution-contract.js";
 import { runOpenClawAgentWriteAdmissions } from "../../state/openclaw-agent-write-admission.js";
-import type { SessionAccessScope } from "./session-accessor.types.js";
+import type { SessionAccessScope, SessionEntryTargetPatchScope } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import { assertSessionEntryCohortScope } from "./session-entry-cohort-scope.js";
 import { SessionEntryChangedDuringReadError } from "./session-entry-read-errors.js";
@@ -40,11 +40,19 @@ export function readAdmittedSessionEntry(
   reader: SessionEntryCohortReader,
   input: SessionAccessScope,
   assertCurrent: () => void,
+  onReadTarget?: (target: SessionEntryTargetPatchScope) => void,
 ) {
   assertCurrent();
   const key = assertSessionEntryCohortScope(reader, input);
   return reader.withRead({ sessionKeys: [key] }, assertCurrent, (read, assertPrepared) => {
     assertPrepared();
+    onReadTarget?.({
+      agentId: reader.logicalAgentId,
+      env: reader.database.env,
+      storePath: read.source.path,
+      readSource: { ...read.source },
+      target: { canonicalKey: key, storeKeys: [key] },
+    });
     return read.entries.find((row) => row.sessionKey === key)?.entry;
   });
 }

@@ -563,8 +563,8 @@ describe("cron view editor", () => {
 
   it("renders system-owned jobs as view-and-run only", () => {
     const { declarationKey, payload } = {
-      declarationKey: "skill-collection-review:test",
-      payload: { kind: "agentTurn" as const, message: "Review the Workshop collection." },
+      declarationKey: "heartbeat:test",
+      payload: { kind: "heartbeat" as const },
     };
 
     const job = createJob(`system-${payload.kind}`, { declarationKey, payload });

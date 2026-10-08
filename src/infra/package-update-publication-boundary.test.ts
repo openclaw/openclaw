@@ -152,17 +152,18 @@ it.skipIf(process.platform === "win32").each(["owned", "replacement"] as const)(
           );
           await expect(
             transaction!.complete({ activationVerified: true }, fence.assertCurrent),
-          ).rejects.toThrow("Retirement target changed");
-          expect(fs.readFileSync(path.join(obsolete, "successor.txt"), "utf8")).toBe(
+          ).resolves.toMatchObject({
+            name: "package-backup-retention",
+            advisory: { kind: "recoverable-maintenance" },
+          });
+          const evidence = `${anchor}.superseded-${record.descriptor.operationId}`;
+          expect(fs.readFileSync(path.join(evidence, "previous/successor.txt"), "utf8")).toBe(
             "foreign retirement owner",
           );
           expect(
             JSON.parse(fs.readFileSync(path.join(retained, "package.json"), "utf8")).version,
           ).toBe("1.0.0");
-          expect(openPackageActivationJournal(anchor).read().intent).toMatchObject({
-            kind: "remove",
-            name: "previous",
-          });
+          expect(() => assertNoPendingPackageActivation(f.packageRoot)).not.toThrow();
         } else {
           // Once the candidate is verified, obsolete backup bytes are not rollback input.
           fs.writeFileSync(path.join(anchor, "previous", "previous.payload"), "obsolete bytes");

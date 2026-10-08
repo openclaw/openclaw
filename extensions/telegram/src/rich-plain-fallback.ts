@@ -17,19 +17,25 @@ const RICH_STRUCTURE_INVALID_RE =
 const PARSE_ERR_RE =
   /can't parse entities|parse entities|find end of the entity|can't parse InputRichBlock/i;
 
-type TelegramRichPlainFallbackTrigger =
+type TelegramPlainFallbackTrigger =
   | "rich-entity-invalid"
   | "rich-structure-invalid"
   | "html-parse"
-  | "rich-content-required";
-
-type TelegramPlainFallbackTrigger = TelegramRichPlainFallbackTrigger | "empty-content";
-const RICH_FALLBACK_TRIGGERS: Array<[RegExp, TelegramRichPlainFallbackTrigger]> = [
-  [RICH_ENTITY_INVALID_RE, "rich-entity-invalid"],
-  [RICH_CONTENT_REQUIRED_RE, "rich-content-required"],
-  [RICH_STRUCTURE_INVALID_RE, "rich-structure-invalid"],
-  [PARSE_ERR_RE, "html-parse"],
-];
+  | "rich-content-required"
+  | "empty-content";
+const FALLBACK_TRIGGERS: Record<"rich" | "html", Array<[RegExp, TelegramPlainFallbackTrigger]>> = {
+  rich: [
+    [RICH_ENTITY_INVALID_RE, "rich-entity-invalid"],
+    [RICH_CONTENT_REQUIRED_RE, "rich-content-required"],
+    [RICH_STRUCTURE_INVALID_RE, "rich-structure-invalid"],
+    [PARSE_ERR_RE, "html-parse"],
+  ],
+  html: [
+    [PARSE_ERR_RE, "html-parse"],
+    [EMPTY_TEXT_RE, "empty-content"],
+    [RICH_CONTENT_REQUIRED_RE, "empty-content"],
+  ],
+};
 
 type TelegramPlainFallbackPlan = {
   plainText: string;
@@ -43,13 +49,6 @@ export function isTelegramHtmlParseError(err: unknown): boolean {
 export function isTelegramEmptyContentError(err: unknown): boolean {
   const message = formatErrorMessage(err);
   return EMPTY_TEXT_RE.test(message) || RICH_CONTENT_REQUIRED_RE.test(message);
-}
-
-function getTelegramPlainFallbackTrigger(
-  err: unknown,
-): TelegramRichPlainFallbackTrigger | undefined {
-  const message = formatErrorMessage(err);
-  return RICH_FALLBACK_TRIGGERS.find(([pattern]) => pattern.test(message))?.[1];
 }
 
 export function splitTelegramPlainTextChunks(text: string, limit: number): string[] {
@@ -72,20 +71,12 @@ export async function withTelegramPlainFallback<T>(params: {
   try {
     return await params.sendFormatted();
   } catch (err) {
-    const trigger: TelegramPlainFallbackTrigger | undefined =
-      params.kind === "rich"
-        ? getTelegramPlainFallbackTrigger(err)
-        : isTelegramHtmlParseError(err)
-          ? "html-parse"
-          : isTelegramEmptyContentError(err)
-            ? "empty-content"
-            : undefined;
+    const message = formatErrorMessage(err);
+    const trigger = FALLBACK_TRIGGERS[params.kind].find(([pattern]) => pattern.test(message))?.[1];
     if (!trigger || !params.plainText.trim()) {
       throw err;
     }
-    params.warn(
-      `telegram ${params.context} degrade=plain-fallback:${trigger}: ${formatErrorMessage(err)}`,
-    );
+    params.warn(`telegram ${params.context} degrade=plain-fallback:${trigger}: ${message}`);
     const limit = params.limit ?? 4000;
     const chunks = splitTelegramPlainTextChunks(params.plainText, limit);
     return await params.sendPlain(

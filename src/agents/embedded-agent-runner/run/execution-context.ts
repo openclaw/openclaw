@@ -55,8 +55,6 @@ export type PreparedEmbeddedAttemptDispatchInput = {
   sessionPromptState: Awaited<ReturnType<typeof createEmbeddedRunSessionPromptState>>;
   terminalRetryState: ReturnType<typeof createEmbeddedRunTerminalRetryState>;
   replayState: EmbeddedRunReplayState;
-  provider: string;
-  modelId: string;
   startupStagesEmitted: boolean;
   bootstrapPromptWarningSignaturesSeen: string[];
   resolveRuntimeFallbackReason: () => string | null;

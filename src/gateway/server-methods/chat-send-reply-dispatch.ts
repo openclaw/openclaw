@@ -103,7 +103,6 @@ export function createChatSendReplyDispatch(params: {
   } = createChatReplySessionReader(session, getRuntimeConfig, params.assertWorkCurrent);
   let assistantTranscriptRewriteState: ReturnType<typeof captureTranscriptStart>;
   let agentRunId = clientRunId;
-  let agentTranscriptLifecycleRevision: string | undefined;
   const captureAgentTranscriptStart = (
     runId = clientRunId,
     prepared?: PreparedReplyTranscriptStart | null,
@@ -111,7 +110,6 @@ export function createChatSendReplyDispatch(params: {
     agentRunId = runId;
     const transcriptStart = captureTranscriptStart(prepared);
     assistantTranscriptRewriteState = transcriptStart;
-    agentTranscriptLifecycleRevision = transcriptStart?.lifecycleRevision;
     return transcriptStart !== undefined;
   };
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
@@ -137,25 +135,22 @@ export function createChatSendReplyDispatch(params: {
     const admission = userTurnRecorder.getAdmissionReceipt();
     const transcriptStart = assistantTranscriptRewriteState;
     const runId = agentRunId;
-    const lifecycleRevision = agentTranscriptLifecycleRevision;
+    const lifecycleRevision = transcriptStart?.lifecycleRevision;
     const reader = admission && getOwnedSessionTranscriptReader(admission);
     const isRunCurrent = () => {
       const currentAdmission = userTurnRecorder.getAdmissionReceipt();
-      if (
-        !admission ||
-        admission.agentId !== session.agentId ||
-        admission.sessionKey !== session.sessionKey ||
-        !isAgentRunStarted() ||
-        params.isRunCurrent?.() !== true ||
-        params.abortSignal?.aborted ||
-        agentRunId !== runId ||
-        assistantTranscriptRewriteState !== transcriptStart ||
-        currentAdmission?.logicalTurnId !== admission.logicalTurnId ||
-        currentAdmission?.entryId !== admission.entryId
-      ) {
-        return false;
-      }
-      return true;
+      return Boolean(
+        admission &&
+        admission.agentId === session.agentId &&
+        admission.sessionKey === session.sessionKey &&
+        isAgentRunStarted() &&
+        params.isRunCurrent?.() === true &&
+        !params.abortSignal?.aborted &&
+        agentRunId === runId &&
+        assistantTranscriptRewriteState === transcriptStart &&
+        currentAdmission?.logicalTurnId === admission.logicalTurnId &&
+        currentAdmission?.entryId === admission.entryId,
+      );
     };
     const isInspectionCurrent = () => {
       if (!isRunCurrent()) {

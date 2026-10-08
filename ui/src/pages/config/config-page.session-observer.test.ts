@@ -41,6 +41,9 @@ async function mount(client: GatewayBrowserClient, scopes: readonly string[] = [
   const context = {
     gateway: source.gateway,
     settingsAgentSelection: { state: { selectedId: "main" }, subscribe },
+    agentSelection: { state: { selectedId: "main" }, subscribe },
+    agents: { state: { agentsList: null }, subscribe },
+    agentIdentity: { ensure: async () => undefined, subscribe },
     runtimeConfig: { state: { configSnapshot: {}, configSchema: {} }, subscribe },
     theme: { serverSelection: null, subscribe },
     overlays: { snapshot: {}, subscribe },

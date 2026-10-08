@@ -21,6 +21,7 @@ import {
   resetClientVoiceConfirmationStateForTest,
 } from "../talk/client-voice-confirmation.test-support.js";
 import * as clientVoiceSession from "../talk/client-voice-session.js";
+import { copyAgentToolMetadata } from "./agent-tool-metadata.js";
 import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
 import * as nodeHost from "./bash-tools.exec-host-node.js";
@@ -359,7 +360,7 @@ describe("Code Mode subscribed host denial", () => {
     let producerError: unknown;
     // Capture the exact real producer object without minting or modifying its proof.
     const capture = wrapToolWithBeforeToolCallHook(
-      {
+      copyAgentToolMetadata(harness.source, {
         ...harness.source,
         execute: async (...args: Parameters<typeof execute>) => {
           try {
@@ -369,7 +370,7 @@ describe("Code Mode subscribed host denial", () => {
             throw error;
           }
         },
-      },
+      }),
       { runId: harness.runId },
     );
     applyCodeModeCatalog({ ...harness, tools: [...harness.tools, capture] });

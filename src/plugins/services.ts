@@ -15,6 +15,7 @@ import {
 } from "./capability-lease.js";
 import { createPluginServiceGatewayEvents } from "./gateway-events.js";
 import { withPluginHttpRouteRegistry } from "./http-registry.js";
+import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
 import { getPluginInstance, runPluginCleanup } from "./plugin-instance-scope.js";
 import type { PluginInstanceConsumer } from "./plugin-instance.types.js";
 import { resolvePluginReturnPromise } from "./plugin-return-value.js";
@@ -23,6 +24,7 @@ import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import type { PluginServiceRegistration } from "./registry-types.js";
 import type { PluginRegistry } from "./registry.js";
 import { getGatewayContextResolver } from "./runtime/gateway-request-scope.js";
+import { runOutsidePluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
 import { createPluginServiceCronGetter, type PluginServiceCronHost } from "./service-cron.js";
 import { createPluginServiceDiagnostics } from "./service-diagnostics.js";
 import { createPluginServiceHealthReporter } from "./service-health.js";
@@ -629,14 +631,20 @@ async function startPreparedPluginServices({
           const start = () =>
             withPluginServiceScheduler(scheduling.scheduler, () => service.start(serviceContext));
           // Reload may originate in an RPC or tool; background work captures
-          // service-owned Gateway/worker context, never that caller's authority.
+          // service-owned Gateway/worker context, never that caller's authority or generation.
           await runOutsideOperatorToolGatewayAuthority(() =>
-            runServiceStart(async () =>
-              withPluginHttpRouteRegistry(
-                registry,
-                () =>
-                  ownedService.startupConsumer ? ownedService.startupConsumer.run(start) : start(),
-                lease,
+            runOutsidePluginRuntimeGenerationScope(() =>
+              pluginInstanceInvocation.exit(() =>
+                runServiceStart(async () =>
+                  withPluginHttpRouteRegistry(
+                    registry,
+                    () =>
+                      ownedService.startupConsumer
+                        ? ownedService.startupConsumer.run(start)
+                        : start(),
+                    lease,
+                  ),
+                ),
               ),
             ),
           );

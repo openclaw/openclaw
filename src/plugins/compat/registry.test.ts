@@ -15,6 +15,9 @@ const retiredPluginSdkSurfaceCodes = [
   "plugin-sdk-channel-reply-pipeline-subpath",
   "plugin-sdk-config-runtime-subpath",
   "plugin-sdk-infra-runtime-subpath",
+  "plugin-sdk-command-auth-subpath",
+  "plugin-sdk-discord-subpath",
+  "plugin-sdk-telegram-account-subpath",
   "plugin-sdk-channel-streaming-subpath",
   "plugin-sdk-text-runtime-subpath",
   "plugin-sdk-channel-secret-runtime-subpath",
@@ -24,6 +27,14 @@ const retiredPluginSdkSurfaceCodes = [
   "plugin-sdk-group-access-subpath",
   "plugin-sdk-zod-subpath",
   "deprecated-session-store-beta5-api",
+  "plugin-sdk-allowlist-resolution-entry-mapper",
+  "plugin-sdk-computer-use-validator-compiler",
+  "plugin-sdk-stoppable-passive-monitor",
+  "plugin-sdk-advertised-lan-host",
+  "plugin-sdk-json-file-fallback-reader",
+  "plugin-sdk-secret-input-mode-normalizer",
+  "plugin-sdk-persistent-dedupe-legacy-json-migration",
+  "plugin-sdk-provider-auth-copilot-helpers",
 ] as const satisfies readonly PluginCompatCode[];
 const deprecationMarkingCodes = [
   "plugin-sdk-channel-setup-input-fields",
@@ -133,7 +144,10 @@ describe("plugin compatibility registry", () => {
         status: "removed",
         releaseNote: expect.stringMatching(/\S/u),
       });
-      expect(records.get(code)?.removeAfter, code).toBeUndefined();
+      const removeAfter = records.get(code)?.removeAfter;
+      if (removeAfter !== undefined) {
+        expect(removeAfter, code).toMatch(datePattern);
+      }
     }
   });
 

@@ -59,25 +59,23 @@ export function reconcileSidebarZone(
     }
   }
 
-  for (const session of pinnedSessions) {
-    const entry = { type: "session", key: session.key } as const;
+  const append = (entry: SidebarZoneEntry) => {
     const serialized = serializeSidebarEntry(entry);
     if (!seen.has(serialized)) {
       seen.add(serialized);
       entries.push(entry);
       canonical.push(serialized);
     }
+  };
+  for (const session of pinnedSessions) {
+    append({ type: "session", key: session.key });
   }
 
   // Plugin defaults join the same ordered zone as explicit pins. Rendering and
   // drag writes must see the same complete order, including newly loaded plugins.
   for (const key of defaultPluginNavigationKeys) {
-    const entry = { type: "plugin", key } as const;
-    const serialized = serializeSidebarEntry(entry);
-    if (pluginNavigationKeys.has(key) && !seen.has(serialized)) {
-      seen.add(serialized);
-      entries.push(entry);
-      canonical.push(serialized);
+    if (pluginNavigationKeys.has(key)) {
+      append({ type: "plugin", key });
     }
   }
 

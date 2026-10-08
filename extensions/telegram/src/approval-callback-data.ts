@@ -35,13 +35,10 @@ export function hasTelegramApprovalCallbackPrefix(data?: string | null): boolean
 export function buildTelegramApprovalCallbackData(
   action: TelegramApprovalCallback,
 ): string | undefined {
-  if (!action.approvalId) {
-    return undefined;
-  }
   const approvalKind = action.approvalKind;
   const kind = APPROVAL_KINDS.find(([value]) => value === approvalKind)?.[1];
   const decision = APPROVAL_DECISIONS.find(([value]) => value === action.decision)?.[1];
-  if (!kind || !decision) {
+  if (!action.approvalId || !kind || !decision) {
     return undefined;
   }
   const encode = (approvalId: string) =>
@@ -69,7 +66,7 @@ export function parseTelegramApprovalCallbackData(
   const approvalKind = APPROVAL_KINDS.find(([, code]) => code === encoded[0])?.[0];
   const decision = APPROVAL_DECISIONS.find(([, code]) => code === encoded[2])?.[0];
   const approvalId = encoded.slice(4);
-  if (!approvalKind || !decision || !approvalId) {
+  if (!approvalKind || !decision) {
     return null;
   }
   return { type: "approval", approvalId, approvalKind, decision };

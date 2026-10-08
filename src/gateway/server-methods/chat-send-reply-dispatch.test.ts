@@ -23,6 +23,7 @@ import {
   SessionTranscriptProjectionUnavailableError,
 } from "../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
+import * as anchorReaders from "../../config/sessions/session-transcript-anchor-read.js";
 import * as historyReaders from "../../config/sessions/session-transcript-worker-readers.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
@@ -171,6 +172,7 @@ describe("chat delivery watermark preparation", () => {
       ).toMatchObject({
         maxSeq: 1,
       });
+      await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
       const createReaders = historyReaders.createSessionHistoryWorkerReaders;
       const readerSpy = vi
         .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
@@ -253,27 +255,21 @@ describe("chat delivery watermark preparation", () => {
           dispatch.captureAgentTranscriptStart();
           await append("answer", { role: "assistant", content: "Committed answer." });
           let reads = 0;
-          const createReaders = historyReaders.createSessionHistoryWorkerReaders;
+          const readAnchors = anchorReaders.readSessionTranscriptAnchorsAsync;
           const failure = new Error("watermark read rejected");
           const readerSpy = vi
-            .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
-            .mockImplementation((runRequest) => {
-              const readers = createReaders(runRequest);
-              return {
-                ...readers,
-                readAnchors: async (input, signal) => {
-                  const facts = await readers.readAnchors(input, signal);
-                  if (++reads !== read) {
-                    return facts;
-                  }
-                  if (change === "retired") {
-                    retire();
-                  } else if (change === "rejected") {
-                    throw failure;
-                  }
-                  return facts;
-                },
-              };
+            .spyOn(anchorReaders, "readSessionTranscriptAnchorsAsync")
+            .mockImplementation(async (...args) => {
+              const facts = await readAnchors(...args);
+              if (++reads !== read) {
+                return facts;
+              }
+              if (change === "retired") {
+                retire();
+              } else if (change === "rejected") {
+                throw failure;
+              }
+              return facts;
             });
           try {
             const delivery = dispatch.resolveReplyDelivery();

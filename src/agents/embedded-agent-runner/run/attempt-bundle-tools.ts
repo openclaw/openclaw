@@ -77,7 +77,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   const tools = await withRuntimeToolSchemaQuarantine((record) =>
     normalizeTools(toolsEnabled ? toolsRaw : [], record),
   );
-  const providedClientTools =
+  let clientTools =
     toolsEnabled &&
     !params.attempt.disableTools &&
     !params.isRawModelRun &&
@@ -86,12 +86,9 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       : undefined;
   // Client functions share the attempt's authority; filter before their names
   // can reserve bundled tools or enter deferred catalogs and provider requests.
-  let clientTools = providedClientTools;
-  if (providedClientTools && effectiveToolsAllow) {
+  if (clientTools && effectiveToolsAllow) {
     const matchesRuntime = createRuntimeToolMatcher(effectiveToolsAllow);
-    clientTools = providedClientTools.filter((definition) =>
-      matchesRuntime(definition.function.name),
-    );
+    clientTools = clientTools.filter((definition) => matchesRuntime(definition.function.name));
   }
   const bundleMetadataSnapshot = params.setup.getCurrentAttemptPluginMetadataSnapshot();
   // Scoped registries are partial views; only complete snapshots can bypass bundle discovery.
@@ -222,16 +219,14 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         preserveToolNames: localModelLeanPreserveToolNames,
       });
       const schemaProjection = filterRuntimeCompatibleTools(projectedTools);
-      if (cronCreatorToolAllowlistCaptureRef) {
-        // Cron is constructed before bundled tools; capture only the executable
-        // surface that survived provider normalization and schema quarantine.
-        captureFinalEffectiveCronCreatorToolAllowlist(
-          cronCreatorToolAllowlist,
-          cronCreatorToolAllowlistCaptureRef,
-          schemaProjection.tools,
-          (tool) => getPluginToolMeta(tool),
-        );
-      }
+      // Cron is constructed before bundled tools; capture only the executable
+      // surface that survived provider normalization and schema quarantine.
+      captureFinalEffectiveCronCreatorToolAllowlist(
+        cronCreatorToolAllowlist,
+        cronCreatorToolAllowlistCaptureRef,
+        schemaProjection.tools,
+        (tool) => getPluginToolMeta(tool),
+      );
       if (inheritedToolAllowlist?.length) {
         // Spawn tools close over this ref before MCP/LSP materialize. Refresh it
         // only after final policy and schema projection so children inherit the

@@ -284,10 +284,8 @@ export async function resolveDiscordAllowlistConfig(params: {
 
   if (hasGuildEntries(guildEntries)) {
     guildEntries = await resolveGuildEntriesByChannelAllowlist({
-      token: params.token,
+      ...params,
       guildEntries,
-      fetcher: params.fetcher,
-      runtime: params.runtime,
     });
   }
 

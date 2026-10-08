@@ -30,44 +30,34 @@ import {
   type ThreadBindingRecord,
 } from "./thread-bindings.types.js";
 
-type ThreadBindingDefaults = {
-  idleTimeoutMs: number;
-  maxAgeMs: number;
-};
-
-function toSessionBindingRecord(
-  record: ThreadBindingRecord,
-  defaults: ThreadBindingDefaults,
-): SessionBindingRecord {
-  const bindingId = resolveBindingRecordKey(record) ?? `${record.accountId}:${record.threadId}`;
-  const lifecycle = resolvePreparedThreadBindingLifecycle({ record, ...defaults });
-  return projectThreadBindingRecord(record, {
-    conversation: {
-      channel: "discord",
-      conversationId: record.threadId,
-      parentConversationId: record.channelId,
-    },
-    bindingId,
-    targetKind: record.targetKind === "subagent" ? "subagent" : "session",
-    lifecycle,
-    metadata: (lifecycleMetadata) => ({
-      ...lifecycleMetadata,
-      webhookId: record.webhookId,
-      webhookToken: record.webhookToken,
-      ...record.metadata,
-    }),
-  });
-}
-
 export function createThreadBindingSessionAdapter(params: {
   accountId: string;
   manager: ThreadBindingManager;
-  defaults: ThreadBindingDefaults;
+  defaults: { idleTimeoutMs: number; maxAgeMs: number };
   resolveCurrentCfg: () => OpenClawConfig;
   resolveCurrentToken: () => string | undefined;
 }): SessionBindingAdapter {
-  const serializeBinding = (entry: ThreadBindingRecord) =>
-    toSessionBindingRecord(entry, params.defaults);
+  const serializeBinding = (record: ThreadBindingRecord): SessionBindingRecord => {
+    const defaults = params.defaults;
+    const bindingId = resolveBindingRecordKey(record) ?? `${record.accountId}:${record.threadId}`;
+    const lifecycle = resolvePreparedThreadBindingLifecycle({ record, ...defaults });
+    return projectThreadBindingRecord(record, {
+      conversation: {
+        channel: "discord",
+        conversationId: record.threadId,
+        parentConversationId: record.channelId,
+      },
+      bindingId,
+      targetKind: record.targetKind === "subagent" ? "subagent" : "session",
+      lifecycle,
+      metadata: (lifecycleMetadata) => ({
+        ...lifecycleMetadata,
+        webhookId: record.webhookId,
+        webhookToken: record.webhookToken,
+        ...record.metadata,
+      }),
+    });
+  };
 
   return createAccountScopedBindingAdapter({
     channel: "discord",

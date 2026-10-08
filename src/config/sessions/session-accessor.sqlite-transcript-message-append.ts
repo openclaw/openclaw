@@ -198,8 +198,10 @@ export function appendTranscriptMessageInTransaction<TMessage>(
       appended: false as const,
       ...(anchor ? { anchor } : {}),
       effectiveParentId:
-        readTranscriptIdentityByEventId(database, resolved.sessionId, found.messageId)?.parentId ??
-        null,
+        !pending && anchor
+          ? anchor.effectiveParentId
+          : (readTranscriptIdentityByEventId(database, resolved.sessionId, found.messageId)
+              ?.parentId ?? null),
       message: found.message as TMessage,
       messageId: found.messageId,
     };

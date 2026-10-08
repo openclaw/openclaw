@@ -1150,9 +1150,7 @@ describe("runAgentHarnessAttempt", () => {
       get effectiveEngineId() {
         return effectiveEngine.info.id;
       },
-      get effectiveEnginePluginId() {
-        return undefined;
-      },
+      effectiveEnginePluginId: undefined,
       get degraded() {
         return degradedReason !== undefined;
       },
@@ -1170,6 +1168,8 @@ describe("runAgentHarnessAttempt", () => {
         return asEffective();
       }),
       deferDisposalUntil: vi.fn(),
+      disposed: false,
+      onDispose: vi.fn(),
       dispose: vi.fn(async () => {}),
     } satisfies ContextEngineLogicalTurnLease;
     contextEngineTurnAttemptMocks.drainPendingContextEngineTurnsBeforeRun.mockImplementationOnce(

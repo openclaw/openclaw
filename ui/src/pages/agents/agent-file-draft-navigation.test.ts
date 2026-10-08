@@ -126,7 +126,7 @@ it.each([
   };
   const settle = async () => {
     await vi.waitFor(() => {
-      expect(page.agentFileContents[page.agentFileActive ?? ""]).toBeDefined();
+      expect(page.agentFileEditors[page.agentFileActive ?? ""]?.content).toBeDefined();
       expect(page.agentFilesList?.agentId).toBe(selection.state.selectedId);
       expect(page.agentFilesLoading).toBe(false);
       paint();
@@ -216,7 +216,7 @@ it.each([
       expect(save().disabled).toBe(true);
     }
     if (transition === "external update" || transition === "missing file") {
-      expect(page.agentFileContents["AGENTS.md"]).toBe("changed on disk");
+      expect(page.agentFileEditors["AGENTS.md"]?.content).toBe("changed on disk");
       save().click();
       await vi.waitFor(() => {
         paint();
@@ -242,7 +242,7 @@ it.each([
       next.value = "next edit";
       next.dispatchEvent(new Event("input", { bubbles: true }));
       save().click();
-      await vi.waitFor(() => expect(page.agentFileContents["AGENTS.md"]).toBe("next edit"));
+      await vi.waitFor(() => expect(page.agentFileEditors["AGENTS.md"]?.content).toBe("next edit"));
       expect(save().disabled).toBe(true);
       expect(request).toHaveBeenLastCalledWith("agents.files.set", {
         agentId: "main",

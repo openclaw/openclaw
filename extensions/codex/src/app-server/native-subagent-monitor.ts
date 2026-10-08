@@ -86,6 +86,7 @@ import {
   type NativeParentRegistration,
 } from "./native-subagent-parent-owner.js";
 import { matchesNativeAssignmentLifecycle } from "./native-subagent-pending-assignments.js";
+import { canPrepareNativeReceiver } from "./native-subagent-receiver.js";
 import {
   CodexNativeSubagentRecoveryCoordinator,
   logRecoveryFailure,
@@ -245,7 +246,7 @@ class Monitor {
       prepareReceiver: (state, threadId) => this.prepareReceiverChild(state, threadId),
       registerChild: (state, assignment, childOptions) =>
         this.registerChildThread(state, assignment, childOptions),
-      admitFollowup: (known, id) => this.admitFollowupChild(known, id),
+      admitFollowup: (known) => this.admitFollowupChild(known),
       resumeChild: (child) => this.resumeChild(child),
       completeChild: (notification, child) => this.handleChildTurnCompletion(notification, child),
       retain: (state, threadId) => {
@@ -493,8 +494,8 @@ class Monitor {
       assertInputCurrent: (threadId, owner) =>
         this.submissions.modelInputs.assertModelInputCurrent(threadId, owner),
       hasPendingInput: (input) => this.submissions.modelInputs.hasPendingModelInput(input),
-      onExecutionAdmitted: (known, threadId) => {
-        this.admitFollowupChild(known, threadId);
+      onExecutionAdmitted: (known) => {
+        this.admitFollowupChild(known);
       },
       registerChildExecution: (state, modelRequest, agentPath, completionCustody) => {
         this.registerChildThread(
@@ -603,6 +604,7 @@ class Monitor {
           this.childStates,
         ),
       admissions: this.admissionCustody.entries,
+      canPrepareReceiver: (state, threadId) => this.canPrepareReceiverChild(state, threadId),
       prepareReceiver: (state, threadId, nativeParentThreadId) =>
         this.prepareReceiverChild(state, threadId, nativeParentThreadId),
       registerChildThread: (state, threadId, options) =>
@@ -1082,7 +1084,6 @@ class Monitor {
     const observedTurn = Boolean(child.nativeTurnId && child.nativeTurnId !== turnId);
     if (child.nativeTurnId !== turnId) {
       child.nativeTurnId = turnId;
-      child.nativeTurnState = undefined;
       child.activityWait = undefined;
     }
     child.nativeTurnState = recovery.nativeTurnState;
@@ -1111,10 +1112,10 @@ class Monitor {
       );
     }
     if (observedTurn && known.pendingTurns.length === 0) {
-      this.associatePendingChildInteraction(known, child.childThreadId, child.nativeTurnId);
+      this.associatePendingChildInteraction(known, child.nativeTurnId);
     }
     this.submissions.observeKnownChild(child.childThreadId);
-    return this.admitFollowupChild(known, child.childThreadId);
+    return this.admitFollowupChild(known);
   }
 
   private async processCompletion(
@@ -1167,43 +1168,34 @@ class Monitor {
     return known?.parent === state ? known.deliveryReceipts : state.deliveryReceipts;
   }
 
+  private canPrepareReceiverChild(state: ParentState, threadId: string): boolean {
+    const child = this.knownChildren.get(threadId);
+    return canPrepareNativeReceiver(
+      state,
+      child?.parent ?? this.parentStates.get(threadId),
+      child,
+      threadId,
+      {
+        isCurrent: (parent) => this.isCurrentParent(parent),
+        isRetired: (parent) => this.retiredParentStates.has(parent),
+        hasChildCustody: (parent, id) => this.submissions.hasChildCustody(parent, id),
+      },
+    );
+  }
+
   private prepareReceiverChild(
     state: ParentState,
     threadId: string,
     nativeParentThreadId?: string,
   ): boolean {
+    if (!this.canPrepareReceiverChild(state, threadId)) {
+      return false;
+    }
     const known = this.knownChildren.get(threadId);
-    if (known?.parent === state) {
+    if (!known || known.parent === state) {
       return true;
     }
-    if (
-      !this.isCurrentParent(state) ||
-      (known &&
-        (!known.assignment.terminal ||
-          known.pendingTurns.length > 0 ||
-          this.submissions.hasChildCustody(known.parent, threadId)))
-    ) {
-      return false;
-    }
-    if (!known) {
-      return true;
-    }
-    const previous = known.parent;
-    if (
-      nativeParentThreadId !== known.nativeParentThreadId ||
-      this.retiredParentStates.has(previous) ||
-      !state.requesterSessionKey ||
-      previous.requesterSessionKey !== state.requesterSessionKey ||
-      !previous.historyOwner ||
-      !state.historyOwner ||
-      !matchesNativeAssignmentLifecycle(previous.historyOwner, state.historyOwner) ||
-      ![...state.owners.values()].some((owner) => owner.completionCustody?.isCurrent())
-    ) {
-      return false;
-    }
-    try {
-      state.assignmentStore?.assertCurrent();
-    } catch {
+    if (nativeParentThreadId !== known.nativeParentThreadId) {
       return false;
     }
     // Only admitted input with freshly read lineage can transfer observation.
@@ -1484,9 +1476,9 @@ class Monitor {
       }
     }
     if (observedTurn) {
-      this.associatePendingChildInteraction(known, threadId, turnId);
+      this.associatePendingChildInteraction(known, turnId);
     }
-    this.admitFollowupChild(known, threadId);
+    this.admitFollowupChild(known);
     const startedChild = this.currentChild(threadId);
     if (startedChild && !known.pendingTurns.some((candidate) => candidate.turnId === turnId)) {
       // Reserve the new turn before persistence yields to a later completion receipt.
@@ -1496,14 +1488,9 @@ class Monitor {
     return true;
   }
 
-  private associatePendingChildInteraction(
-    known: KnownChild,
-    threadId: string,
-    nativeTurnId: string,
-  ): void {
+  private associatePendingChildInteraction(known: KnownChild, nativeTurnId: string): void {
     associateNativeChildInteraction(
       known,
-      threadId,
       nativeTurnId,
       this.admissionCustody.entries,
       (owner, turnId) => this.drainPendingChildAdmissionEvidence(known.parent, owner, turnId),
@@ -1559,11 +1546,8 @@ class Monitor {
     }
   }
 
-  private admitFollowupChild(
-    known: KnownChild,
-    threadId: string,
-    owner?: ParentOwner,
-  ): ChildState | undefined {
+  private admitFollowupChild(known: KnownChild, owner?: ParentOwner): ChildState | undefined {
+    const threadId = known.assignment.childThreadId;
     if (
       this.parentStates.get(known.parent.parentThreadId) !== known.parent ||
       this.retiredParentStates.has(known.parent)
@@ -1735,8 +1719,7 @@ class Monitor {
       registerAgentPath: (parent, threadId, path) => this.registerAgentPath(parent, threadId, path),
       registerChildThread: (parent, threadId, options) =>
         this.registerChildThread(parent, threadId, options),
-      admitFollowupChild: (known, threadId, admittedOwner) =>
-        this.admitFollowupChild(known, threadId, admittedOwner),
+      admitFollowupChild: (known, admittedOwner) => this.admitFollowupChild(known, admittedOwner),
       observeActivity: (child) =>
         this.turnObservation.emitChildTaskActivity(
           {

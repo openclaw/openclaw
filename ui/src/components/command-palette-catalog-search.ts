@@ -117,28 +117,24 @@ function getCommandPaletteBaseItems(
       action: "/verbose full",
       description: t("palette.descriptions.verboseMode"),
     },
-    ...(desktopAvailable
-      ? [
-          {
-            id: "panel-desktop",
-            label: t("palette.items.desktop"),
-            icon: "monitor" as const,
-            category: "navigation" as const,
-            action: "panel:desktop",
-          },
-        ]
-      : []),
-    ...(custodianAvailable
-      ? [
-          {
-            id: "panel-custodian",
-            label: t("nav.askOpenClaw"),
-            icon: "lobster" as const,
-            category: "navigation" as const,
-            action: "panel:custodian",
-          },
-        ]
-      : []),
+    ...(
+      [
+        [desktopAvailable, "desktop", "palette.items.desktop", "monitor"],
+        [custodianAvailable, "custodian", "nav.askOpenClaw", "lobster"],
+      ] as const
+    ).flatMap(([available, panel, labelKey, icon]) =>
+      available
+        ? [
+            {
+              id: `panel-${panel}`,
+              label: t(labelKey),
+              icon,
+              category: "navigation" as const,
+              action: `panel:${panel}`,
+            },
+          ]
+        : [],
+    ),
   ];
 }
 

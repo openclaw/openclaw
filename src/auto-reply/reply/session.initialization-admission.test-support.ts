@@ -136,17 +136,17 @@ export function registerSessionInitializationAdmissionTests({
         throw new Error("Fixture requires a retained reply admission");
       }
       const previous = admitted.databaseClaim;
-      if (!("kind" in previous) || !previous.afterInitialization) {
+      if (!("kind" in previous) || !previous.afterTransition) {
         admitted.operation.complete();
         await waitForReplyRunSuccessorAdmission(sessionKey, null);
         throw new Error("Fixture requires the worker initialization handoff");
       }
-      const prepare = previous.afterInitialization.bind(previous);
+      const prepare = previous.afterTransition.bind(previous);
       const prepared = createDeferred<Awaited<ReturnType<typeof prepare>>>();
       const retired = createDeferred();
       const continueHandoff = createDeferred();
       const prepareSpy = vi
-        .spyOn(previous, "afterInitialization")
+        .spyOn(previous, "afterTransition")
         .mockImplementation(async (...args) => {
           const next = await prepare(...args);
           prepared.resolve(next);

@@ -174,7 +174,7 @@ describe("discord doctor", () => {
     expect(deliveryOnlyMigrated).toEqual({
       streaming: { block: { enabled: true } },
     });
-    expect(resolveDiscordPreviewStreamMode(deliveryOnlyMigrated)).toBe("off");
+    expect(resolveDiscordPreviewStreamMode(deliveryOnlyMigrated)).toBe("progress");
     expect(deliveryOnly.changes).toEqual([
       "Moved channels.discord.blockStreaming → channels.discord.streaming.block.enabled.",
     ]);

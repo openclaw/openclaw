@@ -13,7 +13,7 @@ import {
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import {
   appendTranscriptEventSync,
-  appendTranscriptMessage,
+  appendTranscriptMessageSync,
   assignSessionOwner,
   cleanupPluginHostSessionStore,
   listSessionEntriesCore,
@@ -438,10 +438,12 @@ describe("SQLite session entry cache", () => {
     openOpenClawAgentDatabase(scope);
     const first = listingEntries(scope);
 
-    await appendTranscriptMessage(
-      { ...scope, sessionId: "first" },
-      { message: { role: "user", content: [{ type: "text", text: "cache probe" }] }, now: 2 },
-    );
+    expect(
+      appendTranscriptMessageSync(
+        { ...scope, sessionId: "first" },
+        { message: { role: "user", content: [{ type: "text", text: "cache probe" }] }, now: 2 },
+      ),
+    ).toMatchObject({ ok: true, value: { appended: true } });
     parseSessionEntryCalls.mockClear();
 
     const second = listingEntries(scope);

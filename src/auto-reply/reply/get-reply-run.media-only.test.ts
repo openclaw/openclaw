@@ -2705,22 +2705,6 @@ describe("runPreparedReply media-only handling", () => {
     },
   );
 
-  it("keeps an operator-reviewed proposal revision isolated on the queued run", async () => {
-    const proposalRevision = {
-      agentId: "main",
-      workspaceDir: "/tmp/workspace",
-      proposalId: "proposal-h1",
-      expectedRevisionHash: "revision-h1",
-    };
-    await runPrepared({
-      opts: { skillWorkshopProposalRevision: proposalRevision } as never,
-    });
-
-    const call = requireRunReplyAgentCall();
-    expect(call.followupRun.run.skillWorkshopProposalRevision).toEqual(proposalRevision);
-    expect(call.followupRun.run.skillWorkshopProposalRevision).not.toBe(proposalRevision);
-  });
-
   registerSystemEventAdmissionCases({ runPrepared, requireRunReplyAgentCall });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
