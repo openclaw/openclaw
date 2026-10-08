@@ -2,17 +2,13 @@ import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
 import {
   isExactSemverVersion,
-  isPrereleaseSemverVersion,
   parseRegistryNpmSpec,
   type ParsedRegistryNpmSpec,
   resolveOpenClawReleaseCohortVersion,
 } from "../infra/npm-registry-spec.js";
-import { comparePackageUpdateVersions } from "../infra/package-update-utils.js";
 import { selectNpmChannelVersion, type UpdateChannel } from "../infra/update-channels.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
 import { isUnavailableNpmTarget, PLUGIN_INSTALL_ERROR_CODE } from "./install-types.js";
-import { checkMinHostVersion } from "./min-host-version.js";
-import { satisfiesPluginApiRange } from "./package-compat.js";
 import type { PluginPackageInstall } from "./package-manifest.types.js";
 
 export type PluginInstallSource = {
@@ -119,25 +115,20 @@ type ChannelInstallParams = {
 };
 
 function resolveCoreBoundNpmSpec(params: ChannelInstallParams): string | undefined {
-  if (
-    params.updateChannel === "extended-stable" ||
-    (params.updateChannel === "stable" && params.versionBoundToCore)
-  ) {
-    const target = resolveDefaultNpmSpec(params.spec);
-    if (target && params.officialPackageName === target.name) {
-      const coreVersion = params.coreVersion?.trim();
-      if (!coreVersion || !isExactSemverVersion(coreVersion)) {
-        const policy =
-          params.updateChannel === "extended-stable" ? "Extended-stable" : "Version-bound";
-        throw new Error(
-          `${policy} plugin resolution for ${target.name} requires an exact core version.`,
-        );
-      }
-      const installVersion = params.versionBoundToCore
-        ? resolveOpenClawReleaseCohortVersion(coreVersion)
-        : coreVersion;
-      return `${target.name}@${installVersion}`;
+  const target = resolveDefaultNpmSpec(params.spec);
+  if (target && params.officialPackageName === target.name) {
+    const coreVersion = params.coreVersion?.trim();
+    if (!coreVersion || !isExactSemverVersion(coreVersion)) {
+      const policy =
+        params.updateChannel === "extended-stable" ? "Extended-stable" : "Version-bound";
+      throw new Error(
+        `${policy} plugin resolution for ${target.name} requires an exact core version.`,
+      );
     }
+    const installVersion = params.versionBoundToCore
+      ? resolveOpenClawReleaseCohortVersion(coreVersion)
+      : coreVersion;
+    return `${target.name}@${installVersion}`;
   }
   return undefined;
 }
@@ -145,7 +136,12 @@ function resolveCoreBoundNpmSpec(params: ChannelInstallParams): string | undefin
 export async function resolveNpmInstallSpecsForUpdateChannel(
   params: ChannelInstallParams,
 ): Promise<ChannelInstallSpecs> {
-  const selectedSpec = params.installSpecOverride ?? resolveCoreBoundNpmSpec(params);
+  const selectedSpec =
+    params.installSpecOverride ??
+    (params.updateChannel === "extended-stable" ||
+    (params.updateChannel === "stable" && params.versionBoundToCore)
+      ? resolveCoreBoundNpmSpec(params)
+      : undefined);
   const target = parseRegistryNpmSpec(params.spec);
   const selector = target?.selector?.toLowerCase();
   if (
@@ -210,14 +206,20 @@ export function resolveClawHubInstallSpecsForUpdateChannel(params: {
   if (
     parsed &&
     params.officialPackageName === parsed.name &&
-    (params.updateChannel === "extended-stable" ||
-      (params.updateChannel === "stable" && params.versionBoundToCore))
+    (params.updateChannel === "extended-stable" || params.updateChannel === "stable")
   ) {
     const npmSpec = resolveCoreBoundNpmSpec({
       ...params,
       spec: `${parsed.name}${parsed.version ? `@${parsed.version}` : ""}`,
     });
-    return { installSpec: npmSpec ? `clawhub:${npmSpec}` : params.spec, recordSpec: params.spec };
+    const installSpec = npmSpec ? `clawhub:${npmSpec}` : params.spec;
+    return {
+      installSpec,
+      recordSpec: params.spec,
+      ...(npmSpec && params.updateChannel === "stable"
+        ? { fallbackSpec: params.spec, fallbackLabel: installSpec }
+        : {}),
+    };
   }
   if (
     params.updateChannel !== "beta" ||
@@ -235,87 +237,6 @@ export function resolveClawHubInstallSpecsForUpdateChannel(params: {
     recordSpec: params.spec,
     fallbackSpec: params.spec,
     fallbackLabel: betaSpec,
-  };
-}
-
-/** Prefer the host build, then the newest compatible stable ClawHub release. */
-export async function resolveCompatibleClawHubInstallSpec(params: {
-  packageName: string;
-  coreVersion: string;
-}): Promise<string | { ok: false; error: string; code: string }> {
-  const { fetchClawHubJson, ClawHubRequestError } = await import("../infra/clawhub-client.js");
-  const { fetchClawHubPackageVersion } = await import("../infra/clawhub-packages.js");
-  const versions = new Set<string>();
-  const cursors = new Set<string>();
-  let cursor: string | undefined;
-  do {
-    const page = await fetchClawHubJson<{
-      items: { version: string }[];
-      nextCursor?: string | null;
-    }>({
-      path: `/api/v1/packages/${encodeURIComponent(params.packageName)}/versions`,
-      search: { limit: "100", cursor },
-    });
-    for (const { version } of page.items) {
-      if (isExactSemverVersion(version) && !isPrereleaseSemverVersion(version)) {
-        versions.add(version);
-      }
-    }
-    cursor = page.nextCursor || undefined;
-    if (cursor && cursors.has(cursor)) {
-      throw new Error(`ClawHub repeated a versions cursor for ${params.packageName}.`);
-    }
-    if (cursor) {
-      cursors.add(cursor);
-    }
-  } while (cursor);
-  const candidates = [...versions].toSorted((left, right) =>
-    left === params.coreVersion
-      ? -1
-      : right === params.coreVersion
-        ? 1
-        : comparePackageUpdateVersions(right, left),
-  );
-  let requirement: string | undefined;
-  for (const version of candidates) {
-    let detail;
-    try {
-      detail = await fetchClawHubPackageVersion({ name: params.packageName, version });
-    } catch (error) {
-      if (error instanceof ClawHubRequestError && error.status === 404) {
-        continue;
-      }
-      throw error;
-    }
-    if (!detail.version) {
-      continue;
-    }
-    if (detail.version.version !== version) {
-      throw new Error(`ClawHub returned a different release for ${params.packageName}@${version}.`);
-    }
-    const compatibility = detail.version.compatibility;
-    if (
-      satisfiesPluginApiRange(params.coreVersion, compatibility?.pluginApiRange) &&
-      (!compatibility?.minGatewayVersion ||
-        checkMinHostVersion({
-          currentVersion: params.coreVersion,
-          minHostVersion: compatibility.minGatewayVersion,
-          allowLegacyBareSemver: true,
-        }).ok)
-    ) {
-      return `clawhub:${params.packageName}@${version}`;
-    }
-    requirement ??= `${params.packageName}@${version} requires ${[
-      compatibility?.pluginApiRange ? `plugin API ${compatibility.pluginApiRange}` : undefined,
-      compatibility?.minGatewayVersion ? `OpenClaw ${compatibility.minGatewayVersion}` : undefined,
-    ]
-      .filter(Boolean)
-      .join(" and ")}.`;
-  }
-  return {
-    ok: false,
-    code: CLAWHUB_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API,
-    error: `No compatible stable release of ${params.packageName} is available for OpenClaw ${params.coreVersion}. ${requirement ?? "ClawHub has no stable releases."} Upgrade OpenClaw or choose an explicit plugin version.`,
   };
 }
 

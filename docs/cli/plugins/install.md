@@ -106,10 +106,11 @@ ClawHub also provides plugin discovery. OpenClaw-owned
 `@openclaw/*` plugin packages are published on npm again; see the current list
 on [npmjs.com/org/openclaw](https://www.npmjs.com/org/openclaw) or the
 [plugin inventory](/plugins/plugin-inventory). Stable official ClawHub installs
-prefer a compatible release matching the running OpenClaw version, then the
-newest compatible stable release. A newer catalog release does not force an
-OpenClaw upgrade while a compatible plugin remains available. If none exists,
-the error names the required plugin API or OpenClaw version before downloading.
+first try the running OpenClaw version. If that build is unpublished, installation
+falls back to the original catalog candidate with a visible warning and retains
+that candidate’s integrity pin. An incompatible fallback names the required
+plugin API or OpenClaw version and asks you to upgrade or choose an explicit
+compatible plugin version.
 Fresh beta-channel installs with bare/default or `@latest` intent target the
 installed core's exact beta version for eligible official npm and trusted
 official ClawHub plugins. If the core is not a beta release, they target `@beta`.
