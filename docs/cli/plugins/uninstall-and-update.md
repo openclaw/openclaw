@@ -185,6 +185,35 @@ contract; this option does not add durable ingress to channels that lack it.
 Run this maintenance command outside a turn that itself holds the target plugin:
 waiting for that turn while it waits for reload cannot make progress.
 
+### Inspect retained references
+
+To inspect live holders without requesting a reload, use an administrator Gateway
+connection:
+
+```bash
+openclaw gateway call plugins.inspect --params '{"pluginId":"example-plugin"}' --json
+```
+
+The `runtimeRetention` field describes the selected live instance (or is `null`
+when none is loaded). It includes an opaque instance ID, its current published
+registry generation when available, and up to 64 live reference records. Each
+record has an ID, kind, acquisition reason and time, age, cleanup state, and
+host-attributed agent/session/run/service fields when available. Missing attribution
+is explicitly `unknown`. Derived consumers can name their parent reference.
+The `omitted` count reports truncation. These are acquisition facts, not proof
+that a holder is currently executing or exclusively owns shared resources.
+
+Explicit work and executable consumers block the retained-work drain; idle
+`custody` does not. Ordinary calls and cleanup are reported separately.
+`pending` means host cleanup has started; `failed` on retained work means
+physical cleanup failed without releasing the hold. Released references disappear;
+this is not a history or payload capture. Read-only operators do not receive the
+cross-session diagnostic field. Queued-drain and timeout logs include bounded
+reference summaries without owner identifiers; correlate their instance/reference
+IDs with administrator inspection. A count alone never identifies a blocking turn
+or proves a plugin leak. Run reload outside a turn whose own references it must
+wait for, including when using `--wait`.
+
 Replacement requires the previous registration's resource cleanup to finish
 before its successor acquires those resources. Failed cleanup can prevent
 replacement and automatic recovery; inspect the reported failure before retrying.

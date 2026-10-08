@@ -7,12 +7,14 @@ import type {
 } from "./plugin-instance-invocation.types.js";
 
 export class InvocationFrame implements PluginExecutionFrame {
+  readonly retentionOwner: PluginExecutionScopes["retentionOwner"];
   readonly invocation: PluginExecutionScopes["invocation"];
   readonly metadataScope: PluginExecutionScopes["metadataScope"];
   readonly cacheScope: PluginExecutionScopes["cacheScope"];
   readonly sourceCaptureStorage: PluginExecutionScopes["sourceCaptureStorage"];
 
   constructor(scopes: PluginExecutionScopes, invocation = scopes.invocation) {
+    this.retentionOwner = scopes.retentionOwner;
     this.invocation = invocation;
     this.metadataScope = scopes.metadataScope;
     this.cacheScope = scopes.cacheScope;

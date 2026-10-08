@@ -198,7 +198,7 @@ export function ownPreparedPluginGeneration(
         );
       }
     },
-    () => retainRuntimePluginWork(selectedRegistries),
+    () => retainRuntimePluginWork(selectedRegistries, "prepared-generation-lease"),
   );
   try {
     for (const registry of selectedRegistries) {

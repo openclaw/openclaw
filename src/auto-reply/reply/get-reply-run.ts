@@ -1,4 +1,5 @@
 import { withPreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
+import { withPluginRetentionOwner } from "../../plugins/plugin-retention-diagnostics.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import type { ReplyPayload } from "../types.js";
 import { prepareReplyRunAdmission } from "./get-reply-run-admission.js";
@@ -14,6 +15,15 @@ async function executePreparedReplyContext(context: PreparedReplyRunContext) {
 
 /** Runs a prepared reply turn after session, prompt, queue, and policy state are resolved. */
 export async function runPreparedReply(
+  params: RunPreparedReplyParams,
+): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  return withPluginRetentionOwner({ agentId: params.agentId, sessionKey: params.sessionKey }, () =>
+    runPreparedReplyWithOwner(params),
+  );
+}
+
+// Session attribution precedes preparation; the embedded runner adds its admitted run ID.
+async function runPreparedReplyWithOwner(
   params: RunPreparedReplyParams,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const context = await prepareReplyRunContext(params);

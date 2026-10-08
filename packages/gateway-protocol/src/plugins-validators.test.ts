@@ -263,6 +263,42 @@ describe("plugin lifecycle protocol validators", () => {
     };
 
     expect(Value.Check(PluginsInspectResultSchema, result)).toBe(true);
+    const reference = {
+      referenceId: "fixture:1",
+      kind: "work",
+      reason: "prepared-generation-lease",
+      acquiredAtMs: 1,
+      ageMs: 2,
+      cleanupState: "active",
+      owner: { runId: "fixture-run" },
+    };
+    const runtimeRetention = {
+      instanceId: "fixture",
+      pluginId: "fixture",
+      generation: 1,
+      acceptingCalls: true,
+      replacementPending: false,
+      disposing: false,
+      total: 1,
+      omitted: 0,
+      references: [reference],
+    };
+    expect(Value.Check(PluginsInspectResultSchema, { ...result, runtimeRetention })).toBe(true);
+    expect(Value.Check(PluginsInspectResultSchema, { ...result, runtimeRetention: null })).toBe(
+      true,
+    );
+    for (const references of [
+      Array.from({ length: 65 }, () => reference),
+      [{ ...reference, owner: { prompt: "not diagnostic data" } }],
+      [{ ...reference, owner: { runId: "x".repeat(257) } }],
+    ]) {
+      expect(
+        Value.Check(PluginsInspectResultSchema, {
+          ...result,
+          runtimeRetention: { ...runtimeRetention, references },
+        }),
+      ).toBe(false);
+    }
     expect(Value.Check(PluginsInspectResultSchema, { ...result, reviewToken: "" })).toBe(false);
     expect(
       Value.Check(PluginsInspectResultSchema, {

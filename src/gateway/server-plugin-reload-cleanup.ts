@@ -24,6 +24,20 @@ import type { GatewayPluginReloadStatus } from "./server-plugin-runtime-generati
 
 const PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS = 60_000;
 
+// Logs/readiness have broader readership than admin inspection: never project owner IDs here.
+function logRetainedReferences(
+  instances: readonly PluginInstanceHandle[],
+  phase: "queued" | "timeout",
+  log: Pick<ReturnType<typeof createSubsystemLogger>, "info">,
+): void {
+  const selected = instances
+    .slice(0, 8)
+    .map((instance) => instance.retentionSnapshot({ limit: 8, includeOwners: false }));
+  log.info(
+    `Plugin retained references (${phase}): ${JSON.stringify({ instances: selected, omittedInstances: Math.max(0, instances.length - selected.length) })}. Use administrator plugins.inspect runtimeRetention for acquisition owners; a turn awaiting its own retained work cannot drain.`,
+  );
+}
+
 export class PluginAdmittedWorkTimeoutError extends Error {
   /** Previous-generation instances whose pre-stop drain expired, from the failing registry. */
   readonly instances: readonly PluginInstanceHandle[];
@@ -328,6 +342,7 @@ export function createPluginReloadCleanup({
     const reason = `Plugin replacement queued behind ${count} ${includeCalls ? "admitted" : "retained"} work item(s) for plugin ${[...pluginIds].join(", ")}; ${waitForDrain ? "waiting until they finish or the request is cancelled" : "applies when they finish within the 60s drain budget"}.`;
     reportStatus({ phase: "reloading", pluginIds: [...changedPluginIds], deadlineAtMs, reason });
     log.info(reason);
+    logRetainedReferences(instances, "queued", log);
     try {
       await observeDrain("retained plugin work", signal, deadlineAtMs, (current) =>
         Promise.all(
@@ -338,6 +353,7 @@ export function createPluginReloadCleanup({
       );
     } catch (error) {
       if (error instanceof PluginHostCleanupTimeoutError) {
+        logRetainedReferences(instances, "timeout", log);
         throw new PluginAdmittedWorkTimeoutError(pluginIds, instances, error);
       }
       throw error;

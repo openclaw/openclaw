@@ -23,6 +23,7 @@ import {
 } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
+import { withPluginRetentionOwner } from "../../plugins/plugin-retention-diagnostics.js";
 import {
   runOutsidePluginRuntimeGenerationScope,
   withPluginRuntimeGenerationScope,
@@ -104,6 +105,20 @@ import {
 const EMPTY_EMBEDDED_AGENT_CONFIG: OpenClawConfig = Object.freeze({});
 
 export function runEmbeddedAgent(
+  internalParamsInput: RunEmbeddedAgentInternalParams,
+): Promise<EmbeddedAgentRunResult> {
+  return withPluginRetentionOwner(
+    {
+      agentId: internalParamsInput.agentId,
+      sessionKey: internalParamsInput.sessionKey,
+      runId: internalParamsInput.runId,
+    },
+    () => runEmbeddedAgentWithOwner(internalParamsInput),
+  );
+}
+
+// Capture host-selected run facts before runtime admission can retain a generation.
+function runEmbeddedAgentWithOwner(
   internalParamsInput: RunEmbeddedAgentInternalParams,
 ): Promise<EmbeddedAgentRunResult> {
   const config = resolveEmbeddedRunConfig(internalParamsInput);
