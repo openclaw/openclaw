@@ -931,7 +931,6 @@
 ["extensions/matrix/src/channel.account-paths.test.ts","./channel.runtime.js","1a63723dcdc925bff5f06b316809de6593354f702159520dd774287b3325b20c",1]
 ["extensions/matrix/src/channel.message-adapter.test.ts","./matrix/send.js","3c273af2d7008318311489a6bdcf3050ceb7c8c574551840aa1b645661fa7349",1]
 ["extensions/matrix/src/channel.message-adapter.test.ts","./runtime.js","f6801d332472d3e17c3bd5f965dbdb0d97dc99ad272229700ead07e05fd67106",1]
-["extensions/matrix/src/channel.resolve.test.ts","./resolve-targets.js","e35c844a4be6fb6a53f7c57a60d9c235bb4756e08ed07c8c2ee0416beec6e193",1]
 ["extensions/matrix/src/channel.setup.test.ts","./matrix/actions/verification.js","83134ae10d96393ddf55b8da61e2ffe5aff420f40593824656921b4b53b63e12",1]
 ["extensions/matrix/src/cli-config-publication.test.ts","./runtime.js","a2b2606c9d209163a43fb5bd595092b13f715ca9e4208cfdbb783b57ae860686",1]
 ["extensions/matrix/src/cli.test.ts","./matrix/accounts.js","f30891c639450947af3634edc14ee37bb98676b6962f9fd792e0f54080676ce4",1]
