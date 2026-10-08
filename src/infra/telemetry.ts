@@ -311,23 +311,15 @@ export async function checkTelemetryUpdate(
       ? { version: state.latestVersion, ...(state.note ? { note: state.note } : {}) }
       : null;
     if (
-      state.lastPingAt !== undefined &&
-      nowMs >= state.lastPingAt &&
-      nowMs - state.lastPingAt < TELEMETRY_CHECK_INTERVAL_MS
-    ) {
-      return { update: cached, networkAttempted: false };
-    }
-    if (
-      !options.fetchImpl &&
-      (process.env.VITEST !== undefined || process.env.NODE_ENV === "test")
-    ) {
-      return { update: cached, networkAttempted: false };
-    }
-    if (
-      lastFailedAttempt?.endpoint === endpoint &&
-      lastFailedAttempt.stateDirectory === stateDirectory &&
-      nowMs >= lastFailedAttempt.at &&
-      nowMs - lastFailedAttempt.at < TELEMETRY_FAILURE_BACKOFF_MS
+      (state.lastPingAt !== undefined &&
+        nowMs >= state.lastPingAt &&
+        nowMs - state.lastPingAt < TELEMETRY_CHECK_INTERVAL_MS) ||
+      (!options.fetchImpl &&
+        (process.env.VITEST !== undefined || process.env.NODE_ENV === "test")) ||
+      (lastFailedAttempt?.endpoint === endpoint &&
+        lastFailedAttempt.stateDirectory === stateDirectory &&
+        nowMs >= lastFailedAttempt.at &&
+        nowMs - lastFailedAttempt.at < TELEMETRY_FAILURE_BACKOFF_MS)
     ) {
       return { update: cached, networkAttempted: false };
     }

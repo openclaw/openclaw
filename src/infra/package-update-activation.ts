@@ -35,7 +35,7 @@ import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import {
   assertManagedUpdateLeaseDatabaseIdentity,
   captureManagedUpdateLeaseDatabaseIdentity,
-  createManagedHandoffLeaseDatabase,
+  prepareManagedHandoffLeaseDatabaseIdentity,
   type ManagedUpdateLeaseDatabaseIdentity,
 } from "./update-managed-service-handoff-database.js";
 import { supportsPostCoreExecutor } from "./update-post-core-capability.js";
@@ -217,8 +217,8 @@ export async function settlePendingPackageActivation(installKey: string) {
     }
     // A reboot can remove the temporary store. Its owner provisions it; the
     // fresh executor below still fences every change to retained package custody.
-    currentDatabase = createManagedHandoffLeaseDatabase(originalAuthority.databasePath)(true, () =>
-      captureManagedUpdateLeaseDatabaseIdentity(originalAuthority.databasePath),
+    currentDatabase = await prepareManagedHandoffLeaseDatabaseIdentity(
+      originalAuthority.databasePath,
     );
     leaseWasMissing = true;
   }

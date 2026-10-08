@@ -73,8 +73,6 @@ export abstract class OpenAIRealtimeProtocol {
 
   protected standaloneSpeechQueue: string[] = [];
 
-  protected standaloneSpeechActive = false;
-
   protected standaloneSpeechEventId: string | null = null;
 
   private readonly audioFormat: RealtimeVoiceAudioFormat;
@@ -203,10 +201,7 @@ export abstract class OpenAIRealtimeProtocol {
     this.manualResponseCreateEventId = null;
     this.responseCancelInFlight = false;
     this.manualResponseCancelEventId = null;
-    if (this.standaloneSpeechActive) {
-      this.standaloneSpeechActive = false;
-      this.standaloneSpeechEventId = null;
-    }
+    this.standaloneSpeechEventId = null;
     if (options.drain !== false) {
       this.drainResponseQueue();
     }
@@ -353,7 +348,7 @@ export abstract class OpenAIRealtimeProtocol {
   }
 
   protected flushStandaloneSpeech(): void {
-    if (this.responseBusy || this.standaloneSpeechActive) {
+    if (this.responseBusy || this.standaloneSpeechEventId !== null) {
       return;
     }
     const text = this.standaloneSpeechQueue.shift();
@@ -361,7 +356,6 @@ export abstract class OpenAIRealtimeProtocol {
       return;
     }
     const eventId = `openclaw-standalone-speech-${randomUUID()}`;
-    this.standaloneSpeechActive = true;
     this.standaloneSpeechEventId = eventId;
     this.responseCreateState = "in-flight";
     this.sendEvent({
@@ -411,19 +405,13 @@ export abstract class OpenAIRealtimeProtocol {
     this.outputAudioGeneration += 1;
     this.clearOutstandingMarks();
     this.assistantAudioItem = null;
-    this.responseActive = false;
-    this.responseCreateState = "idle";
-    this.manualResponseCreateEventId = null;
-    this.responseCancelInFlight = false;
-    this.manualResponseCancelEventId = null;
+    this.releaseResponseState({ drain: false });
     this.responseCreatePending = false;
     this.autoRespondSuppressedForManualResponse = false;
     this.continuingToolCallIds.clear();
     this.pendingToolCallIds.clear();
     this.completedToolCallIds.clear();
     this.standaloneSpeechQueue = [];
-    this.standaloneSpeechActive = false;
-    this.standaloneSpeechEventId = null;
   }
 
   protected createPlaybackMark(): string {

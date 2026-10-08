@@ -121,13 +121,11 @@ export async function resolveOutboundDurableFinalDeliverySupport(params: {
   for (const [capability, required] of Object.entries(params.requirements ?? {}) as Array<
     [DurableFinalDeliveryRequirement, boolean | undefined]
   >) {
-    if (required === true && durableFinal?.[capability] !== true) {
-      return { ok: false, reason: "capability_mismatch", capability };
-    }
     if (
       required === true &&
-      capability === "reconcileUnknownSend" &&
-      typeof messageDurableFinal?.reconcileUnknownSend !== "function"
+      (durableFinal?.[capability] !== true ||
+        (capability === "reconcileUnknownSend" &&
+          typeof messageDurableFinal?.reconcileUnknownSend !== "function"))
     ) {
       return { ok: false, reason: "capability_mismatch", capability };
     }
@@ -490,10 +488,8 @@ function createPluginHandler(
           messageMedia,
         );
       }
-      if (sendMedia) {
-        return dispatchToAdapter(mediaCtx, () => sendMedia(mediaCtx));
-      }
-      return dispatchToAdapter(mediaCtx, () => sendText!(mediaCtx));
+      const send = sendMedia ?? sendText!;
+      return dispatchToAdapter(mediaCtx, () => send(mediaCtx));
     },
   };
 }

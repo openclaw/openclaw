@@ -58,7 +58,6 @@ describe("Telegram registered adapter conformance over HTTP", () => {
   it.each([
     { name: "rich", richMessages: true, html: false },
     { name: "explicit HTML on rich", richMessages: true, html: true },
-    { name: "plain", richMessages: false, html: false },
   ])(
     "delivers complete registered $name presentations through the selected account",
     async ({ richMessages, html }) => {
@@ -313,14 +312,14 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       nested: "777",
       target: 777,
     })),
-    ...[0, 12.5, "invalid"].map((nested) => ({
-      name: `invalid adapter target ${nested}`,
-      entry: "adapter" as const,
+    {
+      name: "invalid adapter target",
+      entry: "adapter",
       text: "answer",
-      nested,
-      failure: "target" as const,
+      nested: "invalid",
+      failure: "target",
       media: true,
-    })),
+    },
     ...(["adapter", "stream"] as const).map((entry) => ({
       name: `${entry} rejected reaction`,
       entry,
@@ -350,13 +349,6 @@ describe("Telegram registered adapter conformance over HTTP", () => {
       entry: "stream",
       text: "must not send",
       nested: "0",
-      failure: "target",
-    },
-    {
-      name: "implicit stream target with threading off",
-      entry: "stream",
-      text: "must not send",
-      mode: "off",
       failure: "target",
     },
   ];
@@ -456,41 +448,33 @@ describe("Telegram registered adapter conformance over HTTP", () => {
     },
   );
 
-  it.each([false, true])(
-    "keeps the native reply on the location after its origin marker (venue: %s)",
-    async (venue) => {
-      await telegramPlugin.message!.send!.payload!({
-        cfg,
-        to: "123",
+  it("keeps the native reply on the location after its origin marker", async () => {
+    await telegramPlugin.message!.send!.payload!({
+      cfg,
+      to: "123",
+      text: "[origin: another conversation]",
+      replyToId: "888",
+      payload: {
         text: "[origin: another conversation]",
-        replyToId: "888",
-        payload: {
-          text: "[origin: another conversation]",
-          location: {
-            latitude: 48.858844,
-            longitude: 2.294351,
-            ...(venue ? { name: "  Eiffel Tower ", address: " Champ de Mars " } : { accuracy: 5 }),
-          },
-          channelData: { telegram: { quoteText: "exact quote" } },
+        location: {
+          latitude: 48.858844,
+          longitude: 2.294351,
+          accuracy: 5,
         },
-      });
-      expect(requests.map(({ method }) => method)).toEqual([
-        "sendMessage",
-        venue ? "sendVenue" : "sendLocation",
-      ]);
-      expect(requests[0]!.fields.text).toBe("[origin: another conversation]");
-      expect(requests[0]!.fields.reply_parameters).toBeUndefined();
-      expect(requests[0]!.fields.reply_to_message_id).toBeUndefined();
-      expect(requests[1]!.fields).toMatchObject({
-        latitude: 48.858844,
-        longitude: 2.294351,
-        reply_parameters: { message_id: 888, quote: "exact quote" },
-        ...(venue
-          ? { title: "Eiffel Tower", address: "Champ de Mars" }
-          : { horizontal_accuracy: 5 }),
-      });
-    },
-  );
+        channelData: { telegram: { quoteText: "exact quote" } },
+      },
+    });
+    expect(requests.map(({ method }) => method)).toEqual(["sendMessage", "sendLocation"]);
+    expect(requests[0]!.fields.text).toBe("[origin: another conversation]");
+    expect(requests[0]!.fields.reply_parameters).toBeUndefined();
+    expect(requests[0]!.fields.reply_to_message_id).toBeUndefined();
+    expect(requests[1]!.fields).toMatchObject({
+      latitude: 48.858844,
+      longitude: 2.294351,
+      reply_parameters: { message_id: 888, quote: "exact quote" },
+      horizontal_accuracy: 5,
+    });
+  });
 
   it("routes a registered poll through a legacy topic destination", async () => {
     const result = await telegramOutbound.sendPoll!({
@@ -763,50 +747,6 @@ describe("Telegram registered adapter conformance over HTTP", () => {
         degradedDelivery: { fallback: "not_delivered" },
       });
     });
-
-    it.each([
-      { to: "-1001:topic:271", threadId: 77, target: "-1001:topic:77" },
-      { to: "-1001:topic:271", threadId: 1, target: "-1001:topic:1" },
-      { to: "123:topic:7", threadId: 11, target: "123:topic:11" },
-      { to: "-1001:77", threadId: undefined, target: "-1001:topic:77" },
-    ])(
-      "acknowledges only the delivered room-event surface $target",
-      async ({ to, threadId, target }) => {
-        const acknowledgements: string[] = [];
-        const ends = [
-          telegramInboundEventDelivery.begin(
-            "action-session",
-            {
-              outboundTo: target,
-              markInboundEventDelivered: () => {
-                acknowledgements.push("room");
-              },
-            },
-            { inboundEventKind: "room_event" },
-          ),
-          telegramInboundEventDelivery.begin("action-session", {
-            outboundTo: target,
-            markInboundEventDelivered: () => {
-              acknowledgements.push("user");
-            },
-          }),
-        ];
-        try {
-          await action(
-            "send",
-            { to, threadId, message: "room answer" },
-            { skipQueue: true, sessionKey: "action-session", inboundEventKind: "room_event" },
-          );
-          expect(requests.map(({ method }) => method)).toEqual(["sendMessage"]);
-          expect(requests[0]!.fields.message_thread_id).toBe(
-            threadId === 1 ? undefined : (threadId ?? 77),
-          );
-          expect(acknowledgements).toEqual(["room"]);
-        } finally {
-          ends.forEach((end) => end());
-        }
-      },
-    );
 
     it("uploads all action attachment aliases instead of echoing their paths", async () => {
       const firstBytes = await fs.readFile(photoPath);

@@ -39,7 +39,10 @@ import {
   renderRateLimitReplyCopy,
   type ReplyFallbackAttempt,
 } from "../../agents/failover/user-copy.js";
-import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
+import {
+  AgentHarnessPreflightError,
+  isAgentHarnessPreflightError,
+} from "../../agents/harness/errors.js";
 import { isProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
 import { buildProviderAuthRecoveryHint } from "../../agents/provider-auth-recovery-hint.js";
 import type { ReplyCompletion, ReplyExpectation } from "../../agents/reply-completion.js";
@@ -161,8 +164,7 @@ const CODEX_SESSION_GENERATION_NOT_CURRENT_RE =
 const CODEX_EXECUTION_NODE_DISCONNECTED_RE =
   /^Codex execution node disconnected; start a fresh attempt\. \((?:execution node (?:failed|disconnected)|execution socket (?:closed|failed))(?:: [^\r\n]{1,240})?\)(?:\r?\n|$)/u;
 
-function buildCodexAppServerFailureText(message: string): string | null {
-  const normalizedMessage = collapseRepeatedFailureDetail(message);
+function buildCodexAppServerFailureText(normalizedMessage: string): string | null {
   if (CODEX_SESSION_GENERATION_NOT_CURRENT_RE.test(normalizedMessage)) {
     return "⚠️ This Codex session changed before your message could run. Please send it again.";
   }
@@ -176,6 +178,16 @@ function buildCodexAppServerFailureText(message: string): string | null {
     return "⚠️ Codex hasn't confirmed whether the task finished. It may still be running. Check the conversation in the Control UI before trying again.";
   }
   return null;
+}
+
+export function createPreflightCompactionError(reason: string, isCodexRuntime: boolean): Error {
+  const message = `${PREFLIGHT_COMPACTION_FAILURE_PREFIX} ${reason}`;
+  return isCodexRuntime
+    ? new AgentHarnessPreflightError(message, {
+        userMessage:
+          "⚠️ Your message was not sent to Codex: the session's saved history exceeds its configured size limit and compaction failed. Use /new, then resend your message, or ask the operator to review the compaction settings.",
+      })
+    : new Error(message);
 }
 
 export function buildPreflightCompactionFailureText(

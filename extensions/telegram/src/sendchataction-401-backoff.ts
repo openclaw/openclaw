@@ -8,8 +8,6 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isRetryableTelegramApiError, readTelegramRetryAfterMs } from "./network-errors.js";
 
-type TelegramSendChatActionLogger = (message: string) => void;
-
 type ChatAction = Parameters<Bot["api"]["sendChatAction"]>[1];
 
 type TelegramSendChatActionParams = Parameters<Bot["api"]["sendChatAction"]>[2];
@@ -29,7 +27,7 @@ export type TelegramSendChatActionHandler = {
 };
 
 type CreateTelegramSendChatActionHandlerParams = {
-  logger: TelegramSendChatActionLogger;
+  logger: (message: string) => void;
   maxConsecutive401?: number;
   minIntervalMs?: number;
   now?: () => number;
@@ -66,14 +64,6 @@ function is401Error(error: unknown): boolean {
   return normalizeLowercaseStringOrEmpty(message).includes("unauthorized");
 }
 
-function resolveTransientCooldownMs(error: unknown, attempt: number): number {
-  const retryAfterMs = readTelegramRetryAfterMs(error);
-  if (retryAfterMs !== undefined && retryAfterMs > 0) {
-    return retryAfterMs;
-  }
-  return computeBackoff(BACKOFF_POLICY, attempt);
-}
-
 /**
  * Creates a GLOBAL (per-account) handler for sendChatAction that tracks 401 and
  * transient errors across all message contexts. This prevents the infinite loop
@@ -101,12 +91,6 @@ export function createTelegramSendChatActionHandler({
   const clearTransientCooldown = () => {
     consecutiveTransientFailures = 0;
     transientCooldownUntilMs = 0;
-  };
-
-  const reset = () => {
-    consecutive401Failures = 0;
-    clearTransientCooldown();
-    blockedUntilByKey.clear();
   };
 
   const assertNotCoolingDown = () => {
@@ -236,7 +220,11 @@ export function createTelegramSendChatActionHandler({
       } else if (isRetryableTelegramApiError(error, { context: "action" })) {
         failureVersion++;
         consecutiveTransientFailures++;
-        const cooldownMs = resolveTransientCooldownMs(error, consecutiveTransientFailures);
+        const retryAfterMs = readTelegramRetryAfterMs(error);
+        const cooldownMs =
+          retryAfterMs !== undefined && retryAfterMs > 0
+            ? retryAfterMs
+            : computeBackoff(BACKOFF_POLICY, consecutiveTransientFailures);
         const cooldownStartedAt = now();
         // Keep transient failures rejected through the same-chat coalesce window;
         // otherwise the next typing keepalive can look successful and reset its guard.
@@ -290,6 +278,10 @@ export function createTelegramSendChatActionHandler({
     apiTransformer,
     sendChatAction,
     isSuspended,
-    reset,
+    reset: () => {
+      consecutive401Failures = 0;
+      clearTransientCooldown();
+      blockedUntilByKey.clear();
+    },
   };
 }

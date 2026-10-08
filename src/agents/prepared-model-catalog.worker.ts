@@ -437,10 +437,7 @@ async function runCatalogRequest(
       ...credentials,
     };
     const runtimeModels = new Map<string, Model[]>();
-    // Lazy normalization must keep provider hooks on the selected catalog generation.
-    const catalogModels = withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
-      facts.templateModelRegistry.getAll(),
-    );
+    const { catalogModels } = facts;
     const hookRows = withPluginRuntimeGenerationScope(pluginGenerationScope, () => {
       const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
         pluginMetadataSnapshot,

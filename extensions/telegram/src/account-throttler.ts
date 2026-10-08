@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ApiError } from "grammy/types";
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
 import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
@@ -215,8 +214,8 @@ type QueuedApiRequest<T> = {
 
 class GroupRequestScheduler {
   private readonly lanes = new Map<string, Array<QueuedApiRequest<unknown>>>();
-  private laneOrder: string[] = [];
-  private nextLaneIndex = 0;
+  // Live iteration visits newly appended lanes before wrapping to the first lane.
+  private laneCursor = this.lanes.entries();
   private pendingPriority = 0;
   private running = false;
   private actionTail = Promise.resolve();
@@ -287,7 +286,6 @@ class GroupRequestScheduler {
         existing.push(request);
       } else {
         this.lanes.set(laneKey, [request]);
-        this.laneOrder.push(laneKey);
       }
       this.start();
     });
@@ -316,33 +314,22 @@ class GroupRequestScheduler {
       }
     } finally {
       this.running = false;
-      if (this.laneOrder.length > 0) {
-        this.start();
-      }
     }
   }
 
   private takeNext(): QueuedApiRequest<unknown> | undefined {
-    for (let remaining = this.laneOrder.length; remaining > 0; remaining -= 1) {
-      this.nextLaneIndex %= this.laneOrder.length;
-      const laneKey = expectDefined(
-        this.laneOrder[this.nextLaneIndex],
-        "non-empty Telegram throttle lane order",
-      );
-      const queue = this.lanes.get(laneKey);
-      if (!queue || queue.length === 0) {
-        this.lanes.delete(laneKey);
-        this.laneOrder.splice(this.nextLaneIndex, 1);
-        if (this.laneOrder.length === 0) {
-          this.nextLaneIndex = 0;
-          return undefined;
-        }
+    while (this.lanes.size > 0) {
+      const next = this.laneCursor.next();
+      if (next.done) {
+        this.laneCursor = this.lanes.entries();
         continue;
       }
-
+      const [laneKey, queue] = next.value;
       const request = queue.shift();
-      this.nextLaneIndex += 1;
-      return request;
+      if (request) {
+        return request;
+      }
+      this.lanes.delete(laneKey);
     }
     return undefined;
   }

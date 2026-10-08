@@ -218,17 +218,15 @@ export function renderSanitizedUserFacingText(
       ? formatRawAssistantErrorForUi(trimmed)
       : sanitized;
   }
-  const commandError = formatCommandErrorForUser(trimmed);
-  if (commandError) {
-    return commandError;
-  }
-  const execDenied = formatExecDeniedUserMessage(trimmed);
-  if (execDenied) {
-    return execDenied;
-  }
-  const diskSpace = formatDiskSpaceErrorCopy(trimmed);
-  if (diskSpace) {
-    return diskSpace;
+  for (const format of [
+    formatCommandErrorForUser,
+    formatExecDeniedUserMessage,
+    formatDiskSpaceErrorCopy,
+  ]) {
+    const copy = format(trimmed);
+    if (copy) {
+      return copy;
+    }
   }
   if (/incorrect role information|roles must alternate/i.test(trimmed)) {
     return "Message ordering conflict - please try again. If this persists, use /new to start a fresh session.";

@@ -372,7 +372,7 @@ it("requires Doctor for the exact dangling Workshop index without changing its s
     const database = new DatabaseSync(opened.path);
     try {
       database.exec(
-        "CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
+        "CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (review_id TEXT NOT NULL PRIMARY KEY, owner_agent_id TEXT NOT NULL, backup_id TEXT NOT NULL, create_time INTEGER NOT NULL, kept_names_json TEXT NOT NULL, written_names_json TEXT NOT NULL, dropped_json TEXT NOT NULL) STRICT; CREATE INDEX idx_skill_workshop_collection_reviews_workspace_time ON skill_workshop_collection_reviews(review_id, create_time DESC);",
       );
       database.enableDefensive?.(false);
       database.exec("PRAGMA writable_schema = ON;");
@@ -737,6 +737,19 @@ it("reads fresh authority without replacing an inherited discovery snapshot", as
       expect(read()).toBe("first");
       writer.exec("UPDATE held SET value='later'");
       expect(current()).toEqual(["later", "later"]);
+      expect(read()).toBe("first");
+      writer.exec("UPDATE held SET value='composite'");
+      const prepare = vi.spyOn(sqliteReadOnly, "prepareSqliteReadOnlyLocationSync");
+      try {
+        expect(
+          withSynchronousArtifactPreservingStateSnapshot(() => [read(), ...current()], {
+            current: options,
+          }),
+        ).toEqual(["composite", "composite", "composite"]);
+        expect(prepare).toHaveBeenCalledOnce();
+      } finally {
+        prepare.mockRestore();
+      }
       expect(read()).toBe("first");
       const foreign = createOptions(path.join(root, "foreign"));
       openOpenClawStateDatabase(foreign).db.exec(

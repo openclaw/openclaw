@@ -11,6 +11,10 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../../state/openclaw-agent-db.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
 import { markCompleteReplyConfig } from "./get-reply-fast-path.test-support.js";
 import * as sessionPersistence from "./session-entry-persistence.js";
@@ -45,7 +49,15 @@ vi.mock("./commands-status.js", () => ({
 const { maybeResolveNativeSlashCommandFastReply } =
   await import("./get-reply-native-slash-fast-path.js");
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const root of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(root);
+      closeOpenClawAgentDatabasesForTest(root);
+    }
+    cleanup();
+  }),
+);
 afterEach(() => cliBackendsTesting.resetDepsForTest());
 
 const runtimeCliBackends = [

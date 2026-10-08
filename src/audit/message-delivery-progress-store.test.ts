@@ -320,10 +320,13 @@ describe("outbound message progress companion", () => {
         "skill_workshop_proposals",
         "cron_run_receipts",
       ]) {
-        expect(projectedDatabase.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual({
-          count: 0,
-        });
-        projectedDatabase.exec(`DROP TABLE ${table};`);
+        // Current state no longer has the retired proposal table; the pinned reader recreates it.
+        if (table !== "skill_workshop_proposals") {
+          expect(projectedDatabase.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toEqual(
+            { count: 0 },
+          );
+        }
+        projectedDatabase.exec(`DROP TABLE IF EXISTS ${table};`);
         for (const { sql } of pinnedStatements.all(table) as Array<{ sql: string }>) {
           projectedDatabase.exec(sql);
         }

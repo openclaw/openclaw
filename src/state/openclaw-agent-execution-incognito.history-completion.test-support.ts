@@ -20,10 +20,11 @@ import type { HistoryWiringFixture } from "./openclaw-agent-execution-incognito.
 
 type CompletionFixture = Pick<HistoryWiringFixture, "actor" | "authority" | "env" | "targetInput">;
 
-export async function createIncognitoCompletionSource(
+async function createIncognitoCompletionClaim(
   fixture: CompletionFixture,
   name: string,
-  owner = fixture.actor,
+  owner: CompletionFixture["actor"],
+  resumed: boolean,
 ) {
   const { authority, env, targetInput } = fixture;
   const sessionKey = `agent:${owner.agentId}:dashboard:incognito-${name}`;
@@ -46,7 +47,7 @@ export async function createIncognitoCompletionSource(
       lifecycleRevision: "initial",
       incognito: true,
       restartRecoveryHarnessCompletion: claim,
-      restartRecoveryDeliveryRunId: "recovery",
+      restartRecoveryDeliveryRunId: resumed ? "recovery" : claim.sourceRunId,
       restartRecoveryDeliverySourceRunId: claim.sourceRunId,
     },
   });
@@ -54,6 +55,21 @@ export async function createIncognitoCompletionSource(
   const session = { sessionKey, entry: created.entry };
   const target = targetInput(session);
   const scope = { ...target, agentId: owner.agentId, storePath: owner.path, env };
+  return { claim, session, target, scope };
+}
+
+export async function createIncognitoCompletionSource(
+  fixture: CompletionFixture,
+  name: string,
+  owner = fixture.actor,
+) {
+  const { authority } = fixture;
+  const { claim, session, target, scope } = await createIncognitoCompletionClaim(
+    fixture,
+    name,
+    owner,
+    true,
+  );
   const source = await owner.sessions.transcript(authority, {
     type: "session.message.append",
     input: {
@@ -86,7 +102,7 @@ export async function createIncognitoCompletionSource(
         provenance: {
           kind: "internal_system",
           sourceTool: "main_session_restart_recovery",
-          sourceSessionKey: sessionKey,
+          sourceSessionKey: target.sessionKey,
         },
       },
     },
@@ -103,6 +119,42 @@ export async function createIncognitoCompletionSource(
 
 export function registerIncognitoCompletionTests(fixture: CompletionFixture) {
   const { authority } = fixture;
+  it("requires committed input before retaining cold original-run completion custody", async () => {
+    const { actor } = fixture;
+    const { claim, target, scope } = await createIncognitoCompletionClaim(
+      fixture,
+      "cold-original-claim",
+      actor,
+      false,
+    );
+    await withIncognitoSessionActor(actor, async () => {
+      const reconcile = () =>
+        reconcileHarnessCompletionDelivery({ ...scope, sourceRunId: claim.sourceRunId });
+      expect(await reconcile()).toBe("blocked");
+      const appended = await actor.sessions.transcript(authority, {
+        type: "session.message.append",
+        input: {
+          ...target,
+          fence: { expectedLifecycleRevision: target.lifecycleRevision },
+          message: {
+            role: "user",
+            content: "Completed task ready for recovery",
+            idempotencyKey: `${claim.sourceRunId}:user`,
+            __openclaw: { runId: claim.sourceRunId },
+            provenance: {
+              kind: "inter_session",
+              sourceChannel: "internal",
+              sourceTool: "agent_harness_completion",
+              sourceSessionKey: claim.taskRunId,
+            },
+          },
+        },
+      });
+      assert(appended.ok);
+      expect(await reconcile()).toBe("pending");
+    });
+  });
+
   it.each([true, false])(
     "binds resumed command completion only with valid source input=%s",
     async (validInput) => {

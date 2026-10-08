@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { html as staticHtml, literal } from "lit/static-html.js";
 import type { NostrProfile as NostrProfileType } from "../../api/types.ts";
 import { renderSettingsRow, renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
@@ -70,36 +71,21 @@ export function renderNostrProfileForm(params: {
     const helpId = `${inputId}-help`;
     const errorId = `${inputId}-error`;
     const descriptionIds = [help ? helpId : "", error ? errorId : ""].filter(Boolean).join(" ");
-    const control =
-      type === "textarea"
-        ? html`
-            <textarea
-              id="${inputId}"
-              class="settings-input"
-              .value=${value}
-              placeholder=${placeholder}
-              maxlength="2000"
-              rows="3"
-              aria-describedby=${descriptionIds || nothing}
-              aria-invalid=${error ? "true" : nothing}
-              @input=${onInput}
-              ?disabled=${state.saving}
-            ></textarea>
-          `
-        : html`
-            <input
-              id="${inputId}"
-              class="settings-input"
-              type=${type}
-              .value=${value}
-              placeholder=${placeholder}
-              maxlength="256"
-              aria-describedby=${descriptionIds || nothing}
-              aria-invalid=${error ? "true" : nothing}
-              @input=${onInput}
-              ?disabled=${state.saving}
-            />
-          `;
+    const multiline = type === "textarea";
+    const tag = multiline ? literal`textarea` : literal`input`;
+    const control = staticHtml`<${tag}
+      id=${inputId}
+      class="settings-input"
+      type=${multiline ? nothing : type}
+      .value=${value}
+      placeholder=${placeholder}
+      maxlength=${multiline ? "2000" : "256"}
+      rows=${multiline ? "3" : nothing}
+      aria-describedby=${descriptionIds || nothing}
+      aria-invalid=${error ? "true" : nothing}
+      @input=${onInput}
+      ?disabled=${state.saving}
+    ></${tag}>`;
 
     return html`
       <div class="settings-row settings-row--stacked">
@@ -218,16 +204,9 @@ export function renderNostrProfileForm(params: {
 export function createNostrProfileFormState(
   profile: NostrProfileType | undefined,
 ): NostrProfileFormState {
-  const values: NostrProfileType = {
-    name: profile?.name ?? "",
-    displayName: profile?.displayName ?? "",
-    about: profile?.about ?? "",
-    picture: profile?.picture ?? "",
-    banner: profile?.banner ?? "",
-    website: profile?.website ?? "",
-    nip05: profile?.nip05 ?? "",
-    lud16: profile?.lud16 ?? "",
-  };
+  const values: NostrProfileType = Object.fromEntries(
+    [...BASIC_FIELDS, ...ADVANCED_FIELDS].map(([field]) => [field, profile?.[field] ?? ""]),
+  );
 
   return {
     values,

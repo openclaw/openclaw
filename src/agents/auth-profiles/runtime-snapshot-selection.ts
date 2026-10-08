@@ -74,14 +74,13 @@ function cloneOwnedRuntimeAuthProfileStoreSnapshot(
 /** Borrow the snapshot owner's map; selection never retains or mutates credential state. */
 export function createRuntimeAuthProfileSnapshotSelection(
   snapshots: ReadonlyMap<string, OwnedRuntimeSnapshot>,
-  revision: (databasePath: string) => number,
   invalidate: (databasePath: string, agentDir?: string) => unknown,
 ) {
   /** Select producer-owned identities before copying any credential bodies. */
   function listRuntimeAuthProfileStoreSnapshotTargetsForSharedOwner(
     owner: AuthProfileStoreOwner,
     mutation?: SharedAuthProfileStoreMutation,
-  ): Array<{ databasePath: string; agentDir: string; runtimeRevision: number }> {
+  ): Array<{ databasePath: string; agentDir: string }> {
     const affected = sharedMutationAffectsSnapshot(mutation);
     return Array.from(snapshots)
       .filter(
@@ -93,7 +92,6 @@ export function createRuntimeAuthProfileSnapshotSelection(
       .map(([databasePath]) => ({
         databasePath,
         agentDir: path.dirname(databasePath),
-        runtimeRevision: revision(databasePath),
       }));
   }
   /** Captures the published owners once; catalog reads refresh usage without opening storage. */
