@@ -5,7 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { WizardNextResult } from "../../../packages/gateway-protocol/src/schema/wizard.js";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withinTest, withTestTimeout } from "../../../test/helpers/promise.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 import {
@@ -277,11 +277,7 @@ it(
           apiKey: "fixture-access",
           agentId: "main",
         });
-        await withTestTimeout(
-          apiKeyListing.started.promise,
-          10_000,
-          "API-key sign-in did not start catalog discovery",
-        );
+        await withinTest(apiKeyListing.started.promise, signal);
         const apiKeyPending = await list();
         apiKeyListing.release.resolve();
         expect(apiKeyPending.ids).toEqual(["known-chat"]);
