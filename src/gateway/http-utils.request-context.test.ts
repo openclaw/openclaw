@@ -27,7 +27,8 @@ vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../config/io.js", () => ({
+vi.mock("../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.js")>()),
   getRuntimeConfig: () => runtimeConfig.value,
 }));
 
@@ -114,6 +115,38 @@ describe("resolveGatewayRequestContext", () => {
     ).toThrow(/reserved internal session namespaces/u);
   });
 
+  it("lets a valid agent header win over an unknown agent-specific model", () => {
+    runtimeConfig.value = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "scripts" }],
+      },
+    };
+
+    const result = resolveGatewayRequestContext({
+      req: createReq({ "x-openclaw-agent-id": "scripts" }),
+      model: "openclaw/missing-agent",
+      sessionPrefix: "openai",
+    });
+
+    expect(result.agentId).toBe("scripts");
+  });
+
+  it("rejects an unknown agent-specific model before a known session-key owner", () => {
+    runtimeConfig.value = {
+      agents: {
+        list: [{ id: "main", default: true }, { id: "scripts" }],
+      },
+    };
+
+    expect(() =>
+      resolveGatewayRequestContext({
+        req: createReq({ "x-openclaw-session-key": "agent:scripts:foobar" }),
+        model: "openclaw/missing-agent",
+        sessionPrefix: "openai",
+      }),
+    ).toThrow(/Unknown agent/);
+  });
+
   it("does not build session state for explicit unknown agent ids", () => {
     expect(() =>
       resolveGatewayRequestContext({
@@ -162,7 +195,6 @@ describe("resolveGatewayRequestContext", () => {
       req: createReq({ "x-openclaw-session-key": "agent:scripts:foobar" }),
       model: "openclaw",
       sessionPrefix: "openai",
-      defaultMessageChannel: "webchat",
     });
 
     expect(result.agentId).toBe("scripts");
@@ -181,7 +213,6 @@ describe("resolveGatewayRequestContext", () => {
       req: createReq({ "x-openclaw-agent-id": "scripts" }),
       model: "openclaw",
       sessionPrefix: "openai",
-      defaultMessageChannel: "webchat",
     });
 
     expect(result.agentId).toBe("scripts");
@@ -199,7 +230,6 @@ describe("resolveGatewayRequestContext", () => {
       req: createReq({ "x-openclaw-session-key": "agent:scripts:foobar" }),
       model: "openclaw",
       sessionPrefix: "openai",
-      defaultMessageChannel: "webchat",
     });
 
     expect(result.agentId).toBe("scripts");
@@ -220,7 +250,6 @@ describe("resolveGatewayRequestContext", () => {
         }),
         model: "openclaw",
         sessionPrefix: "openai",
-        defaultMessageChannel: "webchat",
       }),
     ).toThrow("Selected agent 'main' does not match the agent in `x-openclaw-session-key`");
   });
@@ -237,7 +266,6 @@ describe("resolveGatewayRequestContext", () => {
         req: createReq({ "x-openclaw-session-key": "agent:scripts:foobar" }),
         model: "openclaw/main",
         sessionPrefix: "openai",
-        defaultMessageChannel: "webchat",
       }),
     ).toThrow("Selected agent 'main' does not match the agent in `x-openclaw-session-key`");
   });
@@ -256,7 +284,6 @@ describe("resolveGatewayRequestContext", () => {
       }),
       model: "openclaw",
       sessionPrefix: "openai",
-      defaultMessageChannel: "webchat",
     });
 
     expect(result.agentId).toBe("scripts");
@@ -276,7 +303,6 @@ describe("resolveGatewayRequestContext", () => {
         req: createReq(),
         model: "openclaw",
         sessionPrefix: "openai",
-        defaultMessageChannel: "webchat",
       }),
     ).toThrow(AgentSelectionRequiredError);
   });

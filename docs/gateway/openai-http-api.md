@@ -104,7 +104,7 @@ Agent selection precedence, first match wins:
 
 The selected agent is the one that executes the turn, not just the one that routes it. A step 1 or step 2 selector that names a different agent than an agent-scoped session key is a contradiction, not a precedence question, and is rejected with `400 invalid_request_error` (``Selected agent '<a>' does not match the agent in `x-openclaw-session-key` ('<b>')``). Send one or the other.
 
-A generic `model` with no header, no session key, and no default agent is rejected with `400 invalid_request_error` (`Multiple agents are configured, but this operation has no explicit owner`). Every selector is checked against the configured roster; an unknown agent id is also a `400`.
+A generic `model` with no header, no session key, and no default agent is rejected with `400 invalid_request_error` (`Multiple agents are configured, but this operation has no explicit owner`). Only the winning selector is checked against the configured roster, so an unknown id on that selector is a `400`. A later selector is not checked: a valid `x-openclaw-agent-id` still selects that agent when `model` names an agent that is not on the roster. With no agent header, an agent-specific `model` wins, so an unknown agent id there is a `400` even when the session key names a known agent.
 
 `/v1/models` lists top-level agent targets (`openclaw`, `openclaw/default`, `openclaw/<agentId>`), not backend provider models and not sub-agents; sub-agents stay internal execution topology. If you omit `x-openclaw-model`, the selected agent runs with its normal configured model.
 

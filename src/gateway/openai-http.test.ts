@@ -172,6 +172,7 @@ type FirstAgentCommandOptions = {
     };
     type?: string;
   }>;
+  agentId?: string;
   extraSystemPrompt?: string;
   images?: Array<{ data: string; mimeType: string; type: string }>;
   message?: string;
@@ -486,6 +487,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         { "x-openclaw-session-key": "agent:scripts:foobar" },
       );
       expect(bySessionKey.status).toBe(200);
+      expect(firstAgentCommandOptions()?.agentId).toBe("scripts");
       expect(firstAgentCommandOptions()?.sessionKey).toBe("agent:scripts:foobar");
       await bySessionKey.text();
     } finally {
