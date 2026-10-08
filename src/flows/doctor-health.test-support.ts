@@ -440,9 +440,7 @@ export function registerDoctorConfigReceiptTests(
     async (advisory) => {
       mocks.runContributions.mockImplementation(async (ctx) => {
         ctx.configResult.warnings = ['Plugin "fixture" config repair failed; config preserved.'];
-        await createDoctorHealthContribution({
-          id: "doctor:fixture-warning",
-          label: "Fixture warning",
+        await createDoctorHealthContribution("doctor:fixture-warning", "Fixture warning", {
           healthChecks: {
             description: "Optional fixture maintenance",
             detect: async () => [

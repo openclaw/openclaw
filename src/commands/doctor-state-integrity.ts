@@ -282,14 +282,12 @@ function countJsonlLines(filePath: string): number {
   try {
     const chunk = Buffer.alloc(64 * 1024);
     let count = 0;
-    let hasBytes = false;
-    let endsWithNewline = false;
+    let endsWithNewline = true;
     for (;;) {
       const bytesRead = fs.readSync(fd, chunk, 0, chunk.length, null);
       if (bytesRead <= 0) {
         break;
       }
-      hasBytes = true;
       endsWithNewline = chunk[bytesRead - 1] === 0x0a;
       for (let index = 0; index < bytesRead; index += 1) {
         if (chunk[index] === 0x0a) {
@@ -297,7 +295,7 @@ function countJsonlLines(filePath: string): number {
         }
       }
     }
-    if (hasBytes && !endsWithNewline) {
+    if (!endsWithNewline) {
       count += 1;
     }
     return count;
@@ -528,6 +526,28 @@ export function formatLinuxVolatileStateDirWarning(
   ].join("\n");
 }
 
+function detectCloudSyncedStateDir<Storage extends string>(
+  stateDir: string,
+  roots: readonly { storage: Storage; root: string }[],
+  caseInsensitive = false,
+): { path: string; storage: Storage } | null {
+  // Missing leaves must still follow symlink/junction ancestors; a lexical
+  // fallback would misread a cloud-named junction targeting local storage.
+  const resolvedStatePath =
+    resolvePathThroughExistingAncestor(stateDir, path) ?? path.resolve(stateDir);
+  for (const { storage, root } of roots) {
+    if (
+      isPathUnderRoot(
+        caseInsensitive ? resolvedStatePath.toLowerCase() : resolvedStatePath,
+        caseInsensitive ? root.toLowerCase() : root,
+      )
+    ) {
+      return { path: resolvedStatePath, storage };
+    }
+  }
+  return null;
+}
+
 /** Detects macOS state directories under iCloud Drive or CloudStorage providers. */
 export function detectMacCloudSyncedStateDir(stateDir: string): {
   path: string;
@@ -540,7 +560,7 @@ export function detectMacCloudSyncedStateDir(stateDir: string): {
   // Cloud-sync roots should always be anchored to the OS account home on macOS.
   // OPENCLAW_HOME can relocate app data defaults, but iCloud/CloudStorage remain under the OS home.
   const homedir = os.homedir();
-  const roots = [
+  return detectCloudSyncedStateDir(stateDir, [
     {
       storage: "iCloud Drive" as const,
       root: path.join(homedir, "Library", "Mobile Documents", "com~apple~CloudDocs"),
@@ -549,18 +569,7 @@ export function detectMacCloudSyncedStateDir(stateDir: string): {
       storage: "CloudStorage provider" as const,
       root: path.join(homedir, "Library", "CloudStorage"),
     },
-  ];
-  // Missing state leaves must still follow existing symlink ancestors, like the Linux detectors.
-  const resolvedStatePath =
-    resolvePathThroughExistingAncestor(stateDir, path) ?? path.resolve(stateDir);
-
-  for (const { storage, root } of roots) {
-    if (isPathUnderRoot(resolvedStatePath, root)) {
-      return { path: resolvedStatePath, storage };
-    }
-  }
-
-  return null;
+  ]);
 }
 
 /** Detects Windows state directories under OneDrive sync roots. */
@@ -592,22 +601,8 @@ export function detectWindowsCloudSyncedStateDir(
     return null;
   }
 
-  // A state dir that does not exist yet cannot be resolved directly, and
-  // falling back to the lexical path misreads a not-yet-created leaf beneath a
-  // OneDrive-named junction that actually resolves to local storage. Resolve
-  // through the nearest existing ancestor, as the Linux detectors do, so the
-  // junction is followed even when the leaf is absent.
-  const resolvedStatePath =
-    resolvePathThroughExistingAncestor(stateDir, path) ?? path.resolve(stateDir);
-
-  for (const { storage, root } of roots) {
-    // Windows filesystems are case-insensitive by default; compare folded.
-    if (isPathUnderRoot(resolvedStatePath.toLowerCase(), root.toLowerCase())) {
-      return { path: resolvedStatePath, storage };
-    }
-  }
-
-  return null;
+  // Windows filesystems are case-insensitive by default; compare folded.
+  return detectCloudSyncedStateDir(stateDir, roots, true);
 }
 
 type WindowsCloudSyncedStateDir = NonNullable<ReturnType<typeof detectWindowsCloudSyncedStateDir>>;

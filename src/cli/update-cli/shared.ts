@@ -382,16 +382,12 @@ async function cloneGitCheckoutTransactionally(
         a === ".git" ? 1 : b === ".git" ? -1 : 0,
       );
       const moved: string[] = [];
-      let publishError: { value: unknown } | undefined;
       try {
         for (const entry of entries) {
           await fs.rename(path.join(stagingDir, entry), path.join(targetDir, entry));
           moved.push(entry);
         }
       } catch (error) {
-        publishError = { value: error };
-      }
-      if (publishError) {
         const rollbackErrors: unknown[] = [];
         for (const entry of moved.toReversed()) {
           try {
@@ -403,11 +399,11 @@ async function cloneGitCheckoutTransactionally(
         if (rollbackErrors.length > 0) {
           cleanupStaging = false;
           throw new AggregateError(
-            [publishError.value, ...rollbackErrors],
+            [error, ...rollbackErrors],
             `Could not publish or fully roll back the cloned checkout at ${targetDir}; recovery files remain at ${stagingDir}`,
           );
         }
-        throw publishError.value;
+        throw error;
       }
       published = true;
       return targetDir;
@@ -428,7 +424,6 @@ async function cloneGitCheckoutTransactionally(
       cleanupStaging = false;
     }
   }
-  let cleanupOutcome: { ok: true } | { ok: false; error: unknown } = { ok: true };
   // The container does not confer ownership of a replaced repository child.
   // Only completed publication permits that child to be absent at cleanup.
   if (cleanupStaging) {
@@ -456,22 +451,15 @@ async function cloneGitCheckoutTransactionally(
         },
       });
     } catch (error) {
-      cleanupOutcome = { ok: false, error };
+      if ("error" in outcome && outcome.error !== error && hasCommandProcessCleanupError(error)) {
+        throw new AggregateError(
+          [outcome.error, error],
+          "Git clone and cleanup progress both failed",
+          { cause: outcome.error },
+        );
+      }
+      throw error;
     }
-  }
-  if (!cleanupOutcome.ok) {
-    if (
-      "error" in outcome &&
-      outcome.error !== cleanupOutcome.error &&
-      hasCommandProcessCleanupError(cleanupOutcome.error)
-    ) {
-      throw new AggregateError(
-        [outcome.error, cleanupOutcome.error],
-        "Git clone and cleanup progress both failed",
-        { cause: outcome.error },
-      );
-    }
-    throw cleanupOutcome.error;
   }
   if ("error" in outcome) {
     throw outcome.error;
