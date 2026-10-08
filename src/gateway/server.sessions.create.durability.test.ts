@@ -511,7 +511,7 @@ test("dispatches the canonical redacted bytes of a committed initial input", asy
     const history = await rpcReq<{ messages: unknown[] }>(ws, "chat.history", { sessionKey: key });
     expect(history.ok, JSON.stringify(history)).toBe(true);
     expect(JSON.stringify(history.payload?.messages)).not.toContain("initial-secret");
-    expect(JSON.stringify(history.payload?.messages)).toContain(String(persisted.content));
+    expect(JSON.stringify(history.payload?.messages)).toContain(JSON.stringify(persisted.content));
   } finally {
     const released = getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] });
     for (const [turn] of dispatch.start.mock.calls) {
