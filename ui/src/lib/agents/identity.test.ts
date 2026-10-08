@@ -3,7 +3,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { AgentIdentityResult } from "../../api/types.ts";
-import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
+import type { ApplicationGatewayPhase, ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createAgentIdentityCapability, fetchAgentIdentity } from "./identity.ts";
 
@@ -87,6 +87,50 @@ it("retains the displayed identity while sidebar and chat share a failed refresh
   await capability.ensure(["main"]);
   expect(capability.get("main")).toBe(replacement);
   expect(publish).toHaveBeenCalledTimes(2);
+});
+
+it.each([
+  { name: "restart", restartPending: true, suspensionPhase: "accepting" },
+  { name: "suspension preparation", restartPending: false, suspensionPhase: "preparing" },
+  { name: "suspension drain", restartPending: false, suspensionPhase: "draining" },
+  { name: "prepared suspension", restartPending: false, suspensionPhase: "prepared" },
+] as const)("retains identity and pauses refresh during $name", async (unavailable) => {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(0);
+  const original = { agentId: "main", name: "Main", avatar: "/avatar/main?v=old" };
+  const replacement = { ...original, avatar: "/avatar/main?v=new" };
+  const request = vi.fn().mockResolvedValueOnce(original).mockResolvedValue(replacement);
+  const snapshot: Pick<
+    ApplicationGatewaySnapshot,
+    "client" | "phase" | "restartPending" | "suspensionPhase"
+  > = {
+    client: createTestGatewayClient(request),
+    phase: "connected",
+  };
+  let onSnapshot = (_snapshot: typeof snapshot) => {};
+  const capability = createAgentIdentityCapability({
+    snapshot,
+    subscribe(listener) {
+      onSnapshot = listener;
+      return () => undefined;
+    },
+  });
+  await capability.ensure(["main"]);
+  clock.mockReturnValue(60_000);
+  snapshot.restartPending = unavailable.restartPending;
+  snapshot.suspensionPhase = unavailable.suspensionPhase;
+  onSnapshot(snapshot);
+  for (let render = 0; render < 40; render += 1) {
+    await capability.ensure(["main"]);
+  }
+  expect(request).toHaveBeenCalledOnce();
+  expect(capability.get("main")).toBe(original);
+
+  snapshot.restartPending = false;
+  snapshot.suspensionPhase = "accepting";
+  onSnapshot(snapshot);
+  await capability.ensure(["main"]);
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(capability.get("main")).toBe(replacement);
 });
 
 it.each(["reconnect", "config", "agent"])(

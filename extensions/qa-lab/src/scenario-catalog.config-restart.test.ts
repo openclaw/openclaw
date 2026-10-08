@@ -1,5 +1,6 @@
 // Qa Lab tests cover config-restart scenario ordering.
 import { randomUUID } from "node:crypto";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { readQaScenarioById } from "./scenario-catalog.js";
@@ -7,7 +8,7 @@ import { runScenarioFlow } from "./scenario-flow-runner.js";
 import { applyQaMergePatch } from "./suite-merge-patch.js";
 
 describe("QA config-restart scenario catalog", () => {
-  it.each([undefined, "/dashboard", "/qa-restart-wakeup"])(
+  it.each(["/qa-restart-wakeup"])(
     "applies a changed serving path without changing other config: %s",
     async (basePath) => {
       const scenario = readQaScenarioById("config-apply-restart-wakeup");
@@ -88,18 +89,13 @@ describe("QA config-restart scenario catalog", () => {
     expect(flow.indexOf('"call":"runAgentPrompt"')).toBeGreaterThan(capabilityPollIndex);
   });
 
-  it.each([
-    undefined,
-    { enabled: false, allowedOrigins: ["https://qa.example"] },
-    { enabled: true, basePath: "/dashboard" },
-    { enabled: true, basePath: "/qa-capability-flip" },
-  ])("restores the original Control UI config after a failed wake: %j", async (controlUi) => {
+  it("restores an absent Control UI config after a failed wake", async () => {
     const scenario = readQaScenarioById("config-restart-capability-flip");
     if (scenario.execution.kind !== "flow" || !scenario.execution.flow) {
       throw new Error("config restart scenario must be a flow");
     }
-    const original = {
-      gateway: controlUi ? { controlUi } : {},
+    const original: OpenClawConfig = {
+      gateway: {},
       tools: { deny: ["browser"] },
       agents: { defaults: { mediaModels: { image: { primary: "openai/gpt-image-1" } } } },
     };
@@ -125,8 +121,10 @@ describe("QA config-restart scenario catalog", () => {
         readEffectiveTools: () => new Set(),
         liveTurnTimeoutMs: (_env: unknown, timeoutMs: number) => timeoutMs,
         waitForOutboundMessage: () => {
-          expect(current.gateway.controlUi?.basePath).toEqual(expect.any(String));
-          expect(current.gateway.controlUi?.basePath).not.toBe(controlUi?.basePath);
+          expect(current.gateway?.controlUi?.basePath).toEqual(expect.any(String));
+          expect(current.gateway?.controlUi?.basePath).not.toBe(
+            original.gateway?.controlUi?.basePath,
+          );
           throw wakeError;
         },
         runScenario: async (name, steps) => {

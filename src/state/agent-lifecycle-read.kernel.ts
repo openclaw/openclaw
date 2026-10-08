@@ -24,7 +24,7 @@ export function readAgentLifecycleStoreFacts(
   );
   const hasProvenance = tableExists(database, "agent_provenance");
   const hasJournal = tableExists(database, "agent_deletion_journal");
-  const query = base
+  const lifecycleQuery = base
     .$if(hasProvenance, (query) =>
       query
         .leftJoin("agent_provenance as provenance", "provenance.agent_id", "target.agent_id")
@@ -49,7 +49,7 @@ export function readAgentLifecycleStoreFacts(
         .select("deletion.agent_id as deletedAgentId"),
     )
     .$if(!hasJournal, (query) => query.select(sql<string | null>`NULL`.as("deletedAgentId")));
-  const row = executeSqliteQueryTakeFirstSync(database, query);
+  const row = executeSqliteQueryTakeFirstSync(database, lifecycleQuery);
   if (!row) {
     throw new Error("Agent lifecycle lookup returned no target row");
   }

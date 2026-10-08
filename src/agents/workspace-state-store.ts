@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
   createSqliteWorkerOperationAdmission,
   observeSqliteWorkerCommittedFacts,
@@ -18,19 +17,15 @@ import {
   resolveCanonicalWorkspacePath,
   resolveWorkspaceStateAliases,
   resolveWorkspaceStateIdentity,
-  type WorkspaceStateIdentity,
 } from "./workspace-state-identity.js";
 import {
   assertCanonicalIntegerTimestamp,
   assertCanonicalTimestamp,
-  readWorkspaceStateSnapshotFromDatabase,
   WORKSPACE_SETUP_STATE_VERSION,
   workspacePathEntryExists,
   type WorkspaceAttestation,
   type WorkspaceAttestationInput,
   type WorkspaceSetupState,
-  type WorkspaceStateDatabase,
-  type WorkspaceStateDatabaseHandle,
   type WorkspaceStateSnapshot,
 } from "./workspace-state-store.kernel.js";
 import type {
@@ -47,7 +42,6 @@ export {
   readWorkspaceStateSnapshotFromDatabase,
   registerWorkspaceStateAliasIdentitiesInTransaction,
   registerWorkspaceStateAliasesInTransaction,
-  WORKSPACE_ATTESTATION_RECENT_MS,
   WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND,
   WORKSPACE_LEGACY_STATE_MIGRATION_KIND,
   WORKSPACE_SETUP_STATE_VERSION,
@@ -223,30 +217,6 @@ export async function replaceWorkspaceAttestation(
       }),
     },
   );
-}
-
-/** The migration owner has verified the same workspace and every relocated byte before this commit. */
-export function retireWorkspaceRelocationAttestation(params: {
-  database: WorkspaceStateDatabaseHandle;
-  identity: WorkspaceStateIdentity;
-  attestedAtMs: number;
-}): boolean {
-  const snapshot = readWorkspaceStateSnapshotFromDatabase(params);
-  if (
-    snapshot.setupExists ||
-    snapshot.attestation?.attestedAtMs !== params.attestedAtMs ||
-    snapshot.attestation.generatedHashes.size > 0
-  ) {
-    return false;
-  }
-  executeSqliteQuerySync(
-    params.database.db,
-    getNodeSqliteKysely<WorkspaceStateDatabase>(params.database.db)
-      .updateTable("workspace_setup_state")
-      .set({ attested_at_ms: null, attestation_updated_at_ms: null })
-      .where("workspace_key", "=", params.identity.workspaceKey),
-  );
-  return true;
 }
 
 /** Clear expired state only when no concurrent writer refreshed the vanished workspace. */

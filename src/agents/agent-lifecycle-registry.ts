@@ -98,8 +98,8 @@ type AgentDeletionBeginOptions = {
 export type AgentDeletionOperation = AgentDeletionWorkerAuthority & {
   entry: AgentDeletionJournalEntry;
   previousEntry?: AgentDeletionJournalEntry;
-  assertCurrentAsync(): Promise<void>;
-  assertCurrentFinal(): void;
+  assertCurrentAsync(this: void): Promise<void>;
+  assertCurrentFinal(this: void): void;
   runDatabaseCleanup: ReturnType<typeof createAgentDeletionDatabaseCleanup>;
   fenceDatabasePaths(paths: readonly string[]): Promise<void>;
   fenceCleanupPaths(paths: readonly AgentDeletionJournalCleanupPath[]): Promise<void>;

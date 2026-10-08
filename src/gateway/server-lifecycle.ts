@@ -228,6 +228,7 @@ export async function prepareGatewayLifecycle(params: {
       deps,
       broadcast,
       resolveGatewayContext: runtime.resolvePluginGatewayContext,
+      resolvePluginRegistry: () => pluginRuntime.registry,
     }),
     gatewayMethods: listActiveGatewayMethods(pluginRuntime.baseGatewayMethods),
   });

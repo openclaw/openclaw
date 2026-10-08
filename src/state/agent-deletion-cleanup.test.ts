@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -14,19 +15,25 @@ import {
   acquireAuthProfileReadDatabase,
   closeAuthProfileReadPool,
 } from "../agents/auth-profiles/sqlite-read-pool.js";
+import { readSessionArchiveContentSync } from "../config/sessions/archive-compression.js";
 import { purgeAgentSessionStoreEntries } from "../config/sessions/cleanup-service.js";
+import { resolveSessionArtifactDirectory } from "../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
+import * as archiveWorker from "../config/sessions/session-accessor.sqlite-archive.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { appendTranscriptEventSync } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { purgeDeletedAgentSessionEntries } from "../config/sessions/session-agent-purge.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
 import * as admission from "../infra/sqlite-worker-operation-admission.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { onSessionIdentityMutation } from "../sessions/session-lifecycle-events.js";
 import {
   beginAgentDeletionJournal,
   removeAgentDeletionJournal,
 } from "../test-utils/agent-deletion-journal.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { assertNoOpenClawAgentDatabaseLeases } from "./openclaw-agent-db-lease.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-resources.js";
 import {
@@ -84,6 +91,26 @@ function fixture() {
   };
 }
 
+function expectPublishedArchive(databasePath: string, sessionId: string, content: string): void {
+  const reader = openNodeSqliteDatabase(databasePath, { readOnly: true });
+  try {
+    const archive = reader
+      .prepare(
+        "SELECT archive_name, published_at, last_publish_error FROM session_transcript_archives WHERE session_id = ?",
+      )
+      .get(sessionId);
+    assert(archive && typeof archive.archive_name === "string");
+    expect(archive).toMatchObject({ published_at: expect.any(Number), last_publish_error: null });
+    expect(
+      readSessionArchiveContentSync(
+        path.join(resolveSessionArtifactDirectory(databasePath), archive.archive_name),
+      ),
+    ).toContain(content);
+  } finally {
+    reader.close();
+  }
+}
+
 describe("agent deletion database cleanup authority", () => {
   it.each([false, true])(
     "purges through the live deletion owner without host SQLite (warm survivor: %s)",
@@ -98,6 +125,13 @@ describe("agent deletion database cleanup authority", () => {
       const scope = { ...f.options, storePath: target.path, sessionKey: "agent:worker:main" };
       if (survivor) {
         replaceSessionEntrySync(scope, { sessionId: "before", updatedAt: 1 });
+      }
+      appendTranscriptEventSync(
+        { ...scope, sessionId: "before" },
+        { type: "proof", data: "retirement archive proof" },
+      );
+      if (!survivor) {
+        await closeOpenClawAgentDatabaseByPathAsync(target.path, target.agentId);
       }
       const cfg = {
         agents: { entries: { worker: {}, kept: {} } },
@@ -117,7 +151,7 @@ describe("agent deletion database cleanup authority", () => {
           );
           expect(
             sql.queries.filter((query) =>
-              /\b(?:agent_deletion_journal|state_leases|session_nodes|session_windows|transcript_events)\b/i.test(
+              /\b(?:agent_deletion_journal|state_leases|session_nodes|session_windows|transcript_events|session_transcript_archives)\b/i.test(
                 query,
               ),
             ),
@@ -127,6 +161,7 @@ describe("agent deletion database cleanup authority", () => {
         }
       });
       expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
+      expectPublishedArchive(target.path, "before", "retirement archive proof");
       if (survivingDatabase) {
         expect(survivingDatabase.db.isOpen).toBe(true);
       } else {
@@ -134,6 +169,146 @@ describe("agent deletion database cleanup authority", () => {
       }
     },
   );
+
+  it("retains an accepted archive export when journal takeover refuses its publication receipt", async () => {
+    const f = fixture();
+    appendTranscriptEventSync(
+      { ...f.options, sessionKey: "agent:worker:main", sessionId: "before" },
+      { type: "proof", data: "accepted export proof" },
+    );
+    await closeOpenClawAgentDatabaseByPathAsync(f.target.path, "worker");
+    let exported: string | undefined;
+    const publish = archiveWorker.runSqliteTranscriptArchivePublishWorker;
+    vi.spyOn(archiveWorker, "runSqliteTranscriptArchivePublishWorker").mockImplementationOnce(
+      async (...args) => {
+        const results = await publish(...args);
+        exported = results.find((result) => result.sessionId === "before")?.archivedPath;
+        beginAgentDeletionJournal(
+          { ...f.entry, operationId: "replacement", deleteFiles: true },
+          { env: f.options.env },
+        );
+        return results;
+      },
+    );
+    await f.withDeletion(async (deletion) => {
+      await expect(
+        deletion.runDatabaseCleanup(f.target, () =>
+          purgeDeletedAgentSessionEntries({
+            cfg: {
+              agents: { entries: { worker: {}, kept: {} } },
+              session: { store: f.target.path, maintenance: { mode: "warn" } },
+            },
+            agentId: "worker",
+            storeAgentId: "worker",
+            storePath: f.target.path,
+            env: f.options.env,
+          }),
+        ),
+      ).rejects.toThrow(/no longer owns/);
+    });
+    assert(exported);
+    expect(readSessionArchiveContentSync(exported)).toContain("accepted export proof");
+    expect(f.read()).toBeUndefined();
+    const reader = openNodeSqliteDatabase(f.target.path, { readOnly: true });
+    try {
+      expect(
+        reader
+          .prepare("SELECT published_at FROM session_transcript_archives WHERE session_id = ?")
+          .get("before"),
+      ).toMatchObject({ published_at: null });
+    } finally {
+      reader.close();
+    }
+  });
+
+  it("settles maintenance archives and bulk planner refresh under the retained deletion owner", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const storePath = state.statePath("retirement.sqlite");
+      const cfg = {
+        agents: { entries: { worker: {}, kept: {} } },
+        session: { store: storePath, maintenance: { mode: "warn" as const } },
+      };
+      await state.writeConfig(cfg);
+      const options = { agentId: "worker", path: storePath, env: state.env };
+      const target = openOpenClawAgentDatabase(options);
+      const removed = {
+        agentId: "worker",
+        storePath,
+        sessionKey: "agent:worker:main",
+        env: state.env,
+      };
+      const aged = { ...removed, agentId: "kept", sessionKey: "agent:kept:aged" };
+      runOpenClawAgentWriteTransaction(() => {
+        for (let index = 0; index < 64; index++) {
+          replaceSessionEntrySync(
+            { ...removed, sessionKey: index ? `agent:worker:extra-${index}` : removed.sessionKey },
+            { sessionId: `retired-${index}`, updatedAt: Date.now() },
+          );
+        }
+        replaceSessionEntrySync(aged, {
+          sessionId: "aged-survivor",
+          updatedAt: Date.now() - 3 * 86_400_000,
+        });
+        appendTranscriptEventSync(
+          { ...removed, sessionId: "retired-0" },
+          { type: "proof", data: "primary archive proof" },
+        );
+        appendTranscriptEventSync(
+          { ...aged, sessionId: "aged-survivor" },
+          { type: "proof", data: "maintenance archive proof" },
+        );
+      }, options);
+      await closeOpenClawAgentDatabaseByPathAsync(storePath, "worker");
+      await state.writeConfig({
+        ...cfg,
+        session: {
+          ...cfg.session,
+          maintenance: {
+            mode: "enforce",
+            pruneAfter: "1d",
+            maxEntries: 1000,
+            preserveRecent: false,
+          },
+        },
+      });
+      const warnings = createWarnLogCapture("retirement-maintenance");
+      try {
+        await withAgentDeletion(
+          "worker",
+          async (begin) => {
+            const deletion = await begin({
+              agentId: "worker",
+              agentDir: state.agentDir("worker"),
+              sessionsDir: state.sessionsDir("worker"),
+              workspaceDir: state.workspaceDir,
+            });
+            await deletion.runDatabaseCleanup({ agentId: "worker", path: target.path }, () =>
+              purgeDeletedAgentSessionEntries({
+                cfg,
+                agentId: "worker",
+                storeAgentId: "worker",
+                storePath,
+                env: state.env,
+              }),
+            );
+          },
+          { env: state.env },
+        );
+        expect(loadSessionEntryReadOnly(removed)).toBeUndefined();
+        expect(loadSessionEntryReadOnly(aged)).toBeUndefined();
+        expectPublishedArchive(storePath, "retired-0", "primary archive proof");
+        expectPublishedArchive(storePath, "aged-survivor", "maintenance archive proof");
+        expect(
+          await warnings.findText("SQLite session maintenance cleanup failed"),
+        ).toBeUndefined();
+        expect(
+          await warnings.findText("SQLite session planner-statistics refresh failed"),
+        ).toBeUndefined();
+      } finally {
+        warnings.cleanup();
+      }
+    });
+  });
 
   it.each(["held", "journal replaced", "lease expired"] as const)(
     "retains the shared retirement guard through agent COMMIT (%s)",

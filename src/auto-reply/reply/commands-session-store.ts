@@ -1,5 +1,8 @@
 import { resolveSessionStoreEntryCore, type SessionEntry } from "../../config/sessions.js";
-import { patchSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  matchesSessionAbortTargetOwner,
+  patchSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import { sessionSnapshotChangesApplied } from "../../config/sessions/session-snapshot-merge.js";
 import { applyAbortCutoffToSessionEntry, type AbortCutoff } from "./abort-cutoff.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
@@ -105,7 +108,7 @@ export async function persistAbortTargetEntry(params: {
     await patchSessionEntryCore(
       { storePath, sessionKey: key },
       (nextEntry) => {
-        if (params.isCurrent?.() === false) {
+        if (params.isCurrent?.() === false || !matchesSessionAbortTargetOwner(nextEntry, entry)) {
           return null;
         }
         applied = true;

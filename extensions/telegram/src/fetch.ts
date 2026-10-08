@@ -230,13 +230,20 @@ function createTelegramDispatcher(
       const reason = formatErrorMessage(err);
       throw new Error(`explicit proxy dispatcher init failed: ${reason}`, { cause: err });
     }
-  } else if (policy.mode === "env-proxy") {
+  } else {
     const connectOptions = withPinnedLookup(policy.connect, policy.pinnedHostname);
+    const directOptions = {
+      ...poolOptions,
+      ...(connectOptions ? { connect: connectOptions } : {}),
+    };
+    if (policy.mode === "direct") {
+      dispatcher = new Agent(directOptions);
+      return { dispatcher, mode: policy.mode, effectivePolicy: policy };
+    }
     const proxyTlsOptions = withPinnedLookup(policy.proxyTls, policy.pinnedHostname);
     const proxyOptions = {
-      ...poolOptions,
+      ...directOptions,
       ...resolveEnvHttpProxyAgentOptions(),
-      ...(connectOptions ? { connect: connectOptions } : {}),
       ...(proxyTlsOptions ? { proxyTls: proxyTlsOptions } : {}),
     } satisfies Parameters<typeof createHttp1EnvHttpProxyAgent>[0];
     try {
@@ -251,12 +258,6 @@ function createTelegramDispatcher(
       };
       return createTelegramDispatcher(directPolicy, pipelining);
     }
-  } else {
-    const connectOptions = withPinnedLookup(policy.connect, policy.pinnedHostname);
-    dispatcher = new Agent({
-      ...poolOptions,
-      ...(connectOptions ? { connect: connectOptions } : {}),
-    } satisfies ConstructorParameters<typeof Agent>[0]);
   }
   return { dispatcher, mode: policy.mode, effectivePolicy: policy };
 }
@@ -562,11 +563,7 @@ export function resolveTelegramTransport(
     if (nextAttempt.logMessage) {
       const reasonText = reason ? `, reason=${reason}` : "";
       const logLine = `${nextAttempt.logMessage} (codes=${formatErrorCodes(err)}${reasonText})`;
-      if (nextAttempt.logLevel === "debug") {
-        log.debug(logLine);
-      } else {
-        log.warn(logLine);
-      }
+      log[nextAttempt.logLevel ?? "warn"](logLine);
     }
     stickyAttemptIndex = nextIndex;
     resetStickyRecoveryProbe();
@@ -723,23 +720,21 @@ export function resolveTelegramTransport(
     throw err;
   }) as typeof fetch;
 
-  const close = async (): Promise<void> => {
-    if (closed) {
-      return;
-    }
-    closed = true;
-    const toDestroy = [...ownedDispatchers];
-    ownedDispatchers.clear();
-    await destroyOwnedDispatchers(toDestroy);
-  };
-
   return {
     fetch: resolvedFetch,
     sourceFetch,
     dispatcherAttempts: transportAttempts.map((attempt) => attempt.exportAttempt),
     forceFallback: (reason: string, err?: unknown) =>
       promoteStickyAttempt(stickyAttemptIndex + 1, err ?? new Error("forced fallback"), reason),
-    close,
+    close: async () => {
+      if (closed) {
+        return;
+      }
+      closed = true;
+      const toDestroy = [...ownedDispatchers];
+      ownedDispatchers.clear();
+      await destroyOwnedDispatchers(toDestroy);
+    },
   };
 }
 

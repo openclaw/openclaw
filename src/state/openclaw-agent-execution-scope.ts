@@ -12,6 +12,8 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "./openclaw-agent-db.paths.js";
 import type {
+  AgentDatabaseFileExecutionOwner,
+  OpenClawAgentDatabaseExecution,
   AgentDatabaseGenerationClaim,
   AgentDatabaseNativeGeneration,
   AgentDatabaseExecutionFileIdentity,
@@ -19,6 +21,63 @@ import type {
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { captureOpenClawStateReadContext } from "./openclaw-state-worker-context.js";
+
+export type AgentDatabaseExecutionCaptureConstraints = {
+  expectedIdentity?: AgentDatabaseExecutionFileIdentity;
+  expectedCreationIdentity?: DatabasePathIdentity;
+  /** The caller's locator before it pinned options.path to the physical file. */
+  requestedPath?: string;
+};
+
+/** A creating borrow must retain the exact originally observed target, including absence. */
+export function assertAgentDatabaseCreationTarget(params: {
+  expectedCreationIdentity: DatabasePathIdentity;
+  expectedIdentity: AgentDatabaseExecutionFileIdentity | undefined;
+  identity: DatabasePathIdentity;
+  existingFileOwner: AgentDatabaseFileExecutionOwner | undefined;
+  hasNativeOwner: boolean;
+}): void {
+  const {
+    expectedCreationIdentity,
+    expectedIdentity,
+    identity,
+    existingFileOwner,
+    hasNativeOwner,
+  } = params;
+  const capturesAbsence = expectedCreationIdentity.key.startsWith("path:");
+  const observed =
+    capturesAbsence && existingFileOwner ? existingFileOwner.creationIdentity : identity;
+  if (
+    expectedIdentity ||
+    (capturesAbsence && hasNativeOwner) ||
+    (!capturesAbsence &&
+      (!expectedCreationIdentity.key.startsWith("file:") ||
+        typeof expectedCreationIdentity.birthtime !== "string")) ||
+    observed?.key !== expectedCreationIdentity.key ||
+    observed.canonicalPath !== expectedCreationIdentity.canonicalPath ||
+    observed.birthtime !== expectedCreationIdentity.birthtime
+  ) {
+    throw new Error("Agent creation no longer owns its originally observed target");
+  }
+}
+
+/** A read can borrow an already-selected file owner only within its current storage scope. */
+export function borrowExistingAgentDatabaseExecution(
+  owner: AgentDatabaseFileExecutionOwner,
+  options: { path: string; env?: NodeJS.ProcessEnv },
+): OpenClawAgentDatabaseExecution | undefined {
+  const target = { ...options, agentId: owner.agentId };
+  if (!supportsAgentDatabaseExecutionScope(target)) {
+    return undefined;
+  }
+  try {
+    assertAgentDatabaseExecutionSharedState(target, owner.sharedDatabaseKey);
+    return owner.borrow(options.path);
+  } catch {
+    // Initial read selection does not inherit failures of an unrelated writable lifecycle.
+    return undefined;
+  }
+}
 
 export function assertAgentDatabaseExecutionSharedState(
   options: OpenClawAgentDatabaseOptions,

@@ -672,7 +672,7 @@ async function applyClawPackageRemovalsUnlocked(
       } else {
         await (deps.withPackageLease ?? withClawPackageLifecycleLease)(
           leaseArtifact,
-          (lease) => run(lease, lease.assertOwned),
+          (lease) => run(lease, () => lease.assertOwned()),
           options,
         );
       }

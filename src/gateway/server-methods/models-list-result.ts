@@ -218,8 +218,7 @@ async function prepareOwnedModelsListResult({
         }
       },
       {
-        allowDiscovery: !params.preloadedOnly && !params.params.preparedOnly,
-        refresh,
+        refresh: refresh && !params.preloadedOnly && !params.params.preparedOnly,
         withCurrent: authority?.withCurrent,
         beforeRequest: publicationScope?.beforeRequest,
       },
@@ -304,6 +303,7 @@ async function prepareOwnedModelsListResult({
       ...outcomeProjection,
       ...(snapshot.refreshFailed ? { refreshFailed: true } : {}),
       ...(accountSelection ? { accountSelection } : {}),
+      ...(decisionModels.length ? { decisionModels } : {}),
     };
   };
   const includeProviderCapabilities = params.params.includeProviderCapabilities === true;
@@ -513,7 +513,6 @@ async function prepareOwnedModelsListResult({
           .filter(({ entry }) => matchesProvider(entry))
           .map(({ entry, host }) => projectPublic(entry, evaluateNative(entry, host))),
         ...readOutcomeProjection(),
-        ...(decisionModels.length ? { decisionModels } : {}),
       }),
     };
   }
@@ -642,7 +641,6 @@ async function prepareOwnedModelsListResult({
           selectionPolicies,
         ),
         ...readOutcomeProjection(),
-        ...(decisionModels.length ? { decisionModels } : {}),
       };
     },
   };

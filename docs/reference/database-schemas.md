@@ -34,6 +34,10 @@ lock-wait budgets, schemas, stored data, and update behavior are unchanged.
 
 The admitted catalog includes index names and trigger definitions alongside tables.
 Canonical session validation consumes these definitions without another catalog scan.
+Canonical index admission shares the schema contract reader's batched metadata snapshot
+instead of querying each table and index separately. Shadowed PRAGMA names retain
+native inspection, and authorization, drift detection, transactional repair, and
+integrity checks remain unchanged.
 First-use schema owners skip additive DDL only when all their tables and indexes
 are present in the current facts. Foreign schema changes, local DDL, rollback, and
 connection replacement invalidate those facts through the same connection owner;
@@ -62,9 +66,9 @@ Retaining an already-open agent handle holds its lifetime without querying SQLit
 
 Agent ownership metadata follows that admitted read revision as well. Unchanged
 reads reuse the handle's metadata; foreign commits, local mutations, and schema
-changes require a new ownership read. Transactions, pinned snapshots, and dynamic
-authorizers keep querying the metadata. This changes no schema, stored bytes, or
-update behavior.
+changes require a new ownership read. Managed transactions reuse metadata at
+their admitted revision; changed pinned snapshots and dynamic authorizers still
+query it. This changes no schema, stored bytes, or update behavior.
 
 The shared-state content-version marker uses the same admitted read revision.
 Unchanged reads reuse its successful result; foreign commits, local writes,
@@ -75,7 +79,9 @@ validation and upgrade or downgrade behavior are unchanged.
 Registry discovery reuses successful migration checks for the admitted schema
 generation. The minute retention sweep reads deletion history in a worker and
 shares one matcher across its agent stores; live deletion status and lifecycle
-commit guards still apply. Legacy watch-marker discovery uses an indexed prefix
+commit guards still apply. Cron registry retention validates the complete listing
+in its reader worker and returns only cron-run entries to the Gateway; ordinary
+session metadata stays in the worker. Legacy watch-marker discovery uses an indexed prefix
 range. Retention continues as rows age, even without writes; schema, upgrade, and
 retention policies are unchanged.
 

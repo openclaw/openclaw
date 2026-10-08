@@ -162,9 +162,9 @@ export function prepareComparisonClaimsFromStores(params: {
       failed.add(store);
       params.onUnreadable(store, error);
     };
-    for (const { store, reader, error } of readers) {
+    for (const { store, reader, error: preparationError } of readers) {
       if (!reader) {
-        unreadable(store, error);
+        unreadable(store, preparationError);
         continue;
       }
       try {

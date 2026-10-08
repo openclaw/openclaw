@@ -259,12 +259,8 @@ async function resolveBaseToolsEffectiveInventory(
 ): Promise<EffectiveToolInventoryResult> {
   const agentDir = resolveAgentDir(context.cfg, context.agentId);
   const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
-    cfg: context.cfg,
-    agentId: context.agentId,
+    ...context,
     agentDir,
-    workspaceDir: context.workspaceDir,
-    modelProvider: context.modelProvider,
-    modelId: context.modelId,
   });
   try {
     return await acquired.run((runtimeModelContext) =>
@@ -400,12 +396,9 @@ async function projectMcpCatalog(params: {
     return base;
   }
   const acquired = await acquireEffectiveToolInventoryRuntimeModelContext({
-    cfg: params.context.cfg,
-    agentId: params.context.agentId,
+    ...params.context,
     agentDir: resolveAgentDir(params.context.cfg, params.context.agentId),
     workspaceDir: params.workspaceDir,
-    modelProvider: params.context.modelProvider,
-    modelId: params.context.modelId,
   });
   try {
     return acquired.run((runtimeModelContext) => {

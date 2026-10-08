@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { admitMediaHandle } from "../media-generation-activity.test-support.js";
 vi.mock("../media-generation-activity.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media-generation-activity.js")>();
@@ -11,12 +12,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import {
   IMAGE_GENERATION_TASK_KIND,
   MUSIC_GENERATION_TASK_KIND,
   VIDEO_GENERATION_TASK_KIND,
 } from "../media-generation-task-status.js";
+import { resolveGeneratedMediaSessionDeliveryRoute } from "../subagents/announce/subagent-announce-origin.js";
 import {
   createMediaCompletionFixture,
   expectFallbackMediaAnnouncement,
@@ -34,8 +38,12 @@ const taskExecutorMocks = vi.hoisted(() => ({
 const announceDeliveryMocks = vi.hoisted(() => ({
   deliverSubagentAnnouncement: vi.fn(),
 }));
+const sessionMocks = vi.hoisted((): { entry: SessionEntry } => ({
+  entry: { sessionId: "media-requester", updatedAt: 1 },
+}));
 
 vi.mock("../subagents/announce/subagent-announce-delivery.js", () => announceDeliveryMocks);
+// mock-isolation: Keep the session database outside this routing fixture.
 vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
   withSessionEntryReadOnlyInWorker: async (
     _scope: unknown,
@@ -43,7 +51,7 @@ vi.mock("../../config/sessions/session-entry-read-runtime.js", () => ({
     consume: (read: { ok: true; value: SessionEntry }) => Promise<unknown>,
   ) => {
     assertCurrent();
-    return consume({ ok: true, value: { sessionId: "media-requester", updatedAt: 1 } });
+    return consume({ ok: true, value: sessionMocks.entry });
   },
 }));
 
@@ -52,7 +60,105 @@ const {
   musicGenerationTaskLifecycle,
   videoGenerationTaskLifecycle,
   runMediaGenerationTask,
+  prepareMediaGenerationTask,
 } = await import("./media-generate-background.js");
+
+describe("media requester provenance", () => {
+  beforeEach(() => {
+    resetMediaBackgroundMocks({
+      taskExecutorMocks,
+      taskDeliveryRuntimeMocks,
+      announceDeliveryMocks,
+    });
+    taskExecutorMocks.createOperation.mockReturnValue({ taskId: "task-provenance" });
+    announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({ delivered: true });
+    sessionMocks.entry = {
+      sessionId: "media-requester",
+      updatedAt: 1,
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "test-room", accountId: "test-bot" },
+      }),
+    };
+  });
+  afterEach(() => {
+    sessionMocks.entry = { sessionId: "media-requester", updatedAt: 1 };
+  });
+
+  it.each([
+    [undefined, "webchat"],
+    [{ kind: "external_user" }, "webchat"],
+    [{ kind: "internal_system", sourceTool: "cron" }, "telegram"],
+    [{ kind: "inter_session", sourceTool: "sessions_send" }, "telegram"],
+  ] satisfies Array<[InputProvenance | undefined, string]>)(
+    "routes a prepared WebChat media task with provenance %j to %s",
+    async (inputProvenance, channel) => {
+      let backgroundWork: (() => Promise<void>) | undefined;
+      const run = vi.fn(async () => ({
+        provider: "openai",
+        model: "gpt-image-1",
+        count: 1,
+        wakeResult: "generated",
+        contentText: "generated",
+        details: {},
+      }));
+      await prepareMediaGenerationTask({
+        generationLabel: "image",
+        cfg: {
+          agents: { defaults: { mediaModels: { image: { primary: "openai/gpt-image-1" } } } },
+        },
+        args: { prompt: "synthetic provenance proof" },
+        options: { inputProvenance },
+        acquire: async () => undefined,
+        resolveProviders: () => [],
+        findDuplicate: async () => undefined,
+        prepare: async ({ prompt }) => ({
+          kind: "task",
+          params: {
+            lifecycle: imageGenerationTaskLifecycle,
+            sessionKey: "agent:main:main",
+            requesterOrigin: {
+              channel: "webchat",
+              ...(channel === "webchat"
+                ? { to: "stale-peer", accountId: "test-bot", threadId: "stale-thread" }
+                : {}),
+            },
+            prompt,
+            requestKey: "provenance-proof",
+            scheduleBackgroundWork: (work) => {
+              backgroundWork = work;
+            },
+            onFailure: vi.fn(),
+            run,
+          },
+        }),
+      });
+      assert(backgroundWork);
+      sessionMocks.entry.delivery = normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "changed-room", accountId: "changed-bot" },
+      });
+      await backgroundWork();
+      expect(run).toHaveBeenCalledOnce();
+      expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledOnce();
+      const completion = announceDeliveryMocks.deliverSubagentAnnouncement.mock.calls[0]?.[0];
+      assert(completion);
+      expect(
+        resolveGeneratedMediaSessionDeliveryRoute({
+          ...completion,
+          sessionKey: "agent:main:main",
+        }).route,
+      ).toEqual(
+        channel === "webchat"
+          ? { channel: "webchat", to: "agent:main:main", chatType: "direct" }
+          : {
+              channel: "telegram",
+              to: "test-room",
+              accountId: "test-bot",
+              chatType: "direct",
+            },
+      );
+    },
+  );
+});
 
 describe("image generate background helpers", () => {
   beforeEach(() => {

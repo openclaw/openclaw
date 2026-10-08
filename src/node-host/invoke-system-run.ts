@@ -186,27 +186,26 @@ type HandleSystemRunInvokeOptions = {
 async function sendSystemRunDenied(
   opts: Pick<HandleSystemRunInvokeOptions, "sendNodeEvent" | "sendInvokeResult">,
   execution: SystemRunExecutionContext,
-  params: {
-    reason: SystemRunDeniedReason;
-    message: string;
-  },
-) {
+  message: string,
+  reason: SystemRunDeniedReason = "approval-required",
+): Promise<null> {
   await opts.sendNodeEvent?.("exec.denied", {
     sessionKey: execution.sessionKey,
     runId: execution.runId,
     host: "node",
     command: execution.commandText,
-    reason: params.reason,
+    reason,
     suppressNotifyOnExit: execution.suppressNotifyOnExit,
   });
   await opts.sendInvokeResult({
     ok: false,
     // A missing companion reply can follow execution; it is not a policy denial.
     error: {
-      code: params.reason === "companion-unavailable" ? "UNAVAILABLE" : "SYSTEM_RUN_DENIED",
-      message: params.message,
+      code: reason === "companion-unavailable" ? "UNAVAILABLE" : "SYSTEM_RUN_DENIED",
+      message,
     },
   });
+  return null;
 }
 
 async function sendSystemRunCompleted(
@@ -360,6 +359,7 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
     () => sanitizeHostExecEnv({ overrides: envOverrides, blockPathOverrides: true }),
   );
   const validatedApprovalSource: ExecHostRequest["approvalSource"] = approvalSource ?? undefined;
+  const execution = { sessionKey, runId, commandText, suppressNotifyOnExit };
   return {
     argv: command.argv,
     shellPayload: command.shellPayload,
@@ -369,7 +369,9 @@ async function parseSystemRunPhase(opts: HandleSystemRunInvokeOptions) {
     agentId,
     sessionKey,
     runId,
-    execution: { sessionKey, runId, commandText, suppressNotifyOnExit },
+    execution,
+    deny: (message: string, reason?: SystemRunDeniedReason): Promise<null> =>
+      sendSystemRunDenied(opts, execution, message, reason),
     approvalDecision,
     approvalSource: validatedApprovalSource,
     delayedApprovalPolicySnapshot,
@@ -404,11 +406,7 @@ async function evaluateSystemRunPolicyPhase(
       currentPolicySnapshot,
     )
   ) {
-    await sendSystemRunDenied(opts, parsed.execution, {
-      reason: "approval-required",
-      message: "SYSTEM_RUN_DENIED: exec approval policy changed; request approval again",
-    });
-    return null;
+    return parsed.deny("SYSTEM_RUN_DENIED: exec approval policy changed; request approval again");
   }
   const evaluationPolicySnapshot = parsed.delayedApprovalPolicySnapshot ?? currentPolicySnapshot;
   const baseSecurity = effectivePolicy.security;
@@ -474,20 +472,22 @@ async function evaluateSystemRunPolicyPhase(
     : parsed.approved || approvalDecision !== null
       ? "explicit-approval"
       : null;
-  let policy = evaluateSystemRunPolicy({
-    security,
-    ask,
-    analysisOk,
-    allowlistSatisfied,
-    durableApprovalSatisfied: durableApprovalSatisfied || inlineEvalExecutableTrusted,
-    approvalDecision,
-    approved: parsed.approved,
-    isWindows,
-    cmdInvocation,
-    // Keep cmd.exe approval gating scoped to inline shell-wrapper transport.
-    // Env sanitization uses broader shell-wrapper detection in parse phase.
-    shellWrapperInvocation: parsed.shellPayload !== null,
-  });
+  const evaluatePolicy = (approved: boolean) =>
+    evaluateSystemRunPolicy({
+      security,
+      ask,
+      analysisOk,
+      allowlistSatisfied,
+      durableApprovalSatisfied: durableApprovalSatisfied || inlineEvalExecutableTrusted,
+      approvalDecision,
+      approved,
+      isWindows,
+      cmdInvocation,
+      // Keep cmd.exe approval gating scoped to inline shell-wrapper transport.
+      // Env sanitization uses broader shell-wrapper detection in parse phase.
+      shellWrapperInvocation: parsed.shellPayload !== null,
+    });
+  let policy = evaluatePolicy(parsed.approved);
   let autoReviewDeferredMessage: string | undefined;
   analysisOk = policy.analysisOk;
   allowlistSatisfied = policy.allowlistSatisfied;
@@ -496,13 +496,10 @@ async function evaluateSystemRunPolicyPhase(
     !policy.approvedByAsk &&
     (policy.allowed ? true : policy.eventReason !== "security=deny");
   if (strictInlineEvalRequiresApproval) {
-    await sendSystemRunDenied(opts, parsed.execution, {
-      reason: "approval-required",
-      message:
-        `SYSTEM_RUN_DENIED: approval required (` +
+    return parsed.deny(
+      `SYSTEM_RUN_DENIED: approval required (` +
         `${describeInterpreterInlineEval(inlineEvalHit)} requires explicit approval in strictInlineEval mode)`,
-    });
-    return null;
+    );
   }
 
   let executableBinding: SystemRunMutableFileBinding | undefined;
@@ -520,11 +517,7 @@ async function evaluateSystemRunPolicyPhase(
       shellCommand: parsed.shellPayload !== null,
     });
     if (!prepared.ok) {
-      await sendSystemRunDenied(opts, parsed.execution, {
-        reason: "approval-required",
-        message: prepared.message,
-      });
-      return null;
+      return parsed.deny(prepared.message);
     }
     executableBinding = prepared.binding;
   }
@@ -604,11 +597,10 @@ async function evaluateSystemRunPolicyPhase(
       });
       switch (decision.decision) {
         case "deny":
-          await sendSystemRunDenied(opts, parsed.execution, {
-            reason: "auto-review-denied",
-            message: `SYSTEM_RUN_DENIED: auto-review denied (${formatExecAutoReviewAssessment(decision)}): ${decision.rationale}\n${EXEC_AUTO_REVIEW_DENIAL_GUIDANCE}`,
-          });
-          return null;
+          return parsed.deny(
+            `SYSTEM_RUN_DENIED: auto-review denied (${formatExecAutoReviewAssessment(decision)}): ${decision.rationale}\n${EXEC_AUTO_REVIEW_DENIAL_GUIDANCE}`,
+            "auto-review-denied",
+          );
         case "ask":
           break;
         case "allow-once": {
@@ -617,18 +609,7 @@ async function evaluateSystemRunPolicyPhase(
           }
           approvalDecision = "allow-once";
           approvalGrantSource = "auto-review";
-          policy = evaluateSystemRunPolicy({
-            security,
-            ask,
-            analysisOk,
-            allowlistSatisfied,
-            durableApprovalSatisfied: durableApprovalSatisfied || inlineEvalExecutableTrusted,
-            approvalDecision,
-            approved: true,
-            isWindows,
-            cmdInvocation,
-            shellWrapperInvocation: parsed.shellPayload !== null,
-          });
+          policy = evaluatePolicy(true);
           break;
         }
         default:
@@ -643,20 +624,12 @@ async function evaluateSystemRunPolicyPhase(
   }
 
   if (!policy.allowed) {
-    await sendSystemRunDenied(opts, parsed.execution, {
-      reason: policy.eventReason,
-      message: autoReviewDeferredMessage ?? policy.errorMessage,
-    });
-    return null;
+    return parsed.deny(autoReviewDeferredMessage ?? policy.errorMessage, policy.eventReason);
   }
 
   // Fail closed if policy/runtime drift re-allows Windows shell wrappers.
   if (policy.shellWrapperBlocked && !policy.approvedByAsk && !durableApprovalSatisfied) {
-    await sendSystemRunDenied(opts, parsed.execution, {
-      reason: "approval-required",
-      message: "SYSTEM_RUN_DENIED: approval required",
-    });
-    return null;
+    return parsed.deny("SYSTEM_RUN_DENIED: approval required");
   }
   // Bind the commit to the normalized policy: Windows wrappers invalidate
   // otherwise-valid raw allowlist matches before execution.
@@ -679,32 +652,20 @@ async function evaluateSystemRunPolicyPhase(
     cwd: parsed.cwd,
   });
   if (!hardenedPaths.ok) {
-    await sendSystemRunDenied(opts, parsed.execution, {
-      reason: "approval-required",
-      message: hardenedPaths.message,
-    });
-    return null;
+    return parsed.deny(hardenedPaths.message);
   }
   let executionCwd = hardenedPaths.cwd;
   let approvedCwdSnapshot = approvalContextBound ? hardenedPaths.approvedCwdSnapshot : undefined;
   if (security === "allowlist" && !approvedCwdSnapshot) {
     const capturedCwd = captureApprovedCwdSnapshotSync(executionCwd ?? process.cwd());
     if (!capturedCwd.ok) {
-      await sendSystemRunDenied(opts, parsed.execution, {
-        reason: "approval-required",
-        message: capturedCwd.message,
-      });
-      return null;
+      return parsed.deny(capturedCwd.message);
     }
     executionCwd = capturedCwd.snapshot.cwd;
     approvedCwdSnapshot = capturedCwd.snapshot;
   }
   if ((approvalContextBound || security === "allowlist") && !approvedCwdSnapshot) {
-    await sendSystemRunDenied(opts, parsed.execution, {
-      reason: "approval-required",
-      message: APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
-    });
-    return null;
+    return parsed.deny(APPROVAL_CWD_DRIFT_DENIED_MESSAGE);
   }
 
   const plannedAllowlistArgv = resolvePlannedAllowlistArgv({
@@ -714,11 +675,7 @@ async function evaluateSystemRunPolicyPhase(
     segments,
   });
   if (plannedAllowlistArgv === null) {
-    await sendSystemRunDenied(opts, parsed.execution, {
-      reason: "execution-plan-miss",
-      message: "SYSTEM_RUN_DENIED: execution plan mismatch",
-    });
-    return null;
+    return parsed.deny("SYSTEM_RUN_DENIED: execution plan mismatch", "execution-plan-miss");
   }
   return {
     ...parsed,
@@ -748,15 +705,11 @@ async function evaluateSystemRunPolicyPhase(
 }
 
 async function revalidateSystemRunApprovedPathBindings(
-  opts: HandleSystemRunInvokeOptions,
   phase: SystemRunPolicyPhase,
 ): Promise<boolean> {
   if (phase.approvedCwdSnapshot && !revalidateApprovedCwdSnapshot(phase.approvedCwdSnapshot)) {
     logWarn(`security: system.run approval cwd drift blocked (runId=${phase.runId})`);
-    await sendSystemRunDenied(opts, phase.execution, {
-      reason: "approval-required",
-      message: APPROVAL_CWD_DRIFT_DENIED_MESSAGE,
-    });
+    await phase.deny(APPROVAL_CWD_DRIFT_DENIED_MESSAGE);
     return false;
   }
   if (
@@ -768,10 +721,7 @@ async function revalidateSystemRunApprovedPathBindings(
     })
   ) {
     logWarn(`security: system.run approval script drift blocked (runId=${phase.runId})`);
-    await sendSystemRunDenied(opts, phase.execution, {
-      reason: "approval-required",
-      message: APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE,
-    });
+    await phase.deny(APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE);
     return false;
   }
   if (phase.executableBinding) {
@@ -781,10 +731,7 @@ async function revalidateSystemRunApprovedPathBindings(
     });
     if (!revalidated.ok) {
       logWarn(`security: system.run approval executable drift blocked (runId=${phase.runId})`);
-      await sendSystemRunDenied(opts, phase.execution, {
-        reason: "approval-required",
-        message: revalidated.message,
-      });
+      await phase.deny(revalidated.message);
       return false;
     }
   }
@@ -795,7 +742,7 @@ async function executeSystemRunPhase(
   opts: HandleSystemRunInvokeOptions,
   phase: SystemRunPolicyPhase,
 ): Promise<void> {
-  if (!(await revalidateSystemRunApprovedPathBindings(opts, phase))) {
+  if (!(await revalidateSystemRunApprovedPathBindings(phase))) {
     return;
   }
   const expectedMutableFileOperand =
@@ -811,18 +758,12 @@ async function executeSystemRunPhase(
       : null;
   if (expectedMutableFileOperand && !expectedMutableFileOperand.ok) {
     logWarn(`security: system.run approval script binding blocked (runId=${phase.runId})`);
-    await sendSystemRunDenied(opts, phase.execution, {
-      reason: "approval-required",
-      message: expectedMutableFileOperand.message,
-    });
+    await phase.deny(expectedMutableFileOperand.message);
     return;
   }
   if (expectedMutableFileOperand?.snapshot && !phase.approvalPlan?.mutableFileOperand) {
     logWarn(`security: system.run approval script binding missing (runId=${phase.runId})`);
-    await sendSystemRunDenied(opts, phase.execution, {
-      reason: "approval-required",
-      message: APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE,
-    });
+    await phase.deny(APPROVAL_SCRIPT_OPERAND_BINDING_DENIED_MESSAGE);
     return;
   }
   const execArgv = await resolveSystemRunExecArgv({
@@ -837,10 +778,7 @@ async function executeSystemRunPhase(
     authorizationPlan: phase.authorizationPlan,
   });
   if (!execArgv) {
-    await sendSystemRunDenied(opts, phase.execution, {
-      reason: "execution-plan-miss",
-      message: "SYSTEM_RUN_DENIED: execution plan mismatch",
-    });
+    await phase.deny("SYSTEM_RUN_DENIED: execution plan mismatch", "execution-plan-miss");
     return;
   }
 
@@ -878,17 +816,14 @@ async function executeSystemRunPhase(
       return;
     }
     if (!response) {
-      await sendSystemRunDenied(opts, phase.execution, {
-        reason: "companion-unavailable",
-        message: "COMPANION_APP_UNAVAILABLE: macOS app exec host unreachable",
-      });
+      await phase.deny(
+        "COMPANION_APP_UNAVAILABLE: macOS app exec host unreachable",
+        "companion-unavailable",
+      );
       return;
     }
     if (!response.ok) {
-      await sendSystemRunDenied(opts, phase.execution, {
-        reason: normalizeDeniedReason(response.error.reason),
-        message: response.error.message,
-      });
+      await phase.deny(response.error.message, normalizeDeniedReason(response.error.reason));
       return;
     }
     const result: ExecHostRunResult = response.payload;
@@ -897,10 +832,7 @@ async function executeSystemRunPhase(
   }
 
   if (phase.needsScreenRecording) {
-    await sendSystemRunDenied(opts, phase.execution, {
-      reason: "permission:screenRecording",
-      message: "PERMISSION_MISSING: screenRecording",
-    });
+    await phase.deny("PERMISSION_MISSING: screenRecording", "permission:screenRecording");
     return;
   }
 
@@ -953,16 +885,13 @@ async function executeSystemRunPhase(
     // a failed durable grant or audit write, and consume the error in this
     // fire-and-forget node invocation before it can terminate the host process.
     logWarn(`security: system.run approval state write failed (runId=${phase.runId})`);
-    await sendSystemRunDenied(opts, phase.execution, {
-      reason: "approval-state-write-failed",
-      message: APPROVAL_STATE_WRITE_FAILED_MESSAGE,
-    });
+    await phase.deny(APPROVAL_STATE_WRITE_FAILED_MESSAGE, "approval-state-write-failed");
     return;
   }
 
   // Policy commit can yield to another invocation or process. Recheck the
   // approval-bound cwd, executable identities, and mutable operands before local spawn.
-  if (!(await revalidateSystemRunApprovedPathBindings(opts, phase))) {
+  if (!(await revalidateSystemRunApprovedPathBindings(phase))) {
     return;
   }
 
@@ -998,10 +927,7 @@ async function executeSystemRunPhase(
     if (!authorizationDenied) {
       throw error;
     }
-    await sendSystemRunDenied(opts, phase.execution, {
-      reason: "approval-required",
-      message: "SYSTEM_RUN_DENIED: exec approval changed before execution",
-    });
+    await phase.deny("SYSTEM_RUN_DENIED: exec approval changed before execution");
     return;
   }
   if (opts.signal?.aborted) {

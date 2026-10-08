@@ -19,6 +19,7 @@ import {
 } from "../../agents/sandbox-paths.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox.js";
 import type { SandboxWorkspaceAccess } from "../../agents/sandbox/types.js";
+import type { CapturedSessionEntryReadSource } from "../../config/sessions/session-entry-read-source.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { FsSafeError } from "../../infra/fs-safe.js";
@@ -45,6 +46,8 @@ const WINDOWS_DRIVE_RE = /^[a-zA-Z]:[\\/]/;
 const SCHEME_RE = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
 const HAS_FILE_EXT_RE = /\.\w{1,10}$/;
 const MAX_FAILURE_LABEL_LENGTH = 180;
+const HOST_FILE_URL_BLOCKED =
+  "Host-local MEDIA file URLs are blocked in normal replies. Use a safe path or the message tool.";
 
 function resolveReplyMediaFailureLabel(media: string, index: number): string {
   const trimmed = media.trim();
@@ -56,10 +59,8 @@ function resolveReplyMediaFailureLabel(media: string, index: number): string {
       // Fall through to path-style basename handling for malformed sources.
     }
   }
-  const basename = basenameFromAnyPath(source).trim();
-  const fallback = `Attachment ${index + 1}`;
   return truncateUtf16Safe(
-    sanitizeUntrustedFileName(basename, fallback) || fallback,
+    sanitizeUntrustedFileName(basenameFromAnyPath(source), `Attachment ${index + 1}`),
     MAX_FAILURE_LABEL_LENGTH,
   );
 }
@@ -69,8 +70,8 @@ function resolveReplyMediaFailureCode(error: unknown): ReplyMediaFailure["code"]
   // Media loaders wrap filesystem/policy errors; bound cause traversal so malformed cycles fail safe.
   for (let depth = 0; current instanceof Error && depth < 4; depth += 1) {
     if (
-      (current instanceof LocalMediaAccessError && current.code === "not-found") ||
-      (current instanceof FsSafeError && current.code === "not-found")
+      (current instanceof LocalMediaAccessError || current instanceof FsSafeError) &&
+      current.code === "not-found"
     ) {
       return "file-not-found";
     }
@@ -119,7 +120,7 @@ export type PreparedReplyMedia = readonly {
   outcome: PreparedReplyMediaSource | { failure: ReplyMediaFailure };
 }[];
 
-export function createReplyMediaSourcePreparer(params: {
+type ReplyMediaSourcePreparationParams = {
   cfg: OpenClawConfig;
   sessionKey?: string;
   agentId?: string;
@@ -144,7 +145,12 @@ export function createReplyMediaSourcePreparer(params: {
   workspaceMediaRoot?: string;
   /** Streams local audio/video up to this size instead of the channel cap. */
   localMediaMaxBytes?: number;
-}): (sources: readonly string[]) => Promise<PreparedReplyMedia> {
+};
+
+export function createReplyMediaSourcePreparer(
+  params: ReplyMediaSourcePreparationParams,
+  readSource?: CapturedSessionEntryReadSource,
+): (sources: readonly string[]) => Promise<PreparedReplyMedia> {
   // Prefer an explicit agentId so callers without a resolved sessionKey (e.g.
   // `openclaw agent --deliver` with `--reply-channel/--reply-to`) still get
   // the stricter agent-scoped file-read policy applied during staging.
@@ -179,23 +185,24 @@ export function createReplyMediaSourcePreparer(params: {
   const persistedMediaBySource = new Map<string, Promise<{ path: string; contentType?: string }>>();
 
   const resolveSandboxWorkspace = async () => {
-    if (!sandboxWorkspacePromise) {
-      sandboxWorkspacePromise = ensureSandboxWorkspaceForSession({
+    sandboxWorkspacePromise ??= ensureSandboxWorkspaceForSession(
+      {
         config: params.cfg,
         agentId,
         sessionKey: params.sessionKey,
         workspaceDir: params.workspaceDir,
-      }).then((sandbox) =>
-        sandbox
-          ? {
-              root: sandbox.workspaceDir,
-              containerWorkdir: sandbox.containerWorkdir,
-              // Fail closed when access metadata is absent: treat as unmounted.
-              workspaceAccess: sandbox.workspaceAccess ?? "none",
-            }
-          : undefined,
-      );
-    }
+      },
+      readSource,
+    ).then((sandbox) =>
+      sandbox
+        ? {
+            root: sandbox.workspaceDir,
+            containerWorkdir: sandbox.containerWorkdir,
+            // Fail closed when access metadata is absent: treat as unmounted.
+            workspaceAccess: sandbox.workspaceAccess ?? "none",
+          }
+        : undefined,
+    );
     return await sandboxWorkspacePromise;
   };
 
@@ -349,10 +356,7 @@ export function createReplyMediaSourcePreparer(params: {
         });
       } catch (err) {
         if (FILE_URL_RE.test(media)) {
-          throw new Error(
-            "Host-local MEDIA file URLs are blocked in normal replies. Use a safe path or the message tool.",
-            { cause: err },
-          );
+          throw new Error(HOST_FILE_URL_BLOCKED, { cause: err });
         }
         throw err;
       }
@@ -371,9 +375,7 @@ export function createReplyMediaSourcePreparer(params: {
       return { mediaUrl: media, trustedLocalMedia: false };
     }
     if (FILE_URL_RE.test(media)) {
-      throw new Error(
-        "Host-local MEDIA file URLs are blocked in normal replies. Use a safe path or the message tool.",
-      );
+      throw new Error(HOST_FILE_URL_BLOCKED);
     }
     return prepareLocalReplyMedia(media);
   };
@@ -494,8 +496,9 @@ export function applyPreparedReplyMedia(
 
 export function createReplyMediaPathNormalizer(
   params: Parameters<typeof createReplyMediaSourcePreparer>[0],
+  readSource?: CapturedSessionEntryReadSource,
 ): (payload: ReplyPayload) => Promise<ReplyPayload> {
-  const prepare = createReplyMediaSourcePreparer(params);
+  const prepare = createReplyMediaSourcePreparer(params, readSource);
   return async (payload) =>
     applyPreparedReplyMedia(
       payload,

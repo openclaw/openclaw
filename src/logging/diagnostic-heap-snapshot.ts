@@ -50,7 +50,7 @@ export async function captureDiagnosticHeapSnapshot(options: {
         directory,
         `heap-${new Date().toISOString().replaceAll(":", "-")}.heapsnapshot`,
       );
-      // Reserve privately before V8 opens the file, including with a permissive umask.
+      // Reserve privately before native capture opens the file, including with a permissive umask.
       const file = await fs.open(filename, "wx", 0o600);
       ownedPath = filename;
       await file.close();
@@ -61,7 +61,7 @@ export async function captureDiagnosticHeapSnapshot(options: {
       if (heapUsedBefore > MAX_HEAP_BYTES) {
         throw new ProfileFailure("heap-too-large");
       }
-      log.warn("Writing heap snapshot: the main thread will block until V8 finishes", {
+      log.warn("Writing heap snapshot: the main thread will block until capture finishes", {
         heapUsedBefore,
         reason: options.reason,
       });
@@ -79,7 +79,7 @@ export async function captureDiagnosticHeapSnapshot(options: {
     stop: async () => ({
       profile: { path: ownedPath!, sizeBytes: (await fs.stat(ownedPath!)).size },
     }),
-    // Deleting the snapshot alone leaves V8's object-move tracking active across later GCs.
+    // The snapshot file and the runtime's retained snapshot metadata have separate lifetimes.
     disable: (session) => session.post("HeapProfiler.disable"),
     sanitize: (profile, _packageRoot, measurement) => ({
       ...profile,

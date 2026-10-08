@@ -17,6 +17,7 @@ import { createTuiRefreshCoalescer } from "./coalesced-refresh.js";
 import { QuestionPrompt } from "./components/question-prompt.js";
 import type { TuiBackend } from "./tui-backend.js";
 import { matchesOwnedTuiSession } from "./tui-session-events.js";
+import { TuiSnapshotJournal } from "./tui-snapshot-journal.js";
 
 type TuiQuestionControllerDeps = {
   client: Pick<TuiBackend, "listQuestions" | "getQuestion" | "resolveQuestion">;
@@ -36,7 +37,6 @@ type QuestionState = {
   unconfirmed?: QuestionRecord;
   recovery?: Promise<"pending" | "terminal" | "unknown">;
 };
-type QuestionMutation = { version: number; question: QuestionRecord | null };
 
 function isSecretStoreRefreshFailure(record: QuestionRecord, error: unknown): boolean {
   return (
@@ -49,13 +49,12 @@ function isSecretStoreRefreshFailure(record: QuestionRecord, error: unknown): bo
 
 export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
   const questions = new Map<string, QuestionState>();
-  const mutations = new Map<string, QuestionMutation>();
-  let mutationVersion = 0;
   let active: { id: string; handle: OverlayHandle } | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
   let pendingText = "";
   const refreshRunner = createTuiRefreshCoalescer(refreshOnce, () => mutations.clear());
+  const mutations = new TuiSnapshotJournal<QuestionRecord>(refreshRunner.isRunning);
 
   const matchesSession = (record: QuestionRecord) =>
     matchesOwnedTuiSession(deps.getSessionKey(), deps.getAgentId(), record);
@@ -65,12 +64,6 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
       const handle = active.handle;
       active = null;
       deps.closeOverlay(handle);
-    }
-  }
-
-  function remember(id: string, question: QuestionRecord | null) {
-    if (refreshRunner.isRunning()) {
-      mutations.set(id, { version: ++mutationVersion, question });
     }
   }
 
@@ -95,7 +88,7 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
     state?.prompt?.dispose();
     questions.delete(id);
     update(id, { resolving: state?.resolving, recovery: state?.recovery });
-    remember(id, null);
+    mutations.record(id, null);
     if (active?.id === id) {
       closeActive();
     }
@@ -145,7 +138,7 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
         return "terminal";
       }
       update(record.id, { record: result.question, unconfirmed: undefined });
-      remember(record.id, result.question);
+      mutations.record(record.id, result.question);
       return "pending";
     } catch (error) {
       if (disposed || !questions.get(record.id)?.unconfirmed) {
@@ -307,7 +300,7 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
     if (disposed) {
       return;
     }
-    const startedAtVersion = mutationVersion;
+    const startedAtVersion = mutations.version;
     await Promise.all(questionRecords("unconfirmed").map(recover));
     if (disposed || !deps.client.listQuestions) {
       present();
@@ -320,21 +313,10 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
     if (!Value.Check(QuestionListResultSchema, result)) {
       throw new Error("invalid question list");
     }
-    const next = new Map(
-      result.questions
-        .filter((question) => question.status === "pending")
-        .map((question) => [question.id, question]),
+    const next = mutations.replay(
+      result.questions.filter((question) => question.status === "pending"),
+      startedAtVersion,
     );
-    // The list snapshot predates any events received during its request.
-    for (const [id, mutation] of mutations) {
-      if (mutation.version > startedAtVersion) {
-        if (mutation.question) {
-          next.set(id, mutation.question);
-        } else {
-          next.delete(id);
-        }
-      }
-    }
     for (const { id } of questionRecords()) {
       if (!next.has(id) && !questions.get(id)?.unconfirmed && !questions.get(id)?.resolving) {
         remove(id);
@@ -358,7 +340,7 @@ export function createTuiQuestionController(deps: TuiQuestionControllerDeps) {
       if (event === "question.requested" && Value.Check(QuestionRecordSchema, payload)) {
         if (payload.status === "pending") {
           update(payload.id, { record: payload });
-          remember(payload.id, payload);
+          mutations.record(payload.id, payload);
           present();
         }
       } else if (

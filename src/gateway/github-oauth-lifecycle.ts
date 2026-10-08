@@ -87,7 +87,7 @@ export async function requestCurrentPersonalGitHubRefresh(owner: string): Promis
 
 export function createGitHubOAuthLifecycle(params: {
   getConfig: () => OpenClawConfig;
-  getPersistedConfig?: () => OpenClawConfig;
+  getPersistedConfig?: () => Promise<OpenClawConfig>;
   warn: (message: string) => void;
   scheduler: GatewayScheduler;
 }) {
@@ -129,6 +129,22 @@ export function createGitHubOAuthLifecycle(params: {
   const status = (agentId: string, selectedScope: GitHubIdentityScope) =>
     resolveGitHubToolIdentityStatus({ config: params.getConfig(), agentId, selectedScope });
 
+  const assertInitialRecordCurrent = (
+    expected: GitHubOAuthRecord,
+    runtimeConfig: OpenClawConfig,
+    runtimeConfigValue: OpenClawConfig,
+  ): void => {
+    const current = inspectGitHubOAuthRecord(expected.profileId);
+    if (
+      params.getConfig() !== runtimeConfig ||
+      !isDeepStrictEqual(runtimeConfig, runtimeConfigValue) ||
+      current.state !== "valid" ||
+      !isDeepStrictEqual(current.record, expected)
+    ) {
+      throw new Error("GitHub OAuth initial reconciliation was superseded.");
+    }
+  };
+
   const installDeviceTokens = async (
     record: GitHubDeviceAuthorizationRecord,
     tokens: GitHubOAuthTokenPair,
@@ -145,7 +161,7 @@ export function createGitHubOAuthLifecycle(params: {
       profileId,
     });
     let nextConfig = current;
-    let metadataWritten = false;
+    let initialRecord: GitHubOAuthRecord | undefined;
     const completeAuthorization = async (
       config: OpenClawConfig,
     ): Promise<ToolsGitHubAuthorizePollResult> => {
@@ -188,18 +204,17 @@ export function createGitHubOAuthLifecycle(params: {
               ? { agentLifecycleBinding: record.agentLifecycleBinding }
               : {}),
           } as const;
-          writeGitHubOAuthRecord(
-            createGitHubOAuthRecord({
-              profileId,
-              scope: record.scope,
-              agentId: record.agentId,
-              account,
-              tokens,
-              now: Date.now(),
-              pendingInitial,
-            }),
-          );
-          metadataWritten = true;
+          const nextRecord = createGitHubOAuthRecord({
+            profileId,
+            scope: record.scope,
+            agentId: record.agentId,
+            account,
+            tokens,
+            now: Date.now(),
+            pendingInitial,
+          });
+          writeGitHubOAuthRecord(nextRecord);
+          initialRecord = nextRecord;
           const identity: GitHubToolIdentityConfig = {
             profileId,
             kind: "oauth",
@@ -223,25 +238,29 @@ export function createGitHubOAuthLifecycle(params: {
           if (inspected.state !== "valid" || !inspected.record.pendingInitial) {
             throw new Error("GitHub OAuth initial record is unavailable.");
           }
-          writeGitHubOAuthRecord({ ...inspected.record, pendingInitial: undefined });
+          const { pendingInitial: _pendingInitial, ...settledRecord } = inspected.record;
+          writeGitHubOAuthRecord(settledRecord);
+          initialRecord = settledRecord;
         },
       });
     } catch {
-      if (metadataWritten) {
+      if (initialRecord) {
         try {
-          const persistedConfig = params.getPersistedConfig?.();
+          const runtimeConfig = params.getConfig();
+          const runtimeConfigValue = structuredClone(runtimeConfig);
+          const persistedConfig = await params.getPersistedConfig?.();
           if (!persistedConfig) {
             throw new Error("Authoritative persisted config is unavailable.");
           }
+          assertInitialRecordCurrent(initialRecord, runtimeConfig, runtimeConfigValue);
           const persistedIdentity = resolveConfiguredGitHubToolIdentity({
             config: persistedConfig,
             scope: record.scope,
             agentId: record.agentId,
           });
           if (persistedIdentity?.profileId === profileId && persistedIdentity.kind === "oauth") {
-            const inspected = inspectGitHubOAuthRecord(profileId);
-            if (inspected.state === "valid" && inspected.record.pendingInitial) {
-              writeGitHubOAuthRecord({ ...inspected.record, pendingInitial: undefined });
+            if (initialRecord.pendingInitial) {
+              writeGitHubOAuthRecord({ ...initialRecord, pendingInitial: undefined });
             }
             return await completeAuthorization(persistedConfig);
           }
@@ -252,7 +271,7 @@ export function createGitHubOAuthLifecycle(params: {
           return { status: "failed", reason: "setup_failed" };
         }
       }
-      if (metadataWritten) {
+      if (initialRecord) {
         queueOAuthCleanup(profileId);
       }
       await removeManagedGitHubProfile(profileDir).catch(() => undefined);
@@ -432,8 +451,14 @@ export function createGitHubOAuthLifecycle(params: {
         }
         let persistedConfig: OpenClawConfig;
         try {
-          const persisted = params.getPersistedConfig?.();
+          const runtimeConfig = params.getConfig();
+          const runtimeConfigValue = structuredClone(runtimeConfig);
+          const persisted = await params.getPersistedConfig?.();
           if (!persisted) {
+            continue;
+          }
+          assertInitialRecordCurrent(record, runtimeConfig, runtimeConfigValue);
+          if (committingRequests.has(record.pendingInitial.requestId)) {
             continue;
           }
           persistedConfig = persisted;

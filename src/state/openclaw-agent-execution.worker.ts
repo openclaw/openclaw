@@ -63,11 +63,13 @@ import { createIncognitoAgentDatabaseBackend } from "./openclaw-agent-execution-
 import { createAgentDatabaseMaintenanceOwner } from "./openclaw-agent-execution-maintenance.js";
 import {
   loadAgentTranscriptOperations,
+  loadAgentTranscriptReadOperations,
   loadAgentReplacementOperations,
   loadAgentRestartRecoveryOperations,
   loadAgentEntryReadOperations,
   loadAgentEntryPatchOperations,
   loadAgentCompoundOperations,
+  loadAgentMaintenanceFinalizationOperations,
   loadAgentNativeBindingOperations,
   loadAgentMessageCutOperations,
   prepareAgentNativeBindingOperation,
@@ -423,6 +425,8 @@ function openAgentDatabaseBackend(
     "session.lifecycle.project": loadAgentCompoundOperations,
     "session.agentPurge.prepare": loadAgentCompoundOperations,
     "session.agentPurge.commit": loadAgentCompoundOperations,
+    "session.maintenance.finalize": loadAgentMaintenanceFinalizationOperations,
+    "session.maintenance.size": loadAgentMaintenanceFinalizationOperations,
     "session.nativeBindings.delete": loadAgentNativeBindingOperations,
     "session.messageCut.commit": loadAgentMessageCutOperations,
     "trajectory.events.append": loadAgentTrajectoryOperations,
@@ -431,6 +435,12 @@ function openAgentDatabaseBackend(
     "session.archives.preparePublication": loadAgentArchiveOperations,
     "session.archives.recordPublication": loadAgentArchiveOperations,
     "session.transcript.initialize": loadAgentTranscriptOperations,
+    "session.transcript.rawDelta.read": loadAgentTranscriptReadOperations,
+    "session.transcript.watermark.read": loadAgentTranscriptReadOperations,
+    "session.transcript.visibleDelta.read": loadAgentTranscriptReadOperations,
+    "session.transcript.memoryCapture.read": loadAgentTranscriptReadOperations,
+    "session.transcript.anchors.read": loadAgentTranscriptReadOperations,
+    "session.transcript.coldMetadata.read": loadAgentTranscriptReadOperations,
     "session.entries.replace": loadAgentReplacementOperations,
     "session.restart.recover": loadAgentRestartRecoveryOperations,
     "session.entry.acp": loadAgentAcpOperations,
@@ -561,7 +571,8 @@ function openAgentDatabaseBackend(
           ? command.input
           : command.type === "session.messageCut.commit"
             ? command.input.nativeBindings
-            : command.type === "session.agentPurge.commit"
+            : command.type === "session.agentPurge.commit" ||
+                command.type === "session.maintenance.finalize"
               ? command.input.nativeBindings
               : undefined;
       if (nativeBindings) {

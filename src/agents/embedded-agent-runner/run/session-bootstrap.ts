@@ -130,11 +130,9 @@ export function buildContextEngineCompactionSessionTarget(params: {
       )
     : undefined;
   const markerSessionKey = marker
-    ? suppliedEntry?.sessionId === marker.sessionId
+    ? suppliedEntry?.sessionId === marker.sessionId || (candidateSessionKey && !suppliedEntry)
       ? candidateSessionKey
-      : candidateSessionKey && !suppliedEntry
-        ? candidateSessionKey
-        : preferredMarkerSessionKey
+      : preferredMarkerSessionKey
     : undefined;
   if (marker && markerMatches.length > 0 && !markerSessionKey) {
     throw new Error("Legacy compaction transcript identity is ambiguous");
@@ -222,12 +220,9 @@ export async function resetNoRealConversationTokenSnapshot(params: {
 }
 
 /** Best-effort identity lookup retains the agent that owns an unqualified stored key. */
-function backfillSessionIdentity(params: {
-  config: RunEmbeddedAgentParams["config"];
-  sessionId: string;
-  sessionKey?: string;
-  agentId?: string;
-}): Pick<RunEmbeddedAgentInternalParams, "agentId" | "sessionKey"> {
+function backfillSessionIdentity(
+  params: Pick<RunEmbeddedAgentParams, "config" | "sessionId" | "sessionKey" | "agentId">,
+): Pick<RunEmbeddedAgentInternalParams, "agentId" | "sessionKey"> {
   const trimmed = normalizeOptionalString(params.sessionKey);
   if (trimmed) {
     return { sessionKey: trimmed };
@@ -268,12 +263,7 @@ export async function prepareEmbeddedRunSession(paramsInput: RunEmbeddedAgentInt
   // Carry the lookup's owner into every admission; a bare stored key cannot encode it.
   const paramsBase = {
     ...supplied,
-    ...backfillSessionIdentity({
-      config: supplied.config,
-      sessionId: supplied.sessionId,
-      sessionKey: supplied.sessionKey,
-      agentId: supplied.agentId,
-    }),
+    ...backfillSessionIdentity(supplied),
   };
   const sessionAdmission = await assertAgentHarnessRunAdmission(paramsBase);
   assertRequiredWorkerSelection(paramsBase.config ?? {}, {

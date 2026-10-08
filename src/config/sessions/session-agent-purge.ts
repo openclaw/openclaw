@@ -7,7 +7,10 @@ import {
 } from "../../state/openclaw-agent-execution.js";
 import { publishSessionStateArchives } from "./session-accessor.sqlite-archive-store.js";
 import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
-import type { DeletedAgentSessionEntryPurgeParams } from "./session-accessor.sqlite-contract.js";
+import type {
+  DeletedAgentSessionEntryPurgeParams,
+  SessionLifecycleArchivedTranscript,
+} from "./session-accessor.sqlite-contract.js";
 import {
   captureNativeSessionWorkerDeletion,
   preparedSessionDeletionRequiresNativeTransaction,
@@ -40,6 +43,7 @@ import type {
   SessionAgentPurgeCommitted,
   SessionAgentPurgeResult,
 } from "./session-agent-purge.types.js";
+import { publishSessionStateArchivesInWorker } from "./session-archive-publication.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import { runSessionNativeBindingWorkerOperation } from "./session-native-binding.js";
 import { assertMaintenancePreservationCompatible } from "./store-maintenance-preserve-snapshot.js";
@@ -230,15 +234,28 @@ export async function purgeDeletedAgentSessionEntries(
       },
     );
     execution?.assertCurrent();
+    const publishArchives = (requested: readonly SessionLifecycleArchivedTranscript[]) =>
+      execution
+        ? publishSessionStateArchivesInWorker({
+            scope: resolved,
+            requested,
+            retainedExecution: execution,
+            assertCurrent: () => execution.assertCurrent(),
+          })
+        : publishSessionStateArchives(resolved, requested);
     const { archivedTranscripts: maintenanceArchivedTranscripts } =
       await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
         resolved,
         committed.maintenancePlans,
-        { deletedEntriesBeforeMaintenance: prepared.entryRemovals.length },
+        {
+          deletedEntriesBeforeMaintenance: prepared.entryRemovals.length,
+          retainedExecution: execution,
+          publishArchives,
+        },
       );
     execution?.assertCurrent();
     const archivedTranscripts = [
-      ...(await publishSessionStateArchives(resolved, committed.archivedTranscripts)),
+      ...(await publishArchives(committed.archivedTranscripts)),
       ...maintenanceArchivedTranscripts,
     ];
     emitArchivedTranscriptUpdates(archivedTranscripts);

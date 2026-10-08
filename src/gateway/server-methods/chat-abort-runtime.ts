@@ -8,14 +8,8 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { captureExecRequestCancellation } from "../../agents/bash-process-control.js";
 import { killSubagentRunAdmin } from "../../agents/subagents/registry/subagent-control-kill.js";
-import {
-  ensureSubagentControllerOwnsRun,
-  listControlledSubagentRunsForTurn,
-} from "../../agents/subagents/registry/subagent-control-scope.js";
-import {
-  killAllControlledSubagentRuns,
-  resolveSubagentController,
-} from "../../agents/subagents/registry/subagent-control.js";
+import { ensureSubagentControllerOwnsRun } from "../../agents/subagents/registry/subagent-control-scope.js";
+import type { SubagentRequestSessionOrigin } from "../../agents/subagents/registry/subagent-exec-request-ownership.js";
 import {
   getCurrentSubagentRunOwner,
   subagentRuns,
@@ -24,9 +18,7 @@ import {
   getLatestLiveSubagentRunByChildSessionKey,
   isSubagentRunQueued,
 } from "../../agents/subagents/registry/subagent-registry-read.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../infra/agent-events.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { captureWorkerInferenceForSession, createChatAbortOps } from "../chat-abort-ops.js";
 import {
   abortChatRunById,
@@ -50,6 +42,7 @@ import {
   writePreRegisteredChatAbort,
   type ChatAbortRequester,
 } from "./chat-abort-authorization.js";
+import { abortControlledSubagents } from "./chat-abort-descendants.js";
 import {
   createQueuedCollectorPublication,
   getQueuedCollectorCancellationRunId,
@@ -66,109 +59,6 @@ import {
 } from "./chat-aborted-partial.js";
 import { persistAbortedPartials } from "./chat-transcript-persistence.js";
 import type { GatewayRequestContext } from "./types.js";
-
-export async function abortControlledSubagents(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
-  agentId?: string;
-  requesterTurnRunId?: string;
-  sessionId?: string;
-  execCancellation?: ReturnType<typeof captureExecRequestCancellation>;
-  assertCurrent?: () => void;
-  beforeKill?: Parameters<typeof killAllControlledSubagentRuns>[0]["beforeKill"];
-}) {
-  const controller = resolveSubagentController({
-    cfg: params.cfg,
-    agentSessionKey: params.sessionKey,
-    agentId: params.agentId,
-  });
-  const commands =
-    params.execCancellation ??
-    captureExecRequestCancellation({
-      runId: params.requesterTurnRunId,
-      sessionKey: params.sessionKey,
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-    });
-  const runs = listControlledSubagentRunsForTurn(controller, params.requesterTurnRunId);
-  let execAborted = false;
-  const commandErrors: unknown[] = [];
-  const beforeKill = async () => {
-    if ((await params.beforeKill?.()) === false) {
-      return false;
-    }
-    try {
-      params.assertCurrent?.();
-    } catch (error) {
-      // Without descendants, the caller owns the original authority exception.
-      if (runs.length === 0) {
-        throw error;
-      }
-      commandErrors.push(error);
-      return false;
-    }
-    execAborted = commands.cancel();
-    return true;
-  };
-  let descendants: Awaited<ReturnType<typeof killAllControlledSubagentRuns>> | undefined;
-  let failure: { error: unknown } | undefined;
-  try {
-    if (runs.length === 0) {
-      await beforeKill();
-    } else {
-      descendants = await killAllControlledSubagentRuns({
-        cfg: params.cfg,
-        controller,
-        runs,
-        suppressTaskDelivery: true,
-        assertCurrent: params.assertCurrent,
-        beforeKill,
-      });
-    }
-  } catch (error) {
-    failure = { error };
-  }
-  try {
-    // The parent may already have accepted Stop before the caller was revoked.
-    await commands.settle();
-  } catch (error) {
-    commandErrors.push(error);
-  }
-  if (failure) {
-    throw commandErrors.length > 0
-      ? new AggregateError([failure.error, ...commandErrors], "Request cancellation was incomplete")
-      : failure.error;
-  }
-  if (commandErrors.length > 0) {
-    return {
-      ...(descendants ?? { killed: 0, labels: [] }),
-      status: "error" as const,
-      error: [
-        ...(descendants && descendants.status !== "ok" ? [descendants.error] : []),
-        ...commandErrors.map(formatErrorMessage),
-      ].join("; "),
-      execAborted,
-    };
-  }
-  return descendants || execAborted
-    ? {
-        ...(descendants ?? { status: "ok" as const, killed: 0, labels: [] }),
-        execAborted,
-      }
-    : undefined;
-}
-
-export function descendantAbortError(
-  result: Awaited<ReturnType<typeof abortControlledSubagents>>,
-  subject: "Parent run" | "Session",
-) {
-  return result && result.status !== "ok"
-    ? errorShape(
-        ErrorCodes.UNAVAILABLE,
-        `${subject} stopped, but descendant cancellation was incomplete: ${result.error}`,
-      )
-    : undefined;
-}
 
 /** Queued collectors retain scheduler ownership while Gateway admission is still pending. */
 export function abortQueuedCollectorSession(
@@ -436,30 +326,42 @@ function prepareChatSessionAbort(
     defaultAgentId: params.defaultAgentId,
     requester: params.requester,
   };
+  const acceptsRequest: SubagentRequestSessionOrigin["acceptsRequest"] = (identity) =>
+    canRequesterAbortChatRun(identity, params.requester) &&
+    (params.includeProtectedRuns === true ||
+      (identity.controlUiVisible !== false &&
+        !(params.preserveSideRuns && identity.turnKind === "btw")));
   const commands = captureExecRequestCancellation(
     {
       sessionKey: params.sessionKey,
       sessionId: params.requiredSessionId ?? params.sessionId,
       agentId: params.agentId,
     },
-    (identity) =>
-      canRequesterAbortChatRun(identity, params.requester) &&
-      (params.includeProtectedRuns === true ||
-        (identity.controlUiVisible !== false &&
-          !(params.preserveSideRuns && identity.turnKind === "btw"))),
+    acceptsRequest,
   );
+  const session = params.session?.ok ? params.session.value : undefined;
+  const sessionOrigin: SubagentRequestSessionOrigin | undefined =
+    session?.entry &&
+    (params.requiredSessionId === undefined ||
+      session.entry.sessionId === params.requiredSessionId) &&
+    (params.sessionId === undefined || session.entry.sessionId === params.sessionId)
+      ? {
+          target: {
+            agentId: session.agentId,
+            storePath: session.storePath,
+            sessionKey: session.canonicalKey,
+            sessionId: session.entry.sessionId,
+            lifecycleRevision: session.entry.lifecycleRevision ?? null,
+          },
+          acceptsRequest,
+        }
+      : undefined;
   const queuedPlan = resolveAuthorizedQueuedTurnsForSession({
     ...ownerScope,
     context: params.context,
     sessionId: params.sessionId,
   });
-  const {
-    authorizedRuns,
-    matchedRunIds: matchedActiveRunIds,
-    hasUnauthorizedRuns: hasUnauthorizedActiveRuns,
-    hasUnauthorizedProtectedRuns: hasUnauthorizedProtectedActiveRuns,
-    hasProtectedRuns: hasProtectedActiveRuns,
-  } = resolveAuthorizedRunsForSessionKeys({
+  const activePlan = resolveAuthorizedRunsForSessionKeys({
     ...ownerScope,
     chatAbortControllers: params.context.chatAbortControllers,
     sessionIds: [params.sessionId],
@@ -476,11 +378,10 @@ function prepareChatSessionAbort(
     });
   const pendingAgent = resolvePendingRuns("agent:");
   const pendingChat = resolvePendingRuns(PENDING_CHAT_SEND_DEDUPE_PREFIX);
-  const pendingPlans = [pendingAgent, pendingChat];
+  const runPlans = [activePlan, pendingAgent, pendingChat];
+  const { authorizedRuns, matchedRunIds: matchedActiveRunIds } = activePlan;
   const hasAuthorizedGatewayRuns =
-    authorizedRuns.length > 0 ||
-    queuedPlan.authorized.length > 0 ||
-    pendingPlans.some((plan) => plan.authorizedRuns.length > 0);
+    queuedPlan.authorized.length > 0 || runPlans.some((plan) => plan.authorizedRuns.length > 0);
   const isLifecycleAbort = Boolean(
     params.cascadeDescendants || params.onAuthorizedAfterQueuedAbort,
   );
@@ -493,15 +394,11 @@ function prepareChatSessionAbort(
   const hasControllerRepresentedWorkerRun =
     hasWorkerRun && matchedActiveRunIds.some((runId) => workerCancellation?.runIds.includes(runId));
   const hasUnauthorizedOwner =
-    hasUnauthorizedActiveRuns ||
     queuedPlan.hasUnauthorizedRuns ||
-    pendingPlans.some((plan) => plan.hasUnauthorizedRuns) ||
+    runPlans.some((plan) => plan.hasUnauthorizedRuns) ||
     (hasWorkerRun && !hasControllerRepresentedWorkerRun && !params.requester.isAdmin);
-  const hasProtectedLifecycleRuns =
-    hasProtectedActiveRuns || pendingPlans.some((plan) => plan.hasProtectedRuns);
-  const hasUnauthorizedProtectedOwner =
-    hasUnauthorizedProtectedActiveRuns ||
-    pendingPlans.some((plan) => plan.hasUnauthorizedProtectedRuns);
+  const hasProtectedLifecycleRuns = runPlans.some((plan) => plan.hasProtectedRuns);
+  const hasUnauthorizedProtectedOwner = runPlans.some((plan) => plan.hasUnauthorizedProtectedRuns);
   const hasUnauthorizedLifecycleOwner = isLifecycleAbort && hasUnauthorizedProtectedOwner;
   const canRunLifecycleCleanup = !hasUnauthorizedOwner && !hasProtectedLifecycleRuns;
   // Keep ordinary chat.abort's admin worker behavior; only the injected broad
@@ -663,13 +560,14 @@ function prepareChatSessionAbort(
     }
   };
   const hasOtherWork =
-    matchedActiveRunIds.some((runId) => runId !== selectedRunId) ||
-    queuedPlan.matchedRunIds.some((runId) => runId !== selectedRunId) ||
-    pendingPlans.some((plan) => plan.matchedRunIds.some((runId) => runId !== selectedRunId)) ||
+    [activePlan, queuedPlan, pendingAgent, pendingChat].some((plan) =>
+      plan.matchedRunIds.some((runId) => runId !== selectedRunId),
+    ) ||
     (hasWorkerRun && (!selectedRunId || !workerCancellation?.runIds.includes(selectedRunId)));
   return {
     canCascade: canRunLifecycleCleanup && !hasUnauthorizedLifecycleOwner,
     commands,
+    sessionOrigin,
     hasOtherWork,
     result,
     abort: abortAuthorizedRuns,
@@ -734,6 +632,7 @@ export async function abortChatRunsForSessionKeyWithPartials(
         agentId: params.agentId,
         sessionId: params.sessionId,
         execCancellation: plan.commands,
+        sessionOrigin: plan.sessionOrigin,
         assertCurrent: params.assertCurrent,
         beforeKill: () => {
           plan.abort();

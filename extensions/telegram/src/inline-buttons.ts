@@ -56,14 +56,8 @@ export function isTelegramInlineButtonsEnabled(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
 }): boolean {
-  if (params.accountId) {
-    return resolveTelegramInlineButtonsScope(params) !== "off";
-  }
-  const accountIds = listTelegramAccountIds(params.cfg);
-  if (accountIds.length === 0) {
-    return resolveTelegramInlineButtonsScope(params) !== "off";
-  }
-  return accountIds.some(
+  const accountIds = params.accountId ? [params.accountId] : listTelegramAccountIds(params.cfg);
+  return (accountIds.length > 0 ? accountIds : [params.accountId]).some(
     (accountId) => resolveTelegramInlineButtonsScope({ cfg: params.cfg, accountId }) !== "off",
   );
 }

@@ -53,7 +53,7 @@ it("compares retained history without acquiring Doctor deletion custody", () => 
     }
     return /\b(?:board_widgets|board_tabs|session_members|session_participants|session_progress_cards|session_suggestions|session_reactions|heartbeat_outcomes)\b/.test(
       sql,
-    ) || /^select "legacy_acp_migration_json" /.test(sql)
+    ) || sql.startsWith('select "legacy_acp_migration_json" ')
       ? "node"
       : null;
   });

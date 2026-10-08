@@ -107,12 +107,6 @@ function resolveSessionBindingLastActivityAt(binding: SessionBindingRecord): num
   return Math.max(Math.floor(raw), binding.boundAt);
 }
 
-function resolveSessionBindingExpiryAt(baseMs: number, durationMs: number): number | undefined {
-  return durationMs > 0
-    ? resolveExpiresAtMsFromDurationMs(durationMs, { nowMs: baseMs })
-    : undefined;
-}
-
 async function persistSessionCommandSetting<
   Key extends "sendPolicy" | "responseUsage" | "fastMode",
 >(
@@ -374,11 +368,10 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
       isIdle ? activeBinding.metadata?.idleTimeoutMs : activeBinding.metadata?.maxAgeMs,
       isIdle ? 24 * 60 * 60 * 1000 : 0,
     );
-    const expiresAt = resolveSessionBindingExpiryAt(
-      isIdle ? resolveSessionBindingLastActivityAt(activeBinding) : activeBinding.boundAt,
-      durationMs,
-    );
-    if (typeof expiresAt === "number" && Number.isFinite(expiresAt) && expiresAt > Date.now()) {
+    const expiresAt = resolveExpiresAtMsFromDurationMs(durationMs, {
+      nowMs: isIdle ? resolveSessionBindingLastActivityAt(activeBinding) : activeBinding.boundAt,
+    });
+    if (expiresAt !== undefined && expiresAt > Date.now()) {
       return sessionCommandReply(
         `ℹ️ ${settingLabel} active (${formatThreadBindingDurationLabel(durationMs)}, ${expiryDescription} at ${formatSessionExpiry(expiresAt)}).`,
       );
@@ -409,9 +402,7 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
         });
   if (updatedBindings.length === 0) {
     return sessionCommandReply(
-      action === SESSION_ACTION_IDLE
-        ? "⚠️ Failed to update idle timeout for the current binding."
-        : "⚠️ Failed to update max age for the current binding.",
+      `⚠️ Failed to update ${settingLabel.toLowerCase()} for the current binding.`,
     );
   }
 
@@ -422,9 +413,9 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
   }
 
   const expiries = updatedBindings.flatMap((binding) => {
-    const expiresAt = resolveSessionBindingExpiryAt(
-      isIdle ? Math.max(binding.lastActivityAt, binding.boundAt) : binding.boundAt,
+    const expiresAt = resolveExpiresAtMsFromDurationMs(
       (isIdle ? binding.idleTimeoutMs : binding.maxAgeMs) ?? 0,
+      { nowMs: isIdle ? Math.max(binding.lastActivityAt, binding.boundAt) : binding.boundAt },
     );
     return expiresAt === undefined ? [] : [expiresAt];
   });

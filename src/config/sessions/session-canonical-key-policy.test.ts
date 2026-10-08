@@ -89,7 +89,9 @@ describe("canonical main-key policy facts", () => {
         ).toHaveLength(0);
       });
       runSqliteDeferredTransactionSync(db, () => {
-        const probes = observation.queries.filter((sql) => sql === "PRAGMA data_version").length;
+        const isVersionProbe = (sql: string) =>
+          /^PRAGMA data_version$|FROM main\.pragma_data_version\(\)\s*$/iu.test(sql);
+        const probes = observation.queries.filter(isVersionProbe).length;
         db.exec("SAVEPOINT policy_change");
         db.exec("UPDATE session_key_contract SET main_key = 'temporary'");
         expect(read()).toBe("temporary");
@@ -97,9 +99,7 @@ describe("canonical main-key policy facts", () => {
         expect(read()).toBe("main");
         db.exec("RELEASE SAVEPOINT policy_change");
         expect(read()).toBe("main");
-        expect(observation.queries.filter((sql) => sql === "PRAGMA data_version")).toHaveLength(
-          probes,
-        );
+        expect(observation.queries.filter(isVersionProbe)).toHaveLength(probes);
       });
       expect(read()).toBe("main");
     } finally {

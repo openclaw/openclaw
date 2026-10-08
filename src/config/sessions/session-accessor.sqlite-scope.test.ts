@@ -6,6 +6,12 @@ import { performance } from "node:perf_hooks";
 import { isMainThread, threadId, Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, test, vi } from "vitest";
+import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
 import * as logging from "../../logging/logger.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -43,9 +49,9 @@ async function readFailedWriterLog(failure: unknown, diagnostics?: SqliteSession
         const content = await fs.readFile(logPath, "utf8");
         const record: unknown = JSON.parse(content.trim());
         assert.ok(isRecord(record));
-        const details = record["2"];
+        const details = record["1"];
         assert.ok(isRecord(details));
-        expect(record["1"]).toBe("SQLite session write failed");
+        expect(record["2"]).toBe("SQLite session write failed");
         expect(details.operation).toBe(operation);
         return { content, error: details.error, details };
       } finally {
@@ -189,6 +195,73 @@ test("archive pruning file logs whitelist partial stage observations", async () 
   expect(record.content).not.toContain("synthetic-private-transcript");
 });
 
+test.each(["ok", "error"] as const)(
+  "retains session writer timing in diagnostic events and file metadata (%s)",
+  async (outcome) => {
+    await withOpenClawTestState(
+      { scenario: "minimal", env: { OPENCLAW_TEST_FILE_LOG: "1" } },
+      async (state) => {
+        const logPath = state.path("sqlite-write.log");
+        resetDiagnosticEventsForTest();
+        logging.resetLogger();
+        logging.setLoggerOverride({ level: "warn", file: logPath });
+        const received: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
+        const unsubscribe = onInternalDiagnosticEvent((event) => {
+          if (event.type === "log.record") {
+            received.push(event);
+          }
+        });
+        let clock = 0;
+        vi.spyOn(performance, "now").mockImplementation(() => clock);
+        const failure = new Error("synthetic writer failure");
+        const message =
+          outcome === "ok" ? "slow SQLite session write" : "SQLite session write failed";
+        const fields = {
+          operation: "session.transcript.batch",
+          elapsedMs: 1_250,
+          queueWaitMs: 0,
+          writerExecutionMs: 1_250,
+          completionDelayMs: 0,
+          reentrant: false,
+        };
+        try {
+          const write = runExclusiveSqliteSessionWrite(
+            { agentId: "main", env: state.env },
+            async () => {
+              clock = 1_250;
+              if (outcome === "error") {
+                throw failure;
+              }
+              return "written";
+            },
+            "session.transcript.batch",
+          );
+          if (outcome === "error") {
+            await expect(write).rejects.toBe(failure);
+          } else {
+            await expect(write).resolves.toBe("written");
+          }
+          await waitForDiagnosticEventsDrained();
+          expect(received).toEqual([
+            expect.objectContaining({ message, attributes: expect.objectContaining(fields) }),
+          ]);
+          await logging.flushLogger();
+          const record: unknown = JSON.parse((await fs.readFile(logPath, "utf8")).trim());
+          expect(record).toEqual(
+            expect.objectContaining({ "1": expect.objectContaining(fields), "2": message }),
+          );
+        } finally {
+          unsubscribe();
+          await logging.flushLogger();
+          logging.setLoggerOverride(null);
+          logging.resetLogger();
+          resetDiagnosticEventsForTest();
+        }
+      },
+    );
+  },
+);
+
 test("captures fast writer failure without error payloads or identities", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     let clock = 0;
@@ -222,6 +295,7 @@ test("captures fast writer failure without error payloads or identities", async 
           queueWaitMs: 0,
           writerExecutionMs: 25,
           completionDelayMs: 0,
+          reentrant: false,
         },
       ]);
       expect(JSON.stringify(events)).not.toContain("synthetic-private");
@@ -316,19 +390,19 @@ test("slow writer failure separates waiting and execution", async () => {
       expect(await settled).toEqual({ error: failure });
       expect(await queuedSuccessor).toBe("queued-successor");
       expect(order).toEqual(["first:start", "first:end", "second:start", "queued-successor"]);
-      expect(records.find((entry) => entry.owner === "first")?.args[1]).toHaveProperty(
+      expect(records.find((entry) => entry.owner === "first")?.args[0]).toHaveProperty(
         "operation",
         "session.history.archive-prune",
       );
-      expect(records.find((entry) => entry.owner === "second")?.args[1]).toHaveProperty(
+      expect(records.find((entry) => entry.owner === "second")?.args[0]).toHaveProperty(
         "operation",
         "session.maintenance.plan",
       );
-      expect(records.find((entry) => entry.owner === "queued-successor")?.args[1]).toHaveProperty(
+      expect(records.find((entry) => entry.owner === "queued-successor")?.args[0]).toHaveProperty(
         "operation",
         "session.pending-input.stage",
       );
-      expect(records.find((entry) => entry.owner === "first")?.args[1]).toEqual(
+      expect(records.find((entry) => entry.owner === "first")?.args[0]).toEqual(
         expect.objectContaining({
           pid: process.pid,
           threadId,
@@ -341,11 +415,11 @@ test("slow writer failure separates waiting and execution", async () => {
           completionDelayMs: 0,
         }),
       );
-      expect(records.find((entry) => entry.owner === "first")?.args[1]).not.toHaveProperty(
+      expect(records.find((entry) => entry.owner === "first")?.args[0]).not.toHaveProperty(
         "payload",
       );
       const record = records.find((entry) => entry.owner === "second");
-      expect(record?.args[1]).toEqual(
+      expect(record?.args[0]).toEqual(
         expect.objectContaining({
           pid: process.pid,
           threadId,
@@ -356,9 +430,9 @@ test("slow writer failure separates waiting and execution", async () => {
           completionDelayMs: 0,
         }),
       );
-      expect(record?.args[1]).not.toHaveProperty("reclamationKind");
-      expect(record?.args[1]).not.toHaveProperty("workerThreadId");
-      expect(record?.args[1]).toHaveProperty("error", failure.message);
+      expect(record?.args[0]).not.toHaveProperty("reclamationKind");
+      expect(record?.args[0]).not.toHaveProperty("workerThreadId");
+      expect(record?.args[0]).toHaveProperty("error", failure.message);
       const warningCount = records.length;
       await expect(
         runExclusiveSqliteSessionWrite(
@@ -368,6 +442,27 @@ test("slow writer failure separates waiting and execution", async () => {
         ),
       ).resolves.toBe("successor");
       expect(records).toHaveLength(warningCount);
+      await runExclusiveSqliteSessionWrite(
+        scope,
+        () =>
+          runExclusiveSqliteSessionWrite(
+            scope,
+            async () => {
+              clock += 1_200;
+            },
+            "session.pending-input.stage",
+            undefined,
+            "foreground-reentrant",
+          ),
+        "session-entry.patch",
+      );
+      expect(records.slice(warningCount).map((entry) => entry.args[0])).toEqual([
+        expect.objectContaining({ operation: "session.pending-input.stage", reentrant: true }),
+        expect.objectContaining({ operation: "session-entry.patch", reentrant: false }),
+      ]);
+      expect(records.some((entry) => entry.args[1] === "slow agent database reservation")).toBe(
+        false,
+      );
     } finally {
       release.resolve();
       await Promise.allSettled([first, second, queuedSuccessor]);

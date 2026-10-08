@@ -19,7 +19,7 @@ import {
 } from "./workspace-state-identity.js";
 
 export const WORKSPACE_SETUP_STATE_VERSION = 1 as const;
-export const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
+const WORKSPACE_ATTESTATION_RECENT_MS = 24 * 60 * 60 * 1000;
 export const WORKSPACE_LEGACY_STATE_MIGRATION_KIND = "legacy-workspace-setup-files";
 export const WORKSPACE_CONTENT_RELOCATION_MIGRATION_KIND = "workspace-content-relocation";
 const MAX_WORKSPACE_ATTESTATION_FILENAME_LENGTH = 255;

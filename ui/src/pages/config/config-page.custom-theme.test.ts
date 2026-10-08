@@ -35,7 +35,7 @@ function createCustomThemePage(settings: Partial<UiSettings> = {}) {
   const state = page as unknown as CustomThemeImportState;
   const gatewayUrl = "ws://gateway.test";
   state.context = {
-    gateway: { connection: { gatewayUrl } },
+    gateway: { connection: { gatewayUrl }, snapshot: { phase: "connected", selfUser: null } },
     runtimeConfig: {
       state: {
         configApplying: false,

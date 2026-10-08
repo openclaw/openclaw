@@ -238,6 +238,7 @@ describe("chat delivery watermark preparation", () => {
       ).toMatchObject({
         maxSeq: 1,
       });
+      await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
       const createReaders = historyReaders.createSessionHistoryWorkerReaders;
       const readerSpy = vi
         .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
@@ -324,45 +325,39 @@ describe("chat delivery watermark preparation", () => {
           dispatch.captureAgentTranscriptStart();
           await append("answer", { role: "assistant", content: "Committed answer." });
           let reads = 0;
-          const createReaders = historyReaders.createSessionHistoryWorkerReaders;
+          const readWatermark = sessionTranscriptReaders.readSessionTranscriptWatermarkAsync;
           const failure = new Error("watermark read rejected");
           const readerSpy = vi
-            .spyOn(historyReaders, "createSessionHistoryWorkerReaders")
-            .mockImplementation((runRequest) => {
-              const readers = createReaders(runRequest);
-              return {
-                ...readers,
-                readWatermark: async (input) => {
-                  const watermark = await readers.readWatermark(input);
-                  if (++reads !== read) {
-                    return watermark;
-                  }
-                  if (change === "retired") {
-                    retire();
-                  } else if (change === "rejected") {
-                    throw failure;
-                  } else if (change === "rewrite") {
-                    const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: "answer" });
-                    if (!anchor) {
-                      throw new Error("Expected active answer anchor");
-                    }
-                    await rewriteTranscriptMessageAtAnchor(anchor, (message) => ({
-                      ...asOptionalRecord(message),
-                      content: "NO_REPLY",
-                    }));
-                  } else {
-                    await append(
-                      "later-row",
-                      {
-                        role: change === "new-input" ? "user" : "assistant",
-                        content: "NO_REPLY",
-                      },
-                      change === "branch" ? inputId : undefined,
-                    );
-                  }
-                  return watermark;
-                },
-              };
+            .spyOn(sessionTranscriptReaders, "readSessionTranscriptWatermarkAsync")
+            .mockImplementation(async (...args) => {
+              const watermark = await readWatermark(...args);
+              if (++reads !== read) {
+                return watermark;
+              }
+              if (change === "retired") {
+                retire();
+              } else if (change === "rejected") {
+                throw failure;
+              } else if (change === "rewrite") {
+                const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: "answer" });
+                if (!anchor) {
+                  throw new Error("Expected active answer anchor");
+                }
+                await rewriteTranscriptMessageAtAnchor(anchor, (message) => ({
+                  ...asOptionalRecord(message),
+                  content: "NO_REPLY",
+                }));
+              } else {
+                await append(
+                  "later-row",
+                  {
+                    role: change === "new-input" ? "user" : "assistant",
+                    content: "NO_REPLY",
+                  },
+                  change === "branch" ? inputId : undefined,
+                );
+              }
+              return watermark;
             });
           try {
             const delivery = dispatch.resolveReplyDelivery();

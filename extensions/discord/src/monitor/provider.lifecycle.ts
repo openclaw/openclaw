@@ -65,7 +65,7 @@ async function restartGatewayAfterReadyTimeout(params: {
     let drainTimeout: ReturnType<typeof setTimeout> | undefined;
     let terminateCloseTimeout: ReturnType<typeof setTimeout> | undefined;
     const ignoreSocketError = () => {};
-    const clearTimers = () => {
+    const cleanup = () => {
       if (drainTimeout) {
         clearTimeout(drainTimeout);
         drainTimeout = undefined;
@@ -74,9 +74,6 @@ async function restartGatewayAfterReadyTimeout(params: {
         clearTimeout(terminateCloseTimeout);
         terminateCloseTimeout = undefined;
       }
-    };
-    const cleanup = () => {
-      clearTimers();
       socket.removeListener("close", onClose);
       socket.removeListener("error", ignoreSocketError);
     };
@@ -345,11 +342,7 @@ async function waitForGatewayReady(params: {
       lastError: "startup-not-ready",
     });
     await params.beforeRestart?.();
-    await restartGatewayAfterReadyTimeout({
-      gateway: params.gateway,
-      abortSignal: params.abortSignal,
-      runtime: params.runtime,
-    });
+    await restartGatewayAfterReadyTimeout(params);
     if (params.abortSignal?.aborted) {
       return;
     }

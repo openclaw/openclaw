@@ -54,6 +54,34 @@ describe("agents skills panel (browser)", () => {
     );
   });
 
+  it("keeps learned Workshop skills on under an allowlist", async () => {
+    const container = document.createElement("div");
+    render(
+      renderAgentSkills(
+        skillsParams(
+          [
+            createSkill({ name: "github", source: "openclaw-managed" }),
+            createSkill({ name: "budget", source: "openclaw-workshop" }),
+          ],
+          { configForm: { agents: { entries: { main: { skills: ["github"] } } } } },
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const learnedRow = Array.from(container.querySelectorAll(".agent-skill-row")).find((row) =>
+      row.textContent?.includes("budget"),
+    );
+    const toggle = learnedRow?.querySelector<HTMLElement & { checked: boolean; disabled: boolean }>(
+      "wa-switch",
+    );
+    expect(toggle?.checked).toBe(true);
+    expect(toggle?.disabled).toBe(true);
+    expect(learnedRow?.textContent).toContain("archive in Workshop to hide");
+    expect(container.textContent).toContain("2/2");
+  });
+
   it.each(["inherited", "explicit without patch access"])(
     "gates clearing a %s allowlist separately from staged edits",
     async (mode) => {

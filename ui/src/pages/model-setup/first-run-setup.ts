@@ -354,7 +354,7 @@ export class FirstRunSetup {
       });
       return;
     }
-    void this.run(this.owner(routeData.firstRun), pageState.result);
+    void this.verifyRestoredModel(this.owner(routeData.firstRun), configured);
   }
 
   beginActivation(intent: {
@@ -404,15 +404,18 @@ export class FirstRunSetup {
       }
       return;
     }
-    const modelRef = result.status === "done" ? result.modelActivation?.modelRef : undefined;
-    if (!modelRef || this.pending !== activation || !this.ownsActivation(activation)) {
+    const modelActivation = result.status === "done" ? result.modelActivation : undefined;
+    if (
+      !modelActivation?.modelRef ||
+      this.pending !== activation ||
+      !this.ownsActivation(activation)
+    ) {
       return;
     }
     // Capture the verified target before config refresh can replace the hello
     // and retire the Lit task that otherwise owns this response.
-    activation.modelRef = modelRef;
-    activation.modelTarget =
-      result.status === "done" ? result.modelActivation?.modelTarget : undefined;
+    activation.modelRef = modelActivation.modelRef;
+    activation.modelTarget = modelActivation.modelTarget;
     activation.outcome = "verified";
     activation.receipt = persistFirstRunActivationReceipt(this.host.context(), activation);
   }
@@ -593,20 +596,17 @@ export class FirstRunSetup {
     );
   }
 
-  private async run(owner: FirstRunOwner, detection: SystemAgentSetupDetectResult): Promise<void> {
-    const configured = this.configuredActivationModel(detection);
-    if (configured) {
-      if (this.pending && configured !== this.pending.modelRef) {
-        this.showUnresolved();
-        return;
-      }
-      const outcome = await this.verify();
-      if (!this.owns(owner) || !outcome || "error" in outcome) {
-        return;
-      }
-      if (outcome.value.ok) {
-        this.finishVerified(outcome.value.modelRef, outcome.value.modelTarget);
-      }
+  private async verifyRestoredModel(owner: FirstRunOwner, configured: string): Promise<void> {
+    if (this.pending && configured !== this.pending.modelRef) {
+      this.showUnresolved();
+      return;
+    }
+    const outcome = await this.verify();
+    if (!this.owns(owner) || !outcome || "error" in outcome) {
+      return;
+    }
+    if (outcome.value.ok) {
+      this.finishVerified(outcome.value.modelRef, outcome.value.modelTarget);
     }
   }
 

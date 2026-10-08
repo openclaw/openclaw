@@ -6,6 +6,7 @@ import { createDeferred as deferred } from "../../../../test/helpers/promise.js"
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { changedServerUiPrefs } from "../../app/server-prefs-intent.ts";
+import { canSyncAppearancePreference } from "../../app/server-prefs-profile-runtime.ts";
 import { createServerPrefsWriter } from "../../app/server-prefs.test-support.ts";
 import {
   applyServerUiPrefs,
@@ -103,9 +104,6 @@ describe("ConfigPage synced preference provenance", () => {
   ])("$label", ({ selfUser, scopes, canPatch, appearanceCanSync, localeCanSync }) => {
     const page = new ConfigPage() as unknown as {
       context: ApplicationContext;
-      serverUiPrefsCanSync: (
-        key?: "theme" | "themeMode" | "accent" | "fontUi" | "fontChat",
-      ) => boolean | null;
     };
     page.context = {
       gateway: {
@@ -114,12 +112,19 @@ describe("ConfigPage synced preference provenance", () => {
       runtimeConfig: { state: { connected: true }, canPatch },
     } as unknown as ApplicationContext;
 
-    expect(page.serverUiPrefsCanSync("theme")).toBe(appearanceCanSync);
-    expect(page.serverUiPrefsCanSync("themeMode")).toBe(appearanceCanSync);
-    expect(page.serverUiPrefsCanSync("accent")).toBe(appearanceCanSync);
-    expect(page.serverUiPrefsCanSync("fontUi")).toBe(Boolean(selfUser) && appearanceCanSync);
-    expect(page.serverUiPrefsCanSync("fontChat")).toBe(Boolean(selfUser) && appearanceCanSync);
-    expect(page.serverUiPrefsCanSync()).toBe(localeCanSync);
+    expect(canSyncAppearancePreference(page.context, "theme")).toBe(appearanceCanSync);
+    expect(canSyncAppearancePreference(page.context, "themeMode")).toBe(appearanceCanSync);
+    expect(canSyncAppearancePreference(page.context, "accent")).toBe(appearanceCanSync);
+    expect(canSyncAppearancePreference(page.context, "fontUi")).toBe(
+      Boolean(selfUser) && appearanceCanSync,
+    );
+    expect(canSyncAppearancePreference(page.context, "fontChat")).toBe(
+      Boolean(selfUser) && appearanceCanSync,
+    );
+    expect(canSyncAppearancePreference(page.context, "tabIcon")).toBe(
+      Boolean(selfUser) && appearanceCanSync,
+    );
+    expect(canSyncAppearancePreference(page.context)).toBe(localeCanSync);
   });
 
   it("restores the gateway appearance default while queuing deletion of the profile override", async () => {
@@ -356,6 +361,8 @@ describe("ConfigPage synced preference provenance", () => {
         },
       },
       runtimeConfig,
+      agentSelection: { state: { selectedId: null } },
+      agents: { state: { agentsList: null } },
       theme: { refresh: vi.fn() },
       webPush: { snapshot: {} },
     } as unknown as ApplicationContext;

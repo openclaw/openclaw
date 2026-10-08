@@ -152,13 +152,7 @@ export class TalkRealtimeRelayOutputOwnership {
       return undefined;
     }
     const activeTurnId = this.activeTurnId();
-    if (
-      this.phase !== "cancelling" &&
-      activeTurnId &&
-      this.mode === "turn-bound" &&
-      claim &&
-      this.phase === "unowned"
-    ) {
+    if (activeTurnId && this.mode === "turn-bound" && claim && this.phase === "unowned") {
       this.cancelledTerminal = undefined;
       Object.assign(this, { phase: "owned" as const, turnId: activeTurnId });
     }
@@ -345,10 +339,7 @@ export function adoptRelayProviderToolCallId(
   }
   const current = session.relayToolCallIdsByProviderId.get(providerCallId);
   if (current) {
-    if (session.toolCalls.isAgentCompleted(current)) {
-      return undefined;
-    }
-    return current;
+    return session.toolCalls.isAgentCompleted(current) ? undefined : current;
   }
   const relayCallId = session.toolCalls.isAgentCompleted(providerCallId)
     ? `relay-${randomUUID()}`

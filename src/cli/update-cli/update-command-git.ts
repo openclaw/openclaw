@@ -272,11 +272,7 @@ function readRemoteTagRevisions(stdout: string): Map<string, string> | null {
     if (!match) {
       return null;
     }
-    const tag = match[1];
-    if (!tag) {
-      return null;
-    }
-    (match[2] ? peeled : direct).set(tag, sha);
+    (match[2] ? peeled : direct).set(match[1]!, sha);
   }
   return new Map([...direct, ...peeled]);
 }

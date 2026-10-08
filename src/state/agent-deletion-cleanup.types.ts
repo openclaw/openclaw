@@ -3,7 +3,7 @@ import type { WorkerLeaseScope } from "./openclaw-state-lease-worker-owner.js";
 
 /** Cleanup borrows the deletion lease without depending on the shared worker command catalog. */
 export type AgentDeletionCleanupWorkerAuthority = {
-  assertCurrentHost(): void;
+  assertCurrentHost(this: void): void;
   runWithLeaseAdmission<T>(
     operation: (scope: WorkerLeaseScope, guard: AgentDeletionWorkerGuard) => Promise<T>,
   ): Promise<T>;

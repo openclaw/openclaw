@@ -206,16 +206,17 @@ instead of being overwritten in one editable draft.
 
 ### Channel mapping
 
-Discord defaults to `off` when `streaming` is unset, Telegram and Slack default
-to `progress`, and Mattermost and MS Teams default to `partial`.
+Discord, Telegram, and Slack default to `progress` when `streaming` is unset.
+Mattermost and MS Teams default to `partial`. Explicitly configured modes remain
+unchanged; `off` disables previews.
 
-| Channel    | `off`         | `partial` | `block` | `progress`                                    |
-| ---------- | ------------- | --------- | ------- | --------------------------------------------- |
-| Telegram   | Yes           | Yes       | Yes     | editable progress draft (default)             |
-| Discord    | Yes (default) | Yes       | Yes     | editable progress draft (opt-in)              |
-| Slack      | Yes           | Yes       | Yes     | native card in threads; quiet outside threads |
-| Mattermost | Yes           | Yes       | Yes     | Yes                                           |
-| MS Teams   | Yes           | Yes       | Yes     | native progress stream                        |
+| Channel    | `off` | `partial` | `block` | `progress`                                    |
+| ---------- | ----- | --------- | ------- | --------------------------------------------- |
+| Telegram   | Yes   | Yes       | Yes     | editable progress draft (default)             |
+| Discord    | Yes   | Yes       | Yes     | editable progress draft (default)             |
+| Slack      | Yes   | Yes       | Yes     | native card in threads; quiet outside threads |
+| Mattermost | Yes   | Yes       | Yes     | Yes                                           |
+| MS Teams   | Yes   | Yes       | Yes     | native progress stream                        |
 
 Preview chunk config (`streaming.preview.chunk.*`, e.g. under
 `channels.discord.streaming` or `channels.telegram.streaming`) defaults to
@@ -287,10 +288,12 @@ Slack-only:
 - Preview streaming is skipped when Discord block streaming is explicitly
   enabled.
 - `progress` is quiet by default: headline, authored commentary and reasoning,
-  plan milestones, and approval requests. Intermediate tool failures and nonzero
-  command exits are hidden. The same default applies on
-  other shared progress-card renderers; `streaming.progress.toolProgress: true` adds
-  the rolling tool log with its icons.
+  plan milestones, approval requests, and safe current-operation and delegated-task
+  status. Status does not require a utility model or a model-authored preamble.
+  Intermediate tool failures and nonzero command exits are hidden.
+  `streaming.progress.toolProgress: true` adds the rolling tool log with its icons.
+  Telegram shares the safe work-status presentation; other channels retain their
+  existing progress layouts.
 - `progress` mode deletes the status draft once the final answer is delivered,
   so busy channels keep no orphaned tool log above the reply. Error finals keep
   the draft as the record of the failed turn.

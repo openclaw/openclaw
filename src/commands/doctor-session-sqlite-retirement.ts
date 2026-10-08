@@ -179,11 +179,13 @@ export async function retireSessionSqliteRecovery(params: {
   readConfig(): Promise<OpenClawConfig>;
   confirm(report: RecoveryCleanupReport): Promise<boolean>;
 }): Promise<RecoveryCleanupReport> {
-  await assertOpenClawStateWriteAllowedAtPath({
-    databasePath: path.join(params.preview.stateDir, "state", "openclaw.sqlite"),
-    env: params.env,
-    recoverOrphanedSidecars: false,
-  });
+  const assertStateWriteAllowed = (stateDir: string) =>
+    assertOpenClawStateWriteAllowedAtPath({
+      databasePath: path.join(stateDir, "state", "openclaw.sqlite"),
+      env: params.env,
+      recoverOrphanedSidecars: false,
+    });
+  await assertStateWriteAllowed(params.preview.stateDir);
   return withDoctorSqliteMaintenanceLock({
     env: params.env,
     operation: "update recovery cleanup",
@@ -199,11 +201,7 @@ export async function retireSessionSqliteRecovery(params: {
       ) {
         throw new Error("Recovery selection changed; preview cleanup again.");
       }
-      await assertOpenClawStateWriteAllowedAtPath({
-        databasePath: path.join(report.stateDir, "state", "openclaw.sqlite"),
-        env: params.env,
-        recoverOrphanedSidecars: false,
-      });
+      await assertStateWriteAllowed(report.stateDir);
       const adoptions = new Map<RecoveryArtifactReference, MigrationArtifact>();
       const assertDestinations = createRecoveryDestinationVerifier(report.stateDir);
       for (const item of report.artifacts) {
@@ -297,11 +295,7 @@ export async function retireSessionSqliteRecovery(params: {
           }
         }
       }
-      await assertOpenClawStateWriteAllowedAtPath({
-        databasePath: path.join(report.stateDir, "state", "openclaw.sqlite"),
-        env: params.env,
-        recoverOrphanedSidecars: false,
-      });
+      await assertStateWriteAllowed(report.stateDir);
       authority.assertCurrent();
       for (const item of selected) {
         const refs = references.get(item.path)!;

@@ -184,7 +184,7 @@ describe("Codex terminal dynamic-tool release", () => {
     try {
       route.armTurn();
       await route.bindTurn("turn-1");
-      controller.scheduleTurnReleaseAfterTerminalDynamicTool(terminalYieldResult(true));
+      controller.recordDynamicToolResult(terminalYieldResult(true));
       await yieldImmediate();
       expect(runtime.state.completed).toBe(true);
       expect(interrupt).toHaveBeenCalledOnce();
@@ -230,7 +230,7 @@ describe("Codex terminal dynamic-tool release", () => {
     // the exact-value timeoutMs assertion stays on a single tick.
     const monotonic = vi.spyOn(performance, "now").mockReturnValue(1_000);
     try {
-      harness.controller.scheduleTurnReleaseAfterTerminalDynamicTool(terminalYieldResult(true));
+      harness.controller.recordDynamicToolResult(terminalYieldResult(true));
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
@@ -246,7 +246,7 @@ describe("Codex terminal dynamic-tool release", () => {
       expect(harness.resolveCompletion).toHaveBeenCalledOnce();
 
       harness.completeTurn();
-      harness.controller.scheduleTurnReleaseAfterTerminalDynamicTool(terminalYieldResult(true));
+      harness.controller.recordDynamicToolResult(terminalYieldResult(true));
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
@@ -273,7 +273,7 @@ describe("Codex terminal dynamic-tool release", () => {
         harness.pendingOpenClawDynamicToolCompletionIds.add("tool-response");
       }
       try {
-        harness.controller.scheduleTurnReleaseAfterTerminalDynamicTool(terminalYieldResult(true));
+        harness.controller.recordDynamicToolResult(terminalYieldResult(true));
         await vi.runOnlyPendingTimersAsync();
         expect(harness.request).not.toHaveBeenCalled();
         expect(harness.state.completed).toBe(false);
@@ -300,7 +300,8 @@ describe("Codex terminal dynamic-tool release", () => {
   it("keeps steering open when the yield result fails", async () => {
     const harness = createTerminalReleaseHarness();
 
-    harness.controller.scheduleTurnReleaseAfterTerminalDynamicTool(terminalYieldResult(false));
+    harness.controller.recordDynamicToolResult(terminalYieldResult(false));
+    harness.controller.scheduleTerminalDynamicToolReleaseCheck();
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
