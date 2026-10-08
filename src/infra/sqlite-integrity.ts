@@ -420,7 +420,7 @@ function createSqliteIntegrityError(message: string, cause?: unknown): Error {
   const error =
     cause === undefined
       ? new Error(
-          `${message}. Run openclaw doctor --fix for explicit repair; if repair is refused, preserve the database and WAL and restore a verified backup.`,
+          `${message}. Stop the Gateway, run "openclaw doctor --fix" to inspect and repair this database, and restart. Only if Doctor still cannot repair the offline database, preserve the database and WAL and restore a verified backup.`,
         )
       : new Error(message, { cause });
   error.name = "SqliteIntegrityError";

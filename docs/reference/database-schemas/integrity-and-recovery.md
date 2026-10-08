@@ -775,7 +775,9 @@ that has not reached the main database file.
 ### Doctor reports orphan session windows
 
 If `foreign_key_check` names `session_windows` referencing missing `session_nodes`,
-run `openclaw doctor --fix`. Doctor uses its existing exclusive maintenance
+stop the Gateway, run `openclaw doctor --fix`, then restart after repair. Only if
+Doctor still cannot repair the offline database, preserve the database and WAL
+and restore a verified backup. Doctor uses its existing exclusive maintenance
 ownership; a managed Gateway may be stopped and restored, and an independently
 running Gateway must release the state before repair can proceed.
 
