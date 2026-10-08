@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import type { AgentDefaultsConfig, AgentModelEntryConfig } from "./types.agent-defaults.js";
+import type { AgentDefaultsConfig } from "./types.agent-defaults.js";
 import type { AgentSandboxConfig } from "./types.agents-shared.js";
 import type { MemorySearchConfig } from "./types.memory.js";
 import type { AgentToolsConfig } from "./types.tools.js";
@@ -20,15 +20,6 @@ export type AgentConfig = Omit<
   z.input<typeof AgentEntrySchema>,
   "memory" | "tts" | "sandbox" | "tools"
 > & {
-  /** @deprecated Raw legacy list compatibility only; canonical agents.entries rejects this key. */
-  default?: boolean;
-  /**
-   * @deprecated Legacy raw config accepted only by doctor/migration repair.
-   * Normal schema parsing rejects this key; use per-model agentRuntime instead.
-   */
-  agentRuntime?: AgentModelEntryConfig["agentRuntime"];
-  /** @deprecated Legacy per-agent compaction config is kept for raw doctor migration/repair. */
-  compaction?: AgentDefaultsConfig["compaction"];
   memory?: {
     search?: MemorySearchConfig;
   };
@@ -44,6 +35,4 @@ export type AgentsConfig = {
   ownership?: "explicit";
   defaults?: AgentDefaultsConfig;
   entries?: Record<string, AgentEntryConfig>;
-  /** Internal non-serialized projection materialized by validation for ID-based runtime code. */
-  list?: AgentConfig[];
 };

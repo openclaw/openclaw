@@ -13,7 +13,7 @@ import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { resolveSession } from "./session.js";
 
-describe("resolveSession with a yielded running parent", () => {
+describe("resolveSession with a yielded parent", () => {
   const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-yielded-parent-");
   let stateDir: string;
   let storePath: string;
@@ -31,8 +31,7 @@ describe("resolveSession with a yielded running parent", () => {
     const startedAt = Date.now() - 60_000;
     const yieldedAt = startedAt + 20_000;
 
-    // The parent run starts, then yields; the Gateway projection keeps it running
-    // while recording the settled run's endedAt.
+    // A yielded run retains its timing without claiming a terminal outcome.
     const running = deriveGatewaySessionLifecycleSnapshot({
       session: { updatedAt: startedAt },
       event: {
@@ -57,7 +56,8 @@ describe("resolveSession with a yielded running parent", () => {
         },
       },
     });
-    expect(yielded).toMatchObject({ status: "running", endedAt: yieldedAt });
+    expect(yielded.status).toBeUndefined();
+    expect(yielded.endedAt).toBe(yieldedAt);
     await upsertSessionEntryCore(
       { agentId, sessionKey, storePath },
       {
@@ -73,7 +73,7 @@ describe("resolveSession with a yielded running parent", () => {
       },
     );
 
-    const first = resolveSession({ cfg, sessionKey, agentId });
+    const first = await resolveSession({ cfg, sessionKey, agentId });
     expect(first.sessionId).toBe(parentSessionId);
 
     // The first completion's prompt admission lands after the registry row.
@@ -81,12 +81,11 @@ describe("resolveSession with a yielded running parent", () => {
       { agentId, sessionId: parentSessionId, sessionKey, storePath },
       { type: "custom", timestamp: new Date().toISOString() },
     );
-    expect(loadSessionEntry({ agentId, sessionKey, storePath })).toMatchObject({
-      status: "running",
-      endedAt: yieldedAt,
-    });
+    const stored = loadSessionEntry({ agentId, sessionKey, storePath });
+    expect(stored?.status).toBeUndefined();
+    expect(stored?.endedAt).toBe(yieldedAt);
 
-    const second = resolveSession({ cfg, sessionKey, agentId });
+    const second = await resolveSession({ cfg, sessionKey, agentId });
     expect(second.sessionId).toBe(parentSessionId);
     expect(second.isNewSession).toBe(false);
     expect(second.previousSessionId).toBeUndefined();

@@ -35,6 +35,18 @@ const childIdentity = processIdentity.extend({
 const registrationSchema = z.object({ parent: processIdentity, child: childIdentity }).strict();
 type ProcessRegistration = z.infer<typeof registrationSchema>;
 const registrationCleanup = new WeakMap<object, Promise<void>>();
+type RegisteredTransportIdentity = Readonly<
+  Pick<ProcessRegistration["child"], "pid" | "startedAt">
+>;
+const registeredTransportIdentities = new WeakMap<object, RegisteredTransportIdentity>();
+
+/** Registration-time direct transport identity, not descendant identity or current liveness. */
+export function getCodexAppServerRegisteredTransportIdentity(
+  child: object,
+): RegisteredTransportIdentity | undefined {
+  return registeredTransportIdentities.get(child);
+}
+
 // Source and dist copies must not stop or resume the same orphan concurrently.
 const processReaper = resolveGlobalSingleton(
   Symbol.for("openclaw.codexAppServerProcessReaper"),
@@ -161,14 +173,13 @@ export function createCodexAppServerProcessReaperService(): OpenClawPluginServic
 export async function prepareCodexAppServerProcessRegistration(): Promise<
   (child: ChildProcessWithoutNullStreams) => Promise<void>
 > {
-  if (process.platform === "win32") {
-    return async (child) => {
-      await once(child, "spawn");
-    };
-  }
-  const store = await reapRegisteredCodexAppServerOrphans();
+  const store =
+    process.platform === "win32" ? undefined : await reapRegisteredCodexAppServerOrphans();
   return async (child) => {
     await once(child, "spawn");
+    if (!store) {
+      return;
+    }
     if (!child.pid) {
       throw new ProcessInspectionError("unavailable");
     }
@@ -220,5 +231,9 @@ export async function prepareCodexAppServerProcessRegistration(): Promise<
         "Cannot register the Codex child process: the child exited during registration. Retry.",
       );
     }
+    registeredTransportIdentities.set(
+      child,
+      Object.freeze({ pid: value.child.pid, startedAt: value.child.startedAt }),
+    );
   };
 }

@@ -131,10 +131,12 @@ export function createExecApprovalHandlers(
       ) {
         return;
       }
+      const rejectRequest = (message: string) => {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
+      };
       const p = params;
       const twoPhase = p.twoPhase === true;
-      const timeoutMs =
-        typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
+      const timeoutMs = p.timeoutMs ?? DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
       // IDs are opaque cross-surface handles. Preserve every supplied byte so
       // the manager can reject unsafe values instead of silently normalizing them.
       const explicitId = p.id ?? null;
@@ -145,14 +147,7 @@ export function createExecApprovalHandlers(
         trustedAgentRuntime &&
         context.validateAgentRuntimeApprovalAuthority?.(trustedAgentRuntime) !== true
       ) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "agent runtime approval authority is no longer active",
-          ),
-        );
+        rejectRequest("agent runtime approval authority is no longer active");
         return;
       }
       const approvalContext = resolveSystemRunApprovalRequestContext({
@@ -172,33 +167,20 @@ export function createExecApprovalHandlers(
       const requestRunId =
         trustedAgentRuntime?.operationalRunInstance.runId ?? normalizeOptionalString(p.runId);
       if (host === "node" && !nodeId) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "nodeId is required for host=node"),
-        );
+        rejectRequest("nodeId is required for host=node");
         return;
       }
       if (host === "node" && !approvalContext.plan) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "systemRunPlan is required for host=node"),
-        );
+        rejectRequest("systemRunPlan is required for host=node");
         return;
       }
       if (effectiveCommandText.trim().length === 0) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "command is required"));
+        rejectRequest("command is required");
         return;
       }
       if (explicitId?.startsWith(RESERVED_PLUGIN_APPROVAL_ID_PREFIX)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `approval ids starting with ${RESERVED_PLUGIN_APPROVAL_ID_PREFIX} are reserved`,
-          ),
+        rejectRequest(
+          `approval ids starting with ${RESERVED_PLUGIN_APPROVAL_ID_PREFIX} are reserved`,
         );
         return;
       }
@@ -206,17 +188,12 @@ export function createExecApprovalHandlers(
         host === "node" &&
         (!Array.isArray(effectiveCommandArgv) || effectiveCommandArgv.length === 0)
       ) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "commandArgv is required for host=node"),
-        );
+        rejectRequest("commandArgv is required for host=node");
         return;
       }
       const envBinding = buildSystemRunApprovalEnvBinding(p.env);
       const warningText = normalizeOptionalString(p.warningText);
-      const runtimeConfig =
-        typeof context.getRuntimeConfig === "function" ? context.getRuntimeConfig() : {};
+      const runtimeConfig = context.getRuntimeConfig();
       const commandHighlighting = resolveExecCommandHighlighting({
         config: runtimeConfig,
         agentId: effectiveAgentId,
@@ -258,11 +235,7 @@ export function createExecApprovalHandlers(
             })
           : null;
       if (explicitId && (await manager.getSnapshot(explicitId))) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "approval id already pending"),
-        );
+        rejectRequest("approval id already pending");
         return;
       }
       const unavailableDecisions = normalizeExecApprovalUnavailableDecisions(

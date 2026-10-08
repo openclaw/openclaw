@@ -228,5 +228,7 @@ Screenshots:
 - Android screenshot capture writes Play screenshots under
   `apps/android/fastlane/metadata/android/<locale>/images/phoneScreenshots/`
   and `apps/android/fastlane/metadata/android/<locale>/images/wearScreenshots/`.
+- Store release runs retain emulator startup diagnostics, per-scene UI dumps, and
+  activity startup results for 30 days, including after a screenshot failure.
 - Set `SUPPLY_UPLOAD_SCREENSHOTS=1` to include those screenshots in `fastlane android metadata`.
 - Do not commit generated screenshot captures unless they become intentional store metadata assets.

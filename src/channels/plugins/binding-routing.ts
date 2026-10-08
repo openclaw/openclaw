@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { raceWithTimeout } from "../../../packages/retry/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { readSessionBindingInspectionConversation } from "../../infra/outbound/session-binding-normalization.js";
@@ -297,34 +298,29 @@ export async function ensureConfiguredBindingRouteReady(params: {
   bindingResolution: ConfiguredBindingResolution | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const readyPromise = ensureConfiguredBindingTargetReady(params);
-  let timer: ReturnType<typeof setTimeout> | undefined;
   const timeoutToken = Symbol("configured-binding-route-ready-timeout");
-  const timeoutPromise = new Promise<typeof timeoutToken>((resolve) => {
-    timer = setTimeout(() => resolve(timeoutToken), CONFIGURED_BINDING_ROUTE_READY_TIMEOUT_MS);
-    timer.unref?.();
-  });
-
-  try {
-    const result = await Promise.race([readyPromise, timeoutPromise]);
-    if (result !== timeoutToken) {
-      return result;
-    }
-    // Let late driver work finish for diagnostics, but return a bounded failure to the caller.
-    logVerbose(
-      `configured binding route ready check timed out after ${
-        CONFIGURED_BINDING_ROUTE_READY_TIMEOUT_MS / 1_000
-      }s`,
-    );
-    readyPromise.then(
-      (lateResult) =>
-        logVerbose(
-          `configured binding route ready check settled after timeout (ok=${lateResult.ok})`,
-        ),
-      (err: unknown) =>
-        logVerbose(`configured binding route ready check rejected after timeout: ${String(err)}`),
-    );
-    return { ok: false, error: "Configured binding route ready check timed out" };
-  } finally {
-    clearTimeout(timer);
+  const result = await raceWithTimeout(
+    readyPromise,
+    CONFIGURED_BINDING_ROUTE_READY_TIMEOUT_MS,
+    (): typeof timeoutToken => timeoutToken,
+    { ref: false },
+  );
+  if (result !== timeoutToken) {
+    return result;
   }
+  // Let late driver work finish for diagnostics, but return a bounded failure to the caller.
+  logVerbose(
+    `configured binding route ready check timed out after ${
+      CONFIGURED_BINDING_ROUTE_READY_TIMEOUT_MS / 1_000
+    }s`,
+  );
+  readyPromise.then(
+    (lateResult) =>
+      logVerbose(
+        `configured binding route ready check settled after timeout (ok=${lateResult.ok})`,
+      ),
+    (err: unknown) =>
+      logVerbose(`configured binding route ready check rejected after timeout: ${String(err)}`),
+  );
+  return { ok: false, error: "Configured binding route ready check timed out" };
 }

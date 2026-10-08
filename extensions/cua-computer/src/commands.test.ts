@@ -77,7 +77,7 @@ describe("cua-computer provider", () => {
       provider: {
         id: "cua-computer",
         label: "CUA Computer",
-        generation: "cua-computer-v2:execution-1",
+        generation: expect.stringMatching(/^cua-computer-v2:/),
       },
       actions: [
         "screenshot",
@@ -162,13 +162,11 @@ describe("cua-computer provider", () => {
     });
 
     const createDriver = vi.fn(() => session);
-    expect(
-      createCuaComputerProvider({
-        platform: "darwin",
-        env: endpoint,
-        createDriver,
-      }).isAvailable(),
-    ).toBe(true);
+    const passive = createCuaComputerProvider({ platform: "darwin", env: endpoint, createDriver });
+    expect(passive.isAvailable()).toBe(true);
+    const declared = passive.capabilities();
+    expect(passive.capabilities()).toEqual(declared);
+    expect(declared.actions).toContain("get_window_state");
     expect(createDriver).not.toHaveBeenCalled();
 
     for (const [label, env] of invalidMacOsEndpoints()) {

@@ -104,14 +104,6 @@ export function dedupeChannelPluginFailures(
   );
 }
 
-function dedupeCompatibilityNotices(
-  notices: readonly PluginCompatibilityHealthNotice[],
-): PluginCompatibilityHealthNotice[] {
-  return dedupeByKey(notices, (entry) =>
-    JSON.stringify([entry.pluginId, entry.severity, entry.code ?? "", entry.message]),
-  );
-}
-
 function mergePluginRecords(
   installed: readonly PluginHealthRecord[],
   runtime: readonly PluginHealthRecord[],
@@ -155,10 +147,10 @@ export function mergeStatusPluginHealthSnapshots(
       ...(installed.channelPluginFailures ?? []),
       ...(runtime.channelPluginFailures ?? []),
     ]),
-    compatibilityNotices: dedupeCompatibilityNotices([
-      ...(installed.compatibilityNotices ?? []),
-      ...(runtime.compatibilityNotices ?? []),
-    ]),
+    compatibilityNotices: dedupeByKey(
+      [...(installed.compatibilityNotices ?? []), ...(runtime.compatibilityNotices ?? [])],
+      (entry) => JSON.stringify([entry.pluginId, entry.severity, entry.code ?? "", entry.message]),
+    ),
     // Each entry is one refused registration, not one refused hook: a plugin may
     // call `api.on()` for the same hook several times (distinct `registrationId`,
     // priority or trigger eligibility) and every one of those handlers is dead.
@@ -239,36 +231,26 @@ export function isChannelPluginFailureDiagnostic(diagnostic: PluginDiagnosticRec
   return diagnostic.level === "error" && diagnostic.code === "channel-setup-failure";
 }
 
-function formatCount(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
 export function formatCompactPluginHealthLine(
   snapshot: StatusPluginHealthSnapshot,
 ): string | undefined {
-  const loadErrors = snapshot.plugins.filter((plugin) => plugin.status === "error").length;
-  const dependencyIssues = snapshot.plugins.filter(hasDependencyIssue).length;
-  const diagnosticErrors = countProblemDiagnostics(getReportableDiagnostics(snapshot)).errors;
-  const quarantines = snapshot.contextEngineQuarantines.length;
-  const runtimeToolQuarantines = snapshot.runtimeToolQuarantines?.length ?? 0;
-  const channelPluginFailures = snapshot.channelPluginFailures?.length ?? 0;
   // Only the implicit refusal (severity "error") is a problem chip; hooks the
   // operator deliberately denied are steady state and stay off the compact line.
   const blockedHookErrors = (snapshot.blockedHooks ?? []).filter(
     (entry) => entry.severity === "error",
   ).length;
-
-  const parts = [
-    loadErrors > 0 ? formatCount(loadErrors, "plugin error") : null,
-    quarantines > 0 ? formatCount(quarantines, "context engine quarantine") : null,
-    runtimeToolQuarantines > 0
-      ? formatCount(runtimeToolQuarantines, "runtime tool quarantine")
-      : null,
-    channelPluginFailures > 0 ? formatCount(channelPluginFailures, "channel plugin failure") : null,
-    blockedHookErrors > 0 ? formatCount(blockedHookErrors, "blocked hook") : null,
-    dependencyIssues > 0 ? formatCount(dependencyIssues, "dependency issue") : null,
-    diagnosticErrors > 0 ? formatCount(diagnosticErrors, "diagnostic error") : null,
-  ].filter((part): part is string => Boolean(part));
+  const counts: Array<[number, string]> = [
+    [snapshot.plugins.filter((plugin) => plugin.status === "error").length, "plugin error"],
+    [snapshot.contextEngineQuarantines.length, "context engine quarantine"],
+    [snapshot.runtimeToolQuarantines?.length ?? 0, "runtime tool quarantine"],
+    [snapshot.channelPluginFailures?.length ?? 0, "channel plugin failure"],
+    [blockedHookErrors, "blocked hook"],
+    [snapshot.plugins.filter(hasDependencyIssue).length, "dependency issue"],
+    [countProblemDiagnostics(getReportableDiagnostics(snapshot)).errors, "diagnostic error"],
+  ];
+  const parts = counts
+    .filter(([count]) => count > 0)
+    .map(([count, noun]) => `${count} ${noun}${count === 1 ? "" : "s"}`);
 
   return parts.length === 0 ? undefined : `⚠️ Plugins: ${parts.join(" · ")}`;
 }

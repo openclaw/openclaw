@@ -5,6 +5,7 @@
 import { addAbortListener, once } from "node:events";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isSelectableCdpBrowserTarget } from "../cdp-target-filter.js";
 import { resolveCreateTargetParams } from "./create-target-params.js";
 import { resolveExtensionRelayCommandTimeoutMs } from "./relay-command-timeout.js";
 import {
@@ -427,25 +428,38 @@ export class ExtensionRelayBridge {
   }
 
   private autoAttachTab(tabId: number): void {
+    const tab = this.tabs.get(tabId);
+    if (!tab || !isSelectableCdpBrowserTarget({ type: "page", url: tab.info.url })) {
+      return;
+    }
     for (const client of this.autoAttachRecipients(tabId)) {
-      void this.withAttachedTab(client, tabId, (attached) => {
-        this.announceAttachedTab(
-          tabId,
-          attached,
-          this.autoAttachRecipients(tabId, attached.sessionId),
-        );
-      }).catch((err: unknown) =>
+      void this.withAutoAttachedTab(client, tabId).catch((err: unknown) =>
         log.warn(`auto-attach of accessible tab ${tabId} failed: ${String(err)}`),
       );
     }
   }
 
-  private async withAttachedTab<T>(
+  private withAutoAttachedTab(
     client: CdpClientState,
     tabId: number,
-    use: (attached: { targetId: string; sessionId: string }) => T,
+    use?: (targetId: string) => void,
+  ): Promise<void> {
+    return this.withAttachedTab(client, tabId, (attached) => {
+      this.announceAttachedTab(
+        tabId,
+        attached,
+        this.autoAttachRecipients(tabId, attached.sessionId),
+      );
+      use?.(attached.targetId);
+    });
+  }
+
+  private async withAttachedTab(
+    client: CdpClientState,
+    tabId: number,
+    use: (attached: { targetId: string; sessionId: string }) => void,
     createdTargetId?: string,
-  ): Promise<T> {
+  ): Promise<void> {
     const tab = this.tabs.get(tabId);
     const extension = this.extension;
     if (!tab) {
@@ -599,7 +613,10 @@ export class ExtensionRelayBridge {
     const identities = new Map<TabState, string | undefined>();
     const skipped = new Map<TabState, { url: string; reason: string }>();
     while (this.extensionConnected) {
-      const pending = [...this.tabs].filter(([, tab]) => !identities.has(tab));
+      const pending = [...this.tabs].filter(
+        ([, tab]) =>
+          !identities.has(tab) && isSelectableCdpBrowserTarget({ type: "page", url: tab.info.url }),
+      );
       if (pending.length === 0) {
         break;
       }
@@ -610,13 +627,8 @@ export class ExtensionRelayBridge {
         pending.map(async ([tabId, tab]) => {
           const url = tab.info.url;
           try {
-            await this.withAttachedTab(client, tabId, (attached) => {
-              this.announceAttachedTab(
-                tabId,
-                attached,
-                this.autoAttachRecipients(tabId, attached.sessionId),
-              );
-              identities.set(tab, attached.targetId);
+            await this.withAutoAttachedTab(client, tabId, (targetId) => {
+              identities.set(tab, targetId);
             });
           } catch (error) {
             // Exact Chromium page restrictions, not attachment conflicts,
@@ -638,6 +650,9 @@ export class ExtensionRelayBridge {
     }
     const targetInfos: Record<string, unknown>[] = [];
     for (const [tabId, tab] of this.tabs) {
+      if (!isSelectableCdpBrowserTarget({ type: "page", url: tab.info.url })) {
+        continue;
+      }
       const refusal = skipped.get(tab);
       if (refusal && refusal.url === tab.info.url) {
         log.warn(`Skipping tab ${tabId} during target enumeration: ${refusal.reason}`);
@@ -1091,16 +1106,14 @@ export class ExtensionRelayBridge {
         client.autoAttach = autoAttach;
         if (autoAttach) {
           client.detachedTabs.clear();
+          // Puppeteer's TargetManager treats this reply as the initial attachment
+          // barrier. Announce granted targets first so its first page list is complete.
           const attachResults = await Promise.allSettled(
-            [...this.tabs.keys()].map((tabId) =>
-              this.withAttachedTab(client, tabId, (attached) => {
-                this.announceAttachedTab(
-                  tabId,
-                  attached,
-                  this.autoAttachRecipients(tabId, attached.sessionId),
-                );
-              }),
-            ),
+            [...this.tabs]
+              .filter(([, tab]) =>
+                isSelectableCdpBrowserTarget({ type: "page", url: tab.info.url }),
+              )
+              .map(([tabId]) => this.withAutoAttachedTab(client, tabId)),
           );
           for (const settled of attachResults) {
             if (settled.status === "rejected") {
@@ -1111,15 +1124,29 @@ export class ExtensionRelayBridge {
         this.respond(client, request, {});
         return;
       }
+      case "Target.closeTarget":
+      case "Target.activateTarget":
       case "Target.attachToTarget": {
         const targetId = request.params?.targetId as string | undefined;
         const found = targetId ? this.tabByTargetId(targetId) : null;
-        if (!found && targetId) {
-          this.respondError(client, request, `No target with given id found: ${targetId}`, -32602);
+        if (!found) {
+          this.respondError(
+            client,
+            request,
+            request.method === "Target.attachToTarget" && !targetId
+              ? "targetId is required"
+              : `No target with given id found: ${String(targetId)}`,
+            -32602,
+          );
           return;
         }
-        if (!found) {
-          this.respondError(client, request, "targetId is required", -32602);
+        if (request.method !== "Target.attachToTarget") {
+          const close = request.method === "Target.closeTarget";
+          await this.callExtension({
+            type: close ? "closeTab" : "activateTab",
+            tabId: found.tabId,
+          });
+          this.respond(client, request, close ? { success: true } : {});
           return;
         }
         await this.withAttachedTab(client, found.tabId, (attached) => {
@@ -1175,24 +1202,6 @@ export class ExtensionRelayBridge {
         } finally {
           client.creating.delete(creating);
         }
-        return;
-      }
-      case "Target.closeTarget":
-      case "Target.activateTarget": {
-        const targetId = request.params?.targetId as string | undefined;
-        const found = targetId ? this.tabByTargetId(targetId) : null;
-        if (!found) {
-          this.respondError(
-            client,
-            request,
-            `No target with given id found: ${String(targetId)}`,
-            -32602,
-          );
-          return;
-        }
-        const close = request.method === "Target.closeTarget";
-        await this.callExtension({ type: close ? "closeTab" : "activateTab", tabId: found.tabId });
-        this.respond(client, request, close ? { success: true } : {});
         return;
       }
       case "Target.getBrowserContexts": {

@@ -14,11 +14,12 @@ import {
   type SkillSnapshot,
 } from "../types.js";
 import { getSkillsSourceVersion } from "./refresh-state.js";
+import { resolveSkillSnapshotExecutionFileHost } from "./skill-snapshot-provenance.js";
 
-/** Resolves skill entries embedded into a run payload into runtime-visible entries. */
 export async function resolveEmbeddedRunSkillEntries(params: {
   workspaceDir: string;
   executionWorkspaceDir?: string;
+  executionWorkspaceFileHost?: "gateway";
   config?: OpenClawConfig;
   agentId?: string;
   eligibility?: SkillEligibilityContext;
@@ -37,15 +38,21 @@ export async function resolveEmbeddedRunSkillEntries(params: {
   const config = resolveSkillRuntimeConfig(params.config);
   // Materialized sandbox copies are the sole read root, including lazy rebuilds
   // of hydrated library snapshots that still carry their host provenance.
+  const persistedRoots =
+    params.skillsSnapshot?.promptFormatVersion === WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION
+      ? params.skillsSnapshot.skillRoots
+      : undefined;
   const skillRoots = normalizeWorkspaceSkillRoots(
     params.workspaceOnly === true
       ? { agentWorkspaceDir: params.workspaceDir }
-      : ((params.skillsSnapshot?.promptFormatVersion === WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION
-          ? params.skillsSnapshot.skillRoots
-          : undefined) ?? {
-          agentWorkspaceDir: params.workspaceDir,
-          executionWorkspaceDir: params.executionWorkspaceDir,
-        }),
+      : {
+          agentWorkspaceDir: persistedRoots?.agentWorkspaceDir ?? params.workspaceDir,
+          executionWorkspaceDir:
+            persistedRoots?.executionWorkspaceDir ?? params.executionWorkspaceDir,
+          executionWorkspaceFileHost:
+            params.executionWorkspaceFileHost ??
+            resolveSkillSnapshotExecutionFileHost(params.skillsSnapshot),
+        },
   );
   let cachedSkillEntries: SkillEntry[] | undefined;
   const loadSkillEntries = async (): Promise<SkillEntry[]> => {
@@ -68,6 +75,7 @@ export async function resolveEmbeddedRunSkillEntries(params: {
       config,
       agentId: params.agentId,
       executionWorkspaceDir: skillRoots.executionWorkspaceDir,
+      executionWorkspaceFileHost: skillRoots.executionWorkspaceFileHost,
       ...(params.eligibility ? { eligibility: params.eligibility } : {}),
       ...(params.skillsSnapshot?.skillFilter
         ? { skillFilter: params.skillsSnapshot.skillFilter }

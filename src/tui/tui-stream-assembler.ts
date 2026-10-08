@@ -13,7 +13,6 @@ type RunStreamState = {
   displayText: string;
 };
 
-/** Assembles assistant stream deltas and final messages into stable TUI display text. */
 export class TuiStreamAssembler {
   private readonly runs = new Map<string, RunStreamState>();
 
@@ -84,7 +83,6 @@ export class TuiStreamAssembler {
     return state.displayText;
   }
 
-  /** Reports whether a run already has real displayable streamed content. */
   hasDisplayText(runId: string): boolean {
     return Boolean(this.runs.get(runId)?.displayText);
   }

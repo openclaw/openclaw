@@ -1,60 +1,20 @@
-/**
- * Session compaction compatibility bridge over the shared agent-core implementation.
- *
- * Local callers keep the historic throwing API while agent-core returns explicit Result objects.
- */
+/** Preserves the session SDK's throwing summary API over agent-core results. */
 import type { Model } from "../../../llm/types.js";
 import {
-  calculateContextTokens,
-  compact as compactCore,
-  DEFAULT_COMPACTION_SETTINGS,
-  estimateContextTokens,
-  estimateTokens,
-  findCutPoint,
-  findTurnStartIndex,
   generateSummary as generateSummaryCore,
-  getLastAssistantUsage,
-  prepareCompaction as prepareCompactionCore,
-  serializeConversation,
-  shouldCompact,
-  type CompactionDetails,
-  type CompactionPreparation,
-  type CompactionResult,
-  type CompactionSettings,
   type CompactionSummaryPrompt,
-  type ContextUsageEstimate,
   type AgentMessage,
   type StreamFn,
   type ThinkingLevel,
 } from "../../runtime/index.js";
 import { unwrapCoreResult } from "../agent-session-utils.js";
-import type { SessionEntry } from "../session-manager.js";
 import { createCompactionRuntime, type SessionModelUsageSink } from "./runtime.js";
 
 export {
-  calculateContextTokens,
-  DEFAULT_COMPACTION_SETTINGS,
-  estimateContextTokens,
   estimateTokens,
-  findCutPoint,
-  findTurnStartIndex,
-  getLastAssistantUsage,
-  serializeConversation,
-  shouldCompact,
-  type CompactionDetails,
   type CompactionPreparation,
   type CompactionResult,
-  type CompactionSettings,
-  type ContextUsageEstimate,
-};
-
-/** Prepares session entries for compaction using the shared agent-core planner. */
-export function prepareCompaction(
-  pathEntries: SessionEntry[],
-  settings: CompactionSettings,
-): CompactionPreparation | undefined {
-  return unwrapCoreResult(prepareCompactionCore(pathEntries, settings));
-}
+} from "../../runtime/index.js";
 
 /** Generates a compaction summary through the shared agent-core runtime. */
 export async function generateSummary(
@@ -85,33 +45,6 @@ export async function generateSummary(
       streamFn,
       createCompactionRuntime(usageSink),
       summaryPrompt,
-    ),
-  );
-}
-
-/** Runs full compaction through agent-core and returns the compacted conversation result. */
-export async function compact(
-  preparation: CompactionPreparation,
-  model: Model,
-  apiKey: string | undefined,
-  headers?: Record<string, string>,
-  customInstructions?: string,
-  signal?: AbortSignal,
-  thinkingLevel?: ThinkingLevel,
-  streamFn?: StreamFn,
-  usageSink?: SessionModelUsageSink,
-): Promise<CompactionResult> {
-  return unwrapCoreResult(
-    await compactCore(
-      preparation,
-      model,
-      apiKey,
-      headers,
-      customInstructions,
-      signal,
-      thinkingLevel,
-      streamFn,
-      createCompactionRuntime(usageSink),
     ),
   );
 }

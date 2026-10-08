@@ -1,6 +1,3 @@
-/**
- * Resolves model provider API keys from explicit environment variables.
- */
 import { normalizeProviderIdForAuth } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
@@ -140,7 +137,6 @@ export function resolveProviderDirectAuthPlanningEvidence(
     : null;
 }
 
-/** Resolve an API key or auth-evidence marker for a provider from environment state. */
 export function resolveEnvApiKey(
   provider: string,
   env: NodeJS.ProcessEnv = process.env,

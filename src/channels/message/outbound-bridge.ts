@@ -60,7 +60,6 @@ type CreateChannelMessageAdapterFromOutboundParams<TConfig = unknown> = {
 
 type MessageSendResultParams = {
   kind: MessageReceiptPartKind;
-  normalizeReceiptKind?: boolean;
   threadId?: string | number | null;
   replyToId?: string | null;
 };
@@ -70,7 +69,7 @@ function toMessageSendResult(
   params: MessageSendResultParams,
 ): ChannelMessageSendResult {
   const receipt = result.receipt
-    ? params.normalizeReceiptKind
+    ? params.kind === "poll"
       ? {
           ...result.receipt,
           parts: result.receipt.parts.map((part) => ({ ...part, kind: params.kind })),
@@ -115,7 +114,6 @@ async function sendThroughOutboundBridge<
 ): Promise<ChannelMessageSendResult> {
   const resultParams = {
     kind,
-    ...(kind === "poll" ? { normalizeReceiptKind: true } : {}),
     threadId: ctx.threadId,
     replyToId: ctx.replyToId,
   };

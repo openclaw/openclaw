@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
@@ -7,27 +8,15 @@ import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-
-const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
 
 export type ResetCommandAction = "new" | "reset";
 
 function parseTranscriptMessages(entries: unknown[]): unknown[] {
   const selectedEntries = selectSessionTranscriptLeafControlledPath(entries) ?? entries;
-  return selectedEntries.flatMap((entry) => {
-    if (
-      entry &&
-      typeof entry === "object" &&
-      !Array.isArray(entry) &&
-      (entry as { type?: unknown }).type === "message" &&
-      (entry as { message?: unknown }).message
-    ) {
-      return [(entry as { message: unknown }).message];
-    }
-    return [];
-  });
+  return selectedEntries.flatMap((entry) =>
+    isRecord(entry) && entry.type === "message" && entry.message ? [entry.message] : [],
+  );
 }
 
 export async function readBeforeResetMessages(params: {
@@ -108,7 +97,7 @@ export async function emitResetCommandHooks(params: {
     const channel = params.ctx.OriginatingChannel || params.command.channel;
     const to = params.ctx.OriginatingTo || params.command.from || params.command.to;
     if (channel && to) {
-      const { routeReply } = await routeReplyRuntimeLoader.load();
+      const { routeReply } = await import("./route-reply.js");
       const result = await routeReply({
         payload: { text: hookEvent.messages.join("\n\n") },
         channel,

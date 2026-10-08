@@ -319,7 +319,16 @@ describe("update failure triage boundary", () => {
           result: {
             reason: result.reason,
             recovery: result.recovery,
-            steps: gateway === "preserve" ? [{ stderrTail: "ENOSPC" }] : [],
+            steps:
+              gateway === "preserve"
+                ? [{ stderrTail: "ENOSPC" }]
+                : [
+                    {
+                      name: "update",
+                      exitCode: null,
+                      failureFacts: [{ check: "update", code: "restart-unhealthy" }],
+                    },
+                  ],
           },
         },
       });
@@ -377,11 +386,15 @@ describe("update failure triage boundary", () => {
       const detail = `Fresh Doctor failed token=${secret}; original Doctor diagnostic`;
       const failure =
         kind === "reported" ? new UpdateCommandFailure(result, 1, detail) : new Error(detail);
+      const observedResult = failure instanceof UpdateCommandFailure ? failure.result : result;
       const completion = withUpdateFailureTriage({ json: true }, targetWithResult, async () => {
         try {
           throw failure;
         } finally {
-          result.recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+          observedResult.recovery = {
+            serviceRestartSafe: false,
+            reason: "runtime-verification-failed",
+          };
           await fs.writeFile(path.join(target.root, "released"), "done");
         }
       });

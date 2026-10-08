@@ -48,18 +48,6 @@ const MAX_PROBE_TRANSPORT_CACHE_SIZE = 64;
 // 4 MiB guards against a misbehaving or hostile API endpoint streaming an oversized payload.
 const TELEGRAM_BOT_API_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
-function resolveProbeOptions(
-  proxyOrOptions?: string | TelegramProbeOptions,
-): TelegramProbeOptions | undefined {
-  if (!proxyOrOptions) {
-    return undefined;
-  }
-  if (typeof proxyOrOptions === "string") {
-    return { proxyUrl: proxyOrOptions };
-  }
-  return proxyOrOptions;
-}
-
 function buildProbeTransportCacheKey(token: string, options?: TelegramProbeOptions): string {
   const cacheIdentity = options?.accountId?.trim() || token;
   const cacheIdentityKind = options?.accountId?.trim() ? "account" : "token";
@@ -70,22 +58,6 @@ function buildProbeTransportCacheKey(token: string, options?: TelegramProbeOptio
   const dnsResultOrderKey = options?.network?.dnsResultOrder ?? "default";
   const apiRootKey = options?.apiRoot?.trim() ?? "";
   return `${cacheIdentityKind}:${cacheIdentity}::${proxyKey}::${autoSelectFamilyKey}::${dnsResultOrderKey}::${apiRootKey}`;
-}
-
-function setCachedProbeTransport(
-  cacheKey: string,
-  transport: TelegramTransport,
-): TelegramTransport {
-  probeTransportCache.set(cacheKey, transport);
-  if (probeTransportCache.size > MAX_PROBE_TRANSPORT_CACHE_SIZE) {
-    const oldestKey = probeTransportCache.keys().next().value;
-    if (oldestKey !== undefined) {
-      const oldestTransport = probeTransportCache.get(oldestKey);
-      probeTransportCache.delete(oldestKey);
-      void oldestTransport?.close();
-    }
-  }
-  return transport;
 }
 
 function resolveProbeTransport(token: string, options?: TelegramProbeOptions): TelegramTransport {
@@ -101,7 +73,16 @@ function resolveProbeTransport(token: string, options?: TelegramProbeOptions): T
     network: options?.network,
   });
 
-  return setCachedProbeTransport(cacheKey, transport);
+  probeTransportCache.set(cacheKey, transport);
+  if (probeTransportCache.size > MAX_PROBE_TRANSPORT_CACHE_SIZE) {
+    const oldestKey = probeTransportCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      const oldestTransport = probeTransportCache.get(oldestKey);
+      probeTransportCache.delete(oldestKey);
+      void oldestTransport?.close();
+    }
+  }
+  return transport;
 }
 
 function normalizeBoolean(value: unknown): boolean | null {
@@ -129,13 +110,25 @@ export async function probeTelegram(
     async ({ startedAt }) => {
       const timeoutBudgetMs = Math.max(1, Math.floor(timeoutMs));
       const deadlineMs = startedAt + timeoutBudgetMs;
-      const options = resolveProbeOptions(proxyOrOptions);
+      const options =
+        typeof proxyOrOptions === "string"
+          ? proxyOrOptions
+            ? { proxyUrl: proxyOrOptions }
+            : undefined
+          : proxyOrOptions;
       const abortSignal = options?.abortSignal;
       const includeWebhookInfo = options?.includeWebhookInfo !== false;
+      const apiBase = resolveTelegramApiBase(options?.apiRoot);
       const transport = resolveProbeTransport(token, options);
       const fetcher = transport.fetch;
-      const apiBase = resolveTelegramApiBase(options?.apiRoot);
       const base = `${apiBase}/bot${token}`;
+      const fetchMethod = (method: "getMe" | "getWebhookInfo", remainingBudgetMs: number) =>
+        fetchWithTimeout(
+          `${base}/${method}`,
+          { signal: abortSignal },
+          Math.max(1, Math.min(timeoutBudgetMs, remainingBudgetMs)),
+          fetcher,
+        );
       const retryDelayMs = Math.max(50, Math.min(1000, Math.floor(timeoutBudgetMs / 5)));
       const resolveRemainingBudgetMs = () => Math.max(0, deadlineMs - Date.now());
       const result: Omit<TelegramProbe, "elapsedMs"> = {
@@ -153,12 +146,7 @@ export async function probeTelegram(
           break;
         }
         try {
-          meRes = await fetchWithTimeout(
-            `${base}/getMe`,
-            { signal: abortSignal },
-            Math.max(1, Math.min(timeoutBudgetMs, remainingBudgetMs)),
-            fetcher,
-          );
+          meRes = await fetchMethod("getMe", remainingBudgetMs);
           break;
         } catch (err) {
           fetchError = err;
@@ -169,7 +157,7 @@ export async function probeTelegram(
           // fallback dispatcher so the next retry (and all future probes
           // sharing this cached transport) skip the stalled IPv6 path.
           // Keep the original socket code in transport fallback diagnostics.
-          transport.forceFallback?.("probe timeout/network error", err);
+          transport.forceFallback?.("check timeout/network error", err);
           if (i < 2) {
             const remainingAfterAttemptMs = resolveRemainingBudgetMs();
             if (remainingAfterAttemptMs <= 0) {
@@ -185,7 +173,7 @@ export async function probeTelegram(
 
       if (!meRes) {
         throw toErrorObject(
-          fetchError ?? new Error(`probe timed out after ${timeoutBudgetMs}ms`),
+          fetchError ?? new Error(`check timed out after ${timeoutBudgetMs}ms`),
           "Non-Error thrown",
         );
       }
@@ -234,12 +222,7 @@ export async function probeTelegram(
         try {
           const webhookRemainingBudgetMs = resolveRemainingBudgetMs();
           if (webhookRemainingBudgetMs > 0) {
-            const webhookRes = await fetchWithTimeout(
-              `${base}/getWebhookInfo`,
-              { signal: abortSignal },
-              Math.max(1, Math.min(timeoutBudgetMs, webhookRemainingBudgetMs)),
-              fetcher,
-            );
+            const webhookRes = await fetchMethod("getWebhookInfo", webhookRemainingBudgetMs);
             const webhookJson = JSON.parse(
               (
                 await readTelegramDiagnosticBody(

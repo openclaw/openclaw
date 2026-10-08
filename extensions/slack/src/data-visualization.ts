@@ -1,4 +1,3 @@
-// Slack data-visualization Block Kit contract, projection, and text fallback.
 import type { Block } from "@slack/web-api";
 import {
   normalizeMessagePresentation,
@@ -56,7 +55,6 @@ function hasUniqueStrings(values: readonly string[]): boolean {
   return new Set(values).size === values.length;
 }
 
-/** True when a portable chart satisfies Slack's complete native-block contract. */
 export function canRenderSlackDataVisualization(block: MessagePresentationChartBlock): boolean {
   if (!isStringWithin(block.title, SLACK_CHART_TITLE_MAX)) {
     return false;
@@ -94,7 +92,6 @@ export function canRenderSlackDataVisualization(block: MessagePresentationChartB
   );
 }
 
-/** Map a validated portable chart to Slack's app-facing Block Kit shape. */
 export function buildSlackDataVisualizationBlock(
   block: MessagePresentationChartBlock,
 ): SlackDataVisualizationBlock | undefined {

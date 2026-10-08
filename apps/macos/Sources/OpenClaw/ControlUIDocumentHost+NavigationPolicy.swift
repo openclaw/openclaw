@@ -32,14 +32,9 @@ extension ControlUIDocumentHost {
         isMainFrame && self.isTrustedLinkSource(sourceURL, dashboardURL: dashboardURL)
     }
 
-    static func isHTTPURL(_ url: URL) -> Bool {
-        guard let scheme = url.scheme?.lowercased(),
-              scheme == "http" || scheme == "https",
-              url.host?.isEmpty == false
-        else {
-            return false
-        }
-        return true
+    nonisolated static func isHTTPURL(_ url: URL) -> Bool {
+        let scheme = url.scheme?.lowercased()
+        return (scheme == "http" || scheme == "https") && url.host?.isEmpty == false
     }
 
     static func isExternalURL(_ url: URL) -> Bool {
@@ -75,13 +70,7 @@ extension ControlUIDocumentHost {
         if self.sameOrigin(url, dashboardURL) {
             return true
         }
-        guard !isMainFrame,
-              isTrustedDashboardSource,
-              host?.isEmpty == false
-        else {
-            return false
-        }
-        return true
+        return !isMainFrame && isTrustedDashboardSource && host?.isEmpty == false
     }
 
     static func shouldAllowBrowserNavigation(to url: URL, isMainFrame: Bool) -> Bool {
@@ -266,7 +255,7 @@ extension ControlUIDocumentHost {
             navigationType: navigationAction.navigationType,
             buttonNumber: navigationAction.buttonNumber)
         {
-            self.openExternal(url)
+            Self.openExternal(url)
         }
         decisionHandler(.cancel)
     }
@@ -345,15 +334,15 @@ extension ControlUIDocumentHost {
         case .allow:
             decisionHandler(.allow)
         case .openExternal:
-            self.openExternal(url)
+            Self.openExternal(url)
             decisionHandler(.cancel)
         case .cancel:
             decisionHandler(.cancel)
         }
     }
 
-    private func openExternal(_ url: URL) {
-        guard Self.isExternalURL(url) || Self.isEditorURL(url) else { return }
-        NSWorkspace.shared.open(url)
+    static func openExternal(_ url: URL) {
+        guard self.isExternalURL(url) || self.isEditorURL(url) else { return }
+        AppActivation.shared.open(url)
     }
 }

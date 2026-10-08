@@ -13,7 +13,6 @@ const hoistedMocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
   maybeRepairGroupAllowFromFallback: vi.fn(),
   maybeRepairPluginOpenClawHostLinks: vi.fn(),
-  maybeRepairLegacyOAuthSidecarProfiles: vi.fn(),
   migrateLegacyTailscaleProfileIdentities: vi.fn(),
   repairMergedGatewayOwnerProfile: vi.fn(),
   maybeMigrateAuthProfileJsonStoresToSqlite: vi.fn(),
@@ -48,10 +47,6 @@ vi.mock("../doctor-plugin-host-links.js", () => ({
 
 vi.mock("../doctor-plugin-registry.js", () => ({
   maybeRepairStaleManagedNpmBundledPlugins: hoistedMocks.maybeRepairStaleManagedNpmBundledPlugins,
-}));
-
-vi.mock("../doctor-auth-oauth-sidecar.js", () => ({
-  maybeRepairLegacyOAuthSidecarProfiles: hoistedMocks.maybeRepairLegacyOAuthSidecarProfiles,
 }));
 
 vi.mock("../../state/user-profiles-tailscale-migration.js", () => ({

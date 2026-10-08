@@ -125,7 +125,7 @@ described [above](/start/wizard-cli-reference#what-the-wizard-does).
       - **Generate/store plaintext secret** (default)
       - **Use SecretRef** (opt-in)
       - Classic QuickStart reuses an existing `gateway.auth.token` SecretRef from an
-        `env`, `file`, `exec`, or `store` provider for its probe and dashboard
+        `env`, `file`, `exec`, or `store` provider for its check and dashboard
         handoff. An unresolved configured ref stops onboarding with remediation
         guidance instead of silently weakening Gateway auth.
     - Explicit or existing password mode also supports plaintext or SecretRef storage.
@@ -187,7 +187,7 @@ described [above](/start/wizard-cli-reference#what-the-wizard-does).
   </Step>
   <Step title="Health check">
     - Starts gateway (if needed) and runs `openclaw health`.
-    - `openclaw status --deep` adds the live gateway health probe to status output, including channel probes when supported.
+    - `openclaw status --deep` adds the live gateway health check to status output, including channel checks when supported.
 
   </Step>
   <Step title="Finish">
@@ -522,6 +522,15 @@ and allow an explicit retry after the competing setup finishes. A terminal wizar
 rolled back. Generic request failures, timeouts, disconnects, and a missing wizard
 do not establish whether setup ran; clients must preserve that uncertainty rather
 than automatically retrying or claiming successful activation.
+
+If a Gateway restart loses the in-memory model setup wizard, the Control UI
+refreshes the saved model and provider state. A configured model is offered for
+explicit verification and continuation; if none is configured, provider choices
+become available again without waiting for the old wizard deadline. Failed
+refreshes retain the recovery guard and can be retried with **Check again**.
+Recovery never replays the previous sign-in or answer, treats a saved model as a
+successful verification, or requires deleting setup state. Model settings that
+support config hot reload apply without restarting the Gateway.
 
 ## Signal setup behavior
 

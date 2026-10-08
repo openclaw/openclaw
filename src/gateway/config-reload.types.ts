@@ -70,7 +70,7 @@ export type GatewayConfigReloaderOptions = {
   onConfigCandidateObserved?: () => void;
   onConfigChange?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
   /** Publishes runtime state after a hot or no-op config transaction. */
-  onConfigApplied?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void | Promise<void>;
+  onConfigApplied?: GatewayConfigReloaderOptions["onConfigChange"];
   /** Runs synchronously when a config transaction publishes its runtime state. */
   onRuntimeConfigCommitted?: (plan: GatewayReloadPlan, nextConfig: OpenClawConfig) => void;
   /** Publishes the resolved source-config revision accepted by the active runtime. */
@@ -109,10 +109,7 @@ export type GatewayConfigReloaderOptions = {
     changedPaths: readonly string[];
   }) => void;
   onNoopConfigCommit: (
-    plan: GatewayReloadPlan,
-    nextConfig: OpenClawConfig,
-    ownership: GatewayConfigReloadTransactionOwnership,
-    sourceConfig: OpenClawConfig,
+    ...args: Parameters<GatewayConfigReloaderOptions["onHotReload"]>
   ) => Promise<void | GatewayHotReloadApplication>;
   onHotReload: (
     plan: GatewayReloadPlan,
@@ -121,10 +118,7 @@ export type GatewayConfigReloaderOptions = {
     sourceConfig: OpenClawConfig,
   ) => Promise<GatewayHotReloadApplication>;
   onRestart: (
-    plan: GatewayReloadPlan,
-    nextConfig: OpenClawConfig,
-    ownership: GatewayConfigReloadTransactionOwnership,
-    sourceConfig: OpenClawConfig,
+    ...args: Parameters<GatewayConfigReloaderOptions["onHotReload"]>
   ) => void | Promise<void>;
   /** Keeps one accepted config transaction inside the Gateway work fence. */
   runTransaction?: <T>(run: () => Promise<T>) => Promise<T>;

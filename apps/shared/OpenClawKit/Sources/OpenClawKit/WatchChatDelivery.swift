@@ -114,9 +114,8 @@ public struct OpenClawWatchChatDeliveryCommand: Codable, Sendable, Equatable {
         case let .chat(text):
             return text
         case let .quickReply(promptId, actionId, actionLabel, note):
-            let label = actionLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
             var lines = [
-                "Watch reply: \(label?.isEmpty == false ? label! : actionId)",
+                "Watch reply: \(actionLabel?.trimmedNonEmpty ?? actionId)",
                 "promptId=\(promptId)",
                 "actionId=\(actionId)",
                 "replyId=\(self.commandId)",
@@ -392,12 +391,11 @@ public enum OpenClawWatchChatDeliveryCodec {
             if let runId = terminal.runId { try self.identifier(runId) }
             guard terminal.completedAtMs >= 0 else { throw self.invalidPayload() }
             switch terminal.outcome {
-            case let .reply(text): try self.text(text)
+            case let .reply(text), let .uncertain(text): try self.text(text)
             case .forwarded: break
             case let .failed(code, message):
                 try self.identifier(code)
                 try self.text(message)
-            case let .uncertain(message): try self.text(message)
             }
         }
         _ = try self.encode(receipt)

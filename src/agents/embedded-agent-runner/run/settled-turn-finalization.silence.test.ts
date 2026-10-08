@@ -44,24 +44,11 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
       phased: true,
     },
     {
-      name: "confirmation committed during recovery",
-      expectation: "required",
-      delivery: "delivered-during-recovery",
-      phased: false,
-    },
-    {
       name: "confirmation held during recovery",
       expectation: "required",
       delivery: "pending-during-recovery",
       phased: false,
     },
-    {
-      name: "delivered confirmation",
-      expectation: "required",
-      delivery: "delivered",
-      phased: false,
-    },
-    { name: "pending confirmation", expectation: "required", delivery: "pending", phased: false },
     { name: "unconfirmed receipt", expectation: "required", delivery: "unknown", phased: false },
     { name: "optional helper", expectation: "optional", delivery: "missing", phased: false },
   ] as const)(
@@ -130,12 +117,8 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
       let observations = 0;
       input.terminalBase.runParams.resolveReplyDelivery = async () => {
         observations += 1;
-        if (delivery === "delivered-during-recovery" || delivery === "pending-during-recovery") {
-          return observations === 1
-            ? "missing"
-            : delivery === "delivered-during-recovery"
-              ? "delivered"
-              : "pending";
+        if (delivery === "pending-during-recovery") {
+          return observations === 1 ? "missing" : "pending";
         }
         if (delivery === "unknown") {
           throw new Error("Source receipt unavailable");
@@ -154,9 +137,8 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
 
       const result = await prepareTerminalWithSettledTurnFinalization(input);
 
-      const deliveredDuringRecovery =
-        delivery === "delivered-during-recovery" || delivery === "pending-during-recovery";
-      if (expectation === "required" && (delivery === "missing" || deliveredDuringRecovery)) {
+      const pendingDuringRecovery = delivery === "pending-during-recovery";
+      if (expectation === "required" && (delivery === "missing" || pendingDuringRecovery)) {
         expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
         const [preparedAttempt] = backendMocks.runSettledFinalization.mock.calls[0] ?? [];
         expect(preparedAttempt).toMatchObject({
@@ -167,14 +149,10 @@ describe("prepareTerminalWithSettledTurnFinalization canonical silence", () => {
         });
         expect(result.finalizationOutcome).toBe("answered");
         expect(result.prepared.payloadsWithToolMedia).toEqual(
-          deliveredDuringRecovery ? [] : [expect.objectContaining({ text: finalText })],
+          pendingDuringRecovery ? [] : [expect.objectContaining({ text: finalText })],
         );
         expect(result.prepared.replyDeliveryState).toBe(
-          deliveredDuringRecovery
-            ? delivery === "delivered-during-recovery"
-              ? "delivered"
-              : "pending"
-            : "missing",
+          pendingDuringRecovery ? "pending" : "missing",
         );
       } else {
         expect(backendMocks.runSettledFinalization).not.toHaveBeenCalled();

@@ -90,7 +90,7 @@ describe("cron model schema regressions", () => {
     },
   );
 
-  it.each(["add", "update"])("preserves failure-alert values for %s", (action) => {
+  it("preserves failure-alert values in the shared job schema", () => {
     expect(propertyAt(schema, "job.failureAlert")?.anyOf).toContainEqual({
       type: "boolean",
       const: false,
@@ -103,7 +103,7 @@ describe("cron model schema regressions", () => {
       [true, false],
       ["invalid", false],
     ] as const) {
-      const args = { action, job: { failureAlert } };
+      const args = { action: "update", job: { failureAlert } };
       const validate = () =>
         validateToolArguments(tool, {
           type: "toolCall",

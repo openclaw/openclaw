@@ -1,14 +1,35 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
+import * as diskSpace from "../infra/disk-space.js";
 import { collectDiskSpaceHealthFindings, formatBytes, noteDiskSpace } from "./doctor-disk-space.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
 
+beforeEach(() => {
+  vi.stubEnv("OPENCLAW_STATE_DIR", "/home/test/.openclaw");
+  vi.stubEnv("OPENCLAW_HOME", undefined);
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+
+function mockDiskSpace(availableBytes: number | null) {
+  vi.spyOn(diskSpace, "tryReadDiskSpace").mockReturnValue(
+    availableBytes === null
+      ? null
+      : {
+          availableBytes,
+          targetPath: "/home/test/.openclaw",
+          checkedPath: "/home/test",
+          totalBytes: null,
+        },
+  );
+}
+
 function collectFindingsAt(availableBytes: number) {
-  return collectDiskSpaceHealthFindings({
-    env: { HOME: "/home/test" },
-    readDiskSpace: () => ({ availableBytes }),
-  });
+  mockDiskSpace(availableBytes);
+  return collectDiskSpaceHealthFindings();
 }
 
 describe("formatBytes", () => {
@@ -63,12 +84,8 @@ describe("collectDiskSpaceHealthFindings", () => {
   });
 
   it("returns no finding when disk space cannot be read", () => {
-    expect(
-      collectDiskSpaceHealthFindings({
-        env: { HOME: "/home/test" },
-        readDiskSpace: () => null,
-      }),
-    ).toEqual([]);
+    mockDiskSpace(null);
+    expect(collectDiskSpaceHealthFindings()).toEqual([]);
   });
 });
 
@@ -76,10 +93,8 @@ describe("noteDiskSpace", () => {
   beforeEach(() => vi.mocked(note).mockClear());
 
   it("emits one titled low-space note", () => {
-    noteDiskSpace({
-      env: { HOME: "/home/test" },
-      readDiskSpace: () => ({ availableBytes: 300 * 1024 * 1024 }),
-    });
+    mockDiskSpace(300 * 1024 * 1024);
+    noteDiskSpace();
 
     expect(note).toHaveBeenCalledExactlyOnceWith(
       expect.stringContaining("Low disk space"),
@@ -91,7 +106,8 @@ describe("noteDiskSpace", () => {
     { name: "space is sufficient", snapshot: { availableBytes: 10 * 1024 * 1024 * 1024 } },
     { name: "disk space cannot be read", snapshot: null },
   ])("does not call note when $name", ({ snapshot }) => {
-    noteDiskSpace({ env: { HOME: "/home/test" }, readDiskSpace: () => snapshot });
+    mockDiskSpace(snapshot?.availableBytes ?? null);
+    noteDiskSpace();
     expect(note).not.toHaveBeenCalled();
   });
 });

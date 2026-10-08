@@ -13,6 +13,7 @@ import {
   formatContextUsageShort,
   handleCompactCommand,
   incrementCompactionCount,
+  isEmbeddedAgentRunAbortableForCompaction,
   requireCompactEmbeddedAgentSessionCall,
   requireIncrementCompactionCountCall,
   requireResolveAgentDirCall,
@@ -623,6 +624,29 @@ describe("handleCompactCommand", () => {
 
     expect(result?.reply?.text).toContain("Server-side compaction (8614 → 736)");
     expect(requireIncrementCompactionCountCall().compactionKind).toBe("server-endpoint");
+  });
+
+  it("lets the active run settle naturally before compacting", async () => {
+    vi.mocked(isEmbeddedAgentRunAbortableForCompaction).mockReturnValueOnce(true);
+    vi.mocked(compactEmbeddedAgentSession).mockResolvedValueOnce({
+      ok: true,
+      compacted: true,
+      compactionKind: "context-engine",
+      result: { summary: "summary", firstKeptEntryId: "kept", tokensBefore: 999, tokensAfter: 42 },
+    });
+
+    const result = await handleCompactCommand(
+      {
+        ...buildCompactParams("/compact", compactCommandConfig),
+        sessionEntry: { sessionId: "settle-session", updatedAt: Date.now() },
+      },
+      true,
+    );
+
+    expect(vi.mocked(abortEmbeddedAgentRun)).not.toHaveBeenCalled();
+    expect(vi.mocked(waitForEmbeddedAgentRunEnd)).toHaveBeenCalledWith(expect.any(String), 60_000);
+    expect(result?.sessionCompaction).toMatchObject({ compacted: true, tokensAfter: 42 });
+    expect(result?.reply?.text).not.toContain("aborted");
   });
 
   it.each([

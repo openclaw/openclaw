@@ -22,22 +22,18 @@ export type ProjectedUpstreamProviderCatalogModel = ModelDefinitionConfig & {
 };
 
 export function readLiveModelCatalogId(row: unknown): string | undefined {
-  const record = readLiveModelCatalogRecord(row);
+  const record = asOptionalRecord(row);
   if (record?.object !== undefined && record.object !== "model") {
     return undefined;
   }
   return readLiveModelCatalogStringField(record, "id");
 }
 
-export function readLiveModelCatalogRecord(body: unknown): Record<string, unknown> | undefined {
-  return asOptionalRecord(body);
-}
-
 export function readLiveModelCatalogStringField(
   row: unknown,
   keys: string | readonly string[],
 ): string | undefined {
-  const record = readLiveModelCatalogRecord(row);
+  const record = asOptionalRecord(row);
   for (const key of typeof keys === "string" ? [keys] : keys) {
     const value = record?.[key];
     if (typeof value === "string" && value.trim()) {
@@ -51,7 +47,7 @@ export function readLiveModelCatalogBooleanField(
   row: unknown,
   keys: string | readonly string[],
 ): boolean | undefined {
-  const record = readLiveModelCatalogRecord(row);
+  const record = asOptionalRecord(row);
   for (const key of typeof keys === "string" ? [keys] : keys) {
     const value = record?.[key];
     if (typeof value === "boolean") {
@@ -65,7 +61,7 @@ export function readLiveModelCatalogPositiveSafeIntegerField(
   row: unknown,
   keys: string | readonly string[],
 ): number | undefined {
-  const record = readLiveModelCatalogRecord(row);
+  const record = asOptionalRecord(row);
   for (const key of typeof keys === "string" ? [keys] : keys) {
     const value = record?.[key];
     if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
@@ -78,8 +74,8 @@ export function readLiveModelCatalogPositiveSafeIntegerField(
 export function isUpstreamProviderCatalogModel(
   value: unknown,
 ): value is UpstreamProviderCatalogModel {
-  const model = readLiveModelCatalogRecord(value);
-  const limits = readLiveModelCatalogRecord(model?.limit);
+  const model = asOptionalRecord(value);
+  const limits = asOptionalRecord(model?.limit);
   return Boolean(
     readLiveModelCatalogStringField(model, "id") &&
     readLiveModelCatalogPositiveSafeIntegerField(limits, "context") &&
@@ -199,10 +195,6 @@ function findLiveModelTemplate(
   modelId: string,
   models: readonly ModelDefinitionConfig[],
 ): ModelDefinitionConfig | undefined {
-  const exact = models.find((model) => model.id === modelId);
-  if (exact) {
-    return exact;
-  }
   const normalizedId = modelId.toLowerCase();
   let best: ModelDefinitionConfig | undefined;
   let bestScore = 0;
@@ -247,7 +239,7 @@ function buildOpenAICompatibleLiveModel(
   fallback: ModelProviderConfig,
   acceptUnknownModel?: (params: { id: string; record: Record<string, unknown> }) => boolean,
 ): ModelDefinitionConfig | undefined {
-  const record = readLiveModelCatalogRecord(row);
+  const record = asOptionalRecord(row);
   const id = readLiveModelCatalogStringField(record, ["id", "model", "model_name", "modelName"]);
   if (!record || !id || !isSafeLiveModelId(id)) {
     return undefined;
@@ -258,10 +250,10 @@ function buildOpenAICompatibleLiveModel(
   if (readLiveModelCatalogBooleanField(record, ["archived", "deprecated"]) === true) {
     return undefined;
   }
-  const capabilities = readLiveModelCatalogRecord(record.capabilities);
-  const architecture = readLiveModelCatalogRecord(record.architecture);
-  const topProvider = readLiveModelCatalogRecord(record.top_provider);
-  const modelInfo = readLiveModelCatalogRecord(record.model_info);
+  const capabilities = asOptionalRecord(record.capabilities);
+  const architecture = asOptionalRecord(record.architecture);
+  const topProvider = asOptionalRecord(record.top_provider);
+  const modelInfo = asOptionalRecord(record.model_info);
   const nestedRecords = [capabilities, architecture, topProvider, modelInfo];
   const advertisedChatCapability = rowAdvertisesChatModel(record, nestedRecords);
   if (
@@ -279,10 +271,7 @@ function buildOpenAICompatibleLiveModel(
       ? { ...exact, contextWindow: liveContextWindow }
       : exact;
   }
-  // Manifest-published ids returned above are known-good. Everything past this
-  // point is a model the manifest has never described, so an opted-in provider
-  // gate decides whether its request shaping is understood well enough to
-  // surface it at all.
+  // Only unknown ids need the provider's request-shaping gate.
   if (acceptUnknownModel && !acceptUnknownModel({ id, record })) {
     return undefined;
   }
@@ -377,8 +366,8 @@ export function projectUpstreamProviderCatalogModel(params: {
   anthropicBaseUrl?: string;
   defaultBaseUrl?: string;
 }): ProjectedUpstreamProviderCatalogModel | undefined {
-  const model = readLiveModelCatalogRecord(params.model);
-  const limit = readLiveModelCatalogRecord(model?.limit);
+  const model = asOptionalRecord(params.model);
+  const limit = asOptionalRecord(model?.limit);
   const id = readLiveModelCatalogStringField(model, "id");
   const contextWindow = readLiveModelCatalogPositiveSafeIntegerField(limit, "context");
   const maxTokens = readLiveModelCatalogPositiveSafeIntegerField(limit, "output");
@@ -386,7 +375,7 @@ export function projectUpstreamProviderCatalogModel(params: {
     return undefined;
   }
 
-  const modelProvider = readLiveModelCatalogRecord(model.provider);
+  const modelProvider = asOptionalRecord(model.provider);
   const npm =
     readLiveModelCatalogStringField(modelProvider, "npm") ??
     params.provider.npm ??
@@ -417,7 +406,7 @@ export function projectUpstreamProviderCatalogModel(params: {
     return undefined;
   }
 
-  const modalities = readLiveModelCatalogRecord(model.modalities);
+  const modalities = asOptionalRecord(model.modalities);
   const input: ProjectedUpstreamProviderCatalogModel["input"] = ["text"];
   if (Array.isArray(modalities?.input) && modalities.input.includes("image")) {
     input.push("image");
@@ -426,7 +415,7 @@ export function projectUpstreamProviderCatalogModel(params: {
     ? model.reasoning_options
     : undefined;
   const effortOptions = reasoningOptions?.flatMap((option) => {
-    const record = readLiveModelCatalogRecord(option);
+    const record = asOptionalRecord(option);
     return record?.type === "effort" && Array.isArray(record.values) ? [record.values] : [];
   });
   // Upstream distinguishes absent controls from no controls and uses null for native "none".

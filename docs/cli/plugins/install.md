@@ -18,6 +18,10 @@ Gateway, it saves the installation for the next start. A lost reply or failed
 runtime activation does not trigger a second local install; inspect the reported
 state and use `plugins reload <id>` after fixing an activation failure.
 
+Replacement installs wait for the old plugin's in-flight work before applying
+the new generation. File watcher notifications for the install's own unchanged
+config do not cancel that wait; a newer config change can still supersede it.
+
 Use `--no-enable` when configuration already owns plugin activation. It installs
 and records the plugin without adding it to `plugins.allow`, removing it from
 `plugins.deny`, enabling its entry, or selecting its exclusive slot. Existing

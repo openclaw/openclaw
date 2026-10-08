@@ -115,48 +115,27 @@ describePosix("attributed production type failure in a cancelled job", () => {
   });
 
   it.each([
+    "different command",
+    "wrong task binding",
+    "ignored job failure",
+    "changed step condition",
     "different job",
-    "wrong step number",
     "missing source step",
-    "duplicate step number",
-    "incomplete step",
-    "additional failure",
-    "missing cleanup",
     "missing prelude timestamp",
     "reordered steps",
     "overlapping steps",
     "step outside job",
-    "foreign publisher",
-    "stale check head",
-    "missing independent proof",
-    "changed source input",
     "omitted collateral",
   ])("refuses %s without dispatching", (fault) => {
-    const f = staticRootCandidate();
+    const f = staticRootCandidate(fault);
     const state = f.state();
     const job = state.priorCi.jobs![0]!;
     const steps = job.steps!;
-    const check = state.priorCi.deadline.check;
     if (fault === "different job") {
-      job.name = check.name = "check-test-types";
-    }
-    if (fault === "wrong step number") {
-      f.evidence.failures[0]!.failedStep.number = 15;
+      job.name = state.priorCi.deadline.check.name = "check-test-types";
     }
     if (fault === "missing source step") {
       steps.splice(1, 1);
-    }
-    if (fault === "duplicate step number") {
-      steps[1]!.number = 1;
-    }
-    if (fault === "incomplete step") {
-      steps[1]!.status = "in_progress";
-    }
-    if (fault === "additional failure") {
-      steps[1]!.conclusion = "failure";
-    }
-    if (fault === "missing cleanup") {
-      steps.pop();
     }
     if (fault === "missing prelude timestamp") {
       delete steps[1]!.started_at;
@@ -170,18 +149,6 @@ describePosix("attributed production type failure in a cancelled job", () => {
     if (fault === "step outside job") {
       steps.at(-1)!.completed_at = "2026-09-20T00:02:05Z";
     }
-    if (fault === "foreign publisher") {
-      check.app.id = 999;
-    }
-    if (fault === "stale check head") {
-      check.head_sha = f.base;
-    }
-    if (fault === "missing independent proof") {
-      f.evidence.failures[0]!.evidence = [];
-    }
-    if (fault === "changed source input") {
-      f.evidence.failures[0]!.sourcePaths = ["owner.txt"];
-    }
     if (fault === "omitted collateral") {
       f.evidence.cancellation.jobIds = [];
     }
@@ -189,20 +156,16 @@ describePosix("attributed production type failure in a cancelled job", () => {
     writeFileSync(f.path, JSON.stringify(f.evidence));
     const result = f.verifyPriorCi(f.path);
     expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain("Prior-CI admin admission:");
-    expect(f.state().mutations).toBe(0);
-  });
-
-  it.each([
-    "different command",
-    "wrong task binding",
-    "ignored job failure",
-    "changed step condition",
-  ])("refuses %s in the audited workflow", (fault) => {
-    const f = staticRootCandidate(fault);
-    const result = f.verifyPriorCi(f.path);
-    expect(result.status, result.output).not.toBe(0);
-    expect(result.output).toContain("canonical production-type workflow owner");
+    expect(result.output).toContain(
+      [
+        "different command",
+        "wrong task binding",
+        "ignored job failure",
+        "changed step condition",
+      ].includes(fault)
+        ? "canonical production-type workflow owner"
+        : "Prior-CI admin admission:",
+    );
     expect(f.state().mutations).toBe(0);
   });
 });

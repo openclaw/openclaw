@@ -18,6 +18,7 @@ import {
   clearPluginLoaderCache,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -104,6 +105,8 @@ afterEach(async () => {
   clearRuntimeConfigSnapshot();
   clearPluginLoaderCache();
   clearPluginMetadataLifecycleCaches();
+  // Capture retirement still owns its SQLite token beneath the fixture root.
+  await expect(waitForPluginCacheRetirement()).resolves.toMatchObject({ failures: [] });
   await state?.cleanup();
 });
 

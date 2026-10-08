@@ -72,17 +72,9 @@ function formatScheduleLogContext(params: {
   name?: string;
   jobId?: string;
 }): string {
-  const parts = [`pluginId=${params.pluginId}`];
-  if (params.sessionKey) {
-    parts.push(`sessionKey=${params.sessionKey}`);
-  }
-  if (params.name) {
-    parts.push(`name=${params.name}`);
-  }
-  if (params.jobId) {
-    parts.push(`jobId=${params.jobId}`);
-  }
-  return parts.join(" ");
+  return (["pluginId", "sessionKey", "name", "jobId"] as const)
+    .flatMap((key) => (key === "pluginId" || params[key] ? [`${key}=${params[key]}`] : []))
+    .join(" ");
 }
 
 async function removeScheduledSessionTurn(params: {
@@ -190,9 +182,6 @@ async function listAllCronJobsForPluginTagCleanup(
 
     if (!snapshotChanged) {
       throw new Error("cron.list pagination exceeded maximum pages");
-    }
-    if (restart === PLUGIN_CRON_CLEANUP_MAX_SNAPSHOT_RESTARTS) {
-      throw new Error("cron.list inventory changed repeatedly during cleanup");
     }
   }
 

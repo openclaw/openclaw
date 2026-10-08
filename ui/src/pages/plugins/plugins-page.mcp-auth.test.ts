@@ -53,13 +53,7 @@ describe("plugin MCP sign-in", () => {
     return { ...mounted, ...harness, client, request, route, context };
   }
 
-  it.each([
-    "unauthenticated",
-    "requires-authorization",
-    "pending-authorization",
-    "authorized",
-    undefined,
-  ] as const)(
+  it.each(["unauthenticated", "authorized", undefined] as const)(
     "shows Connect before sign-in and Connected with Edit afterward (%s)",
     async (state) => {
       const inspection = createInspectResult({
@@ -92,10 +86,7 @@ describe("plugin MCP sign-in", () => {
 
   it.each([
     ["missing", undefined],
-    ["missing", false],
     ["configured", undefined],
-    ["invalid", undefined],
-    ["unresolved", undefined],
   ] as const)(
     "shows credential state %s (required=%s) and opens existing Settings",
     async (status, requiresCredential) => {

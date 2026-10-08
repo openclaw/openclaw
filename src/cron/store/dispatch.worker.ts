@@ -32,9 +32,16 @@ const loadExternalState = createLazyRuntimeModule(() => import("./external-state
 let externalState: typeof import("./external-state.worker.js") | undefined;
 const loadScheduler = createLazyRuntimeModule(() => import("./scheduler-state.worker.js"));
 let scheduler: typeof import("./scheduler-state.worker.js") | undefined;
+const loadStartup = createLazyRuntimeModule(() => import("./startup-plan.worker.js"));
+let startup: typeof import("./startup-plan.worker.js") | undefined;
 
 export function prepareCronStateWorkerCommand(type: PropertyKey): Promise<void> | undefined {
-  if ((type === "cron.recordSkippedRuns" || type === "cron.planStartup") && !scheduler) {
+  if (type === "cron.planStartup" && !startup) {
+    return loadStartup().then((loaded) => {
+      startup = loaded;
+    });
+  }
+  if (type === "cron.recordSkippedRuns" && !scheduler) {
     return loadScheduler().then((loaded) => {
       scheduler = loaded;
     });
@@ -138,13 +145,15 @@ export function executeCronStateCommand(
         { operationLabel: command.type },
       );
     case "cron.recordSkippedRuns":
-    case "cron.planStartup":
       if (!scheduler) {
         throw new Error("Cron scheduler worker is not prepared");
       }
-      return command.type === "cron.recordSkippedRuns"
-        ? scheduler.recordSkippedCronRunsInWorker(database, command.input)
-        : scheduler.planCronStartupInWorker(database, command.input);
+      return scheduler.recordSkippedCronRunsInWorker(database, command.input);
+    case "cron.planStartup":
+      if (!startup) {
+        throw new Error("Cron startup worker is not prepared");
+      }
+      return startup.planCronStartupInWorker(database, command.input);
     case "cron.mutateExternalState":
       if (!externalState) {
         throw new Error("Cron external-state worker is not prepared");

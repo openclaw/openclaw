@@ -11,7 +11,6 @@ export type PageContext = {
   nonce: string;
   absoluteUrl: string;
   displayTimezone: string;
-  nowMs?: number;
 };
 type Window = Pick<PeriodDescriptor, "period" | "key" | "sinceMs" | "untilMs">;
 type Snapshot = Window & { generatedAtMs: number; status: ReportDocument["status"] };
@@ -68,15 +67,15 @@ export function formatWindow(entry: Pick<Window, "sinceMs" | "untilMs">): string
   }
   return `${formatUtcDay(start)}-${formatUtcDay(end)}`;
 }
-export function isOpen(ctx: PageContext, entry: Pick<Window, "sinceMs" | "untilMs">): boolean {
-  const now = ctx.nowMs ?? Date.now();
+export function isOpen(entry: Pick<Window, "sinceMs" | "untilMs">): boolean {
+  const now = Date.now();
   return now >= entry.sinceMs && now < entry.untilMs;
 }
 export function openPeriodStatus(ctx: PageContext, entry: Snapshot): string {
-  if (!isOpen(ctx, entry)) {
+  if (!isOpen(entry)) {
     return "";
   }
-  const minutes = Math.max(1, Math.ceil((entry.untilMs - (ctx.nowMs ?? Date.now())) / 60000));
+  const minutes = Math.max(1, Math.ceil((entry.untilMs - Date.now()) / 60000));
   const remaining = minutes >= 60 ? `${Math.floor(minutes / 60)}h ${minutes % 60}m` : `${minutes}m`;
   const until = new Date(entry.untilMs).toISOString();
   const asOf = new Date(entry.generatedAtMs).toISOString();

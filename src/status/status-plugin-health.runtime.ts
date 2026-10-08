@@ -127,15 +127,6 @@ function collectChannelPluginFailures(params: {
   }
 }
 
-function parsePluginOwner(owner: string | undefined): string | undefined {
-  const prefix = "plugin:";
-  if (!owner?.startsWith(prefix)) {
-    return undefined;
-  }
-  const pluginId = owner.slice(prefix.length).trim();
-  return pluginId.length > 0 ? pluginId : undefined;
-}
-
 function filterRuntimeToolQuarantinesForRegistry(params: {
   quarantines: readonly RuntimeToolQuarantineRecord[];
   plugins: readonly PluginHealthRecord[];
@@ -146,7 +137,9 @@ function filterRuntimeToolQuarantinesForRegistry(params: {
       .map((plugin) => plugin.id),
   );
   return params.quarantines.filter((quarantine) => {
-    const pluginId = parsePluginOwner(quarantine.owner);
+    const pluginId = quarantine.owner?.startsWith("plugin:")
+      ? quarantine.owner.slice("plugin:".length).trim()
+      : undefined;
     return !pluginId || loadedPluginIds.has(pluginId);
   });
 }

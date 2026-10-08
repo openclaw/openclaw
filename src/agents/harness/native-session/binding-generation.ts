@@ -2,7 +2,7 @@ import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 
-/** Resolve host lineage before selecting a native queue, catalog, or connection. */
+/** @deprecated Use resolveNativeSessionBindingWithAuthority; retained for released harness plugins. */
 export async function resolveNativeSessionBinding<TBinding>(
   params: Omit<NativeSessionGenerationParams, "target"> & {
     target?: NativeSessionGenerationTarget;
@@ -46,7 +46,7 @@ export async function resolveNativeSessionBinding<TBinding>(
   return { binding, assertCurrent };
 }
 
-/** Let the authoritative OpenClaw generation adopt its predecessor or reclaim a stale row. */
+/** @deprecated Use reclaimNativeSessionGenerationWithAuthority; retained for released harness plugins. */
 export async function reclaimNativeSessionGeneration(
   params: NativeSessionGenerationParams & {
     generation: NativeSessionGenerationOperations;
@@ -65,7 +65,7 @@ export async function reclaimNativeSessionGeneration(
   return reclaimPreparedGeneration(params, authority);
 }
 
-/** Capture the host generation and predecessor together, then revalidate both after waits. */
+/** @deprecated Await prepareNativeSessionGenerationAuthority; the released capture contract stays synchronous. */
 export function captureNativeSessionGenerationAuthority(params: NativeSessionGenerationParams) {
   const readEntry = () => {
     try {
@@ -111,7 +111,7 @@ type NativeSessionGenerationTarget = {
   sessionKey?: string;
 };
 
-type NativeSessionGenerationParams = {
+export type NativeSessionGenerationParams = {
   target: NativeSessionGenerationTarget;
   config?: OpenClawConfig;
   storePath?: string;
@@ -127,7 +127,7 @@ export type NativeSessionGenerationReclaimPlan =
 
 export type NativeSessionGenerationAdoptionResult = "absent" | "current" | "adopted" | "conflict";
 
-/** Backend storage translates these decisions into its own record schema and native policy. */
+/** @deprecated Use NativeSessionGenerationOperationsV2 for worker-backed authority. */
 export type NativeSessionGenerationOperations = {
   prepareReclaim: () => Promise<NativeSessionGenerationReclaimPlan>;
   adopt: (

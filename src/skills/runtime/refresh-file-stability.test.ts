@@ -24,18 +24,7 @@ function fixture(
   return { scheduler, sample, schedule, onError };
 }
 
-it("renews settling for a repeated hint even when metadata is unchanged", async () => {
-  const f = fixture();
-  f.scheduler.schedule("SKILL.md");
-  await vi.advanceTimersByTimeAsync(200);
-  f.scheduler.schedule("SKILL.md");
-  await vi.advanceTimersByTimeAsync(249);
-  expect(f.schedule).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(51);
-  expect(f.schedule).toHaveBeenCalledExactlyOnceWith("SKILL.md");
-});
-
-it("does not let a busy file starve a stable sibling", async () => {
+it("renews repeated hints without starving a stable sibling", async () => {
   const f = fixture();
   f.scheduler.schedule("first/SKILL.md");
   f.scheduler.schedule("busy/SKILL.md");
@@ -43,6 +32,10 @@ it("does not let a busy file starve a stable sibling", async () => {
   f.scheduler.schedule("busy/SKILL.md");
   await vi.advanceTimersByTimeAsync(50);
   expect(f.schedule.mock.calls).toEqual([["first/SKILL.md"]]);
+  await vi.advanceTimersByTimeAsync(199);
+  expect(f.schedule.mock.calls).toEqual([["first/SKILL.md"]]);
+  await vi.advanceTimersByTimeAsync(51);
+  expect(f.schedule.mock.calls).toEqual([["first/SKILL.md"], ["busy/SKILL.md"]]);
 });
 
 it("invalidates a vanished discovery file without waiting for writer completion", async () => {
@@ -52,97 +45,72 @@ it("invalidates a vanished discovery file without waiting for writer completion"
   expect(f.schedule).toHaveBeenCalledExactlyOnceWith("SKILL.md");
 });
 
-it("joins a held guarded sample and never publishes after retirement", async () => {
-  const held = createDeferredCore<SkillFileSnapshot | undefined>();
-  const f = fixture(vi.fn(() => held.promise));
-  f.scheduler.schedule("SKILL.md");
-  await Promise.resolve();
-  let closed = false;
-  const closing = f.scheduler.close().then(() => {
-    closed = true;
-  });
-  await Promise.resolve();
-  expect(closed).toBe(false);
-  f.scheduler.schedule("late/SKILL.md");
-  held.resolve({ size: 1, mtimeMs: 1 });
-  await closing;
-  expect(f.sample).toHaveBeenCalledTimes(1);
-  expect(f.schedule).not.toHaveBeenCalled();
-  expect(f.onError).not.toHaveBeenCalled();
-});
-
-it("keeps a replacement scheduler independent of a retired held sample", async () => {
+it("joins a retired held sample without blocking a replacement or publishing late hints", async () => {
   const held = createDeferredCore<SkillFileSnapshot | undefined>();
   const old = fixture(vi.fn(() => held.promise));
   old.scheduler.schedule("SKILL.md");
   await Promise.resolve();
-  const closing = old.scheduler.close();
+  let closed = false;
+  const closing = old.scheduler.close().then(() => {
+    closed = true;
+  });
+  await Promise.resolve();
+  expect(closed).toBe(false);
+  old.scheduler.schedule("late/SKILL.md");
   const next = fixture();
   next.scheduler.schedule("SKILL.md");
   try {
     await vi.advanceTimersByTimeAsync(250);
     expect(next.schedule).toHaveBeenCalledExactlyOnceWith("SKILL.md");
   } finally {
-    held.resolve(undefined);
+    held.resolve({ size: 1, mtimeMs: 1 });
     await closing;
   }
+  expect(old.sample).toHaveBeenCalledTimes(1);
   expect(old.schedule).not.toHaveBeenCalled();
+  expect(old.onError).not.toHaveBeenCalled();
 });
 
-it("reports observation failure without poisoning retirement or a later sample", async () => {
-  const error = new Error("guarded sample failed");
-  const f = fixture(
-    vi.fn(async () => {
-      throw error;
-    }),
-  );
-  f.scheduler.schedule("SKILL.md");
-  await vi.advanceTimersByTimeAsync(0);
-  expect(f.onError).toHaveBeenCalledExactlyOnceWith("SKILL.md", error);
-  expect(f.schedule).not.toHaveBeenCalled();
-  f.sample.mockResolvedValue({ size: 2, mtimeMs: 2 });
-  f.scheduler.schedule("SKILL.md");
-  await vi.advanceTimersByTimeAsync(250);
-  expect(f.schedule).toHaveBeenCalledExactlyOnceWith("SKILL.md");
-  await expect(f.scheduler.close()).resolves.toBeUndefined();
-});
-
-it("joins an observation failure arriving after retirement without publishing", async () => {
+it.each([
+  { phase: "active", cleanup: false },
+  { phase: "retired", cleanup: false },
+  { phase: "active", cleanup: true },
+  { phase: "retired", cleanup: true },
+])("handles sample failure while $phase (cleanup: $cleanup)", async ({ phase, cleanup }) => {
   const held = createDeferredCore<SkillFileSnapshot | undefined>();
   const f = fixture(vi.fn(() => held.promise));
   f.scheduler.schedule("SKILL.md");
   await Promise.resolve();
-  const closing = f.scheduler.close();
-  held.reject(new Error("snapshot unavailable"));
-  await expect(closing).resolves.toBeUndefined();
-  expect(f.schedule).not.toHaveBeenCalled();
-  expect(f.onError).not.toHaveBeenCalled();
-});
-
-it.each(["active", "retired"] as const)(
-  "retains an actual sample cleanup failure while %s",
-  async (phase) => {
-    const held = createDeferredCore<SkillFileSnapshot | undefined>();
-    const f = fixture(vi.fn(() => held.promise));
-    f.scheduler.schedule("SKILL.md");
-    await Promise.resolve();
-    const cause = new Error("sample disposal failed");
-    const error = new ObservationSampleCloseError(cause);
-    const closing = phase === "retired" ? f.scheduler.close() : undefined;
-    held.reject(error);
-    if (closing) {
+  const cause = new Error("sample failed");
+  const error = cleanup ? new ObservationSampleCloseError(cause) : cause;
+  const closing = phase === "retired" ? f.scheduler.close() : undefined;
+  held.reject(error);
+  if (closing) {
+    if (cleanup) {
       await expect(closing).rejects.toBe(error);
-      expect(f.onError).not.toHaveBeenCalled();
     } else {
-      await vi.advanceTimersByTimeAsync(0);
-      expect(f.onError).toHaveBeenCalledExactlyOnceWith("SKILL.md", error);
+      await expect(closing).resolves.toBeUndefined();
     }
+    expect(f.onError).not.toHaveBeenCalled();
+  } else {
+    await vi.advanceTimersByTimeAsync(0);
+    expect(f.onError).toHaveBeenCalledExactlyOnceWith("SKILL.md", error);
+  }
+  expect(f.schedule).not.toHaveBeenCalled();
+  if (cleanup) {
     expect(error.cause).toBe(cause);
     await expect(f.scheduler.close()).rejects.toBe(error);
-    expect(f.schedule).not.toHaveBeenCalled();
     schedulers.splice(schedulers.indexOf(f.scheduler), 1);
-  },
-);
+  } else {
+    if (!closing) {
+      f.sample.mockResolvedValue({ size: 2, mtimeMs: 2 });
+      f.scheduler.schedule("SKILL.md");
+      await vi.advanceTimersByTimeAsync(250);
+      expect(f.schedule).toHaveBeenCalledExactlyOnceWith("SKILL.md");
+    }
+    await expect(f.scheduler.close()).resolves.toBeUndefined();
+  }
+});
 
 it.each(["initial", "final"] as const)(
   "resamples a recreated file when its %s missing sample was superseded",

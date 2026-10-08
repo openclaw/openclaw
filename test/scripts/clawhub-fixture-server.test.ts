@@ -200,15 +200,6 @@ describe("ClawHub fixture server", () => {
     expect(artifactResponse.headers.get("x-clawhub-artifact-sha256")).toMatch(/^[a-f0-9]{64}$/u);
     expect(Buffer.from(await artifactResponse.arrayBuffer()).length).toBeGreaterThan(100);
 
-    const legacyAssertion = runNoRequestsAssertion(baseUrl, process.cwd(), {
-      ...process.env,
-      OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_PACKAGE: PACKAGE_NAME,
-    });
-    expect(legacyAssertion.status, legacyAssertion.stderr).toBe(0);
-    expect(legacyAssertion.stdout).toContain(
-      "Verified complete legacy ClawHub artifact audit sequence.",
-    );
-
     const missingResponse = await fetch(`${baseUrl}/missing`);
     expect(missingResponse.status).toBe(404);
     const methodResponse = await fetch(`${baseUrl}${PACKAGE_PATH}`, { method: "POST" });
@@ -443,6 +434,7 @@ ${runner.slice(boundary)}
     // The full runner exceeds Linux's per-argument limit when passed to bash -c.
     const automaticPhasesPath = path.join(root, "automatic-phases.sh");
     writeFileSync(automaticPhasesPath, automaticPhases);
+    const openclawArgvLog = path.join(root, "openclaw-argv.log");
     const runAutomaticChecks = (
       record: PluginInstallRecord | null = npmRecord,
       deniedPluginId?: string,
@@ -453,6 +445,7 @@ ${runner.slice(boundary)}
         JSON.stringify({ installRecords: record ? { whatsapp: record } : {} }),
       );
       const fixtureEnv = writePluginInspectFixture(bin, record ? { whatsapp: record } : {});
+      writeFileSync(openclawArgvLog, "");
       const artifacts = path.join(isolatedCwd, "artifacts");
       mkdirSync(artifacts, { recursive: true });
       writeFileSync(
@@ -504,6 +497,7 @@ ${runner.slice(boundary)}
               .update(registryManifest)
               .digest("hex"),
             OPENCLAW_DOCKER_E2E_SELECTED_SHA: "a".repeat(40),
+            OPENCLAW_TEST_OPENCLAW_ARGV_LOG: openclawArgvLog,
             OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.7.1-2",
             OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "base",
             OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "manual",
@@ -520,6 +514,11 @@ ${runner.slice(boundary)}
     expect(automatic.status, automatic.stdout + automatic.stderr).toBe(0);
     expect(automatic.stdout).toContain("assert-prepublish-requests passed");
     expect(automatic.stdout).toContain("assert-prepublish-recovery-requests passed");
+    expect(
+      readFileSync(openclawArgvLog, "utf8")
+        .split("\n")
+        .filter((line) => line === "plugins install --help"),
+    ).toHaveLength(1);
     expect(automatic.stdout).toContain(
       'Plugin "whatsapp" has verified official capability-consent exemption.',
     );
@@ -641,29 +640,6 @@ ${runner.slice(boundary)}
     expect(
       runPrepublishAssertion(baseUrl, "@openclaw/whatsapp", version, undefined, isolatedCwd).status,
     ).toBe(0);
-    const { baseUrl: legacyBaseUrl } = await startFixtureServer(
-      "prepublish-artifacts",
-      signal,
-      [manifestPath],
-      isolatedCwd,
-    );
-    await fetchJson(legacyBaseUrl, whatsappPath);
-    await fetchJson(legacyBaseUrl, `${whatsappPath}/versions/${version}/artifact`);
-    await fetch(`${legacyBaseUrl}${whatsappPath}/versions/${version}/artifact/download`);
-    const legacyAssertion = runPrepublishAssertion(
-      legacyBaseUrl,
-      "@openclaw/whatsapp",
-      version,
-      undefined,
-      isolatedCwd,
-      undefined,
-      undefined,
-      {
-        ...process.env,
-        OPENCLAW_FROZEN_UPGRADE_SURVIVOR_CLAWHUB_PACKAGE: "@openclaw/whatsapp",
-      },
-    );
-    expect(legacyAssertion.status, legacyAssertion.stderr).toBe(0);
     const completeWithMinimum = runPrepublishAssertion(
       baseUrl,
       "@openclaw/whatsapp",

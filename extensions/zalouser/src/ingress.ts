@@ -38,18 +38,9 @@ type ZalouserIngressDispatch = (
   lifecycle: ZalouserIngressLifecycle,
 ) => Promise<void> | void;
 
-type ZalouserIngressMonitor = {
-  receive: (message: Message) => Promise<void>;
-  stop: () => Promise<void>;
-  waitForIdle: () => Promise<void>;
-};
-
 const ZalouserIngressPayloadError = createChannelIngressError("ZalouserIngressPayloadError");
 
-function inspectZalouserIngressMessage(message: unknown): {
-  eventId: string;
-  laneKey: string;
-} {
+function inspectZalouserIngressMessage(message: unknown) {
   if (!isRecord(message) || !isRecord(message.data)) {
     throw new ZalouserIngressPayloadError("zca-js message envelope must contain data.");
   }
@@ -129,7 +120,7 @@ export function createZalouserIngressMonitor(options: {
   queue?: ChannelIngressQueue<ZalouserIngressPayload>;
   pollIntervalMs?: number;
   adoptionStallTimeoutMs?: number;
-}): ZalouserIngressMonitor {
+}) {
   const monitor = createChannelIngressMonitor<
     Message,
     { receivedAt: number; rawMessage: string },
@@ -208,7 +199,7 @@ export function createZalouserIngressMonitor(options: {
   monitor.start();
 
   return {
-    receive: async (message) => {
+    receive: async (message: Message) => {
       if (monitor.isStopped()) {
         throw new Error("Zalouser ingress monitor is stopped.");
       }

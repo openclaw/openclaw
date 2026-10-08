@@ -79,7 +79,6 @@ export function createDirListTool(): AnyAgentTool {
         input: params,
         key: "maxEntries",
         defaultValue: DIR_LIST_DEFAULT_MAX_ENTRIES,
-        hardMin: 1,
         hardMax: DIR_LIST_HARD_MAX_ENTRIES,
       });
 

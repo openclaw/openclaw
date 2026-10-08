@@ -86,7 +86,7 @@ describe("Responses retained-user compaction replay", () => {
       },
       {
         type: "message",
-        role: "user",
+        role: "developer",
         id: "msg_saved",
         content: [{ type: "input_text", text: "canonical retained user" }],
       },
@@ -225,16 +225,16 @@ describe("Responses retained-user compaction replay", () => {
       }
       const carrier = {
         role: "user",
-        content: "current request metadata",
-        runtimeContextCarrier: true,
+        content: "OpenClaw runtime context:\ncurrent request metadata",
         timestamp: 3,
+        runtimeContext: {},
       } satisfies Context["messages"][number];
       const replayMode = fullHistory ? "full-history" : "checkpoint";
       const prefix = convert({ messages }, replayMode);
       let input = convert({ messages: [...messages, carrier] }, replayMode);
       expect(input.slice(0, prefix.length), scenario).toEqual(prefix);
       expect(input.at(-1), scenario).toMatchObject({
-        role: "user",
+        role: "developer",
         content: [{ type: "input_text", text: carrier.content }],
       });
 

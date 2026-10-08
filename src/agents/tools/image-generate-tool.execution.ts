@@ -1,16 +1,11 @@
 /** Owns the exact provider view through image generation and media persistence. */
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { GenerateImageParams } from "../../image-generation/runtime-types.js";
 import { generateImage } from "../../image-generation/runtime.js";
 import type {
-  ImageGenerationBackground,
-  ImageGenerationOutputFormat,
   ImageGenerationProvider,
-  ImageGenerationProviderOptions,
-  ImageGenerationQuality,
   ImageGenerationResolution,
   ImageGenerationSourceImage,
 } from "../../image-generation/types.js";
-import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { getImageMetadata } from "../../media/media-services.js";
 import { extractOriginalFilename } from "../../media/store.js";
@@ -22,7 +17,7 @@ import { imageGenerationTaskLifecycle } from "./media-generate-background.js";
 import {
   buildMediaGenerateToolExecutionResult,
   describeMediaGenerationResult,
-  resolveMediaGenerationResultGeometry,
+  buildMediaGenerationGeometryDetails,
 } from "./media-generate-result-shared.js";
 import {
   buildMediaReferenceDetails,
@@ -34,75 +29,35 @@ const DEFAULT_RESOLUTION: ImageGenerationResolution = "1K";
 const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
 
 export async function executeImageGenerationJob(params: {
-  effectiveCfg: OpenClawConfig;
-  prompt: string;
-  agentDir?: string;
-  model?: string;
-  size?: string;
-  aspectRatio?: string;
-  resolution?: ImageGenerationResolution;
-  inferredResolution?: ImageGenerationResolution;
-  quality?: ImageGenerationQuality;
-  outputFormat?: ImageGenerationOutputFormat;
-  background?: ImageGenerationBackground;
-  count: number;
-  inputImages: ImageGenerationSourceImage[];
-  timeoutMs?: number;
-  providerOptions?: ImageGenerationProviderOptions;
-  ssrfPolicy?: SsrFPolicy;
+  request: Omit<GenerateImageParams, "authStore">;
   filename?: string;
   loadedReferenceImages: LoadedMediaToolReference<ImageGenerationSourceImage>[];
-  taskHandle?: MediaGenerationTaskHandle | null;
-  autoProviderFallback?: boolean;
+  taskHandle: MediaGenerationTaskHandle | null;
   providers: ImageGenerationProvider[];
 }) {
-  if (params.taskHandle) {
-    imageGenerationTaskLifecycle.recordTaskProgress({
-      handle: params.taskHandle,
-      progressSummary: "Generating image",
-    });
-  }
+  const { request } = params;
+  imageGenerationTaskLifecycle.recordTaskProgress({
+    handle: params.taskHandle,
+    progressSummary: "Generating image",
+  });
   const result = await generateImage(
-    {
-      cfg: params.effectiveCfg,
-      prompt: params.prompt,
-      agentDir: params.agentDir,
-      modelOverride: params.model,
-      autoProviderFallback: params.autoProviderFallback,
-      size: params.size,
-      aspectRatio: params.aspectRatio,
-      resolution: params.resolution,
-      inferredResolution: params.inferredResolution,
-      quality: params.quality,
-      outputFormat: params.outputFormat,
-      background: params.background,
-      count: params.count,
-      inputImages: params.inputImages,
-      timeoutMs: params.timeoutMs,
-      providerOptions: params.providerOptions,
-      ssrfPolicy: params.ssrfPolicy,
-    },
+    request,
     createCapabilityProviderRuntimeDeps(params.providers),
   );
-  if (params.taskHandle) {
-    imageGenerationTaskLifecycle.recordTaskProgress({
-      handle: params.taskHandle,
-      progressSummary: "Saving generated image",
-    });
-  }
+  imageGenerationTaskLifecycle.recordTaskProgress({
+    handle: params.taskHandle,
+    progressSummary: "Saving generated image",
+  });
   const { displayProvider, displayModel, warning } = describeMediaGenerationResult(result);
-  const {
-    normalizedSize,
-    normalizedAspectRatio,
-    normalizedResolution,
-    sizeTranslatedToAspectRatio,
-  } = resolveMediaGenerationResultGeometry(result, params.size);
-  const appliedResolution = result.appliedResolution ?? normalizedResolution;
+  const geometryDetails = buildMediaGenerationGeometryDetails("image", result, {
+    size: request.size,
+    aspectRatio: request.aspectRatio,
+  });
 
   const savedImages = await persistGeneratedMediaBuffers({
     assets: result.images,
     subdir: GENERATED_IMAGE_MEDIA_SUBDIR,
-    maxBytes: resolveGeneratedMediaMaxBytes(params.effectiveCfg, "image"),
+    maxBytes: resolveGeneratedMediaMaxBytes(request.cfg, "image"),
     filename: params.filename,
   });
 
@@ -130,18 +85,12 @@ export async function executeImageGenerationJob(params: {
     warning,
     details: {
       ...buildMediaReferenceDetails(params.loadedReferenceImages, "image"),
-      ...(appliedResolution ? { resolution: appliedResolution } : {}),
-      ...(normalizedSize || (params.size && !sizeTranslatedToAspectRatio)
-        ? { size: normalizedSize ?? params.size }
-        : {}),
-      ...(normalizedAspectRatio || params.aspectRatio
-        ? { aspectRatio: normalizedAspectRatio ?? params.aspectRatio }
-        : {}),
-      ...(params.quality ? { quality: params.quality } : {}),
-      ...(params.outputFormat ? { outputFormat: params.outputFormat } : {}),
-      ...(params.background ? { background: params.background } : {}),
+      ...geometryDetails,
+      ...(request.quality ? { quality: request.quality } : {}),
+      ...(request.outputFormat ? { outputFormat: request.outputFormat } : {}),
+      ...(request.background ? { background: request.background } : {}),
       ...(params.filename ? { filename: params.filename } : {}),
-      ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+      ...(request.timeoutMs !== undefined ? { timeoutMs: request.timeoutMs } : {}),
     },
   });
   if (revisedPrompts.length > 0) {
@@ -169,43 +118,6 @@ export async function inferImageGenerationResolution(
     return "2K";
   }
   return DEFAULT_RESOLUTION;
-}
-
-const SUPPORTED_ASPECT_RATIOS = new Set([
-  "1:1",
-  "2:1",
-  "20:9",
-  "19.5:9",
-  "2:3",
-  "3:2",
-  "2.35:1",
-  "3:4",
-  "4:3",
-  "4:5",
-  "5:4",
-  "9:16",
-  "9:19.5",
-  "9:20",
-  "16:9",
-  "21:9",
-  "1:2",
-  "4:1",
-  "1:4",
-  "8:1",
-  "1:8",
-]);
-
-export function normalizeImageGenerationAspectRatio(raw: string | undefined): string | undefined {
-  const normalized = raw?.trim();
-  if (!normalized) {
-    return undefined;
-  }
-  if (SUPPORTED_ASPECT_RATIOS.has(normalized)) {
-    return normalized;
-  }
-  throw new ToolInputError(
-    "aspectRatio must be one of 1:1, 2:1, 20:9, 19.5:9, 2:3, 3:2, 2.35:1, 3:4, 4:3, 4:5, 5:4, 9:16, 9:19.5, 9:20, 16:9, 21:9, 1:2, 4:1, 1:4, 8:1, or 1:8",
-  );
 }
 
 export function normalizeImageGenerationResolution(

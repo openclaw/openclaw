@@ -60,10 +60,6 @@ function directlyAuthoredModel(params: {
   return model?.id === params.modelId ? model : undefined;
 }
 
-function isSuccessfulWrite(record: ConfigWriteRecord): boolean {
-  return record.result === "rename" || record.result === "copy-fallback";
-}
-
 function isHistoricalMaterializingWriter(record: ConfigWriteRecord): boolean {
   const updateFinalize = record.argv.some(
     (arg, index) => arg === "update" && record.argv[index + 1] === "finalize",
@@ -73,28 +69,6 @@ function isHistoricalMaterializingWriter(record: ConfigWriteRecord): boolean {
     record.argv.includes("doctor") &&
     (record.argv.includes("--fix") || record.argv.includes("--yes"));
   return updateFinalize || repairDoctor;
-}
-
-function hasCandidateMetadataPaths(params: {
-  record: ConfigWriteRecord;
-  providerId: string;
-  modelIndex: number;
-}): boolean {
-  if (!params.record.changedPaths) {
-    return false;
-  }
-  const fields = new Set<string>();
-  const prefix = `models.providers.${params.providerId}.models[${params.modelIndex}].`;
-  for (const changedPath of params.record.changedPaths) {
-    if (!changedPath.startsWith(prefix)) {
-      continue;
-    }
-    const field = changedPath.slice(prefix.length).split(".", 1)[0];
-    if (field && GENERATED_MODEL_FIELDS.some((candidate) => candidate === field)) {
-      fields.add(field);
-    }
-  }
-  return fields.size === GENERATED_MODEL_FIELDS.length;
 }
 
 function hasAuditProvenance(params: {
@@ -108,18 +82,20 @@ function hasAuditProvenance(params: {
     return false;
   }
   const configPath = path.resolve(params.configPath);
+  const prefix = `models.providers.${params.providerId}.models[${params.modelIndex}].`;
   return params.auditRecords.some(
     (record) =>
       record.event === "config.write" &&
-      isSuccessfulWrite(record) &&
+      (record.result === "rename" || record.result === "copy-fallback") &&
       path.resolve(record.configPath) === configPath &&
       record.nextHash === params.currentHash &&
       isHistoricalMaterializingWriter(record) &&
-      hasCandidateMetadataPaths({
-        record,
-        providerId: params.providerId,
-        modelIndex: params.modelIndex,
-      }),
+      GENERATED_MODEL_FIELDS.every((field) =>
+        record.changedPaths?.some(
+          (changedPath) =>
+            changedPath === `${prefix}${field}` || changedPath.startsWith(`${prefix}${field}.`),
+        ),
+      ),
   );
 }
 

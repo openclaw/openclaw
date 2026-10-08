@@ -21,6 +21,7 @@ export async function withSkillUploadInstallOwner<T>(
   const cleanupContext = {
     environment: context.environment,
     existingSchemaPath: context.existingSchemaPath,
+    stateIntegrity: context.stateIntegrity,
   };
   const assertOwned = () => {
     if (!active || !identity) {
@@ -47,6 +48,7 @@ export async function withSkillUploadInstallOwner<T>(
               context.admission.databasePath,
               cleanupContext,
               assertOwned,
+              observed,
             );
             if (!store) {
               throw new Error("Skill upload cleanup lost its original shared database");

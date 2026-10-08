@@ -600,20 +600,30 @@ describe("plugin npm runtime build planning", () => {
     ]);
   });
 
-  it("builds doctor contract surfaces for publishable channel plugins", () => {
-    for (const pluginDir of ["msteams", "nostr"]) {
+  it.each([
+    { plugins: ["msteams", "nostr"], entries: ["doctor-contract-api"] },
+    { plugins: ["tencent"], entries: ["setup-api"] },
+    { plugins: ["zalo"], entries: ["setup-api", "setup-surface"] },
+  ])("plans public runtime surfaces for $plugins", ({ plugins, entries }) => {
+    for (const pluginDir of plugins) {
+      const packageDir = path.join(repoRoot, "extensions", pluginDir);
       const plan = expectPluginNpmRuntimeBuildPlan(
-        resolvePluginNpmRuntimeBuildPlan({
-          repoRoot,
-          packageDir: path.join(repoRoot, "extensions", pluginDir),
-        }),
+        resolvePluginNpmRuntimeBuildPlan({ repoRoot, packageDir }),
       );
-      expect(plan.entry["doctor-contract-api"]).toBe(
-        path.join(repoRoot, "extensions", pluginDir, "doctor-contract-api.ts"),
-      );
-      const extension = plan.runtimeFormat === "cjs" ? ".cjs" : ".js";
-      expect(plan.runtimeBuildOutputs).toContain(`./dist/doctor-contract-api${extension}`);
-      expect(plan.packageFiles).toContain("dist/**");
+      const extension =
+        entries[0] === "doctor-contract-api" && plan.runtimeFormat === "cjs" ? ".cjs" : ".js";
+      for (const entry of entries) {
+        expect(plan.entry[entry]).toBe(path.join(packageDir, `${entry}.ts`));
+        expect(plan.runtimeBuildOutputs).toContain(`./dist/${entry}${extension}`);
+      }
+      if (pluginDir === "tencent") {
+        expect(plan.runtimeSetupEntry).toBe("./dist/setup-api.js");
+      } else {
+        expect(plan.packageFiles).toContain("dist/**");
+      }
+      if (pluginDir === "zalo") {
+        expect(plan.runtimeBuildOutputs).not.toContain("./dist/src/setup-surface.js");
+      }
     }
   });
 
@@ -690,69 +700,32 @@ describe("plugin npm runtime build planning", () => {
     });
   });
 
-  it("builds Tencent setup metadata for installed-package migrations", () => {
-    const plan = expectPluginNpmRuntimeBuildPlan(
-      resolvePluginNpmRuntimeBuildPlan({
+  it.each(["codex", "llama-cpp"])(
+    "keeps published %s runtime imports resolvable from the host package",
+    async (plugin) => {
+      const result = await buildPluginNpmRuntime({
         repoRoot,
-        packageDir: path.join(repoRoot, "extensions", "tencent"),
-      }),
-    );
+        packageDir: copyPluginBuildFixture(plugin),
+        logLevel: "silent",
+      });
+      expect(
+        listMissingPluginNpmRuntimeHostExports(expectPluginNpmRuntimeBuildPlan(result)),
+      ).toEqual([]);
+    },
+  );
 
-    expect(plan.entry["setup-api"]).toBe(
-      path.join(repoRoot, "extensions", "tencent", "setup-api.ts"),
-    );
-    expect(plan.runtimeSetupEntry).toBe("./dist/setup-api.js");
-    expect(plan.runtimeBuildOutputs).toContain("./dist/setup-api.js");
-  });
-
-  it("plans the Zalo public setup API with its lazy package surface", () => {
-    const packageDir = path.join(repoRoot, "extensions", "zalo");
-    const plan = expectPluginNpmRuntimeBuildPlan(
-      resolvePluginNpmRuntimeBuildPlan({
-        repoRoot,
-        packageDir,
-      }),
-    );
-    expect(plan.entry["setup-api"]).toBe(path.join(packageDir, "setup-api.ts"));
-    expect(plan.entry["setup-surface"]).toBe(path.join(packageDir, "setup-surface.ts"));
-    expect(plan.runtimeBuildOutputs).toContain("./dist/setup-api.js");
-    expect(plan.runtimeBuildOutputs).toContain("./dist/setup-surface.js");
-    expect(plan.runtimeBuildOutputs).not.toContain("./dist/src/setup-surface.js");
-    expect(plan.packageFiles).toContain("dist/**");
-  });
-
-  it("keeps published Codex runtime imports resolvable from the host package", async () => {
-    const result = await buildPluginNpmRuntime({
-      repoRoot,
-      packageDir: copyPluginBuildFixture("codex"),
-      logLevel: "silent",
-    });
-    const plan = expectPluginNpmRuntimeBuildPlan(result);
-
-    expect(listMissingPluginNpmRuntimeHostExports(plan)).toEqual([]);
-  });
-
-  it("keeps published llama.cpp runtime imports resolvable from the host package", async () => {
-    const result = await buildPluginNpmRuntime({
-      repoRoot,
-      packageDir: copyPluginBuildFixture("llama-cpp"),
-      logLevel: "silent",
-    });
-    const plan = expectPluginNpmRuntimeBuildPlan(result);
-
-    expect(listMissingPluginNpmRuntimeHostExports(plan)).toEqual([]);
-  });
-
-  it("detects unresolved side-effect host imports in built plugin runtimes", () => {
+  it.each([true, false])("checks emitted host imports only when present (%s)", (hasHostImports) => {
     const outDir = tempDirs.make("openclaw-plugin-runtime-host-import-");
     writeFileSync(
       path.join(outDir, "index.js"),
-      [
-        'import "openclaw/plugin-sdk/not-exported";',
-        'const runtime = __require("openclaw/plugin-sdk/not-exported-from-require");',
-        "void runtime;",
-        "",
-      ].join("\n"),
+      hasHostImports
+        ? [
+            'import "openclaw/plugin-sdk/not-exported";',
+            'const runtime = __require("openclaw/plugin-sdk/not-exported-from-require");',
+            "void runtime;",
+            "",
+          ].join("\n")
+        : "export default {};\n",
     );
     const plan = expectPluginNpmRuntimeBuildPlan(
       resolvePluginNpmRuntimeBuildPlan({
@@ -760,26 +733,18 @@ describe("plugin npm runtime build planning", () => {
         packageDir: path.join(repoRoot, "extensions", "codex"),
       }),
     );
-
-    expect(listMissingPluginNpmRuntimeHostExports({ ...plan, outDir })).toEqual([
-      "openclaw/plugin-sdk/not-exported",
-      "openclaw/plugin-sdk/not-exported-from-require",
-    ]);
-  });
-
-  it("does not require host metadata when the runtime has no host imports", () => {
-    const syntheticRepoRoot = tempDirs.make("openclaw-plugin-runtime-synthetic-repo-");
-    const outDir = tempDirs.make("openclaw-plugin-runtime-no-host-import-");
-    writeFileSync(path.join(outDir, "index.js"), "export default {};\n");
-    const plan = expectPluginNpmRuntimeBuildPlan(
-      resolvePluginNpmRuntimeBuildPlan({
-        repoRoot,
-        packageDir: path.join(repoRoot, "extensions", "codex"),
-      }),
-    );
-
     expect(
-      listMissingPluginNpmRuntimeHostExports({ ...plan, repoRoot: syntheticRepoRoot, outDir }),
-    ).toEqual([]);
+      listMissingPluginNpmRuntimeHostExports({
+        ...plan,
+        repoRoot: hasHostImports
+          ? repoRoot
+          : tempDirs.make("openclaw-plugin-runtime-synthetic-repo-"),
+        outDir,
+      }),
+    ).toEqual(
+      hasHostImports
+        ? ["openclaw/plugin-sdk/not-exported", "openclaw/plugin-sdk/not-exported-from-require"]
+        : [],
+    );
   });
 });

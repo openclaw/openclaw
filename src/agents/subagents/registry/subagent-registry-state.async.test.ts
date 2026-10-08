@@ -1,4 +1,3 @@
-// Real-storage proof that committed and best-effort publications survive read-owner retirement.
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -23,17 +22,24 @@ import {
 } from "../../../test-utils/openclaw-test-state.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { buildControlledSubagentRunsReadContext } from "./subagent-control-scope.js";
+import {
+  mutateSubagentRuns,
+  restoreSubagentRunsFromDisk,
+} from "./subagent-registry-persistence.js";
+// Real-storage proof that committed projections survive read-owner retirement.
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
+import {
+  persistRegistryFixture,
+  saveSubagentRegistryToSqlite,
+  saveSubagentRegistryChangesToSqlite,
+} from "./subagent-registry-state.fixture.test-support.js";
 import {
   clearSubagentRunsReadCacheForTest,
   createSubagentSessionListReadView,
   getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForRead,
-  getSubagentMaintenanceRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForRead,
   getSubagentSessionListReadSnapshotIdentity,
-  persistSubagentRunsToDisk,
-  persistSubagentRunsToDiskOrThrow,
   prepareOptionalSubagentSessionListReadCache,
   prepareSubagentSessionListReadCache,
   publishSubagentRunsAfterAtomicStore,
@@ -41,7 +47,6 @@ import {
   prepareSubagentRunsSnapshotForRunIds,
 } from "./subagent-registry-state.js";
 import * as store from "./subagent-registry.store.sqlite.js";
-import { saveSubagentRegistryToSqlite } from "./subagent-registry.store.test-support.js";
 
 let state: OpenClawTestState;
 beforeEach(async () => {
@@ -67,9 +72,8 @@ function runs(model: string, runId = "one") {
   return new Map([[run.runId, run]]);
 }
 
-it("reads resident session-list facts without enumerating the process environment", async () => {
-  persistSubagentRunsToDiskOrThrow(runs("retained"), ["one"]);
-  await prepareSubagentSessionListReadCache();
+it("reads resident session-list facts without enumerating the process environment", () => {
+  persistRegistryFixture(runs("retained"));
   const prepared = createSubagentSessionListReadView({ env: state.env });
   const preparedIdentity = prepared.snapshotIdentity();
   const originalEnv = process.env;
@@ -104,8 +108,7 @@ it("reads resident session-list facts without enumerating the process environmen
 it.each(["maintenance", "schema"] as const)(
   "rejects resident session-list reads from an ended %s scope",
   async (kind) => {
-    persistSubagentRunsToDiskOrThrow(runs("retained"), ["one"]);
-    await prepareSubagentSessionListReadCache();
+    persistRegistryFixture(runs("retained"));
     const identity = getSubagentSessionListReadSnapshotIdentity();
     const maintenance = createOpenClawDatabaseMaintenanceScope();
     const bind = () => {
@@ -174,8 +177,7 @@ it("keeps a newer source publication when a prepared projection read settles", a
   try {
     await gate.entered;
     await withEnvAsync({ OPENCLAW_STATE_DIR: other.stateDir }, async () => {
-      persistSubagentRunsToDiskOrThrow(runs("newer source"), ["one"]);
-      await prepareSubagentSessionListReadCache();
+      persistRegistryFixture(runs("newer source"));
       published = getSubagentSessionListReadSnapshotIdentity();
     });
     expect(prepared.snapshotIdentity()).toBeUndefined();
@@ -285,7 +287,6 @@ it.each(["requester", "controller"] as const)(
     saveSubagentRegistryToSqlite(
       new Map([old, latest, descendant].map((entry) => [entry.runId, entry])),
     );
-    const nativeLoad = vi.spyOn(store, "loadSubagentRegistryFromSqlite");
     const read = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
 
     const context = await buildControlledSubagentRunsReadContext(requesterSessionKey);
@@ -301,14 +302,13 @@ it.each(["requester", "controller"] as const)(
       { type: "subagents.sessionList" },
       { type: "subagents.runs", scope: { kind: "ids", runIds: [latest.runId] } },
     ]);
-    expect(nativeLoad).not.toHaveBeenCalled();
     const moved = {
       ...latest,
       runId: "moved",
       generation: 3,
       requesterSessionKey: "agent:main:moved",
     };
-    persistSubagentRunsToDiskOrThrow(new Map([[moved.runId, moved]]), [moved.runId]);
+    persistRegistryFixture(new Map([[moved.runId, moved]]), [moved.runId]);
     expect((await buildControlledSubagentRunsReadContext(requesterSessionKey)).runs).toEqual([]);
   },
 );
@@ -467,7 +467,7 @@ it("captures parent and yielded-child facts after the final scoped hydration", a
       execution: { status: "terminal" as const, endedAt: Date.now() },
       cleanupCompletedAt: Date.now(),
     };
-    persistSubagentRunsToDiskOrThrow(
+    persistRegistryFixture(
       new Map([changedParent, settledChild].map((entry) => [entry.runId, entry])),
       [parent.runId, child.runId],
     );
@@ -579,7 +579,7 @@ it("consumes only selected full rows with current raw ownership after worker hyd
   }
 });
 
-it.each(["update", "delete"] as const)(
+it.each(["update", "delete", "replace"] as const)(
   "retains a named %s publication while a real worker fill is pending",
   async (change) => {
     saveSubagentRegistryToSqlite(
@@ -589,19 +589,25 @@ it.each(["update", "delete"] as const)(
     const prepared = prepareSubagentSessionListReadCache();
     try {
       await gate.entered;
-      persistSubagentRunsToDiskOrThrow(change === "update" ? runs("after", "changed") : new Map(), [
-        "changed",
-      ]);
+      if (change === "replace") {
+        persistRegistryFixture(runs("replacement", "new"));
+      } else {
+        persistRegistryFixture(change === "update" ? runs("after", "changed") : new Map(), [
+          "changed",
+        ]);
+      }
       gate.release();
       await prepared;
       const current = getSubagentSessionListRunsSnapshotForRead(new Map());
       expect([...current].map(([id, row]) => [id, row.model])).toEqual(
-        change === "delete"
-          ? [["other", "retained"]]
-          : [
-              ["changed", "after"],
-              ["other", "retained"],
-            ],
+        change === "replace"
+          ? [["new", "replacement"]]
+          : change === "delete"
+            ? [["other", "retained"]]
+            : [
+                ["changed", "after"],
+                ["other", "retained"],
+              ],
       );
       expect(gate.read).toHaveBeenCalledTimes(1);
     } finally {
@@ -633,7 +639,7 @@ it.each(["after", "during", "after a named publication"] as const)(
           admission.assertCurrent();
           expect(admission.identity.key).toMatch(/^file:/);
           if (creation === "after a named publication") {
-            persistSubagentRunsToDiskOrThrow(runs("published", "own"), ["own"]);
+            persistRegistryFixture(runs("published", "own"), ["own"]);
           }
           gate?.release();
           await prepared;
@@ -714,8 +720,7 @@ it("keeps published compact facts through a temporary writer scope without reloa
   const changed = original.get("changed")!;
   changed.createdAt = 20;
   original.get("other")!.createdAt = 10;
-  await prepareSubagentSessionListReadCache();
-  persistSubagentRunsToDiskOrThrow(original, [...original.keys()]);
+  persistRegistryFixture(original);
   const initial = getSubagentSessionListRunsSnapshotForRead(new Map());
   const admission = captureOpenClawStateWorkerContext().admission;
   const load = vi.spyOn(store, "loadSubagentSessionListRunsFromSqlite");
@@ -728,7 +733,7 @@ it("keeps published compact facts through a temporary writer scope without reloa
   const writer = createOpenClawDatabaseMaintenanceScope();
   try {
     writer.run(() =>
-      persistSubagentRunsToDiskOrThrow(new Map([[changed.runId, { ...changed, model: "after" }]]), [
+      persistRegistryFixture(new Map([[changed.runId, { ...changed, model: "after" }]]), [
         changed.runId,
       ]),
     );
@@ -751,11 +756,12 @@ it("keeps published compact facts through a temporary writer scope without reloa
   }
 });
 
-it.each(["best effort", "strict refusal", "strict commit", "atomic commit"])(
-  "keeps %s publication independent of retired read admission",
+it.each(["refused mutation", "committed publication"] as const)(
+  "keeps projections consistent with a %s during read retirement",
   async (mode) => {
     vi.spyOn(Date, "now").mockReturnValue(1000);
-    persistSubagentRunsToDiskOrThrow(runs("before"), ["one"]);
+    const before = runs("before");
+    persistRegistryFixture(before, ["one"]);
     const database = openOpenClawStateDatabase();
     const context = captureOpenClawStateWorkerContext();
     const current = runs("after");
@@ -763,82 +769,72 @@ it.each(["best effort", "strict refusal", "strict commit", "atomic commit"])(
     entry.execution = { status: "terminal", endedAt: 2, outcome: { status: "ok" } };
     entry.cleanupCompletedAt = 2;
     const wake = vi.fn();
+    const events: Array<() => void> = [];
+    let mutateAfterClose: (() => Promise<void>) | undefined;
+    let mutation: Promise<void> | undefined;
+    const committed = mode === "committed publication";
+    if (committed) {
+      saveSubagentRegistryChangesToSqlite(current, ["one"]);
+    } else {
+      const scope = createOpenClawDatabaseMaintenanceScope();
+      mutateAfterClose = scope.run(() => {
+        const mutationContext = captureOpenClawStateWorkerContext();
+        // Scope close drains returned Promises; retain only the callback until after close.
+        return AsyncLocalStorage.bind(() =>
+          mutateSubagentRuns(["one"], () => ({ value: undefined, postimages: current }), {
+            runs: before,
+            context: mutationContext,
+          }),
+        );
+      });
+      await scope.close();
+    }
     const unsubscribe = subscribeSubagentRunChanges("persistence", wake);
     const releaseClose = createDeferredCore();
     const unregister = registerOpenClawStateDatabaseAsyncResource({
       close: () => releaseClose.promise,
     });
-    const events: Array<() => void> = [];
-    const publish = () => {
-      if (mode === "atomic commit") {
-        publishSubagentRunsAfterAtomicStore(current, ["one"], events);
-      } else if (mode === "best effort") {
-        persistSubagentRunsToDisk(current, ["one"]);
-      } else {
-        persistSubagentRunsToDiskOrThrow(current, ["one"]);
-      }
-    };
-    if (mode === "atomic commit") {
-      store.saveSubagentRegistryChangesToSqlite(current, ["one"]);
-    }
-    const resumePublication = createDeferredCore();
-    let publication: Promise<void> | undefined;
-    if (mode === "best effort" || mode === "strict refusal") {
-      const scope = createOpenClawDatabaseMaintenanceScope();
-      scope.run(() => {
-        publication = resumePublication.promise.then(publish);
-      });
-      await scope.close();
-    }
     const closing = closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
     try {
       expect(() => captureOpenClawStateWorkerContext()).toThrow("read admission is closed");
-      if (publication) {
-        const observed =
-          mode === "strict refusal"
-            ? expect(publication).rejects.toThrow("maintenance resource scope is closed")
-            : expect(publication).resolves.toBeUndefined();
-        resumePublication.resolve();
-        await observed;
+      if (mutateAfterClose) {
+        mutation = mutateAfterClose();
+        await expect(mutation).rejects.toThrow("maintenance resource scope is closed");
       } else {
-        expect(publish).not.toThrow();
+        events.push(publishSubagentRunsAfterAtomicStore(current, ["one"]));
       }
-      const committed = mode === "strict commit" || mode === "atomic commit";
       expect(store.readSubagentRun(database, "one")?.model).toBe(committed ? "after" : "before");
-      const refused = mode === "strict refusal";
       expect(
-        getSubagentRunsSnapshotForChildSession(new Map(), entry.childSessionKey).get("one"),
+        (await getSubagentRunsSnapshotForChildSession(new Map(), entry.childSessionKey)).get("one"),
       ).toMatchObject({
-        model: refused ? "before" : "after",
-        execution: { status: refused ? "running" : "terminal" },
+        model: committed ? "after" : "before",
+        execution: { status: committed ? "terminal" : "running" },
       });
       expect(getSubagentRunsSnapshotForRead(new Map()).get("one")).toMatchObject({
-        model: refused ? "before" : "after",
-        execution: { status: refused ? "running" : "terminal" },
+        model: committed ? "after" : "before",
+        execution: { status: committed ? "terminal" : "running" },
       });
-      const maintenance = getSubagentMaintenanceRunsSnapshotForRead(new Map()).get("one");
-      expect(maintenance?.execution.status).toBe(refused ? "running" : "terminal");
-      expect(maintenance?.cleanupCompletedAt).toBe(refused ? undefined : 2);
-      expect(events).toHaveLength(mode === "atomic commit" ? 1 : 0);
+      expect(events).toHaveLength(committed ? 1 : 0);
       events.forEach((event) => event());
-      expect(wake).toHaveBeenCalledTimes(refused ? 0 : 1);
+      expect(wake).toHaveBeenCalledTimes(committed ? 1 : 0);
     } finally {
-      resumePublication.resolve();
       releaseClose.resolve();
+      await mutation?.catch(() => {});
       await closing;
       unregister();
       unsubscribe();
     }
-    store.saveSubagentRegistryChangesToSqlite(runs("reopened"), ["one"]);
+    saveSubagentRegistryChangesToSqlite(runs("reopened"), ["one"]);
     await prepareSubagentSessionListReadCache();
     expect(getSubagentSessionListRunsSnapshotForRead(new Map()).get("one")?.model).toBe("reopened");
   },
 );
 
 it("keeps retired publications with their draining source across source switches and reopen", async () => {
-  const selectedChild = () =>
-    getSubagentRunsSnapshotForChildSession(new Map(), "agent:main:subagent:one");
-  persistSubagentRunsToDiskOrThrow(runs("before"), ["one"]);
+  const selectedChild = async () =>
+    await getSubagentRunsSnapshotForChildSession(new Map(), "agent:main:subagent:one");
+  persistRegistryFixture(runs("before"), ["one"]);
+  await restoreSubagentRunsFromDisk({ runs: new Map() });
   expect(getSubagentRunsSnapshotForRead(new Map()).get("one")?.model).toBe("before");
   const context = captureOpenClawStateWorkerContext();
   const other = await createOpenClawTestState({ scenario: "minimal", applyEnv: false });
@@ -848,30 +844,32 @@ it("keeps retired publications with their draining source across source switches
   });
   let closing = closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
   try {
-    persistSubagentRunsToDiskOrThrow(runs("after"), ["one"]);
-    expect(selectedChild().get("one")?.model).toBe("after");
+    persistRegistryFixture(runs("after"), ["one"]);
+    expect((await selectedChild()).get("one")?.model).toBe("after");
     expect(getSubagentRunsSnapshotForRead(new Map()).get("one")?.model).toBe("after");
     await withEnvAsync({ OPENCLAW_STATE_DIR: other.stateDir }, async () => {
-      expect(selectedChild().has("one")).toBe(false);
+      expect((await selectedChild()).has("one")).toBe(false);
+      await restoreSubagentRunsFromDisk({ runs: new Map() });
       expect(getSubagentRunsSnapshotForRead(new Map()).has("one")).toBe(false);
-      persistSubagentRunsToDiskOrThrow(runs("other"), ["one"]);
+      persistRegistryFixture(runs("other"), ["one"]);
     });
-    expect(selectedChild().has("one")).toBe(false);
+    expect((await selectedChild()).has("one")).toBe(false);
     expect(getSubagentRunsSnapshotForRead(new Map()).has("one")).toBe(false);
-    persistSubagentRunsToDiskOrThrow(runs("after"), ["one"]);
-    expect(selectedChild().get("one")?.model).toBe("after");
+    persistRegistryFixture(runs("after"), ["one"]);
+    expect((await selectedChild()).get("one")?.model).toBe("after");
     expect(getSubagentRunsSnapshotForRead(new Map()).get("one")?.model).toBe("after");
     releaseClose.resolve();
     await closing;
 
-    store.saveSubagentRegistryChangesToSqlite(runs("reopened"), ["one"]);
+    saveSubagentRegistryChangesToSqlite(runs("reopened"), ["one"]);
     releaseClose = createDeferredCore();
     closing = closeOpenClawStateDatabaseByPathAsync(context.admission.databasePath);
-    expect(selectedChild().has("one")).toBe(false);
+    expect((await selectedChild()).has("one")).toBe(false);
     expect(getSubagentRunsSnapshotForRead(new Map()).has("one")).toBe(false);
     releaseClose.resolve();
     await closing;
-    expect(selectedChild().get("one")?.model).toBe("reopened");
+    expect((await selectedChild()).get("one")?.model).toBe("reopened");
+    await restoreSubagentRunsFromDisk({ runs: new Map() });
     expect(getSubagentRunsSnapshotForRead(new Map()).get("one")?.model).toBe("reopened");
   } finally {
     releaseClose.resolve();
@@ -888,5 +886,5 @@ it("keeps unrelated publication context failures visible", () => {
       throw failure;
     },
   );
-  expect(() => persistSubagentRunsToDisk(runs("current"), ["one"])).toThrow(failure);
+  expect(() => persistRegistryFixture(runs("current"), ["one"])).toThrow(failure);
 });

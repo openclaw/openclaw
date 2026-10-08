@@ -367,7 +367,6 @@ export function readPairedDevicePairingRecordsFromDatabase(
   );
 }
 
-/** Load the full pending + paired device snapshot from the shared state DB. */
 export function loadDevicePairingStoreState(baseDir?: string): DevicePairingStoreState {
   const database = openOpenClawStateDatabase(resolveDevicePairingStateDbOptions(baseDir));
   return structuredClone(
@@ -400,10 +399,9 @@ export function loadPairedDevicePairingStoreRecordFromDatabase(
 /** Read and patch one device under the worker's transaction and commit admission. */
 export function updatePairedDeviceInTransaction<T>(
   deviceId: string,
-  baseDir: string | undefined,
   update: (device: PairedDevice | null) => PairedDeviceUpdate<T>,
 ): T {
-  return runDevicePairingStoreMutation(baseDir, ({ db }) => {
+  return runDevicePairingStoreMutation(undefined, ({ db }) => {
     const normalizedDeviceId = deviceId.trim();
     const device = loadPairedDevicePairingStoreRecordFromDatabase(db, normalizedDeviceId);
     const result = update(device);
@@ -473,7 +471,6 @@ export function persistDevicePairingStoreState(
   });
 }
 
-/** Load all bootstrap token records keyed by token key. */
 export function loadDeviceBootstrapTokenRecords(
   baseDir?: string,
 ): Record<string, DeviceBootstrapTokenRecord> {
@@ -542,7 +539,6 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
     record: DeviceBootstrapTokenRecord,
   ) => boolean;
   recordWorkerEnvironment: (facts: CloudWorkerSetupCompletionPublication) => void;
-  baseDir?: string;
 }): { record: DeviceBootstrapTokenRecord; completion?: DevicePairSetupCompletionRecord } | null {
   const token = params.token.trim();
   const deviceId = params.deviceId.trim();
@@ -629,7 +625,7 @@ export function consumeDeviceBootstrapTokenWithSetupCompletionInTransaction(para
       );
     }
     return { record, ...(completion ? { completion } : {}) };
-  }, resolveDevicePairingStateDbOptions(params.baseDir));
+  }, resolveDevicePairingStateDbOptions());
 }
 
 /** Mark one consumed setup handoff as delivered without reviving an expired or replaced row. */
@@ -637,7 +633,6 @@ export function confirmDevicePairSetupCompletionDeliveryInTransaction(params: {
   setupId: string;
   deviceId: string;
   nowMs: number;
-  baseDir?: string;
 }): DevicePairSetupCompletionRecord | null {
   const setupId = params.setupId.trim();
   const deviceId = params.deviceId.trim();
@@ -668,15 +663,12 @@ export function confirmDevicePairSetupCompletionDeliveryInTransaction(params: {
         .where("device_id", "=", deviceId),
     );
     return fromSetupCompletionRow(row);
-  }, resolveDevicePairingStateDbOptions(params.baseDir));
+  }, resolveDevicePairingStateDbOptions());
 }
 
 /** Prune retained setup outcomes when the Gateway maintenance owner ticks. */
-export function pruneExpiredDevicePairSetupCompletionRecords(
-  nowMs: number,
-  baseDir?: string,
-): number {
-  const databaseOptions = resolveDevicePairingStateDbOptions(baseDir);
+export function pruneExpiredDevicePairSetupCompletionRecords(nowMs: number): number {
+  const databaseOptions = resolveDevicePairingStateDbOptions();
   const database = openOpenClawStateDatabase(databaseOptions);
   if (!tableExists(database.db, "device_pair_setup_completions")) {
     return 0;

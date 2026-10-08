@@ -888,12 +888,14 @@ describe("Google message conversion", () => {
         ...(boundary === "foreign route"
           ? []
           : [
-              {
-                role: "user",
-                content: "a new question",
-                timestamp: 1,
-                ...(boundary === "runtime context" ? { runtimeContextCarrier: true } : {}),
-              },
+              boundary === "runtime context"
+                ? {
+                    role: "user",
+                    content: "OpenClaw runtime context:\na new question",
+                    timestamp: 1,
+                    runtimeContext: {},
+                  }
+                : { role: "user", content: "a new question", timestamp: 1 },
             ]),
         {
           ...makeGoogleAssistantMessage(conversionModel.id, [call]),

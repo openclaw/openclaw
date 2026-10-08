@@ -1,7 +1,12 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { normalizeWorkboardChange } from "./change-payload.ts";
 import { refreshWorkboard, shouldDeferWorkboardLiveRefresh } from "./loading.ts";
-import { getWorkboardRuntime, getWorkboardState, type WorkboardHost } from "./runtime.ts";
+import {
+  getWorkboardRuntime,
+  getWorkboardState,
+  hasCurrentWorkboardCards,
+  type WorkboardHost,
+} from "./runtime.ts";
 
 const WORKBOARD_LIVE_REFRESH_RETRY_MS = 1000;
 
@@ -51,7 +56,6 @@ async function runPendingRefresh(host: WorkboardHost): Promise<void> {
       runtime.liveRefreshPending = false;
       const targetEpoch = runtime.liveChangeEpoch;
       const targetRevision = runtime.liveHighestSeenRevision ?? 0;
-      const targetInvalidation = runtime.liveInvalidationRevision ?? 0;
       const refreshed = await (entry.refresh?.() ??
         refreshWorkboard({
           host,
@@ -71,7 +75,6 @@ async function runPendingRefresh(host: WorkboardHost): Promise<void> {
         runtime.liveAppliedRevision = Math.max(runtime.liveAppliedRevision ?? 0, targetRevision);
       }
       runtime.liveRefreshPending =
-        (runtime.liveInvalidationRevision ?? 0) !== targetInvalidation ||
         runtime.liveChangeEpoch !== targetEpoch ||
         (runtime.liveHighestSeenRevision ?? 0) > (runtime.liveAppliedRevision ?? 0);
     }
@@ -120,20 +123,15 @@ export function configureWorkboardLiveRefresh(params: {
   return requiresCanonicalReload;
 }
 
-/** Observer bursts share the canonical read queue and its single coalescing timer. */
-export function invalidateWorkboardLiveRefresh(host: WorkboardHost): void {
-  const runtime = getWorkboardRuntime(host);
-  runtime.liveInvalidationRevision = (runtime.liveInvalidationRevision ?? 0) + 1;
-  runtime.liveRefreshPending = true;
-  scheduleRetry(host, runtime.liveRefreshGeneration ?? 0);
-}
-
 export function handleWorkboardChanged(host: WorkboardHost, payload: unknown): boolean {
   const change = normalizeWorkboardChange(payload);
   if (!change) {
     return false;
   }
   const runtime = getWorkboardRuntime(host);
+  if (!runtime.liveRefreshEntry?.refresh && hasCurrentWorkboardCards(host, payload)) {
+    return false;
+  }
   if (runtime.liveChangeEpoch !== change.epoch) {
     runtime.liveChangeEpoch = change.epoch;
     runtime.liveHighestSeenRevision = change.revision;

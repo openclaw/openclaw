@@ -1,3 +1,7 @@
+import {
+  captureExternalSessionCommitGuard,
+  composeSessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
@@ -14,11 +18,8 @@ import {
   getInProcessGatewayToolContext,
   type AgentToolGatewayRequestCaller,
 } from "./in-process-gateway.js";
-import {
-  hasSessionControlAuthority,
-  readSessionControlAuthority,
-  prepareSessionControlTarget,
-} from "./sessions-control-authority.js";
+import { prepareSessionControlTarget } from "./sessions-control-authority.js";
+import { captureSessionControlAuthority } from "./sessions-operator-authority.js";
 
 type ControlTarget = {
   cfg: OpenClawConfig;
@@ -31,18 +32,15 @@ type ControlTarget = {
 };
 
 export async function prepareSessionToolControlTarget(target: ControlTarget) {
-  const authority = target.restricted ? readSessionControlAuthority() : undefined;
-  if (target.restricted && (!authority || !hasSessionControlAuthority(authority))) {
+  const { key, restricted, ...identity } = target;
+  const source = restricted ? captureSessionControlAuthority() : undefined;
+  if (restricted && !source?.allows("operator.write")) {
     throw new ToolAuthorizationError("Session control requires a current operator write grant");
   }
   return await prepareSessionControlTarget({
-    cfg: target.cfg,
-    agentId: target.agentId,
-    sessionKey: target.key,
-    expectedSessionId: target.expectedSessionId,
-    expectedLifecycleRevision: target.expectedLifecycleRevision,
-    operation: target.operation,
-    authority,
+    ...identity,
+    sessionKey: key,
+    authority: source?.authority,
   });
 }
 
@@ -56,10 +54,10 @@ export async function callSessionToolControl<T>(
   try {
     return await callGateway<T>({
       ...request,
-      sessionMutationCommitGuard: () => {
-        request.sessionMutationCommitGuard?.();
-        control.assertCurrent();
-      },
+      sessionMutationCommitGuard: composeSessionSourceAssertion([
+        captureExternalSessionCommitGuard(request.sessionMutationCommitGuard),
+        control.assertCurrent,
+      ]),
     });
   } finally {
     control.release();

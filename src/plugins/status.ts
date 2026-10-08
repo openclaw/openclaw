@@ -16,11 +16,7 @@ import {
   resolvePluginControlPlaneWorkspace,
 } from "./control-plane-workspace.js";
 import { resolveEffectivePluginIds } from "./effective-plugin-ids.js";
-import {
-  buildPluginShapeSummary,
-  type PluginCapabilityEntry,
-  type PluginInspectShape,
-} from "./inspect-shape.js";
+import { buildPluginShapeSummary } from "./inspect-shape.js";
 import {
   acquirePluginRegistryForInspection,
   loadPluginRegistryHandle,
@@ -73,13 +69,9 @@ export type {
   PluginCompatibilitySummary,
 } from "./status-compatibility.js";
 
-export type PluginInspectReport = {
+export type PluginInspectReport = ReturnType<typeof buildPluginShapeSummary> & {
   workspaceDir?: string;
   plugin: PluginRegistry["plugins"][number];
-  shape: PluginInspectShape;
-  capabilityMode: "none" | "plain" | "hybrid";
-  capabilityCount: number;
-  capabilities: PluginCapabilityEntry[];
   typedHooks: Array<{
     name: PluginHookName;
     priority?: number;
@@ -471,7 +463,7 @@ function buildPluginInspectRecord(
   const shape = shapeSummary.shape;
   const gatewayMethods = (
     rows?.gatewayMethodDescriptors ??
-    (report.gatewayMethodDescriptors ?? []).filter(
+    report.gatewayMethodDescriptors.filter(
       (descriptor) => descriptor.owner.kind === "plugin" && descriptor.owner.pluginId === plugin.id,
     )
   ).map((descriptor) => descriptor.name);
@@ -582,7 +574,7 @@ export function buildAllPluginInspectReports(params: PluginInspectParams): Plugi
   const diagnostics = groupPluginRecords(report.diagnostics, (entry) => entry.pluginId);
   const sessionCatalogs = groupPluginRecords(report.sessionCatalogs, (entry) => entry.pluginId);
   const gatewayMethodDescriptors = groupPluginRecords(
-    report.gatewayMethodDescriptors ?? [],
+    report.gatewayMethodDescriptors,
     (descriptor) => (descriptor.owner.kind === "plugin" ? descriptor.owner.pluginId : undefined),
   );
   return report.plugins.map((plugin) =>

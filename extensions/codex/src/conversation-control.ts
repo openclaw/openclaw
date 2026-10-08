@@ -25,7 +25,7 @@ import {
 import {
   resolveCodexAppServerRequestModelSelection,
   resolveCodexBindingModelProviderFallback,
-} from "./app-server/thread-lifecycle.js";
+} from "./app-server/thread-model-selection.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 
 type ActiveTurn = {
@@ -307,9 +307,6 @@ export async function setCodexConversationPermissions(params: {
 
 export function parseCodexFastModeArg(arg: string | undefined): boolean | undefined {
   const normalized = arg?.trim().toLowerCase();
-  if (!normalized || normalized === "status") {
-    return undefined;
-  }
   if (normalized === "on" || normalized === "true" || normalized === "fast") {
     return true;
   }
@@ -320,10 +317,7 @@ export function parseCodexFastModeArg(arg: string | undefined): boolean | undefi
 }
 
 export function parseCodexPermissionsModeArg(arg: string | undefined): PermissionsMode | undefined {
-  const normalized = arg?.trim().toLowerCase();
-  if (!normalized || normalized === "status") {
-    return undefined;
-  }
+  const normalized = arg?.trim().toLowerCase() ?? "";
   if (normalized === "yolo" || normalized === "full" || normalized === "full-access") {
     return "yolo";
   }

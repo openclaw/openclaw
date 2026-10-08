@@ -166,24 +166,25 @@ it.each(["container", "browser"] as const)(
     }
   },
 );
-it.each(["container", "browser"] as const)(
-  "preserves replacement %s custody during awaited removal",
-  async (kind) => {
+it.each([
+  { kind: "container", change: "replacement" },
+  { kind: "browser", change: "replacement" },
+  { kind: "container", change: "revocation" },
+  { kind: "browser", change: "revocation" },
+] as const)(
+  "preserves $kind metadata after $change during awaited removal",
+  async ({ kind, change }) => {
     const h = await setup(kind);
-    h.onRemove(h.replace);
-    await expect(h.custody.retire()).rejects.toThrow(/generation|owner changed/);
-    expect(h.physical.has(newId)).toBe(true);
-    expect(await h.rows()).toMatchObject([{ createdAtMs: 2 }]);
-    expect(bridgeApi.stopBrowserBridgeServer).not.toHaveBeenCalled();
-  },
-);
-it.each(["container", "browser"] as const)(
-  "rejects revoked %s custody after physical removal without dropping metadata",
-  async (kind) => {
-    const h = await setup(kind);
-    h.onRemove(async () => h.revoke());
-    await expect(h.custody.retire()).rejects.toThrow("lease revoked");
-    expect(await h.rows()).toHaveLength(1);
+    h.onRemove(change === "replacement" ? h.replace : async () => h.revoke());
+    await expect(h.custody.retire()).rejects.toThrow(
+      change === "replacement" ? /generation|owner changed/ : "lease revoked",
+    );
+    if (change === "replacement") {
+      expect(h.physical.has(newId)).toBe(true);
+      expect(await h.rows()).toMatchObject([{ createdAtMs: 2 }]);
+    } else {
+      expect(await h.rows()).toHaveLength(1);
+    }
     expect(bridgeApi.stopBrowserBridgeServer).not.toHaveBeenCalled();
   },
 );

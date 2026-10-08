@@ -28,10 +28,7 @@ function createPlacementGuard(params: {
     | undefined;
   installWorkerPlacementReconcileGuard({
     placements: {
-      readChangeSnapshot: async () => [{ sessionId: params.placement.sessionId }],
-      readProjection: async () => ({
-        placements: new Map([[params.placement.sessionId, params.placement]]),
-      }),
+      readEnvironmentOwner: async () => params.placement,
     } as never,
     environments: {
       get: (environmentId: string) => ({

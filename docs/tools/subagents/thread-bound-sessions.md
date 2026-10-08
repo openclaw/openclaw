@@ -115,3 +115,7 @@ captured ownership; it does not remove a later registration.
 
 The `subagent_ended` plugin hook is best-effort. Hook execution or plugin runtime
 loading failures are logged and do not abort sub-agent cleanup.
+
+Periodic context-engine cleanup continues after the request that started it ends.
+Best-effort context-engine cleanup failures log the redacted error, cleanup reason,
+and masked child session key.

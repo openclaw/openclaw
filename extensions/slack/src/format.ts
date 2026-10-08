@@ -188,7 +188,7 @@ type SlackCodeMarker = "`" | "```";
 const SLACK_ASSISTANT_TRANSCRIPT_PREFIX = "`Assistant:` ";
 
 // Slack mrkdwn backslashes are literal, including immediately before code delimiters.
-function tokenizeSlackMrkdwn(text: string): string[] {
+function tokenizeSlackMrkdwn(text: string, graphemes?: Intl.Segments): string[] {
   const tokens: string[] = [];
   for (let index = 0; index < text.length;) {
     if (text.startsWith("```", index)) {
@@ -218,7 +218,11 @@ function tokenizeSlackMrkdwn(text: string): string[] {
     if (codePoint === undefined) {
       break;
     }
-    const character = String.fromCodePoint(codePoint);
+    const grapheme = graphemes?.containing(index + (codePoint > 0xffff ? 1 : 0));
+    const character =
+      (grapheme &&
+        text.slice(index, grapheme.index + grapheme.segment.length).match(/^[^`*_~<>&]+/u)?.[0]) ||
+      String.fromCodePoint(codePoint);
     index += character.length;
     tokens.push(character);
   }
@@ -460,7 +464,10 @@ export function chunkSlackMrkdwnText(text: string, limit: number): string[] {
     content = "";
   };
 
-  for (const token of tokenizeSlackMrkdwn(text)) {
+  for (const token of tokenizeSlackMrkdwn(
+    text,
+    new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(text),
+  )) {
     const transition = resolveSlackCodeMarkerTransition(activeMarker, token);
     const nextMarker = transition === null ? activeMarker : transition;
     const sourceMarker = token === "`" || token === "```" ? token : undefined;
@@ -481,7 +488,7 @@ export function chunkSlackMrkdwnText(text: string, limit: number): string[] {
     if (token.length > contentLimit) {
       flush();
       const marker = wrapper(activeMarker);
-      if (activeMarker && isAllowedSlackAngleToken(token)) {
+      if (activeMarker) {
         if (marker) {
           chunks.push(
             ...chunkTextForOutbound(token, Math.max(1, Math.floor(contentLimit)), {

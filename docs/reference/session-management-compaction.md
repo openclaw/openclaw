@@ -11,16 +11,17 @@ A single **Gateway process** owns session state end-to-end. UIs (macOS app, web 
 
 Overview docs first: [Session management](/concepts/session), [Compaction](/concepts/compaction), [Memory overview](/concepts/memory), [Memory search](/concepts/memory-search), [Session pruning](/concepts/session-pruning), [Transcript hygiene](/reference/transcript-hygiene), full config reference at [Agent config](/gateway/config-agents).
 
-This page is an index. The deep dive is documented on five pages, one per
+This page is an index. The deep dive is documented on six pages, one per
 reader job. Open the page that matches your task and stay there.
 
-| Page                                                                                        | Read it when                                                                                     |
-| ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| [Session state on disk](/reference/session-management-compaction/store)                     | The two persistence layers and the per-agent paths on the Gateway host.                          |
-| [Store maintenance and retention](/reference/session-management-compaction/maintenance)     | `session.maintenance` keys, disk-budget cleanup, cron retention, and the SQLite downgrade path.  |
-| [Session keys, ids, and transcript events](/reference/session-management-compaction/schema) | `sessionKey` patterns, `sessionId` lifecycle, `SessionEntry` fields, and transcript entry types. |
-| [Compaction behavior and settings](/reference/session-management-compaction/compaction)     | What compaction does, when it runs, its settings and providers, and where it surfaces.           |
-| [Silent turns and the memory flush](/reference/session-management-compaction/housekeeping)  | The `NO_REPLY` contract and `agents.defaults.compaction.memoryFlush`.                            |
+| Page                                                                                         | Read it when                                                                                     |
+| -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| [Session state on disk](/reference/session-management-compaction/store)                      | The two persistence layers and the per-agent paths on the Gateway host.                          |
+| [Store maintenance and retention](/reference/session-management-compaction/maintenance)      | `session.maintenance` keys, disk-budget cleanup, cron retention, and the SQLite downgrade path.  |
+| [Session keys, ids, and transcript events](/reference/session-management-compaction/schema)  | `sessionKey` patterns, `sessionId` lifecycle, `SessionEntry` fields, and transcript entry types. |
+| [Compaction behavior and settings](/reference/session-management-compaction/compaction)      | What compaction does, when it runs, its settings and providers, and where it surfaces.           |
+| [Silent turns and the memory flush](/reference/session-management-compaction/housekeeping)   | The `NO_REPLY` contract and `agents.defaults.compaction.memoryFlush`.                            |
+| [Session transcript working sets](/reference/session-management-compaction/resident-history) | Proposed worker-owned acquisition, resident budgets, and history-reader migrations.              |
 
 ## Where each section moved
 
