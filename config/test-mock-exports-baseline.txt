@@ -481,7 +481,6 @@
 ["extensions/diffs/plugin-startup-laziness.test.ts","./src/browser.runtime.js","b4aae09dc3b6f70ddb4e319f43d55a3ed0c35281021d7a3e325e216ad3d51fb8",1]
 ["extensions/diffs/src/plugin.test.ts","./tool.js","af41bac9a7610b19cdf0c889c484aa2242433c26f36bf1238c4ec1f1e733fd32",1]
 ["extensions/discord/src/activities/presenter.test.ts","../send.components.js","651dcb255bc6d4cabdee3627e59c5060dc829f1962583dbef8be7a4fe58ef097",1]
-["extensions/discord/src/channel.test.ts","./audit.js","42a98353fcad8c849675ce4fb89f2138c618afe395df655ed6bcacef32eae2a0",1]
 ["extensions/discord/src/channel.test.ts","./monitor/provider.runtime.js","02916598d15487d8f67cc0c0ab9731afe070209dcfdb85c9f26fd782964696e7",1]
 ["extensions/discord/src/channel.test.ts","./probe.js","42aa02766d6589485df98bfe25fb451cf1f7d86b564148fafa098ef43de46c14",1]
 ["extensions/discord/src/durable-forum-batch.test.ts","openclaw/plugin-sdk/web-media","e47cba8f82f96ad127026c676bf2fb761d56d38235f37bf39736ca44715580b3",1]
