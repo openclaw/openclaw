@@ -1,28 +1,18 @@
-// Telegram plugin module implements native command registration behavior.
-import type { Bot, Context } from "grammy";
+import type { Context } from "grammy";
 import {
   findCommandByNativeName,
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
 } from "openclaw/plugin-sdk/command-auth-native";
-import type {
-  ChannelGroupPolicy,
-  OpenClawConfig,
-  TelegramAccountConfig,
-} from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createPluginCommandRuntime } from "openclaw/plugin-sdk/plugin-command-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { danger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import type {
-  TelegramNativeCommandCallbackDispatcher,
-  TelegramResolvedGroupConfig,
-} from "./bot-handlers.types.js";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
+import type { TelegramNativeCommandCallbackDispatcher } from "./bot-handlers.types.js";
 import type { TelegramBuiltinCommandResult } from "./bot-native-command-builtins.js";
-import {
-  defaultTelegramNativeCommandDeps,
-  type TelegramNativeCommandDeps,
-} from "./bot-native-command-deps.runtime.js";
+import { defaultTelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
+import type { TelegramCommandExecutorParams } from "./bot-native-command-dispatch.js";
 import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
@@ -30,7 +20,6 @@ import {
   type TelegramMenuCommand,
 } from "./bot-native-command-menu.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
-import type { TelegramBotOptions } from "./bot.types.js";
 import {
   normalizeTelegramCommandName,
   resolveTelegramCustomCommands,
@@ -46,33 +35,15 @@ const loadTelegramPluginCommandExecutor = createLazyRuntimeModule(
 
 type TelegramNativeCommandContext = Context & { match?: string };
 
-type RegisterTelegramNativeCommandsParams = {
-  bot: Bot;
+type RegisterTelegramNativeCommandsParams = Omit<
+  TelegramCommandExecutorParams,
+  "botUser" | "msg" | "rawText"
+> & {
   cfg: OpenClawConfig;
-  runtime: RuntimeEnv;
-  accountId: string;
   telegramCfg: TelegramAccountConfig;
-  mediaMaxBytes?: number;
   nativeEnabled: boolean;
   nativeSkillsEnabled: boolean;
-  resolveGroupPolicy: (chatId: string | number, cfg: OpenClawConfig) => ChannelGroupPolicy;
-  resolveTelegramGroupConfig: (
-    chatId: string | number,
-    messageThreadId: number | undefined,
-    cfg: OpenClawConfig,
-  ) => TelegramResolvedGroupConfig;
   shouldSkipUpdate: (ctx: TelegramUpdateKeyContext) => boolean;
-  telegramDeps?: TelegramNativeCommandDeps;
-  opts: Pick<
-    TelegramBotOptions,
-    | "token"
-    | "ownerAgentId"
-    | "botInfo"
-    | "allowFrom"
-    | "groupAllowFrom"
-    | "replyToMode"
-    | "accountAbortSignal"
-  >;
 };
 
 export const registerTelegramNativeCommands = ({
@@ -141,12 +112,11 @@ export const registerTelegramNativeCommands = ({
   for (const issue of pluginCatalog.issues) {
     runtime.error?.(danger(issue));
   }
-  const firstSkillCommandIndex = nativeEnabled
-    ? listNativeCommandSpecsForConfig(cfg, {
-        provider: "telegram",
-        includeBundledChannelFallback: false,
-      }).length
-    : 0;
+  const builtinCommands = listNativeCommandSpecsForConfig(cfg, {
+    provider: "telegram",
+    includeBundledChannelFallback: false,
+  });
+  const firstSkillCommandIndex = nativeEnabled ? builtinCommands.length : 0;
   const nativeMenuCommands = nativeCommands
     .map((command, index): TelegramMenuCommand | null => {
       const normalized = normalizeTelegramCommandName(command.name);
@@ -185,10 +155,7 @@ export const registerTelegramNativeCommands = ({
       "Telegram menu pressure omitted per-skill commands; removing per-skill commands and keeping /skill.",
     );
   }
-  const loginCommand = listNativeCommandSpecsForConfig(cfg, {
-    provider: "telegram",
-    includeBundledChannelFallback: false,
-  }).find(
+  const loginCommand = builtinCommands.find(
     (command) =>
       findCommandByNativeName(command.name, "telegram", { includeBundledChannelFallback: false })
         ?.key === "login",
@@ -344,10 +311,7 @@ export const registerTelegramNativeCommands = ({
       return { handled: false, clearButtons: false };
     }
     const callbackMessage = callbackQuery.message;
-    if (!callbackMessage || callbackMessage.date <= 0) {
-      return { handled: true, clearButtons: false };
-    }
-    if (callbackMessage.chat.type === "channel") {
+    if (!callbackMessage || callbackMessage.date <= 0 || callbackMessage.chat.type === "channel") {
       return { handled: true, clearButtons: false };
     }
     const rawText = separatorIndex === -1 ? "" : commandBody.slice(separatorIndex + 1).trim();

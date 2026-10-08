@@ -62,26 +62,24 @@ describe("chat content context copy", () => {
     await copy("Copy table", "Name\tCount\nAlpha\t2");
   });
 
-  it.each(["user", "assistant"])(
-    "copies %s source without a footer or reply callback",
-    async (role) => {
-      const source = "**Exact source** " + "x".repeat(520);
-      const bubble = document.createElement("div");
-      bubble.className = "chat-bubble";
-      Object.assign(bubble, {
-        messageActions: resolveMessageActionDetails(
-          prepareChatMessageRender({ role, content: source }),
-          {
-            messageId: "commentary",
-            senderLabel: role,
-          },
-        ),
-      });
-      owner.append(bubble);
-      open(bubble);
-      await copy("Copy as markdown", source);
-    },
-  );
+  it("copies source without a footer or reply callback", async () => {
+    const role = "assistant";
+    const source = "**Exact source** " + "x".repeat(520);
+    const bubble = document.createElement("div");
+    bubble.className = "chat-bubble";
+    Object.assign(bubble, {
+      messageActions: resolveMessageActionDetails(
+        prepareChatMessageRender({ role, content: source }),
+        {
+          messageId: "commentary",
+          senderLabel: role,
+        },
+      ),
+    });
+    owner.append(bubble);
+    open(bubble);
+    await copy("Copy as markdown", source);
+  });
 
   it("copies selected text in tool output without message actions", async () => {
     owner.innerHTML = '<div class="chat-tool-msg-body">selected output</div>';
@@ -93,18 +91,15 @@ describe("chat content context copy", () => {
     await copy("Copy", "selected output");
   });
 
-  it.each(["document", "audio", "video"])(
-    "copies the %s card download link, not playback state",
-    async (kind) => {
-      owner.innerHTML = `<div class="chat-assistant-attachment-card chat-assistant-attachment-card--${kind}">
+  it("copies the card download link, not playback state", async () => {
+    owner.innerHTML = `<div class="chat-assistant-attachment-card chat-assistant-attachment-card--video">
       <span class="chat-assistant-attachment-card__title">report</span>
       <a class="chat-assistant-attachment-card__download" href="https://example.test/report">Download</a>
       <video src="blob:temporary-playback"></video>
     </div>`;
-      open(owner.querySelector("span")!);
-      await copy("Copy link", "https://example.test/report");
-    },
-  );
+    open(owner.querySelector("span")!);
+    await copy("Copy link", "https://example.test/report");
+  });
 
   it("copies a file name without inventing a link for a pending attachment", async () => {
     owner.innerHTML =

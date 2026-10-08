@@ -3,8 +3,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import type {
   OpenClawPluginApi,
   OpenClawPluginNodeInvokePolicy,
-  OpenClawPluginService,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -20,7 +20,7 @@ function registerLogbook(runtimeSource = fileURLToPath(new URL("./index.ts", imp
   const captured = createCapturedPluginRegistration({ id: "logbook" });
   captured.api.pluginConfig = { captureEnabled: false };
   const policies: OpenClawPluginNodeInvokePolicy[] = [];
-  const services: OpenClawPluginService[] = [];
+  const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
   const methods: Array<{
     method: string;
     handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
@@ -48,6 +48,7 @@ describe("logbook gateway methods", () => {
       config: {},
       stateDir,
       logger: { info() {}, warn() {}, error() {}, debug() {} },
+      scheduler: createTestPluginServiceScheduler(),
     };
     const store = await LogbookStore.open(
       path.join(stateDir, "logbook"),
@@ -117,9 +118,11 @@ describe("logbook gateway methods", () => {
         byteSize: 9,
       });
     } finally {
+      context.scheduler.beginClose();
       try {
         await service.stop?.(context);
       } finally {
+        await context.scheduler.stop();
         await store.close();
       }
     }
@@ -139,20 +142,24 @@ describe("logbook gateway methods", () => {
   it.each([
     ["source", "extensions/logbook/index.ts", "extensions/logbook/src/store.worker.ts"],
     ["standalone", "plugins/logbook/dist/index.js", "plugins/logbook/dist/src/store.worker.js"],
-    ["bundled", "dist/extensions/logbook/index.js", "dist/extensions/logbook/src/store.worker.js"],
   ] as const)(
     "locates its %s worker from the selected runtime entry",
     async (_layout, entry, worker) => {
       const { services } = registerLogbook(path.resolve(entry));
       const stopBeforeOpening = new Error("worker location captured");
       const open = vi.spyOn(LogbookStore, "open").mockRejectedValueOnce(stopBeforeOpening);
-      await expect(
-        services[0]!.start({ config: {}, stateDir: "/unused", logger: console }),
-      ).rejects.toBe(stopBeforeOpening);
-      expect(open).toHaveBeenCalledExactlyOnceWith(
-        path.join("/unused", "logbook"),
-        pathToFileURL(path.resolve(worker)),
-      );
+      const scheduler = createTestPluginServiceScheduler();
+      try {
+        await expect(
+          services[0]!.start({ config: {}, stateDir: "/unused", logger: console, scheduler }),
+        ).rejects.toBe(stopBeforeOpening);
+        expect(open).toHaveBeenCalledExactlyOnceWith(
+          path.join("/unused", "logbook"),
+          pathToFileURL(path.resolve(worker)),
+        );
+      } finally {
+        await scheduler.stop();
+      }
     },
   );
 });

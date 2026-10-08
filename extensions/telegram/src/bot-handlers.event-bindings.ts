@@ -6,8 +6,12 @@ import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
 import { resolveTelegramAccount } from "./accounts.js";
 import { normalizeAllowFrom } from "./bot-access.js";
 import type { TelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
+import {
+  buildSyntheticContext,
+  buildSyntheticTextMessage,
+} from "./bot-handlers.message-context.js";
 import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
-import type { RegisterTelegramHandlerParams, TelegramEventBindings } from "./bot-handlers.types.js";
+import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
 import {
   createTelegramSpooledReplayDeferredParticipant,
   isTelegramSpooledReplayUpdate,
@@ -25,10 +29,7 @@ const TELEGRAM_REACTION_THREAD_UNRESOLVED_REASON = "thread-context-unavailable";
 
 type TelegramEventMessageDependencies = Pick<
   TelegramMessagePipeline,
-  | "resolveCachedMessageThreadSpec"
-  | "buildSyntheticTextMessage"
-  | "buildSyntheticContext"
-  | "processMessageWithReplyChain"
+  "resolveCachedMessageThreadSpec" | "processMessageWithReplyChain"
 >;
 
 type CreateTelegramEventBindingsOptions = {
@@ -38,7 +39,6 @@ type CreateTelegramEventBindingsOptions = {
     TelegramHandlerAuthorization,
     "resolveTelegramEventAuthorizationContext" | "authorizeTelegramEventSender"
   >;
-  registerMessages: () => void;
 };
 
 function isCurrentTelegramChatMember(member: ChatMember): boolean {
@@ -54,17 +54,22 @@ export function createTelegramEventBindings({
   params,
   message,
   authorization,
-  registerMessages,
-}: CreateTelegramEventBindingsOptions): TelegramEventBindings {
+}: CreateTelegramEventBindingsOptions) {
   const { accountId, ownerAgentId, bot, cfg, opts, runtime, shouldSkipUpdate, telegramDeps } =
     params;
   const { authorizeTelegramEventSender, resolveTelegramEventAuthorizationContext } = authorization;
-  const {
-    buildSyntheticContext,
-    buildSyntheticTextMessage,
-    processMessageWithReplyChain,
-    resolveCachedMessageThreadSpec,
-  } = message;
+  const { processMessageWithReplyChain, resolveCachedMessageThreadSpec } = message;
+  const resolveAuthorizedEventContext = async (
+    eventParams: Parameters<typeof resolveTelegramEventAuthorizationContext>[0] & {
+      senderId: string;
+      chatTitle?: string;
+    },
+  ) => {
+    const context = await resolveTelegramEventAuthorizationContext(eventParams);
+    return (await authorizeTelegramEventSender({ ...eventParams, mode: "reaction", context }))
+      ? context
+      : undefined;
+  };
 
   const registerChatMembership = () => {
     bot.on("my_chat_member", async (ctx) => {
@@ -96,11 +101,8 @@ export function createTelegramEventBindings({
         groupConfig,
         effectiveGroupAllow: normalizeAllowFrom(),
         resolveGroupPolicy: params.resolveGroupPolicy,
-        enforcePolicy: true,
         enforceAllowlistAuthorization: false,
         allowEmptyAllowlistEntries: false,
-        requireSenderForAllowlistAuthorization: false,
-        checkChatAllowlist: true,
       });
       const roomAllowed = groupConfig?.enabled !== false && groupPolicyAccess.allowed;
       const inviter = membership.from;
@@ -119,13 +121,15 @@ export function createTelegramEventBindings({
           accountId,
           conversationId: String(chatId),
           deliverTo: String(chatId),
-          route: resolveTelegramConversationRoute({
-            cfg: currentCfg,
-            accountId,
-            chatId,
-            isGroup: true,
-            threadSpec: resolveTelegramThreadSpec({ isGroup: true }),
-          }).route,
+          route: (
+            await resolveTelegramConversationRoute({
+              cfg: currentCfg,
+              accountId,
+              chatId,
+              isGroup: true,
+              threadSpec: resolveTelegramThreadSpec({ isGroup: true }),
+            })
+          ).route,
           inviterLabel,
           roomAllowed,
           resolveRoomContext: async () => {
@@ -161,7 +165,6 @@ export function createTelegramEventBindings({
         const messageId = reaction.message_id;
         const user = reaction.user;
         const senderId = user?.id != null ? String(user.id) : "";
-        const senderUsername = user?.username ?? "";
         const isGroup = reaction.chat.type === "group" || reaction.chat.type === "supergroup";
         const isDirectMessagesChat = reaction.chat.is_direct_messages === true;
         const isForum = !isDirectMessagesChat && reaction.chat.is_forum === true;
@@ -223,9 +226,10 @@ export function createTelegramEventBindings({
           }
         }
 
-        const eventAuthContext = await resolveTelegramEventAuthorizationContext({
+        const eventAuthContext = await resolveAuthorizedEventContext({
           cfg: authorizationCfg,
           chatId,
+          chatTitle: reaction.chat.title,
           isGroup,
           senderId,
           threadSpec:
@@ -235,16 +239,7 @@ export function createTelegramEventBindings({
               isForum,
             }),
         });
-        const senderAuthorization = await authorizeTelegramEventSender({
-          chatId,
-          chatTitle: reaction.chat.title,
-          isGroup,
-          senderId,
-          senderUsername,
-          mode: "reaction",
-          context: eventAuthContext,
-        });
-        if (!senderAuthorization) {
+        if (!eventAuthContext) {
           return;
         }
 
@@ -262,7 +257,7 @@ export function createTelegramEventBindings({
           }
         }
 
-        const { route } = resolveTelegramConversationRoute({
+        const { route } = await resolveTelegramConversationRoute({
           cfg: eventAuthContext.cfg,
           accountId,
           chatId,
@@ -348,7 +343,6 @@ export function createTelegramEventBindings({
         const chatId = entry.chat.id;
         const isGroup = entry.chat.type === "group" || entry.chat.type === "supergroup";
         const senderId = String(user.id);
-        const senderUsername = user.username ?? "";
         if (!isGroup && user.id !== chatId) {
           logVerbose(`Blocked forwarded telegram poll_answer for DM ${chatId} from ${senderId}`);
           return;
@@ -360,23 +354,15 @@ export function createTelegramEventBindings({
           return;
         }
         const authorizationCfg = telegramDeps.getRuntimeConfig();
-        const eventAuthContext = await resolveTelegramEventAuthorizationContext({
+        const eventAuthContext = await resolveAuthorizedEventContext({
           cfg: authorizationCfg,
-          chatId,
-          isGroup,
-          senderId,
-          threadSpec: entry.threadSpec,
-        });
-        const senderAuthorization = await authorizeTelegramEventSender({
           chatId,
           chatTitle: "title" in entry.chat ? entry.chat.title : undefined,
           isGroup,
           senderId,
-          senderUsername,
-          mode: "reaction",
-          context: eventAuthContext,
+          threadSpec: entry.threadSpec,
         });
-        if (!senderAuthorization) {
+        if (!eventAuthContext) {
           return;
         }
 
@@ -385,13 +371,11 @@ export function createTelegramEventBindings({
           eventAuthContext.groupConfig && "requireTopic" in eventAuthContext.groupConfig
             ? eventAuthContext.groupConfig.requireTopic
             : undefined;
-        if (!isGroup && requireTopic === true) {
-          if (eventAuthContext.dmThreadId == null) {
-            logVerbose(
-              `Blocked telegram poll_answer in DM ${chatId}: requireTopic=true but topic unknown`,
-            );
-            return;
-          }
+        if (!isGroup && requireTopic === true && eventAuthContext.dmThreadId == null) {
+          logVerbose(
+            `Blocked telegram poll_answer in DM ${chatId}: requireTopic=true but topic unknown`,
+          );
+          return;
         }
 
         const optionLabels = optionIds.map((index) => entry.options[index] ?? `option ${index}`);
@@ -503,6 +487,5 @@ export function createTelegramEventBindings({
     registerReaction,
     registerPolls,
     registerMigration,
-    registerMessages,
   };
 }

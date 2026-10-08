@@ -186,6 +186,9 @@ GRAPHQL
     return 1
   fi
   local result
+  if [ -n "${PREP_PUBLICATION_REVIEW_SNAPSHOT:-}" ]; then
+    verify_correction_publication_authority || { rm -f "$payload_file"; return 1; }
+  fi
   result=$(pr_gh_plain api graphql --input "$payload_file" 2>&1) || {
     rm -f "$payload_file"
     echo "GraphQL push failed: $result" >&2
@@ -297,6 +300,9 @@ push_prep_head_once() {
 
   revalidate_pr_publication "$pr" "$observation" "$pr_head" "$lease_sha" "$prep_head_sha" || return 1
   local push_output push_status
+  if [ -n "${PREP_PUBLICATION_REVIEW_SNAPSHOT:-}" ]; then
+    verify_correction_publication_authority || return 1
+  fi
   if push_output=$(pr_git push "--force-with-lease=refs/heads/$pr_head:$lease_sha" "$PRHEAD_REMOTE_URL" "$prep_head_sha:refs/heads/$pr_head" 2>&1); then
     printf '%s\n' "$push_output" >&2
   else
@@ -322,6 +328,10 @@ push_prep_head_to_pr_branch() {
   local lease_sha="$4"
   local result_env_path="${5:-.local/push-result.env}"
   local observation="${6:-}"
+  local publication_snapshot="${PREP_PUBLICATION_REVIEW_SNAPSHOT:-}"
+  if [ -n "$publication_snapshot" ]; then
+    correction_review_snapshot_with_publication "$publication_snapshot" "$result_env_path" absent >/dev/null || return 1
+  fi
   if [ -z "$observation" ]; then
     require_artifact .local/pr-meta.json || return 1
     observation=$(cat .local/pr-meta.json) || return 1
@@ -379,16 +389,42 @@ push_prep_head_to_pr_branch() {
   fi
   local replaced_hosted_ancestry
   replaced_hosted_ancestry=$(classify_replaced_hosted_ancestry "$pushed_from_sha" "$prep_head_sha") || return 1
+  if [ -n "${PREP_PUBLICATION_REVIEW_SNAPSHOT:-}" ]; then
+    verify_correction_review_snapshot "$PREP_PUBLICATION_PR" "$PREP_PUBLICATION_REVIEW_SNAPSHOT" || return 1
+  fi
+
+  # A verified retry retains its original publication lease. Another operation
+  # may own the selected receipt, so replace this file if it records an older pair.
+  if [ "$remote_sha" = "$prep_head_sha" ] && { [ -e "$result_env_path" ] || [ -L "$result_env_path" ]; }; then
+    local PUSH_PREP_HEAD_SHA="" PUSH_LOCAL_PREP_HEAD_SHA="" PUSHED_FROM_SHA=""
+    local PUSH_REPLACED_HOSTED_ANCESTRY="" PR_HEAD_SHA_AFTER_PUSH=""
+    read_prep_publication_result "$result_env_path" || return 1
+    if [ "$PUSH_PREP_HEAD_SHA" = "$prep_head_sha" ] && [ "$PUSH_LOCAL_PREP_HEAD_SHA" = "$local_prep_head_sha" ]; then
+      if [ -n "$publication_snapshot" ]; then
+        advance_correction_publication_authority "$pr" "$local_prep_head_sha" "$publication_snapshot" || return 1
+      fi
+      return 0
+    fi
+  fi
 
   # merge-verify owns relevance-aware mainline drift checks. Requiring every
   # prepared head to contain main here forces needless rebases, while GraphQL
   # createCommitOnBranch cannot move a rebased branch's commit ancestry.
   # Security: shell-escape values to prevent command injection when sourced.
-  printf '%s=%q\n' \
+  local result_env result_oid
+  result_env=$(printf '%s=%q\n' \
     PUSH_PREP_HEAD_SHA "$prep_head_sha" \
     PUSH_LOCAL_PREP_HEAD_SHA "$local_prep_head_sha" \
     PUSHED_FROM_SHA "$pushed_from_sha" \
     PUSH_REPLACED_HOSTED_ANCESTRY "$replaced_hosted_ancestry" \
-    PR_HEAD_SHA_AFTER_PUSH "$pr_head_sha_after" \
-    > "$result_env_path"
+    PR_HEAD_SHA_AFTER_PUSH "$pr_head_sha_after") || return 1
+  if [ -n "$publication_snapshot" ]; then
+    result_oid=$(printf '%s\n' "$result_env" | pr_git hash-object --stdin) || return 1
+    publication_snapshot=$(correction_review_snapshot_with_publication \
+      "$publication_snapshot" "$result_env_path" "$result_oid") || return 1
+  fi
+  printf '%s\n' "$result_env" > "$result_env_path" || return 1
+  if [ -n "$publication_snapshot" ]; then
+    advance_correction_publication_authority "$pr" "$local_prep_head_sha" "$publication_snapshot" || return 1
+  fi
 }

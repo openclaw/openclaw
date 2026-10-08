@@ -1,18 +1,12 @@
-import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/embedded-agent-runner/types.js";
-import { normalizeChatType } from "../../channels/chat-type.js";
 import { updateAmbientTranscriptWatermark } from "../../config/sessions/ambient-transcript-watermark.js";
 import { isImageMediaFact, type MediaFact } from "../../media/media-facts.js";
 import type { UserTurnInput } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
-import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel } from "../thinking.js";
-import type { ExecOverrides } from "./get-reply-run.types.js";
-
-const EPOCH_MILLISECONDS_THRESHOLD = 1_000_000_000_000;
+import type { ReplyExecOverrides } from "./get-reply-exec-overrides.js";
 
 export function buildPersistedMediaImageLayout(params: {
   ctx: MsgContext;
@@ -47,10 +41,8 @@ export function buildPersistedMediaImageLayout(params: {
   const used = new Set<number>();
   const unsuppressedFactCount = imageFactIndexes.filter((index) => !suppressed.has(index)).length;
   const canInferByPosition = unsuppressedFactCount === (params.imageOrder?.length ?? 0);
-  const takeNextFactIndex = (): number | undefined =>
-    imageFactIndexes.find((index) => !suppressed.has(index) && !used.has(index));
-  const slots = (params.imageOrder ?? []).map((kind, index) => {
-    const sourceIndex = params.imageSourceIndexes?.[index];
+  const slots = (params.imageOrder ?? []).map((kind, slotIndex) => {
+    const sourceIndex = params.imageSourceIndexes?.[slotIndex];
     const sourceFact = sourceIndex === undefined ? undefined : params.media[sourceIndex];
     const factIndex =
       sourceIndex !== undefined
@@ -61,7 +53,7 @@ export function buildPersistedMediaImageLayout(params: {
           ? sourceIndex
           : undefined
         : canInferByPosition
-          ? takeNextFactIndex()
+          ? imageFactIndexes.find((index) => !suppressed.has(index) && !used.has(index))
           : undefined;
     if (factIndex !== undefined) {
       used.add(factIndex);
@@ -72,9 +64,6 @@ export function buildPersistedMediaImageLayout(params: {
     if (!suppressed.has(factIndex) && !used.has(factIndex)) {
       slots.push({ kind: "offloaded", factIndex });
     }
-  }
-  if (slots.length === 0 && suppressedFactIndexes.length === 0) {
-    return undefined;
   }
   return {
     slots,
@@ -114,16 +103,6 @@ export function routeThreadIdsMatch(
   return String(activeThreadId) === String(currentThreadId);
 }
 
-export function normalizeMessageTimestampMs(value: unknown): number | undefined {
-  const timestamp = typeof value === "number" && Number.isFinite(value) ? value : undefined;
-  if (timestamp === undefined || timestamp <= 0) {
-    return undefined;
-  }
-  const timestampMs =
-    timestamp < EPOCH_MILLISECONDS_THRESHOLD ? Math.trunc(timestamp * 1000) : timestamp;
-  return asDateTimestampMs(timestampMs);
-}
-
 export async function updateRoomEventAmbientTranscriptWatermark(params: {
   expectedSessionId: string;
   sessionCtx: TemplateContext;
@@ -147,30 +126,8 @@ export async function updateRoomEventAmbientTranscriptWatermark(params: {
   });
 }
 
-export function resolvePromptSilentReplyConversationType(params: {
-  ctx: Pick<
-    MsgContext,
-    "ChatType" | "CommandSource" | "CommandTargetSessionKey" | "CommandTurn" | "SessionKey"
-  >;
-  inboundSessionKey?: string;
-}): SilentReplyConversationType | undefined {
-  const sourceSessionKey = params.inboundSessionKey ?? params.ctx.SessionKey;
-  const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(params.ctx);
-  if (commandTargetSessionKey && commandTargetSessionKey !== sourceSessionKey) {
-    return undefined;
-  }
-  const chatType = normalizeChatType(params.ctx.ChatType);
-  if (chatType === "direct") {
-    return "direct";
-  }
-  if (chatType === "group" || chatType === "channel") {
-    return "group";
-  }
-  return undefined;
-}
-
 export function buildExecOverridePromptHint(params: {
-  execOverrides?: ExecOverrides;
+  execOverrides?: ReplyExecOverrides;
   elevatedLevel: ElevatedLevel;
   fullAccessAvailable?: boolean;
   fullAccessBlockedReason?: EmbeddedFullAccessBlockedReason;
@@ -208,10 +165,8 @@ export function buildExecOverridePromptHint(params: {
 const embeddedAgentRuntimeLoader = createLazyImportLoader(
   () => import("../../agents/embedded-agent.runtime.js"),
 );
-const agentRunnerRuntimeLoader = createLazyImportLoader(() => import("./agent-runner.runtime.js"));
-const sessionUpdatesRuntimeLoader = createLazyImportLoader(
-  () => import("./session-updates.runtime.js"),
-);
+const agentRunnerRuntimeLoader = createLazyImportLoader(() => import("./agent-runner-run.js"));
+const sessionUpdatesRuntimeLoader = createLazyImportLoader(() => import("./session-updates.js"));
 
 export async function prewarmReplyRunRuntimes(): Promise<void> {
   await Promise.all([
@@ -221,17 +176,9 @@ export async function prewarmReplyRunRuntimes(): Promise<void> {
   ]);
 }
 
-export function loadEmbeddedAgentRuntime() {
-  return embeddedAgentRuntimeLoader.load();
-}
-
-export function loadAgentRunnerRuntime() {
-  return agentRunnerRuntimeLoader.load();
-}
-
-export function loadSessionUpdatesRuntime() {
-  return sessionUpdatesRuntimeLoader.load();
-}
+export const loadEmbeddedAgentRuntime = embeddedAgentRuntimeLoader.load;
+export const loadAgentRunnerRuntime = agentRunnerRuntimeLoader.load;
+export const loadSessionUpdatesRuntime = sessionUpdatesRuntimeLoader.load;
 
 export function hasInboundHistoryBody(ctx: TemplateContext): boolean {
   return (
@@ -244,6 +191,6 @@ export function hasReplyTargetContext(ctx: MsgContext | TemplateContext): boolea
   if (normalizeOptionalString(ctx.ReplyToBody)) {
     return true;
   }
-  const replyChain = (ctx as { ReplyChain?: unknown }).ReplyChain;
+  const replyChain = ctx.ReplyChain;
   return Array.isArray(replyChain) && replyChain.length > 0;
 }

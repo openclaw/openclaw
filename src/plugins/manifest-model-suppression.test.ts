@@ -627,54 +627,44 @@ describe("manifest model suppression", () => {
     ).toBeUndefined();
   });
 
-  describe.each(["qwen", "modelstudio"])("%s plan availability", (provider) => {
-    describe.each(["openai-completions", undefined] as const)("api=%s", (api) => {
-      it.each([
-        ["https://coding.dashscope.aliyuncs.com/v1", true],
-        ["https://coding-intl.dashscope.aliyuncs.com/v1", true],
-        ["https://dashscope.aliyuncs.com/compatible-mode/v1", false],
-        ["https://dashscope-intl.aliyuncs.com/compatible-mode/v1", false],
-        ["https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", false],
-        ["https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1", false],
-        ["https://proxy.example/v1", false],
-      ] as const)("matches the plan at %s", (baseUrl, suppressed) => {
-        // Public metadata is fixture data; core's type graph must not compile plugin files.
-        const qwenManifest: Record<string, unknown> = JSON.parse(
-          fs.readFileSync(
-            new URL("../../extensions/qwen/openclaw.plugin.json", import.meta.url),
-            "utf8",
-          ),
-        );
-        mocks.loadPluginMetadataSnapshot.mockReturnValue(createMetadataSnapshot([qwenManifest]));
-        const providerCatalog = normalizeModelCatalog(qwenManifest.modelCatalog, {
-          ownedProviders: new Set(["qwen"]),
-        })?.providers?.qwen;
-        if (!providerCatalog) {
-          throw new Error("Qwen manifest catalog is missing");
-        }
-        const rows = normalizeModelCatalogProviderRows({
-          provider,
-          providerCatalog,
-          source: "manifest",
-        });
-        const resolver = buildManifestBuiltInModelSuppressionResolver({
-          config: {
-            models: {
-              providers: { [provider]: { baseUrl, ...(api ? { api } : {}), models: [] } },
-            },
-          },
-          env: process.env,
-        });
-
-        for (const id of ["qwen3.6-flash", "qwen3.7-max", "qwen3.8-max", "qwen3.8-flash"]) {
-          const row = rows.find((entry) => entry.id === id);
-          expect(row, id).toBeDefined();
-          expect(Boolean(resolver({ provider, id, baseUrl: row?.baseUrl })?.suppress), id).toBe(
-            suppressed,
-          );
-        }
-        expect(resolver({ provider, id: "qwen3.7-plus" })).toBeUndefined();
-      });
+  it.each([
+    ["qwen", "https://coding.dashscope.aliyuncs.com/v1", true],
+    ["modelstudio", "https://coding-intl.dashscope.aliyuncs.com/v1", true],
+    ["qwen", "https://dashscope.aliyuncs.com/compatible-mode/v1", false],
+    ["modelstudio", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", false],
+    ["qwen", "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1", false],
+    ["modelstudio", "https://proxy.example/v1", false],
+  ] as const)("matches %s plan availability at %s", (provider, baseUrl, suppressed) => {
+    const qwenManifest: Record<string, unknown> = JSON.parse(
+      fs.readFileSync(
+        new URL("../../extensions/qwen/openclaw.plugin.json", import.meta.url),
+        "utf8",
+      ),
+    );
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(createMetadataSnapshot([qwenManifest]));
+    const providerCatalog = normalizeModelCatalog(qwenManifest.modelCatalog, {
+      ownedProviders: new Set(["qwen"]),
+    })?.providers?.qwen;
+    if (!providerCatalog) {
+      throw new Error("Qwen manifest catalog is missing");
+    }
+    const rows = normalizeModelCatalogProviderRows({
+      provider,
+      providerCatalog,
+      source: "manifest",
     });
+    const resolver = buildManifestBuiltInModelSuppressionResolver({
+      config: { models: { providers: { [provider]: { baseUrl, models: [] } } } },
+      env: process.env,
+    });
+
+    for (const id of ["qwen3.6-flash", "qwen3.7-max", "qwen3.8-max", "qwen3.8-flash"]) {
+      const row = rows.find((entry) => entry.id === id);
+      expect(row, id).toBeDefined();
+      expect(Boolean(resolver({ provider, id, baseUrl: row?.baseUrl })?.suppress), id).toBe(
+        suppressed,
+      );
+    }
+    expect(resolver({ provider, id: "qwen3.7-plus" })).toBeUndefined();
   });
 });

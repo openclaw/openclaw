@@ -13,25 +13,25 @@ import {
   startsWithSilentToken,
   stripLeadingSilentToken,
 } from "../tokens.js";
-import type { ReplyPayload } from "../types.js";
+import type { BlockReplyContext, GetReplyOptions, ReplyPayload } from "../types.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { createBlockReplyDeliveryHandler, type DirectBlockDelivery } from "./reply-delivery.js";
 import type { ReplyMediaContext } from "./reply-media-paths.js";
 import { hasCommittedReplyOperationOutcome } from "./reply-run-registry.js";
 
-type AgentTurnPresentation = {
-  classifyStreamingPartial: (payload: ReplyPayload) => { text?: string; skip: boolean };
-  sanitizeStreamingText: (
-    text: string | undefined,
-    errorContext: boolean,
-  ) => { text?: string; skip: boolean };
-  normalizeStreamingText: (payload: ReplyPayload) => { text?: string; skip: boolean };
-  presentWithTyping: (
-    typingPromise: Promise<void>,
-    startPresentation: () => boolean | void | Promise<boolean | void>,
-  ) => Promise<boolean | void>;
-  blockReplyHandler: ReturnType<typeof createBlockReplyDeliveryHandler> | undefined;
-};
+export async function deliverPreparedBlockReply(
+  opts: Pick<GetReplyOptions, "onPreparedBlockReply" | "onBlockReply"> | undefined,
+  payload: ReplyPayload,
+  context?: BlockReplyContext,
+): Promise<void> {
+  if (opts?.onPreparedBlockReply) {
+    for (const plan of createStructuredOutboundPayloadPlan([payload])) {
+      await opts.onPreparedBlockReply(plan, context);
+    }
+  } else {
+    await opts?.onBlockReply?.(payload, context);
+  }
+}
 
 /** Builds the channel-presentation callbacks shared by CLI and embedded runs. */
 export function createAgentTurnPresentation(params: {
@@ -39,8 +39,8 @@ export function createAgentTurnPresentation(params: {
   replyMediaContext: ReplyMediaContext;
   directBlockDeliveries: DirectBlockDelivery[];
   heartbeatState: { didLogStrip: boolean };
-}): AgentTurnPresentation {
-  const classifyStreamingPartial = (payload: ReplyPayload): { text?: string; skip: boolean } => {
+}) {
+  const classifyReplyText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
     let text = payload.text;
     const reply = resolveSendableOutboundReplyParts(payload, { text: "" });
     if (params.turn.followupRun.run.silentExpected) {
@@ -57,10 +57,8 @@ export function createAgentTurnPresentation(params: {
       }
       text = stripped.text;
     }
-    if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
-      return { skip: true };
-    }
     if (
+      isSilentReplyText(text, SILENT_REPLY_TOKEN) ||
       isSilentReplyPrefixText(text, SILENT_REPLY_TOKEN) ||
       isSilentReplyPrefixText(text, HEARTBEAT_TOKEN)
     ) {
@@ -73,6 +71,18 @@ export function createAgentTurnPresentation(params: {
       return reply.hasMedia ? { text: undefined, skip: false } : { skip: true };
     }
     return { text, skip: false };
+  };
+
+  // Previews are cumulative, so a held lead reappears in the next partial or
+  // the final reply once the text diverges from NO_REPLY. Leading punctuation
+  // can wrap the complete marker, so hold its unfinished preview too.
+  const classifyStreamingPartial = (payload: ReplyPayload): { text?: string; skip: boolean } => {
+    const preview = payload.text?.trim();
+    const unwrapped = preview?.replace(/^\p{P}+/u, "").trimStart();
+    return unwrapped === SILENT_REPLY_TOKEN[0] ||
+      (unwrapped !== preview && isSilentReplyPrefixText(unwrapped, SILENT_REPLY_TOKEN))
+      ? { skip: true }
+      : classifyReplyText(payload);
   };
 
   const sanitizeStreamingText = (
@@ -93,7 +103,7 @@ export function createAgentTurnPresentation(params: {
   };
 
   const normalizeStreamingText = (payload: ReplyPayload): { text?: string; skip: boolean } => {
-    const classified = classifyStreamingPartial(payload);
+    const classified = classifyReplyText(payload);
     if (classified.skip || !classified.text) {
       return classified;
     }
@@ -138,15 +148,8 @@ export function createAgentTurnPresentation(params: {
   const blockReplyHandler =
     params.turn.opts?.onPreparedBlockReply || params.turn.opts?.onBlockReply
       ? createBlockReplyDeliveryHandler({
-          onBlockReply: async (payload, context) => {
-            if (params.turn.opts?.onPreparedBlockReply) {
-              for (const plan of createStructuredOutboundPayloadPlan([payload])) {
-                await params.turn.opts.onPreparedBlockReply(plan, context);
-              }
-              return;
-            }
-            await params.turn.opts?.onBlockReply?.(payload, context);
-          },
+          onBlockReply: (payload, context) =>
+            deliverPreparedBlockReply(params.turn.opts, payload, context),
           currentMessageId:
             params.turn.sessionCtx.MessageSidFull ?? params.turn.sessionCtx.MessageSid,
           replyThreading: params.turn.replyThreading,

@@ -1,4 +1,3 @@
-// Discord provider module implements model/runtime integration.
 import { warn, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { Client, type RequestClient } from "../internal/discord.js";
@@ -122,27 +121,18 @@ function installDeployRestLogging(params: {
     }) as RequestClient[typeof method];
   }
   return () => {
-    params.rest.get = original.get;
-    params.rest.post = original.post;
-    params.rest.put = original.put;
-    params.rest.patch = original.patch;
-    params.rest.delete = original.delete;
+    Object.assign(params.rest, original);
   };
 }
 
 async function deployDiscordCommands(params: {
   client: Client;
   runtime: RuntimeEnv;
-  enabled: boolean;
-  accountId?: string;
-  startupStartedAt?: number;
+  accountId: string;
+  startupStartedAt: number;
   shouldLogVerbose: () => boolean;
 }) {
-  if (!params.enabled) {
-    return;
-  }
-  const startupStartedAt = params.startupStartedAt ?? Date.now();
-  const accountId = params.accountId ?? "default";
+  const { accountId, startupStartedAt } = params;
   const restoreDeployRestLogging = installDeployRestLogging({
     rest: params.client.rest,
     runtime: params.runtime,
@@ -152,7 +142,7 @@ async function deployDiscordCommands(params: {
   });
   try {
     try {
-      await params.client.deployCommands({ mode: "reconcile" });
+      await params.client.deployCommands();
     } catch (err) {
       if (isDiscordDeployDailyCreateLimit(err)) {
         params.runtime.log?.(

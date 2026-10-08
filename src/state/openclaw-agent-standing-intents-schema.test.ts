@@ -68,21 +68,31 @@ describe("additive memory agent schemas", () => {
     }
   });
 
-  it("accepts a current-version database before the lazy ensure and ensures idempotently", async () => {
+  async function withDatabase(
+    schema: string,
+    run: (db: ReturnType<typeof openNodeSqliteDatabase>, databasePath: string) => void,
+  ) {
     tempDir = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-intent-schema-")),
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-schema-")),
     );
     const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
     const db = openNodeSqliteDatabase(databasePath);
     try {
-      db.exec(schemaWithoutStandingIntents());
+      db.exec(schema);
       db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`);
       db.prepare(
         `INSERT INTO schema_meta (
           meta_key, role, schema_version, agent_id, app_version, created_at, updated_at
         ) VALUES ('primary', 'agent', ?, 'main', 'test', 1, 1)`,
       ).run(OPENCLAW_AGENT_SCHEMA_VERSION);
+      run(db, databasePath);
+    } finally {
+      db.close();
+    }
+  }
 
+  it("accepts a current-version database before the lazy ensure and ensures idempotently", async () => {
+    await withDatabase(schemaWithoutStandingIntents(), (db, databasePath) => {
       expect(() =>
         ensureOpenClawAgentDatabaseSchema(db, {
           agentId: "main",
@@ -121,26 +131,11 @@ describe("additive memory agent schemas", () => {
       expect(db.prepare("PRAGMA user_version").get()).toMatchObject({
         user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
       });
-    } finally {
-      db.close();
-    }
+    });
   });
 
   it("accepts current-version databases before the provenance lazy ensure", async () => {
-    tempDir = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-provenance-schema-")),
-    );
-    const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
-    const db = openNodeSqliteDatabase(databasePath);
-    try {
-      db.exec(schemaWithoutMemoryProvenance());
-      db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`);
-      db.prepare(
-        `INSERT INTO schema_meta (
-          meta_key, role, schema_version, agent_id, app_version, created_at, updated_at
-        ) VALUES ('primary', 'agent', ?, 'main', 'test', 1, 1)`,
-      ).run(OPENCLAW_AGENT_SCHEMA_VERSION);
-
+    await withDatabase(schemaWithoutMemoryProvenance(), (db, databasePath) => {
       expect(() =>
         ensureOpenClawAgentDatabaseSchema(db, {
           agentId: "main",
@@ -180,26 +175,11 @@ describe("additive memory agent schemas", () => {
       expect(db.prepare("PRAGMA user_version").get()).toMatchObject({
         user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
       });
-    } finally {
-      db.close();
-    }
+    });
   });
 
   it("lazily adds creator provenance to the unreleased standing-intent table", async () => {
-    tempDir = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-intent-creator-schema-")),
-    );
-    const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
-    const db = openNodeSqliteDatabase(databasePath);
-    try {
-      db.exec(schemaWithoutStandingIntentCreator());
-      db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`);
-      db.prepare(
-        `INSERT INTO schema_meta (
-          meta_key, role, schema_version, agent_id, app_version, created_at, updated_at
-        ) VALUES ('primary', 'agent', ?, 'main', 'test', 1, 1)`,
-      ).run(OPENCLAW_AGENT_SCHEMA_VERSION);
-
+    await withDatabase(schemaWithoutStandingIntentCreator(), (db, databasePath) => {
       expect(() =>
         ensureOpenClawAgentDatabaseSchema(db, { agentId: "main", path: databasePath }),
       ).not.toThrow();
@@ -222,20 +202,12 @@ describe("additive memory agent schemas", () => {
       expect(() =>
         ensureOpenClawAgentDatabaseSchema(db, { agentId: "main", path: databasePath }),
       ).not.toThrow();
-    } finally {
-      db.close();
-    }
+    });
   });
 
   it("migrates unreleased inline chunk metadata into rollback-safe storage", async () => {
-    tempDir = await fs.realpath(
-      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chunk-metadata-schema-")),
-    );
-    const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
-    const db = openNodeSqliteDatabase(databasePath);
-    try {
-      db.exec(schemaWithoutMemoryRecallMetadata());
-      db.exec(`
+    await withDatabase(
+      `${schemaWithoutMemoryRecallMetadata()}
         ALTER TABLE memory_index_chunks ADD COLUMN importance INTEGER
           CHECK (importance IS NULL OR importance BETWEEN 1 AND 10);
         ALTER TABLE memory_index_chunks ADD COLUMN triggers TEXT;
@@ -254,60 +226,53 @@ describe("additive memory agent schemas", () => {
           'sentinel', 'MEMORY.md', 'memory', 1, 1, 'hash', 'model', 'body', X'',
           42, 9, 'when testing rollback', 'project/key'
         );
-      `);
-      db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`);
-      db.prepare(
-        `INSERT INTO schema_meta (
-          meta_key, role, schema_version, agent_id, app_version, created_at, updated_at
-        ) VALUES ('primary', 'agent', ?, 'main', 'test', 1, 1)`,
-      ).run(OPENCLAW_AGENT_SCHEMA_VERSION);
-
-      expect(() =>
-        ensureOpenClawAgentDatabaseSchema(db, { agentId: "main", path: databasePath }),
-      ).not.toThrow();
-      expect(
-        db
-          .prepare("SELECT name FROM pragma_table_info('memory_index_chunks')")
-          .all()
-          .map((row) => (row as { name: string }).name),
-      ).toEqual([
-        "chunk_rowid",
-        "id",
-        "path",
-        "source",
-        "start_line",
-        "end_line",
-        "hash",
-        "model",
-        "text",
-        "embedding",
-        "updated_at",
-      ]);
-      expect(
-        db
-          .prepare(
-            `SELECT importance, triggers, project_key
+      `,
+      (db, databasePath) => {
+        expect(() =>
+          ensureOpenClawAgentDatabaseSchema(db, { agentId: "main", path: databasePath }),
+        ).not.toThrow();
+        expect(
+          db
+            .prepare("SELECT name FROM pragma_table_info('memory_index_chunks')")
+            .all()
+            .map((row) => (row as { name: string }).name),
+        ).toEqual([
+          "chunk_rowid",
+          "id",
+          "path",
+          "source",
+          "start_line",
+          "end_line",
+          "hash",
+          "model",
+          "text",
+          "embedding",
+          "updated_at",
+        ]);
+        expect(
+          db
+            .prepare(
+              `SELECT importance, triggers, project_key
              FROM ${MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE}
              WHERE chunk_id = 'sentinel'`,
-          )
-          .get(),
-      ).toEqual({
-        importance: 9,
-        triggers: "when testing rollback",
-        project_key: "project/key",
-      });
-      expect(
-        db
-          .prepare(
-            "SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND name = 'memory_index_chunk_provenance_after_insert'",
-          )
-          .get(),
-      ).toBeUndefined();
-      expect(db.prepare("SELECT origin_class FROM memory_index_chunk_provenance").get()).toEqual({
-        origin_class: "agent",
-      });
-    } finally {
-      db.close();
-    }
+            )
+            .get(),
+        ).toEqual({
+          importance: 9,
+          triggers: "when testing rollback",
+          project_key: "project/key",
+        });
+        expect(
+          db
+            .prepare(
+              "SELECT 1 FROM sqlite_schema WHERE type = 'trigger' AND name = 'memory_index_chunk_provenance_after_insert'",
+            )
+            .get(),
+        ).toBeUndefined();
+        expect(db.prepare("SELECT origin_class FROM memory_index_chunk_provenance").get()).toEqual({
+          origin_class: "agent",
+        });
+      },
+    );
   });
 });

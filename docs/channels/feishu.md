@@ -10,6 +10,8 @@ OpenClaw connects to Feishu/Lark (the all-in-one collaboration platform) through
 
 **Status:** production-ready for bot DMs + group chats. WebSocket is the default event transport (no public URL needed); webhook mode is optional.
 
+Webhook mode shares the Gateway HTTP port (normally `18789`) at `/feishu/events`. Updates preserve an existing installation's previous endpoint with an explicit `legacyWebhook` pin; new installations open no separate port. See the [webhook migration guidance](/channels/feishu/configuration-reference#gateway-webhook-route) before moving an existing callback.
+
 ## What each page covers
 
 - [Feishu setup](/channels/feishu/setup) — run the setup wizard and understand durable inbound events.

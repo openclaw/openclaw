@@ -107,10 +107,7 @@ function getErrorCode(err: unknown): string | undefined {
     return undefined;
   }
   const errno = (err as { errno?: unknown }).errno;
-  if (typeof errno === "string") {
-    return errno;
-  }
-  if (typeof errno === "number") {
+  if (typeof errno === "string" || typeof errno === "number") {
     return String(errno);
   }
   return undefined;
@@ -204,16 +201,9 @@ export function isSafeToRetrySendError(err: unknown): boolean {
   if (isTelegramRequestNotStartedError(err)) {
     return true;
   }
-  for (const candidate of collectTelegramErrorCandidates(err)) {
-    if (classifyTelegramTransientNetworkError(candidate) === "pre-connect") {
-      return true;
-    }
-  }
-  return false;
-}
-
-export function shouldRetryTelegramSendError(err: unknown): boolean {
-  return isSafeToRetrySendError(err) || isTelegramRateLimitError(err);
+  return collectTelegramErrorCandidates(err).some(
+    (candidate) => classifyTelegramTransientNetworkError(candidate) === "pre-connect",
+  );
 }
 
 function hasTelegramErrorCode(err: unknown, matches: (code: number) => boolean): boolean {
@@ -334,16 +324,14 @@ export function isRecoverableTelegramNetworkError(
     }
 
     const message = normalizeLowercaseStringOrEmpty(formatErrorMessage(candidate));
-    if (message && ALWAYS_RECOVERABLE_MESSAGES.has(message)) {
+    if (
+      message &&
+      (ALWAYS_RECOVERABLE_MESSAGES.has(message) ||
+        GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message) ||
+        (allowMessageMatch &&
+          RECOVERABLE_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))))
+    ) {
       return true;
-    }
-    if (message && GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message)) {
-      return true;
-    }
-    if (allowMessageMatch && message) {
-      if (RECOVERABLE_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))) {
-        return true;
-      }
     }
   }
 

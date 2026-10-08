@@ -9,18 +9,10 @@ function resolveDiscordProxyUrl(
   account: Pick<ResolvedDiscordAccount, "config">,
   cfg: OpenClawConfig,
 ): string | undefined {
-  const accountProxy = normalizeOptionalString(account.config.proxy);
-  if (accountProxy) {
-    return accountProxy;
-  }
-  return normalizeOptionalString(cfg?.channels?.discord?.proxy);
-}
-
-function resolveDiscordProxyFetchByUrl(
-  proxyUrl: string | undefined,
-  runtime?: Pick<RuntimeEnv, "error">,
-): typeof fetch | undefined {
-  return withValidatedDiscordProxy(proxyUrl, runtime, (proxy) => makeProxyFetch(proxy));
+  return (
+    normalizeOptionalString(account.config.proxy) ??
+    normalizeOptionalString(cfg?.channels?.discord?.proxy)
+  );
 }
 
 export function resolveDiscordProxyFetchForAccount(
@@ -28,7 +20,7 @@ export function resolveDiscordProxyFetchForAccount(
   cfg: OpenClawConfig,
   runtime?: Pick<RuntimeEnv, "error">,
 ): typeof fetch | undefined {
-  return resolveDiscordProxyFetchByUrl(resolveDiscordProxyUrl(account, cfg), runtime);
+  return withValidatedDiscordProxy(resolveDiscordProxyUrl(account, cfg), runtime, makeProxyFetch);
 }
 
 export function withValidatedDiscordProxy<T>(

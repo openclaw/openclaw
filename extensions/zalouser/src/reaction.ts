@@ -1,4 +1,3 @@
-// Zalouser plugin module implements reaction behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Reactions } from "./zca-constants.js";
 
@@ -25,9 +24,5 @@ export function normalizeZaloReactionIcon(raw: string): string {
   if (!trimmed) {
     return Reactions.LIKE;
   }
-  return (
-    REACTION_ALIAS_MAP.get(normalizeLowercaseStringOrEmpty(trimmed)) ??
-    REACTION_ALIAS_MAP.get(trimmed) ??
-    trimmed
-  );
+  return REACTION_ALIAS_MAP.get(normalizeLowercaseStringOrEmpty(trimmed)) ?? trimmed;
 }

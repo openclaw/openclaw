@@ -1,7 +1,10 @@
-// Session message RPC adapters over canonical chat.send dispatch.
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -11,16 +14,21 @@ import { terminateAcceptedCollectorRun } from "../../agents/subagents/spawn/suba
 import { resolveSessionWorkStartError, type SessionEntry } from "../../config/sessions.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import { invalidSessionRequest } from "../session-request-error.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   loadSessionEntry,
   loadGatewaySessionEntryReadOnly,
   resolveDeletedAgentIdFromSessionKey,
 } from "../session-utils.js";
+import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { isFreshChatSendStarted } from "./session-create-initial-turn.js";
-import { bindGatewayRequestHandlerMutationAuthority } from "./session-mutation-guards.js";
+import {
+  bindGatewayRequestHandlerMutationAuthority,
+  readGatewayRequestMutationAuthority,
+} from "./session-mutation-guards.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
 import { isAgentMainSessionKey, requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -39,14 +47,11 @@ async function createAgentMainSessionForSend(
 > {
   const agentId = parseAgentSessionKey(canonicalKey)?.agentId;
   if (!agentId) {
-    return {
-      ok: false,
-      error: errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${canonicalKey}`),
-    };
+    return invalidSessionRequest(`session not found: ${canonicalKey}`);
   }
 
   let createResult:
-    | { ok: boolean; payload?: { key?: string }; error?: ReturnType<typeof errorShape> }
+    | { ok: boolean; payload?: Record<string, unknown>; error?: ReturnType<typeof errorShape> }
     | undefined;
   const createOptions = bindGatewayRequestHandlerMutationAuthority(
     options,
@@ -59,8 +64,7 @@ async function createAgentMainSessionForSend(
       respond: (ok, payload, error) => {
         createResult = {
           ok,
-          payload:
-            payload && typeof payload === "object" ? (payload as { key?: string }) : undefined,
+          payload: asOptionalObjectRecord(payload),
           error,
         };
       },
@@ -72,16 +76,15 @@ async function createAgentMainSessionForSend(
     "sessions.create handler",
   )(createOptions);
 
-  if (!createResult) {
+  if (!createResult?.ok) {
     return {
       ok: false,
-      error: errorShape(ErrorCodes.UNAVAILABLE, "sessions.create did not respond"),
-    };
-  }
-  if (!createResult.ok) {
-    return {
-      ok: false,
-      error: createResult.error ?? errorShape(ErrorCodes.UNAVAILABLE, "failed to create session"),
+      error:
+        createResult?.error ??
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          createResult ? "failed to create session" : "sessions.create did not respond",
+        ),
     };
   }
 
@@ -109,16 +112,12 @@ async function handleSessionSend(
     return;
   }
   const p = options.params;
-  const key = requireSessionKey((p as { key?: unknown }).key, options.respond);
+  const key = requireSessionKey(p.key, options.respond);
   if (!key) {
     return;
   }
   const cfg = options.context.getRuntimeConfig();
-  const requestedAgent = resolveRequestedGlobalAgentId(
-    cfg,
-    key,
-    (p as { agentId?: string }).agentId,
-  );
+  const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
   if (!requestedAgent.ok) {
     options.respond(false, undefined, requestedAgent.error);
     return;
@@ -127,7 +126,6 @@ async function handleSessionSend(
   const loaded = loadSessionEntry(key, { agentId: requestedAgentId });
   const { legacyKey } = loaded;
   let { entry, canonicalKey } = loaded;
-  // Reject sends/steers targeting sessions whose owning agent was deleted (#65524).
   const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, canonicalKey, entry, {
     acpMetadataSessionKey: legacyKey ?? canonicalKey,
   });
@@ -142,13 +140,11 @@ async function handleSessionSend(
     );
     return;
   }
-  const rawIdempotencyKey = (p as { idempotencyKey?: string }).idempotencyKey;
-  const explicitIdempotencyKey =
-    typeof rawIdempotencyKey === "string" && rawIdempotencyKey.trim()
-      ? rawIdempotencyKey.trim()
-      : undefined;
+  const explicitIdempotencyKey = normalizeOptionalString(p.idempotencyKey);
   const idempotencyKey = explicitIdempotencyKey ?? randomUUID();
   const respond = options.respond;
+  const requestAuthority = readGatewayRequestMutationAuthority(options);
+  const sessionAuthorization = options.sessionMutationAuthorization;
   const dispatchChatSend = async (dispatchRespond: RespondFn) => {
     const forwarded = bindGatewayRequestHandlerMutationAuthority(
       options,
@@ -157,11 +153,11 @@ async function handleSessionSend(
         params: {
           sessionKey: canonicalKey,
           ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
-          message: (p as { message: string }).message,
+          message: p.message,
           ...(p.mentions ? { mentions: p.mentions } : {}),
-          thinking: (p as { thinking?: string }).thinking,
-          attachments: (p as { attachments?: unknown[] }).attachments,
-          timeoutMs: (p as { timeoutMs?: number }).timeoutMs,
+          thinking: p.thinking,
+          attachments: p.attachments,
+          timeoutMs: p.timeoutMs,
           idempotencyKey,
           ...(queueMode ? { queueMode } : {}),
         },
@@ -183,6 +179,18 @@ async function handleSessionSend(
     }
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
     return;
+  }
+  if (!entry?.sessionId) {
+    const uploadError = gatewayClientUploadPolicyError({
+      method: "sessions.send",
+      requestParams: options.params,
+      client: options.client,
+      context: options.context,
+    });
+    if (uploadError) {
+      options.respond(false, undefined, uploadError);
+      return;
+    }
   }
   if (!entry?.sessionId && queueMode !== "interrupt" && isAgentMainSessionKey(cfg, canonicalKey)) {
     // Sending to an empty agent main session should create it; steering still requires an active row.
@@ -207,18 +215,9 @@ async function handleSessionSend(
     sendAcked = ok;
     sendPayload = payload;
     sendCached = meta?.cached === true;
-    startedRunId =
-      payload &&
-      typeof payload === "object" &&
-      typeof (payload as { runId?: unknown }).runId === "string"
-        ? (payload as { runId: string }).runId
-        : undefined;
-    interruptedActiveRun =
-      ok &&
-      payload !== null &&
-      typeof payload === "object" &&
-      "interruptedActiveRun" in payload &&
-      payload.interruptedActiveRun === true;
+    const result = asOptionalObjectRecord(payload);
+    startedRunId = readStringValue(result?.runId);
+    interruptedActiveRun = ok && result?.interruptedActiveRun === true;
     respond(ok, payload, error, meta);
   });
   if (sendAcked) {
@@ -227,8 +226,16 @@ async function handleSessionSend(
         await reactivateCompletedSubagentSession({
           sessionKey: canonicalKey,
           runId: startedRunId,
-          task: (p as { message: string }).message,
+          task: p.message,
           gatewayContextResolver: options.context.resolveGatewayContext,
+          assertCurrent: () => {
+            if (sessionAuthorization?.assertAdmittedInputCurrent) {
+              sessionAuthorization.assertAdmittedInputCurrent();
+            } else {
+              requestAuthority.assertCurrent();
+              sessionAuthorization?.assertCurrent();
+            }
+          },
         });
       } catch (error) {
         if (startedRunId) {
@@ -250,10 +257,6 @@ async function handleSessionSend(
 }
 
 export const sessionMessagingHandlers: GatewayRequestHandlers = {
-  "sessions.send": async (options) => {
-    await handleSessionSend("sessions.send", options);
-  },
-  "sessions.steer": async (options) => {
-    await handleSessionSend("sessions.steer", options);
-  },
+  "sessions.send": (options) => handleSessionSend("sessions.send", options),
+  "sessions.steer": (options) => handleSessionSend("sessions.steer", options),
 };

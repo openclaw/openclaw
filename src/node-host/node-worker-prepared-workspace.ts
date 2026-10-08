@@ -28,7 +28,7 @@ export class NodeWorkerPreparedWorkspaceRuntime {
   readonly root: string;
   constructor(
     home: string,
-    options: OpenClawStateDatabaseOptions,
+    options: Pick<OpenClawStateDatabaseOptions, "env" | "path">,
     private readonly hashMemos: Map<string, WorkspaceHashMemo>,
     enabled: boolean,
   ) {
@@ -52,6 +52,24 @@ export class NodeWorkerPreparedWorkspaceRuntime {
       sessionId: input.sessionId,
       sessionKey: input.sessionKey,
       ownerEpoch: input.generation,
+    });
+  }
+
+  async acquire<T>(
+    environmentId: string,
+    publish: (row?: NodeWorkerPreparedWorkspaceRow) => T,
+  ): Promise<T> {
+    const store = this.store;
+    const prepared = await store?.find(environmentId);
+    if (!prepared || !store) {
+      return publish();
+    }
+    return serializeNodeWorkerWorkspace(path.dirname(prepared.workspace_dir), async () => {
+      const current = await store.find(environmentId);
+      if (!current) {
+        throw new Error("INVALID_REQUEST: prepared workspace binding is missing");
+      }
+      return publish(current);
     });
   }
 
@@ -109,12 +127,17 @@ export class NodeWorkerPreparedWorkspaceRuntime {
         await verifyPrepared(input, hashMemo);
         signal?.throwIfAborted();
         assertNodePreparedWorkspacePaths(root, input);
-        row = store.register(input);
+        row = await store.register(input, {
+          assertCurrent: () => {
+            signal?.throwIfAborted();
+            assertNodePreparedWorkspacePaths(root, input);
+          },
+        });
         // Only successful registration publishes hashes; failed verification keeps
         // its candidate memo private and cannot replace an accepted registration.
         hashMemos.set(ownerRoot, hashMemo);
       } else {
-        const existing = store.find(input.environmentId);
+        const existing = await store.find(input.environmentId);
         if (!existing) {
           throw new Error("INVALID_REQUEST: prepared workspace registration is missing");
         }
@@ -140,7 +163,17 @@ export class NodeWorkerPreparedWorkspaceRuntime {
           signal?.throwIfAborted();
           hashMemos.set(ownerRoot, hashMemo);
         }
-        row = store.bind(input);
+        row = await store.bind(input, {
+          assertCurrent: () => {
+            signal?.throwIfAborted();
+            assertNodePreparedWorkspacePaths(root, {
+              gatewayNamespace: existing.gateway_namespace,
+              cacheKey: existing.cache_key,
+              workspaceDir: existing.workspace_dir,
+              homeDir: existing.home_dir,
+            });
+          },
+        });
         const hashMemo = hashMemos.get(ownerRoot);
         if (hashMemo) {
           // Move once, under the workspace fence. Bind replay must not overwrite
@@ -167,6 +200,7 @@ export class NodeWorkerPreparedWorkspaceRuntime {
     isProtected: (generationKey: string) => boolean,
     signal?: AbortSignal,
     prepareProtection?: () => Promise<void>,
+    beginRetirement?: (generationKey: string) => () => void,
   ) {
     const generationKeys: string[] = [];
     let deleted = 0;
@@ -174,7 +208,7 @@ export class NodeWorkerPreparedWorkspaceRuntime {
     if (!store) {
       return { deleted, generationKeys };
     }
-    for (const row of store.list(gatewayNamespace)) {
+    for (const row of await store.list(gatewayNamespace)) {
       if (row.state === "available" || row.state === "retired") {
         continue;
       }
@@ -199,32 +233,45 @@ export class NodeWorkerPreparedWorkspaceRuntime {
         if (isProtected(generationKey)) {
           return;
         }
-        // Retain passes serialize. Fence new claims before filesystem awaits;
-        // a later retain cannot reopen this durable retirement tombstone.
-        const retiring = store.retire(row);
-        const removed = await removeNodeWorkerWorkspaceEntry(
-          this.root,
-          ownerRoot,
-          "directory",
-          () => {
-            signal?.throwIfAborted();
-            store.assertCurrent(retiring);
-            return true;
-          },
-        );
-        if (!removed) {
-          try {
-            await fsp.lstat(ownerRoot);
-            throw new Error("INVALID_REQUEST: prepared workspace retirement path is not owned");
-          } catch (error) {
-            if (!hasNodeErrorCode(error, "ENOENT")) {
-              throw error;
+        // Also fence legacy synchronous acquisitions while the durable tombstone is awaiting admission.
+        const endRetirement = beginRetirement?.(generationKey);
+        try {
+          // Retain passes serialize. Fence new claims before filesystem awaits;
+          // a later retain cannot reopen this durable retirement tombstone.
+          const retiring = await store.retire(row, false, {
+            assertCurrent: () => {
+              signal?.throwIfAborted();
+              if (isProtected(generationKey)) {
+                throw new Error("INVALID_REQUEST: prepared workspace is protected from retirement");
+              }
+            },
+          });
+          const removed = await removeNodeWorkerWorkspaceEntry(
+            this.root,
+            ownerRoot,
+            "directory",
+            () => {
+              signal?.throwIfAborted();
+              return true;
+            },
+            () => store.assertCurrent(retiring),
+          );
+          if (!removed) {
+            try {
+              await fsp.lstat(ownerRoot);
+              throw new Error("INVALID_REQUEST: prepared workspace retirement path is not owned");
+            } catch (error) {
+              if (!hasNodeErrorCode(error, "ENOENT")) {
+                throw error;
+              }
             }
           }
+          await store.retire(retiring, true);
+          generationKeys.push(generationKey);
+          deleted += Number(removed);
+        } finally {
+          endRetirement?.();
         }
-        store.retire(retiring, true);
-        generationKeys.push(generationKey);
-        deleted += Number(removed);
       });
     }
     return { deleted, generationKeys };

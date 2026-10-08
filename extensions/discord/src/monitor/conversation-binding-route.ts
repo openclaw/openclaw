@@ -9,15 +9,21 @@ import { shouldIgnoreStaleDiscordRouteBinding } from "./route-resolution.js";
 
 export function resolveDiscordConversationBindingRoute(params: {
   cfg: OpenClawConfig;
-  route: ResolvedAgentRoute;
+  resolveRoute: NonNullable<
+    Parameters<typeof resolveRuntimeConversationBindingRoute>[0]["resolveRoute"]
+  >;
   accountId: string;
   runtimeConversationId: string;
   configuredConversationId: string;
   parentConversationId?: string;
   touchBinding?: boolean;
 }) {
+  let baseRoute: ResolvedAgentRoute | undefined;
   let runtimeRoute = resolveRuntimeConversationBindingRoute({
-    route: params.route,
+    resolveRoute: (selection) => {
+      baseRoute = params.resolveRoute(selection);
+      return baseRoute;
+    },
     touchBinding: params.touchBinding,
     conversation: {
       channel: "discord",
@@ -26,19 +32,20 @@ export function resolveDiscordConversationBindingRoute(params: {
       parentConversationId: params.parentConversationId,
     },
   });
+  const route = baseRoute ?? runtimeRoute.route;
   if (
     shouldIgnoreStaleDiscordRouteBinding({
       bindingRecord: runtimeRoute.bindingRecord,
-      route: params.route,
+      route,
     })
   ) {
     logVerbose(
-      `discord: ignoring stale route binding for conversation ${params.runtimeConversationId} (${runtimeRoute.bindingRecord?.targetSessionKey} -> ${params.route.sessionKey})`,
+      `discord: ignoring stale route binding for conversation ${params.runtimeConversationId} (${runtimeRoute.bindingRecord?.targetSessionKey} -> ${route.sessionKey})`,
     );
     runtimeRoute = {
       bindingOwnerAvailable: true,
       bindingRecord: null,
-      route: { ...runtimeRoute.route, ...params.route },
+      route: { ...runtimeRoute.route, ...route },
     };
   }
   const configuredRoute = runtimeRoute.bindingRecord

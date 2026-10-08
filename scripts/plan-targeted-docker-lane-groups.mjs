@@ -1,7 +1,9 @@
 // Plans grouped targeted Docker lane matrix entries without installed dependencies.
 import { fileURLToPath } from "node:url";
 import { parsePositiveInt } from "./lib/numeric-options.mjs";
+import { expandUpdateFirstHopCompatLanes } from "./lib/update-first-hop-lanes.mjs";
 import {
+  assertSupportedUpgradeSurvivorBaselineSpec,
   CUSTOM_PLUGIN_SIBLINGS_BASELINE,
   normalizeUpgradeSurvivorBaselineSpec,
   parseUpgradeSurvivorBaselineSpecs,
@@ -10,14 +12,14 @@ import {
 } from "./lib/upgrade-survivor-policy.mjs";
 
 const BASELINE_SHARDED_LANES = new Set(["published-upgrade-survivor", "update-migration"]);
-const SURVIVOR_SCENARIOS_PER_GROUP = 3;
+// The 62-minute update-restart-auth lane needs room for runner setup and artifact upload.
+const LONG_LANE_JOB_TIMEOUT_MINUTES = new Map([["update-restart-auth", 75]]);
 
 function splitTokens(raw) {
   return [
     ...new Set(
       String(raw ?? "")
         .split(/[,\s]+/u)
-        .map((token) => token.trim())
         .filter(Boolean),
     ),
   ];
@@ -33,8 +35,6 @@ function sanitizeLabel(value) {
 }
 
 /**
- * Groups selected Docker lanes and expands sharded upgrade-survivor baselines.
- *
  * @param {{
  *   groupSize?: number | string;
  *   lanes?: string;
@@ -59,7 +59,8 @@ export function planTargetedDockerLaneGroups({
   upgradeSurvivorBaselines = "",
   upgradeSurvivorScenarios = "",
 } = {}) {
-  const selectedLanes = splitTokens(lanes);
+  // Each recorded first-hop source becomes its own job.
+  const selectedLanes = expandUpdateFirstHopCompatLanes(splitTokens(lanes));
   if (selectedLanes.length === 0) {
     throw new Error("docker_lanes is required when planning targeted Docker lane groups.");
   }
@@ -69,6 +70,9 @@ export function planTargetedDockerLaneGroups({
     throw new Error("Unknown upgrade survivor baseline scope.");
   }
   const baselineSpecs = parseUpgradeSurvivorBaselineSpecs(upgradeSurvivorBaselines);
+  const predecessor = normalizeUpgradeSurvivorBaselineSpec(upgradeSurvivorBaseline);
+  baselineSpecs.forEach(assertSupportedUpgradeSurvivorBaselineSpec);
+  assertSupportedUpgradeSurvivorBaselineSpec(predecessor);
   const hasExpandedSurvivorScenarios = splitTokens(upgradeSurvivorScenarios).length > 0;
   const survivorScenarios = selectedLanes.some((lane) => BASELINE_SHARDED_LANES.has(lane))
     ? parseUpgradeSurvivorScenarios(upgradeSurvivorScenarios)
@@ -78,7 +82,6 @@ export function planTargetedDockerLaneGroups({
     upgradeSurvivorBaselineScope === "legacy-operator-state" &&
     selectedLanes.some((lane) => BASELINE_SHARDED_LANES.has(lane))
   ) {
-    const predecessor = normalizeUpgradeSurvivorBaselineSpec(upgradeSurvivorBaseline);
     if (!predecessor || !/^openclaw@\d{4}\.\d+\.\d+(?:-\d+)?$/u.test(predecessor)) {
       throw new Error("Supported-line pairing requires an exact published predecessor.");
     }
@@ -117,6 +120,12 @@ export function planTargetedDockerLaneGroups({
     ) {
       group.timeout_minutes = 90;
     }
+    for (const lane of groupLanes) {
+      const minutes = LONG_LANE_JOB_TIMEOUT_MINUTES.get(lane);
+      if (minutes !== undefined && (group.timeout_minutes ?? 60) < minutes) {
+        group.timeout_minutes = minutes;
+      }
+    }
     groups.push(group);
   };
 
@@ -136,26 +145,18 @@ export function planTargetedDockerLaneGroups({
       flushPending();
       for (const [baseline, scenarios] of pairedScenarios) {
         const label = `${sanitizeLabel(lane)}-${sanitizeLabel(baseline)}`;
-        for (let offset = 0; offset < scenarios.length; offset += SURVIVOR_SCENARIOS_PER_GROUP) {
+        for (const [index, scenario] of scenarios.entries()) {
           addGroup({
             docker_lanes: lane,
-            label:
-              scenarios.length > SURVIVOR_SCENARIOS_PER_GROUP
-                ? `${label}-scenarios-${offset / SURVIVOR_SCENARIOS_PER_GROUP + 1}`
-                : label,
+            label: scenarios.length > 1 ? `${label}-scenarios-${index + 1}` : label,
             published_upgrade_survivor_baselines: baseline,
-            published_upgrade_survivor_scenarios: scenarios
-              .slice(offset, offset + SURVIVOR_SCENARIOS_PER_GROUP)
-              .join(" "),
+            published_upgrade_survivor_scenarios: scenario,
           });
         }
       }
       continue;
     }
-    if (
-      BASELINE_SHARDED_LANES.has(lane) &&
-      survivorScenarios.length > SURVIVOR_SCENARIOS_PER_GROUP
-    ) {
+    if (BASELINE_SHARDED_LANES.has(lane) && survivorScenarios.length > 1) {
       flushPending();
       for (const baselineSpec of baselineSpecs.length > 0 ? baselineSpecs : [undefined]) {
         // Filter at the policy owner before partitioning so old baselines cannot
@@ -164,14 +165,12 @@ export function planTargetedDockerLaneGroups({
           supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec),
         );
         const label = [lane, baselineSpec].filter(Boolean).map(sanitizeLabel).join("-");
-        for (let offset = 0; offset < scenarios.length; offset += SURVIVOR_SCENARIOS_PER_GROUP) {
+        for (const [index, scenario] of scenarios.entries()) {
           addGroup({
             docker_lanes: lane,
-            label: `${label}-scenarios-${offset / SURVIVOR_SCENARIOS_PER_GROUP + 1}`,
+            label: `${label}-scenarios-${index + 1}`,
             ...(baselineSpec ? { published_upgrade_survivor_baselines: baselineSpec } : {}),
-            published_upgrade_survivor_scenarios: scenarios
-              .slice(offset, offset + SURVIVOR_SCENARIOS_PER_GROUP)
-              .join(" "),
+            published_upgrade_survivor_scenarios: scenario,
           });
         }
       }

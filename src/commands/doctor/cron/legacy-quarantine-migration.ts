@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { CronQuarantinedJob } from "../../../cron/store.js";
 import { parseJsonWithJson5Fallback } from "../../../utils/parse-json-compat.js";
-import { archiveLegacyCronFile } from "./legacy-store-migration.js";
 
 export type LegacyCronQuarantine = {
   path: string;
@@ -12,18 +11,11 @@ export type LegacyCronQuarantine = {
   jobs: CronQuarantinedJob[];
 };
 
-/** Resolves the historical sidecar without making it part of the runtime store API. */
-function resolveLegacyCronQuarantinePath(storePath: string): string {
-  return storePath.endsWith(".json")
-    ? storePath.replace(/\.json$/, "-quarantine.json")
-    : `${storePath}-quarantine.json`;
-}
-
 /** Reads and validates a historical quarantine file without modifying its source. */
 export async function loadLegacyCronQuarantineForMigration(
   storePath: string,
 ): Promise<LegacyCronQuarantine | undefined> {
-  const quarantinePath = resolveLegacyCronQuarantinePath(storePath);
+  const quarantinePath = `${storePath.endsWith(".json") ? storePath.slice(0, -5) : storePath}-quarantine.json`;
   let raw: string;
   try {
     raw = await fs.readFile(quarantinePath, "utf-8");
@@ -78,9 +70,4 @@ export async function loadLegacyCronQuarantineForMigration(
     sourceSha256: createHash("sha256").update(raw).digest("hex"),
     jobs,
   };
-}
-
-/** Archives the exact quarantine source already committed to SQLite. */
-export async function archiveLegacyCronQuarantineForMigration(quarantine: LegacyCronQuarantine) {
-  return await archiveLegacyCronFile(quarantine.path, quarantine.sourceSha256);
 }

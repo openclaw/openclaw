@@ -1,5 +1,4 @@
 // Exposes archive extraction helpers after applying fs-safe defaults.
-import "./fs-safe-defaults.js";
 import {
   extractArchive as extractArchiveWithFsSafe,
   type ExtractArchiveOptions,
@@ -16,7 +15,6 @@ export {
   DEFAULT_MAX_EXTRACTED_BYTES,
   DEFAULT_MAX_ENTRY_BYTES,
   inspectTarArchive,
-  loadZipArchiveWithPreflight,
   readArchiveEntry,
   resolveArchiveKind,
   resolvePackedRootDir,

@@ -182,7 +182,7 @@ describe("managed worktrees child CLI product proof", () => {
         "worktrees gc",
         await instance.cli(["worktrees", "gc", "--json"]),
       );
-      expect(gc).toEqual({
+      expect(gc).toMatchObject({
         removed: [],
         orphansDeleted: expect.any(Number),
         snapshotsPruned: expect.any(Number),

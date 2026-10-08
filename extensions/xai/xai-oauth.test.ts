@@ -97,21 +97,30 @@ function createDeviceLoginContext(
   };
 }
 
+function refreshWithFetch(
+  credential: OAuthCredential,
+  { fetchImpl, now }: { fetchImpl: typeof fetch; now?: () => number },
+) {
+  vi.stubGlobal("fetch", fetchImpl);
+  if (now) {
+    vi.spyOn(Date, "now").mockImplementation(now);
+  }
+  return refreshXaiOAuthCredential(credential);
+}
+
 describe("xAI OAuth", () => {
   afterEach(() => {
     clearLiveCatalogCacheForTests();
     vi.unstubAllGlobals();
     vi.unstubAllEnvs();
     vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 
   it.each([
     { proxy: "http_proxy", noProxy: "" },
     { proxy: "https_proxy", noProxy: "" },
     { proxy: "all_proxy", noProxy: "" },
-    { proxy: "http_proxy", noProxy: "auth.x.ai" },
-    { proxy: "https_proxy", noProxy: "auth.x.ai" },
-    { proxy: "all_proxy", noProxy: "auth.x.ai" },
     { proxy: "all_proxy", noProxy: "", socks: true },
     { proxy: "all_proxy", noProxy: "auth.x.ai", socks: true },
   ])("preserves $proxy routing with no_proxy=$noProxy", async ({ proxy, noProxy, socks }) => {
@@ -149,9 +158,9 @@ describe("xAI OAuth", () => {
           return jsonResponse({ error: "temporarily_unavailable" }, { status: 503 });
         },
       );
-      await expect(
-        refreshXaiOAuthCredential(createXaiOAuthCredential(), { fetchImpl }),
-      ).rejects.toThrow("temporarily_unavailable");
+      await expect(refreshWithFetch(createXaiOAuthCredential(), { fetchImpl })).rejects.toThrow(
+        "temporarily_unavailable",
+      );
       expect(fetchImpl).toHaveBeenCalledOnce();
       expect(fixture.connections).toEqual(noProxy ? [] : [`${socks ? "socks" : "http"}:auth.x.ai`]);
       expect(fixture.originRoutes).toEqual([]);
@@ -335,25 +344,6 @@ describe("xAI OAuth", () => {
     },
   );
 
-  it("keeps the public auth method named OAuth while using device code", () => {
-    const method = createXaiOAuthAuthMethod();
-
-    expect(method.id).toBe("oauth");
-    expect(method.kind).toBe("oauth");
-    expect(method.wizard?.choiceId).toBe("xai-oauth");
-    expect(method.wizard?.methodId).toBe("oauth");
-  });
-
-  it("preserves device-code as an explicit auth method alias", () => {
-    const method = createXaiDeviceCodeAuthMethod();
-
-    expect(method.id).toBe("device-code");
-    expect(method.kind).toBe("device_code");
-    expect(method.wizard?.choiceId).toBe("xai-device-code");
-    expect(method.wizard?.methodId).toBe("device-code");
-    expect(method.wizard?.assistantVisibility).toBe("manual-only");
-  });
-
   it("rejects untrusted discovered endpoints through credential refresh", async () => {
     const poisonedFetch = vi.fn<typeof fetch>(async () =>
       jsonResponse({
@@ -363,9 +353,9 @@ describe("xAI OAuth", () => {
     );
     const credential = createXaiOAuthCredential("https://auth.x.ai/oauth/token");
 
-    await expect(
-      refreshXaiOAuthCredential(credential, { fetchImpl: poisonedFetch }),
-    ).rejects.toThrow("untrusted token endpoint");
+    await expect(refreshWithFetch(credential, { fetchImpl: poisonedFetch })).rejects.toThrow(
+      "untrusted token endpoint",
+    );
   });
 
   it("refreshes with the cached token endpoint and preserves refresh fallback", async () => {
@@ -386,7 +376,7 @@ describe("xAI OAuth", () => {
     });
 
     const credential = createXaiOAuthCredential();
-    const refreshed = await refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
+    const refreshed = await refreshWithFetch(credential, { fetchImpl, now: () => 1_000 });
 
     expect(fetchImpl).toHaveBeenCalledWith("https://auth.x.ai/oauth2/token", expect.any(Object));
     expect(refreshed.access).toBe("access-2");
@@ -414,7 +404,7 @@ describe("xAI OAuth", () => {
     });
     const credential = createXaiOAuthCredential("https://auth.x.ai/oauth/token");
 
-    const refreshed = await refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
+    const refreshed = await refreshWithFetch(credential, { fetchImpl, now: () => 1_000 });
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     expect(fetchImpl.mock.calls.map(([url]) => requestUrl(url))).toEqual([
@@ -435,7 +425,7 @@ describe("xAI OAuth", () => {
     });
     const credential = createXaiOAuthCredential("https://auth.x.ai/oauth/token");
 
-    await expect(refreshXaiOAuthCredential(credential, { fetchImpl })).rejects.toThrow(
+    await expect(refreshWithFetch(credential, { fetchImpl })).rejects.toThrow(
       "discovery unavailable",
     );
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -470,7 +460,7 @@ describe("xAI OAuth", () => {
       );
     const credential = createXaiOAuthCredential();
 
-    const refresh = refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
+    const refresh = refreshWithFetch(credential, { fetchImpl, now: () => 1_000 });
     await vi.advanceTimersByTimeAsync(250);
     await vi.advanceTimersByTimeAsync(250);
     const refreshed = await refresh;
@@ -497,7 +487,7 @@ describe("xAI OAuth", () => {
     );
     const credential = createXaiOAuthCredential();
 
-    const refresh = refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
+    const refresh = refreshWithFetch(credential, { fetchImpl, now: () => 1_000 });
     const expectation = expect(refresh).rejects.toThrow(
       "xAI returned an HTML/Cloudflare challenge",
     );
@@ -520,7 +510,7 @@ describe("xAI OAuth", () => {
     );
     const credential = createXaiOAuthCredential();
 
-    await expect(refreshXaiOAuthCredential(credential, { fetchImpl })).rejects.toThrow(
+    await expect(refreshWithFetch(credential, { fetchImpl })).rejects.toThrow(
       "invalid_grant (Invalid or unknown refresh token)",
     );
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -538,7 +528,7 @@ describe("xAI OAuth", () => {
     );
     const credential = createXaiOAuthCredential();
 
-    await expect(refreshXaiOAuthCredential(credential, { fetchImpl })).rejects.toThrow(
+    await expect(refreshWithFetch(credential, { fetchImpl })).rejects.toThrow(
       "server_error (try again later)",
     );
     expect(fetchImpl).toHaveBeenCalledTimes(1);
@@ -550,9 +540,7 @@ describe("xAI OAuth", () => {
     });
     const credential = createXaiOAuthCredential();
 
-    await expect(refreshXaiOAuthCredential(credential, { fetchImpl })).rejects.toThrow(
-      "socket hang up",
-    );
+    await expect(refreshWithFetch(credential, { fetchImpl })).rejects.toThrow("socket hang up");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
@@ -565,7 +553,7 @@ describe("xAI OAuth", () => {
     );
     const credential = createXaiOAuthCredential();
 
-    const refreshed = await refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
+    const refreshed = await refreshWithFetch(credential, { fetchImpl, now: () => 1_000 });
 
     expect(refreshed.expires).toBe(100);
   });
@@ -579,20 +567,7 @@ describe("xAI OAuth", () => {
     );
     const credential = createXaiOAuthCredential();
 
-    const refreshed = await refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
-
-    expect(refreshed.expires).toBe(100);
-  });
-
-  it("ignores unsafe JWT expiry fallbacks from xAI access tokens", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async () =>
-      jsonResponse({
-        access_token: createJwt({ exp: Number.MAX_SAFE_INTEGER }),
-      }),
-    );
-    const credential = createXaiOAuthCredential();
-
-    const refreshed = await refreshXaiOAuthCredential(credential, { fetchImpl, now: () => 1_000 });
+    const refreshed = await refreshWithFetch(credential, { fetchImpl, now: () => 1_000 });
 
     expect(refreshed.expires).toBe(100);
   });

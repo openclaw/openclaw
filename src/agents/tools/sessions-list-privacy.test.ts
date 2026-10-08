@@ -18,6 +18,7 @@ import {
   requestContext,
 } from "../../gateway/server-methods/sessions-read-cache.test-support.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
+import { withReadySessionRows } from "../../gateway/session-row-prepared-read.js";
 import { getSessionRowProjection } from "../../gateway/session-row-projection-access.js";
 import * as titleReader from "../../gateway/session-transcript-title-reader.js";
 import {
@@ -25,7 +26,8 @@ import {
   withPluginRuntimeGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { registerOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
   bindEmbeddedSessionRowProjection,
@@ -72,7 +74,7 @@ async function withInventory(
     const owner = ensureProfileForEmail("inventory-owner@example.test");
     const viewer = ensureProfileForEmail("inventory-reader@example.test");
     let cfg: OpenClawConfig = {
-      agents: { entries: { main: { default: true } } },
+      agents: { entries: { main: {} } },
       gateway: {
         roles: {
           default: "reader",
@@ -128,7 +130,7 @@ async function withInventory(
         statePath: (name) => state.statePath(name),
       });
     } finally {
-      disposeSessionReadContexts();
+      await disposeSessionReadContexts();
     }
   });
 }
@@ -242,88 +244,128 @@ test.each([
   { stage: "chat.history", change: "role", policy: "named role" },
   { stage: "chat.history", change: "lifecycle", policy: "named role" },
   { stage: "chat.history", change: "metadata", policy: "named role" },
+  { stage: "chat.history", change: "lifecycle", policy: "embedded" },
 ] as const)(
   "rechecks $policy enrichment after a $change change during $stage",
   async ({ stage, change, policy }) => {
-    await withInventory(async ({ cfg, viewerId, asReader, setConfig }) => {
-      if (policy === "shared profile") {
-        setConfig({ ...cfg, gateway: {} });
-      }
-      const firstRead = createDeferred();
-      let changed = false;
-      const afterRead = async (key: unknown) => {
-        if (key === first.sessionKey) {
-          firstRead.resolve();
-        } else if (key === second.sessionKey) {
-          await firstRead.promise;
-          if (change === "role") {
-            setUserProfileRole(viewerId, "self");
-          } else {
-            await patchSessionEntryCore(first, () =>
-              change === "draft"
-                ? { visibility: "draft" }
-                : change === "lifecycle"
-                  ? { lifecycleRevision: "replacement-lifecycle" }
-                  : { label: "Renamed shared session" },
-            );
-          }
-          changed = true;
+    await withInventory(async ({ cfg, viewerId, context, asReader, setConfig }) => {
+      const embedded = policy === "embedded";
+      const unbind = embedded
+        ? bindEmbeddedSessionRowProjection(
+            Promise.resolve(expectDefined(getSessionRowProjection(context), "embedded projection")),
+          )
+        : undefined;
+      const gateway = embedded ? createEmbeddedCallGateway() : callAgentToolGatewayRequest;
+      try {
+        if (policy === "shared profile") {
+          setConfig({ ...cfg, gateway: {} });
         }
-      };
-      if (stage === "titles") {
-        const read = titleReader.readSessionTitleFieldsFromTranscriptAsync;
-        vi.spyOn(titleReader, "readSessionTitleFieldsFromTranscriptAsync").mockImplementation(
-          async (...args) => {
-            const fields = await read(...args);
-            const scope = args[0];
-            if (scope.sessionKey === first.sessionKey) {
-              expect(fields.lastMessagePreview).toBe(bufferedText);
+        const firstRead = createDeferred();
+        let changed = false;
+        const afterRead = async (key: unknown) => {
+          if (key === first.sessionKey) {
+            firstRead.resolve();
+          } else if (key === second.sessionKey) {
+            await firstRead.promise;
+            if (change === "role") {
+              expect(setUserProfileRole(viewerId, "self").role).toBe("self");
+            } else {
+              await patchSessionEntryCore(first, () =>
+                change === "draft"
+                  ? { visibility: "draft" }
+                  : change === "lifecycle"
+                    ? { lifecycleRevision: "replacement-lifecycle" }
+                    : { label: "Renamed shared session" },
+              );
             }
-            await afterRead(scope.sessionKey);
-            return fields;
-          },
-        );
-      }
-      const callGateway: AgentToolGatewayRequestCaller = async <T>(
-        request: Parameters<AgentToolGatewayRequestCaller>[0],
-      ): Promise<T> => {
-        const response = await callAgentToolGatewayRequest<T>(request);
-        if (stage === "chat.history" && request.method === stage) {
-          const params = request.params;
-          if (!isRecord(params)) {
-            throw new Error("Inventory requests require object parameters");
+            changed = true;
           }
-          await afterRead(params.sessionKey);
+        };
+        if (stage === "titles") {
+          const read = titleReader.readSessionTitleFieldsFromTranscriptAsync;
+          vi.spyOn(titleReader, "readSessionTitleFieldsFromTranscriptAsync").mockImplementation(
+            async (...args) => {
+              const fields = await read(...args);
+              const scope = args[0];
+              if (scope.sessionKey === first.sessionKey) {
+                expect(fields.lastMessagePreview).toBe(bufferedText);
+              }
+              await afterRead(scope.sessionKey);
+              return fields;
+            },
+          );
         }
-        return response;
-      };
-      const result = await asReader(() =>
-        createSessionsListTool({ config: cfg, callGateway }).execute("buffered-inventory", {
-          includeDerivedTitles: true,
-          includeLastMessage: true,
-          ...(stage === "chat.history" ? { messageLimit: 1 } : {}),
-        }),
-      );
-      expect(changed).toBe(true);
-      expect(result.details).toMatchObject({
-        count: change === "metadata" ? 2 : 1,
-        sessions:
-          change === "metadata"
-            ? [{ key: first.sessionKey }, { key: second.sessionKey }]
-            : [
-                {
-                  key: second.sessionKey,
-                  derivedTitle: "Shared question 1",
-                  lastMessagePreview: "Still-visible reply",
-                },
-              ],
-      });
-      if (change === "metadata") {
-        expect(JSON.stringify(result)).toContain(bufferedText);
-      } else {
-        expect(JSON.stringify(result)).not.toContain(bufferedText);
+        const callGateway: AgentToolGatewayRequestCaller = async <T>(
+          request: Parameters<AgentToolGatewayRequestCaller>[0],
+        ): Promise<T> => {
+          const response = await gateway<T>(request);
+          if (stage === "chat.history" && request.method === stage) {
+            const params = request.params;
+            if (!isRecord(params)) {
+              throw new Error("Inventory requests require object parameters");
+            }
+            if (change === "role" && params.sessionKey === first.sessionKey) {
+              expect(JSON.stringify(response)).toContain(bufferedText);
+            }
+            await afterRead(params.sessionKey);
+          }
+          return response;
+        };
+        const invoke = () =>
+          createSessionsListTool({
+            config: cfg,
+            callGateway,
+            supportsActiveOnly: !embedded,
+            requireSessionReadOwner: embedded,
+          }).execute("buffered-inventory", {
+            includeDerivedTitles: !embedded,
+            includeLastMessage: !embedded,
+            ...(stage === "chat.history" ? { messageLimit: 1 } : {}),
+          });
+        const pending = embedded ? invoke() : asReader(invoke);
+        if (change === "role") {
+          await expect(pending).rejects.toThrow(
+            "Your operator role changed; reconnect before continuing.",
+          );
+          expect(changed).toBe(true);
+        }
+        const result =
+          change === "role"
+            ? await asReader(() =>
+                createSessionsListTool({ config: cfg }).execute("fresh-inventory", {
+                  includeDerivedTitles: true,
+                  includeLastMessage: true,
+                  messageLimit: 1,
+                }),
+              )
+            : await pending;
+        expect(changed).toBe(true);
+        expect(result.details).toMatchObject({
+          count: change === "metadata" ? 2 : 1,
+          sessions:
+            change === "metadata"
+              ? [{ key: first.sessionKey }, { key: second.sessionKey }]
+              : [
+                  {
+                    key: second.sessionKey,
+                    ...(!embedded
+                      ? {
+                          derivedTitle: "Shared question 1",
+                          lastMessagePreview: "Still-visible reply",
+                        }
+                      : {}),
+                  },
+                ],
+        });
+        if (change === "metadata") {
+          expect(JSON.stringify(result)).toContain(bufferedText);
+        } else {
+          expect(JSON.stringify(result)).not.toContain(bufferedText);
+        }
+        expect(JSON.stringify(result)).toContain("Still-visible reply");
+      } finally {
+        unbind?.();
       }
-      expect(JSON.stringify(result)).toContain("Still-visible reply");
     });
   },
 );
@@ -350,41 +392,6 @@ test("rejects lost in-process read custody while preserving external RPC results
     );
     expect(result.details).toMatchObject({ count: 2 });
     expect(JSON.stringify(result)).toContain(bufferedText);
-  });
-});
-
-test("retains the embedded projection owner through history enrichment", async () => {
-  await withInventory(async ({ cfg, context }) => {
-    const projection = expectDefined(getSessionRowProjection(context), "embedded projection");
-    const unbind = bindEmbeddedSessionRowProjection(Promise.resolve(projection));
-    const embedded = createEmbeddedCallGateway();
-    const firstRead = createDeferred();
-    const callGateway: AgentToolGatewayRequestCaller = async <T>(
-      request: Parameters<AgentToolGatewayRequestCaller>[0],
-    ) => {
-      const result = await embedded<T>(request);
-      if (request.method === "chat.history" && isRecord(request.params)) {
-        if (request.params.sessionKey === first.sessionKey) {
-          firstRead.resolve();
-        } else if (request.params.sessionKey === second.sessionKey) {
-          await firstRead.promise;
-          await patchSessionEntryCore(first, () => ({ lifecycleRevision: "replacement" }));
-        }
-      }
-      return result;
-    };
-    try {
-      const result = await createSessionsListTool({
-        config: cfg,
-        callGateway,
-        supportsActiveOnly: false,
-        requireSessionReadOwner: true,
-      }).execute("embedded-inventory", { messageLimit: 1 });
-      expect(result.details).toMatchObject({ count: 1, sessions: [{ key: second.sessionKey }] });
-      expect(JSON.stringify(result)).not.toContain(bufferedText);
-    } finally {
-      unbind();
-    }
   });
 });
 
@@ -430,13 +437,22 @@ test("does not authorize a buffered global transcript with another physical stor
         await patchSessionEntryCore(original, () => ({ visibility: "draft" }));
         setConfig({ ...originalConfig, session: { scope: "global", store: newPath } });
         const projection = expectDefined(getSessionRowProjection(context), "physical stores");
-        expect(projection.describe({ agentId: "main", key: "global" })?.entry.sessionId).toBe(
-          "new-global",
+        await withReadySessionRows(
+          projection,
+          () => [
+            { agentId: "main", key: "global" },
+            { agentId: "main", key: "global", storePath: oldPath },
+          ],
+          (read) => {
+            expect(read.describe({ agentId: "main", key: "global" })?.entry.sessionId).toBe(
+              "new-global",
+            );
+            expect(
+              read.describe({ agentId: "main", key: "global", storePath: oldPath })?.entry
+                .visibility,
+            ).toBe("draft");
+          },
         );
-        expect(
-          projection.describe({ agentId: "main", key: "global", storePath: oldPath })?.entry
-            .visibility,
-        ).toBe("draft");
         changed = true;
       }
       return response;

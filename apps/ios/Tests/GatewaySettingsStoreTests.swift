@@ -21,13 +21,6 @@ private let bootstrapDefaultsKeys = [
     "gateway.lastDiscoveredStableID",
 ]
 private let bootstrapKeychainEntries = [instanceIdEntry, preferredGatewayEntry, lastGatewayEntry]
-private let lastGatewayDefaultsKeys = [
-    "gateway.last.kind",
-    "gateway.last.host",
-    "gateway.last.port",
-    "gateway.last.tls",
-    "gateway.last.stableID",
-]
 private let lastGatewayKeychainEntry = KeychainEntry(service: gatewayService, account: "lastConnection")
 private let gatewayRegistryKeychainEntry = KeychainEntry(service: gatewayService, account: "gateway-registry")
 
@@ -58,7 +51,7 @@ private func restoreDefaults(_ snapshot: [String: Any?]) {
 private func snapshotKeychain(_ entries: [KeychainEntry]) -> [KeychainEntry: String?] {
     var snapshot: [KeychainEntry: String?] = [:]
     for entry in entries {
-        snapshot[entry] = KeychainStore.loadString(service: entry.service, account: entry.account)
+        snapshot[entry] = GenericPasswordKeychainStore.loadString(service: entry.service, account: entry.account)
     }
     return snapshot
 }
@@ -66,9 +59,9 @@ private func snapshotKeychain(_ entries: [KeychainEntry]) -> [KeychainEntry: Str
 private func applyKeychain(_ values: [KeychainEntry: String?]) {
     for (entry, value) in values {
         if let value {
-            _ = KeychainStore.saveString(value, service: entry.service, account: entry.account)
+            _ = GenericPasswordKeychainStore.saveString(value, service: entry.service, account: entry.account)
         } else {
-            _ = KeychainStore.delete(service: entry.service, account: entry.account)
+            _ = GenericPasswordKeychainStore.delete(service: entry.service, account: entry.account)
         }
     }
 }
@@ -79,7 +72,7 @@ private func restoreKeychain(_ snapshot: [KeychainEntry: String?]) {
 
 private func withBootstrapSnapshots(_ body: () -> Void) {
     gatewayPersistenceTestSemaphore.wait()
-    let defaultsSnapshot = snapshotDefaults(bootstrapDefaultsKeys + lastGatewayDefaultsKeys)
+    let defaultsSnapshot = snapshotDefaults(bootstrapDefaultsKeys)
     let keychainSnapshot = snapshotKeychain(
         bootstrapKeychainEntries + [lastGatewayKeychainEntry, gatewayRegistryKeychainEntry])
     defer {
@@ -92,10 +85,8 @@ private func withBootstrapSnapshots(_ body: () -> Void) {
 
 private func withLastGatewaySnapshot(_ body: () -> Void) {
     gatewayPersistenceTestSemaphore.wait()
-    let defaultsSnapshot = snapshotDefaults(lastGatewayDefaultsKeys)
     let keychainSnapshot = snapshotKeychain([lastGatewayKeychainEntry, gatewayRegistryKeychainEntry])
     defer {
-        restoreDefaults(defaultsSnapshot)
         restoreKeychain(keychainSnapshot)
         gatewayPersistenceTestSemaphore.signal()
     }
@@ -205,7 +196,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             service: service)["X-Owner"] == "exact")
     }
 
-    @Test func `legacy gateway defaults cannot alias encoded owner keys`() {
+    @Test func `legacy selected agent defaults cannot alias encoded owner keys`() {
         let exactOwner = "gateway-\(UUID().uuidString)"
         let component = Data(exactOwner.utf8).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
@@ -213,20 +204,14 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             .replacingOccurrences(of: "=", with: "")
         let collidingLegacyOwner = "v2.\(component)"
         defer {
-            GatewaySettingsStore.saveGatewayClientIdOverride(stableID: exactOwner, clientId: nil)
-            GatewaySettingsStore.saveGatewayClientIdOverride(stableID: collidingLegacyOwner, clientId: nil)
             GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: exactOwner, agentId: nil)
             GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: collidingLegacyOwner, agentId: nil)
         }
 
-        GatewaySettingsStore.saveGatewayClientIdOverride(stableID: exactOwner, clientId: "exact-client")
         GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: exactOwner, agentId: "exact-agent")
 
-        #expect(GatewaySettingsStore.loadGatewayClientIdOverride(stableID: collidingLegacyOwner) == nil)
         #expect(GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: collidingLegacyOwner) == nil)
-        GatewaySettingsStore.saveGatewayClientIdOverride(stableID: collidingLegacyOwner, clientId: nil)
         GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: collidingLegacyOwner, agentId: nil)
-        #expect(GatewaySettingsStore.loadGatewayClientIdOverride(stableID: exactOwner) == "exact-client")
         #expect(GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: exactOwner) == "exact-agent")
     }
 
@@ -248,7 +233,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         let firstGatewayID = "manual|first-reset.example.com|443|\(UUID().uuidString)"
         let secondGatewayID = "manual|second-reset.example.com|443|\(UUID().uuidString)"
         let unrelatedAccount = "unrelated-reset-secret.\(UUID().uuidString)"
-        defer { _ = KeychainStore.delete(service: gatewayService, account: unrelatedAccount) }
+        defer { _ = GenericPasswordKeychainStore.delete(service: gatewayService, account: unrelatedAccount) }
 
         #expect(GatewaySettingsStore.saveGatewayCustomHeaders(
             ["X-Proxy-Token": "first"],
@@ -258,7 +243,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             ["X-Proxy-Token": "second"],
             gatewayStableID: secondGatewayID,
             service: service))
-        #expect(KeychainStore.saveString("keep", service: gatewayService, account: unrelatedAccount))
+        #expect(GenericPasswordKeychainStore.saveString("keep", service: gatewayService, account: unrelatedAccount))
 
         #expect(GatewaySettingsStore.clearGatewayCustomHeaders(service: service))
 
@@ -268,7 +253,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         #expect(GatewaySettingsStore.loadGatewayCustomHeaders(
             gatewayStableID: secondGatewayID,
             service: service).isEmpty)
-        #expect(KeychainStore.loadString(service: gatewayService, account: unrelatedAccount) == "keep")
+        #expect(GenericPasswordKeychainStore.loadString(service: gatewayService, account: unrelatedAccount) == "keep")
     }
 
     @Test func `custom header forget clears only one gateway`() {
@@ -412,10 +397,10 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         #expect(GatewaySettingsStore.loadGatewayCredentials(
             instanceId: instanceID,
             gatewayStableID: secondGatewayID) == .empty)
-        #expect(KeychainStore.loadString(
+        #expect(GenericPasswordKeychainStore.loadString(
             service: gatewayService,
             account: "gateway-token.\(instanceID)") == nil)
-        #expect(KeychainStore.loadString(
+        #expect(GenericPasswordKeychainStore.loadString(
             service: gatewayService,
             account: "gateway-credentials.\(instanceID)") == nil)
     }
@@ -447,7 +432,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
         #expect(credentials.bootstrapToken == "current-bootstrap")
         #expect(credentials.password == "current-password")
         #expect(credentials.suppressStoredDeviceAuth)
-        #expect(KeychainStore.loadString(
+        #expect(GenericPasswordKeychainStore.loadString(
             service: gatewayService,
             account: "gateway-token.\(instanceID)") == nil)
     }
@@ -551,7 +536,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             gatewayStableID: gatewayID)?.suppressStoredDeviceAuth == false)
         let storageComponent = try #require(GatewayStableIdentifier.storageComponent(gatewayID))
         let account = "gateway-credentials.\(instanceID).v2.\(storageComponent)"
-        let retainedJSON = KeychainStore.loadString(service: gatewayService, account: account)
+        let retainedJSON = GenericPasswordKeychainStore.loadString(service: gatewayService, account: account)
         #expect(retainedJSON?.contains(bootstrapToken) == false)
     }
 
@@ -658,9 +643,11 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
 
             GatewaySettingsStore.bootstrapPersistence()
 
-            #expect(KeychainStore.loadString(service: nodeService, account: "instanceId") == "node-test")
-            #expect(KeychainStore.loadString(service: gatewayService, account: "preferredStableID") == "preferred-test")
-            #expect(KeychainStore.loadString(service: gatewayService, account: "lastDiscoveredStableID") == "last-test")
+            #expect(GenericPasswordKeychainStore.loadString(service: nodeService, account: "instanceId") == "node-test")
+            #expect(GenericPasswordKeychainStore
+                .loadString(service: gatewayService, account: "preferredStableID") == "preferred-test")
+            #expect(GenericPasswordKeychainStore
+                .loadString(service: gatewayService, account: "lastDiscoveredStableID") == "last-test")
         }
     }
 
@@ -729,7 +716,9 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(gatewayB, activate: true))
             #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(gatewayA))
             #expect(GatewaySettingsStore.markGatewayConnected(stableID: gatewayB.stableID, atMs: 1234))
-            let firstJSON = KeychainStore.loadString(service: gatewayService, account: "gateway-registry")
+            let firstJSON = GenericPasswordKeychainStore.loadString(
+                service: gatewayService,
+                account: "gateway-registry")
             let registry = GatewaySettingsStore.loadGatewayRegistry()
             #expect(registry.version == 1)
             #expect(registry.entries.map(\.stableID) == [gatewayA.stableID, gatewayB.stableID])
@@ -738,7 +727,8 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             #expect(registry.entries.last?.lastConnectedAtMs == 1234)
             #expect(registry.entries.last?.contextPath == "/openclaw-gateway")
             #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(gatewayA))
-            #expect(KeychainStore.loadString(service: gatewayService, account: "gateway-registry") == firstJSON)
+            #expect(GenericPasswordKeychainStore
+                .loadString(service: gatewayService, account: "gateway-registry") == firstJSON)
 
             #expect(GatewaySettingsStore.setActiveGateway(stableID: gatewayA.stableID))
             #expect(GatewaySettingsStore.loadGatewayRegistry().connectedStableIDs == [
@@ -770,7 +760,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             #expect(registry.version == 1)
             #expect(registry.activeStableID == "bonjour|alpha")
             #expect(registry.connectedStableIDs == ["bonjour|alpha"])
-            #expect(KeychainStore.loadString(
+            #expect(GenericPasswordKeychainStore.loadString(
                 service: gatewayService,
                 account: "gateway-registry")?.contains("connectedStableIDs") == true)
         }
@@ -809,7 +799,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
                 port: nil,
                 useTLS: true,
                 lastConnectedAtMs: nil)))
-            #expect(KeychainStore.loadString(
+            #expect(GenericPasswordKeychainStore.loadString(
                 service: gatewayService,
                 account: "gateway-registry") == unsupported)
 
@@ -823,7 +813,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
                 port: nil,
                 useTLS: true,
                 lastConnectedAtMs: nil)))
-            #expect(KeychainStore.loadString(
+            #expect(GenericPasswordKeychainStore.loadString(
                 service: gatewayService,
                 account: "gateway-registry") == missingVersion)
         }
@@ -874,7 +864,9 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             ])
 
             GatewaySettingsStore.bootstrapPersistence()
-            let firstJSON = KeychainStore.loadString(service: gatewayService, account: "gateway-registry")
+            let firstJSON = GenericPasswordKeychainStore.loadString(
+                service: gatewayService,
+                account: "gateway-registry")
             GatewaySettingsStore.bootstrapPersistence()
 
             let active = GatewaySettingsStore.activeGatewayEntry()
@@ -882,8 +874,9 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             #expect(active?.host == "example.org")
             #expect(active?.port == 18789)
             #expect(active?.useTLS == false)
-            #expect(KeychainStore.loadString(service: gatewayService, account: "lastConnection") == nil)
-            #expect(KeychainStore.loadString(service: gatewayService, account: "gateway-registry") == firstJSON)
+            #expect(GenericPasswordKeychainStore.loadString(service: gatewayService, account: "lastConnection") == nil)
+            #expect(GenericPasswordKeychainStore
+                .loadString(service: gatewayService, account: "gateway-registry") == firstJSON)
         }
     }
 
@@ -894,13 +887,6 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
                 lastGatewayKeychainEntry:
                     #"{"kind":"discovered","stableID":"bonjour|gateway-a","useTLS":true}"#,
             ])
-            applyDefaults([
-                "gateway.last.kind": "manual",
-                "gateway.last.host": "stale.example.org",
-                "gateway.last.port": 18789,
-                "gateway.last.tls": false,
-                "gateway.last.stableID": "manual|stale.example.org|18789",
-            ])
 
             GatewaySettingsStore.bootstrapPersistence()
 
@@ -908,36 +894,6 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             #expect(active?.stableID == "bonjour|gateway-a")
             #expect(active?.kind == .discovered)
             #expect(active?.name == "bonjour|gateway-a")
-            let defaults = UserDefaults.standard
-            #expect(defaults.object(forKey: "gateway.last.stableID") == nil)
-            #expect(defaults.object(forKey: "gateway.last.host") == nil)
-        }
-    }
-
-    @Test func `legacy defaults migrate directly into active registry`() {
-        withLastGatewaySnapshot {
-            applyKeychain([
-                gatewayRegistryKeychainEntry: nil,
-                lastGatewayKeychainEntry: nil,
-            ])
-            applyDefaults([
-                "gateway.last.kind": "manual",
-                "gateway.last.host": "defaults.example.org",
-                "gateway.last.port": 443,
-                "gateway.last.tls": true,
-                "gateway.last.stableID": "manual|defaults.example.org|443",
-            ])
-
-            GatewaySettingsStore.bootstrapPersistence()
-
-            let active = GatewaySettingsStore.activeGatewayEntry()
-            #expect(active?.stableID == "manual|defaults.example.org|443")
-            #expect(active?.host == "defaults.example.org")
-            #expect(active?.port == 443)
-            #expect(active?.useTLS == true)
-            for key in lastGatewayDefaultsKeys {
-                #expect(UserDefaults.standard.object(forKey: key) == nil)
-            }
         }
     }
 
@@ -973,8 +929,8 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             #expect(credentials.bootstrapToken == "legacy-bootstrap")
             #expect(credentials.password == "legacy-password")
             #expect(credentials.suppressStoredDeviceAuth)
-            #expect(KeychainStore.loadString(service: gatewayService, account: legacyAccount) == nil)
-            #expect(KeychainStore.loadString(service: gatewayService, account: scopedAccount) == nil)
+            #expect(GenericPasswordKeychainStore.loadString(service: gatewayService, account: legacyAccount) == nil)
+            #expect(GenericPasswordKeychainStore.loadString(service: gatewayService, account: scopedAccount) == nil)
         }
     }
 

@@ -1,4 +1,3 @@
-// Zalo plugin module implements setup allow from behavior.
 import {
   DEFAULT_ACCOUNT_ID,
   createSetupTranslator,
@@ -12,10 +11,6 @@ import {
 import { resolveDefaultZaloAccountId, resolveZaloAccount } from "./accounts.js";
 
 const t = createSetupTranslator();
-
-type ZaloAccountSetupConfig = {
-  enabled?: boolean;
-};
 
 export async function noteZaloTokenHelp(
   prompter: Parameters<NonNullable<ChannelSetupWizard["finalize"]>>[0]["prompter"],
@@ -59,9 +54,7 @@ export async function promptZaloAllowFrom(params: {
   const normalized = entry.trim();
   const unique = mergeAllowFromEntries(existingAllowFrom, [normalized]);
 
-  const currentAccount = cfg.channels?.zalo?.accounts?.[accountId] as
-    | ZaloAccountSetupConfig
-    | undefined;
+  const currentAccount = cfg.channels?.zalo?.accounts?.[accountId];
   return patchTopLevelChannelConfigSection({
     cfg,
     channel: "zalo",

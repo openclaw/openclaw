@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 370300,
-  "reason": "Avatar-hat catalog measured 370,196 B locally against main baseline 369,600 B (enforcement 370,176 B); 370,300 B rounds up with Linux headroom, and the unchanged 512 B growth and 64 B build-variance allowances give a 370,876 B enforcement limit, 700 B (0.19 %) above the base limit.",
-  "updatedAt": "2026-09-21"
+  "startupJsGzipBytes": 372878,
+  "reason": "Native sidebar bridge landing: measured production startup JS 372,878 B after rebasing onto main, +1,107 B (0.298%) over the prior baseline within the approved sub-1% ceiling rule. Matched-toolchain main measured 372,406 B versus 372,597 B before final action-module extraction (+191 B); retain the existing 512 B growth and 64 B build-variance allowances.",
+  "updatedAt": "2026-10-02"
 }

@@ -48,8 +48,6 @@ export function evaluateWorkflowExpression(
     actor?: string;
     githubEvent?: Record<string, unknown>;
     maintainerCommands?: string;
-    // Runner routing keys off contributor trust, so pull-request cases default
-    // to CONTRIBUTOR: same-repo PRs always come from someone with write access.
     authorAssociation?: string;
     cancelled?: boolean;
     dispatchId?: string;
@@ -61,10 +59,12 @@ export function evaluateWorkflowExpression(
       | "issues"
       | "push"
       | "workflow_dispatch"
+      | "workflow_run"
       | "repository_dispatch"
       | "schedule";
     failed?: boolean;
     env?: Record<string, string>;
+    secrets?: Record<string, string>;
     frozenTarget?: boolean;
     fileHashes?: Record<string, string>;
     headRepository?: string;
@@ -72,20 +72,42 @@ export function evaluateWorkflowExpression(
     hostedRunnerProfileContract?: boolean;
     matrix?: Record<string, unknown>;
     preflightOutputs?: Record<string, string>;
+    additionalNeeds?: Record<
+      string,
+      {
+        outputs: Record<string, string>;
+        result?: "success" | "failure" | "cancelled" | "skipped";
+      }
+    >;
+    jobResults?: Record<string, string>;
+    preflightResult?: string;
+    failFastOutputs?: Record<string, string>;
+    failFastResult?: string;
     pullRequestNumber?: number;
     ref?: string;
     resolveTargetOutputs?: Record<string, string>;
     releaseGate?: boolean;
+    releaseRunnerGroup?: string;
+    releasePublishRunId?: string;
+    runnerGroup?: string;
+    releasePriorityRun?: string;
     releaseScope?: string;
+    validationTier?: "full" | "main";
     repository: string;
     runCheck?: boolean;
-    runnerBackend?: "" | "blacksmith" | "github" | "hybrid";
+    runWindowsCi?: boolean;
+    runnerBackend?: "" | "blacksmith" | "github" | "hybrid" | "runson";
+    requestedRunnerBackend?: "default" | "hybrid" | "runson";
+    ciShape?: "default" | "main";
+    ciOnPush?: string;
+    includeAndroid?: boolean;
     runnerEnvironment?: "" | "github-hosted" | "self-hosted";
     runnerProfile?: "blacksmith" | "github" | "hybrid";
     runAttempt: number;
     runId?: number;
     runNumber?: number;
     sha?: string;
+    skipDefenderExclusions?: boolean;
     steps?: Record<
       string,
       { outputs: Record<string, string>; outcome?: "success" | "failure" | "cancelled" | "skipped" }
@@ -96,6 +118,7 @@ export function evaluateWorkflowExpression(
     workflow?: string;
     workflowSha?: string;
     workflowToken?: string;
+    windowsCiReplay?: string;
     workspace?: string;
   },
 ) {
@@ -130,8 +153,11 @@ export function evaluateWorkflowExpression(
     endsWith: (value: unknown, suffix: unknown) =>
       String(value).toLowerCase().endsWith(String(suffix).toLowerCase()),
     fromJSON: (value: string) => JSON.parse(value) as unknown,
+    fromJson: (value: string) => JSON.parse(value) as unknown,
     format: (value: string, ...args: unknown[]) =>
-      value.replace(/\{(\d+)\}/gu, (_match, index: string) => String(args[Number(index)])),
+      value.replace(/\{\{|\}\}|\{(\d+)\}/gu, (token, index: string | undefined) =>
+        index === undefined ? token[0]! : String(args[Number(index)]),
+      ),
     hashFiles: (file: string) => context.fileHashes?.[file] ?? "",
     startsWith: (value: unknown, prefix: unknown) => String(value).startsWith(String(prefix)),
     toJson: (value: unknown) => JSON.stringify(value),
@@ -168,33 +194,75 @@ export function evaluateWorkflowExpression(
     },
     inputs: {
       dispatch_id: context.dispatchId ?? "",
+      runner_group: context.runnerGroup ?? "",
+      release_publish_run_id: context.releasePublishRunId ?? "",
+      runner_backend: context.requestedRunnerBackend ?? "default",
+      ci_shape: context.ciShape ?? "default",
+      include_android: context.includeAndroid ?? false,
       release_gate: context.releaseGate ?? false,
       release_scope: context.releaseScope ?? "full",
+      validation_tier: context.validationTier ?? "full",
       target_context_ref: context.targetContextRef ?? "",
       target_ref: context.targetRef ?? "",
       use_github_hosted_runners: context.useGithubHostedRunners ?? false,
+      run_windows_ci: context.runWindowsCi ?? false,
+      skip_defender_exclusions: context.skipDefenderExclusions ?? false,
+      windows_ci_replay: context.windowsCiReplay ?? "",
     },
     env: context.env ?? {},
+    secrets: context.secrets ?? {},
     matrix: context.matrix ?? {},
     runner: { environment: context.runnerEnvironment ?? "" },
-    steps: context.steps ?? {},
+    steps: {
+      runner_profile: { outputs: { node_runner_backend: "" } },
+      qualification_dispatch: { outputs: { eligible: "false" } },
+      ...context.steps,
+    },
     needs: {
+      ...context.additionalNeeds,
       resolve_target: { outputs: context.resolveTargetOutputs ?? {} },
+      "checks-baseline-ratchets": {
+        result: context.jobResults?.["checks-baseline-ratchets"] ?? "success",
+      },
       preflight: {
+        result: context.preflightResult ?? context.jobResults?.preflight ?? "success",
         outputs: {
           frozen_target: String(context.frozenTarget ?? false),
           hosted_runner_profile_contract: String(context.hostedRunnerProfileContract ?? true),
           run_check: String(context.runCheck ?? true),
           runner_profile: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
+          // Preflight defaults the Node planner backend to the logical profile.
+          node_runner_backend: context.runnerProfile ?? context.runnerBackend ?? "blacksmith",
           ...context.preflightOutputs,
         },
+      },
+      "pr-fail-fast": {
+        result: context.failFastResult ?? "success",
+        outputs: { failure_job_id: "", failure_run_attempt: "", ...context.failFastOutputs },
       },
     },
     vars: {
       MAINTAINER_COMMAND_REACTIONS: context.maintainerCommands ?? "",
       OPENCLAW_CI_RUNNER_BACKEND: context.runnerBackend ?? "",
+      OPENCLAW_RELEASE_RUNNER_GROUP: context.releaseRunnerGroup ?? "",
+      OPENCLAW_CI_ON_PUSH: context.ciOnPush ?? "",
+      OPENCLAW_RELEASE_PRIORITY_RUN: context.releasePriorityRun ?? "",
     },
   });
+}
+
+export function evaluateWorkflowRunner(
+  selector: unknown,
+  context: Partial<Parameters<typeof evaluateWorkflowExpression>[1]> = {},
+) {
+  return typeof selector === "string" && selector.startsWith("${{")
+    ? evaluateWorkflowExpression(selector, {
+        eventName: "workflow_dispatch",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+        ...context,
+      })
+    : selector;
 }
 
 export function quoteShell(value: string): string {
@@ -210,27 +278,27 @@ export function runWorkflowShellScript(
   const { linuxWorkflow, tempDir, ...spawnOptions } = options;
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-workflow-shell-"));
   const childTempDir = tempDir ?? root;
-  const modulePaths: string[] = [];
   try {
     let moduleIndex = 0;
-    const moduleRoot = options.cwd ?? process.cwd();
     const rewritten = script
       .replace(
         /node (?:(--import tsx |"\$\{manifest_node_args\[@\]\}" ))?--input-type=module <<'([A-Z][A-Z0-9_]*)'\n([\s\S]*?)\n\2(?=\n|$)/gu,
         (_match, nodeOptions: string | undefined, _marker: string, body: string) => {
-          const modulePath = path.join(
-            moduleRoot,
-            `.openclaw-${path.basename(root)}-${moduleIndex}.mjs`,
-          );
+          // Keep scratch outside the checkout's compiler namespace. File-backed stdin
+          // avoids Bash heredoc deadlocks and preserves the workflow's cwd-based imports.
+          const modulePath = path.join(root, `module-${moduleIndex}.mjs`);
           moduleIndex += 1;
-          modulePaths.push(modulePath);
           writeFileSync(modulePath, `${body}\n`, "utf8");
           const loader =
             nodeOptions === "--import tsx "
               ? `--import ${quoteShell(TSX_IMPORT)} `
               : (nodeOptions ?? "");
-          return `${quoteShell(testNodeExecPath)} ${loader}${quoteShell(modulePath)}`;
+          return `${quoteShell(testNodeExecPath)} ${loader}--input-type=module < ${quoteShell(modulePath)}`;
         },
+      )
+      .replace(
+        'node "${manifest_node_args[@]}" .ci-harness/scripts/ci-build-manifest.mjs',
+        `${quoteShell(testNodeExecPath)} "\${manifest_node_args[@]}" .ci-harness/scripts/ci-build-manifest.mjs`,
       )
       .replaceAll(
         "manifest_node_args+=(--import tsx)",
@@ -255,9 +323,6 @@ export function runWorkflowShellScript(
       },
     });
   } finally {
-    for (const modulePath of modulePaths) {
-      rmSync(modulePath, { force: true });
-    }
     rmSync(root, { force: true, recursive: true });
   }
 }

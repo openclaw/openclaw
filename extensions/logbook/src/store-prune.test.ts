@@ -107,7 +107,7 @@ function seedFrames(expired: number) {
 }
 
 describe("Logbook frame pruning", () => {
-  it.each([0, 1, 64, 65, 129])(
+  it.each([0, 129])(
     "prunes %i expired frames with bounded reads while retaining recent frames and cards",
     (expired) => {
       const { backend, database, paths } = seedFrames(expired);

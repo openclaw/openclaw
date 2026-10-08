@@ -1,7 +1,9 @@
-import { throwSqliteLifecycleErrors } from "../infra/sqlite-coordinator.js";
+import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
 import { readDatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
+import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { runSqliteWorkerStoreOperation } from "../infra/sqlite-worker-store.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
+import { invalidateOpenClawAgentDatabaseValidation } from "./openclaw-agent-db-validation-cache.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
 import { openOpenClawStateWorkerCleanupStore } from "./openclaw-state-worker-store.js";
 
@@ -21,13 +23,14 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
   }
   const context = {
     environment: params.context.environment,
-    coordinatorRuntime: { ...params.context.coordinatorRuntime, keepAlive: false },
     existingSchemaPath: params.context.existingSchemaPath,
+    stateIntegrity: params.context.stateIntegrity,
   };
   const store = await openOpenClawStateWorkerCleanupStore(
     params.lease.sharedStatePath,
     context,
     () => params.assertOwned(),
+    observed,
   ).catch((error: unknown) => {
     if (error instanceof Error) {
       error.message += ` (leaseId=${params.lease.leaseId}, path=${params.lease.path})`;
@@ -45,6 +48,16 @@ export async function cleanupRetiredAgentDatabaseLease(params: {
       (scope) => scope.execute({ type: "agentDatabases.releaseExitedLease", input: params.lease }),
       context,
       () => params.assertOwned(),
+      () => ({
+        nativeLocations: [params.lease.sharedStatePath],
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          params.assertOwned();
+          if (request.stage === "prepare" && request.facts === "agent-integrity-invalidated") {
+            invalidateOpenClawAgentDatabaseValidation(params.lease.path);
+          }
+          grant();
+        }),
+      }),
     );
   } catch (error) {
     errors.push(error);

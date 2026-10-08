@@ -4,7 +4,6 @@ import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation
 import { configureSqliteMaintenanceCache } from "../infra/sqlite-maintenance-cache.js";
 import { tryInspectSqliteReadOnlyInProcess } from "../infra/sqlite-readonly-inspection.js";
 import { withSqliteSourceReadDatabase } from "../infra/sqlite-source-handle.js";
-import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
 import { serializeAgentSchemaInspectionError } from "./openclaw-agent-schema-inspection-response.js";
 import type { AgentSchemaInspectionSnapshot } from "./openclaw-agent-schema-inspection-worker.js";
 import {
@@ -67,35 +66,13 @@ process.on(
         });
         readSqliteIntegrityFileIdentity(snapshot.pathname, snapshot.identity);
       } else {
-        inspection = tryInspectSqliteReadOnlyInProcess(input.pathname, inspect)?.value;
-        if (
-          !inspection &&
-          canReuseOpenClawAgentIntegrityVerification(input.pathname, readVerification(), false)
-        ) {
-          try {
-            inspection = withSqliteSourceReadDatabase(
-              input.pathname,
-              "source",
-              (database) => {
-                // sqlite-allow-raw -- Match the ordinary source reader's connection policy.
-                database.exec("PRAGMA trusted_schema = OFF;");
-                const verification = readVerification();
-                return canReuseOpenClawAgentIntegrityVerification(
-                  input.pathname,
-                  verification,
-                  false,
-                )
-                  ? inspect(database, verification)
-                  : undefined;
-              },
-              "immutable",
-            );
-          } catch (error) {
-            if (!(error instanceof StateDatabaseCoordinatorContentionError)) {
-              throw error;
-            }
-          }
-        }
+        inspection = tryInspectSqliteReadOnlyInProcess(input.pathname, inspect, {
+          allowClosedWal: canReuseOpenClawAgentIntegrityVerification(
+            input.pathname,
+            readVerification(),
+            false,
+          ),
+        })?.value;
       }
       send({
         requestId,

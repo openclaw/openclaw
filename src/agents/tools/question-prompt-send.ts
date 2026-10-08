@@ -1,18 +1,9 @@
-/**
- * Publishes a question tool's prompt into the conversation it will be answered from.
- *
- * A question tool blocks its turn until a person answers, so the prompt has to reach
- * that conversation whichever harness is running the agent. Harnesses that run tools
- * through the embedded tool lifecycle publish it from their tool-start handler;
- * harnesses that dispatch tools themselves hand the tool this sender instead. Both
- * arrive here, so the prompt is identical either way.
- */
+/** Shared prompt delivery for embedded tool-start handlers and self-publishing harnesses. */
 import type { QuestionRequestQuestion } from "../../../packages/gateway-protocol/src/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   durableMessageBatchMayHaveReachedRecipient,
   sendDurableMessageBatchCore,
-  type DurableMessageBatchSendResult,
 } from "../../channels/message/runtime.js";
 import { resolveControlUiSessionLinkBase } from "../../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -67,25 +58,21 @@ export function createChannelQuestionPromptDelivery(params: {
         deliveryRetryOwner: "caller",
         signal: options?.signal,
       });
-      settleChannelQuestionPromptSend(send);
+      // Fail closed when the durable batch did not reach the chat. ask_user then
+      // cancels instead of waiting on Control UI after a suppressed or failed send.
+      if (durableMessageBatchMayHaveReachedRecipient(send)) {
+        return;
+      }
+      if (send.status === "failed") {
+        throw send.error;
+      }
+      throw new Error(
+        send.status === "suppressed"
+          ? `question prompt delivery was suppressed: ${send.reason}`
+          : "question prompt delivery did not reach the conversation",
+      );
     },
   };
-}
-
-function settleChannelQuestionPromptSend(send: DurableMessageBatchSendResult): void {
-  // Fail closed when the durable batch did not reach the chat. ask_user then
-  // cancels instead of waiting on Control UI after a suppressed or failed send.
-  if (durableMessageBatchMayHaveReachedRecipient(send)) {
-    return;
-  }
-  if (send.status === "failed") {
-    throw send.error;
-  }
-  throw new Error(
-    send.status === "suppressed"
-      ? `question prompt delivery was suppressed: ${send.reason}`
-      : "question prompt delivery did not reach the conversation",
-  );
 }
 
 /**

@@ -5,18 +5,19 @@ import {
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { getSessionKysely } from "./session-accessor.sqlite-scope-helpers.js";
 import {
   parseSessionEntryJson,
   sessionEntryInventoryJson,
 } from "./session-accessor.sqlite-status.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
+import { sessionEntrySnapshotColumns } from "./session-entry-snapshots.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 type OpenClawAgentDatabaseReader = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 
 export function readSessionEntryStore(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
   options: {
     allowCanonicalRepair?: boolean;
     includeArchived?: boolean;
@@ -27,7 +28,7 @@ export function readSessionEntryStore(
     assertCanonicalSqliteSessionKeysCurrent(database);
   }
   const db = getSessionKysely(database.db);
-  let query = db.selectFrom("session_nodes").selectAll();
+  let query = db.selectFrom("session_nodes").selectAll().select(sessionEntrySnapshotColumns);
   if (options.includeArchived === false) {
     query = query.where("archived_at", "is", null);
   }
@@ -58,7 +59,7 @@ const countQueriesByDatabase = new WeakMap<
 >();
 
 export function readSessionEntryCount(
-  database: OpenClawAgentDatabase,
+  database: Pick<OpenClawAgentDatabase, "db">,
   options: { includeArchived?: boolean } = {},
 ): number {
   const includeArchived = options.includeArchived !== false;
@@ -110,14 +111,16 @@ export function readSessionEntryCount(
 
 export function* iterateSessionEntryKeys(
   database: OpenClawAgentDatabaseReader,
+  options: { limit?: number } = {},
 ): IterableIterator<string> {
   const db = getSessionKysely(database.db);
+  const query = db
+    .selectFrom("session_nodes")
+    .select([sessionEntryInventoryJson, "session_key"])
+    .orderBy("session_key", "asc");
   for (const row of iterateSqliteQuerySync(
     database.db,
-    db
-      .selectFrom("session_nodes")
-      .select([sessionEntryInventoryJson, "session_key"])
-      .orderBy("session_key", "asc"),
+    options.limit === undefined ? query : query.limit(options.limit),
   )) {
     if (row.entry_json === null || parseSessionEntryJson({ entry_json: row.entry_json })) {
       yield row.session_key;

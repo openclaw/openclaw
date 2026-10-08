@@ -1,12 +1,10 @@
 :root {
-  /* Background - Deep, rich dark with layered depth */
   --bg: #0e1015;
   --bg-accent: #13151b;
   --bg-elevated: #191c24;
   --bg-hover: #1f2330;
   --bg-muted: #1f2330;
 
-  /* Card / Surface - Clear hierarchy between levels */
   --card: #161920;
   --card-foreground: #f0f0f2;
   --card-highlight: rgba(255, 255, 255, 0.04);
@@ -15,7 +13,6 @@
   --session-hovercard-surface: color-mix(in srgb, var(--card) 94%, black 6%);
   --session-hovercard-progress-surface: color-mix(in srgb, var(--card) 58%, var(--bg) 42%);
 
-  /* Panel */
   --panel: #0e1015;
   --panel-strong: #191c24;
   --panel-hover: #1f2330;
@@ -33,9 +30,12 @@
   --muted: #8b8b94;
   --muted-strong: #898990;
   --muted-foreground: #8b8b94;
-  --file-icon-glyph: #a3a3a3;
+  --file-icon-glyph: var(--muted);
 
-  /* Border - Whisper-thin, barely there */
+  /* GitHub references share an opaque neutral surface; only their ink carries status. */
+  --github-item-bg: color-mix(in srgb, var(--text) 6%, var(--bg));
+  --github-item-hover-bg: color-mix(in srgb, var(--text) 10%, var(--bg));
+
   --border: #1e2028;
   --border-strong: #2e3040;
   --border-hover: #3e4050;
@@ -54,10 +54,7 @@
   --rail-header-action-active-color: var(--accent);
   --rail-header-action-disabled-opacity: 0.4;
   --rail-header-action-gap: 2px;
-  --rail-header-copy-gap: 2px;
   --rail-header-background: var(--bg);
-  --rail-header-eyebrow-size: var(--control-ui-text-xs);
-  --rail-header-eyebrow-letter-spacing: 0.04em;
   --rail-header-title-size: var(--control-ui-text-sm);
   --rail-header-title-weight: 600;
   --rail-divider-color: var(--border);
@@ -84,7 +81,7 @@
   --accent-hover: #ff7070;
   --accent-muted: #ff5c5c;
   --accent-subtle: rgba(255, 92, 92, 0.1);
-  --accent-foreground: #fafafa;
+  --accent-foreground: #0e1015;
   --accent-glow: rgba(255, 92, 92, 0.2);
   --inbox-attention: #e5243b;
   --inbox-attention-hover: color-mix(in srgb, var(--inbox-attention) 88%, black);
@@ -110,10 +107,11 @@
   --selection-bg: #005fcc;
   --selection-fg: #ffffff;
   --primary: #d13c3c;
-  --primary-hover: #c22e2e;
+  /* Imported palettes supply a fill/ink pair, not a hover pair. Keep their
+     contrast intact; built-in palettes override with audited hover colors. */
+  --primary-hover: var(--primary);
   --primary-foreground: #ffffff;
 
-  /* Secondary */
   --secondary: #161920;
   --secondary-foreground: #f0f0f2;
   --accent-2: #14b8a6;
@@ -189,26 +187,24 @@
   --ok-muted: rgba(34, 197, 94, 0.75);
   --ok-subtle: rgba(34, 197, 94, 0.08);
   --destructive: #ef4444;
+  --destructive-hover: var(--destructive);
   --destructive-foreground: #fafafa;
   --warn: #f59e0b;
   --warn-muted: rgba(245, 158, 11, 0.75);
   --warn-subtle: rgba(245, 158, 11, 0.08);
+  /* Presence dots are indicators, not text: idle keeps this amber in every theme. */
+  --presence-idle: #f59e0b;
   --danger: #f87171;
   --danger-muted: rgba(248, 113, 113, 0.75);
   --danger-subtle: rgba(248, 113, 113, 0.08);
   --info: #60a5fa;
   --info-subtle: rgba(96, 165, 250, 0.08);
-  --warn-bright: #f59e0b;
-  --warn-strong: #d97706;
-  --danger-solid-hover: #dc2626;
   --pr-merged: #a78bfa;
 
-  /* Focus */
   --focus: rgba(255, 92, 92, 0.2);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 80%, transparent);
   --focus-glow: 0 0 0 2px var(--bg), 0 0 0 3px var(--ring), 0 0 16px var(--accent-glow);
 
-  /* Grid */
   --grid-line: rgba(255, 255, 255, 0.03);
 
   /* GitHub syntax palette shared by highlighted code and file previews. */
@@ -222,11 +218,37 @@
   --hljs-deletion: #ffa198;
   --hljs-addition: #7ee787;
 
-  /* Theme transition */
-  --theme-switch-x: 50%;
-  --theme-switch-y: 50%;
+  /* Web Awesome shadow parts otherwise retain its independent blue-gray palette.
+     Map its semantic colors once so menus, form controls, tabs, and dialogs
+     inherit built-in, imported, and personal themes together. */
+  --wa-color-surface-default: var(--bg);
+  --wa-color-surface-raised: var(--popover);
+  --wa-color-surface-lowered: var(--bg-muted);
+  --wa-color-surface-border: var(--border);
+  --wa-color-text-normal: var(--text);
+  --wa-color-text-quiet: var(--muted);
+  --wa-color-text-link: var(--link);
+  --wa-color-focus: var(--ring);
+  --wa-color-neutral-fill-quiet: var(--bg-muted);
+  --wa-color-neutral-fill-normal: var(--bg-hover);
+  --wa-color-neutral-border-normal: var(--border-strong);
+  --wa-color-neutral-border-loud: var(--muted);
+  --wa-color-neutral-on-quiet: var(--muted);
+  --wa-color-neutral-on-normal: var(--text);
+  --wa-color-brand-fill-quiet: var(--accent-subtle);
+  --wa-color-brand-fill-loud: var(--accent);
+  --wa-color-brand-on-quiet: var(--accent);
+  --wa-color-danger-fill-normal: var(--danger-subtle);
+  --wa-color-danger-on-quiet: var(--danger);
+  --wa-color-danger-on-normal: var(--danger);
+  --wa-form-control-background-color: var(--bg);
+  --wa-form-control-border-color: var(--border-strong);
+  --wa-form-control-activated-color: var(--accent);
+  --wa-form-control-label-color: var(--text);
+  --wa-form-control-value-color: var(--text);
+  --wa-form-control-hint-color: var(--muted);
+  --wa-form-control-placeholder-color: var(--muted);
 
-  /* Typography */
   --mono:
     "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
   --font-shortcut: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI Symbol", sans-serif;
@@ -246,7 +268,6 @@
   --chat-text-size: var(--control-ui-text-md);
   --chat-block-gap: var(--chat-text-size);
 
-  /* Shadows - Subtle, layered depth */
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.25);
   --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.3);
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.4);
@@ -271,14 +292,16 @@
   --space-8: 40px;
 
   /* Shared by mobile headers, transcripts, and independently loaded composers. */
-  --chat-mobile-edge-inset: var(--space-3);
+  --chat-mobile-edge-inset: var(--space-4);
+  --shell-popup-inline-gutter: 12px;
 
   /* One inset shared by every widget frame (chat preview panel, board card)
      so agent-authored widget documents meet identical breathing room on all
      surfaces. Board layout math mirrors this value numerically. */
   --widget-frame-inset: var(--space-3);
 
-  /* Radii - Slightly larger for modern feel */
+  --sidebar-nav-row-height: 32px;
+
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
@@ -317,7 +340,6 @@
   --menu-padding: 4px;
   --menu-selected: color-mix(in srgb, var(--text) 8%, transparent);
 
-  /* Transitions - Crisp and responsive */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
@@ -329,14 +351,23 @@
   --safe-area-right: env(safe-area-inset-right, 0px);
   --safe-area-bottom: env(safe-area-inset-bottom, 0px);
   --safe-area-left: env(safe-area-inset-left, 0px);
+  --shell-viewport-base: 100vh;
+  --shell-safe-area-bottom: var(--safe-area-bottom);
+  --shell-canvas-height: min(
+    var(--shell-viewport-base),
+    var(--shell-viewport-height, var(--shell-viewport-base))
+  );
+  --shell-content-height: calc(
+    var(--shell-canvas-height) - var(--safe-area-top) - var(--shell-safe-area-bottom)
+  );
 
-  /* Layering */
   --z-dropdown: 100;
   --z-toast: 2000;
 
-  /* Custom select chevron. Data URIs cannot read var(--muted), so the stroke
-     color is baked per theme mode; light mode overrides the whole image. */
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+  /* Two gradient strokes keep native select chevrons on the live muted ink. */
+  --select-chevron:
+    linear-gradient(45deg, transparent 40%, var(--muted) 40% 60%, transparent 60%),
+    linear-gradient(-45deg, transparent 40%, var(--muted) 40% 60%, transparent 60%);
 
   color-scheme: dark;
 }
@@ -375,15 +406,15 @@
    border-radius declaration in its home file, which always loads later.
    Each selector below is doubled (`.card.card`) to outrank that one bare
    declaration by specificity regardless of load order — deliberately not
-   !important, so a genuinely more specific state override elsewhere (e.g.
-   `.chat:has(> .agent-chat__search-bar)`) keeps winning as it did before
-   this block existed, instead of every such rule needing a matching
-   !important of its own. */
+   !important, so a genuinely more specific state override elsewhere keeps
+   winning as it did before this block existed, instead of every such rule
+   needing a matching !important of its own. */
 @supports (corner-shape: superellipse(1.5)) {
   :root {
     --openclaw-corner-radius-scale: 1.25;
   }
 
+  .agent-chat__search-bar.agent-chat__search-bar,
   .exec-approval-card.exec-approval-card,
   .exec-approval-list.exec-approval-list,
   .cmd-palette.cmd-palette,
@@ -428,20 +459,6 @@
 
   .option-card.option-card {
     border-radius: calc(20px * var(--openclaw-corner-radius-scale));
-    corner-shape: superellipse(1.5);
-  }
-
-  /* The transcript search bar's bottom corners round with its .chat ancestor
-     so the two edges stay optically parallel; only two corners are rounded,
-     and .chat:has(> .agent-chat__search-bar) zeroes .chat's own radius while
-     the search bar is present (see chat/layout.css). corner-shape still
-     needs to be set here even though the top two corners are 0 (a 0-radius
-     corner draws no curve either way): the bottom two are standing in for
-     .chat's own squircle corner at the seam, so they need the same shape,
-     not just the same radius, to actually match it. */
-  .agent-chat__search-bar.agent-chat__search-bar {
-    border-radius: 0 0 calc(14px * var(--openclaw-corner-radius-scale))
-      calc(14px * var(--openclaw-corner-radius-scale));
     corner-shape: superellipse(1.5);
   }
 
@@ -513,10 +530,15 @@
   }
 }
 
-/* The claw family deepens only the text-bearing destructive fill. */
+/* The claw family deepens text-bearing primary and destructive fills. */
 :root[data-theme="dark"] {
+  --primary-hover: #c22e2e;
   --destructive: #d32f2f;
   --destructive-hover: #bc2a2a;
+}
+
+:root[data-theme="light"] {
+  --primary-hover: var(--accent-hover);
 }
 
 /* Light theme tokens apply to every light-mode family. */
@@ -561,7 +583,8 @@
   --muted: #6e6960;
   --muted-strong: #56524a;
   --muted-foreground: #6e6960;
-  --file-icon-glyph: #737373;
+  --github-item-bg: color-mix(in srgb, var(--text) 5%, var(--bg));
+  --github-item-hover-bg: color-mix(in srgb, var(--text) 9%, var(--bg));
 
   --border: #e8e4dc;
   --border-strong: #d6d0c5;
@@ -654,7 +677,6 @@
   --hljs-deletion: #a40e26;
   --hljs-addition: #116329;
 
-  /* Light shadows - Subtle, warm-tinted */
   --shadow-sm: 0 1px 2px rgba(60, 42, 24, 0.05);
   --shadow-md: 0 4px 12px rgba(60, 42, 24, 0.07);
   --shadow-lg: 0 12px 28px rgba(60, 42, 24, 0.09);
@@ -662,8 +684,6 @@
   --shadow-glow: 0 0 20px var(--accent-glow);
   --overlay-border: color-mix(in srgb, var(--border-strong) 64%, transparent);
   --overlay-shadow: 0 1px 2px rgb(60 42 24 / 0.035), 0 8px 24px rgb(60 42 24 / 0.065);
-
-  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23444' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
 
   color-scheme: light;
 }
@@ -744,8 +764,12 @@ summary,
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  html:has(.shell--chat),
-  body:has(.shell--chat) {
+  :root {
+    --shell-popup-inline-gutter: var(--chat-mobile-edge-inset);
+  }
+
+  html.control-ui-chat-shell,
+  .control-ui-chat-shell body {
     /* iOS Safari exposes the document canvas around its browser chrome; keep
        that canvas on the same semantic surface as the narrow transcript. */
     background: var(--control-ui-system-chrome-background, var(--bg-content, var(--bg)));
@@ -770,44 +794,15 @@ summary,
   }
 }
 
-/* Theme transition */
-@keyframes theme-circle-transition {
-  0% {
-    clip-path: circle(0% at var(--theme-switch-x, 50%) var(--theme-switch-y, 50%));
-  }
-  100% {
-    clip-path: circle(150% at var(--theme-switch-x, 50%) var(--theme-switch-y, 50%));
-  }
-}
-
-html.theme-transition {
-  view-transition-name: theme;
-}
-
-html.theme-transition::view-transition-old(theme) {
-  mix-blend-mode: normal;
-  animation: none;
-  z-index: 1;
-}
-
-html.theme-transition::view-transition-new(theme) {
-  mix-blend-mode: normal;
-  z-index: 2;
-  animation: theme-circle-transition 0.4s var(--ease-out) forwards;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  html.theme-transition::view-transition-old(theme),
-  html.theme-transition::view-transition-new(theme) {
-    animation: none !important;
-  }
-}
-
 openclaw-app {
   display: block;
   position: relative;
   z-index: 1;
-  height: 100%;
+  /* One safe-area owner for every in-flow route, including native embeds.
+     Fixed/portaled surfaces consume the same geometry at the viewport edge. */
+  height: var(--shell-canvas-height);
+  padding: var(--safe-area-top) var(--safe-area-right) var(--shell-safe-area-bottom)
+    var(--safe-area-left);
 }
 
 /* Empty contribution hosts must not add layout boxes before the plugin runtime loads. */
@@ -815,21 +810,23 @@ openclaw-plugin-contributions {
   display: contents;
 }
 
+@supports (height: 100dvh) {
+  :root {
+    --shell-viewport-base: 100dvh;
+  }
+}
+
 @media (display-mode: standalone) {
-  @supports (height: 100dvh) {
-    html,
-    body {
-      height: 100dvh;
-    }
+  html,
+  body {
+    /* Keep the root clipping box on the CSS canvas. The app can shrink within
+       it to the visible bound without changing the keyboard layout reference. */
+    height: var(--shell-viewport-base);
   }
 
   body {
     position: fixed;
     inset: 0;
-    padding-top: var(--safe-area-top);
-    padding-right: var(--safe-area-right);
-    padding-bottom: var(--safe-area-bottom);
-    padding-left: var(--safe-area-left);
   }
 }
 
@@ -904,10 +901,19 @@ a:hover {
 }
 
 /* Web Awesome defaults checked switches to brand blue. Keep every switch on
-   the Control UI accent, matching native check controls and custom switches. */
+   the Control UI accent, matching native check controls and custom switches.
+   Its off state (track fill, border, thumb) defaults to the library's
+   blue-grey neutrals, so derive that from the theme tokens as well. */
 wa-switch {
   --wa-form-control-activated-color: var(--accent);
+  --wa-form-control-background-color: color-mix(in srgb, var(--border-strong) 60%, transparent);
+  --wa-form-control-border-color: var(--muted);
   --wa-color-focus: var(--ring);
+  /* The library sizes the track at 1.75x its height and the thumb at 0.75em,
+     leaving fractional insets (3.75px at 14px) that pixel-snap unevenly and
+     push the thumb off-center. Whole-pixel insets keep it centered. */
+  --width: calc(var(--height) + 2 * round(calc(var(--height) * 0.375), 1px));
+  --thumb-size: calc(var(--height) - 2 * round(calc((var(--height) - 0.75em) / 2), 1px));
 }
 
 /* Keep neutral menu hover, keyboard focus, and open submenus on the active theme.
@@ -922,6 +928,13 @@ wa-dropdown-item {
 
 wa-dropdown-item[disabled] {
   cursor: not-allowed;
+}
+
+/* Options are menu rows, not solid primary actions. Keep their keyboard-current
+   fill and ink paired even when a theme has a very bright or dark accent. */
+wa-option {
+  --wa-form-control-activated-color: var(--bg-hover);
+  --current-text-color: var(--text);
 }
 
 /* The submenu safe triangle follows the pointer and can cover sibling rows,
@@ -1038,7 +1051,6 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
   background-clip: content-box;
 }
 
-/* Animations - Polished with spring feel */
 @keyframes rise {
   from {
     opacity: 0;
@@ -1102,7 +1114,6 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
   }
 }
 
-/* Skeleton loading primitives */
 .skeleton {
   position: relative;
   overflow: hidden;
@@ -1174,7 +1185,6 @@ wa-popover::part(body)::-webkit-scrollbar-thumb:hover {
   }
 }
 
-/* Focus visible styles */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;

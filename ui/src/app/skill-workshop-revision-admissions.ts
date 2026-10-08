@@ -1,3 +1,4 @@
+import { registerListener } from "../../../src/shared/listeners.js";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
 
@@ -45,17 +46,9 @@ type SkillWorkshopRevisionAdmissionRun = {
   entry: SkillWorkshopRevisionAdmissionEntry;
 };
 
-export type ApplicationSkillWorkshopRevisionAdmissions = {
-  dispose(): void;
-  firstFailed(proposalAgentId: string): SkillWorkshopRevisionAdmissionEntry | null;
-  get(id: string): SkillWorkshopRevisionAdmissionEntry | null;
-  retry(id: string): SkillWorkshopRevisionAdmissionRun | null;
-  start(
-    input: SkillWorkshopRevisionAdmissionInput,
-    execute: AdmissionExecutor,
-  ): SkillWorkshopRevisionAdmissionRun;
-  subscribe(listener: () => void): () => void;
-};
+export type ApplicationSkillWorkshopRevisionAdmissions = ReturnType<
+  typeof createSkillWorkshopRevisionAdmissions
+>;
 
 type OwnedEntry = {
   execute: AdmissionExecutor;
@@ -67,7 +60,7 @@ function copyEntry(entry: OwnedEntry): SkillWorkshopRevisionAdmissionEntry {
   return { ...entry.value };
 }
 
-export function createSkillWorkshopRevisionAdmissions(): ApplicationSkillWorkshopRevisionAdmissions {
+export function createSkillWorkshopRevisionAdmissions() {
   const entries = new Map<string, OwnedEntry>();
   const listeners = new Set<() => void>();
   let disposed = false;
@@ -115,7 +108,7 @@ export function createSkillWorkshopRevisionAdmissions(): ApplicationSkillWorksho
   };
 
   return {
-    start(input, execute) {
+    start(this: void, input: SkillWorkshopRevisionAdmissionInput, execute: AdmissionExecutor) {
       const id = generateUUID();
       const entry: OwnedEntry = {
         execute,
@@ -134,7 +127,7 @@ export function createSkillWorkshopRevisionAdmissions(): ApplicationSkillWorksho
       publish();
       return run(entry);
     },
-    retry(id) {
+    retry(this: void, id: string) {
       const entry = entries.get(id);
       if (!entry || entry.value.phase !== "retryable-failed" || disposed) {
         return null;
@@ -144,11 +137,11 @@ export function createSkillWorkshopRevisionAdmissions(): ApplicationSkillWorksho
       publish();
       return run(entry);
     },
-    get(id) {
+    get(this: void, id: string) {
       const entry = entries.get(id);
       return entry ? copyEntry(entry) : null;
     },
-    firstFailed(proposalAgentId) {
+    firstFailed(this: void, proposalAgentId: string) {
       const normalizedAgentId = normalizeAgentId(proposalAgentId);
       for (const entry of entries.values()) {
         if (
@@ -160,11 +153,8 @@ export function createSkillWorkshopRevisionAdmissions(): ApplicationSkillWorksho
       }
       return null;
     },
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    dispose() {
+    subscribe: (listener: () => void) => registerListener(listeners, listener),
+    dispose(this: void) {
       disposed = true;
       entries.clear();
       listeners.clear();

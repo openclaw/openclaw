@@ -24,7 +24,7 @@ Checking the streaming behavior and running the focused tests.
 The default draft shows a status headline, authored plan steps, and approval
 requests. Intermediate tool failures and nonzero command exits stay out of the
 draft. Set `streaming.progress.toolProgress: true` to add a rolling tool log,
-including tool failures, with rows such as `🛠️ Bash: run tests`.
+including tool failures, with rows such as `Bash: run tests`.
 
 <Note>
   Discord defaults preview streaming to `off`; set `streaming.mode: "progress"`
@@ -76,8 +76,8 @@ It sits at the top of the rolling progress-line list, so it scrolls away once
 enough concrete work lines appear. The implicit label is hidden while a status
 headline is present unless you configure one explicitly. Plain text-only
 replies never show a progress draft; a line appears only for real work updates,
-for example `🛠️ Bash: run tests`, `🔎 Web Search: for "discord edit message"`,
-or `✍️ Write: to /tmp/file`.
+for example `Bash: run tests`, `Web Search: for "discord edit message"`,
+or `Write: to /tmp/file`.
 
 Final delivery depends on the channel and transport. OpenClaw either finalizes
 the draft or sends a separate answer and cleans up or stops updating the draft
@@ -247,10 +247,10 @@ OpenClaw uses the same formatter for progress drafts and `/verbose`:
 requires the explicit `streaming.progress.commandText: "raw"` opt-in below.
 With that opt-in, a `node --check /tmp/app.js` call renders differently by mode:
 
-| Mode      | Progress line                                                   |
-| --------- | --------------------------------------------------------------- |
-| `explain` | `🛠️ check js syntax for /tmp/app.js`                            |
-| `raw`     | `🛠️ check js syntax for /tmp/app.js · node --check /tmp/app.js` |
+| Mode      | Progress line                                                |
+| --------- | ------------------------------------------------------------ |
+| `explain` | `check js syntax for /tmp/app.js`                            |
+| `raw`     | `check js syntax for /tmp/app.js · node --check /tmp/app.js` |
 
 ### Command/exec text
 
@@ -363,12 +363,14 @@ Limit how many lines stay visible (default 8):
 }
 ```
 
-With `toolProgress: true`, command exit rows use ordinary tool-log capacity,
-including exits with a code other than `0`. Older exits scroll out as newer
-activity arrives and do not reduce the plan's line budget. Approval requests
-and explicit `failed`, `error`, or `blocked` states still take priority. With
-the tool log hidden, tool failures and nonzero exits are hidden too; approval
-requests remain visible.
+With `toolProgress: true`, command exit rows and failed item rows from any named
+tool use ordinary tool-log capacity. This includes built-in, plugin, and custom
+tools without maintaining a name list. One rolling activity slot remains visible
+alongside a plan, so a failed row appears when it occurs, then scrolls out as
+newer activity arrives.
+Approval requests, blocked/error states, and unnamed failures still take
+priority. With the tool log hidden, tool failures and nonzero exits are hidden
+too; approval requests remain visible.
 
 Progress lines are compacted automatically to reduce chat-bubble reflow while
 the draft is edited, and OpenClaw truncates long lines so repeated draft edits
@@ -438,9 +440,9 @@ full runtime-behavior breakdown per channel.
 
 When the final answer is ready, OpenClaw tries to keep the chat clean:
 
-- A Discord or Telegram progress card handed off to accepted subagents stays visible across
-  parent yield. Core updates that same card while delegated work continues;
-  the eventual final answer is separate. See
+- A Telegram progress draft handed off to accepted announcing subagents stays
+  visible after the parent yields and keeps showing child status and prepared
+  operation names; the final answer is separate. See
   [Subagent yield handoff](/concepts/subagent-yield-handoff#progress-after-yield).
 
 - Otherwise, in `progress` mode on Discord, the final answer is sent as a fresh

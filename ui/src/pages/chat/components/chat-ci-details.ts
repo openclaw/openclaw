@@ -25,47 +25,35 @@ const SKIPPED_ICON = strokeIcon(svg`<circle cx="12" cy="12" r="10" /><path d="M8
 const CHECK_ORDER = { failed: 0, running: 1, passed: 2, skipped: 3 } as const;
 type CheckState = ControlUiSessionPullRequestCheck["state"] | "queued";
 
+const STEP_CONCLUSIONS = new Map<string, CheckState>([
+  ["success", "passed"],
+  ["failure", "failed"],
+  ["timed_out", "failed"],
+  ["action_required", "failed"],
+  ["startup_failure", "failed"],
+  ["skipped", "skipped"],
+  ["neutral", "skipped"],
+  ["cancelled", "skipped"],
+]);
+
 function stepState(step: ControlUiSessionPullRequestCheckStep): CheckState {
   if (step.status === "in_progress") {
     return "running";
   }
-  switch (step.conclusion) {
-    case "success":
-      return "passed";
-    case "failure":
-    case "timed_out":
-    case "action_required":
-    case "startup_failure":
-      return "failed";
-    case "skipped":
-    case "neutral":
-    case "cancelled":
-      return "skipped";
-    default:
-      return "queued";
-  }
+  return STEP_CONCLUSIONS.get(step.conclusion ?? "") ?? "queued";
 }
 
-const STATE_LABEL_KEYS = {
-  passed: "chat.pullRequests.checksPassed",
-  failed: "chat.pullRequests.checksFailed",
-  running: "chat.pullRequests.checksRunning",
-  skipped: "chat.pullRequests.checksSkipped",
-  queued: "chat.pullRequests.checksQueued",
+const CHECK_PRESENTATION = {
+  passed: ["chat.pullRequests.checksPassed", icons.check],
+  failed: ["chat.pullRequests.checksFailed", icons.circleX],
+  running: ["chat.pullRequests.checksRunning", icons.loader],
+  skipped: ["chat.pullRequests.checksSkipped", SKIPPED_ICON],
+  queued: ["chat.pullRequests.checksQueued", icons.clock],
 } as const;
 
 function renderStatus(state: CheckState) {
-  const label = t(STATE_LABEL_KEYS[state]);
-  const icon =
-    state === "passed"
-      ? icons.check
-      : state === "failed"
-        ? icons.circleX
-        : state === "running"
-          ? icons.loader
-          : state === "skipped"
-            ? SKIPPED_ICON
-            : icons.clock;
+  const [labelKey, icon] = CHECK_PRESENTATION[state];
+  const label = t(labelKey);
   return html`<span
     class="chat-ci__status"
     data-state=${state}
@@ -208,11 +196,7 @@ export class ChatCiDetailsElement extends OpenClawLightDomElement {
     if (event.target !== this.disclosure) {
       return;
     }
-    if (this.visible) {
-      void this.load();
-    } else {
-      this.cancelRequest();
-    }
+    this.handleVisibility();
   };
 
   private readonly handleVisibility = (): void => {

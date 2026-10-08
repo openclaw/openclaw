@@ -1,3 +1,9 @@
+import { resolveApprovalApprovers } from "openclaw/plugin-sdk/approval-auth-runtime";
+import {
+  getExecApprovalReplyMetadata,
+  isChannelExecApprovalClientEnabledFromConfig,
+  matchesApprovalRequestFilters,
+} from "openclaw/plugin-sdk/approval-client-runtime";
 import type { ChannelOutboundPayloadHint } from "openclaw/plugin-sdk/channel-contract";
 import type {
   OpenClawConfig,
@@ -5,12 +11,6 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-dispatch-runtime";
 import { resolveDiscordAccount } from "./accounts.js";
-import {
-  getExecApprovalReplyMetadata,
-  isChannelExecApprovalClientEnabledFromConfig,
-  matchesApprovalRequestFilters,
-  resolveApprovalApprovers,
-} from "./approval-runtime.js";
 import { resolveDiscordCommandOwnerEntries } from "./command-owners.js";
 import { parseDiscordTarget } from "./target-parsing.js";
 
@@ -61,11 +61,7 @@ export function isDiscordExecApprovalClientEnabled(params: {
   const config = params.configOverride ?? resolveDiscordAccount(params).config.execApprovals;
   return isChannelExecApprovalClientEnabledFromConfig({
     enabled: config?.enabled,
-    approverCount: getDiscordExecApprovalApprovers({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      configOverride: params.configOverride,
-    }).length,
+    approverCount: getDiscordExecApprovalApprovers(params).length,
   });
 }
 
@@ -79,11 +75,7 @@ export function isDiscordExecApprovalApprover(params: {
   if (!senderId) {
     return false;
   }
-  return getDiscordExecApprovalApprovers({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    configOverride: params.configOverride,
-  }).includes(senderId);
+  return getDiscordExecApprovalApprovers(params).includes(senderId);
 }
 
 export function shouldSuppressLocalDiscordExecApprovalPrompt(params: {

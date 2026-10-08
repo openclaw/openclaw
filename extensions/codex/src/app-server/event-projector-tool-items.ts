@@ -1,51 +1,24 @@
+import { truncateNativeToolTranscriptText } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   inferToolMetaFromArgs,
   projectAgentToolActivity,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   itemName,
   itemStatus,
   auditNativeToolName,
   unknownItemStatus,
-  shouldSynthesizeToolProgressForItem,
+  isProjectedNativeToolItem,
 } from "./event-projector-items.js";
-import {
-  collectDynamicToolContentText,
-  truncateToolTranscriptText,
-} from "./event-projector-tool-output.js";
-import {
-  normalizeNonEmptyString,
-  readNonEmptyString,
-  readNonEmptyStringArray,
-} from "./event-projector-values.js";
+import { collectDynamicToolContentText } from "./event-projector-tool-output.js";
 import { isJsonObject, type CodexThreadItem, type JsonObject } from "./protocol.js";
 import {
   sanitizeCodexAgentEventRecord,
   sanitizeCodexToolArguments,
 } from "./tool-progress-normalization.js";
-
-const CODE_MODE_NATIVE_PATCH_SOURCE_RE =
-  /^\s*(?:\/\/[^\r\n]*\r?\n\s*)?(?:const|let)\s+([A-Za-z_$][\w$]*)\s*=\s*await\s+tools\.apply_patch\(\s*("(?:\\[\s\S]|[^"\\])*")\s*\)\s*;?\s*text\(\s*\1\s*\)\s*;?\s*$/u;
-
-export function readCodeModeNativePatchInput(source: unknown): string | undefined {
-  if (typeof source !== "string") {
-    return undefined;
-  }
-  const match = CODE_MODE_NATIVE_PATCH_SOURCE_RE.exec(source);
-  if (!match?.[2]) {
-    return undefined;
-  }
-  try {
-    const patch: unknown = JSON.parse(match[2]);
-    return typeof patch === "string" &&
-      /^\*\*\* Begin Patch\r?\n[\s\S]*\r?\n\*\*\* End Patch(?:\r?\n)?$/u.test(patch)
-      ? patch
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
+import { projectCodexWebSearchItem } from "./web-search-item.js";
 
 export function readInterceptedNativePatchInput(
   command: unknown,
@@ -100,7 +73,7 @@ export function projectCodexToolActivity(
             : unknownItemStatus(item)
               ? "unknown"
               : itemStatus(item),
-        result: { details: itemToolResult(item).result },
+        result: { details: itemToolResult(item) },
         ...(item.type === "collabAgentToolCall" && item.tool === "wait"
           ? { nativeOperation: "wait" }
           : {}),
@@ -120,7 +93,7 @@ export function isNativePostToolUseRelayItem(item: CodexThreadItem): boolean {
 }
 
 export function shouldSuppressChannelProgressForItem(item: CodexThreadItem): boolean {
-  if (shouldSynthesizeToolProgressForItem(item)) {
+  if (isProjectedNativeToolItem(item)) {
     return true;
   }
   // Dynamic OpenClaw tool requests are emitted at the item/tool/call request
@@ -160,78 +133,43 @@ export function isCommandBearingToolItem(
 }
 
 function webSearchToolArgs(item: CodexThreadItem): Record<string, unknown> {
-  const action = isJsonObject(item.action) ? item.action : undefined;
-  const actionType = action ? readNonEmptyString(action, "type") : undefined;
-  const queries =
-    action && actionType === "search" ? readNonEmptyStringArray(action, "queries") : [];
-  const query =
-    normalizeNonEmptyString(item.query) ??
-    (action && actionType === "search" ? readNonEmptyString(action, "query") : undefined) ??
-    queries[0];
-  const url = action ? readNonEmptyString(action, "url") : undefined;
-  const pattern = action ? readNonEmptyString(action, "pattern") : undefined;
-  const args: Record<string, unknown> = {};
-  if (query) {
-    args.query = query;
-  }
-  if (queries.length > 0) {
-    args.queries = queries;
-  }
-  if (actionType && actionType !== "search") {
-    args.action = actionType;
-  }
-  if (url) {
-    args.url = url;
-  }
-  if (pattern) {
-    args.pattern = pattern;
-  }
-  if (!query && !url && !pattern) {
+  const args = projectCodexWebSearchItem(item);
+  if (!args.query && !args.url && !args.pattern) {
     args.queryUnavailable = true;
   }
   return sanitizeCodexAgentEventRecord(args);
 }
 
-export function itemToolResult(item: CodexThreadItem): { result?: Record<string, unknown> } {
+export function itemToolResult(item: CodexThreadItem): Record<string, unknown> | undefined {
   if (item.type === "commandExecution") {
-    return {
-      result: sanitizeCodexAgentEventRecord({
-        status: item.status,
-        exitCode: item.exitCode,
-        durationMs: item.durationMs,
-      }),
-    };
+    return sanitizeCodexAgentEventRecord({
+      status: item.status,
+      exitCode: item.exitCode,
+      durationMs: item.durationMs,
+    });
   }
   if (item.type === "fileChange") {
-    return {
-      result: sanitizeCodexAgentEventRecord({
-        status: item.status,
-        changes: itemFileChanges(item),
-      }),
-    };
+    return sanitizeCodexAgentEventRecord({
+      status: item.status,
+      changes: itemFileChanges(item),
+    });
   }
   if (item.type === "mcpToolCall") {
-    return {
-      result: sanitizeCodexAgentEventRecord({
-        status: item.status,
-        durationMs: item.durationMs,
-        ...(item.error ? { error: item.error } : {}),
-        ...(item.result ? { result: item.result } : {}),
-      }),
-    };
+    return sanitizeCodexAgentEventRecord({
+      status: item.status,
+      durationMs: item.durationMs,
+      ...(item.error ? { error: item.error } : {}),
+      ...(item.result ? { result: item.result } : {}),
+    });
   }
   if (item.type === "webSearch") {
-    return { result: webSearchToolResult(item) };
+    return sanitizeCodexAgentEventRecord({
+      status: itemStatus(item),
+      ...(typeof item.durationMs === "number" ? { durationMs: item.durationMs } : {}),
+      ...webSearchToolArgs(item),
+    });
   }
-  return {};
-}
-
-function webSearchToolResult(item: CodexThreadItem): Record<string, unknown> {
-  return sanitizeCodexAgentEventRecord({
-    status: itemStatus(item),
-    ...(typeof item.durationMs === "number" ? { durationMs: item.durationMs } : {}),
-    ...webSearchToolArgs(item),
-  });
+  return undefined;
 }
 
 type CodexFileChangeSummary = {
@@ -246,25 +184,18 @@ type CodexTranscriptFileChange = CodexFileChangeSummary & {
 };
 
 function itemFileChangeRecords(item: CodexThreadItem): JsonObject[] {
-  const changes = (item as Record<string, unknown>).changes;
+  const changes = item.changes;
   return Array.isArray(changes) ? changes.filter(isJsonObject) : [];
 }
 
 function itemFileChanges(item: CodexThreadItem): CodexFileChangeSummary[] {
   return itemFileChangeRecords(item).flatMap((change) => {
-    const path = normalizeNonEmptyString(change.path);
+    const path = normalizeOptionalString(change.path);
     if (!path || change.kind === undefined) {
       return [];
     }
     return [{ path, kind: change.kind }];
   });
-}
-
-function fileChangeKindType(kind: unknown): string | undefined {
-  if (typeof kind === "string") {
-    return kind;
-  }
-  return isJsonObject(kind) ? normalizeNonEmptyString(kind.type) : undefined;
 }
 
 function countFileContentLines(content: string): number {
@@ -279,7 +210,12 @@ function countFileContentLines(content: string): number {
 }
 
 function fileChangeDiffStat(diff: string, kind: unknown): { added: number; removed: number } {
-  const kindType = fileChangeKindType(kind);
+  const kindType =
+    typeof kind === "string"
+      ? kind
+      : isJsonObject(kind)
+        ? normalizeOptionalString(kind.type)
+        : undefined;
   if (kindType === "add") {
     return { added: countFileContentLines(diff), removed: 0 };
   }
@@ -325,7 +261,7 @@ function truncateFileChangeDiffAtLineBoundary(
 function itemFileChangesForTranscript(item: CodexThreadItem): CodexTranscriptFileChange[] {
   let remainingDiffChars = 10_000;
   return itemFileChangeRecords(item).flatMap((change) => {
-    const path = normalizeNonEmptyString(change.path);
+    const path = normalizeOptionalString(change.path);
     if (!path || change.kind === undefined) {
       return [];
     }
@@ -389,7 +325,7 @@ export function itemOutputText(
   outputTextByItem?: ReadonlyMap<string, string>,
 ): string | undefined {
   const output = itemObservedOutputText(item, outputTextByItem)?.trim();
-  return output ? truncateToolTranscriptText(output) : undefined;
+  return output ? truncateNativeToolTranscriptText(output, "Codex") : undefined;
 }
 
 function itemObservedOutputText(
@@ -403,12 +339,11 @@ function itemObservedOutputText(
     return collectDynamicToolContentText(item.contentItems);
   }
   if (item.type === "mcpToolCall") {
-    const output = item.error
+    return item.error
       ? stringifyJsonValue(item.error)
       : item.result
         ? stringifyJsonValue(item.result)
         : undefined;
-    return output;
   }
   return undefined;
 }
@@ -421,7 +356,7 @@ export function itemTranscriptResultText(
   if (output !== undefined) {
     return output;
   }
-  const result = itemToolResult(item).result;
+  const result = itemToolResult(item);
   const resultText = result ? stringifyJsonValue(result) : undefined;
   return resultText ?? itemStatus(item);
 }

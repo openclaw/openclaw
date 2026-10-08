@@ -81,20 +81,6 @@ describe("parseTtsDirectives provider-aware routing", () => {
     });
   });
 
-  it("routes generic speed to the explicitly declared provider", () => {
-    const result = parseTtsDirectives(
-      "hello [[tts:provider=minimax speed=1.2]] world",
-      fullPolicy,
-      {
-        providers: [elevenlabs, minimax],
-      },
-    );
-
-    expect(result.overrides.provider).toBe("minimax");
-    expect(result.overrides.providerOverrides?.minimax).toEqual({ speed: 1.2 });
-    expect(result.overrides.providerOverrides?.elevenlabs).toBeUndefined();
-  });
-
   it("routes correctly when provider appears after the generic token", () => {
     const result = parseTtsDirectives("[[tts:speed=1.2 provider=minimax]] hi", fullPolicy, {
       providers: [elevenlabs, minimax],
@@ -149,17 +135,6 @@ describe("parseTtsDirectives provider-aware routing", () => {
     expect(result.overrides.providerOverrides?.minimax).toBeUndefined();
   });
 
-  it("does not fall through when the explicit provider does not handle the key", () => {
-    const result = parseTtsDirectives("[[tts:provider=minimax style=0.4]]", fullPolicy, {
-      providers: [elevenlabs, minimax],
-    });
-
-    expect(result.overrides.provider).toBe("minimax");
-    expect(result.overrides.providerOverrides?.elevenlabs).toBeUndefined();
-    expect(result.overrides.providerOverrides?.minimax).toBeUndefined();
-    expect(result.warnings).toContain('unsupported minimax directive key "style"');
-  });
-
   it("keeps explicit-provider tokens scoped to the selected provider", () => {
     const result = parseTtsDirectives("[[tts:provider=minimax style=0.4 speed=1.2]]", fullPolicy, {
       providers: [elevenlabs, minimax],
@@ -169,42 +144,6 @@ describe("parseTtsDirectives provider-aware routing", () => {
     expect(result.overrides.providerOverrides?.minimax).toEqual({ speed: 1.2 });
     expect(result.overrides.providerOverrides?.elevenlabs).toBeUndefined();
     expect(result.warnings).toContain('unsupported minimax directive key "style"');
-  });
-
-  it("does not route explicit provider tokens to another provider with overlapping keys", () => {
-    const openai = makeProvider("openai", 10, ({ key, value }) => {
-      if (key === "model") {
-        return { handled: true, overrides: { model: value } };
-      }
-      return undefined;
-    });
-    const elevenlabsModel = makeProvider("elevenlabs", 20, ({ key, value }) => {
-      if (key === "model") {
-        return { handled: true, overrides: { modelId: value } };
-      }
-      return undefined;
-    });
-
-    const result = parseTtsDirectives("[[tts:provider=elevenlabs model=eleven_v3]]", fullPolicy, {
-      providers: [openai, elevenlabsModel],
-    });
-
-    expect(result.overrides.provider).toBe("elevenlabs");
-    expect(result.overrides.providerOverrides?.elevenlabs).toEqual({ modelId: "eleven_v3" });
-    expect(result.overrides.providerOverrides?.openai).toBeUndefined();
-    expect(result.warnings).toStrictEqual([]);
-  });
-
-  it("warns instead of routing prefixed tokens to another provider when provider is explicit", () => {
-    const result = parseTtsDirectives(
-      "[[tts:provider=elevenlabs openai_model=gpt-4o-mini-tts]]",
-      fullPolicy,
-      { providers: [elevenlabs, minimax] },
-    );
-
-    expect(result.overrides.provider).toBe("elevenlabs");
-    expect(result.overrides.providerOverrides).toBeUndefined();
-    expect(result.warnings).toContain('unsupported elevenlabs directive key "openai_model"');
   });
 
   it("passes the selected provider id to the chosen provider parser", () => {

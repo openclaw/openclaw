@@ -1,3 +1,5 @@
+import { isHttpsUrl } from "@openclaw/net-policy/url-protocol";
+import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import type { Insertable, Selectable } from "kysely";
 import type { WebPushDevicePreferences } from "../../packages/gateway-protocol/src/schema/push.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -48,14 +50,6 @@ export type VapidKeyPair = {
   subject: string;
 };
 
-export function createWebPushVapidKeyPair(
-  publicKey: string,
-  privateKey: string,
-  subject: string,
-): VapidKeyPair {
-  return { publicKey, privateKey, subject };
-}
-
 export type WebPushDatabase = Pick<
   OpenClawStateKyselyDatabase,
   | "config_machine_state"
@@ -74,11 +68,7 @@ export function isValidWebPushEndpoint(endpoint: string): boolean {
   if (!endpoint || endpoint.length > WEB_PUSH_MAX_ENDPOINT_LENGTH) {
     return false;
   }
-  try {
-    return new URL(endpoint).protocol === "https:";
-  } catch {
-    return false;
-  }
+  return isHttpsUrl(endpoint);
 }
 
 export function isValidWebPushKey(key: unknown): key is string {
@@ -110,21 +100,8 @@ export function boundWebPushSubscriptionFromRow(
     ...webPushSubscriptionFromRow(row),
     deviceId: row.device_id,
     userProfileId: row.user_profile_id,
-    devicePreferences: normalizeWebPushDevicePreferences(
-      parseDevicePreferences(row.preferences_json),
-    ),
+    devicePreferences: normalizeWebPushDevicePreferences(safeParseJson(row.preferences_json ?? "")),
   };
-}
-
-function parseDevicePreferences(value: string | null): unknown {
-  if (!value) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(value) as unknown;
-  } catch {
-    return undefined;
-  }
 }
 
 export function webPushSubscriptionToRow(params: {

@@ -1,4 +1,3 @@
-// Devices page renders the mobile device pairing setup dialog.
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { handleCopyButton, renderCopyButton } from "../../components/copy-button.ts";
@@ -142,21 +141,13 @@ export function renderDevicePairSetup(props: DevicePairSetupProps) {
               : nothing
           }
           ${
-            lifecycle.phase === "loading"
+            lifecycle.phase === "loading" || lifecycle.phase === "reconciling"
               ? html`
                   <div class="device-pair-setup__loading" role="status" aria-live="polite">
                     <span class="device-pair-setup__spinner" aria-hidden="true"></span>
-                    <span>${t("devices.pairing.generating")}</span>
-                  </div>
-                `
-              : nothing
-          }
-          ${
-            lifecycle.phase === "reconciling"
-              ? html`
-                  <div class="device-pair-setup__loading" role="status" aria-live="polite">
-                    <span class="device-pair-setup__spinner" aria-hidden="true"></span>
-                    <span>${t("common.loading")}</span>
+                    <span
+                      >${t(lifecycle.phase === "loading" ? "devices.pairing.generating" : "common.loading")}</span
+                    >
                   </div>
                 `
               : nothing

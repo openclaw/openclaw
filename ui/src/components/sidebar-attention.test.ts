@@ -26,8 +26,6 @@ import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { createStorageMock as createTestStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
-import { resolveUpdateAttentionDismissal } from "./sidebar-attention-dismissals.ts";
-import { buildUpdateInboxEntry } from "./sidebar-attention-entries.ts";
 import { buildSidebarAttentionEntries } from "./sidebar-attention-items.ts";
 import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
 import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
@@ -169,6 +167,7 @@ describe("sidebar attention refresh ownership", () => {
     }
     stores.clear();
     document.body.replaceChildren();
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -229,6 +228,32 @@ describe("sidebar attention refresh ownership", () => {
     await element.updateComplete;
     expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
     expect(document.activeElement).toBe(trigger);
+  });
+
+  it("dismisses for a plain outside frame without restoring trigger focus", async () => {
+    const { element, trigger } = await mountAttention();
+    const frame = document.body.appendChild(document.createElement("iframe"));
+    trigger.click();
+    await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
+
+    // jsdom can focus the frame but does not emit the browsing-context blur.
+    frame.focus();
+    window.dispatchEvent(new Event("blur"));
+    await element.updateComplete;
+
+    expect(element.querySelector(".sidebar-issues-panel")).toBeNull();
+    expect(document.activeElement).toBe(frame);
+  });
+
+  it("keeps Inbox open when the window loses focus without entering an outside frame", async () => {
+    const { element, trigger } = await mountAttention();
+    trigger.click();
+    await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
+
+    window.dispatchEvent(new Event("blur"));
+    await element.updateComplete;
+
+    expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull();
   });
 
   it("updates cross-agent mentions and opens them through shell navigation", async () => {
@@ -357,6 +382,50 @@ describe("sidebar attention refresh ownership", () => {
     await waitForFast(() => expect(request).toHaveBeenCalledWith("cron.status", {}));
     expect(element.querySelector(".sidebar-issues-button__count")).toBeNull();
   });
+
+  it.each(["visible", "hidden"] as const)(
+    "publishes a quiet automation's overdue warning after a %s deadline without polling",
+    async (presentation) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(Date.UTC(2026, 8, 22));
+      let visibility: DocumentVisibilityState = "visible";
+      vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
+      vi.stubGlobal("localStorage", createTestStorageMock());
+      const job = cronJob("quiet-deadline");
+      job.state = { lastRunStatus: "ok", nextRunAtMs: Date.now() };
+      const deadline = Date.now() + 300_000;
+      const request = vi.fn(async (method: string) => {
+        if (method === "cron.list") {
+          return cronListResponse([job]);
+        }
+        if (method === "cron.status") {
+          return { enabled: true, triggersEnabled: true, jobs: 1 };
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const harness = createGatewayHarness(mockClient(request));
+      const { element } = await mountAttention({ gateway: harness.gateway });
+      expect(request).toHaveBeenCalledTimes(2);
+      if (presentation === "hidden") {
+        visibility = "hidden";
+        document.dispatchEvent(new Event("visibilitychange"));
+      }
+      await vi.advanceTimersByTimeAsync(deadline - Date.now());
+      await element.updateComplete;
+      expect(element.querySelector(".sidebar-issues-button__count")).toBeNull();
+      await vi.advanceTimersByTimeAsync(1);
+      await element.updateComplete;
+      if (presentation === "hidden") {
+        expect(element.querySelector(".sidebar-issues-button__count")).toBeNull();
+        visibility = "visible";
+        document.dispatchEvent(new Event("visibilitychange"));
+        await element.updateComplete;
+      }
+      expect(element.querySelector(".sidebar-issues-button__count")?.textContent).toBe("1");
+      await vi.advanceTimersByTimeAsync(30 * 60_000);
+      expect(request).toHaveBeenCalledTimes(2);
+    },
+  );
 
   it("does not let an obsolete open render steal focus from a later interaction", async () => {
     const { element, trigger } = await mountAttention();
@@ -591,7 +660,7 @@ describe("sidebar attention refresh ownership", () => {
       );
 
       now = 200_000;
-      document.dispatchEvent(new Event("visibilitychange"));
+      eventListener?.({ type: "event", event: "cron", payload: {} });
       invalidateModelAuthStatusRequests(client);
       eventListener?.({ type: "event", event: "chat.metadata.changed", payload: {} });
       await waitForFast(() => expect(request).toHaveBeenCalledTimes(6));
@@ -819,14 +888,14 @@ describe("update attention", () => {
       overlays: { snapshot: overlaySnapshot },
     } as unknown as ApplicationContext;
 
-    expect(resolveSidebarUpdateAttention(element.context).present).toBe(false);
+    expect(resolveSidebarUpdateAttention(element.context)).toBeNull();
 
     gatewaySnapshot.hello.auth.scopes = ["operator.read"];
-    expect(resolveSidebarUpdateAttention(element.context).present).toBe(true);
+    expect(resolveSidebarUpdateAttention(element.context)).not.toBeNull();
 
     gatewaySnapshot.hello.auth.scopes = ["operator.admin"];
     overlaySnapshot.updateCampaignStatusHydrated = true;
-    expect(resolveSidebarUpdateAttention(element.context).present).toBe(true);
+    expect(resolveSidebarUpdateAttention(element.context)).not.toBeNull();
   });
 
   it("keeps restart reconciliation visible after update metadata clears", () => {
@@ -844,32 +913,6 @@ describe("update attention", () => {
       },
     } as unknown as ApplicationContext;
 
-    expect(resolveSidebarUpdateAttention(element.context).present).toBe(true);
-  });
-
-  it.each([
-    { name: "stable admin update", canDismiss: true, forced: false, dismissible: true },
-    { name: "read-only update", canDismiss: false, forced: false, dismissible: false },
-    { name: "forced update", canDismiss: true, forced: true, dismissible: false },
-  ])("projects $name with explicit dismissal policy", ({ canDismiss, forced, dismissible }) => {
-    const dismissal = resolveUpdateAttentionDismissal({
-      gatewayBootId: "boot-a",
-      updateAvailable: {
-        currentVersion: "2026.8.1",
-        latestVersion: "2026.8.2",
-        channel: "latest",
-      },
-    });
-
-    const entry = buildUpdateInboxEntry({
-      canDismiss,
-      dismissal,
-      forced,
-      requiresAction: true,
-      severity: "warning",
-      visible: true,
-    });
-
-    expect(Boolean(entry?.dismissal)).toBe(dismissible);
+    expect(resolveSidebarUpdateAttention(element.context)).not.toBeNull();
   });
 });

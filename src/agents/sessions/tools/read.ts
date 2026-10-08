@@ -1,8 +1,10 @@
 import { constants } from "node:fs";
 import { access as fsAccess, readdir as fsReaddir, stat as fsStat } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
+import { readRegularFile } from "@openclaw/fs-safe/advanced";
+import { classifyAttachmentBytes } from "@openclaw/media-core/attachment-classify";
+import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
-import { readRegularFile } from "../../../infra/regular-file.js";
 import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
 import type { ImageContent, TextContent } from "../../../llm/types.js";
 import {
@@ -10,11 +12,6 @@ import {
   normalizeMediaReferenceSource,
   resolveMediaReferenceLocalPath,
 } from "../../../media/media-reference.js";
-/**
- * Built-in read session tool.
- *
- * Reads text and image files through local or injected operations with highlighting, resizing, and bounded output.
- */
 import { normalizeNativePathSeparators } from "../../../shared/ignore-rules.js";
 import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
 import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.js";
@@ -42,11 +39,7 @@ import {
   resolveToCwd,
 } from "./path-utils.js";
 import { createBoundedReadTextPage } from "./read-page.js";
-import {
-  createReadToolDetails,
-  readToolInputSchema,
-  readToolOutputSchema,
-} from "./read-tool-contract.js";
+import { createReadToolDetails } from "./read-tool-contract.js";
 import {
   getTextOutput,
   invalidArgText,
@@ -58,6 +51,7 @@ import {
 } from "./render-utils.js";
 import type { ReadToolDetails } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+import { readToolInputSchema, readToolOutputSchema } from "./tool-schemas.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.js";
 
 function normalizeReadError(error: unknown, filePath: string): Error {
@@ -117,14 +111,13 @@ const COMPACT_RESOURCE_FILE_NAMES = new Set(["AGENTS.md", "AGENTS.MD", "CLAUDE.m
  * Pluggable operations for the read tool.
  * Override these to delegate file reading to remote systems (for example SSH).
  */
-export interface ReadOperations {
+interface ReadOperations {
   /** Resolve the physical identity used to order this backend's file operations. */
   resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
   /** Resolve a user-supplied path for this read backend. */
   resolvePath?: (filePath: string, cwd: string) => string | Promise<string>;
   /** Decode text bytes for this backend. Custom backends default to UTF-8. */
   decodeText?: (params: { buffer: Buffer; absolutePath: string }) => string;
-  /** Read file contents as a Buffer */
   readFile: (absolutePath: string) => Promise<Buffer>;
   /** Check if file is readable (throw if not) */
   access: (absolutePath: string) => Promise<void>;
@@ -141,17 +134,6 @@ const defaultReadOperations: ReadOperations = {
   readFile: async (filePath) => (await readRegularFile({ filePath })).buffer,
   access: assertLocalReadableFile,
 };
-
-async function detectReadImageMimeType(
-  ops: ReadOperations,
-  buffer: Buffer,
-  absolutePath: string,
-): Promise<string | null | undefined> {
-  if (ops.detectImageMimeType) {
-    return await ops.detectImageMimeType(absolutePath, buffer);
-  }
-  return detectSupportedImageMimeType(buffer);
-}
 
 export interface ReadToolOptions {
   /** Whether to auto-resize images to 2000x2000 max. Default: true */
@@ -387,42 +369,23 @@ export function createReadToolDefinition(
     parameters: readToolInputSchema,
     outputSchema: readToolOutputSchema,
     async execute(
-      toolCallId,
-      {
-        path,
-        offset,
-        limit,
-        cursor = 0,
-        optional,
-      }: { path: string; offset?: number; limit?: number; cursor?: number; optional?: true },
-      signal?: AbortSignal,
-      onUpdate?,
-      ctx?,
+      _toolCallId,
+      { path, offset, limit, cursor = 0, optional },
+      signal,
+      _onUpdate,
+      ctx,
     ) {
-      void toolCallId;
-      void onUpdate;
       if (offset !== undefined && (!Number.isSafeInteger(offset) || offset < 1)) {
         throw new Error("Offset must be an integer at least 1");
       }
       if (!Number.isSafeInteger(cursor) || cursor < 0) {
         throw new Error("Cursor must be an integer at least 0");
       }
-      return new Promise<{
-        content: (TextContent | ImageContent)[];
-        details: ReadToolDetails;
-      }>((resolve, reject) => {
-        if (signal?.aborted) {
-          reject(new Error("Operation aborted"));
-          return;
-        }
-        let aborted = false;
-        const onAbort = () => {
-          aborted = true;
-          reject(new Error("Operation aborted"));
-        };
-        signal?.addEventListener("abort", onAbort, { once: true });
-
-        void (async () => {
+      return await racePromiseWithAbortSignal(
+        async (): Promise<{
+          content: (TextContent | ImageContent)[];
+          details: ReadToolDetails;
+        }> => {
           try {
             let absolutePath: string;
             let note: string | undefined;
@@ -445,8 +408,8 @@ export function createReadToolDefinition(
                 async () => {
                   const absoluteInputPath = await inputPathResolution;
                   const resolved = await resolveReadToolPathFromAbsolute(ops, absoluteInputPath);
-                  if (aborted) {
-                    return undefined;
+                  if (signal?.aborted) {
+                    throw new Error("Operation aborted");
                   }
                   return {
                     ...resolved,
@@ -454,22 +417,16 @@ export function createReadToolDefinition(
                   };
                 },
               );
-              if (!snapshot) {
-                return;
-              }
               ({ absolutePath, note, buffer } = snapshot);
             } catch (error) {
-              if (aborted) {
-                return;
-              }
               if (
+                signal?.aborted ||
                 optional !== true ||
                 (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR"))
               ) {
                 throw error;
               }
-              signal?.removeEventListener("abort", onAbort);
-              resolve({
+              return {
                 content: [{ type: "text", text: `Optional file not found: ${path}.` }],
                 details: {
                   kind: "not_found",
@@ -477,10 +434,12 @@ export function createReadToolDefinition(
                   path,
                   optional: true,
                 },
-              });
-              return;
+              };
             }
-            const mimeType = await detectReadImageMimeType(ops, buffer, absolutePath);
+            const mimeType = await (ops.detectImageMimeType
+              ? ops.detectImageMimeType(absolutePath, buffer)
+              : detectSupportedImageMimeType(buffer));
+            const attachment = mimeType ? undefined : await classifyAttachmentBytes({ buffer });
             let content: (TextContent | ImageContent)[];
             let textDetails: Parameters<typeof createReadToolDetails>[1];
             const modelHasVision = options?.modelHasVision ?? ctx?.model?.input.includes("image");
@@ -488,31 +447,29 @@ export function createReadToolDefinition(
               modelHasVision === false
                 ? "[Current model does not support images. The image will be omitted from this request.]"
                 : undefined;
-            if (mimeType) {
+            if (attachment?.class === "document") {
+              content = [
+                {
+                  type: "text",
+                  text: `Read did not return file contents because it detected a binary document [${attachment.mime ?? "unknown"}]. Use an available document parser or converter, or convert the file to text, Markdown, or CSV, then read the converted file.`,
+                },
+              ];
+            } else if (mimeType) {
               // Backends may reuse their Buffer while image preparation awaits processing.
               const imageBytes = Buffer.from(buffer);
               const processed = await processImage(
                 { data: imageBytes, mimeType },
                 { autoResizeImages },
               );
-              if (!processed.ok) {
-                let textNote = `Read image file [${mimeType}]\n${processed.message}`;
-                if (nonVisionImageNote) {
-                  textNote += `\n${nonVisionImageNote}`;
-                }
-                content = [{ type: "text", text: textNote }];
-              } else {
-                let textNote = `Read image file [${processed.image.mimeType}]`;
-                if (processed.hints.length > 0) {
-                  textNote += `\n${processed.hints.join("\n")}`;
-                }
-                if (nonVisionImageNote) {
-                  textNote += `\n${nonVisionImageNote}`;
-                }
-                content = [{ type: "text", text: textNote }];
-                if (!nonVisionImageNote) {
-                  content.push(processed.image);
-                }
+              const notes = processed.ok
+                ? [`Read image file [${processed.image.mimeType}]`, ...processed.hints]
+                : [`Read image file [${mimeType}]`, processed.message];
+              if (nonVisionImageNote) {
+                notes.push(nonVisionImageNote);
+              }
+              content = [{ type: "text", text: notes.join("\n") }];
+              if (processed.ok && !nonVisionImageNote) {
+                content.push(processed.image);
               }
             } else {
               const decodedText =
@@ -620,19 +577,17 @@ export function createReadToolDefinition(
               ];
             }
 
-            if (aborted) {
-              return;
+            if (signal?.aborted) {
+              throw new Error("Operation aborted");
             }
-            signal?.removeEventListener("abort", onAbort);
-            resolve({ content, details: createReadToolDetails(content, textDetails) });
+            return { content, details: createReadToolDetails(content, textDetails) };
           } catch (error: unknown) {
-            signal?.removeEventListener("abort", onAbort);
-            if (!aborted) {
-              reject(normalizeReadError(error, path));
-            }
+            throw normalizeReadError(error, path);
           }
-        })();
-      });
+        },
+        signal,
+        () => new Error("Operation aborted"),
+      );
     },
     renderCall(args, theme, context) {
       const classification = !context.expanded

@@ -1,4 +1,5 @@
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { isInProcessSessionRun } from "./in-process-session-run.js";
 import { projectOperatorScopesForMethod } from "./method-scopes.js";
 import {
   ADMIN_SCOPE,
@@ -17,6 +18,7 @@ export function resolveInProcessGatewaySyntheticScopes(params: {
   operatorScopes?: readonly string[];
   scopedClientScopes?: readonly string[];
   registeredScope?: string;
+  allowOwnSessionScope?: boolean;
 }): string[] | undefined {
   const { operatorScopes, syntheticScopeMode } = params;
   const requestedSyntheticScopes = (
@@ -54,6 +56,10 @@ export function resolveInProcessGatewaySyntheticScopes(params: {
           requestParams: params.requestParams,
           requestedScopes: requestedSyntheticScopes,
           allowedScopes: operatorScopes,
+          ...(params.allowOwnSessionScope ||
+          isInProcessSessionRun(params.method, params.requestParams)
+            ? { sessionScope: SESSION_WRITE_SCOPE }
+            : {}),
           ...(isOperatorScope(params.registeredScope)
             ? { requiredScope: params.registeredScope }
             : {}),

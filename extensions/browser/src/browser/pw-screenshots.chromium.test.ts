@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { getImageMetadata } from "openclaw/plugin-sdk/media-runtime";
 import type { Page } from "playwright-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
-import { getImageMetadata } from "../media/media-services.js";
 import { captureScreenshot } from "./cdp.js";
 import { resolveBrowserConfig } from "./config.js";
 import { getPlaywrightCore } from "./playwright-core.runtime.js";
@@ -45,6 +45,23 @@ const readGeometry = () => ({
     height: visualViewport!.height,
   },
 });
+
+function snapshotRoutes(cdpUrl: string) {
+  const state: BrowserServerState = {
+    port: 0,
+    resolved: resolveBrowserConfig({
+      defaultProfile: "capture",
+      profiles: { capture: { cdpUrl, color: "#123456", attachOnly: true } },
+    }),
+    profiles: new Map(),
+  };
+  const routes = createBrowserRouteApp();
+  registerBrowserAgentSnapshotRoutes(
+    routes.app,
+    createBrowserRouteContext({ getState: () => state }),
+  );
+  return routes;
+}
 
 async function withBrowser(
   run: (target: { cdpUrl: string; targetId: string }, page: Page, wsUrl: string) => Promise<void>,
@@ -220,21 +237,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
               return cdp;
             });
           try {
-            const state: BrowserServerState = {
-              port: 0,
-              resolved: resolveBrowserConfig({
-                defaultProfile: "capture",
-                profiles: {
-                  capture: { cdpUrl: target.cdpUrl, color: "#123456", attachOnly: true },
-                },
-              }),
-              profiles: new Map(),
-            };
-            const routes = createBrowserRouteApp();
-            registerBrowserAgentSnapshotRoutes(
-              routes.app,
-              createBrowserRouteContext({ getState: () => state }),
-            );
+            const routes = snapshotRoutes(target.cdpUrl);
             const response = createBrowserRouteResponse();
             await routes.getHandlers.get("/snapshot")!(
               {
@@ -282,21 +285,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
             .frameLocator("iframe")
             .getByRole("button", { name: "Original document" })
             .waitFor();
-          const state: BrowserServerState = {
-            port: 0,
-            resolved: resolveBrowserConfig({
-              defaultProfile: "delta",
-              profiles: {
-                delta: { cdpUrl: target.cdpUrl, color: "#123456", attachOnly: true },
-              },
-            }),
-            profiles: new Map(),
-          };
-          const routes = createBrowserRouteApp();
-          registerBrowserAgentSnapshotRoutes(
-            routes.app,
-            createBrowserRouteContext({ getState: () => state }),
-          );
+          const routes = snapshotRoutes(target.cdpUrl);
           const capture = async () => {
             const result = createBrowserRouteResponse();
             await routes.getHandlers.get("/snapshot")!(
@@ -351,21 +340,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
             <a href="https://parent.test/docs">Parent docs</a>
             <iframe srcdoc="<style>html,body{margin:0}button{display:block;width:180px;height:80px;background:rgb(224,79,95);border:0}</style><button onclick=&quot;document.querySelector('output').textContent='clicked'&quot;>Frame target</button><output></output><a href='https://frame.test/docs'>Frame docs</a>"></iframe>`);
           await page.frameLocator("iframe").getByRole("button").waitFor();
-          const state: BrowserServerState = {
-            port: 0,
-            resolved: resolveBrowserConfig({
-              defaultProfile: "refs",
-              profiles: {
-                refs: { cdpUrl: target.cdpUrl, color: "#123456", attachOnly: true },
-              },
-            }),
-            profiles: new Map(),
-          };
-          const routes = createBrowserRouteApp();
-          registerBrowserAgentSnapshotRoutes(
-            routes.app,
-            createBrowserRouteContext({ getState: () => state }),
-          );
+          const routes = snapshotRoutes(target.cdpUrl);
           const snapshot = createBrowserRouteResponse();
           await routes.getHandlers.get("/snapshot")!(
             {
@@ -521,7 +496,6 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
     it.for([
       { device: "Native DPR 2", pageScale: 1, nativeDpr: 2 },
       { device: "Desktop Chrome", pageScale: 1 },
-      { device: "iPad Mini", pageScale: 1 },
       { device: "iPhone 13", pageScale: 1 },
       { device: "iPhone 13", pageScale: 2 },
       { device: "Native classic scrollbars", pageScale: 1, nativeDpr: 1, showScrollbars: true },
@@ -544,21 +518,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_SNAPSHOT_E2E === "1")(
             const zoom = await page.context().newCDPSession(page);
             await zoom.send("Emulation.setPageScaleFactor", { pageScaleFactor: pageScale });
             await zoom.detach();
-            const state: BrowserServerState = {
-              port: 0,
-              resolved: resolveBrowserConfig({
-                defaultProfile: "geometry",
-                profiles: {
-                  geometry: { cdpUrl: target.cdpUrl, color: "#123456", attachOnly: true },
-                },
-              }),
-              profiles: new Map(),
-            };
-            const routes = createBrowserRouteApp();
-            registerBrowserAgentSnapshotRoutes(
-              routes.app,
-              createBrowserRouteContext({ getState: () => state }),
-            );
+            const routes = snapshotRoutes(target.cdpUrl);
             for (const mode of ["viewport", "fullpage", "element", "snapshot"] as const) {
               await page.evaluate(() => scrollTo(0, 420));
               if (mode === "element") {

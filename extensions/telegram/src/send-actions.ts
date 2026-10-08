@@ -4,6 +4,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { buildTypingThreadParams } from "./bot/helpers.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
+import { resolveTelegramSendThreadSpec } from "./reply-parameters.js";
 import {
   createTelegramRequestWithDiag,
   isTelegramMessageDeleteNoopError,
@@ -16,7 +17,7 @@ import type {
   TelegramMessageActionOpts,
   TelegramSendOpts,
 } from "./send-message-types.js";
-import { prepareTelegramOutbound } from "./send-outbound.js";
+import { withTelegramMessageAction } from "./send-outbound.js";
 import {
   resolveTelegramAllowedReactions,
   resolveTelegramReactionEmoji,
@@ -53,6 +54,16 @@ export async function sendTypingTelegram(
   if (target.directMessagesTopicId != null) {
     throw new Error("Telegram typing is not supported in channel Direct Messages chats.");
   }
+  // Validate both sources; the target topic still wins when both are present.
+  const targetThread = resolveTelegramSendThreadSpec({
+    messageThreadId: target.messageThreadId,
+    chatType: target.chatType,
+  });
+  const optionThread = resolveTelegramSendThreadSpec({
+    messageThreadId: opts.messageThreadId,
+    chatType: target.chatType,
+  });
+  const threadSpec = targetThread ?? optionThread;
   // grammY's Node API uses the abort-controller signal, not Node's native type.
   // Bridge the event so queues recognize owner cancellation instead of cooling down the account.
   const apiAbort = opts.signal ? new TelegramAbortController() : undefined;
@@ -64,7 +75,7 @@ export async function sendTypingTelegram(
   }
   try {
     return await withTelegramApiContext(opts, async (context): Promise<{ ok: true }> => {
-      const { cfg, account, api } = context;
+      const { cfg, api } = context;
       const chatId = await resolveAndPersistChatId({
         cfg,
         api,
@@ -74,12 +85,11 @@ export async function sendTypingTelegram(
       });
       const requestWithDiag = createTelegramRequestWithDiag({
         cfg,
-        account,
         retry: opts.retry,
         verbose: opts.verbose,
         shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "action" }),
       });
-      const threadParams = buildTypingThreadParams(target.messageThreadId ?? opts.messageThreadId);
+      const threadParams = buildTypingThreadParams(threadSpec?.id);
       const signalArgs: [Parameters<TelegramApi["sendChatAction"]>[3]?] = apiAbort
         ? [apiAbort.signal]
         : [];
@@ -106,20 +116,11 @@ export async function reactMessageTelegram(
   emoji: string,
   opts: TelegramReactionOpts,
 ): Promise<{ ok: true } | { ok: false; warning: string }> {
-  return withTelegramApiContext(
+  return withTelegramMessageAction(
+    chatIdInput,
+    messageIdInput,
     opts,
-    async (context): Promise<{ ok: true } | { ok: false; warning: string }> => {
-      const { api } = context;
-      const { chatId, messageId, request } = await prepareTelegramOutbound({
-        to: chatIdInput,
-        context,
-        opts,
-        messageIdInput,
-        request: {
-          kind: "standard",
-          shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "react" }),
-        },
-      });
+    async ({ api, chatId, messageId, request }) => {
       const remove = opts.remove === true;
       const trimmedEmoji = emoji.trim();
       // Unsupported emoji remain server-validated so existing graceful failures stay intact.
@@ -146,6 +147,7 @@ export async function reactMessageTelegram(
       }
       return { ok: true };
     },
+    (err) => isRecoverableTelegramNetworkError(err, { context: "react" }),
   );
 }
 
@@ -154,20 +156,11 @@ export async function deleteMessageTelegram(
   messageIdInput: string | number,
   opts: TelegramMessageActionOpts,
 ): Promise<{ ok: true } | { ok: false; warning: string }> {
-  return withTelegramApiContext(
+  return withTelegramMessageAction(
+    chatIdInput,
+    messageIdInput,
     opts,
-    async (context): Promise<{ ok: true } | { ok: false; warning: string }> => {
-      const { api } = context;
-      const { chatId, messageId, request } = await prepareTelegramOutbound({
-        to: chatIdInput,
-        context,
-        opts,
-        messageIdInput,
-        request: {
-          kind: "standard",
-          shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "delete" }),
-        },
-      });
+    async ({ api, chatId, messageId, request }) => {
       try {
         await request(() => api.deleteMessage(chatId, messageId), "deleteMessage", {
           shouldLog: (err) => !isTelegramMessageDeleteNoopError(err),
@@ -188,6 +181,7 @@ export async function deleteMessageTelegram(
       logVerbose(`[telegram] Deleted message ${messageId} from chat ${chatId}`);
       return { ok: true };
     },
+    (err) => isRecoverableTelegramNetworkError(err, { context: "delete" }),
   );
 }
 
@@ -196,17 +190,11 @@ export async function pinMessageTelegram(
   messageIdInput: string | number,
   opts: TelegramMessageActionOpts,
 ): Promise<{ ok: true; messageId: string; chatId: string }> {
-  return withTelegramApiContext(
+  return withTelegramMessageAction(
+    chatIdInput,
+    messageIdInput,
     opts,
-    async (context): Promise<{ ok: true; messageId: string; chatId: string }> => {
-      const { api } = context;
-      const { chatId, messageId, request } = await prepareTelegramOutbound({
-        to: chatIdInput,
-        context,
-        opts,
-        messageIdInput,
-        request: { kind: "standard" },
-      });
+    async ({ api, chatId, messageId, request }) => {
       await request(
         () =>
           api.pinChatMessage(chatId, messageId, {
@@ -225,17 +213,11 @@ export async function unpinMessageTelegram(
   messageIdInput: string | number | undefined,
   opts: TelegramMessageActionOpts,
 ): Promise<{ ok: true; chatId: string; messageId?: string }> {
-  return withTelegramApiContext(
+  return withTelegramMessageAction(
+    chatIdInput,
+    messageIdInput,
     opts,
-    async (context): Promise<{ ok: true; chatId: string; messageId?: string }> => {
-      const { api } = context;
-      const { chatId, messageId, request } = await prepareTelegramOutbound({
-        to: chatIdInput,
-        context,
-        opts,
-        ...(messageIdInput !== undefined ? { messageIdInput } : {}),
-        request: { kind: "standard" },
-      });
+    async ({ api, chatId, messageId, request }) => {
       await request(() => api.unpinChatMessage(chatId, messageId), "unpinChatMessage");
       logVerbose(
         `[telegram] Unpinned ${messageId != null ? `message ${messageId}` : "active message"} in chat ${chatId}`,

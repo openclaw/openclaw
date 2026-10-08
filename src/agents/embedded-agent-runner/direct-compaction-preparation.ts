@@ -1,7 +1,3 @@
-/**
- * Prepares one direct embedded-agent compaction attempt through model, auth,
- * workspace, and sandbox resolution.
- */
 import fs from "node:fs/promises";
 import type { ThinkLevel, ThinkingCatalogEntry } from "../../auto-reply/thinking.js";
 import {
@@ -27,14 +23,13 @@ import {
   resolvePreparedRuntimeAuthAttempts,
   resolvePreparedRuntimeModelAuth,
 } from "../runtime-plan/resolve-auth.js";
-import type { AgentRuntimeAuthPlan } from "../runtime-plan/types.js";
 import { resolveSandboxContext } from "../sandbox.js";
 import type { SandboxContext } from "../sandbox/types.js";
 import {
   classifyCompactionReason,
   formatUnknownCompactionReasonDetail,
 } from "./compact-reasons.js";
-import type { CompactEmbeddedAgentSessionRuntimeParams } from "./compact.types.js";
+import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
 import { createDirectCompactionDiagId } from "./compaction-diagnostics.js";
 import { resolveEmbeddedCompactionThinkingLevel } from "./compaction-runtime-context.js";
 import {
@@ -44,15 +39,19 @@ import {
 import { log } from "./logger.js";
 import { resolveTieredModel } from "./model-resolution.js";
 import { resolveModelAsync } from "./model.js";
-import type { TranscriptByteCompactionPersistence } from "./transcript-byte-preflight-authority.js";
+import type {
+  TranscriptByteCompactionPersistence,
+  TranscriptByteCompactionPersistenceAsync,
+} from "./transcript-byte-preflight-authority.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
-export type PreparedCompactEmbeddedAgentSessionParams = CompactEmbeddedAgentSessionRuntimeParams & {
-  sessionFile: string;
+export type PreparedCompactEmbeddedAgentSessionParams = CompactEmbeddedAgentSessionParams & {
   preparedModelRuntime: PreparedModelRuntimeSnapshot;
   requestedRouteResolution?: "resolved";
   transcriptBytePreflightAuthority?: true;
   transcriptByteCompactionPersistence?: TranscriptByteCompactionPersistence;
+  transcriptByteCompactionPersistenceAsync?: TranscriptByteCompactionPersistenceAsync;
+  sandbox?: SandboxContext | null;
 };
 
 export async function prepareDirectCompactionAttempt(
@@ -75,13 +74,12 @@ export async function prepareDirectCompactionAttempt(
   const diagnosticCompactionRunId = `${runId}:compaction:${diagId}`;
   let diagnosticModelCallSeq = 0;
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
-  const earlyAgentIds = resolveSessionAgentIds({
+  const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
     agentId: params.agentId,
   });
-  const agentDir =
-    params.agentDir ?? resolveAgentDir(params.config ?? {}, earlyAgentIds.sessionAgentId);
+  const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
   const {
     runtimePolicySessionKey,
     runtimePolicyAgentId,
@@ -112,7 +110,6 @@ export async function prepareDirectCompactionAttempt(
     workspaceDir: resolvedWorkspace,
     pluginRegistry: params.preparedModelRuntime.pluginRegistry!,
   });
-  const attemptedThinking = new Set<ThinkLevel>();
   const fail = (reason: string, err?: unknown): EmbeddedAgentCompactResult => {
     const failureReason = classifyCompactionReason(reason);
     const failure = err ? describeFailoverError(err) : undefined;
@@ -156,12 +153,6 @@ export async function prepareDirectCompactionAttempt(
     const reason = error ?? `Unknown model: ${runtimeProvider}/${modelId}`;
     return { ok: false as const, result: fail(reason) };
   }
-  const modelResolutionOptions = {
-    authStorage,
-    modelRegistry,
-    preparedModelRuntime,
-    workspaceDir: resolvedWorkspace,
-  };
   // Overrides stay unset when no bound/planned/explicit harness resolved so auth-aware
   // selection can pick the credential-owning harness (codex for ChatGPT OAuth); native
   // transcript compaction stays gated on the selected prepared harness.
@@ -194,45 +185,35 @@ export async function prepareDirectCompactionAttempt(
     providerUsesProfileScopedModelMetadata,
   } = harnessAuth;
   const preparedHarnessRuntime = selectedPreparedHarness.id;
-  const resolvePreparedModel = ({
-    config,
-    authProfileId: profileId,
-    authProfileMode: resolvedAuthProfileMode,
-  }: Parameters<
-    Parameters<typeof materializePreparedRuntimeModel<ProviderRuntimeModel>>[0]["resolveModel"]
-  >[0]) =>
-    resolveModelAsync(runtimeProvider, modelId, agentDir, config, {
-      abortSignal: params.abortSignal,
-      ...modelResolutionOptions,
-      modelIdSource: params.requestedRouteResolution === "resolved" ? "selected" : "input",
-      skipAgentDiscovery: true,
-      allowBundledStaticCatalogFallback: true,
-      authProfileId: profileId,
-      authProfileMode: resolvedAuthProfileMode,
-    });
-  const materializeAuthAttemptModel = async (materializeParams: {
-    plan: AgentRuntimeAuthPlan;
-    model: ProviderRuntimeModel;
-    forceResolve?: boolean;
-  }): Promise<ProviderRuntimeModel> =>
-    (await materializePreparedRuntimeModel<ProviderRuntimeModel>({
-      plan: materializeParams.plan,
-      provider,
-      modelId,
-      config: params.config,
-      workspaceDir: resolvedWorkspace,
-      metadataSnapshot: preparedModelRuntime.metadataSnapshot,
-      model: materializeParams.model,
-      forceResolve: materializeParams.forceResolve,
-      resolveModel: resolvePreparedModel,
-    })) ?? materializeParams.model;
-  const resolveRuntimeAuthAttempt = () =>
-    resolvePreparedRuntimeAuthAttempts({
+  let resolvedAuthAttempt;
+  try {
+    resolvedAuthAttempt = await resolvePreparedRuntimeAuthAttempts({
       attempts: runtimeAuthPreparation.attempts,
       store: runtimeAuthProfileStore,
       modelId,
       model,
-      materializeModel: materializeAuthAttemptModel,
+      materializeModel: async (materializeParams) =>
+        (await materializePreparedRuntimeModel<ProviderRuntimeModel>({
+          ...materializeParams,
+          provider,
+          modelId,
+          config: params.config,
+          workspaceDir: resolvedWorkspace,
+          metadataSnapshot: preparedModelRuntime.metadataSnapshot,
+          resolveModel: ({ config, authProfileId: profileId, authProfileMode }) =>
+            resolveModelAsync(runtimeProvider, modelId, agentDir, config, {
+              abortSignal: params.abortSignal,
+              authStorage,
+              modelRegistry,
+              preparedModelRuntime,
+              workspaceDir: resolvedWorkspace,
+              modelIdSource: params.requestedRouteResolution === "resolved" ? "selected" : "input",
+              skipAgentDiscovery: true,
+              allowBundledStaticCatalogFallback: true,
+              authProfileId: profileId,
+              authProfileMode,
+            }),
+        })) ?? materializeParams.model,
       forceCredentialScopedDirectModelResolve: providerUsesProfileScopedModelMetadata,
       resolveAuth: async ({ attempt: preparedAttempt, model: attemptModel }) =>
         await resolvePreparedRuntimeModelAuth({
@@ -249,9 +230,6 @@ export async function prepareDirectCompactionAttempt(
         }),
       errorMessage: `Prepared compaction auth attempts could not be resolved for ${provider}/${modelId}.`,
     });
-  let resolvedAuthAttempt: Awaited<ReturnType<typeof resolveRuntimeAuthAttempt>>;
-  try {
-    resolvedAuthAttempt = await resolveRuntimeAuthAttempt();
     params.abortSignal?.throwIfAborted();
   } catch (err) {
     return { ok: false as const, result: fail(formatErrorMessage(err), err) };
@@ -261,11 +239,7 @@ export async function prepareDirectCompactionAttempt(
   const resolvedRuntimeAuthPlan = resolvedAuthAttempt.plan;
   let hasRuntimeAuthExchange = false;
   try {
-    if (!apiKeyInfo.apiKey) {
-      if (apiKeyInfo.mode !== "aws-sdk") {
-        throw new MissingProviderAuthError(runtimeModel.provider, apiKeyInfo);
-      }
-    } else {
+    if (apiKeyInfo.apiKey) {
       const runtimeAuth = await prepareProviderRuntimeAuth({
         provider: runtimeModel.provider,
         config: params.config,
@@ -299,10 +273,11 @@ export async function prepareDirectCompactionAttempt(
         throw new Error(`Provider "${runtimeModel.provider}" runtime auth returned no apiKey.`);
       }
       authStorage.setRuntimeApiKey(runtimeModel.provider, runtimeApiKey);
+    } else if (apiKeyInfo.mode !== "aws-sdk") {
+      throw new MissingProviderAuthError(runtimeModel.provider, apiKeyInfo);
     }
   } catch (err) {
-    const reason = formatErrorMessage(err);
-    return { ok: false as const, result: fail(reason, err) };
+    return { ok: false as const, result: fail(formatErrorMessage(err), err) };
   }
   const thinkingCompat = projectModelThinkingCompat(runtimeModel.compat);
   const thinkingCatalogEntry = {
@@ -330,11 +305,9 @@ export async function prepareDirectCompactionAttempt(
   const sessionKey = params.sessionKey?.trim() || params.sessionId;
   const sandboxSessionKey = params.sandboxSessionKey?.trim() || sessionKey;
   const sandboxAgentId =
-    params.sandboxAgentId ??
-    (sandboxSessionKey === sessionKey ? earlyAgentIds.sessionAgentId : undefined);
-  const placementParams = params as typeof params & { sandbox?: SandboxContext | null };
+    params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined);
   const sandbox =
-    placementParams.sandbox === undefined
+    params.sandbox === undefined
       ? await resolveSandboxContext({
           config: params.config,
           agentId: sandboxAgentId,
@@ -342,15 +315,12 @@ export async function prepareDirectCompactionAttempt(
           sessionKey: sandboxSessionKey,
           workspaceDir: resolvedWorkspace,
         })
-      : placementParams.sandbox;
+      : params.sandbox;
   if (params.requireWritableSandbox && sandbox?.enabled && sandbox.workspaceAccess !== "rw") {
     throw new Error("sandbox workspace is not read-write; collection review skipped");
   }
-  const effectiveWorkspace = sandbox?.enabled
-    ? sandbox.workspaceAccess === "rw"
-      ? resolvedWorkspace
-      : sandbox.workspaceDir
-    : resolvedWorkspace;
+  const effectiveWorkspace =
+    sandbox?.enabled && sandbox.workspaceAccess !== "rw" ? sandbox.workspaceDir : resolvedWorkspace;
   const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
   if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
     throw new Error(
@@ -359,14 +329,10 @@ export async function prepareDirectCompactionAttempt(
   }
   const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace);
   await fs.mkdir(effectiveWorkspace, { recursive: true });
-  const isSqliteSessionTranscript = true;
-  const { sessionAgentId: effectiveSkillAgentId } = earlyAgentIds;
-
   return {
     ok: true as const,
     value: {
       params,
-      startedAt,
       diagId,
       trigger,
       attempt,
@@ -376,14 +342,13 @@ export async function prepareDirectCompactionAttempt(
       diagnosticCompactionRunId,
       nextDiagnosticModelCallId: () =>
         `${diagnosticCompactionRunId}:model:${(diagnosticModelCallSeq += 1)}`,
-      earlyAgentIds,
       agentDir,
       provider,
       contextConfigProvider,
       modelId,
       preparedHarnessRuntime,
       thinkLevel,
-      attemptedThinking,
+      attemptedThinking: new Set<ThinkLevel>(),
       fail,
       authStorage,
       modelRegistry,
@@ -397,8 +362,7 @@ export async function prepareDirectCompactionAttempt(
       sandbox,
       effectiveWorkspace,
       effectiveCwd,
-      isSqliteSessionTranscript,
-      effectiveSkillAgentId,
+      sessionAgentId,
     },
   };
 }

@@ -1,4 +1,6 @@
+import { runSqliteReadOperationSync } from "../infra/sqlite-schema-facts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { assertCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -34,8 +36,6 @@ import {
 export {
   openOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentReadOnlyDatabase,
-  type OpenClawAgentReadOnlyDatabaseHandle,
-  type OpenClawAgentDatabaseReadOnlyOpenResult,
 } from "./openclaw-agent-db-readonly-open.js";
 
 /**
@@ -105,16 +105,22 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
       agentId,
     });
   }
-  const reusable = processOpened && !processOpened.db.isTransaction ? processOpened : undefined;
-  if (!reusable) {
+  if (!processOpened) {
     return withScopedOpenClawAgentDatabaseReadOnly(
       operation,
       { ...options, agentId, path: pathname },
       behavior,
     );
   }
-  // Share only this admission's fresh value; a later read must check again.
-  const userVersion = assertSupportedAgentSchemaVersion(reusable.db, pathname);
-  assertCanonicalAgentPersistenceVersion(reusable.db, pathname, userVersion);
-  return readOpenClawAgentDatabase(reusable, operation);
+  // The handle's admission owner refreshes these facts after DDL or a foreign commit.
+  return runSqliteReadOperationSync(
+    processOpened.db,
+    () => {
+      const userVersion = assertSupportedAgentSchemaVersion(processOpened.db, pathname);
+      assertCanonicalAgentPersistenceVersion(processOpened.db, pathname, userVersion);
+      assertCanonicalSessionValidationSchema(processOpened.db);
+      return readOpenClawAgentDatabase(processOpened, operation);
+    },
+    "fresh",
+  );
 }

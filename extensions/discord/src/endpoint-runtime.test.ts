@@ -1,9 +1,7 @@
 import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
-import { readRemoteMediaBuffer } from "openclaw/plugin-sdk/media-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  assertDiscordEndpointGatewayUrl,
   getDiscordEndpointRuntime,
   resolveDiscordEndpointAttachmentGuard,
   resolveDiscordEndpointMediaGuard,
@@ -141,21 +139,6 @@ describe("Discord endpoint runtime", () => {
     }
   });
 
-  it("downloads media from the configured origin through the guarded media path", async () => {
-    const observedUrls: string[] = [];
-    const baseUrl = await startEndpointServer((request) => {
-      observedUrls.push(request.url ?? "");
-    });
-    configureLoopbackEndpoint(baseUrl);
-    const url = `${baseUrl}/media/asset.png`;
-    const guard = resolveDiscordEndpointMediaGuard(url);
-
-    const media = await readRemoteMediaBuffer({ url, maxBytes: 1024, ...guard });
-
-    expect(media.buffer.toString("utf8")).toBe('{"ok":true}');
-    expect(observedUrls).toEqual(["/media/asset.png"]);
-  });
-
   it("rejects public REST, CDN media, and upload targets before network I/O", async () => {
     const networkFetch = vi.spyOn(globalThis, "fetch");
     const endpoint = configureLoopbackEndpoint("http://127.0.0.1:43210");
@@ -172,18 +155,6 @@ describe("Discord endpoint runtime", () => {
       resolveDiscordEndpointAttachmentGuard("https://cdn.discordapp.com/attachments/1/upload"),
     ).toThrow(/outside the configured REST origin/);
     expect(networkFetch).not.toHaveBeenCalled();
-  });
-
-  it("accepts only the configured Gateway origin for initial and resume sockets", () => {
-    configureLoopbackEndpoint("http://127.0.0.1:43210");
-    const origin = "ws://127.0.0.1:43210";
-    expect(() => assertDiscordEndpointGatewayUrl(`${origin}/gateway?v=10`, origin)).not.toThrow();
-    expect(() =>
-      assertDiscordEndpointGatewayUrl(`${origin}/gateway?resume=1`, origin),
-    ).not.toThrow();
-    expect(() => assertDiscordEndpointGatewayUrl("wss://gateway.discord.gg/?v=10", origin)).toThrow(
-      /outside the configured WebSocket origin/,
-    );
   });
 
   it("rejects a non-loopback plaintext API URL", () => {

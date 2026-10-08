@@ -7,10 +7,8 @@ import {
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveExplicitConfigWriteTarget } from "../../channels/plugins/config-writes.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
-import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   addChannelAllowFromStoreEntry,
   readChannelAllowFromStore,
@@ -32,12 +30,6 @@ import { resolveConfigWriteDeniedText } from "./config-write-authorization.js";
 type AllowlistScope = "dm" | "group" | "all";
 type AllowlistAction = "list" | "add" | "remove";
 type AllowlistTarget = "both" | "config" | "store";
-type ResolvedAllowlistName = {
-  input: string;
-  resolved: boolean;
-  name?: string | null;
-};
-
 type AllowlistCommand =
   | {
       action: "list";
@@ -60,24 +52,6 @@ type AllowlistCommand =
 const ACTIONS = new Set(["list", "add", "remove"]);
 const SCOPES = new Set<AllowlistScope>(["dm", "group", "all"]);
 
-function resolveAllowlistAccountId(params: {
-  cfg: OpenClawConfig;
-  channelId: ChannelId;
-  parsedAccount?: string;
-  ctxAccountId?: string;
-}): string {
-  const explicitAccountId = normalizeOptionalAccountId(params.parsedAccount);
-  if (explicitAccountId) {
-    return explicitAccountId;
-  }
-  const plugin = getChannelPlugin(params.channelId);
-  const configuredDefaultAccountId = normalizeOptionalString(
-    plugin?.config.defaultAccountId?.(params.cfg),
-  );
-  const ctxAccountId = normalizeOptionalAccountId(params.ctxAccountId);
-  return configuredDefaultAccountId || ctxAccountId || DEFAULT_ACCOUNT_ID;
-}
-
 function parseAllowlistCommand(raw: string): AllowlistCommand | null {
   const trimmed = raw.trim();
   const trimmedLower = normalizeOptionalLowercaseString(trimmed) ?? "";
@@ -94,8 +68,7 @@ function parseAllowlistCommand(raw: string): AllowlistCommand | null {
   let scope: AllowlistScope = "dm";
   let resolve = false;
   let target: AllowlistTarget = "both";
-  let channel: string | undefined;
-  let account: string | undefined;
+  const route: { channel?: string; account?: string } = {};
   const entryTokens: string[] = [];
 
   let i = 0;
@@ -113,25 +86,17 @@ function parseAllowlistCommand(raw: string): AllowlistCommand | null {
   for (; i < tokens.length; i += 1) {
     const token = expectDefined(tokens[i], "tokens entry at i");
     const lowered = normalizeOptionalLowercaseString(token) ?? "";
-    if (lowered === "--resolve" || lowered === "resolve") {
+    const flag = lowered.replace(/^--/u, "");
+    if (flag === "resolve") {
       resolve = true;
       continue;
     }
-    if (lowered === "--config" || lowered === "config") {
-      target = "config";
+    if (flag === "config" || flag === "store") {
+      target = flag;
       continue;
     }
-    if (lowered === "--store" || lowered === "store") {
-      target = "store";
-      continue;
-    }
-    if (lowered === "--channel" && tokens[i + 1]) {
-      channel = tokens[i + 1];
-      i += 1;
-      continue;
-    }
-    if (lowered === "--account" && tokens[i + 1]) {
-      account = tokens[i + 1];
+    if ((lowered === "--channel" || lowered === "--account") && tokens[i + 1]) {
+      route[lowered === "--channel" ? "channel" : "account"] = tokens[i + 1];
       i += 1;
       continue;
     }
@@ -139,15 +104,9 @@ function parseAllowlistCommand(raw: string): AllowlistCommand | null {
     if (kv.length === 2) {
       const key = normalizeOptionalLowercaseString(kv[0]);
       const value = normalizeOptionalString(kv[1]);
-      if (key === "channel") {
+      if (key === "channel" || key === "account") {
         if (value) {
-          channel = value;
-        }
-        continue;
-      }
-      if (key === "account") {
-        if (value) {
-          account = value;
+          route[key] = value;
         }
         continue;
       }
@@ -160,6 +119,7 @@ function parseAllowlistCommand(raw: string): AllowlistCommand | null {
     entryTokens.push(token);
   }
 
+  const { channel, account } = route;
   if (action === "add" || action === "remove") {
     const entry = entryTokens.join(" ").trim();
     if (!entry) {
@@ -169,23 +129,6 @@ function parseAllowlistCommand(raw: string): AllowlistCommand | null {
   }
 
   return { action: "list", scope, channel, account, resolve };
-}
-
-function normalizeAllowFrom(params: {
-  cfg: OpenClawConfig;
-  channelId: ChannelId;
-  accountId?: string | null;
-  values: Array<string | number>;
-}): string[] {
-  const plugin = getChannelPlugin(params.channelId);
-  if (plugin?.config.formatAllowFrom) {
-    return plugin.config.formatAllowFrom({
-      cfg: params.cfg,
-      accountId: params.accountId,
-      allowFrom: params.values,
-    });
-  }
-  return normalizeStringEntries(params.values);
 }
 
 function formatEntryList(entries: string[], resolved?: Map<string, string>): string {
@@ -198,69 +141,6 @@ function formatEntryList(entries: string[], resolved?: Map<string, string>): str
       return name ? `${entry} (${name})` : entry;
     })
     .join(", ");
-}
-
-async function updatePairingStoreAllowlist(params: {
-  action: "add" | "remove";
-  channelId: ChannelId;
-  accountId?: string;
-  entry: string;
-  assertCurrent?: () => void;
-}) {
-  const storeEntry = {
-    channel: params.channelId,
-    entry: params.entry,
-    accountId: params.accountId,
-    ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
-  };
-  if (params.action === "add") {
-    await addChannelAllowFromStoreEntry(storeEntry);
-    return;
-  }
-
-  await removeChannelAllowFromStoreEntry(storeEntry);
-  if (params.accountId === DEFAULT_ACCOUNT_ID) {
-    await removeChannelAllowFromStoreEntry({
-      channel: params.channelId,
-      entry: params.entry,
-      ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
-    });
-  }
-}
-
-async function resolveAllowlistNames(params: {
-  cfg: OpenClawConfig;
-  channelId: ChannelId;
-  accountId?: string | null;
-  scope: "dm" | "group";
-  entries: string[];
-}) {
-  const plugin = getChannelPlugin(params.channelId);
-  const resolved = await plugin?.allowlist?.resolveNames?.({
-    cfg: params.cfg,
-    accountId: params.accountId,
-    scope: params.scope,
-    entries: params.entries,
-  });
-  return new Map(
-    (resolved ?? []).flatMap((entry: ResolvedAllowlistName) =>
-      entry.resolved && entry.name ? [[entry.input, entry.name] as const] : [],
-    ),
-  );
-}
-
-async function readAllowlistConfig(params: {
-  cfg: OpenClawConfig;
-  channelId: ChannelId;
-  accountId?: string | null;
-}) {
-  const plugin = getChannelPlugin(params.channelId);
-  return (
-    (await plugin?.allowlist?.readConfig?.({
-      cfg: params.cfg,
-      accountId: params.accountId,
-    })) ?? {}
-  );
 }
 
 /** Command handler for listing, adding, and removing allowlist entries. */
@@ -299,12 +179,11 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
       "⚠️ Invalid account id. Reserved keys (__proto__, constructor, prototype) are blocked.",
     );
   }
-  const accountId = resolveAllowlistAccountId({
-    cfg: params.cfg,
-    channelId,
-    parsedAccount: parsed.account,
-    ctxAccountId: params.ctx.AccountId,
-  });
+  const accountId =
+    normalizeOptionalAccountId(parsed.account) ||
+    normalizeOptionalString(getChannelPlugin(channelId)?.config.defaultAccountId?.(params.cfg)) ||
+    normalizeOptionalAccountId(params.ctx.AccountId) ||
+    DEFAULT_ACCOUNT_ID;
   const originChannelId =
     params.command.channelId ?? normalizeChatChannelId(resolveCommandSurfaceChannel(params));
   const originAccountId = resolveChannelAccountId({
@@ -328,11 +207,11 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
         storeReadFailed = true;
       }
     }
-    const configState = await readAllowlistConfig({
-      cfg: params.cfg,
-      channelId,
-      accountId,
-    });
+    const configState =
+      (await getChannelPlugin(channelId)?.allowlist?.readConfig?.({
+        cfg: params.cfg,
+        accountId,
+      })) ?? {};
 
     const dmAllowFrom = (configState.dmAllowFrom ?? []).map(String);
     const groupAllowFrom = (configState.groupAllowFrom ?? []).map(String);
@@ -341,32 +220,35 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
       entries: entry.entries.map(String).filter(Boolean),
     }));
 
-    const normalizeValues = (values: Array<string | number>) =>
-      normalizeAllowFrom({ cfg: params.cfg, channelId, accountId, values });
+    const normalizeValues = (values: Array<string | number>) => {
+      const currentPlugin = getChannelPlugin(channelId);
+      return currentPlugin?.config.formatAllowFrom
+        ? currentPlugin.config.formatAllowFrom({ cfg: params.cfg, accountId, allowFrom: values })
+        : normalizeStringEntries(values);
+    };
+    const resolveNames = async (scope: "dm" | "group", entries: string[]) => {
+      const resolved = await getChannelPlugin(channelId)?.allowlist?.resolveNames?.({
+        cfg: params.cfg,
+        accountId,
+        scope,
+        entries,
+      });
+      return new Map(
+        (resolved ?? []).flatMap((entry) =>
+          entry.resolved && entry.name ? [[entry.input, entry.name] as const] : [],
+        ),
+      );
+    };
     const dmDisplay = normalizeValues(dmAllowFrom);
     const groupDisplay = normalizeValues(groupAllowFrom);
     const groupOverrideEntries = groupOverrides.flatMap((entry) => entry.entries);
     const groupOverrideDisplay = normalizeValues(groupOverrideEntries);
 
     const resolvedDm =
-      parsed.resolve && dmDisplay.length > 0
-        ? await resolveAllowlistNames({
-            cfg: params.cfg,
-            channelId,
-            accountId,
-            scope: "dm",
-            entries: dmDisplay,
-          })
-        : undefined;
+      parsed.resolve && dmDisplay.length > 0 ? await resolveNames("dm", dmDisplay) : undefined;
     const resolvedGroup =
       parsed.resolve && groupOverrideDisplay.length > 0
-        ? await resolveAllowlistNames({
-            cfg: params.cfg,
-            channelId,
-            accountId,
-            scope: "group",
-            entries: groupOverrideDisplay,
-          })
+        ? await resolveNames("group", groupOverrideDisplay)
         : undefined;
 
     const lines: string[] = ["🧾 Allowlist"];
@@ -378,9 +260,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
       lines.push(`Group policy: ${configState.groupPolicy}`);
     }
 
-    const showDm = parsed.scope === "dm" || parsed.scope === "all";
-    const showGroup = parsed.scope === "group" || parsed.scope === "all";
-    if (showDm) {
+    if (parsed.scope === "dm" || parsed.scope === "all") {
       lines.push(`DM allowFrom (config): ${formatEntryList(dmDisplay, resolvedDm)}`);
     }
     if (supportsStore && storeReadFailed) {
@@ -390,7 +270,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     } else if (supportsStore && storeAllowFrom.length > 0) {
       lines.push(`Paired allowFrom (store): ${formatEntryList(normalizeValues(storeAllowFrom))}`);
     }
-    if (showGroup) {
+    if (parsed.scope === "group" || parsed.scope === "all") {
       if (groupAllowFrom.length > 0) {
         lines.push(`Group allowFrom (config): ${formatEntryList(groupDisplay, resolvedGroup)}`);
       }
@@ -431,13 +311,40 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     );
   }
 
-  const shouldUpdateConfig = parsed.target !== "store";
   // Pairing stores authorize DMs only. Group edits must stay config-scoped or a
   // group-only sender could gain or lose unrelated direct-message access.
   const shouldTouchStore =
     parsed.scope !== "group" && parsed.target !== "config" && Boolean(plugin?.pairing);
+  const resolveWriteDeniedText = (
+    target: Parameters<typeof resolveConfigWriteDeniedText>[0]["target"],
+  ) =>
+    resolveConfigWriteDeniedText({
+      cfg: params.cfg,
+      channel: params.command.channel,
+      originChannelId,
+      originAccountId,
+      gatewayClientScopes: params.ctx.GatewayClientScopes,
+      target,
+      fallbackChannelId: channelId,
+    });
+  const updatePairingStore = async () => {
+    const storeEntry = {
+      channel: channelId,
+      entry: parsed.entry,
+      accountId,
+      ...(assertOwnerCurrent ? { assertCurrent: assertOwnerCurrent } : {}),
+    };
+    const mutate =
+      parsed.action === "add" ? addChannelAllowFromStoreEntry : removeChannelAllowFromStoreEntry;
+    await mutate(storeEntry);
+    if (parsed.action === "remove" && accountId === DEFAULT_ACCOUNT_ID) {
+      const { accountId: _accountId, ...legacyEntry } = storeEntry;
+      await removeChannelAllowFromStoreEntry(legacyEntry);
+    }
+  };
 
-  if (shouldUpdateConfig) {
+  const actionLabel = parsed.action === "add" ? "added" : "removed";
+  if (parsed.target !== "store") {
     if (parsed.scope === "all") {
       return commandReply("⚠️ /allowlist add|remove requires scope dm or group.");
     }
@@ -470,15 +377,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     if (editResult.kind === "invalid-entry") {
       return commandReply("⚠️ Invalid allowlist entry.");
     }
-    const deniedText = resolveConfigWriteDeniedText({
-      cfg: params.cfg,
-      channel: params.command.channel,
-      originChannelId,
-      originAccountId,
-      gatewayClientScopes: params.ctx.GatewayClientScopes,
-      target: editResult.writeTarget,
-      fallbackChannelId: channelId,
-    });
+    const deniedText = resolveWriteDeniedText(editResult.writeTarget);
     if (deniedText) {
       return commandReply(deniedText);
     }
@@ -509,16 +408,9 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     }
 
     if (shouldTouchStore) {
-      await updatePairingStoreAllowlist({
-        action: parsed.action,
-        channelId,
-        accountId,
-        entry: parsed.entry,
-        assertCurrent: assertOwnerCurrent,
-      });
+      await updatePairingStore();
     }
 
-    const actionLabel = parsed.action === "add" ? "added" : "removed";
     const scopeLabel = parsed.scope === "dm" ? "DM" : "group";
     const locations: string[] = [];
     if (configChanged) {
@@ -527,7 +419,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     if (shouldTouchStore) {
       locations.push("pairing store");
     }
-    const targetLabel = locations.length > 0 ? locations.join(" + ") : "no-op";
+    const targetLabel = locations.join(" + ");
     return commandReply(`✅ ${scopeLabel} allowlist ${actionLabel}: ${targetLabel}.`);
   }
 
@@ -535,28 +427,14 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     return commandReply("⚠️ This channel does not support allowlist storage.");
   }
 
-  const storeDeniedText = resolveConfigWriteDeniedText({
-    cfg: params.cfg,
-    channel: params.command.channel,
-    originChannelId,
-    originAccountId,
-    gatewayClientScopes: params.ctx.GatewayClientScopes,
-    target: resolveExplicitConfigWriteTarget({ channelId, accountId }),
-    fallbackChannelId: channelId,
-  });
+  const storeDeniedText = resolveWriteDeniedText(
+    resolveExplicitConfigWriteTarget({ channelId, accountId }),
+  );
   if (storeDeniedText) {
     return commandReply(storeDeniedText);
   }
 
-  await updatePairingStoreAllowlist({
-    action: parsed.action,
-    channelId,
-    accountId,
-    entry: parsed.entry,
-    assertCurrent: assertOwnerCurrent,
-  });
+  await updatePairingStore();
 
-  const actionLabel = parsed.action === "add" ? "added" : "removed";
-  const scopeLabel = parsed.scope === "group" ? "group" : "DM";
-  return commandReply(`✅ ${scopeLabel} allowlist ${actionLabel} in pairing store.`);
+  return commandReply(`✅ DM allowlist ${actionLabel} in pairing store.`);
 };

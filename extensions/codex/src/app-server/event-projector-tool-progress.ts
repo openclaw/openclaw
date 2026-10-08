@@ -1,10 +1,21 @@
 import {
+  NativeToolOutputAccumulator,
+  formatNativeToolOutput,
+  formatNativeToolSummary,
+  MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM,
+  TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS,
+  truncateNativeToolTranscriptText,
+} from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
+import {
   inferToolMetaFromArgs,
   TOOL_PROGRESS_OUTPUT_MAX_CHARS,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNonArrayRecord,
+  readStringField as readString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import {
@@ -24,16 +35,9 @@ import {
 } from "./event-projector-tool-items.js";
 import {
   collectDynamicToolContentText,
-  formatToolOutput,
-  formatToolSummary,
-  MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM,
-  normalizeToolTranscriptArguments,
   TOOL_PROGRESS_ECHO_PREFIX_MIN_CHARS,
   TOOL_PROGRESS_ECHO_SIGNATURE_CAP,
-  TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS,
-  ToolOutputAccumulator,
   toolOutputRawEchoSignature,
-  truncateToolTranscriptText,
 } from "./event-projector-tool-output.js";
 import { codexApprovalTimeoutText, type CodexApprovalKind } from "./plugin-approval-roundtrip.js";
 import type {
@@ -91,16 +95,15 @@ export class CodexToolProgressProjection {
   private readonly echoesByItem = new Map<string, ToolProgressEchoState>();
   private readonly resultSummaryItemIds = new Set<string>();
   private readonly resultOutputItemIds = new Set<string>();
-  private readonly resultOutputStreamedItemIds = new Set<string>();
   private readonly transcriptProgressSuppressedIds = new Set<string>();
   private readonly resultOutputDeltaState = new Map<
     string,
     { chars: number; messages: number; truncated: boolean }
   >();
-  private readonly output = new ToolOutputAccumulator();
+  private readonly output = new NativeToolOutputAccumulator("Codex");
   private readonly metas = new Map<string, EmbeddedRunAttemptResult["toolMetas"][number]>();
   private readonly sideEffectingNativeIds = new Set<string>();
-  private readonly sideEffectingDynamicIds = new Set<string>();
+  private hasDynamicSideEffects = false;
   private readonly transcriptProgressCallIds = new Set<string>();
   readonly approvalTimeoutKinds = new Map<string, CodexApprovalKind>();
   private lastNativeToolError: EmbeddedRunAttemptResult["lastToolError"];
@@ -128,7 +131,7 @@ export class CodexToolProgressProjection {
   }
 
   get hasPotentialSideEffects(): boolean {
-    return this.sideEffectingNativeIds.size > 0 || this.sideEffectingDynamicIds.size > 0;
+    return this.sideEffectingNativeIds.size > 0 || this.hasDynamicSideEffects;
   }
 
   approvalTimeoutExplanation(itemId: string, status: NativeToolStatus): string | undefined {
@@ -198,9 +201,7 @@ export class CodexToolProgressProjection {
     } else if (this.lastNativeToolError?.mutatingAction !== true) {
       this.lastNativeToolError = undefined;
     }
-    if (params.sideEffectEvidence === true) {
-      this.sideEffectingDynamicIds.add(params.callId);
-    }
+    this.hasDynamicSideEffects ||= params.sideEffectEvidence === true;
   }
 
   handleOutputDelta(params: JsonObject, toolName: string): void {
@@ -245,10 +246,9 @@ export class CodexToolProgressProjection {
       state.truncated = true;
     }
     this.resultOutputDeltaState.set(itemId, state);
-    this.resultOutputStreamedItemIds.add(itemId);
     this.emitToolResultMessage({
       itemId,
-      text: formatToolOutput(
+      text: formatNativeToolOutput(
         toolName,
         undefined,
         reachedLimit ? `${chunk}\n...(truncated)...` : chunk,
@@ -331,7 +331,7 @@ export class CodexToolProgressProjection {
       : undefined;
     this.emitToolResultMessage({
       itemId: item.id,
-      text: formatToolSummary(toolName, meta),
+      text: formatNativeToolSummary(toolName, meta),
     });
   }
 
@@ -342,7 +342,7 @@ export class CodexToolProgressProjection {
     if (!this.params.onToolResult || !this.shouldEmitToolOutput()) {
       return;
     }
-    if (this.resultOutputItemIds.has(item.id) || this.resultOutputStreamedItemIds.has(item.id)) {
+    if (this.resultOutputItemIds.has(item.id) || this.resultOutputDeltaState.has(item.id)) {
       return;
     }
     const toolName = itemName(item);
@@ -355,7 +355,7 @@ export class CodexToolProgressProjection {
       : undefined;
     this.emitToolResultMessage({
       itemId: item.id,
-      text: formatToolOutput(toolName, meta, output),
+      text: formatNativeToolOutput(toolName, meta, output),
       finalOutput: true,
       isError: isNonSuccessItemStatus(itemStatus(item)),
     });
@@ -402,10 +402,6 @@ export class CodexToolProgressProjection {
     this.emitTranscriptToolCallProgress(params);
   }
 
-  recordTranscriptResult(params: ToolTranscriptResultInput): void {
-    this.emitTranscriptToolResultProgress(params);
-  }
-
   matchesEcho(text: string): boolean {
     for (const state of this.echoesByItem.values()) {
       if (state.streamedDisplayText === text || state.displayTexts.includes(text)) {
@@ -448,7 +444,7 @@ export class CodexToolProgressProjection {
     isError?: boolean;
   }): void {
     const rawText = params.text.trim();
-    const text = truncateToolTranscriptText(rawText);
+    const text = truncateNativeToolTranscriptText(rawText, "Codex");
     if (!text) {
       return;
     }
@@ -495,7 +491,7 @@ export class CodexToolProgressProjection {
       return;
     }
     this.transcriptProgressCallIds.add(params.id);
-    const args = normalizeToolTranscriptArguments(params.arguments);
+    const args = asNonArrayRecord(params.arguments);
     const meta = this.shouldIncludeFormattedMeta(isCodexCommandBearingToolCall(params.name, args))
       ? inferToolMetaFromArgs(params.name, args, {
           detailMode: this.toolProgressDetailMode(),
@@ -505,18 +501,18 @@ export class CodexToolProgressProjection {
       !this.params.onToolResult ||
       !this.shouldEmitToolResult() ||
       this.resultSummaryItemIds.has(params.id) ||
-      this.resultOutputStreamedItemIds.has(params.id)
+      this.resultOutputDeltaState.has(params.id)
     ) {
       return;
     }
     this.resultSummaryItemIds.add(params.id);
     this.emitToolResultMessage({
       itemId: params.id,
-      text: formatToolSummary(params.name, meta),
+      text: formatNativeToolSummary(params.name, meta),
     });
   }
 
-  private emitTranscriptToolResultProgress(params: ToolTranscriptResultInput): void {
+  recordTranscriptResult(params: ToolTranscriptResultInput): void {
     if (
       (params.name === "progress_card" && !params.isError) ||
       this.transcriptProgressSuppressedIds.has(params.id) ||
@@ -527,7 +523,7 @@ export class CodexToolProgressProjection {
     if (params.name === "progress_card" && this.shouldEmitToolResult()) {
       this.emitToolResultMessage({
         itemId: params.id,
-        text: formatToolSummary(params.name),
+        text: formatNativeToolSummary(params.name),
         isError: true,
       });
     }
@@ -538,7 +534,7 @@ export class CodexToolProgressProjection {
       !this.params.onToolResult ||
       !this.shouldEmitToolOutput() ||
       this.resultOutputItemIds.has(params.id) ||
-      this.resultOutputStreamedItemIds.has(params.id)
+      this.resultOutputDeltaState.has(params.id)
     ) {
       return;
     }
@@ -546,7 +542,7 @@ export class CodexToolProgressProjection {
     if (text) {
       this.emitToolResultMessage({
         itemId: params.id,
-        text: formatToolOutput(params.name, undefined, text),
+        text: formatNativeToolOutput(params.name, undefined, text),
         finalOutput: true,
         isError: params.isError,
       });

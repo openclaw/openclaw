@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 
 const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatMock = vi.fn();
@@ -8,8 +9,11 @@ const runCronIsolatedAgentTurnMock = vi.fn();
 const loadConfigMock = vi.fn<() => OpenClawConfig>();
 const logHooksWarnMock = vi.fn();
 
-vi.mock("../../infra/system-events.js", () => ({
+vi.mock("../../infra/system-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/system-events.js")>()),
   enqueueSystemEvent: enqueueSystemEventMock,
+  enqueueSystemEventWithReceipt: (...args: unknown[]) =>
+    enqueueSystemEventMock(...args) ? () => true : null,
 }));
 vi.mock("../../infra/heartbeat-wake.js", () => ({
   requestHeartbeat: requestHeartbeatMock,
@@ -60,12 +64,14 @@ function payload(overrides: Partial<HookPayload> = {}): HookPayload {
   };
 }
 
-function globalConfig(defaultAgentId: "main" | "work", includeMain = true): OpenClawConfig {
+function globalConfig(systemAgentId: "main" | "work", includeMain = true): OpenClawConfig {
   return {
     agents: {
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: systemAgentId } },
       entries: {
-        ...(includeMain ? { main: { default: defaultAgentId === "main" } } : {}),
-        work: { default: defaultAgentId === "work" },
+        ...(includeMain ? { main: {} } : {}),
+        work: {},
       },
     },
     session: { scope: "global" },
@@ -116,6 +122,7 @@ describe("global hook terminal target resolution", () => {
     loadConfigMock.mockReturnValue(globalConfig("main"));
     capturedDispatchAgentHook = undefined;
     createGatewayHooksRequestHandler({
+      scheduler: createTestGatewayScheduler("fake-timers"),
       deps: {} as never,
       getHooksConfig: () => null,
       getClientIpConfig: () => ({ trustedProxies: undefined, allowRealIpFallback: false }),
@@ -135,7 +142,7 @@ describe("global hook terminal target resolution", () => {
     vi.restoreAllMocks();
   });
 
-  it("keeps the accepted agent when hooks are disabled and the default changes", async () => {
+  it("keeps the accepted agent when hooks are disabled and the system agent changes", async () => {
     const gate = await startGatedRun("success");
     loadConfigMock.mockReturnValue({
       ...globalConfig("work"),
@@ -160,13 +167,6 @@ describe("global hook terminal target resolution", () => {
       outcome: "failure" as const,
       wakeMode: "now" as const,
       status: "error",
-      reason: "accepted-agent-removed",
-    },
-    {
-      name: "the accepted agent is removed before next-heartbeat completion",
-      outcome: "success" as const,
-      wakeMode: "next-heartbeat" as const,
-      status: "ok",
       reason: "accepted-agent-removed",
     },
   ])("suppresses the terminal event when $name", async (testCase) => {

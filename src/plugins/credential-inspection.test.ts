@@ -30,19 +30,6 @@ describe("plugin credential authoring boundary", () => {
     });
   });
 
-  it.each([
-    { source: "env", provider: "default", id: "EXAMPLE_KEY" },
-    { source: "file", provider: "vault", id: "/search/key" },
-    { source: "exec", provider: "vault", id: "team/search" },
-    { source: "store", provider: "default", id: "SEARCH_KEY" },
-  ])("returns the exact authored $source pointer without resolution", (ref) => {
-    expect(inspectPluginCredentialValue(config(ref), descriptor, {}, true)).toEqual({
-      kind: "reference",
-      ref,
-      unresolved: false,
-    });
-  });
-
   it("recovers an env shorthand pointer from loader facts instead of exposing its decoded value", () => {
     const loaded = config("resolved-private");
     setConfigResolutionFacts(

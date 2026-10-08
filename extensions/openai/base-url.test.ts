@@ -5,7 +5,6 @@ import {
   classifyOpenAIBaseUrl,
   isOpenAIApiBaseUrl,
   isOpenAICodexBaseUrl,
-  isOpenAIHttpsApiBaseUrl,
   OPENAI_API_BASE_URL,
   OPENAI_CODEX_RESPONSES_BASE_URL,
   resolveOpenAIDefaultBaseUrl,
@@ -26,11 +25,6 @@ describe("openai base URL helpers", () => {
     expect(isOpenAIApiBaseUrl("https://proxy.example.com/v1")).toBe(false);
     expect(isOpenAIApiBaseUrl("https://chatgpt.com/backend-api")).toBe(false);
     expect(isOpenAIApiBaseUrl(undefined)).toBe(false);
-  });
-
-  it("limits native transport hooks to HTTPS official routes", () => {
-    expect(isOpenAIHttpsApiBaseUrl("https://api.openai.com/v1")).toBe(true);
-    expect(isOpenAIHttpsApiBaseUrl("http://api.openai.com/v1")).toBe(false);
   });
 
   it("classifies exact HTTPS native endpoints as official", () => {

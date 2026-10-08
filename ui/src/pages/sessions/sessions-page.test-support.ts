@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type {
@@ -8,7 +8,10 @@ import type {
   SessionListSnapshot,
 } from "../../lib/sessions/index.ts";
 import { createSessionArchiveState } from "../../lib/sessions/session-archive-state.ts";
-import type { SessionRefreshOptions } from "../../lib/sessions/session-capability.ts";
+import type {
+  SessionRefreshOptions,
+  SessionRowObservation,
+} from "../../lib/sessions/session-capability.ts";
 import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { buildSessionsListQuery } from "./list-query.ts";
@@ -26,7 +29,10 @@ export type TestSessionsPage = HTMLElement & {
   loading: boolean;
   refreshing: boolean;
   statusFilter: "active" | "archived" | "all";
-  selectedKeys: Set<string>;
+  selectedSessions: Map<
+    string,
+    Pick<GatewaySessionRow, "key" | "archived" | "sessionId" | "label" | "displayName">
+  >;
   sessionMenu: { key: string; x: number; y: number } | null;
   sessionMenuTrigger: HTMLElement | null;
   sessionMutationPending: boolean;
@@ -58,6 +64,7 @@ export type TestSessionsPage = HTMLElement & {
 type MutableGateway = {
   gateway: ApplicationContext["gateway"];
   emit: (patch: Partial<ApplicationGatewaySnapshot>) => void;
+  emitEvent: (event: GatewayEventFrame) => void;
   setSessionKey: ReturnType<typeof vi.fn>;
 };
 
@@ -74,6 +81,7 @@ export function createGateway(client: GatewayBrowserClient): MutableGateway {
     lastErrorCode: null,
   };
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
+  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
   const setSessionKey = vi.fn();
   const gateway = {
     get snapshot() {
@@ -85,12 +93,16 @@ export function createGateway(client: GatewayBrowserClient): MutableGateway {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    subscribeEvents: () => () => undefined,
+    subscribeEvents(listener: (event: GatewayEventFrame) => void) {
+      eventListeners.add(listener);
+      return () => eventListeners.delete(listener);
+    },
     subscribeEventLog: () => () => undefined,
   } as unknown as ApplicationContext["gateway"];
   return {
     gateway,
     setSessionKey,
+    emitEvent: (event) => eventListeners.forEach((listener) => listener(event)),
     emit(patch) {
       snapshot = { ...snapshot, ...patch };
       for (const listener of listeners) {
@@ -175,7 +187,16 @@ export function createManagedSessions(overrides: Partial<SessionCapability> = {}
     listSnapshot,
     subscribeList,
     refreshList,
+    observeRow: vi.fn((): SessionRowObservation => ({
+      row: null,
+      sessionId: null,
+      hasObserved: false,
+      isCurrent: () => true,
+      captureReconcile: () => () => ({ status: "current", row: null }),
+      dispose: () => {},
+    })),
     deleteMany: vi.fn(async () => ({ deleted: [], errors: [], preservedWorktrees: [] })),
+    deletionState: () => undefined,
     patch: vi.fn(async () => null),
     archiveVisibility: archiveState.visibility,
     beginArchive: archiveState.beginPending,

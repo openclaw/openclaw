@@ -3,12 +3,17 @@ import path from "node:path";
 import { Worker } from "node:worker_threads";
 import * as tar from "tar";
 import { describe, expect, it } from "vitest";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import { sqliteWorkerPreloadEnv } from "../../infra/sqlite-worker-preload.test-support.js";
 import {
   closeOpenClawStateDatabase,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { cliRecoveryEntrypoints } from "../cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "../cli-process-child.test-helpers.js";
 
 function runBackupCli(params: {
@@ -18,9 +23,7 @@ function runBackupCli(params: {
 }): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return runCliProcessChild({
     nodeArgs: [
-      "--import",
-      "tsx",
-      path.resolve("src/entry.ts"),
+      ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli)),
       "backup",
       "create",
       "--output",
@@ -147,7 +150,14 @@ describe("backup create CLI", () => {
       const result = await runBackupCli({ env: { ...process.env, ...state.env }, outputPath });
       expect(result.code).toBe(1);
       expect(result.stderr).not.toContain("Config invalid");
-      expect(result.stderr).toContain("Cannot read shared state for discovery");
+      expect(result.stderr).toContain("[openclaw] The CLI command failed.");
+      expect(result.stderr).toContain("[openclaw] For help, run `openclaw doctor`.");
+      const failure = JSON.parse(result.stdout);
+      expect(failure).toMatchObject({ ok: false, error: { type: "cli_error" } });
+      expect(failure.error.message).toContain(
+        `Cannot read shared state for discovery: ${state.statePath("state/openclaw.sqlite")}.`,
+      );
+      expect(failure.error.message).toContain("file is not a database");
       await expect(fs.stat(outputPath)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
@@ -175,6 +185,20 @@ describe("backup create CLI", () => {
             const { syncBuiltinESMExports } = require("node:module");
             const sqlite = process.getBuiltinModule("node:sqlite");
             const originalBackup = sqlite.backup.bind(sqlite);
+            if (process.versions.bun) {
+              const workerThreads = require("node:worker_threads");
+              const OriginalWorker = workerThreads.Worker;
+              const preload = process.env.OPENCLAW_TEST_SQLITE_WORKER_PRELOAD;
+              // The CLI's nested Workers do not inherit the Vitest parent's preload spy.
+              workerThreads.Worker = class Worker extends OriginalWorker {
+                constructor(filename, options = {}) {
+                  super(filename, {
+                    ...options,
+                    execArgv: [...(options.execArgv ?? process.execArgv), "--preload", preload],
+                  });
+                }
+              };
+            }
             const markerPath = process.env.PROOF_SNAPSHOT_MARKER;
             const realNow = Date.now.bind(Date);
             // Acquisition runs in a worker; every isolate must observe the same elapsed time.

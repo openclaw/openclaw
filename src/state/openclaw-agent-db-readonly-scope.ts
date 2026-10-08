@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import type { DatabaseSync } from "node:sqlite";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import {
   registerSqliteCacheExitClose,
@@ -12,6 +12,7 @@ import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.
 import {
   createOpenClawAgentDatabaseClaim,
   isOpenClawAgentDatabasePathCurrent,
+  findOpenClawAgentDatabaseIdentity,
 } from "./openclaw-agent-db-identity.js";
 import {
   hasOpenClawAgentReadOnlySchema,
@@ -55,6 +56,18 @@ export class OpenClawAgentDatabaseReadOnlyScope {
 
   get hasRetainedConnection(): boolean {
     return this.database !== undefined;
+  }
+
+  invalidateProjection(
+    databaseIdentity: string,
+    invalidate: (database: DatabaseSync) => void,
+  ): void {
+    if (
+      this.database &&
+      findOpenClawAgentDatabaseIdentity(this.database)?.identity === databaseIdentity
+    ) {
+      invalidate(this.database.db);
+    }
   }
 
   closeIfIdle(): void {
@@ -157,7 +170,6 @@ export class OpenClawAgentDatabaseReadOnlyScope {
           revoke: () => this.close(),
           close: () => this.close(),
         });
-        enableNodeSqliteKyselyStatementCache(this.database.db);
         retainedScopes.active.add(this);
         if (this.cached) {
           retainedScopes.paths.set(this.database.path, this);
@@ -270,6 +282,16 @@ function cachedScope(options: ReadTarget): OpenClawAgentDatabaseReadOnlyScope {
     retainedScopes.paths.set(options.path, scope);
   }
   return scope;
+}
+
+/** Committed worker receipts invalidate projections on retained readers without running SQL. */
+export function invalidateOpenClawAgentReadOnlyProjections(
+  databaseIdentity: string,
+  invalidate: (database: DatabaseSync) => void,
+): void {
+  for (const scope of retainedScopes.active) {
+    scope.invalidateProjection(databaseIdentity, invalidate);
+  }
 }
 
 /** Writable admission retires an idle reader before opening the same physical file. */

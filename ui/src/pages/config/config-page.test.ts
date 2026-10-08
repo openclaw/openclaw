@@ -23,7 +23,6 @@ import {
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as realtimeTalk from "../chat/talk/session.ts";
 import { ConfigPage, extractQuickSettingsSecurity } from "./config-page.ts";
-import { serverUiPrefProvenanceHint } from "./view-appearance-preferences.ts";
 import type { ConfigViewState } from "./view.ts";
 
 const switchActiveRealtimeTalkCameras =
@@ -123,16 +122,6 @@ describe("ConfigPage synced preference provenance", () => {
     expect(page.serverUiPrefsCanSync()).toBe(localeCanSync);
   });
 
-  it("describes profile-owned appearance without changing gateway or device-local hints", () => {
-    expect(serverUiPrefProvenanceHint("profile")).toBe(
-      "Saved to your profile — follows you on every device.",
-    );
-    expect(serverUiPrefProvenanceHint("synced")).toBe(
-      "Synced across your devices through the gateway.",
-    );
-    expect(serverUiPrefProvenanceHint("device-local")).toBe("Stored in this browser only.");
-  });
-
   it("restores the gateway appearance default while queuing deletion of the profile override", async () => {
     const configObject = { ui: { prefs: { theme: "dash" } } };
     const client = {
@@ -148,7 +137,7 @@ describe("ConfigPage synced preference provenance", () => {
     const page = new ConfigPage() as unknown as {
       context: ApplicationContext;
       settings: ReturnType<typeof loadSettings>;
-      resetSyncedAppearancePref: (key: "theme") => void;
+      resetSyncedPref: (key: "theme") => void;
     };
     page.context = {
       gateway: {
@@ -167,7 +156,7 @@ describe("ConfigPage synced preference provenance", () => {
     const beforeReset = loadSettings();
     page.settings = beforeReset;
 
-    page.resetSyncedAppearancePref("theme");
+    page.resetSyncedPref("theme");
 
     expect(page.settings.theme).toBe("dash");
     expect(changedServerUiPrefs(beforeReset, page.settings)).toEqual({
@@ -224,7 +213,7 @@ describe("ConfigPage synced preference provenance", () => {
       const page = new ConfigPage() as unknown as {
         context: ApplicationContext;
         settings: ReturnType<typeof loadSettings>;
-        resetSyncedAppearancePref: (key: "accent") => void;
+        resetSyncedPref: (key: "accent") => void;
       };
       page.context = {
         gateway: {
@@ -242,7 +231,7 @@ describe("ConfigPage synced preference provenance", () => {
       } as unknown as ApplicationContext;
       const previous = loadSettings();
       page.settings = previous;
-      page.resetSyncedAppearancePref("accent");
+      page.resetSyncedPref("accent");
       expect(page.settings.accent).toBe("#123456");
       expect(changedServerUiPrefs(previous, page.settings)).toBeNull();
 
@@ -394,41 +383,22 @@ describe("ConfigPage synced preference provenance", () => {
   });
 });
 
-describe("ConfigPage header", () => {
-  it("renders the route subtitle for Communications", () => {
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      context: ApplicationContext;
-      pageId: "communications";
-      renderAdvancedConfig: () => undefined;
-    };
-    state.context = { runtimeConfig: { state: {} } } as unknown as ApplicationContext;
-    state.pageId = "communications";
-    state.renderAdvancedConfig = () => undefined;
-    const container = document.createElement("div");
-
-    render(page.render(), container);
-
-    expect(container.querySelector(".page-subtitle")?.textContent?.trim()).toBe(
-      "Messages, text-to-speech, and meeting capture settings.",
-    );
-  });
-});
-
 describe("ConfigPage media discovery", () => {
   it("coalesces refreshes while discovery is in flight", async () => {
-    for (const method of ["refreshMicrophones", "refreshCameras"] as const) {
+    for (const kind of ["microphone", "camera"] as const) {
       const discovery = deferred<MediaDeviceInfo[]>();
       const enumerateDevices = vi.fn(() => discovery.promise);
       vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices } });
       const page = new ConfigPage();
-      const state = page as unknown as Record<
-        typeof method,
-        (requestPermission: boolean) => Promise<void>
-      >;
+      const state = page as unknown as {
+        refreshMediaDevices: (
+          kind: "microphone" | "camera",
+          requestPermission: boolean,
+        ) => Promise<void>;
+      };
 
-      const first = state[method](true);
-      await state[method](true);
+      const first = state.refreshMediaDevices(kind, true);
+      await state.refreshMediaDevices(kind, true);
       expect(enumerateDevices).toHaveBeenCalledOnce();
 
       discovery.resolve([]);
@@ -467,17 +437,14 @@ describe("media permission lifetime: Settings", () => {
       const page = new ConfigPage();
       page.pageId = "appearance";
       const state = page as unknown as {
-        refreshMicrophones: (requestPermission: boolean) => Promise<void>;
-        refreshCameras: (requestPermission: boolean) => Promise<void>;
-        microphoneLoading: boolean;
-        cameraLoading: boolean;
-        microphoneError: string | null;
-        cameraError: string | null;
+        refreshMediaDevices: (
+          kind: "microphone" | "camera",
+          requestPermission: boolean,
+        ) => Promise<void>;
+        mediaDevices: Record<"microphone" | "camera", { loading: boolean; error: string | null }>;
       };
       const refresh = (requestPermission: boolean) =>
-        kind === "microphone"
-          ? state.refreshMicrophones(requestPermission)
-          : state.refreshCameras(requestPermission);
+        state.refreshMediaDevices(kind, requestPermission);
       const leaveAppearance = () => {
         page.pageId = "advanced";
         page.willUpdate(new Map([["pageId", "appearance"]]));
@@ -519,9 +486,7 @@ describe("media permission lifetime: Settings", () => {
         second.resolve([]);
       }
       await first;
-      await vi.waitFor(() =>
-        expect(kind === "microphone" ? state.microphoneLoading : state.cameraLoading).toBe(false),
-      );
+      await vi.waitFor(() => expect(state.mediaDevices[kind].loading).toBe(false));
       const permits = [
         "queued gesture remains active",
         "reentry with a fresh gesture",
@@ -536,7 +501,7 @@ describe("media permission lifetime: Settings", () => {
       }
       if (scenario === "permission-bearing enumeration fails once") {
         expect(enumerateDevices).toHaveBeenCalledOnce();
-        expect(kind === "microphone" ? state.microphoneError : state.cameraError).toBeTruthy();
+        expect(state.mediaDevices[kind].error).toBeTruthy();
       }
     });
   }
@@ -555,18 +520,18 @@ describe("ConfigPage camera selection", () => {
       .mockResolvedValueOnce(undefined);
     const page = new ConfigPage();
     const state = page as unknown as {
-      cameraError: string | null;
+      mediaDevices: { camera: { error: string | null } };
       selectCamera: (deviceId: string) => Promise<void>;
       applySettings: ReturnType<typeof vi.fn>;
     };
     state.applySettings = vi.fn();
 
     await state.selectCamera("missing-camera");
-    expect(state.cameraError).toBe("The selected camera is unavailable");
+    expect(state.mediaDevices.camera.error).toBe("The selected camera is unavailable");
     expect(state.applySettings).not.toHaveBeenCalled();
 
     const staleSelection = state.selectCamera("slow-camera");
-    expect(state.cameraError).toBeNull();
+    expect(state.mediaDevices.camera.error).toBeNull();
     await state.selectCamera("back-camera");
     expect(state.applySettings).toHaveBeenCalledOnce();
     expect(state.applySettings).toHaveBeenLastCalledWith(
@@ -574,12 +539,12 @@ describe("ConfigPage camera selection", () => {
     );
     rejectFirst(new Error("The selected camera is unavailable"));
     await staleSelection;
-    expect(state.cameraError).toBeNull();
+    expect(state.mediaDevices.camera.error).toBeNull();
     expect(state.applySettings).toHaveBeenCalledOnce();
 
-    state.cameraError = "Another camera error";
+    state.mediaDevices.camera.error = "Another camera error";
     await state.selectCamera("");
-    expect(state.cameraError).toBeNull();
+    expect(state.mediaDevices.camera.error).toBeNull();
     expect(state.applySettings).toHaveBeenLastCalledWith(
       expect.objectContaining({ realtimeTalkVideoDeviceId: undefined }),
     );

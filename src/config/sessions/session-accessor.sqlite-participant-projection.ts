@@ -1,14 +1,21 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
 import {
+  createSqliteQueryCache,
   getNodeSqliteKysely,
   executeSqliteQuerySync,
   prepareSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import {
+  getSqliteReadScopeRevision,
+  runSqliteReadOperationSync,
+  type SqliteReadScopeRevision,
+} from "../../infra/sqlite-schema-facts.js";
 import { SESSION_PARTICIPANTS_TABLE } from "../../state/openclaw-agent-db-contract.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
+import { readCurrentSessionEntryCacheParticipants } from "./session-accessor.sqlite-entry-cache-state.js";
 import {
   readParticipantIdentity,
   type SessionParticipantIdentity,
@@ -28,38 +35,51 @@ type SessionParticipantRow = Selectable<OpenClawAgentKyselyDatabase["session_par
 function selectParticipantRows(database: DatabaseSync) {
   return getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database)
     .selectFrom("session_participants")
-    .selectAll()
+    .select([
+      "session_key",
+      "identity_namespace",
+      "actor_id",
+      "contribution_count",
+      "first_prompted_at",
+      "last_prompted_at",
+    ])
     .orderBy("session_key")
     .orderBy("first_prompted_at")
     .orderBy("actor_id")
     .orderBy("identity_namespace");
 }
 
-function prepareSingleSessionParticipantQuery(database: DatabaseSync) {
-  return prepareSqliteQuerySync<string, SessionParticipantRow>(database, (parameter) =>
+// The last exact read belongs to this connection's admitted revision, including its snapshot.
+const singleSessionParticipantQuery = createSqliteQueryCache((database) => {
+  const query = prepareSqliteQuerySync<string, SessionParticipantRow>(database, (parameter) =>
     selectParticipantRows(database).where(
       "session_key",
       "=",
       parameter((sessionKey) => sessionKey),
     ),
   );
-}
-
-// Compiled SQL follows the connection; native statement invalidation remains executor-owned.
-const singleSessionParticipantQueries = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof prepareSingleSessionParticipantQuery>
->();
+  let last:
+    | { key: string; revision: SqliteReadScopeRevision; rows: SessionParticipantRow[] }
+    | undefined;
+  return (key: string) =>
+    runSqliteReadOperationSync(database, () => {
+      const revision = getSqliteReadScopeRevision(database);
+      if (revision && last?.revision === revision && last.key === key) {
+        return last.rows;
+      }
+      const rows = query(key).rows;
+      last =
+        revision && getSqliteReadScopeRevision(database) === revision
+          ? { key, revision, rows }
+          : undefined;
+      return rows;
+    });
+});
 
 function readParticipantRows(database: DatabaseSync, sessionKeys?: readonly string[]) {
   const sessionKey = sessionKeys?.length === 1 ? sessionKeys[0] : undefined;
   if (sessionKey !== undefined) {
-    let query = singleSessionParticipantQueries.get(database);
-    if (!query) {
-      query = prepareSingleSessionParticipantQuery(database);
-      singleSessionParticipantQueries.set(database, query);
-    }
-    return query(sessionKey).rows;
+    return singleSessionParticipantQuery(database)(sessionKey);
   }
   let query = selectParticipantRows(database);
   if (sessionKeys) {
@@ -81,16 +101,18 @@ export function participantRecordsBySessionKey(
   database: DatabaseSync,
   sessionKeys?: readonly string[],
 ): Map<string, SessionParticipantRecord[]> {
-  const records = new Map<string, SessionParticipantRecord[]>();
-  if (!tableExists(database, SESSION_PARTICIPANTS_TABLE)) {
+  return runSqliteReadOperationSync(database, () => {
+    const records = new Map<string, SessionParticipantRecord[]>();
+    if (!tableExists(database, SESSION_PARTICIPANTS_TABLE)) {
+      return records;
+    }
+    for (const row of readParticipantRows(database, sessionKeys)) {
+      const participants = records.get(row.session_key) ?? [];
+      participants.push(readParticipantRecord(row));
+      records.set(row.session_key, participants);
+    }
     return records;
-  }
-  for (const row of readParticipantRows(database, sessionKeys)) {
-    const participants = records.get(row.session_key) ?? [];
-    participants.push(readParticipantRecord(row));
-    records.set(row.session_key, participants);
-  }
-  return records;
+  });
 }
 
 function participantProjection(
@@ -115,6 +137,7 @@ function withProjectedParticipants(
 export function readSqliteSessionParticipantProjection(database: DatabaseSync, sessionKey: string) {
   return (
     readPreparedSessionParticipants(database, sessionKey) ??
+    readCurrentSessionEntryCacheParticipants(database, sessionKey) ??
     participantProjection(
       participantRecordsBySessionKey(database, [sessionKey]).get(sessionKey) ?? [],
     )
@@ -126,7 +149,9 @@ export function projectSqliteSessionParticipants(
   sessionKey: string,
   entry: SessionEntry,
 ): SessionEntry {
-  const prepared = readPreparedSessionParticipants(database, sessionKey);
+  const prepared =
+    readPreparedSessionParticipants(database, sessionKey) ??
+    readCurrentSessionEntryCacheParticipants(database, sessionKey);
   if (prepared) {
     return prepared.participants ? { ...entry, ...prepared } : entry;
   }

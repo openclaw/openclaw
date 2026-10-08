@@ -1,7 +1,12 @@
 // Gateway-scoped tool resolution for HTTP and loopback tool surfaces.
+import {
+  getAdmittedRunDelegatedAuthority,
+  readAdmittedRunOperatorAuthority,
+  type AdmittedRunContext,
+} from "../agents/admitted-run-context.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "../agents/agent-scope.js";
 import { applyToolAvailabilityDescriptions } from "../agents/agent-tools.deferred-followup.js";
-import { createOpenClawCodingTools } from "../agents/agent-tools.js";
+import { createOpenClawCodingToolsAsync } from "../agents/agent-tools.js";
 import { filterToolsByMessageProvider } from "../agents/agent-tools.message-provider-policy.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
@@ -10,14 +15,13 @@ import { resolveCoreToolFactoryFamily } from "../agents/core-tool-factory-descri
 import { applyDelegationCapability } from "../agents/delegation-capability.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
-import { createOpenClawTools } from "../agents/openclaw-tools.js";
+import { createOpenClawToolsAsync } from "../agents/openclaw-tools.js";
 import { filterRequesterYieldTools } from "../agents/openclaw-tools.requester-yield.js";
 import {
   applySwarmCollectorToolContract,
   createSwarmCollectorWriteAuthority,
   resolveSwarmCollectorToolContext,
 } from "../agents/openclaw-tools.swarm.js";
-import { resolveRequesterToolPolicies } from "../agents/requester-tool-policy.js";
 import type { PreparedRootedExecutionCapability } from "../agents/rooted-run-params.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
 import { createScheduledMessageInvocationAdmission } from "../agents/scheduled-message-invocation.js";
@@ -45,6 +49,11 @@ import {
   type CronToolsAllowCaptureRef,
 } from "../agents/tools/cron-tool.js";
 import { createChannelQuestionPromptDelivery } from "../agents/tools/question-prompt-send.js";
+import { prepareSessionPortalToolTarget } from "../agents/tools/session-portal-target.js";
+import {
+  hasSessionControlAuthority,
+  prepareSandboxSessionRename,
+} from "../agents/tools/sessions-operator-authority.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -57,14 +66,16 @@ import {
   GATEWAY_OWNER_ONLY_CORE_TOOLS,
 } from "../security/dangerous-tools.js";
 import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
-import { normalizeMessageChannel } from "../utils/message-channel-core.js";
 import type { McpLoopbackRequestContext } from "./mcp-grant-store.js";
+import {
+  captureGatewayToolResolutionAuthority,
+  resolveGatewayRequesterToolPolicies,
+} from "./tool-resolution-authority.js";
 
 type GatewayScopedToolSurface = "http" | "loopback";
 
 /** Resolve the tools visible to a gateway caller after agent, channel, and surface policy. */
-export function resolveGatewayScopedTools(
+export async function resolveGatewayScopedTools(
   params: Omit<
     McpLoopbackRequestContext,
     | "senderIsOwner"
@@ -76,6 +87,8 @@ export function resolveGatewayScopedTools(
     | "cronCreatorCallerOrigin"
   > & {
     cfg: OpenClawConfig;
+    /** Workspace from the invocation owner's exact session read. */
+    preparedSessionWorkspaceDir?: string;
     rootedExecution?: PreparedRootedExecutionCapability;
     messageActionTurnCapability?: string;
     authProfileStore?: AuthProfileStore;
@@ -85,6 +98,7 @@ export function resolveGatewayScopedTools(
     agentTo?: string;
     agentThreadId?: string;
     senderIsOwner?: boolean;
+    admittedRunContext?: AdmittedRunContext;
     conversationReadOrigin?: ConversationReadInvocationOrigin;
     allowGatewaySubagentBinding?: boolean;
     allowMediaInvokeCommands?: boolean;
@@ -96,6 +110,8 @@ export function resolveGatewayScopedTools(
     isGrantCurrent?: () => boolean;
     /** Authenticated standalone invocation lifetime supplied by its HTTP/RPC owner. */
     assertInvocationCurrent?: () => void;
+    /** SQL-safe input policy, separate from invocation authority that may read state. */
+    assertInputCommitAllowed?: () => void;
     excludeToolNames?: Iterable<string>;
     /** Server-minted coding tools that must be mediated through the loopback surface. */
     mediatedToolNames?: Iterable<string>;
@@ -110,7 +126,13 @@ export function resolveGatewayScopedTools(
     pairedNodeComputerUse?: import("../agents/computer-use-node-capabilities.js").PreparedPairedComputerUse;
     skillWorkshop?: SkillWorkshopRunOptions;
   },
+  assertPreparationCurrent?: () => void,
 ) {
+  const { assertCurrent, assertInvocationCurrent } = captureGatewayToolResolutionAuthority(
+    params,
+    assertPreparationCurrent,
+  );
+  assertCurrent();
   const runtimePolicySessionKey = params.runtimePolicySessionKey?.trim() || params.sessionKey;
   const sessionAgentId = resolveSessionAgentIds({
     config: params.cfg,
@@ -181,38 +203,18 @@ export function resolveGatewayScopedTools(
   } = configuredToolPolicies;
   const policyAgentId = resolvedPolicyAgentId ?? runtimePolicyAgentId;
   const senderId = params.channelContext?.sender?.id;
-  // Only immutable Gateway-launched grants can opt into node exec. Match the
-  // embedded runner's wildcard sender policy while preserving owner WebChat.
-  const isOwnerInternalSession =
-    nodeExecSurface &&
-    params.senderIsOwner === true &&
-    normalizeMessageChannel(params.messageProvider) === INTERNAL_MESSAGE_CHANNEL;
-  const requesterPolicies = resolveRequesterToolPolicies({
-    config: params.cfg,
-    sessionKey: runtimePolicySessionKey,
-    subagentSessionKey: runtimePolicySessionKey,
-    agentId: policyAgentId,
-    spawnedBy: params.spawnedBy,
-    messageProvider: params.messageProvider,
-    groupId: params.groupId,
-    groupChannel: params.groupChannel,
-    groupSpace: params.groupSpace,
-    accountId: gatewayCaller.accountId ?? null,
-    senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-    senderPolicyMode: params.scheduledToolPolicy
-      ? "never"
-      : nodeExecSurface
-        ? isOwnerInternalSession
-          ? "never"
-          : "always"
-        : "when-sender-id",
-    groupPolicySessionKey: params.scheduledToolPolicy?.ownerSessionKey,
-    requireConfiguredGroupAccount: params.scheduledToolPolicy?.mode === "account",
+  const requesterPolicies = resolveGatewayRequesterToolPolicies(params, {
+    runtimePolicySessionKey,
+    policyAgentId,
+    nodeExecSurface,
+    accountId: gatewayCaller.accountId,
   });
   const { groupPolicy, senderPolicy, subagentPolicy, inheritedToolPolicy } = requesterPolicies;
+  const sessionPermissionPolicy = params.rootedExecution
+    ? params.rootedExecution.sessionPermissionPolicy
+    : requesterPolicies.inheritedToolPolicySource === "sender"
+      ? params.sessionPermissionPolicy
+      : undefined;
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
@@ -223,11 +225,19 @@ export function resolveGatewayScopedTools(
   const sandboxed = params.rootedExecution
     ? Boolean(params.rootedExecution.sandbox)
     : sandboxRuntime.sandboxed;
-  const sandboxPolicy = params.rootedExecution
+  const preparedSandboxPolicy = params.rootedExecution
     ? params.rootedExecution.sandbox?.tools
     : sandboxRuntime.sandboxed
       ? sandboxRuntime.toolPolicy
       : undefined;
+  const sessionControlAuthority = readAdmittedRunOperatorAuthority(params.admittedRunContext);
+  const { policy: sandboxPolicy, renameOnly: sandboxSessionRenameOnly } =
+    prepareSandboxSessionRename({
+      policy: preparedSandboxPolicy,
+      senderIsOwner:
+        surface === "loopback" && params.admittedRunContext ? params.senderIsOwner : undefined,
+      authority: sessionControlAuthority,
+    });
   const excludedToolNames = params.excludeToolNames ? Array.from(params.excludeToolNames) : [];
   const mediatedToolNames = new Set(
     Array.from(params.mediatedToolNames ?? [], (name) => normalizeToolPolicyName(name)).filter(
@@ -235,6 +245,14 @@ export function resolveGatewayScopedTools(
     ),
   );
   const gatewayToolsCfg = params.cfg.gateway?.tools;
+  const sessionPortalTarget =
+    surface === "loopback" && params.senderIsOwner === false && !sandboxed
+      ? prepareSessionPortalToolTarget({
+          sessionKey: params.sessionKey,
+          agentId: sessionAgentId,
+          sessionId: params.sessionId,
+        })
+      : undefined;
   const defaultGatewayDeny =
     surface === "http"
       ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
@@ -246,15 +264,32 @@ export function resolveGatewayScopedTools(
             ),
         )
       : [];
-  const ownerOnlyGatewayDeny =
-    params.senderIsOwner === false || (surface === "http" && params.senderIsOwner !== true)
-      ? [...GATEWAY_OWNER_ONLY_CORE_TOOLS]
-      : [];
+  const assignmentAdmitted =
+    surface === "loopback" &&
+    params.admittedRunContext &&
+    getAdmittedRunDelegatedAuthority(params.admittedRunContext);
+  const ownerOnlyGatewayDeny = [
+    ...(params.senderIsOwner === false || (surface === "http" && params.senderIsOwner !== true)
+      ? GATEWAY_OWNER_ONLY_CORE_TOOLS.filter(
+          (name) => name !== "sessions" && (name !== "portal" || !sessionPortalTarget),
+        )
+      : []),
+    // Attach grants also use loopback; session binding is not run authority.
+    ...(params.senderIsOwner !== true &&
+    !assignmentAdmitted &&
+    !(surface === "loopback" && hasSessionControlAuthority(sessionControlAuthority))
+      ? ["sessions"]
+      : []),
+  ];
   // HTTP callers start with additional surface denies because they cross auth only.
   const workspaceDir =
     params.rootedExecution?.workspaceDir ??
-    (params.workspaceDir?.trim() || resolveAgentWorkspaceDir(params.cfg, sessionAgentId));
-  const explicitDenylist = collectExplicitDenylist([
+    ((requesterPolicies.inheritedToolPolicySource === "sender"
+      ? params.preparedSessionWorkspaceDir?.trim()
+      : undefined) ||
+      params.workspaceDir?.trim() ||
+      resolveAgentWorkspaceDir(params.cfg, sessionAgentId));
+  const basePolicies = [
     profilePolicy,
     providerProfilePolicy,
     globalPolicy,
@@ -266,6 +301,13 @@ export function resolveGatewayScopedTools(
     sandboxPolicy,
     subagentPolicy,
     inheritedToolPolicy,
+  ];
+  const requestedPolicies = [
+    ...basePolicies,
+    gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
+  ];
+  const explicitDenylist = collectExplicitDenylist([
+    ...basePolicies,
     defaultGatewayDeny.length > 0 ? { deny: defaultGatewayDeny } : undefined,
     ownerOnlyGatewayDeny.length > 0 ? { deny: ownerOnlyGatewayDeny } : undefined,
     Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
@@ -277,20 +319,7 @@ export function resolveGatewayScopedTools(
   const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const cronCreatorToolAllowlistCaptureRef: CronToolsAllowCaptureRef | undefined =
     surface === "loopback" ? {} : undefined;
-  const shouldInheritEffectiveToolAllowlist = [
-    profilePolicy,
-    providerProfilePolicy,
-    globalPolicy,
-    globalProviderPolicy,
-    agentPolicy,
-    agentProviderPolicy,
-    groupPolicy,
-    senderPolicy,
-    sandboxPolicy,
-    subagentPolicy,
-    inheritedToolPolicy,
-    gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
-  ].some(hasRestrictiveAllowPolicy);
+  const shouldInheritEffectiveToolAllowlist = requestedPolicies.some(hasRestrictiveAllowPolicy);
 
   // CLI backends reach OpenClaw tools through this resolver instead of the
   // embedded runner, and the loopback grant carries no collector fields, so the
@@ -306,10 +335,12 @@ export function resolveGatewayScopedTools(
   // bound to that same collector session.
   const swarmCollectorAdmission = {
     childSessionKey: params.sessionKey,
+    childAgentId: sessionAgentId,
     admittedRunId: surface === "loopback" ? params.runId : undefined,
   };
   const swarmCollectorContext = resolveSwarmCollectorToolContext(swarmCollectorAdmission);
-  const openClawTools = createOpenClawTools({
+  const openClawToolOptions: Parameters<typeof createOpenClawToolsAsync>[0] = {
+    sessionPortalTarget,
     gatewayConfigReadAllowed,
     agentSessionKey: params.sessionKey,
     messageToolTurnCapability:
@@ -325,15 +356,8 @@ export function resolveGatewayScopedTools(
         })
       : undefined,
     runId: params.runId,
-    assertInvocationCurrent:
-      params.assertInvocationCurrent || params.isGrantCurrent
-        ? () => {
-            params.assertInvocationCurrent?.();
-            if (params.isGrantCurrent && !params.isGrantCurrent()) {
-              throw new Error("Gateway tool invocation grant is no longer active");
-            }
-          }
-        : undefined,
+    assertInputCommitAllowed: params.assertInputCommitAllowed,
+    assertInvocationCurrent,
     ...(swarmCollectorContext
       ? {
           swarmCollector: true,
@@ -380,6 +404,8 @@ export function resolveGatewayScopedTools(
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     senderIsOwner: params.senderIsOwner,
     requesterSenderId: senderId,
+    sessionControlAuthority,
+    sandboxSessionRenameOnly,
     conversationReadOrigin: params.conversationReadOrigin,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     skillWorkshop: params.skillWorkshop,
@@ -400,11 +426,11 @@ export function resolveGatewayScopedTools(
     pinnedWidgetAuthoring: surface === "loopback" ? params.pinnedWidgetAuthoring : undefined,
     workspaceDir,
     sandboxed,
+    sessionPermissionPolicy,
     ...(params.rootedExecution
       ? {
           cwd: params.rootedExecution.cwd,
           fsPolicy: { workspaceOnly: true, root: params.rootedExecution.root },
-          sessionPermissionPolicy: params.rootedExecution.sessionPermissionPolicy,
           sandboxRoot: params.rootedExecution.sandbox?.workspaceDir,
           sandboxContainerWorkdir: params.rootedExecution.sandbox?.containerWorkdir,
           sandboxFsBridge: params.rootedExecution.sandbox?.fsBridge,
@@ -414,26 +440,16 @@ export function resolveGatewayScopedTools(
             : true,
         }
       : {}),
-    pluginToolAllowlist: collectExplicitAllowlist([
-      profilePolicy,
-      providerProfilePolicy,
-      globalPolicy,
-      globalProviderPolicy,
-      agentPolicy,
-      agentProviderPolicy,
-      groupPolicy,
-      senderPolicy,
-      sandboxPolicy,
-      subagentPolicy,
-      inheritedToolPolicy,
-      gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
-    ]),
+    pluginToolAllowlist: collectExplicitAllowlist(requestedPolicies),
     pluginToolDenylist: explicitDenylist,
     cronCreatorToolAllowlist,
     cronCreatorToolAllowlistCaptureRef,
     inheritedToolAllowlist,
     inheritedToolDenylist,
-  });
+    inheritedToolPolicySource: requesterPolicies.inheritedToolPolicySource,
+  };
+  const openClawTools = await createOpenClawToolsAsync(openClawToolOptions, { assertCurrent });
+  assertCurrent();
   const execDefaults =
     nodeExecSurface || mediatedToolNames.size > 0
       ? resolveExecDefaults({
@@ -460,7 +476,7 @@ export function resolveGatewayScopedTools(
   const includeMediatedShellTools = mediatedToolFamilies.has("shell");
   const mediatedCodingTools =
     surface === "loopback" && (includeMediatedBaseCodingTools || includeMediatedShellTools)
-      ? createOpenClawCodingTools({
+      ? await createOpenClawCodingToolsAsync({
           config: params.cfg,
           sessionConfigSource: "runtime",
           agentId: policyAgentId,
@@ -468,9 +484,11 @@ export function resolveGatewayScopedTools(
           runSessionKey: params.sessionKey,
           sessionId: params.sessionId,
           runId: params.runId,
+          operationalRunInstance: params.admittedRunContext?.operationalRunInstance,
           workspaceDir,
           cwd: params.cwd?.trim() || workspaceDir,
           ...params.rootedExecution,
+          sessionPermissionPolicy,
           sandbox: params.rootedExecution?.sandbox ?? undefined,
           modelProvider: params.modelProvider,
           modelId: params.modelId,
@@ -496,7 +514,11 @@ export function resolveGatewayScopedTools(
           senderUsername: params.senderUsername,
           senderE164: params.senderE164,
           senderIsOwner: params.senderIsOwner,
+          conversationToolPolicy: params.conversationToolPolicy,
+          inputProvenance: params.inputProvenance,
+          trustedInternalHandoff: params.trustedInternalHandoff,
           trigger: params.trigger,
+          continuesConversation: params.continuesConversation,
           approvalReviewerDeviceId: params.approvalReviewerDeviceId,
           sourceReplyDeliveryMode,
           taskSuggestionDeliveryMode: params.taskSuggestionDeliveryMode,
@@ -529,6 +551,7 @@ export function resolveGatewayScopedTools(
           wrapBeforeToolCallHook: false,
         })
       : [];
+  assertCurrent();
   // CLI backends already own their local shell. This extra surface is deliberately
   // fixed to node so it cannot become a second path to Gateway-local execution.
   const baseTools = nodeExecSurface

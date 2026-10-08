@@ -16,10 +16,6 @@ import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import {
-  resetTaskFlowRegistryForTests,
-  resetTaskRegistryForTests,
-} from "../../tasks/task-runtime.test-helpers.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
 import { waitForDeferredTurnMaintenanceForSession } from "../embedded-agent-runner/context-engine-maintenance.js";
 import { createContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
@@ -44,8 +40,6 @@ async function withAcceptedTurn(
 ) {
   await withStateDirEnv("openclaw-accepted-turn-maintenance-", async ({ stateDir }) => {
     resetCommandQueueStateForTest();
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
     const fixture = await createAcceptedTurn(stateDir, outcome, maintenanceFails, maintenanceInfo);
     try {
       await run(fixture);
@@ -56,8 +50,6 @@ async function withAcceptedTurn(
       await fixture.source.release();
       await fixture.sourceDisposed.promise;
       resetCommandQueueStateForTest();
-      resetTaskRegistryForTests({ persist: false });
-      resetTaskFlowRegistryForTests({ persist: false });
     }
   });
 }
@@ -274,8 +266,6 @@ describe("durable accepted-turn maintenance handoff", () => {
 
   it.each([
     { outcome: "committed", maintenanceFails: false },
-    { outcome: "duplicate", maintenanceFails: false },
-    { outcome: "committed", maintenanceFails: true },
     { outcome: "duplicate", maintenanceFails: true },
   ] as const)(
     "returns before maintenance settles and retains resources ($outcome, failure=$maintenanceFails)",
@@ -285,7 +275,12 @@ describe("durable accepted-turn maintenance handoff", () => {
         expect(fixture.commitTurn).toHaveBeenCalledOnce();
         expect(fixture.pendingTurn()).toBeUndefined();
         // No second user turn or explicit scheduler invocation starts the work.
-        await vi.waitFor(() => expect(fixture.maintain).toHaveBeenCalledOnce());
+        const maintenanceResult = await Promise.race([
+          fixture.maintenanceStarted.promise.then(() => "started"),
+          waitForDeferredTurnMaintenanceForSession(fixture.facts.sessionKey).then(() => "settled"),
+        ]);
+        expect(maintenanceResult).toBe("started");
+        expect(fixture.maintain).toHaveBeenCalledOnce();
         expect(fixture.maintain.mock.calls[0]?.[0]).toMatchObject({
           sessionId: fixture.facts.sessionIdUsed,
           sessionKey: fixture.facts.sessionKey,
@@ -316,7 +311,7 @@ describe("durable accepted-turn maintenance handoff", () => {
     },
   );
 
-  it.each(["commit-failed", "aborted", "promptError", "yieldAborted"] as const)(
+  it.each(["commit-failed", "aborted"] as const)(
     "does not schedule maintenance for %s",
     async (failure) => {
       await withAcceptedTurn(

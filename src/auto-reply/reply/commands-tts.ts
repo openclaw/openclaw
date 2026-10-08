@@ -1,20 +1,13 @@
 // Implements text-to-speech commands and persisted voice preferences.
 import crypto from "node:crypto";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
 import { readLatestAssistantTextFromSessionTranscript } from "../../config/sessions.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   isUnscopedSessionKeySentinel,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
-import {
-  canonicalizeSpeechProviderId,
-  getSpeechProvider,
-  listSpeechProviders,
-} from "../../tts/provider-registry.js";
+import { getSpeechProvider, listSpeechProviders } from "../../tts/provider-registry.js";
 import {
   getResolvedSpeechProviderConfig,
   getLastTtsAttempt,
@@ -48,52 +41,25 @@ import {
 } from "./commands-session-store.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 
-type ParsedTtsCommand = {
-  action: string;
-  args: string;
-};
-
-type TtsAttemptDetail = NonNullable<
-  NonNullable<ReturnType<typeof getLastTtsAttempt>>["attempts"]
->[number];
+const log = createSubsystemLogger("auto-reply/commands-tts");
 
 type TtsCommandParams = Parameters<CommandHandler>[0];
 
-function parseTtsCommand(normalized: string): ParsedTtsCommand | null {
-  // Accept `/tts` and `/tts <action> [args]` as a single control surface.
+function parseTtsCommand(normalized: string) {
   const rest = matchCommandPrefix(normalized, "/tts");
   if (rest === null) {
     return null;
   }
-  const [action, ...tail] = (rest || "status").split(/\s+/);
+  const [action = "", ...tail] = (rest || "status").split(/\s+/);
   return {
-    action: normalizeOptionalLowercaseString(action) ?? "",
-    args: normalizeOptionalString(tail.join(" ")) ?? "",
+    action: action.toLowerCase(),
+    args: tail.join(" "),
   };
 }
 
-function formatAttemptDetails(attempts: TtsAttemptDetail[] | undefined): string | undefined {
-  if (!attempts || attempts.length === 0) {
-    return undefined;
-  }
-  return attempts
-    .map((attempt) => {
-      const reason = attempt.reasonCode === "success" ? "ok" : attempt.reasonCode;
-      const latency = Number.isFinite(attempt.latencyMs) ? ` ${attempt.latencyMs}ms` : "";
-      const persona =
-        attempt.persona && attempt.personaBinding && attempt.personaBinding !== "none"
-          ? ` persona=${attempt.persona}:${attempt.personaBinding}`
-          : "";
-      return `${attempt.provider}:${attempt.outcome}(${reason})${persona}${latency}`;
-    })
-    .join(", ");
-}
-
-function ttsUsage(): ReplyPayload {
-  // Keep usage in one place so help/validation stays consistent.
-  return {
-    text:
-      `🔊 **TTS (Text-to-Speech) Help**\n\n` +
+function ttsUsage(): CommandHandlerResult {
+  return stopWithText(
+    `🔊 **TTS (Text-to-Speech) Help**\n\n` +
       `**Commands:**\n` +
       `• /tts on — Enable automatic TTS for replies\n` +
       `• /tts off — Disable TTS\n` +
@@ -117,11 +83,7 @@ function ttsUsage(): ReplyPayload {
       `/tts limit 2000\n` +
       `/tts latest\n` +
       `/tts audio Hello, this is a test!`,
-  };
-}
-
-function hashTtsReadLatestText(text: string): string {
-  return crypto.createHash("sha256").update(text).digest("hex");
+  );
 }
 
 async function buildTtsAudioReply(params: {
@@ -131,30 +93,27 @@ async function buildTtsAudioReply(params: {
   accountId?: string;
   prefsPath: string;
   agentId?: string;
-}): Promise<{ reply: ReplyPayload } | { error: string }> {
+}): Promise<{ reply: ReplyPayload } | { error: CommandHandlerResult }> {
   const start = Date.now();
-  const result = await textToSpeech({
-    text: params.text,
-    cfg: params.cfg,
-    channel: params.channel,
-    accountId: params.accountId,
-    prefsPath: params.prefsPath,
-    agentId: params.agentId,
+  const result = await textToSpeech(params);
+  const success = result.success && Boolean(result.audioPath);
+  setLastTtsAttempt({
+    timestamp: Date.now(),
+    success,
+    textLength: params.text.length,
+    summarized: false,
+    persona: result.persona,
+    attemptedProviders: result.attemptedProviders,
+    attempts: result.attempts,
+    ...(success
+      ? {
+          provider: result.provider,
+          fallbackFrom: result.fallbackFrom,
+          latencyMs: result.latencyMs,
+        }
+      : { error: result.error, latencyMs: Date.now() - start }),
   });
-
-  if (result.success && result.audioPath) {
-    setLastTtsAttempt({
-      timestamp: Date.now(),
-      success: true,
-      textLength: params.text.length,
-      summarized: false,
-      provider: result.provider,
-      persona: result.persona,
-      fallbackFrom: result.fallbackFrom,
-      attemptedProviders: result.attemptedProviders,
-      attempts: result.attempts,
-      latencyMs: result.latencyMs,
-    });
+  if (success && result.audioPath) {
     return {
       reply: {
         mediaUrl: result.audioPath,
@@ -165,18 +124,12 @@ async function buildTtsAudioReply(params: {
     };
   }
 
-  setLastTtsAttempt({
-    timestamp: Date.now(),
-    success: false,
-    textLength: params.text.length,
-    summarized: false,
-    persona: result.persona,
-    attemptedProviders: result.attemptedProviders,
-    attempts: result.attempts,
-    error: result.error,
-    latencyMs: Date.now() - start,
-  });
-  return { error: result.error ?? "unknown error" };
+  log.warn(`Audio generation failed: ${result.error ?? "unknown error"}`);
+  return {
+    error: stopWithText(
+      "⚠️ Couldn't create the audio. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.",
+    ),
+  };
 }
 
 async function handleTtsChatAction(
@@ -202,7 +155,7 @@ async function handleTtsChatAction(
     delete params.sessionEntry.ttsAuto;
     replyText = "🔊 TTS chat override cleared.";
   } else {
-    return { shouldContinue: false, reply: ttsUsage() };
+    return ttsUsage();
   }
 
   if (!(await persistCommandSession({ ...params, touchedFields: ["ttsAuto"] }))) {
@@ -237,7 +190,7 @@ async function handleTtsLatestAction(
   if (!latestText || isSilentReplyPayloadText(latestText)) {
     return stopWithText("🎤 No readable assistant reply was found in this chat yet.");
   }
-  const hash = hashTtsReadLatestText(latestText);
+  const hash = crypto.createHash("sha256").update(latestText).digest("hex");
   if (params.sessionEntry.lastTtsReadLatestHash === hash) {
     return stopWithText("🔊 Latest assistant reply was already sent as audio.");
   }
@@ -251,7 +204,7 @@ async function handleTtsLatestAction(
     agentId: targetAgentId,
   });
   if ("error" in audio) {
-    return stopWithText(`❌ Error generating audio: ${audio.error}`);
+    return audio.error;
   }
 
   params.sessionEntry.lastTtsReadLatestHash = hash;
@@ -301,22 +254,29 @@ function handleTtsStatusAction(
       if (last.fallbackFrom && last.provider && last.fallbackFrom !== last.provider) {
         lines.push(`Fallback: ${last.fallbackFrom} -> ${last.provider}`);
       }
-      if (last.attemptedProviders && last.attemptedProviders.length > 1) {
-        lines.push(`Attempts: ${last.attemptedProviders.join(" -> ")}`);
-      }
-      const details = formatAttemptDetails(last.attempts);
-      if (details) {
-        lines.push(`Attempt details: ${details}`);
-      }
-      lines.push(`Latency: ${last.latencyMs ?? 0}ms`);
     } else if (last.error) {
       lines.push(`Error: ${last.error}`);
-      if (last.attemptedProviders && last.attemptedProviders.length > 0) {
+    }
+    if (last.success || last.error) {
+      if (last.attemptedProviders && last.attemptedProviders.length > (last.success ? 1 : 0)) {
         lines.push(`Attempts: ${last.attemptedProviders.join(" -> ")}`);
       }
-      const details = formatAttemptDetails(last.attempts);
+      const details = last.attempts
+        ?.map((attempt) => {
+          const reason = attempt.reasonCode === "success" ? "ok" : attempt.reasonCode;
+          const latency = Number.isFinite(attempt.latencyMs) ? ` ${attempt.latencyMs}ms` : "";
+          const personaDetail =
+            attempt.persona && attempt.personaBinding && attempt.personaBinding !== "none"
+              ? ` persona=${attempt.persona}:${attempt.personaBinding}`
+              : "";
+          return `${attempt.provider}:${attempt.outcome}(${reason})${personaDetail}${latency}`;
+        })
+        .join(", ");
       if (details) {
         lines.push(`Attempt details: ${details}`);
+      }
+      if (last.success) {
+        lines.push(`Latency: ${last.latencyMs ?? 0}ms`);
       }
     }
   }
@@ -333,11 +293,10 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
       accountId,
     });
     const prefsPath = resolveTtsPrefsPath(config);
-    const action = parsed.action;
-    const args = parsed.args;
+    const { action, args } = parsed;
 
     if (action === "help") {
-      return { shouldContinue: false, reply: ttsUsage() };
+      return ttsUsage();
     }
 
     if (action === "on" || action === "off") {
@@ -371,10 +330,7 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
         prefsPath,
         agentId: params.agentId,
       });
-      if (!("error" in audio)) {
-        return { shouldContinue: false, reply: audio.reply };
-      }
-      return stopWithText(`❌ Error generating audio: ${audio.error}`);
+      return "error" in audio ? audio.error : { shouldContinue: false, reply: audio.reply };
     }
 
     if (action === "provider") {
@@ -409,11 +365,10 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
       const requested = args.toLowerCase();
       const resolvedProvider = getSpeechProvider(requested, params.cfg);
       if (!resolvedProvider) {
-        return { shouldContinue: false, reply: ttsUsage() };
+        return ttsUsage();
       }
 
-      const nextProvider =
-        canonicalizeSpeechProviderId(requested, params.cfg) ?? resolvedProvider.id;
+      const nextProvider = resolvedProvider.id;
       setTtsProvider(prefsPath, nextProvider);
       return stopWithText(`✅ TTS provider set to ${nextProvider}.`);
     }
@@ -488,7 +443,7 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
       }
       const requested = args.toLowerCase();
       if (requested !== "on" && requested !== "off") {
-        return { shouldContinue: false, reply: ttsUsage() };
+        return ttsUsage();
       }
       setSummarizationEnabled(prefsPath, requested === "on");
       return stopWithText(
@@ -500,6 +455,6 @@ export const handleTtsCommands: CommandHandler = defineAuthorizedTextCommand(
       return handleTtsStatusAction(params, config, prefsPath);
     }
 
-    return { shouldContinue: false, reply: ttsUsage() };
+    return ttsUsage();
   },
 );

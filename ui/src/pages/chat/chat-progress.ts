@@ -12,8 +12,6 @@ type WorkingProgress = {
   startedAt: number;
 };
 
-type WorkingProgressCache = WorkingProgress;
-
 const CONTEXT_COMPACTION_CUSTOM_TYPE = "openclaw.context-compaction";
 
 export function isContextCompactionMessage(message: unknown): boolean {
@@ -32,66 +30,58 @@ export function matchesCompactionOperation(message: unknown, status: CompactionS
   );
 }
 
-const workingProgressBySession = new Map<string, WorkingProgressCache>();
+const workingProgressBySession = new Map<string, WorkingProgress>();
 let anonymousWorkingProgressId = 0;
 
 export function buildGuardianNoticeItem(
   notice: ChatGuardianNotice,
 ): Extract<ChatItem, { kind: "notice" }> {
   const action = notice.command ?? t("chat.systemNotice.guardian.requestedAction");
+  const item = {
+    kind: "notice" as const,
+    key: notice.key,
+    icon: "shieldCheck" as const,
+    timestamp: notice.timestamp,
+  };
   if (notice.source === "system") {
     return {
-      kind: "notice",
-      key: notice.key,
+      ...item,
       icon: "cpu",
       label: t("common.system"),
       text: notice.message ?? "",
-      timestamp: notice.timestamp,
     };
   }
   if (notice.kind === "approved") {
     return {
-      kind: "notice",
-      key: notice.key,
-      icon: "shieldCheck",
+      ...item,
       label: t("chat.systemNotice.guardian.approvedSummary", { action }),
       text: "",
-      timestamp: notice.timestamp,
     };
   }
   if (notice.kind === "warning") {
     return {
-      kind: "notice",
-      key: notice.key,
-      icon: "shieldCheck",
+      ...item,
       label: t("chat.systemNotice.guardian.warningLabel"),
       text: notice.message ?? t("chat.systemNotice.guardian.warningFallback"),
-      timestamp: notice.timestamp,
       tone: "danger",
     };
   }
   if (notice.kind === "reviewing" || notice.kind === "strict-review-required") {
     return {
-      kind: "notice",
-      key: notice.key,
-      icon: "shieldCheck",
+      ...item,
       label: t("chat.systemNotice.guardian.strictReviewRequiredLabel"),
       text: t("chat.systemNotice.guardian.strictReviewRequiredSummary"),
-      timestamp: notice.timestamp,
       tone: "danger",
     };
   }
   return {
-    kind: "notice",
-    key: notice.key,
-    icon: "shieldCheck",
+    ...item,
     label: t("chat.systemNotice.guardian.deniedLabel"),
     text: t("chat.systemNotice.guardian.deniedSummary", {
       action,
       risk: notice.riskLevel ?? t("chat.systemNotice.guardian.unknownRisk"),
       rationale: notice.rationale ?? t("chat.systemNotice.guardian.noRationale"),
     }),
-    timestamp: notice.timestamp,
     tone: "danger",
   };
 }
@@ -129,11 +119,6 @@ export function buildCompactionDividerItem(
             count: formatCompactTokenCount(tokensSaved),
           }),
         }),
-    ...(phase === "complete" && marker.kind === "compaction"
-      ? {
-          description: t("chat.compaction.description"),
-        }
-      : {}),
     timestamp,
   };
 }
@@ -274,8 +259,28 @@ export type TurnRecapWatch = {
   agentId: string | null;
   gatewayClient: GatewayBrowserClient | null;
   runId: string;
+  /** For a run that resumed a handoff: when its request was asked and the runs before it. */
+  request: TurnRequest | null;
   recap: TurnRecap | null;
 };
+
+type TurnRequest = { askedAt: number; runIds: readonly string[] };
+
+/** Output tokens across the runs of one answer; null unless every run has reported. */
+export function sumRunOutputTokens(
+  usageByRun: ReadonlyMap<string, RunOutputUsage> | undefined,
+  runIds: readonly string[],
+): number | null {
+  let total = 0;
+  for (const runId of runIds) {
+    const usage = usageByRun?.get(runId);
+    if (!usage) {
+      return null;
+    }
+    total += usage.outputTokens;
+  }
+  return runIds.length > 0 ? total : null;
+}
 
 export function resolveTurnRecap(
   host: { turnRecapWatch: TurnRecapWatch | null },
@@ -283,8 +288,8 @@ export function resolveTurnRecap(
     sessionKey: string;
     agentId?: string | null;
     gatewayClient?: GatewayBrowserClient | null;
-    indicator?: { runId?: string };
-    row?: Pick<GatewaySessionRow, "lastRunId" | "status" | "runtimeMs">;
+    indicator?: { runId?: string; request?: TurnRequest };
+    row?: Pick<GatewaySessionRow, "lastRunId" | "status" | "runtimeMs" | "endedAt">;
     usageByRun?: ReadonlyMap<string, RunOutputUsage>;
   },
 ): (TurnRecap & { runId: string }) | null {
@@ -304,19 +309,26 @@ export function resolveTurnRecap(
       return null;
     }
     if (watch?.runId !== runId) {
-      watch = { sessionKey, agentId, gatewayClient, runId, recap: null };
+      watch = { sessionKey, agentId, gatewayClient, runId, request: null, recap: null };
     }
+    watch.request = indicator.request ?? null;
   }
   host.turnRecapWatch = watch;
   if (!watch) {
     return null;
   }
   const outputTokens =
-    usageByRun?.get(watch.runId)?.outputTokens ?? watch.recap?.outputTokens ?? null;
+    sumRunOutputTokens(usageByRun, [...(watch.request?.runIds ?? []), watch.runId]) ??
+    watch.recap?.outputTokens ??
+    null;
   if (row?.lastRunId === watch.runId) {
     const runtimeMs = row.runtimeMs;
     if (row.status === "done" && typeof runtimeMs === "number" && Number.isFinite(runtimeMs)) {
-      watch.recap = { runtimeMs, outputTokens };
+      // A resumed answer reports the whole request, the wait included. Both
+      // ends are on the Gateway's clock; it never reports less than its last run.
+      const sinceRequest =
+        watch.request && typeof row.endedAt === "number" ? row.endedAt - watch.request.askedAt : 0;
+      watch.recap = { runtimeMs: Math.max(runtimeMs, sinceRequest), outputTokens };
     } else if (row.status && row.status !== "done") {
       watch.recap = null;
     }

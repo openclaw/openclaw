@@ -1,29 +1,22 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { expect, it, vi } from "vitest";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPathAsync,
-  closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import { saveSkillLibrary } from "../library/service.js";
 import * as workspaceLoader from "../loading/workspace-skill-loader.js";
 import type { SkillSnapshot } from "../types.js";
 import { resolveEmbeddedRunSkillEntries } from "./embedded-run-entries.js";
 
-const dirs = useAutoCleanupTempDirTracker((cleanup) =>
-  afterEach(async () => {
-    vi.restoreAllMocks();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
-    cleanup();
-  }),
-);
+const dirs = useStateDatabaseTempDirs();
 const content = "---\nname: guide\ndescription: Saved procedure\n---\n# Synthetic guide\n";
 
 async function fixture() {
@@ -61,14 +54,8 @@ async function fixture() {
 
 it("loads cold and cached library entries through the real getter without parent SQL", async () => {
   const { root, workspaceDir, snapshot, pin } = await fixture();
-  const native = requireNodeSqlite();
-  const counters = [
-    vi.spyOn(native.DatabaseSync.prototype, "prepare"),
-    vi.spyOn(native.DatabaseSync.prototype, "exec"),
-    ...(["get", "all", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(native.StatementSync.prototype, method),
-    ),
-  ];
+  requireNodeSqlite();
+  const sql = observeMainThreadSql();
   try {
     await withEnvAsync(
       { OPENCLAW_STATE_DIR: root, OPENCLAW_BUNDLED_SKILLS_DIR: workspaceDir },
@@ -92,11 +79,9 @@ it("loads cold and cached library entries through the real getter without parent
         await closeOpenClawStateDatabaseAsync();
       },
     );
-    expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    sql.expectIdle();
   } finally {
-    for (const counter of counters) {
-      counter.mockRestore();
-    }
+    sql.restore();
   }
 });
 

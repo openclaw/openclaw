@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../state/openclaw-agent-db.js";
 import * as stateDatabase from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
@@ -77,6 +80,13 @@ describe("blocked migration receipt provenance", () => {
       const execPath = path.join(stateDir, "exec-approvals.json");
       const execBytes = JSON.stringify({ version: 1, defaults: {}, agents: {} });
       fs.writeFileSync(execPath, execBytes);
+      if (exitHeartbeat) {
+        // Held or empty fleets intentionally avoid the writer lease this fault requires.
+        stateDatabase.openOpenClawStateDatabase({ env });
+        openOpenClawAgentDatabase({ agentId: "planner", env });
+        closeOpenClawAgentDatabasesForTest();
+        stateDatabase.closeOpenClawStateDatabaseForTest();
+      }
       const plan = await planLegacyStateMigrationsReadOnly({
         mode: "doctor",
         candidate: { root, version: "test" },
@@ -242,11 +252,9 @@ describe("blocked migration receipt provenance", () => {
         database.exec("PRAGMA user_version = 999");
         database.close();
       } else {
-        vi.spyOn(stateDatabase, "repairOpenClawStateDatabaseSchemaIfNeeded").mockImplementationOnce(
-          () => {
-            throw new Error(failure.message);
-          },
-        );
+        vi.spyOn(stateDatabase, "prepareOpenClawStateDatabaseSchema").mockImplementationOnce(() => {
+          throw new Error(failure.message);
+        });
       }
       const receipts: LegacyStateMigrationStepReceipt[] = [];
 

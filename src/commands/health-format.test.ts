@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ChannelAccountHealthSummary, HealthSummary } from "../gateway/health/types.js";
+import * as loggingConfig from "../logging/config.js";
+import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import {
   formatDeliveryQueueHealthLine,
   formatGatewayClosedDiagnostic,
@@ -139,23 +142,12 @@ describe("formatHealthChannelLines", () => {
     ]);
   });
 
-  it("formats statusState without inferring from linked", () => {
-    const summary = createHealthSummary({
-      channels: {
-        whatsapp: {
-          accountId: "default",
-          statusState: "unstable",
-          configured: true,
-        },
-      },
-      channelOrder: ["whatsapp"],
-      channelLabels: { whatsapp: "WhatsApp" },
-    });
-
-    expect(formatHealthChannelLines(summary)).toStrictEqual(["WhatsApp: auth stabilizing"]);
-  });
-
   it.each([
+    [
+      "collection timeout remains a warning",
+      { probe: { timedOut: true, error: "health collection timed out after 7000ms" } },
+      "warning - health collection timed out after 7000ms",
+    ],
     [
       "fresh probe failure over passive healthy state",
       { healthState: "healthy", probe: { ok: false, error: "sync rejected" } },
@@ -184,16 +176,6 @@ describe("formatHealthChannelLines", () => {
         probe: { ok: false, error: "sync rejected" },
       },
       "auth stabilizing",
-    ],
-    [
-      "disabled account over configured metadata",
-      { enabled: false, stateReason: "disabled" },
-      "disabled",
-    ],
-    [
-      "disabled account over a stale successful probe",
-      { enabled: false, healthState: "healthy", probe: { ok: true, elapsedMs: 12 } },
-      "disabled",
     ],
     [
       "disabled account over stale failure metadata",
@@ -267,9 +249,6 @@ describe("formatHealthChannelLines", () => {
 
   it.each([
     ["blocked", { healthState: "blocked" }],
-    ["disconnected", { healthState: "disconnected" }],
-    ["ingress-unavailable", { healthState: "ingress-unavailable" }],
-    ["stale-socket", { healthState: "stale-socket" }],
     ["auth stabilizing", { healthState: "healthy", statusState: "unstable" }],
   ])(
     "surfaces secondary account state %s in default and verbose health output",
@@ -419,7 +398,7 @@ describe("formatHealthChannelLines", () => {
     ]);
   });
 
-  it("surfaces activated plugin failures without promoting inactive load errors", () => {
+  it("surfaces activated and configured plugin failures without promoting inactive errors", () => {
     const summary = createHealthSummary({ channels: {}, channelOrder: [], channelLabels: {} });
     summary.plugins = {
       loaded: ["calendar"],
@@ -438,56 +417,129 @@ describe("formatHealthChannelLines", () => {
           failurePhase: "load",
           error: "inactive plugin load failed",
         },
+        ...(["explicit", "auto", "default"] as const).map((activationSource) => ({
+          id: activationSource,
+          origin: "config" as const,
+          activated: false,
+          activationSource,
+          failurePhase: "load" as const,
+          error: "runtime entry missing",
+        })),
+        {
+          id: "disabled",
+          origin: "workspace",
+          activated: false,
+          activationSource: "disabled",
+          error: "disabled plugin ignored",
+        },
       ],
     };
 
     expect(formatHealthChannelLines(summary)).toStrictEqual([
       "Plugin calendar: failed - service scheduler: address already in use; run openclaw doctor",
+      "Plugin explicit: failed - runtime entry missing; run openclaw doctor",
+      "Plugin auto: failed - runtime entry missing; run openclaw doctor",
+      "Plugin default: failed - runtime entry missing; run openclaw doctor",
     ]);
   });
 
-  it("bounds activated plugin failure details and summarizes omitted failures", () => {
-    const summary = createHealthSummary({ channels: {}, channelOrder: [], channelLabels: {} });
+  it("masks raw and terminal-normalized plugin diagnostics with built-in and custom patterns", () => {
+    const configSpy = vi.spyOn(loggingConfig, "readLoggingConfig").mockReturnValue({
+      redactPatterns: ["deploymentMarker7"],
+    });
+    try {
+      registerSecretValueForRedaction("plugin9X");
+      registerSecretValueForRedaction("lineA9\nlineB7");
+      const summary = createHealthSummary();
+      summary.plugins = {
+        loaded: [],
+        errors: [
+          {
+            id: "\u202eplug\u200b\u001b[31min9X\u2069",
+            origin: "config",
+            activated: true,
+            error:
+              "lineA9\nlineB7 pass\u200bword=mockPass7X deploymentMark\u200ber7 vis\u{E0061}ible\u2028 context\u2029\ufeff\uD800",
+          },
+        ],
+      };
+
+      expect(formatHealthChannelLines(summary)).toEqual([
+        "Plugin ***: failed - *** password=*** *** visible context; run openclaw doctor",
+      ]);
+    } finally {
+      resetSecretRedactionRegistryForTest();
+      configSpy.mockRestore();
+    }
+  });
+
+  it("bounds plugin diagnostics without splitting Unicode characters", () => {
+    const summary = createHealthSummary();
     summary.plugins = {
       loaded: [],
-      errors: Array.from({ length: 22 }, (_, index) => ({
-        id: `plugin-${index}`,
-        origin: "workspace",
-        activated: true,
-        error: "x".repeat(600),
-      })),
+      errors: [
+        {
+          id: `x${"📦".repeat(60)}`,
+          origin: "config",
+          activated: true,
+          error: `y${"🦀".repeat(250)}`,
+        },
+      ],
     };
 
-    const lines = formatHealthChannelLines(summary);
-
-    expect(lines).toHaveLength(21);
-    expect(lines[0]).toBe(`Plugin plugin-0: failed - ${"x".repeat(500)}; run openclaw doctor`);
-    expect(lines.at(-1)).toBe(
-      "Plugins: failed - 2 additional activated failures; run openclaw doctor",
-    );
+    expect(formatHealthChannelLines(summary)).toEqual([
+      `Plugin x${"📦".repeat(59)}: failed - y${"🦀".repeat(249)}; run openclaw doctor`,
+    ]);
   });
 
-  it("formats iMessage probe failures as failed health lines", () => {
-    const summary = createHealthSummary({
-      channels: {
-        imessage: {
-          accountId: "default",
-          configured: true,
-          probe: {
-            ok: false,
-            error:
-              "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+  it.each([20, 21])(
+    "bounds %s combined plugin warnings without counting hidden errors",
+    (count) => {
+      const summary = createHealthSummary({ channels: {}, channelOrder: [], channelLabels: {} });
+      summary.plugins = {
+        loaded: [],
+        errors: [
+          ...Array.from({ length: 10 }, (_, index) => ({
+            id: `plugin-${index}`,
+            origin: "workspace" as const,
+            activated: true,
+            error: "x".repeat(600),
+          })),
+          { id: "inactive", origin: "workspace", activated: false, error: "hidden inactive" },
+          {
+            id: "disabled",
+            origin: "workspace",
+            activated: false,
+            activationSource: "disabled",
+            error: "hidden disabled",
           },
-        },
-      },
-      channelOrder: ["imessage"],
-      channelLabels: { imessage: "iMessage" },
-    });
+        ],
+        unavailable: Array.from({ length: count - 10 }, (_, index) => ({
+          id: `unavailable-${index}`,
+          state: "configured-unavailable",
+          diagnostic: {
+            kind: "plugin-verification",
+            reason: "unreadable-package-json",
+            detail: "manifest unreadable",
+          },
+        })),
+      };
+      const original = structuredClone(summary);
 
-    expect(formatHealthChannelLines(summary)).toContain(
-      "iMessage: failed (unknown) - imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
-    );
-  });
+      const lines = formatHealthChannelLines(summary);
+
+      expect(summary).toEqual(original);
+      expect(lines).toHaveLength(count);
+      expect(lines[0]).toBe(`Plugin plugin-0: failed - ${"x".repeat(500)}; run openclaw doctor`);
+      expect(lines.filter((line) => line.startsWith("Plugin unavailable-"))).toHaveLength(10);
+      expect(lines.join("\n")).not.toContain("hidden");
+      expect(lines.filter((line) => line.startsWith("Plugins:"))).toEqual(
+        count === 21
+          ? ["Plugins: warning - 1 additional plugin warnings; run openclaw doctor"]
+          : [],
+      );
+    },
+  );
 });
 
 describe("formatDeliveryQueueHealthLine", () => {

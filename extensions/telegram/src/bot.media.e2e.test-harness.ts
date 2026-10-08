@@ -1,6 +1,4 @@
 // Telegram plugin module implements bot.media harness behavior.
-import { mkdtempSync, rmSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -15,8 +13,12 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { finalizeInboundContext, resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, vi, type Mock } from "vitest";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+  useSessionStoreTempDirs,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { afterAll, afterEach, beforeEach, vi, type Mock } from "vitest";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import { runTelegramChannelInboundEventWithHarness } from "./bot.test-helpers.js";
 import { setTelegramRuntime } from "./runtime.js";
@@ -87,19 +89,11 @@ async function defaultSaveMediaBuffer(buffer: Buffer, contentType?: string) {
 const saveMediaBufferSpy: Mock = vi.fn(defaultSaveMediaBuffer);
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 let mediaHarnessStoreRoot: string | undefined;
+const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-telegram-media-e2e-");
 
 function ensureMediaHarnessStoreRoot(): string {
-  mediaHarnessStoreRoot ??= mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-media-e2e-"));
+  mediaHarnessStoreRoot ??= sessionDirs.make();
   return mediaHarnessStoreRoot;
-}
-
-async function cleanupMediaHarnessStoreRoot(): Promise<void> {
-  if (!mediaHarnessStoreRoot) {
-    return;
-  }
-  await closeOpenClawStateDatabaseAsync();
-  rmSync(mediaHarnessStoreRoot, { recursive: true, force: true });
-  mediaHarnessStoreRoot = undefined;
 }
 
 export function setNextSavedMediaPath(params: {
@@ -128,6 +122,7 @@ type ApiStub = {
   getChat: Mock;
   sendChatAction: Mock;
   sendMessage: Mock;
+  deleteMyCommands: () => Promise<void>;
   setMyCommands: (commands: Array<{ command: string; description: string }>) => Promise<void>;
 };
 
@@ -136,6 +131,7 @@ const apiStub: ApiStub = {
   getChat: vi.fn(async () => undefined),
   sendChatAction: sendChatActionSpy,
   sendMessage: vi.fn(async () => ({ message_id: 1 })),
+  deleteMyCommands: vi.fn(async () => undefined),
   setMyCommands: vi.fn(async () => undefined),
 };
 
@@ -144,6 +140,7 @@ export const telegramMediaHarnessSendMessageSpy = apiStub.sendMessage;
 const throttlerSpy = vi.fn(() => "throttler");
 const defaultRuntimeConfig = (() =>
   ({
+    messages: { inbound: { debounceMs: 0 } },
     channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
   }) as OpenClawConfig) as TelegramBotDeps["getRuntimeConfig"];
 
@@ -170,7 +167,6 @@ const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
     catch = vi.fn();
     constructor(public token: string) {}
   } as unknown as TelegramBotRuntimeForTest["Bot"],
-  sequentialize: (() => vi.fn()) as TelegramBotRuntimeForTest["sequentialize"],
   apiThrottler: (() => throttlerSpy()) as unknown as TelegramBotRuntimeForTest["apiThrottler"],
 };
 
@@ -182,45 +178,13 @@ const mediaHarnessReplySpy = vi.hoisted(() =>
 );
 export { mediaHarnessReplySpy };
 
-const LEGACY_MEDIA_KEYS = [
-  "MediaPath",
-  "MediaUrl",
-  "MediaType",
-  "MediaPaths",
-  "MediaUrls",
-  "MediaTypes",
-  "MediaDir",
-  "MediaWorkspaceDir",
-  "MediaTranscribedIndexes",
-  "MediaStaged",
-] as const;
-
 const mediaHarnessDispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
   vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(async (params: DispatchReplyHarnessParams) => {
     await params.dispatcherOptions.typingCallbacks?.onReplyStart?.();
-    const input = params.ctx as MsgContext & Record<string, unknown>;
-    const legacyMedia = Object.fromEntries(
-      LEGACY_MEDIA_KEYS.flatMap((key) => (key in input ? [[key, input[key]]] : [])),
-    );
-    // Preserve SDK aliases while projecting canonical media compactly, as the mocked
-    // agent boundary did before routed core acquired its own internal dispatcher.
-    const finalized = Object.assign(finalizeInboundContext(params.ctx), legacyMedia);
+    const finalized = finalizeInboundContext(params.ctx);
     const mediaPaths = (finalized.media ?? []).flatMap((fact) => (fact.path ? [fact.path] : []));
-    const mediaUrls = (finalized.media ?? []).flatMap((fact) => {
-      const value = fact.url ?? fact.path;
-      return value ? [value] : [];
-    });
-    const mediaTypes = (finalized.media ?? []).flatMap((fact) => {
-      const value = fact.contentType ?? fact.kind;
-      return value ? [value] : [];
-    });
     Object.assign(finalized, {
-      MediaPath: mediaPaths[0],
       MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
-      MediaUrl: mediaUrls[0],
-      MediaUrls: mediaUrls.length > 0 ? mediaUrls : undefined,
-      MediaType: mediaTypes[0],
-      MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
     });
     const reply = await mediaHarnessReplySpy(finalized, params.replyOptions);
     const payloads = reply === undefined ? [] : Array.isArray(reply) ? reply : [reply];
@@ -270,7 +234,7 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
   wasSentByBot: vi.fn(() => false) as TelegramBotDeps["wasSentByBot"],
 };
 
-beforeEach(async () => {
+beforeEach(() => {
   // Gateway starts the bot after registering this hook; direct harness construction must
   // preserve that boundary so topic routing does not bootstrap bundled plugins mid-turn.
   setActivePluginRegistry(
@@ -286,8 +250,8 @@ beforeEach(async () => {
       },
     ]),
   );
-  await cleanupMediaHarnessStoreRoot();
-  resetPluginStateStoreForTests();
+  mediaHarnessStoreRoot = undefined;
+  resetPluginStateStoreForTests({ closeDatabase: false });
   process.env.OPENCLAW_STATE_DIR = ensureMediaHarnessStoreRoot();
   telegramBotDepsForTest.getRuntimeConfig = defaultRuntimeConfig;
   resetInboundDedupe();
@@ -299,8 +263,14 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await cleanupMediaHarnessStoreRoot();
+  const caseRoot = mediaHarnessStoreRoot;
+  mediaHarnessStoreRoot = undefined;
   resetPluginRuntimeStateForTest();
+  // Album timing is wall-clock sensitive; retire this case's Workers before the next case.
+  if (caseRoot) {
+    await closeOpenClawAgentDatabasesAsync(caseRoot);
+  }
+  await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
   if (originalStateDir === undefined) {
     delete process.env.OPENCLAW_STATE_DIR;
@@ -334,7 +304,8 @@ vi.mock("undici/index.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./telegram-media.runtime.js", () => ({
+vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>()),
   readRemoteMediaBuffer: (...args: Parameters<typeof readRemoteMediaBufferSpy>) =>
     readRemoteMediaBufferSpy(...args),
   getAgentScopedMediaLocalRoots: vi.fn(() => []),
@@ -361,7 +332,7 @@ vi.doMock("./bot-message-context.session.runtime.js", async () => {
   );
   return {
     ...actual,
-    readSessionUpdatedAt: () => undefined,
+    readSessionUpdatedAtAsync: async () => undefined,
     resolveStorePath: (storePath?: string) =>
       storePath ?? path.join(ensureMediaHarnessStoreRoot(), "sessions.json"),
   };

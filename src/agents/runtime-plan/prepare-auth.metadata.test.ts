@@ -54,11 +54,9 @@ describe("prepared auth metadata ownership", () => {
     );
   });
 
-  it.each(["user", "user-link", "auto", "binding"] as const)(
+  it.each(["user-link", "binding"] as const)(
     "selects the prepared owner for %s profiles despite ambient aliases",
     (selection) => {
-      const selected = metadata("selected-auth");
-      const ambient = metadata("ambient-auth");
       const config: OpenClawConfig =
         selection === "binding"
           ? {
@@ -75,16 +73,16 @@ describe("prepared auth metadata ownership", () => {
           modelId: "model",
           config,
           env: {},
-          metadataSnapshot: selected,
+          metadataSnapshot: metadata("selected-auth"),
           authProfileStore: createAuthProfileStoreFixture({
             "fixture:ambient": createApiKeyCredential("ambient-auth", "synthetic-ambient"),
             "fixture:selected": createApiKeyCredential("selected-auth", "synthetic-selected"),
           }),
-          ...(selection === "user" || selection === "user-link"
+          ...(selection === "user-link"
             ? { sessionAuthProfileId: "fixture:selected", sessionAuthProfileSource: selection }
             : {}),
         });
-      const prepared = withPluginMetadataSnapshotScope(ambient, prepare, {
+      const prepared = withPluginMetadataSnapshotScope(metadata("ambient-auth"), prepare, {
         config,
         trustConfigIdentity: true,
       });

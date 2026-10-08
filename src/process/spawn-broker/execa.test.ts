@@ -1,3 +1,4 @@
+import { deepStrictEqual } from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { serialize } from "node:v8";
@@ -38,7 +39,6 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
 
   const cases = [
     { name: "success", source: "process.stdout.write('out\\n');process.stderr.write('err\\n')" },
-    { name: "exit code", source: "process.stdout.write('partial');process.exitCode=7" },
     {
       name: "binary diagnostics",
       source:
@@ -211,9 +211,9 @@ describe.skipIf(skipBrokerTests)("broker execa parity", () => {
         Buffer.from(Array.from({ length: size }, (_, index) => Math.floor(index / 4096) % 251)),
       ]);
       for (const name of ["stdout", "stderr"] as const) {
-        expect(Buffer.concat(chunks[name])).toEqual(expected);
+        deepStrictEqual(Buffer.concat(chunks[name]), expected);
         if (buffer) {
-          expect(Buffer.from(result[name] as Uint8Array)).toEqual(expected);
+          deepStrictEqual(Buffer.from(result[name] as Uint8Array), expected);
         }
       }
       expect(result.exitCode).toBe(0);

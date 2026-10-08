@@ -9,14 +9,17 @@ sidebarTitle: "Image generation"
 ---
 
 The `image_generate` tool creates and edits images through your configured
-providers. In chat sessions it runs asynchronously: OpenClaw records a
-background task, returns the task id immediately, and wakes the agent when
-the provider finishes. The task record stays silent, while the completion
-agent follows the session's current visible-reply contract with a short
+providers. In chat sessions it runs asynchronously: the native media-generation
+owner tracks the operation, returns the task id immediately, and wakes the agent
+when the provider finishes. The completion agent follows the session's current
+visible-reply contract with a short
 user-facing caption and every structured generated attachment. If generation
 fails, the agent returns a concise visible failure instead. If the requester
 session is inactive or its active wake fails, OpenClaw sends an idempotent
 direct fallback with the generated images so the result is not lost.
+
+You can send a follow-up while the completion agent is still working. The new
+turn waits for the completion and its delivery to settle before starting.
 
 In WebChat and the macOS app, generated attachments stay on the completion
 reply instead of appearing again in a separate image-only message. Replaying
@@ -135,6 +138,10 @@ current session:
 ```text
 /tool image_generate action=status
 ```
+
+Task status and duplicate detection are scoped to the requesting chat, even
+when direct chats share the main session transcript. Completion returns to
+the peer who requested the image.
 
 ## Provider capabilities
 

@@ -4,13 +4,14 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
+import * as sqliteReaders from "../infra/session-sqlite-migration-readers.js";
 import { invalidateRegisteredAgentDatabasesMemo } from "../state/openclaw-agent-db-registry-listing.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import * as sqliteReaders from "./doctor-session-sqlite-readers.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
+import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 import {
   RECOVERY_TRANSCRIPT_LINES,
   runPublicSessionSqlite,
@@ -18,7 +19,7 @@ import {
   useDoctorSessionSqliteTestFixture,
 } from "./doctor-session-sqlite.test-support.js";
 
-const { createLegacyStore } = useDoctorSessionSqliteTestFixture();
+const { createLegacyStore, createImportedStoreForCompaction } = useDoctorSessionSqliteTestFixture();
 
 describe("runDoctorSessionSqlite", () => {
   it.each(["absent", "populated"] as const)(
@@ -83,88 +84,90 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it("explains hard-linked legacy index refusal and supports an independent copy before retry", async () => {
-    const store = createLegacyStore();
-    const snapshotPath = path.join(store.tempDir, "snapshot-sessions.json");
-    const originalBytes = fs.readFileSync(store.storePath);
-    fs.linkSync(store.storePath, snapshotPath);
-
-    const refused = importLegacyStore(store);
-    await expect(refused).rejects.toThrow(store.storePath);
-    await expect(refused).rejects.toThrow("nlink=2");
-    await expect(refused).rejects.toThrow("another hard link references this inode");
-    await expect(refused).rejects.toThrow("backup");
-    await expect(refused).rejects.toThrow("#hard-linked-legacy-artifacts");
-    expect(fs.lstatSync(store.storePath).nlink).toBe(2);
-    expect(fs.readFileSync(store.storePath)).toEqual(originalBytes);
-    expect(fs.readFileSync(snapshotPath)).toEqual(originalBytes);
-    expect(fs.existsSync(store.transcriptPath)).toBe(true);
-
-    const copyPath = path.join(store.sessionDir, "sessions-copy.tmp");
-    fs.copyFileSync(store.storePath, copyPath, fs.constants.COPYFILE_EXCL);
-    expect(fs.readFileSync(copyPath)).toEqual(originalBytes);
-    fs.renameSync(copyPath, store.storePath);
-    expect(fs.lstatSync(store.storePath).nlink).toBe(1);
-    expect((await importLegacyStore(store)).totals.issues).toBe(0);
-    expect(fs.readFileSync(snapshotPath)).toEqual(originalBytes);
-  });
-
-  it("explains hard-linked transcript archive refusal without changing either link", async () => {
-    const store = createLegacyStore();
-    const snapshotPath = path.join(store.tempDir, "snapshot-transcript.jsonl");
-    const originalBytes = fs.readFileSync(store.transcriptPath);
-    fs.linkSync(store.transcriptPath, snapshotPath);
-
-    const report = await importLegacyStore(store);
-    const issue = expectDefined(
-      report.targets[0]?.issues.find((entry) => entry.code === "transcript_archive_failed"),
-      "hard-linked transcript archive refusal",
-    );
-    expect(issue.message).toContain(store.transcriptPath);
-    expect(issue.message).toContain("nlink=2");
-    expect(issue.message).toContain("another hard link references this inode");
-    expect(issue.message).toContain("backup");
-    expect(issue.message).toContain("#hard-linked-legacy-artifacts");
-    expect(fs.lstatSync(store.transcriptPath).nlink).toBe(2);
-    expect(fs.readFileSync(store.transcriptPath)).toEqual(originalBytes);
-    expect(fs.readFileSync(snapshotPath)).toEqual(originalBytes);
-    expect(fs.existsSync(store.storePath)).toBe(true);
-  });
-
-  it.skipIf(process.platform === "win32")(
-    "rejects symlink-backed legacy stores before migration",
-    async () => {
+  it.each(["index", "transcript"] as const)(
+    "explains hard-linked %s refusal without changing either link",
+    async (kind) => {
       const store = createLegacyStore();
-      const realStorePath = path.join(store.tempDir, "real-sessions.json");
-      fs.renameSync(store.storePath, realStorePath);
-      fs.symlinkSync(realStorePath, store.storePath);
-
-      await expect(importLegacyStore(store)).rejects.toThrow(
-        "Refusing session SQLite migration through symbolic link",
-      );
-
-      expect(fs.lstatSync(store.storePath).isSymbolicLink()).toBe(true);
-      expect(fs.existsSync(realStorePath)).toBe(true);
+      const sourcePath = kind === "index" ? store.storePath : store.transcriptPath;
+      const snapshotPath = path.join(store.tempDir, "snapshot");
+      const originalBytes = fs.readFileSync(sourcePath);
+      fs.linkSync(sourcePath, snapshotPath);
+      const diagnostics = [
+        sourcePath,
+        "nlink=2",
+        "another hard link references this inode",
+        "backup",
+        "#hard-linked-legacy-artifacts",
+      ];
+      if (kind === "index") {
+        const refused = importLegacyStore(store);
+        for (const message of diagnostics) {
+          await expect(refused).rejects.toThrow(message);
+        }
+      } else {
+        const report = await importLegacyStore(store);
+        const issue = expectDefined(
+          report.targets[0]?.issues.find((entry) => entry.code === "transcript_archive_failed"),
+          "hard-linked transcript archive refusal",
+        );
+        for (const message of diagnostics) {
+          expect(issue.message).toContain(message);
+        }
+      }
+      expect(fs.lstatSync(sourcePath).nlink).toBe(2);
+      expect(fs.readFileSync(sourcePath)).toEqual(originalBytes);
+      expect(fs.readFileSync(snapshotPath)).toEqual(originalBytes);
+      expect(fs.existsSync(store.storePath)).toBe(true);
       expect(fs.existsSync(store.transcriptPath)).toBe(true);
+      if (kind === "index") {
+        const copyPath = path.join(store.sessionDir, "sessions-copy.tmp");
+        fs.copyFileSync(store.storePath, copyPath, fs.constants.COPYFILE_EXCL);
+        expect(fs.readFileSync(copyPath)).toEqual(originalBytes);
+        fs.renameSync(copyPath, store.storePath);
+        expect(fs.lstatSync(store.storePath).nlink).toBe(1);
+        expect((await importLegacyStore(store)).totals.issues).toBe(0);
+        expect(fs.readFileSync(snapshotPath)).toEqual(originalBytes);
+      }
     },
   );
 
-  it.skipIf(process.platform === "win32")(
-    "rejects symlink-backed archive directories before migration",
-    async () => {
-      const store = createLegacyStore();
-      const archiveDir = path.join(path.dirname(store.sessionDir), "session-sqlite-import-archive");
-      const outsideArchiveDir = path.join(store.tempDir, "outside-archive");
-      fs.mkdirSync(outsideArchiveDir, { recursive: true });
-      fs.symlinkSync(outsideArchiveDir, archiveDir);
-
-      await expect(importLegacyStore(store)).rejects.toThrow(
-        "Refusing session SQLite migration through symbolic link",
+  it.skipIf(process.platform === "win32").each(["index", "archive", "database"] as const)(
+    "rejects a symlink-backed %s before maintenance",
+    async (kind) => {
+      const imported = kind === "database" ? await createImportedStoreForCompaction() : undefined;
+      const store = imported?.store ?? createLegacyStore();
+      const sourcePath =
+        imported?.sqlitePath ??
+        (kind === "index"
+          ? store.storePath
+          : path.join(path.dirname(store.sessionDir), "session-sqlite-import-archive"));
+      const realPath = path.join(store.tempDir, "symlink-target");
+      if (kind === "archive") {
+        fs.mkdirSync(realPath);
+      } else {
+        fs.renameSync(sourcePath, realPath);
+      }
+      fs.symlinkSync(realPath, sourcePath);
+      await expect(
+        runDoctorSessionSqlite({
+          env: store.env,
+          store: store.storePath,
+          mode: kind === "database" ? "compact" : "import",
+        }),
+      ).rejects.toThrow(
+        kind === "database"
+          ? /Cannot run session SQLite compact.*symbolic-link path/iu
+          : "Refusing session SQLite migration through symbolic link",
       );
-
-      expect(fs.existsSync(store.storePath)).toBe(true);
-      expect(fs.existsSync(store.transcriptPath)).toBe(true);
-      expect(fs.readdirSync(outsideArchiveDir)).toEqual([]);
+      expect(fs.lstatSync(sourcePath).isSymbolicLink()).toBe(true);
+      expect(fs.existsSync(realPath)).toBe(true);
+      if (kind !== "database") {
+        expect(fs.existsSync(store.transcriptPath)).toBe(true);
+        if (kind === "archive") {
+          expect(fs.existsSync(store.storePath)).toBe(true);
+          expect(fs.readdirSync(realPath)).toEqual([]);
+        }
+      }
     },
   );
 

@@ -14,12 +14,11 @@ import { racePromiseWithAbortSignal } from "../../../src/infra/abort-signal.ts";
 import { loadOrCreateDeviceIdentity } from "../../../src/infra/device-identity.ts";
 import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import {
-  ensureProfileForEmail,
   linkEmail,
-  resolveUserProfileId,
   setDisplayName,
   setUserProfileRole,
-} from "../../../src/state/user-profiles.ts";
+} from "../../../src/state/user-profile-writes.worker.ts";
+import { ensureProfileForEmail, resolveUserProfileId } from "../../../src/state/user-profiles.ts";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -398,11 +397,13 @@ suite.define(() => {
           async ({ page }) => {
             await page.addInitScript(() =>
               localStorage.setItem(
-                "openclaw:control-ui:community-invite",
+                "openclaw:control-ui:community-invite:v2",
                 JSON.stringify({ dismissedAtMs: 1770000000000 }),
               ),
             );
+            const initialDelivery = createDeferredCore<Delivery>();
             const changedDelivery = createDeferredCore<Delivery>();
+            const replacementSummaryDelivery = createDeferredCore<Delivery>();
             const currentReaderDelivery = createDeferredCore<Delivery>();
             const delivered: Delivery[] = [];
             const checkResponses: ReturnType<typeof summarizeChecks>[] = [];
@@ -444,8 +445,12 @@ suite.define(() => {
                     : undefined;
                 if (delivery) {
                   delivered.push(delivery);
+                  initialDelivery.resolve(delivery);
                   if (waitingForReplacement && delivery.number !== 101) {
                     changedDelivery.resolve(delivery);
+                  }
+                  if (delivery.number === 203) {
+                    replacementSummaryDelivery.resolve(delivery);
                   }
                   if (identityReassigned && delivery.number === 203 && delivery.additions === 5) {
                     currentReaderDelivery.resolve(delivery);
@@ -460,6 +465,13 @@ suite.define(() => {
               .locator("openclaw-gateway-url-confirmation")
               .getByRole("button", { name: `Switch to ${browserGatewayUrl.host}`, exact: true })
               .click();
+            // Finish this browser's initial subscription load before timing the rendered PR state.
+            expect(await racePromiseWithAbortSignal(initialDelivery.promise, signal)).toEqual({
+              number: original.number,
+              repo: original.repo,
+              branch: original.branch,
+              additions: original.additions,
+            });
             const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
             const chip = pane.locator(".chat-pr").first();
             await chip.locator(".chat-pr__number").filter({ hasText: "#101" }).waitFor();
@@ -547,6 +559,15 @@ suite.define(() => {
               replacement.number = 203;
               replacement.checkName = "replacement-workspace current-reader check";
               expect(await refreshFromBrowser(page)).toEqual(["operator.read"]);
+              // The subscription acknowledgement precedes the owner's paced refresh.
+              expect(
+                await racePromiseWithAbortSignal(replacementSummaryDelivery.promise, signal),
+              ).toEqual({
+                number: replacement.number,
+                repo: replacement.repo,
+                branch: replacement.branch,
+                additions: replacement.additions,
+              });
               await chip.locator(".chat-pr__number").filter({ hasText: "#203" }).waitFor();
               await reader.request(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, {
                 sessionKeys: [sessionKey],

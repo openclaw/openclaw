@@ -36,7 +36,7 @@ export type PluginCredentialEditorContext = {
   onCommit: (path: Array<string | number>, value: unknown) => Promise<boolean>;
   onDiscard: () => Promise<boolean>;
 };
-type CredentialField = Pick<ConfigNodeRenderParams, "path" | "value" | "disabled" | "onPatch"> & {
+type CredentialField = Pick<ConfigNodeRenderParams, "path" | "value" | "disabled"> & {
   descriptionId?: string;
 };
 
@@ -172,11 +172,10 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
   private openReference() {
     this.referenceSubmitted = false;
     const value = this.inspection;
-    if (value?.kind === "reference") {
-      this.reference = { ...value.ref };
-    } else {
-      this.reference = { source: "env", provider: "default", id: "" };
-    }
+    this.reference =
+      value?.kind === "reference"
+        ? { ...value.ref }
+        : { source: "env", provider: "default", id: "" };
     this.dialogOpen = true;
   }
 
@@ -275,7 +274,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
       this.field.disabled || this.loading || this.saving || this.cancelling || !this.inspection;
     const failure = this.error || this.context.saveError;
     return html`<openclaw-modal-dialog
-      .label=${t("pluginsPage.credentials.referenceTitle")}
+      .label=${`${t("pluginsPage.credentials.referenceTitle")}: ${this.descriptor.label}`}
       @modal-cancel=${(event: Event) => {
         event.preventDefault();
         void this.cancelReference();
@@ -308,28 +307,19 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
                     ${credentialSources.map((source) => html`<option value=${source} ?selected=${source === this.reference.source}>${t(`pluginsPage.credentials.sources.${source}`)}</option>`)}
                   </select></label
                 >
-                <label
-                  >${t("pluginsPage.credentials.provider")}<input
-                    class="settings-input"
-                    .value=${this.reference.provider}
-                    ?disabled=${blocked}
-                    @input=${(event: Event) => {
-                      if (event.currentTarget instanceof HTMLInputElement) {
-                        this.reference = { ...this.reference, provider: event.currentTarget.value };
-                      }
-                    }}
-                /></label>
-                <label
-                  >${t("pluginsPage.credentials.identifier")}<input
-                    class="settings-input"
-                    .value=${this.reference.id}
-                    ?disabled=${blocked}
-                    @input=${(event: Event) => {
-                      if (event.currentTarget instanceof HTMLInputElement) {
-                        this.reference = { ...this.reference, id: event.currentTarget.value };
-                      }
-                    }}
-                /></label>
+                ${(["provider", "id"] as const).map(
+                  (key) => html`<label
+                    >${t(`pluginsPage.credentials.${key === "id" ? "identifier" : key}`)}<input
+                      class="settings-input"
+                      .value=${this.reference[key]}
+                      ?disabled=${blocked}
+                      @input=${(event: Event) => {
+                        if (event.currentTarget instanceof HTMLInputElement) {
+                          this.reference = { ...this.reference, [key]: event.currentTarget.value };
+                        }
+                      }}
+                  /></label>`,
+                )}
                 <p class="muted">${t(`pluginsPage.credentials.help.${this.reference.source}`)}</p>
                 ${this.inspection?.kind === "reference" && this.inspection.unresolved ? html`<p class="callout warn">${t("pluginsPage.credentials.unresolved")}</p>` : nothing}
               `
@@ -374,6 +364,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
               ${credential?.kind === "reference" ? html`<code>${credential.ref.id}</code>` : nothing}
               <button
                 class="btn btn--sm"
+                aria-label=${`${t(environment ? "pluginsPage.credentials.viewSource" : "pluginsPage.credentials.editReference")}: ${this.descriptor.label}`}
                 aria-describedby=${ifDefined(this.field.descriptionId)}
                 ?disabled=${this.loading || !credential || !this.context.canInspect}
                 @click=${() => this.openReference()}
@@ -421,7 +412,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
                 <button
                   class="settings-secret__toggle"
                   type="button"
-                  aria-label=${t(this.revealed ? "pluginsPage.credentials.hide" : "pluginsPage.credentials.reveal")}
+                  aria-label=${`${t(this.revealed ? "pluginsPage.credentials.hide" : "pluginsPage.credentials.reveal")}: ${this.descriptor.label}`}
                   aria-pressed=${this.revealed}
                   ?disabled=${disabled || this.loading || (!this.literal && credential?.kind !== "literal")}
                   @click=${() => this.toggleReveal()}
@@ -432,6 +423,7 @@ export class PluginCredentialEditor extends OpenClawLightDomElement {
               <div class="plugin-credential__links">
                 ${this.descriptor.signupUrl ? html`<a href=${this.descriptor.signupUrl} target="_blank" rel="noopener noreferrer">${t("pluginsPage.credentials.signup")}${icons.externalLink}</a>` : nothing}<button
                   class="btn btn--ghost btn--sm"
+                  aria-label=${`${t("pluginsPage.credentials.useReference")}: ${this.descriptor.label}`}
                   aria-describedby=${ifDefined(this.field.descriptionId)}
                   ?disabled=${disabled || this.loading || !credential || !this.context.canInspect}
                   @click=${() => this.openReference()}

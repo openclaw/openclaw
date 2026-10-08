@@ -1,12 +1,10 @@
-/** Session MCP runtime manager: acquisition and requester-scoped install orchestration. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
+import type { BundleMcpServerConfig } from "../plugins/bundle-mcp.types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import { createSessionMcpRuntimeManagerInstall } from "./agent-bundle-mcp-manager-install.js";
 import {
   createSessionMcpRuntimeManagerLifecycle,
-  createSessionMcpRuntimeManagerStore,
   type SessionMcpRuntimeManagerOpts,
   type SessionMcpConfigPublication,
 } from "./agent-bundle-mcp-manager-lifecycle.js";
@@ -26,6 +24,7 @@ import {
   buildMcpRequesterRuntimeCacheKey,
   partitionMcpServersByConnectionScope,
 } from "./mcp-connection-resolver.js";
+import { resetMcpStartupBackoff } from "./mcp-startup-backoff.js";
 
 type RuntimeAcquisitionParams = Parameters<SessionMcpRuntimeManager["acquire"]>[0];
 type PreparedAcquisitionParams = RuntimeAcquisitionParams & {
@@ -42,11 +41,9 @@ const createSessionMcpRuntimeLazy: CreateSessionMcpRuntime = async (params) => {
   return runtime.createSessionMcpRuntime(params);
 };
 
-export function createSessionMcpRuntimeManager(
-  opts: SessionMcpRuntimeManagerOpts = {},
-): SessionMcpRuntimeManager {
-  const store = createSessionMcpRuntimeManagerStore(opts, createSessionMcpRuntimeLazy);
-  const lifecycle = createSessionMcpRuntimeManagerLifecycle(store);
+export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpts) {
+  const lifecycle = createSessionMcpRuntimeManagerLifecycle(opts, createSessionMcpRuntimeLazy);
+  const { store } = lifecycle;
   const install = createSessionMcpRuntimeManagerInstall(lifecycle);
   const leaseRuntime = (
     runtime: SessionMcpRuntime,
@@ -95,6 +92,7 @@ export function createSessionMcpRuntimeManager(
         return await lifecycle.runExclusiveOnRuntimeKeys(runtimeKeys, async () => {
           await Promise.all([priorDisposal, priorSessionWork].filter((work) => work !== undefined));
           for (;;) {
+            store.scheduler.signal.throwIfAborted();
             const next = store.configReload;
             // A publication can cross queued admission before a producer starts.
             if (next && next !== publication) {
@@ -105,6 +103,7 @@ export function createSessionMcpRuntimeManager(
             acquired = await acquire(input);
             // Keep one hidden lease until its successor owns unchanged transports.
             previous?.releaseLease();
+            store.scheduler.signal.throwIfAborted();
             if (!store.configReload || store.configReload === publication) {
               return acquired;
             }
@@ -303,9 +302,6 @@ export function createSessionMcpRuntimeManager(
     }),
     rememberAdvertisedScopedCatalog: lifecycle.rememberAdvertisedScopedCatalog,
     getAdvertisedScopedCatalog: lifecycle.getAdvertisedScopedCatalog,
-    bindSessionKey(sessionKey, sessionId) {
-      store.sessionIdBySessionKey.set(sessionKey, sessionId);
-    },
     resolveSessionId(sessionKey) {
       return store.sessionIdBySessionKey.get(sessionKey);
     },
@@ -339,7 +335,10 @@ export function createSessionMcpRuntimeManager(
       if (runtime !== undefined && runtime.sessionId !== sessionId) {
         return false;
       }
-      if (!store.deferredRetirementSessionIds.has(sessionId)) {
+      const deferred = store.deferredRetirementSessionIds.has(sessionId);
+      // A late acquisition can settle after its last idle-sweep owner stopped.
+      const unmaintained = !deferred && store.scheduler.signal.aborted;
+      if (!deferred && !unmaintained) {
         for (const runtimeKey of lifecycle.runtimeKeysForSessionId(sessionId)) {
           const current = store.runtimesBySessionId.get(runtimeKey);
           if (current && sessionMcpRuntimeOwners.get(current)?.hasServers() === false) {
@@ -371,10 +370,12 @@ export function createSessionMcpRuntimeManager(
       // intent survives replacement and completes when its last transferred lease releases.
       await lifecycle.disposeManagedRuntimes(sessionId, {
         preserveRequiredRetirement: store.requiredRetirementSessionIds.has(sessionId),
+        requireStoppedScheduler: unmaintained,
       });
-      return true;
+      return !unmaintained || lifecycle.runtimeKeysForSessionId(sessionId).length === 0;
     },
     async reloadConfig(reload) {
+      resetMcpStartupBackoff();
       store.configReload = {
         ...reload,
         pluginGeneration:
@@ -399,7 +400,10 @@ export function createSessionMcpRuntimeManager(
         }),
       );
     },
-    disposeAll: () => lifecycle.disposeManagedRuntimes(),
+    disposeAll: () => {
+      resetMcpStartupBackoff();
+      return lifecycle.disposeManagedRuntimes();
+    },
     sweepIdleRuntimes: lifecycle.sweepIdleRuntimes,
     listSessionIds() {
       return [
@@ -409,11 +413,8 @@ export function createSessionMcpRuntimeManager(
     listRuntimeKeys() {
       return Array.from(store.runtimesBySessionId.keys()).toSorted((a, b) => a.localeCompare(b));
     },
-    totalActiveLeasesForSession(sessionId) {
-      return lifecycle.totalActiveLeasesForSessionId(sessionId);
-    },
+    totalActiveLeasesForSession: lifecycle.totalActiveLeasesForSessionId,
   };
-  // Test-only bookkeeping snapshot for drain assertions.
   Object.assign(manager, {
     bookkeepingSizesForTest: () => ({
       runtimes: store.runtimesBySessionId.size,
@@ -424,5 +425,5 @@ export function createSessionMcpRuntimeManager(
       advertisedScopedCatalogs: store.advertisedScopedCatalogBySessionId.size,
     }),
   });
-  return manager;
+  return Object.assign(manager, { setScheduler: lifecycle.setScheduler });
 }

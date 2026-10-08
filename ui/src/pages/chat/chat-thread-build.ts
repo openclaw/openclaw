@@ -1,14 +1,11 @@
-import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
+import { readAssistantStreamSegmentIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { ChatPendingInputsPage } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { composeTranscriptDisplay } from "../../../../src/chat/transcript-display-position.js";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
-import { t } from "../../i18n/index.ts";
 import {
   type ChatGuardianNotice,
   type ChatItem,
-  type ChatQueueItem,
   type MessageGroup,
   accumulatedStreamText,
   advanceAccumulatedStreamText,
@@ -27,8 +24,6 @@ import {
   normalizeRoleForGrouping,
 } from "../../lib/chat/message-normalizer.ts";
 import type { CanvasToolPreview } from "../../lib/chat/tool-cards.ts";
-import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
-import { buildPendingInputItems } from "./chat-pending-inputs.ts";
 import {
   buildCompactionDividerItem,
   buildGuardianNoticeItem,
@@ -39,7 +34,18 @@ import {
   resolveWorkingProgress,
   shouldRenderQueuedSendInThread,
 } from "./chat-progress.ts";
+import {
+  hasSessionsYieldCall,
+  pendingSessionsYield,
+  projectSessionsYieldItems,
+} from "./chat-sessions-yield.ts";
+import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { groupMessages } from "./chat-thread-grouping.ts";
+import {
+  placeChatInputs,
+  type ChatInputOrderState,
+  type ChatInputPlacementProps,
+} from "./chat-thread-inputs.ts";
 import {
   appendCanvasBlockToAssistantMessage,
   buildMessageItems,
@@ -52,14 +58,13 @@ import {
   insertionIndexesForBounds,
   type ChatProjection,
   messageMatchesSearchQuery,
-  queuedSendThreadMessage,
   rawMessageTimestamp,
   insertChatItemsByTimestamp,
   sanitizeStreamText,
   timestampAfterVisibleItems,
+  userTurnRunId,
   transcriptPositionTimestamp,
   type TurnInsertionBounds,
-  userTurnRunId,
 } from "./chat-thread-items.ts";
 import {
   applyPersistedToolInvocationBounds,
@@ -70,19 +75,14 @@ import {
   optionalBoundaryIdentity,
   optionalRunIdentity,
   resolveRunInsertionBounds,
+  transcriptRunId,
 } from "./chat-thread-run-identity.ts";
 import { coalesceToolActivityMessages } from "./chat-tool-activity-coalesce.ts";
 import { safeNormalizeMessage } from "./chat-turn-boundary.ts";
-import { selectChatInputDisplay } from "./history-merge.ts";
-import { resolveSystemNoticeKind } from "./system-notice-kinds.ts";
-import {
-  isLiveTerminalForRun,
-  readLiveTerminalRunId,
-  readLiveTerminalAfterBoundaryRunId,
-} from "./terminal-message-identity.ts";
+import { latestPersistedSteerBoundary } from "./stream-causal-boundary.ts";
 import type { CompactionStatus } from "./tool-stream-contract.ts";
 
-export type BuildChatItemsProps = {
+export type BuildChatItemsProps = ChatInputPlacementProps & {
   paneId: string;
   sessionKey: string;
   archiveNotice?: Extract<ChatItem, { kind: "notice" }>;
@@ -96,23 +96,21 @@ export type BuildChatItemsProps = {
   streamSegments: ChatStreamSegment[];
   stream: string | null;
   streamStartedAt: number | null;
-  queue?: ChatQueueItem[];
-  initialTurnId?: string;
-  pendingInputs?: ChatPendingInputsPage["items"];
-  workspaceSyncPendingRunIds?: readonly string[];
-  workerSetupPending?: boolean;
   showToolCalls: boolean;
   persistCommentary?: boolean;
   /** True while the agent is visibly working (isChatRunWorking). */
   runWorking?: boolean;
   /** True while the current session has an abortable live run. */
   runActive?: boolean;
+  /** Set while a run that handed off is idle and its subagents are still running. */
+  subagentWait?: { startedAt: number; runId: string };
   questionPrompts?: readonly QuestionPrompt[];
   /** True while chat history is loading (initial load or background reload). */
   loading?: boolean;
-  searchOpen?: boolean;
-  searchQuery?: string;
-  messageRecovery?: ChatMessageRecovery;
+  /** People the session row lists, loaded or not, keyed by `sessionParticipantIdentityKey`. */
+  replyPeople?: readonly string[];
+  /** Key of the signed-in viewer, who authors local user messages without a sender. */
+  replyLocalPerson?: string;
 };
 
 function canvasAssistantItemKey(
@@ -124,7 +122,10 @@ function canvasAssistantItemKey(
   return identity ? `canvas:${identity}` : `${fallback}:canvas`;
 }
 
-export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | MessageGroup> {
+export function buildChatItems(
+  props: BuildChatItemsProps,
+  inputOrder: ChatInputOrderState = { keys: [] },
+): Array<ChatItem | MessageGroup> {
   let items: ChatItem[] = [];
   const tools = props.toolMessages.filter(
     (message): message is Record<string, unknown> => asRecord(message) !== null,
@@ -138,17 +139,57 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       preview: extractChatMessagePreview(item.message),
     };
   });
+  const queuedSends = props.queue ?? [];
+  const segments = props.streamSegments;
+  let progress: ReturnType<typeof resolveWorkingProgress> | null = null;
+  const resolveProgress = () => {
+    if (progress) {
+      return progress;
+    }
+    // A run that handed off has ended, but its live rows stay until the next
+    // run starts. The status that follows must not take that run's identity or
+    // count from its first tool call.
+    const handedOff = props.runId ? undefined : pendingSessionsYield(props.messages)?.runId;
+    progress = resolveWorkingProgress(
+      props.sessionKey,
+      props.runId ?? null,
+      props.streamStartedAt,
+      queuedSends,
+      handedOff ? segments.filter((segment) => segment.runId !== handedOff) : segments,
+      handedOff ? tools.filter((message) => message.runId !== handedOff) : tools,
+    );
+    return progress;
+  };
+  // Retention and live status share the same explicit or inferred run ownership.
+  const activeCommentaryRunId =
+    props.persistCommentary === false && (props.runWorking || props.runActive)
+      ? normalizeOptionalString(resolveProgress().runId)
+      : undefined;
   const history = composeTranscriptDisplay(
     props.messages.filter(
       (message) =>
         !isAssistantHeartbeatAckForDisplay(message) &&
-        (props.persistCommentary !== false || !isKeyedAssistantStreamFallbackMessage(message)),
+        (props.persistCommentary !== false ||
+          !isKeyedAssistantStreamFallbackMessage(message) ||
+          (activeCommentaryRunId !== undefined &&
+            transcriptRunId(message) === activeCommentaryRunId)),
     ),
   );
   const searchFiltering = props.searchOpen === true && Boolean(props.searchQuery?.trim());
+  const hiddenHistoryKeys = new Set<string>();
   const persistedCanvasIdentities = new Set<string>();
   const normalizedHistory = history.map(safeNormalizeMessage);
   const historyItems = buildMessageItems(history);
+  const persistedCommentaryKeys = new Map<string, string>();
+  for (const [index, message] of history.entries()) {
+    const identity = readAssistantStreamSegmentIdentity(message);
+    if (identity) {
+      persistedCommentaryKeys.set(
+        `${identity.runId ?? ""}\u0000${identity.itemId}`,
+        historyItems[index]!.key,
+      );
+    }
+  }
   let canvasTurn: {
     previews: { preview: CanvasToolPreview; item: (typeof historyItems)[number] }[];
     lastMatchingAssistantIndex: number;
@@ -259,7 +300,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       });
     }
 
-    if (!props.showToolCalls && isToolResult) {
+    if (!props.showToolCalls && isToolResult && !hasSessionsYieldCall(msg)) {
       continue;
     }
 
@@ -269,7 +310,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       searchQuery.trim() &&
       !messageMatchesSearchQuery(msg, searchQuery, props.messageRecovery)
     ) {
-      continue;
+      hiddenHistoryKeys.add(itemKey);
     }
     if (
       !hasRenderableNormalizedMessage(msg, normalized) &&
@@ -278,124 +319,35 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       continue;
     }
 
-    const provenance = asRecord(raw.provenance);
-    if (role === "user" && provenance?.kind === "internal_system") {
-      const noticeKind = resolveSystemNoticeKind(
-        typeof provenance.sourceTool === "string" ? provenance.sourceTool : undefined,
-      );
-      const text = noticeKind?.summaryKey
-        ? t(noticeKind.summaryKey)
-        : extractTextCached(msg)?.replace(/^\[System\] /u, "");
-      if (text?.trim()) {
-        items.push({
-          kind: "notice",
-          key: itemKey,
-          icon: noticeKind?.icon ?? "cpu",
-          label: noticeKind ? t(noticeKind.labelKey) : t("common.system"),
-          ...(noticeKind?.startsTurn === false ? {} : { startsTurn: true }),
-          ...(noticeKind?.collapsedBody ? { collapsedBody: true } : {}),
-          text,
-          timestamp: normalized.timestamp,
-          ...optionalBoundaryIdentity(userTurnRunId(msg)),
-        });
-      }
-      continue;
-    }
-
-    items.push(item);
+    items.push(...projectChatSystemNotice(item, normalized));
   }
-  const queuedSends = props.queue ?? [];
-  const { queue: threadQueuedSends, pendingInputs } = selectChatInputDisplay(
+  const currentRunId =
+    props.runId ??
+    (props.stream !== null || queuedSends.some(shouldRenderQueuedSendInThread)
+      ? resolveProgress().runId
+      : null);
+  const historyTurnBounds = findCurrentTurnBounds(items);
+  const { pendingKeys, historicalKeys, hiddenKeys, activeInputKey } = placeChatInputs(
+    items,
     history,
-    queuedSends,
-    props.pendingInputs ?? [],
+    props,
+    inputOrder,
+    currentRunId,
   );
-  const currentRunQueuedSends = threadQueuedSends.filter(
-    (queued) =>
-      queued.sendState === "submitting" ||
-      queued.sendState === "sending" ||
-      queued.sendState === "waiting-model" ||
-      (queued.sendState === "waiting-reconnect" &&
-        props.runId != null &&
-        queued.sendRunId === props.runId),
-  );
-  const futureQueuedSends = threadQueuedSends.filter(
-    (queued) => !currentRunQueuedSends.includes(queued),
-  );
-  const futureQueuedTimestamp = futureQueuedSends.reduce<number | null>(
-    (earliest, queued) =>
-      earliest == null ? queued.createdAt : Math.min(earliest, queued.createdAt),
-    null,
-  );
-  // Transient projections merge into stable history + queued-send rows by timestamp.
-  // Stable rows keep their relative order despite client and Gateway clock skew.
-  const pendingInputItems = buildPendingInputItems(
-    pendingInputs,
-    props.searchOpen ? props.searchQuery : undefined,
-    props.queue,
-    props.workspaceSyncPendingRunIds,
-    props.workerSetupPending,
-    props.messageRecovery,
-  );
-  const projections: ChatProjection[] = pendingInputItems.map((item) => ({ item }));
-  if (compaction && compactionKey && !hasPersistedCompaction) {
-    const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
-    projections.push({
-      item: {
-        ...buildCompactionDividerItem(
-          {},
-          timestamp,
-          0,
-          compaction.phase === "complete" ? "complete" : "active",
-        ),
-        key: compactionKey,
-      },
-    });
-  }
-  const appendQueuedSend = (queued: ChatQueueItem) => {
-    if (!shouldRenderQueuedSendInThread(queued)) {
-      return;
-    }
-    const message = queuedSendThreadMessage(queued);
-    if (!message) {
-      return;
-    }
-    const searchQuery = props.searchQuery ?? "";
-    if (
-      props.searchOpen &&
-      searchQuery.trim() &&
-      !messageMatchesSearchQuery(message, searchQuery, props.messageRecovery)
-    ) {
-      return;
-    }
-    const runId = queued.sendRunId;
-    // Reconnect can deliver a saved reply before history recovers its user row.
-    // Anchor to the first rendered owned output even after the local run clears;
-    // hidden/imported rows cannot anchor, and unmatched future sends stay last.
-    const insertionIndex = items.findIndex((item) => {
-      if (!runId || item.kind !== "message") {
-        return false;
-      }
-      const identity = readSessionMessageIdentity(item.message);
-      return (
-        isLiveTerminalForRun(item.message, runId) ||
-        (identity?.role === "assistant" && !identity.isImported && identity.runId === runId)
-      );
-    });
-    // The retained New Session prompt predates all recovery output, including
-    // after a reload when its original browser timestamp is unavailable.
-    const position = queued.id === props.initialTurnId ? 0 : insertionIndex;
-    items.splice(position < 0 ? items.length : position, 0, {
-      kind: "message",
-      key: queued.sendRunId ? buildMessageItems([message])[0]!.key : `pending-send:${queued.id}`,
-      message,
-    });
+  const executionItems = () => items.filter((item) => !historicalKeys.has(item.key));
+  const canvasRunBounds = createRunTurnLookup(executionItems());
+  const currentTurnBounds =
+    (currentRunId ? canvasRunBounds(currentRunId) : null) ??
+    (activeInputKey ? { afterKey: activeInputKey } : historyTurnBounds);
+  const boundToPendingInputs = (
+    bounds: TurnInsertionBounds | null | undefined,
+  ): TurnInsertionBounds | undefined => {
+    const { minimum, maximum } = insertionIndexesForBounds(items, bounds ?? undefined);
+    const pending = items.find(
+      (item, index) => index >= minimum && index < maximum && pendingKeys.has(item.key),
+    );
+    return pending ? { ...bounds, beforeKey: pending.key } : (bounds ?? undefined);
   };
-  for (const queued of currentRunQueuedSends) {
-    appendQueuedSend(queued);
-  }
-  const currentTurnBounds = findCurrentTurnBounds(items);
-  const canvasRunBounds = createRunTurnLookup(items);
   for (const { projection, preview } of toolItems) {
     if (!preview) {
       continue;
@@ -404,11 +356,13 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     if (baseIdentity && persistedCanvasIdentities.has(baseIdentity)) {
       continue;
     }
-    const canvasBounds = resolveRunInsertionBounds(
-      canvasRunBounds,
-      projection.item.message.runId,
-      props.runId,
-      currentTurnBounds,
+    const canvasBounds = boundToPendingInputs(
+      resolveRunInsertionBounds(
+        canvasRunBounds,
+        projection.item.message.runId,
+        currentRunId,
+        currentTurnBounds,
+      ) ?? (!projection.item.message.runId && activeInputKey ? currentTurnBounds : undefined),
     );
     const { minimum: canvasMinimumIndex, maximum: canvasMaximumIndex } = insertionIndexesForBounds(
       items,
@@ -443,19 +397,10 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     const nextItem = items[insertionIndex];
     const nextTimestamp =
       nextItem?.kind === "message" ? rawMessageTimestamp(nextItem.message) : null;
-    const boundaryTimestamp =
-      nextTimestamp == null
-        ? futureQueuedTimestamp
-        : futureQueuedTimestamp == null
-          ? nextTimestamp
-          : Math.min(nextTimestamp, futureQueuedTimestamp);
     const timestamp =
-      preview.timestamp != null && boundaryTimestamp != null
-        ? Math.min(preview.timestamp, boundaryTimestamp)
+      preview.timestamp != null && nextTimestamp != null
+        ? Math.min(preview.timestamp, nextTimestamp)
         : preview.timestamp;
-    // Canvas previews are positioned relative to the queued-send tail that
-    // existed when they were lifted, so they stay in the stable row order
-    // rather than being re-sorted with live stream/tool cards.
     items.splice(insertionIndex, 0, {
       kind: "message",
       key: canvasAssistantItemKey(projection.item.message, preview, projection.item.key),
@@ -465,7 +410,21 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   items = items.filter(
     (item) => item.kind !== "message" || hasRenderableNormalizedMessage(item.message),
   );
-  const segments = props.streamSegments;
+  const projections: ChatProjection[] = [];
+  if (compaction && compactionKey && !hasPersistedCompaction) {
+    const timestamp = compaction.startedAt ?? compaction.completedAt ?? Date.now();
+    projections.push({
+      item: {
+        ...buildCompactionDividerItem(
+          {},
+          timestamp,
+          0,
+          compaction.phase === "complete" ? "complete" : "active",
+        ),
+        key: compactionKey,
+      },
+    });
+  }
   const afterBoundaryBySegment = new Map<ChatStreamSegment, string>();
   let latestBoundaryRunId: string | undefined;
   for (const segment of segments) {
@@ -486,28 +445,27 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   }
   // Empty user rows may have disappeared since canvas placement. Preserve the
   // earlier current-turn fallback, but resolve exact bounds over rendered rows.
-  const projectionRunBounds = createRunTurnLookup(items);
+  const projectionRunBounds = createRunTurnLookup(executionItems());
   const resolveProjectionBounds = (
     runId: unknown,
     boundaryRunId?: string,
     afterBoundaryRunId?: string,
   ): TurnInsertionBounds | undefined => {
-    const bounds = resolveRunInsertionBounds(
-      projectionRunBounds,
-      runId,
-      props.runId,
-      currentTurnBounds,
-    );
+    const bounds =
+      resolveRunInsertionBounds(projectionRunBounds, runId, currentRunId, currentTurnBounds) ??
+      (!runId && activeInputKey ? currentTurnBounds : undefined);
     const boundaryKey = boundaryRunId ? projectionRunBounds(boundaryRunId)?.afterKey : undefined;
     const afterBounds = afterBoundaryRunId ? projectionRunBounds(afterBoundaryRunId) : undefined;
-    return bounds || boundaryKey || afterBounds
-      ? {
-          ...bounds,
-          ...(afterBounds?.afterKey ? { afterKey: afterBounds.afterKey } : {}),
-          ...(afterBounds?.beforeKey ? { beforeKey: afterBounds.beforeKey } : {}),
-          ...(boundaryKey ? { beforeKey: boundaryKey } : {}),
-        }
-      : undefined;
+    return boundToPendingInputs(
+      bounds || boundaryKey || afterBounds
+        ? {
+            ...bounds,
+            ...(afterBounds?.afterKey ? { afterKey: afterBounds.afterKey } : {}),
+            ...(afterBounds?.beforeKey ? { beforeKey: afterBounds.beforeKey } : {}),
+            ...(boundaryKey ? { beforeKey: boundaryKey } : {}),
+          }
+        : undefined,
+    );
   };
   if (!searchFiltering) {
     if (props.archiveNotice) {
@@ -536,6 +494,17 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   }
   const appendStreamSegment = (segment: ChatStreamSegment, key: string, text: string) => {
     const afterBoundaryRunId = afterBoundaryBySegment.get(segment);
+    const pendingItemId = normalizeOptionalString(segment.pendingCommentaryPrefixFor);
+    const persistedCommentaryKey = pendingItemId
+      ? (persistedCommentaryKeys.get(
+          `${normalizeOptionalString(segment.runId) ?? ""}\u0000${pendingItemId}`,
+        ) ?? persistedCommentaryKeys.get(`\u0000${pendingItemId}`))
+      : undefined;
+    const bounds = resolveProjectionBounds(
+      segment.runId,
+      segment.boundaryRunId,
+      afterBoundaryRunId,
+    );
     projections.push({
       item: {
         kind: "stream",
@@ -546,7 +515,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
         ...optionalRunIdentity(segment.runId),
         ...optionalBoundaryIdentity(afterBoundaryRunId ?? segment.runId),
       },
-      bounds: resolveProjectionBounds(segment.runId, segment.boundaryRunId, afterBoundaryRunId),
+      bounds: persistedCommentaryKey ? { ...bounds, beforeKey: persistedCommentaryKey } : bounds,
     });
   };
   let previousAccumulatedStreamText: string | null = null;
@@ -580,9 +549,13 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       }
     }
     const tool = toolItems[i];
-    if (tool && props.showToolCalls) {
-      const before = toolBeforeBoundaries.get(tool.runId, tool.callId);
-      const after = toolAfterBoundaries.get(tool.runId, tool.callId);
+    if (tool && (props.showToolCalls || hasSessionsYieldCall(tool.projection.item.message))) {
+      const before =
+        normalizeOptionalString(tool.projection.item.message.boundaryRunId) ??
+        toolBeforeBoundaries.get(tool.runId, tool.callId);
+      const after =
+        normalizeOptionalString(tool.projection.item.message.afterBoundaryRunId) ??
+        toolAfterBoundaries.get(tool.runId, tool.callId);
       tool.projection.bounds = resolveProjectionBounds(tool.runId, before, after);
       projections.push(tool.projection);
     }
@@ -622,39 +595,6 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   );
   insertChatItemsByTimestamp(items, projections);
 
-  // Completion time must not move an already visible reply across queued custody.
-  // Only unsequenced live terminals use the same causal ceiling as their stream;
-  // canonical history order is never rewritten.
-  if (pendingInputItems.length) {
-    const pendingKeys = new Set(pendingInputItems.map((item) => item.key));
-    const findTerminalBounds = createRunTurnLookup(items);
-    // Relocation mutates items, so iterate a narrowed snapshot of message candidates.
-    for (const item of items.filter((candidate) => candidate.kind === "message")) {
-      const runId =
-        readLiveTerminalAfterBoundaryRunId(item.message) ?? readLiveTerminalRunId(item.message);
-      const identity = readSessionMessageIdentity(item.message);
-      if (
-        !runId ||
-        identity?.role !== "assistant" ||
-        identity.id !== null ||
-        identity.sequence !== null ||
-        identity.isImported
-      ) {
-        continue;
-      }
-      const bounds = findTerminalBounds(runId);
-      if (!bounds?.beforeKey || !pendingKeys.has(bounds.beforeKey)) {
-        continue;
-      }
-      const index = items.indexOf(item);
-      const { maximum } = insertionIndexesForBounds(items, bounds);
-      if (index > maximum) {
-        items.splice(index, 1);
-        items.splice(maximum, 0, item);
-      }
-    }
-  }
-
   // The active claw is telemetry, not a placeholder: it stays through visible
   // assistant text and tool cards until the run settles. The initial-load
   // skeleton still owns an otherwise empty thread, but not an active stream.
@@ -674,18 +614,21 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   if (props.runWorking !== true && props.stream === null && !showWorkingIndicator) {
     clearWorkingProgress(props.sessionKey);
   }
-  let progress: ReturnType<typeof resolveWorkingProgress> | null = null;
-  const resolveProgress = () =>
-    (progress ??= resolveWorkingProgress(
-      props.sessionKey,
-      props.runId ?? null,
-      props.streamStartedAt,
-      queuedSends,
-      segments,
-      tools,
-    ));
-  const activeTurnRunId = latestBoundaryRunId ?? normalizeOptionalString(props.runId);
-  const activeTurnBounds = activeTurnRunId ? createRunTurnLookup(items)(activeTurnRunId) : null;
+  const persistedBoundary = currentRunId
+    ? latestPersistedSteerBoundary(history, currentRunId)
+    : null;
+  const activeBoundaryRunId =
+    persistedBoundary &&
+    (!latestBoundaryRunId ||
+      history.findIndex((message) => userTurnRunId(message) === latestBoundaryRunId) <=
+        persistedBoundary.index)
+      ? persistedBoundary.runId
+      : latestBoundaryRunId;
+  const activeTurnRunId = activeBoundaryRunId ?? currentRunId;
+  const activeTurnBounds = boundToPendingInputs(
+    (activeTurnRunId ? createRunTurnLookup(executionItems())(activeTurnRunId) : null) ??
+      (activeInputKey ? { afterKey: activeInputKey } : null),
+  );
   const appendActiveRunItem = (item: ChatItem) => {
     // Queued custody is a ceiling for the whole live response, not just its text.
     // Moving its working indicator past that ceiling splits and remeasures the run.
@@ -705,14 +648,14 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       const liveRunId = props.runId ?? liveProgress.runId;
       const liveStreamItem: ChatItem = {
         kind: "stream",
-        key: latestBoundaryRunId
-          ? `${liveProgress.key}:after:${latestBoundaryRunId}`
+        key: activeBoundaryRunId
+          ? `${liveProgress.key}:after:${activeBoundaryRunId}`
           : liveProgress.key,
         text: visibleText,
         startedAt: timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now()),
         isStreaming: true,
         ...optionalRunIdentity(liveRunId),
-        ...optionalBoundaryIdentity(latestBoundaryRunId ?? liveRunId),
+        ...optionalBoundaryIdentity(activeBoundaryRunId ?? liveRunId),
       };
       appendActiveRunItem(liveStreamItem);
     }
@@ -725,14 +668,32 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       key: workingProgress.key,
       startedAt: workingProgress.startedAt,
       ...optionalRunIdentity(workingRunId),
-      ...optionalBoundaryIdentity(latestBoundaryRunId ?? workingRunId),
+      ...optionalBoundaryIdentity(activeBoundaryRunId ?? workingRunId),
+    });
+  } else if (props.subagentWait && !initialHistoryLoad) {
+    // The handoff ended the parent's run, not its work. Carrying that run's
+    // identity keeps the claw in the same frame instead of opening another row.
+    appendActiveRunItem({
+      kind: "reading-indicator",
+      key: `waiting-subagents:${props.sessionKey}`,
+      startedAt: props.subagentWait.startedAt,
+      waitingOn: "subagents",
+      runId: props.subagentWait.runId,
     });
   }
-  // Unmatched future turns stay after all current-run projections as a causal
-  // ceiling. A known same-run reply instead anchors its already-attempted prompt.
-  for (const queued of futureQueuedSends) {
-    appendQueuedSend(queued);
-  }
-
-  return groupMessages(coalesceToolActivityMessages(items));
+  // Place output against the complete transcript before search hides any rows.
+  // Pending/local inputs contribute people and turn boundaries just like history;
+  // queued future inputs must remain after the live output they do not own.
+  const hidden =
+    hiddenHistoryKeys.size > 0 || hiddenKeys.size > 0
+      ? new Set([...hiddenHistoryKeys, ...hiddenKeys])
+      : undefined;
+  const projectYields = (source: ChatItem[], complete?: ChatItem[]) =>
+    projectSessionsYieldItems(source, props.showToolCalls, complete);
+  const complete = hidden ? projectYields(coalesceToolActivityMessages(items)) : undefined;
+  return groupMessages(projectYields(coalesceToolActivityMessages(items, hidden), complete), {
+    items: complete,
+    people: props.replyPeople,
+    localPerson: props.replyLocalPerson,
+  });
 }

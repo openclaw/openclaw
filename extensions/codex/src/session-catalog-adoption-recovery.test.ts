@@ -21,6 +21,12 @@ import {
   type CodexAppServerThreadBinding,
 } from "./session-catalog.test-helpers.js";
 
+function continueSource(
+  params: Omit<Parameters<typeof continueLocalCodexSession>[0], "config" | "threadId">,
+) {
+  return continueLocalCodexSession({ config, threadId: "thread-1", ...params });
+}
+
 describe("Codex supervision actions", () => {
   it("recovers the same pending session after a restart before binding commit", async () => {
     const sessionKey = supervisionSessionKey("thread-1");
@@ -37,13 +43,7 @@ describe("Codex supervision actions", () => {
     const bindingStore = createCodexTestBindingStore();
 
     await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore,
-        config,
-        control: createEligibleControl(),
-        threadId: "thread-1",
-      }),
+      continueSource({ api, bindingStore, control: createEligibleControl() }),
     ).resolves.toEqual({ sessionKey, disposition: "forked" });
 
     expect(createSessionEntry).toHaveBeenCalledOnce();
@@ -116,13 +116,7 @@ describe("Codex supervision actions", () => {
     const bindingStore: CodexAppServerBindingStore = { ...inner, mutate };
 
     await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore,
-        config,
-        control: createEligibleControl(),
-        threadId: "thread-1",
-      }),
+      continueSource({ api, bindingStore, control: createEligibleControl() }),
     ).resolves.toEqual({ sessionKey, disposition: "forked" });
 
     expect(createSessionEntry).toHaveBeenCalledOnce();
@@ -190,13 +184,7 @@ describe("Codex supervision actions", () => {
     });
 
     await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore,
-        config,
-        control: createEligibleControl(),
-        threadId: "thread-1",
-      }),
+      continueSource({ api, bindingStore, control: createEligibleControl() }),
     ).rejects.toThrow("guarded rollback did not complete");
     expect(entries[0]?.entry.initializationPending).toBe(true);
   });
@@ -214,13 +202,7 @@ describe("Codex supervision actions", () => {
       ),
     });
 
-    const result = await continueLocalCodexSession({
-      api,
-      bindingStore,
-      config,
-      control,
-      threadId: "thread-1",
-    });
+    const result = await continueSource({ api, bindingStore, control });
 
     expect(result.disposition).toBe("forked");
     expect(createSessionEntry).toHaveBeenCalledOnce();
@@ -278,13 +260,7 @@ describe("Codex supervision actions", () => {
     });
 
     await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore,
-        config,
-        control: createEligibleControl(),
-        threadId: "thread-1",
-      }),
+      continueSource({ api, bindingStore, control: createEligibleControl() }),
     ).resolves.toEqual({ sessionKey, disposition: "existing" });
 
     expect(patchSessionEntry).toHaveBeenCalledWith(
@@ -337,15 +313,7 @@ describe("Codex supervision actions", () => {
       sourceThreadId: "thread-1",
     });
 
-    await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore,
-        config,
-        control,
-        threadId: "thread-1",
-      }),
-    ).resolves.toEqual({
+    await expect(continueSource({ api, bindingStore, control })).resolves.toEqual({
       sessionKey,
       disposition: "existing",
     });
@@ -381,15 +349,9 @@ describe("Codex supervision actions", () => {
         readThread: vi.fn(async () => idleThread({ id: "different-thread", source: "cli" })),
       });
 
-      await expect(
-        continueLocalCodexSession({
-          api,
-          bindingStore,
-          config,
-          control,
-          threadId: "thread-1",
-        }),
-      ).rejects.toThrow("returned a different thread than requested");
+      await expect(continueSource({ api, bindingStore, control })).rejects.toThrow(
+        "returned a different thread than requested",
+      );
 
       expect(control.readThread).toHaveBeenCalledWith(
         mapped ? "thread-1-branch" : "thread-1",
@@ -431,15 +393,9 @@ describe("Codex supervision actions", () => {
       }),
     });
 
-    await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore,
-        config,
-        control,
-        threadId: "thread-1",
-      }),
-    ).rejects.toThrow("changed before it could be opened");
+    await expect(continueSource({ api, bindingStore, control })).rejects.toThrow(
+      "changed before it could be opened",
+    );
     expect(patchSessionEntry).toHaveBeenCalledOnce();
     expect(entries[0]?.entry.archivedAt).toBe(123);
     expect(entries[0]?.entry.modelSelectionLocked).toBe(true);
@@ -461,15 +417,9 @@ describe("Codex supervision actions", () => {
     const bindingStore: CodexAppServerBindingStore = { ...inner, mutate };
     const control = createEligibleControl();
 
-    await expect(
-      continueLocalCodexSession({
-        api,
-        bindingStore,
-        config,
-        control,
-        threadId: "thread-1",
-      }),
-    ).rejects.toThrow("Codex session binding changed during initialization");
+    await expect(continueSource({ api, bindingStore, control })).rejects.toThrow(
+      "Codex session binding changed during initialization",
+    );
     expect(entries).toEqual([]);
     expect(createSessionEntry).toHaveBeenCalledOnce();
     expect(transcriptMirrorMocks.importCodexThreadHistoryToTranscript).toHaveBeenCalledOnce();

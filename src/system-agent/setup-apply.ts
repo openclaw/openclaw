@@ -1,4 +1,3 @@
-// Applies OpenClaw's conversational setup: config, workspace files, gateway.
 import { isDeepStrictEqual } from "node:util";
 import { listAgentEntries, toAgentEntriesRecord } from "../agents/agent-scope-config.js";
 import { resolveGatewayStartupTiming } from "../commands/gateway-startup-timing.js";
@@ -12,7 +11,6 @@ import {
   readConfigFileSnapshot,
   readConfigFileSnapshotWithPluginMetadata,
   resolveConfigSnapshotHash,
-  resolveGatewayPort,
   validateConfigObjectWithPlugins,
 } from "../config/config.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
@@ -332,27 +330,22 @@ export async function applySystemAgentSetup(
     const allowWorkspaceWrite = params.allowWorkspaceChange || !currentHasRoster;
     let setupBaseConfig = currentBaseConfig;
     if (currentHasRoster) {
-      const { list: _legacyList, ...agents } = setupBaseConfig.agents ?? {};
       setupBaseConfig = {
         ...setupBaseConfig,
         agents: {
-          ...agents,
+          ...setupBaseConfig.agents,
           entries: toAgentEntriesRecord(roster),
         },
       };
     }
     const preserveWorkspace = currentHasRoster && !params.allowWorkspaceChange;
     if (preserveWorkspace) {
-      const defaults = { ...setupBaseConfig.agents?.defaults };
-      const currentDefaults = currentBaseConfig.agents?.defaults;
-      if (currentDefaults && Object.hasOwn(currentDefaults, "workspace")) {
-        defaults.workspace = currentDefaults.workspace;
-      } else {
-        delete defaults.workspace;
-      }
       setupBaseConfig = {
         ...setupBaseConfig,
-        agents: { ...setupBaseConfig.agents, defaults },
+        agents: {
+          ...setupBaseConfig.agents,
+          defaults: { ...setupBaseConfig.agents?.defaults },
+        },
       };
     }
 
@@ -365,10 +358,8 @@ export async function applySystemAgentSetup(
       flow: "quickstart",
       baseConfig: currentBaseConfig,
       nextConfig: candidate,
-      localPort: resolveGatewayPort(currentBaseConfig),
       quickstartGateway: resolveQuickstartGatewayDefaults(currentBaseConfig),
       prompter,
-      runtime,
     });
     return {
       nextConfig: onboardHelpers.applyWizardMetadata(gateway.nextConfig, {
@@ -510,7 +501,7 @@ export async function applySystemAgentSetup(
         agentId: effectiveAgentId,
         skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
         skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
-        beforePersistentApply,
+        guard: { assertHost: beforePersistentApply },
       }),
     (error) => lines.push(`Workspace files: ${formatErrorMessage(error)}`),
   );
@@ -561,6 +552,8 @@ export async function applySystemAgentSetup(
         if (gateway.status === "failed") {
           lines.push(`Gateway service: ${gateway.error}`);
         } else if (gateway.status === "ready") {
+          const { gatewayAuthUsesLocalPassword, resolveGatewayLocalPassword } =
+            await import("../wizard/setup.finalize-gateway-auth.js");
           const probeLinks = onboardHelpers.resolveLocalControlUiProbeLinks({
             bind: settings.bind,
             port: settings.port,
@@ -571,17 +564,12 @@ export async function applySystemAgentSetup(
           const probe = await onboardHelpers.waitForGatewayReachable({
             url: probeLinks.wsUrl,
             token: settings.authMode === "token" ? settings.gatewayToken : undefined,
-            password:
-              settings.authMode === "password"
-                ? await (
-                    await import("../wizard/setup.secret-input.js")
-                  ).resolveSetupSecretInputString({
-                    config: nextConfig,
-                    value: nextConfig.gateway?.auth?.password,
-                    path: "gateway.auth.password",
-                    env: process.env,
-                  })
-                : undefined,
+            password: gatewayAuthUsesLocalPassword(settings.authMode)
+              ? await resolveGatewayLocalPassword({
+                  nextConfig,
+                  env: process.env,
+                })
+              : undefined,
             ...(gateway.action === "reused"
               ? { deadlineMs: 15_000 }
               : resolveGatewayStartupTiming()),

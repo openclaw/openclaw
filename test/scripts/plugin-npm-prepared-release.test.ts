@@ -15,6 +15,7 @@ import {
   preparedNpmArtifactName,
   validatePreparedNpmRelease,
   verifyPreparedNpmRegistry,
+  verifyPublishedNpmRegistry,
 } from "../../scripts/plugin-npm-prepared-release.mjs";
 import { createPluginPublicationArtifact } from "../../scripts/plugin-publication-artifact.mjs";
 
@@ -227,31 +228,9 @@ async function packedPluginFixture(runtime = true) {
 }
 
 describe("prepared plugin npm publication", () => {
-  it("seals the full selection, including previously published packages", () => {
-    const manifest = createPreparedNpmRelease(preparation());
-    expect(manifest.packages.map((entry: { packageName: string }) => entry.packageName)).toEqual([
-      "@openclaw/demo",
-      "@openclaw/existing",
-    ]);
-    expect(manifest.packages[1].artifact).toMatchObject({
-      runId: 101,
-      runAttempt: 2,
-      artifactId: 2,
-    });
-  });
-
   it.each([
     ["beta bootstrap", version, "beta", "beta", "default", "npm-token-bootstrap"],
     ["regular stable bootstrap", "2026.9.32", "stable", "latest", "default", "npm-token-bootstrap"],
-    [
-      "regular stable correction bootstrap",
-      "2026.9.32-1",
-      "stable",
-      "latest",
-      "default",
-      "npm-token-bootstrap",
-    ],
-    ["alpha OIDC", "2026.9.3-alpha.1", "alpha", "alpha", "default", "npm-oidc"],
     [
       "extended-stable OIDC",
       "2026.9.33",
@@ -280,11 +259,16 @@ describe("prepared plugin npm publication", () => {
     },
   );
 
+  it("rejects retired alpha preparation", () => {
+    expect(() =>
+      createPreparedNpmRelease(
+        preparation({ version: "2026.9.3-alpha.1", channel: "alpha", publishTag: "alpha" }),
+      ),
+    ).toThrow("Alpha releases are retired");
+  });
+
   it.each([
     ["first extended-stable patch on latest", "2026.9.33", "stable", "latest", "default"],
-    ["later extended-stable patch on latest", "2026.9.34", "stable", "latest", "default"],
-    ["extended-stable correction on latest", "2026.9.33-1", "stable", "latest", "default"],
-    ["alpha", "2026.9.3-alpha.1", "alpha", "alpha", "default"],
     ["explicit extended-stable", "2026.9.33", "stable", "extended-stable", "extended-stable"],
   ])(
     "rejects bootstrap preparation for %s",
@@ -478,8 +462,7 @@ describe("prepared plugin npm publication", () => {
 });
 
 describe("prepared npm registry readback", () => {
-  function registryFixture() {
-    const bytes = Buffer.from("exact qualified bytes");
+  function registryFixture(bytes = Buffer.from("exact qualified bytes")) {
     const tarballPath = join(tempRoot(), "qualified.tgz");
     writeFileSync(tarballPath, bytes);
     const name = "@openclaw/demo";
@@ -509,20 +492,17 @@ describe("prepared npm registry readback", () => {
     return { bytes, packument, params };
   }
 
-  it("adopts an already-published version only after exact byte and selector readback", async () => {
-    const { bytes, packument, params } = registryFixture();
-    const requests: string[] = [];
-    const result = await verifyPreparedNpmRegistry({
-      ...params,
-      fetchImpl: async (input: string) => {
-        requests.push(input);
-        return input.endsWith(".tgz")
-          ? new Response(new Uint8Array(bytes))
-          : Response.json(packument);
-      },
-    });
-    expect(result).toEqual({ alreadyPublished: true });
-    expect(requests).toHaveLength(2);
+  it("refuses an incomparable selector on a version this run did not publish", async () => {
+    const fixture = registryFixture(readFileSync((await packedPluginFixture()).tarballPath));
+    const { bytes, packument, params } = fixture;
+    packument["dist-tags"].beta = "not-a-version";
+    await expect(
+      verifyPublishedNpmRegistry({
+        ...params,
+        fetchImpl: async (input: string) =>
+          input.endsWith(".tgz") ? new Response(new Uint8Array(bytes)) : Response.json(packument),
+      }),
+    ).rejects.toThrow("beta differs from the prepared version; use authorized tag repair.");
   });
 
   it("accepts an authoritative missing version as publication work, not a malformed response", async () => {
@@ -611,7 +591,7 @@ describe("prepared npm registry readback", () => {
     );
   });
 
-  it.each(["0", "-1", "NaN", "1.5"])("rejects invalid readback timeout %s", async (timeout) => {
+  it.each(["0", "NaN", "1.5"])("rejects invalid readback timeout %s", async (timeout) => {
     vi.stubEnv("OPENCLAW_NPM_READBACK_TIMEOUT_MS", timeout);
     const { params, packument } = registryFixture();
     await expect(

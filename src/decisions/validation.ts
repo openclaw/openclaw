@@ -112,7 +112,7 @@ function decisionEntry(value: unknown): boolean {
 }
 
 /** Returns false only for locally unsupported resource size, never silently truncates. */
-export function validateDecisionBatch(batch: DecisionBatch): boolean {
+export function validateDecisionBatch(batch: unknown): batch is DecisionBatch {
   const shape = finiteJson(batch);
   if (shape === "invalid") {
     throw new DecisionContractError();

@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
 import path from "node:path";
-import ts from "typescript";
+import * as ts from "typescript/unstable/ast";
+import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
+import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { collectSourceFileContents } from "./lib/source-file-scan-cache.mts";
 import {
@@ -54,7 +56,6 @@ export type ModuleExports = {
   valueDefinitions: Map<string, ExportedValueDefinition>;
 };
 
-const failurePrefix = "check-export-name-collisions";
 const extraExcludedFileSuffixes = [".test-support.ts", ".test-helpers.ts", ".d.ts"];
 
 function normalizeRelativePath(filePath: string) {
@@ -71,8 +72,8 @@ export function isExcludedExportCollisionSource(filePath: string) {
   );
 }
 
-function hasModifier(node: ts.Node, kind: ts.SyntaxKind) {
-  return ts.canHaveModifiers(node) && ts.getModifiers(node)?.some((item) => item.kind === kind);
+function hasModifier(node: ts.ModifiersBase, kind: ts.SyntaxKind) {
+  return node.modifiers?.some((item) => item.kind === kind);
 }
 
 function collectBindingNames(name: ts.BindingName, names: Set<string>) {
@@ -81,7 +82,7 @@ function collectBindingNames(name: ts.BindingName, names: Set<string>) {
     return;
   }
   for (const element of name.elements) {
-    if (ts.isBindingElement(element)) {
+    if (ts.isBindingElement(element) && element.name) {
       collectBindingNames(element.name, names);
     }
   }
@@ -101,9 +102,7 @@ function resolveImportedReference(
   }
   const namespaceName = ts.isPropertyAccessExpression(target)
     ? target.name.text
-    : ts.isElementAccessExpression(target) &&
-        target.argumentExpression &&
-        ts.isStringLiteral(target.argumentExpression)
+    : ts.isStringLiteral(target.argumentExpression)
       ? target.argumentExpression.text
       : null;
   if (!namespaceName || !ts.isIdentifier(target.expression)) {
@@ -143,7 +142,7 @@ function collectImportedReferences(
         ),
       );
     }
-    ts.forEachChild(current, visit);
+    current.forEachChild(visit);
   };
   visit(node);
   return [...references.values()].toSorted((left, right) =>
@@ -183,13 +182,25 @@ function parametersAreForwarded(
   });
 }
 
-function isAwaitedZeroArgumentCall(expression: ts.Expression) {
+function isAwaitedModuleLoad(expression: ts.Expression) {
   const unwrapped = unwrapExpression(expression);
   if (!ts.isAwaitExpression(unwrapped)) {
     return false;
   }
   const awaited = unwrapExpression(unwrapped.expression);
-  return ts.isCallExpression(awaited) && awaited.arguments.length === 0;
+  if (!ts.isCallExpression(awaited)) {
+    return false;
+  }
+  // Literal imports and zero-argument loaders acquire the same lazy boundary;
+  // forwarding its unchanged arguments does not define a second behavior.
+  const [specifier] = awaited.arguments;
+  return (
+    awaited.arguments.length === 0 ||
+    (awaited.expression.kind === ts.SyntaxKind.ImportKeyword &&
+      awaited.arguments.length === 1 &&
+      specifier !== undefined &&
+      ts.isStringLiteral(specifier))
+  );
 }
 
 function returnCall(statement: ts.Statement | undefined) {
@@ -203,13 +214,13 @@ function returnCall(statement: ts.Statement | undefined) {
 function isStaticImportForwarder(
   call: ts.CallExpression,
   functionName: string,
-  importedNamesByLocalName: ReadonlyMap<string, string>,
+  importedSymbolsByLocalName: ReadonlyMap<string, ImportedSymbolReference>,
 ) {
   const callee = unwrapExpression(call.expression);
   return (
     ts.isIdentifier(callee) &&
     callee.text !== functionName &&
-    importedNamesByLocalName.get(callee.text) === functionName
+    importedSymbolsByLocalName.get(callee.text)?.importedName === functionName
   );
 }
 
@@ -226,13 +237,13 @@ function isLazyModuleForwarderCall(
   if (moduleObjectName) {
     return ts.isIdentifier(target) && target.text === moduleObjectName;
   }
-  return isAwaitedZeroArgumentCall(target);
+  return isAwaitedModuleLoad(target);
 }
 
 function isForwardingOnlyFunction(
   declaration: ts.FunctionDeclaration | ts.ArrowFunction,
   functionName: string,
-  importedNamesByLocalName: ReadonlyMap<string, string>,
+  importedSymbolsByLocalName: ReadonlyMap<string, ImportedSymbolReference>,
 ) {
   const body = declaration.body;
   if (!body) {
@@ -257,7 +268,7 @@ function isForwardingOnlyFunction(
         !loaded ||
         !ts.isIdentifier(loaded.name) ||
         !loaded.initializer ||
-        !isAwaitedZeroArgumentCall(loaded.initializer)
+        !isAwaitedModuleLoad(loaded.initializer)
       ) {
         return false;
       }
@@ -270,7 +281,8 @@ function isForwardingOnlyFunction(
   return Boolean(
     call &&
     parametersAreForwarded(declaration.parameters, call.arguments) &&
-    ((!moduleObjectName && isStaticImportForwarder(call, functionName, importedNamesByLocalName)) ||
+    ((!moduleObjectName &&
+      isStaticImportForwarder(call, functionName, importedSymbolsByLocalName)) ||
       isLazyModuleForwarderCall(call, functionName, moduleObjectName)),
   );
 }
@@ -278,7 +290,7 @@ function isForwardingOnlyFunction(
 function isForwardingOnlyConst(
   declaration: ts.VariableDeclaration,
   exportName: string,
-  importedNamesByLocalName: ReadonlyMap<string, string>,
+  importedSymbolsByLocalName: ReadonlyMap<string, ImportedSymbolReference>,
   lazyRuntimeMethods: ReadonlyMap<string, number>,
 ) {
   if (!ts.isIdentifier(declaration.name) || !declaration.initializer) {
@@ -286,7 +298,7 @@ function isForwardingOnlyConst(
   }
   const initializer = unwrapExpression(declaration.initializer);
   if (ts.isIdentifier(initializer)) {
-    return importedNamesByLocalName.get(initializer.text) === exportName;
+    return importedSymbolsByLocalName.get(initializer.text)?.importedName === exportName;
   }
   if (ts.isCallExpression(initializer) && ts.isIdentifier(initializer.expression)) {
     const arity = lazyRuntimeMethods.get(initializer.expression.text);
@@ -315,14 +327,15 @@ function isForwardingOnlyConst(
   }
   return (
     ts.isArrowFunction(initializer) &&
-    isForwardingOnlyFunction(initializer, exportName, importedNamesByLocalName)
+    isForwardingOnlyFunction(initializer, exportName, importedSymbolsByLocalName)
   );
 }
 
 /** Collects value exports and locally defined exported functions/consts from one module. */
-export function collectModuleExportNames(content: string, fileName = "source.ts"): ModuleExports {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
-  const importedNamesByLocalName = new Map<string, string>();
+export function collectModuleExportNames(
+  fileName: string,
+  sourceFile: ts.SourceFile,
+): ModuleExports {
   const importedSymbolsByLocalName = new Map<string, ImportedSymbolReference>();
   const namespaceImportsByLocalName = new Map<string, string>();
   const localConstDeclarations = new Map<string, ts.VariableDeclaration[]>();
@@ -340,12 +353,14 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
       const bindings = statement.importClause?.namedBindings;
       if (bindings && ts.isNamedImports(bindings)) {
         for (const specifier of bindings.elements) {
-          if (!statement.importClause?.isTypeOnly && !specifier.isTypeOnly) {
+          if (
+            statement.importClause?.phaseModifier !== ts.SyntaxKind.TypeKeyword &&
+            !specifier.isTypeOnly
+          ) {
             const importedName = specifier.propertyName?.text ?? specifier.name.text;
             const moduleSpecifier = ts.isStringLiteral(statement.moduleSpecifier)
               ? statement.moduleSpecifier.text
               : "";
-            importedNamesByLocalName.set(specifier.name.text, importedName);
             importedSymbolsByLocalName.set(specifier.name.text, {
               importedName,
               localName: specifier.name.text,
@@ -356,7 +371,7 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
       } else if (
         bindings &&
         ts.isNamespaceImport(bindings) &&
-        !statement.importClause?.isTypeOnly &&
+        statement.importClause?.phaseModifier !== ts.SyntaxKind.TypeKeyword &&
         ts.isStringLiteral(statement.moduleSpecifier)
       ) {
         namespaceImportsByLocalName.set(bindings.name.text, statement.moduleSpecifier.text);
@@ -540,6 +555,16 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
             namespaceImportsByLocalName,
           );
           if (aliasSource) {
+            if (ts.isIdentifier(constDeclaration.name) && aliasSource.importedName === name) {
+              // Const aliases keep runtime identity even when their declared type narrows.
+              // Retain the edge so real wrappers still resolve through this facade.
+              namedReExports.push({
+                exportedName: name,
+                importedName: aliasSource.importedName,
+                moduleSpecifier: aliasSource.moduleSpecifier,
+              });
+              continue;
+            }
             importedReferences.push(aliasSource);
           }
         }
@@ -555,7 +580,12 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
       if (
         constDeclarations.length === 1 &&
         constDeclaration &&
-        isForwardingOnlyConst(constDeclaration, name, importedNamesByLocalName, lazyRuntimeMethods)
+        isForwardingOnlyConst(
+          constDeclaration,
+          name,
+          importedSymbolsByLocalName,
+          lazyRuntimeMethods,
+        )
       ) {
         continue;
       }
@@ -581,7 +611,7 @@ export function collectModuleExportNames(content: string, fileName = "source.ts"
     // argument forwarding so those boundaries do not become duplicate behavior.
     if (
       implementation &&
-      isForwardingOnlyFunction(implementation, name, importedNamesByLocalName)
+      isForwardingOnlyFunction(implementation, name, importedSymbolsByLocalName)
     ) {
       continue;
     }
@@ -665,6 +695,10 @@ const managedHandoffNativeLoaderModules = [
 // Other modules remain collisions, including while these consumers land separately.
 const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
   [
+    "createSqliteWorkerBackend",
+    new Set(["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"]),
+  ],
+  [
     "openExistingSqliteWorkerBackend",
     new Set(["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"]),
   ],
@@ -672,15 +706,29 @@ const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
     "bindSqliteWorkerBackend",
     new Set([
       "src/agents/auth-profiles/inline-usage.worker.ts",
+      "src/agents/harness/context-engine-turn-outbox.worker.ts",
+      "src/agents/plugin-model-catalog.worker.ts",
       "src/boards/sqlite-board-store.worker.ts",
       "src/agents/sessions/session-manager-metadata.worker.ts",
+      "src/agents/subagents/spawn/acp-parent-stream-store.worker.ts",
+      "src/config/sessions/goals-operations.worker.ts",
+      "src/config/sessions/session-accessor.sqlite-transcript-reports.worker.ts",
+      "src/config/sessions/session-fork-domain.worker.ts",
+      "src/config/sessions/session-lifecycle-projection.worker.ts",
+      "src/config/sessions/session-message-rewrite.worker.ts",
       "src/config/sessions/session-sharing-store.worker.ts",
+      "src/config/sessions/session-transcript-projection-publication.worker.ts",
+      "src/config/sessions/session-transcript-stats.worker.ts",
+      "src/gateway/worker-environments/transcript-commit.worker.ts",
       "src/infra/heartbeat-outcome-store.worker.ts",
+      "src/infra/message-tool-run-outcome-store.worker.ts",
+      "src/session-cards/progress-card-store.worker.ts",
     ]),
   ],
 ]);
 
 function analyzeExportNames(modules: SourceModule[]) {
+  using parser = createNativeTypeScriptParser();
   const aliasingReExports: AliasingReExport[] = [];
   const filesByName = new Map<string, Set<string>>();
   const modulesByPath = new Map<string, ModuleExports>();
@@ -688,7 +736,10 @@ function analyzeExportNames(modules: SourceModule[]) {
     left.path.localeCompare(right.path),
   )) {
     const relativePath = normalizeRelativePath(sourceModule.path);
-    const moduleExports = collectModuleExportNames(sourceModule.content, relativePath);
+    const moduleExports = collectModuleExportNames(
+      relativePath,
+      parser.parseSourceFile(relativePath, sourceModule.content),
+    );
     modulesByPath.set(relativePath, moduleExports);
     if (sourceModule.includeDefinitions !== false && !relativePath.startsWith("src/plugin-sdk/")) {
       aliasingReExports.push(
@@ -753,40 +804,33 @@ export function findExportNameCollisions(modules: SourceModule[]): ExportNameCol
 
 async function collectRepositoryModules(repoRoot: string) {
   const ignoredDirNames = new Set(["node_modules", "test", "__fixtures__"]);
-  const [collectedFiles, collectedSupportFiles] = await Promise.all([
-    collectSourceFileContents({
-      repoRoot,
+  const scans = [
+    {
       scanRoots: ["src"],
       scanExtensions: new Set([".ts", ".mts", ".js", ".mjs"]),
-      ignoredDirNames,
-    }),
+      includeDefinitions: true,
+    },
     // Package modules are resolution-only: Plugin SDK barrels can export their
     // names, but the collision rule itself remains scoped to src/ definitions.
-    collectSourceFileContents({
-      repoRoot,
+    {
       scanRoots: ["packages"],
       scanExtensions: new Set([".ts", ".mts"]),
-      ignoredDirNames,
-    }),
-  ]);
-  const files = collectedFiles.filter(
-    ({ relativeFile }) => !isExcludedExportCollisionSource(relativeFile),
-  );
-  const supportFiles = collectedSupportFiles.filter(
-    ({ relativeFile }) => !isExcludedExportCollisionSource(relativeFile),
-  );
-  return [
-    ...files.map(({ content, relativeFile }) => ({
-      content,
-      includeDefinitions: true,
-      path: relativeFile,
-    })),
-    ...supportFiles.map(({ content, relativeFile }) => ({
-      content,
       includeDefinitions: false,
-      path: relativeFile,
-    })),
+    },
   ];
+  return (
+    await Promise.all(
+      scans.map(async ({ includeDefinitions, ...scan }) =>
+        (await collectSourceFileContents({ repoRoot, ignoredDirNames, ...scan }))
+          .filter(({ relativeFile }) => !isExcludedExportCollisionSource(relativeFile))
+          .map(({ content, relativeFile }) => ({
+            content,
+            includeDefinitions,
+            path: relativeFile,
+          })),
+      ),
+    )
+  ).flat();
 }
 
 async function collectRepositoryExportAnalysis(repoRoot: string) {
@@ -833,15 +877,8 @@ export async function main(
   return 1;
 }
 
-runAsScript(import.meta.url, async () => {
-  let exitCode = 1;
-  try {
-    exitCode = await main();
-  } catch (error) {
-    console.error(error);
-  }
-  if (exitCode !== 0) {
-    process.exitCode = exitCode;
-    console.error(`[${failurePrefix}] FAILED (exit ${exitCode})`);
-  }
-});
+runAsScript(import.meta.url, () =>
+  runWithFailedTrailer("check-export-name-collisions", async () => {
+    process.exitCode = await main();
+  }),
+);

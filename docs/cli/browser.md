@@ -67,7 +67,7 @@ openclaw browser stop
 openclaw browser --browser-profile openclaw reset-profile
 ```
 
-- `doctor --deep` adds a live snapshot probe: useful when basic CDP readiness is green but you want proof the current tab can be inspected.
+- `doctor --deep` adds a live snapshot check: useful when basic CDP readiness is green but you want proof the current tab can be inspected.
 - For a running local managed profile, `status` and `doctor` report cached
   graphics diagnostics from Chrome: hardware/software classification, renderer,
   backend, device/driver, feature and disabled-status details, and accelerated
@@ -438,7 +438,7 @@ Current existing-session limits:
 
 Existing-session action steps share one execution budget: filling and submitting with `type` do not each receive a fresh timeout. A conditional `wait` allows its explicit `timeMs` delay plus the action budget (with a 250 ms minimum) to satisfy the condition. A pure timer wait reserves the larger of `timeMs` and the action budget.
 
-Navigation verification has a separate shared allowance of the action budget plus 1250 ms for scheduled delays. `resize` and `close` skip verification. Browser and tab preparation, execution, and final URL lookup share the overall request deadline. Internal calls and navigation probes do not renew it.
+Navigation verification has a separate shared allowance of the action budget plus 1250 ms for scheduled delays. `resize` and `close` skip verification. Browser and tab preparation, execution, and final URL lookup share the overall request deadline. Internal calls and navigation checks do not renew it.
 
 ## Remote browser control (node host proxy)
 

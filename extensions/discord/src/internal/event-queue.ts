@@ -1,3 +1,5 @@
+import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
+
 export type DiscordEventQueueOptions = {
   maxQueueSize?: number;
   maxConcurrency?: number;
@@ -14,16 +16,6 @@ type DiscordEventQueueJob = {
 };
 
 type DiscordEventQueueDispatchOutcome = "completed" | "failed" | "timed-out";
-
-type DiscordEventQueueMetrics = {
-  queueSize: number;
-  processing: number;
-  processed: number;
-  dropped: number;
-  timeouts: number;
-  maxQueueSize: number;
-  maxConcurrency: number;
-};
 
 const DEFAULT_MAX_QUEUE_SIZE = 10_000;
 const DEFAULT_MAX_CONCURRENCY = 50;
@@ -69,7 +61,7 @@ export class DiscordEventQueue {
     });
   }
 
-  getMetrics(): DiscordEventQueueMetrics {
+  getMetrics() {
     return {
       queueSize: this.pendingQueueSize,
       processing: this.processing,
@@ -86,11 +78,6 @@ export class DiscordEventQueue {
   }
 
   private takeNextJob(): DiscordEventQueueJob | undefined {
-    if (this.queueHead >= this.queue.length) {
-      this.queue.length = 0;
-      this.queueHead = 0;
-      return undefined;
-    }
     const job = this.queue[this.queueHead];
     this.queueHead += 1;
     if (this.queueHead >= this.queue.length) {
@@ -144,7 +131,14 @@ export class DiscordEventQueue {
   ): Promise<DiscordEventQueueDispatchOutcome> {
     const startedAt = Date.now();
     try {
-      await this.runWithTimeout(listenerPromise);
+      await raceWithTimeout(
+        listenerPromise,
+        this.options.listenerTimeout,
+        () => {
+          throw createListenerTimeoutError(this.options.listenerTimeout);
+        },
+        { ref: false },
+      );
       this.logSlowListener(job, Date.now() - startedAt);
       return "completed";
     } catch (error) {
@@ -160,25 +154,6 @@ export class DiscordEventQueue {
         error,
       );
       return "failed";
-    }
-  }
-
-  private async runWithTimeout(listenerPromise: Promise<void>): Promise<void> {
-    let timeout: NodeJS.Timeout | undefined;
-    try {
-      await Promise.race([
-        listenerPromise,
-        new Promise<never>((_, reject) => {
-          timeout = setTimeout(() => {
-            reject(createListenerTimeoutError(this.options.listenerTimeout));
-          }, this.options.listenerTimeout);
-          timeout.unref?.();
-        }),
-      ]);
-    } finally {
-      if (timeout) {
-        clearTimeout(timeout);
-      }
     }
   }
 

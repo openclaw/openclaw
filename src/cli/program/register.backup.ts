@@ -1,28 +1,30 @@
-// Backup command registration for local state archive creation and verification.
 import type { Command } from "commander";
-import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { addGatewayClientOptions } from "../gateway-rpc.js";
-import { formatHelpExamples } from "../help-format.js";
-import { parseStrictPositiveIntOption } from "./helpers.js";
+import { formatDocsHelp, formatHelpExamples } from "../help-format.js";
+import { collectOption, parseStrictPositiveIntOption } from "./helpers.js";
 
-/** Register backup create/verify subcommands. */
 export function registerBackupCommand(program: Command) {
   const backup = program
     .command("backup")
     .description("Create, verify, and restore backup archives and SQLite snapshots")
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/backup", "docs.openclaw.ai/cli/backup")}\n`,
-    );
+    .addHelpText("after", () => formatDocsHelp("/cli/backup"));
 
   backup
     .command("create")
     .description("Write a backup archive for config, credentials, sessions, and workspaces")
     .option("--output <path>", "Archive path or destination directory")
+    .option("--to <location>", "Upload the verified archive to a storage location")
+    .option(
+      "--claim-namespace",
+      "Deliberately take over the backup namespace for this installation",
+    )
+    .option("--namespace <name>", "Backup namespace (default: sanitized hostname)")
+    .option("--keep-daily <n>", "Retain the newest backup in N daily UTC buckets")
+    .option("--keep-weekly <n>", "Retain the newest backup in N weekly UTC buckets")
+    .option("--keep-monthly <n>", "Retain the newest backup in N monthly UTC buckets")
     .option("--json", "Output JSON", false)
     .option("--dry-run", "Print the backup plan without writing the archive", false)
     .option("--verify", "Verify the archive after writing it", false)
@@ -55,72 +57,102 @@ export function registerBackupCommand(program: Command) {
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { backupCreateCommand } = await import("../../commands/backup.js");
-        await backupCreateCommand(defaultRuntime, {
-          output: opts.output as string | undefined,
-          json: Boolean(opts.json),
-          dryRun: Boolean(opts.dryRun),
-          verify: Boolean(opts.verify),
-          onlyConfig: Boolean(opts.onlyConfig),
-          includeWorkspace: opts.includeWorkspace as boolean,
-        });
+        await backupCreateCommand(defaultRuntime, opts);
+      });
+    });
+
+  for (const operation of ["verify", "restore"] as const) {
+    const restore = operation === "restore";
+    const command = backup
+      .command(`${operation} <archive>`)
+      .description(
+        restore
+          ? "Restore a verified backup archive to a fresh staging directory"
+          : "Validate a backup archive and its embedded manifest",
+      )
+      .option("--from <location>", "Read a backup key or latest from a storage location")
+      .option("--namespace <name>", "Backup namespace (default: sanitized hostname)");
+    if (restore) {
+      command.requiredOption(
+        "--target <dir>",
+        "Fresh target directory; non-empty directories are refused",
+      );
+    }
+    command
+      .option("--json", "Output JSON", false)
+      .addHelpText(
+        "after",
+        () =>
+          `\n${theme.heading("Examples:")}\n${formatHelpExamples(
+            restore
+              ? [
+                  [
+                    "openclaw backup restore ~/Backups/latest.tar.gz --target ./restored-openclaw",
+                    "Verify, then extract the whole archive into a fresh staging directory.",
+                  ],
+                  [
+                    "openclaw backup restore ~/Backups/latest.tar.gz --target ./restored-openclaw --json",
+                    "Emit machine-readable restore details and rollback warnings.",
+                  ],
+                ]
+              : [
+                  [
+                    "openclaw backup verify ./2026-03-09T08-00-00.000+08-00-openclaw-backup.tar.gz",
+                    "Check that the archive structure and manifest are intact.",
+                  ],
+                  [
+                    "openclaw backup verify ~/Backups/latest.tar.gz --json",
+                    "Emit machine-readable verification output.",
+                  ],
+                ],
+          )}`,
+      )
+      .action((archive, opts) =>
+        runCommandWithRuntime(defaultRuntime, async () => {
+          if (opts.from !== undefined) {
+            const remote = await import("../../commands/backup-remote.js");
+            const run = restore
+              ? remote.backupRemoteRestoreCommand
+              : remote.backupRemoteVerifyCommand;
+            await run(defaultRuntime, { ...opts, archive });
+            return;
+          }
+          if (opts.namespace) {
+            throw new Error("--namespace requires --from <location>.");
+          }
+          const run = restore
+            ? (await import("../../commands/backup-restore.js")).backupRestoreCommand
+            : (await import("../../commands/backup-verify.js")).backupVerifyCommand;
+          await run(defaultRuntime, { ...opts, archive });
+        }),
+      );
+  }
+
+  backup
+    .command("list")
+    .description("List archives in a storage location")
+    .requiredOption("--from <location>", "Storage location name")
+    .option("--namespace <name>", "Backup namespace (default: sanitized hostname)")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const { backupListCommand } = await import("../../commands/backup-remote.js");
+        await backupListCommand(defaultRuntime, opts);
       });
     });
 
   backup
-    .command("verify <archive>")
-    .description("Validate a backup archive and its embedded manifest")
+    .command("record")
+    .description("Record an external backup job outcome")
+    .requiredOption("--status <status>", "ok or failed")
+    .requiredOption("--target <label>", "External backup target label")
+    .option("--bytes <n>", "Backup size in bytes")
+    .option("--error <text>", "Failure details")
     .option("--json", "Output JSON", false)
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-          [
-            "openclaw backup verify ./2026-03-09T08-00-00.000+08-00-openclaw-backup.tar.gz",
-            "Check that the archive structure and manifest are intact.",
-          ],
-          [
-            "openclaw backup verify ~/Backups/latest.tar.gz --json",
-            "Emit machine-readable verification output.",
-          ],
-        ])}`,
-    )
-    .action(async (archive, opts) => {
+    .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
-        const { backupVerifyCommand } = await import("../../commands/backup-verify.js");
-        await backupVerifyCommand(defaultRuntime, {
-          archive: archive as string,
-          json: Boolean(opts.json),
-        });
-      });
-    });
-
-  backup
-    .command("restore <archive>")
-    .description("Restore a verified backup archive to a fresh staging directory")
-    .requiredOption("--target <dir>", "Fresh target directory; non-empty directories are refused")
-    .option("--json", "Output JSON", false)
-    .addHelpText(
-      "after",
-      () =>
-        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-          [
-            "openclaw backup restore ~/Backups/latest.tar.gz --target ./restored-openclaw",
-            "Verify, then extract the whole archive into a fresh staging directory.",
-          ],
-          [
-            "openclaw backup restore ~/Backups/latest.tar.gz --target ./restored-openclaw --json",
-            "Emit machine-readable restore details and rollback warnings.",
-          ],
-        ])}`,
-    )
-    .action(async (archive, opts) => {
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { backupRestoreCommand } = await import("../../commands/backup-restore.js");
-        await backupRestoreCommand(defaultRuntime, {
-          archive: archive as string,
-          target: opts.target as string,
-          json: Boolean(opts.json),
-        });
+        const { backupRecordCommand } = await import("../../commands/backup-record.js");
+        await backupRecordCommand(defaultRuntime, opts);
       });
     });
 
@@ -129,16 +161,22 @@ export function registerBackupCommand(program: Command) {
   registerBackupScheduleCommands(backup);
 }
 
-function collectAgent(value: string, previous: string[]): string[] {
-  return [...previous, value];
-}
-
 function registerBackupScheduleCommands(backup: Command): void {
   addGatewayClientOptions(
     backup
       .command("enable")
-      .description("Provision a Gateway automation for scheduled Git backups")
-      .requiredOption("--repository <path>", "Git backup repository directory")
+      .description("Provision a Gateway automation for offsite or Git backups")
+      .option("--repository <path>", "Git backup repository directory")
+      .option("--to <location>", "Storage location for offsite archive backups")
+      .option(
+        "--claim-namespace",
+        "Deliberately take over the backup namespace on each scheduled run",
+      )
+      .option("--namespace <name>", "Backup namespace (default: sanitized hostname)")
+      .option("--no-include-workspace", "Exclude workspace directories from offsite archives")
+      .option("--keep-daily <n>", "Retain the newest backup in N daily UTC buckets")
+      .option("--keep-weekly <n>", "Retain the newest backup in N weekly UTC buckets")
+      .option("--keep-monthly <n>", "Retain the newest backup in N monthly UTC buckets")
       .option("--every <duration>", "Backup interval", "24h")
       .option("--push", "Push the current branch to origin after each backup", false)
       .option("--exclude-secrets", "Omit credential-bearing database tables", false)
@@ -160,7 +198,9 @@ function registerBackupScheduleCommands(backup: Command): void {
   addGatewayClientOptions(
     backup
       .command("disable")
-      .description("Remove the scheduled Git backup automation")
+      .description("Remove both scheduled backup modes, or the selected mode")
+      .option("--offsite", "Disable only offsite archive backups", false)
+      .option("--git", "Disable only Git backups", false)
       .action(async (opts) => {
         await runCommandWithRuntime(defaultRuntime, async () => {
           const { backupDisableCommand } = await import("../../commands/backup-schedule.js");
@@ -198,22 +238,15 @@ function registerBackupGitCommands(backup: Command): void {
     .requiredOption("--repository <path>", "Git backup repository directory")
     .option("--all", "Back up the shared database and every registered agent database", false)
     .option("--global", "Back up the shared OpenClaw state database", false)
-    .option("--agent <id>", "Back up an agent database (repeatable)", collectAgent, [])
+    .option("--agent <id>", "Back up an agent database (repeatable)", collectOption, [])
     .option("--push", "Push the current branch to origin", false)
     .option("--exclude-secrets", "Omit credential-bearing database tables", false)
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { backupGitCreateCommand } = await import("../../commands/backup-git.js");
-        await backupGitCreateCommand(defaultRuntime, {
-          repository: opts.repository as string,
-          all: Boolean(opts.all),
-          global: Boolean(opts.global),
-          agents: opts.agent as string[],
-          push: Boolean(opts.push),
-          excludeSecrets: Boolean(opts.excludeSecrets),
-          json: Boolean(opts.json),
-        });
+        const { agent: agents, ...options } = opts;
+        await backupGitCreateCommand(defaultRuntime, { ...options, agents });
       });
     });
 
@@ -300,12 +333,7 @@ function registerBackupSqliteCommands(backup: Command): void {
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { backupSqliteCreateCommand } = await import("../../commands/backup-sqlite.js");
-        await backupSqliteCreateCommand(defaultRuntime, {
-          global: Boolean(opts.global),
-          agent: opts.agent as string | undefined,
-          repository: opts.repository as string,
-          json: Boolean(opts.json),
-        });
+        await backupSqliteCreateCommand(defaultRuntime, opts);
       });
     });
 
@@ -317,10 +345,7 @@ function registerBackupSqliteCommands(backup: Command): void {
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { backupSqliteListCommand } = await import("../../commands/backup-sqlite.js");
-        await backupSqliteListCommand(defaultRuntime, {
-          repository: opts.repository as string,
-          json: Boolean(opts.json),
-        });
+        await backupSqliteListCommand(defaultRuntime, opts);
       });
     });
 
@@ -332,10 +357,7 @@ function registerBackupSqliteCommands(backup: Command): void {
     .action(async (snapshot, opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { backupSqliteVerifyCommand } = await import("../../commands/backup-sqlite.js");
-        await backupSqliteVerifyCommand(defaultRuntime, snapshot as string, {
-          scratch: opts.scratch as string | undefined,
-          json: Boolean(opts.json),
-        });
+        await backupSqliteVerifyCommand(defaultRuntime, snapshot, opts);
       });
     });
 
@@ -347,10 +369,7 @@ function registerBackupSqliteCommands(backup: Command): void {
     .action(async (snapshot, opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const { backupSqliteRestoreCommand } = await import("../../commands/backup-sqlite.js");
-        await backupSqliteRestoreCommand(defaultRuntime, snapshot as string, {
-          target: opts.target as string,
-          json: Boolean(opts.json),
-        });
+        await backupSqliteRestoreCommand(defaultRuntime, snapshot, opts);
       });
     });
 }

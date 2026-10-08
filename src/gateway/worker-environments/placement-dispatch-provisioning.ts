@@ -1,6 +1,14 @@
+import { WorkerDispatchTargetChangedError } from "../server-worker-placement-session-target.js";
 import { supportsCurrentWorkerLaunch } from "./admission.js";
-import type { WorkerDispatchEnvironmentService } from "./placement-dispatch-failure.js";
-import type { WorkerPlacementDispatchRequest } from "./service-contract.js";
+import type {
+  WorkerDispatchEnvironmentService,
+  WorkerDispatchPlacement,
+  WorkerDispatchPlacementStore,
+} from "./placement-dispatch-failure.js";
+import {
+  WorkerPlacementAdmissionTargetError,
+  type WorkerPlacementDispatchRequest,
+} from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
 
 export function isPendingProvisioningEnvironment(
@@ -14,6 +22,59 @@ export function isPendingProvisioningEnvironment(
       environment.state === "provisioning" ||
       environment.state === "bootstrapping")
   );
+}
+
+export function createInterruptedWorkerProvisioningRetainer(options: {
+  placements: Pick<WorkerDispatchPlacementStore, "get" | "getAsync">;
+  environments: Pick<WorkerEnvironmentService, "get" | "recordError">;
+  isShuttingDown?: () => boolean;
+}) {
+  const { environments, placements } = options;
+  return async (
+    owned: WorkerDispatchPlacement,
+    error: unknown,
+  ): Promise<WorkerDispatchPlacement | undefined> => {
+    const current = await placements.getAsync(owned.sessionId);
+    if (
+      error instanceof WorkerPlacementAdmissionTargetError ||
+      error instanceof WorkerDispatchTargetChangedError ||
+      !options.isShuttingDown?.() ||
+      current?.state !== "provisioning" ||
+      current.state !== owned.state ||
+      current.generation !== owned.generation ||
+      current.environmentId !== owned.environmentId ||
+      current.sessionKey !== owned.sessionKey ||
+      current.agentId !== owned.agentId ||
+      current.executionMode !== owned.executionMode
+    ) {
+      return undefined;
+    }
+    const environment = current.environmentId ? environments.get(current.environmentId) : undefined;
+    if (!environment || !isPendingProvisioningEnvironment(environment, current.environmentId)) {
+      return undefined;
+    }
+    const assertCurrent = () => {
+      const latest = placements.get(owned.sessionId);
+      if (
+        latest?.state !== current.state ||
+        latest.generation !== current.generation ||
+        latest.environmentId !== current.environmentId ||
+        latest.sessionKey !== current.sessionKey ||
+        latest.agentId !== current.agentId ||
+        latest.executionMode !== current.executionMode ||
+        !isPendingProvisioningEnvironment(
+          environments.get(environment.environmentId),
+          current.environmentId,
+        )
+      ) {
+        throw new Error("Worker provisioning owner changed before shutdown retention");
+      }
+    };
+    // Explicit Stop must win while the diagnostic waits for the database worker.
+    await environments.recordError(environment, error, assertCurrent);
+    assertCurrent();
+    return current;
+  };
 }
 
 export function requireProvisionedEnvironment(

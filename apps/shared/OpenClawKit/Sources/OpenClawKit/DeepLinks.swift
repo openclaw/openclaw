@@ -5,9 +5,7 @@ private func defaultGatewayPort(tls: Bool) -> Int {
 }
 
 private func normalizeGatewayTLSFingerprint(_ value: String?) -> String? {
-    guard var value = value?.trimmingCharacters(in: .whitespacesAndNewlines), !value.isEmpty else {
-        return nil
-    }
+    guard var value = value?.trimmedNonEmpty else { return nil }
     if value.lowercased().hasPrefix("sha256:") {
         value.removeFirst("sha256:".count)
     }
@@ -98,8 +96,7 @@ public struct GatewayAddDeepLink: Sendable, Equatable {
         components.host = host.lowercased()
         guard let normalizedURL = components.url else { return nil }
         self.url = normalizedURL
-        let label = name?.trimmingCharacters(in: .whitespacesAndNewlines)
-        self.name = label?.isEmpty == false ? label : nil
+        self.name = name?.trimmedNonEmpty
     }
 }
 
@@ -254,8 +251,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
     /// - an `openclaw://gateway?...` deep link
     /// - a raw `ws://` or `wss://` gateway URL
     public static func fromSetupInput(_ input: String) -> GatewayConnectDeepLink? {
-        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        guard let trimmed = input.trimmedNonEmpty else { return nil }
         if let link = fromSetupCode(trimmed) {
             return link
         }
@@ -289,8 +285,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
     /// and `tls`. In both cases, the optional `tlsFingerprint`, `expiresAtMs`, `bootstrapToken`,
     /// `token`, and `password` fields are also supported.
     public static func fromSetupCode(_ code: String) -> GatewayConnectDeepLink? {
-        var trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
+        guard var trimmed = code.trimmedNonEmpty else { return nil }
         if trimmed.range(
             of: self.pairingSetupURLPrefix,
             options: [.anchored, .caseInsensitive]) != nil
@@ -331,8 +326,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         }
         var seenURLs = Set<String>()
         let links = urlCandidates.enumerated().compactMap { index, rawURL -> GatewayConnectDeepLink? in
-            let url = rawURL.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !url.isEmpty, seenURLs.insert(url).inserted else { return nil }
+            guard let url = rawURL.trimmedNonEmpty, seenURLs.insert(url).inserted else { return nil }
             return self.fromGatewayURLString(
                 url,
                 tlsFingerprintSha256: index == 0 ? tlsFingerprintSha256 : nil,
@@ -361,18 +355,8 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
                 password: primary.password,
                 fallbackEndpoints: fallbacks)
         }
-        guard let host = payload.host?.trimmingCharacters(in: .whitespacesAndNewlines),
-              !host.isEmpty
-        else {
-            return nil
-        }
+        guard let host = payload.host?.trimmedNonEmpty else { return nil }
         let tls = payload.tls ?? true
-        if !tls, tlsFingerprintSha256 != nil {
-            return nil
-        }
-        if !tls, !LoopbackHost.isLocalNetworkHost(host) {
-            return nil
-        }
         return GatewayConnectDeepLink.validated(
             host: host,
             port: payload.port ?? defaultGatewayPort(tls: tls),
@@ -405,12 +389,6 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
             return nil
         }
         let tls = scheme == "wss" || scheme == "https"
-        if !tls, tlsFingerprintSha256 != nil {
-            return nil
-        }
-        if !tls, !LoopbackHost.isLocalNetworkHost(hostname) {
-            return nil
-        }
         return GatewayConnectDeepLink.validated(
             host: hostname,
             port: parsed.port ?? defaultGatewayPort(tls: tls),
@@ -473,13 +451,6 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
 }
 
 public struct GatewayConnectEndpoint: Codable, Sendable, Equatable {
-    private enum CodingKeys: String, CodingKey {
-        case host
-        case port
-        case tls
-        case contextPath
-    }
-
     public let host: String
     public let port: Int
     public let tls: Bool
@@ -602,9 +573,6 @@ public enum DeepLinkParser {
                 port = parsedPort
             } else {
                 port = defaultGatewayPort(tls: tls)
-            }
-            if !tls, !LoopbackHost.isLocalNetworkHost(hostParam) {
-                return nil
             }
             guard let link = GatewayConnectDeepLink.validated(
                 host: hostParam,

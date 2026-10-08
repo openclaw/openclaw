@@ -65,7 +65,7 @@ async function createRequesterPolicySources(
   await setCanonicalUserProfileRole(maintainerProfile, "maintainer");
   invalidateOperatorRolePolicy(maintainerProfile);
   const config: OpenClawConfig = {
-    agents: { list: [{ id: "main", default: true, workspace }] },
+    agents: { entries: { main: { workspace } } },
     session: { maintenance: { mode: "warn" } },
     gateway: {
       roles: {
@@ -218,10 +218,12 @@ export async function createRequesterPublicationFixture(
   };
 }
 
-export function holdWorkerTurn(f: Awaited<ReturnType<typeof createRequesterPublicationFixture>>) {
+export async function holdWorkerTurn(
+  f: Awaited<ReturnType<typeof createRequesterPublicationFixture>>,
+) {
   const owner = { environmentId: "requester-worker", ownerEpoch: 2 };
   seedAttachedPlacementEnvironment(f.database, { ...owner, sessionId: REQUEST.sessionId });
-  seedActivePlacement(f.placements, owner);
+  await seedActivePlacement(f.placements, owner);
   return f.placements.claimTurn({
     sessionId: REQUEST.sessionId,
     sessionKey: REQUEST.sessionKey,
@@ -253,6 +255,7 @@ export function requireVisitorPublicationPolicy(f: { config: OpenClawConfig }): 
             ...roles.definitions.guest!,
             sandbox: "required",
             accessPolicyPlugin: "visitor-access",
+            modelPolicy: {},
           },
         },
       },
@@ -281,7 +284,7 @@ export async function prepareVisitorPublicationFixture(f: {
     { createEmptyPluginRegistry },
   ] = await Promise.all([
     import("../plugins/loader.js"),
-    import("../plugins/services.js"),
+    import("../plugins/services.test-support.js"),
     import("../plugins/runtime.js"),
     import("../plugins/registry-empty.js"),
   ]);
@@ -347,6 +350,18 @@ export async function prepareVisitorPublicationFixture(f: {
   );
   const gateway: PluginRuntime["gateway"] = {
     isAvailable: async () => true,
+    async openPluginPanel() {
+      throw new Error("Unexpected plugin panel request");
+    },
+    async readSessionFacts() {
+      throw new Error("Unexpected session facts request");
+    },
+    async withSessionFacts() {
+      throw new Error("Unexpected session read scope");
+    },
+    subscribeSessionChanges() {
+      throw new Error("Unexpected session changes subscription");
+    },
     async request() {
       throw new Error("Unexpected Gateway request");
     },
@@ -364,8 +379,8 @@ export async function prepareVisitorPublicationFixture(f: {
   const unexpectedSubagent = () => {
     throw new Error("Visitor publication fixtures must not dispatch subagent work");
   };
-  const register = () => {
-    const registry = loadAndActivateRootPluginRegistry({
+  const register = async () => {
+    const registry = await loadAndActivateRootPluginRegistry({
       config,
       env,
       workspaceDir,
@@ -439,7 +454,7 @@ export async function prepareVisitorPublicationFixture(f: {
       },
     };
   };
-  let active = register();
+  let active = await register();
   return {
     get store() {
       return active.store;
@@ -461,7 +476,7 @@ export async function prepareVisitorPublicationFixture(f: {
       await closeOpenClawAgentDatabasesAsync();
       await closeOpenClawStateDatabaseAsync();
       resetPluginStateStoreForTests();
-      active = register();
+      active = await register();
     },
     async close() {
       try {

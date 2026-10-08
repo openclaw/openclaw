@@ -1,4 +1,3 @@
-// OpenClaw CLI runner selects JSON, one-shot, or interactive setup-helper mode.
 import { stdin as defaultStdin, stdout as defaultStdout } from "node:process";
 import { withProgress } from "../cli/progress.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
@@ -84,9 +83,9 @@ async function requireVerifiedInference(opts: RunSystemAgentOptions): Promise<vo
       return;
     }
   } catch (error) {
-    throw new SystemAgentInferenceUnavailableError("conversation", [error]);
+    throw new SystemAgentInferenceUnavailableError("conversation", [error], "route-changed");
   }
-  throw new SystemAgentInferenceUnavailableError("conversation");
+  throw new SystemAgentInferenceUnavailableError("conversation", [], "route-changed");
 }
 
 async function requirePersistentApplyInference(
@@ -110,9 +109,9 @@ async function requirePersistentApplyInference(
     if (error instanceof SystemAgentInferenceUnavailableError) {
       throw error;
     }
-    throw new SystemAgentInferenceUnavailableError("conversation", [error]);
+    throw new SystemAgentInferenceUnavailableError("conversation", [error], "route-changed");
   }
-  throw new SystemAgentInferenceUnavailableError("conversation");
+  throw new SystemAgentInferenceUnavailableError("conversation", [], "route-changed");
 }
 
 async function runOneShot(
@@ -170,7 +169,7 @@ export async function runSystemAgent(
       readConfigFileSnapshot: async () => snapshot,
     });
     if (!currentArtifacts) {
-      throw new SystemAgentInferenceUnavailableError("conversation");
+      throw new SystemAgentInferenceUnavailableError("conversation", [], "route-changed");
     }
     const config = snapshot.runtimeConfig ?? snapshot.config;
     const workspaceDir = resolveAgentWorkspaceDir(config, route.agentId);

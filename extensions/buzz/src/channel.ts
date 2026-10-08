@@ -53,167 +53,170 @@ type BuzzProbeResult = {
   rooms: Array<{ id: string; name: string }>;
 };
 
-export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbeResult>({
-  base: {
-    id: "buzz",
-    meta: {
+export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbeResult, unknown, 2>(
+  {
+    base: {
       id: "buzz",
-      label: "Buzz",
-      selectionLabel: "Buzz",
-      docsPath: "/channels/buzz",
-      docsLabel: "buzz",
-      blurb: "Connect OpenClaw agents to Buzz team rooms.",
-      markdownCapable: true,
-      order: 56,
-    },
-    capabilities: {
-      chatTypes: ["group"],
-      threads: true,
-    },
-    threading: {
-      resolveReplyTransport: ({ replyDelivery, threadId, replyToId, replyToIsExplicit }) => {
-        if (replyDelivery?.replyToMode === "off") {
-          return { threadId: null, replyToId: null };
-        }
-        // Implicit replies belong to the root; explicit child targets keep their nesting.
-        return threadId && replyToId && !replyToIsExplicit
-          ? { threadId, replyToId: String(threadId) }
-          : null;
+      meta: {
+        id: "buzz",
+        label: "Buzz",
+        selectionLabel: "Buzz",
+        docsPath: "/channels/buzz",
+        docsLabel: "buzz",
+        blurb: "Connect OpenClaw agents to Buzz team rooms.",
+        markdownCapable: true,
+        order: 56,
       },
-    },
-    agentPrompt: {
-      messageToolHints: () => [
-        "- Buzz targets: use a configured room UUID, `buzz:<ROOM_UUID>`, or a unique current room name. Use the UUID when room names are ambiguous.",
-        "- Buzz mentions: write a unique current room member as `@Display Name`. For an explicit identity, include `nostr:npub...`; the public key must belong to the target room. Any unresolved or ambiguous label needs an explicit identity for every intended member.",
-      ],
-    },
-    reload: { configPrefixes: ["channels.buzz"], accountScopedRestart: true },
-    configSchema: BuzzConfigSchema,
-    setupContract: buzzSetupContract,
-    setupWizard: buzzSetupWizard,
-    config: {
-      listAccountIds: listBuzzAccountIds,
-      resolveAccount: (cfg, accountId) => resolveBuzzAccount({ cfg, accountId }),
-      defaultAccountId: resolveDefaultBuzzAccountId,
-      isConfigured: (account) => account.configured,
-      describeAccount: (account) =>
-        describeAccountSnapshot({
-          account,
-          configured: account.configured,
-          extra: {
-            baseUrl: account.relayUrl,
-            publicKey: account.publicKey,
-            tokenStatus: account.tokenStatus,
-          },
-        }),
-      resolveAllowFrom: ({ cfg, accountId }) =>
-        resolveBuzzAccount({ cfg, accountId }).config.groupAllowFrom,
-      resolveDefaultTo: ({ cfg, accountId }) =>
-        resolveBuzzAccount({ cfg, accountId }).config.defaultTo,
-    },
-    secrets: {
-      secretTargetRegistryEntries,
-      collectRuntimeConfigAssignments,
-    },
-    messaging: {
-      targetPrefixes: ["buzz"],
-      normalizeTarget: normalizeBuzzTarget,
-      inferTargetChatType: () => "group",
-      targetResolver: {
-        looksLikeId: looksLikeBuzzTarget,
-        hint: "<room UUID|configured room name>",
+      capabilities: {
+        chatTypes: ["group"],
+        threads: true,
       },
-      resolveOutboundSessionRoute: ({
-        cfg,
-        agentId,
-        accountId,
-        target,
-        replyToId,
-        threadId,
-        currentSessionKey,
-      }) => {
-        const normalized = buildBuzzTarget(parseBuzzTarget(target));
-        const baseRoute = buildChannelOutboundSessionRoute({
+      threading: {
+        resolveReplyTransport: ({ replyDelivery, threadId, replyToId, replyToIsExplicit }) => {
+          if (replyDelivery?.replyToMode === "off") {
+            return { threadId: null, replyToId: null };
+          }
+          // Implicit replies belong to the root; explicit child targets keep their nesting.
+          return threadId && replyToId && !replyToIsExplicit
+            ? { threadId, replyToId: String(threadId) }
+            : null;
+        },
+      },
+      agentPrompt: {
+        messageToolHints: () => [
+          "- Buzz targets: use a configured room UUID, `buzz:<ROOM_UUID>`, or a unique current room name. Use the UUID when room names are ambiguous.",
+          "- Buzz mentions: write a unique current room member as `@Display Name`. For an explicit identity, include `nostr:npub...`; the public key must belong to the target room. Any unresolved or ambiguous label needs an explicit identity for every intended member.",
+        ],
+      },
+      reload: { configPrefixes: ["channels.buzz"], accountScopedRestart: true },
+      configSchema: BuzzConfigSchema,
+      setupContract: buzzSetupContract,
+      setupWizard: buzzSetupWizard,
+      config: {
+        listAccountIds: listBuzzAccountIds,
+        resolveAccount: (cfg, accountId) => resolveBuzzAccount({ cfg, accountId }),
+        defaultAccountId: resolveDefaultBuzzAccountId,
+        isConfigured: (account) => account.configured,
+        describeAccount: (account) =>
+          describeAccountSnapshot({
+            account,
+            configured: account.configured,
+            extra: {
+              baseUrl: account.relayUrl,
+              publicKey: account.publicKey,
+              tokenStatus: account.tokenStatus,
+            },
+          }),
+        resolveAllowFrom: ({ cfg, accountId }) =>
+          resolveBuzzAccount({ cfg, accountId }).config.groupAllowFrom,
+        resolveDefaultTo: ({ cfg, accountId }) =>
+          resolveBuzzAccount({ cfg, accountId }).config.defaultTo,
+      },
+      secrets: {
+        secretTargetRegistryEntries,
+        collectRuntimeConfigAssignments,
+      },
+      messaging: {
+        targetPrefixes: ["buzz"],
+        normalizeTarget: normalizeBuzzTarget,
+        inferTargetChatType: () => "group",
+        targetResolver: {
+          looksLikeId: looksLikeBuzzTarget,
+          hint: "<room UUID|configured room name>",
+        },
+        resolveOutboundSessionRoute: ({
           cfg,
           agentId,
-          channel: "buzz",
           accountId,
-          recipientSessionExact: true,
-          peer: { kind: "group", id: normalized },
-          chatType: "group",
-          from: `buzz:${accountId ?? "default"}`,
-          to: normalized,
-        });
-        return buildThreadAwareOutboundSessionRoute({
-          route: baseRoute,
+          target,
           replyToId,
           threadId,
           currentSessionKey,
-          canRecoverCurrentThread: () => true,
-        });
+        }) => {
+          const normalized = buildBuzzTarget(parseBuzzTarget(target));
+          const baseRoute = buildChannelOutboundSessionRoute({
+            cfg,
+            agentId,
+            channel: "buzz",
+            accountId,
+            recipientSessionExact: true,
+            peer: { kind: "group", id: normalized },
+            chatType: "group",
+            from: `buzz:${accountId ?? "default"}`,
+            to: normalized,
+          });
+          return buildThreadAwareOutboundSessionRoute({
+            route: baseRoute,
+            replyToId,
+            threadId,
+            currentSessionKey,
+            canRecoverCurrentThread: () => true,
+          });
+        },
+        resolveSessionConversation: ({ rawId }) => {
+          const { baseSessionKey, threadId } = parseThreadSessionSuffix(rawId);
+          const channelId = parseBuzzTarget(baseSessionKey ?? rawId);
+          return {
+            id: channelId,
+            threadId,
+            baseConversationId: channelId,
+            parentConversationCandidates: [channelId],
+          };
+        },
       },
-      resolveSessionConversation: ({ rawId }) => {
-        const { baseSessionKey, threadId } = parseThreadSessionSuffix(rawId);
-        const channelId = parseBuzzTarget(baseSessionKey ?? rawId);
-        return {
-          id: channelId,
-          threadId,
-          baseConversationId: channelId,
-          parentConversationCandidates: [channelId],
-        };
-      },
-    },
-    status: {
-      ...createComputedAccountStatusAdapter<ResolvedBuzzAccount>({
-        defaultRuntime: createDefaultChannelRuntimeState("default"),
-        buildChannelSummary: ({ snapshot }) => ({
-          ok: snapshot.configured,
-          label: snapshot.configured ? "configured" : "missing config",
-          detail: snapshot.baseUrl ?? "",
+      status: {
+        ...createComputedAccountStatusAdapter<ResolvedBuzzAccount>({
+          defaultRuntime: createDefaultChannelRuntimeState("default"),
+          buildChannelSummary: ({ snapshot }) => ({
+            ok: snapshot.configured,
+            label: snapshot.configured ? "configured" : "missing config",
+            detail: snapshot.baseUrl ?? "",
+          }),
+          resolveAccountSnapshot: ({ account }) => ({
+            accountId: account.accountId,
+            name: account.name,
+            enabled: account.enabled,
+            configured: account.configured,
+            extra: {
+              baseUrl: account.relayUrl,
+              publicKey: account.publicKey,
+              tokenStatus: account.tokenStatus,
+            },
+          }),
         }),
-        resolveAccountSnapshot: ({ account }) => ({
-          accountId: account.accountId,
-          name: account.name,
-          enabled: account.enabled,
-          configured: account.configured,
-          extra: {
-            baseUrl: account.relayUrl,
+        probeAccount: async ({ account, timeoutMs }) => {
+          assertBuzzAccountAvailable(account);
+          const rooms = await discoverBuzzRooms({
+            relayUrl: account.relayUrl,
+            privateKey: account.privateKey,
+            authTag: account.authTag,
+            timeoutMs,
+          });
+          return {
+            ok: true,
             publicKey: account.publicKey,
-            tokenStatus: account.tokenStatus,
-          },
-        }),
-      }),
-      probeAccount: async ({ account, timeoutMs }) => {
-        assertBuzzAccountAvailable(account);
-        const rooms = await discoverBuzzRooms({
-          relayUrl: account.relayUrl,
-          privateKey: account.privateKey,
-          authTag: account.authTag,
-          timeoutMs,
-        });
-        return {
-          ok: true,
-          publicKey: account.publicKey,
-          roomCount: rooms.length,
-          rooms: rooms.map((room) => ({ id: room.id, name: room.name })),
-        };
+            roomCount: rooms.length,
+            rooms: rooms.map((room) => ({ id: room.id, name: room.name })),
+          };
+        },
       },
+      gateway: {
+        apiVersion: 2,
+        startAccount: startBuzzGatewayAccount,
+      },
+      heartbeat: {
+        sendTyping: sendBuzzTyping,
+      },
+      directory: createChannelDirectoryAdapter({
+        self: getBuzzDirectorySelf,
+        listPeers: listBuzzDirectoryPeersFromConfig,
+        listPeersLive: listBuzzDirectoryPeersLive,
+        listGroups: listBuzzDirectoryGroupsFromConfig,
+        listGroupsLive: listBuzzDirectoryGroupsLive,
+        listGroupMembers: listBuzzDirectoryGroupMembers,
+      }),
+      message: buzzMessageAdapter,
     },
-    gateway: {
-      startAccount: startBuzzGatewayAccount,
-    },
-    heartbeat: {
-      sendTyping: sendBuzzTyping,
-    },
-    directory: createChannelDirectoryAdapter({
-      self: getBuzzDirectorySelf,
-      listPeers: listBuzzDirectoryPeersFromConfig,
-      listPeersLive: listBuzzDirectoryPeersLive,
-      listGroups: listBuzzDirectoryGroupsFromConfig,
-      listGroupsLive: listBuzzDirectoryGroupsLive,
-      listGroupMembers: listBuzzDirectoryGroupMembers,
-    }),
-    message: buzzMessageAdapter,
+    outbound: buzzOutboundAdapter,
   },
-  outbound: buzzOutboundAdapter,
-});
+);

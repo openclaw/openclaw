@@ -148,11 +148,6 @@ describe("Matrix monitor credential discovery", () => {
         }
         expect(harness.inboundReplayClaim.commit).toHaveBeenCalledOnce();
         expect(harness.logger.error).not.toHaveBeenCalled();
-        console.log(
-          "matrix-monitor bot discovery host SQL",
-          kind,
-          sql.map((spy) => spy.mock.calls.length),
-        );
         for (const spy of sql) {
           expect(spy).not.toHaveBeenCalled();
         }

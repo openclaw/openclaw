@@ -1,13 +1,19 @@
 // Model-bound thinking cannot be exposed or replayed after a model switch.
 import {
   CLAUDE_FABLE_5_THINKING_PROFILE,
+  CLAUDE_HAIKU_55_THINKING_PROFILE,
+  CLAUDE_OPUS_55_THINKING_PROFILE,
+  CLAUDE_SONNET_55_THINKING_PROFILE,
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeHaiku55ModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeOpus55ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
+  resolveClaudeSonnet55ModelIdentity,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "@openclaw/llm-core";
@@ -24,22 +30,26 @@ import type {
 import { headersToRecord } from "../utils/headers.js";
 export {
   bindsClaudeThinkingPrefix,
+  requiresClaudeBetweenToolsThinking,
   requiresClaudeDefaultSampling,
   requiresClaudeMandatoryAdaptiveThinking,
   resolveClaudeFable5ModelIdentity,
+  resolveClaudeHaiku55ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
   resolveClaudeNativeThinkingLevelMap,
+  resolveClaudeOpus55ModelIdentity,
   resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
+  resolveClaudeSonnet55ModelIdentity,
   supportsClaudeAdaptiveThinking,
   supportsClaudeNativeMaxEffort,
   supportsClaudeNativeXhighEffort,
 } from "@openclaw/llm-core";
 
 // Anthropic gates OAuth models with claude_code_version_too_old. Keep this floor
-// at the published Claude Code release (2.1.278); older or absent CLIs must not downgrade it.
-export const ANTHROPIC_CLAUDE_CODE_VERSION = "2.1.278";
+// at the published Claude Code release (2.1.280); older or absent CLIs must not downgrade it.
+export const ANTHROPIC_CLAUDE_CODE_VERSION = "2.1.280";
 
 /** Build OAuth headers and the matching billing identity from one request snapshot. */
 export function buildAnthropicClaudeCodeIdentity(
@@ -127,6 +137,7 @@ export function usesClaudeStreamingRefusalContract(model: {
     return false;
   }
   return (
+    resolveClaudeHaiku55ModelIdentity(model) !== undefined ||
     resolveClaudeFable5ModelIdentity(model) !== undefined ||
     resolveClaudeMythos5ModelIdentity(model) !== undefined ||
     resolveClaudeOpus5ModelIdentity(model) !== undefined ||
@@ -155,6 +166,7 @@ export function defaultsClaudeAdaptiveThinking(model: {
     requiresClaudeAdaptiveThinking(model) ||
     (normalizeApi(model.api) === "anthropic-messages" &&
       (resolveClaudeOpus5ModelIdentity(model) !== undefined ||
+        resolveClaudeHaiku55ModelIdentity(model) !== undefined ||
         resolveClaudeSonnet5ModelIdentity(model) !== undefined))
   );
 }
@@ -166,9 +178,15 @@ export function resolveAnthropicThinkingEffort(
 ): AnthropicEffort {
   const requestedLevel: ModelThinkingLevel | undefined =
     level ??
-    (resolveClaudeFable5ModelIdentity(model)
-      ? CLAUDE_FABLE_5_THINKING_PROFILE.defaultLevel
-      : undefined);
+    (resolveClaudeHaiku55ModelIdentity(model)
+      ? CLAUDE_HAIKU_55_THINKING_PROFILE.defaultLevel
+      : resolveClaudeOpus55ModelIdentity(model)
+        ? CLAUDE_OPUS_55_THINKING_PROFILE.defaultLevel
+        : resolveClaudeSonnet55ModelIdentity(model)
+          ? CLAUDE_SONNET_55_THINKING_PROFILE.defaultLevel
+          : resolveClaudeFable5ModelIdentity(model)
+            ? CLAUDE_FABLE_5_THINKING_PROFILE.defaultLevel
+            : undefined);
   const thinkingLevelMap = resolveClaudeNativeThinkingLevelMap(model);
   const clampModel = {
     ...model,
@@ -219,7 +237,11 @@ export function mapAnthropicStopReason(reason: string | undefined): StopReason {
 
 /** Remove unsupported assistant prefills while preserving completed tool-use turns. */
 export function prepareClaudeNoPrefillRequestContext(model: Model, context: Context): Context {
-  if (!resolveClaudeOpus5ModelIdentity(model) && !resolveClaudeSonnet5ModelIdentity(model)) {
+  if (
+    !resolveClaudeOpus5ModelIdentity(model) &&
+    !resolveClaudeSonnet5ModelIdentity(model) &&
+    !resolveClaudeHaiku55ModelIdentity(model)
+  ) {
     return context;
   }
 
@@ -259,13 +281,14 @@ export function applyClaudeRequestContract(
   }
   const opus5 = resolveClaudeOpus5ModelIdentity(model) !== undefined;
   const sonnet5 = resolveClaudeSonnet5ModelIdentity(model) !== undefined;
+  const haiku55 = resolveClaudeHaiku55ModelIdentity(model) !== undefined;
   if (!requiresClaudeDefaultSampling(model) && !opus5 && !sonnet5) {
     return;
   }
   delete params.temperature;
   delete params.top_p;
   delete params.top_k;
-  if (opus5 || sonnet5) {
+  if (opus5 || sonnet5 || haiku55) {
     delete params.service_tier;
   }
 }
@@ -278,6 +301,10 @@ function resolveReplayModelBoundIdentity(ref: ReplayModelRef): string | undefine
     ? { id: ref.responseModelId }
     : { id: ref.modelId, params: ref.modelParams };
   const fableIdentity = resolveClaudeFable5ModelIdentity(modelRef);
+  const haikuIdentity = resolveClaudeHaiku55ModelIdentity(modelRef);
+  if (haikuIdentity) {
+    return `haiku:${haikuIdentity}`;
+  }
   if (fableIdentity) {
     return `fable:${fableIdentity}`;
   }
@@ -293,17 +320,33 @@ function resolveReplayModelBoundIdentity(ref: ReplayModelRef): string | undefine
   return sonnetIdentity ? `sonnet:${sonnetIdentity}` : undefined;
 }
 
+const FABLE_51_REPLAY_IDENTITY = /^fable:claude-fable-5-1(?=$|[^a-z0-9])/;
+const SONNET_55_REPLAY_IDENTITY = /^sonnet:claude-sonnet-5-5(?=$|[^a-z0-9])/;
+
 /**
- * Fable 5.1 reads thinking from every earlier Claude generation (verified live:
- * Opus 5, Sonnet 5, Opus 4.8 replay with no drops), while the API silently
- * drops anything it cannot read. Moving onto it therefore keeps prior reasoning;
- * every other cross-identity move, including unregistered Mythos targets, is
- * still dropped here until its replay contract is proven separately.
+ * Verified live (2026-09-28): Fable 5.1 reads every earlier Claude generation
+ * except Sonnet 5.5; Sonnet 5.5 reads Sonnet 5 and pre-Claude-5 thinking but
+ * not Opus 5, Fable, or Mythos; no other model reads Sonnet 5.5 thinking. The
+ * API drops what a target cannot read, and every other cross-identity move
+ * stays dropped here until its replay contract is proven separately.
  */
-function readsPriorClaudeThinking(targetIdentity: string | undefined): boolean {
-  return (
-    targetIdentity !== undefined && /^fable:claude-fable-5-1(?=$|[^a-z0-9])/.test(targetIdentity)
-  );
+function readsPriorClaudeThinking(
+  targetIdentity: string | undefined,
+  sourceIdentity: string | undefined,
+): boolean {
+  if (targetIdentity === undefined) {
+    return false;
+  }
+  if (FABLE_51_REPLAY_IDENTITY.test(targetIdentity)) {
+    return (
+      sourceIdentity === undefined ||
+      (!SONNET_55_REPLAY_IDENTITY.test(sourceIdentity) && !sourceIdentity.startsWith("haiku:"))
+    );
+  }
+  if (SONNET_55_REPLAY_IDENTITY.test(targetIdentity)) {
+    return sourceIdentity === undefined || sourceIdentity.startsWith("sonnet:");
+  }
+  return false;
 }
 
 function isClaudeReplaySource(ref: ReplayModelRef): boolean {
@@ -329,7 +372,7 @@ export function resolveModelBoundThinkingReplayMode(params: {
   }
   if (
     sourceApi === targetApi &&
-    readsPriorClaudeThinking(targetIdentity) &&
+    readsPriorClaudeThinking(targetIdentity, sourceIdentity) &&
     isClaudeReplaySource(params.source)
   ) {
     return "preserve";

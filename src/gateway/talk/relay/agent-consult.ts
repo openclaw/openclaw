@@ -14,16 +14,18 @@ export function bindTalkRealtimeRelayAgentConsult(
   isCurrent: () => boolean,
   waitForTranscript: (signal?: AbortSignal) => Promise<void>,
 ) {
-  const runAgentConsult = async (request: TalkAgentConsultRequest) => {
-    if (!isCurrent()) {
-      throw new Error("Realtime gateway-relay session is closed");
-    }
-    await waitForTranscript(request.signal);
-    if (!isCurrent()) {
-      throw new Error("Realtime gateway-relay session is closed");
-    }
-    return await runPrompt(request);
-  };
+  const bindReadiness =
+    (runner: RealtimeVoiceAgentConsultRunner, closedMessage: string) =>
+    async (request: TalkAgentConsultRequest) => {
+      if (!isCurrent()) {
+        throw new Error(closedMessage);
+      }
+      await waitForTranscript(request.signal);
+      if (!isCurrent()) {
+        throw new Error(closedMessage);
+      }
+      return await runner(request);
+    };
   const steer = runPrompt.steer;
   const lifecycleMethods = {
     adoptCompletionClaims: () => runPrompt.adoptCompletionClaims(),
@@ -40,18 +42,12 @@ export function bindTalkRealtimeRelayAgentConsult(
     revokeRequesterFinal: () => runPrompt.revokeRequesterFinal?.(),
     ...(steer
       ? {
-          steer: async (request: Parameters<RealtimeVoiceAgentConsultRunner>[0]) => {
-            if (!isCurrent()) {
-              throw new Error("Realtime relay session is no longer active");
-            }
-            await waitForTranscript(request.signal);
-            if (!isCurrent()) {
-              throw new Error("Realtime relay session is no longer active");
-            }
-            return await steer(request);
-          },
+          steer: bindReadiness(steer, "Realtime relay session is no longer active"),
         }
       : {}),
   };
-  return Object.assign(runAgentConsult, lifecycleMethods);
+  return Object.assign(
+    bindReadiness(runPrompt, "Realtime gateway-relay session is closed"),
+    lifecycleMethods,
+  );
 }

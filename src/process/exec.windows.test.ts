@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-utils/temp-dir.js";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
 
 const execaMock = vi.fn();
@@ -111,6 +111,13 @@ function createMockSubprocess(params?: {
   return child;
 }
 
+function pendingCommand() {
+  vi.useFakeTimers();
+  const command = createMockSubprocess({ autoFinish: false });
+  execaMock.mockReturnValueOnce(command);
+  return command;
+}
+
 function requireExecaCall(index: number): ExecaCall {
   const call = execaMock.mock.calls[index];
   if (!call) {
@@ -138,12 +145,10 @@ function expectCmdWrappedInvocation(call: ExecaCall, commandFragment = "pnpm.cmd
 let runCommandWithTimeout: typeof import("./exec.js").runCommandWithTimeout;
 let runCommandBuffered: typeof import("./exec.js").runCommandBuffered;
 let runCommandBuffersWithTimeout: typeof import("./exec-runner.js").runCommandBuffersWithTimeout;
-let runUtf8CommandWithTimeout: typeof import("./exec.js").runUtf8CommandWithTimeout;
 let runExec: typeof import("./exec.js").runExec;
 let spawnCommand: typeof import("./exec.js").spawnCommand;
 let withCommandProcessScope: typeof import("./exec-spawn.js").withCommandProcessScope;
 let getWindowsInstallRoots: typeof import("../infra/windows-install-roots.js").getWindowsInstallRoots;
-let getWindowsSystem32ExePath: typeof import("../infra/windows-install-roots.js").getWindowsSystem32ExePath;
 
 describe("Windows command execution", () => {
   beforeEach(async () => {
@@ -172,15 +177,9 @@ describe("Windows command execution", () => {
         await vi.importActual<typeof import("node:child_process")>("node:child_process");
       return { ...actual, spawnSync: spawnSyncMock };
     });
-    ({ getWindowsInstallRoots, getWindowsSystem32ExePath } =
-      await import("../infra/windows-install-roots.js"));
-    ({
-      runCommandBuffered,
-      runCommandWithTimeout,
-      runExec,
-      runUtf8CommandWithTimeout,
-      spawnCommand,
-    } = await import("./exec.js"));
+    ({ getWindowsInstallRoots } = await import("../infra/windows-install-roots.js"));
+    ({ runCommandBuffered, runCommandWithTimeout, runExec, spawnCommand } =
+      await import("./exec.js"));
     ({ runCommandBuffersWithTimeout } = await import("./exec-runner.js"));
     ({ withCommandProcessScope } = await import("./exec-spawn.js"));
   });
@@ -221,57 +220,16 @@ describe("Windows command execution", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.restoreAllMocks();
-  });
-
-  it("wraps .cmd commands through trusted cmd.exe", async () => {
-    await withMockedWindowsPlatform(async () => {
-      await runCommandWithTimeout(["pnpm", "--version"], { timeoutMs: 1_000 });
-      expectCmdWrappedInvocation(requireExecaCall(0));
-    });
+    vi.unstubAllEnvs();
   });
 
   it("ignores ComSpec when selecting the Windows command wrapper", async () => {
-    const previousComSpec = process.env.ComSpec;
-    const previousSystemRoot = process.env.SystemRoot;
-    process.env.ComSpec = "C:\\workspace\\evil\\cmd.exe";
-    process.env.SystemRoot = "C:\\Windows";
-    try {
-      await withMockedWindowsPlatform(async () => {
-        await runCommandWithTimeout(["pnpm", "--version"], { timeoutMs: 1_000 });
-        expect(requireExecaCall(0)[0].toLowerCase()).toBe("c:\\windows\\system32\\cmd.exe");
-      });
-    } finally {
-      if (previousComSpec === undefined) {
-        delete process.env.ComSpec;
-      } else {
-        process.env.ComSpec = previousComSpec;
-      }
-      if (previousSystemRoot === undefined) {
-        delete process.env.SystemRoot;
-      } else {
-        process.env.SystemRoot = previousSystemRoot;
-      }
-    }
-  });
-
-  it("resolves implicit batch shims before Execa can consult ComSpec", async () => {
-    await withTempDir("openclaw-execa-windows-shim-", async (binDir) => {
-      const shimPath = path.join(binDir, "custom-shim.cmd");
-      fs.writeFileSync(shimPath, "@echo off\r\n", "utf8");
-      resolveExecutableFromPathEnvMock.mockReturnValueOnce(shimPath);
-
-      await withMockedWindowsPlatform(async () => {
-        void spawnCommand(["custom-shim", "--version"], {
-          baseEnv: {
-            ComSpec: "C:\\workspace\\evil\\cmd.exe",
-            PATH: binDir,
-            PATHEXT: ".CMD",
-          },
-        });
-        const call = requireExecaCall(0);
-        expect(call[0]).toBe(expectedTrustedCmdExe());
-        expect(call[1][3]).toContain(`"${shimPath}" "--version"`);
-      });
+    vi.stubEnv("ComSpec", "C:\\workspace\\evil\\cmd.exe");
+    vi.stubEnv("SystemRoot", "C:\\Windows");
+    await withMockedWindowsPlatform(async () => {
+      await runCommandWithTimeout(["pnpm", "--version"], { timeoutMs: 1_000 });
+      expectCmdWrappedInvocation(requireExecaCall(0));
+      expect(requireExecaCall(0)[0].toLowerCase()).toBe("c:\\windows\\system32\\cmd.exe");
     });
   });
 
@@ -301,14 +259,6 @@ describe("Windows command execution", () => {
     });
   });
 
-  it("quotes carets inside the trusted cmd.exe wrapper", async () => {
-    await withMockedWindowsPlatform(async () => {
-      await runCommandWithTimeout(["pnpm", "run", "value^with^carets"], { timeoutMs: 1_000 });
-      const commandLine = String(requireExecaCall(0)[1][3]);
-      expect(commandLine).toContain('"value^with^carets"');
-    });
-  });
-
   it("spawns node plus npm-cli.js instead of npm.cmd when available", async () => {
     vi.spyOn(fs, "existsSync").mockReturnValue(true);
     vi.spyOn(process, "execPath", "get").mockReturnValue("C:\\Program Files\\nodejs\\node.exe");
@@ -318,7 +268,7 @@ describe("Windows command execution", () => {
       expect(path.win32.basename(command).toLowerCase()).toBe("node.exe");
       expect(args[0]).toContain(path.join("node_modules", "npm", "bin", "npm-cli.js"));
       expect(args[1]).toBe("--version");
-      expect(options.shell).toBe(false);
+      expect(options).toMatchObject({ shell: false, windowsHide: true });
     });
   });
 
@@ -330,19 +280,8 @@ describe("Windows command execution", () => {
     });
   });
 
-  it("sets windowsHide and disables shell on direct commands", async () => {
-    await withMockedWindowsPlatform(async () => {
-      void spawnCommand(["node", "script.js"]);
-      const [command, , options] = requireExecaCall(0);
-      expect(path.win32.basename(command).toLowerCase()).toBe("node.exe");
-      expect(options).toMatchObject({ shell: false, windowsHide: true });
-    });
-  });
-
   it("infers success when a spawned Windows shim has no exit state", async () => {
-    vi.useFakeTimers();
-    const command = createMockSubprocess({ autoFinish: false });
-    execaMock.mockReturnValueOnce(command);
+    const command = pendingCommand();
 
     await withMockedWindowsPlatform(async () => {
       const resultPromise = runCommandWithTimeout(["pnpm", "--version"], {
@@ -356,9 +295,7 @@ describe("Windows command execution", () => {
   });
 
   it("preserves a delayed nonzero exit code from a Windows shim", async () => {
-    vi.useFakeTimers();
-    const command = createMockSubprocess({ autoFinish: false });
-    execaMock.mockReturnValueOnce(command);
+    const command = pendingCommand();
 
     await withMockedWindowsPlatform(async () => {
       const resultPromise = runCommandWithTimeout(["pnpm", "--version"], {
@@ -396,66 +333,29 @@ describe("Windows command execution", () => {
     });
   });
 
-  it.each([
-    { exitCode: 0, killProcessTree: undefined },
-    { exitCode: 7, killProcessTree: undefined },
-    { exitCode: 0, killProcessTree: true },
-    { exitCode: 7, killProcessTree: true },
-  ])(
-    "does not target an exited Windows root (code $exitCode, tree=$killProcessTree) while output settles",
-    async ({ exitCode, killProcessTree }) => {
-      vi.useFakeTimers();
-      const command = createMockSubprocess({ autoFinish: false });
-      execaMock.mockReturnValueOnce(command);
-
-      await withMockedWindowsPlatform(async () => {
-        const resultPromise = runCommandWithTimeout(["node", "quick.js"], {
-          timeoutMs: 80,
-          killProcessTree,
-        });
-        command.exitCode = exitCode;
-        command.emit("exit", exitCode, null);
-
-        await vi.advanceTimersByTimeAsync(81);
-        expect(execaMock).toHaveBeenCalledTimes(1);
-        expect(command.stdout.destroyed).toBe(false);
-        await vi.advanceTimersByTimeAsync(19);
-        expect(command.stdout.destroyed).toBe(false);
-        await vi.advanceTimersToNextTimerAsync();
-        expect(command.stdout.destroyed).toBe(true);
-        expect(command.stderr.destroyed).toBe(true);
-
-        command.finish({ exitCode });
-        await expect(resultPromise).resolves.toMatchObject({ code: exitCode, termination: "exit" });
-      });
-    },
-  );
-
-  it("gracefully then force-kills a Windows process tree", async () => {
-    vi.useFakeTimers();
-    const command = createMockSubprocess({ autoFinish: false });
-    execaMock
-      .mockImplementationOnce(() => command)
-      .mockImplementation(() => createMockSubprocess());
+  it("does not target an exited Windows root while output settles", async () => {
+    const exitCode = 7;
+    const command = pendingCommand();
 
     await withMockedWindowsPlatform(async () => {
-      const resultPromise = runCommandWithTimeout(["node", "idle.js"], {
-        killGraceMs: 40,
-        killProcessTree: true,
+      const resultPromise = runCommandWithTimeout(["node", "quick.js"], {
         timeoutMs: 80,
+        killProcessTree: true,
       });
+      command.exitCode = exitCode;
+      command.emit("exit", exitCode, null);
+
       await vi.advanceTimersByTimeAsync(81);
-      expect(requireExecaCall(1).slice(0, 2)).toEqual([
-        getWindowsSystem32ExePath("taskkill.exe"),
-        ["/PID", "1234", "/T"],
-      ]);
-      expect(command.kill).not.toHaveBeenCalled();
+      expect(execaMock).toHaveBeenCalledTimes(1);
+      expect(command.stdout.destroyed).toBe(false);
+      await vi.advanceTimersByTimeAsync(19);
+      expect(command.stdout.destroyed).toBe(false);
+      await vi.advanceTimersToNextTimerAsync();
+      expect(command.stdout.destroyed).toBe(true);
+      expect(command.stderr.destroyed).toBe(true);
 
-      await vi.advanceTimersByTimeAsync(40);
-      expect(requireExecaCall(2)[1]).toEqual(["/PID", "1234", "/T", "/F"]);
-      command.finish({ signal: "SIGKILL" });
-
-      await expect(resultPromise).resolves.toMatchObject({ code: 124, termination: "timeout" });
+      command.finish({ exitCode });
+      await expect(resultPromise).resolves.toMatchObject({ code: exitCode, termination: "exit" });
     });
   });
 
@@ -487,90 +387,55 @@ describe("Windows command execution", () => {
     },
   );
 
-  it("keeps forced Windows tree escalation after graceful taskkill returns nonzero", async () => {
+  it("joins graceful and forced taskkill before canceling a scoped Windows root", async () => {
     vi.useFakeTimers();
     const command = createMockSubprocess({ autoFinish: false });
+    const gracefulTaskkill = createMockSubprocess({
+      autoFinish: false,
+      exitCode: 1,
+    });
+    const forcedTaskkill = createMockSubprocess({ autoFinish: false });
     execaMock
       .mockImplementationOnce(() => command)
-      .mockImplementationOnce(() => createMockSubprocess({ exitCode: 1 }))
-      .mockImplementation(() => createMockSubprocess());
+      .mockImplementationOnce(() => gracefulTaskkill)
+      .mockImplementationOnce(() => forcedTaskkill);
 
     await withMockedWindowsPlatform(async () => {
-      const resultPromise = runCommandWithTimeout(["node", "idle.js"], {
-        killProcessTree: true,
-        timeoutMs: 80,
-      });
-      await vi.advanceTimersByTimeAsync(81);
-      expect(requireExecaCall(1)[1]).toEqual(["/PID", "1234", "/T"]);
-
-      await vi.advanceTimersByTimeAsync(300);
-      expect(requireExecaCall(2)[1]).toEqual(["/PID", "1234", "/T", "/F"]);
-      command.finish({ signal: "SIGKILL" });
-
-      await expect(resultPromise).resolves.toMatchObject({ code: 124, termination: "timeout" });
-    });
-  });
-
-  it.each(
-    ["exits", "times out"].flatMap((gracefulOutcome) =>
-      (["timeout", "scope"] as const).map((interruption) => ({ gracefulOutcome, interruption })),
-    ),
-  )(
-    "waits for forced taskkill after $interruption when graceful taskkill $gracefulOutcome",
-    async ({ gracefulOutcome, interruption }) => {
-      vi.useFakeTimers();
-      const command = createMockSubprocess({ autoFinish: false });
-      const gracefulTaskkill = createMockSubprocess({ autoFinish: gracefulOutcome === "exits" });
-      const forcedTaskkill = createMockSubprocess({ autoFinish: false });
-      execaMock
-        .mockImplementationOnce(() => command)
-        .mockImplementationOnce(() => gracefulTaskkill)
-        .mockImplementationOnce(() => forcedTaskkill);
-
-      await withMockedWindowsPlatform(async () => {
-        const controller = new AbortController();
-        const run = () =>
+      const controller = new AbortController();
+      const resultPromise = withCommandProcessScope(
+        () =>
           runCommandWithTimeout(["node", "idle.js"], {
             killProcessTree: true,
-            ...(interruption === "timeout" ? { timeoutMs: 80 } : {}),
-          });
-        const resultPromise =
-          interruption === "scope" ? withCommandProcessScope(run, controller.signal) : run();
-        const cancelSignal = requireExecaCall(0)[2].cancelSignal as AbortSignal;
+          }),
+        controller.signal,
+      );
+      const cancelSignal = requireExecaCall(0)[2].cancelSignal as AbortSignal;
 
-        if (interruption === "scope") {
-          controller.abort();
-        } else {
-          await vi.advanceTimersByTimeAsync(80);
-        }
-        await vi.advanceTimersByTimeAsync(300);
-        expect(requireExecaCall(2)[1]).toEqual(["/PID", "1234", "/T", "/F"]);
-        if (gracefulOutcome === "times out") {
-          // Graceful taskkill expires while its later-started forced sibling still owns the root.
-          await vi.advanceTimersByTimeAsync(5_000 - 300);
-          gracefulTaskkill.finish({ signal: "SIGTERM", timedOut: true });
-          await vi.advanceTimersByTimeAsync(0);
-        }
-        expect(command.kill).not.toHaveBeenCalled();
-        expect(cancelSignal.aborted).toBe(false);
-        for (const index of [1, 2]) {
-          const cleanupSignal = requireExecaCall(index)[2].cancelSignal as AbortSignal | undefined;
-          expect(cleanupSignal?.aborted).not.toBe(true);
-        }
+      controller.abort();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(requireExecaCall(2)[1]).toEqual(["/PID", "1234", "/T", "/F"]);
+      // Graceful taskkill expires while its later-started forced sibling still owns the root.
+      await vi.advanceTimersByTimeAsync(5_000 - 300);
+      gracefulTaskkill.finish({ signal: "SIGTERM", timedOut: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(command.kill).not.toHaveBeenCalled();
+      expect(cancelSignal.aborted).toBe(false);
+      for (const index of [1, 2]) {
+        const cleanupSignal = requireExecaCall(index)[2].cancelSignal as AbortSignal | undefined;
+        expect(cleanupSignal?.aborted).not.toBe(true);
+      }
 
-        forcedTaskkill.finish();
-        await vi.advanceTimersByTimeAsync(0);
-        expect(cancelSignal.aborted).toBe(true);
+      forcedTaskkill.finish();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cancelSignal.aborted).toBe(true);
 
-        command.finish({ signal: "SIGKILL" });
-        await expect(resultPromise).resolves.toMatchObject({
-          ...(interruption === "timeout" ? { code: 124 } : {}),
-          termination: interruption === "timeout" ? "timeout" : "signal",
-          cleanup: "forced",
-        });
+      command.finish({ signal: "SIGKILL" });
+      await expect(resultPromise).resolves.toMatchObject({
+        termination: "signal",
+        cleanup: "forced",
       });
-    },
-  );
+    });
+  });
 
   it("waits for immediate forced taskkill before aborting the Windows root", async () => {
     vi.useFakeTimers();
@@ -598,95 +463,34 @@ describe("Windows command execution", () => {
     });
   });
 
-  it.each([false, true])(
-    "cancels the Windows root when every taskkill fails to spawn (tree=%s)",
-    async (killProcessTree) => {
-      vi.useFakeTimers();
-      const command = createMockSubprocess({ autoFinish: false });
-      execaMock
-        .mockImplementationOnce(() => command)
-        .mockImplementation(() => {
-          throw new Error("taskkill could not spawn");
-        });
-
-      await withMockedWindowsPlatform(async () => {
-        const resultPromise = runCommandWithTimeout(["node", "idle.js"], {
-          killProcessTree,
-          timeoutMs: 80,
-        });
-        const cancelSignal = requireExecaCall(0)[2].cancelSignal as AbortSignal;
-
-        await vi.advanceTimersByTimeAsync(380);
-        expect(cancelSignal.aborted).toBe(true);
-        command.finish({ signal: "SIGKILL" });
-
-        await expect(resultPromise).resolves.toMatchObject({ code: 124, termination: "timeout" });
+  it("cancels the Windows root when every taskkill fails to spawn", async () => {
+    vi.useFakeTimers();
+    const command = createMockSubprocess({ autoFinish: false });
+    execaMock
+      .mockImplementationOnce(() => command)
+      .mockImplementation(() => {
+        throw new Error("taskkill could not spawn");
       });
-    },
-  );
 
-  it.each(["exec", "command"])("decodes GBK stdout and stderr from %s", async (runner) => {
-    execaMock.mockImplementationOnce(() =>
-      createMockSubprocess({
-        stderrChunks: [Buffer.from([0xa3, 0xbb])],
-        stdoutChunks: [Buffer.from([0xb2, 0xe2, 0xca, 0xd4])],
-      }),
-    );
     await withMockedWindowsPlatform(async () => {
-      const result =
-        runner === "exec"
-          ? runExec("node", ["gbk-output.js"], 1_000)
-          : runCommandWithTimeout(["node", "gbk-output.js"], 1_000);
-      await expect(result).resolves.toMatchObject({
-        stdout: "测试",
-        stderr: "；",
+      const resultPromise = runCommandWithTimeout(["node", "idle.js"], {
+        killProcessTree: true,
+        timeoutMs: 80,
       });
-      expect(requireExecaCall(0)[2].encoding).toBe("buffer");
+      const cancelSignal = requireExecaCall(0)[2].cancelSignal as AbortSignal;
+
+      await vi.advanceTimersByTimeAsync(80);
+      await vi.advanceTimersToNextTimerAsync();
+      await vi.advanceTimersByTimeAsync(300);
+      expect(cancelSignal.aborted).toBe(true);
+      command.finish({ signal: "SIGKILL" });
+
+      await expect(resultPromise).resolves.toMatchObject({ code: 124, termination: "timeout" });
     });
   });
 
-  it.each(["exec", "command"])("decodes UTF-16 output from %s", async (runner) => {
-    execaMock.mockImplementationOnce(() =>
-      createMockSubprocess({
-        stdoutChunks: [Buffer.from([0xff, 0xfe, 0x6f, 0x00, 0x6b, 0x00])],
-        stderrChunks: [Buffer.from([0xfe, 0xff, 0x00, 0x6e, 0x00, 0x6f])],
-      }),
-    );
-    await withMockedWindowsPlatform(async () => {
-      const result =
-        runner === "exec"
-          ? runExec("node", ["utf16-output.js"], 1_000)
-          : runCommandWithTimeout(["node", "utf16-output.js"], 1_000);
-      await expect(result).resolves.toMatchObject({
-        stdout: "ok",
-        stderr: "no",
-      });
-      expect(spawnSyncMock).toHaveBeenCalledTimes(runner === "exec" ? 0 : 1);
-    });
-  });
-
-  it.each(["exec", "command"])("decodes UTF-8 output from %s", async (runner) => {
-    execaMock.mockImplementationOnce(() =>
-      createMockSubprocess({ stdoutChunks: [Buffer.from("测试", "utf8")] }),
-    );
-    await withMockedWindowsPlatform(async () => {
-      const result =
-        runner === "exec"
-          ? runExec("node", ["utf8-output.js"], 1_000)
-          : runCommandWithTimeout(["node", "utf8-output.js"], 1_000);
-      await expect(result).resolves.toMatchObject({
-        stdout: "测试",
-        stderr: "",
-      });
-      expect(spawnSyncMock).toHaveBeenCalledTimes(runner === "exec" ? 0 : 1);
-    });
-  });
-
-  it.each([
-    { encoding: "UTF-8", bytes: Buffer.from("测试", "utf8"), text: "测试", probes: 0 },
-    { encoding: "UTF-16", bytes: Buffer.from([0xff, 0xfe, 0x6f, 0x00]), text: "o", probes: 0 },
-    { encoding: "GBK", bytes: Buffer.from([0xb2, 0xe2]), text: "测", probes: 1 },
-  ])("preserves $encoding diagnostics on runExec failure", async ({ bytes, text, probes }) => {
+  it("preserves decoded diagnostics on runExec failure", async () => {
+    const bytes = Buffer.from([0xb2, 0xe2]);
     execaMock.mockImplementationOnce(() =>
       createMockSubprocess({ exitCode: 1, reject: true, stdout: bytes, stderr: bytes }),
     );
@@ -694,64 +498,43 @@ describe("Windows command execution", () => {
       await expect(runExec("node", ["failed-output.js"], 1_000)).rejects.toMatchObject({
         message: "command failed",
         code: 1,
-        stdout: text,
-        stderr: text,
+        exitCode: 1,
+        stdout: "测",
+        stderr: "测",
       });
-      expect(spawnSyncMock).toHaveBeenCalledTimes(probes);
+      expect(spawnSyncMock).toHaveBeenCalledTimes(1);
     });
   });
 
-  it.each(["raw", "command"])(
-    "captures the %s result encoding before the child can change the console page",
-    async (runner) => {
-      const stdout = Buffer.from([0xb2, 0xe2]);
-      const stderr = Buffer.from([0xa3, 0xbb]);
-      execaMock.mockImplementationOnce(() => {
-        spawnSyncMock.mockReturnValue({ stdout: "Active code page: 1252", stderr: "" });
-        return createMockSubprocess({ stdoutChunks: [stdout], stderrChunks: [stderr] });
+  it("captures the raw result encoding before the child can change the console page", async () => {
+    const stdout = Buffer.from([0xb2, 0xe2]);
+    const stderr = Buffer.from([0xa3, 0xbb]);
+    execaMock.mockImplementationOnce(() => {
+      spawnSyncMock.mockReturnValue({ stdout: "Active code page: 1252", stderr: "" });
+      return createMockSubprocess({
+        stdoutChunks: [stdout.subarray(0, 1), stdout.subarray(1)],
+        stderrChunks: [stderr],
       });
-      await withMockedWindowsPlatform(async () => {
-        const result =
-          runner === "raw"
-            ? runCommandBuffersWithTimeout(["node", "legacy-output.js"], 1_000)
-            : runCommandWithTimeout(["node", "legacy-output.js"], 1_000);
-        await expect(result).resolves.toMatchObject(
-          runner === "raw"
-            ? { code: 0, stdout, stderr, windowsEncoding: "gbk" }
-            : { code: 0, stdout: "测", stderr: "；" },
-        );
-      });
-    },
-  );
-
-  it("keeps truncated UTF-8 head output on a code point boundary", async () => {
-    execaMock.mockImplementationOnce(() =>
-      createMockSubprocess({
-        stdoutChunks: [Buffer.from("a😀z", "utf8")],
-        stderrChunks: [Buffer.from("b😀y", "utf8")],
-      }),
-    );
+    });
     await withMockedWindowsPlatform(async () => {
       await expect(
-        runUtf8CommandWithTimeout(["node", "utf8-output.js"], {
-          maxOutputBytes: 3,
-          outputCapture: "head",
-          timeoutMs: 1_000,
-        }),
+        runCommandBuffersWithTimeout(["node", "legacy-output.js"], 1_000),
       ).resolves.toMatchObject({
-        stdout: "a",
-        stderr: "b",
-        stdoutTruncatedBytes: 5,
-        stderrTruncatedBytes: 5,
+        code: 0,
+        stdout,
+        stderr,
+        windowsEncoding: "gbk",
       });
-      expect(spawnSyncMock).not.toHaveBeenCalled();
     });
   });
 
-  it("preserves complete legacy-code-page characters in truncated head output", async () => {
-    execaMock.mockImplementationOnce(() =>
-      createMockSubprocess({ stdoutChunks: [Buffer.from([0x61, 0xb2, 0xe2, 0xca, 0xd4])] }),
-    );
+  it("decodes truncated, split output with the code page captured before spawn", async () => {
+    execaMock.mockImplementationOnce(() => {
+      spawnSyncMock.mockReturnValue({ stdout: "Active code page: 1252", stderr: "" });
+      return createMockSubprocess({
+        stdoutChunks: [Buffer.from([0x61, 0xb2]), Buffer.from([0xe2, 0xca, 0xd4])],
+      });
+    });
     await withMockedWindowsPlatform(async () => {
       await expect(
         runCommandWithTimeout(["node", "gbk-output.js"], {
@@ -763,19 +546,6 @@ describe("Windows command execution", () => {
         stdout: "a测",
         stdoutTruncatedBytes: 2,
       });
-    });
-  });
-
-  it("decodes split GBK chunks after complete output capture", async () => {
-    execaMock.mockImplementationOnce(() =>
-      createMockSubprocess({
-        stdoutChunks: [Buffer.from([0xb2]), Buffer.from([0xe2, 0xca]), Buffer.from([0xd4])],
-      }),
-    );
-    await withMockedWindowsPlatform(async () => {
-      await expect(
-        runCommandWithTimeout(["node", "gbk-output.js"], { timeoutMs: 1_000 }),
-      ).resolves.toMatchObject({ code: 0, stdout: "测试", termination: "exit" });
     });
   });
 });

@@ -5,7 +5,7 @@ import { prepareSubagentSessionListReadCache } from "../agents/subagents/registr
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import { readUserProfileAliases } from "../state/user-profile-list.js";
+import { prepareUserProfileCatalog, readUserProfileAliases } from "../state/user-profile-list.js";
 import { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import type { SessionListDiagnostics } from "./session-list-diagnostics.types.js";
@@ -56,6 +56,7 @@ function sessionStoreTargetsFixture(params: {
           storeTarget: { agentId, storePath: params.storePath },
           entry,
           readSourceEntry,
+          resolveSourceKey: (sourceKey: string) => sourceKey,
         },
       ] as const;
     }),
@@ -76,72 +77,82 @@ export async function listSessionFixture(
   },
 ) {
   await prepareSubagentSessionListReadCache();
-  const store = params.entryFilter
-    ? Object.fromEntries(
-        Object.entries(params.store).filter(([key, entry]) => params.entryFilter!(key, entry)),
-      )
-    : params.store;
-  const projection = createSessionRowProjectionFixture({
-    ...params,
-    store,
-    targetsBySessionKey:
-      params.targetsBySessionKey ??
-      sessionStoreTargetsFixture({
-        ...params,
-        store,
-        agentId: params.opts.agentId ?? params.fixtureAgentId,
-      }),
-  });
-  if (params.opts.includeActivitySummary) {
-    for (const row of projection.selectEntries()) {
-      row.facts = readSessionRowFacts({ cfg: params.cfg, target: row, entry: row.entry });
-      row.hasBoard = row.facts.hasBoard;
-    }
-  }
-  const profileId = params.ownerFirstActorId ?? params.involvingActorId;
-  const client: GatewayClient | undefined =
-    profileId || params.entryFilter
-      ? {
-          connect: {
-            minProtocol: 1,
-            maxProtocol: 1,
-            client: {
-              id: "openclaw-control-ui",
-              version: "test",
-              platform: "test",
-              mode: "webchat",
-            },
-            role: "operator",
-            scopes: ["operator.admin"],
-          },
-          ...(profileId
-            ? {
-                authenticatedUserProfile: {
-                  profileId,
-                  displayName: profileId,
-                  hasAvatar: false,
-                  updatedAt: 1,
-                },
-                preparedSessionProfile: {
-                  profileId,
-                  aliases: readUserProfileAliases(profileId),
-                  role: null,
-                },
-              }
-            : {}),
-        }
-      : undefined;
+  const profiles = await prepareUserProfileCatalog();
   try {
-    return await listProjectedSessions({
-      projection,
-      client,
-      opts: {
-        ...params.opts,
-        ownerFirst: Boolean(params.ownerFirstActorId),
-        involvingMe: Boolean(params.involvingActorId),
-      },
+    const store = params.entryFilter
+      ? Object.fromEntries(
+          Object.entries(params.store).filter(([key, entry]) => params.entryFilter!(key, entry)),
+        )
+      : params.store;
+    const projection = createSessionRowProjectionFixture({
+      ...params,
+      store,
+      targetsBySessionKey:
+        params.targetsBySessionKey ??
+        sessionStoreTargetsFixture({
+          ...params,
+          store,
+          agentId: params.opts.agentId ?? params.fixtureAgentId,
+        }),
     });
+    if (params.opts.includeActivitySummary) {
+      for (const row of projection.selectEntries()) {
+        row.facts = readSessionRowFacts({
+          cfg: params.cfg,
+          target: row,
+          entry: row.entry,
+          databaseFacts: { hasBoard: row.hasBoard ?? false },
+        });
+        row.hasBoard = row.facts.hasBoard;
+      }
+    }
+    const profileId = params.ownerFirstActorId ?? params.involvingActorId;
+    const client: GatewayClient | undefined =
+      profileId || params.entryFilter
+        ? {
+            connect: {
+              minProtocol: 1,
+              maxProtocol: 1,
+              client: {
+                id: "openclaw-control-ui",
+                version: "test",
+                platform: "test",
+                mode: "webchat",
+              },
+              role: "operator",
+              scopes: ["operator.admin"],
+            },
+            ...(profileId
+              ? {
+                  authenticatedUserProfile: {
+                    profileId,
+                    displayName: profileId,
+                    hasAvatar: false,
+                    updatedAt: 1,
+                  },
+                  preparedSessionProfile: {
+                    profileId,
+                    aliases: readUserProfileAliases(profileId),
+                    role: null,
+                  },
+                }
+              : {}),
+          }
+        : undefined;
+    try {
+      return await listProjectedSessions({
+        projection,
+        client,
+        opts: {
+          ...params.opts,
+          ownerFirst: Boolean(params.ownerFirstActorId),
+          involvingMe: Boolean(params.involvingActorId),
+        },
+      });
+    } finally {
+      projection.dispose();
+    }
   } finally {
-    projection.dispose();
+    profiles.release();
   }
 }

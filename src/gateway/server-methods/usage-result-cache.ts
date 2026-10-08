@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getSessionCostUsageUpdatedAt } from "../../infra/session-cost-usage-events.js";
 import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
@@ -47,8 +48,7 @@ type SessionsUsageCacheKeyParams = {
   includeContextWeight: boolean;
 };
 
-// Every normalized query axis that can change response bytes belongs in this
-// key; the 30s TTL mirrors usage.cost and keeps dashboard refreshes coherent.
+// Revisions replace the value for a stable query instead of retaining every rollup.
 function sessionsUsageCacheKey(params: SessionsUsageCacheKeyParams): string {
   return JSON.stringify([
     params.agentScope === "all" ? "all" : `agent:${params.agentId}`,
@@ -61,7 +61,6 @@ function sessionsUsageCacheKey(params: SessionsUsageCacheKeyParams): string {
     params.specificKey,
     params.includeContextWeight,
     params.creatorKey,
-    readUserProfileVersion(),
     ...(params.visibilityIdentity ? [params.visibilityIdentity] : []),
   ]);
 }
@@ -75,6 +74,7 @@ export async function loadSessionsUsageResultCached(
     cache: sessionsUsageCache,
     cacheKey: sessionsUsageCacheKey(params),
     configRef: params.configRef,
+    revision: `${readUserProfileVersion()}:${getSessionCostUsageUpdatedAt()}`,
     load: params.load,
     // Incomplete lower-cache snapshots must not acquire the outer freshness TTL.
     isComplete: (result) => !result.cacheStatus || result.cacheStatus.status === "fresh",
@@ -99,14 +99,10 @@ export async function loadCostUsageSummaryCached(params: {
     cache: costUsageCache,
     cacheKey,
     configRef: params.config,
+    revision: getSessionCostUsageUpdatedAt(),
     load: () =>
       allAgents
-        ? loadAllAgentCostUsageSummary({
-            startMs: params.startMs,
-            endMs: params.endMs,
-            dayBucket: params.dayBucket,
-            config: params.config,
-          })
+        ? loadAllAgentCostUsageSummary(params)
         : loadCostUsageSummaryFromCache({
             startMs: params.startMs,
             endMs: params.endMs,
@@ -114,7 +110,6 @@ export async function loadCostUsageSummaryCached(params: {
             config: params.config,
             agentId: expectDefined(agentId, "non-aggregate usage agent id"),
             requestRefresh: true,
-            refreshMode: "background",
           }),
   });
 }
@@ -127,7 +122,7 @@ async function loadAllAgentCostUsageSummary(params: {
 }): Promise<CostUsageSummary> {
   // Same agent universe as discoverAllSessionsForUsage: enumerating configured
   // ids only would list system-agent sessions whose cost never reaches totals.
-  const agentIds = listGatewayAgentsBasic(params.config).agents.map((agent) =>
+  const agentIds = (await listGatewayAgentsBasic(params.config)).agents.map((agent) =>
     normalizeAgentId(agent.id),
   );
   const summaries = await runUsageAgentTasks(
@@ -140,7 +135,6 @@ async function loadAllAgentCostUsageSummary(params: {
           config: params.config,
           agentId,
           requestRefresh: true,
-          refreshMode: "background",
         }),
     ),
   );

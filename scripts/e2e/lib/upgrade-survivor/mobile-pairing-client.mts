@@ -6,7 +6,6 @@ import {
   generateKeyPairSync,
   randomUUID,
   sign,
-  verify,
 } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -231,19 +230,6 @@ export function parseConnectChallengePayload(value: unknown): {
   return { nonce, issuedAtMs };
 }
 
-function protocolRangeForClient(
-  role: ConnectRole,
-  mode: ConnectMode,
-): { minProtocol: number; maxProtocol: number } {
-  return {
-    minProtocol:
-      role === "node" && mode === "node"
-        ? GATEWAY_MIN_NODE_PROTOCOL_VERSION
-        : GATEWAY_PROTOCOL_VERSION,
-    maxProtocol: GATEWAY_PROTOCOL_VERSION,
-  };
-}
-
 function publicKeyRawBase64Url(publicKeyPem: string): string {
   const der = createPublicKey(publicKeyPem).export({ type: "spki", format: "der" });
   return Buffer.from(der.subarray(-32)).toString("base64url");
@@ -262,19 +248,6 @@ export function createMobilePairingIdentity(): MobilePairingIdentity {
 
 function signDeviceAuthPayload(privateKeyPem: string, payload: string): string {
   return sign(null, Buffer.from(payload), createPrivateKey(privateKeyPem)).toString("base64url");
-}
-
-export function verifyDeviceAuthPayloadSignature(params: {
-  publicKeyPem: string;
-  payload: string;
-  signature: string;
-}): boolean {
-  return verify(
-    null,
-    Buffer.from(params.payload),
-    createPublicKey(params.publicKeyPem),
-    Buffer.from(params.signature, "base64url"),
-  );
 }
 
 export function parseQrBootstrapJson(value: unknown): { url: string; bootstrapToken: string } {
@@ -350,7 +323,6 @@ export function buildConnectRequest(params: {
   identity?: MobilePairingIdentity;
 }): JsonRecord {
   const challenge = parseConnectChallengePayload(params.challengePayload);
-  const protocolRange = protocolRangeForClient(params.role, params.mode);
   const signatureToken = params.auth?.token ?? params.auth?.bootstrapToken ?? null;
   const isNode = params.role === "node" && params.mode === "node";
   const device = params.identity
@@ -379,7 +351,8 @@ export function buildConnectRequest(params: {
     id: params.id ?? `connect-${randomUUID()}`,
     method: "connect",
     params: {
-      ...protocolRange,
+      minProtocol: isNode ? GATEWAY_MIN_NODE_PROTOCOL_VERSION : GATEWAY_PROTOCOL_VERSION,
+      maxProtocol: GATEWAY_PROTOCOL_VERSION,
       client: { ...params.client, mode: params.mode },
       caps: isNode ? [...MOBILE_PAIRING_NODE_CAPS] : [...MOBILE_PAIRING_OPERATOR_CAPS],
       locale: "en-US",
@@ -407,27 +380,33 @@ function parseFrame(value: unknown): JsonRecord | null {
   }
 }
 
-function receiveFrame(
+async function receiveFrame(
   socket: WebSocketLike,
   predicate: (frame: JsonRecord) => boolean,
+  trigger: () => void | Promise<void>,
   timeoutMs = RESPONSE_TIMEOUT_MS,
 ): Promise<JsonRecord> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      socket.off("message", onMessage);
-      reject(new Error("Gateway response timed out"));
-    }, timeoutMs);
-    const onMessage = (value: unknown) => {
-      const frame = parseFrame(value);
-      if (!frame || !predicate(frame)) {
-        return;
-      }
-      clearTimeout(timer);
-      socket.off("message", onMessage);
-      resolve(frame);
-    };
-    socket.on("message", onMessage);
-  });
+  let cleanup: (() => void) | undefined;
+  try {
+    const response = new Promise<JsonRecord>((resolve, reject) => {
+      const onMessage = (value: unknown) => {
+        const frame = parseFrame(value);
+        if (frame && predicate(frame)) {
+          resolve(frame);
+        }
+      };
+      const timer = setTimeout(() => reject(new Error("Gateway response timed out")), timeoutMs);
+      cleanup = () => {
+        clearTimeout(timer);
+        socket.off("message", onMessage);
+      };
+      socket.on("message", onMessage);
+    });
+    const [frame] = await Promise.all([response, trigger()]);
+    return frame;
+  } finally {
+    cleanup?.();
+  }
 }
 
 function waitForOpen(socket: WebSocketLike): Promise<void> {
@@ -451,12 +430,15 @@ async function closeSocket(socket: WebSocketLike, WebSocket: WebSocketConstructo
   }
   const closed = waitForClose(socket).then(() => undefined);
   socket.close();
-  await Promise.race([
-    closed,
-    new Promise<void>((resolve) => {
-      setTimeout(resolve, 1_000);
-    }),
-  ]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, 1_000);
+  });
+  try {
+    await Promise.race([closed, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function loadWebSocket(packageRoot: string): WebSocketConstructor {
@@ -489,15 +471,13 @@ export async function attemptConnect(params: {
   const socket = new params.WebSocket(params.url);
   const closeCode = waitForClose(socket);
   try {
-    const challenge = receiveFrame(
+    const challengeFrame = await receiveFrame(
       socket,
       (frame) => frame.type === "event" && frame.event === "connect.challenge",
+      () => waitForOpen(socket),
     );
-    await waitForOpen(socket);
-    const challengeFrame = await challenge;
-    const payload = isRecord(challengeFrame.payload) ? challengeFrame.payload : null;
     const connectRequest = buildConnectRequest({
-      challengePayload: payload,
+      challengePayload: challengeFrame.payload,
       client: params.client,
       mode: params.mode,
       role: params.role,
@@ -505,12 +485,11 @@ export async function attemptConnect(params: {
       auth: params.auth,
       identity: params.identity,
     });
-    const requestId = requireString(connectRequest.id, "connect request id");
     const response = receiveFrame(
       socket,
-      (frame) => frame.type === "res" && frame.id === requestId,
+      (frame) => frame.type === "res" && frame.id === connectRequest.id,
+      () => socket.send(JSON.stringify(connectRequest)),
     );
-    socket.send(JSON.stringify(connectRequest));
     return { socket, response: await response, closeCode };
   } catch (error) {
     await closeSocket(socket, params.WebSocket);
@@ -533,9 +512,11 @@ async function connect(params: Parameters<typeof attemptConnect>[0]): Promise<Co
 
 async function request(socket: WebSocketLike, method: string, params: JsonRecord = {}) {
   const id = `rpc-${randomUUID()}`;
-  const response = receiveFrame(socket, (frame) => frame.type === "res" && frame.id === id);
-  socket.send(JSON.stringify({ type: "req", id, method, params }));
-  const frame = await response;
+  const frame = await receiveFrame(
+    socket,
+    (candidate) => candidate.type === "res" && candidate.id === id,
+    () => socket.send(JSON.stringify({ type: "req", id, method, params })),
+  );
   if (frame.ok !== true) {
     throw new Error(`${method} failed`);
   }
@@ -858,30 +839,19 @@ export function buildRedactedEvidence(params: {
     nodeSurfaceReapprovalExpected: params.expectKnownNodeSurfaceUpgrade,
     missingPasswordReason: true,
     missingPasswordClose1008: true,
-    credentials: {
-      node: {
-        usedTokenHash: params.node.usedTokenHash,
-        storedTokenHash: params.node.storedTokenHash,
-        deviceTokenReturned: params.node.deviceTokenReturned,
-        tokenRotated: params.node.tokenRotated,
-      },
-      operator: {
-        usedTokenHash: params.operator.usedTokenHash,
-        storedTokenHash: params.operator.storedTokenHash,
-        deviceTokenReturned: params.operator.deviceTokenReturned,
-        tokenRotated: params.operator.tokenRotated,
-      },
-    },
+    credentials: Object.fromEntries(
+      (["node", "operator"] as const).map((role) => {
+        const { usedTokenHash, storedTokenHash, deviceTokenReturned, tokenRotated } = params[role];
+        return [role, { usedTokenHash, storedTokenHash, deviceTokenReturned, tokenRotated }];
+      }),
+    ),
   };
 }
 
-function ensurePrivateDirectory(directory: string): void {
+function writePrivateJson(file: string, value: unknown): void {
+  const directory = path.dirname(file);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   fs.chmodSync(directory, 0o700);
-}
-
-function writePrivateJson(file: string, value: unknown): void {
-  ensurePrivateDirectory(path.dirname(file));
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   fs.chmodSync(file, 0o600);
 }

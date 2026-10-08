@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createQueueTestRun } from "../queue.test-helpers.js";
-import { resolveFollowupDeliveryContextKey } from "./delivery-context.js";
+import { resolveFollowupDeliveryStorageKey } from "./delivery-context.js";
 
 describe("followup delivery context", () => {
   it("separates runs with different gateway client capabilities", () => {
@@ -8,8 +8,8 @@ describe("followup delivery context", () => {
     const withInlineWidgets = createQueueTestRun({ prompt: "with inline widgets" });
     withInlineWidgets.run.clientCaps = ["inline-widgets"];
 
-    expect(resolveFollowupDeliveryContextKey(withoutCaps)).not.toBe(
-      resolveFollowupDeliveryContextKey(withInlineWidgets),
+    expect(resolveFollowupDeliveryStorageKey(withoutCaps)).not.toBe(
+      resolveFollowupDeliveryStorageKey(withInlineWidgets),
     );
   });
 
@@ -19,8 +19,8 @@ describe("followup delivery context", () => {
     const second = createQueueTestRun({ prompt: "second" });
     second.run.clientCaps = ["inline-widgets", "tool-events", "inline-widgets"];
 
-    expect(resolveFollowupDeliveryContextKey(first)).toBe(
-      resolveFollowupDeliveryContextKey(second),
+    expect(resolveFollowupDeliveryStorageKey(first)).toBe(
+      resolveFollowupDeliveryStorageKey(second),
     );
   });
 
@@ -30,8 +30,8 @@ describe("followup delivery context", () => {
     const second = createQueueTestRun({ prompt: "second" });
     second.run.toolBindings = { browser: { kind: "tab", targetId: "tab-b" } };
 
-    expect(resolveFollowupDeliveryContextKey(first)).not.toBe(
-      resolveFollowupDeliveryContextKey(second),
+    expect(resolveFollowupDeliveryStorageKey(first)).not.toBe(
+      resolveFollowupDeliveryStorageKey(second),
     );
   });
 
@@ -41,8 +41,8 @@ describe("followup delivery context", () => {
     const second = createQueueTestRun({ prompt: "second" });
     second.run.toolBindings = { browser: { kind: "tab", targetId: "tab-a" } };
 
-    expect(resolveFollowupDeliveryContextKey(first)).toBe(
-      resolveFollowupDeliveryContextKey(second),
+    expect(resolveFollowupDeliveryStorageKey(first)).toBe(
+      resolveFollowupDeliveryStorageKey(second),
     );
   });
 
@@ -51,8 +51,8 @@ describe("followup delivery context", () => {
     restricted.run.conversationToolPolicy = { deny: ["exec"] };
     const unrestricted = createQueueTestRun({ prompt: "unrestricted" });
 
-    expect(resolveFollowupDeliveryContextKey(restricted)).not.toBe(
-      resolveFollowupDeliveryContextKey(unrestricted),
+    expect(resolveFollowupDeliveryStorageKey(restricted)).not.toBe(
+      resolveFollowupDeliveryStorageKey(unrestricted),
     );
   });
 
@@ -62,8 +62,8 @@ describe("followup delivery context", () => {
     const second = createQueueTestRun({ prompt: "second" });
     second.run.conversationToolPolicy = { deny: ["exec"], allow: ["read"] };
 
-    expect(resolveFollowupDeliveryContextKey(first)).toBe(
-      resolveFollowupDeliveryContextKey(second),
+    expect(resolveFollowupDeliveryStorageKey(first)).toBe(
+      resolveFollowupDeliveryStorageKey(second),
     );
   });
 
@@ -73,8 +73,8 @@ describe("followup delivery context", () => {
     const second = createQueueTestRun({ prompt: "second" });
     second.run.spawnedBy = "agent:main:telegram:group:second";
 
-    expect(resolveFollowupDeliveryContextKey(first)).not.toBe(
-      resolveFollowupDeliveryContextKey(second),
+    expect(resolveFollowupDeliveryStorageKey(first)).not.toBe(
+      resolveFollowupDeliveryStorageKey(second),
     );
   });
 });

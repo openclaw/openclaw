@@ -1,7 +1,5 @@
+import type { ReasoningStreamPayload } from "../../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../../auto-reply/reply-payload.js";
-/**
- * Shared parameter types for embedded-agent run orchestration.
- */
 import type { ReasoningLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { GroupToolPolicyConfig } from "../../../config/types.tools.js";
@@ -16,6 +14,7 @@ import type {
   SkillWorkshopRunOptions,
 } from "../../../skills/workshop/types.js";
 import type { ModelFallbackAvailability } from "../../agent-scope.js";
+import type { MemoryFlushToolRunContext } from "../../agent-tools.memory-flush.types.js";
 import type { AssistantErrorTranscript } from "../../assistant-error-transcript.js";
 import type { ExecApprovalContinuationPromptRange } from "../../bash-tools.exec-approval-output.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
@@ -41,6 +40,7 @@ import type {
 import type { ExecSessionDefaults } from "../../exec-defaults.js";
 import type { ExpectedAgentHarnessRuntimeArtifact } from "../../harness/runtime-artifact.types.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
+import type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 import type { PreparedModelThinkingCapability } from "../../model-catalog-lookup.js";
 import type { ReplyDeliveryObserver, ReplyExpectation } from "../../reply-completion.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
@@ -51,30 +51,16 @@ import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
 import type { BlockReplyFlushContext } from "../types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
+export type { CurrentInboundPromptContext } from "../../internal-runtime-context.js";
 
 export type ResolvedToolPromptFinalizer = (params: {
   prompt: string;
   messageToolAvailable: boolean;
 }) => string;
 
-type ReasoningStreamPayload = Pick<
-  ReplyPayload,
-  "text" | "mediaUrls" | "isReasoning" | "isReasoningSnapshot"
-> & {
-  requiresReasoningProgressOptIn?: boolean;
-};
-
-export type CurrentInboundPromptContext = {
-  text: string;
-  /** Producer-owned fragments for model projection; text remains the legacy rendering. */
-  fragments?: import("../../internal-runtime-context.js").RuntimeContextFragment[];
-  resumableText?: string;
-  promptJoiner?: "\n\n" | "\n" | " ";
-  /** Generated goal blocks owned by inbound-context assembly, never user text. */
-  injectedGoalContexts?: string[];
-};
-
 export type RunEmbeddedAgentParams = {
+  /** Host-minted parent audience inherited by a trusted internal child run. */
+  memoryAudience?: import("../../../plugins/memory-provider-types.js").MemoryAudience;
   /** Detached runs may read session identity but never write its durable transcript or metadata. */
   sessionPersistence?: "durable" | "detached";
   /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */
@@ -97,6 +83,8 @@ export type RunEmbeddedAgentParams = {
   scheduledRuntimeAuthorityRecoveryRequired?: boolean;
   /** Relative workspace path that memory-triggered writes are allowed to append to. */
   memoryFlushWritePath?: string;
+  /** Provider-owned persistence surface for a tools-arm memory flush. */
+  memoryFlushTools?: MemoryFlushToolRunContext;
   /** Sticky source-turn taint inherited by an internal maintenance run. */
   initialTurnTainted?: boolean;
   /** Delivery target for topic/thread routing. */
@@ -127,6 +115,8 @@ export type RunEmbeddedAgentParams = {
   codeModeOverride?: boolean | "auto";
   /** Internal one-shot model probe mode: no tools, no workspace/chat prompt policy. */
   modelRun?: boolean;
+  /** Setup can reject unavailable endpoints without spending the session retry budget. */
+  retryConnectionErrors?: boolean;
   /** Disable trajectory persistence for auxiliary runs with no durable session owner. */
   disableTrajectory?: boolean;
   /** Restrict Skill Workshop to a bounded pending-proposal budget for an internal review run. */
@@ -151,6 +141,8 @@ export type RunEmbeddedAgentParams = {
   enableHeartbeatTool?: boolean;
   /** Keep the heartbeat response tool available even when a narrow profile would omit it. */
   forceHeartbeatTool?: boolean;
+  /** Heartbeat-transported turn that continues a conversation (its own command completion). */
+  continuesConversation?: boolean;
   /** Allow runtime plugins for this run to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
   /** @deprecated Use sessionTarget plus sessionId/sessionKey/agentId for runtime identity. */
@@ -227,7 +219,7 @@ export type RunEmbeddedAgentParams = {
   execApprovalContinuationTranscriptPromptRange?: ExecApprovalContinuationPromptRange;
   /** Trusted runtime-only authorization for one bounded cross-conversation recall pass. */
   conversationRecall?: ConversationRecallContext;
-  onExecutionStarted?: (info?: { lifecycleGeneration?: string }) => unknown;
+  onExecutionStarted?: (info?: { lifecycleGeneration?: string; backend?: string }) => unknown;
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;
     provider?: string;
@@ -293,27 +285,15 @@ export type RunEmbeddedAgentParams = {
   terminalReplyExpectation?: ReplyExpectation;
   authProfileFailurePolicy?: AuthProfileFailurePolicy;
   /**
-   * One-shot helper runs may opt in to executing through the provider's CLI
-   * backend instead of the direct-API passthrough when the run targets a CLI
-   * runtime provider whose passthrough credentials are subscription-scoped.
-   * Anthropic routes direct anthropic-messages calls on subscription OAuth to
-   * metered extra-usage billing: without extra-usage balance the passthrough
-   * fails closed with a billing error, and with it the run silently draws
-   * paid usage instead of plan limits. The CLI backend is the plan-limits
-   * path for those credentials. CLI dispatch translates `toolsAllow` into the
-   * selectable-backend surface (no native tools, allowlisted loopback MCP
-   * tools); the same list bounds the loopback MCP grant server-side, so tools
-   * outside it — including the message tool, matching `disableMessageTool`
-   * intent — can be neither listed nor called. Leave unset to keep the
-   * direct-API passthrough.
+   * Use the provider's subscription CLI for one-shot helpers within plan limits.
+   * Direct Anthropic OAuth passthrough uses metered extra usage and fails without balance.
+   * `toolsAllow` bounds both backend-visible tools and server-side loopback MCP grants;
+   * native and non-allowlisted tools, including a disabled message tool, stay unavailable.
+   * Unset retains direct-API passthrough.
    */
   cliBackendDispatch?: "subscription-auth";
   /**
-   * Allow a single run attempt even when all auth profiles are in cooldown,
-   * but only for inferred transient cooldowns like `rate_limit` or `overloaded`.
-   *
-   * This is used by model fallback when trying sibling models on providers
-   * where transient service pressure is often model-scoped.
+   * Probe one transiently cooled profile when sibling models may still be available.
    */
   allowTransientCooldownProbe?: boolean;
   suppressTranscriptOnlyAssistantPersistence?: boolean;
@@ -335,39 +315,17 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "sandboxAgentId"
   | "promptCacheKey"
   | "reasoningLevel"
-  | "messageChannel"
-  | "messageProvider"
   | "clientCaps"
   | "gatewayUiCommandTarget"
   | "toolBindings"
-  | "chatType"
-  | "agentAccountId"
   | "trigger"
   | "messageTo"
   | "messageThreadId"
   | "conversationToolPolicy"
-  | "groupId"
-  | "groupChannel"
-  | "groupSpace"
   | "memberRoleIds"
-  | "messageActionTurnCapability"
-  | "spawnedBy"
   | "isCanonicalWorkspace"
-  | "senderId"
-  | "senderName"
-  | "senderUsername"
-  | "senderE164"
-  | "senderIsOwner"
-  | "approvalReviewerDeviceId"
-  | "currentChannelId"
   | "chatId"
-  | "channelContext"
   | "currentMessagingTarget"
-  | "currentThreadTs"
-  | "currentMessageId"
-  | "currentInboundAudio"
-  | "replyToMode"
-  | "requireExplicitMessageTarget"
   | "disableMessageTool"
   | "conversationRecall"
   | "toolOverrides"
@@ -382,11 +340,10 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "forceMessageTool"
   | "enableHeartbeatTool"
   | "forceHeartbeatTool"
+  | "continuesConversation"
   | "allowGatewaySubagentBinding"
   | "extraSystemPrompt"
   | "gitCoauthorPrompt"
-  | "sourceReplyDeliveryMode"
-  | "taskSuggestionDeliveryMode"
   | "silentReplyPromptMode"
   | "ownerNumbers"
   | "toolsAllow"
@@ -395,12 +352,14 @@ export type EmbeddedForegroundPromptContext = Pick<
   | "scheduledToolPolicy"
   | "modelThinkingCapability"
   | "modelFallbacksOverride"
-> & {
-  /** SDK observation of the completed attempt; new runs recheck publication availability. */
-  githubPublicationAvailable?: boolean;
-  agentId: string;
-  workspaceDir: string;
-  cwd?: string;
-  sandboxSessionKey: string;
-  cronCreatorCallerOrigin?: CronScheduledToolCallerOrigin;
-};
+> &
+  AgentRunMessageContext &
+  AgentRunChannelContext & {
+    /** SDK observation of the completed attempt; new runs recheck publication availability. */
+    githubPublicationAvailable?: boolean;
+    agentId: string;
+    workspaceDir: string;
+    cwd?: string;
+    sandboxSessionKey: string;
+    cronCreatorCallerOrigin?: CronScheduledToolCallerOrigin;
+  };

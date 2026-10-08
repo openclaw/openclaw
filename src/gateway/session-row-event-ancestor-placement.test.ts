@@ -2,21 +2,22 @@ import { afterEach, expect, it, vi } from "vitest";
 import { reconcileSessionChanged } from "../../ui/src/lib/sessions/reconcile.ts";
 import { sessionsResult } from "../../ui/src/lib/sessions/session-capability.test-support.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import {
   emitSessionsChanged,
   flushPendingSessionsChangedEvents,
 } from "./server-methods/session-change-event.js";
 import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
-import type { GatewayWsClient } from "./server/ws-types.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
-import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
+import { rolePolicyConfig } from "./session-sharing.test-utils.js";
 import {
   projectWorkerPlacementMove,
   projectWorkerSessionPlacement,
@@ -61,12 +62,12 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
     }
     const database = openOpenClawStateDatabase();
     const placements = createWorkerSessionPlacementStore({ database, now: () => now - 50 });
-    const rootPlacement = placements.startDispatch({
+    const rootPlacement = await placements.startDispatch({
       sessionId: "root",
       sessionKey: root,
       agentId: "main",
     });
-    placements.startDispatch({
+    await placements.startDispatch({
       sessionId: "unused",
       sessionKey: "agent:main:unused",
       agentId: "main",
@@ -76,7 +77,7 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
       sessionId: "parent",
       ownerEpoch: 7,
     });
-    let parentPlacement = placements.startDispatch({
+    let parentPlacement = await placements.startDispatch({
       sessionId: "parent",
       sessionKey: parent,
       agentId: "main",
@@ -93,7 +94,7 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
       },
       { to: "active", patch: { activeOwnerEpoch: 7 } },
     ] as const) {
-      parentPlacement = placements.transition({
+      parentPlacement = await placements.transition({
         sessionId: "parent",
         from: parentPlacement.state,
         expectedGeneration: parentPlacement.generation,
@@ -103,7 +104,7 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
     if (parentPlacement.state !== "active") {
       throw new Error("Expected active ancestor fixture");
     }
-    const move = placements.beginPlacementMove({
+    const move = await placements.beginPlacementMove({
       sessionId: "parent",
       source: {
         generation: parentPlacement.generation,
@@ -119,37 +120,18 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
       modelCatalog: [],
       placementFactsReader: placements,
     });
-    const connection = createGatewayConnectionState({ bootId: "ancestor-placement", cfg });
+    const connection = createGatewayConnectionState({
+      scheduler: createTestGatewayScheduler(),
+      bootId: "ancestor-placement",
+      cfg,
+    });
     const context = requestContext(cfg);
     context.chatAbortControllers = connection.chatAbortControllers;
     context.broadcastToConnIds = connection.broadcastToConnIds;
     bindSessionRowProjection(context, () => projection);
     const detach = connection.attachSessionRowProjection(projection);
     const peers = profiles.map((profile, index) => {
-      const send = vi.fn();
-      const client = {
-        ...sharingPolicyClient({ user: profile.id }),
-        connId: `ancestor-${index}`,
-        usesSharedGatewayAuth: false,
-        authenticatedUserProfile: {
-          profileId: profile.id,
-          displayName: profile.displayName,
-          avatarRevision: "1",
-          hasAvatar: false,
-          updatedAt: now,
-        },
-        socket: {
-          readyState: 1,
-          bufferedAmount: 0,
-          send,
-          close: vi.fn(),
-          terminate: vi.fn(),
-          on: vi.fn(),
-          off: vi.fn(),
-          once: vi.fn(),
-        },
-      } satisfies GatewayWsClient;
-      prepareGatewayRecipientProfile(client);
+      const { client, send } = createSessionRowEventPeer(profile, `ancestor-${index}`, now);
       connection.clients.add(client);
       return { client, send };
     });
@@ -190,18 +172,28 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
         },
         { includeAncestors: true },
       );
-      expect(await escapedAncestors).toBeUndefined();
-      expect(projection.capture({ agentId: "main", key: parent })?.materialized).toBeUndefined();
-      expect(projection.capture({ agentId: "main", key: root })?.materialized).toBeUndefined();
+      expect((await escapedAncestors)?.map((row) => row.key)).toEqual([parent, root, gateway]);
+      expect(projection.capture({ agentId: "main", key: parent })?.materialized).toBeDefined();
+      expect(projection.capture({ agentId: "main", key: root })?.materialized).toBeDefined();
       expect(new Set(placementReads.mock.calls.flatMap(([ids]) => ids))).toEqual(
         new Set(["root", "parent", "gateway"]),
       );
       placementReads.mockClear();
+      sessionChanges.emit({ all: true, scope: "worker-placements" });
+      expect(projection.ancestorRows(childRow)).toBeUndefined();
       const rootFields = { placement: projectWorkerSessionPlacement(rootPlacement) };
       const parentFields = {
         placement: projectWorkerSessionPlacement(move.placement),
         placementMove: projectWorkerPlacementMove(move.intent),
       };
+      const archived = (key: string, sessionId: string) => ({
+        key,
+        sessionId,
+        kind: "direct" as const,
+        updatedAt: now - 100,
+        archived: true,
+        archivedAt: 1,
+      });
       emitSessionsChanged(context, { sessionKey: child, agentId: "main", reason: "patch" });
       await flushPendingSessionsChangedEvents(context);
       for (const [index, peer] of peers.entries()) {
@@ -216,36 +208,9 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
         const held = sessionsResult(
           [
             { key: child, sessionId: "child", kind: "direct", updatedAt: now - 100 },
-            {
-              key: gateway,
-              sessionId: "gateway",
-              kind: "direct",
-              updatedAt: now - 100,
-              archived: true,
-              archivedAt: 1,
-            },
-            {
-              key: root,
-              sessionId: "root",
-              kind: "direct",
-              updatedAt: now - 100,
-              archived: true,
-              archivedAt: 1,
-              ...rootFields,
-            },
-            ...(index === 0
-              ? [
-                  {
-                    key: parent,
-                    sessionId: "parent",
-                    kind: "direct" as const,
-                    updatedAt: now - 100,
-                    archived: true,
-                    archivedAt: 1,
-                    ...parentFields,
-                  },
-                ]
-              : []),
+            archived(gateway, "gateway"),
+            { ...archived(root, "root"), ...rootFields },
+            ...(index === 0 ? [{ ...archived(parent, "parent"), ...parentFields }] : []),
           ],
           now,
         );
@@ -278,7 +243,7 @@ it("keeps cold archived ancestor placement and moves through child-event recipie
     } finally {
       await flushPendingSessionsChangedEvents(context);
       detach();
-      connection.mentionInbox.dispose();
+      await connection.mentionInbox.dispose();
       projection.dispose();
       release();
     }

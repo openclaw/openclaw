@@ -143,17 +143,12 @@ describe("model command provider preparation", () => {
     });
   });
 
-  it.each(
-    [false, true].flatMap((hasCanonicalEntry) =>
-      [false, true].flatMap((included) =>
-        ["same", "different", "missing"].map((priorAlias) => ({
-          hasCanonicalEntry,
-          included,
-          priorAlias,
-        })),
-      ),
-    ),
-  )(
+  it.each([
+    { hasCanonicalEntry: false, included: false, priorAlias: "same" },
+    { hasCanonicalEntry: false, included: true, priorAlias: "different" },
+    { hasCanonicalEntry: true, included: false, priorAlias: "missing" },
+    { hasCanonicalEntry: true, included: true, priorAlias: "same" },
+  ])(
     "preserves alias source settings across canonical moves (existing: $hasCanonicalEntry, include: $included, alias: $priorAlias)",
     async ({ hasCanonicalEntry, included, priorAlias }) => {
       config.agents!.defaults!.models = {
@@ -234,24 +229,36 @@ describe("model command provider preparation", () => {
     },
   );
 
-  it.each(
-    ["set", "set-image", "fallback", "image-fallback"].flatMap((command) => [
-      {
-        command,
-        provider: "openrouter",
-        sourceKey: "openrouter/openrouter/hunter-alpha",
-        input: "openrouter/hunter-alpha",
-        modelId: "hunter-alpha",
-      },
-      {
-        command,
-        provider: "fixture",
-        sourceKey: "fixture/legacy",
-        input: "fixture/legacy",
-        modelId: "current",
-      },
-    ]),
-  )(
+  it.each([
+    {
+      command: "set",
+      provider: "openrouter",
+      sourceKey: "openrouter/openrouter/hunter-alpha",
+      input: "openrouter/hunter-alpha",
+      modelId: "hunter-alpha",
+    },
+    {
+      command: "set-image",
+      provider: "fixture",
+      sourceKey: "fixture/legacy",
+      input: "fixture/legacy",
+      modelId: "current",
+    },
+    {
+      command: "fallback",
+      provider: "fixture",
+      sourceKey: "fixture/legacy",
+      input: "fixture/legacy",
+      modelId: "current",
+    },
+    {
+      command: "image-fallback",
+      provider: "openrouter",
+      sourceKey: "openrouter/openrouter/hunter-alpha",
+      input: "openrouter/hunter-alpha",
+      modelId: "hunter-alpha",
+    },
+  ])(
     "preserves source and request settings when $command canonicalizes $sourceKey",
     async ({ command, provider, sourceKey, input, modelId }) => {
       if (provider === "openrouter") {

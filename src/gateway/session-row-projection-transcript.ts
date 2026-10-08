@@ -9,6 +9,7 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
   matching: (query: Query, kind?: string) => Row[];
   mark: (change: SessionRowChange) => void;
   read: (id: string) => Row | undefined;
+  invalidate: (id: string) => void;
   refresh: (id: string) => void;
 }) {
   const windows = new Map<string, { timer: ReturnType<typeof setTimeout>; pending: boolean }>();
@@ -53,10 +54,20 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
       found = new Set([...params.matching(query), ...params.matching(query, "id")]);
     }
     for (const row of found) {
+      const id = identity(row);
+      params.invalidate(id);
+      const pending = row.pendingDatabaseFacts !== undefined;
+      // Revoke reusable and in-flight watermarks even when presentation is throttled.
+      row.retainedDatabaseFacts = undefined;
+      row.databaseFactsRevision++;
+      // Accepted snapshots must lose their watermark before cold-row or throttle
+      // suppression; an exact read may resume before the next refresh window.
+      if (pending) {
+        params.refresh(id);
+      }
       if (row.entry?.archivedAt !== undefined && !row.materialized) {
         continue;
       }
-      const id = identity(row);
       const window = windows.get(id);
       if (window) {
         window.pending = true;
@@ -65,7 +76,7 @@ export function createSessionRowProjectionTranscriptUpdates(params: {
       startWindow(id, row.generation);
       // Transcript watermarks and previews are row-local. Relationships, inherited model
       // settings, and subagent activity change through their own sessionChanges publications.
-      if (!cold) {
+      if (!cold && !pending) {
         params.refresh(id);
       }
     }

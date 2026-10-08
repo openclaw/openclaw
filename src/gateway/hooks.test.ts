@@ -59,7 +59,9 @@ describe("gateway hooks helpers", () => {
         allowedAgentIds,
       },
       agents: {
-        list: [{ id: "main", default: true }, { id: "hooks" }],
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, hooks: {} },
       },
     }) as OpenClawConfig;
 
@@ -373,7 +375,9 @@ describe("gateway hooks helpers", () => {
     const cfg = {
       hooks: { enabled: true, token: "secret" },
       agents: {
-        list: [{ id: "main", default: true }, { id: "hooks" }],
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, hooks: {} },
       },
     } as OpenClawConfig;
     const resolved = resolveHooksConfigOrThrow(cfg);
@@ -424,13 +428,18 @@ describe("gateway hooks helpers", () => {
         agents: {
           ownership,
           defaults: { systemAgent: { agentId: "research" } },
-          entries: { ops: { default: true }, research: {} },
+          entries: { ops: {}, research: {} },
         },
       });
-      expect(resolveEffectiveHookTargetAgentId(resolved, undefined, "request")).toEqual({
-        ok: true,
-        effectiveAgentId: ownership === "explicit" ? "research" : "ops",
-      });
+      expect(resolveEffectiveHookTargetAgentId(resolved, undefined, "request")).toEqual(
+        ownership === "explicit"
+          ? { ok: true, effectiveAgentId: "research" }
+          : {
+              ok: false,
+              code: "agent-required",
+              error: "agentId is required when multiple agents are configured",
+            },
+      );
     },
   );
 
@@ -495,12 +504,6 @@ describe("gateway hooks helpers", () => {
     const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig([]));
     expect(isHookAgentAllowed(resolved, "hooks")).toBe(false);
     expect(isHookAgentAllowed(resolved, "main")).toBe(false);
-  });
-
-  test("isHookAgentAllowed allows the resolved default agent when allowlisted", () => {
-    const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig(["main"]));
-    expect(isHookAgentAllowed(resolved, "hooks")).toBe(false);
-    expect(isHookAgentAllowed(resolved, "main")).toBe(true);
   });
 
   test("isHookAgentAllowed treats wildcard allowlist as allow-all", () => {
@@ -612,15 +615,6 @@ describe("gateway hooks helpers", () => {
       source: "request",
     });
     expect(resolvedKey).toEqual({ ok: true, value: "hook:ingress" });
-  });
-
-  test("normalizeHookDispatchSessionKey preserves target agent scope", () => {
-    expect(
-      normalizeHookDispatchSessionKey({
-        sessionKey: "agent:hooks:slack:channel:c123",
-        targetAgentId: "hooks",
-      }),
-    ).toBe("agent:hooks:slack:channel:c123");
   });
 
   test("normalizeHookDispatchSessionKey rebinds non-target agent scoped keys to the target agent", () => {

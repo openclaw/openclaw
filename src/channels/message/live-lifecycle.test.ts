@@ -33,19 +33,19 @@ function createPreviewHarness() {
       receipt: createPreviewMessageReceipt({ id: "final" }),
     };
   });
-  return { posts, draft, send };
+  const adapter = {
+    draft,
+    buildFinalEdit: (payload: Payload) => payload.text,
+    editFinal: vi.fn(async (messageId: string, text: string) => {
+      posts.set(messageId, text);
+    }),
+  };
+  return { posts, draft, send, adapter };
 }
 
 describe("live preview delivery ownership", () => {
   it("protects a promoted answer when the published adapter receives a later final", async () => {
-    const { posts, draft, send } = createPreviewHarness();
-    const adapter = {
-      draft,
-      buildFinalEdit: (payload: Payload) => payload.text,
-      editFinal: async (id: string, text: string) => {
-        posts.set(id, text);
-      },
-    };
+    const { posts, draft, send, adapter } = createPreviewHarness();
     const first = await deliverWithFinalizableLivePreviewAdapter({
       kind: "final",
       payload: { text: "answer" },
@@ -63,43 +63,69 @@ describe("live preview delivery ownership", () => {
     expect(draft.clear).not.toHaveBeenCalled();
   });
 
-  it("records final acceptance before cleanup and never resends because deletion failed", async () => {
-    const { posts, draft, send } = createPreviewHarness();
-    const cleanupError = new Error("delete rejected");
-    draft.clear.mockRejectedValueOnce(cleanupError);
-    const onCleanupFailure = vi.fn();
-    const lifecycle = createLivePreviewLifecycle<Payload, string>({ draft, onCleanupFailure });
-    const result = await lifecycle.deliver({
-      kind: "final",
-      payload: { text: "answer" },
-      deliverNormally: send,
-    });
-    expect(lifecycle.finalDelivered).toBe(true);
-    expect(lifecycle.finalSucceeded).toBe(true);
-    expect(lifecycle.previewFinalized).toBe(true);
-    expect(result.deliveryResult?.receipt?.platformMessageIds).toEqual(["final"]);
-    expect([...posts.values()]).toEqual(["Working", "answer"]);
-    lifecycle.observeFailure();
-    await lifecycle.cleanup({ failed: true });
-    expect([...posts.values()]).toEqual(["answer"]);
-    expect(send).toHaveBeenCalledTimes(1);
-    expect(onCleanupFailure).toHaveBeenCalledWith(cleanupError);
-    expect(lifecycle.finalFailed).toBe(false);
-  });
+  it.each(["send", "observe"] as const)(
+    "preserves %s acceptance through failed cleanup and later failure",
+    async (source) => {
+      const { posts, draft, send, adapter } = createPreviewHarness();
+      const cleanupError = new Error("delete rejected");
+      draft.clear.mockRejectedValueOnce(cleanupError);
+      const onCleanupFailure = vi.fn();
+      const lifecycle = createLivePreviewLifecycle<Payload, string>({ draft, onCleanupFailure });
+      if (source === "observe") {
+        await lifecycle.observeDelivery({ visibleReplySent: false });
+        expect(posts.has("preview")).toBe(true);
+        posts.set("source-final", "tool-delivered answer");
+        await lifecycle.observeDelivery({ visibleReplySent: true, messageIds: ["source-final"] });
+        await lifecycle.deliver({
+          kind: "final",
+          payload: { text: "later warning" },
+          adapter,
+          deliverNormally: send,
+        });
+      } else {
+        const result = await lifecycle.deliver({
+          kind: "final",
+          payload: { text: "answer" },
+          deliverNormally: send,
+        });
+        expect(lifecycle.previewFinalized).toBe(true);
+        expect(result.deliveryResult?.receipt?.platformMessageIds).toEqual(["final"]);
+        expect([...posts.values()]).toEqual(["Working", "answer"]);
+      }
+      expect(lifecycle.finalDelivered).toBe(true);
+      expect(lifecycle.finalSucceeded).toBe(true);
+      lifecycle.observeFailure();
+      await lifecycle.cleanup({ failed: true });
+      expect([...posts.values()]).toEqual(
+        source === "send" ? ["answer"] : ["tool-delivered answer", "later warning"],
+      );
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(onCleanupFailure).toHaveBeenCalledWith(cleanupError);
+      expect(lifecycle.finalDelivered).toBe(true);
+      expect(lifecycle.finalFailed).toBe(false);
+    },
+  );
 
-  it.each(["rejected", "suppressed", "partial"] as const)(
+  it.each(["rejected", "suppressed", "partial", "progress-receipt"] as const)(
     "does not delete progress for a %s final",
     async (outcome) => {
       const { posts, draft, send } = createPreviewHarness();
       const lifecycle = createLivePreviewLifecycle<Payload, string>({ draft });
-      if (outcome === "rejected") {
+      if (outcome === "progress-receipt") {
+        draft.discardPending.mockRejectedValueOnce(
+          createChannelPartialDeliveryError(new Error("progress receipt missing"), {
+            visibleReplySent: true,
+            messageIds: [],
+          }),
+        );
+      } else if (outcome === "rejected") {
         send.mockRejectedValueOnce(new Error("final rejected"));
       } else if (outcome === "suppressed") {
         send.mockResolvedValueOnce({
           visibleReplySent: false,
           suppression: { reason: "no_visible_result" },
         });
-      } else {
+      } else if (outcome === "partial") {
         send.mockImplementationOnce(async () => {
           posts.set("final", "accepted prefix");
           throw createChannelPartialDeliveryError(new Error("suffix rejected"), {
@@ -115,6 +141,8 @@ describe("live preview delivery ownership", () => {
       });
       if (outcome === "suppressed") {
         expect((await delivery).kind).toBe("normal-skipped");
+      } else if (outcome === "progress-receipt") {
+        await expect(delivery).rejects.toMatchObject({ code: "CHANNEL_PARTIAL_DELIVERY" });
       } else {
         await expect(delivery).rejects.toBeInstanceOf(Error);
       }
@@ -122,127 +150,142 @@ describe("live preview delivery ownership", () => {
       expect(posts.get("preview")).toBe("Working");
       expect(lifecycle.finalDelivered).toBe(outcome === "partial");
       expect(lifecycle.finalFailed).toBe(outcome !== "suppressed");
-      expect(send).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledTimes(outcome === "progress-receipt" ? 0 : 1);
       expect(draft.clear).not.toHaveBeenCalled();
       expect(draft.discardPending).toHaveBeenCalled();
       expect(lifecycle.finalSucceeded).toBe(false);
     },
   );
 
-  it("does not mistake an accepted progress receipt for a final-send receipt", async () => {
-    const { draft, send } = createPreviewHarness();
-    draft.discardPending.mockRejectedValueOnce(
-      createChannelPartialDeliveryError(new Error("progress receipt missing"), {
-        visibleReplySent: true,
-        messageIds: [],
-      }),
-    );
-    const lifecycle = createLivePreviewLifecycle<Payload, string>({ draft });
-    await expect(
-      lifecycle.deliver({ kind: "final", payload: { text: "answer" }, deliverNormally: send }),
-    ).rejects.toMatchObject({ code: "CHANNEL_PARTIAL_DELIVERY" });
-    expect(lifecycle.finalDelivered).toBe(false);
-    expect(lifecycle.finalFailed).toBe(true);
-    expect(send).not.toHaveBeenCalled();
-  });
-
-  it("preserves promoted text and receipt when supplemental delivery is rejected", async () => {
-    const { posts, draft, send } = createPreviewHarness();
-    const lifecycle = createLivePreviewLifecycle<Payload, string>({ draft });
-    send.mockRejectedValueOnce(new Error("media rejected"));
-    await expect(
-      lifecycle.deliver({
+  it.each(["rejected", "suppressed"] as const)(
+    "preserves promoted text and receipt when supplemental delivery is %s",
+    async (outcome) => {
+      const { posts, draft, send, adapter } = createPreviewHarness();
+      const lifecycle = createLivePreviewLifecycle<Payload, string>({ draft });
+      if (outcome === "rejected") {
+        send.mockRejectedValueOnce(new Error("media rejected"));
+      } else {
+        send.mockResolvedValueOnce({
+          visibleReplySent: false,
+          suppression: { reason: "channel_transform" },
+        });
+      }
+      const delivery = lifecycle.deliver({
         kind: "final",
         payload: { text: "answer" },
         adapter: {
-          buildFinalEdit: (payload) => payload.text,
-          editFinal: async (id, text) => {
-            posts.set(id, text);
-          },
+          ...adapter,
           buildSupplementalPayload: () => ({ text: "media" }),
         },
         deliverNormally: send,
-      }),
-    ).rejects.toMatchObject({
-      code: "CHANNEL_PARTIAL_DELIVERY",
-      deliveryResult: { receipt: { platformMessageIds: ["preview"] } },
-    });
-    await lifecycle.cleanup({ failed: true });
-    expect(posts.get("preview")).toBe("answer");
-    expect(lifecycle.finalDelivered).toBe(true);
-    expect(lifecycle.finalFailed).toBe(true);
-    expect(send).toHaveBeenCalledTimes(1);
-  });
+      });
+      if (outcome === "rejected") {
+        await expect(delivery).rejects.toMatchObject({
+          code: "CHANNEL_PARTIAL_DELIVERY",
+          deliveryResult: { receipt: { platformMessageIds: ["preview"] } },
+        });
+        await lifecycle.cleanup({ failed: true });
+        expect(lifecycle.finalDelivered).toBe(true);
+        expect(lifecycle.finalFailed).toBe(true);
+      } else {
+        expect((await delivery).deliveryResult?.receipt?.platformMessageIds).toEqual(["preview"]);
+      }
+      expect(posts.get("preview")).toBe("answer");
+      expect(send).toHaveBeenCalledTimes(1);
+    },
+  );
 
-  it("does not retry intentionally suppressed supplemental media", async () => {
-    const { posts, draft, send } = createPreviewHarness();
-    const lifecycle = createLivePreviewLifecycle<Payload, string>({ draft });
-    send.mockResolvedValueOnce({
-      visibleReplySent: false,
-      suppression: { reason: "channel_transform" },
-    });
-    const result = await lifecycle.deliver({
-      kind: "final",
-      payload: { text: "answer" },
-      adapter: {
-        buildFinalEdit: (payload) => payload.text,
-        editFinal: async (id, text) => {
-          posts.set(id, text);
-        },
-        buildSupplementalPayload: () => ({ text: "media" }),
-      },
-      deliverNormally: send,
-    });
-    expect(result.deliveryResult?.receipt?.platformMessageIds).toEqual(["preview"]);
-    expect(posts.get("preview")).toBe("answer");
-    expect(send).toHaveBeenCalledTimes(1);
-  });
-
-  it("settles observed source delivery without reviving a later failure", async () => {
-    const { posts, draft, send } = createPreviewHarness();
-    draft.clear.mockRejectedValueOnce(new Error("delete rejected"));
-    const lifecycle = createLivePreviewLifecycle<Payload, string>({
-      draft,
-      onCleanupFailure: vi.fn(),
-    });
-    await lifecycle.observeDelivery({ visibleReplySent: false });
-    expect(posts.has("preview")).toBe(true);
-    posts.set("source-final", "tool-delivered answer");
-    await lifecycle.observeDelivery({ visibleReplySent: true, messageIds: ["source-final"] });
-    await lifecycle.deliver({
-      kind: "final",
-      payload: { text: "later warning" },
-      adapter: {
-        buildFinalEdit: (payload) => payload.text,
-        editFinal: async (id, text) => {
-          posts.set(id, text);
-        },
-      },
-      deliverNormally: send,
-    });
-    lifecycle.observeFailure();
-    await lifecycle.cleanup({ failed: true });
-    expect([...posts.values()]).toEqual(["tool-delivered answer", "later warning"]);
-    expect(lifecycle.finalDelivered).toBe(true);
-    expect(lifecycle.finalFailed).toBe(false);
-  });
-
-  it.each(["send", "edit"] as const)(
-    "does not apply a stale final %s receipt or observer to the next admitted turn",
-    async (operation) => {
+  it.each(["error", "failed", "partial", "suppressed"] as const)(
+    "keeps native final facts and cleanup consistent for %s delivery",
+    async (outcome) => {
       const { posts, draft } = createPreviewHarness();
-      const oldSend = createDeferred<LivePreviewDeliveryResult>();
-      const started = createDeferred();
       const onFinalDelivered = vi.fn();
       const lifecycle = createLivePreviewLifecycle<Payload, string>({
         draft,
-        onFinalDelivered,
         cleanupUndelivered: true,
+        retainOnError: outcome === "error",
+        onFinalDelivered,
+      });
+      lifecycle.beginFinalDelivery();
+      if (outcome === "error") {
+        await lifecycle.cleanup();
+        expect([...posts.values()]).toEqual(["Working"]);
+        posts.set("native-final", "The task failed.");
+        await lifecycle.observeDelivery(
+          { visibleReplySent: true, messageIds: ["native-final"] },
+          { isError: true },
+        );
+        lifecycle.observeFailure();
+      } else {
+        if (outcome === "partial") {
+          posts.set("native-prefix", "Accepted answer prefix");
+        }
+        if (outcome !== "suppressed") {
+          lifecycle.observeFailure(
+            outcome === "partial"
+              ? { visibleReplySent: true, messageIds: ["native-prefix"] }
+              : undefined,
+          );
+        }
+        lifecycle.observeSuppression();
+      }
+      await lifecycle.cleanup();
+      expect([...posts.values()]).toEqual(
+        outcome === "suppressed"
+          ? []
+          : outcome === "error"
+            ? ["Working", "The task failed."]
+            : outcome === "partial"
+              ? ["Working", "Accepted answer prefix"]
+              : ["Working"],
+      );
+      expect(lifecycle.finalDelivered).toBe(outcome === "error" || outcome === "partial");
+      expect(lifecycle.finalSucceeded).toBe(false);
+      expect(lifecycle.finalFailed).toBe(outcome === "failed" || outcome === "partial");
+      expect(lifecycle.finalSuppressed).toBe(outcome === "suppressed");
+      expect(onFinalDelivered).not.toHaveBeenCalled();
+      if (outcome === "failed" || outcome === "partial") {
+        expect(posts.get("preview")).toBe("Working");
+        expect(posts.get("native-prefix")).toBe(
+          outcome === "partial" ? "Accepted answer prefix" : undefined,
+        );
+      }
+      if (outcome === "suppressed") {
+        lifecycle.reset();
+        expect(lifecycle.finalStarted).toBe(false);
+        expect(lifecycle.finalSuppressed).toBe(false);
+      }
+    },
+  );
+
+  it.each(["send", "edit", "flush", "rejected-edit"] as const)(
+    "fences a stale %s completion from the next admitted turn",
+    async (operation) => {
+      const { posts, draft, send, adapter } = createPreviewHarness();
+      const finish = createDeferred<LivePreviewDeliveryResult>();
+      const started = createDeferred();
+      const onFinalDelivered = vi.fn();
+      const acceptsReceipt = operation === "send" || operation === "edit";
+      let writable = true;
+      if (operation === "rejected-edit") {
+        draft.discardPending.mockImplementation(async () => {
+          writable = false;
+        });
+      }
+      const lifecycle = createLivePreviewLifecycle<Payload, string>({
+        draft,
+        onFinalDelivered,
+        cleanupUndelivered: acceptsReceipt,
       });
       const acceptOld = async () => {
         started.resolve();
-        return oldSend.promise;
+        return finish.promise;
       };
+      if (operation === "flush") {
+        draft.flush.mockImplementationOnce(async () => {
+          await acceptOld();
+        });
+      }
       const terminalize = () => {
         posts.set("preview", "old turn complete");
       };
@@ -250,91 +293,50 @@ describe("live preview delivery ownership", () => {
         kind: "final",
         payload: { text: "old answer" },
         adapter:
-          operation === "edit"
-            ? {
-                buildFinalEdit: (payload) => payload.text,
-                editFinal: acceptOld,
+          operation === "send"
+            ? undefined
+            : {
+                ...adapter,
+                ...(operation === "flush" ? {} : { editFinal: acceptOld }),
                 onPreviewFinalized: terminalize,
-              }
-            : undefined,
-        deliverNormally: acceptOld,
+              },
+        deliverNormally: operation === "send" ? acceptOld : send,
         onNormalDelivered: terminalize,
       });
       await started.promise;
-      await lifecycle.cleanup();
-      expect(posts.get("preview")).toBe("Working");
+      if (acceptsReceipt) {
+        await lifecycle.cleanup();
+        expect(posts.get("preview")).toBe("Working");
+      }
       lifecycle.reset();
       posts.set("preview", "new turn progress");
-      oldSend.resolve({ visibleReplySent: true, messageIds: ["old-final"] });
-      expect((await delivery).deliveryResult?.messageIds).toEqual(["old-final"]);
-      expect(posts.get("preview")).toBe("new turn progress");
+      if (operation === "rejected-edit") {
+        finish.reject(new Error("old edit rejected"));
+      } else {
+        finish.resolve({ visibleReplySent: true, messageIds: ["old-final"] });
+      }
+      const result = await delivery;
+      if (acceptsReceipt) {
+        expect(result.deliveryResult?.messageIds).toEqual(["old-final"]);
+      } else {
+        expect(result.kind).toBe("normal-skipped");
+      }
+      if (operation === "rejected-edit" && writable) {
+        posts.set("preview", "new turn updated");
+      }
+      expect(posts.get("preview")).toBe(
+        operation === "rejected-edit" ? "new turn updated" : "new turn progress",
+      );
       expect(lifecycle.finalDelivered).toBe(false);
       expect(onFinalDelivered).not.toHaveBeenCalled();
       expect(draft.clear).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
+      if (operation === "flush") {
+        expect(draft.seal).not.toHaveBeenCalled();
+        expect(adapter.editFinal).not.toHaveBeenCalled();
+      }
     },
   );
-
-  it("does not seal the next turn after an old preview flush settles", async () => {
-    const { posts, draft, send } = createPreviewHarness();
-    const flushStarted = createDeferred();
-    const finishFlush = createDeferred();
-    draft.flush.mockImplementationOnce(async () => {
-      flushStarted.resolve();
-      await finishFlush.promise;
-    });
-    const lifecycle = createLivePreviewLifecycle<Payload, string>({ draft });
-    const editFinal = vi.fn(async (id: string, text: string) => {
-      posts.set(id, text);
-    });
-    const delivery = lifecycle.deliver({
-      kind: "final",
-      payload: { text: "old answer" },
-      adapter: { buildFinalEdit: (payload) => payload.text, editFinal },
-      deliverNormally: send,
-    });
-    await flushStarted.promise;
-    lifecycle.reset();
-    posts.set("preview", "new turn progress");
-    finishFlush.resolve();
-    expect((await delivery).kind).toBe("normal-skipped");
-    expect(posts.get("preview")).toBe("new turn progress");
-    expect(draft.seal).not.toHaveBeenCalled();
-    expect(editFinal).not.toHaveBeenCalled();
-    expect(send).not.toHaveBeenCalled();
-  });
-
-  it("keeps the next turn writable when an old final edit is rejected", async () => {
-    const { posts, draft, send } = createPreviewHarness();
-    const editStarted = createDeferred();
-    const finishEdit = createDeferred();
-    let writable = true;
-    draft.discardPending.mockImplementation(async () => {
-      writable = false;
-    });
-    const lifecycle = createLivePreviewLifecycle<Payload, string>({ draft });
-    const delivery = lifecycle.deliver({
-      kind: "final",
-      payload: { text: "old answer" },
-      adapter: {
-        buildFinalEdit: (payload) => payload.text,
-        editFinal: async () => {
-          editStarted.resolve();
-          await finishEdit.promise;
-        },
-      },
-      deliverNormally: send,
-    });
-    await editStarted.promise;
-    lifecycle.reset();
-    posts.set("preview", "new turn progress");
-    finishEdit.reject(new Error("old edit rejected"));
-    expect((await delivery).kind).toBe("normal-skipped");
-    if (writable) {
-      posts.set("preview", "new turn updated");
-    }
-    expect(posts.get("preview")).toBe("new turn updated");
-    expect(send).not.toHaveBeenCalled();
-  });
 
   it("does not infer final delivery when preview custody is transferred", async () => {
     const { posts, draft } = createPreviewHarness();

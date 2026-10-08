@@ -1,5 +1,9 @@
 // Gateway request scope tracks request-local plugin runtime context across async work.
-import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
+import type {
+  GatewayContextResolver,
+  GatewayRequestContext,
+} from "../../gateway/server-methods/types.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   getPluginExecutionFrame,
   pluginInstanceInvocation,
@@ -7,6 +11,7 @@ import {
 } from "../plugin-instance-invocation.js";
 import type { PluginInstanceInvocation } from "../plugin-instance-invocation.types.js";
 import type { PluginOrigin } from "../plugin-origin.types.js";
+import { mapPluginReturnPromise, resolvePluginReturnPromise } from "../plugin-return-value.js";
 import type { DeclaredProviderOwnerIndex } from "../provider-owner-index.js";
 import type { PluginRegistry } from "../registry-types.js";
 import { getPluginRegistryState } from "../runtime-state.js";
@@ -31,10 +36,6 @@ type PluginRuntimePluginScope = {
   pluginTrustedOfficialInstall?: boolean;
 };
 
-function getPluginGatewayScope(): PluginRuntimeGatewayRequestScope | undefined {
-  return getPluginRuntimeExecutionFrame()?.gatewayScope;
-}
-
 function runWithPluginGatewayScope<T>(
   gatewayScope: PluginRuntimeGatewayRequestScope,
   run: () => T,
@@ -46,9 +47,11 @@ function runWithPluginGatewayScope<T>(
     runtime?.gatewayScope === gatewayScope && runtime.invocation === invocation
       ? runtime
       : new PluginRuntimeExecutionFrame(
-          { ...current, invocation },
+          // Reuse prepared frame facts; the mutable Gateway view remains call-local.
+          current ?? {},
           gatewayScope,
           runtime?.generationRegistry,
+          invocation,
         ),
     run,
   );
@@ -56,9 +59,91 @@ function runWithPluginGatewayScope<T>(
 
 const isNotWebchatConnect = () => false;
 
+// Settled reactions may outlive the call; capture only its emptied custody holder.
+function settleRegistryScope(completion: Promise<unknown>, held: PluginRegistry[]) {
+  return mapPluginReturnPromise(
+    completion,
+    (value) => {
+      held.length = 0;
+      return value;
+    },
+    (error) => {
+      held.length = 0;
+      throw error;
+    },
+  ).value;
+}
+
+export const ExpiredPluginRegistryScopeError = resolveGlobalSingleton(
+  Symbol.for("openclaw.expiredPluginRegistryScopeError"),
+  () =>
+    class extends Error {
+      constructor() {
+        super("Plugin registry scope is no longer available");
+      }
+    },
+);
+
+// Native resources inherit these views; the registry's lifecycle owner keeps the graph alive.
+function bindBorrowedRegistry(
+  scope: PluginRuntimeGatewayRequestScope,
+  registry: PluginRegistry | undefined,
+  initiallyExpired = false,
+): void {
+  let expired = initiallyExpired;
+  let reference = registry && new WeakRef(registry);
+  Object.defineProperty(scope, "pluginRegistry", {
+    enumerable: true,
+    configurable: true,
+    get() {
+      const current = reference?.deref();
+      if (expired || (reference && !current)) {
+        throw new ExpiredPluginRegistryScopeError();
+      }
+      return current;
+    },
+    set(next: PluginRegistry | undefined) {
+      reference = next && new WeakRef(next);
+      expired = false;
+    },
+  });
+}
+
+function copyGatewayScope(
+  current: PluginRuntimeGatewayRequestScope | undefined,
+  inheritRegistry = true,
+): PluginRuntimeGatewayRequestScope {
+  const scoped: PluginRuntimeGatewayRequestScope = { isWebchatConnect: isNotWebchatConnect };
+  if (!current) {
+    return scoped;
+  }
+  // Copy enumerable values like spread, but do not read a registry that the caller replaces.
+  for (const key of Reflect.ownKeys(current)) {
+    if (key !== "pluginRegistry" && Object.getOwnPropertyDescriptor(current, key)?.enumerable) {
+      Object.defineProperty(scoped, key, {
+        value: Reflect.get(current, key),
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    }
+  }
+  if (inheritRegistry && Object.getOwnPropertyDescriptor(current, "pluginRegistry")?.enumerable) {
+    try {
+      bindBorrowedRegistry(scoped, current.pluginRegistry);
+    } catch (error) {
+      if (!(error instanceof ExpiredPluginRegistryScopeError)) {
+        throw error;
+      }
+      bindBorrowedRegistry(scoped, undefined, true);
+    }
+  }
+  return scoped;
+}
+
 /** Carry only closure-bound node authorities into a nested request scope. */
 export function getPluginRuntimeGatewayNodeAuthorities() {
-  const scope = getPluginGatewayScope();
+  const scope = getPluginRuntimeGatewayRequestScope();
   return {
     invokeWithSessionNodeAuthority: scope?.invokeWithSessionNodeAuthority,
     nodePlacementGrantAuthority: scope?.nodePlacementGrantAuthority,
@@ -83,12 +168,11 @@ export function withPluginRuntimeGatewayContextResolver<T>(
 ): T {
   // Scheduler-owned work must not retain the request-local client or context
   // that happened to exist when its timer was armed.
-  const current = options?.inheritRequestScope === false ? undefined : getPluginGatewayScope();
-  const scoped: PluginRuntimeGatewayRequestScope = {
-    ...current,
-    isWebchatConnect: current?.isWebchatConnect ?? isNotWebchatConnect,
-    resolveGatewayContext,
-  };
+  const current =
+    options?.inheritRequestScope === false ? undefined : getPluginRuntimeGatewayRequestScope();
+  const scoped = copyGatewayScope(current);
+  scoped.isWebchatConnect = current?.isWebchatConnect ?? isNotWebchatConnect;
+  scoped.resolveGatewayContext = resolveGatewayContext;
   delete scoped.context;
   return runWithPluginGatewayScope(scoped, run);
 }
@@ -102,10 +186,15 @@ export function withPluginRuntimeRegistryScope<T>(
   if (!registry) {
     return run();
   }
-  const current = getPluginGatewayScope();
+  const current = getPluginRuntimeGatewayRequestScope();
   return runWithPluginGatewayScope(
     createRegistryScope(registry, current, declaredProviderOwners),
-    run,
+    () => {
+      const value = run();
+      const completion = resolvePluginReturnPromise(value);
+      // SAFETY: Awaiting the callback preserves its value and rejection reason.
+      return completion ? (settleRegistryScope(completion, [registry]) as T) : value;
+    },
   );
 }
 
@@ -114,16 +203,25 @@ export function createRegistryScope(
   current: PluginRuntimeGatewayRequestScope | undefined,
   declaredProviderOwners?: DeclaredProviderOwnerIndex,
 ): PluginRuntimeGatewayRequestScope {
-  return {
-    isWebchatConnect: isNotWebchatConnect,
-    ...current,
-    pluginRegistry: registry,
-    declaredProviderOwners:
-      declaredProviderOwners ??
-      // Nested calls keep this prepared registry's facts, never a different registry's index.
-      (current?.pluginRegistry === registry ? current.declaredProviderOwners : undefined) ??
-      getPluginRuntimeLoadContextState(registry)?.declaredProviderOwners,
-  };
+  const scoped = copyGatewayScope(current, false);
+  let inheritedOwners: DeclaredProviderOwnerIndex | undefined;
+  if (declaredProviderOwners === undefined && current) {
+    try {
+      if (current.pluginRegistry === registry) {
+        inheritedOwners = current.declaredProviderOwners;
+      }
+    } catch (error) {
+      if (!(error instanceof ExpiredPluginRegistryScopeError)) {
+        throw error;
+      }
+    }
+  }
+  bindBorrowedRegistry(scoped, registry);
+  scoped.declaredProviderOwners =
+    declaredProviderOwners ??
+    inheritedOwners ??
+    getPluginRuntimeLoadContextState(registry)?.declaredProviderOwners;
+  return scoped;
 }
 
 function applyPluginScope(
@@ -157,37 +255,32 @@ export function withPluginRuntimePluginScope<T>(
   registry?: PluginRegistry,
   invocation?: PluginInstanceInvocation,
 ): T {
-  const current = getPluginGatewayScope();
+  const current = getPluginRuntimeGatewayRequestScope();
   // Instance calls combine registry and identity without adding a second async frame.
   const scoped: PluginRuntimeGatewayRequestScope = registry
     ? createRegistryScope(registry, current)
-    : current
-      ? { ...current }
-      : { isWebchatConnect: isNotWebchatConnect };
+    : copyGatewayScope(current);
   applyPluginScope(scoped, scope);
   return runWithPluginGatewayScope(scoped, run, invocation);
 }
 
 /** Drops only generation selection; authenticated Gateway caller and authority stay attached. */
 export function runOutsidePluginRuntimeRegistryScope<T>(run: () => T): T {
-  const current = getPluginGatewayScope();
+  const current = getPluginRuntimeGatewayRequestScope();
   if (!current) {
     return run();
   }
   // Registry selection and its declared provider index belong to the same generation.
-  return runWithPluginGatewayScope(
-    { ...current, pluginRegistry: undefined, declaredProviderOwners: undefined },
-    run,
-  );
+  const scoped = copyGatewayScope(current, false);
+  scoped.pluginRegistry = undefined;
+  scoped.declaredProviderOwners = undefined;
+  return runWithPluginGatewayScope(scoped, run);
 }
 
-/**
- * Returns the current plugin gateway request scope when called from a plugin request handler.
- */
 export function getPluginRuntimeGatewayRequestScope():
   | PluginRuntimeGatewayRequestScope
   | undefined {
-  return getPluginGatewayScope();
+  return getPluginRuntimeExecutionFrame()?.gatewayScope;
 }
 
 /** Reads registration/request/active registry precedence without initializing a cold runtime. */
@@ -199,4 +292,15 @@ export function getPluginRegistryForContext(): PluginRegistry | null {
     state?.activeRegistry ??
     null
   );
+}
+
+/** Live request context for trusted built-in tools that need direct runtime state. */
+export function getInProcessGatewayRequestContext(
+  resolveGatewayContext?: GatewayContextResolver,
+): GatewayRequestContext | undefined {
+  if (resolveGatewayContext) {
+    return resolveGatewayContext();
+  }
+  const scope = getPluginRuntimeGatewayRequestScope();
+  return scope?.resolveGatewayContext ? scope.resolveGatewayContext() : scope?.context;
 }

@@ -20,7 +20,6 @@ import type { WebPushWorkerOperations } from "./push-web-store.worker-contract.j
 import { createSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 export {
   WebPushSubscriptionBindingError,
-  createWebPushVapidKeyPair,
   hashWebPushEndpoint,
   isValidWebPushEndpoint,
   isValidWebPushKey,
@@ -96,7 +95,7 @@ export function withBoundWebPushSubscriptionByEndpoint<T>(
   },
   prepare: (
     subscription: WebPushWorkerOperations["webPush.findBoundWebPushSubscriptionByEndpoint"]["output"],
-  ) => WebPushSnapshotAction<T> | undefined,
+  ) => WebPushSnapshotAction<T> | undefined | Promise<WebPushSnapshotAction<T> | undefined>,
 ) {
   const { stateDir, ...input } = params;
   const captured = context(stateDir);
@@ -186,13 +185,6 @@ export function listWebPushSubscriptions(stateDir?: string) {
 export function hasBoundWebPushSubscriptions(stateDir?: string) {
   return executeOpenClawStateWorker(context(stateDir), {
     type: "webPush.hasBoundWebPushSubscriptions",
-    input: undefined,
-  });
-}
-
-export function listBoundWebPushSubscriptions(stateDir?: string) {
-  return executeOpenClawStateWorker(context(stateDir), {
-    type: "webPush.listBoundWebPushSubscriptions",
     input: undefined,
   });
 }

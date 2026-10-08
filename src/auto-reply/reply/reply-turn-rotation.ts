@@ -4,6 +4,7 @@ import {
   isReplyOperationAbortedForRestart,
   lifecycleAdmissionByOperation,
   mergeReplyRunAdmissionSource,
+  observeReplyRunCompletions,
   type ReplyRunAdmissionSource,
 } from "./reply-run-registry.state.js";
 
@@ -21,7 +22,9 @@ export function createReplyTurnRotationEvidence(params: {
   const isCurrent = (source: ReplyRotationSource) =>
     !isReplyOperationAbortedForRestart(source.operation) &&
     (source.fromBarrier ||
-      (source.operation.key === params.sessionKey &&
+      (lifecycleAdmissionByOperation.get(source.operation)?.databaseIdentity ===
+        source.databaseIdentity &&
+        source.operation.key === params.sessionKey &&
         (source.operation === replyRunRegistry.get(params.sessionKey) ||
           source.operation.result !== null)));
   const mergeWaitedRotation = (source: ReplyRotationSource) => {
@@ -35,23 +38,41 @@ export function createReplyTurnRotationEvidence(params: {
     );
   };
 
+  const recordSources = (sources: readonly ReplyRunAdmissionSource[], fromBarrier: boolean) => {
+    for (const source of sources) {
+      waitedRotations.set(
+        source.databaseIdentity,
+        mergeWaitedRotation({ ...source, sessionIds: new Set(source.sessionIds), fromBarrier }),
+      );
+    }
+  };
+
   return {
     recordBarrierSources(sources: ReplyRunAdmissionSource[] = []) {
-      for (const source of sources) {
-        waitedRotations.set(
-          source.databaseIdentity,
-          mergeWaitedRotation({
-            ...source,
-            sessionIds: new Set(source.sessionIds),
-            fromBarrier: true,
-          }),
-        );
-      }
+      recordSources(sources, true);
+    },
+    observeAdmission() {
+      const completions = observeReplyRunCompletions(params.sessionKey);
+      const initialOperation = replyRunRegistry.get(params.sessionKey);
+      return {
+        recordCompletions: () => recordSources(completions.read() ?? [], false),
+        changed: () =>
+          completions.read() !== undefined ||
+          initialOperation !== replyRunRegistry.get(params.sessionKey),
+        dispose: () => {
+          const sources = completions.read();
+          completions.dispose();
+          recordSources(sources ?? [], false);
+        },
+      };
     },
     recordCompletedOperation(
       operation: ReplyOperation,
       databaseIdentity: OpenClawAgentDatabaseIdentity | undefined,
     ) {
+      if (lifecycleAdmissionByOperation.get(operation)?.databaseIdentity !== databaseIdentity) {
+        return;
+      }
       waitedRotations.set(
         databaseIdentity,
         mergeWaitedRotation({

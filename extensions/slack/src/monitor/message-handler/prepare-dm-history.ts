@@ -8,14 +8,6 @@ import type { SlackMonitorContext } from "../context.js";
 import type { SlackEventScope } from "../event-scope.js";
 import { resolveSlackTimestampMs } from "./timestamp.js";
 
-type SlackDmHistoryMessage = {
-  text?: string;
-  user?: string;
-  bot_id?: string;
-  username?: string;
-  ts?: string;
-};
-
 type SlackDmHistoryEntry = {
   sender: string;
   body: string;
@@ -27,10 +19,9 @@ export function resolveSlackDmHistoryLimit(params: {
   userId?: string;
   defaultLimit: number;
 }): number {
-  const override =
-    params.userId && params.account.config.dms?.[params.userId]?.historyLimit !== undefined
-      ? params.account.config.dms[params.userId]?.historyLimit
-      : undefined;
+  const override = params.userId
+    ? params.account.config.dms?.[params.userId]?.historyLimit
+    : undefined;
   return resolvePromptHistoryLimit(override ?? params.defaultLimit, 0);
 }
 
@@ -50,21 +41,22 @@ export async function resolveSlackDmHistoryContext(params: {
   }
 
   try {
-    const response = (await (
+    const response = await (
       params.eventScope?.client ?? params.ctx.app.client
     ).conversations.history({
       token: params.ctx.botToken,
       channel: params.channelId,
       ...(params.currentMessageTs ? { latest: params.currentMessageTs, inclusive: true } : {}),
       limit: maxMessages + 1,
-    })) as { messages?: SlackDmHistoryMessage[] };
+    });
 
     const messages = (response.messages ?? [])
-      .filter((message) => {
+      .flatMap((message) => {
         if (params.currentMessageTs && message.ts === params.currentMessageTs) {
-          return false;
+          return [];
         }
-        return Boolean(normalizeOptionalString(message.text));
+        const body = normalizeOptionalString(message.text);
+        return body ? [{ message, body }] : [];
       })
       .slice(0, maxMessages)
       .toReversed();
@@ -89,11 +81,7 @@ export async function resolveSlackDmHistoryContext(params: {
 
     const entries: SlackDmHistoryEntry[] = [];
     const formatted: string[] = [];
-    for (const message of messages) {
-      const body = normalizeOptionalString(message.text);
-      if (!body) {
-        continue;
-      }
+    for (const { message, body } of messages) {
       const isCurrentBot =
         (params.ctx.botUserId && message.user === params.ctx.botUserId) ||
         (params.ctx.botId && message.bot_id === params.ctx.botId);
@@ -119,8 +107,8 @@ export async function resolveSlackDmHistoryContext(params: {
     }
 
     return {
-      body: formatted.length > 0 ? formatted.join("\n\n") : undefined,
-      inboundHistory: entries.length > 0 ? entries : undefined,
+      body: formatted.join("\n\n"),
+      inboundHistory: entries,
     };
   } catch (err) {
     logVerbose(

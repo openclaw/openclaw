@@ -1,4 +1,3 @@
-// Discord plugin module owns the reply pipeline, draft preview, and delivery correlation setup.
 import {
   createChannelMessageReplyPipeline,
   resolveChannelStreamingBlockEnabled,
@@ -82,6 +81,7 @@ export function createDiscordBeforePayloadDelivery(params: {
 export function createDiscordMessageReplyRuntime(params: {
   ctx: DiscordMessagePreflightContext;
   processContext: DiscordMessageProcessContext;
+  replyReference: DiscordMessageProcessContext["replyPlan"]["replyReference"];
   sourceRepliesAreToolOnly: boolean;
   shouldDisableCoreTypingKeepalive: boolean;
   isRoomEvent: boolean;
@@ -104,9 +104,9 @@ export function createDiscordMessageReplyRuntime(params: {
     isDirectMessage,
     route,
   } = ctx;
-  const { ctxPayload, deliverTarget, replyReference } = processContext;
-  const typingChannelId = deliverTarget.startsWith("channel:")
-    ? deliverTarget.slice("channel:".length)
+  const { ctxPayload, replyPlan } = processContext;
+  const deliverChannelId = replyPlan.deliverTarget.startsWith("channel:")
+    ? replyPlan.deliverTarget.slice("channel:".length)
     : messageChannelId;
   let typingFeedback: ReturnType<typeof createDiscordReplyTypingFeedback> | undefined;
   const getTypingFeedback = () =>
@@ -114,7 +114,7 @@ export function createDiscordMessageReplyRuntime(params: {
       cfg,
       token,
       accountId,
-      channelId: typingChannelId,
+      channelId: deliverChannelId,
       rest: params.feedbackRest,
       log: logVerbose,
       keepaliveIntervalMs: params.shouldDisableCoreTypingKeepalive ? undefined : 0,
@@ -194,9 +194,6 @@ export function createDiscordMessageReplyRuntime(params: {
     }
   };
 
-  const deliverChannelId = deliverTarget.startsWith("channel:")
-    ? deliverTarget.slice("channel:".length)
-    : messageChannelId;
   const draftPreview = createDiscordDraftPreviewController({
     groupThread: Boolean(ctxPayload.GroupThread),
     cfg,
@@ -207,7 +204,7 @@ export function createDiscordMessageReplyRuntime(params: {
     textLimit,
     deliveryRest: params.deliveryRest,
     deliverChannelId,
-    replyReference,
+    replyReference: params.replyReference,
     onFinalReplyStart: params.onFinalReplyStart,
     onFinalReplyDelivered: params.onFinalReplyDelivered,
     log: logVerbose,

@@ -1,10 +1,8 @@
-// Update status helpers for `openclaw status`.
-// Wraps registry/git update checks and formats compact update rows/hints.
-
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.js";
+import { formatInstallOwnerMessage } from "../infra/install-owner.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import {
   normalizeUpdateChannel,
@@ -33,7 +31,6 @@ export function resolveStatusRegistryUpdateChannel(
   }).channel;
 }
 
-/** Runs the update check using the configured update channel and current install root. */
 export async function getUpdateCheckResult(params: {
   timeoutMs: number;
   fetchGit: boolean;
@@ -71,7 +68,7 @@ export async function getUpdateCheckResult(params: {
     update.error = {
       status: "unknown",
       timeoutMs: gitProbeTimeoutMs,
-      message: `git probe did not finish within ${gitProbeTimeoutMs / 1000} s (slow host)`,
+      message: `git check did not finish within ${gitProbeTimeoutMs / 1000} s (slow host)`,
     };
   } else if (update.git?.error) {
     update.error = { status: "failed", message: sanitizeTerminalText(update.git.error) };
@@ -87,16 +84,16 @@ export async function getUpdateCheckResult(params: {
   return update;
 }
 
-type UpdateAvailability = {
-  available: boolean;
-  hasGitUpdate: boolean;
-  hasRegistryUpdate: boolean;
-  latestVersion: string | null;
-  gitBehind: number | null;
-};
-
-/** Determines whether git and/or registry data indicate an available update. */
-export function resolveUpdateAvailability(update: UpdateCheckResult): UpdateAvailability {
+export function resolveUpdateAvailability(update: UpdateCheckResult) {
+  if (update.installKind === "host" || update.installKind === "immutable") {
+    return {
+      available: false,
+      hasGitUpdate: false,
+      hasRegistryUpdate: false,
+      latestVersion: null,
+      gitBehind: null,
+    };
+  }
   const latestVersion = update.registry?.latestVersion ?? null;
   const registryCmp = latestVersion ? compareSemverStrings(VERSION, latestVersion) : null;
   const hasRegistryUpdate = !update.error && registryCmp != null && registryCmp < 0;
@@ -115,7 +112,6 @@ export function resolveUpdateAvailability(update: UpdateCheckResult): UpdateAvai
   };
 }
 
-/** Formats the actionable update hint shown in status footers. */
 export function formatUpdateAvailableHint(update: UpdateCheckResult): string | null {
   const availability = resolveUpdateAvailability(update);
   if (!availability.available) {
@@ -135,10 +131,18 @@ export function formatUpdateAvailableHint(update: UpdateCheckResult): string | n
   return `Update available${suffix}. Run: ${formatCliCommand("openclaw update")}`;
 }
 
-/** Formats a compact one-line update summary for overview rows. */
 export function formatUpdateOneLiner(update: UpdateCheckResult): string {
+  if (update.installKind === "host" && update.installOwner) {
+    return `Update: ${formatInstallOwnerMessage(update.installOwner)}`;
+  }
   if (update.error) {
     return `Update: update status ${update.error.status}: ${update.error.message}; run ${formatCliCommand("openclaw update status")}`;
+  }
+  if (update.installKind === "immutable") {
+    const install = update.immutable;
+    return install
+      ? `Update: immutable ${install.currentSha.slice(0, 12)}${install.prepared ? ` · prepared ${install.prepared.sha.slice(0, 12)}` : ""} · activation unavailable`
+      : "Update: immutable · installation facts unavailable";
   }
   const parts: string[] = [];
 
@@ -171,23 +175,13 @@ export function formatUpdateOneLiner(update: UpdateCheckResult): string {
       return;
     }
     if (update.registry?.error) {
-      if (update.registry.reason === "unsupported_git_channel") {
-        parts.push("extended-stable requires a package install");
-        return;
-      }
-      if (update.registry.reason === "selector_missing") {
-        parts.push("npm extended-stable selector missing");
-        return;
-      }
-      if (update.registry.reason === "selector_query_failed") {
-        parts.push("npm extended-stable query failed");
-        return;
-      }
-      if (update.registry.reason === "exact_package_mismatch") {
-        parts.push("npm extended-stable exact package verification failed");
-        return;
-      }
-      parts.push(`${registryLabel} unknown`);
+      const errors = new Map([
+        ["unsupported_git_channel", "extended-stable requires a package install"],
+        ["selector_missing", "npm extended-stable selector missing"],
+        ["selector_query_failed", "npm extended-stable query failed"],
+        ["exact_package_mismatch", "npm extended-stable exact package verification failed"],
+      ]);
+      parts.push(errors.get(update.registry.reason ?? "") ?? `${registryLabel} unknown`);
     }
   };
 

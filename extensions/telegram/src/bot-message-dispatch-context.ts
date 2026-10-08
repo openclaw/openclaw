@@ -1,4 +1,3 @@
-// Telegram plugin module recovers dispatch routing and group-history context.
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
@@ -22,10 +21,6 @@ import {
 
 const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
-function normalizeTelegramThreadId(value: unknown): number | undefined {
-  return parseStrictPositiveInteger(value);
-}
-
 function resolveTelegramForumThreadScopeFromSessionKey(
   sessionKey: unknown,
 ): { chatId: string; threadId: number } | undefined {
@@ -33,7 +28,7 @@ function resolveTelegramForumThreadScopeFromSessionKey(
     return undefined;
   }
   const match = /:telegram:group:(-?\d+):topic:(\d+)(?::|$)/.exec(sessionKey);
-  const threadId = normalizeTelegramThreadId(match?.[2]);
+  const threadId = parseStrictPositiveInteger(match?.[2]);
   if (!match?.[1] || threadId == null) {
     return undefined;
   }
@@ -55,34 +50,13 @@ function resolveDispatchTelegramThreadSpec(params: {
   const scopedThreadId =
     scopedThread?.chatId === String(params.chatId) ? scopedThread.threadId : undefined;
   const payloadThreadId =
-    normalizeTelegramThreadId(params.ctxPayload.MessageThreadId) ??
-    normalizeTelegramThreadId(params.ctxPayload.TransportThreadId);
+    parseStrictPositiveInteger(params.ctxPayload.MessageThreadId) ??
+    parseStrictPositiveInteger(params.ctxPayload.TransportThreadId);
   // Missing forum IDs are normalized to General; topic-scoped turn facts are more specific.
   const recoveredThreadId = scopedThreadId ?? payloadThreadId;
   return recoveredThreadId == null || recoveredThreadId === params.threadSpec.id
     ? params.threadSpec
     : { ...params.threadSpec, id: recoveredThreadId };
-}
-
-function normalizeDispatchTelegramThreadPayload(params: {
-  context: TelegramMessageContext;
-  threadSpec: TelegramThreadSpec;
-}): TelegramMessageContext {
-  if (params.threadSpec.scope !== "forum" || params.threadSpec.id == null) {
-    return params.context;
-  }
-  const messageThreadId = normalizeTelegramThreadId(params.context.ctxPayload.MessageThreadId);
-  const transportThreadId = normalizeTelegramThreadId(params.context.ctxPayload.TransportThreadId);
-  if (messageThreadId === params.threadSpec.id && transportThreadId === params.threadSpec.id) {
-    return params.context;
-  }
-  // This payload owns private host admission state outside its enumerable fields.
-  // Normalize routing in place so a plugin-visible copier is never needed.
-  Object.assign(params.context.ctxPayload, {
-    MessageThreadId: params.threadSpec.id,
-    TransportThreadId: params.threadSpec.id,
-  });
-  return params.context;
 }
 
 function buildRecoveredTelegramChatActionSender(params: {
@@ -121,7 +95,23 @@ export async function resolveDispatchTelegramContext(params: {
     threadSpec: params.context.threadSpec,
   });
   if (threadSpec === params.context.threadSpec || threadSpec.scope !== "forum") {
-    return normalizeDispatchTelegramThreadPayload({ context: params.context, threadSpec });
+    if (threadSpec.scope !== "forum" || threadSpec.id == null) {
+      return params.context;
+    }
+    const messageThreadId = parseStrictPositiveInteger(params.context.ctxPayload.MessageThreadId);
+    const transportThreadId = parseStrictPositiveInteger(
+      params.context.ctxPayload.TransportThreadId,
+    );
+    if (messageThreadId === threadSpec.id && transportThreadId === threadSpec.id) {
+      return params.context;
+    }
+    // This payload owns private host admission state outside its enumerable fields.
+    // Normalize routing in place so a plugin-visible copier is never needed.
+    Object.assign(params.context.ctxPayload, {
+      MessageThreadId: threadSpec.id,
+      TransportThreadId: threadSpec.id,
+    });
+    return params.context;
   }
   const recoveredRoutingTarget = buildTelegramInboundOriginTarget(
     params.context.chatId,
@@ -221,7 +211,7 @@ export async function resolveDispatchTelegramContext(params: {
         recoveredPromptContext.length > 0 ? recoveredPromptContext : undefined,
     });
   }
-  const recovered = {
+  return {
     ...params.context,
     historyKey: recoveredHistoryKey,
     threadSpec,
@@ -238,5 +228,4 @@ export async function resolveDispatchTelegramContext(params: {
     },
     ctxPayload: params.context.ctxPayload,
   };
-  return recovered;
 }

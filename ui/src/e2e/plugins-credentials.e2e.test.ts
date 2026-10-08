@@ -165,7 +165,10 @@ suite.define(() => {
               .getByLabel("Search settings", { exact: true })
               .click();
             expect(await gateway.getRequests("config.set")).toHaveLength(0);
-            const reveal = page.getByRole("button", { name: "Show API key", exact: true });
+            const reveal = page.getByRole("button", {
+              name: "Show API key: Search API key",
+              exact: true,
+            });
             await expect
               .poll(async () => (await gateway.getRequests("plugins.credentials.inspect")).length)
               .toBe(1);
@@ -187,7 +190,9 @@ suite.define(() => {
                 baseHash: configMocks["config.get"].hash,
                 reveal: true,
               });
-              await page.getByRole("button", { name: "Hide API key", exact: true }).click();
+              await page
+                .getByRole("button", { name: "Hide API key: Search API key", exact: true })
+                .click();
               expect(await input.inputValue()).toBe("");
               expect(await gateway.getRequests("config.set")).toHaveLength(0);
             } else {
@@ -195,9 +200,13 @@ suite.define(() => {
               expect(await input.getAttribute("placeholder")).toBe("demo-key");
             }
             await input.fill("synthetic-new-key");
-            await page.getByRole("button", { name: "Show API key", exact: true }).click();
+            await page
+              .getByRole("button", { name: "Show API key: Search API key", exact: true })
+              .click();
             expect(await input.getAttribute("type")).toBe("text");
-            await page.getByRole("button", { name: "Hide API key", exact: true }).click();
+            await page
+              .getByRole("button", { name: "Hide API key: Search API key", exact: true })
+              .click();
             await gateway.deferNext("config.set");
             await input.press("Enter");
             const request = await gateway.waitForRequest("config.set");
@@ -230,14 +239,19 @@ suite.define(() => {
             expect(await input.getAttribute("type")).toBe("password");
             return;
           }
-          const reference = page.getByRole("button", { name: "Edit reference", exact: true });
+          const reference = page.getByRole("button", {
+            name: "Edit reference: Search API key",
+            exact: true,
+          });
           await reference.waitFor();
           const other = page.locator('input[aria-label$="Other secret"]');
           expect(await other.getAttribute("type")).toBe("password");
           expect(await other.inputValue()).toBe("");
           expect(await page.locator('input[aria-label$="Search mode"]').inputValue()).toBe("web");
           expect(
-            await page.getByRole("button", { name: "Edit reference", exact: true }).count(),
+            await page
+              .getByRole("button", { name: "Edit reference: Search API key", exact: true })
+              .count(),
           ).toBe(1);
           expect(await page.locator("body").textContent()).not.toContain(REDACTED_SENTINEL);
           if (readOnly) {
@@ -254,7 +268,9 @@ suite.define(() => {
             });
           }
           await reference.click();
-          await page.getByRole("dialog", { name: "Secret reference", exact: true }).waitFor();
+          await page
+            .getByRole("dialog", { name: "Secret reference: Search API key", exact: true })
+            .waitFor();
           const dialog = page.locator("openclaw-modal-dialog");
           expect(await dialog.getByLabel("Source", { exact: true }).inputValue()).toBe("file");
           expect(await dialog.getByLabel("Provider", { exact: true }).inputValue()).toBe("team");
@@ -313,9 +329,12 @@ suite.define(() => {
           await reference.click();
           expect(await identifier.inputValue()).toBe("/search/updated");
           await identifier.fill("/search/failed");
+          const writesBeforeFailure = (await gateway.getRequests("config.set")).length;
           await gateway.deferNext("config.set");
           await dialog.getByRole("button", { name: "Save", exact: true }).click();
-          await gateway.waitForRequest("config.set");
+          const uncertainWrite = await gateway.waitForRequest("config.set", {
+            after: writesBeforeFailure,
+          });
           await gateway.rejectDeferred("config.set", {
             code: width === 390 ? "INVALID_REQUEST" : "UNAVAILABLE",
             message: "Fixture write rejected",
@@ -353,6 +372,30 @@ suite.define(() => {
               .toContain("Fixture config read unavailable");
             expect(await dialog.isVisible()).toBe(true);
             expect(await identifier.inputValue()).toBe("/search/failed");
+            await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+            await expect
+              .poll(() => dialog.getByRole("alert").textContent())
+              .toContain("The last save could not be confirmed");
+            expect(await dialog.isVisible()).toBe(true);
+            expect(await identifier.inputValue()).toBe("/search/failed");
+            expect(await gateway.getRequests("config.set")).toHaveLength(writesBeforeFailure + 1);
+            // A successful old snapshot cannot fence the unknown write. Its later
+            // persisted bytes let Cancel reconcile without restoring the older reference.
+            const confirmedRaw = String(asRecord(uncertainWrite.params).raw);
+            await gateway.setMethodResponse("config.get", {
+              ...configMocks["config.get"],
+              config: JSON.parse(confirmedRaw),
+              raw: confirmedRaw,
+              hash: "confirmed-credential-write",
+            });
+            await gateway.setMethodResponse("plugins.credentials.inspect", {
+              baseHash: "confirmed-credential-write",
+              credential: {
+                kind: "reference",
+                ref: { ...originalRef, id: "/search/failed" },
+                unresolved: false,
+              },
+            });
           }
           await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
           await dialog.waitFor({ state: "hidden" });
@@ -371,7 +414,8 @@ suite.define(() => {
                   config: {
                     search: {
                       ...sourceConfig.plugins.entries.workboard.config.search,
-                      apiKey: changedRef,
+                      apiKey:
+                        width === 1174 ? { ...originalRef, id: "/search/failed" } : changedRef,
                       mode: "llm-context",
                     },
                   },

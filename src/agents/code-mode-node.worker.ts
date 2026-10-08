@@ -15,6 +15,7 @@ import {
   captureCodeModeValue,
   EMPTY_CODE_MODE_OUTPUT,
 } from "./code-mode-json.js";
+import { CodeModeNodeProgress } from "./code-mode-node-progress.js";
 import {
   buildUserSource,
   normalizeSourceStack,
@@ -31,7 +32,10 @@ import type {
 } from "./code-mode-worker-types.js";
 import { ToolInputError } from "./tool-input-error.js";
 
-type NodeInput = CodeModeExecutorStartInput | CodeModeExecutorResumeInput;
+type NodeInput = (CodeModeExecutorStartInput | CodeModeExecutorResumeInput) & {
+  progress: SharedArrayBuffer;
+  inlineHost: boolean;
+};
 type NodeResult = CodeModeWorkerThreadResult<undefined>;
 
 type GuestOutcome = { ok: boolean; json: string };
@@ -41,11 +45,14 @@ type NodeCell = {
   location: SourceLocation;
   pendingRequests: PendingBridgeRequest[];
   canceledRequestIds: string[];
+  replies?: SettledBridgeRequest[];
+  replyIndex: number;
   rejections: Map<Promise<unknown>, unknown>;
   outcome?: GuestOutcome;
   admissionError?: string;
   networkContentObserved?: true;
   deadline: number;
+  progress: CodeModeNodeProgress;
 };
 
 // Each pool owns one cell and keeps its worker until that cell completes or expires.
@@ -66,6 +73,7 @@ const bridgeMethods = new Set<string>([
   "agentSpawn",
   "agentWait",
   "skillsList",
+  "skillsSearch",
   "skillsRead",
   "sleep",
   "swarmNote",
@@ -114,21 +122,36 @@ const initializeScript = new Script(
       const finish = globalThis.__openclawNodeFinish;
       delete globalThis.__openclawNodeFinish;
       const stringify = JSON.stringify;
-      Object.defineProperty(globalThis, "__openclawNodeObserveResult", { value: (result) => {
-        result.then(value => finish(true, value), error => finish(false, stringify({
-          name: String(error?.name ?? "Error"),
-          message: String(error?.message ?? error),
-          stack: typeof error?.stack === "string" ? error.stack : "",
-        })));
-      }});
+      const string = String;
+      const encodeError = (error) => {
+        const bridgeCode = __openclawBridgeFailureCode(error) ?? null;
+        const diagnostic = (read, fallback) => {
+          try { return read(); } catch { return fallback; }
+        };
+        // Guest error properties may throw; recorded bridge identity must still reach finish.
+        const stack = diagnostic(() => error?.stack, "");
+        // Provenance records contain primitives and never inherit guest toJSON hooks.
+        return stringify({
+          __proto__: null,
+          bridgeCode,
+          name: diagnostic(() => string(error?.name ?? "Error"), "Error"),
+          message: diagnostic(() => string(error?.message ?? error), "Error"),
+          stack: typeof stack === "string" ? stack : "",
+        });
+      };
+      Object.defineProperties(globalThis, {
+        __openclawNodeEncodeError: { value: encodeError },
+        __openclawNodeObserveResult: { value: (result) => {
+          result.then(value => finish(true, value), error => finish(false, encodeError(error)));
+        }},
+      });
     })();
   `,
   { filename: "openclaw-code-mode:controller.js" },
 );
-const settleScript = new Script(
-  "for (const reply of JSON.parse(__openclawNodeReplies)) __openclawSettleBridge(reply.id, reply.ok, reply.json); delete globalThis.__openclawNodeReplies;",
-  { filename: "openclaw-code-mode:controller.js" },
-);
+const settleScript = new Script("__openclawSettleBridge()", {
+  filename: "openclaw-code-mode:controller.js",
+});
 const drainScript = new Script(
   `(() => {
     const error = __openclawAdmissionError();
@@ -147,7 +170,7 @@ const rejectionScript = new Script(
   `(() => {
     const error = __openclawNodeRejection;
     delete globalThis.__openclawNodeRejection;
-    return JSON.stringify({name: String(error?.name ?? "Error"), message: String(error?.message ?? error), stack: typeof error?.stack === "string" ? error.stack : ""});
+    return __openclawNodeEncodeError(error);
   })()`,
   { filename: "openclaw-code-mode:controller.js" },
 );
@@ -157,10 +180,8 @@ function evaluate(current: NodeCell, script: Script): unknown {
   if (remaining <= 0) {
     throw new Error("code mode timeout exceeded");
   }
-  return script.runInContext(current.context, {
-    timeout: Math.max(1, Math.ceil(remaining)),
-    breakOnSigint: false,
-  });
+  // The host interrupts this Worker; vm.timeout would create a native thread per evaluation.
+  return script.runInContext(current.context);
 }
 
 function sourceFrames(stack: string | undefined, location: SourceLocation): string[] {
@@ -195,6 +216,8 @@ function createCell(
   input: Extract<NodeInput, { kind: "exec" }>,
   source: string,
   startedAt: number,
+  progress: CodeModeNodeProgress,
+  consumed?: () => void,
 ): NodeCell {
   // Source validation consumes wall time; the separate headless CPU allowance starts here.
   const preparedAt = performance.now();
@@ -213,8 +236,10 @@ function createCell(
     location: program.location,
     pendingRequests: [],
     canceledRequestIds: [],
+    replyIndex: 0,
     rejections: new Map(),
     deadline,
+    progress,
   };
   cell = current;
   context["__openclawNodeTextEncoder"] = TextEncoder;
@@ -256,9 +281,21 @@ function createCell(
       current.canceledRequestIds.push(id);
     }
   };
+  context["__openclawHostTakeBridgeReply"] = () => {
+    const request = current.replies?.[current.replyIndex];
+    if (!request) {
+      return undefined;
+    }
+    current.replyIndex++;
+    const reply = { __proto__: null, id: request.id, ok: request.ok, json: request.json };
+    request.json = "";
+    return reply;
+  };
   context["__openclawHostObserveNetworkContent"] = () => {
     current.networkContentObserved = true;
+    current.progress.observeNetworkContent();
   };
+  context["__openclawHostOutput"] = (json: string) => current.progress.append(json);
   context["__openclawNodeInit"] = JSON.stringify({
     __openclawCatalog: input.catalog,
     __openclawNamespaces: input.namespaces,
@@ -269,6 +306,8 @@ function createCell(
   context["__openclawNodeFinish"] = (ok: boolean, json: string) => {
     current.outcome = { ok, json };
   };
+  progress.deadline = performance.timeOrigin + deadline;
+  consumed?.();
   evaluate(current, initializeScript);
   evaluate(current, new Script(program.source, { filename: USER_SOURCE_FILE }));
   evaluate(current, observeResultScript);
@@ -276,10 +315,13 @@ function createCell(
 }
 
 function settle(current: NodeCell, requests: SettledBridgeRequest[]): void {
-  current.context["__openclawNodeReplies"] = JSON.stringify(requests);
+  current.replies = requests;
+  current.replyIndex = 0;
   try {
     evaluate(current, settleScript);
   } finally {
+    current.replies = undefined;
+    current.replyIndex = 0;
     for (const request of requests) {
       request.json = "";
     }
@@ -296,17 +338,24 @@ function takeOutput(current: NodeCell): unknown[] {
 function formatGuestFailure(
   current: NodeCell,
   json: string,
-): { code: "invalid_input" | "internal_error"; error: string } {
-  // SAFETY: This worker's result observer encodes all three error fields as strings.
-  const value = JSON.parse(json) as { name: string; message: string; stack: string };
+): { code: "invalid_input" | "internal_error"; error: string; failurePhase?: "bridge" } {
+  // SAFETY: This worker's result observer encodes the error strings and bridge identity.
+  const value = JSON.parse(json) as {
+    name: string;
+    message: string;
+    stack: string;
+    bridgeCode: "invalid_input" | "internal_error" | null;
+  };
   if (
+    value.bridgeCode === null &&
     value.name === "ReferenceError" &&
     /^(?:require|module|process) is not defined$/u.test(value.message)
   ) {
     return { code: "invalid_input", error: "code mode module access is disabled." };
   }
   return {
-    code: "internal_error",
+    code: value.bridgeCode ?? "internal_error",
+    ...(value.bridgeCode === null ? {} : { failurePhase: "bridge" as const }),
     error: [`${value.name}: ${value.message}`, ...sourceFrames(value.stack, current.location)].join(
       "\n",
     ),
@@ -317,13 +366,14 @@ function failed(
   code: "invalid_input" | "internal_error" | "timeout",
   error: string,
   output = EMPTY_CODE_MODE_OUTPUT,
+  failurePhase?: "bridge",
 ): Extract<NodeResult, { status: "failed" }> {
   return {
     status: "failed",
     code,
     error,
     output,
-    failurePhase: code === "invalid_input" ? "input" : "guest",
+    failurePhase: failurePhase ?? (code === "invalid_input" ? "input" : "guest"),
     bridgeDispatchStarted: false,
   };
 }
@@ -333,18 +383,28 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
   let consumed = channel?.consumeInput;
   const config = input.config;
   const startedAt = performance.now();
+  const progress = new CodeModeNodeProgress(input.progress);
   try {
     const current =
-      input.kind === "exec" ? createCell(input, prepareSource(input.source), startedAt) : cell;
+      input.kind === "exec"
+        ? createCell(input, prepareSource(input.source), startedAt, progress, consumed)
+        : cell;
     if (!current) {
       throw new Error("code mode continuation is no longer available");
     }
     if (input.kind === "resume") {
+      current.progress = progress;
       current.config = config;
       current.deadline = performance.now() + config.timeoutMs;
+      progress.deadline = performance.timeOrigin + current.deadline;
+      if (current.networkContentObserved) {
+        progress.observeNetworkContent();
+      }
       current.pendingRequests = input.pendingRequests ?? [];
       current.canceledRequestIds = [];
       settle(current, input.settledRequests);
+    } else {
+      consumed = undefined;
     }
     for (;;) {
       consumed?.();
@@ -379,7 +439,7 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
           memoryUsedBytes: getHeapStatistics().used_heap_size,
           ...(current.networkContentObserved ? { networkContentObserved: true as const } : {}),
         };
-        if (!channel) {
+        if (!channel || !input.inlineHost) {
           return { status: "waiting", ...boundary, continuation: undefined };
         }
         const response = await channel.request({ status: "boundary", ...boundary });
@@ -420,6 +480,7 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
           failure.code,
           boundCodeModeError(failure.error, config.maxOutputBytes),
           captureCodeModeOutput(output, config.maxOutputBytes),
+          failure.failurePhase,
         );
       }
       if (current.rejections.size > 0) {
@@ -430,6 +491,7 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
           failure.code,
           boundCodeModeError(failure.error, config.maxOutputBytes),
           captureCodeModeOutput(output, config.maxOutputBytes),
+          failure.failurePhase,
         );
       }
       return {
@@ -445,14 +507,8 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
       };
     }
   } catch (error) {
-    const timeout =
-      types.isNativeError(error) &&
-      /Script execution timed out|code mode timeout exceeded/u.test(error.message);
-    if (cell && output.length === 0) {
-      // Preserve already-emitted output within the parent's watchdog cleanup grace.
-      if (timeout) {
-        cell.deadline = performance.now() + 50;
-      }
+    const timeout = types.isNativeError(error) && error.message === "code mode timeout exceeded";
+    if (cell && output.length === 0 && !timeout) {
       try {
         output = takeOutput(cell);
       } catch {
@@ -471,7 +527,7 @@ async function run(input: NodeInput, channel?: WorkerTaskChannel): Promise<NodeR
               : String(error),
         config.maxOutputBytes,
       ),
-      captureCodeModeOutput(output, config.maxOutputBytes),
+      timeout ? progress.output() : captureCodeModeOutput(output, config.maxOutputBytes),
     );
   }
 }

@@ -18,6 +18,7 @@ import type {
   PluginManifestMcpServer,
 } from "./manifest.js";
 import { isPluginLifecycleTraceEnabled } from "./plugin-lifecycle-trace.js";
+import { groupPluginRecords } from "./record-groups.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
   formatPluginVerificationDiagnostic,
@@ -54,6 +55,7 @@ export function createPluginRecord(params: {
   contracts?: PluginManifestContracts;
   dashboard?: PluginManifestDashboard;
   controlUi?: PluginManifestControlUi;
+  uiCapabilities?: PluginRecord["uiCapabilities"];
   mcpServers?: Record<string, PluginManifestMcpServer>;
 }): PluginRecord {
   return {
@@ -114,6 +116,7 @@ export function createPluginRecord(params: {
     contracts: params.contracts,
     dashboard: params.dashboard,
     controlUi: params.controlUi,
+    uiCapabilities: params.uiCapabilities,
     mcpServers: params.mcpServers,
   };
 }
@@ -280,14 +283,9 @@ export function recordPluginError(params: {
 
 /** Groups failed plugin ids by loader phase for compact startup summaries. */
 export function formatPluginFailureSummary(failedPlugins: PluginRecord[]): string {
-  const grouped = new Map<NonNullable<PluginRecord["failurePhase"]>, string[]>();
-  for (const plugin of failedPlugins) {
-    const phase = plugin.failurePhase ?? "load";
-    const ids = grouped.get(phase) ?? [];
-    ids.push(plugin.id);
-    grouped.set(phase, ids);
-  }
-  return [...grouped.entries()].map(([phase, ids]) => `${phase}: ${ids.join(", ")}`).join("; ");
+  return [...groupPluginRecords(failedPlugins, (plugin) => plugin.failurePhase ?? "load")]
+    .map(([phase, plugins]) => `${phase}: ${plugins.map((plugin) => plugin.id).join(", ")}`)
+    .join("; ");
 }
 
 function describePluginModuleExportShape(
@@ -340,18 +338,20 @@ export function recordBundleDiagnostics(params: {
   registry: PluginRegistry;
   inspectMcp: typeof import("./bundle-mcp.js").inspectBundleMcpRuntimeSupport;
 }): void {
+  const warn = (message: string) =>
+    params.registry.diagnostics.push({
+      level: "warn",
+      pluginId: params.record.id,
+      source: params.record.source,
+      message,
+    });
   const unsupportedCapabilities = (params.record.bundleCapabilities ?? []).filter(
     (capability) =>
       !params.record.bundleFormat ||
       !isBundleCapabilitySupported(params.record.bundleFormat, capability),
   );
   for (const capability of unsupportedCapabilities) {
-    params.registry.diagnostics.push({
-      level: "warn",
-      pluginId: params.record.id,
-      source: params.record.source,
-      message: `bundle capability detected but not wired into OpenClaw yet: ${capability}`,
-    });
+    warn(`bundle capability detected but not wired into OpenClaw yet: ${capability}`);
   }
   if (
     params.record.enabled &&
@@ -365,22 +365,13 @@ export function recordBundleDiagnostics(params: {
       bundleFormat: params.record.bundleFormat,
     });
     for (const message of runtimeSupport.diagnostics) {
-      params.registry.diagnostics.push({
-        level: "warn",
-        pluginId: params.record.id,
-        source: params.record.source,
-        message,
-      });
+      warn(message);
     }
     if (runtimeSupport.unsupportedServerNames.length > 0) {
-      params.registry.diagnostics.push({
-        level: "warn",
-        pluginId: params.record.id,
-        source: params.record.source,
-        message:
-          "bundle MCP servers use unsupported transports or incomplete configs " +
+      warn(
+        "bundle MCP servers use unsupported transports or incomplete configs " +
           `(${runtimeSupport.unsupportedServerNames.join(", ")})`,
-      });
+      );
     }
   }
   params.registry.plugins.push(params.record);

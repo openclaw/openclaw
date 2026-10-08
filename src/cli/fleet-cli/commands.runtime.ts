@@ -1,4 +1,3 @@
-// Runtime-backed fleet command handlers and human/JSON output formatting.
 import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
 import {
   createFleetService,
@@ -27,12 +26,9 @@ export async function runFleetCreateCommand(
   defaultRuntime.log(`Next: ${result.nextStep}`);
 }
 
-export async function runFleetBackupCommand(options: {
-  tenant: string;
-  out?: string;
-  maxBytes?: number;
-  json: boolean;
-}): Promise<void> {
+export async function runFleetBackupCommand(
+  options: Parameters<typeof fleetService.backup>[0] & { json: boolean },
+): Promise<void> {
   const result = await fleetService.backup(options);
   if (options.json) {
     defaultRuntime.writeJson(result);
@@ -47,13 +43,9 @@ export async function runFleetBackupCommand(options: {
   defaultRuntime.log(result.note);
 }
 
-export async function runFleetRestoreCommand(options: {
-  tenant: string;
-  from: string;
-  force: boolean;
-  maxBytes?: number;
-  json: boolean;
-}): Promise<void> {
+export async function runFleetRestoreCommand(
+  options: Parameters<typeof fleetService.restore>[0] & { force: boolean; json: boolean },
+): Promise<void> {
   const result = await fleetService.restore(options);
   if (options.json) {
     defaultRuntime.writeJson(result);
@@ -177,11 +169,9 @@ export async function runFleetUpgradeCommand(options: {
   defaultRuntime.log(`Upgraded fleet cell ${result.tenant} to ${result.image}.`);
 }
 
-export async function runFleetRemoveCommand(options: {
-  tenant: string;
-  purgeData: boolean;
-  force: boolean;
-}): Promise<void> {
+export async function runFleetRemoveCommand(
+  options: Required<Parameters<typeof fleetService.remove>[0]>,
+): Promise<void> {
   const result = await fleetService.remove(options);
   defaultRuntime.log(
     result.dataPurged

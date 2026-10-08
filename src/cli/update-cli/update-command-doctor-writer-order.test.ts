@@ -13,6 +13,7 @@ import {
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
   writeUpdatePostInstallDoctorResult,
 } from "../../infra/update-doctor-result.js";
+import { recordCommandProcessFailure } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -79,18 +80,40 @@ vi.mock("../../commands/daemon-install-helpers.js", () => ({
   buildGatewayInstallPlan: mocks.plan,
 }));
 vi.mock("../../infra/container-environment.js", () => ({ isContainerEnvironment: () => false }));
-vi.mock("../../process/exec.js", async (original) => ({
-  ...(await original<typeof import("../../process/exec.js")>()),
-  runExec: vi.fn<typeof import("../../process/exec.js").runExec>((command, args, options) => {
-    if (args[1] === "doctor") {
-      return mocks.child(command, args, options);
-    }
-    expect(args.slice(1)).toEqual(["config", "validate", "--json"]);
-    return Promise.resolve({ stdout: "", stderr: "" });
-  }),
-}));
+vi.mock("../../process/exec.js", async (original) => {
+  const actual = await original<typeof import("../../process/exec.js")>();
+  return {
+    ...actual,
+    runExec: vi.fn<typeof actual.runExec>((_command, args) => {
+      expect(args.slice(1)).toEqual(["config", "validate", "--json"]);
+      return Promise.resolve({ stdout: "", stderr: "" });
+    }),
+    runUtf8CommandWithTimeout: async (
+      ...args: Parameters<typeof actual.runUtf8CommandWithTimeout>
+    ) => {
+      const [command, ...argv] = args[0];
+      if (command && argv[1] === "doctor" && argv.includes("--repair")) {
+        return {
+          ...(await mocks.child(command, argv, args[1]).catch((error: unknown) => {
+            // The in-process writer fixture never launches a native child.
+            throw recordCommandProcessFailure(error, {
+              code: 1,
+              cleanup: "normal",
+              termination: "exit",
+            });
+          })),
+          code: 0,
+          signal: null,
+          killed: false,
+          cleanup: "normal",
+          termination: "exit",
+        };
+      }
+      return actual.runUtf8CommandWithTimeout(...args);
+    },
+  };
+});
 vi.mock("./progress.js", () => ({ printResult: vi.fn() }));
-vi.mock("./restart-helper.js", () => ({ prepareRestartScript: vi.fn(async () => null) }));
 vi.mock("../../commands/doctor-completion.js", async (original) => ({
   ...(await original<typeof import("../../commands/doctor-completion.js")>()),
   checkShellCompletionStatus: vi.fn(async () => ({ shell: null })),
@@ -121,6 +144,9 @@ vi.mock("./update-command-post-plugin-readiness.js", () => ({
 vi.mock("./update-command-service.js", async (original) => ({
   ...(await original<typeof import("./update-command-service.js")>()),
   maybeRestartService: mocks.restart,
+}));
+vi.mock("./update-command-service-revalidation.js", async (original) => ({
+  ...(await original<typeof import("./update-command-service-revalidation.js")>()),
   revalidateManagedGatewayServiceAfterUpdate: async ({ root }: { root: string }) => ({
     kind: "owned",
     root,

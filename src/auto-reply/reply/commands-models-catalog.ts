@@ -31,7 +31,6 @@ import {
 import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
-import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -86,23 +85,6 @@ export type ModelsRuntimeChoice = {
   description: string;
 };
 
-function isModelsBrowseVisibleProvider(provider: string): boolean {
-  return !isRetiredModelPickerProvider(provider);
-}
-
-function buildRuntimeChoice(params: { cfg: OpenClawConfig; runtime: string }): ModelsRuntimeChoice {
-  const id = normalizeRuntimeChoiceId(params.runtime);
-  const label = resolveAgentRuntimeLabel({ config: params.cfg, resolvedHarness: id });
-  return {
-    id,
-    label,
-    description:
-      id === "openclaw"
-        ? "Use OpenClaw's built-in agent and tools."
-        : `Use ${label} to run this model.`,
-  };
-}
-
 /** Undefined is unknown; an empty list is an authoritative refusal. */
 export function getModelsRuntimeChoices(
   data: ModelsProviderData,
@@ -126,27 +108,21 @@ export function buildPreparedModelsProviderData(
 }
 
 export async function loadModelsProviderData(
-  cfg: OpenClawConfig,
+  config: OpenClawConfig,
   agentId: string | undefined,
   options: ModelsBrowseOptions,
   agentDir?: string,
 ): Promise<PreparedModelsProviderData> {
-  const published = await preparedModelCatalog.loadPublishedPreparedModelCatalogOwnerSnapshot({
-    config: cfg,
+  const owner = await preparedModelCatalog.loadPublishedPreparedModelCatalogOwnerSnapshot({
+    config,
     ...(agentId ? { agentId } : {}),
     ...(agentDir ? { agentDir } : {}),
     ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
-    readOnly: false,
+    readOnly: true,
   });
-  return projectPreparedModelsProviderData(published.config, agentId, options, published);
-}
-
-async function projectPreparedModelsProviderData(
-  cfg: OpenClawConfig,
-  agentId: string | undefined,
-  options: ModelsBrowseOptions,
-  owner: PreparedModelRuntimeSnapshot,
-): Promise<PreparedModelsProviderData> {
+  // The owner records refresh outcomes; a sent menu must not wait for acquisition or be rewritten.
+  void owner.loadFullModelCatalog?.().catch(() => undefined);
+  const cfg = owner.config;
   const runtimeNormalization = resolveRuntimeNormalization(cfg);
   const resolvedDefault = resolveDefaultModelForAgent({
     cfg,
@@ -205,10 +181,34 @@ async function projectPreparedModelsProviderData(
     entry.id === resolvedDefault.model
       ? defaultDecisions
       : decisions;
+  const evaluateEntry = (entry: ModelCatalogEntry, variants?: readonly ModelCatalogEntry[]) => {
+    const selection = decisionsForEntry(entry);
+    return selection.evaluateNative(entry, selection.evaluateEntry(entry, variants));
+  };
   // Configured/default rows may remain visible without auth, but must not
   // reintroduce a model that its provider route contract rejected.
   const incompatibleModelKeys = new Set<string>();
   const modelAvailability = new Map<string, ModelReadiness>();
+  const recordModelAvailability = (
+    entry: ModelCatalogEntry,
+    evaluation: ReturnType<typeof decisions.evaluateNative>,
+    provider = entry.provider,
+  ) => {
+    modelAvailability.set(`${normalizeProviderId(provider)}/${entry.id}`, {
+      availability: evaluation.availability,
+      unavailableReason: evaluation.unavailableReason,
+      runtimeAuth: evaluation.runtimeAuth,
+      runtimeId: resolveModelRuntimeRoute(provider)
+        ? resolveCatalogDecisionRuntime({
+            cfg,
+            agentId: owner.agentId ?? agentId ?? "main",
+            entry,
+            evaluation,
+            pluginRegistry: owner.pluginRegistry,
+          })?.id
+        : undefined,
+    });
+  };
   const hasAuth: ModelCatalogAuthChecker =
     options.view === "all"
       ? async () => true
@@ -217,11 +217,7 @@ async function projectPreparedModelsProviderData(
           if (!entry) {
             return false;
           }
-          const selectionDecisions = decisionsForEntry(entry);
-          return (
-            selectionDecisions.evaluateNative(entry, await selectionDecisions.evaluateEntry(entry))
-              .availability === true
-          );
+          return evaluateEntry(entry).availability === true;
         };
   const visibleCatalog = await resolveLogicalVisibleModelCatalog({
     cfg,
@@ -229,6 +225,7 @@ async function projectPreparedModelsProviderData(
     catalog,
     defaultProvider: resolvedDefault.provider,
     defaultModel: resolvedDefault,
+    selectedModel: resolvedDefault,
     agentId,
     workspaceDir,
     view: options.view,
@@ -236,25 +233,8 @@ async function projectPreparedModelsProviderData(
     routePolicy: openAIModelCatalogRoutePolicy,
     routeVariants: snapshot.routeVariants,
     evaluateEntry: async (entry, routeVariants) => {
-      const selectionDecisions = decisionsForEntry(entry);
-      const evaluation = selectionDecisions.evaluateNative(
-        entry,
-        await selectionDecisions.evaluateEntry(entry, routeVariants),
-      );
-      modelAvailability.set(`${normalizeProviderId(entry.provider)}/${entry.id}`, {
-        availability: evaluation.availability,
-        unavailableReason: evaluation.unavailableReason,
-        runtimeAuth: evaluation.runtimeAuth,
-        runtimeId: resolveModelRuntimeRoute(entry.provider)
-          ? resolveCatalogDecisionRuntime({
-              cfg,
-              agentId: owner.agentId ?? agentId ?? "main",
-              entry,
-              evaluation,
-              pluginRegistry: owner.pluginRegistry,
-            })?.id
-          : undefined,
-      });
+      const evaluation = evaluateEntry(entry, routeVariants);
+      recordModelAvailability(entry, evaluation);
       if (evaluation.routeResolution?.kind === "incompatible") {
         incompatibleModelKeys.add(resolveModelCatalogIdentityKey(entry));
       }
@@ -283,7 +263,7 @@ async function projectPreparedModelsProviderData(
   const byProvider = new Map<string, Set<string>>();
   const add = (p: string, m: string) => {
     const key = normalizeProviderId(p);
-    if (!isModelsBrowseVisibleProvider(key)) {
+    if (isRetiredModelPickerProvider(key)) {
       return;
     }
     if (
@@ -334,28 +314,6 @@ async function projectPreparedModelsProviderData(
     add(resolved.ref.provider, resolved.ref.model);
   };
 
-  const addModelConfigEntries = () => {
-    const modelConfig = cfg.agents?.defaults?.model;
-    if (typeof modelConfig === "string") {
-      addRawModelRef(modelConfig);
-    } else if (modelConfig && typeof modelConfig === "object") {
-      addRawModelRef(modelConfig.primary);
-      for (const fallback of modelConfig.fallbacks ?? []) {
-        addRawModelRef(fallback);
-      }
-    }
-
-    const imageConfig = cfg.agents?.defaults?.imageModel;
-    if (typeof imageConfig === "string") {
-      addRawModelRef(imageConfig);
-    } else if (imageConfig && typeof imageConfig === "object") {
-      addRawModelRef(imageConfig.primary);
-      for (const fallback of imageConfig.fallbacks ?? []) {
-        addRawModelRef(fallback);
-      }
-    }
-  };
-
   for (const entry of visibleCatalog) {
     if (incompatibleModelKeys.has(resolveModelCatalogIdentityKey(entry))) {
       continue;
@@ -391,11 +349,20 @@ async function projectPreparedModelsProviderData(
   ) {
     add(resolvedDefault.provider, resolvedDefault.model);
   }
-  addModelConfigEntries();
+  for (const modelConfig of [cfg.agents?.defaults?.model, cfg.agents?.defaults?.imageModel]) {
+    if (typeof modelConfig === "string") {
+      addRawModelRef(modelConfig);
+    } else if (modelConfig && typeof modelConfig === "object") {
+      addRawModelRef(modelConfig.primary);
+      for (const fallback of modelConfig.fallbacks ?? []) {
+        addRawModelRef(fallback);
+      }
+    }
+  }
 
   const pendingProviders = decisions.snapshot.pendingProviders?.filter(
     (provider) =>
-      isModelsBrowseVisibleProvider(provider) &&
+      !isRetiredModelPickerProvider(provider) &&
       (options.view === "all" ||
         visibilityPolicy.allowAny ||
         [...visibilityPolicy.allowedKeys].some((key) => key.startsWith(`${provider}/`))),
@@ -434,44 +401,35 @@ async function projectPreparedModelsProviderData(
         (row) => normalizeProviderId(row.provider) === provider && row.id === model,
       );
       const authEntry = entry ?? { provider, id: model, name: model };
-      const selectionDecisions = decisionsForEntry(authEntry);
       const variants = snapshot.routeVariants.filter(
         (row) => resolveModelCatalogIdentityKey(row) === resolveModelCatalogIdentityKey(authEntry),
       );
       if (!modelAvailability.has(`${provider}/${model}`)) {
-        const evaluation = selectionDecisions.evaluateNative(
-          authEntry,
-          await selectionDecisions.evaluateEntry(
-            authEntry,
-            variants.length ? variants : [authEntry],
-          ),
-        );
-        modelAvailability.set(`${provider}/${model}`, {
-          availability: evaluation.availability,
-          unavailableReason: evaluation.unavailableReason,
-          runtimeAuth: evaluation.runtimeAuth,
-          runtimeId: resolveModelRuntimeRoute(provider)
-            ? resolveCatalogDecisionRuntime({
-                cfg,
-                agentId: owner.agentId ?? agentId ?? "main",
-                entry: authEntry,
-                evaluation,
-                pluginRegistry: owner.pluginRegistry,
-              })?.id
-            : undefined,
-        });
+        const evaluation = evaluateEntry(authEntry, variants.length ? variants : [authEntry]);
+        recordModelAvailability(authEntry, evaluation, provider);
       }
       if (!entry) {
         continue;
       }
-      const runtimes = await selectionDecisions.runtimeChoices(
+      const runtimes = decisionsForEntry(entry).runtimeChoices(
         entry,
         variants.length ? variants : [entry],
       );
       if (!runtimes) {
         continue;
       }
-      const choices = runtimes.map((runtime) => buildRuntimeChoice({ cfg, runtime }));
+      const choices = runtimes.map((runtime) => {
+        const id = normalizeRuntimeChoiceId(runtime);
+        const label = resolveAgentRuntimeLabel({ config: cfg, resolvedHarness: id });
+        return {
+          id,
+          label,
+          description:
+            id === "openclaw"
+              ? "Use OpenClaw's built-in agent and tools."
+              : `Use ${label} to run this model.`,
+        };
+      });
       runtimeChoicesByModel.set(`${provider}/${model}`, choices);
       for (const choice of choices) {
         providerChoices.set(choice.id, choice);

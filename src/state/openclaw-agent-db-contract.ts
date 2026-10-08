@@ -1,7 +1,12 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { SqliteWalMaintenance } from "../infra/sqlite-wal.js";
+import type {
+  DatabaseFileIdentity,
+  DatabasePathIdentity,
+} from "../infra/sqlite-worker-identity.js";
 import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.js";
 
+// v24 separates keyed cold session snapshots from hot entry facts without rewriting transcripts.
 // v23 compacts payloads and replaces deployed v22 lazy FTS ownership without rewriting FTS content.
 // v22 introduced exact FTS row ownership with nullable completeness and lazy repair.
 // v21 records canonical-session invalidation under node, window and policy mutations.
@@ -22,14 +27,15 @@ import type { OpenClawStateDatabaseOptions } from "./openclaw-state-db-contract.
 // v8 added per-transcript session provenance. v7 added per-entry lifecycle status projection.
 // v6 added session/transcript hot-path indexes.
 // v5 added transcript mutation watermarks.
-// The v4 session/transcript flip and main's v2 memory-identity
-// change is folded in structure-gated migrations, so v2 main DBs and
-// pre-merge v4 flip DBs both converge on this schema.
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 23;
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 24;
 export const AGENT_STORAGE_SCHEMA_VERSION = 23;
 export const TRANSCRIPT_FTS_ROW_SCHEMA_VERSION = 22;
 export const AGENT_MEDIA_SCHEMA_VERSION = 17;
 export const CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION = 21;
+// Bound the disk work shared by startup inspection, admission, and canonical preparation.
+export const AGENT_DATABASE_PREFLIGHT_CONCURRENCY = 2;
+// Bounds startup session reconciliation for large fleets without letting one slow store hold every slot.
+export const AGENT_DATABASE_PREPARATION_CONCURRENCY = 4;
 
 /** Open per-agent SQLite database handle plus lifecycle maintenance. */
 export type OpenClawAgentDatabase = {
@@ -42,6 +48,14 @@ export type OpenClawAgentDatabase = {
 /** Options for resolving and opening one agent database. */
 export type OpenClawAgentDatabaseOptions = OpenClawStateDatabaseOptions & {
   agentId: string;
+};
+
+/** Internal Doctor custody; never part of the plugin-facing database options. */
+export type OpenClawAgentDatabaseRepairAdmission = {
+  /** Bind repair admission to the physical database inspected and backed up by its owner. */
+  expectedIdentity?: DatabaseFileIdentity;
+  /** Live caller authority for native open and schema/registry admission mutations. */
+  assertCurrent?: () => void;
 };
 
 /** Shared-state registry row describing an agent database seen by this process. */
@@ -63,6 +77,18 @@ export type OpenClawAgentDatabaseRegistrationCommit = Readonly<{
   stateDatabasePath: string;
   stateDatabaseIdentity: string;
 }>;
+
+export type AgentDatabaseRegistryWorkerOperations = {
+  "agentDatabaseRegistry.remove": {
+    input: { agentId: string; agentPath: string; identity: DatabasePathIdentity };
+    output: OpenClawAgentDatabaseRegistrationCommit;
+  };
+};
+
+export type OpenClawAgentDatabaseRegistrationObserver = {
+  starting?: () => void;
+  committed?: (receipt: OpenClawAgentDatabaseRegistrationCommit) => void;
+};
 
 export type OpenClawAgentDatabaseOwnerInspection =
   | { status: "owned"; agentId: string }

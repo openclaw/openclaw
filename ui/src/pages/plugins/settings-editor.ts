@@ -1,10 +1,7 @@
 import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
 import { repeat } from "lit/directives/repeat.js";
-import {
-  shouldStageStructuredDraft,
-  structuredDraftInitialValue,
-} from "../../components/config-form-structured-draft.ts";
+import { resolveStructuredDraftInitialValue } from "../../components/config-form-structured-draft.ts";
 import { renderMapField } from "../../components/config-form.node.collection-map.ts";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
 import {
@@ -46,7 +43,7 @@ export function flattenPluginSettingsFields(
 ): PluginSettingsField[] {
   const { label, help } = resolveConfigFieldMeta(params.path, params.schema, params.hints);
   const labels = [...ancestors, label];
-  const initial = structuredDraftInitialValue(params);
+  const initial = resolveStructuredDraftInitialValue(params);
   // SecretRef metadata stays atomic; source/provider/id are not child settings.
   if (
     schemaType(params.schema) === "object" &&
@@ -58,13 +55,24 @@ export function flattenPluginSettingsFields(
     !params.schema.enum &&
     !isSecretRefObject(params.value) &&
     !params.unsupported.has(pathKey(params.path)) &&
-    !shouldStageStructuredDraft(params, initial)
+    initial === undefined
   ) {
     return resolveConfigObjectFields(params).fields.flatMap((field) =>
       flattenPluginSettingsFields(field, rootProperty, labels),
     );
   }
   return [{ ...params, property: rootProperty, label: labels.join(": "), help }];
+}
+
+function renderEditorSection(title: string, content: TemplateResult, id?: string) {
+  return html`<section
+    class="plugin-editor__section"
+    id=${id ?? nothing}
+    tabindex=${id === undefined ? nothing : "-1"}
+  >
+    ${title ? html`<h2>${title}</h2>` : nothing}
+    <div class="plugin-editor__group">${content}</div>
+  </section>`;
 }
 
 export class PluginSettingsEditor extends OpenClawLightDomElement {
@@ -278,33 +286,25 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
       <div class="plugin-editor__sections">
         ${sections.map((section) =>
           section.fields.length
-            ? html`<section
-                class="plugin-editor__section"
-                id=${sectionId(section.id)}
-                tabindex="-1"
-              >
-                ${section.title ? html`<h2>${section.title}</h2>` : nothing}
-                <div class="plugin-editor__group">
-                  ${repeat(
-                    section.fields,
-                    (field) => JSON.stringify(field.path),
-                    (field) => this.renderField(field),
-                  )}
-                </div>
-              </section>`
+            ? renderEditorSection(
+                section.title,
+                html`${repeat(
+                  section.fields,
+                  (field) => JSON.stringify(field.path),
+                  (field) => this.renderField(field),
+                )}`,
+                sectionId(section.id),
+              )
             : nothing,
         )}
-        ${additional !== nothing ? html`<section class="plugin-editor__section"><div class="plugin-editor__group">${additional}</div></section>` : nothing}
+        ${additional !== nothing ? renderEditorSection("", additional) : nothing}
         ${
           hasPermissions
-            ? html`<section
-                class="plugin-editor__section"
-                id=${sectionId("__permissions")}
-                tabindex="-1"
-              >
-                <h2>${t("pluginsPage.editor.permissions")}</h2>
-                <div class="plugin-editor__group">${permissions}</div>
-              </section>`
+            ? renderEditorSection(
+                t("pluginsPage.editor.permissions"),
+                html`${permissions}`,
+                sectionId("__permissions"),
+              )
             : nothing
         }
         ${!fields.length && additional === nothing && !hasPermissions ? html`<p class="plugin-editor__empty">${t(query ? "pluginsPage.editor.noMatches" : "pluginsPage.editor.empty")}</p>` : nothing}
@@ -338,9 +338,9 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
           onRemove: props.onConfigRemove,
         }
       : null;
-    const initial = params ? structuredDraftInitialValue(params) : undefined;
+    const initial = params ? resolveStructuredDraftInitialValue(params) : undefined;
     const fields =
-      params && shouldStageStructuredDraft(params, initial)
+      params && initial !== undefined
         ? html`<openclaw-config-form-structured-draft
             .props=${{ identity: JSON.stringify(params.path), sourceIdentity: params.value, initialValue: initial, params, renderNode: (p: ConfigNodeRenderParams) => this.renderGroups(p, permissions) }}
           ></openclaw-config-form-structured-draft>`
@@ -372,10 +372,7 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
       ${props.configSchemaLoading || !props.configValue ? renderSettingsLoadingSkeleton({ rows: 2, carapace: true }) : fields}
       ${
         hasPermissions && !params
-          ? html`<section class="plugin-editor__section">
-              <h2>${t("pluginsPage.editor.permissions")}</h2>
-              <div class="plugin-editor__group">${permissions}</div>
-            </section>`
+          ? renderEditorSection(t("pluginsPage.editor.permissions"), html`${permissions}`)
           : nothing
       }
     </section>`;

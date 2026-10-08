@@ -75,10 +75,17 @@ is enabled, that `plugins.allow` includes it when an allowlist is
 configured, and that any custom `appServer.command`, `url`, `authToken`, or
 headers are valid.
 
+**An app-server message cannot be parsed:** OpenClaw recovers raw newlines inside
+otherwise valid JSON strings. Invalid escapes or unescaped control characters
+produce a redacted warning, then decoding resumes with the next message on both
+Node and Bun. These invalid fragments do not consume the following valid message.
+
 **The resident catalog reports a spawn failure:** a missing executable
 (`ENOENT`), missing execute permission (`EACCES`), or incompatible CPU
 (`EBADARCH`, sometimes shown as macOS errno `-86`) stops that catalog's
-automatic retries and records one advisory. Repair the installation, then
+automatic retries and records one advisory. This includes native launch errors
+whose diagnostics arrive after the managed launcher exits during registration
+or initialization, on both Node and Bun. Repair the installation, then
 restart the Gateway to retry. Unrelated configuration reloads do not retry the
 failed executable. Disabling the
 plugin through config reload retires its catalog refresh loop.
@@ -107,6 +114,13 @@ heap; it does not cap or enlarge Codex. Managed Gateway installs already choose
 an adaptive V8 heap, and raising it can leave less host memory for Codex. Use
 [Gateway memory troubleshooting](/gateway/troubleshooting#gateway-exits-during-high-memory-use)
 for Gateway pressure, and inspect host or container memory for the Codex child.
+
+Large catalog replies use a decoder worker in the Gateway. After a complete
+reply, OpenClaw releases that worker after one minute without further worker
+decoding. The native app-server connection and its warm conversation threads stay
+connected. A later large reply starts a new decoder, so its first response can
+take longer; small replies do not require a worker. Incomplete replies retain
+their decoder until recovery completes or the connection closes.
 
 **"Cannot inspect Codex processes":** this error comes from local process
 inspection before model inference. For a deadline error, retry after host
@@ -159,8 +173,10 @@ limit includes the root thread and cannot be combined with `agents.max_threads`.
 For more Codex headroom, increase the host, container, or cgroup memory
 allocation. An OS hard limit can terminate Codex rather than backpressure it.
 
-**Model discovery is slow:** lower
-`plugins.entries.codex.config.discovery.timeoutMs` or disable discovery.
+**Model discovery is slow:** check the app-server's connectivity to its model
+catalog endpoint. The default `plugins.entries.codex.config.discovery.timeoutMs`
+is 10 seconds so Codex can finish its native refresh or fallback. A shorter
+override can interrupt that fallback and make native models unavailable.
 See [Codex harness reference](/plugins/codex-harness-reference#model-discovery).
 
 **Codex plugin state has reached its row limit:** run `openclaw doctor` to

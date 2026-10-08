@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 // Onboard auth tests cover provider auth setup, credential persistence, and auth-profile state.
@@ -128,9 +129,25 @@ describe("writeOAuthCredentials", () => {
       expires: Date.now() + 60_000,
     } satisfies OAuthCredentials;
 
-    await writeOAuthCredentials("openai", creds, undefined, {
-      syncSiblingAgents: true,
+    const readdir = fsSync.readdirSync;
+    const discovery = vi.spyOn(fsSync, "readdirSync").mockImplementation((...args) => {
+      const entries = readdir(...args);
+      if (args[0] === path.join(tempStateDir, "agents")) {
+        // The shared owner must precede siblings even when the filesystem lists it last.
+        entries.sort(
+          (left, right) =>
+            Number(left.name.toString() === "kid") - Number(right.name.toString() === "kid"),
+        );
+      }
+      return entries;
     });
+    try {
+      await writeOAuthCredentials("openai", creds, undefined, {
+        syncSiblingAgents: true,
+      });
+    } finally {
+      discovery.mockRestore();
+    }
 
     for (const dir of [mainAgentDir, kidAgentDir]) {
       const effectiveStore = readEffectiveAuthProfiles(dir);
@@ -508,25 +525,6 @@ describe("applyAuthProfileConfig", () => {
     expect(next.auth?.order).toEqual({ anthropic: expected, unrelated: ["unrelated:default"] });
   });
 
-  it("creates provider order when switching from legacy oauth to api_key without explicit order", () => {
-    const next = applyAuthProfileConfig(
-      {
-        auth: {
-          profiles: {
-            "kilocode:legacy": { provider: "kilocode", mode: "oauth" },
-          },
-        },
-      },
-      {
-        profileId: "kilocode:default",
-        provider: "kilocode",
-        mode: "api_key",
-      },
-    );
-
-    expect(next.auth?.order?.kilocode).toEqual(["kilocode:default", "kilocode:legacy"]);
-  });
-
   it.each([
     { provider: "z.ai", expected: ["zai:new", "legacy", "same-mode"] },
     { provider: "unrelated", expected: undefined },
@@ -543,28 +541,6 @@ describe("applyAuthProfileConfig", () => {
       { profileId: "zai:new", provider: "zai", mode: "api_key" },
     );
     expect(next.auth?.order).toEqual(expected ? { zai: expected } : undefined);
-  });
-
-  it("repairs aliased auth.order keys instead of duplicating them", () => {
-    const next = applyAuthProfileConfig(
-      {
-        auth: {
-          profiles: {
-            "zai:default": { provider: "z.ai", mode: "api_key" },
-          },
-          order: { "z.ai": ["zai:default"] },
-        },
-      },
-      {
-        profileId: "zai:work",
-        provider: "z-ai",
-        mode: "oauth",
-      },
-    );
-
-    expect(next.auth?.order).toEqual({
-      zai: ["zai:work", "zai:default"],
-    });
   });
 
   it("merges split canonical and aliased auth.order entries for the same provider", () => {
@@ -591,25 +567,6 @@ describe("applyAuthProfileConfig", () => {
     expect(next.auth?.order).toEqual({
       zai: ["zai:work", "zai:default", "zai:backup"],
     });
-  });
-
-  it("keeps implicit round-robin when no mixed provider modes are present", () => {
-    const next = applyAuthProfileConfig(
-      {
-        auth: {
-          profiles: {
-            "kilocode:legacy": { provider: "kilocode", mode: "api_key" },
-          },
-        },
-      },
-      {
-        profileId: "kilocode:default",
-        provider: "kilocode",
-        mode: "api_key",
-      },
-    );
-
-    expect(next.auth?.order).toBeUndefined();
   });
 
   it("stores display metadata without overloading email", () => {

@@ -8,7 +8,7 @@ import {
   WebSocket,
   WebSocketServer,
 } from "openclaw/plugin-sdk/websocket-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type TestContext } from "vitest";
 import { CodexAppServerClient } from "./client.js";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
 import { createCodexInferenceProxy } from "./inference-proxy.js";
@@ -108,6 +108,44 @@ vi.mock("openclaw/plugin-sdk/websocket-runtime", async (original) => {
   };
 });
 
+async function prepareNative(context: TestContext, prefix: string) {
+  const tempDirs = useAutoCleanupTempDirTracker(context.onTestFinished);
+  const root = await fs.realpath(tempDirs.make(prefix));
+  const native = await createCodexNativeTestState(root);
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+  vi.stubEnv("HOME", native.env.HOME);
+  vi.stubEnv("CODEX_HOME", native.codexHome);
+  context.onTestFinished(() => {
+    vi.unstubAllEnvs();
+  });
+  return native;
+}
+
+async function startNative(
+  context: TestContext,
+  native: Awaited<ReturnType<typeof createCodexNativeTestState>>,
+) {
+  const childEnv = Object.fromEntries(
+    Object.entries(native.env).filter((entry): entry is [string, string] => entry[1] !== undefined),
+  );
+  const client = await CodexAppServerClient.start({
+    transport: "stdio",
+    command: native.command,
+    commandSource: "config",
+    args: ["app-server"],
+    cwd: native.cwd,
+    headers: {},
+    env: childEnv,
+    clearEnv: Object.keys(process.env).filter((key) => !(key in childEnv)),
+  });
+  context.onTestFinished(async () => {
+    expect(await client.closeAndWait()).toMatchObject({ exited: true });
+  });
+  await client.initialize();
+  expect(client.getRuntimeIdentity()?.serverVersion).toBe(CODEX_APP_SERVER_VERSION);
+  return client;
+}
+
 // One real app-server complements the deterministic admission/clock tests.
 // It never reaches a provider or the operator's HOME.
 describe.skipIf(process.platform === "win32")("native inference admission", () => {
@@ -115,15 +153,7 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
     "starts native roots and delegated work beyond 16 active responses",
     { timeout: 90_000 },
     async (context) => {
-      const tempDirs = useAutoCleanupTempDirTracker(context.onTestFinished);
-      const root = await fs.realpath(tempDirs.make("codex-inference-admission-"));
-      const native = await createCodexNativeTestState(root);
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
-      vi.stubEnv("HOME", native.env.HOME);
-      vi.stubEnv("CODEX_HOME", native.codexHome);
-      context.onTestFinished(() => {
-        vi.unstubAllEnvs();
-      });
+      const native = await prepareNative(context, "codex-inference-admission-");
       const changed = new EventEmitter();
       changed.setMaxListeners(64);
       transport.upstream = "";
@@ -154,7 +184,16 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
         });
       };
       const upstream = http.createServer();
-      const wss = new WebSocketServer({ server: upstream });
+      const wss = new WebSocketServer({ noServer: true, maxPayload: 32 * 1024 * 1024 });
+      let disconnectNextHandshake = false;
+      upstream.on("upgrade", (request, socket, head) => {
+        if (disconnectNextHandshake) {
+          disconnectNextHandshake = false;
+          socket.destroy();
+          return;
+        }
+        wss.handleUpgrade(request, socket, head, (accepted) => wss.emit("connection", accepted));
+      });
       const held = new Map<string, WebSocket>();
       const metadata = new Map<string, JsonObject>();
       let responseSequence = 0;
@@ -297,26 +336,7 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
           "request_max_retries=1",
         ].join("\n"),
       );
-      const childEnv = Object.fromEntries(
-        Object.entries(native.env).filter(
-          (entry): entry is [string, string] => entry[1] !== undefined,
-        ),
-      );
-      const client = await CodexAppServerClient.start({
-        transport: "stdio",
-        command: native.command,
-        commandSource: "config",
-        args: ["app-server"],
-        cwd: native.cwd,
-        headers: {},
-        env: childEnv,
-        clearEnv: Object.keys(process.env).filter((key) => !(key in childEnv)),
-      });
-      context.onTestFinished(async () => {
-        expect(await client.closeAndWait()).toMatchObject({ exited: true });
-      });
-      await client.initialize();
-      expect(client.getRuntimeIdentity()?.serverVersion).toBe(CODEX_APP_SERVER_VERSION);
+      const client = await startNative(context, native);
       const started = new Map<string, string>();
       const terminals = new Map<string, string>();
       client.addNotificationHandler((event) => {
@@ -366,6 +386,17 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
         });
         return { threadId: thread.id, turnId: turn.id, controller };
       };
+      disconnectNextHandshake = true;
+      const recovered = await begin();
+      await waitFor(() => (held.has(recovered.threadId) ? true : undefined));
+      finish(recovered.threadId);
+      expect(await waitFor(() => terminals.get(recovered.threadId))).toBe("completed");
+      expect(transport.rejected).toContainEqual({
+        status: 502,
+        connected: true,
+        threadId: recovered.threadId,
+      });
+      transport.rejected = [];
       const roots = [];
       for (let index = 0; index < 16; index++) {
         roots.push(await begin());
@@ -467,15 +498,7 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
       if (!apiKey) {
         throw new Error("OPENAI_API_KEY is required for real relay proof");
       }
-      const tempDirs = useAutoCleanupTempDirTracker(context.onTestFinished);
-      const root = await fs.realpath(tempDirs.make("codex-inference-live-"));
-      const native = await createCodexNativeTestState(root);
-      vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
-      vi.stubEnv("HOME", native.env.HOME);
-      vi.stubEnv("CODEX_HOME", native.codexHome);
-      context.onTestFinished(() => {
-        vi.unstubAllEnvs();
-      });
+      const native = await prepareNative(context, "codex-inference-live-");
       const proxy = await createCodexInferenceProxy({
         upstream: new URL("https://api.openai.com/v1"),
         assertCurrent: () => {},
@@ -499,26 +522,7 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
           "enabled=false",
         ].join("\n"),
       );
-      const childEnv = Object.fromEntries(
-        Object.entries(native.env).filter(
-          (entry): entry is [string, string] => entry[1] !== undefined,
-        ),
-      );
-      const client = await CodexAppServerClient.start({
-        transport: "stdio",
-        command: native.command,
-        commandSource: "config",
-        args: ["app-server"],
-        cwd: native.cwd,
-        headers: {},
-        env: childEnv,
-        clearEnv: Object.keys(process.env).filter((key) => !(key in childEnv)),
-      });
-      context.onTestFinished(async () => {
-        expect(await client.closeAndWait()).toMatchObject({ exited: true });
-      });
-      await client.initialize();
-      expect(client.getRuntimeIdentity()?.serverVersion).toBe(CODEX_APP_SERVER_VERSION);
+      const client = await startNative(context, native);
       await client.request("account/login/start", { type: "apiKey", apiKey });
       const { thread } = await client.request("thread/start", {
         cwd: native.cwd,

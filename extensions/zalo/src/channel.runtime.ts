@@ -1,20 +1,10 @@
-// Zalo plugin module implements channel behavior.
+import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
-import type { ChannelPlugin } from "../runtime-api.js";
+import { normalizeSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import { probeZalo } from "./probe.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
-import { normalizeSecretInputString } from "./secret-input.js";
-import { sendMessageZalo } from "./send.js";
 import type { ResolvedZaloAccount } from "./types.js";
-
-export async function sendZaloText(
-  params: Parameters<typeof sendMessageZalo>[2] & {
-    to: string;
-    text: string;
-  },
-) {
-  return await sendMessageZalo(params.to, params.text, params);
-}
+export { sendMessageZalo } from "./send.js";
 
 export async function probeZaloAccount(params: {
   account: import("./accounts.js").ResolvedZaloAccount;

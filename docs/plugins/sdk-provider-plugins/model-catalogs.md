@@ -13,6 +13,13 @@ Catalog reference for provider plugins: shared live model discovery, catalog
 helpers, pricing normalization, and the narrower single-provider entry point.
 Part of the [Building provider plugins](/plugins/sdk-provider-plugins) guide.
 
+For lightweight model-reference normalization, use
+`openclaw/plugin-sdk/model-ref-parse`. Its `normalizeGooglePreviewModelId`
+and `normalizeAntigravityPreviewModelId` exports share the catalog's alias
+rules without loading provider replay or transport helpers.
+Use `splitTrailingAuthProfile` to separate a trailing auth profile while preserving
+model-version and local quantization suffixes.
+
 ## Live model discovery
 
 If your provider exposes an OpenAI-compatible `/models` API, opt the
@@ -59,11 +66,27 @@ seed models as a successful refresh. HTTP 401/403 produces a catalog-scoped
 Neither a static catalog nor skipped discovery produces a live outcome.
 Each outcome carries the profile selected for the actual request, when one
 supplied its credential. Family providers report each sibling independently.
+An explicit `ready` outcome may include `modelOrder: string[]` to rank its
+already discovered models in the picker. This does not add models or grant
+access; absent models are ignored, and outcomes without `modelOrder` retain
+the manifest order.
+Provider-scoped refreshes preserve explicit outcomes reported under a registered
+alias of the selected provider; unrelated sibling outcomes remain excluded.
 With a positive cache lifetime, validated empty results use the same
 successful-observation lifetime as nonempty results. After expiry, ordinary
 catalog reads return retained rows while the existing inventory owner refreshes
 the provider in the background. `ttlMs: 0` still disables response caching and
 does not record an expiry for this renewal path.
+
+A successful authenticated outcome may include private `modelServiceTiers`
+observations: `{ modelId, runtimeId, api, baseUrl, serviceTiers }` rows bound to
+that outcome's `profileId`. Supply only tier IDs explicitly advertised by the
+account's successful response; never copy them from static seeds or native
+fallback catalogs. The host matches the selected profile, model, route, and
+runtime before projecting `serviceTiers` on a public model choice. Account tier
+maps never appear in public `providerOutcomes`. Missing, failed, stale, or
+mismatched observations leave support unknown. This metadata does not authorize
+execution or guarantee upstream fulfillment.
 
 Public metadata requests declare `authentication: "none"` in discovery
 options. The prepared request then has no credential or profile identity;
@@ -80,8 +103,14 @@ without the selected credential.
 The strict and advisory paths share the same guarded transport and cache, with
 separate cache identities. Advisory calls still retain only nonempty results.
 Custom live builders can use `runLiveProviderCatalog` at their catalog hook
-to convert acquisition errors into outcomes. Keep metadata-feed fallback
-separate from account discovery; do not retry a rejected account request
+to report successful acquisition and convert acquisition errors into outcomes.
+Returning provider configuration alone does not establish a live discovery outcome.
+For compatibility, nonempty rows returned by a legacy catalog hook without an
+outcome survive provider-wide failures under the same credentials. This does not
+establish a successful discovery origin or retain unrelated configured and
+supplemental rows. Empty legacy catalogs and profile-specific failures do not
+use that fallback; a successful replacement clears the previous row provenance.
+Keep metadata-feed fallback separate from account discovery; do not retry a rejected account request
 anonymously or substitute seed rows inside a strict builder.
 
 Custom catalog hooks may receive optional `mode` metadata from
@@ -247,7 +276,8 @@ credential scope of discovery.
 
 The private `createUpstreamProviderCatalog` helper keeps this snapshot lifecycle in one prepared
 owner. Supply the trusted seed, provider routes, metadata and model-list
-endpoints, static-entry eligibility, and any model decoration. An optional
+endpoints, discovery and starter-model audit labels, static-entry eligibility,
+and any model decoration. An optional
 `upstreamSeed` controls which seed lifecycle facts survive an upstream refresh.
 The owner exposes `getSnapshot`, `refreshMetadata`, `buildStaticProvider`, and
 `buildLiveProvider`; credentials belong to each build call. Live builds refresh
@@ -257,6 +287,10 @@ and empty results remain strict. `refreshMetadata` returns `undefined` when the
 feed lacks the provider, so explicit model preparation cannot mistake retained
 metadata for a successful refresh. Plugin policy still owns which models may
 resolve directly from the seed or current snapshot.
+
+`resolveStarterModel` checks the preferred provider/model reference against a
+fresh account model-list response. It returns that reference only when its exact
+model ID is advertised, without refreshing or extending the metadata snapshot.
 
 Upstream reasoning metadata preserves omitted controls as unspecified and an
 empty options or effort list as no effort control. A native `null` effort maps
@@ -435,6 +469,13 @@ The live discovery examples above cover `/models`-style provider APIs. Keep
 that discovery inside `catalog.run`, gated on usable auth, and keep
 `staticRun` network-free for offline catalog generation.
 
+Runtime model preparation also runs `staticRun` when configured model refs
+need its rows, and then sets `ctx.providerIds` to the selected provider ids.
+Only in that case may the hook await provider-owned caches that its synchronous
+hooks read, such as model capabilities used for thinking levels. Catalog
+generation, `models list --all`, and doctor validation leave `ctx.providerIds`
+unset; keep those runs network-free.
+
 Official provider plugins that share credentials can use
 `resolveFirstProviderCatalogAuth(ctx.resolveProviderApiKey, providerIds)` from
 the private runtime `openclaw/plugin-sdk/provider-catalog-shared` subpath.
@@ -445,3 +486,8 @@ takes precedence over another provider's live key; fields are never mixed
 across accounts. It returns `undefined` when no provider has auth and
 propagates lookup failures. Official plugin releases using this host export
 must require a host version that provides it in their `compat.pluginApi`.
+
+`findNormalizedProviderKey(entries, providerId)` from the private-local
+`openclaw/plugin-sdk/provider-model-metadata` surface returns the first configured
+key whose trimmed, lowercase spelling matches the provider ID. Callers that
+prefer an exact authored key must check that key first.

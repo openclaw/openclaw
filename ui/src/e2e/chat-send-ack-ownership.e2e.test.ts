@@ -38,6 +38,7 @@ suite.define(() => {
         seq: 1,
         state: "delta",
         deltaText: progress,
+        message: { role: "assistant", content: [{ type: "text", text: progress }] },
       });
       const reply = page.locator(".chat-bubble").getByText(progress, { exact: true });
       await reply.waitFor();
@@ -116,10 +117,7 @@ suite.define(() => {
           state: "delta",
           deltaText: " Still streaming.",
         });
-        await page
-          .locator(".chat-bubble")
-          .getByText(`${progress} Still streaming.`, { exact: true })
-          .waitFor();
+        await page.locator(".chat-bubble").getByText("Still streaming.", { exact: true }).waitFor();
         await composer.fill("");
         await stop.click();
         const aborted = await gateway.waitForRequest("chat.abort");

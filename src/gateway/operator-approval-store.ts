@@ -1,13 +1,49 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { serialize } from "node:v8";
+import { expectDefined } from "@openclaw/normalization-core";
+import {
+  collectNestedErrorCandidates,
+  extractErrorCode,
+} from "@openclaw/normalization-core/error-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  withCronReceiptAuthorityMutation,
+  type CronReceiptAuthorityMutation,
+} from "../cron/store/receipt-authority-owner.js";
+import type { SqliteWorkerInputPreparation } from "../infra/sqlite-worker-broker.types.js";
+import type { SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
+import type {
+  SqliteWorkerAdmissionFactory,
+  SqliteWorkerOperationAdmission,
+} from "../infra/sqlite-worker-operation-admission.js";
 // Runtime approval operations retain the shared-state owner through worker settlement.
-import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import {
+  createSqliteWorkerWriteAdmission,
+  reserveSqliteWorkerInputPreparation,
+} from "../infra/sqlite-worker-store.js";
+import { createKeyedFifoLeaseRegistry } from "../shared/keyed-fifo-lease.js";
+import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import { executeExistingOpenClawStateRead } from "../state/openclaw-state-db-readonly.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import type {
+  OpenClawStateReadCommand,
+  OpenClawStateReadResult,
+} from "../state/openclaw-state-read.types.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
+import type { OpenClawStateWorkerOperationOptions } from "../state/openclaw-state-worker-contract.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
+import type {
+  CronStandingGrantLookupInput,
+  ConsumeCronStandingGrantResult,
+} from "./operator-approval-standing-grants.types.js";
+import type { OperatorApprovalCommitReceipt } from "./operator-approval-store.operations.js";
 import { decodeOperatorApprovalHistoryCursor } from "./operator-approval-store.rows.js";
 import type {
   ListTerminalOperatorApprovalsInput,
   ListTerminalOperatorApprovalsResult,
+  OperatorApprovalStoreGuard,
 } from "./operator-approval-store.types.js";
 import type { OperatorApprovalWorkerOperations } from "./operator-approval-store.worker-contract.js";
 
@@ -25,101 +61,334 @@ export {
   OperatorApprovalHistoryCursorError,
 } from "./operator-approval-store.rows.js";
 export {
-  // Connection-bound receipt readers execute inside the audit read worker.
-  hasOperatorApprovalReceiptsForRunInDatabase,
-  summarizeOperatorApprovalReceiptsForRunInDatabase,
-  pageOperatorApprovalReceiptsForRunInDatabase,
-} from "./operator-approval-store.receipts.js";
-export {
   // Gateway boot admission closes orphaned rows and prunes before serving requests.
   closeOrphanedOperatorApprovals,
   pruneTerminalOperatorApprovals,
 } from "./operator-approval-store.transitions.js";
 
+/** Storage admission failure is not evidence that a pending row is corrupt. */
+export function isOperatorApprovalStoreRefusal(error: unknown): boolean {
+  return collectNestedErrorCandidates(error).some(
+    (cause) =>
+      isStateDatabaseReadAdmissionInvalidatedError(cause) ||
+      ["closed", "overloaded", "unavailable"].includes(extractErrorCode(cause) ?? ""),
+  );
+}
+
+export function isOperatorApprovalStoreOutcomeUnknown(error: unknown): boolean {
+  return collectNestedErrorCandidates(error).some(
+    (cause) => extractErrorCode(cause) === "outcome-unknown",
+  );
+}
+
 type Operation = keyof OperatorApprovalWorkerOperations;
-type Options = { databaseOptions?: OpenClawStateDatabaseOptions; assertCurrent?: () => void };
+type Options = {
+  databaseOptions?: OpenClawStateDatabaseOptions;
+  assertCurrent?: () => void;
+  guard?: OperatorApprovalStoreGuard;
+};
 type Input<Key extends Operation> = OperatorApprovalWorkerOperations[Key]["input"] & Options;
+
+const loadNativeStore = createLazyRuntimeModule(
+  () => import("./operator-approval-store.native.js"),
+);
+const leases = createKeyedFifoLeaseRegistry(Symbol.for("openclaw.operatorApprovalStoreLeases"));
+
+async function runApprovalStoreOperation<T>(
+  context: OpenClawStateWorkerContext,
+  input: unknown,
+  operation: (
+    scope: Pick<SqliteWorkerStore<OperatorApprovalWorkerOperations>, "execute">,
+    preparation: SqliteWorkerInputPreparation,
+  ) => Promise<T>,
+  options?: Omit<OpenClawStateWorkerOperationOptions, "existingOnly">,
+  assertCurrent?: () => void,
+  retainAuthority?: (run: (context?: OpenClawStateWorkerContext) => Promise<T>) => Promise<T>,
+): Promise<T> {
+  context.admission.assertCurrent();
+  const preparation = reserveSqliteWorkerInputPreparation(serialize(input).byteLength);
+  const lease = expectDefined(
+    leases.reserve([
+      context.admission.identity.key,
+      `path:${context.admission.identity.canonicalPath}`,
+    ]),
+    "Operator approval storage lease",
+  );
+  try {
+    // Acquire FIFO before retaining an actor: a predecessor may need to retire it.
+    await lease.wait();
+    preparation.assertCurrent();
+    context.admission.assertCurrent();
+    assertCurrent?.();
+    const run = (retainedContext = context) =>
+      runOpenClawStateWorkerOperation(
+        retainedContext,
+        (scope) => operation(scope, preparation),
+        options,
+      );
+    return await (retainAuthority ? retainAuthority(run) : run());
+  } finally {
+    preparation.release();
+    lease.release();
+  }
+}
 
 function execute<Key extends Operation>(
   type: Key,
-  input: OperatorApprovalWorkerOperations[Key]["input"],
-  { databaseOptions, assertCurrent }: Options,
+  { databaseOptions, assertCurrent, guard, ...input }: Input<Key>,
+  onCommitted?: (resolutionKey: string) => void,
 ): Promise<OperatorApprovalWorkerOperations[Key]["output"]> {
   const context = captureOpenClawStateWorkerContext({
     ...databaseOptions,
     path: databaseOptions?.database?.path ?? databaseOptions?.path,
   });
   const captured = structuredClone(input);
-  return runOpenClawStateWorkerOperation(
+  // Receipt settlement owns its work, while live guards retain the caller's approval scope.
+  const assertCallerCurrent = AsyncLocalStorage.bind(() => {
+    guard?.assertCurrent();
+    assertCurrent?.();
+  });
+  let mutation: CronReceiptAuthorityMutation | undefined;
+  const assertOperationCurrent = () => {
+    context.admission.assertCurrent();
+    mutation?.assertCurrent();
+    assertCallerCurrent();
+  };
+  const native = guard?.family === "native-compatibility";
+  let admission: SqliteWorkerOperationAdmission | undefined;
+  const createAdmission: SqliteWorkerAdmissionFactory = (operation) => {
+    const authority = expectDefined(mutation, "Operator approval receipt authority");
+    const retained = createSqliteWorkerWriteAdmission(
+      assertOperationCurrent,
+      [context.admission.databasePath],
+      authority.attachment,
+    )(operation);
+    admission = retained.admission;
+    authority.observe(admission, operation);
+    return retained;
+  };
+  const publishCommitted = (facts: unknown) => {
+    if (
+      onCommitted &&
+      isRecord(facts) &&
+      facts.type === "operatorApprovals.resolve" &&
+      typeof facts.resolutionKey === "string"
+    ) {
+      onCommitted(facts.resolutionKey);
+    }
+  };
+  return runApprovalStoreOperation(
     context,
-    (scope) => scope.execute({ type, input: captured }),
-    {
-      assertCurrent,
-      createAdmission: () => ({
-        nativeLocations: [context.admission.databasePath],
-        admission: createSqliteWorkerOperationAdmission((request, grant) => {
-          if (request.stage !== "transaction" && request.stage !== "commit") {
-            throw new Error("Operator approval mutation requires transaction admission");
-          }
-          context.admission.assertCurrent();
-          assertCurrent?.();
-          grant();
-        }),
-      }),
+    captured,
+    async (scope, preparation) => {
+      if (native) {
+        const store = await loadNativeStore();
+        preparation.assertCurrent();
+        assertOperationCurrent();
+        preparation.release();
+        const authority = expectDefined(mutation, "Operator approval receipt authority");
+        let receipt: OperatorApprovalCommitReceipt | undefined;
+        try {
+          return store.executeNativeOperatorApproval(
+            type,
+            captured,
+            context,
+            assertOperationCurrent,
+            authority.attachment,
+            (committed) => {
+              receipt = committed;
+              if (committed.receiptAuthority) {
+                authority.publish(committed.receiptAuthority);
+              }
+            },
+          );
+        } finally {
+          publishCommitted(receipt);
+        }
+      }
+      try {
+        return await preparation.handoff(() => scope.execute({ type, input: captured }));
+      } finally {
+        // Broker settlement retains the native receipt even when the command reply is lost.
+        publishCommitted(admission?.committed?.facts);
+      }
     },
+    {
+      // Native guards run only after FIFO and outside worker-held transactions.
+      assertCurrent: native ? undefined : assertOperationCurrent,
+      ...(native ? {} : { createAdmission }),
+    },
+    assertOperationCurrent,
+    (run) =>
+      withCronReceiptAuthorityMutation(
+        context,
+        (authority) => {
+          mutation = authority;
+          return run(authority.context);
+        },
+        // Only guarded consumption can settle an already-recorded handoff during close.
+        { settlement: type === "operatorApprovals.consume" && assertCurrent !== undefined },
+      ),
   );
 }
 
 export function insertOperatorApproval(params: Input<"operatorApprovals.insert">) {
-  const { databaseOptions, assertCurrent, ...input } = params;
-  return execute("operatorApprovals.insert", input, { databaseOptions, assertCurrent });
+  return execute("operatorApprovals.insert", params);
 }
 export function getOperatorApprovalDetailed(params: Input<"operatorApprovals.get">) {
-  const { databaseOptions, assertCurrent, ...input } = params;
-  return execute("operatorApprovals.get", input, { databaseOptions, assertCurrent });
+  return execute("operatorApprovals.get", params);
 }
 export function listPendingOperatorApprovals(params: Input<"operatorApprovals.pending"> = {}) {
-  const { databaseOptions, assertCurrent, ...input } = params;
-  return execute("operatorApprovals.pending", input, { databaseOptions, assertCurrent });
+  return execute("operatorApprovals.pending", params);
 }
-export function resolveOperatorApproval(params: Input<"operatorApprovals.resolve">) {
-  const { databaseOptions, assertCurrent, ...input } = params;
-  return execute("operatorApprovals.resolve", input, { databaseOptions, assertCurrent });
+export function resolveOperatorApproval(
+  params: Input<"operatorApprovals.resolve"> & {
+    /** Non-throwing observer of this operation's real native commit. */
+    onCommitted?: (resolutionKey: string) => void;
+  },
+) {
+  const { onCommitted, ...input } = params;
+  return execute("operatorApprovals.resolve", input, onCommitted);
 }
 export function forceDenyOperatorApproval(params: Input<"operatorApprovals.deny">) {
-  const { databaseOptions, assertCurrent, ...input } = params;
-  return execute("operatorApprovals.deny", input, { databaseOptions, assertCurrent });
+  return execute("operatorApprovals.deny", params);
 }
 export function expireDueOperatorApprovals(params: Input<"operatorApprovals.expire">) {
-  const { databaseOptions, assertCurrent, ...input } = params;
-  return execute("operatorApprovals.expire", input, { databaseOptions, assertCurrent });
+  return execute("operatorApprovals.expire", params);
 }
 export function consumeOperatorApprovalAllowOnce(params: Input<"operatorApprovals.consume">) {
-  const { databaseOptions, assertCurrent, ...input } = params;
-  return execute("operatorApprovals.consume", input, { databaseOptions, assertCurrent });
+  return execute("operatorApprovals.consume", params);
+}
+
+async function readApprovalStore<T>(
+  command: Extract<OpenClawStateReadCommand, { type: `operatorApprovals.${string}` }>,
+  { databaseOptions, assertCurrent, guard }: Options,
+  project: (result: OpenClawStateReadResult) => T | undefined,
+): Promise<T> {
+  const context = captureOpenClawStateWorkerContext({
+    ...databaseOptions,
+    path: databaseOptions?.database?.path ?? databaseOptions?.path,
+  });
+  const captured = structuredClone(command);
+  const assertOperationCurrent = () => {
+    context.admission.assertCurrent();
+    guard?.assertCurrent();
+    assertCurrent?.();
+  };
+  // Preserve creating/writable admission, then use the existing read-only owner.
+  return runApprovalStoreOperation(
+    context,
+    captured,
+    async (_scope, preparation) => {
+      preparation.assertCurrent();
+      assertOperationCurrent();
+      preparation.release();
+      const result = await executeExistingOpenClawStateRead(
+        { env: context.environment, path: context.admission.databasePath },
+        captured,
+      );
+      assertOperationCurrent();
+      const value = result?.ok && result.type === command.type ? project(result) : undefined;
+      if (value !== undefined) {
+        return value;
+      }
+      throw new Error("Operator approval database became unavailable");
+    },
+    undefined,
+    assertOperationCurrent,
+  );
 }
 
 export async function listTerminalOperatorApprovals(
   params: ListTerminalOperatorApprovalsInput & Options = {},
 ): Promise<ListTerminalOperatorApprovalsResult> {
-  const { databaseOptions, assertCurrent, ...input } = params;
+  const { databaseOptions, assertCurrent, guard, ...input } = params;
   if (input.cursor !== undefined) {
     decodeOperatorApprovalHistoryCursor(input.cursor);
   }
-  const context = captureOpenClawStateWorkerContext({
-    ...databaseOptions,
-    path: databaseOptions?.database?.path ?? databaseOptions?.path,
-  });
-  // Preserve the original creating/writable admission before the fixed read.
-  await runOpenClawStateWorkerOperation(context, async () => {}, { assertCurrent });
-  const result = await executeExistingOpenClawStateRead(
-    { env: context.environment, path: context.admission.databasePath },
+  return readApprovalStore(
     { type: "operatorApprovals.history", input },
+    { databaseOptions, assertCurrent, guard },
+    (result) => (result.type === "operatorApprovals.history" ? result.history : undefined),
   );
-  context.admission.assertCurrent();
-  assertCurrent?.();
-  if (result?.ok && result.type === "operatorApprovals.history") {
-    return result.history;
-  }
-  throw new Error("Operator approval history database became unavailable");
+}
+
+export function listCronStandingGrants(params: { limit?: number } & Options = {}) {
+  const { databaseOptions, assertCurrent, guard, ...input } = params;
+  return readApprovalStore(
+    { type: "operatorApprovals.listCronGrants", input },
+    { databaseOptions, assertCurrent, guard },
+    (result) => (result.type === "operatorApprovals.listCronGrants" ? result.grants : undefined),
+  );
+}
+
+export function revokeCronStandingGrant(params: Input<"operatorApprovals.revokeCronGrant">) {
+  return execute("operatorApprovals.revokeCronGrant", params);
+}
+
+export function validateCronStandingGrant(params: CronStandingGrantLookupInput & Options) {
+  const { databaseOptions, assertCurrent, guard, ...input } = params;
+  return readApprovalStore(
+    { type: "operatorApprovals.validateCronGrant", input },
+    { databaseOptions, assertCurrent, guard },
+    (result) => (result.type === "operatorApprovals.validateCronGrant" ? result.result : undefined),
+  );
+}
+
+/** The approval FIFO precedes acquisition of the caller's exact cron authority interval. */
+export function consumeCronStandingGrant(
+  context: OpenClawStateWorkerContext,
+  input: CronStandingGrantLookupInput & { recordUse: boolean },
+  assertCurrent: () => void,
+  withAuthority: (
+    run: (mutation: CronReceiptAuthorityMutation) => Promise<ConsumeCronStandingGrantResult>,
+  ) => Promise<ConsumeCronStandingGrantResult>,
+): Promise<ConsumeCronStandingGrantResult> {
+  const captured = structuredClone(input);
+  let authority: CronReceiptAuthorityMutation | undefined;
+  const assertUseCurrent = () => {
+    context.admission.assertCurrent();
+    authority?.assertCurrent();
+    assertCurrent();
+  };
+  return runApprovalStoreOperation(
+    context,
+    captured,
+    (scope, preparation) =>
+      preparation.handoff(() =>
+        scope.execute({ type: "operatorApprovals.consumeCronGrant", input: captured }),
+      ),
+    {
+      assertCurrent: assertUseCurrent,
+      createAdmission(retained) {
+        const mutation = expectDefined(authority, "Cron standing-grant receipt authority");
+        const admission = createSqliteWorkerWriteAdmission(
+          assertUseCurrent,
+          [context.admission.databasePath],
+          mutation.attachment,
+        )(retained);
+        mutation.observe(admission.admission, retained);
+        return admission;
+      },
+    },
+    assertUseCurrent,
+    (run) =>
+      withAuthority(async (mutation) => {
+        authority = mutation;
+        const result = await run(mutation.context);
+        assertUseCurrent();
+        return result;
+      }),
+  );
+}
+
+export function readPlacementStandingGrant(
+  input: import("./operator-approval-placement-grants.read.js").PlacementGrantReadInput,
+  options: Options,
+) {
+  return readApprovalStore(
+    { type: "operatorApprovals.placementGrant", input },
+    options,
+    (result) => (result.type === "operatorApprovals.placementGrant" ? result.rows : undefined),
+  );
 }

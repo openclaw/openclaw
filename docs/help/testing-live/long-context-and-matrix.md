@@ -133,7 +133,7 @@ Docker notes:
 - It passes `OPENAI_API_KEY`, copies Codex CLI auth files when present, installs
   `@openai/codex` into a writable mounted npm
   prefix, stages the source tree, then runs only the Codex-harness live test.
-- Docker enables the image, MCP/tool, and Guardian probes by default. Set
+- Docker enables the image, MCP/tool, and Guardian checks by default. Set
   `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=0` or
   `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=0` or
   `OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=0` when you need a narrower debug
@@ -191,6 +191,7 @@ Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=mode
 
 | Provider/model                                      | Notes      |
 | --------------------------------------------------- | ---------- |
+| `anthropic/claude-opus-5-5`                         |            |
 | `anthropic/claude-opus-5`                           |            |
 | `anthropic/claude-opus-4-8`                         |            |
 | `anthropic/claude-sonnet-5`                         |            |
@@ -214,7 +215,7 @@ Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=mode
 | `xai/grok-4.5`                                      |            |
 | `xai/grok-4.20-0309-reasoning`                      |            |
 | `zai/glm-5.1`                                       |            |
-| `fireworks/accounts/fireworks/routers/glm-5p2-fast` |            |
+| `fireworks/accounts/fireworks/routers/glm-5p3-fast` |            |
 | `minimax-portal/minimax-m3`                         |            |
 
 The curated **small-model** list (`OPENCLAW_LIVE_MODELS=small` / `OPENCLAW_LIVE_GATEWAY_MODELS=small`), from `SMALL_LIVE_MODEL_PRIORITY`:
@@ -234,7 +235,7 @@ Notes on the modern list:
 
 - `codex` and `codex-cli` providers are excluded from the default modern sweep (they cover CLI-backend/ACP behavior, tested separately on [CLI backend and APNs lanes](/help/testing-live/cli-backends) and [ACP bind and Codex app-server lanes](/help/testing-live/acp-and-codex)). `openai/gpt-5.6` itself routes through the Codex app-server harness by default; see [Live: Codex app-server harness smoke](/help/testing-live/acp-and-codex#live-codex-app-server-harness-smoke).
 - `fireworks`, `google`, `openrouter`, and `xai` only run their explicitly curated model ids in the modern sweep (no automatic "every model from this provider" expansion).
-- Include at least one image-capable model (Claude/Gemini/OpenAI-family vision variants, etc.) in `OPENCLAW_LIVE_GATEWAY_MODELS` to exercise the image probe.
+- Include at least one image-capable model (Claude/Gemini/OpenAI-family vision variants, etc.) in `OPENCLAW_LIVE_GATEWAY_MODELS` to exercise the image check.
 
 Run gateway smoke with tools + image across a hand-picked cross-provider set:
 

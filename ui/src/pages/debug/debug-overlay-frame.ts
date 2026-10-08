@@ -95,7 +95,12 @@ export function renderDebugOverlayFrame({
       class="debug-overlay ${mode === "minimized" ? "debug-overlay--minimized" : ""}"
       aria-label=${t("debug.overlay.title")}
     >
-      <header class="debug-overlay__header" tabindex="0" aria-label=${t("debug.overlay.move")}>
+      <header
+        class="debug-overlay__header"
+        role="group"
+        tabindex="0"
+        aria-label=${t("debug.overlay.move")}
+      >
         <div>
           ${mode === "minimized" ? nothing : html`<div class="debug-overlay__eyebrow">${t("debug.overlay.eyebrow")}</div>`}
           <h2>${t("debug.overlay.title")}</h2>

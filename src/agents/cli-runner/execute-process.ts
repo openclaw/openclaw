@@ -16,19 +16,18 @@ import { transformCliResultText } from "../cli-output-results.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import { parseCliOutput } from "../cli-output.js";
 import type { FailoverError } from "../failover-error.js";
-import { resolveReplyExpectation } from "../reply-completion.js";
 import type { CliExecuteDeps } from "./execute-deps.js";
 import type { CliEventHandlers } from "./execute-events.js";
 import { createCliAbortError, executeNodeClaudeRun } from "./execute-node-claude.js";
 import { appendCliOutputTail } from "./execute-output-buffer.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
+import { attachCliReplyBackend } from "./execution-target.js";
 import {
   createCliExitFailoverError,
   createCliFailoverError,
   resolveCliResumeAtError,
 } from "./exit-error.js";
-import { buildCliSupervisorScopeKey } from "./helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
 import type { createClaudeCliModelCallDiagnostics } from "./model-call-diagnostics.js";
 import {
@@ -36,6 +35,7 @@ import {
   resolveCliNoOutputTimeoutDecision,
 } from "./no-output-timeout-policy.js";
 import { createCliOutputFailoverError } from "./output-error.js";
+import { buildCliSupervisorScopeKey } from "./reliability.js";
 import type { NodeClaudePlacement, PreparedCliRunContext } from "./types.js";
 
 const CLI_RUNNER_OUTPUT_PARSE_BYTES = 1024 * 1024;
@@ -114,6 +114,14 @@ export async function executeCliProcess(params: {
         onNativeTools: context.preparedBackend.mcpClientGrantCapture?.captureNativeTools,
         onAssistantMessage: params.diagnostics?.observeAssistantMessage,
         onUsage: params.diagnostics?.observeUsage,
+        onAttributedSubagentProgress: (parentToolUseId) => {
+          if (!params.events.isActiveForegroundAgentTool(parentToolUseId)) {
+            return;
+          }
+          // Raw stdout stays transport-only while a tool is active. Only a
+          // semantic record for this Agent call may move the recovery clock.
+          backendActivity?.observeAttributedAgentProgress(parentToolUseId);
+        },
       })
     : null;
   let stdoutTail = "";
@@ -225,6 +233,8 @@ export async function executeCliProcess(params: {
         consumeStdout,
         onOutstandingWorkChange: backendActivity?.setOutstandingWork,
         activeToolCount: params.events.activeParsedToolCount,
+        compactionActive: params.events.hasActiveCompaction,
+        onCompactionActiveChange: params.events.onCompactionActiveChange,
         getActiveLoopbackAskUserDeadline: params.toolTracking.getActiveLoopbackAskUserDeadline,
         onActiveLoopbackAskUserDeadlineChange:
           params.toolTracking.onActiveLoopbackAskUserDeadlineChange,
@@ -316,28 +326,15 @@ export async function executeCliProcess(params: {
           onStderr: consumeStderr,
         });
         managedRunPid = managedRun.pid;
-        const replyBackendHandle = runParams.replyOperation
-          ? {
-              kind: "cli" as const,
-              runId: runParams.runId,
-              toolAuthorityFingerprint: runParams.toolAuthorityFingerprint,
-              terminalReplyExpectation: resolveReplyExpectation(runParams),
-              cancel: () => {
-                processCancelled = true;
-                managedRun.cancel("manual-cancel");
-              },
-            }
-          : undefined;
-        if (replyBackendHandle) {
-          runParams.replyOperation?.attachBackend(replyBackendHandle);
-        }
+        const detachReplyBackend = attachCliReplyBackend(runParams, () => {
+          processCancelled = true;
+          managedRun.cancel("manual-cancel");
+        });
         try {
           result = await managedRun.wait();
           processCancelled ||= result.reason !== "exit";
         } finally {
-          if (replyBackendHandle) {
-            runParams.replyOperation?.detachBackend(replyBackendHandle);
-          }
+          detachReplyBackend?.();
         }
       } finally {
         runParams.abortSignal?.removeEventListener("abort", abortManagedRun);
@@ -355,8 +352,7 @@ export async function executeCliProcess(params: {
   }
   params.options?.onPhase?.("resolve");
   streamingParser?.finish();
-  const streamingParserErrorText =
-    params.outputMode === "jsonl" ? (streamingParser?.getErrorText() ?? null) : null;
+  const streamingParserErrorText = streamingParser?.getErrorText();
   if (streamingParserErrorText) {
     throw createCliFailoverError(streamingParserErrorText, "format", failoverContext);
   }
@@ -393,36 +389,31 @@ export async function executeCliProcess(params: {
     stderrHash: stderrHash.digest("hex").slice(0, 12),
     useResume: params.useResume,
   };
-  if (params.logOutputText) {
-    if (stdoutDiagnostic) {
-      cliBackendLog.info(`cli stdout:\n${stdoutDiagnostic}`);
-    }
-    if (stderrDiagnostic) {
-      cliBackendLog.info(`cli stderr:\n${stderrDiagnostic}`);
-    }
-  }
-  if (shouldLogVerbose()) {
-    if (stdoutDiagnostic) {
-      cliBackendLog.debug(`cli stdout:\n${stdoutDiagnostic}`);
-    }
-    if (stderrDiagnostic) {
-      cliBackendLog.debug(`cli stderr:\n${stderrDiagnostic}`);
+  for (const level of ["info", "debug"] as const) {
+    if (level === "info" ? params.logOutputText : shouldLogVerbose()) {
+      for (const [stream, diagnostic] of [
+        ["stdout", stdoutDiagnostic],
+        ["stderr", stderrDiagnostic],
+      ]) {
+        if (diagnostic) {
+          cliBackendLog[level](`cli ${stream}:\n${diagnostic}`);
+        }
+      }
     }
   }
 
-  const streamedJsonlOutput =
-    params.outputMode === "jsonl" ? (streamingParser?.getOutput() ?? null) : null;
+  const streamedJsonlOutput = streamingParser?.getOutput();
+  const parseOutput = () =>
+    parseCliOutput({
+      raw: readStdout(),
+      backend: params.backend,
+      providerId: context.backendResolved.id,
+      outputMode: params.outputMode,
+      fallbackSessionId: params.resolvedSessionId,
+    });
   const parsedStructuredOutput =
     streamedJsonlOutput ??
-    (params.outputMode === "json" && stdoutCapture.truncatedBytes === 0
-      ? parseCliOutput({
-          raw: readStdout(),
-          backend: params.backend,
-          providerId: context.backendResolved.id,
-          outputMode: params.outputMode,
-          fallbackSessionId: params.resolvedSessionId,
-        })
-      : null);
+    (params.outputMode === "json" && stdoutCapture.truncatedBytes === 0 ? parseOutput() : null);
   // A completed terminal record is authoritative even if the CLI hangs
   // afterward. Reclassifying it as a timeout could replay completed tools.
   if (parsedStructuredOutput?.terminalFailure) {
@@ -455,6 +446,7 @@ export async function executeCliProcess(params: {
               observedActivity,
               activeToolCount: params.events.activeParsedToolCount(),
               backgroundTaskCount: 0,
+              compactionActive: params.events.hasActiveCompaction(),
             },
             hasOutputText: Boolean(stdoutDiagnostic || stderrDiagnostic),
             useResume: params.useResume,
@@ -546,15 +538,7 @@ export async function executeCliProcess(params: {
       finalPromptText: params.prompt,
     };
   }
-  const parsed =
-    parsedStructuredOutput ??
-    parseCliOutput({
-      raw: readStdout(),
-      backend: params.backend,
-      providerId: context.backendResolved.id,
-      outputMode: params.outputMode,
-      fallbackSessionId: params.resolvedSessionId,
-    });
+  const parsed = parsedStructuredOutput ?? parseOutput();
   const parsedError = createCliOutputFailoverError({
     output: parsed,
     ...outputErrorContext,

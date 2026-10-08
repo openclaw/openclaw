@@ -2,15 +2,11 @@ import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensit
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../../../packages/gateway-protocol/src/client-info.js";
 import { classifyGatewayConnectFailure } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { createConfigIO } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { loadStoredOperatorDeviceAuthToken } from "../../gateway/call-device-auth.js";
+import { resolveReadOnlyLocalGatewayAuth } from "../../gateway/call-device-auth.js";
 import { callGateway } from "../../gateway/call.js";
 import { isGatewayProtocolResponseError } from "../../gateway/client.js";
 import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
@@ -20,7 +16,10 @@ import {
 } from "../../gateway/local-http-probe.js";
 import { READ_SCOPE } from "../../gateway/method-scopes.js";
 import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
-import { loadDeviceIdentityIfPresent } from "../../infra/device-identity.js";
+import {
+  classifyGatewayStaleConnectionError,
+  type GatewayStaleConnectionReason,
+} from "../../gateway/stale-install.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import { LOOPBACK_PORT_PROBE_HOSTS } from "../../infra/ports-probe.js";
@@ -32,7 +31,7 @@ import type {
 } from "./restart-health.types.js";
 import { allListenersOwnedByRuntimePid } from "./restart-port-ownership.js";
 
-const GATEWAY_RESTART_PROBE_TIMEOUT_MS = 3_000;
+export const GATEWAY_RESTART_PROBE_TIMEOUT_MS = 3_000;
 
 export async function readGatewayStartupPhase(params: {
   configuredProbe: ConfiguredGatewayLocalProbe;
@@ -65,7 +64,7 @@ export async function readGatewayStartupPhase(params: {
   }
 }
 
-export type GatewayRestartProbeAuth = {
+type GatewayRestartProbeAuth = {
   token?: string;
   password?: string;
 };
@@ -78,10 +77,12 @@ export type GatewayReachability = {
   activatedPluginErrors: PluginHealthErrorSummary[];
   unavailablePlugins: UnavailablePluginHealthSummary[];
   channelProbeErrors: Array<{ id: string; error: string }>;
+  channelProbeTimeouts?: Array<{ id: string; error: string }>;
   probeError?: string;
+  staleConnection?: GatewayStaleConnectionReason;
 };
 
-export type GatewayHttpReadiness = {
+type GatewayHttpReadiness = {
   healthz: number | null;
   readyz: number | null;
 };
@@ -95,6 +96,7 @@ export async function waitForGatewayHttpReadiness(params: {
   probeTimeoutMs?: number;
   port: number;
   signal?: AbortSignal;
+  onObservation?: (readiness: GatewayHttpReadiness) => void;
 }): Promise<GatewayHttpReadiness> {
   params.signal?.throwIfAborted();
   const probe = createConfiguredGatewayLocalProbe(params.config ?? {});
@@ -105,34 +107,20 @@ export async function waitForGatewayHttpReadiness(params: {
     if (remainingMs <= 0) {
       return latest;
     }
-    const [healthz, readyz] = await Promise.all([
-      probe
-        .requestHttp({
-          host: "127.0.0.1",
-          pathname: "/healthz",
-          port: params.port,
-          timeoutMs: Math.min(
-            remainingMs,
-            params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
-          ),
-          ...(params.signal ? { signal: params.signal } : {}),
-        })
-        .then((result) => result?.statusCode ?? null),
-      probe
-        .requestHttp({
-          host: "127.0.0.1",
-          pathname: "/readyz",
-          port: params.port,
-          timeoutMs: Math.min(
-            remainingMs,
-            params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
-          ),
-          ...(params.signal ? { signal: params.signal } : {}),
-        })
-        .then((result) => result?.statusCode ?? null),
-    ]);
+    const probeStatus = async (pathname: "/healthz" | "/readyz") => {
+      const result = await probe.requestHttp({
+        host: "127.0.0.1",
+        pathname,
+        port: params.port,
+        timeoutMs: Math.min(remainingMs, params.probeTimeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS),
+        ...(params.signal ? { signal: params.signal } : {}),
+      });
+      return result?.statusCode ?? null;
+    };
+    const [healthz, readyz] = await Promise.all([probeStatus("/healthz"), probeStatus("/readyz")]);
     params.signal?.throwIfAborted();
     latest = { healthz, readyz };
+    params.onObservation?.(latest);
     if (healthz === 200 && readyz === 200) {
       return latest;
     }
@@ -208,37 +196,40 @@ function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] 
       activated: true,
       error: entry.error,
     };
-    if (typeof entry.activationSource === "string") {
-      error.activationSource = entry.activationSource;
-    }
-    if (typeof entry.activationReason === "string") {
-      error.activationReason = entry.activationReason;
-    }
-    if (typeof entry.failurePhase === "string") {
-      error.failurePhase = entry.failurePhase;
+    for (const key of ["activationSource", "activationReason", "failurePhase"] as const) {
+      if (typeof entry[key] === "string") {
+        error[key] = entry[key];
+      }
     }
     return [error];
   });
 }
 
-function readChannelProbeErrors(health: unknown): Array<{ id: string; error: string }> {
+type ChannelProbeResult = { id: string } & (
+  | { status: "healthy" }
+  | { status: "unhealthy" | "timed-out"; error: string }
+);
+
+function readChannelProbeResults(health: unknown): ChannelProbeResult[] {
   const channels = asOptionalRecord(asOptionalRecord(health)?.channels);
-  if (!channels) {
-    return [];
-  }
-  const errors: Array<{ id: string; error: string }> = [];
-  for (const [id, summary] of Object.entries(channels)) {
+  return Object.entries(channels ?? {}).flatMap<ChannelProbeResult>(([id, summary]) => {
     const probe = asOptionalRecord(asOptionalRecord(summary)?.probe);
-    if (probe?.ok !== false) {
-      continue;
+    if (!probe) {
+      return [];
     }
-    const error = probe.error;
-    errors.push({
-      id,
-      error: typeof error === "string" && error.trim() ? error : "probe failed",
-    });
-  }
-  return errors;
+    // Retain the explicit timeout marker from older Gateways that also sent ok:false.
+    if (probe.timedOut === true || probe.ok === false) {
+      return [
+        {
+          id,
+          status: probe.timedOut === true ? "timed-out" : "unhealthy",
+          error:
+            typeof probe.error === "string" && probe.error.trim() ? probe.error : "check failed",
+        },
+      ];
+    }
+    return probe.ok === true ? [{ id, status: "healthy" }] : [];
+  });
 }
 
 function readUnavailablePlugins(health: unknown): UnavailablePluginHealthSummary[] {
@@ -294,36 +285,19 @@ export async function confirmGatewayReachable(params: {
     if (!target) {
       return { ...result, probeError: "gateway TLS certificate unavailable" };
     }
-    const authNone = context.config.gateway?.auth?.mode === "none";
-    const identity =
-      authNone || auth?.token || auth?.password
-        ? null
-        : loadDeviceIdentityIfPresent({ env: params.env });
-    const preparedDeviceAuth = await loadStoredOperatorDeviceAuthToken(
-      identity,
-      undefined,
-      "read-only",
-      params.env,
-    );
-    // Readiness is first-party local control. CLI shared auth preserves read scopes;
-    // auth-none uses the loopback backend contract. Other modes may reuse an
-    // existing paired identity; the read-only client never creates or changes it.
+    const controlAuth = await resolveReadOnlyLocalGatewayAuth({
+      auth,
+      authNone: context.config.gateway?.auth?.mode === "none",
+      env: params.env,
+    });
     params.signal?.throwIfAborted();
     const health = await callGateway({
       config: context.config,
       localPortOverride: params.port,
-      token: auth?.token,
-      password: auth?.password,
-      skipImplicitAuth: true,
+      ...controlAuth,
       tlsFingerprint: target.tlsFingerprint,
       method: "health",
       scopes: [READ_SCOPE],
-      clientName: authNone ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT : GATEWAY_CLIENT_NAMES.CLI,
-      mode: authNone ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
-      requireLocalBackendSharedAuth: authNone,
-      deviceIdentity: preparedDeviceAuth ? identity : null,
-      preparedDeviceAuth: preparedDeviceAuth ?? undefined,
-      sharedStateMode: "read-only",
       timeoutMs: params.timeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
       ...(params.signal ? { signal: params.signal } : {}),
       onHelloOk: (hello) => {
@@ -335,7 +309,16 @@ export async function confirmGatewayReachable(params: {
     result.reachable = true;
     result.activatedPluginErrors = readActivatedPluginErrors(health);
     result.unavailablePlugins = readUnavailablePlugins(health);
-    result.channelProbeErrors = readChannelProbeErrors(health);
+    const channelProbes = readChannelProbeResults(health);
+    result.channelProbeErrors = channelProbes.flatMap((probe) =>
+      probe.status === "unhealthy" ? [{ id: probe.id, error: probe.error }] : [],
+    );
+    const timeouts = channelProbes.flatMap((probe) =>
+      probe.status === "timed-out" ? [{ id: probe.id, error: probe.error }] : [],
+    );
+    if (timeouts.length) {
+      result.channelProbeTimeouts = timeouts;
+    }
   } catch (error) {
     params.signal?.throwIfAborted();
     // Only a correlated Gateway rejection proves protocol reachability. Bare socket
@@ -347,6 +330,7 @@ export async function confirmGatewayReachable(params: {
         (params.allowDeviceIdentityRequired === true &&
           error.message === "device identity required"));
     if (!result.reachable) {
+      result.staleConnection = classifyGatewayStaleConnectionError(error);
       result.probeError = formatGatewayRestartProbeError(error);
     }
   }

@@ -64,6 +64,7 @@ export async function clearPendingFinalDeliveryAfterSuccess(
           : {
               restartRecoveryBeforeAgentReplyState: undefined,
               restartRecoverySourceIngress: undefined,
+              restartRecoveryOperatorSource: undefined,
               restartRecoveryForceSafeTools: undefined,
             }),
         pendingFinalDelivery: undefined,
@@ -81,6 +82,11 @@ export async function clearPendingFinalDeliveryAfterSuccess(
             }),
       };
     },
-    { skipMaintenance: true, takeCacheOwnership: true, preserveActivity: options.preserveActivity },
+    {
+      skipMaintenance: true,
+      takeCacheOwnership: true,
+      preserveActivity: options.preserveActivity,
+      workerGuard: {},
+    },
   );
 }

@@ -77,7 +77,7 @@ export function createTestAgentScope(
       params.resolveAutoFallbackPrimaryProbeMock(args),
     resolveAgentConfig: () => undefined,
     resolveAgentDir: () => "/tmp/agent",
-    resolveAgentEffectiveModelPrimary: (cfg: unknown) => {
+    resolveNativeModelPrimary: (cfg: unknown) => {
       const raw = (cfg as { agents?: { defaults?: { model?: string | { primary?: string } } } })
         ?.agents?.defaults?.model;
       return typeof raw === "string" ? raw : raw?.primary;

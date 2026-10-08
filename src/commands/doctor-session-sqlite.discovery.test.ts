@@ -6,12 +6,10 @@ import { loadExactSessionEntry } from "../config/sessions/session-accessor.sqlit
 import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { searchSessionTranscriptsReadOnlySync as searchSessionTranscripts } from "../config/sessions/session-transcript-search.js";
 import * as sessionTargets from "../config/sessions/targets.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   readMigrationArtifactIdentity,
   moveMigrationArtifact,
-} from "./doctor-session-sqlite-artifact.js";
+} from "../infra/session-sqlite-migration-artifact.js";
 import {
   createSessionSqliteMigrationRun,
   recordPlannedMigrationMoves,
@@ -19,9 +17,11 @@ import {
   updateMigrationManifestTarget,
   writeSessionSqliteMigrationManifest,
   type SessionSqliteMigrationMove,
-} from "./doctor-session-sqlite-migration-run.js";
-import * as migrationRun from "./doctor-session-sqlite-migration-run.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
+} from "../infra/session-sqlite-migration-manifest.js";
+import * as migrationRun from "../infra/session-sqlite-migration-manifest.js";
+import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-readers.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { collectRecoveryInventory } from "./doctor-session-sqlite-recovery-inventory.js";
 import { restoreSessionSqliteMigrationRun } from "./doctor-session-sqlite-restore.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
@@ -130,32 +130,29 @@ it("retains growing duplicate archives and the restore refusal without leaking i
   });
 });
 
-it.each(["dry-run", "import", "validate"] as const)(
-  "%s carries one fleet discovery into legacy archive coverage",
-  async (mode) => {
-    await withOpenClawTestState({ label: "doctor-fleet-discovery" }, async (state) => {
-      const agentIds = ["first", "second", "third"];
-      for (const agentId of agentIds) {
-        const sessions = state.sessionsDir(agentId);
-        fs.mkdirSync(sessions, { recursive: true });
-        fs.writeFileSync(path.join(sessions, "sessions.json"), "{}");
-      }
-      const discovery = vi.spyOn(sessionTargets, "resolveAllAgentSessionStoreCandidateTargetsSync");
-      try {
-        const report = await runDoctorSessionSqlite({
-          mode,
-          allAgents: true,
-          cfg: {},
-          env: state.env,
-        });
-        expect(report.targets.map((target) => target.agentId).toSorted()).toEqual(agentIds);
-        expect(discovery).toHaveBeenCalledTimes(1);
-      } finally {
-        discovery.mockRestore();
-      }
-    });
-  },
-);
+it("carries one fleet discovery into import archive coverage", async () => {
+  await withOpenClawTestState({ label: "doctor-fleet-discovery" }, async (state) => {
+    const agentIds = ["first", "second", "third"];
+    for (const agentId of agentIds) {
+      const sessions = state.sessionsDir(agentId);
+      fs.mkdirSync(sessions, { recursive: true });
+      fs.writeFileSync(path.join(sessions, "sessions.json"), "{}");
+    }
+    const discovery = vi.spyOn(sessionTargets, "resolveAllAgentSessionStoreCandidateTargetsSync");
+    try {
+      const report = await runDoctorSessionSqlite({
+        mode: "import",
+        allAgents: true,
+        cfg: {},
+        env: state.env,
+      });
+      expect(report.targets.map((target) => target.agentId).toSorted()).toEqual(agentIds);
+      expect(discovery).toHaveBeenCalledTimes(1);
+    } finally {
+      discovery.mockRestore();
+    }
+  });
+});
 
 it.each([{ allAgents: true }, { agent: "retired" }])(
   "admits transcript-only retired agents through the public selector %j",
@@ -215,49 +212,104 @@ it.each([{ allAgents: true }, { agent: "retired" }])(
   },
 );
 
-it("imports valid unregistered primary history without changing its current logical owner", async () => {
-  await withOpenClawTestState({ label: "doctor-discovery" }, async (state) => {
-    const sessions = state.sessionsDir();
-    fs.mkdirSync(sessions, { recursive: true });
-    const store = path.join(sessions, "sessions.json");
-    const key = "agent:main:main";
-    const previous = "11111111-1111-4111-8111-111111111111";
-    const standalone = "22222222-2222-4222-8222-222222222222";
-    const priorName = `2026-06-15T00-00-00-000Z_${previous}.jsonl`;
-    fs.writeFileSync(
-      store,
-      JSON.stringify({
-        [key]: {
-          sessionId: "current",
-          updatedAt: 42,
-          sessionFile: "current.jsonl",
-          previousSessionId: previous,
-        },
-      }),
-    );
-    fs.writeFileSync(path.join(sessions, "current.jsonl"), transcript("current", "currentword"));
-    fs.writeFileSync(path.join(sessions, priorName), transcript(previous, "oldfamilyneedle"));
-    fs.writeFileSync(
-      path.join(sessions, `${standalone}.jsonl`),
-      transcript(standalone, "oldstandaloneneedle"),
-    );
-    const report = await runDoctorSessionSqlite({ mode: "import", store, env: state.env });
-    expect(report.targets.flatMap((target) => target.issues)).toEqual([]);
-    const scope = { agentId: "main", env: state.env };
-    expect(searchSessionTranscripts({ ...scope, query: "oldfamilyneedle" }).hits).toEqual([
-      expect.objectContaining({ sessionKey: key, sessionId: previous }),
-    ]);
-    expect(searchSessionTranscripts({ ...scope, query: "oldstandaloneneedle" }).hits).toHaveLength(
-      1,
-    );
-    expect(
-      loadExactSessionEntry({ ...scope, sessionKey: key, storePath: store })?.entry,
-    ).toMatchObject({
-      sessionId: "current",
-      updatedAt: 42,
+it.each(["lineage", "generated", 1, 2] as const)(
+  "imports primary history without changing its logical owner (%s)",
+  async (variant) => {
+    await withOpenClawTestState({ label: "doctor-primary-history" }, async (state) => {
+      const sessions = state.sessionsDir();
+      fs.mkdirSync(sessions, { recursive: true });
+      const store = path.join(sessions, "sessions.json");
+      const key = "agent:main:main";
+      const id =
+        variant === "lineage"
+          ? "11111111-1111-4111-8111-111111111111"
+          : variant === "generated"
+            ? "77777777-7777-4777-8777-777777777777"
+            : `legacy-version-${variant}`;
+      const query =
+        variant === "lineage"
+          ? "oldfamilyneedle"
+          : variant === "generated"
+            ? "generatedcurrentneedle"
+            : "legacyversionneedle";
+      if (typeof variant === "number") {
+        const header = {
+          type: "session",
+          id,
+          version: variant,
+          timestamp: "2026-06-15T00:00:00.000Z",
+          cwd: "/legacy/workspace",
+        };
+        const event = {
+          type: "message",
+          ...(variant > 1 ? { id: "old-user", parentId: null } : {}),
+          timestamp: "2026-06-15T00:00:01.000Z",
+          message: { role: "user", content: query },
+        };
+        fs.writeFileSync(
+          path.join(sessions, `${id}.jsonl`),
+          `${JSON.stringify(header)}\n${JSON.stringify(event)}\n`,
+        );
+      } else {
+        const entry =
+          variant === "lineage"
+            ? {
+                sessionId: "current",
+                updatedAt: 42,
+                sessionFile: "current.jsonl",
+                previousSessionId: id,
+              }
+            : {
+                sessionId: id,
+                updatedAt: 123,
+                sessionFile: `${id}.jsonl`,
+                label: "retained-label",
+              };
+        fs.writeFileSync(store, JSON.stringify({ [key]: entry }));
+        fs.writeFileSync(
+          path.join(sessions, `2026-06-15T00-00-00-000Z_${id}.jsonl`),
+          transcript(id, query),
+        );
+        if (variant === "lineage") {
+          const standalone = "22222222-2222-4222-8222-222222222222";
+          fs.writeFileSync(
+            path.join(sessions, "current.jsonl"),
+            transcript("current", "currentword"),
+          );
+          fs.writeFileSync(
+            path.join(sessions, `${standalone}.jsonl`),
+            transcript(standalone, "oldstandaloneneedle"),
+          );
+        }
+      }
+      const report = await runDoctorSessionSqlite({ mode: "import", store, env: state.env });
+      expect(report.targets.flatMap((target) => target.issues)).toEqual([]);
+      if (typeof variant === "number") {
+        closeOpenClawAgentDatabasesForTest();
+      }
+      const scope = { agentId: "main", env: state.env };
+      expect(searchSessionTranscripts({ ...scope, query }).hits).toEqual([
+        expect.objectContaining(
+          typeof variant === "number" ? { sessionId: id } : { sessionKey: key, sessionId: id },
+        ),
+      ]);
+      if (typeof variant !== "number") {
+        expect(
+          loadExactSessionEntry({ ...scope, sessionKey: key, storePath: store })?.entry,
+        ).toMatchObject(
+          variant === "lineage"
+            ? { sessionId: "current", updatedAt: 42 }
+            : { sessionId: id, updatedAt: 123, label: "retained-label" },
+        );
+      }
+      if (variant === "lineage") {
+        expect(
+          searchSessionTranscripts({ ...scope, query: "oldstandaloneneedle" }).hits,
+        ).toHaveLength(1);
+      }
     });
-  });
-});
+  },
+);
 
 it("recovers a completed old archive once, preserves bytes, and does not resurrect user-deleted history", async () => {
   await withOpenClawTestState({ label: "doctor-archive-discovery" }, async (state) => {
@@ -420,6 +472,8 @@ it.each(["import", "recover"] as const)(
           };
           recordPlannedMigrationMoves(old, target, [move]);
           await moveMigrationArtifact(sourcePath, archivePath, move.artifact!.identity);
+          // Retained receipts predate the remount; publication still used the live device.
+          move.artifact!.identity.dev = String(BigInt(move.artifact!.identity.dev) + 1n);
           recordCompletedMigrationMoves(old, target, [move]);
           moves.push(move);
         }
@@ -607,7 +661,7 @@ it("keeps diagnostic, deleted, mismatched, and ambiguous inputs out of searchabl
   });
 });
 
-it.each(["unchanged", "metadata changed", "contents changed"])(
+it.each(["unchanged", "device changed", "metadata changed", "contents changed"])(
   "uses a 2026.9.4 archived registry under current SQLite state: %s",
   async (archiveState) => {
     await withOpenClawTestState({ label: "doctor-archived-lineage" }, async (state) => {
@@ -661,6 +715,9 @@ it.each(["unchanged", "metadata changed", "contents changed"])(
         saved.set(archivePath, fs.readFileSync(source, "utf8"));
         recordPlannedMigrationMoves(old, target, [move]);
         await moveMigrationArtifact(source, archivePath, move.artifact!.identity);
+        if (archiveState === "device changed") {
+          move.artifact!.identity.dev = String(BigInt(move.artifact!.identity.dev) + 1n);
+        }
         recordCompletedMigrationMoves(old, target, [move]);
       }
       updateMigrationManifestTarget(old, target, [], { validationBeforeArchive: "passed" });
@@ -681,7 +738,7 @@ it.each(["unchanged", "metadata changed", "contents changed"])(
       const before = loadExactSessionEntry({ ...scope, storePath: store, sessionKey: key });
       const preview = await runDoctorSessionSqlite({ mode: "dry-run", store, env: state.env });
       expect(preview.totals).toMatchObject({ legacyEntries: 1, issues: 0, sqliteEntries: 1 });
-      if (archiveState !== "unchanged") {
+      if (archiveState === "metadata changed" || archiveState === "contents changed") {
         const registry = [...saved.keys()].find((file) => file.includes("legacy-store."))!;
         if (archiveState === "metadata changed") {
           fs.utimesSync(registry, new Date(0), new Date(0));
@@ -736,78 +793,6 @@ it.each(["unchanged", "metadata changed", "contents changed"])(
       for (const [archivePath, bytes] of saved) {
         expect(fs.readFileSync(archivePath, "utf8")).toBe(bytes);
       }
-    });
-  },
-);
-
-it("resolves one generated primary for a missing registry filename at the Doctor boundary", async () => {
-  await withOpenClawTestState({ label: "doctor-generated-current" }, async (state) => {
-    const sessions = state.sessionsDir();
-    fs.mkdirSync(sessions, { recursive: true });
-    const store = path.join(sessions, "sessions.json");
-    const id = "77777777-7777-4777-8777-777777777777";
-    const key = "agent:main:main";
-    fs.writeFileSync(
-      store,
-      JSON.stringify({
-        [key]: {
-          sessionId: id,
-          updatedAt: 123,
-          sessionFile: `${id}.jsonl`,
-          label: "retained-label",
-        },
-      }),
-    );
-    fs.writeFileSync(
-      path.join(sessions, `2026-06-15T00-00-00-000Z_${id}.jsonl`),
-      transcript(id, "generatedcurrentneedle"),
-    );
-    const report = await runDoctorSessionSqlite({ mode: "import", store, env: state.env });
-    expect(report.targets.flatMap((item) => item.issues)).toEqual([]);
-    const scope = { agentId: "main", env: state.env };
-    expect(searchSessionTranscripts({ ...scope, query: "generatedcurrentneedle" }).hits).toEqual([
-      expect.objectContaining({ sessionKey: key, sessionId: id }),
-    ]);
-    expect(
-      loadExactSessionEntry({ ...scope, sessionKey: key, storePath: store })?.entry,
-    ).toMatchObject({
-      sessionId: id,
-      updatedAt: 123,
-      label: "retained-label",
-    });
-  });
-});
-
-it.each([1, 2, 3])(
-  "imports validated version %i history through the legacy codec",
-  async (version) => {
-    await withOpenClawTestState({ label: "doctor-historical-version" }, async (state) => {
-      const sessions = state.sessionsDir();
-      fs.mkdirSync(sessions, { recursive: true });
-      const store = path.join(sessions, "sessions.json");
-      const id = `legacy-version-${version}`;
-      const header = {
-        type: "session",
-        id,
-        version,
-        timestamp: "2026-06-15T00:00:00.000Z",
-        cwd: "/legacy/workspace",
-      };
-      const event = {
-        type: "message",
-        ...(version > 1 ? { id: "old-user", parentId: null } : {}),
-        timestamp: "2026-06-15T00:00:01.000Z",
-        message: { role: "user", content: "legacyversionneedle" },
-      };
-      const bytes = `${JSON.stringify(header)}\n${JSON.stringify(event)}\n`;
-      fs.writeFileSync(path.join(sessions, `${id}.jsonl`), bytes);
-      const report = await runDoctorSessionSqlite({ mode: "import", store, env: state.env });
-      expect(report.targets.flatMap((item) => item.issues)).toEqual([]);
-      closeOpenClawAgentDatabasesForTest();
-      expect(
-        searchSessionTranscripts({ agentId: "main", env: state.env, query: "legacyversionneedle" })
-          .hits,
-      ).toEqual([expect.objectContaining({ sessionId: id })]);
     });
   },
 );

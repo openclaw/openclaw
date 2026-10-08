@@ -18,7 +18,7 @@ export async function writeApprovalCheckpointArtifacts(
           `${JSON.stringify({
             version: 1,
             scenarioId,
-            approvalKind: scenarioId === "slack-approval-exec-native" ? "exec" : "plugin",
+            approvalKind: scenarioId.endsWith("-approval-exec-native") ? "exec" : "plugin",
             state,
             approvalId: `${scenarioId}:approval`,
             channelId: SLACK_ARTIFACT_TEST_CHANNEL,

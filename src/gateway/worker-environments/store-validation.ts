@@ -11,9 +11,7 @@ import type {
 import { isValidSecretRef } from "../../secrets/ref-contract.js";
 import type { WorkerEnvironmentBootstrapReceipt } from "./environment-record.js";
 import { workerEnvironmentStateRequiresLease, type WorkerEnvironmentState } from "./state.js";
-type Ssh = WorkerSshEndpoint;
 
-export const TERMINAL_STATES: WorkerEnvironmentState[] = ["destroyed", "failed", "orphaned"];
 const WORKER_BUNDLE_HASH_PATTERN = /^[a-f0-9]{64}$/u;
 const MAX_HOST_KEY_LENGTH = 16_384;
 const MAX_SSH_FALLBACK_PORTS = 10;
@@ -135,7 +133,7 @@ export function normalizeExpiry(value: unknown): number {
   }
   return value;
 }
-export function normalizeWorkerSshEndpoint(value: Ssh): Ssh {
+export function normalizeWorkerSshEndpoint(value: WorkerSshEndpoint): WorkerSshEndpoint {
   const host = requireWorkerEnvironmentString(value.host, "SSH host");
   const user = requireWorkerEnvironmentString(value.user, "SSH user");
   const hostKey = normalizeOpenSshHostKey(value.hostKey);
@@ -179,7 +177,7 @@ export function assertShape(
   state: WorkerEnvironmentState,
   leaseId: string | null,
   nodeDeviceId: string | null,
-  sshEndpoint: Ssh | null,
+  sshEndpoint: WorkerSshEndpoint | null,
   desktop: WorkerDesktopEndpoint | null,
   bootstrapReceipt: WorkerEnvironmentBootstrapReceipt | null,
   attachedSessionIds: readonly string[],

@@ -60,7 +60,10 @@ function containsBrokenSurrogate(value: string): boolean {
 async function openBuildDetails(page: Page) {
   const sidebar = page.locator("openclaw-app-sidebar");
   await sidebar.getByRole("button", { name: /^Identity and app menu for / }).click();
-  const buildLink = sidebar.getByRole("link", { name: "Control UI build details", exact: true });
+  const buildLink = sidebar.getByRole("menuitem", {
+    name: "Control UI build details",
+    exact: true,
+  });
   await buildLink.waitFor();
   const compactText = (await buildLink.textContent()) ?? "";
   expect(compactText).toContain(`${COMPACT_BRANCH}@0123456`);

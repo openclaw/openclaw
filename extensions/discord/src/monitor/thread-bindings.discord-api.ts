@@ -1,4 +1,3 @@
-// Discord API module exposes the plugin public contract.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -39,19 +38,14 @@ export function isThreadArchived(raw: unknown): boolean {
     thread_metadata?: { archived?: unknown };
     threadMetadata?: { archived?: unknown };
   };
-  if (asRecord.archived === true) {
-    return true;
-  }
-  if (asRecord.thread_metadata?.archived === true) {
-    return true;
-  }
-  if (asRecord.threadMetadata?.archived === true) {
-    return true;
-  }
-  return false;
+  return (
+    asRecord.archived === true ||
+    asRecord.thread_metadata?.archived === true ||
+    asRecord.threadMetadata?.archived === true
+  );
 }
 
-function normalizeDiscordBindingChannelId(raw?: string | null): string | null {
+export function normalizeDiscordBindingChannelId(raw?: string | null): string | null {
   const trimmed = normalizeOptionalString(raw) ?? "";
   if (!trimmed) {
     return null;
@@ -81,51 +75,31 @@ export function summarizeDiscordError(err: unknown): string {
   return "error";
 }
 
-function extractNumericDiscordErrorValue(value: unknown): number | undefined {
-  return parseStrictNonNegativeInteger(value);
-}
-
-function extractDiscordErrorStatus(err: unknown): number | undefined {
+export function isDiscordThreadGoneError(err: unknown): boolean {
   if (!err || typeof err !== "object") {
-    return undefined;
+    return false;
   }
   const candidate = err as {
     status?: unknown;
     statusCode?: unknown;
-    response?: { status?: unknown };
-  };
-  return (
-    extractNumericDiscordErrorValue(candidate.status) ??
-    extractNumericDiscordErrorValue(candidate.statusCode) ??
-    extractNumericDiscordErrorValue(candidate.response?.status)
-  );
-}
-
-function extractDiscordErrorCode(err: unknown): number | undefined {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const candidate = err as {
     code?: unknown;
     rawError?: { code?: unknown };
     body?: { code?: unknown };
-    response?: { body?: { code?: unknown }; data?: { code?: unknown } };
+    response?: { status?: unknown; body?: { code?: unknown }; data?: { code?: unknown } };
   };
-  return (
-    extractNumericDiscordErrorValue(candidate.code) ??
-    extractNumericDiscordErrorValue(candidate.rawError?.code) ??
-    extractNumericDiscordErrorValue(candidate.body?.code) ??
-    extractNumericDiscordErrorValue(candidate.response?.body?.code) ??
-    extractNumericDiscordErrorValue(candidate.response?.data?.code)
-  );
-}
-
-export function isDiscordThreadGoneError(err: unknown): boolean {
-  const code = extractDiscordErrorCode(err);
+  const code =
+    parseStrictNonNegativeInteger(candidate.code) ??
+    parseStrictNonNegativeInteger(candidate.rawError?.code) ??
+    parseStrictNonNegativeInteger(candidate.body?.code) ??
+    parseStrictNonNegativeInteger(candidate.response?.body?.code) ??
+    parseStrictNonNegativeInteger(candidate.response?.data?.code);
   if (code === DISCORD_UNKNOWN_CHANNEL_ERROR_CODE) {
     return true;
   }
-  const status = extractDiscordErrorStatus(err);
+  const status =
+    parseStrictNonNegativeInteger(candidate.status) ??
+    parseStrictNonNegativeInteger(candidate.statusCode) ??
+    parseStrictNonNegativeInteger(candidate.response?.status);
   // 404: deleted/unknown channel. 403: bot no longer has access.
   return status === 404 || status === 403;
 }
@@ -222,10 +196,7 @@ export function findReusableWebhook(params: { accountId: string; channelId: stri
   webhookId?: string;
   webhookToken?: string;
 } {
-  const reusableKey = toReusableWebhookKey({
-    accountId: params.accountId,
-    channelId: params.channelId,
-  });
+  const reusableKey = toReusableWebhookKey(params);
   const cached = REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL.get(reusableKey);
   if (cached) {
     return {
@@ -234,13 +205,12 @@ export function findReusableWebhook(params: { accountId: string; channelId: stri
     };
   }
   for (const record of BINDINGS_BY_THREAD_ID.values()) {
-    if (record.accountId !== params.accountId) {
-      continue;
-    }
-    if (record.channelId !== params.channelId) {
-      continue;
-    }
-    if (!record.webhookId || !record.webhookToken) {
+    if (
+      record.accountId !== params.accountId ||
+      record.channelId !== params.channelId ||
+      !record.webhookId ||
+      !record.webhookToken
+    ) {
       continue;
     }
     rememberReusableWebhook(record);
@@ -314,8 +284,7 @@ export async function createThreadForBinding(params: {
         ...(assertCreateAllowed ? { assertCreateAllowed } : {}),
       },
     );
-    const createdId = normalizeOptionalString(created?.id) ?? "";
-    return createdId || null;
+    return normalizeOptionalString(created?.id) ?? null;
   } catch (err) {
     logVerbose(
       `discord thread binding auto-thread create failed for ${params.channelId}: ${summarizeDiscordError(err)}`,

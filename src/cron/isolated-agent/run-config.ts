@@ -1,3 +1,4 @@
+import { resolveAgentModelConfigForRuntime } from "../../agents/agent-scope-config.js";
 /** Builds isolated cron runner config from global defaults plus agent overrides. */
 import type { resolveAgentConfig } from "../../agents/agent-scope.js";
 import {
@@ -5,6 +6,7 @@ import {
   getRuntimeConfigSourceSnapshot,
   selectApplicableRuntimeConfig,
 } from "../../config/config.js";
+import { toAgentModelListLike } from "../../config/model-input.js";
 import type { AgentDefaultsConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -22,39 +24,30 @@ export function resolveCronActiveRuntimeConfig(cfg: OpenClawConfig): OpenClawCon
   );
 }
 
-function extractCronAgentDefaultsOverride(agentConfigOverride?: ResolvedAgentConfig) {
-  const {
-    model: overrideModel,
-    sandbox: _agentSandboxOverride,
-    memory: _agentMemoryOverride,
-    models: _agentModelsOverride,
-    params: _agentParamsOverride,
-    ...agentOverrideRest
-  } = agentConfigOverride ?? {};
-  return {
-    overrideModel,
-    definedOverrides: Object.fromEntries(
-      Object.entries(agentOverrideRest).filter(([, value]) => value !== undefined),
-    ) as Partial<AgentDefaultsConfig>,
-  };
-}
-
 /** Derives isolated cron agent defaults from one immutable config snapshot. */
 export function resolveCronAgentConfigFromSnapshot(params: {
   config: OpenClawConfig;
   agentConfigOverride?: ResolvedAgentConfig;
 }) {
   const runtimeConfig = params.config;
-  const { overrideModel, definedOverrides } = extractCronAgentDefaultsOverride(
-    params.agentConfigOverride,
-  );
+  const {
+    model: _agentModelOverride,
+    sandbox: _agentSandboxOverride,
+    memory: _agentMemoryOverride,
+    models: _agentModelsOverride,
+    params: _agentParamsOverride,
+    ...agentOverrideRest
+  } = params.agentConfigOverride ?? {};
+  const overrideModel = resolveAgentModelConfigForRuntime(params.agentConfigOverride);
+  const definedOverrides = Object.fromEntries(
+    Object.entries(agentOverrideRest).filter(([, value]) => value !== undefined),
+  ) as Partial<AgentDefaultsConfig>;
   // Agent-aware resolvers merge these scopes themselves. Flattening partial maps
   // erases inherited sandbox, memory, model-runtime and request-parameter settings.
   const agentDefaults: AgentDefaultsConfig = {
     ...Object.assign({}, runtimeConfig.agents?.defaults, definedOverrides),
   };
-  const existingModel =
-    agentDefaults.model && typeof agentDefaults.model === "object" ? agentDefaults.model : {};
+  const existingModel = toAgentModelListLike(agentDefaults.model) ?? {};
   if (typeof overrideModel === "string") {
     agentDefaults.model = { ...existingModel, primary: overrideModel };
   } else if (overrideModel) {

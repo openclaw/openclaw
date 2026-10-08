@@ -4,24 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import { withPendingWebPage } from "./web-runtime.pending-navigation.test-helper.js";
 
 describe("QA web pending-navigation fixture", () => {
-  it("propagates the original launch failure without waiting for a request", async () => {
-    const error = new Error("browser launch failed");
-    const ready = createDeferred<void>();
-    const close = vi.fn();
-    const verify = vi.fn();
-
-    await expect(
-      withPendingWebPage({
-        opening: Promise.reject(error),
-        ready: ready.promise,
-        close,
-        verify,
-      }),
-    ).rejects.toBe(error);
-    expect(verify).not.toHaveBeenCalled();
-    expect(close).toHaveBeenCalledOnce();
-  });
-
   it("rejects acquisition that completes before the request", async () => {
     const ready = createDeferred<void>();
     const close = vi.fn();
@@ -76,10 +58,10 @@ describe("QA web pending-navigation fixture", () => {
       const opening = createDeferred<void>();
       const cancelled = new Error("fixture cancelled");
       const closeError = new Error("fixture close failed");
+      const assertionError = new Error("fixture assertion failed");
       const controller = new AbortController();
       const closing = createDeferred<void>();
       const finished = vi.fn();
-      let expectedError: unknown = closeError;
       const close = vi.fn(() => {
         controller.abort(cancelled);
         closing.resolve();
@@ -93,12 +75,7 @@ describe("QA web pending-navigation fixture", () => {
         close,
         verify: async () => {
           if (phase === "assertion") {
-            try {
-              expect("actual fixture state").toBe("expected fixture state");
-            } catch (error) {
-              expectedError = error;
-              throw error;
-            }
+            throw assertionError;
           }
         },
       })
@@ -119,7 +96,7 @@ describe("QA web pending-navigation fixture", () => {
         expect(close).toHaveBeenCalledOnce();
         expect(finished).not.toHaveBeenCalled();
         opening.reject(cancelled);
-        await expect(pending).resolves.toBe(expectedError);
+        await expect(pending).resolves.toBe(phase === "assertion" ? assertionError : closeError);
         expect(finished).toHaveBeenCalledOnce();
       } finally {
         opening.reject(cancelled);
@@ -128,57 +105,34 @@ describe("QA web pending-navigation fixture", () => {
     },
   );
 
-  it.each(["acquisition", "assertion"] as const)(
-    "preserves both %s and cleanup failures",
-    async (phase) => {
-      const opening = createDeferred<void>();
-      const ready = createDeferred<void>();
-      const acquisitionError = new Error("navigation failed");
-      const rollbackError = new Error("rollback failed");
-      let primaryFailure: unknown = new AggregateError(
-        [acquisitionError, rollbackError],
-        "web page open and cleanup failed",
-        { cause: acquisitionError },
-      );
-      const closeError = new AggregateError([rollbackError], "web session cleanup failed");
-      const cancelled = new Error("fixture cancelled");
-      const close = vi.fn(() => {
-        opening.reject(cancelled);
-        throw closeError;
-      });
-      const verify = vi.fn(async () => {
-        try {
-          expect("actual fixture state").toBe("expected fixture state");
-        } catch (error) {
-          primaryFailure = error;
-          throw error;
-        }
-      });
-      const pending = withPendingWebPage({
-        opening: opening.promise,
-        ready: ready.promise,
-        close,
-        verify,
-      }).catch((error: unknown) => error);
-      try {
-        if (phase === "acquisition") {
-          opening.reject(primaryFailure);
-        } else {
-          ready.resolve();
-        }
-        const failure = (await pending) as AggregateError;
-        expect(failure).toBeInstanceOf(AggregateError);
-        expect(failure.errors).toHaveLength(2);
-        expect(failure.errors[0]).toBe(primaryFailure);
-        expect(failure.errors[1]).toBe(closeError);
-        expect(failure.cause).toBe(primaryFailure);
-        expect(close).toHaveBeenCalledOnce();
-        expect(verify).toHaveBeenCalledTimes(phase === "acquisition" ? 0 : 1);
-      } finally {
-        opening.reject(cancelled);
-        ready.resolve();
-        await pending;
-      }
-    },
-  );
+  it("preserves both acquisition and cleanup failures without waiting for readiness", async () => {
+    const acquisitionError = new Error("navigation failed");
+    const rollbackError = new Error("rollback failed");
+    const primaryFailure = new AggregateError(
+      [acquisitionError, rollbackError],
+      "web page open and cleanup failed",
+      { cause: acquisitionError },
+    );
+    const closeError = new AggregateError([rollbackError], "web session cleanup failed");
+    const close = vi.fn(() => {
+      throw closeError;
+    });
+    const verify = vi.fn();
+    const failure = await withPendingWebPage({
+      opening: Promise.reject(primaryFailure),
+      ready: createDeferred<void>().promise,
+      close,
+      verify,
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    if (!(failure instanceof AggregateError)) {
+      throw failure;
+    }
+    expect(failure.errors).toHaveLength(2);
+    expect(failure.errors[0]).toBe(primaryFailure);
+    expect(failure.errors[1]).toBe(closeError);
+    expect(failure.cause).toBe(primaryFailure);
+    expect(close).toHaveBeenCalledOnce();
+    expect(verify).not.toHaveBeenCalled();
+  });
 });

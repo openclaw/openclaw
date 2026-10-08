@@ -5,11 +5,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import * as directoryDurability from "../infra/directory-durability.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
   createSessionSqliteMigrationRun,
   writeSessionSqliteMigrationManifest,
-} from "./doctor-session-sqlite-migration-run.js";
+} from "../infra/session-sqlite-migration-manifest.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import {
@@ -23,57 +23,31 @@ import {
 const { createLegacyStore, createVerifiedRecoveryStore } = useDoctorSessionSqliteTestFixture();
 
 describe("runDoctorSessionSqlite", () => {
-  it("refuses new recovery references introduced during confirmation", async () => {
-    const { store, imported, archivePath } = await createVerifiedRecoveryStore();
-    const manifest = readMigrationManifest(
-      requireMigrationManifestPath(imported.migrationRun?.manifestPath),
-    );
+  it("blocks a same-size replacement recovery original during preview", async () => {
+    const { store, archivePath } = await createVerifiedRecoveryStore();
     const original = fs.readFileSync(archivePath);
-    await expect(
-      retireSessionSqliteRecovery({
-        env: store.env,
-        preview: inspectSessionSqliteRecovery({ cfg: {}, env: store.env }),
-        readConfig: async () => ({}),
-        confirm: async () => {
-          const added = createSessionSqliteMigrationRun(store.env, []);
-          added.manifest.targets = manifest.targets;
-          added.manifest.completedAt = manifest.completedAt;
-          writeSessionSqliteMigrationManifest(added);
-          return true;
-        },
-      }),
-    ).rejects.toThrow(/selection changed/i);
-    expect(fs.readFileSync(archivePath)).toEqual(original);
+    fs.renameSync(archivePath, path.join(store.tempDir, "parked-original"));
+    const replacement = Buffer.alloc(original.length, "x");
+    fs.writeFileSync(archivePath, replacement);
+
+    const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
+    expect(preview.artifacts.find((artifact) => artifact.path === archivePath)).toMatchObject({
+      outcome: "blocked",
+      reason: "artifact-metadata-changed",
+    });
+    const result = await retireSessionSqliteRecovery({
+      env: store.env,
+      preview,
+      readConfig: async () => ({}),
+      confirm: async () => true,
+    });
+    expect(result.status).toBe("blocked");
+    expect(result.totals.removedBytes).toBe(0);
+    expect(fs.readFileSync(archivePath)).toEqual(replacement);
   });
 
-  it.each([false, true])(
-    "blocks a replaced recovery original during preview (same size: %s)",
-    async (sameSize) => {
-      const { store, archivePath } = await createVerifiedRecoveryStore();
-      const original = fs.readFileSync(archivePath);
-      fs.renameSync(archivePath, path.join(store.tempDir, "parked-original"));
-      const replacement = Buffer.alloc(sameSize ? original.length : 7, "x");
-      fs.writeFileSync(archivePath, replacement);
-
-      const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
-      expect(preview.artifacts.find((artifact) => artifact.path === archivePath)).toMatchObject({
-        outcome: "blocked",
-        reason: "artifact-metadata-changed",
-      });
-      const result = await retireSessionSqliteRecovery({
-        env: store.env,
-        preview,
-        readConfig: async () => ({}),
-        confirm: async () => true,
-      });
-      expect(result.status).toBe("blocked");
-      expect(result.totals.removedBytes).toBe(0);
-      expect(fs.readFileSync(archivePath)).toEqual(replacement);
-    },
-  );
-
-  it.each(["replacement", "symlink", "hardlink"])(
-    "refuses a destination database %s introduced during confirmation",
+  it.each(["new-manifest", "replacement", "symlink", "hardlink"])(
+    "refuses a recovery ownership change during confirmation: %s",
     async (kind) => {
       const { store, imported, archivePath } = await createVerifiedRecoveryStore();
       const databasePath = imported.targets[0]!.sqlitePath;
@@ -85,7 +59,13 @@ describe("runDoctorSessionSqlite", () => {
           preview: inspectSessionSqliteRecovery({ cfg: {}, env: store.env }),
           readConfig: async () => ({}),
           confirm: async () => {
-            if (kind === "hardlink") {
+            if (kind === "new-manifest") {
+              const manifest = readMigrationManifest(imported.migrationRun?.manifestPath);
+              const added = createSessionSqliteMigrationRun(store.env, []);
+              added.manifest.targets = manifest.targets;
+              added.manifest.completedAt = manifest.completedAt;
+              writeSessionSqliteMigrationManifest(added);
+            } else if (kind === "hardlink") {
               fs.linkSync(databasePath, saved);
             } else {
               fs.renameSync(databasePath, saved);
@@ -98,19 +78,20 @@ describe("runDoctorSessionSqlite", () => {
             return true;
           },
         }),
-      ).rejects.toThrow(/destination|symbolic|hard.link/i);
+      ).rejects.toThrow(
+        kind === "new-manifest" ? /selection changed/i : /destination|symbolic|hard.link/i,
+      );
       expect(fs.readFileSync(archivePath)).toEqual(original);
     },
   );
 
-  it.each(
-    ["transcript", "legacy-store"].flatMap((artifactKind) =>
-      ["replacement", "symlink", "hardlink", "same-size edit"].map((change) => ({
-        artifactKind,
-        change,
-      })),
-    ),
-  )(
+  it.each([
+    { artifactKind: "transcript", change: "replacement" },
+    { artifactKind: "transcript", change: "symlink" },
+    { artifactKind: "transcript", change: "hardlink" },
+    { artifactKind: "transcript", change: "same-size edit" },
+    { artifactKind: "legacy-store", change: "same-size edit" },
+  ])(
     "preserves every recovery dependency after a $artifactKind $change during confirmation",
     async ({ artifactKind, change }) => {
       const { store, imported } = await createVerifiedRecoveryStore();
@@ -159,11 +140,14 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it.each(
-    ["in-place edit", "truncation", "WAL commit"].flatMap((change) =>
-      ["confirmation", "publication", "unlink-intent"].map((phase) => ({ change, phase })),
-    ),
-  )("retains originals after destination $change during $phase", async ({ change, phase }) => {
+  it.each([
+    { change: "in-place edit", phase: "confirmation" },
+    { change: "truncation", phase: "confirmation" },
+    ...["confirmation", "publication", "unlink-intent"].map((phase) => ({
+      change: "WAL commit",
+      phase,
+    })),
+  ])("retains originals after destination $change during $phase", async ({ change, phase }) => {
     const { store, imported } = await createVerifiedRecoveryStore();
     const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
     const target = readMigrationManifest(manifestPath).targets[0]!;

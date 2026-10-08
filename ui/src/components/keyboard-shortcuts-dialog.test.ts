@@ -47,17 +47,15 @@ describe("keyboard shortcuts dialog", () => {
         const row = Array.from(dialog.shadowRoot?.querySelectorAll(".shortcut-row") ?? []).find(
           (candidate) => candidate.textContent?.includes(label),
         );
-        expect(Array.from(row?.querySelectorAll("kbd") ?? [], (kbd) => kbd.textContent)).toEqual([
-          modifier,
-          shift,
-          key,
-        ]);
+        expect(
+          Array.from(row?.querySelectorAll("kbd") ?? [], (kbd) => kbd.textContent?.trim()),
+        ).toEqual([modifier, shift, key]);
       }
       const selectionRow = Array.from(
         dialog.shadowRoot?.querySelectorAll(".shortcut-row") ?? [],
       ).find((row) => row.textContent?.includes("Select multiple sessions"));
       expect(
-        Array.from(selectionRow?.querySelectorAll("kbd") ?? [], (key) => key.textContent),
+        Array.from(selectionRow?.querySelectorAll("kbd") ?? [], (key) => key.textContent?.trim()),
       ).toEqual([alt, "Click"]);
 
       const sendRow = () =>
@@ -65,14 +63,14 @@ describe("keyboard shortcuts dialog", () => {
           row.textContent?.includes("Send message"),
         );
       expect(
-        Array.from(sendRow()?.querySelectorAll("kbd") ?? [], (key) => key.textContent),
+        Array.from(sendRow()?.querySelectorAll("kbd") ?? [], (key) => key.textContent?.trim()),
       ).toEqual([enter]);
 
       dialog.sendShortcut = "modifier-enter";
       await dialog.updateComplete;
 
       expect(
-        Array.from(sendRow()?.querySelectorAll("kbd") ?? [], (key) => key.textContent),
+        Array.from(sendRow()?.querySelectorAll("kbd") ?? [], (key) => key.textContent?.trim()),
       ).toEqual([modifier, enter]);
       dialog.shadowRoot?.querySelector<HTMLButtonElement>("button[aria-label='Close']")?.click();
       await dialog.updateComplete;
@@ -155,7 +153,7 @@ describe("keyboard shortcuts dialog", () => {
         context.gateway.snapshot.hello.auth.scopes = ["operator.read"];
         expect(key({}).defaultPrevented).toBe(false);
         expect(dialog.isOpen).toBe(true);
-        context.gateway.snapshot.hello.auth.scopes = ["operator.write"];
+        context.gateway.snapshot.hello.auth.scopes = ["operator.sessions.write"];
         expect(openNewSession).not.toHaveBeenCalled();
         expect(key({}).defaultPrevented).toBe(true);
         await dialog.updateComplete;

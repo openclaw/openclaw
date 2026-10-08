@@ -2,6 +2,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { projectSessionResultRows, type readSessionChangedEvent } from "./reconcile.ts";
 import type { SessionGateway } from "./session-capability.ts";
 import { resolveUiConversationIdentity } from "./session-key.ts";
+import type { createSessionRosterObservations } from "./session-roster-observations.ts";
 
 type PermissionFields = Pick<GatewaySessionRow, "sessionId" | "permissionMode" | "updatedAt">;
 export type SessionPermissionClaim = {
@@ -11,11 +12,10 @@ export type SessionPermissionClaim = {
 
 type PermissionProjectionRoster = {
   readonly requestRevision: number;
-  rowRevision: (row: GatewaySessionRow) => number;
-  inheritRow: (row: GatewaySessionRow, source: GatewaySessionRow) => GatewaySessionRow;
-  publishedRow: (
-    matches: (row: GatewaySessionRow, agentId?: string | null) => boolean,
-  ) => GatewaySessionRow | undefined;
+  observations: Pick<
+    ReturnType<typeof createSessionRosterObservations>,
+    "rowRevision" | "inheritRow" | "publishedRow"
+  >;
 };
 
 // Claims and confirmed fields share one conversation owner. A row event may
@@ -52,7 +52,7 @@ export function createSessionPermissionProjection(
     const identity = permissionIdentity(key, agentId);
     const expectedId = expectedSessionId?.trim() || undefined;
     const roster = getRoster();
-    const published = roster.publishedRow(
+    const published = roster.observations.publishedRow(
       (row, ownerAgentId) => permissionIdentity(row.key, row.agentId ?? ownerAgentId) === identity,
     );
     const sessionId = expectedId ?? published?.sessionId;
@@ -62,7 +62,7 @@ export function createSessionPermissionProjection(
       projection.fact = {
         permissionMode: published.permissionMode,
         updatedAt: published.updatedAt,
-        revision: roster.rowRevision(published),
+        revision: roster.observations.rowRevision(published),
       };
     }
     const initialFact = projection.fact;
@@ -159,7 +159,7 @@ export function createSessionPermissionProjection(
     } else {
       next.permissionMode = fact.permissionMode;
     }
-    return getRoster().inheritRow(next, row);
+    return getRoster().observations.inheritRow(next, row);
   };
   const projectPermissionList = (
     result: SessionsListResult | null,

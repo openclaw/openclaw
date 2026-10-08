@@ -1,21 +1,11 @@
-// Renders the standard `openclaw status` report from prebuilt section data.
-// Report data assembly stays separate so tests can validate rows without terminal formatting.
-
-import type { RenderTableOptions, TableColumn } from "../../packages/terminal-core/src/table.js";
+import type { TableColumn } from "../../packages/terminal-core/src/table.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { statusOverviewTableColumns } from "./status-all/report-tables.js";
 import { appendStatusReportLines, appendStatusReportTable } from "./status-all/text-report.js";
 
-/** Builds terminal lines for the standard status report. */
 export async function buildStatusCommandReportLines(params: {
-  heading: (text: string) => string;
-  muted: (text: string) => string;
-  renderTable: (input: RenderTableOptions) => string;
   width: number;
   overviewRows: Array<{ Item: string; Value: string }>;
-  showTaskMaintenanceHint: boolean;
-  taskMaintenanceHint: string;
-  taskRegistryMigrationHint?: string | null;
-  retainedLostTaskLine?: string | null;
   pluginCompatibilityLines: string[];
   pairingRecoveryLines: string[];
   modelSelectionLines: string[];
@@ -32,84 +22,54 @@ export async function buildStatusCommandReportLines(params: {
   footerLines: string[];
 }) {
   const lines: string[] = [];
-  lines.push(params.heading("OpenClaw status"));
+  lines.push(theme.heading("OpenClaw status"));
 
   const report = {
     lines,
-    heading: params.heading,
+    heading: theme.heading,
     width: params.width,
-    renderTable: params.renderTable,
   };
-  // Prepare callbacks and column snapshots before rendering any table, as one report view.
-  const overviewColumns = [...statusOverviewTableColumns];
-  const overviewRows = params.overviewRows;
-  const maintenanceLines =
-    params.showTaskMaintenanceHint ||
-    params.taskRegistryMigrationHint ||
-    params.retainedLostTaskLine
-      ? [
-          "",
-          ...(params.showTaskMaintenanceHint ? [params.muted(params.taskMaintenanceHint)] : []),
-          ...(params.taskRegistryMigrationHint ? [params.taskRegistryMigrationHint] : []),
-          ...(params.retainedLostTaskLine ? [params.retainedLostTaskLine] : []),
-        ]
-      : [];
-  const pluginCompatibilityLines = params.pluginCompatibilityLines;
-  const pairingRecoveryLines =
-    params.pairingRecoveryLines.length > 0 ? ["", ...params.pairingRecoveryLines] : [];
-  const modelSelectionLines = params.modelSelectionLines;
-  const securityAuditLines = params.securityAuditLines;
+  // Prepare empty-state styling before rendering any table.
   const channelsMessage =
-    params.channelsRows.length === 0 ? params.muted("No channels configured") : undefined;
-  const channelsColumns = channelsMessage === undefined ? [...params.channelsColumns] : [];
-  const channelsRows = channelsMessage === undefined ? params.channelsRows : [];
-  const sessionsMessage =
-    params.sessionsRows.length === 0 ? params.muted("No sessions") : undefined;
-  const sessionsColumns = sessionsMessage === undefined ? [...params.sessionsColumns] : [];
-  const sessionsRows = sessionsMessage === undefined ? params.sessionsRows : [];
-  const systemEventsColumns = [{ key: "Event", header: "Event", flex: true, minWidth: 24 }];
-  const systemEventsRows = params.systemEventsRows ?? [];
-  const systemEventsTrailer = params.systemEventsTrailer;
-  const healthColumns = [...(params.healthColumns ?? [])];
-  const healthRows = params.healthRows ?? [];
-  const usageLines = params.usageLines ?? [];
-  const footerLines = ["", ...params.footerLines];
+    params.channelsRows.length === 0 ? theme.muted("No channels configured") : undefined;
+  const sessionsMessage = params.sessionsRows.length === 0 ? theme.muted("No sessions") : undefined;
 
-  appendStatusReportTable(report, "Overview", overviewColumns, overviewRows);
-  lines.push(...maintenanceLines);
-  if (pluginCompatibilityLines.length > 0) {
-    appendStatusReportLines(report, "Plugin compatibility", pluginCompatibilityLines);
+  appendStatusReportTable(report, "Overview", [...statusOverviewTableColumns], params.overviewRows);
+  if (params.pluginCompatibilityLines.length > 0) {
+    appendStatusReportLines(report, "Plugin compatibility", params.pluginCompatibilityLines);
   }
-  lines.push(...pairingRecoveryLines);
-  if (modelSelectionLines.length > 0) {
-    appendStatusReportLines(report, "Model selection", modelSelectionLines);
+  if (params.pairingRecoveryLines.length > 0) {
+    lines.push("", ...params.pairingRecoveryLines);
   }
-  appendStatusReportLines(report, "Security audit", securityAuditLines);
+  if (params.modelSelectionLines.length > 0) {
+    appendStatusReportLines(report, "Model selection", params.modelSelectionLines);
+  }
+  appendStatusReportLines(report, "Security audit", params.securityAuditLines);
   if (channelsMessage !== undefined) {
     appendStatusReportLines(report, "Channels", [channelsMessage]);
   } else {
-    appendStatusReportTable(report, "Channels", channelsColumns, channelsRows);
+    appendStatusReportTable(report, "Channels", [...params.channelsColumns], params.channelsRows);
   }
   if (sessionsMessage !== undefined) {
     appendStatusReportLines(report, "Sessions", [sessionsMessage]);
   } else {
-    appendStatusReportTable(report, "Sessions", sessionsColumns, sessionsRows);
+    appendStatusReportTable(report, "Sessions", [...params.sessionsColumns], params.sessionsRows);
   }
-  if (systemEventsRows.length > 0) {
+  if (params.systemEventsRows?.length) {
     appendStatusReportTable(
       report,
       "System events",
-      systemEventsColumns,
-      systemEventsRows,
-      systemEventsTrailer,
+      [{ key: "Event", header: "Event", flex: true, minWidth: 24 }],
+      params.systemEventsRows,
+      params.systemEventsTrailer,
     );
   }
-  if (healthRows.length > 0) {
-    appendStatusReportTable(report, "Health", healthColumns, healthRows);
+  if (params.healthRows?.length) {
+    appendStatusReportTable(report, "Health", [...(params.healthColumns ?? [])], params.healthRows);
   }
-  if (usageLines.length > 0) {
-    appendStatusReportLines(report, "Usage", usageLines);
+  if (params.usageLines?.length) {
+    appendStatusReportLines(report, "Usage", params.usageLines);
   }
-  lines.push(...footerLines);
+  lines.push("", ...params.footerLines);
   return lines;
 }

@@ -1,4 +1,3 @@
-// Utility-model narration for channel progress drafts.
 import {
   createSessionActivityNoteState,
   flushSessionActivityAssistantNote,
@@ -13,12 +12,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import type { AgentEventPayload, AgentEventStream } from "../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { compactProgressText } from "../../shared/text-truncate.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import {
   generateNarrationWithUtilityModel,
   prepareNarrationModel,
   type ProgressNarrationInput,
-  truncateAtWordBoundary,
 } from "./progress-narrator-model.js";
 
 const narratorLog = createSubsystemLogger("auto-reply/progress-narrator");
@@ -43,7 +42,7 @@ function normalizeNarrationText(raw: string): string {
     .trim()
     .replace(/^["'`“”]+|["'`“”]+$/gu, "")
     .trim();
-  return truncateAtWordBoundary(collapsed, NARRATION_MAX_CHARS);
+  return compactProgressText(collapsed, NARRATION_MAX_CHARS);
 }
 
 function createProgressNarrator(params: {
@@ -126,8 +125,16 @@ function createProgressNarrator(params: {
   }
 
   const generate = async (input: ProgressNarrationInput, abortSignal: AbortSignal) => {
-    preparedPromise ??= prepareNarrationModel({ cfg: params.cfg, agentId: params.agentId });
-    const prepared = await preparedPromise;
+    const preparation = (preparedPromise ??= prepareNarrationModel({
+      cfg: params.cfg,
+      agentId: params.agentId,
+    }));
+    const prepared = await preparation;
+    // Failed or borrowed routes recheck credentials on the next narration. A late
+    // waiter must not clear a newer preparation owned by a queued turn.
+    if ((!prepared || prepared.agentHarnessRuntimeOverride) && preparedPromise === preparation) {
+      preparedPromise = undefined;
+    }
     if (abortSignal.aborted) {
       return null;
     }
@@ -166,24 +173,20 @@ function createProgressNarrator(params: {
     if (options?.flushAssistant) {
       flushSessionActivityAssistantNote(activity, NARRATION_NOTE_MAX_CHARS);
     }
-    const added = activity.noteSequence > sequenceBefore;
-    if (added) {
+    if (activity.noteSequence > sequenceBefore) {
       maybeRun(options?.immediate === true);
     }
   };
 
   const shouldRunNow = (immediate: boolean): boolean => {
     const newNotes = activity.noteSequence - Math.max(0, noteSequenceAtLastRun);
-    if (newNotes <= 0) {
-      return false;
-    }
-    if (immediate || noteSequenceAtLastRun < 0) {
-      return true;
-    }
-    if (newNotes >= MIN_EVENTS_PER_NARRATION) {
-      return true;
-    }
-    return Date.now() - lastRunAt >= MIN_INTERVAL_MS;
+    return (
+      newNotes > 0 &&
+      (immediate ||
+        noteSequenceAtLastRun < 0 ||
+        newNotes >= MIN_EVENTS_PER_NARRATION ||
+        Date.now() - lastRunAt >= MIN_INTERVAL_MS)
+    );
   };
 
   // Skips retain note bookkeeping; one replaceable timer rechecks the active gate.
@@ -324,9 +327,7 @@ function createProgressNarrator(params: {
       }
       // Command-output titles usually carry the raw command text; honor the
       // channel's commandText: "status" policy for the failure note too.
-      const title = params.hideCommandText
-        ? payload.name || "command"
-        : payload.title || payload.name || "command";
+      const title = (!params.hideCommandText && payload.title) || payload.name || "command";
       recordEvent(
         "command_output",
         {
@@ -368,12 +369,7 @@ function createProgressNarrator(params: {
   };
 }
 
-/**
- * Wraps reply options with a progress narrator when the channel opted in via
- * onNarrationUpdate and a utility model resolves (explicit config or the
- * primary provider's declared default; utilityModel: "" disables).
- * Returns the options unchanged otherwise.
- */
+/** Requires onNarrationUpdate and a utility model; utilityModel: "" disables narration. */
 export function attachProgressNarratorToReplyOptions(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -402,30 +398,26 @@ export function attachProgressNarratorToReplyOptions(params: {
     hideCommandText: opts.narrationHideCommandText === true,
   });
   opts.onProgressNarratorLifecycle?.({
-    beginTurn: () => narrator.beginTurn(),
-    stopTurn: () => narrator.stopTurn(),
+    beginTurn: narrator.beginTurn,
+    stopTurn: narrator.stopTurn,
   });
   return {
     ...opts,
-    ...(opts.onToolStart
-      ? {
-          onToolStart: async (payload) => {
-            narrator.noteToolStart(payload);
-            return await opts.onToolStart?.(payload);
-          },
-        }
-      : {}),
+    ...(opts.onToolStart && {
+      onToolStart: async (payload) => {
+        narrator.noteToolStart(payload);
+        return await opts.onToolStart?.(payload);
+      },
+    }),
     onCommandOutput: async (payload) => {
       narrator.noteCommandOutput(payload);
       return await opts.onCommandOutput?.(payload);
     },
-    ...(opts.onItemEvent
-      ? {
-          onItemEvent: async (payload) => {
-            narrator.noteItemEvent(payload);
-            return await opts.onItemEvent?.(payload);
-          },
-        }
-      : {}),
+    ...(opts.onItemEvent && {
+      onItemEvent: async (payload) => {
+        narrator.noteItemEvent(payload);
+        return await opts.onItemEvent?.(payload);
+      },
+    }),
   };
 }

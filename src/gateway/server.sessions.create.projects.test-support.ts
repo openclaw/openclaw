@@ -15,6 +15,26 @@ import type { ChatAbortControllerEntry } from "./chat-abort.js";
 
 const execFileAsync = promisify(execFile);
 
+export async function createGitWorkspace(root: string): Promise<string> {
+  const workspace = path.join(root, "workspace");
+  await fs.mkdir(workspace, { recursive: true });
+  await execFileAsync("git", ["-C", workspace, "init", "-b", "main"]);
+  await fs.writeFile(path.join(workspace, "README.md"), "base\n");
+  await execFileAsync("git", ["-C", workspace, "add", "README.md"]);
+  await execFileAsync("git", [
+    "-c",
+    "user.name=OpenClaw Test",
+    "-c",
+    "user.email=openclaw-test@example.invalid",
+    "-C",
+    workspace,
+    "commit",
+    "-m",
+    "initial",
+  ]);
+  return await fs.realpath(workspace);
+}
+
 export async function copyGitWorkspace(template: string, root: string): Promise<string> {
   const workspace = path.join(root, "workspace");
   await fs.cp(template, workspace, {

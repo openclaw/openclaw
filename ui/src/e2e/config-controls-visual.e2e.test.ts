@@ -591,6 +591,7 @@ suite.define(() => {
             body: { url: "https://example.com/control-ui-proof" },
             method: "POST",
             path: "/tabs/open",
+            tabScope: { sessionKey: "agent:main:main" },
           });
           const browserPanel = page.locator("openclaw-browser-panel[embedded]");
           await browserPanel.waitFor();

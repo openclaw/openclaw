@@ -17,6 +17,8 @@ does not change operator terminal use or the separate embedded execution paths.
 
 Pass at least one session selector: `--to`, `--session-key`, `--session-id`, or `--agent`. Explicitly blank or whitespace-only selector values are rejected before local or Gateway dispatch, even when another selector supplies a valid target. Omit an unused selector instead of passing an empty value.
 
+When `--session-id` finds an existing session in an agent's storage partition, it retains that agent even if `session.store` uses one fixed JSON locator and the stored key is `global` or `unknown`.
+
 A completed turn exits `0`. Error, timeout, and cancellation outcomes exit `1`, after any text or JSON result is written. A received `SIGINT` or `SIGTERM` instead preserves the signal-specific exit status described below.
 
 Related: [Agent send tool](/tools/agent-send)
@@ -203,7 +205,7 @@ prompt/fixture fingerprints, and settings. Per-cell accounting includes parent
 and descendant input, cache reads/writes, and output, reconciled with runtime
 totals. Missing usage or prices remain unavailable, never zero. Failed attempts
 remain in operational totals. Successful-pair deltas require both arms to pass
-and complete measurements; observed error counts include intentional probes and
+and complete measurements; observed error counts include intentional checks and
 are not repair-turn counts. Task latency excludes startup and interviews.
 
 Automated completion means artifact/effect checks passed. Final-response
@@ -278,7 +280,7 @@ alongside the complete ledger. The process helper's exact written source bytes
 are part of its workload fingerprint. The JavaScript contract task verifies
 declaration discovery, runtime input validation, and the dependent file operation
 sequence, including completion through `wait`. Preview-completeness checks use the observed metadata
-for probed references; missing or conflicting metadata remains unknown.
+for checked references; missing or conflicting metadata remains unknown.
 Keep transcripts local unless their
 publication is explicitly requested. Interview claims about sample coverage,
 freshness, lifetime, limits, and retry safety must be reviewed against these

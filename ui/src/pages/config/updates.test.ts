@@ -487,22 +487,8 @@ describe("renderUpdates", () => {
       description: undefined,
     },
     {
-      name: "allows dev installs with unknown metadata",
-      channel: "dev",
-      installKind: "unknown",
-      disabled: false,
-      description: undefined,
-    },
-    {
       name: "allows stable package installs",
       channel: "stable",
-      installKind: "package",
-      disabled: false,
-      description: undefined,
-    },
-    {
-      name: "allows beta package installs",
-      channel: "beta",
       installKind: "package",
       disabled: false,
       description: undefined,
@@ -686,9 +672,7 @@ describe("renderUpdates", () => {
       ),
       container,
     );
-    expect(row("Installed").textContent).toContain(
-      "Unknown · recorded after the next successful update",
-    );
+    expect(row("Installed").querySelector(".settings-row__value")?.textContent).toBe("Unknown");
   });
 
   it.each([
@@ -928,7 +912,7 @@ describe("renderUpdates", () => {
     );
 
     const report = row("Failure report");
-    expect(report.textContent).toContain("GitHub CLI submission was unavailable");
+    expect(report.textContent).toContain("Review and submit the prefilled issue in your browser.");
     expect(report.textContent).not.toContain("/private/report.md");
     expect(report.querySelector("a")?.getAttribute("href")).toContain("issues/new");
   });

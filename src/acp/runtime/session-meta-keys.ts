@@ -1,26 +1,47 @@
 import type { DatabaseSync } from "node:sqlite";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { Insertable, Selectable } from "kysely";
-import { tryResolveLegacyDataOwnerAgentId } from "../../agents/agent-scope-config.js";
-import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { Insertable } from "kysely";
+import { normalizeStoreSessionKey } from "../../config/sessions/store-entry.js";
+import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  sqliteStringSet,
 } from "../../infra/kysely-sync.js";
+import {
+  getSqliteReadOperationRevision,
+  type SqliteReadOperationRevision,
+} from "../../infra/sqlite-schema-facts.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
+import type {
+  AcpSessionsTable,
+  AcpSessionRow,
+  AcpSessionEntryBinding,
+  AcpSessionReadInput,
+} from "./session-meta-read.types.js";
 
-export type AcpSessionsTable = OpenClawStateKyselyDatabase["acp_sessions"];
 type AcpSessionMetaDatabase = Pick<OpenClawStateKyselyDatabase, "acp_sessions">;
-export type AcpSessionRow = Selectable<AcpSessionsTable>;
-export type AcpSessionEntryBinding = Pick<SessionEntry, "lifecycleRevision"> &
-  Partial<Pick<SessionEntry, "sessionId" | "sessionStartedAt">>;
+
+const MAX_RETAINED_ACP_SESSION_ROWS = 128;
+const metadataRows = new WeakMap<
+  DatabaseSync,
+  SqliteReadOperationRevision & { rows: Map<string, AcpSessionRow | undefined> }
+>();
 
 export function getAcpSessionKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AcpSessionMetaDatabase>(db);
+}
+
+export function selectAcpSessionRows(db: DatabaseSync): AcpSessionRow[] {
+  return executeSqliteQuerySync(
+    db,
+    getAcpSessionKysely(db)
+      .selectFrom("acp_sessions")
+      .selectAll()
+      .orderBy("last_activity_at", "desc")
+      .orderBy("session_key", "asc"),
+  ).rows;
 }
 
 export function selectAcpSessionRow(
@@ -36,8 +57,63 @@ export function selectAcpSessionRow(
   );
 }
 
+export function* selectAcpSessionRowsByKeys(db: DatabaseSync, keys: readonly string[]) {
+  const revision =
+    keys.length <= MAX_RETAINED_ACP_SESSION_ROWS ? getSqliteReadOperationRevision(db) : undefined;
+  let cached = metadataRows.get(db);
+  if (revision) {
+    if (!cached) {
+      cached = { ...revision, rows: new Map() };
+      metadataRows.set(db, cached);
+      registerNodeSqliteDisposeCallback(db, () => metadataRows.delete(db));
+    } else if (
+      cached.schema !== revision.schema ||
+      cached.dataVersion !== revision.dataVersion ||
+      cached.mutationRevision !== revision.mutationRevision
+    ) {
+      Object.assign(cached, revision);
+      cached.rows.clear();
+    }
+    const retainedRows = cached.rows;
+    if (keys.every((key) => retainedRows.has(key))) {
+      const rows: AcpSessionRow[] = [];
+      for (const key of new Set(keys)) {
+        const row = retainedRows.get(key);
+        if (row) {
+          rows.push({ ...row });
+        }
+      }
+      yield* rows;
+      return;
+    }
+  }
+  // Read the whole cohort on a miss: mixing retained and new rows would give
+  // callers a different view if a foreign commit occurs during this request.
+  for (let index = 0; index < keys.length; index += 500) {
+    const cohort = keys.slice(index, index + 500);
+    const rows = executeSqliteQuerySync(
+      db,
+      getAcpSessionKysely(db)
+        .selectFrom("acp_sessions")
+        .selectAll()
+        .where("session_key", "in", sqliteStringSet(cohort)),
+    ).rows;
+    if (revision && cached) {
+      if (cached.rows.size + cohort.length > MAX_RETAINED_ACP_SESSION_ROWS) {
+        cached.rows.clear();
+      }
+      for (const key of cohort) {
+        cached.rows.set(key, undefined);
+      }
+      for (const row of rows) {
+        cached.rows.set(row.session_key, { ...row });
+      }
+    }
+    yield* rows;
+  }
+}
+
 const ACP_DATABASE_KEY_PREFIX = "@acp:v1:";
-const ACP_LEGACY_AGENT_SCOPED_DB_KEY_PREFIX = "@agent:";
 
 export function buildAcpDatabaseSessionKey(storeSessionKey: string, agentId?: string): string {
   const normalizedKey = storeSessionKey.trim();
@@ -45,94 +121,41 @@ export function buildAcpDatabaseSessionKey(storeSessionKey: string, agentId?: st
   return `${ACP_DATABASE_KEY_PREFIX}${Buffer.from(JSON.stringify(identity), "utf8").toString("base64url")}`;
 }
 
-function parseAcpDatabaseSessionKey(sessionKey: string): {
-  agentId?: string;
-  storeSessionKey: string;
-} {
-  if (sessionKey.startsWith(ACP_DATABASE_KEY_PREFIX)) {
-    try {
-      const decoded = JSON.parse(
-        Buffer.from(sessionKey.slice(ACP_DATABASE_KEY_PREFIX.length), "base64url").toString("utf8"),
-      ) as unknown;
-      if (
-        Array.isArray(decoded) &&
-        decoded.length === 2 &&
-        (decoded[0] === null || typeof decoded[0] === "string") &&
-        typeof decoded[1] === "string"
-      ) {
-        return {
-          ...(decoded[0] ? { agentId: normalizeAgentId(decoded[0]) } : {}),
-          storeSessionKey: decoded[1],
-        };
-      }
-    } catch {
-      // A legacy raw key may happen to use the reserved prefix. Treat it as raw.
+export function parseAcpDatabaseSessionKey(sessionKey: string):
+  | {
+      agentId?: string;
+      storeSessionKey: string;
     }
-    return { storeSessionKey: sessionKey };
-  }
-  if (!sessionKey.startsWith(ACP_LEGACY_AGENT_SCOPED_DB_KEY_PREFIX)) {
-    return { storeSessionKey: sessionKey };
-  }
-  const remainder = sessionKey.slice(ACP_LEGACY_AGENT_SCOPED_DB_KEY_PREFIX.length);
-  const separator = remainder.indexOf(":");
-  return separator > 0
-    ? {
-        agentId: normalizeAgentId(remainder.slice(0, separator)),
-        storeSessionKey: remainder.slice(separator + 1),
-      }
-    : { storeSessionKey: sessionKey };
-}
-
-export function parseAcpDatabaseSessionKeyCandidates(sessionKey: string): Array<{
-  agentId?: string;
-  storeSessionKey: string;
-}> {
-  const parsed = parseAcpDatabaseSessionKey(sessionKey);
-  if (parsed.storeSessionKey === sessionKey && parsed.agentId === undefined) {
-    return [parsed];
-  }
-  return [parsed, { storeSessionKey: sessionKey }];
-}
-
-function resolveAcpLegacyUnscopedOwner(
-  cfg: OpenClawConfig | undefined,
-  storeSessionKey: string,
-): string | undefined {
-  if (!cfg) {
+  | undefined {
+  if (!sessionKey.startsWith(ACP_DATABASE_KEY_PREFIX)) {
     return undefined;
   }
-  const persistedOwner = resolvePersistedSessionStoreOwnerForKey(cfg, storeSessionKey);
-  return persistedOwner.kind === "configured"
-    ? persistedOwner.agentId
-    : persistedOwner.kind === "none"
-      ? tryResolveLegacyDataOwnerAgentId(cfg)
-      : undefined;
-}
-
-export function legacyAcpDatabaseSessionKeys(
-  storeSessionKey: string,
-  agentId?: string,
-  cfg?: OpenClawConfig,
-): string[] {
-  const normalizedKey = storeSessionKey.trim();
-  const keys: string[] = [];
-  if (agentId && !parseAgentSessionKey(normalizedKey)) {
-    keys.push(
-      `${ACP_LEGACY_AGENT_SCOPED_DB_KEY_PREFIX}${normalizeAgentId(agentId)}:${normalizedKey}`,
+  try {
+    const decoded: unknown = JSON.parse(
+      Buffer.from(sessionKey.slice(ACP_DATABASE_KEY_PREFIX.length), "base64url").toString("utf8"),
     );
+    if (
+      Array.isArray(decoded) &&
+      decoded.length === 2 &&
+      (decoded[0] === null || typeof decoded[0] === "string") &&
+      typeof decoded[1] === "string"
+    ) {
+      const identity = {
+        ...(decoded[0] ? { agentId: normalizeAgentId(decoded[0]) } : {}),
+        storeSessionKey: decoded[1],
+      };
+      return buildAcpDatabaseSessionKey(identity.storeSessionKey, identity.agentId) === sessionKey
+        ? identity
+        : undefined;
+    }
+  } catch {
+    // Doctor owns malformed historical keys; runtime only accepts canonical identities.
   }
-  if (
-    parseAgentSessionKey(normalizedKey) ||
-    !agentId ||
-    resolveAcpLegacyUnscopedOwner(cfg, normalizedKey) === normalizeAgentId(agentId)
-  ) {
-    keys.push(normalizedKey);
-  }
-  return [...new Set(keys)];
+  return undefined;
 }
 
 export function acpSessionRowMatchesEntry(
-  row: AcpSessionRow,
+  row: Pick<AcpSessionRow, "session_id" | "updated_at">,
   entry: AcpSessionEntryBinding | undefined,
 ): boolean {
   return (
@@ -143,72 +166,30 @@ export function acpSessionRowMatchesEntry(
   );
 }
 
-/** Only raw free-runtime ACP aliases have the historical case-fold lookup contract. */
-export function resolveLegacyFreeAcpSessionKey(sessionKey: string): string | undefined {
-  const normalized = normalizeLowercaseStringOrEmpty(sessionKey);
-  const parsed = parseAgentSessionKey(normalized);
-  return parsed?.rest.startsWith("acp:") && !parsed.rest.startsWith("acp:binding:")
-    ? normalized
-    : undefined;
-}
-
-export function selectLegacyFreeAcpSessionRows(
-  database: DatabaseSync,
-  sessionKeys: readonly string[],
-): Map<string, AcpSessionRow[]> {
-  const keys = [
-    ...new Set(
-      sessionKeys.flatMap((key) => {
-        const normalized = resolveLegacyFreeAcpSessionKey(key);
-        return normalized ? [normalized] : [];
-      }),
-    ),
-  ];
-  const rowsByKey = new Map<string, AcpSessionRow[]>();
-  for (let index = 0; index < keys.length; index += 500) {
-    const rows = executeSqliteQuerySync(
-      database,
-      getAcpSessionKysely(database)
-        .selectFrom("acp_sessions")
-        .selectAll()
-        .where(
-          (eb) => eb.fn<string>("lower", ["session_key"]),
-          "in",
-          keys.slice(index, index + 500),
-        )
-        .orderBy("last_activity_at", "desc")
-        .orderBy("session_key", "asc"),
-    ).rows;
-    for (const row of rows) {
-      const key = normalizeLowercaseStringOrEmpty(row.session_key);
-      const matches = rowsByKey.get(key) ?? [];
-      matches.push(row);
-      rowsByKey.set(key, matches);
-    }
-  }
-  return rowsByKey;
-}
-
 export function selectAcpSessionRowForStoreEntry(
   db: DatabaseSync,
   storeSessionKey: string,
   agentId?: string,
-  cfg?: OpenClawConfig,
   entry?: AcpSessionEntryBinding,
 ): AcpSessionRow | undefined {
-  const databaseKey = buildAcpDatabaseSessionKey(storeSessionKey, agentId);
-  for (const key of [databaseKey, ...legacyAcpDatabaseSessionKeys(storeSessionKey, agentId, cfg)]) {
+  const key = normalizeStoreSessionKey(storeSessionKey);
+  return selectAcpSessionRowForRead(db, {
+    keys: [buildAcpDatabaseSessionKey(key, agentId ?? parseAgentSessionKey(key)?.agentId)],
+    entry,
+  });
+}
+
+export function selectAcpSessionRowForRead(
+  db: DatabaseSync,
+  { keys, entry }: AcpSessionReadInput,
+): AcpSessionRow | undefined {
+  for (const key of keys) {
     const row = selectAcpSessionRow(db, key);
     if (row && (!entry || acpSessionRowMatchesEntry(row, entry))) {
       return row;
     }
   }
-  const legacyKey = resolveLegacyFreeAcpSessionKey(storeSessionKey);
-  return legacyKey
-    ? selectLegacyFreeAcpSessionRows(db, [legacyKey])
-        .get(legacyKey)
-        ?.find((row) => acpSessionRowMatchesEntry(row, entry))
-    : undefined;
+  return undefined;
 }
 
 export function resolveReadableAcpSessionRow(params: {

@@ -92,36 +92,12 @@ const DashboardToolSchema = Type.Object(
   { additionalProperties: false },
 );
 
-type DashboardCommandEmitter = (
-  params: {
-    sessionKey: string;
-    agentId?: string;
-    command: BoardCommand;
-  },
-  resolveGatewayContext?: GatewayContextResolver,
-) => number;
-
-type DashboardGatewayContext = {
-  getClientConnIds?: (
-    predicate: (client: { connect: { client: { id: string } } }) => boolean,
-  ) => Set<string>;
-  broadcastToConnIds: (event: "board.command", payload: unknown, connIds: Set<string>) => void;
-};
-
 type DashboardToolOptions = {
   agentSessionKey?: string;
   agentId?: string;
   callGateway?: InProcessGatewayCaller;
-  emitCommand?: DashboardCommandEmitter;
+  emitCommand?: typeof emitBoardCommand;
 };
-
-function requireSessionKey(value: string | undefined): string {
-  const sessionKey = value?.trim();
-  if (!sessionKey) {
-    throw new ToolInputError("agent session required");
-  }
-  return sessionKey;
-}
 
 function requireInteger(params: Record<string, unknown>, key: string): number {
   const value = readNumberParam(params, key, { required: true, integer: true, strict: true });
@@ -139,20 +115,12 @@ function readTabId(params: Record<string, unknown>): string {
   return tabId;
 }
 
-function readOptionalTabId(params: Record<string, unknown>): string | undefined {
-  const tabId = readToolStringParam(params, "tabId");
-  if (tabId !== undefined && !BOARD_TAB_ID_REGEX.test(tabId)) {
-    throw new ToolInputError("tabId must be a lowercase slug up to 40 characters");
+function readPresentation(params: Record<string, unknown>): "split" | "expanded" {
+  const presentation = readToolStringParam(params, "presentation", { required: true });
+  if (presentation !== "split" && presentation !== "expanded") {
+    throw new ToolInputError("presentation must be split or expanded");
   }
-  return tabId;
-}
-
-function readPluginProps(params: Record<string, unknown>): Record<string, unknown> | undefined {
-  const props = asOptionalRecord(params.props);
-  if (params.props !== undefined && !props) {
-    throw new ToolInputError("props must be an object");
-  }
-  return props;
+  return presentation;
 }
 
 function opForAction(action: string, params: Record<string, unknown>): BoardOp {
@@ -221,9 +189,7 @@ function emitBoardCommand(
   },
   resolveGatewayContext?: GatewayContextResolver,
 ): number {
-  const context = getInProcessGatewayToolContext(resolveGatewayContext) as
-    | DashboardGatewayContext
-    | undefined;
+  const context = getInProcessGatewayToolContext(resolveGatewayContext);
   if (!context) {
     throw new ToolInputError("dashboard command unavailable outside gateway runtime");
   }
@@ -266,16 +232,6 @@ function snapshotResult(
   );
 }
 
-function commandResult(delivered: number) {
-  return delivered === 0
-    ? textResult("Dashboard unavailable. Connect Control UI and retry.", {
-        status: "unavailable",
-        code: "UNAVAILABLE",
-        message: "Connect Control UI and retry.",
-      })
-    : textResult(`Dashboard command sent to ${delivered} client(s)`, { ok: true, delivered });
-}
-
 export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTool {
   const gatewayCall = opts.callGateway ?? callInProcessGatewayTool;
   const emitCommand = opts.emitCommand ?? emitBoardCommand;
@@ -288,7 +244,10 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });
-      const sessionKey = requireSessionKey(opts.agentSessionKey);
+      const sessionKey = opts.agentSessionKey?.trim();
+      if (!sessionKey) {
+        throw new ToolInputError("agent session required");
+      }
       const admittedResolver = getGatewayToolCallerIdentity()?.gatewayContextResolver;
       const gatewayOptions = admittedResolver
         ? { resolveGatewayContext: admittedResolver }
@@ -309,10 +268,7 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
         return snapshotResult(snapshot, described.session?.boardPresentation ?? "split");
       }
       if (action === "set_default_presentation") {
-        const presentation = readToolStringParam(params, "presentation", { required: true });
-        if (presentation !== "split" && presentation !== "expanded") {
-          throw new ToolInputError("presentation must be split or expanded");
-        }
+        const presentation = readPresentation(params);
         const patched = await callGateway<{
           key: string;
           entry: Pick<SessionRow, "boardPresentation">;
@@ -328,38 +284,26 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
           { ok: true, sessionKey: patched.key, defaultPresentation },
         );
       }
-      if (action === "focus_tab") {
+      if (action === "focus_tab" || action === "set_presentation") {
+        // Keep the shipped BoardCommand wire format; the panel owns its dock position.
+        const command: BoardCommand =
+          action === "focus_tab"
+            ? { kind: "focus_tab", tabId: readTabId(params) }
+            : {
+                kind: "set_chat_dock",
+                dock: readPresentation(params) === "expanded" ? "hidden" : "right",
+              };
         const delivered = emitCommand(
-          {
-            sessionKey,
-            agentId: opts.agentId,
-            command: {
-              kind: "focus_tab",
-              tabId: readTabId(params),
-            },
-          },
+          { sessionKey, agentId: opts.agentId, command },
           admittedResolver,
         );
-        return commandResult(delivered);
-      }
-      if (action === "set_presentation") {
-        const presentation = readToolStringParam(params, "presentation", { required: true });
-        if (presentation !== "split" && presentation !== "expanded") {
-          throw new ToolInputError("presentation must be split or expanded");
-        }
-        const delivered = emitCommand(
-          {
-            sessionKey,
-            agentId: opts.agentId,
-            // Keep the shipped BoardCommand wire format; the panel owns its dock position.
-            command: {
-              kind: "set_chat_dock",
-              dock: presentation === "expanded" ? "hidden" : "right",
-            },
-          },
-          admittedResolver,
-        );
-        return commandResult(delivered);
+        return delivered === 0
+          ? textResult("Dashboard unavailable. Connect Control UI and retry.", {
+              status: "unavailable",
+              code: "UNAVAILABLE",
+              message: "Connect Control UI and retry.",
+            })
+          : textResult(`Dashboard command sent to ${delivered} client(s)`, { ok: true, delivered });
       }
       if (action === "widget_put") {
         const pluginKind = readToolStringParam(params, "pluginKind", { required: true });
@@ -367,10 +311,16 @@ export function createDashboardTool(opts: DashboardToolOptions = {}): AnyAgentTo
           throw new ToolInputError("pluginKind must use the <pluginId>:<name> format");
         }
         const title = readToolStringParam(params, "title");
-        const tabId = readOptionalTabId(params);
+        const tabId = readToolStringParam(params, "tabId");
+        if (tabId !== undefined && !BOARD_TAB_ID_REGEX.test(tabId)) {
+          throw new ToolInputError("tabId must be a lowercase slug up to 40 characters");
+        }
         const size = readToolStringParam(params, "size");
         const after = readToolStringParam(params, "after");
-        const props = readPluginProps(params);
+        const props = asOptionalRecord(params.props);
+        if (params.props !== undefined && !props) {
+          throw new ToolInputError("props must be an object");
+        }
         return snapshotResult(
           await callGateway<BoardSnapshot>("board.widget.put", {
             sessionKey,

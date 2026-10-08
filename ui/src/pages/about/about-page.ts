@@ -3,6 +3,7 @@ import { html } from "lit";
 import { state } from "lit/decorators.js";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { shellLayoutTraits } from "../../app/shell-layout-traits.ts";
 import { CONTROL_UI_BUILD_INFO } from "../../build-info.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { copyToClipboard } from "../../lib/clipboard.ts";
@@ -24,21 +25,16 @@ class AboutPage extends OpenClawLightDomElement {
 
   private copyResetTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private waveResetTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  private readonly subscriptions = new SubscriptionsController(this).watch(
+  private readonly subscriptions = new SubscriptionsController(this).watchStore(
     () => this.context?.gateway,
-    (gateway, notify) => gateway.subscribe(notify),
   );
 
   override disconnectedCallback() {
     this.subscriptions.clear();
-    if (this.copyResetTimer !== null) {
-      globalThis.clearTimeout(this.copyResetTimer);
-      this.copyResetTimer = null;
-    }
-    if (this.waveResetTimer !== null) {
-      globalThis.clearTimeout(this.waveResetTimer);
-      this.waveResetTimer = null;
-    }
+    globalThis.clearTimeout(this.copyResetTimer ?? undefined);
+    this.copyResetTimer = null;
+    globalThis.clearTimeout(this.waveResetTimer ?? undefined);
+    this.waveResetTimer = null;
     super.disconnectedCallback();
   }
 
@@ -88,9 +84,9 @@ class AboutPage extends OpenClawLightDomElement {
       onPokeClawd: () => this.pokeClawd(),
     });
     return html`
-      <section class="content-header">
+      <section class="content-header" ${shellLayoutTraits({ toolbarHeader: true })}>
         <div>
-          <div class="page-title">${titleForRoute("about")}</div>
+          <h1 class="page-title">${titleForRoute("about")}</h1>
         </div>
       </section>
       ${renderSettingsWorkspace(body)}

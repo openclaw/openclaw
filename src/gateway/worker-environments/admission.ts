@@ -9,12 +9,15 @@ import {
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { safeEqualSecret } from "../../security/secret-equal.js";
 import {
-  sameWorkerBuild,
   sameWorkerProtocolFeatures,
   type ExpectedWorkerBuild,
 } from "../../worker/worker-build-identity.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
+import type {
+  WorkerEnvironmentBootstrapReceipt,
+  WorkerEnvironmentRecord,
+} from "./environment-record.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerEnvironmentStore } from "./store.js";
 
@@ -42,17 +45,48 @@ export function supportsCurrentWorkerLaunch(
   );
 }
 
+export function requireCurrentWorkerTurnEnvironment(params: {
+  environments: {
+    get(environmentId: string): (WorkerEnvironmentRecord & { error?: string }) | undefined;
+  };
+  placement: {
+    environmentId: string;
+    activeOwnerEpoch: number;
+    workerBundleHash: string;
+    sessionId: string;
+  };
+}): {
+  environment: WorkerEnvironmentRecord;
+  bootstrapReceipt: WorkerEnvironmentBootstrapReceipt;
+} {
+  const { placement } = params;
+  const environment = params.environments.get(placement.environmentId);
+  const bootstrapReceipt = environment?.bootstrapReceipt;
+  if (environment?.error === STALE_WORKER_BUILD_REASON) {
+    throw new StaleWorkerBuildError();
+  }
+  if (
+    !environment ||
+    environment.state !== "attached" ||
+    environment.ownerEpoch !== placement.activeOwnerEpoch ||
+    !bootstrapReceipt ||
+    bootstrapReceipt.bundleHash !== placement.workerBundleHash ||
+    environment.attachedSessionIds.length !== 1 ||
+    environment.attachedSessionIds[0] !== placement.sessionId
+  ) {
+    throw new Error("Active worker placement does not match its attached environment");
+  }
+  if (!supportsCurrentWorkerLaunch(bootstrapReceipt)) {
+    throw new Error(
+      "Active worker bundle lacks the current launch capability; reprovision the worker before launch",
+    );
+  }
+  return { environment, bootstrapReceipt };
+}
+
 type WorkerConnectionAdmissionResult =
   | { ok: true; identity: WorkerConnectionIdentity }
   | { ok: false; reason: WorkerAdmissionFailureReason };
-
-/** Admits only the exact build selected for this worker environment. */
-export function verifyWorkerAdmissionHandshake(
-  handshake: WorkerAdmissionHandshake,
-  expected: ExpectedWorkerBuild,
-): boolean {
-  return sameWorkerBuild(handshake, expected);
-}
 
 /** Validate an opaque credential and every server-owned worker admission binding. */
 export function admitWorkerConnection(params: {
@@ -120,9 +154,6 @@ export function admitWorkerConnection(params: {
     return { ok: false, reason: "version-mismatch" };
   }
   if (admission.sessionId !== credential.sessionId) {
-    return { ok: false, reason: "session-mismatch" };
-  }
-  if ((admission.sessionId === null) !== (admission.runId === null)) {
     return { ok: false, reason: "session-mismatch" };
   }
   if (

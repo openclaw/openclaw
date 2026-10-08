@@ -1,13 +1,16 @@
-import type { DatabaseSync } from "node:sqlite";
 import { sql, type InferResult, type RawBuilder } from "kysely";
 import type { TranscriptDisplayPosition } from "../../chat/transcript-display-position.js";
 import {
+  createSqliteQueryCache,
+  executeSqliteQuerySync,
   getNodeSqliteKysely,
   prepareSqliteQueryIterator,
   prepareSqliteQuerySync,
   prepareSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
+import { captureSqliteReaderOwner } from "../../infra/sqlite-reader-lifecycle.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import type { TranscriptReadWindow } from "../../sessions/transcript-read-window.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
@@ -16,7 +19,7 @@ import type { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite
 import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
 import type { SessionTranscriptProjectionState } from "./session-transcript-index.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
-import { transcriptEventJsonSql } from "./transcript-payload.js";
+import { readTranscriptPayload, type TranscriptPayloadRecord } from "./transcript-payload.js";
 
 type ActiveTranscriptDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -49,6 +52,49 @@ export type SessionTranscriptMessageEvent = {
   displayPosition?: TranscriptDisplayPosition;
 };
 
+export type SessionTranscriptMessageEventPage = {
+  /** Source offset for the next older bounded page, independent of rendered message count. */
+  olderOffset?: number;
+  /** One source event exceeded a strict page byte limit and was skipped. */
+  omittedOversized?: boolean;
+  activeLeafEntryId?: string | null;
+  deltaCursor?: string;
+  displaySource?: string;
+  readWindow?: TranscriptReadWindow;
+  windowReset?: boolean;
+  events: SessionTranscriptMessageEvent[];
+  totalMessages: number;
+};
+
+export type SessionTranscriptMessageAnchorPage = SessionTranscriptMessageEventPage & {
+  found: boolean;
+  hasOverreadContext: boolean;
+  offset: number;
+};
+
+export type SessionTranscriptBoundedMessageTailPage = SessionTranscriptMessageEventPage & {
+  /** Role-matched individual oversized messages in the requested check range. */
+  hasOversizedMessages?: boolean;
+  // `events` may remain sparse for salvage callers; this count marks the
+  // authoritative newest suffix before the first byte-budget omission.
+  newestContiguousEventCount: number;
+  scannedMessages: number;
+  serializedBytes: number;
+  snapshot: {
+    boundarySeq?: number;
+    generation?: string;
+    indexedSeq: number;
+  };
+};
+
+export type SessionTranscriptBoundedMessageTailOptions = {
+  maxBytes: number;
+  maxMessages: number;
+  offset: number;
+  readOnly?: boolean;
+  oversizedMessageCheck?: { roles: readonly string[]; includeEarlier?: boolean };
+};
+
 const EMPTY_PROJECTION_STATE: SessionTranscriptProjectionState = {
   activeEventCount: 0,
   activeMessageCount: 0,
@@ -57,21 +103,43 @@ const EMPTY_PROJECTION_STATE: SessionTranscriptProjectionState = {
   needsRebuild: false,
 };
 
-export function getActiveTranscriptKysely(database: TranscriptReadDatabase) {
+export function getActiveTranscriptKysely(database: Pick<TranscriptReadDatabase, "db">) {
   return getNodeSqliteKysely<ActiveTranscriptDatabase>(database.db);
 }
 
-export function parseActiveTranscriptMessageRow(row: {
-  event_seq: number;
-  event_json: string;
-  message_position: number | null;
-}): SessionTranscriptMessageEvent {
+/** Materialize only physical events already selected in the caller's admitted snapshot. */
+export function readSnapshotEventRows(
+  projection: CurrentTranscriptProjection,
+  eventSeqs: readonly number[],
+) {
+  const sessionId = projection.resolved.sessionId;
+  const query = getActiveTranscriptKysely(projection.database)
+    .selectFrom("transcript_events as event")
+    .select(["event.seq", "event.event_json", "event.event_zstd", "event.event_utf8_bytes"])
+    .where("event.session_id", "=", sessionId);
+  return executeSqliteQuerySync(
+    projection.database.db,
+    query.where(
+      "event.seq",
+      "in",
+      /* kysely-allow-raw: bind physical sequences already selected in this snapshot. */
+      sql<number>`(SELECT value FROM json_each(${JSON.stringify(eventSeqs)}))`,
+    ),
+  ).rows;
+}
+
+export function parseActiveTranscriptMessageRow(
+  row: Pick<TranscriptPayloadRecord, "event_json" | "event_zstd" | "event_utf8_bytes"> & {
+    event_seq: number;
+    message_position: number | null;
+  },
+): SessionTranscriptMessageEvent {
   if (row.message_position === null) {
     throw new Error("Active transcript message row is missing its message position");
   }
   return {
     // SAFETY: The active projection indexes serialized TranscriptEvent rows.
-    event: JSON.parse(row.event_json) as TranscriptEvent,
+    event: JSON.parse(readTranscriptPayload(row)) as TranscriptEvent,
     eventSeq: row.event_seq,
     // Gateway cursors use the visible-message ordinal, matching the JSONL index.
     // Raw event seq includes headers/control rows and would make pages overlap.
@@ -86,7 +154,7 @@ export type MessageRangeSelection =
 type MessageRangeParameters = { sessionId: string; start: number; endExclusive: number };
 
 export function selectMessageRows(
-  database: CurrentTranscriptProjection["database"],
+  database: Pick<TranscriptReadDatabase, "db">,
   sessionId: string | RawBuilder<string>,
   selection:
     | { positions: number[] }
@@ -121,20 +189,20 @@ export function selectMessageRows(
         .where("active.message_position", "<", selection.endExclusive);
 }
 
-export function selectMessagePayload(
-  database: CurrentTranscriptProjection["database"],
-  query: ReturnType<typeof selectMessageRows>,
-) {
+export function selectMessagePayload(query: ReturnType<typeof selectMessageRows>) {
   return query.select([
     "active.event_seq",
     "active.message_position",
-    transcriptEventJsonSql(database.db, "event").as("event_json"),
+    "event.event_json",
+    "event.event_zstd",
+    "event.event_utf8_bytes",
   ]);
 }
 
 export function selectMessageMetadata(query: ReturnType<typeof selectMessageRows>) {
   return query
     .select([
+      "active.event_seq",
       "active.message_position",
       /* kysely-allow-raw: byte caps include each event's JSONL newline. */
       sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
@@ -142,11 +210,12 @@ export function selectMessageMetadata(query: ReturnType<typeof selectMessageRows
     .$narrowType<{ message_position: number }>();
 }
 
-function createMessageRangeReaders(database: CurrentTranscriptProjection["database"]) {
+const messageRangeReaders = createSqliteQueryCache((db) => {
+  const database = { db };
   const metadata = (direction: "asc" | "desc") =>
     prepareSqliteQueryIterator<
       MessageRangeParameters,
-      { message_position: number; serialized_bytes: number }
+      { event_seq: number; message_position: number; serialized_bytes: number }
     >(database.db, (parameter) =>
       selectMessageMetadata(
         selectMessageRows(
@@ -167,7 +236,6 @@ function createMessageRangeReaders(database: CurrentTranscriptProjection["databa
       Parameters<typeof parseActiveTranscriptMessageRow>[0]
     >(database.db, (parameter) =>
       selectMessagePayload(
-        database,
         selectMessageRows(
           database,
           parameter((params) => params.sessionId),
@@ -186,7 +254,6 @@ function createMessageRangeReaders(database: CurrentTranscriptProjection["databa
       Parameters<typeof parseActiveTranscriptMessageRow>[0]
     >(database.db, (parameter) =>
       selectMessagePayload(
-        database,
         selectMessageRows(
           database,
           parameter((params) => params.sessionId),
@@ -200,24 +267,14 @@ function createMessageRangeReaders(database: CurrentTranscriptProjection["databa
     metadata: metadata("asc"),
     metadataDescending: metadata("desc"),
   };
-}
-
-const messageRangeReaders = new WeakMap<
-  DatabaseSync,
-  ReturnType<typeof createMessageRangeReaders>
->();
+});
 
 export function getMessageRangeReaders(database: CurrentTranscriptProjection["database"]) {
-  let readers = messageRangeReaders.get(database.db);
-  if (!readers) {
-    readers = createMessageRangeReaders(database);
-    messageRangeReaders.set(database.db, readers);
-  }
-  return readers;
+  return messageRangeReaders(database.db);
 }
 
 function buildProjectionSnapshotQuery(
-  database: TranscriptReadDatabase,
+  database: Pick<TranscriptReadDatabase, "db">,
   sessionId: RawBuilder<string>,
 ) {
   const db = getActiveTranscriptKysely(database);
@@ -286,31 +343,20 @@ function buildProjectionSnapshotQuery(
 }
 
 // Cache compilation only; bindings and rows belong to each read snapshot.
-const projectionSnapshotReaders = new WeakMap<
-  DatabaseSync,
-  ReturnType<
-    typeof prepareSqliteQuerySync<
-      string,
-      InferResult<ReturnType<typeof buildProjectionSnapshotQuery>>[number]
-    >
-  >
->();
+const projectionSnapshotReader = createSqliteQueryCache((db) =>
+  prepareSqliteQuerySync<
+    string,
+    InferResult<ReturnType<typeof buildProjectionSnapshotQuery>>[number]
+  >(db, (parameter) =>
+    buildProjectionSnapshotQuery(
+      { db },
+      parameter((id) => id),
+    ),
+  ),
+);
 
 function readProjectionSnapshot(database: TranscriptReadDatabase, sessionId: string) {
-  let read = projectionSnapshotReaders.get(database.db);
-  if (!read) {
-    read = prepareSqliteQuerySync<
-      string,
-      InferResult<ReturnType<typeof buildProjectionSnapshotQuery>>[number]
-    >(database.db, (parameter) =>
-      buildProjectionSnapshotQuery(
-        database,
-        parameter((id) => id),
-      ),
-    );
-    projectionSnapshotReaders.set(database.db, read);
-  }
-  const row = read(sessionId).rows[0]!;
+  const row = projectionSnapshotReader(database.db)(sessionId).rows[0]!;
   return {
     cold: Boolean(row.is_cold),
     generation: row.generation ?? undefined,
@@ -337,47 +383,47 @@ export function readCurrentProjectionSnapshot<T>(
   resolved: CurrentTranscriptProjection["resolved"],
   read: (projection: CurrentTranscriptProjection) => T,
 ) {
+  const diagnostics: Record<string, string | number> = { sessionId: resolved.sessionId };
+  const readerOperation = captureSqliteReaderOwner()?.operation;
+  if (readerOperation) {
+    diagnostics.readerOperation = readerOperation;
+  }
   return runSqliteDeferredTransactionSync(
     database.db,
     () => {
       const snapshot = readProjectionSnapshot(database, resolved.sessionId);
+      if (snapshot.state) {
+        diagnostics.activeEvents = snapshot.state.activeEventCount;
+        diagnostics.activeMessages = snapshot.state.activeMessageCount;
+        diagnostics.indexedSeq = snapshot.state.indexedSeq;
+      }
       if (snapshot.cold) {
         throw new SessionTranscriptColdError(resolved.sessionId);
       }
-      if (snapshot.latestSeq === null) {
-        return {
-          kind: "value" as const,
-          value: read({
-            database,
-            generation: snapshot.generation,
-            hasUnindexedPrefix: false,
-            resolved,
-            state: EMPTY_PROJECTION_STATE,
-          }),
-        };
-      }
+      const empty = snapshot.latestSeq === null;
+      const state = empty ? EMPTY_PROJECTION_STATE : snapshot.state;
       if (
-        snapshot.state &&
-        !snapshot.state.needsRebuild &&
-        snapshot.state.indexedSeq === snapshot.latestSeq &&
-        !snapshot.hasUnclassified
+        !state ||
+        state.needsRebuild ||
+        (!empty && (state.indexedSeq !== snapshot.latestSeq || snapshot.hasUnclassified))
       ) {
-        return {
-          kind: "value" as const,
-          value: read({
-            database,
-            generation: snapshot.generation,
-            hasUnindexedPrefix: snapshot.hasUnindexedPrefix,
-            resolved,
-            state: snapshot.state,
-          }),
-        };
+        return { kind: "unavailable" as const };
       }
-      return { kind: "unavailable" as const };
+      return {
+        kind: "value" as const,
+        value: read({
+          database,
+          generation: snapshot.generation,
+          hasUnindexedPrefix: !empty && snapshot.hasUnindexedPrefix,
+          resolved,
+          state,
+        }),
+      };
     },
     {
       databaseLabel: database.path,
       operationLabel: "sessions.history.read",
+      diagnosticContext: diagnostics,
     },
   );
 }

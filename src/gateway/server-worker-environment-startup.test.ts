@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
-import { setActiveNodeContext } from "../infra/active-node-context.js";
+import { setActiveNodeContexts } from "../infra/active-node-context.js";
 import {
   NODE_WORKER_PORTAL_STREAM_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
@@ -19,6 +19,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { createNodeDesktopStreamBroker } from "./desktop/node-stream-broker.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
 import type {
@@ -36,13 +37,15 @@ import {
   DEVICE_WORKER_PROVIDER_ID,
   reconcileDeviceWorker,
 } from "./worker-environments/device-provider.js";
+import { createWorkerInferenceStore } from "./worker-environments/inference-store.js";
+import * as workerServices from "./worker-environments/service.js";
 
 const DEVICE_ID = "revoked-device";
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
-    setActiveNodeContext(null);
+    setActiveNodeContexts([]);
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     resetConfigRuntimeState();
@@ -51,6 +54,74 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 );
 
 describe("gateway worker environment startup", () => {
+  it.each([false, true])(
+    "retires failed startup subscriptions and transfer scratch (cleanup failure=%s)",
+    async (cleanupFails) => {
+      const stateDir = tempDirs.make("openclaw-worker-readiness-failure-");
+      const transferRoot = path.join(stateDir, "tmp", "node-workspace-transfer");
+      const readinessFailure = new Error("inference recovery failed");
+      const cleanupFailure = new Error("bootstrap artifact cleanup failed");
+      await withGatewayWorkerEnvironmentStartupState(stateDir, async () => {
+        const startup = await loadGatewayWorkerEnvironmentStartupState();
+        const activeSubscriptions = new Set<() => void>();
+        const register = startup.placementStore.registerTurnClaimClosedHandler.bind(
+          startup.placementStore,
+        );
+        const registerSpy = vi
+          .spyOn(startup.placementStore, "registerTurnClaimClosedHandler")
+          .mockImplementation((handler) => {
+            const unsubscribe = register(handler);
+            activeSubscriptions.add(unsubscribe);
+            return () => {
+              unsubscribe();
+              activeSubscriptions.delete(unsubscribe);
+            };
+          });
+        const createService = workerServices.createWorkerEnvironmentService;
+        let service: ReturnType<typeof createService> | undefined;
+        vi.spyOn(workerServices, "createWorkerEnvironmentService").mockImplementation((options) => {
+          const inferenceStore = createWorkerInferenceStore();
+          vi.spyOn(inferenceStore, "recoverPending").mockRejectedValue(readinessFailure);
+          service = createService({
+            ...options,
+            inferenceStore,
+            closeNodeBootstrapArtifacts: async () => {
+              await options.closeNodeBootstrapArtifacts?.();
+              if (cleanupFails) {
+                throw cleanupFailure;
+              }
+            },
+          });
+          return service;
+        });
+        const registry = createEmptyPluginRegistry();
+        const creating = createGatewayWorkerEnvironmentRuntime({
+          scheduler: createTestGatewayScheduler(),
+          getPluginRegistry: () => registry,
+          getPortalRuntime: () => undefined,
+          resolveGatewayContext: () => undefined,
+          desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
+          startup,
+          log: { child: () => ({ info: () => {}, warn: () => {} }) },
+        });
+        try {
+          if (cleanupFails) {
+            await expect(creating).rejects.toMatchObject({
+              errors: [readinessFailure, cleanupFailure],
+            });
+          } else {
+            await expect(creating).rejects.toBe(readinessFailure);
+          }
+          expect(registerSpy).toHaveBeenCalled();
+          expect(activeSubscriptions.size).toBe(0);
+          await expect(fs.stat(transferRoot)).rejects.toMatchObject({ code: "ENOENT" });
+        } finally {
+          await service?.stop().catch(() => undefined);
+        }
+      });
+    },
+  );
+
   it("cleans transfer scratch before serving and removes it on shutdown", async () => {
     const stateDir = tempDirs.make("openclaw-worker-transfer-startup-");
     const transferRoot = path.join(stateDir, "tmp", "node-workspace-transfer");
@@ -62,12 +133,13 @@ describe("gateway worker environment startup", () => {
       const startup = await loadGatewayWorkerEnvironmentStartupState();
       const registry = createEmptyPluginRegistry();
       const runtime = await createGatewayWorkerEnvironmentRuntime({
+        scheduler: createTestGatewayScheduler(),
         getPluginRegistry: () => registry,
         getPortalRuntime: () => undefined,
         resolveGatewayContext: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         startup,
-        log: { child: () => ({ warn: () => {} }) },
+        log: { child: () => ({ info: () => {}, warn: () => {} }) },
       });
       const service = runtime.workerEnvironmentService;
       if (!service) {
@@ -129,12 +201,13 @@ describe("gateway worker environment startup", () => {
       });
       const startup = await loadGatewayWorkerEnvironmentStartupState();
       const runtime = await createGatewayWorkerEnvironmentRuntime({
+        scheduler: createTestGatewayScheduler(),
         getPluginRegistry: () => registry,
         getPortalRuntime: () => undefined,
         resolveGatewayContext: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         startup,
-        log: { child: () => ({ warn: () => {} }) },
+        log: { child: () => ({ info: () => {}, warn: () => {} }) },
       });
       const service = runtime.workerEnvironmentService;
       if (!service) {
@@ -205,12 +278,13 @@ describe("gateway worker environment startup", () => {
 
       const registry = createEmptyPluginRegistry();
       const runtime = await createGatewayWorkerEnvironmentRuntime({
+        scheduler: createTestGatewayScheduler(),
         getPluginRegistry: () => registry,
         getPortalRuntime: () => undefined,
         resolveGatewayContext: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         startup,
-        log: { child: () => ({ warn: () => {} }) },
+        log: { child: () => ({ info: () => {}, warn: () => {} }) },
       });
       const service = runtime.workerEnvironmentService;
       if (!service) {
@@ -303,13 +377,14 @@ describe("gateway worker environment startup", () => {
       };
       const registry = createEmptyPluginRegistry();
       const runtime = await createGatewayWorkerEnvironmentRuntime({
+        scheduler: createTestGatewayScheduler(),
         getPluginRegistry: () => registry,
         getPortalRuntime: () => undefined,
         resolveGatewayContext: () => undefined,
         desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
         nodeDesktopStreamBroker: createNodeDesktopStreamBroker(),
         startup,
-        log: { child: () => ({ warn: () => {} }) },
+        log: { child: () => ({ info: () => {}, warn: () => {} }) },
       });
       const service = runtime.workerEnvironmentService;
       try {
@@ -351,14 +426,14 @@ describe("prepared node workspace ownership over the Gateway transport", () => {
         if (changed) {
           await fs.writeFile(path.join(f.prepared.workspaceDir, "source.txt"), "changed source\n");
           await expect(f.register()).rejects.toThrow("source does not match its manifest");
-          expect(f.preparedStore.find(f.record.environmentId)).toBeUndefined();
+          expect(await f.preparedStore.find(f.record.environmentId)).toBeUndefined();
           return;
         }
         await f.register();
         await f.attach();
         await f.bind();
         expect(f.received.map((response) => response.ok)).toEqual([true, true]);
-        const acquired = f.workspace.acquireManagedWorkspace({
+        const acquired = await f.workspace.acquireManagedWorkspaceAsync({
           ...f.binding,
           workspaceDir: f.prepared.workspaceDir,
         });
@@ -419,7 +494,7 @@ describe("prepared node workspace ownership over the Gateway transport", () => {
           }
         } else if (loss === "placement") {
           const placement = f.startup.placementStore.get(f.binding.sessionId)!;
-          f.startup.placementStore.transition({
+          await f.startup.placementStore.transition({
             sessionId: f.binding.sessionId,
             from: "syncing",
             to: "starting",
@@ -435,7 +510,7 @@ describe("prepared node workspace ownership over the Gateway transport", () => {
         release.resolve();
         expect(await operation).toBeInstanceOf(Error);
         expect(f.invoked).toHaveLength(invokedBefore);
-        const registration = f.preparedStore.find(f.record.environmentId);
+        const registration = await f.preparedStore.find(f.record.environmentId);
         if (action === "bind") {
           expect(registration).toMatchObject({ session_id: null, bound_at_ms: null });
         } else {
@@ -472,7 +547,7 @@ describe("prepared node workspace ownership over the Gateway transport", () => {
         await f.cancelled.promise;
         release.resolve();
         await f.settleInvokes();
-        expect(f.preparedStore.find(f.record.environmentId)).toBeUndefined();
+        expect(await f.preparedStore.find(f.record.environmentId)).toBeUndefined();
       } finally {
         caller.abort();
         release.resolve();

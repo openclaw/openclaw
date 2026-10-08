@@ -24,26 +24,28 @@ function createInput(params?: {
   clientFactory?: () => Promise<never>;
   runtimeArtifactRequest?: { expected?: { id: string; fingerprint: string } };
 }) {
+  const runAbortController = new AbortController();
   return {
-    authProfileStore: { kind: "test-store" },
-    authBindingFingerprint: "auth-fingerprint",
+    clientOptions: {
+      authProfileStore: { kind: "test-store" },
+      authBindingFingerprint: "auth-fingerprint",
+      agentDir: "/tmp/openclaw-agent",
+      startOptions: { command: "codex", args: ["app-server"] },
+      config: { agents: { defaults: { workspace: "/tmp/workspace" } } },
+      pluginConfig: { appServer: { enabled: true } },
+      authRequirement: "subscription",
+      authProfileId: "profile-1",
+      timeoutMs: 12_345,
+      abandonSignal: runAbortController.signal,
+    },
     connection: {
       assertCurrent: vi.fn(),
-      agentDir: "/tmp/openclaw-agent",
-      appServer: {
-        requestTimeoutMs: 12_345,
-        start: { command: "codex", args: ["app-server"] },
-      },
+      assertLegacyCurrent: vi.fn(),
       attemptClientFactory:
         params?.attemptClientFactory ?? mocks.getLeasedSharedCodexAppServerClient,
       options: params?.clientFactory ? { clientFactory: params.clientFactory } : {},
-      params: { config: { agents: { defaults: { workspace: "/tmp/workspace" } } } },
-      pluginConfig: { appServer: { enabled: true } },
-      runAbortController: new AbortController(),
+      runAbortController,
       runtimeArtifactRequest: params?.runtimeArtifactRequest,
-      startupAuthRequirement: "subscription",
-      startupClientAuthProfileId: "profile-1",
-      startupPreparedAuth: undefined,
     },
   } as unknown as Parameters<typeof prewarmCodexAttemptClient>[0];
 }
@@ -61,7 +63,7 @@ describe("Codex attempt client prewarm", () => {
     prewarmCodexAttemptClient(input);
 
     expect(mocks.getSharedCodexAppServerClient).toHaveBeenCalledWith({
-      assertCurrent: input.connection.assertCurrent,
+      assertCurrent: input.connection.assertLegacyCurrent,
       startOptions: { command: "codex", args: ["app-server"] },
       pluginConfig: { appServer: { enabled: true } },
       authProfileId: "profile-1",

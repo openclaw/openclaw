@@ -4,28 +4,90 @@ import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-ha
 import { isDeepStrictEqual } from "node:util";
 import { describe, expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { retireAgentDeleteRuntime } from "./agent-delete-databases.js";
+import { withAgentDeletion } from "./agent-lifecycle-registry.js";
 import {
   getPreparedModelRuntimeSnapshot,
+  loadPublishedGatewayReplyDispatchRuntime,
   markPreparedModelRuntimeSnapshotsStale,
+  publishPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
+  retirePreparedModelRuntimeAgent,
 } from "./prepared-model-runtime.js";
 import { closePreparedModelRuntimeSnapshots } from "./prepared-model-runtime.lifecycle.js";
 
 const fixture = usePreparedModelRuntimeHarness({ label: "prepared-model-runtime" });
 const { mocks } = fixture;
 
+function holdNextCatalogWrite() {
+  const started = createDeferred();
+  const release = createDeferred();
+  mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
+    started.resolve();
+    await release.promise;
+    return { agentDir: String(agentDir), wrote: false };
+  });
+  return { started, release };
+}
+
 describe("prepared model runtime owner selection", () => {
+  it("retires only the deleted agent's physical owners", async () => {
+    mocks.configuredAgentIds = ["worker"];
+    mocks.configuredAgentDirs.set("worker", fixture.state.agentDir("isolated-worker"));
+    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+    const separate = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" });
+    const input = { config: {}, agentId: "worker", agentDir: fixture.state.agentDir("worker") };
+    const deleted = await publishPreparedModelRuntimeSnapshot(input);
+    const sharing = await publishPreparedModelRuntimeSnapshot({ ...input, agentId: "survivor" });
+
+    const options = { env: fixture.state.env };
+    await withAgentDeletion(
+      input.agentId,
+      async (begin) => {
+        const deletion = await begin({
+          agentId: input.agentId,
+          agentDir: input.agentDir,
+          workspaceDir: fixture.state.workspaceDir,
+          sessionsDir: fixture.state.sessionsDir(input.agentId),
+          deleteFiles: false,
+        });
+        await deletion.assertCurrentAsync();
+        const replaceJournal = openOpenClawStateDatabase(options).db.prepare(
+          "UPDATE agent_deletion_journal SET operation_id = ? WHERE agent_id = ?",
+        );
+        replaceJournal.run("replacement", input.agentId);
+        await expect(
+          retireAgentDeleteRuntime(input.config, deletion, [input.agentDir]),
+        ).rejects.toThrow("no longer owns");
+        expect(deleted.isCurrent()).toBe(true);
+        expect(sharing.isCurrent()).toBe(true);
+
+        replaceJournal.run(deletion.entry.operationId, input.agentId);
+        await deletion.rollback();
+        await expect(
+          retireAgentDeleteRuntime(input.config, deletion, [input.agentDir]),
+        ).rejects.toThrow("no longer owns");
+        expect(deleted.isCurrent()).toBe(true);
+        expect(sharing.isCurrent()).toBe(true);
+      },
+      options,
+    );
+
+    await retirePreparedModelRuntimeAgent({ agentId: input.agentId, agentDirs: [input.agentDir] });
+
+    expect(deleted.isCurrent()).toBe(false);
+    expect(sharing.isCurrent()).toBe(true);
+    await expect(loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" })).resolves.toBe(
+      separate,
+    );
+  });
+
   it.each(["lost claim", "invalidation", "close"] as const)(
     "does not accept a joined refresh after %s",
     async (boundary) => {
       mocks.configuredAgentIds = ["default"];
-      const started = createDeferred();
-      const release = createDeferred();
-      mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
-        started.resolve();
-        await release.promise;
-        return { agentDir: String(agentDir), wrote: false };
-      });
+      const { started, release } = holdNextCatalogWrite();
       const first = refreshPreparedModelRuntimeSnapshots({}, { joinSupersedingPublication: true });
       const rejected = expect(first).rejects.toThrow(/superseded|closed/);
       let successor: Promise<void> | undefined;
@@ -59,13 +121,7 @@ describe("prepared model runtime owner selection", () => {
 
   it("joins the latest of multiple replacements without rebuilding skipped config", async () => {
     mocks.configuredAgentIds = ["default"];
-    const started = createDeferred();
-    const release = createDeferred();
-    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
-      started.resolve();
-      await release.promise;
-      return { agentDir: String(agentDir), wrote: false };
-    });
+    const { started, release } = holdNextCatalogWrite();
     const first = refreshPreparedModelRuntimeSnapshots({}, { joinSupersedingPublication: true });
     let skipped: Promise<void> | undefined;
     let latest: Promise<void> | undefined;
@@ -98,21 +154,8 @@ describe("prepared model runtime owner selection", () => {
     for (const agentId of mocks.configuredAgentIds) {
       expect(read(agentId)?.isCurrent()).toBe(true);
     }
-    const started = createDeferred();
-    const release = createDeferred();
-    const successorStarted = createDeferred();
-    const releaseSuccessor = createDeferred();
-    mocks.ensureOpenClawModelsJson
-      .mockImplementationOnce(async (_config, agentDir) => {
-        started.resolve();
-        await release.promise;
-        return { agentDir: String(agentDir), wrote: false };
-      })
-      .mockImplementationOnce(async (_config, agentDir) => {
-        successorStarted.resolve();
-        await releaseSuccessor.promise;
-        return { agentDir: String(agentDir), wrote: false };
-      });
+    const { started, release } = holdNextCatalogWrite();
+    const { started: successorStarted, release: releaseSuccessor } = holdNextCatalogWrite();
     const first = refreshPreparedModelRuntimeSnapshots(config, {
       agentIds: new Set(["agent-a"]),
       joinSupersedingPublication: true,

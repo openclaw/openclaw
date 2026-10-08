@@ -29,7 +29,6 @@ export function currentRunningSnapshotInfo(vmName: string): SnapshotInfo {
 
 export function resolveSnapshot(vmName: string, hint: string): SnapshotInfo {
   const output = run("prlctl", ["snapshot-list", vmName, "--json"], {
-    quiet: true,
     timeoutMs: SNAPSHOT_LIST_TIMEOUT_MS,
   }).stdout;
   if (!output.trim()) {

@@ -9,10 +9,11 @@ title: "Claws"
 
 # `openclaw claws`
 
-A Claw is a versioned setup for one new OpenClaw agent. It can describe the
+A Claw is a versioned setup for one OpenClaw agent. It can describe the
 agent's portable identity, workspace files, skills, plugins, MCP servers, and
 cron jobs. Harness-specific agent settings may be carried in a conventional
-package profile. A Claw does not replace or modify an existing agent.
+package profile. Adding a Claw creates a separate agent; `claws migrate` can
+enroll an existing agent without replacing it or moving its workspace.
 
 Claws are experimental. Their schema, command output, and lifecycle may change.
 Enable the command surface explicitly:
@@ -338,7 +339,7 @@ canonical Claw reader before success.
 ## Inspect and preview
 
 Validate the source without planning local changes. For OpenClaw profile
-extensions, inspect also performs the canonical read-only artifact probe and
+extensions, inspect also performs the canonical read-only artifact check and
 reports mapped and unavailable components:
 
 ```bash
@@ -415,6 +416,52 @@ Claw provenance distinguishes two relationships:
 This is not a reference count. Ordinary plugin, skill, and agent commands keep
 their existing behavior; Claws add provenance and guarded lifecycle operations
 on top.
+
+## Migrate an existing agent
+
+`claws migrate` enrolls one already configured local agent without creating a
+second agent or moving its workspace. It creates a local package under the
+OpenClaw state directory, previews the exact profile and existing files that
+will become Claw-managed, lists the generated package files, and asks for
+confirmation:
+
+```bash
+openclaw claws migrate research-agent
+```
+
+For automation, inspect the read-only plan and apply only that exact plan:
+
+```bash
+openclaw claws migrate research-agent --dry-run --json
+openclaw claws migrate research-agent \
+  --yes \
+  --plan-integrity <SHA256_FROM_DRY_RUN> \
+  --json
+```
+
+Migration supports Claw v1 agent identity and OpenClaw profile settings, plus
+the existing `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and
+`HEARTBEAT.md` prompt files. It fails closed when a setting cannot be
+represented faithfully, workspace ownership is ambiguous, a selected file is
+unsafe, or likely secret material is detected. Selected files are recorded
+with their existing content digests and are not rewritten. `BOOTSTRAP.md`,
+credentials, sessions, transcripts, databases, and every other workspace entry
+remain local and outside Claw ownership.
+
+Inherited model, subagent allowlist/delegation, heartbeat schedule, sandbox
+mode/scope/workspace access, and human-delay defaults are copied into the
+generated profile. Host ownership pointers such as `heartbeat.agentId` remain in
+OpenClaw config. Other inherited agent defaults that Claw v1 cannot carry,
+including provider params, skills, model policy/catalog, or unsupported
+heartbeat/sandbox fields and custom compaction settings, block migration with
+their setting paths in the diagnostic. An empty compaction placeholder or the
+effective `safeguard` default materialized by OpenClaw has no effect beyond the
+runtime default and is ignored.
+
+`claws status` and `claws update` use the generated package after migration.
+Removing an adopted Claw releases its ownership records while retaining the
+pre-existing agent, workspace, local package, credentials, databases, sessions,
+and transcripts.
 
 ## Update an installed Claw
 

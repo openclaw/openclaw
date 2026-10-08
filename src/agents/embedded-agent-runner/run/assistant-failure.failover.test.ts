@@ -44,31 +44,43 @@ function makeInput(
     currentAttemptAssistant: assistant,
   });
   return {
-    runParams: {
-      sessionId: "session:assistant-failover",
-      runId: "run:assistant-failover",
-      workspaceDir: "/tmp/openclaw-assistant-failover-test",
-      prompt: "Respond to the user",
-      timeoutMs: 60_000,
+    runInput: {
+      runParams: {
+        sessionId: "session:assistant-failover",
+        sessionFile: "/tmp/openclaw-assistant-failover-test/session.jsonl",
+        runId: "run:assistant-failover",
+        workspaceDir: "/tmp/openclaw-assistant-failover-test",
+        prompt: "Respond to the user",
+        timeoutMs: 60_000,
+      },
+      fallbackConfigured: options.fallbackConfigured ?? true,
+      suspendForFailure: vi.fn(),
+      agentDir: "/tmp/openclaw-assistant-failover-test",
+      isProbeSession: false,
     },
-    attempt,
-    attemptAssistant: assistant,
-    currentAttemptAssistant: assistant,
-    terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
-    activeErrorContext: { provider, model },
-    provider,
+    normalizedAttempt: {
+      attempt,
+      attemptAssistant: assistant,
+      currentAttemptAssistant: assistant,
+      terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
+      activeErrorContext: { provider, model },
+    },
+    preparedRuntime: {
+      provider,
+      modelId: model,
+      model: { id: model },
+      attemptedThinking: new Set(["high"]),
+      attemptAuthProfileStore: { version: 1, profiles: {} },
+      maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
+    },
+    runtime: {
+      thinkLevel: "high",
+      lastProfileId: options.profileId,
+      pluginHarnessOwnsTransport: false,
+    },
     providerOwner: undefined,
-    modelId: model,
-    model,
-    thinkLevel: "high",
     getThinkLevel: () => "low",
-    attemptedThinking: new Set(["high"]),
-    fallbackConfigured: options.fallbackConfigured ?? true,
-    pluginHarnessOwnsTransport: false,
-    authProfileId: options.profileId,
-    authProfileStore: { version: 1, profiles: {} },
     runtimeAuthRetry: false,
-    maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
     failover: {
       resolveAuthProfileFailureReason: vi.fn(() => null),
       maybeMarkAuthProfileFailure: vi.fn(async () => {}),
@@ -81,10 +93,7 @@ function makeInput(
     overloadProfileRotations: 0,
     previousRetryFailoverReason: null,
     traceAttempts: [],
-    suspendForFailure: vi.fn(),
     suspensionSessionId: "session:assistant-failover",
-    agentDir: "/tmp/openclaw-assistant-failover-test",
-    isProbeSession: false,
   };
 }
 
@@ -163,7 +172,7 @@ describe("assistant failure recovery", () => {
         reason: "billing",
         modelId: "test-model",
       });
-      expect(input.suspendForFailure).toHaveBeenCalledWith(
+      expect(input.runInput.suspendForFailure).toHaveBeenCalledWith(
         expect.objectContaining({ reason: "manual" }),
       );
     },
@@ -228,7 +237,7 @@ describe("assistant failure recovery", () => {
     });
     await expect(handleEmbeddedAssistantFailure(input)).rejects.toBe(error);
     expect(input.failover.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
-    expect(input.suspendForFailure).not.toHaveBeenCalled();
+    expect(input.runInput.suspendForFailure).not.toHaveBeenCalled();
     expect(input.traceAttempts).toEqual([]);
   });
 
@@ -236,7 +245,7 @@ describe("assistant failure recovery", () => {
     const input = makeInput("request timed out", {
       terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
     });
-    input.attempt.cloudCodeAssistFormatError = true;
+    input.normalizedAttempt.attempt.cloudCodeAssistFormatError = true;
     input.failover.resolveAuthProfileFailureReason = () => "timeout";
     input.failover.advanceAuthProfile = vi.fn(async () => true);
     expect((await handleEmbeddedAssistantFailure(input)).action).toBe("retry");
@@ -277,7 +286,9 @@ describe("assistant failure recovery", () => {
         if (reason === "auth") {
           expect(failure.message).toBe(AUTH_INVALID_TOKEN_USER_TEXT);
         } else if (reason === "rate_limit") {
-          expect(failure.message).toBe("⚠️ API rate limit reached. Please try again later.");
+          expect(failure.message).toBe(
+            "⚠️ The AI service needs a short break. Please try again in a few minutes.",
+          );
         }
         expect(input.traceAttempts[0]?.status).toBe(status);
       }
@@ -328,13 +339,13 @@ describe("assistant failure recovery", () => {
     "ignores stale %s text on a successful assistant",
     async (errorMessage) => {
       const input = makeInput(errorMessage);
-      if (!input.attemptAssistant) {
+      if (!input.normalizedAttempt.attemptAssistant) {
         throw new Error("missing test assistant");
       }
-      input.attemptAssistant.stopReason = "stop";
-      input.terminalState = resolveEmbeddedRunAttemptTerminalState({
-        attempt: input.attempt,
-        assistant: input.attemptAssistant,
+      input.normalizedAttempt.attemptAssistant.stopReason = "stop";
+      input.normalizedAttempt.terminalState = resolveEmbeddedRunAttemptTerminalState({
+        attempt: input.normalizedAttempt.attempt,
+        assistant: input.normalizedAttempt.attemptAssistant,
       });
       expect((await handleEmbeddedAssistantFailure(input)).action).toBe("proceed");
       expect(input.failover.advanceAuthProfile).not.toHaveBeenCalled();
@@ -343,7 +354,7 @@ describe("assistant failure recovery", () => {
 
   it("keeps harness-owned timeout handling inside the harness", async () => {
     const input = makeInput("request timed out");
-    input.pluginHarnessOwnsTransport = true;
+    input.runtime.pluginHarnessOwnsTransport = true;
     expect((await handleEmbeddedAssistantFailure(input)).action).toBe("proceed");
     expect(input.failover.advanceAuthProfile).not.toHaveBeenCalled();
   });
@@ -367,11 +378,11 @@ describe("assistant failure recovery", () => {
   ])("keeps provider $name failures visible to realtime voice", async (error) => {
     const signal = new AbortController().signal;
     const input = makeInput(error.message);
-    if (!input.attemptAssistant) {
+    if (!input.normalizedAttempt.attemptAssistant) {
       throw new Error("missing test assistant");
     }
-    Object.assign(input.attemptAssistant, projectProviderError(error, signal));
-    input.attemptAssistant.content = [];
+    Object.assign(input.normalizedAttempt.attemptAssistant, projectProviderError(error, signal));
+    input.normalizedAttempt.attemptAssistant.content = [];
     input.emptyErrorRetries = 3;
     const failure = await expectFailure(input);
     expect(failure.rawError).toBe(error.message);

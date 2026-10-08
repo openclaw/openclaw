@@ -4,19 +4,19 @@ import type {
 } from "../../../../src/gateway/server-methods/models-auth-status.types.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelsProbeResult } from "../../api/types.ts";
-import { t } from "../../i18n/index.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
 import {
-  isMissingMethodError,
   mergeProbeResults,
   modelProviderErrorMessage,
+  modelProviderMutationWarnings,
 } from "./config-mutation.ts";
 import type { ModelProviderLogoutTarget } from "./data.ts";
 import type { ModelProvidersData } from "./load.ts";
+import { showProfileActionError, showProfileLogoutSuccess } from "./profiles-view.ts";
+import { updateRecordEntry } from "./record-state.ts";
 
 type PendingProfileOrder = {
-  cardId: string;
   profileIds: string[] | null;
   optimisticOrder: string[];
 };
@@ -36,8 +36,6 @@ type ProfileActionsControllerOptions = {
   setProbeResult: (cardId: string, result: ModelsProbeResult | null) => void;
   setProbeError: (cardId: string, message: string) => void;
   clearMessage: (cardId: string) => void;
-  setError: (cardId: string, error: unknown) => void;
-  setLogoutSuccess: (warning?: string) => void;
   cancelRefresh: () => void;
   refresh: () => Promise<void>;
   getConfig: () => RuntimeConfigCapability;
@@ -46,19 +44,13 @@ type ProfileActionsControllerOptions = {
 
 export class ModelProviderProfileActionsController {
   private probeEpochs = new Map<string, number>();
-  private probeUnsupported = false;
   private readonly pendingOrders = new Map<string, PendingProfileOrder>();
   private readonly activeOrderProviders = new Set<string>();
 
   constructor(private readonly options: ProfileActionsControllerOptions) {}
 
-  get probeAvailable(): boolean {
-    return !this.probeUnsupported;
-  }
-
   resetProbes(): void {
     this.probeEpochs = new Map();
-    this.probeUnsupported = false;
   }
 
   clearProbe(cardId: string): void {
@@ -70,7 +62,7 @@ export class ModelProviderProfileActionsController {
   async probe(cardId: string, providers: string[]) {
     const client = this.options.getClient();
     const key = `probe:${cardId}`;
-    if (!client || !this.options.canMutate() || this.options.isBusy(key) || this.probeUnsupported) {
+    if (!client || !this.options.canMutate() || this.options.isBusy(key)) {
       return;
     }
     const clientEpoch = this.options.getClientEpoch();
@@ -79,9 +71,7 @@ export class ModelProviderProfileActionsController {
     const probeEpoch = (this.probeEpochs.get(cardId) ?? 0) + 1;
     this.probeEpochs.set(cardId, probeEpoch);
     const ownsProbe = () =>
-      this.options.isCurrentClient(client, clientEpoch) &&
-      this.options.getAgentEpoch() === agentEpoch &&
-      this.options.getAgentId() === agentId &&
+      this.isCurrentScope(client, clientEpoch, agentEpoch, agentId) &&
       this.probeEpochs.get(cardId) === probeEpoch;
     this.options.setBusy(key, true);
     this.options.clearMessage(cardId);
@@ -102,12 +92,7 @@ export class ModelProviderProfileActionsController {
       if (!ownsProbe()) {
         return;
       }
-      if (isMissingMethodError(error)) {
-        this.probeUnsupported = true;
-        this.options.setProbeError(cardId, t("modelProviders.probe.unavailable"));
-      } else {
-        this.options.setProbeError(cardId, modelProviderErrorMessage(error));
-      }
+      this.options.setProbeError(cardId, modelProviderErrorMessage(error));
     } finally {
       if (ownsProbe()) {
         this.options.setBusy(key, false);
@@ -127,7 +112,7 @@ export class ModelProviderProfileActionsController {
     const optimisticOrder =
       profileIds ?? providerStatus?.profiles.map((profile) => profile.profileId) ?? [];
     this.options.setOrders({ ...this.options.getOrders(), [provider]: optimisticOrder });
-    this.pendingOrders.set(provider, { cardId, profileIds, optimisticOrder });
+    this.pendingOrders.set(provider, { profileIds, optimisticOrder });
     this.options.clearMessage(cardId);
     void this.flushOrder(provider);
   }
@@ -172,30 +157,20 @@ export class ModelProviderProfileActionsController {
       if (!result.ok) {
         await this.options.refresh();
         if (isCurrentScope()) {
-          this.options.setError(cardId, result.error);
+          showProfileActionError(result.error);
         }
         return;
       }
-      const warnings = result.value.warning ? [result.value.warning] : [];
-      if (!result.refresh.ok) {
-        warnings.push(result.refresh.error);
-      } else {
-        try {
-          await this.options.refresh();
-          const warning = this.options.getData()?.error;
-          if (warning) {
-            warnings.push(warning);
-          }
-        } catch (error) {
-          warnings.push(modelProviderErrorMessage(error));
-        }
-      }
+      const warning = await modelProviderMutationWarnings(result, async () => {
+        await this.options.refresh();
+        return this.options.getData()?.error;
+      });
       if (isCurrentScope()) {
-        this.options.setLogoutSuccess(warnings.join(" ") || undefined);
+        showProfileLogoutSuccess(warning || undefined);
       }
     } catch (error) {
       if (isCurrentScope()) {
-        this.options.setError(cardId, error);
+        showProfileActionError(error);
       }
     } finally {
       if (isCurrentScope()) {
@@ -244,14 +219,14 @@ export class ModelProviderProfileActionsController {
             }
           }
           if (this.clearOptimisticOrder(provider, pending.optimisticOrder) && result.warning) {
-            this.options.setError(pending.cardId, result.warning);
+            showProfileActionError(result.warning);
           }
         } catch (error) {
           if (!this.isCurrentScope(client, clientEpoch, agentEpoch, agentId)) {
             return;
           }
           if (this.clearOptimisticOrder(provider, pending.optimisticOrder)) {
-            this.options.setError(pending.cardId, error);
+            showProfileActionError(error);
           }
         }
       }
@@ -283,9 +258,7 @@ export class ModelProviderProfileActionsController {
     if (orders[provider] !== expected) {
       return false;
     }
-    const next = { ...orders };
-    delete next[provider];
-    this.options.setOrders(next);
+    this.options.setOrders(updateRecordEntry<string[]>(orders, provider, null));
     return true;
   }
 
@@ -295,18 +268,11 @@ export class ModelProviderProfileActionsController {
     if (!data || !authStatus) {
       return;
     }
-    const providers = [...authStatus.providers];
-    for (const [index, candidate] of providers.entries()) {
-      if ((candidate.authProvider ?? candidate.provider) !== provider) {
-        continue;
-      }
-      const { profileOrder: _order, profileOrderStored: _stored, ...base } = candidate;
-      providers[index] = {
-        ...base,
-        profileOrder: [...profileIds],
-        profileOrderStored: true,
-      };
-    }
+    const providers = authStatus.providers.map((candidate) =>
+      (candidate.authProvider ?? candidate.provider) === provider
+        ? { ...candidate, profileOrder: [...profileIds], profileOrderStored: true }
+        : candidate,
+    );
     this.options.setData({ ...data, authStatus: { ...authStatus, providers } });
   }
 }

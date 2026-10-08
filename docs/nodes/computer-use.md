@@ -14,7 +14,7 @@ For [cloud sessions](/gateway/cloud-sessions#desktop-and-computer-control), the 
 
 A conversation can also attach a temporary Crabbox while its agent stays on the Gateway. Select the `environmentId` returned by the environment tool on the first `computer` call; later calls retain that desktop. The agent sees and controls the same desktop shown in the chat sidebar. The environment must belong to the current conversation, and its lease, connection, and admitted agent run must remain current. A missing or stopped attachment never redirects input to the Gateway or another computer. See [Cloud Worker Desktop](/gateway/cloud-workers/desktop) for the complete “open in Crabbox and show me” workflow.
 
-Taking control of a cloud environment in the Desktop panel pauses agent input and cancels pending input. The agent can still observe the screen. Release control to allow new agent input; interrupted actions are not automatically replayed. This arbitration applies to cloud environment desktops, including conversation attachments and cloud sessions.
+Taking control of a cloud environment in the Desktop panel pauses agent input and cancels pending input. The agent can still observe the screen. When asked to resume, it can call `computer` with `action: "take_control"` to switch the controlling viewer to view-only and capture a fresh screenshot. This explicit handoff uses the admitted run’s existing computer-control authority; it does not require a separate viewer-issued handoff token. You can take control again at any time, or release control yourself. Ordinary input never takes over automatically, and interrupted actions are not replayed. Takeover invalidates earlier coordinate and window/browser observations; use the returned screenshot or take a fresh targeted observation before input. This arbitration applies to cloud environment desktops, including conversation attachments and cloud sessions, not ordinary Gateway or paired-node desktops.
 
 The agent emits one uniform command, `computer.act`; it cannot choose how a node fulfills it. On macOS, **Dashboard → Settings → This Mac → Capabilities** selects the node-local provider: Peekaboo is the default and preserves the existing in-process coordinate-action path, while CUA uses a driver daemon embedded in `OpenClaw.app`. The app spawns that daemon directly so it inherits OpenClaw's Accessibility and Screen Recording grants, and the app-owned node worker connects through a private socket. Windows and Linux can use the optional, experimental `cua-computer` plugin, which calls the packaged CUA Driver SDK directly.
 
@@ -50,6 +50,10 @@ For an existing native desktop, the provider uses the Gateway process's desktop 
 
 The built-in tool uses the Gateway desktop from an agent run hosted by that Gateway. Remote Gateway URL/token overrides remain supported for paired node targets.
 
+Tool discovery reads declared capabilities and recorded runtime health without starting a desktop or waiting for its helper. The first computer action probes the selected Gateway and binds to the resulting live provider generation. A declared action list alone does not mean the desktop is ready.
+
+For RPC clients, `computer.status` with `probe: false` performs this passive read. `probe: true` prepares the computer and waits for readiness; omitting `probe` preserves that behavior for existing clients. Concurrent probes share preparation, and helper startup remains bounded by its one-minute timeout. Passive reads never extend the desktop's idle lifetime or retry a failed startup.
+
 ### Linux Gateway live proof
 
 From a built source checkout on Linux, install the managed desktop prerequisites plus `mousepad`, then run:
@@ -60,6 +64,8 @@ node --import ./scripts/tsx.mjs scripts/dev/computer-use-gateway-live-proof.ts \
 ```
 
 Use an empty output directory. The proof starts an isolated Gateway and managed desktop with no paired nodes, captures screenshots, types into Mousepad and reads the text back, then verifies generation fencing and joined process cleanup. It requires no model credentials and leaves screenshots, a redacted log, and `result.json` in the output directory.
+
+Add `--runtime <executable>` to start the built Gateway on another runtime, such as Bun, and run the proof with no `node` on `PATH`. The proof fails if the Gateway or its computer helper runs on another executable or any owned process runs Node, and records each owned process's executable in `result.json`.
 
 ## The `computer` agent tool
 
@@ -79,7 +85,7 @@ Window input coordinates follow the observation's `details.coordinateSpace`. CUA
 
 For a window image, use `get_window_state` with `windowRef` and `includeScreenshot: true`, then pass the returned `observationId` with window input. With CUA, `includeScreenshot: false` skips capture and refreshes accessibility elements and their references. This opt-out requires an updated node; default and `true` observations remain compatible with older nodes. Use those references for element actions; window pixel input still requires an observation with a delivered image. The native macOS Peekaboo provider rejects `includeScreenshot: false` because its window observations require capture. A desktop `frameId` cannot replace a window observation: the images can use different coordinate spaces. Like `screenshot`, `wait` returns a desktop capture and rejects target and observation references.
 
-The CUA provider also exposes the v2 browser family: `get_browser_state`, `browser_prepare`, `browser_navigate`, `browser_click`, `browser_type`, `browser_dialog`, `browser_set_input_files`, `browser_download`, and `browser_pointer`. Bind a discovered native browser window with `get_browser_state`, then use the returned opaque `browserRef`, `pageRef`, observation, and element references. These references belong to one Computer Use execution and driver generation; navigation invalidates page-element observations, and a driver restart invalidates the complete browser reference set.
+The CUA provider also exposes the v2 browser family: `get_browser_state`, `browser_prepare`, `browser_navigate`, `browser_click`, `browser_type`, `browser_dialog`, `browser_set_input_files`, `browser_download`, and `browser_pointer`. Use `list_windows` to discover a native browser's `windowRef`, then pass it to `get_browser_state` to obtain an opaque `browserRef` and page references. Subsequent `get_browser_state` page snapshots and browser actions require both `browserRef` and `pageRef`; snapshots return the observation and element references needed for input. `browser_prepare` also requires the discovered `windowRef`, even for an isolated profile. These references belong to one Computer Use execution and driver generation; navigation invalidates page-element observations, and a driver restart invalidates the complete browser reference set.
 
 CUA additionally exposes `get_recording_state`, `start_recording`, `stop_recording`, and `replay_trajectory`. Recording and browser file operations use opaque `openclaw:computer-resource` handles. The selected computer host creates and validates the underlying files and directories; agent actions never accept native paths, output roots, or helper executable paths. Handles belong to one Computer Use execution and cannot be reused by another execution.
 
@@ -195,7 +201,7 @@ After either proof, stop only the Gateway, app/node, and fixture processes you l
 
 ### Windows and Linux (experimental, direct SDK)
 
-The bundled `cua-computer` plugin loads its Gateway policy by default on every platform. Local computer control remains opt-in on Windows and Linux; loading the policy alone does not start a native driver, register local computer commands, or probe local driver artifacts. macOS keeps its default CUA integration with the app-owned daemon. Explicitly disabling the plugin also disables its cloud computer policy.
+The bundled `cua-computer` plugin loads its Gateway policy by default on every platform. Local computer control remains opt-in on Windows and Linux; loading the policy alone does not start a native driver, register local computer commands, or check local driver artifacts. macOS keeps its default CUA integration with the app-owned daemon. Explicitly disabling the plugin also disables its cloud computer policy.
 
 To enable the experimental Windows or Linux node fulfiller, which uses the pinned CUA Driver SDK contract directly:
 

@@ -4,11 +4,19 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { startupCorpusTestFiles } from "../../test/vitest/vitest.startup-corpus-paths.mjs";
 import { fullSuiteVitestShards } from "../../test/vitest/vitest.test-shards.mjs";
+import { uiE2eRealGatewayTestFiles } from "../../test/vitest/vitest.ui-paths.mjs";
+import { ensureKyselyTypes } from "../generate-kysely-types.mts";
 import { runManagedCommand } from "./managed-child-process.mts";
 import { resolveRepoRoot } from "./repo-root.mjs";
 
 // A private-QA build also satisfies ordinary runtime readers.
 const VITEST_PRETEST_BUILD_MODES = ["private-qa", "runtime"] as const;
+const CONTROL_UI_E2E_CONFIG = "test/vitest/vitest.ui-e2e.config.ts";
+const aiPackageConsumer = {
+  file: "packages/ai/src/package.e2e.test.ts",
+  configs: ["test/vitest/vitest.e2e.config.ts"],
+  dir: "",
+};
 export type VitestPretestBuildMode = (typeof VITEST_PRETEST_BUILD_MODES)[number];
 type SetupCommandRunner = (args: string[], env: NodeJS.ProcessEnv) => Promise<number>;
 
@@ -26,6 +34,18 @@ export type VitestRuntimeTestSelection = {
 // prerequisite before admitting any workers: a child build invalidates dist
 // while unrelated workers may still be importing its public plugin facades.
 const runtimeConsumers = [
+  {
+    file: "src/process/exec.windows.integration.test.ts",
+    configs: ["test/vitest/vitest.process.config.ts"],
+    mode: "runtime",
+    dir: "src",
+  },
+  {
+    file: "src/tui/tui-session-identity-pty.e2e.test.ts",
+    configs: ["test/vitest/vitest.tui-pty.config.ts"],
+    mode: "runtime",
+    dir: "src",
+  },
   {
     file: "src/gateway/server-methods/agent.visitor-access.test.ts",
     configs: [
@@ -119,15 +139,23 @@ const runtimeConsumers = [
     dir: "src",
   },
   ...[
-    "src/agents/agent-command-local.test.ts",
-    "src/agents/simple-completion-runtime.plugin-scope.test.ts",
-    "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
-    "src/agents/prepared-model-catalog-worker.integration.test.ts",
     "src/agents/runtime-plugins.context-engine.integration.test.ts",
     "src/agents/tool-surface-plan.provider-catalog.integration.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.agents-core.config.ts", "test/vitest/vitest.agents.config.ts"],
+    mode: "runtime" as const,
+    dir: "src/agents",
+  })),
+  ...[
+    "src/agents/simple-completion-runtime.plugin-scope.test.ts",
+    // Compiled catalog workers load the fixture's public SDK through built host artifacts.
+    "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
+    "src/agents/prepared-model-catalog-worker.integration.test.ts",
+    "src/agents/prepared-model-catalog-worker.native-renewal.integration.test.ts",
+  ].map((file) => ({
+    file,
+    configs: ["test/vitest/vitest.infra.config.ts"],
     mode: "runtime" as const,
     dir: "src/agents",
   })),
@@ -156,6 +184,15 @@ const runtimeConsumers = [
     dir: "",
   },
   {
+    file: "src/gateway/server-methods/models-list.remote-catalog.integration.test.ts",
+    configs: [
+      "test/vitest/vitest.gateway-database-workers.config.ts",
+      "test/vitest/vitest.gateway.config.ts",
+    ],
+    mode: "runtime",
+    dir: "",
+  },
+  {
     file: "src/gateway/server-methods/models-list.worker-recovery.integration.test.ts",
     configs: [
       "test/vitest/vitest.gateway-database-workers.config.ts",
@@ -176,12 +213,15 @@ const runtimeConsumers = [
     mode: "runtime",
     dir: "",
   },
-  {
-    file: "extensions/qa-lab/src/suite-process-lifecycle.test.ts",
+  ...[
+    "extensions/qa-lab/src/agent-run-identity-repeated-turn-child.process.test.ts",
+    "extensions/qa-lab/src/suite-process-lifecycle.test.ts",
+  ].map((file) => ({
+    file,
     configs: ["test/vitest/vitest.extension-qa.config.ts"],
-    mode: "private-qa",
+    mode: "private-qa" as const,
     dir: "extensions",
-  },
+  })),
   // Native Codex transcript evidence runs in the packaged history Worker.
   ...[
     "extensions/codex/src/app-server/event-projector.verbose-hooks.test.ts",
@@ -206,7 +246,14 @@ const runtimeConsumers = [
     mode: "runtime" as const,
     dir: "extensions",
   })),
+  {
+    file: "extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts",
+    configs: ["test/vitest/vitest.extension-database-workers.config.ts"],
+    mode: "runtime",
+    dir: "extensions",
+  },
   ...[
+    "src/agents/agent-command-local.test.ts",
     "src/cli/acp-cli-exit.process.test.ts",
     "src/cli/update-dry-run-state.process.test.ts",
     "src/cli/update-cli/update-command-migrated.test.ts",
@@ -223,7 +270,7 @@ const runtimeConsumers = [
   ...[
     "src/infra/update-candidate-canary.integration.test.ts",
     "src/infra/update-managed-service-handoff-lifecycle.test.ts",
-    "src/plugin-state/plugin-state-store.authority.test.ts",
+    "src/plugin-state/plugin-state-store.runtime.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.infra.config.ts"],
@@ -231,11 +278,11 @@ const runtimeConsumers = [
     dir: "src",
   })),
   ...[
+    "src/commands/doctor-agent-database-order.process.test.ts",
     "src/commands/doctor-config-flow.legacy-composition.test.ts",
+    "src/commands/doctor-config-preflight.test.ts",
     "src/commands/doctor-config-preflight.process.test.ts",
     "src/commands/doctor-config-preflight.refusal.process.test.ts",
-    "src/commands/doctor-config-preflight.v17-atomicity.process.test.ts",
-    "src/commands/doctor-plugin-install-config.process.test.ts",
   ].map((file) => ({
     file,
     configs: ["test/vitest/vitest.commands.config.ts"],
@@ -243,8 +290,14 @@ const runtimeConsumers = [
     dir: "src/commands",
   })),
   {
+    file: "src/commands/doctor-config-preflight.legacy-driver.live.test.ts",
+    configs: ["test/vitest/vitest.live.config.ts"],
+    mode: "runtime",
+    dir: "src/commands",
+  },
+  {
     file: "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts",
-    configs: ["test/vitest/vitest.tooling.config.ts"],
+    configs: ["test/vitest/vitest.infra.config.ts"],
     mode: "private-qa",
     dir: "",
   },
@@ -278,6 +331,7 @@ const runtimeConsumers = [
     dir: "",
   })),
   ...[
+    "src/gateway/server.acp-native-model.product.test.ts",
     "src/gateway/server-sidecar-retention.test.ts",
     "src/gateway/server.config-patch.test.ts",
   ].map((file) => ({
@@ -329,6 +383,13 @@ function includesRuntimeConfig(configs: readonly string[] | undefined, config: s
 }
 
 export function resolveVitestRuntimeConfigScopes(config: string) {
+  if (aiPackageConsumer.configs.includes(config)) {
+    return [aiPackageConsumer];
+  }
+  // UI E2E is not part of the root unit-test inventory.
+  if (config === CONTROL_UI_E2E_CONFIG) {
+    return uiE2eRealGatewayTestFiles.map((file) => ({ file, configs: [config], dir: "" }));
+  }
   return runtimeConsumers.flatMap(({ file, configs, dir }) => {
     // Preserve the matched project scope; broad roots must not apply another
     // consumer's directory to scoped exclusions.
@@ -387,24 +448,138 @@ export function resolveVitestPretestBuildMode(
   );
 }
 
+export async function preparePrebuiltAiPackage(
+  selections: readonly VitestRuntimeTestSelection[],
+  env: NodeJS.ProcessEnv,
+  signal?: AbortSignal,
+): Promise<number> {
+  const selected =
+    env.OPENCLAW_E2E_SKIP_BUILD !== "1" &&
+    env.OPENCLAW_E2E_USE_PREBUILT_DIST === "1" &&
+    selections.some(({ configs, includePatterns, matchesFile }) => {
+      const included = includePatterns
+        ? includePatterns.some((pattern) => path.matchesGlob(aiPackageConsumer.file, pattern))
+        : configs?.some((config) => aiPackageConsumer.configs.includes(config)) === true;
+      return matchesFile
+        ? matchesFile(aiPackageConsumer.file, included, includePatterns)
+        : included;
+    });
+  if (!selected) {
+    return 0;
+  }
+  signal?.throwIfAborted();
+  const cwd = path.resolve(import.meta.dirname, "../..");
+  const packageRoot = path.join(cwd, "packages/ai");
+  const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8")) as {
+    types: string;
+    exports: Record<string, { types: string }>;
+  };
+  const declarations = new Set([
+    manifest.types,
+    ...Object.values(manifest.exports).map((entry) => entry.types),
+  ]);
+  // CI's qaRuntime supplies JavaScript only. Its shard owner repairs types
+  // before reader admission; generic prebuilt readers must never rebuild them.
+  if ([...declarations].some((entry) => !fs.existsSync(path.resolve(packageRoot, entry)))) {
+    console.error(
+      "[test] preparing missing prebuilt AI package declarations before Vitest workers",
+    );
+    const code = await runManagedCommand({
+      bin: process.execPath,
+      args: ["--import", "tsx", "scripts/tsdown-build.mts", "--config", "tsdown.ai.config.ts"],
+      cwd,
+      env: { ...env, OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
+      signal,
+    });
+    if (code !== 0) {
+      return code;
+    }
+  }
+  return 0;
+}
+
 export async function prepareVitestRuntime(
   selections: readonly VitestRuntimeTestSelection[],
   env: NodeJS.ProcessEnv = process.env,
+  options: { runtimePrepared?: boolean; signal?: AbortSignal } = {},
 ): Promise<number> {
-  const mode = resolveVitestPretestBuildMode(selections);
+  options.signal?.throwIfAborted();
+  await ensureKyselyTypes();
+  const controlUi =
+    !isE2eBuildSkipped(env) &&
+    env.OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY !== "1" &&
+    selections.some(
+      ({ configs, includePatterns, matchesFile }) =>
+        configs?.includes(CONTROL_UI_E2E_CONFIG) &&
+        uiE2eRealGatewayTestFiles.some((file) => {
+          const included =
+            !includePatterns || includePatterns.some((pattern) => path.matchesGlob(file, pattern));
+          return matchesFile ? matchesFile(file, included, includePatterns) : included;
+        }),
+    );
+  const mode = controlUi ? "private-qa" : resolveVitestPretestBuildMode(selections);
   if (!mode) {
     return 0;
   }
-  console.error(`[test] preparing ${mode} runtime before Vitest workers`);
-  return runManagedCommand({
+  options.signal?.throwIfAborted();
+  const cwd = path.resolve(import.meta.dirname, "../..");
+  if (!options.runtimePrepared || controlUi) {
+    console.error(`[test] preparing ${mode} runtime before Vitest workers`);
+    const code = await runManagedCommand({
+      bin: process.execPath,
+      args: [
+        "scripts/prepare-vitest-runtime.mjs",
+        ...(controlUi ? ["--require-current-head"] : []),
+      ],
+      cwd,
+      env: { ...env, ...(mode === "private-qa" ? { OPENCLAW_BUILD_PRIVATE_QA: "1" } : {}) },
+      signal: options.signal,
+    });
+    if (code !== 0) {
+      return code;
+    }
+  }
+  if (!controlUi) {
+    return 0;
+  }
+
+  // Runtime preparation can replace build-info while retaining canonical UI
+  // assets. Reconcile that pair before any Gateway reader captures its identity.
+  const { registerToolingTsx } = await import("./tsx-cli-shim.mjs");
+  options.signal?.throwIfAborted();
+  await registerToolingTsx();
+  options.signal?.throwIfAborted();
+  const [{ inspectControlUiRootAssets }, { normalizeControlUiBuildInfo }] = await Promise.all([
+    import("../../src/infra/control-ui-assets.ts"),
+    import("../../ui/src/build-info-normalizers.ts"),
+  ]);
+  options.signal?.throwIfAborted();
+  const { buildId } = normalizeControlUiBuildInfo(
+    JSON.parse(fs.readFileSync(path.join(cwd, "dist/build-info.json"), "utf8")),
+  );
+  const uiRoot = path.join(cwd, "dist/control-ui");
+  if (inspectControlUiRootAssets(uiRoot, buildId).kind === "ready") {
+    return 0;
+  }
+  console.error("[test] preparing matching Control UI assets before Vitest workers");
+  const code = await runManagedCommand({
     bin: process.execPath,
-    args: ["scripts/run-node.mjs", "--version"],
-    cwd: path.resolve(import.meta.dirname, "../.."),
-    env: { ...env, ...(mode === "private-qa" ? { OPENCLAW_BUILD_PRIVATE_QA: "1" } : {}) },
+    args: ["scripts/ui.js", "build"],
+    cwd,
+    env,
+    signal: options.signal,
   });
+  if (code !== 0) {
+    return code;
+  }
+  const health = inspectControlUiRootAssets(uiRoot, buildId);
+  if (health.kind !== "ready") {
+    throw new Error(`Control UI setup left ${health.kind} assets for runtime ${buildId}`);
+  }
+  return 0;
 }
 
-export function isE2eBuildSkipped(env: NodeJS.ProcessEnv) {
+function isE2eBuildSkipped(env: NodeJS.ProcessEnv) {
   return env.OPENCLAW_E2E_SKIP_BUILD === "1" || env.OPENCLAW_E2E_USE_PREBUILT_DIST === "1";
 }
 
@@ -455,7 +630,7 @@ export async function runE2eGlobalSetup(
   }
   const commands = [
     {
-      args: ["scripts/run-node.mjs", "--version"],
+      args: ["scripts/prepare-vitest-runtime.mjs"],
       env: {
         ...env,
         OPENCLAW_BUILD_PRIVATE_QA: "1",
@@ -493,7 +668,7 @@ function isMissingVitestResolveError(error: unknown): error is NodeJS.ErrnoExcep
 /**
  * Builds the actionable dependency-install message when Vitest is unavailable.
  */
-export function resolveMissingVitestDependencyMessage(
+function resolveMissingVitestDependencyMessage(
   baseDir = resolveRepoRoot(import.meta.url),
   fsImpl: Pick<VitestFs, "existsSync"> = fs,
 ): string {

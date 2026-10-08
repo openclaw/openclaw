@@ -1,4 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
+import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { isIndexedSessionEntry } from "../agents/sessions/session-manager-codec.js";
@@ -20,16 +22,17 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import {
+  projectExistingAgentDatabaseTargets,
+  resolveTargetSqliteOptions,
+} from "../infra/session-sqlite-migration-readers.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import {
-  projectExistingAgentDatabaseTargets,
-  resolveTargetSqliteOptions,
-} from "./doctor-session-sqlite-readers.js";
 import { ReadOnlySqliteTranscriptReader } from "./doctor-session-sqlite-transcript-readers.js";
+import { countLabel } from "./doctor-state-integrity-format.js";
 
 const NOTE_TITLE = "Session transcript headers";
 
@@ -55,31 +58,27 @@ function createCanonicalHeaderlessEventParser(sessionId: string) {
       } catch {
         return undefined;
       }
-      if (!event || typeof event !== "object" || Array.isArray(event)) {
-        return undefined;
-      }
-      const record = event as Record<string, unknown>;
-      if (record.type === "session") {
+      if (!isRecord(event) || event.type === "session") {
         return undefined;
       }
       // Opaque plugin rows remain uninterpreted. Known entries and leaf controls
       // must already satisfy the runtime schema before a replacement can be lossless.
-      if (isCanonicalSessionTranscriptEntry(record)) {
+      if (isCanonicalSessionTranscriptEntry(event)) {
         if (!isIndexedSessionEntry(event)) {
           return undefined;
         }
         indexedEntries += 1;
-      } else if (record.type === "leaf" && !isSessionTranscriptLeafControl(record)) {
+      } else if (event.type === "leaf" && !isSessionTranscriptLeafControl(event)) {
         return undefined;
       }
-      if (typeof record.id === "string") {
-        const eventId = record.id.trim();
+      if (typeof event.id === "string") {
+        const eventId = event.id.trim();
         if (!eventId || eventIds.has(eventId)) {
           return undefined;
         }
         eventIds.add(eventId);
       }
-      return record;
+      return event;
     },
   };
 }
@@ -161,17 +160,6 @@ function readHeaderRepairContext(
   return { sessionKey: window.session_key, ...(spawnedCwd ? { spawnedCwd } : {}) };
 }
 
-function formatHeaderTimestamp(createdAt: number): string | undefined {
-  if (!Number.isFinite(createdAt)) {
-    return undefined;
-  }
-  try {
-    return new Date(createdAt).toISOString();
-  } catch {
-    return undefined;
-  }
-}
-
 function assertRepairPreservedEvents(params: {
   before: readonly SqliteTranscriptStorageRow[];
   database: OpenClawAgentDatabase;
@@ -199,11 +187,6 @@ function assertRepairPreservedEvents(params: {
   }
 }
 
-function formatCount(count: number, singular: string): string {
-  return `${count} ${singular}${count === 1 ? "" : "s"}`;
-}
-
-/** Reports or repairs canonical SQLite transcripts whose first header was never persisted. */
 export async function noteSessionTranscriptHeaderHealth(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -243,7 +226,7 @@ export async function noteSessionTranscriptHeaderHealth(params: {
         if (!snapshot.sessionKey || !parser.hasIndexedEntries() || snapshot.rows.length === 0) {
           continue;
         }
-        const headerTimestamp = formatHeaderTimestamp(snapshot.rows[0]?.createdAt ?? Number.NaN);
+        const headerTimestamp = timestampMsToIsoString(snapshot.rows[0]?.createdAt ?? Number.NaN);
         if (!headerTimestamp) {
           note(
             `- Failed to repair transcript ${sessionId} (${target.agentId}): invalid first-row timestamp`,
@@ -331,13 +314,13 @@ export async function noteSessionTranscriptHeaderHealth(params: {
 
   if (params.shouldRepair && repaired > 0) {
     note(
-      `- Prepended missing headers to ${formatCount(repaired, "session transcript")}.`,
+      `- Prepended missing headers to ${countLabel(repaired, "session transcript")}.`,
       NOTE_TITLE,
     );
   } else if (!params.shouldRepair && found > 0) {
     note(
       [
-        `- Found ${formatCount(found, "canonical session transcript")} without a header.`,
+        `- Found ${countLabel(found, "canonical session transcript")} without a header.`,
         `- Run "openclaw doctor --fix" to repair ${found === 1 ? "it" : "them"} before resuming the session.`,
       ].join("\n"),
       NOTE_TITLE,

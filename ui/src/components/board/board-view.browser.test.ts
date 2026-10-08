@@ -646,16 +646,17 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
             const body = cell.querySelector<HTMLElement>(".board-widget__body")!;
             expect(getComputedStyle(widget).borderTopWidth).toBe(expanded ? "0px" : "1px");
             expect(getComputedStyle(body).paddingTop).toBe(
-              !expanded && presentation === "card" ? "12px" : "0px",
+              presentation === "card" ? "12px" : "0px",
             );
             if (expanded) {
               expect(getComputedStyle(widget).borderRadius).toBe("0px");
               expect(getComputedStyle(body).borderRadius).toBe("0px");
               const bounds = frame.getBoundingClientRect();
               const available = parent.getBoundingClientRect();
-              expect(bounds.left).toBeCloseTo(available.left, 0);
-              expect(bounds.top).toBeCloseTo(available.top, 0);
-              expect(bounds.right).toBeCloseTo(available.right, 0);
+              const inset = presentation === "card" ? 12 : 0;
+              expect(bounds.left).toBeCloseTo(available.left + inset, 0);
+              expect(bounds.top).toBeCloseTo(available.top + inset, 0);
+              expect(bounds.right).toBeCloseTo(available.right - inset, 0);
             }
           }
         }

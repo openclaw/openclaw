@@ -1,7 +1,3 @@
-// Multi-value combobox: the current values sit inside a full-width field as
-// removable chips, the dropdown lists the remaining options filtered by what
-// the operator types, and optional free-text entry appends values the option
-// list does not know. Light DOM so the shared stylesheet applies.
 import WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
@@ -13,16 +9,12 @@ import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { configureAnchoredPopup } from "./anchored-overlay.ts";
 import { icons } from "./icons.ts";
+import type { ModelPickerOption } from "./model-picker.ts";
 import { renderProviderBrandIcon } from "./provider-icon.ts";
+import { revealInScrollRegion } from "./scroll-state.ts";
 import "../styles/multi-select.css";
 
-export type MultiSelectOption = {
-  value: string;
-  label: string;
-  provider?: string;
-  detail?: string;
-  disabled?: boolean;
-};
+export type MultiSelectOption = ModelPickerOption;
 
 type MultiSelectRow = MultiSelectOption & { custom?: boolean };
 
@@ -91,16 +83,8 @@ export class MultiSelect extends OpenClawLightDomElement {
     }
     const menu = this.querySelector<HTMLElement>(".multi-select__menu");
     const option = menu?.querySelector<HTMLElement>('[aria-selected="true"]');
-    if (!menu || !option) {
-      return;
-    }
-    const menuBounds = menu.getBoundingClientRect();
-    const optionBounds = option.getBoundingClientRect();
-    // Keep keyboard navigation inside this popup without scrolling the settings page.
-    if (optionBounds.top < menuBounds.top) {
-      menu.scrollTop -= menuBounds.top - optionBounds.top;
-    } else if (optionBounds.bottom > menuBounds.bottom) {
-      menu.scrollTop += optionBounds.bottom - menuBounds.bottom;
+    if (menu && option) {
+      revealInScrollRegion(menu, option);
     }
   }
 
@@ -109,7 +93,6 @@ export class MultiSelect extends OpenClawLightDomElement {
     return this.options.find((option) => this.getValueKey(option.value) === key);
   }
 
-  /** Dropdown rows: unchosen options matching the query, then the custom entry. */
   private rows(): MultiSelectRow[] {
     const taken = new Set(this.value.map((entry) => this.getValueKey(entry)));
     const custom = this.query.trim();

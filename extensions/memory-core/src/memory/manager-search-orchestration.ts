@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   readMemoryFile,
-  MEMORY_INDEX_VECTOR_TABLE,
+  MEMORY_INDEX_VECTOR_TABLE as VECTOR_TABLE,
   MEMORY_SEARCH_DEADLINE_CONTROL,
   type MemoryReadResult,
   type MemorySearchManager,
@@ -17,14 +17,10 @@ import {
 import { WorkerTaskError } from "openclaw/plugin-sdk/process-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  mergeHybridResults,
-  selectHybridSearchResults,
-  type HybridSearchResult,
-} from "./hybrid.js";
+import { mergeHybridResults, selectHybridSearchResults } from "./hybrid.js";
 import { applyImportanceMultiplier } from "./importance.js";
 import { runMemoryVectorFallback } from "./manager-cpu-worker-runtime.js";
-import { projectHybridCandidates } from "./manager-hybrid-candidates.js";
+import { isMemoryEmbeddingOperationError } from "./manager-embedding-errors.js";
 import { acquireMemoryIndexReadGeneration } from "./manager-index-generation-lease.js";
 import {
   MemoryKeywordRetrieval,
@@ -34,20 +30,20 @@ import {
 import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 import type { MemoryRetrievalIndexState } from "./manager-retrieval-read.js";
 import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
-import { resolveMemorySearchPreflight } from "./manager-search-preflight.js";
 import { searchVector } from "./manager-search-vector.js";
+import { prepareExactPathMatcher } from "./manager-search.js";
 import type { MemoryKeywordWorkerResult } from "./manager-search.worker.js";
+import { assertMemoryShadowIdentity, readMemoryShadowIdentity } from "./manager-shadow-task.js";
 import { applyProjectRanking, prepareActiveProjectKeys } from "./project-ranking.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 
 const SNIPPET_MAX_CHARS = 700;
 const SEARCH_CANDIDATE_UNIVERSE = 200;
-const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const log = createSubsystemLogger("memory");
 type MemoryIndexSearchOptions = NonNullable<Parameters<MemorySearchManager["search"]>[1]>;
 
 export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
-  protected abstract sessionWarm: Set<string>;
+  private readonly sessionWarm = new Set<string>();
 
   protected claimSessionWarmSync(sessionKey?: string): boolean {
     if (!this.settings.sync.onSessionStart) {
@@ -130,7 +126,23 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       200,
       Math.max(1, Math.floor(maxResults * hybrid.candidateMultiplier)),
     );
-    const keywordOptions = { boostFallbackRanking: true, signal: opts?.signal };
+    const fuseRecallMetadata =
+      (opts?.lexicalOnly === true || this.providerRequirement.mode === "fts-only") &&
+      sourceFilterList.length === 1 &&
+      sourceFilterList[0] === "sessions";
+    const keywordOptions = { boostFallbackRanking: true, signal: opts?.signal, fuseRecallMetadata };
+    const database = this.publishedDatabase;
+    const databasePath = resolveUserPath(this.settings.store.databasePath);
+    const fileIdentity = fuseRecallMetadata ? readMemoryShadowIdentity(databasePath) : undefined;
+    const assertReadOwner = () => {
+      opts?.signal?.throwIfAborted();
+      if (database.closed || !database.db.isOpen || this.publishedDatabase !== database) {
+        throw new Error("Memory retrieval changed its captured database owner");
+      }
+      if (fileIdentity) {
+        assertMemoryShadowIdentity(databasePath, fileIdentity);
+      }
+    };
     let preparedKeyword: MemoryKeywordWorkerResult | undefined;
     let releaseGeneration: (() => Promise<void>) | undefined;
     const releaseReadGeneration = async () => {
@@ -143,7 +155,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       releaseGeneration ??= await acquireMemoryIndexReadGeneration(
         this.settings.store.databasePath,
         opts?.signal,
+        fuseRecallMetadata,
       );
+      assertReadOwner();
       preparedKeyword = undefined;
       if (
         sourceFilterAllowed &&
@@ -188,7 +202,10 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           if (err instanceof WorkerTaskError && err.code === "overloaded") {
             throw err;
           }
-          if (this.providerRequirement.mode === "optional" && this.shouldFallbackOnError(err)) {
+          if (
+            this.providerRequirement.mode === "optional" &&
+            isMemoryEmbeddingOperationError(err)
+          ) {
             const failedProvider = this.provider?.id ?? this.settings.provider;
             await this.retireCurrentProvider().catch((retireErr: unknown) => {
               const message = redactSensitiveText(formatErrorMessage(retireErr), {
@@ -215,11 +232,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         indexState = await readIndexState();
         hasIndexedContent = this.hasIndexedContent(indexState);
       }
-      const preflight = resolveMemorySearchPreflight({
-        query: normalizedQuery,
-        hasIndexedContent,
-      });
-      if (!preflight.shouldSearch) {
+      if (!hasIndexedContent) {
         if (this.embeddingBootstrapFailure) {
           opts?.onDebug?.({
             backend: "builtin",
@@ -228,9 +241,8 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         }
         return [];
       }
-      const cleaned = preflight.normalizedQuery;
       const recoveringEmbeddingProvider = this.embeddingBootstrapFailure !== undefined;
-      if (recoveringEmbeddingProvider) {
+      if (recoveringEmbeddingProvider || (fuseRecallMetadata && !this.providerInitialized)) {
         await releaseReadGeneration();
       }
       const embeddingBootstrapKeywordOnly = await this.ensureEmbeddingProviderForSearch(
@@ -246,7 +258,6 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         (this.purpose === "default" || this.purpose === "cli");
       if (
         !embeddingBootstrapKeywordOnly &&
-        preflight.shouldInitializeProvider &&
         !this.provider &&
         (this.providerLifecycle.mode === "pending" ||
           (this.providerLifecycle.mode === "degraded" &&
@@ -256,6 +267,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         // Reinitialize it before identity validation; leaving the lifecycle pending
         // makes a valid existing index look mismatched and drops keyword results.
         this.resetProviderInitializationForRetry();
+        if (fuseRecallMetadata) {
+          await releaseReadGeneration();
+        }
         await this.ensureProviderInitialized();
       }
       this.assertRequiredProviderAvailable("search");
@@ -264,6 +278,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         !this.provider &&
         this.providerLifecycle.mode === "degraded"
       ) {
+        if (fuseRecallMetadata) {
+          await releaseReadGeneration();
+        }
         const activatedFallback = await this.activateFallbackProvider(
           this.providerLifecycle.reason,
         ).catch((fallbackErr: unknown) => {
@@ -279,12 +296,14 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           });
         }
       }
-      const indexIdentity = embeddingBootstrapKeywordOnly
-        ? this.refreshKeywordFallbackIndexIdentity(indexState)
-        : this.refreshIndexIdentityDirty({
-            providerKeyKnown: this.providerInitialized,
-            indexState,
-          });
+      const refreshSearchIdentity = () =>
+        embeddingBootstrapKeywordOnly
+          ? this.refreshKeywordFallbackIndexIdentity(indexState)
+          : this.refreshIndexIdentityDirty({
+              providerKeyKnown: this.providerInitialized,
+              indexState,
+            });
+      const indexIdentity = refreshSearchIdentity();
       const shouldRepairIdentity =
         hasIndexedContent &&
         (indexIdentity.status === "missing" ||
@@ -307,14 +326,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         });
         indexState = await readIndexState();
       }
-      let repairedIndexIdentity = shouldRepairIdentity
-        ? embeddingBootstrapKeywordOnly
-          ? this.refreshKeywordFallbackIndexIdentity(indexState)
-          : this.refreshIndexIdentityDirty({
-              providerKeyKnown: this.providerInitialized,
-              indexState,
-            })
-        : indexIdentity;
+      let repairedIndexIdentity = shouldRepairIdentity ? refreshSearchIdentity() : indexIdentity;
       if (
         repairedIndexIdentity.status === "mismatched" &&
         !embeddingBootstrapKeywordOnly &&
@@ -376,12 +388,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         if (!releaseGeneration) {
           indexState = await readIndexState();
         }
-        const leasedIdentity = embeddingBootstrapKeywordOnly
-          ? this.refreshKeywordFallbackIndexIdentity(indexState)
-          : this.refreshIndexIdentityDirty({
-              providerKeyKnown: this.providerInitialized,
-              indexState,
-            });
+        const leasedIdentity = refreshSearchIdentity();
         effectiveIdentity = leasedIdentity;
         if (
           leasedIdentity.status === "valid" ||
@@ -425,7 +432,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
         const results =
           (keywordOnly || hybrid.enabled) && this.fts.enabled && this.fts.available
             ? await this.searchKeywordWithFallback(
-                cleaned,
+                normalizedQuery,
                 candidates,
                 keywordOptions,
                 sourceFilterList,
@@ -466,20 +473,21 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           .map((identity) => identity.model),
       };
 
+      const embedQuery = () =>
+        this.embedQueryWithRetry(
+          normalizedQuery,
+          opts?.signal,
+          semanticProvider,
+          semanticProviderRuntime,
+          opts?.[MEMORY_SEARCH_DEADLINE_CONTROL],
+        );
       let keywordResults: Awaited<ReturnType<typeof loadKeywordResults>> = [];
       let queryVec: number[];
       const releaseSemanticProvider = this.acquireProviderUse(semanticProvider);
       try {
         keywordResults = await loadKeywordResults();
         try {
-          queryVec = await this.embedQueryWithRetry(
-            cleaned,
-            opts?.signal,
-            semanticProvider,
-            false,
-            semanticProviderRuntime,
-            opts?.[MEMORY_SEARCH_DEADLINE_CONTROL],
-          );
+          queryVec = await embedQuery();
         } catch (err) {
           releaseSemanticProvider();
           // An aborted caller already stopped waiting; keep the provider generation
@@ -492,7 +500,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           opts?.onPartialResults?.(null);
           this.markLocalEmbeddingProviderDegraded(err);
           const message = formatErrorMessage(err);
-          const activatedFallback = this.shouldFallbackOnError(err)
+          const activatedFallback = isMemoryEmbeddingOperationError(err)
             ? await this.activateFallbackProvider(message).catch((fallbackErr: unknown) => {
                 log.warn(
                   `memory search: failed to activate fallback provider: ${formatErrorMessage(fallbackErr)}`,
@@ -524,14 +532,7 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             try {
               keywordResults = await loadKeywordResults();
               try {
-                queryVec = await this.embedQueryWithRetry(
-                  cleaned,
-                  opts?.signal,
-                  semanticProvider,
-                  false,
-                  semanticProviderRuntime,
-                  opts?.[MEMORY_SEARCH_DEADLINE_CONTROL],
-                );
+                queryVec = await embedQuery();
               } catch (fallbackErr) {
                 releaseFallbackProvider();
                 if (!opts?.signal?.aborted) {
@@ -542,7 +543,11 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
             } finally {
               releaseFallbackProvider();
             }
-          } else if (!this.provider && this.fts.enabled && this.fts.available) {
+          } else if (
+            (!this.provider || this.providerRequirement.mode !== "required") &&
+            this.fts.enabled &&
+            this.fts.available
+          ) {
             this.assertRequiredProviderAvailable("search");
             log.warn(
               `memory search: embeddings unavailable; using keyword-only results: ${message}`,
@@ -579,8 +584,8 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           results: vectorResults,
           temporalDecay: hybrid.temporalDecay,
           workspaceDir: this.workspaceDir,
-          sessionSourceMtimes: this.loadSessionSourceMtimes(vectorResults),
-          memorySourceMtimes: this.loadRemoteMemorySourceMtimes(vectorResults),
+          sessionSourceMtimes: this.loadSourceMtimes("sessions", vectorResults),
+          memorySourceMtimes: this.loadSourceMtimes("memory", vectorResults),
         });
         // Decay and importance can reverse the order returned by vector retrieval.
         const activeProjects = prepareActiveProjectKeys(opts?.activeProjectKeys);
@@ -596,15 +601,28 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           .slice(0, maxResults);
       }
 
-      const merged = await this.mergeHybridResults({
-        query: cleaned,
-        vector: vectorResults,
-        keyword: keywordResults,
+      const matchExactPath = prepareExactPathMatcher(normalizedQuery);
+      const merged = await mergeHybridResults({
+        vector: vectorResults.map((entry) => ({
+          ...entry,
+          vectorScore: entry.score,
+          exactPathSpecificity: matchExactPath(entry.path),
+        })),
+        keyword: keywordResults.map((entry) => ({ ...entry, rankingScore: entry.score })),
         vectorWeight: hybrid.vectorWeight,
         textWeight: hybrid.textWeight,
+        isNonTextMediaPath: (path) =>
+          classifyMemoryMultimodalPath(path, this.settings.multimodal) !== null,
         mmr: hybrid.mmr,
         temporalDecay: hybrid.temporalDecay,
         activeProjectKeys: opts?.activeProjectKeys,
+        workspaceDir: this.workspaceDir,
+        // Vector enrichment runs last, so its facts win for paths in both sets.
+        sessionSourceMtimes: this.loadSourceMtimes("sessions", [
+          ...keywordResults,
+          ...vectorResults,
+        ]),
+        memorySourceMtimes: this.loadSourceMtimes("memory", [...keywordResults, ...vectorResults]),
       });
       return selectHybridSearchResults({
         merged,
@@ -615,7 +633,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     };
     return await this.withManagerOperation(async () => {
       try {
-        return await runSearch();
+        const results = await runSearch();
+        assertReadOwner();
+        return results;
       } finally {
         await releaseReadGeneration();
       }
@@ -693,32 +713,6 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       },
       sourceFilterVec: this.buildSourceFilter("c", sourceFilterList),
     });
-    return this.attachRecallMetadata(results, signal, sourceFilterList);
-  }
-
-  private mergeHybridResults(params: {
-    query: string;
-    vector: Array<MemoryRetrievalResult & { id: string }>;
-    keyword: KeywordSearchHit[];
-    vectorWeight: number;
-    textWeight: number;
-    mmr?: { enabled: boolean; lambda: number };
-    temporalDecay?: { enabled: boolean; halfLifeDays: number };
-    activeProjectKeys?: readonly string[];
-  }): Promise<HybridSearchResult<MemorySource>[]> {
-    return mergeHybridResults({
-      ...projectHybridCandidates(params.query, params.vector, params.keyword),
-      vectorWeight: params.vectorWeight,
-      textWeight: params.textWeight,
-      isNonTextMediaPath: (path) =>
-        classifyMemoryMultimodalPath(path, this.settings.multimodal) !== null,
-      mmr: params.mmr,
-      temporalDecay: params.temporalDecay,
-      activeProjectKeys: params.activeProjectKeys,
-      workspaceDir: this.workspaceDir,
-      // Vector enrichment runs last, so its facts win when a path occurs in both sets.
-      sessionSourceMtimes: this.loadSessionSourceMtimes([...params.keyword, ...params.vector]),
-      memorySourceMtimes: this.loadRemoteMemorySourceMtimes([...params.keyword, ...params.vector]),
-    });
+    return this.attachRecallMetadata(results, signal);
   }
 }

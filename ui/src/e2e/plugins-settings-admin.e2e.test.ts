@@ -58,7 +58,7 @@ async function openWorkboard(page: Parameters<typeof waitForControlUiRoute>[0], 
   await search.waitFor();
   const inventoryGeometry = await page.evaluate(() => {
     const surface = document.querySelector<HTMLElement>(".settings-page.oc-app-surface");
-    const title = surface?.querySelector<HTMLElement>(".plugins-settings-title");
+    const title = surface?.querySelector<HTMLElement>(".content-header--settings h1.page-title");
     const tabs = surface?.querySelector<HTMLElement>(".plugins-settings-tabs.oc-segmented");
     const searchField = surface?.querySelector<HTMLElement>(".plugins-settings-search");
     const section = surface?.querySelector<HTMLElement>("#plugin-settings-panel .settings-group");

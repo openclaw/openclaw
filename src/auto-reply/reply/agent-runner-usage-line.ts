@@ -39,8 +39,7 @@ const formatResponseUsageLine = (
   const cost = params.showCost && canPriceUsage ? estimateAggregateUsageCost(params) : undefined;
   const costLabel = params.showCost ? formatUsd(cost) : undefined;
   const cacheSuffix =
-    (typeof cacheRead === "number" && cacheRead > 0) ||
-    (typeof cacheWrite === "number" && cacheWrite > 0)
+    (cacheRead ?? 0) > 0 || (cacheWrite ?? 0) > 0
       ? ` · cache ${formatTokenCount(cacheRead ?? 0)} cached / ${formatTokenCount(cacheWrite ?? 0)} new`
       : "";
   if (!hasSplitTokens && !totalLabel && !cacheSuffix && !costLabel) {
@@ -90,20 +89,11 @@ export const resolveResponseUsageLine = (params: {
       ? renderUsageBar(usageTemplate, buildUsageContract(params.replyUsageState, params.channel))
       : undefined;
 
-  if (rendered) {
-    return rendered;
-  }
-  return formatted ?? undefined;
+  return rendered || formatted || undefined;
 };
 
 export const appendUsageLine = (payloads: ReplyPayload[], line: string): ReplyPayload[] => {
-  let index = -1;
-  for (let i = payloads.length - 1; i >= 0; i -= 1) {
-    if (payloads[i]?.text) {
-      index = i;
-      break;
-    }
-  }
+  const index = payloads.findLastIndex((payload) => payload?.text);
   if (index === -1) {
     return [...payloads, { text: line, isStatusNotice: true }];
   }

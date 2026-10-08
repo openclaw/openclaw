@@ -47,6 +47,8 @@ async function checkDiagnostics(family: "single" | "batch" | "connections", fall
     ? `0 0 127.0.0.1:${port} 127.0.0.1:54321 users:(("node",pid=424242,fd=1))\n`
     : `LISTEN 0 128 127.0.0.1:${port} 0.0.0.0:* users:(("node",pid=424242,fd=1))\n`;
   try {
+    // TMPDIR can live inside an ESM checkout; these executable fixtures use require.
+    await writeFile(path.join(root, "package.json"), '{"type":"commonjs"}');
     for (const command of ["lsof", "ss", "ps"]) {
       await writeFile(
         path.join(root, command),

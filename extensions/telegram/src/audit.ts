@@ -1,5 +1,4 @@
 import type { TelegramGroupConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   AuditTelegramGroupMembershipParams,
@@ -21,16 +20,13 @@ export function collectTelegramUnmentionedGroupIds(
   const groupIds: string[] = [];
   let unresolvedGroups = 0;
   for (const [key, value] of Object.entries(groups)) {
-    if (key === "*") {
-      continue;
-    }
-    if (!value || typeof value !== "object") {
-      continue;
-    }
-    if (value.enabled === false) {
-      continue;
-    }
-    if (value.requireMention !== false) {
+    if (
+      key === "*" ||
+      !value ||
+      typeof value !== "object" ||
+      value.enabled === false ||
+      value.requireMention !== false
+    ) {
       continue;
     }
     const id = normalizeOptionalString(key) ?? "";
@@ -46,10 +42,6 @@ export function collectTelegramUnmentionedGroupIds(
   groupIds.sort((a, b) => a.localeCompare(b));
   return { groupIds, unresolvedGroups, hasWildcardUnmentionedGroups };
 }
-
-const loadAuditMembershipRuntime = createLazyRuntimeModule(
-  () => import("./audit-membership-runtime.js"),
-);
 
 export async function auditTelegramGroupMembership(
   params: AuditTelegramGroupMembershipParams,
@@ -69,7 +61,7 @@ export async function auditTelegramGroupMembership(
 
   // Lazy import to avoid pulling `undici` (ProxyAgent) into cold-path callers that only need
   // `collectTelegramUnmentionedGroupIds` (e.g. config audits).
-  const { auditTelegramGroupMembershipImpl } = await loadAuditMembershipRuntime();
+  const { auditTelegramGroupMembershipImpl } = await import("./audit-membership-runtime.js");
   const result = await auditTelegramGroupMembershipImpl({
     ...params,
     token,

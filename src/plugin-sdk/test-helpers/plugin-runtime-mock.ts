@@ -1,6 +1,9 @@
 // Plugin runtime mock helpers build minimal runtime doubles for plugin SDK tests.
 import { vi } from "vitest";
-import type { InboundDebounceCreateParams } from "../../auto-reply/inbound-debounce.js";
+import {
+  resolveInboundDebounceMs,
+  type InboundDebounceCreateParams,
+} from "../../auto-reply/inbound-debounce.js";
 import { normalizeInboundTextNewlines } from "../../auto-reply/reply/inbound-text.js";
 import { normalizeThinkLevel } from "../../auto-reply/thinking.shared.js";
 import {
@@ -15,7 +18,6 @@ import {
   resolveStableChannelIngressPolicy,
 } from "../../channels/message-access/runtime.js";
 import { createChannelReplyPipeline } from "../../channels/message/reply-pipeline.js";
-import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
 import type { ConfigFileSnapshot } from "../../config/types.openclaw.js";
 import { createChannelRuntimeContextRegistry } from "../../plugins/runtime/channel-runtime-contexts.js";
 import { resolveAgentCatalogCreateTarget } from "../../plugins/runtime/runtime-agent-session-catalog.js";
@@ -24,13 +26,14 @@ import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "../channel-mention-gating.js";
+import { createPluginGatewayRuntimeMock } from "./plugin-runtime-gateway-mock.js";
 import {
   mergePluginRuntimeMockOverrides,
   type PluginRuntimeMockOverrides,
 } from "./plugin-runtime-mock-overrides.js";
 import { createPluginModelRuntimeMock } from "./plugin-runtime-model-mock.js";
+import { createPluginSessionRuntimeMock } from "./plugin-runtime-session-mock.js";
 import { createPluginStateRuntimeMock } from "./plugin-runtime-state-mock.js";
-import { createPluginTasksRuntimeMock } from "./plugin-runtime-tasks-mock.js";
 import { createPluginThreadBindingsRuntimeMock } from "./plugin-runtime-thread-bindings-mock.js";
 
 type InboundDebounceFlush = ReturnType<InboundDebounceCreateParams<unknown>["onFlush"]>;
@@ -450,19 +453,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
       ...structuredContextField,
     } as Awaited<BuildContextResult>;
   });
-  const sessionRuntime = {
-    resolveStorePath: vi.fn<PluginRuntime["channel"]["session"]["resolveStorePath"]>(
-      () => "/tmp/sessions.json",
-    ),
-    readSessionUpdatedAt: vi.fn<PluginRuntime["channel"]["session"]["readSessionUpdatedAt"]>(
-      () => undefined,
-    ),
-    recordSessionMetaFromInbound:
-      vi.fn<PluginRuntime["channel"]["session"]["recordSessionMetaFromInbound"]>(),
-    recordInboundSession: vi.fn<PluginRuntime["channel"]["session"]["recordInboundSession"]>(),
-    updateLastRoute: vi.fn<PluginRuntime["channel"]["session"]["updateLastRoute"]>(),
-    resolveEntryResetFreshness: vi.fn(resolveSessionEntryResetFreshness),
-  };
+  const sessionRuntime = createPluginSessionRuntimeMock();
   const inboundRuntime = {
     ingress: {
       createResolver: createChannelIngressPolicyResolver,
@@ -478,10 +469,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
   const base: PluginRuntime = {
     version: "1.0.0-test",
     ...createPluginModelRuntimeMock({ provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL }),
-    gateway: {
-      isAvailable: vi.fn(async () => false),
-      request: vi.fn(),
-    },
+    gateway: createPluginGatewayRuntimeMock(),
     config: {
       current: vi.fn<PluginRuntime["config"]["current"]>(() => ({})),
       mutateConfigFile: createGenericMock<PluginRuntime["config"]["mutateConfigFile"]>(
@@ -840,6 +828,7 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
             await Promise.race([flush.admission, completion]);
           };
           return {
+            shouldBuffer: vi.fn(() => false),
             enqueue: async (item: unknown) => {
               await runFlush(params.onFlush([item], createTestInboundDebounceFlush));
             },
@@ -850,46 +839,10 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
             },
           };
         }),
-        resolveInboundDebounceMs: vi.fn<
-          PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"]
-        >((params: unknown) => {
-          // Match the production contract so channel plugins that delegate to
-          // `core.channel.debounce.resolveInboundDebounceMs({ cfg, channel })`
-          // see the same per-channel/global/default precedence in tests as
-          // they would at runtime. Prior to this, the mock returned 0
-          // unconditionally, which meant any channel that delegated (vs.
-          // reading config directly) effectively disabled its debounce
-          // window in tests — a footgun that silently hid coverage for
-          // per-channel overrides.
-          const p = params as
-            | {
-                cfg?: {
-                  messages?: {
-                    inbound?: {
-                      debounceMs?: unknown;
-                      byChannel?: Record<string, unknown>;
-                    };
-                  };
-                };
-                channel?: string;
-                overrideMs?: unknown;
-              }
-            | undefined;
-          const override = typeof p?.overrideMs === "number" ? p.overrideMs : undefined;
-          if (typeof override === "number") {
-            return override;
-          }
-          const inbound = p?.cfg?.messages?.inbound;
-          const perChannel =
-            p?.channel && inbound?.byChannel ? inbound.byChannel[p.channel] : undefined;
-          if (typeof perChannel === "number") {
-            return perChannel;
-          }
-          if (typeof inbound?.debounceMs === "number") {
-            return inbound.debounceMs;
-          }
-          return 0;
-        }),
+        resolveInboundDebounceMs:
+          vi.fn<PluginRuntime["channel"]["debounce"]["resolveInboundDebounceMs"]>(
+            resolveInboundDebounceMs,
+          ),
       },
       commands: {
         resolveCommandAuthorizedFromAuthorizers: vi.fn<
@@ -938,7 +891,6 @@ export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = 
       })),
     },
     state: createPluginStateRuntimeMock(),
-    tasks: createPluginTasksRuntimeMock(),
     subagent: {
       complete: vi.fn(),
       run: vi.fn(),

@@ -3,10 +3,22 @@ import path from "node:path";
 
 /** Resolve the canonical identity of an update checkout/install root. */
 export function resolveUpdateInstallRoot(root: string): string {
+  const absolute = path.resolve(root);
   try {
-    return fs.realpathSync.native(root);
+    return fs.realpathSync.native(absolute);
   } catch {
-    return path.resolve(root);
+    try {
+      if (fs.lstatSync(absolute, { throwIfNoEntry: false })) {
+        return absolute;
+      }
+    } catch {
+      return absolute;
+    }
+    try {
+      return path.join(fs.realpathSync.native(path.dirname(absolute)), path.basename(absolute));
+    } catch {
+      return absolute;
+    }
   }
 }
 

@@ -1,18 +1,22 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { isClientToolNameConflictError } from "../agents/agent-tool-definition-adapter.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../agents/command/shared-types.js";
 import type { ImageContent } from "../agents/command/types.js";
 import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { agentCommandFromGatewayIngress } from "../commands/agent.js";
+import { getRuntimeConfig } from "../config/io.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../runtime.js";
 import type { AuthorizedGatewayHttpRequest } from "./http-auth-utils.js";
 import type { GatewayHttpRequestAuthOptions } from "./http-request-authority.js";
+import { resolveOpenAiCompatError, type OpenAiCompatError } from "./openai-compat-errors.js";
 import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { areGatewayUploadsEnabled, GATEWAY_UPLOADS_DISABLED_MESSAGE } from "./upload-policy.js";
 
 export type OpenAiCompatibleHttpOptions<TConfig> = GatewayHttpRequestAuthOptions & {
   config?: TConfig;
@@ -26,45 +30,48 @@ export type OpenAiCompatiblePendingToolCall = {
   arguments: string;
 };
 
+export function resolveOpenAiCompatibleAgentError(
+  error: unknown,
+  fallback?: OpenAiCompatError["error"],
+): OpenAiCompatError {
+  if (isClientToolNameConflictError(error)) {
+    return {
+      status: 400,
+      error: { message: "invalid tool configuration", type: "invalid_request_error" },
+    };
+  }
+  return (
+    resolveOpenAiCompatError(error) ?? {
+      status: 500,
+      error: fallback ?? { message: "internal error", type: "api_error" },
+    }
+  );
+}
+
 export function readOpenAiHttpRunTerminal(result: unknown): {
   runFailed: boolean;
   stopReason: string | undefined;
   pendingToolCalls: OpenAiCompatiblePendingToolCall[] | undefined;
 } {
-  const meta = isRecord(result) ? result.meta : undefined;
-  if (!isRecord(meta)) {
-    return {
-      runFailed: readAgentRunTerminalOutcome(result) === "failed",
-      stopReason: undefined,
-      pendingToolCalls: undefined,
-    };
-  }
-  const stopReasonRaw = meta.stopReason;
+  const meta = asOptionalRecord(asOptionalRecord(result)?.meta);
+  const stopReasonRaw = meta?.stopReason;
   const stopReason = typeof stopReasonRaw === "string" ? stopReasonRaw : undefined;
-  const pendingRaw = meta.pendingToolCalls;
-  if (!Array.isArray(pendingRaw)) {
-    return {
-      runFailed: readAgentRunTerminalOutcome(result) === "failed",
-      stopReason,
-      pendingToolCalls: undefined,
-    };
-  }
-  const pendingToolCalls: OpenAiCompatiblePendingToolCall[] = [];
-  for (const call of pendingRaw) {
-    const record = isRecord(call) ? call : undefined;
-    const id = typeof record?.id === "string" ? record.id.trim() : "";
-    const name = typeof record?.name === "string" ? record.name.trim() : "";
-    const argsValue = record?.arguments;
-    const argumentsValue =
-      typeof argsValue === "string"
-        ? argsValue
-        : argsValue == null
-          ? ""
-          : JSON.stringify(argsValue);
-    if (id && name) {
-      pendingToolCalls.push({ id, name, arguments: argumentsValue });
-    }
-  }
+  const pendingRaw = meta?.pendingToolCalls;
+  const pendingToolCalls = Array.isArray(pendingRaw)
+    ? pendingRaw.flatMap((call): OpenAiCompatiblePendingToolCall[] => {
+        const record = asOptionalRecord(call);
+        const id = typeof record?.id === "string" ? record.id.trim() : "";
+        const name = typeof record?.name === "string" ? record.name.trim() : "";
+        const argsValue = record?.arguments;
+        const argumentsValue =
+          typeof argsValue === "string"
+            ? argsValue
+            : argsValue == null
+              ? ""
+              : JSON.stringify(argsValue);
+        return id && name ? [{ id, name, arguments: argumentsValue }] : [];
+      })
+    : undefined;
   return {
     runFailed: readAgentRunTerminalOutcome(result) === "failed",
     stopReason,
@@ -87,11 +94,15 @@ export async function runOpenAiCompatibleAgentCommand(params: {
   operatorScopes: readonly string[];
   abortSignal?: AbortSignal;
   hasCurrentClientAuthority?: () => boolean;
+  hasClientUploads?: boolean;
   resolveGatewayContext?: GatewayContextResolver;
 }) {
   params.abortSignal?.throwIfAborted();
   let admitted = false;
   const assertSourceCurrent = () => {
+    if (!admitted && params.hasClientUploads && !areGatewayUploadsEnabled(getRuntimeConfig())) {
+      throw new ToolAuthorizationError(GATEWAY_UPLOADS_DISABLED_MESSAGE);
+    }
     if (!admitted && params.hasCurrentClientAuthority?.() === false) {
       throw new ToolAuthorizationError("Gateway requester authority changed");
     }
@@ -108,7 +119,7 @@ export async function runOpenAiCompatibleAgentCommand(params: {
     throw new Error("OpenAI-compatible operator execution requires a current Gateway context.");
   }
   const captured = gatewayContext
-    ? captureGatewayOperatorRunAuthority({
+    ? await captureGatewayOperatorRunAuthority({
         client,
         context: {
           getRuntimeConfig: gatewayContext.getRuntimeConfig,
@@ -119,6 +130,8 @@ export async function runOpenAiCompatibleAgentCommand(params: {
       })
     : undefined;
   try {
+    assertSourceCurrent();
+    captured?.authority.assertCurrent();
     const sourceSignal = captured?.authority.signal;
     const abortSignal =
       params.abortSignal && sourceSignal

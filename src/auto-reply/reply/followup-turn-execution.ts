@@ -1,8 +1,17 @@
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { resolveSqliteSessionKey } from "../../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
+import { withOrderedSessionEntriesInWorker } from "../../config/sessions/session-entry-read-ordered.js";
+import {
+  captureSessionEntryReadScope,
+  isNativeSessionEntryRead,
+} from "../../config/sessions/session-entry-read-request.js";
+import { withSessionStoreReaderInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { isFastModeAutoProgressPayload } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -10,16 +19,16 @@ import type { ReplyPayload } from "../types.js";
 import { executeAgentTurn } from "./agent-runner-execution.js";
 import type { AgentTurnExecutionResult } from "./agent-runner-execution.types.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
-import { resetReplyRunSession } from "./agent-runner-session-reset.js";
 import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.js";
 import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-run-state.js";
-import { hasReplyOperationExecutionStarted } from "./reply-run-registry.js";
+import { hasReplyOperationExecutionStarted, replyRunRegistry } from "./reply-run-registry.js";
 import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 import { resolveSourceReplyExpectation } from "./source-reply-delivery-mode.js";
+import { resolveReplySourceTurnId, setChannelSourceTurnId } from "./source-turn-id.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
 
 export type FollowupExecutionResult = {
@@ -68,15 +77,15 @@ function buildFollowupTemplateContext(turn: AdmittedFollowupTurn): TemplateConte
     InputProvenance: run.inputProvenance,
     InboundEventKind: queued.currentInboundEventKind,
     media: queued.media,
-  } as TemplateContext;
+  };
 }
 
 /** Adapts an admitted queued turn to the canonical agent execution owner. */
 export async function executeFollowupTurn(params: {
   turn: AdmittedFollowupTurn;
   defaults: FollowupRunnerParams;
-  onToolResult: (payload: ReplyPayload, execution: { runId: string }) => Promise<void>;
-  onCompactionNoticePayload: (payload: ReplyPayload, execution: { runId: string }) => Promise<void>;
+  onToolResult: (payload: ReplyPayload) => Promise<void>;
+  onCompactionNoticePayload: (payload: ReplyPayload) => Promise<void>;
 }): Promise<FollowupExecutionResult> {
   const { turn, defaults } = params;
   const sourceOpts = defaults.opts;
@@ -90,21 +99,31 @@ export async function executeFollowupTurn(params: {
       cfg: turn.config,
     });
   turn.queued.run.terminalReplyExpectation = terminalReplyExpectation;
-  // Heartbeats can refresh a drain callback but never enter its queue.
+  // Queued turns are never heartbeats; heartbeat runs never supply the drain callback.
   const isHeartbeat = false;
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
   const progressAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
-  const currentVerboseLevel = (): VerboseLevel => {
+  const verboseRead =
+    turn.session.kind === "session" && turn.session.storePath
+      ? captureSessionEntryReadScope({
+          storePath: turn.session.storePath,
+          sessionKey: turn.session.key,
+        })
+      : undefined;
+  const verboseReadScope = verboseRead?.scope;
+  const currentVerboseLevel = (prepared?: { entry: SessionEntry | undefined }): VerboseLevel => {
     if (turn.queued.run.verboseLevelOverride !== undefined) {
       return turn.queued.run.verboseLevelOverride;
     }
     const session = turn.session;
     if (session.kind === "session" && session.storePath) {
       try {
-        const loadedEntry = loadSessionEntryReadOnly({
-          storePath: session.storePath,
-          sessionKey: session.key,
-        });
+        const loadedEntry = prepared
+          ? prepared.entry
+          : loadSessionEntryReadOnly({
+              storePath: session.storePath,
+              sessionKey: session.key,
+            });
         const ownedEntry = session.current();
         const loadedGenerationMatches =
           loadedEntry !== undefined &&
@@ -142,38 +161,96 @@ export async function executeFollowupTurn(params: {
     progressAllowed() &&
     (shouldEmitStructuredProgress() || sourceOpts?.allowToolLifecycleWhenProgressHidden === true);
   const { commentaryPayloadsEnabled, draftOwnsCommentaryProgress } =
-    resolveTurnCommentaryProgressOwner({
+    await resolveTurnCommentaryProgressOwner({
       commentaryPayloadsEnabled: sourceOpts?.commentaryPayloadsEnabled === true,
       options: sourceOpts,
       resolveVerboseProgressVisibility: () => progressAllowed() && shouldEmitVerboseToolResult(),
+      resolveVerboseProgressVisibilityAsync: async () => {
+        const assertCurrent = () => {
+          turn.operation.abortSignal.throwIfAborted();
+          turn.queued.operatorAuthority?.assertCurrent();
+          if (turn.operation.result) {
+            throw new Error("Follow-up progress owner has settled");
+          }
+        };
+        assertCurrent();
+        if (verboseReadScope?.storePath && turn.queued.run.verboseLevelOverride === undefined) {
+          if (isNativeSessionEntryRead(verboseReadScope, verboseRead?.agentId)) {
+            const visible = progressAllowed() && shouldEmitVerboseToolResult();
+            assertCurrent();
+            return visible;
+          }
+          try {
+            const visible = await withSessionStoreReaderInWorker(
+              { ...verboseReadScope, storePath: verboseReadScope.storePath },
+              (source) => {
+                const sessionKey = resolveSqliteSessionKey(
+                  verboseReadScope.sessionKey,
+                  source.logicalAgentId,
+                );
+                return withOrderedSessionEntriesInWorker(
+                  [
+                    {
+                      agentId: source.database.agentId,
+                      storePath: source.database.path,
+                      sessionKeys: [sessionKey],
+                      projection: "exact",
+                      env: source.database.env,
+                    },
+                  ],
+                  ([read]) => {
+                    read!.assertCurrent();
+                    assertCurrent();
+                    const entry = read!.result.entries.find(
+                      (item) => item.sessionKey === sessionKey,
+                    )?.entry;
+                    return progressAllowed() && currentVerboseLevel({ entry }) !== "off";
+                  },
+                  { readStore: (_input, consume) => consume(source) },
+                );
+              },
+              { backing: true, logical: { assertCurrent } },
+            );
+            assertCurrent();
+            return visible;
+          } catch {
+            // Match the existing maintenance fallback, but never swallow lost authority.
+          }
+        }
+        assertCurrent();
+        return progressAllowed() && currentVerboseLevel({ entry: undefined }) !== "off";
+      },
     });
+  turn.operation.abortSignal.throwIfAborted();
+  turn.queued.operatorAuthority?.assertCurrent();
   let progressChain: Promise<void> = Promise.resolve();
   let visibleReplyDelivered = false;
-  let pendingProgressTaskFailure: unknown;
+  const pendingTaskFailures: { progress?: unknown; tool?: unknown } = {};
   const pendingWorkTasks = new Set<Promise<void>>();
+  const trackPendingWork = (task: Promise<void>, kind: "progress" | "tool") => {
+    const observedTask = task.catch((error: unknown) => {
+      pendingTaskFailures[kind] ??= error;
+      throw error;
+    });
+    const watcher = observedTask.finally(() => pendingWorkTasks.delete(watcher));
+    void watcher.catch(() => undefined);
+    pendingWorkTasks.add(watcher);
+  };
   const enqueueProgress = (deliver: () => Promise<void> | void): Promise<void> => {
     const deliveryTask = progressChain.then(deliver);
     progressChain = deliveryTask.catch(() => undefined);
-    const observedTask = deliveryTask.catch((error: unknown) => {
-      pendingProgressTaskFailure ??= error;
-      throw error;
-    });
-    const trackedTask = observedTask.finally(() => pendingWorkTasks.delete(trackedTask));
-    void trackedTask.catch(() => undefined);
-    pendingWorkTasks.add(trackedTask);
+    trackPendingWork(deliveryTask, "progress");
     return progressChain;
   };
   const enqueueProgressResult = async (
     deliver: () => Promise<boolean | void> | boolean | void,
   ): Promise<boolean | void> => {
-    let completed = false;
     let result: boolean | void = false;
     await enqueueProgress(async () => {
       result = await deliver();
       visibleReplyDelivered ||= result !== false;
-      completed = true;
     });
-    return completed ? result : false;
+    return result;
   };
   const wrap = <T>(callback: ((value: T) => unknown) | undefined, allowed = progressAllowed) =>
     callback
@@ -184,17 +261,17 @@ export async function executeFollowupTurn(params: {
             }
           })
       : undefined;
-  const wrapVisibility = <T>(
-    callback: ((value: T) => Promise<boolean | void> | boolean | void) | undefined,
+  const wrapVisibility = <Args extends unknown[]>(
+    callback: ((...args: Args) => Promise<boolean | void> | boolean | void) | undefined,
     allowed = progressAllowed,
   ) =>
     callback
-      ? (value: T) =>
+      ? (...args: Args) =>
           enqueueProgressResult(async () => {
             if (!allowed()) {
               return false;
             }
-            return (await settleProgressVisibilityCallbackResult(callback(value))).visible;
+            return (await settleProgressVisibilityCallbackResult(callback(...args))).visible;
           })
       : undefined;
   const baseTypingSignals = createTypingSignaler({
@@ -217,11 +294,17 @@ export async function executeFollowupTurn(params: {
   const progressOpts: InternalGetReplyOptions = {
     ...sourceOpts,
     isHeartbeat,
-    // Queue callbacks are refreshed per session, but authority belongs to the
-    // queued turn. Never let a later callback widen or narrow an older item.
+    // Queue callbacks are refreshed per session, but authority, cancellation, and
+    // run observers belong to the queued turn. Never borrow them from another runner.
     operatorAuthority: turn.queued.operatorAuthority,
+    abortSignal: turn.operation.abortSignal,
     toolsAllow: turn.queued.toolsAllow,
     disableTools: turn.queued.disableTools,
+    onAgentRunStart: turn.queued.runObservers?.onAgentRunStart,
+    onAgentRunTerminalOutcome: turn.queued.runObservers?.onAgentRunTerminalOutcome,
+    onModelSelected: turn.queued.runObservers?.onModelSelected,
+    prepareAssistantTranscriptMessage: turn.queued.runObservers?.prepareAssistantTranscriptMessage,
+    resolveReplyDelivery: turn.queued.runObservers?.resolveReplyDelivery,
     commentaryPayloadsEnabled,
     runId: turn.runId,
     onBlockReply: undefined,
@@ -240,44 +323,19 @@ export async function executeFollowupTurn(params: {
             if (!draftOwnsPreamble && !shouldEmitStructuredProgress()) {
               return false;
             }
-            const visible = (
-              await settleProgressVisibilityCallbackResult(sourceOpts.onItemEvent!(item))
-            ).visible;
-            return visible;
+            return (await settleProgressVisibilityCallbackResult(sourceOpts.onItemEvent!(item)))
+              .visible;
           })
       : undefined,
     onNarrationUpdate: wrap(sourceOpts?.onNarrationUpdate),
     onPlanUpdate: wrapVisibility(sourceOpts?.onPlanUpdate),
     onApprovalEvent: wrapVisibility(sourceOpts?.onApprovalEvent, shouldEmitStructuredProgress),
     onPatchSummary: wrapVisibility(sourceOpts?.onPatchSummary, shouldEmitStructuredProgress),
-    onCompactionStart: sourceOpts?.onCompactionStart
-      ? () =>
-          enqueueProgressResult(async () =>
-            progressAllowed()
-              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onCompactionStart!()))
-                  .visible
-              : false,
-          )
-      : undefined,
-    onCompactionEnd: sourceOpts?.onCompactionEnd
-      ? (payload) =>
-          enqueueProgressResult(async () =>
-            progressAllowed()
-              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onCompactionEnd!(payload)))
-                  .visible
-              : false,
-          )
-      : undefined,
+    onCompactionStart: wrapVisibility(sourceOpts?.onCompactionStart),
+    onCompactionEnd: wrapVisibility(sourceOpts?.onCompactionEnd),
     onReasoningStream: wrapVisibility(sourceOpts?.onReasoningStream),
     onReasoningProgress: wrap(sourceOpts?.onReasoningProgress),
-    onReasoningEnd: sourceOpts?.onReasoningEnd
-      ? () =>
-          enqueueProgressResult(async () =>
-            progressAllowed()
-              ? (await settleProgressVisibilityCallbackResult(sourceOpts.onReasoningEnd!())).visible
-              : false,
-          )
-      : undefined,
+    onReasoningEnd: wrapVisibility(sourceOpts?.onReasoningEnd),
     onToolResult: async (payload) => {
       return await enqueueProgressResult(async () => {
         if (!progressAllowed()) {
@@ -306,14 +364,11 @@ export async function executeFollowupTurn(params: {
             if (visible) {
               return true;
             }
-            if (!forceToolResultProgress && !verboseToolResult) {
-              return false;
-            }
           }
           if (!forceToolResultProgress && !verboseToolResult) {
             return false;
           }
-          await params.onToolResult(payload, { runId: turn.runId });
+          await params.onToolResult(payload);
           return true;
         }
         const verboseToolResult = !requiresDurableToolResult && shouldEmitVerboseToolResult();
@@ -328,25 +383,16 @@ export async function executeFollowupTurn(params: {
         ) {
           return false;
         }
-        const visible =
-          transientToolResultProgress && !verboseToolResult
-            ? (await settleProgressVisibilityCallbackResult(transientToolResultProgress(payload)))
-                .visible
-            : await params.onToolResult(payload, { runId: turn.runId }).then(() => true);
-        return visible;
+        return transientToolResultProgress && !verboseToolResult
+          ? (await settleProgressVisibilityCallbackResult(transientToolResultProgress(payload)))
+              .visible
+          : await params.onToolResult(payload).then(() => true);
       });
     },
   };
-  let pendingToolTaskFailure: unknown;
   const pendingToolTasks = new (class extends Set<Promise<void>> {
     override add(task: Promise<void>): this {
-      const observedTask = task.catch((error: unknown) => {
-        pendingToolTaskFailure ??= error;
-        throw error;
-      });
-      const watcher = observedTask.finally(() => pendingWorkTasks.delete(watcher));
-      void watcher.catch(() => undefined);
-      pendingWorkTasks.add(watcher);
+      trackPendingWork(task, "tool");
       return super.add(task);
     }
   })();
@@ -378,7 +424,7 @@ export async function executeFollowupTurn(params: {
       turn.queued.run.bootstrapUserProfileId = turn.queued.personalBootstrapEligible
         ? sessionPersonalProfileId(turn.session.current())
         : undefined;
-      turn.operation.bindToolAuthoritySnapshot(prepareReplyToolAuthority(turn.queued));
+      await turn.operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(turn.queued));
       turn.operation.setPhase("running");
       const gatewayOwnsCompletion =
         turn.queued.queuedFollowupReplyDisposition?.kind === "deliver" &&
@@ -409,45 +455,20 @@ export async function executeFollowupTurn(params: {
           shouldEmitToolResult,
           shouldEmitToolOutput,
           pendingToolTasks,
-          resetSessionAfterRoleOrderingConflict: async (reason) => {
-            const session = turn.session;
-            if (session.kind !== "session") {
-              return false;
-            }
-            return await resetReplyRunSession({
-              options: {
-                failureLabel: "role ordering conflict",
-                buildLogMessage: (nextSessionId) =>
-                  `Role ordering conflict (${reason}). Restarting session ${session.key} -> ${nextSessionId}.`,
-                cleanupTranscripts: true,
-              },
-              sessionKey: session.key,
-              queueKey: session.key,
-              activeSessionEntry: session.current(),
-              activeSessionStore: turn.sessionStore,
-              storePath: session.storePath,
-              followupRun: turn.queued,
-              onActiveSessionEntry: (entry) => {
-                session.adopt(entry);
-                turn.operation.updateSessionId(entry.sessionId);
-              },
-              onNewSession: () => undefined,
-            });
-          },
           isHeartbeat,
           sessionKey: turn.session.kind === "session" ? turn.session.key : undefined,
           runtimePolicySessionKey: turn.queued.run.runtimePolicySessionKey,
           getActiveSessionEntry: turn.session.current,
           activeSessionStore: turn.sessionStore,
           storePath: turn.session.kind === "session" ? turn.session.storePath : undefined,
-          resolvedVerboseLevel: currentVerboseLevel() ?? "off",
+          resolvedVerboseLevel: currentVerboseLevel(),
           toolProgressDetail: defaults.toolProgressDetail,
           onCompactionNoticePayload: async (payload) => {
             await enqueueProgressResult(async () => {
               if (!progressAllowed()) {
                 return false;
               }
-              await params.onCompactionNoticePayload(payload, { runId: turn.runId });
+              await params.onCompactionNoticePayload(payload);
               return true;
             });
           },
@@ -457,9 +478,17 @@ export async function executeFollowupTurn(params: {
       // custody after lazy collection binds it, so runtime appends consume all sources.
       await recorder?.resolveMessage();
       turn.operation.abortSignal.throwIfAborted();
-      execution = await (recorder?.withPendingInput
-        ? recorder.withPendingInput(execute)
-        : execute());
+      const sourceTurnId = resolveReplySourceTurnId({
+        sourceTurnId: turn.queued.sourceTurnId,
+        admissionRunId: turn.queued.messageId,
+        ingressProvider: turn.queued.run.messageProvider,
+        entry: turn.session.current(),
+      });
+      if (sourceTurnId) {
+        replyRunRegistry.bindSourceTurnId(turn.operation, sourceTurnId);
+        setChannelSourceTurnId(sessionCtx, sourceTurnId);
+      }
+      execution = await withCurrentUserTurnInput(recorder, execute);
     } catch (error) {
       await drainPendingWork();
       if (!hasReplyOperationExecutionStarted(turn.operation)) {
@@ -494,7 +523,7 @@ export async function executeFollowupTurn(params: {
     progress: {
       drain: async () => {
         await drainPendingWork();
-        const firstFailure: unknown = pendingProgressTaskFailure ?? pendingToolTaskFailure;
+        const firstFailure: unknown = pendingTaskFailures.progress ?? pendingTaskFailures.tool;
         if (firstFailure !== undefined) {
           throw firstFailure instanceof Error
             ? firstFailure

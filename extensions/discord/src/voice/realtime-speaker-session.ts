@@ -8,14 +8,12 @@ import {
   REALTIME_VOICE_AGENT_CONTROL_TOOL,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   resolveRealtimeVoiceAgentConsultTools,
-  type RealtimeVoiceAgentConsultToolPolicy,
   type RealtimeVoiceBridgeEvent,
   type RealtimeVoiceBridgeSession,
   type RealtimeVoiceCloseDisposition,
   type RealtimeVoiceSelectionInfo,
   type RealtimeVoiceTranscriptEntry,
   type RealtimeVoiceSessionHarness,
-  type RealtimeVoiceWakeNamePolicy,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -23,8 +21,7 @@ import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { DiscordVoiceIngressContext } from "./ingress.js";
 import {
   formatVoiceLogPreview,
-  formatRealtimeInterruptionLog,
-  formatRealtimeLifecycleLog,
+  formatRealtimeInfoLog,
   shouldLogRealtimeVerboseEvent,
 } from "./log-preview.js";
 import { DiscordRealtimeConsults, type AgentProxyConsultState } from "./realtime-consults.js";
@@ -52,10 +49,6 @@ const discordRealtimeTalkPayload = () => ({});
 
 type DiscordRealtimeVoiceConfig = NonNullable<DiscordAccountConfig["voice"]>["realtime"];
 
-function isDiscordAgentProxyVoiceMode(mode: DiscordVoiceMode): boolean {
-  return mode === "agent-proxy";
-}
-
 export type DiscordRealtimeSessionParams = {
   accountId: string;
   cfg: OpenClawConfig;
@@ -80,13 +73,18 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     status: "inactive" | "starting" | "active" | "closing" | "stopped";
     generation: number;
   } = { status: "inactive", generation: 0 };
-  private consultToolPolicy: RealtimeVoiceAgentConsultToolPolicy = "safe-read-only";
-  private consultToolsAllow: string[] | undefined;
-  private consultPolicy: "auto" | "always" = "auto";
-  private wakeNamePolicy: RealtimeVoiceWakeNamePolicy = "never";
-  private wakeNames: string[] = [];
+  private policy: Omit<
+    ReturnType<typeof resolveDiscordRealtimeSpeakerConfig>["sessionPolicy"],
+    "autoRespondToAudio"
+  > = {
+    toolPolicy: "safe-read-only",
+    consultToolsAllow: undefined,
+    consultPolicy: "auto",
+    wakeNamePolicy: "never",
+    wakeNames: [],
+    handlesAgentConsult: false,
+  };
   private realtimeProviderId: string | undefined;
-  private handlesAgentConsult = false;
   private providerGenerationObserved = false;
   private providerContinuityEpoch = 0;
   private readonly captures = new Set<VoiceRealtimeSpeakerTurn>();
@@ -111,7 +109,13 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     },
   ) {
     this.outputEnabled = !params.standby;
-    this.recording = this.createRecording();
+    const recordingEpoch = this.providerContinuityEpoch;
+    this.recording = new DiscordRealtimeRecording({
+      entry: this.params.entry,
+      isCurrent: () =>
+        this.lifecycle.status !== "stopped" && this.providerContinuityEpoch === recordingEpoch,
+      warn: (message) => logger.warn(message),
+    });
     this.harness = createRealtimeVoiceSessionHarness<AgentProxyConsultState>({
       talk: {
         sessionId: this.params.sessionId,
@@ -177,19 +181,18 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
       realtimeConfig: () => this.realtimeConfig,
       recordInputAudio: (audio) => this.harness.recordInputAudio(audio),
       stopped: () => this.isStopped(),
-      wakeNamePolicy: () => this.wakeNamePolicy,
-      wakeNames: () => this.wakeNames,
+      wakeNamePolicy: () => this.policy.wakeNamePolicy,
+      wakeNames: () => this.policy.wakeNames,
     });
     this.consults = new DiscordRealtimeConsults({
       accountId: this.params.accountId,
-      consultPolicy: () => this.consultPolicy,
-      consultToolPolicy: () => this.consultToolPolicy,
-      consultToolsAllow: () => this.consultToolsAllow,
+      consultPolicy: () => this.policy.consultPolicy,
+      consultToolPolicy: () => this.policy.toolPolicy,
+      consultToolsAllow: () => this.policy.consultToolsAllow,
       debounceMs: () => this.realtimeConfig?.debounceMs,
       entry: this.params.entry,
       harness: this.harness,
-      isAgentProxy: () =>
-        isDiscordAgentProxyVoiceMode(this.params.mode) && !this.handlesAgentConsult,
+      isAgentProxy: () => this.params.mode === "agent-proxy" && !this.policy.handlesAgentConsult,
       isWakeNameRequired: () => this.isWakeNameRequired(),
       playback: this.playback,
       providerEpoch: () => this.providerContinuityEpoch,
@@ -198,8 +201,8 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
       stopped: () => this.isStopped(),
       turns: this.turns,
       usesRealtimeAgentHandoff: () =>
-        this.params.mode === "bidi" || this.consultToolPolicy !== "none",
-      wakeNamePolicy: () => this.wakeNamePolicy,
+        this.params.mode === "bidi" || this.policy.toolPolicy !== "none",
+      wakeNamePolicy: () => this.policy.wakeNamePolicy,
     });
   }
 
@@ -224,7 +227,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
       agentId: this.params.entry.route.agentId,
       cfg: this.params.cfg,
       realtimeConfig: this.realtimeConfig,
-      isAgentProxy: isDiscordAgentProxyVoiceMode(this.params.mode),
+      isAgentProxy: this.params.mode === "agent-proxy",
       bootstrapContextInstructions: this.params.bootstrapContextInstructions,
       voiceOverride: this.params.voiceOverride,
       conversationHistory: this.params.conversationHistory,
@@ -232,20 +235,8 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     this.realtimeProviderId = resolved.provider.id;
     this.selection = selection;
     const capabilities = resolved.capabilities;
-    const {
-      toolPolicy,
-      consultToolsAllow,
-      consultPolicy,
-      wakeNamePolicy,
-      wakeNames,
-      autoRespondToAudio,
-    } = sessionPolicy;
-    this.handlesAgentConsult = sessionPolicy.handlesAgentConsult;
-    this.consultToolPolicy = toolPolicy;
-    this.consultToolsAllow = consultToolsAllow;
-    this.consultPolicy = consultPolicy;
-    this.wakeNamePolicy = wakeNamePolicy;
-    this.wakeNames = wakeNames;
+    this.policy = sessionPolicy;
+    const { toolPolicy, consultPolicy, autoRespondToAudio } = sessionPolicy;
     const usesRealtimeAgentHandoff = this.params.mode === "bidi" || toolPolicy !== "none";
     const onReady = () => {
       this.markProviderGenerationObserved();
@@ -264,7 +255,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
       autoRespondToAudio,
       interruptResponseOnInputAudio,
       markStrategy: "transport",
-      ...(this.handlesAgentConsult
+      ...(this.policy.handlesAgentConsult
         ? {
             runAgentConsult: (request) =>
               this.trackOperation(() => this.consults.runAgentConsult(request)),
@@ -329,7 +320,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
         }
         // Provider-owned delegation consumes its own transcript; a final snapshot is not
         // another agent request or a host-controlled speech turn.
-        if (this.handlesAgentConsult) {
+        if (this.policy.handlesAgentConsult) {
           return;
         }
         void this.trackOperation(() => this.turns.handleFinalUserTranscript(text)).catch(
@@ -386,7 +377,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     }
     const humanParticipantCount = this.humanParticipantCount();
     logger.info(
-      `discord voice: realtime bridge starting mode=${this.params.mode} provider=${resolved.provider.id} model=${resolvedModel ?? "default"} voice=${resolvedVoice ?? "default"} consultPolicy=${consultPolicy} toolPolicy=${toolPolicy} autoRespond=${autoRespondToAudio} wakeNamePolicy=${this.wakeNamePolicy} requireWakeName=${this.isWakeNameRequired(humanParticipantCount)} humanParticipants=${humanParticipantCount} wakeNames=${this.wakeNames.join(",") || "none"} interruptResponse=${interruptResponseOnInputAudio} bargeIn=${bargeIn} minBargeInAudioEndMs=${minBargeInAudioEndMs}`,
+      `discord voice: realtime bridge starting mode=${this.params.mode} provider=${resolved.provider.id} model=${resolvedModel ?? "default"} voice=${resolvedVoice ?? "default"} consultPolicy=${consultPolicy} toolPolicy=${toolPolicy} autoRespond=${autoRespondToAudio} wakeNamePolicy=${this.policy.wakeNamePolicy} requireWakeName=${this.isWakeNameRequired(humanParticipantCount)} humanParticipants=${humanParticipantCount} wakeNames=${this.policy.wakeNames.join(",") || "none"} interruptResponse=${interruptResponseOnInputAudio} bargeIn=${bargeIn} minBargeInAudioEndMs=${minBargeInAudioEndMs}`,
     );
     this.attachOutputAudioPort();
     await this.bridge.connect();
@@ -492,7 +483,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
           recordingInput?.exclude();
           throw error;
         } finally {
-          recordingInput?.sealAudio();
+          recordingInput?.seal("audio");
         }
       },
     };
@@ -574,7 +565,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     // Wake-name/response admission still owns those sinks on main. Standby
     // voice replacements cannot acquire physical output until activated.
     if (
-      this.wakeNamePolicy === "never" &&
+      this.policy.wakeNamePolicy === "never" &&
       provider?.outputAudioMode === "continuous" &&
       provider.setAudioOutputPort
     ) {
@@ -648,7 +639,7 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
   }
 
   private isWakeNameRequired(humanParticipantCount = this.humanParticipantCount()): boolean {
-    return isRealtimeVoiceWakeNameRequired(this.wakeNamePolicy, humanParticipantCount);
+    return isRealtimeVoiceWakeNameRequired(this.policy.wakeNamePolicy, humanParticipantCount);
   }
 
   private handleBridgeEvent(event: RealtimeVoiceBridgeEvent): void {
@@ -672,13 +663,9 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     if (shouldLogRealtimeVerboseEvent(event)) {
       logVoiceVerbose(`realtime ${event.direction}:${event.type}${detail}`);
     }
-    const interruptionLog = formatRealtimeInterruptionLog(event);
-    if (interruptionLog) {
-      logger.info(interruptionLog);
-    }
-    const lifecycleLog = formatRealtimeLifecycleLog(event);
-    if (lifecycleLog) {
-      logger.info(lifecycleLog);
+    const info = formatRealtimeInfoLog(event);
+    if (info) {
+      logger.info(info);
     }
   }
 
@@ -702,16 +689,6 @@ export class DiscordRealtimeSpeakerSession implements VoiceRealtimeSession {
     this.consults.resetProviderContinuity();
     this.turns.resetProviderContinuity();
     this.playback.resetProviderContinuity(reason);
-  }
-
-  private createRecording(): DiscordRealtimeRecording {
-    const epoch = this.providerContinuityEpoch;
-    return new DiscordRealtimeRecording({
-      entry: this.params.entry,
-      isCurrent: () =>
-        this.lifecycle.status !== "stopped" && this.providerContinuityEpoch === epoch,
-      warn: (message) => logger.warn(message),
-    });
   }
 
   private logRealtimeError(message: string): void {
