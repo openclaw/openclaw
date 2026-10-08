@@ -781,7 +781,7 @@ describe("native OpenAI Responses SSE continuation", () => {
   it("keeps the session's sessions_yield synchronous so a yield pauses the response", async () => {
     sseState.outcomes.push(sdkCompletion("resp_wait", "waiting"));
     const sessionTools = toToolDefinitions([
-      createSessionsYieldTool({ sessionId: "session", onYield: async () => {} }),
+      createSessionsYieldTool({ sessionId: "session" }),
       {
         ...functionTool("exec"),
         label: "exec",
