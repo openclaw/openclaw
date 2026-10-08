@@ -42,7 +42,6 @@ import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gate
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
-import { resolveSkillWorkshopApprovalForFinalParams } from "../agent-tools.before-tool-call.approval.js";
 import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
