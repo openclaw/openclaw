@@ -692,6 +692,12 @@ export async function runExecProcess({
       token: sandboxFinalizeToken,
     });
   };
+  const runtimeErrorOutcome = (error: unknown) =>
+    buildExecRuntimeErrorOutcome({
+      error,
+      aggregated: session.aggregated.trim(),
+      durationMs: Date.now() - startedAt,
+    });
   const finalizeAndSettleSession = async (
     outcome: ExecProcessOutcome,
   ): Promise<ExecProcessOutcome> => {
@@ -733,11 +739,7 @@ export async function runExecProcess({
       recordAgentCleanupFailure();
       const detail = redactToolPayloadText(formatErrorMessage(error));
       if (outcome.status === "completed") {
-        finalOutcome = buildExecRuntimeErrorOutcome({
-          error: detail,
-          aggregated: session.aggregated.trim(),
-          durationMs: Date.now() - startedAt,
-        });
+        finalOutcome = runtimeErrorOutcome(detail);
       } else {
         finalOutcome = { ...outcome, reason: joinExecFailureOutput(outcome.reason, detail) };
         logWarn(`exec: finalization after process failure failed (${detail}).`);
@@ -752,12 +754,7 @@ export async function runExecProcess({
         onSettledBeforeNotify,
         notifyOnExit: (settledSession, status) =>
           maybeNotifyOnExit(settledSession, status, opts.subagentSession === true),
-        failureOutcome: (error) =>
-          buildExecRuntimeErrorOutcome({
-            error,
-            aggregated: session.aggregated.trim(),
-            durationMs: Date.now() - startedAt,
-          }),
+        failureOutcome: runtimeErrorOutcome,
       });
     }
     return finalOutcome;
@@ -811,6 +808,13 @@ export async function runExecProcess({
   }
   const launchLifecycle = createExecLaunchLifecycle(initialInitiateSpawn, initialReleaseSpawn);
   const onOperatorRevoked = () => managedRun?.cancel("manual-cancel");
+  const releaseExecutionContext = () => {
+    onSettledBeforeNotify = undefined;
+    operatorSignal?.removeEventListener("abort", onOperatorRevoked);
+    releaseOperatorAuthority?.();
+    releaseOperatorAuthority = undefined;
+    requestSignal?.removeEventListener("abort", onRequestCancelled);
+  };
   let usingPty = opts.usePty && !opts.sandbox;
   const assertPreSpawnAuthorized = () => launchLifecycle.prepare(assertSourceActive, beforeSpawn);
   const spawn = async (input: SpawnInput) => {
@@ -907,19 +911,9 @@ export async function runExecProcess({
   } catch (error) {
     launchLifecycle.release();
     onUpdate = undefined;
-    const outcome = await finalizeAndSettleSession(
-      buildExecRuntimeErrorOutcome({
-        error,
-        aggregated: session.aggregated.trim(),
-        durationMs: Date.now() - startedAt,
-      }),
-    ).finally(() => {
-      onSettledBeforeNotify = undefined;
-      operatorSignal?.removeEventListener("abort", onOperatorRevoked);
-      releaseOperatorAuthority?.();
-      releaseOperatorAuthority = undefined;
-      requestSignal?.removeEventListener("abort", onRequestCancelled);
-    });
+    const outcome = await finalizeAndSettleSession(runtimeErrorOutcome(error)).finally(
+      releaseExecutionContext,
+    );
     emitExecProcessCompleted({
       command: opts.command,
       mode: usingPty ? "pty" : "child",
@@ -955,11 +949,7 @@ export async function runExecProcess({
           processContinuationAvailable: opts.processContinuationAvailable !== false,
         });
       } catch (error) {
-        outcome = buildExecRuntimeErrorOutcome({
-          error,
-          aggregated: session.aggregated.trim(),
-          durationMs: Date.now() - startedAt,
-        });
+        outcome = runtimeErrorOutcome(error);
       } finally {
         // Release foreground delivery before finalization marks the record exited.
         onUpdate = undefined;
@@ -974,11 +964,7 @@ export async function runExecProcess({
       });
       return finalOutcome;
     } finally {
-      onSettledBeforeNotify = undefined;
-      operatorSignal?.removeEventListener("abort", onOperatorRevoked);
-      releaseOperatorAuthority?.();
-      releaseOperatorAuthority = undefined;
-      requestSignal?.removeEventListener("abort", onRequestCancelled);
+      releaseExecutionContext();
     }
   });
 

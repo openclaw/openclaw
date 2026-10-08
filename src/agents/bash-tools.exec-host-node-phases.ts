@@ -429,15 +429,21 @@ export async function analyzeNodeApprovalRequirement(params: {
   const approvalCwd = params.prepared.cwd ?? params.request.workdir;
   // Bare-name resolution must not fall back to the Gateway's PATH during precheck.
   const analysisEnv = { ...params.target.env, PATH: "", Path: "" };
-  const baseAllowlistEval = await evaluateShellAllowlistWithAuthorization({
-    command: approvalCommand,
-    allowlist: [],
-    safeBins: new Set(),
-    cwd: approvalCwd,
-    env: analysisEnv,
-    platform: params.target.platform,
-    trustedSafeBinDirs: params.request.trustedSafeBinDirs,
-  });
+  const evaluateCommand = (
+    command: string,
+    cwd: string | undefined,
+    allowlist: ExecAllowlistEntry[] = [],
+  ) =>
+    evaluateShellAllowlistWithAuthorization({
+      command,
+      allowlist,
+      safeBins: new Set(),
+      cwd,
+      env: analysisEnv,
+      platform: params.target.platform,
+      trustedSafeBinDirs: params.request.trustedSafeBinDirs,
+    });
+  const baseAllowlistEval = await evaluateCommand(approvalCommand, approvalCwd);
   const bindingCommandEvals: NodePolicyCommandEval[] = [
     {
       command: approvalCommand,
@@ -460,15 +466,7 @@ export async function analyzeNodeApprovalRequirement(params: {
     entries.push({
       command: normalizedCommand,
       cwd,
-      allowlistEval: await evaluateShellAllowlistWithAuthorization({
-        command: normalizedCommand,
-        allowlist: [],
-        safeBins: new Set(),
-        cwd,
-        env: analysisEnv,
-        platform: params.target.platform,
-        trustedSafeBinDirs: params.request.trustedSafeBinDirs,
-      }),
+      allowlistEval: await evaluateCommand(normalizedCommand, cwd),
     });
   };
   const preparedCommand = resolveSystemRunCommandRequest({
@@ -537,15 +535,11 @@ export async function analyzeNodeApprovalRequirement(params: {
         // accepting either the prepared wrapper or its semantic inner command.
         const allowlistEvals = await Promise.all(
           bindingCommandEvals.map(async (entry) => {
-            const allowlistEval = await evaluateShellAllowlistWithAuthorization({
-              command: entry.command,
-              allowlist: resolved.allowlist,
-              safeBins: new Set(),
-              cwd: entry.cwd,
-              env: analysisEnv,
-              platform: params.target.platform,
-              trustedSafeBinDirs: params.request.trustedSafeBinDirs,
-            });
+            const allowlistEval = await evaluateCommand(
+              entry.command,
+              entry.cwd,
+              resolved.allowlist,
+            );
             return {
               command: entry.command,
               allowlistEligible:

@@ -72,7 +72,8 @@ Replace model IDs with exact names from `ollama list` or
   </Accordion>
 
   <Accordion title="Ollama Cloud only">
-    No local daemon, hosted models directly:
+    No local daemon, hosted models directly through the dedicated
+    `ollama-cloud` provider:
 
     ```bash
     export OLLAMA_API_KEY="your-ollama-api-key"
@@ -80,35 +81,16 @@ Replace model IDs with exact names from `ollama list` or
 
     ```json5
     {
-      models: {
-        providers: {
-          ollama: {
-            baseUrl: "https://ollama.com",
-            apiKey: "OLLAMA_API_KEY",
-            api: "ollama",
-            models: [
-              {
-                id: "kimi-k2.5:cloud",
-                name: "kimi-k2.5:cloud",
-                reasoning: false,
-                input: ["text", "image"],
-                contextWindow: 128000,
-                maxTokens: 8192,
-              },
-            ],
-          },
-        },
-      },
       agents: {
         defaults: {
-          model: { primary: "ollama/kimi-k2.5:cloud" },
+          model: { primary: "ollama-cloud/kimi-k3" },
         },
       },
     }
     ```
 
-    For the dedicated `ollama-cloud` provider id instead of this shape, see
-    [Ollama Cloud](/providers/ollama-cloud).
+    Or run `openclaw onboard --auth-choice ollama-cloud` to save the key as an
+    `ollama-cloud` credential. See [Ollama Cloud](/providers/ollama-cloud).
 
   </Accordion>
 

@@ -22,6 +22,7 @@ import {
 } from "./model-catalog-entry.js";
 import { loadManifestModelProviderConfigs } from "./model-catalog-manifest.js";
 import { compareModelCatalogEntries } from "./model-catalog-order.js";
+import { createPreparedModelCatalogProviderNormalizer } from "./model-catalog-provider-normalizer.js";
 import { buildPreparedModelCatalogSnapshot } from "./model-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { createModelCatalogIdentityKeyResolver } from "./openai-model-routes.js";
@@ -201,15 +202,25 @@ export async function prepareFullCatalogFacts(
       templateModelRegistry,
     );
     const providerOutcomes = catalogSource.providerOutcomes ?? [];
+    const normalizeProvider = createPreparedModelCatalogProviderNormalizer(
+      pluginMetadataSnapshot,
+      input.config,
+      input.env,
+    );
     const completeModelCatalog = {
       ...modelCatalog,
       staticEntries:
         input.config.models?.mode === "replace"
           ? []
           : dedupeByKey(
-              [...providerStaticModels, ...manifestStaticModels],
+              // Static hooks also answer runtime provider aliases; publish canonical rows once.
+              [...providerStaticModels, ...manifestStaticModels].map((model) => {
+                const entry = modelCatalogRowToEntry(model);
+                entry.provider = normalizeProvider(entry.provider);
+                return entry;
+              }),
               createModelCatalogIdentityKeyResolver(),
-            ).map(modelCatalogRowToEntry),
+            ),
       ...(providerOutcomes.length > 0 ? { providerOutcomes } : {}),
     };
     if (catalogMode === "live") {

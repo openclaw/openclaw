@@ -89,13 +89,6 @@ const dispatchCases: DispatchCase[] = [
     oneShotCliRun: false,
   },
   {
-    agentId: "main",
-    sandboxSessionKey: undefined,
-    remoteSkills: true,
-    skillCatalog: "none" as const,
-    oneShotCliRun: true,
-  },
-  {
     agentId: "work",
     sandboxSessionKey: undefined,
     remoteSkills: false,
@@ -106,20 +99,12 @@ const dispatchCases: DispatchCase[] = [
   {
     agentId: "work",
     sandboxSessionKey: undefined,
-    remoteSkills: true,
-    skillCatalog: "none" as const,
-    oneShotCliRun: false,
-    managedWorkspace: true,
-  },
-  ...[false, true].map((remoteSkills) => ({
-    agentId: "work",
-    sandboxSessionKey: undefined,
-    remoteSkills,
+    remoteSkills: false,
     skillCatalog: "none" as const,
     oneShotCliRun: false,
     managedWorkspace: true,
     realManagedWorkspace: true,
-  })),
+  },
   {
     agentId: "main",
     sandboxSessionKey: undefined,
@@ -569,6 +554,13 @@ it.each(dispatchCases)(
             sessionRoot: workspaceDir,
             sandbox: remoteSandbox,
           });
+          const dispatched = runAttempt.mock.calls[0]?.[0];
+          expect(dispatched?.prompt).toBe("Use the skill at /remote/inbound/0/SKILL.md.");
+          expect(dispatched?.explicitSkillSelections).toEqual([
+            { name: "demo", path: "/remote/inbound/0/SKILL.md" },
+            { name: "native", path: "node://worker/skills/native/SKILL.md" },
+          ]);
+          expect(params.explicitSkillSelections?.[0]?.path).toBe("/host/skills/demo/SKILL.md");
           if (hostMedia === "allowed") {
             expect(runAttempt.mock.calls[0]?.[0].images).toMatchObject([{ mimeType: "image/png" }]);
           }
@@ -604,20 +596,6 @@ it.each(dispatchCases)(
             sandbox: projectedSandbox,
           });
           expect(params.workspaceDir).toBe(workspaceDir);
-        } else if (remoteSkills) {
-          const dispatched = runAttempt.mock.calls[0]?.[0];
-          expect(dispatched?.prompt).toBe("Use the skill at /remote/inbound/0/SKILL.md.");
-          expect(dispatched?.explicitSkillSelections).toEqual([
-            { name: "demo", path: "/remote/inbound/0/SKILL.md" },
-            { name: "native", path: "node://worker/skills/native/SKILL.md" },
-          ]);
-          expect(params.explicitSkillSelections?.[0]?.path).toBe("/host/skills/demo/SKILL.md");
-          expect(sandbox).toEqual(remoteSandbox);
-          expect(dispatched?.workspaceDir).toBe(workspaceDir);
-          if (managedWorkspace) {
-            expect(dispatched?.cwd).toBe(workspaceDir);
-            expect(dispatched?.sessionRoot).toBe(workspaceDir);
-          }
         } else if (skillCatalog === "sandbox") {
           const dispatched = runAttempt.mock.calls[0]?.[0];
           const sandboxSkillPath = "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md";

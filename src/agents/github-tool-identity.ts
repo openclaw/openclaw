@@ -102,19 +102,11 @@ export function resolveConfiguredGitHubToolIdentity(params: {
 function resolveSystemGitHubToolIdentity(
   params: Pick<GitHubIdentityPreparation, "config" | "env">,
 ) {
-  const config = params.config.tools?.github;
-  return config
-    ? {
-        source: "system-configured" as const,
-        config,
-        profileDir: resolveManagedGitHubProfileDir({
-          agentId: "",
-          scope: "system",
-          profileId: config.profileId,
-          env: params.env,
-        }),
-      }
-    : { source: "system-detected" as const };
+  return (
+    resolveScopedGitHubToolIdentity({ ...params, agentId: "", scope: "system" }) ?? {
+      source: "system-detected" as const,
+    }
+  );
 }
 
 function resolveGitHubToolIdentity(params: GitHubIdentityPreparation) {
@@ -130,18 +122,16 @@ function resolveScopedGitHubToolIdentity(params: {
   scope: "system" | "agent";
   env?: NodeJS.ProcessEnv;
 }) {
-  if (params.scope === "system") {
-    return resolveSystemGitHubToolIdentity(params);
-  }
   const config = resolveConfiguredGitHubToolIdentity(params);
   return config
     ? {
-        source: "agent-override" as const,
+        source:
+          params.scope === "agent" ? ("agent-override" as const) : ("system-configured" as const),
         config,
         profileDir: resolveManagedGitHubProfileDir({
           agentId: params.agentId,
           env: params.env,
-          scope: "agent",
+          scope: params.scope,
           profileId: config.profileId,
         }),
       }
@@ -334,10 +324,10 @@ export async function resolveGitHubToolIdentityStatus(
   params: GitHubIdentityPreparation & { selectedScope: "system" | "agent" },
 ): Promise<ToolsGitHubStatusResult> {
   const effectiveIdentity = resolveGitHubToolIdentity(params);
-  const selectedIdentity = resolveScopedGitHubToolIdentity({
-    ...params,
-    scope: params.selectedScope,
-  });
+  const selectedIdentity =
+    params.selectedScope === "system"
+      ? resolveSystemGitHubToolIdentity(params)
+      : resolveScopedGitHubToolIdentity({ ...params, scope: "agent" });
   const probe = {
     config: params.config,
     sourceConfig: params.sourceConfig,

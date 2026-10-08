@@ -10,6 +10,7 @@ import type {
   SessionEntryReadScope,
   SessionEntrySummary,
   SessionTranscriptRuntimeScope,
+  SessionTranscriptRuntimeTarget,
 } from "./session-accessor.types.js";
 import type { CanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import type { SessionColdArchive } from "./session-cold-storage-state.js";
@@ -20,6 +21,7 @@ import type {
   SessionSourcePredicate,
   SessionSourcePredicateFacts,
 } from "./session-source-authority.js";
+import type { SessionTranscriptAnchorFacts } from "./session-transcript-anchor-read.kernel.js";
 import type { SessionTranscriptWorkerReadError } from "./session-transcript-worker-error.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
@@ -94,6 +96,33 @@ export type SessionExactEntriesWorkerRequest = SessionExactEntriesWorkerSelectio
   continuation?: CanonicalSessionReaderContinuation;
 };
 
+/** Bounded foreground facts read through an already admitted session executor. */
+export type SessionEntryCohortRequest = Pick<
+  SessionExactEntriesWorkerRequest,
+  | "snapshotFields"
+  | "replyInitializationSessionKey"
+  | "includeMembers"
+  | "includeParticipantRecords"
+  | "lifecycleSessionKey"
+> & {
+  sessionKeys: readonly string[];
+  runtimeTarget?: Pick<SessionTranscriptRuntimeTarget, "agentId" | "sessionId" | "sessionKey">;
+  expected?: {
+    /** Native incarnation returned by this cohort, independent of the host execution claim. */
+    incarnation: string;
+    sessions: readonly {
+      sessionKey: string;
+      sessionId: string;
+      lifecycleRevision: string | undefined;
+    }[];
+  };
+  transcript?: {
+    sessionKey: string;
+    entryIds: readonly string[];
+    includeHeader?: boolean;
+  };
+};
+
 export type SessionExactEntriesWorkerResult = {
   kind: "session-exact-entries";
   source?: SessionEntryListWorkerResult["source"];
@@ -123,6 +152,13 @@ export type SessionExactEntriesWorkerResult = {
     members: Array<{ sessionKey: string; identityIds: string[] }>;
     placeholders: Array<{ sessionKey: string; sessionId: string }>;
   };
+  transcript?: Pick<SessionTranscriptAnchorFacts, "anchors" | "header">;
+};
+
+export type SessionEntryCohortResult = SessionExactEntriesWorkerResult & {
+  runtimeTarget?: SessionTranscriptRuntimeTarget;
+  source: NonNullable<SessionExactEntriesWorkerResult["source"]>;
+  databaseIdentity: NonNullable<SessionExactEntriesWorkerResult["databaseIdentity"]>;
 };
 
 export type SessionRuntimeTargetWorkerInput = {

@@ -243,8 +243,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/session-row-projection.membership.test.ts",
   "src/gateway/session-row-projection.prepared-read.test.ts",
   "src/gateway/session-row-projection.publication.test.ts",
-  "src/gateway/session-row-projection.registry-refresh.test.ts",
-  "src/gateway/session-row-projection.search-facts.test.ts",
   "src/gateway/session-row-projection.subagent-index.test.ts",
   "src/gateway/session-row-projection.test.ts",
   "src/gateway/session-row-projection.topology.test.ts",
