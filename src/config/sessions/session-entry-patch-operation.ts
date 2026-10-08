@@ -7,6 +7,15 @@ import {
   type SessionEntryUsageUpdate,
 } from "./session-entry-usage.js";
 import {
+  projectPendingFinalDeliverySettlement,
+  type PendingFinalDeliverySettlementInput,
+} from "./session-pending-final-settlement.js";
+import type {
+  SessionTranscriptTurnExpectedState,
+  SessionTranscriptTurnLifecyclePatch,
+} from "./session-transcript-turn-lifecycle.types.js";
+import { sessionMatchesExpectedTranscriptTurn } from "./session-transcript-turn-state.js";
+import {
   mergeSessionEntry,
   mergeSessionEntryPreserveActivity,
   type InternalSessionEntry as SessionEntry,
@@ -19,6 +28,13 @@ type ExpectedSession = Pick<SessionEntry, "sessionId"> &
 export type SessionEntryPatchOperation = (
   | { kind: "fields"; patch: Partial<SessionEntry> }
   | { kind: "usage-accounting"; usage: SessionEntryUsageUpdate }
+  | { kind: "pending-final-settle"; settlement: PendingFinalDeliverySettlementInput }
+  | {
+      kind: "restart-admission";
+      sessionId: string;
+      expectedSessionState: SessionTranscriptTurnExpectedState;
+      patch: SessionTranscriptTurnLifecyclePatch;
+    }
   | {
       kind: "pending-final-clear";
       sessionId: string;
@@ -60,6 +76,18 @@ export function reduceSessionEntryPatch(
       return projectCompactionAccountingPatch(entry, operation.accounting);
     case "usage-accounting":
       return projectSessionEntryUsageUpdate(entry, operation.usage);
+    case "pending-final-settle":
+      return projectPendingFinalDeliverySettlement(entry, operation.settlement).patch;
+    case "restart-admission":
+      return sessionMatchesExpectedTranscriptTurn(
+        { entry },
+        {
+          expectedSessionId: operation.sessionId,
+          expectedSessionState: operation.expectedSessionState,
+        },
+      )
+        ? operation.patch
+        : null;
     case "pending-final-clear": {
       const recoveryRunId = normalizeOptionalString(entry.restartRecoveryDeliveryRunId);
       const deliveries = entry.pendingFinalDelivery?.deliveries;

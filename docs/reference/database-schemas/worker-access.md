@@ -1248,7 +1248,10 @@ provider callbacks keep their existing preparation boundary.
 
 Pending-final intent creation and completed-intent cleanup use fixed patch
 operations as well. Cleanup checks the current session, intent, delivery states,
-and recovery claim inside the writer transaction. Live-model-switch callbacks
+and recovery claim inside the writer transaction. Ordinary delivery settlement
+and restart admission evaluate their current-row predicates in that same command;
+harness completion claims retain host authority validation and callback CAS.
+Every settlement remains at its existing durable event boundary. Live-model-switch callbacks
 prepare only when the freshly selected entry has a pending switch; an absent
 flag ends the operation without a commit request. A pending switch retains host
 plugin normalization and CAS, and arbitrary null-returning callbacks retain
