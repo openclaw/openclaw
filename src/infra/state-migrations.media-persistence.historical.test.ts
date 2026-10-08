@@ -143,14 +143,14 @@ it.each(["repair", "unrelated violation", "cleanup failure"] as const)(
         expect(() => openOpenClawAgentDatabase(options)).not.toThrow();
       } else {
         expect(result.warnings.join("\n")).toMatch(
-          scenario === "unrelated violation" ? /foreign_key_check/ : /Session window repair failed/,
+          scenario === "unrelated violation" ? /foreign_key_check/ : /fixture cleanup refused/,
         );
         expect(readRows(repaired)).toEqual(original);
       }
       const backups = fs
         .readdirSync(path.dirname(pathname))
         .filter((name) => name.startsWith("openclaw-session-window-recovery-"));
-      expect(backups).toHaveLength(scenario === "unrelated violation" ? 0 : 1);
+      expect(backups).toHaveLength(1);
       if (backups.length > 0) {
         using backup = new NativeDatabaseSync(
           path.join(path.dirname(pathname), backups[0]!, "database.sqlite"),
@@ -159,7 +159,7 @@ it.each(["repair", "unrelated violation", "cleanup failure"] as const)(
         expect(readRows(backup)).toEqual(original);
         expect(
           backup.prepare("SELECT count(*) AS count FROM pragma_foreign_key_check").get(),
-        ).toEqual({ count: 2 });
+        ).toEqual({ count: scenario === "unrelated violation" ? 3 : 2 });
       }
     });
   },

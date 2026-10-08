@@ -1,9 +1,11 @@
+import { spawnSync } from "node:child_process";
+import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { assertSqliteIntegrityInWorker } from "../infra/sqlite-integrity-worker.js";
+import { readSqliteInspectionBudget } from "../infra/sqlite-readonly-worker.js";
 import { readGlobalSingleton } from "../shared/global-singleton.js";
 import type { agentDatabaseLifecycle } from "./openclaw-agent-db-lifecycle.js";
-import {
-  confirmDatabaseVerifyWorker,
-  confirmDatabaseVerifyWorkerSync,
-} from "./openclaw-database-verify-client.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 
 function terminalLatch() {
   // SAFETY: This key is registered only by the agent database lifecycle owner with its terminal latch.
@@ -21,50 +23,43 @@ export function assertAgentDatabaseTerminalOpenAllowed(pathname: string): void {
   }
 }
 
-/** A fresh synchronous admission can recover after another process repairs the file. */
+/** Only latched integrity failures need a fresh native check after external repair. */
 export function revalidateAgentDatabaseTerminalOpen(pathname: string): void {
   const latch = terminalLatch();
   const failure = latch?.peek(pathname);
   if (latch && failure?.name === "SqliteIntegrityError") {
-    const confirmation = confirmDatabaseVerifyWorkerSync(pathname);
-    if (confirmation.status === "healthy") {
-      latch.clear(pathname, { expectedError: failure, generation: confirmation.generation });
+    const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.databaseVerify);
+    const child = spawnSync(
+      process.execPath,
+      [...resolveRuntimeWorkerArgv(workerUrl), "--openclaw-database-verify-sync", pathname],
+      {
+        timeout: readSqliteInspectionBudget("integrity check", pathname).timeoutMs,
+        killSignal: "SIGKILL",
+        stdio: "ignore",
+      },
+    );
+    if (child.error || child.status !== 0) {
+      throw failure;
     }
-  } else {
-    assertAgentDatabaseTerminalOpenAllowed(pathname);
-    return;
+    latch.clear(pathname);
   }
-  const remaining = latch?.peek(pathname);
-  if (remaining) {
-    throw remaining;
-  }
+  assertAgentDatabaseTerminalOpenAllowed(pathname);
 }
 
-/** Gateway admission awaits the native verifier; healthy operations never start a child. */
 export async function revalidateAgentDatabaseTerminalOpenAsync(
   pathname: string,
   assertCurrent?: () => void,
-  signal?: AbortSignal,
+  signal: AbortSignal = new AbortController().signal,
 ): Promise<void> {
   const latch = terminalLatch();
   const failure = latch?.peek(pathname);
   if (latch && failure?.name === "SqliteIntegrityError") {
+    await assertSqliteIntegrityInWorker(pathname, OPENCLAW_SQLITE_BUSY_TIMEOUT_MS, signal);
     assertCurrent?.();
-    const confirmation = await confirmDatabaseVerifyWorker(
-      { path: pathname, kind: "agent", label: pathname },
-      { assertCurrent, signal },
-    );
-    if (confirmation.status === "healthy") {
-      latch.clear(pathname, { expectedError: failure, generation: confirmation.generation });
+    if (latch.peek(pathname) === failure) {
+      latch.clear(pathname);
     }
-  } else {
-    assertCurrent?.();
-    assertAgentDatabaseTerminalOpenAllowed(pathname);
-    return;
   }
   assertCurrent?.();
-  const remaining = latch?.peek(pathname);
-  if (remaining) {
-    throw remaining;
-  }
+  assertAgentDatabaseTerminalOpenAllowed(pathname);
 }

@@ -3346,19 +3346,26 @@ server.listen(0, "127.0.0.1", () => {
     },
   );
 
-  it("refreshes full-build cache generations without changing their restore prefix", () => {
+  it("shares full-build caches by installed Node version across requests and generations", () => {
     const action = parse(readFileSync(".github/actions/setup-node-env/action.yml", "utf8"));
     const cacheStep = expectDefined(
       action.runs.steps.find((step: WorkflowStep) => step.name === "Restore build-all cache"),
       "full-build cache restore",
     );
-    const renderCacheKey = (template: string, runId: number, runAttempt: number) =>
+    const renderCacheKey = (
+      template: string,
+      runId: number,
+      runAttempt: number,
+      requestedNode = "24.x",
+      resolvedNode = "24.21.0",
+    ) =>
       template.replace(/\$\{\{([\s\S]*?)\}\}/gu, (_, expression: string) =>
         String(
-          runInNewContext(expression.replace(/inputs\.([a-z-]+)/gu, 'inputs["$1"]'), {
+          runInNewContext(expression.replace(/\.([A-Za-z_][\w-]*)/gu, '["$1"]'), {
             github: { repository: "openclaw/openclaw", run_id: runId, run_attempt: runAttempt },
-            inputs: { "build-all-cache-scope": "full", "node-version": "24.x" },
+            inputs: { "build-all-cache-scope": "full", "node-version": requestedNode },
             runner: { os: "Linux", arch: "X64" },
+            steps: { "setup-node": { outputs: { "resolved-version": resolvedNode } } },
             hashFiles: () => "unchanged-source",
           }),
         ),
@@ -3378,6 +3385,19 @@ server.listen(0, "127.0.0.1", () => {
       );
     }
     expect(cacheStep.with["restore-keys"]).not.toContain("hashFiles");
+    const warmerKey = renderCacheKey(cacheStep.with.key, 10, 1);
+    const releasePrefix = renderCacheKey(cacheStep.with["restore-keys"], 11, 1, "24.21.0").trim();
+    expect(warmerKey.startsWith(releasePrefix)).toBe(true);
+    for (const resolvedNode of ["24.22.0", "26.7.0"]) {
+      const otherRuntimePrefix = renderCacheKey(
+        cacheStep.with["restore-keys"],
+        11,
+        1,
+        "24.x",
+        resolvedNode,
+      ).trim();
+      expect(warmerKey.startsWith(otherRuntimePrefix)).toBe(false);
+    }
   });
 
   it("persists Node 26 minimum declarations through trusted bounded artifacts", () => {

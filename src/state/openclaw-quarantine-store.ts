@@ -19,6 +19,7 @@ import {
   type SqliteFileGeneration,
 } from "../infra/sqlite-file-generation.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
+import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { VERSION } from "../version.js";
 import type { OpenClawAgentDatabase } from "./openclaw-agent-db-contract.js";
@@ -143,7 +144,7 @@ export function readOpenClawAgentIntegrityVerification(
   }
   let database: DatabaseSync | undefined;
   try {
-    database = openNodeSqliteDatabase(storePath, { readOnly: true });
+    database = openSqliteReadOnlyDatabase(storePath);
     return read(database);
   } catch {
     return undefined;
@@ -397,7 +398,7 @@ function readOpenClawDatabaseQuarantine(
   if (!existsSync(storePath)) {
     return undefined;
   }
-  const database = openNodeSqliteDatabase(storePath, {
+  const database = openSqliteReadOnlyDatabase(storePath, {
     timeout: OPENCLAW_QUARANTINE_BUSY_TIMEOUT_MS,
   });
   let outcome: { value: OpenClawDatabaseQuarantine | undefined } | { error: unknown };

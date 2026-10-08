@@ -30,6 +30,7 @@ import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context
 import { isUserModelAuthProfileId, parseUserModelAuthProfileId } from "./user-model-account-id.js";
 import { publishUserProfileModelAccountLinksChange } from "./user-profile-events.js";
 import { selectResolvedUserProfile, userProfilesDb } from "./user-profiles-internal.js";
+import type { UserProfilesDatabase } from "./user-profiles.types.js";
 
 const credentialSchema = inlineAuthProfileCredentialSchema.refine(
   (credential) => credential.copyToAgents !== true,
@@ -51,6 +52,11 @@ type UserModelLinks = z.infer<typeof linksSchema>;
 type AccountRecordName = "model-accounts" | `model-account:${string}`;
 
 export type UserProfileAuthLink = { provider: string; authProfileId: string; updatedAt: number };
+export type PersonalCatalogSelection = { profileId: string } | { requesterProfileId: string };
+export type PersonalCatalogProfiles = {
+  links: UserProfileAuthLink[];
+  profiles: Record<string, UserModelAuthProfile>;
+};
 export type UserModelAccount = ReturnType<typeof accountSummary>;
 
 const MODEL_ACCOUNTS_PAGE_SIZE = 50;
@@ -105,10 +111,15 @@ function readRecord(db: DatabaseSync, owner: string, name: AccountRecordName): s
       .where("name", "=", name)
       .where("deleted_at_ms", "is", null),
   );
-  if (!row) {
-    return undefined;
-  }
-  if (row.kind !== "secret" || row.allowed_hosts !== null) {
+  return row ? accountRecordValue(row) : undefined;
+}
+
+function accountRecordValue(row: {
+  value: string | null;
+  kind: string | null;
+  allowed_hosts: string | null;
+}): string {
+  if (row.kind !== "secret" || row.allowed_hosts !== null || row.value === null) {
     throw invalidAccounts();
   }
   return row.value;
@@ -168,7 +179,10 @@ function readProfile(
   if (!isUserModelAuthProfileId(authProfileId)) {
     return undefined;
   }
-  const raw = readRecord(db, owner, `model-account:${authProfileId}`);
+  return parseProfileRecord(readRecord(db, owner, `model-account:${authProfileId}`));
+}
+
+function parseProfileRecord(raw: string | undefined): UserModelAuthProfile | undefined {
   if (raw === undefined) {
     return undefined;
   }
@@ -303,8 +317,56 @@ export function readUserModelAuthProfileInDatabase(
   db: DatabaseSync,
   authProfileId: string,
 ): UserModelAuthProfile | undefined {
-  const owner = credentialOwner(db, authProfileId);
-  return owner ? readProfile(db, owner, authProfileId) : undefined;
+  const locator = parseUserModelAuthProfileId(authProfileId);
+  if (!locator || !tableExists(db, "user_profiles") || !tableExists(db, "secret_store_entries")) {
+    return undefined;
+  }
+  const row = selectResolvedUserProfile(db, locator.ownerProfileId, (ownerId) =>
+    getNodeSqliteKysely<UserProfilesDatabase & Pick<DB, "secret_store_entries">>(db)
+      .selectFrom("user_profiles")
+      .leftJoin("secret_store_entries", (join) =>
+        join
+          .onRef("secret_store_entries.scope_id", "=", "user_profiles.id")
+          .on("secret_store_entries.scope_kind", "=", "identity")
+          .on("secret_store_entries.name", "=", `model-account:${authProfileId}`)
+          .on("secret_store_entries.deleted_at_ms", "is", null),
+      )
+      .select([
+        "user_profiles.merged_into",
+        "secret_store_entries.name as record_name",
+        "secret_store_entries.value",
+        "secret_store_entries.kind",
+        "secret_store_entries.allowed_hosts",
+      ])
+      .where("user_profiles.id", "=", ownerId),
+  );
+  return !row || row.merged_into || row.record_name === null
+    ? undefined
+    : parseProfileRecord(accountRecordValue(row));
+}
+
+/** The catalog reads only explicit pins or linked credentials from its admitted reader. */
+export function readPersonalCatalogProfilesInDatabase(
+  db: DatabaseSync,
+  selection: PersonalCatalogSelection,
+): PersonalCatalogProfiles {
+  const links =
+    "requesterProfileId" in selection
+      ? listUserProfileAuthLinksInDatabase(db, selection.requesterProfileId)
+      : [];
+  const profileIds =
+    "profileId" in selection ? [selection.profileId] : links.map((link) => link.authProfileId);
+  const profiles: PersonalCatalogProfiles["profiles"] = {};
+  for (const profileId of new Set(profileIds)) {
+    if (!isUserModelAuthProfileId(profileId)) {
+      continue;
+    }
+    const profile = readUserModelAuthProfileInDatabase(db, profileId);
+    if (profile) {
+      profiles[profileId] = profile;
+    }
+  }
+  return { links, profiles };
 }
 
 /** The canonical OAuth/usage owners mutate one exact private credential under the DB lock. */

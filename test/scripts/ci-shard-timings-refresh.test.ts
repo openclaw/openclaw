@@ -118,6 +118,7 @@ describe("release shard timing refresh CLI", () => {
             steps: [{ name: "Run Node 24 minimum compatibility" }],
           },
           { ...job, id: 7, name: "checks-node-compact-small-1" },
+          { ...job, id: 8, name: "checks-node-release-packed-1" },
         ],
         logs: {
           "1": log("fixture", undefined, files),

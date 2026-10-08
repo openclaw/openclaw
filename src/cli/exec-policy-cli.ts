@@ -13,16 +13,13 @@ import {
   type ExecPolicyScopeSnapshot,
 } from "../infra/exec-approvals-effective.js";
 import {
-  maxAsk,
-  minSecurity,
   normalizeExecAsk,
   normalizeExecMode,
   normalizeExecSecurity,
   normalizeExecTarget,
-  readExecApprovalsSnapshot,
+  readExecApprovalsSnapshotAsync,
   resolveExactExecModeFromPolicy,
   resolveExecModePolicy,
-  resolveExecApprovalsFromFile,
   restoreExecApprovalsSnapshotLocked,
   updateExecApprovals,
   type ExecApprovalsFile,
@@ -31,6 +28,7 @@ import {
   type ExecTarget,
 } from "../infra/exec-approvals.js";
 import { defaultRuntime } from "../runtime.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   buildExecPolicyToolAccess,
   formatExecPolicyCommandApprovals,
@@ -186,48 +184,11 @@ function applyApprovalsDefaults(
   return next;
 }
 
-function buildExecPolicyApprovalsRollback(params: {
-  current: ExecApprovalsFile;
-  original: ExecApprovalsFile;
-  written: ExecApprovalsFile;
-  policy: ExecPolicyResolved;
-}): ExecApprovalsFile | null {
-  // Whole-file restore can lose to an unrelated concurrent edit. Revert only
-  // matching fields, and never loosen ambiguous same-value concurrent writes.
-  const fields = [
-    ["security", params.policy.security],
-    ["ask", params.policy.ask],
-    ["askFallback", params.policy.askFallback],
-  ] as const;
-  const originalDefaults = resolveExecApprovalsFromFile({ file: params.original }).defaults;
-  const currentDefaults = resolveExecApprovalsFromFile({ file: params.current }).defaults;
-  const next = structuredClone(params.current);
-  let changed = false;
-  for (const [field, appliedValue] of fields) {
-    const currentValue = params.current.defaults?.[field];
-    const originalValue = params.original.defaults?.[field];
-    const rollbackDoesNotLoosen =
-      field === "ask"
-        ? maxAsk(originalDefaults.ask, currentDefaults.ask) === originalDefaults.ask
-        : minSecurity(originalDefaults[field], currentDefaults[field]) === originalDefaults[field];
-    if (
-      appliedValue !== undefined &&
-      currentValue === params.written.defaults?.[field] &&
-      currentValue !== originalValue &&
-      rollbackDoesNotLoosen
-    ) {
-      next.defaults = { ...next.defaults, [field]: originalValue };
-      changed = true;
-    }
-  }
-  return changed ? next : null;
-}
-
 async function buildLocalExecPolicyShowPayload(
   options?: ExecPolicyShowOptions,
 ): Promise<ExecPolicyShowPayload> {
   const configSnapshot = await readConfigFileSnapshot();
-  const approvalsSnapshot = readExecApprovalsSnapshot();
+  const approvalsSnapshot = await readExecApprovalsSnapshotAsync();
   const config = configSnapshot.config ?? {};
   const scopes = collectExecPolicyScopeSnapshots({
     cfg: config,
@@ -368,6 +329,7 @@ async function applyOwnedExecPolicy(
   assertCurrent: () => void,
 ): Promise<ExecPolicyShowPayload> {
   assertCurrent();
+  const context = captureOpenClawStateWorkerContext();
   const configSnapshot = await readConfigFileSnapshot();
   assertCurrent();
   const nextConfig = structuredClone(configSnapshot.config ?? {});
@@ -377,13 +339,17 @@ async function applyOwnedExecPolicy(
       "Local exec-policy cannot synchronize host=node. Node approvals are fetched from the node at runtime.",
     );
   }
-  const approvalsSnapshot = readExecApprovalsSnapshot();
+  const approvalsSnapshot = await readExecApprovalsSnapshotAsync(context);
+  assertCurrent();
   const nextApprovals = applyApprovalsDefaults(approvalsSnapshot.file, policy);
-  const writtenApprovals = await updateExecApprovals({
-    baseHash: approvalsSnapshot.hash,
-    assertCurrent,
-    update: () => nextApprovals,
-  });
+  const writtenApprovals = await updateExecApprovals(
+    {
+      baseHash: approvalsSnapshot.hash,
+      assertCurrent,
+      update: { kind: "replace", file: nextApprovals },
+    },
+    context,
+  );
   if (!writtenApprovals) {
     throw new Error("Exec approvals changed; reload and retry.");
   }
@@ -397,17 +363,26 @@ async function applyOwnedExecPolicy(
   } catch (err) {
     try {
       assertCurrent();
-      if (!(await restoreExecApprovalsSnapshotLocked(approvalsSnapshot, writtenApprovals.hash))) {
-        await updateExecApprovals({
+      if (
+        !(await restoreExecApprovalsSnapshotLocked(
+          approvalsSnapshot,
+          writtenApprovals.hash,
+          context,
           assertCurrent,
-          update: (current) =>
-            buildExecPolicyApprovalsRollback({
-              current,
+        ))
+      ) {
+        await updateExecApprovals(
+          {
+            assertCurrent,
+            update: {
+              kind: "rollback-defaults",
               original: approvalsSnapshot.file,
               written: writtenApprovals.file,
               policy,
-            }),
-        });
+            },
+          },
+          context,
+        );
       }
     } catch (rollbackError) {
       throw new Error(

@@ -159,10 +159,6 @@ async function prepareOutboundPlan(
   let plan =
     structuredPlan ??
     createOutboundPayloadPlan(params.payloads, {
-      cfg: params.cfg,
-      sessionKey: params.session?.policyKey ?? params.session?.key,
-      surface: params.channel,
-      conversationType: params.session?.conversationType,
       extractMarkdownImages: handler.extractMarkdownImages,
     });
   if (structuredPlan && handler.extractMarkdownImages) {

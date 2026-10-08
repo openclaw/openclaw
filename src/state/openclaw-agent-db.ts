@@ -154,14 +154,14 @@ export {
 /** Drain the live owner before reconfirming an advisory failure in a native child. */
 export async function confirmOpenClawAgentDatabaseIntegrity(
   pathname: string,
-  lifetime?: import("./openclaw-database-verify-client.js").DatabaseVerifyWorkerLifetime,
+  lifetime?: import("./openclaw-database-verify.impl.js").DatabaseVerifyWorkerLifetime,
 ): Promise<SqliteIntegrityConfirmation> {
   const resolvedPath = path.resolve(pathname);
   await closeOpenClawAgentDatabaseByPathAsync(resolvedPath);
   // Closing breaks process ownership of the pathname. A replacement must
   // revalidate and claim its schema before the path can become trusted again.
   invalidateOpenClawAgentDatabaseValidation(resolvedPath);
-  const { confirmDatabaseVerifyWorker } = await import("./openclaw-database-verify-client.js");
+  const { confirmDatabaseVerifyWorker } = await import("./openclaw-database-verify.impl.js");
   return confirmDatabaseVerifyWorker(
     { path: resolvedPath, kind: "agent", label: resolvedPath },
     lifetime,

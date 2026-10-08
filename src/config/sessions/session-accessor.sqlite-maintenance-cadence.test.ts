@@ -205,6 +205,49 @@ it.each(["participant", "owner"] as const)(
   },
 );
 
+it("reports a maintenance deadline without an unused revision snapshot", () => {
+  const now = Date.now();
+  const { database, options } = createStore(1, now);
+  const maintenance: ResolvedSessionMaintenanceConfig = {
+    ...resolveMaintenanceConfigFromInput(),
+    mode: "enforce",
+    pruneAfterMs: DAY_MS,
+    archiveDashboardAfterMs: null,
+    preserveRecentMs: null,
+  };
+  runOpenClawAgentWriteTransaction(
+    (current) => ageFacts.recordSessionEntryMaintenanceAgeFact(current, maintenance, now),
+    options,
+  );
+  const reads = trackSqliteStatementExecutions(database.db, ["revision"], (sql) =>
+    /^PRAGMA data_version\b/i.test(sql) ? "revision" : null,
+  );
+  let admittedReads = 0;
+  try {
+    const result = reclaimSessionMaintenanceInTransaction(
+      {
+        kind: "maintenance-age",
+        databaseOptions: resolveSessionReclamationDatabaseOptions(options),
+        materializedPlans: [],
+        maintenance,
+      },
+      {
+        beforeMutation() {
+          // The transaction's freshness probe remains; the deadline needs no second snapshot.
+          admittedReads = reads.counts.revision;
+        },
+      },
+    );
+    expect(result).toEqual({
+      kind: "maintenance-age",
+      nextAt: now + ageFacts.SESSION_ENTRY_MAINTENANCE_INTERVAL_MS,
+    });
+    expect(reads.counts.revision - admittedReads).toBe(0);
+  } finally {
+    reads.restore();
+  }
+});
+
 it.each([
   { scenario: "a write crosses the cap", count: 2, maxEntries: 2, force: false },
   {

@@ -80,19 +80,8 @@ export function createSqliteTerminalOpenLatch(options: {
       }
       return true;
     },
-    clear: (
-      pathname: string,
-      verified?: { expectedError: Error; generation: SqliteFileGeneration },
-    ): boolean => {
-      const resolvedPath = path.resolve(pathname);
-      if (
-        verified &&
-        (failures.get(resolvedPath)?.error !== verified.expectedError ||
-          !generationMatchesPath(resolvedPath, verified.generation))
-      ) {
-        return false;
-      }
-      return failures.delete(resolvedPath);
+    clear: (pathname: string): void => {
+      failures.delete(path.resolve(pathname));
     },
     clearAll: (rootPath?: string): void => {
       for (const pathname of failures.keys()) {

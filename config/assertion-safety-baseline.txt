@@ -1270,7 +1270,7 @@ src/agents/delegation-capability.ts	1
 src/agents/embedded-agent-helpers/bootstrap.ts	2
 src/agents/embedded-agent-helpers/images.ts	6
 src/agents/embedded-agent-helpers/openai.ts	17
-src/agents/embedded-agent-helpers/turns.ts	14
+src/agents/embedded-agent-helpers/turns.ts	8
 src/agents/embedded-agent-live-edit-diff.ts	3
 src/agents/embedded-agent-messaging-extraction.ts	1
 src/agents/embedded-agent-messaging.ts	1
@@ -1298,8 +1298,8 @@ src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts	4
 src/agents/embedded-agent-runner/run/attempt-client-tools.ts	1
 src/agents/embedded-agent-runner/run/attempt-context-summary.ts	2
 src/agents/embedded-agent-runner/run/attempt-execution-phase.ts	1
-src/agents/embedded-agent-runner/run/attempt-history.ts	10
-src/agents/embedded-agent-runner/run/attempt-llm-boundary.ts	10
+src/agents/embedded-agent-runner/run/attempt-history.ts	9
+src/agents/embedded-agent-runner/run/attempt-llm-boundary.ts	6
 src/agents/embedded-agent-runner/run/attempt-normalization.ts	1
 src/agents/embedded-agent-runner/run/attempt-prompt-build.ts	1
 src/agents/embedded-agent-runner/run/attempt-prompt-helpers.ts	4
@@ -1327,7 +1327,7 @@ src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts	2
 src/agents/embedded-agent-runner/run/incomplete-turn-resolution.ts	3
 src/agents/embedded-agent-runner/run/message-transform-stream-wrapper.ts	3
 src/agents/embedded-agent-runner/run/recovery-message-action-capability.ts	1
-src/agents/embedded-agent-runner/run/session-bootstrap.ts	2
+src/agents/embedded-agent-runner/run/session-bootstrap.ts	1
 src/agents/embedded-agent-runner/run/session-prompt-state.ts	1
 src/agents/embedded-agent-runner/run/stream-wrapper.ts	1
 src/agents/embedded-agent-runner/run/terminal-preparation.ts	1
@@ -1343,14 +1343,13 @@ src/agents/embedded-agent-runner/tool-result-truncation.ts	12
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	1
 src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	1
-src/agents/embedded-agent-subscribe.handlers.messages.stream.ts	3
-src/agents/embedded-agent-subscribe.handlers.messages.update.ts	3
-src/agents/embedded-agent-subscribe.handlers.tools.completion.ts	1
+src/agents/embedded-agent-subscribe.handlers.messages.stream.ts	1
+src/agents/embedded-agent-subscribe.handlers.messages.update.ts	2
 src/agents/embedded-agent-subscribe.handlers.tools.results.ts	1
 src/agents/embedded-agent-subscribe.handlers.tools.start.ts	6
 src/agents/embedded-agent-subscribe.tool-text-diagnostics.ts	6
 src/agents/embedded-agent-tool-media.ts	5
-src/agents/embedded-agent-tool-results.ts	9
+src/agents/embedded-agent-tool-results.ts	8
 src/agents/embedded-agent-utils.ts	3
 src/agents/exec-auto-reviewer.ts	1
 src/agents/exec-defaults.ts	2
@@ -1880,7 +1879,6 @@ src/config/redact-snapshot.ts	4
 src/config/runtime-overrides.ts	1
 src/config/runtime-source-projection.ts	4
 src/config/schema.ts	1
-src/config/sessions/cleanup-service.ts	3
 src/config/sessions/legacy-main-session-migration.ts	4
 src/config/sessions/metadata.ts	1
 src/config/sessions/session-accessor.entry-mutation.ts	2
@@ -1910,7 +1908,6 @@ src/config/sessions/transcript-stream.ts	1
 src/config/sessions/transcript-tree.ts	3
 src/config/sessions/transcript.ts	13
 src/config/sessions/types.ts	1
-src/config/talk.ts	1
 src/config/validation-channel-rules.ts	1
 src/config/validation-core.ts	1
 src/config/validation-plugin-config.ts	2

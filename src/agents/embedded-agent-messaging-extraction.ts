@@ -84,14 +84,14 @@ function readSourceReplyPayload(
   sourceReply: Record<string, unknown>,
 ): MessagingToolSourceReplyPayload | undefined {
   const payload: MessagingToolSourceReplyPayload = {};
-  const text = readStringValue(sourceReply.text) ?? readStringValue(details.message);
-  if (text) {
-    payload.text = text;
-  }
-  const mediaUrl = readStringValue(sourceReply.mediaUrl) ?? readStringValue(details.mediaUrl);
-  if (mediaUrl) {
-    payload.mediaUrl = mediaUrl;
-  }
+  const copyText = (key: "text" | "mediaUrl" | "idempotencyKey", fallback: string = key) => {
+    const value = readStringValue(sourceReply[key]) ?? readStringValue(details[fallback]);
+    if (value) {
+      payload[key] = value;
+    }
+  };
+  copyText("text", "message");
+  copyText("mediaUrl");
   const rawMediaUrls = Array.isArray(sourceReply.mediaUrls)
     ? sourceReply.mediaUrls
     : Array.isArray(details.mediaUrls)
@@ -147,43 +147,11 @@ function readSourceReplyPayload(
   if (channelData) {
     payload.channelData = { ...channelData };
   }
-  const idempotencyKey =
-    readStringValue(sourceReply.idempotencyKey) ?? readStringValue(details.idempotencyKey);
-  if (idempotencyKey) {
-    payload.idempotencyKey = idempotencyKey;
-  }
+  copyText("idempotencyKey");
   if (details.sourceReplyTranscriptOwner === true) {
     payload.transcriptOwner = true;
   }
   return Object.keys(payload).length > 0 ? payload : undefined;
-}
-
-function resolveMessageToolTarget(params: {
-  action: string;
-  args: Record<string, unknown>;
-  providerId: string | null;
-  currentChannelId?: string;
-  currentMessagingTarget?: string;
-}): string | undefined {
-  const directTarget =
-    normalizeOptionalString(params.args.target) ??
-    normalizeOptionalString(params.args.to) ??
-    normalizeOptionalString(params.args.channelId);
-  if (directTarget) {
-    return directTarget;
-  }
-  const aliases = params.providerId
-    ? getChannelPlugin(params.providerId)?.actions?.messageActionTargetAliases?.[
-        params.action as ChannelMessageActionName
-      ]?.deliveryTargetAliases
-    : undefined;
-  for (const alias of aliases ?? []) {
-    const aliasTarget = normalizeOptionalStringifiedId(params.args[alias]);
-    if (aliasTarget) {
-      return aliasTarget;
-    }
-  }
-  return params.currentMessagingTarget ?? params.currentChannelId;
 }
 
 function resolveMessagingToolThreadEvidence(params: {
@@ -294,13 +262,26 @@ export function extractMessagingToolSend(
     const channelRaw = normalizeOptionalString(args.channel) ?? "";
     const providerHint = providerRaw || channelRaw;
     providerId = providerHint ? normalizeChannelId(providerHint) : null;
-    const toRaw = resolveMessageToolTarget({
-      action,
-      args,
-      providerId,
-      currentChannelId: options?.currentChannelId,
-      currentMessagingTarget: options?.currentMessagingTarget,
-    });
+    const currentChannelId = options?.currentChannelId;
+    const currentMessagingTarget = options?.currentMessagingTarget;
+    let toRaw =
+      normalizeOptionalString(args.target) ??
+      normalizeOptionalString(args.to) ??
+      normalizeOptionalString(args.channelId);
+    if (!toRaw) {
+      const aliases = providerId
+        ? getChannelPlugin(providerId)?.actions?.messageActionTargetAliases?.[
+            action as ChannelMessageActionName
+          ]?.deliveryTargetAliases
+        : undefined;
+      for (const alias of aliases ?? []) {
+        toRaw = normalizeOptionalStringifiedId(args[alias]);
+        if (toRaw) {
+          break;
+        }
+      }
+      toRaw ??= currentMessagingTarget ?? currentChannelId;
+    }
     if (!toRaw) {
       return undefined;
     }

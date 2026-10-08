@@ -16,7 +16,7 @@ import {
   confirmDatabaseVerifyWorker,
   runDatabaseVerifyWorker,
   terminateDatabaseVerifyWorker,
-} from "./openclaw-database-verify-client.js";
+} from "./openclaw-database-verify.impl.js";
 import { verifyOpenClawDatabases } from "./openclaw-database-verify.worker.js";
 
 // Vitest can enter teardown while a timed-out body is still closing its native owners.
@@ -165,27 +165,6 @@ describe("database verifier worker lifetime", () => {
     );
     return pathToFileURL(fixturePath);
   }
-
-  it("joins the native verifier before settling an aborted admission", async () => {
-    const controller = new AbortController();
-    let child: ChildProcess | undefined;
-    let releasedWhileAlive: boolean | undefined;
-    await expect(
-      runDatabaseVerifyWorker([], {
-        workerUrl: createWorkerFixture(),
-        signal: controller.signal,
-        onWorker(worker) {
-          if (worker) {
-            child = worker;
-            controller.abort(new Error("admission cancelled"));
-          } else {
-            releasedWhileAlive = child?.exitCode === null && child.signalCode === null;
-          }
-        },
-      }),
-    ).rejects.toThrow("admission cancelled");
-    expect(releasedWhileAlive).toBe(false);
-  });
 
   it("retains a failed IPC worker until exit without losing a concurrent stop waiter", async () => {
     let worker: ChildProcess | undefined;

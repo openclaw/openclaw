@@ -12,7 +12,10 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { CODEX_NATIVE_TOOL_REQUIREMENTS } from "./native-tool-policy.js";
+import {
+  CODEX_NATIVE_TOOL_REQUIREMENTS,
+  CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
+} from "./native-tool-policy.js";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
 import { sessionBindingIdentity } from "./src/app-server/session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
@@ -46,27 +49,6 @@ function requireCodexCompactionCapabilities<T extends AgentHarnessCompactParams>
 const SHARED_CODEX_APP_SERVER_CLIENT_DISPOSER = codexBuildSymbol(
   "openclaw.codexAppServerClientDisposer",
 );
-// Audited against @openai/codex 0.150.1 (rust-v0.150.1). These exact denies
-// either have no Codex-native equivalent or are enforced by the harness. Keep
-// the list positive and conservative: an omitted tool isolates the native surface.
-const CODEX_TOOL_POLICY_SAFE_DENY_NAMES = [
-  "web_fetch",
-  "x_search",
-  "memory_search",
-  "memory_get",
-  "dashboard",
-  "canvas",
-  "show_widget",
-  "message",
-  "heartbeat_respond",
-  "automations",
-  "gateway",
-  "skill_workshop",
-  "image_generate",
-  "music_generate",
-  "video_generate",
-  "tts",
-] as const;
 const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
   "bootstrap",
   "assemble-before-prompt",

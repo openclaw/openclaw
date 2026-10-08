@@ -54,6 +54,7 @@ import {
   resolveActiveReplyRunSessionId,
   waitForReplyRunEndBySessionId,
 } from "./reply-run-registry.js";
+import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import {
   isSlackDirectRoutedThreadTurn,
@@ -188,6 +189,11 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
         const { ensureSkillSnapshot } = await loadSessionUpdatesRuntime();
         return await ensureSkillSnapshot({
           agentId,
+          // Command continuations prepare the target before adopting its run slot below.
+          reader:
+            opts?.replyOperation && opts.replyOperation.key === sessionKey
+              ? getReplyOperationSessionReader(opts.replyOperation)
+              : undefined,
           sessionEntry,
           sessionEntryHandle,
           sessionStore,

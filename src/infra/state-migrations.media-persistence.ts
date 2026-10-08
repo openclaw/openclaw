@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { readRegularFileSync } from "@openclaw/fs-safe/advanced";
 import { replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
 import {
@@ -9,6 +10,7 @@ import {
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "../config/sessions/archive-compression.js";
 import { resolveSqliteTranscriptArchiveDirectory } from "../config/sessions/session-accessor.sqlite-scope.js";
+import { deleteSessionTranscriptFtsRowsInTransaction } from "../config/sessions/session-transcript-fts.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "../config/sessions/session-transcript-index.js";
 import {
   AGENT_MEDIA_SCHEMA_VERSION,
@@ -21,10 +23,7 @@ import {
 } from "../state/openclaw-agent-db-lease.js";
 import { agentDatabaseLifecycle } from "../state/openclaw-agent-db-lifecycle.js";
 import { withAgentDatabaseMaintenanceLease } from "../state/openclaw-agent-db-maintenance-lease.js";
-import {
-  assertOpenClawAgentDatabaseOwner,
-  repairOpenClawAgentDatabaseIntegrityForMaintenance,
-} from "../state/openclaw-agent-db-maintenance.js";
+import { assertOpenClawAgentDatabaseOwner } from "../state/openclaw-agent-db-maintenance.js";
 import {
   registerOpenClawAgentDatabase,
   unregisterOpenClawAgentDatabase,
@@ -54,10 +53,16 @@ import { VERSION } from "../version.js";
 import { formatErrorMessage } from "./errors.js";
 import {
   executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  iterateSqliteQuerySync,
   getNodeSqliteKysely,
   enableNodeSqliteKyselyStatementCache,
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import {
+  backupDoctorSqliteRepair,
+  repairDoctorSqliteIndexCorruption,
+} from "./sqlite-index-recovery.js";
 import { repairCanonicalSqliteIndexes } from "./sqlite-index-schema.js";
 import { runSqliteIntegrityOperationInWorker } from "./sqlite-integrity-operation.js";
 import { assertSqliteIntegrity, isTerminalSqliteIntegrityError } from "./sqlite-integrity.js";
@@ -95,6 +100,54 @@ const PREVIOUS_MEDIA_SCHEMA_VERSION = AGENT_MEDIA_SCHEMA_VERSION - 1;
 const ARCHIVE_TEMP_MARKER = ".media-retirement";
 
 type MediaMigrationDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
+
+/** Doctor alone may remove windows whose logical node no longer exists. */
+function repairDoctorSessionWindowOrphans(
+  database: DatabaseSync,
+  pathname: string,
+  assertCurrent: () => void,
+): string[] {
+  assertCurrent();
+  database.exec("PRAGMA foreign_keys = ON;");
+  return runSqliteImmediateTransactionSync(
+    database,
+    () => {
+      assertCurrent();
+      const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database);
+      const windows = db
+        .selectFrom("session_windows")
+        .leftJoin("session_nodes", "session_nodes.session_key", "session_windows.session_key")
+        .where("session_nodes.session_key", "is", null)
+        .select("session_windows.session_id");
+      if (!executeSqliteQueryTakeFirstSync(database, windows)) {
+        return [];
+      }
+      const backupPath = backupDoctorSqliteRepair(pathname, "session-window");
+      assertCurrent();
+      // FTS is virtual and has no FK cascade; its existing owner clears derived rows.
+      for (const window of iterateSqliteQuerySync(database, windows)) {
+        deleteSessionTranscriptFtsRowsInTransaction(database, window.session_id);
+      }
+      const deleted = executeSqliteQuerySync(
+        database,
+        db.deleteFrom("session_windows").where("session_id", "in", windows),
+      );
+      assertSqliteIntegrity(database, pathname);
+      return [
+        `Saved pre-repair SQLite backup: ${backupPath}`,
+        `Removed ${deleted.numAffectedRows} orphan session window(s) from ${pathname}; their dependent history remains in the backup.`,
+      ];
+    },
+    {
+      databaseLabel: pathname,
+      operationLabel: "session.orphan-window-repair",
+      withCommit: (commit) => {
+        assertCurrent();
+        commit();
+      },
+    },
+  );
+}
 
 async function migrateAgentDatabase(params: {
   agentId: string;
@@ -172,11 +225,21 @@ async function migrateAgentDatabase(params: {
       }
       // Admission already checks the whole file. Only a proven integrity failure
       // needs Doctor's preserving repair scan under an immediate transaction.
-      integrityChanges = repairOpenClawAgentDatabaseIntegrityForMaintenance(
-        database,
-        params,
-        params.maintenance,
-      );
+      const assertCurrent = () => {
+        assertAgentDatabaseMaintenanceAuthority(params.maintenance);
+        assertOpenClawAgentDatabaseOwner(database, params);
+      };
+      integrityChanges = repairDoctorSqliteIndexCorruption(database, params.pathname, {
+        label: `agent ${params.agentId}`,
+        assertCurrent,
+      });
+      if (integrityChanges.length === 0 && userVersion === OPENCLAW_AGENT_SCHEMA_VERSION) {
+        integrityChanges = repairDoctorSessionWindowOrphans(
+          database,
+          params.pathname,
+          assertCurrent,
+        );
+      }
       params.changes.push(...integrityChanges);
       await prepareSchema();
     }

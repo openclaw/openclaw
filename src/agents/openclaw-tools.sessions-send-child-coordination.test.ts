@@ -33,8 +33,8 @@ const { config, callGatewayMock, readAcpSessionMetaMock, readAcpSessionMetaForEn
     readAcpSessionMetaMock: vi.fn(),
     readAcpSessionMetaForEntryMock: vi.fn(),
   }));
+// mock-isolation: Keep ACP runtime access mocked while coordinating fixture session rows.
 vi.mock("../acp/runtime/session-meta.js", () => ({
-  readAcpSessionMeta: (params: unknown) => readAcpSessionMetaMock(params),
   readAcpSessionEntryAsync: async (params: {
     cfg?: OpenClawConfig;
     sessionKey: string;
@@ -812,7 +812,7 @@ describe("sessions_send child coordination", () => {
       // The separate lookup can observe another entry snapshot; classification must
       // join its metadata against the entry already selected by sessions_send.
       readAcpSessionMetaMock.mockImplementation(
-        (params: Parameters<typeof metadata.readAcpSessionMeta>[0]) =>
+        (params: Parameters<typeof metadata.readAcpSessionEntry>[0]) =>
           metadataRead.readAcpSessionMetaForEntry({
             ...params,
             databasePath,

@@ -133,6 +133,12 @@ export const maintenanceLane = createDatabaseWorkerLane(
   "Session maintenance",
   createSessionTranscriptHistoryPool(),
 );
+// Writers retain FIFO admission through target discovery and cleanup. These reads
+// cannot share a worker with history tasks that await a host-side database write.
+export const targetDiscoveryLane = createDatabaseWorkerLane(
+  "Session target discovery",
+  createSessionTranscriptHistoryPool(),
+);
 export const costReadLane = createDatabaseWorkerLane(
   "Session usage read",
   createUsageCostPool("read"),
@@ -142,7 +148,7 @@ export const costRefreshLane = createDatabaseWorkerLane(
   createUsageCostPool("refresh"),
 );
 
-const historyWorkerLanes = [historyLane, projectionLane, maintenanceLane];
+const historyWorkerLanes = [historyLane, projectionLane, maintenanceLane, targetDiscoveryLane];
 const databaseWorkerLanes = [...historyWorkerLanes, costReadLane, costRefreshLane];
 const memoryPressure = channel("openclaw.memory.critical");
 let pressureSubscribed = false;

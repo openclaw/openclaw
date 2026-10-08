@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type * as VerifierClient from "./openclaw-database-verify-client.js";
 import type * as VerifierImplementation from "./openclaw-database-verify.impl.js";
 import {
   requestOpenClawAgentDatabaseIntegrityCheck,
@@ -13,20 +12,15 @@ import {
 import type { OpenClawDatabaseVerifyResult } from "./openclaw-database-verify.worker.js";
 
 const mocks = vi.hoisted(() => ({
-  runDatabaseVerifyWorker: vi.fn<typeof VerifierClient.runDatabaseVerifyWorker>(),
-  terminateDatabaseVerifyWorker: vi.fn<typeof VerifierClient.terminateDatabaseVerifyWorker>(),
+  runDatabaseVerifyWorker: vi.fn<typeof VerifierImplementation.runDatabaseVerifyWorker>(),
+  terminateDatabaseVerifyWorker:
+    vi.fn<typeof VerifierImplementation.terminateDatabaseVerifyWorker>(),
   applyOpenClawDatabaseVerificationResults:
     vi.fn<typeof VerifierImplementation.applyOpenClawDatabaseVerificationResults>(),
 }));
 
-// mock-isolation: Control native child lifetime without starting database processes.
-vi.mock("./openclaw-database-verify-client.js", () => ({
-  runDatabaseVerifyWorker: mocks.runDatabaseVerifyWorker,
-  terminateDatabaseVerifyWorker: mocks.terminateDatabaseVerifyWorker,
-}));
-// mock-isolation: These lifecycle tests do not mutate real database quarantine state.
 vi.mock("./openclaw-database-verify.impl.js", () => ({
-  applyOpenClawDatabaseVerificationResults: mocks.applyOpenClawDatabaseVerificationResults,
+  ...mocks,
 }));
 
 describe("database verifier shutdown", () => {
@@ -348,7 +342,7 @@ describe("database verifier shutdown", () => {
       const application = createDeferredCore();
       const entered = createDeferredCore();
       const child = new ChildProcess();
-      let lifetime: VerifierClient.DatabaseVerifyWorkerLifetime | undefined;
+      let lifetime: VerifierImplementation.DatabaseVerifyWorkerLifetime | undefined;
       mocks.runDatabaseVerifyWorker.mockResolvedValue([]);
       mocks.applyOpenClawDatabaseVerificationResults.mockImplementation((options) => {
         lifetime = options.workerLifetime;

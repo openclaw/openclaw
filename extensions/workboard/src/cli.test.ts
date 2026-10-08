@@ -125,6 +125,28 @@ describe("registerWorkboardCli", () => {
     expect(includeOutput).toContain("(archived)");
   });
 
+  it("rejects invalid list status filters instead of reporting an empty board", async () => {
+    const store = createWorkboardSqliteTestStore();
+    const running = await store.create({ title: "Active work", status: "running" });
+    await store.create({ title: "Queued work", status: "todo" });
+    const program = createProgram(store);
+
+    const output = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "list", "--status", "running", "--json"], {
+        from: "user",
+      });
+    });
+    expect(JSON.parse(output)).toMatchObject({ cards: [{ id: running.id }] });
+
+    await captureStdout(async () => {
+      await expect(
+        program.parseAsync(["workboard", "list", "--status", "runnning", "--json"], {
+          from: "user",
+        }),
+      ).rejects.toThrow(/Allowed choices are.*running/);
+    });
+  });
+
   it("marks archived cards in show output", async () => {
     const store = createWorkboardSqliteTestStore();
     const archived = await store.create({ title: "Archived card", status: "ready" });

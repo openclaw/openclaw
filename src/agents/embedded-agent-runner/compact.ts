@@ -135,11 +135,9 @@ export async function compactNativeCliSession(params: {
         abortSignal: params.compactParams.abortSignal,
       });
     };
-    if (params.runControlOperation) {
-      await params.runControlOperation(runControlOperation);
-    } else {
-      await runControlOperation();
-    }
+    await (params.runControlOperation
+      ? params.runControlOperation(runControlOperation)
+      : runControlOperation());
   } catch (err) {
     const signal = params.compactParams.abortSignal;
     if (signal?.aborted && (isAbortError(err) || err === signal.reason)) {
@@ -479,10 +477,7 @@ export async function compactEmbeddedAgentSessionDirect(
             });
           },
           classifyResult: ({ result, provider, model }) => {
-            if (result.ok) {
-              return null;
-            }
-            const reason = result.reason?.trim();
+            const reason = result.ok ? undefined : result.reason?.trim();
             if (!reason) {
               return null;
             }

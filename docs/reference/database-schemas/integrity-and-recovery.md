@@ -791,9 +791,8 @@ contains the original orphan windows and any history they owned. No schema chang
 is required, and this repair does not identify the writer that created the orphans.
 
 Fresh agent database admission re-verifies a cached integrity refusal in the
-native verifier process. A clean result clears only that refusal and its verified
-file generation, so a repaired database does not remain blocked by the old
-process-local error. Healthy admissions do not run this recovery check. This does
+native verifier process. A clean result clears the old process-local refusal so a repaired database
+does not remain blocked. Healthy admissions do not run this recovery check. This does
 not clear startup ownership refusals or newer-schema errors, and Doctor retains
 its exclusive maintenance requirements.
 

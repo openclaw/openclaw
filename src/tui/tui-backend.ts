@@ -128,7 +128,14 @@ export type TuiAgentsList = AgentsListResult;
 
 export type TuiModelChoice = Pick<
   ModelChoice,
-  "id" | "name" | "provider" | "contextWindow" | "reasoning" | "available" | "unavailableReason"
+  | "id"
+  | "name"
+  | "provider"
+  | "contextWindow"
+  | "reasoning"
+  | "available"
+  | "unavailableReason"
+  | "recommended"
 >;
 
 export type TuiSessionMutationResult = {

@@ -9,7 +9,6 @@ import { runSqliteIntegrityOperationInWorker } from "../infra/sqlite-integrity-o
 import { configureSqliteMaintenanceCache } from "../infra/sqlite-maintenance-cache.js";
 import { SqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
-import { repairDoctorSessionWindowOrphans } from "../infra/state-migrations.session-window-orphans.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
@@ -81,32 +80,6 @@ export function assertOpenClawAgentDatabaseForMaintenance(
   );
 }
 
-/** Keep index and orphan repair behind the same Doctor maintenance authority. */
-export function repairOpenClawAgentDatabaseIntegrityForMaintenance(
-  database: DatabaseSync,
-  options: { agentId: string; pathname: string },
-  maintenance: OpenClawStateLeaseContext,
-): string[] {
-  const assertCurrent = () => {
-    maintenance.signal.throwIfAborted();
-    assertAgentDatabaseMaintenanceAuthority(maintenance);
-    assertOpenClawAgentDatabaseOwner(database, options);
-    assertSupportedAgentSchemaVersion(database, options.pathname);
-  };
-  assertCurrent();
-  const changes = repairDoctorSqliteIndexCorruption(database, options.pathname, {
-    label: `agent ${options.agentId}`,
-    assertCurrent,
-  });
-  if (changes.length > 0 || readSqliteUserVersion(database) !== OPENCLAW_AGENT_SCHEMA_VERSION) {
-    return changes;
-  }
-  return repairDoctorSessionWindowOrphans(database, options.pathname, () => {
-    assertCurrent();
-    assertOpenClawAgentDatabaseForMaintenance(database, options);
-  });
-}
-
 /** Upgrade or repair a supported owned schema before strict offline maintenance. */
 export async function migrateOpenClawAgentDatabaseForMaintenance(
   options: { agentId: string; pathname: string },
@@ -144,12 +117,15 @@ export async function migrateOpenClawAgentDatabaseForMaintenance(
     if (!hasCurrentVersion && !hasSupportedOlderVersion) {
       return;
     }
-    const repairIntegrity = () => {
-      const changes = repairOpenClawAgentDatabaseIntegrityForMaintenance(
-        database,
-        { agentId, pathname },
-        maintenance,
-      );
+    const repairIndexes = () => {
+      const changes = repairDoctorSqliteIndexCorruption(database, pathname, {
+        label: `agent ${agentId}`,
+        assertCurrent: () => {
+          assertOwned();
+          assertOpenClawAgentDatabaseOwner(database, { agentId, pathname });
+          assertSupportedAgentSchemaVersion(database, pathname);
+        },
+      });
       for (const change of changes) {
         agentDbLog.warn(change);
       }
@@ -158,7 +134,7 @@ export async function migrateOpenClawAgentDatabaseForMaintenance(
     if (userVersion === AGENT_MEDIA_SCHEMA_VERSION) {
       // v17 checks integrity inside its additive-schema transaction; repair only
       // physical indexes here so rejected migrations still roll schema changes back.
-      repairIntegrity();
+      repairIndexes();
     }
     const operation = ensureOpenClawAgentDatabaseSchemaSteps(database, {
       agentId,
@@ -173,7 +149,7 @@ export async function migrateOpenClawAgentDatabaseForMaintenance(
         assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(database), agentId, pathname);
         assertSupportedAgentSchemaVersion(database, pathname);
       },
-      repairIntegrityError: repairIntegrity,
+      repairIntegrityError: repairIndexes,
     });
     assertOwned();
     assertOpenClawAgentDatabaseForMaintenance(database, {
