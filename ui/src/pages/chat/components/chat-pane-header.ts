@@ -60,6 +60,7 @@ type ChatPaneHeaderProps = {
   navDrawerOpen?: boolean;
   title: string;
   session: GatewaySessionRow | undefined;
+  incognito?: boolean;
   showOwnerChip?: boolean;
   ownerViewing?: boolean;
   personActivity?: PersonActivityRouting;
@@ -347,7 +348,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             : nothing
         }
         ${
-          props.session?.incognito
+          (props.incognito ?? props.session?.incognito)
             ? html`<span
                 class="chat-pane__incognito"
                 role="img"

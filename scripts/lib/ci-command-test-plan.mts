@@ -145,11 +145,8 @@ export function estimateCommandWorkerSeconds(
 // retain their existing sessions/cron timing owner.
 const doctorSessionSqliteCorpusFiles = new Set([
   "doctor-session-sqlite.test.ts",
-  "doctor-session-sqlite.archive-safety.test.ts",
   "doctor-session-sqlite.compaction.test.ts",
-  "doctor-session-sqlite.compaction-recovery.test.ts",
   "doctor-session-sqlite.failure-reports.test.ts",
-  "doctor-session-sqlite.inspection.test.ts",
   "doctor-session-sqlite.manifests.test.ts",
   "doctor-session-sqlite.publication-recovery.test.ts",
   "doctor-session-sqlite.recovery.test.ts",

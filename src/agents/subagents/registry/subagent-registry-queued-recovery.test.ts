@@ -163,6 +163,7 @@ function createRestorer(
     ensureListener: () => {},
     startSweeper: () => {},
     scheduleSweep: () => {},
+    recoverInterruptedRuns: async () => {},
     resumeRun: () => {},
     listSwarmRunsForGroup: () => [],
     startQueuedSubagentRun: async () => true,

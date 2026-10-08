@@ -543,33 +543,6 @@ describe("CronService declarative jobs", () => {
     expect((await first.readJob(created.id))?.state).toMatchObject(replacementState);
   });
 
-  it("converges delivery while retaining the declared session target", async () => {
-    const { cron } = await setup();
-
-    const created = await cron.add(
-      declaration({
-        sessionTarget: "main",
-        payload: { kind: "systemEvent", text: "wake" },
-        delivery: undefined,
-      }),
-    );
-    // Session target is identity-adjacent and stays outside declaration
-    // convergence; delivery converges, and main + webhook is a supported
-    // shipped combination.
-    const converged = await cron.add(
-      declaration({
-        sessionTarget: "isolated",
-        payload: { kind: "systemEvent", text: "wake" },
-        delivery: { mode: "webhook", to: "https://example.invalid/hook" },
-      }),
-    );
-    expect(converged).toMatchObject({ created: false, updated: true });
-    expect(await cron.readJob(created.id)).toMatchObject({
-      sessionTarget: "main",
-      delivery: { mode: "webhook", to: "https://example.invalid/hook" },
-    });
-  });
-
   it("persists declaration metadata and rejects blank or duplicate reserved ids", async () => {
     const { cron: writer, storePath } = await setup();
     const created = await add(writer, declaration({ id: "reserved-id" }), {

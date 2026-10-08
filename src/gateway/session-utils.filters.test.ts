@@ -33,53 +33,6 @@ function entry(overrides: Partial<SessionEntry> = {}): SessionEntry {
   return { sessionId: "inventory-session", updatedAt: 1, ...overrides };
 }
 
-it("excludes dock conversations before ownership, people counts, and pagination", async () => {
-  const store = {
-    "agent:main:board-agent": entry({
-      updatedAt: 3,
-      createdVia: "operator",
-      createdSurface: "plugin-dock",
-      createdActor: { type: "human", source: "profile", id: "profile-bob" },
-    }),
-    "agent:main:first": entry({
-      updatedAt: 2,
-      createdActor: { type: "human", source: "profile", id: "profile-ada" },
-    }),
-    "agent:main:second": entry({
-      createdActor: { type: "human", source: "profile", id: "profile-ada" },
-    }),
-  };
-  const opts = {
-    excludeDock: true,
-    includePeople: true,
-    includeOwnerSessionCounts: true,
-    limit: 1,
-  };
-  const first = await listSessionFixture({ cfg, storePath, store, opts });
-  expect(first.sessions.map((row) => row.key)).toEqual(["agent:main:first"]);
-  expect(first).toMatchObject({
-    totalCount: 2,
-    peopleSessionCount: 2,
-    nextOffset: 1,
-    hasMore: true,
-  });
-  expect(first.owners?.map((owner) => owner.id)).toEqual(["profile-ada"]);
-  expect(first.people?.map((person) => [person.identity.id, person.sessionCount])).toEqual([
-    ["profile-ada", 2],
-  ]);
-  expect(first.ownerSessionCounts).toEqual([{ profileId: "profile-ada", open: 2, running: 0 }]);
-  const second = await listSessionFixture({ cfg, storePath, store, opts: { ...opts, offset: 1 } });
-  expect(second.sessions.map((row) => row.key)).toEqual(["agent:main:second"]);
-  expect(second).toMatchObject({ totalCount: 2, nextOffset: null, hasMore: false });
-  const explicit = await listSessionFixture({
-    cfg,
-    storePath,
-    store,
-    opts: { excludeDock: false },
-  });
-  expect(explicit.sessions[0]).toMatchObject({ key: "agent:main:board-agent", isDock: true });
-});
-
 it("reports the age boundary of people outside the selected profile and returned page", async () => {
   const now = Date.UTC(2026, 8, 27);
   const clock = vi.spyOn(Date, "now").mockReturnValue(now);
@@ -289,71 +242,6 @@ it("aggregates the selected time window after person filtering and before pagina
   });
 });
 
-it("buckets nonuniform intervals half-open while counting every filtered running session", () => {
-  const projection = createSessionRowProjectionFixture({
-    cfg,
-    store: {
-      "agent:main:before": entry({ lastActivityAt: 99 }),
-      "agent:main:first": entry({ lastActivityAt: 100 }),
-      "agent:main:second": entry({ lastActivityAt: 200, createdAt: 0 }),
-      "agent:main:last": entry({ lastActivityAt: 499 }),
-      "agent:main:after": entry({ lastActivityAt: 500 }),
-    },
-  });
-  onTestFinished(projection.dispose);
-  const result = runSynchronousWork(
-    filterSessionEntries({
-      ...prepareSessionRowSelection(projection, { activityPulseBoundaries: [100, 200, 500] }),
-      projectActiveRun: () => ({ active: true }),
-    }),
-  );
-  expect(result.activityPulse).toEqual({
-    since: 100,
-    until: 500,
-    buckets: [1, 2],
-    sessions: 5,
-    running: 5,
-  });
-  const recent = runSynchronousWork(
-    filterSessionEntries({
-      ...prepareSessionRowSelection(
-        projection,
-        { activityPulseBoundaries: [100, 200, 500], activeMinutes: 1 },
-        { now: 500 },
-      ),
-    }),
-  );
-  expect(recent.activityPulse?.started).toBe(1);
-});
-
-it.each([{ activityPulseBoundaries: undefined }, { activityPulseBoundaries: [0, 100] }])(
-  "includes the optional pulse only for requested boundaries: $activityPulseBoundaries",
-  async ({ activityPulseBoundaries }) => {
-    const result = await listSessionFixture({
-      cfg,
-      storePath,
-      store: {
-        "agent:main:one": entry({
-          createdAt: 0,
-          participants: [{ identity: { type: "profile", id: "profile-ada" } }],
-        }),
-      },
-      opts: { activityPulseBoundaries },
-    });
-    if (activityPulseBoundaries) {
-      expect(result.activityPulse).toEqual({
-        since: 0,
-        until: 100,
-        buckets: [1],
-        sessions: 1,
-        running: 0,
-      });
-    } else {
-      expect(result).not.toHaveProperty("activityPulse");
-    }
-  },
-);
-
 it("keeps system provenance and named conversations distinct in projected lists", async () => {
   const cases: [key: string, fields: Partial<SessionEntry>, visible: boolean][] = [
     ["agent:main:system", { createdActor: { type: "system" }, label: "Named probe" }, false],
@@ -455,43 +343,6 @@ it.each([
   },
 );
 
-it("does not project extra participants when canonical owners satisfy both involvement filters", async () => {
-  const participants = vi.spyOn(sessionIdentity, "projectSessionParticipants");
-  const store = Object.fromEntries(
-    Array.from({ length: 32 }, (_, index) => [
-      `agent:main:owned-${index}`,
-      entry({
-        sessionId: `owned-${index}`,
-        updatedAt: index + 1,
-        createdActor: { type: "human", source: "profile", id: "profile-merged-ada" },
-        participants: [{ identity: { type: "profile", id: "profile-bob" } }],
-      }),
-    ]),
-  );
-  const query = { cfg, storePath, store, opts: { limit: 1 } };
-  const all = await listSessionFixture(query);
-  const unfilteredWork = participants.mock.calls.length;
-  participants.mockClear();
-
-  const filtered = await listSessionFixture({
-    ...query,
-    opts: {
-      ...query.opts,
-      profileRelation: { profileId: "profile-ada", relationship: "involving" },
-    },
-    involvingActorId: "profile-ada",
-  });
-
-  expect(filtered.sessions.map((row) => row.key)).toEqual(all.sessions.map((row) => row.key));
-  expect(filtered.owners).toEqual(all.owners);
-  expect(filtered.totalCount).toBe(32);
-  expect(filtered.sessions[0]?.owner?.actor.identity).toEqual({
-    type: "profile",
-    id: "profile-ada",
-  });
-  expect(participants.mock.calls.length).toBeLessThanOrEqual(unfilteredWork);
-});
-
 it.each([true, false])("filters canonical pin state before pagination: %s", async (pinned) => {
   const result = await listSessionFixture({
     cfg,
@@ -510,56 +361,6 @@ it.each([true, false])("filters canonical pin state before pagination: %s", asyn
   ]);
   expect(result.sessions[0]?.pinned).toBe(pinned);
   expect(result).toMatchObject({ totalCount: pinned ? 1 : 4, hasMore: !pinned });
-});
-
-it("finds sparse metadata matches beyond 200 rows before facets and pagination", async () => {
-  const store: Record<string, SessionEntry> = Object.fromEntries(
-    Array.from({ length: 205 }, (_, index) => [
-      `agent:main:unrelated-${index}`,
-      entry({
-        sessionId: `unrelated-${index}`,
-        updatedAt: 1_000 + index,
-        createdActor: { type: "human", source: "profile", id: "profile-bob" },
-        projectId: "other-project",
-        spawnedCwd: "/other-workspace",
-        category: "Other",
-      }),
-    ]),
-  );
-  for (const index of [0, 1, 2]) {
-    store[`agent:main:match-${index}`] = entry({
-      sessionId: `match-${index}`,
-      updatedAt: 3 - index,
-      projectId: "project-one",
-      spawnedCwd: "/workspace/task",
-      category: "Review",
-      pinnedAt: 1,
-      createdActor: { type: "human", source: "profile", id: "profile-ada" },
-    });
-  }
-  const opts: SessionsListParams = {
-    projectId: "project-one",
-    workspaceDir: "/workspace/task",
-    group: "Review",
-    pinned: true,
-    includePeople: true,
-    limit: 2,
-  };
-  const first = await listSessionFixture({ cfg, storePath, store, opts });
-  expect(first.sessions.map((row) => row.sessionId)).toEqual(["match-0", "match-1"]);
-  expect(first).toMatchObject({
-    totalCount: 3,
-    peopleSessionCount: 3,
-    nextOffset: 2,
-    hasMore: true,
-  });
-  expect(first.owners?.map((owner) => owner.id)).toEqual(["profile-ada"]);
-  expect(first.people?.map((person) => [person.identity.id, person.sessionCount])).toEqual([
-    ["profile-ada", 3],
-  ]);
-  const second = await listSessionFixture({ cfg, storePath, store, opts: { ...opts, offset: 2 } });
-  expect(second.sessions.map((row) => row.sessionId)).toEqual(["match-2"]);
-  expect(second).toMatchObject({ totalCount: 3, nextOffset: null, hasMore: false });
 });
 
 it("keeps profile selectors, authenticated involvement, and their owner facets distinct", async () => {

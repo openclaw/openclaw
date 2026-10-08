@@ -1,10 +1,10 @@
 import { isAgentRunRestartAbortReason } from "../../agents/run-termination.js";
 import type { SandboxContext } from "../../agents/sandbox/types.js";
 import type {
-  LocalTurnPlacementClaim,
   PreparedSessionPlacementSandbox,
   SessionPlacementAdmissionProvider,
 } from "../../agents/session-placement-admission.js";
+import type { LocalTurnPlacementClaim } from "../../agents/session-placement-admission.types.js";
 import {
   composeSessionSourceAssertion,
   createDynamicSessionSourceAssertion,

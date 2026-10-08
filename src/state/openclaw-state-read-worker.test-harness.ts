@@ -142,7 +142,7 @@ export function queueTask(dispatchReady: Promise<void> = Promise.resolve()) {
 
 export const emptyReply: OpenClawStateReadReply = {
   ok: true,
-  type: "fleet.list",
+  type: "backup.runs",
   sourceAdmitted: true,
-  cells: [],
+  runs: [],
 };

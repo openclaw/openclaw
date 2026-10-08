@@ -611,7 +611,7 @@ extensions/msteams/src/qa/bot-framework-server.ts	2
 extensions/msteams/src/qa/private-runtime.ts	1
 extensions/msteams/src/reply-stream-controller.ts	1
 extensions/msteams/src/sdk-proactive.ts	3
-extensions/msteams/src/sdk.ts	7
+extensions/msteams/src/sdk.ts	3
 extensions/msteams/src/setup-surface.ts	7
 extensions/msteams/src/sqlite-state.ts	1
 extensions/msteams/src/user-agent.ts	1
@@ -1910,7 +1910,7 @@ src/config/sessions/session-accessor.sqlite-reset-window.ts	2
 src/config/sessions/session-accessor.sqlite-transcript-message-append.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-mirror.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-store.ts	2
-src/config/sessions/session-accessor.sqlite-transcript-write.ts	3
+src/config/sessions/session-accessor.sqlite-transcript-write.ts	2
 src/config/sessions/session-accessor.sqlite-visible-cursor.ts	1
 src/config/sessions/session-accessor.transcript-range.ts	3
 src/config/sessions/session-accessor.transcript-turn.ts	1
@@ -1979,8 +1979,6 @@ src/daemon/systemd-lifecycle.ts	2
 src/daemon/systemd-runtime.ts	1
 src/entry.compile-cache.ts	2
 src/entry.respawn.ts	1
-src/fleet/backup.runtime.ts	3
-src/fleet/service-support.runtime.ts	1
 src/flows/channel-setup.status.ts	2
 src/flows/channel-setup.ts	3
 src/flows/doctor-health-contributions-final.ts	1

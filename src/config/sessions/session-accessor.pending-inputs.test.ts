@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
@@ -43,6 +44,21 @@ import {
 import { SessionPendingInputCustodyError } from "./session-pending-input-custody-error.js";
 import { waitForSessionTranscriptProjection } from "./session-transcript-reconcile.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
+
+const custodyFault = useSqliteWorkerFault([
+  {
+    name: "reject_pending_consume",
+    match: /^delete from session_pending_inputs\b/u,
+    sql: `CREATE TEMP TRIGGER reject_pending_consume BEFORE DELETE ON main.session_pending_inputs
+      BEGIN SELECT RAISE(ABORT, 'consume failed'); END`,
+  },
+  {
+    name: "reject_collect_consume",
+    match: /^update session_pending_inputs\b/u,
+    sql: `CREATE TEMP TRIGGER reject_collect_consume BEFORE UPDATE OF consumed_event_id ON main.session_pending_inputs
+      WHEN OLD.run_id = 'atomic-b' BEGIN SELECT RAISE(ABORT, 'collect consume failed'); END`,
+  },
+]);
 
 describe("accepted input custody", () => {
   const fixture = useTempSessionsFixture("openclaw-pending-inputs-");
@@ -270,17 +286,11 @@ describe("accepted input custody", () => {
   it("rolls transcript promotion and custody consumption back together", async () => {
     const receipt = await stage("atomic");
     const before = await loadTranscriptEvents(scope());
-    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
-      database().db.exec(
-        "CREATE TRIGGER reject_pending_consume BEFORE DELETE ON session_pending_inputs BEGIN SELECT RAISE(ABORT, 'consume failed'); END",
-      );
-    });
+    custodyFault.enable();
     await expect(promote(receipt)).rejects.toThrow("consume failed");
     expect(await loadTranscriptEvents(scope())).toEqual(before);
     expect((await readSessionPendingInput(scope(), receipt.inputId))?.state).toBe("queued");
-    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
-      database().db.exec("DROP TRIGGER reject_pending_consume");
-    });
+    custodyFault.disable();
     expect(await promote(receipt)).toMatchObject({ appended: true, messageId: receipt.inputId });
     expect(await readSessionPendingInput(scope(), receipt.inputId)).toBeUndefined();
   });
@@ -482,11 +492,7 @@ describe("accepted input custody", () => {
     const aggregate = bindSessionPendingInputSources([first, second], message("atomic-c"))!;
     receipts.push(aggregate);
     const before = await loadTranscriptEvents(scope());
-    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
-      database().db.exec(
-        "CREATE TRIGGER reject_collect_consume BEFORE UPDATE OF consumed_event_id ON session_pending_inputs WHEN OLD.run_id = 'atomic-b' BEGIN SELECT RAISE(ABORT, 'collect consume failed'); END",
-      );
-    });
+    custodyFault.enable(1);
     await expect(promote(aggregate)).rejects.toThrow("collect consume failed");
     expect(await loadTranscriptEvents(scope())).toEqual(before);
     expect((await listSessionPendingInputs(scope())).total).toBe(2);
@@ -494,9 +500,7 @@ describe("accepted input custody", () => {
       { runId: "atomic-a", state: "pending" },
       { runId: "atomic-b", state: "pending" },
     ]);
-    await runOpenClawAgentWriteAdmission(toDatabaseOptions(resolveSqliteScope(scope())), () => {
-      database().db.exec("DROP TRIGGER reject_collect_consume");
-    });
+    custodyFault.disable();
     expect(await promote(aggregate)).toMatchObject({
       appended: true,
       messageId: aggregate.inputId,

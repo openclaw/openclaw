@@ -1,6 +1,7 @@
+import type { SessionMoveTarget } from "../../packages/gateway-protocol/src/schema/session-placement.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
-class RequiredWorkerProfileError extends Error {
+export class RequiredWorkerProfileError extends Error {
   readonly code = "invalid_profile";
 }
 
@@ -38,6 +39,44 @@ export function assertRequiredWorkerSelection(
   ) {
     throw new RequiredWorkerProfileError(
       `Gateway policy requires worker profile "${required}" with the OpenClaw runtime; session execution overrides are not allowed.`,
+    );
+  }
+}
+
+export function assertRequiredWorkerDispatch(
+  config: Pick<OpenClawConfig, "cloudWorkers">,
+  request: { profileId: string; executionMode: string; machineClass?: string; os?: string },
+): void {
+  const required = config.cloudWorkers?.requiredProfile;
+  if (!required) {
+    return;
+  }
+  // A recorded profile may carry its original device and settings through recovery.
+  // New dispatches cannot use that internal snapshot to choose another profile.
+  if (
+    request.profileId !== required ||
+    request.executionMode !== "worker-turn" ||
+    request.machineClass !== undefined ||
+    request.os !== undefined
+  ) {
+    throw new RequiredWorkerProfileError(`Gateway policy requires worker profile "${required}".`);
+  }
+}
+
+export function assertRequiredWorkerMove(
+  config: Pick<OpenClawConfig, "cloudWorkers">,
+  target: SessionMoveTarget,
+): void {
+  const required = config.cloudWorkers?.requiredProfile;
+  if (
+    required &&
+    (target.kind !== "profile" ||
+      target.profileId !== required ||
+      target.machineClass !== undefined ||
+      target.os !== undefined)
+  ) {
+    throw new RequiredWorkerProfileError(
+      "Session placement changes are disabled by the required worker profile policy.",
     );
   }
 }

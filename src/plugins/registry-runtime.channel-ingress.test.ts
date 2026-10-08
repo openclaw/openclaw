@@ -1,3 +1,6 @@
+import { AsyncResource } from "node:async_hooks";
+import { setImmediate } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildChannelInboundEventContext } from "../channels/inbound-event/context.js";
 import {
@@ -17,6 +20,7 @@ import {
 import { recordAcceptedSessionParticipantInput } from "../sessions/session-participant-input-recording.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   markPluginRegistryActive,
@@ -34,6 +38,7 @@ import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
   hasGatewayContextOwner,
+  withPluginRuntimeRegistryScope,
 } from "./runtime/gateway-request-scope.js";
 import { createPluginRuntime } from "./runtime/index.js";
 import type { PluginRuntime } from "./runtime/types.js";
@@ -56,6 +61,127 @@ afterEach(() => {
   }
   audits.clear();
 });
+
+it.each([
+  "loadAdapter",
+  "setIdleTimeoutBySessionKey",
+  "setMaxAgeBySessionKey",
+  "setIdleTimeoutBySessionKeyAsync",
+  "setMaxAgeBySessionKeyAsync",
+] as const)(
+  "keeps adopted channel %s usable after its captured registry is collected",
+  async (method) => {
+    class RetainedService {
+      id = "retired-channel-scope";
+      start() {}
+    }
+    const registryBuilder = createPluginRegistry({
+      logger: { info() {}, warn() {}, error() {}, debug() {} },
+      runtime: createPluginRuntime(),
+      activateGlobalSideEffects: false,
+    });
+    const record = createPluginRecord({ id: "adopted-channel", origin: "bundled" });
+    const api = registryBuilder.createApi(record, { config: {} });
+    const instance = getPluginInstance(record)!;
+    const binding = { boundAt: 1, lastActivityAt: 2 };
+    const idle = vi.fn(() => [binding]);
+    const maxAge = vi.fn(() => [binding]);
+    const idleAsync = vi.fn(async () => [binding]);
+    const maxAgeAsync = vi.fn(async () => [binding]);
+    api.registerChannel({
+      plugin: {
+        id: record.id,
+        meta: {
+          id: record.id,
+          label: record.id,
+          selectionLabel: record.id,
+          docsPath: "/channels/adopted-channel",
+          blurb: "test channel",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: { listAccountIds: () => [], resolveAccount: () => ({ accountId: "default" }) },
+        outbound: { deliveryMode: "direct" },
+        conversationBindings: {
+          setIdleTimeoutBySessionKey: idle,
+          setMaxAgeBySessionKey: maxAge,
+          setIdleTimeoutBySessionKeyAsync: idleAsync,
+          setMaxAgeBySessionKeyAsync: maxAgeAsync,
+        },
+      },
+    });
+    registryBuilder.registry.plugins.push(record);
+    markPluginRegistryActive(registryBuilder.registry);
+    const capturedChannel = api.runtime.channel;
+    const current = createEmptyPluginRegistry();
+    current.plugins.push(record);
+    current.channels.push(...registryBuilder.registry.channels);
+    const resource = (() => {
+      const intermediate = createEmptyPluginRegistry();
+      intermediate.plugins.push(record);
+      intermediate.channels.push(...registryBuilder.registry.channels);
+      intermediate.services.push({
+        id: "retired-channel-scope",
+        pluginId: record.id,
+        source: "retention-test",
+        origin: "config",
+        service: new RetainedService(),
+      });
+      markPluginRegistryActive(intermediate);
+      markPluginRegistryRetired(registryBuilder.registry);
+      const captured = instance.run(() => new AsyncResource("adopted-channel-runtime"));
+      markPluginRegistryActive(current);
+      markPluginRegistryRetired(intermediate);
+      return captured;
+    })();
+    const input = { channelId: record.id, targetSessionKey: "agent:main:channel:dm:fixture" };
+    const invoke = (channel: PluginRuntime["channel"]) => {
+      if (method === "loadAdapter") {
+        return channel.outbound.loadAdapter(record.id);
+      }
+      if (method === "setIdleTimeoutBySessionKey" || method === "setIdleTimeoutBySessionKeyAsync") {
+        return channel.threadBindings[method]({ ...input, idleTimeoutMs: 10 });
+      }
+      return channel.threadBindings[method]({ ...input, maxAgeMs: 20 });
+    };
+    try {
+      await setImmediate();
+      expect(queryObjects(RetainedService)).toBe(0);
+      for (const readChannel of [() => capturedChannel, () => api.runtime.channel]) {
+        const result = await resource.runInAsyncScope(() => invoke(readChannel()));
+        if (method === "loadAdapter") {
+          expect(result).toBe(current.channels[0]?.plugin.outbound);
+        } else {
+          expect(result).toEqual([binding]);
+        }
+      }
+      if (method === "loadAdapter") {
+        const empty = createEmptyPluginRegistry();
+        await withPluginRuntimeRegistryScope(empty, async () => {
+          expect(await capturedChannel.outbound.loadAdapter(record.id)).toBeUndefined();
+        });
+        expect(empty.channels).toHaveLength(0);
+      }
+      const expected = {
+        setIdleTimeoutBySessionKey: idle,
+        setMaxAgeBySessionKey: maxAge,
+        setIdleTimeoutBySessionKeyAsync: idleAsync,
+        setMaxAgeBySessionKeyAsync: maxAgeAsync,
+      };
+      if (method !== "loadAdapter") {
+        expect(expected[method]).toHaveBeenCalledTimes(2);
+        expect(expected[method]).toHaveBeenLastCalledWith({
+          targetSessionKey: input.targetSessionKey,
+          accountId: undefined,
+          ...(method.includes("Idle") ? { idleTimeoutMs: 10 } : { maxAgeMs: 20 }),
+        });
+      }
+    } finally {
+      resource.emitDestroy();
+      markPluginRegistryRetired(current);
+      await instance.dispose();
+    }
+  },
+);
 
 type LegacyIngressMethod = "direct" | "stable" | "factory";
 
