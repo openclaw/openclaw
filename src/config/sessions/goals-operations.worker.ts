@@ -59,7 +59,7 @@ export function bindSqliteWorkerBackend(
   const { admit, writeTransaction } = createSessionWorkerOperationContext(
     database,
     options,
-    bound.admit,
+    bound,
     "Goal",
   );
   return {

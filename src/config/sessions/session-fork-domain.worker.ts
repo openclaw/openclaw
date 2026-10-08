@@ -31,12 +31,7 @@ export function bindSqliteWorkerBackend(
   if (!database || database.db !== bound.database || database.path !== bound.databasePath) {
     throw new Error("Session fork lost its canonical database owner");
   }
-  const context = createSessionWorkerOperationContext(
-    database,
-    options,
-    bound.admit,
-    "Session fork",
-  );
+  const context = createSessionWorkerOperationContext(database, options, bound, "Session fork");
   return {
     execute(command) {
       switch (command.type) {

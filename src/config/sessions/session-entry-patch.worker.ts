@@ -34,17 +34,19 @@ import { readRefusedSessionSource } from "./session-source-predicate.worker.js";
 export function createSessionWorkerOperationContext(
   database: OpenClawAgentDatabase,
   options: AgentWorkerOperationContext["options"],
-  admit: (stage: "transaction" | "commit", restriction?: AgentDatabaseAdmissionRestriction) => void,
-  owner: string,
+  bound: {
+    admit(stage: "transaction" | "commit", restriction?: AgentDatabaseAdmissionRestriction): void;
+  },
+  domain: string,
 ): AgentWorkerOperationContext {
   const native = database.db;
   const context: AgentWorkerOperationContext = {
     options,
     open: () => database,
     admit(stage, publication) {
-      admit(stage, (request, dispatch) => {
+      bound.admit(stage, (request, dispatch) => {
         if (!isRecord(request.facts)) {
-          throw new Error(`${owner} admission omitted its database identity`);
+          throw new Error(`${domain} admission omitted its database identity`);
         }
         dispatch({ ...request, facts: { ...request.facts, publication } });
       });

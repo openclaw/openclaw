@@ -176,7 +176,7 @@ export function bindSqliteWorkerBackend(
   const context = createSessionWorkerOperationContext(
     database,
     options,
-    bound.admit,
+    bound,
     "Transcript rewrite",
   );
   return {
