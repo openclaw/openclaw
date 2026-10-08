@@ -181,6 +181,9 @@ it.each(["module-load", "entry-open"] as const)(
       expect(after.ok, after.error?.message).toBe(true);
       expect(after.payload?.registryId).not.toBe(before.payload?.registryId);
 
+      // Successful reloads can leave config reconciliation queued after the RPC.
+      await waitForReloadSettlement();
+
       // Break only B's code; recovery must register captured A code under a fresh owner.
       await fs.writeFile(
         path.join(healthyPlugin, "index.js"),

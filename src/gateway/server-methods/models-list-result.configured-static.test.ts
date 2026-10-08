@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { createPreparedAccountCatalogAccess } from "../../agents/prepared-model-runtime.catalog-auth.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadOpenClawPlugins } from "../../plugins/loader.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
@@ -13,6 +14,10 @@ import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  readPreparedCatalog,
+  registerGatewayModelCatalogPrivateAccess,
+} from "../server-model-catalog-auth.js";
 import {
   catalogEntry,
   createModelsListTestContext,
@@ -286,18 +291,36 @@ describe("models.list configured static entries", () => {
       async (state) => {
         const alice = ensureProfileForEmail("alice@example.test");
         const bob = ensureProfileForEmail("bob@example.test");
+        const discover = vi.fn(async () => {
+          throw new Error("Ordinary model reads must not discover account models");
+        });
+        const pluginRegistry = createEmptyPluginRegistry();
+        pluginRegistry.providers.push({
+          pluginId: "openai",
+          source: "test",
+          provider: { id: "openai", label: "OpenAI", auth: [], catalog: { run: discover } },
+        });
         const context = createModelsListTestContext({
           cfg: { agents: { defaults: { model: { primary: "test/default" } } } },
           agentDir: state.agentDir(),
           workspaceDir: state.workspaceDir,
           catalog: [],
           staticEntries: [catalogEntry("gpt-5.6-luna", "openai-chatgpt-responses")],
+          pluginRegistry,
+        });
+        const published = await readPreparedCatalog(context, "main");
+        const owner = {
+          ...published!,
+          accountCatalog: createPreparedAccountCatalogAccess(() => true),
+        };
+        registerGatewayModelCatalogPrivateAccess(context.loadGatewayModelCatalogSnapshot, {
+          readPrepared: async () => owner,
+          loadDeferred: async () => owner,
         });
         const read = async (profileId?: string) => {
           const params = {
             agentId: "main",
             view: "configured",
-            preparedOnly: true,
             includeDefaultModels: false,
           };
           const respond = vi.fn<RespondFn>();
@@ -360,6 +383,7 @@ describe("models.list configured static entries", () => {
         expect(await read(alice.id)).toEqual(connected);
         clearUserProfileAuthLink({ profileId: merged.id, provider: "openai" });
         expect(await read(alice.id)).toEqual(unconfiguredPersonal);
+        expect(discover.mock.calls.length).toBe(0);
       },
     );
   });

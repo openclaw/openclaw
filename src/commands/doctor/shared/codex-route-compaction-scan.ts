@@ -36,6 +36,17 @@ type CompactionScanParams = {
   env?: NodeJS.ProcessEnv;
 };
 
+function readCompactionSlot(params: AgentCompactionScanParams, key: CompactionOverrideKey) {
+  const local = asMutableRecord(asMutableRecord(params.agent)?.compaction)?.[key];
+  const hasLocal = typeof local === "string" && local.trim();
+  const localPath = `${params.path}.compaction`;
+  return {
+    key,
+    value: hasLocal ? local : asMutableRecord(params.inheritedCompaction)?.[key],
+    path: `${hasLocal ? localPath : (params.inheritedCompactionPath ?? localPath)}.${key}`,
+  };
+}
+
 function collectUnsupportedCodexCompactionOverridesForAgent(
   params: AgentCompactionScanParams,
 ): UnsupportedCodexCompactionOverride[] {
@@ -46,54 +57,28 @@ function collectUnsupportedCodexCompactionOverridesForAgent(
   if (normalizeString(providerValue) === LOSSLESS_CONTEXT_ENGINE_ID) {
     return [];
   }
-  const candidates = COMPACTION_OVERRIDE_KEYS.map((key) => {
-    const localValue = compaction?.[key];
-    const hasLocalValue = typeof localValue === "string" && localValue.trim();
-    return {
-      key,
-      value: hasLocalValue ? localValue : inheritedCompaction?.[key],
-      path: hasLocalValue
-        ? `${params.path}.compaction.${key}`
-        : params.inheritedCompactionPath
-          ? `${params.inheritedCompactionPath}.${key}`
-          : `${params.path}.compaction.${key}`,
-    };
-  });
-  return candidates.flatMap(({ key, path, value }) =>
-    typeof value === "string" && value.trim() ? [{ path, key, value: value.trim() }] : [],
+  return COMPACTION_OVERRIDE_KEYS.map((key) => readCompactionSlot(params, key)).flatMap(
+    ({ key, path, value }) =>
+      typeof value === "string" && value.trim() ? [{ path, key, value: value.trim() }] : [],
   );
 }
 
 function collectLegacyLosslessCompactionForAgent(
   params: AgentCompactionScanParams,
 ): LegacyLosslessCompactionConfig[] {
-  const agent = asMutableRecord(params.agent);
-  const compaction = asMutableRecord(agent?.compaction);
-  const inheritedCompaction = asMutableRecord(params.inheritedCompaction);
-  const localProvider = compaction?.provider;
-  const hasLocalProvider = typeof localProvider === "string" && localProvider.trim();
-  const providerValue = hasLocalProvider ? localProvider : inheritedCompaction?.provider;
-  if (normalizeString(providerValue) !== LOSSLESS_CONTEXT_ENGINE_ID) {
+  const provider = readCompactionSlot(params, "provider");
+  if (normalizeString(provider.value) !== LOSSLESS_CONTEXT_ENGINE_ID) {
     return [];
   }
-  const compactionPath = hasLocalProvider
-    ? `${params.path}.compaction`
-    : (params.inheritedCompactionPath ?? `${params.path}.compaction`);
-  const localModel = compaction?.model;
-  const hasLocalModel = typeof localModel === "string" && localModel.trim();
-  const inheritedModel = inheritedCompaction?.model;
-  const modelValue = hasLocalModel ? localModel : inheritedModel;
-  const modelCompactionPath = hasLocalModel
-    ? `${params.path}.compaction`
-    : (params.inheritedCompactionPath ?? compactionPath);
+  const model = readCompactionSlot(params, "model");
   return [
     {
-      providerPath: `${compactionPath}.provider`,
-      providerValue: String(providerValue).trim(),
-      ...(typeof modelValue === "string" && modelValue.trim()
+      providerPath: provider.path,
+      providerValue: String(provider.value).trim(),
+      ...(typeof model.value === "string" && model.value.trim()
         ? {
-            modelPath: `${modelCompactionPath}.model`,
-            modelValue: modelValue.trim(),
+            modelPath: model.path,
+            modelValue: model.value.trim(),
           }
         : {}),
     },

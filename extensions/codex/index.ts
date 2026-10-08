@@ -116,10 +116,7 @@ export default definePluginEntry({
         // the feature's own surface (see requireLiveToolPolicy).
         enabledByDefault: livePluginConfig !== undefined,
       }).enabled;
-      if (!enabled) {
-        return undefined;
-      }
-      return livePluginConfig;
+      return enabled ? livePluginConfig : undefined;
     };
     const resolveCurrentPluginConfig = () => resolvePluginConfig(resolveCurrentConfig);
     const appServerConfig = readCodexPluginConfig(resolveCurrentPluginConfig()).appServer;

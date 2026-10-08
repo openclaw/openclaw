@@ -94,25 +94,18 @@ export type DurableMessageBatchSendResult =
 export function durableMessageBatchMayHaveReachedRecipient(
   result: DurableMessageBatchSendResult,
 ): boolean {
-  if (result.status === "sent" || result.status === "partial_failed") {
-    return true;
-  }
-  if (result.status === "suppressed" && result.reason === "adapter_returned_no_identity") {
-    return true;
-  }
-  if (
-    result.status === "failed" &&
-    isOutboundDeliveryError(result.error) &&
-    result.error.sentBeforeError
-  ) {
-    return true;
-  }
-  return (
+  return Boolean(
+    result.status === "sent" ||
+    result.status === "partial_failed" ||
+    (result.status === "suppressed" && result.reason === "adapter_returned_no_identity") ||
+    (result.status === "failed" &&
+      isOutboundDeliveryError(result.error) &&
+      result.error.sentBeforeError) ||
     result.payloadOutcomes?.some((outcome) =>
       outcome.status === "failed"
         ? outcome.sentBeforeError
         : outcome.status === "sent" || outcome.reason === "adapter_returned_no_identity",
-    ) === true
+    ),
   );
 }
 

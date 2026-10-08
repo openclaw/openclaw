@@ -1,7 +1,6 @@
 import { promises as fs } from "node:fs";
 import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
-import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -74,59 +73,75 @@ export async function buildPolicyConformanceReport(params: {
   const policyPath = resolvePolicyPath(params.policyPath);
   const baselineResult = await readPolicyDocument(baselinePath);
   const policyResult = await readPolicyDocument(policyPath);
+  const report = (
+    findings: readonly PolicyConformanceFinding[],
+    rulesChecked = 0,
+  ): PolicyConformanceReport => ({
+    ok: findings.length === 0,
+    baselinePath: baselineResult.displayName,
+    policyPath: policyResult.displayName,
+    rulesChecked,
+    findings,
+  });
   if (!baselineResult.ok || !policyResult.ok) {
     const invalidFindings = [baselineResult, policyResult]
       .filter((result): result is Extract<PolicyDocumentReadResult, { readonly ok: false }> => {
         return !result.ok;
       })
-      .map(invalidParseConformanceFinding);
-    return {
-      ok: false,
-      baselinePath: baselineResult.displayName,
-      policyPath: policyResult.displayName,
-      rulesChecked: 0,
-      findings: invalidFindings,
-    };
+      .map((result) =>
+        invalidConformanceFinding(
+          result.displayName,
+          result.message,
+          result.target,
+          `Fix ${result.displayName} so it contains valid policy JSONC.`,
+        ),
+      );
+    return report(invalidFindings);
   }
   const baseline = baselineResult;
   const policy = policyResult;
   const baselineClaims = collectPolicyRuleClaims(baseline);
   const candidateClaims = collectPolicyRuleClaims(policy);
+  const documents = [baseline, policy];
   const invalidFindings = uniqueConformanceFindings([
-    ...policyContainerShapeFindings(baseline.value, baseline.displayName, baseline.displayName).map(
-      (finding) => invalidShapeConformanceFinding(finding, baseline.displayName),
+    ...documents.flatMap((document) =>
+      policyContainerShapeFindings(document.value, document.displayName, document.displayName).map(
+        (finding) =>
+          invalidConformanceFinding(
+            document.displayName,
+            finding.message,
+            finding.target ?? `oc://${document.displayName}`,
+            finding.fixHint ??
+              `Fix ${document.displayName} so it uses the documented policy syntax.`,
+          ),
+      ),
     ),
-    ...policyContainerShapeFindings(policy.value, policy.displayName, policy.displayName).map(
-      (finding) => invalidShapeConformanceFinding(finding, policy.displayName),
+    ...documents.flatMap(collectInvalidScopedPolicyFindings),
+    ...(
+      [
+        [baseline, baselineClaims],
+        [policy, candidateClaims],
+      ] as const
+    ).flatMap(([document, claims]) =>
+      claims
+        .filter((claim) => !policyRuleValueIsValid(claim.metadata, claim.value))
+        .map((claim) =>
+          invalidConformanceFinding(
+            document.displayName,
+            `${document.displayName} ${claim.propertyPath} is not valid policy conformance syntax.`,
+            claim.target,
+            `Fix ${claim.propertyPath} so it uses the documented policy syntax.`,
+          ),
+        ),
     ),
-    ...collectInvalidScopedPolicyFindings(baseline),
-    ...collectInvalidScopedPolicyFindings(policy),
-    ...baselineClaims
-      .filter((claim) => !policyRuleValueIsValid(claim.metadata, claim.value))
-      .map((claim) => invalidConformanceFinding(claim, baseline.displayName)),
-    ...candidateClaims
-      .filter((claim) => !policyRuleValueIsValid(claim.metadata, claim.value))
-      .map((claim) => invalidConformanceFinding(claim, policy.displayName)),
   ]);
   if (invalidFindings.length > 0) {
-    return {
-      ok: false,
-      baselinePath: baseline.displayName,
-      policyPath: policy.displayName,
-      rulesChecked: 0,
-      findings: invalidFindings,
-    };
+    return report(invalidFindings);
   }
   const findings = baselineClaims
     .map((claim) => conformanceFinding(claim, candidateClaims, policy.displayName))
     .filter((finding): finding is PolicyConformanceFinding => finding !== undefined);
-  return {
-    ok: findings.length === 0,
-    baselinePath: baseline.displayName,
-    policyPath: policy.displayName,
-    rulesChecked: baselineClaims.length,
-    findings,
-  };
+  return report(findings, baselineClaims.length);
 }
 
 function uniqueConformanceFindings(
@@ -143,38 +158,6 @@ function uniqueConformanceFindings(
   });
 }
 
-function invalidParseConformanceFinding(
-  result: Extract<PolicyDocumentReadResult, { readonly ok: false }>,
-): PolicyConformanceFinding {
-  return {
-    checkId: POLICY_CONFORMANCE_CHECK_IDS.invalid,
-    severity: "error",
-    message: result.message,
-    source: "policy",
-    path: result.displayName,
-    target: result.target,
-    requirement: result.target,
-    fixHint: `Fix ${result.displayName} so it contains valid policy JSONC.`,
-  };
-}
-
-function invalidShapeConformanceFinding(
-  finding: HealthFinding,
-  displayName: string,
-): PolicyConformanceFinding {
-  const target = finding.target ?? `oc://${displayName}`;
-  return {
-    checkId: POLICY_CONFORMANCE_CHECK_IDS.invalid,
-    severity: "error",
-    message: finding.message,
-    source: "policy",
-    path: displayName,
-    target,
-    requirement: target,
-    fixHint: finding.fixHint ?? `Fix ${displayName} so it uses the documented policy syntax.`,
-  };
-}
-
 function collectInvalidScopedPolicyFindings(
   document: PolicyDocument,
 ): readonly PolicyConformanceFinding[] {
@@ -183,12 +166,12 @@ function collectInvalidScopedPolicyFindings(
   }
   if (!isRecord(document.value.scopes)) {
     return [
-      invalidConformancePathFinding({
-        displayName: document.displayName,
-        message: `${document.displayName} scopes must be an object.`,
-        propertyPath: "scopes",
-        target: `oc://${document.displayName}/scopes`,
-      }),
+      invalidConformanceFinding(
+        document.displayName,
+        `${document.displayName} scopes must be an object.`,
+        `oc://${document.displayName}/scopes`,
+        "Fix scopes so it uses the documented policy syntax.",
+      ),
     ];
   }
   const findings: PolicyConformanceFinding[] = [];
@@ -197,12 +180,12 @@ function collectInvalidScopedPolicyFindings(
     const scopeTarget = `oc://${document.displayName}/scopes/${ocPathSegment(scopeName)}`;
     if (!isRecord(overlay)) {
       findings.push(
-        invalidConformancePathFinding({
-          displayName: document.displayName,
-          message: `${document.displayName} ${scopePath} must be an object.`,
-          propertyPath: scopePath,
-          target: scopeTarget,
-        }),
+        invalidConformanceFinding(
+          document.displayName,
+          `${document.displayName} ${scopePath} must be an object.`,
+          scopeTarget,
+          `Fix ${scopePath} so it uses the documented policy syntax.`,
+        ),
       );
       continue;
     }
@@ -219,12 +202,12 @@ function collectInvalidScopedPolicyFindings(
       }
       const propertyPath = `${scopePath}.${metadata.policyPath.join(".")}`;
       findings.push(
-        invalidConformancePathFinding({
-          displayName: document.displayName,
-          message: `${document.displayName} ${propertyPath} needs a valid selector for policy conformance.`,
-          propertyPath,
-          target: `${scopeTarget}/${metadata.policyPath.map(ocPathSegment).join("/")}`,
-        }),
+        invalidConformanceFinding(
+          document.displayName,
+          `${document.displayName} ${propertyPath} needs a valid selector for policy conformance.`,
+          `${scopeTarget}/${metadata.policyPath.map(ocPathSegment).join("/")}`,
+          `Fix ${propertyPath} so it uses the documented policy syntax.`,
+        ),
       );
     }
   }
@@ -232,32 +215,20 @@ function collectInvalidScopedPolicyFindings(
 }
 
 function invalidConformanceFinding(
-  claim: PolicyRuleClaim,
   displayName: string,
+  message: string,
+  target: string,
+  fixHint: string,
 ): PolicyConformanceFinding {
-  return invalidConformancePathFinding({
-    displayName,
-    message: `${displayName} ${claim.propertyPath} is not valid policy conformance syntax.`,
-    propertyPath: claim.propertyPath,
-    target: claim.target,
-  });
-}
-
-function invalidConformancePathFinding(params: {
-  readonly displayName: string;
-  readonly message: string;
-  readonly propertyPath: string;
-  readonly target: string;
-}): PolicyConformanceFinding {
   return {
     checkId: POLICY_CONFORMANCE_CHECK_IDS.invalid,
     severity: "error",
-    message: params.message,
+    message,
     source: "policy",
-    path: params.displayName,
-    target: params.target,
-    requirement: params.target,
-    fixHint: `Fix ${params.propertyPath} so it uses the documented policy syntax.`,
+    path: displayName,
+    target,
+    requirement: target,
+    fixHint,
   };
 }
 
@@ -278,7 +249,7 @@ function conformanceFinding(
             candidate.selector === undefined && candidate.metadata === baseline.metadata,
         );
   if (candidates.length === 0) {
-    return missingConformanceFinding(baseline, policyDisplayName);
+    return unsatisfiedConformanceFinding(baseline, policyDisplayName);
   }
   const satisfies = (candidate: PolicyRuleClaim) =>
     isPolicyValueAtLeastAsStrict(baseline.metadata, candidate.value, baseline.value);
@@ -291,7 +262,7 @@ function conformanceFinding(
   }
   const weaker = candidates.find((candidate) => !satisfies(candidate));
   if (weaker !== undefined) {
-    return weakerConformanceFinding(baseline, policyDisplayName, weaker);
+    return unsatisfiedConformanceFinding(baseline, policyDisplayName, weaker);
   }
   if (baseline.selector === undefined) {
     const weakerScopedOverride = candidateClaims.find(
@@ -301,7 +272,7 @@ function conformanceFinding(
         !satisfies(candidate),
     );
     if (weakerScopedOverride !== undefined) {
-      return weakerConformanceFinding(baseline, policyDisplayName, weakerScopedOverride);
+      return unsatisfiedConformanceFinding(baseline, policyDisplayName, weakerScopedOverride);
     }
   }
   return undefined;
@@ -329,36 +300,31 @@ function policyRuleListIsEmpty(value: unknown): boolean {
   return Array.isArray(value) && value.length === 0;
 }
 
-function missingConformanceFinding(
+function unsatisfiedConformanceFinding(
   baseline: PolicyRuleClaim,
   policyDisplayName: string,
+  candidate?: PolicyRuleClaim,
 ): PolicyConformanceFinding {
   return {
-    checkId: POLICY_CONFORMANCE_CHECK_IDS.missing,
+    checkId:
+      candidate === undefined
+        ? POLICY_CONFORMANCE_CHECK_IDS.missing
+        : POLICY_CONFORMANCE_CHECK_IDS.weaker,
     severity: "error",
-    message: `${policyDisplayName} is missing ${baseline.propertyPath}.`,
+    message:
+      candidate === undefined
+        ? `${policyDisplayName} is missing ${baseline.propertyPath}.`
+        : `${policyDisplayName} ${baseline.propertyPath} is weaker than the baseline policy.`,
     source: "policy",
     path: policyDisplayName,
-    target: `oc://${policyDisplayName}/${baseline.propertyPath.replaceAll(".", "/")}`,
+    target:
+      candidate?.target ??
+      `oc://${policyDisplayName}/${baseline.propertyPath.replaceAll(".", "/")}`,
     requirement: baseline.target,
-    fixHint: `Add an equally or more restrictive ${baseline.propertyPath} rule, or update the baseline policy after review.`,
-  };
-}
-
-function weakerConformanceFinding(
-  baseline: PolicyRuleClaim,
-  policyDisplayName: string,
-  candidate: PolicyRuleClaim,
-): PolicyConformanceFinding {
-  return {
-    checkId: POLICY_CONFORMANCE_CHECK_IDS.weaker,
-    severity: "error",
-    message: `${policyDisplayName} ${baseline.propertyPath} is weaker than the baseline policy.`,
-    source: "policy",
-    path: policyDisplayName,
-    target: candidate.target,
-    requirement: baseline.target,
-    fixHint: `Use an equally or more restrictive ${baseline.propertyPath} value, or update the baseline policy after review.`,
+    fixHint:
+      candidate === undefined
+        ? `Add an equally or more restrictive ${baseline.propertyPath} rule, or update the baseline policy after review.`
+        : `Use an equally or more restrictive ${baseline.propertyPath} value, or update the baseline policy after review.`,
   };
 }
 
@@ -436,13 +402,11 @@ function coalesceScopedPolicyRuleClaims(
   for (const claim of claims) {
     const previous = byKey.get(claim.key);
     if (
-      previous !== undefined &&
+      previous === undefined ||
       isPolicyValueAtLeastAsStrict(previous.metadata, claim.value, previous.value)
     ) {
       byKey.set(claim.key, claim);
-      continue;
     }
-    byKey.set(claim.key, previous ?? claim);
   }
   return [...byKey.values()];
 }
@@ -463,26 +427,17 @@ function normalizeSelectorValues(
 
 async function readPolicyDocument(path: string): Promise<PolicyDocumentReadResult> {
   const displayName = basename(path);
-  let raw: string;
+  let operation = "read";
   try {
-    raw = await fs.readFile(path, "utf-8");
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return {
-      ok: false,
-      displayName,
-      message: `${displayName} could not be read: ${message}`,
-      target: `oc://${displayName}`,
-    };
-  }
-  try {
+    const raw = await fs.readFile(path, "utf-8");
+    operation = "parsed";
     return { ok: true, displayName, value: JSON5.parse(raw) };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
       ok: false,
       displayName,
-      message: `${displayName} could not be parsed: ${message}`,
+      message: `${displayName} could not be ${operation}: ${message}`,
       target: `oc://${displayName}`,
     };
   }

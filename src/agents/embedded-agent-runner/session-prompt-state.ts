@@ -285,16 +285,15 @@ export function recordToolResultPromptProjection(
 
 export function getEmbeddedSessionPromptState(sessionId: string): EmbeddedSessionPromptState {
   const existing = sessionPromptStates.get(sessionId);
-  if (existing) {
-    sessionPromptStates.delete(sessionId);
-    sessionPromptStates.set(sessionId, existing);
-    return existing;
-  }
-  const created: EmbeddedSessionPromptState = {
+  const current: EmbeddedSessionPromptState = existing ?? {
     activeAttempts: 0,
     toolResults: createToolResultPromptProjectionState(),
   };
-  sessionPromptStates.set(sessionId, created);
+  sessionPromptStates.delete(sessionId);
+  sessionPromptStates.set(sessionId, current);
+  if (existing) {
+    return current;
+  }
   for (const [key, state] of sessionPromptStates) {
     if (sessionPromptStates.size <= MAX_SESSION_PROMPT_STATES) {
       break;
@@ -303,7 +302,7 @@ export function getEmbeddedSessionPromptState(sessionId: string): EmbeddedSessio
       sessionPromptStates.delete(key);
     }
   }
-  return created;
+  return current;
 }
 
 /** Overlapping cleanup keeps the next attempt's state until its own settlement. */

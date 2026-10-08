@@ -107,6 +107,7 @@ export function createChatSendTurnAdoptionLifecycle(params: {
     });
     if (publish && !params.suppressReplies) {
       broadcastChatTerminal({
+        terminalEntry: params.sessionBinding,
         context: params.context,
         runId: params.runId,
         sessionKey: params.sessionKey,
@@ -131,6 +132,7 @@ export function createChatSendTurnAdoptionLifecycle(params: {
   const finalizeReply = params.suppressReplies
     ? undefined
     : createChatSendLateReplyFinalizer({
+        terminalEntry: params.sessionBinding,
         requesterContext: params.requesterContext,
         abortSignal: params.controller.signal,
         accountId: params.accountId,

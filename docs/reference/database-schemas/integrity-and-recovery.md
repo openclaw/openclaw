@@ -113,6 +113,9 @@ The queued check retains an executor borrow through scanning and proof publicati
 so idle retirement and opening another agent cannot close its original writer.
 Completion, failure, cancellation, and superseded requests release that borrow;
 explicit close and revocation still prevent stale publication.
+If the scan finishes during startup preparation, proof publication waits for that
+agent's admission to finish before joining its writer queue. Failed preparation
+reports that the proof was not retained; verifier shutdown cancels the wait.
 The verifier must check the admitted physical file, and the original writer must
 still hold valid admission with an unchanged connection-local `data_version`
 since admission. Its own writes preserve that value; a commit from any other

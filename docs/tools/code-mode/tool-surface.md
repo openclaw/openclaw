@@ -54,6 +54,8 @@ Rules:
 - Write plain JavaScript. TypeScript annotations, interfaces, and other
   TypeScript-only syntax are not accepted. Tool signatures and `API.read`
   declarations remain available as documentation for composing calls.
+- `API.read(path)` returns `{ path, description, content, bytes }`, not a string.
+  Use `(await API.read(path)).content` for the declaration text.
 - The retired `language` and `typecheck` fields are rejected with `invalid_input`.
   Tool arguments are validated when each call reaches its normal execution owner;
   Code Mode does not typecheck the whole program before execution.

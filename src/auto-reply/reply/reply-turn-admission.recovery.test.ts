@@ -16,6 +16,7 @@ import {
   beginSessionWorkAdmission,
   consumeSessionWorkAdmissionHandoff,
   getSessionWorkAdmissionRelease,
+  getSessionWorkAdmissionOwnerRelease,
   isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
   type SessionWorkAdmissionLease,
@@ -307,7 +308,7 @@ it("keeps new input and followups behind a concurrent recovery winner", async ()
   expect(f.read()).toMatchObject(delivery);
   expect(f.read()?.mainRestartRecovery?.foregroundClaims).toBeUndefined();
   expect(
-    getSessionWorkAdmissionRelease({
+    getSessionWorkAdmissionOwnerRelease({
       ...f.scope,
       owner: MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER,
     }),

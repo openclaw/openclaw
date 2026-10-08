@@ -117,9 +117,10 @@ it.each(["tool", "item"] as const)(
     });
     expect(rows()).toEqual([...before, steer.content]);
     history.messages = [original, steer];
+    history.inFlightRun!.text = "Already visible answer.";
     await loadChatHistory(state);
     expect(rows()).toEqual([...before, steer.content]);
-    // Producer clocks cannot pull newly received activity above its user boundary.
+    // The steer remains below all output from its target run despite clock skew.
     emitTool("read-after-steer", 2, 500);
     await vi.runOnlyPendingTimersAsync();
     handleChatGatewayEvent(state, {
@@ -128,9 +129,15 @@ it.each(["tool", "item"] as const)(
       state: "delta",
       message: { role: "assistant", content: "Already visible answer. Continued." },
     });
-    const continued = [...before, steer.content, "tool", "Continued."];
+    const continued = [
+      "Original prompt",
+      "tool",
+      "tool",
+      "Already visible answer. Continued.",
+      steer.content,
+    ];
     expect(rows()).toEqual(continued);
-    // Completion updates the original card in place, retaining its first boundary.
+    // Completion updates the original card in place.
     emitTool("read-before-steer", 3, 30_000, true);
     await vi.runOnlyPendingTimersAsync();
     expect(rows()).toEqual(continued);
@@ -151,6 +158,7 @@ it.each(["tool", "item"] as const)(
     });
     expect(rows()).toEqual([...continued, secondSteer.content]);
     history.messages = [original, steer, secondSteer];
+    history.inFlightRun!.text = "Already visible answer. Continued.";
     await loadChatHistory(state);
     expect(rows()).toEqual([...continued, secondSteer.content]);
     handleChatGatewayEvent(state, {
@@ -162,14 +170,31 @@ it.each(["tool", "item"] as const)(
         content: "Already visible answer. Continued. Finishing.",
       },
     });
-    expect(rows()).toEqual([...continued, secondSteer.content, "Finishing."]);
-    // The producer's terminal contains only the suffix after its saved cutoffs.
+    expect(rows()).toEqual([
+      "Original prompt",
+      "tool",
+      "tool",
+      "Already visible answer. Continued. Finishing.",
+      steer.content,
+      secondSteer.content,
+    ]);
+    // No assistant row has committed, so the terminal owns the complete reply.
     handleChatGatewayEvent(state, {
       sessionKey: state.sessionKey,
       runId: "active-run",
       state: "final",
-      message: { role: "assistant", content: "Finishing. Done." },
+      message: {
+        role: "assistant",
+        content: "Already visible answer. Continued. Finishing. Done.",
+      },
     });
-    expect(rows()).toEqual([...continued, secondSteer.content, "Finishing. Done."]);
+    expect(rows()).toEqual([
+      "Original prompt",
+      "tool",
+      "tool",
+      "Already visible answer. Continued. Finishing. Done.",
+      steer.content,
+      secondSteer.content,
+    ]);
   },
 );

@@ -8,7 +8,6 @@ import { clearAgentRunContext, getAgentRunContext } from "../../infra/agent-run-
 import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
-import { markChatAbortTerminalOutcome } from "../chat-abort-lifecycle-internal.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { chatAbortMarkerTimestampMs, type ChatAbortMarker } from "../server-chat-state.js";
@@ -154,8 +153,8 @@ export async function handleChatSendSetupError(params: {
   }
   params.respond(false, payload, error, { runId: clientRunId, error: formatForLog(params.error) });
   if (!hidden && failureDisposition !== "client-retry") {
-    markChatAbortTerminalOutcome(jobSessionBinding);
     broadcastChatError({
+      terminalEntry: jobSessionBinding,
       context: params.context,
       runId: clientRunId,
       sessionKey,
@@ -324,8 +323,8 @@ export function createChatSendDispatchErrorLifecycle(params: {
           },
         });
         if (!hidden) {
-          markChatAbortTerminalOutcome(jobSessionBinding);
           broadcastChatError({
+            terminalEntry: jobSessionBinding,
             context,
             runId: clientRunId,
             sessionKey,

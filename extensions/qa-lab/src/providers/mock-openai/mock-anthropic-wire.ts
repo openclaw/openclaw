@@ -229,6 +229,18 @@ function buildAnthropicMessageStart(message: ReturnType<typeof buildAnthropicMes
   };
 }
 
+function buildAnthropicContentBlockEvents(
+  index: number,
+  contentBlock: Record<string, unknown>,
+  deltas: Array<Record<string, unknown>>,
+): AnthropicStreamEvent[] {
+  return [
+    { type: "content_block_start", index, content_block: contentBlock },
+    ...deltas.map((delta) => ({ type: "content_block_delta", index, delta })),
+    { type: "content_block_stop", index },
+  ];
+}
+
 export function buildAnthropicFailureResponse(failure: QaMockProviderFailure) {
   return {
     type: "error",
@@ -268,35 +280,10 @@ export function buildAnthropicThinkingErrorStreamEvents(params: {
         extracted: { text: "", toolCalls: [] },
       }),
     ),
-    {
-      type: "content_block_start",
-      index: 0,
-      content_block: {
-        type: "thinking",
-        thinking: "",
-        signature: "",
-      },
-    },
-    {
-      type: "content_block_delta",
-      index: 0,
-      delta: {
-        type: "thinking_delta",
-        thinking: QA_ANTHROPIC_THINKING_ERROR_TEXT,
-      },
-    },
-    {
-      type: "content_block_delta",
-      index: 0,
-      delta: {
-        type: "signature_delta",
-        signature: QA_ANTHROPIC_THINKING_ERROR_SIGNATURE,
-      },
-    },
-    {
-      type: "content_block_stop",
-      index: 0,
-    },
+    ...buildAnthropicContentBlockEvents(0, { type: "thinking", thinking: "", signature: "" }, [
+      { type: "thinking_delta", thinking: QA_ANTHROPIC_THINKING_ERROR_TEXT },
+      { type: "signature_delta", signature: QA_ANTHROPIC_THINKING_ERROR_SIGNATURE },
+    ]),
     {
       type: "message_delta",
       delta: {},
@@ -321,29 +308,20 @@ export function buildAnthropicMessageStreamEvents(
 ): AnthropicStreamEvent[] {
   const events: AnthropicStreamEvent[] = [buildAnthropicMessageStart(message)];
   for (const [index, block] of message.content.entries()) {
-    events.push({
-      type: "content_block_start",
-      index,
-      content_block: {
-        ...block,
-        ...(block.type === "text" ? { text: "" } : { input: {} }),
-      },
-    });
     const delta = block.type === "text" ? block.text : JSON.stringify(block.input);
-    if (delta) {
-      events.push({
-        type: "content_block_delta",
+    events.push(
+      ...buildAnthropicContentBlockEvents(
         index,
-        delta:
-          block.type === "text"
-            ? { type: "text_delta", text: delta }
-            : { type: "input_json_delta", partial_json: delta },
-      });
-    }
-    events.push({
-      type: "content_block_stop",
-      index,
-    });
+        { ...block, ...(block.type === "text" ? { text: "" } : { input: {} }) },
+        delta
+          ? [
+              block.type === "text"
+                ? { type: "text_delta", text: delta }
+                : { type: "input_json_delta", partial_json: delta },
+            ]
+          : [],
+      ),
+    );
   }
   if (failure) {
     events.push(buildAnthropicFailureResponse(failure));

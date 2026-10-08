@@ -36,11 +36,8 @@ function consumeGatewayRunPreBootstrapOptionToken(
   args: ReadonlyArray<string>,
   index: number,
 ): number {
-  const rootConsumed = consumeRootCommandOptionToken(args, index);
-  if (rootConsumed > 0) {
-    return rootConsumed;
-  }
-  const consumed = consumeGatewayRunOptionToken(args, index);
+  const consumed =
+    consumeRootCommandOptionToken(args, index) || consumeGatewayRunOptionToken(args, index);
   if (consumed > 0) {
     return consumed;
   }

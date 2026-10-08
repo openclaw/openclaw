@@ -36,6 +36,7 @@ import {
   waitForSessionWorkAdmissionRelease,
   type SessionWorkAdmissionInterrupt,
 } from "./session-work-admission-interruption.js";
+import { createSessionWorkAdmissionQueries } from "./session-work-admission-queries.js";
 
 export {
   cancelSessionWorkAdmissionHandoff,
@@ -113,6 +114,22 @@ const {
   currentAdmissions: CURRENT_SESSION_WORK_ADMISSIONS,
   admissionClosures: SESSION_WORK_ADMISSION_CLOSURES,
 } = SESSION_LIFECYCLE_ADMISSION_STATE;
+const {
+  collectSessionWorkAdmissions,
+  getSessionWorkAdmissionRelease,
+  getSessionWorkAdmissionOwnerRelease,
+  getCompetingSessionWorkAdmissionRelease,
+  getTerminalSessionWorkAdmissionRelease,
+} = createSessionWorkAdmissionQueries<SessionWorkAdmission>(ACTIVE_SESSION_WORK_ADMISSIONS, () =>
+  CURRENT_SESSION_WORK_ADMISSIONS.getStore(),
+);
+export {
+  getSessionWorkAdmissionRelease,
+  getSessionWorkAdmissionOwnerRelease,
+  getCompetingSessionWorkAdmissionRelease,
+  getTerminalSessionWorkAdmissionRelease,
+};
+
 // Older runtime chunks can create the shared state without this newer index.
 const ACTIVE_SESSION_LIFECYCLE_MUTATION_RUNS =
   (SESSION_LIFECYCLE_ADMISSION_STATE.activeMutationRuns ??= new Set());
@@ -402,67 +419,18 @@ function isSessionWorkAdmissionTargetActive(params: {
   );
 }
 
-/** Capture competing acquired owners without including the initiating execution. */
-function collectCompetingSessionWorkAdmissions(
-  scope: string,
-  identities: Iterable<string | undefined>,
-): Set<SessionWorkAdmission> {
-  const currentAdmissions = CURRENT_SESSION_WORK_ADMISSIONS.getStore();
-  return collectSessionWorkAdmissions(
-    normalizeSessionIdentities(scope, identities),
-    (admission) => admission.phase === "acquired" && !currentAdmissions?.has(admission),
-  );
-}
-
+/** Whether another admitted turn currently owns any of these session identities. */
 export function isCompetingSessionWorkAdmissionActive(
   scope: string,
   identities: Iterable<string | undefined>,
 ): boolean {
-  return collectCompetingSessionWorkAdmissions(scope, identities).size > 0;
-}
-
-function collectSessionWorkAdmissions(
-  identities: Iterable<string>,
-  matches: (admission: SessionWorkAdmission) => boolean,
-): Set<SessionWorkAdmission> {
-  const matching = new Set<SessionWorkAdmission>();
-  for (const identity of identities) {
-    for (const admission of ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? []) {
-      if (matches(admission)) {
-        matching.add(admission);
-      }
-    }
-  }
-  return matching;
-}
-
-/** Capture terminal owners without waiting on a live turn or a later successor. */
-export function getTerminalSessionWorkAdmissionRelease(
-  params: SessionLifecycleMutationTarget,
-): Promise<void> | false {
-  const admissions = collectCompetingSessionWorkAdmissions(params.scope, params.identities);
-  if ([...admissions].some((admission) => !admission.isSettling?.())) {
-    return false;
-  }
-  return Promise.all([...admissions].map((admission) => admission.released)).then(() => undefined);
-}
-
-/** Join acquired work, or a named owner's pending and acquired admissions. */
-export function getSessionWorkAdmissionRelease(
-  params: SessionLifecycleMutationTarget & { owner?: symbol },
-): Promise<void> | undefined {
-  const admissions = collectSessionWorkAdmissions(
-    normalizeSessionIdentities(params.scope, params.identities),
-    (admission) =>
-      params.owner === undefined
-        ? admission.phase === "acquired"
-        : admission.owner === params.owner,
+  const currentAdmissions = CURRENT_SESSION_WORK_ADMISSIONS.getStore();
+  return normalizeSessionIdentities(scope, identities).some((identity) =>
+    Array.from(
+      ACTIVE_SESSION_WORK_ADMISSIONS.get(identity) ?? [],
+      (admission) => admission.phase === "acquired" && !currentAdmissions?.has(admission),
+    ).some(Boolean),
   );
-  // A gateway turn can adopt an outer reply admission and open its own inner
-  // admission. Self-archive must wait for both owners to release the session.
-  return admissions.size > 0
-    ? Promise.all(Array.from(admissions, (admission) => admission.released)).then(() => undefined)
-    : undefined;
 }
 
 /** Active session identities grouped by their authoritative store/lifecycle scope. */

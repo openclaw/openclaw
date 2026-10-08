@@ -14,7 +14,6 @@ import { throwIfAborted } from "./abort.js";
 import { createChannelHandler } from "./deliver-channel.js";
 import type { ChannelHandler, DeliverOutboundPayloadsCoreParams } from "./deliver-contracts.js";
 import { assertOutboundHandoffCurrent } from "./deliver-handoff.js";
-import { suppressedPayloadOutcome, toOutboundDeliveryError } from "./deliver-hooks.js";
 import {
   buildPayloadSummary,
   deliveryKindForPayload,
@@ -26,10 +25,12 @@ import {
 } from "./deliver-payload.js";
 import { createDeliveryResultRecorder } from "./deliver-results.js";
 import { mirrorDeliveredPayloads } from "./deliver-transcript.js";
-import type {
-  OutboundDeliveryResult,
-  OutboundPayloadDeliveryKind,
-  OutboundPayloadDeliveryOutcome,
+import {
+  OutboundDeliveryError,
+  type OutboundDeliveryResult,
+  type OutboundPayloadDeliveryKind,
+  type OutboundPayloadDeliveryOutcome,
+  type OutboundPayloadDeliverySuppressionReason,
 } from "./deliver-types.js";
 import {
   assertStableMediaFanout,
@@ -215,6 +216,8 @@ export async function deliverOutboundPayloadsCore(
       payloadOutcomes.push(recordedOutcome);
       params.onPayloadDeliveryOutcome?.(recordedOutcome);
     };
+    const recordSuppressedPayload = (reason: OutboundPayloadDeliverySuppressionReason): void =>
+      recordPayloadOutcome({ index: payloadIndex, status: "suppressed", reason });
     let deliveryKind: DiagnosticMessageDeliveryKind = "other";
     let deliveryStartedAt = 0;
     let deliveryPending = false;
@@ -283,15 +286,12 @@ export async function deliverOutboundPayloadsCore(
           )
         : null;
       if (!effectivePayload) {
-        recordPayloadOutcome(
-          suppressedPayloadOutcome({
-            index: payloadIndex,
-            reason: preparedEntry.messageHookChanged
-              ? "empty_after_message_sending_hook"
-              : preparedEntry.replyHookChanged
-                ? "empty_after_reply_payload_sending_hook"
-                : "no_visible_payload",
-          }),
+        recordSuppressedPayload(
+          preparedEntry.messageHookChanged
+            ? "empty_after_message_sending_hook"
+            : preparedEntry.replyHookChanged
+              ? "empty_after_reply_payload_sending_hook"
+              : "no_visible_payload",
         );
         continue;
       }
@@ -336,12 +336,7 @@ export async function deliverOutboundPayloadsCore(
         const deliveredResults = results.slice(beforeCount);
         if (deliveredResults.length === 0) {
           finishDeliveryDiagnostics(0);
-          recordPayloadOutcome(
-            suppressedPayloadOutcome({
-              index: payloadIndex,
-              reason: getSuppressionReason() ?? "adapter_returned_no_identity",
-            }),
-          );
+          recordSuppressedPayload(getSuppressionReason() ?? "adapter_returned_no_identity");
           continue;
         }
       } else if (payloadSummary.mediaUrls.length === 0) {
@@ -410,12 +405,7 @@ export async function deliverOutboundPayloadsCore(
         });
         recordDeliveredPayload(mirroredPayload);
       } else {
-        recordPayloadOutcome(
-          suppressedPayloadOutcome({
-            index: payloadIndex,
-            reason: getSuppressionReason() ?? "adapter_returned_no_identity",
-          }),
-        );
+        recordSuppressedPayload(getSuppressionReason() ?? "adapter_returned_no_identity");
         if (getSuppressionReason() === "adapter_returned_no_send") {
           finishDeliveryDiagnostics(0);
           continue;
@@ -492,12 +482,14 @@ export async function deliverOutboundPayloadsCore(
           : {}),
       });
       if (!params.bestEffort) {
-        throw toOutboundDeliveryError({
-          error: err,
-          results,
-          payloadOutcomes,
-          stage: "platform_send",
-        });
+        throw err instanceof OutboundDeliveryError
+          ? err
+          : new OutboundDeliveryError(formatErrorMessage(err), {
+              cause: err,
+              results,
+              payloadOutcomes,
+              stage: "platform_send",
+            });
       }
       params.onError?.(err, payloadSummary);
     }

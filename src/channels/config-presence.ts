@@ -82,19 +82,16 @@ export function listPotentialConfiguredChannelPresenceSignals(
   env: NodeJS.ProcessEnv = process.env,
   options: ChannelPresenceOptions = {},
 ): ChannelPresenceSignal[] {
-  const signals: ChannelPresenceSignal[] = [];
-  const seenSignals = new Set<string>();
+  const signals = new Map<string, ChannelPresenceSignal>();
   const addSignal = (rawChannelId: string, source: ChannelPresenceSignalSource) => {
     const channelId = rawChannelId.trim();
     if (!channelId || isChannelConfigMetadataKey(channelId)) {
       return;
     }
     const key = `${source}:${channelId}`;
-    if (seenSignals.has(key)) {
-      return;
+    if (!signals.has(key)) {
+      signals.set(key, { channelId, source });
     }
-    seenSignals.add(key);
-    signals.push({ channelId, source });
   };
   const scopedChannelIds = options.channelIds
     ? new Set(
@@ -167,5 +164,5 @@ export function listPotentialConfiguredChannelPresenceSignals(
     }
   }
 
-  return signals;
+  return [...signals.values()];
 }

@@ -430,6 +430,21 @@ describe("irc client PRIVMSG chunking on the wire", () => {
   }>([
     { name: "multibyte byte limit", text: "漢".repeat(900) },
     { name: "emoji byte limit", text: "😀".repeat(300) },
+    {
+      name: "joined emoji at the character cap",
+      text: `${"x".repeat(348)}👨‍👩‍👧‍👦tail`,
+      bodies: ["x".repeat(348), "👨‍👩‍👧‍👦tail"],
+    },
+    {
+      name: "joined emoji at the byte cap",
+      text: `${"漢".repeat(162)}👨‍👩‍👧‍👦tail`,
+      bodies: ["漢".repeat(162), "👨‍👩‍👧‍👦tail"],
+    },
+    {
+      name: "combining mark at the character cap",
+      text: `${"x".repeat(349)}e\u0301tail`,
+      bodies: ["x".repeat(349), "e\u0301tail"],
+    },
     { name: "default ASCII cap", text: "a".repeat(900), lengths: [350, 350, 200] },
     {
       name: "multibyte character cap",

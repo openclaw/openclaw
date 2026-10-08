@@ -250,16 +250,23 @@ function blockContextEngineTurnIntent(
   });
 }
 
-function discardContextEngineTurnIntent(params: OutboxKernelParams<"discardIntent">): void {
+function discardContextEngineTurnIntent(params: OutboxKernelParams<"discardIntent">): boolean {
   const db = outboxDb(params.database);
-  executeSqliteQuerySync(
+  const result = executeSqliteQuerySync(
     params.database.db,
     db
       .deleteFrom("context_engine_turn_outbox")
       .where("advancement_key", "=", params.admission.logicalTurnId)
       .where("engine_id", "=", params.engineId)
+      // Accepted work remains recoverable when publication or acknowledgment fails.
+      .where(
+        /* kysely-allow-raw: Closed outbox payload state. */ sql`json_extract(payload_json, '$.state')`,
+        "=",
+        "admitted",
+      )
       .where("owner_plugin_id", params.ownerPluginId ? "=" : "is", params.ownerPluginId ?? null),
   );
+  return result.numAffectedRows !== undefined && result.numAffectedRows > 0n;
 }
 
 /**
@@ -367,6 +374,9 @@ export function recoverContextEngineTurnOutbox(params: {
         engineId: params.engineId,
         ownerPluginId: params.ownerPluginId,
       });
+      params.warn(
+        `[context-engine] discarded unaccepted turn advancement: ${row.advancement_key}: recovery found no host acceptance`,
+      );
       continue;
     }
     advanceAcceptedContextEngineTurn(
@@ -668,7 +678,7 @@ export type ContextEngineTurnOutboxWorkerOperations = {
   };
   discardIntent: {
     input: ContextEngineTurnOutboxFilter & { admission: TranscriptTurnAdmission };
-    output: undefined;
+    output: boolean;
   };
 };
 
@@ -711,8 +721,7 @@ export function executeContextEngineTurnOutboxCommand(
     case "publishClosedTurn":
       return publishClosedContextEngineTurn({ ...command.input, database });
     case "discardIntent":
-      discardContextEngineTurnIntent({ ...command.input, database });
-      return undefined;
+      return discardContextEngineTurnIntent({ ...command.input, database });
   }
   throw new Error("Unknown context-engine turn outbox command");
 }

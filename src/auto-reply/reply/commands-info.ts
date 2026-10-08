@@ -93,11 +93,9 @@ function buildSkillCommandUsage(skillCommands: NonNullable<HandleCommandsParams[
   if (skillCommands.length > 0) {
     const names = skillCommands.slice(0, 8).map((command) => command.skillName || command.name);
     lines.push("", `Available: ${names.join(", ")}`);
-    if (skillCommands.length > names.length) {
-      lines.push(`More: /commands (${skillCommands.length - names.length} more)`);
-    } else {
-      lines.push("More: /commands");
-    }
+    lines.push(
+      `More: /commands${skillCommands.length > names.length ? ` (${skillCommands.length - names.length} more)` : ""}`,
+    );
   } else {
     lines.push("", "Use /commands to list available skill commands.");
   }

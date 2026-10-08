@@ -1642,14 +1642,15 @@ jobs:
 
           if [[ "$requested_config_path" == "$config_path" ]]; then
             # Doctor owns a writable runtime copy; the scenario's source stays immutable.
-            # Keep generation receipts outside SUT state so a canonical mutation always
-            # refreshes the copy, while an unchanged source preserves Doctor repairs.
-            projection_dir="${OPENCLAW_STATE_DIR}/qa-runtime-config"
+            # Separate source generations so config recovery never mistakes an authored
+            # replacement for corruption of Doctor's previous, metadata-stamped copy.
+            # Keep receipts outside SUT state; unchanged sources retain Doctor repairs.
             generation_dir="${RUNTIME_ROOT}/config-generations"
             install -d -o root -g root -m 0700 "$generation_dir"
             generation_key="$(printf %s "$config_path" | sha256sum | cut -d ' ' -f1)"
             generation_path="${generation_dir}/${generation_key}"
             config_generation="$(sha256sum "$config_path" | cut -d ' ' -f1)"
+            projection_dir="${OPENCLAW_STATE_DIR}/qa-runtime-config/${config_generation}"
             previous_generation=""
             if [[ -e "$generation_path" ]]; then
               [[ "$(stat -c '%F:%a:%u:%g' "$generation_path")" == "regular file:600:0:0" ]]
@@ -1913,7 +1914,10 @@ jobs:
                       [[ -r "$OPENCLAW_CONFIG_PATH" && -w "$OPENCLAW_CONFIG_PATH" &&
                             ! -L "$OPENCLAW_CONFIG_PATH" ]]
                       case "$OPENCLAW_CONFIG_PATH" in
-                        "${OPENCLAW_STATE_DIR}/qa-runtime-config/openclaw.json") ;;
+                        "${OPENCLAW_STATE_DIR}/qa-runtime-config/"*/openclaw.json)
+                          projection_generation="${OPENCLAW_CONFIG_PATH#"${OPENCLAW_STATE_DIR}/qa-runtime-config/"}"
+                          projection_generation="${projection_generation%/openclaw.json}"
+                          [[ "$projection_generation" =~ ^[0-9a-f]{64}$ ]] ;;
                         "${OPENCLAW_STATE_DIR}/qa-auth-bootstrap/openclaw.json")
                           [[ "${1:-}" == "models" && "${2:-}" == "auth" ]] ;;
                         *) exit 1 ;;

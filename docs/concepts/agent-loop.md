@@ -168,8 +168,9 @@ For completed `chat.send` turns, clients may request compaction, fork, or rewind
 as soon as they receive chat `final`. These requests join the published turn's
 remaining transcript and admission cleanup before mutating the session. A
 competing live turn still returns an active-run error.
-Terminal events remain bound to the registrations present when emission begins;
-reusing a run ID during a listener callback cannot make its replacement terminal.
+Lifecycle delivery captures registrations before listeners run, and later chat
+terminal publication keeps the producer's original registration. Reusing a run ID
+during a listener callback cannot make its replacement terminal.
 
 The Gateway projects lifecycle and tool start/terminal events into the bounded,
 metadata-only [audit ledger](/cli/audit). This projection records provenance and

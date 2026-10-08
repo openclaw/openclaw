@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { markChatAbortTerminalOutcome } from "../chat-abort-lifecycle-internal.js";
+import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
 import { projectChatDisplayMessage } from "../chat-display-projection.js";
 import { capLiveAssistantText } from "../live-chat-projector.js";
 import type { GatewayBroadcastOpts } from "../server-broadcast-types.js";
@@ -13,9 +14,7 @@ type ChatBroadcastContext = Pick<
   GatewayRequestContext,
   "broadcast" | "nodeSendToSession" | "agentRunSeq"
 > &
-  Partial<
-    Pick<GatewayRequestContext, "getRuntimeConfig" | "chatRunState" | "chatAbortControllers">
-  >;
+  Partial<Pick<GatewayRequestContext, "getRuntimeConfig" | "chatRunState">>;
 
 type SideResultPayload = {
   kind: "btw";
@@ -95,6 +94,16 @@ type ChatBroadcastParams = {
   agentId?: string;
 };
 
+function broadcastChatPayload(
+  params: Omit<ChatBroadcastParams, "runId">,
+  event: string,
+  payload: unknown,
+  opts?: GatewayBroadcastOpts,
+): void {
+  params.context.broadcast(event, payload, opts ?? { sessionKeys: resolveChatSessionKeys(params) });
+  sendGlobalAwareNodeChatPayload({ ...params, event, payload, opts });
+}
+
 type ChatTerminal =
   | { state: "final" | "aborted"; message?: Record<string, unknown>; stopReason?: string }
   | {
@@ -103,6 +112,10 @@ type ChatTerminal =
       stopReason?: string;
       errorKind?: "timeout" | "state_contention";
     };
+
+type ChatTerminalBroadcastParams = ChatBroadcastParams & {
+  terminalEntry: Pick<ChatAbortControllerEntry, "terminalOutcomeObserved"> | undefined;
+};
 
 type ChatFrame = ChatTerminal | { state: "delta"; text: string };
 
@@ -161,15 +174,7 @@ function broadcastChatFrame(
       agentId: payloadAgentId,
     }),
   };
-  params.context.broadcast("chat", payload, opts);
-  sendGlobalAwareNodeChatPayload({
-    context: params.context,
-    sessionKey: params.sessionKey,
-    agentId: payloadAgentId,
-    event: "chat",
-    payload,
-    opts,
-  });
+  broadcastChatPayload({ ...params, agentId: payloadAgentId }, "chat", payload, opts);
 }
 
 export function broadcastChatDelta(
@@ -201,14 +206,14 @@ export function broadcastChatDelta(
   );
 }
 
-export function broadcastChatTerminal(params: ChatBroadcastParams & ChatTerminal): void {
-  markChatAbortTerminalOutcome(params.context.chatAbortControllers?.get(params.runId));
+export function broadcastChatTerminal(params: ChatTerminalBroadcastParams & ChatTerminal): void {
+  markChatAbortTerminalOutcome(params.terminalEntry);
   broadcastChatFrame(params);
   params.context.agentRunSeq.delete(params.runId);
 }
 
 export function broadcastChatFinal(
-  params: ChatBroadcastParams & { message?: Record<string, unknown> },
+  params: ChatTerminalBroadcastParams & { message?: Record<string, unknown> },
 ): void {
   broadcastChatTerminal({ ...params, state: "final" });
 }
@@ -238,24 +243,15 @@ export function broadcastSideResult(params: {
     ...(payloadAgentId ? { agentId: payloadAgentId } : {}),
     seq,
   };
-  params.context.broadcast("chat.side_result", payload, {
-    sessionKeys: resolveChatSessionKeys({
-      context: params.context,
-      sessionKey: params.payload.sessionKey,
-      agentId: payloadAgentId,
-    }),
-  });
-  sendGlobalAwareNodeChatPayload({
-    context: params.context,
-    sessionKey: params.payload.sessionKey,
-    agentId: payloadAgentId,
-    event: "chat.side_result",
+  broadcastChatPayload(
+    { context: params.context, sessionKey: params.payload.sessionKey, agentId: payloadAgentId },
+    "chat.side_result",
     payload,
-  });
+  );
 }
 
 export function broadcastChatError(
-  params: ChatBroadcastParams & Omit<Extract<ChatTerminal, { state: "error" }>, "state">,
+  params: ChatTerminalBroadcastParams & Omit<Extract<ChatTerminal, { state: "error" }>, "state">,
 ): void {
   broadcastChatTerminal({ ...params, state: "error" });
 }

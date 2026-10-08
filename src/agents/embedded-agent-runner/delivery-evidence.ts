@@ -73,16 +73,16 @@ type ExplicitFinalSourceReplyEvidence = {
 export function resolveExplicitFinalSourceReplyDeliveryEvidence(
   result: ExplicitFinalSourceReplyEvidence,
 ): boolean | undefined {
-  const markers: boolean[] = [];
+  let final: boolean | undefined;
   for (const value of [result.messagingToolSentTargets, result.messagingToolSourceReplyPayloads]) {
     for (const entry of Array.isArray(value) ? value : []) {
       const marker = asOptionalRecord(entry)?.sourceReplyFinal;
       if (typeof marker === "boolean") {
-        markers.push(marker);
+        final = final || marker;
       }
     }
   }
-  return markers.length > 0 ? markers.some(Boolean) : undefined;
+  return final;
 }
 
 /** Preserve legacy completion semantics unless the runtime emitted progress/final markers. */

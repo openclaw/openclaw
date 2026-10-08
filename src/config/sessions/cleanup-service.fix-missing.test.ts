@@ -123,53 +123,11 @@ describe("sessions cleanup --fix-missing", () => {
     expect(listDeletedArchives(path.dirname(storePath))).toEqual([]);
   });
 
-  it("archives raw non-message rows before removing a confirmed missing session", async () => {
-    const sessionKey = "agent:main:message-free";
-    const sessionId = "message-free";
-    const scope = { sessionKey, sessionId, storePath };
-    await replaceSessionEntry(scope, { sessionId, updatedAt: Date.now() });
-    appendTranscriptEventSync(scope, {
-      type: "proof",
-      id: "raw-event",
-      content: "recoverable non-message state",
-    });
-    const rawEventJson =
-      '{  "content": "recoverable non-message state", "id": "raw-event", "type": "proof"  }';
-    const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path;
-    if (!sqlitePath) {
-      throw new Error("expected SQLite session store");
-    }
-    openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath })
-      .db.prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ?")
-      .run(rawEventJson, sessionId);
-
-    const result = await runSessionsCleanup({
-      cfg: {},
-      opts: { enforce: true, fixMissing: true },
-      targets: [{ agentId: "main", storePath }],
-    });
-
-    expect(result.appliedSummaries[0]?.missing).toBe(1);
-    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
-    const archives = listDeletedArchives(path.dirname(storePath));
-    expect(archives).toHaveLength(1);
-    expect(readSessionArchiveContentSync(archives[0] ?? "")).toBe(`${rawEventJson}\n`);
-    expect(
-      openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath })
-        .db.prepare(
-          `SELECT session_key, reason, published_at
-           FROM session_transcript_archives WHERE session_id = ?`,
-        )
-        .get(sessionId),
-    ).toMatchObject({
-      published_at: expect.any(Number),
-      reason: "deleted",
-      session_key: sessionKey,
-    });
-  });
-
   it("recreates every derived file from pending canonical archives after commit", async () => {
     const sessionIds = Array.from({ length: 6 }, (_, index) => `pending-export-${index}`);
+    const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path;
+    const rawEventJson = (sessionId: string) =>
+      `{  "content": "recover after commit ${sessionId}", "type": "proof"  }`;
     for (const sessionId of sessionIds) {
       const scope = {
         sessionId,
@@ -181,6 +139,9 @@ describe("sessions cleanup --fix-missing", () => {
         type: "proof",
         content: `recover after commit ${sessionId}`,
       });
+      openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath })
+        .db.prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ?")
+        .run(rawEventJson(sessionId), sessionId);
     }
 
     await runSessionsCleanup({
@@ -193,10 +154,6 @@ describe("sessions cleanup --fix-missing", () => {
     expect(archives).toHaveLength(sessionIds.length);
     for (const archivePath of archives) {
       fs.rmSync(archivePath);
-    }
-    const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" }).path;
-    if (!sqlitePath) {
-      throw new Error("expected SQLite session store");
     }
     openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath })
       .db.prepare(
@@ -218,9 +175,7 @@ describe("sessions cleanup --fix-missing", () => {
         path.basename(candidate).startsWith(`${sessionId}.jsonl.deleted.`),
       );
       expect(archivePath).toBeTruthy();
-      expect(readSessionArchiveContentSync(archivePath ?? "")).toContain(
-        `recover after commit ${sessionId}`,
-      );
+      expect(readSessionArchiveContentSync(archivePath ?? "")).toBe(`${rawEventJson(sessionId)}\n`);
     }
     const statuses = openOpenClawAgentDatabase({ agentId: "main", path: sqlitePath })
       .db.prepare(

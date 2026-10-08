@@ -233,8 +233,9 @@ describe("CLI transcript account boundary", () => {
       await f.seed();
       const abort = new AbortController();
       const patch = patchSessionEntryCore;
-      vi.spyOn(sessionAccessor, "patchSessionEntryCore").mockImplementationOnce(
-        (target, update, options) =>
+      const spy = vi
+        .spyOn(sessionAccessor, "patchSessionEntryCore")
+        .mockImplementation((target, update, options) =>
           patch(
             target,
             async (...args) => {
@@ -246,6 +247,7 @@ describe("CLI transcript account boundary", () => {
                 if (change === "append") {
                   manager.appendMessage({ role: "user", content: "intervening", timestamp: 2 });
                 } else if (change === "rewrite") {
+                  manager.appendMessage({ role: "user", content: "intervening", timestamp: 2 });
                   manager.removeTrailingEntries((entry) => entry.type === "message");
                 } else {
                   manager.appendResetBoundary("reset");
@@ -255,7 +257,7 @@ describe("CLI transcript account boundary", () => {
             },
             options,
           ),
-      );
+        );
       await f.withRun(
         "changed-preparation",
         async (params) => {
@@ -264,10 +266,53 @@ describe("CLI transcript account boundary", () => {
               credential: { type: "token", provider: "test-cli", token: "epoch-a" },
             }),
           ).rejects.toThrow();
+          if (change === "append" || change === "rewrite") {
+            expect(spy).toHaveBeenCalledTimes(2);
+          } else if (change === "revocation") {
+            expect(spy).toHaveBeenCalledOnce();
+          }
           expect(loadSessionEntryReadOnly(f.target)?.activeWriterRunId).not.toBe(params.runId);
         },
         { abortSignal: abort.signal },
       );
+    },
+  );
+
+  it.each(["append", "rewrite"] as const)(
+    "plans again after one late %s instead of failing the turn",
+    async (change) => {
+      const f = await fixture();
+      await f.seed();
+      const patch = patchSessionEntryCore;
+      const spy = vi
+        .spyOn(sessionAccessor, "patchSessionEntryCore")
+        .mockImplementationOnce((target, update, options) =>
+          patch(
+            target,
+            async (...args) => {
+              const planned = await update(...args);
+              // A finished run settles its own rows after the lane moved on.
+              const manager = f.manager();
+              if (change === "append") {
+                manager.appendMessage({ role: "user", content: "late settle", timestamp: 2 });
+              } else {
+                manager.removeTrailingEntries((entry) => entry.type === "message");
+              }
+              return planned;
+            },
+            options,
+          ),
+        );
+      await f.withRun("replanned-preparation", async (params) => {
+        const writer = await prepareCliHistoryBoundary(params, {
+          credential: { type: "token", provider: "test-cli", token: "epoch-a" },
+        });
+        expect(spy).toHaveBeenCalledTimes(2);
+        expect(loadSessionEntryReadOnly(f.target)?.activeWriterRunId).toBe(params.runId);
+        // The fresh plan judges the settled transcript: an unproven foreign row stays
+        // unknown, while an emptied context may start a new boundary.
+        expect(Boolean(writer)).toBe(change === "rewrite");
+      });
     },
   );
 

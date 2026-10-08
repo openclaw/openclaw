@@ -1,5 +1,4 @@
 import type { DatabaseSync } from "node:sqlite";
-// SQLite ownership helpers for Gateway skill-upload staging.
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,

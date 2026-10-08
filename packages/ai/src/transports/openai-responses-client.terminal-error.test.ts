@@ -56,11 +56,20 @@ const model = {
 
 const initialHost = getAiTransportHost();
 const logWarn = vi.fn();
+const logDebug = vi.fn<typeof initialHost.logDebug>();
 beforeEach(() => {
   logWarn.mockClear();
-  configureAiTransportHost({ logWarn });
+  logDebug.mockClear();
+  vi.stubEnv("OPENCLAW_DEBUG_MODEL_TRANSPORT", undefined);
+  vi.stubEnv("OPENCLAW_DEBUG_MODEL_PAYLOAD", undefined);
+  vi.stubEnv("OPENCLAW_DEBUG_SSE", undefined);
+  vi.stubEnv("OPENCLAW_DEBUG_CODE_MODE", undefined);
+  configureAiTransportHost({ logWarn, logDebug });
 });
-afterEach(() => configureAiTransportHost(initialHost));
+afterEach(() => {
+  vi.unstubAllEnvs();
+  configureAiTransportHost(initialHost);
+});
 
 describe("managed Responses transport terminal errors", () => {
   it.each(
@@ -107,7 +116,12 @@ describe("managed Responses transport terminal errors", () => {
             return;
           }
           if (ending === "aborted") {
-            controller.abort();
+            controller.abort(
+              Object.assign(new Error("superseded"), {
+                name: "AbortError",
+                code: "AGENT_RUN_SUPERSEDED_ABORT",
+              }),
+            );
           }
           if (ending === "eof" || ending === "aborted") {
             return;
@@ -149,6 +163,17 @@ describe("managed Responses transport terminal errors", () => {
       expect(events).not.toContain("toolcall_end");
       expect(events.filter((type) => type === "done" || type === "error")).toEqual(["error"]);
       expect(result.stopReason).toBe(ending === "aborted" ? "aborted" : "error");
+      if (ending === "aborted") {
+        expect(logWarn).not.toHaveBeenCalled();
+        expect(
+          logDebug.mock.calls.some(
+            ([subsystem, build]) =>
+              subsystem === "openai-transport" &&
+              build()?.message.startsWith("[responses] aborted "),
+          ),
+        ).toBe(true);
+        expect(result.errorCode).toBe("AGENT_RUN_SUPERSEDED_ABORT");
+      }
       if (ending !== "eof" && ending !== "aborted" && ending !== "error") {
         expect(result.usage).toMatchObject({ input: 20, output: 9, totalTokens: 29 });
         expect(result.responseId).toBe("resp_parallel_truncated");
@@ -196,6 +221,30 @@ describe("managed Responses transport terminal errors", () => {
       }
     },
   );
+
+  it("keeps a caller deadline at warning level when the stream throws a generic abort", async () => {
+    const controller = new AbortController();
+    sseState.outcomes.push({
+      data: (async function* () {
+        yield { type: "response.created", response: { id: "resp_timeout", status: "in_progress" } };
+        controller.abort(new DOMException("run deadline", "TimeoutError"));
+        throw new Error("Request was aborted");
+      })(),
+      response: new Response(null, { status: 200 }),
+    });
+    const stream = await createOpenAIResponsesTransportStreamFn()(
+      model,
+      { messages: [], tools: [] },
+      { apiKey: "test-key", transport: "sse", signal: controller.signal },
+    );
+
+    expect((await stream.result()).stopReason).toBe("aborted");
+    expect(logWarn).toHaveBeenCalledWith(
+      "openai-transport",
+      expect.stringContaining("[responses] error "),
+      undefined,
+    );
+  });
 
   it.each(
     ["incomplete", "completed", "failed", "cancelled", "in_progress", "queued", undefined].flatMap(

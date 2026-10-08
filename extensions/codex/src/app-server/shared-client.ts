@@ -694,9 +694,7 @@ async function acquireSharedCodexAppServerClient(
       entry,
       authProfileId: usesNativeAuth || preparedAuth?.kind === "api-key" ? null : authProfileId,
       runtimeArtifactMode,
-      ...(options?.expectedRuntimeArtifact
-        ? { expectedRuntimeArtifact: options.expectedRuntimeArtifact }
-        : {}),
+      expectedRuntimeArtifact: options?.expectedRuntimeArtifact,
       abandonSignal: entry.startupAbort.signal,
       config: options?.config,
     }));
@@ -844,9 +842,7 @@ export async function createIsolatedCodexAppServerClient(
         usesNativeAuth || context.preparedAuth?.kind === "api-key" ? null : context.authProfileId,
       runtimeArtifactMode:
         options?.runtimeArtifactMode ?? (options?.expectedRuntimeArtifact ? "capture" : undefined),
-      ...(options?.expectedRuntimeArtifact
-        ? { expectedRuntimeArtifact: options.expectedRuntimeArtifact }
-        : {}),
+      expectedRuntimeArtifact: options?.expectedRuntimeArtifact,
       config: options?.config,
       timeoutMs: resolveRemainingAcquireTimeout(timeoutMs, startedAt),
       abandonSignal,

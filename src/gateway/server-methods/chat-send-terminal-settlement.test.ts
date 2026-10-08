@@ -18,6 +18,7 @@ import {
   gatewayReplyMock,
   installGatewayTestHooks,
 } from "../test-helpers.js";
+import { broadcastChatFinal } from "./chat-broadcast.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
 import * as workAdmission from "./chat-send-work-admission.js";
 import * as settlementOwner from "./session-run-settlement.js";
@@ -165,9 +166,13 @@ it.for(
   },
 );
 
-it.for(["compact", "fork", "rewind"] as const)(
-  "refuses $0 immediately when an unclaimed terminal listener replaces the admitted run",
-  async (action, { signal }) => {
+it.for(
+  (["compact", "fork", "rewind"] as const).flatMap((action) =>
+    (["lifecycle", "chat-final"] as const).map((publication) => ({ action, publication })),
+  ),
+)(
+  "refuses $action immediately when a replaced run publishes $publication",
+  async ({ action, publication }, { signal }) => {
     const fixture = await createFixture({ active: false });
     await appendTranscriptMessage(fixture.scope, {
       message: { role: "user", content: "A second completed turn.", timestamp: 2 },
@@ -206,6 +211,15 @@ it.for(["compact", "fork", "rewind"] as const)(
     try {
       emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "end" } });
       expect(registration.entry).not.toBe(originalEntry);
+      if (publication === "chat-final") {
+        broadcastChatFinal({
+          context: fixture.context,
+          runId,
+          sessionKey: fixture.scope.sessionKey,
+          terminalEntry: originalEntry,
+        });
+      }
+      expect(registration.entry.terminalOutcomeObserved).toBeUndefined();
       const entryId = loadTranscriptEventsSync(fixture.scope)
         .map(asOptionalRecord)
         .find((event) => event?.type === "message")?.id;

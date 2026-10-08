@@ -15,8 +15,7 @@ export type ModelSelectionChange = (
 
 /** Mutable intent belongs to this draft, separate from remembered defaults and catalog metadata. */
 export class NewSessionModelSelection {
-  protected explicitSelection = false;
-  private restoredSelection = false;
+  private selectionOrigin: "none" | "restored" | "explicit" = "none";
   protected fastModeSelected = false;
   protected pendingDraftSelection: DurableDraftModelSelection | undefined;
   onDraftSelectionChange: (() => void) | undefined;
@@ -34,8 +33,7 @@ export class NewSessionModelSelection {
     this.contextWindow = "";
     this.thinkingLevel = "";
     this.fastMode = undefined;
-    this.explicitSelection = false;
-    this.restoredSelection = false;
+    this.selectionOrigin = "none";
     this.fastModeSelected = false;
   }
 
@@ -47,7 +45,7 @@ export class NewSessionModelSelection {
   }
 
   draftSelection(agentId: string): DurableDraftModelSelection | undefined {
-    return this.explicitSelection
+    return this.selectionOrigin !== "none"
       ? {
           agentId,
           model: this.selected,
@@ -68,7 +66,7 @@ export class NewSessionModelSelection {
     const fastMode =
       this.fastModeSelected || preference === undefined ? this.fastMode : preference?.fastMode;
     // Saved defaults seed a draft; only explicit intent is authoritative after that.
-    if (this.explicitSelection) {
+    if (this.selectionOrigin !== "none") {
       return {
         model: this.selected,
         agentRuntime: this.agentRuntime,
@@ -92,11 +90,10 @@ export class NewSessionModelSelection {
       return undefined;
     }
     this.pendingDraftSelection = undefined;
-    if (this.explicitSelection && !this.restoredSelection) {
+    if (this.selectionOrigin === "explicit") {
       return undefined;
     }
-    this.explicitSelection = true;
-    this.restoredSelection = true;
+    this.selectionOrigin = "restored";
     this.selected = selection.model;
     this.agentRuntime = selection.agentRuntime;
     this.thinkingLevel = selection.thinkingLevel;
@@ -107,16 +104,14 @@ export class NewSessionModelSelection {
   }
 
   protected markExplicitSelection() {
-    this.explicitSelection = true;
-    this.restoredSelection = false;
+    this.selectionOrigin = "explicit";
   }
 
   protected retireModelSelection(restoredOnly: boolean): boolean {
-    if (restoredOnly && !this.restoredSelection) {
+    if (restoredOnly && this.selectionOrigin !== "restored") {
       return false;
     }
-    this.restoredSelection = false;
-    this.explicitSelection = false;
+    this.selectionOrigin = "none";
     if (!restoredOnly) {
       this.fastModeSelected = false;
     }

@@ -120,10 +120,9 @@ export function getTelegramNativeQuoteReplyMessageId(
 }
 
 export function isTelegramQuoteParamError(err: unknown): boolean {
-  if (err instanceof GrammyError) {
-    return QUOTE_PARAM_RE.test(err.description);
-  }
-  return QUOTE_PARAM_RE.test(formatErrorMessage(err));
+  return QUOTE_PARAM_RE.test(
+    err instanceof GrammyError ? err.description : formatErrorMessage(err),
+  );
 }
 
 function removeTelegramNativeQuoteParam(params: Record<string, unknown>): Record<string, unknown> {
