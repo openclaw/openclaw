@@ -527,7 +527,11 @@ it("rechecks foreign backdates at 30 minutes even when ordinary writes keep kick
   kickSessionEntryMaintenanceAfterWrite(request);
   await yieldToEventLoop();
   await vi.advanceTimersByTimeAsync(15 * 60 * 1_000 - 1);
-  expect(loadSessionEntry({ sessionKey, storePath })?.archivedAt).toBeUndefined();
+  expect(
+    database.db
+      .prepare("SELECT archived_at FROM session_nodes WHERE session_key = ?")
+      .get(sessionKey),
+  ).toEqual({ archived_at: null });
   await vi.advanceTimersByTimeAsync(1);
   await withinTest(archived.promise, signal);
   expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({

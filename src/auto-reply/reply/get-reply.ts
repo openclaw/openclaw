@@ -105,6 +105,7 @@ import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing
 import { prepareReplyWorkspace } from "./reply-workspace.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { prepareReplySessionDiffBaseline } from "./session-diff-baseline.js";
+import { resolveReplySessionInitializationOptions } from "./session-initialization-admission.js";
 import { SessionResetCleanupError } from "./session-reset-cleanup.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
 import { mergeSkillFilters } from "./skill-filter.js";
@@ -592,18 +593,10 @@ export async function getReplyFromConfig(
         })
       : await traceGetReplyPhase("reply.init_session_state", () =>
           initSessionState({
-            providerReviewAcknowledgment: optsWithSkillFilter?.providerReviewAcknowledgment,
+            ...resolveReplySessionInitializationOptions(optsWithSkillFilter),
             ctx: finalized,
             cfg,
             commandAuthorized,
-            ...(optsWithSkillFilter?.expectedExistingSessionId
-              ? { expectedExistingSessionId: optsWithSkillFilter.expectedExistingSessionId }
-              : {}),
-            pinExpectedExistingSession: optsWithSkillFilter?.pinExpectedExistingSession === true,
-            newlyCreatedSessionId: optsWithSkillFilter?.newlyCreatedSessionId,
-            requestedSessionId: optsWithSkillFilter?.requestedSessionId,
-            resumeRequestedSession: optsWithSkillFilter?.resumeRequestedSession,
-            signal: optsWithSkillFilter?.abortSignal,
           }),
         );
   } catch (error) {

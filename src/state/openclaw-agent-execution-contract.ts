@@ -61,7 +61,16 @@ export type OpenClawAgentDatabaseExecution = {
   runExisting<T>(
     source: AgentDatabaseRequestExecutionSource,
     operation: (scope: AgentDatabaseExecutionScope) => Promise<T>,
-    options?: { retireNativeOnFailure: true },
+    options?:
+      | { retireNativeOnFailure: true; withAdmission?: never }
+      | {
+          retireNativeOnFailure?: never;
+          /** Track read admission; cancellation removes only a waiting host-queue task. */
+          withAdmission: <Result>(
+            run: () => Promise<Result>,
+            signal: AbortSignal,
+          ) => Promise<Result>;
+        },
   ): Promise<T | undefined>;
   /**
    * Join this reference's work; native cleanup failures remain with its resource owner.

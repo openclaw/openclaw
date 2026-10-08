@@ -256,7 +256,7 @@ export function retainSessionHistoryWorkerDatabase(
           aborters: owned.aborters,
           assertCurrent,
         },
-        async (admit, remainingTime, requestLane) => {
+        async (admit, requestLane) => {
           try {
             const reply = await admit((requestSignal, remaining) =>
               requestLane.pool.run(
@@ -277,13 +277,10 @@ export function retainSessionHistoryWorkerDatabase(
                         const effect = (async () => {
                           context.signal.throwIfAborted();
                           assertCurrent();
-                          const response = await onRequest(value);
+                          const response = await onRequest(value, context.signal);
                           context.signal.throwIfAborted();
                           assertCurrent();
-                          if (response) {
-                            return response;
-                          }
-                          return { input: null, timeoutMs: remainingTime() };
+                          return response ?? { input: null, timeoutMs };
                         })();
                         hostEffects.add(effect);
                         owned.hostEffects.add(effect);
@@ -347,7 +344,7 @@ export function retainSessionHistoryWorkerDatabase(
             }
             throw error;
           } finally {
-            // A worker timeout does not cancel an admitted host-side status operation.
+            // Cancellation removes queued effects; accepted writes still retain settlement custody.
             await Promise.allSettled(hostEffects);
           }
         },

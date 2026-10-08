@@ -355,6 +355,18 @@ compound turns retain their existing synchronous preparation contract. Released
 synchronous preparation retains native callback ordering until the next Plugin SDK
 major. Schemas, stored bytes, retention, and update behavior are unchanged.
 
+Admitted reply phases borrow the canonical agent executor for bounded session-entry,
+membership, participant, lifecycle, header, and anchor facts. Each unpinned phase
+probes the original connection again and consumes its result synchronously under
+the existing foreground FIFO and native-mutation witness. The borrow keeps the
+selected physical file, aliases, native incarnation, and session lifecycle; reset,
+replacement, and release revoke it. An acknowledged initialization may transfer
+admission to the new lifecycle on that same native generation, joining the old
+borrow before returning. Read-only and pre-admission discovery keep their existing
+owners and do not create storage. Reply settlement and database close join accepted
+phases, including those still waiting for foreground admission. Schemas, stored
+bytes, retention, SDK signatures, and update behavior are unchanged.
+
 ## Keep one store owner
 
 Manual `sessions.compact` trimming with `maxLines` runs on the existing agent
@@ -2274,8 +2286,10 @@ idle gaps, and foreground history retains its separate reader. Branch identity a
 reads use metadata without loading saved prompts or diff snapshots. After a complete scan
 verifies unique indexed identities and backward ancestry, linear canonical
 appends, including metadata, extend the active summary from the new sequence
-range. Rewrites, navigation changes, and legacy or irregular graphs use the
-complete scanner. First reads still scale with transcript length; cached append
+range. After validating the appended navigation, headline selection reads message
+bodies newest-first and stops at the first visible, nonempty headline, retaining
+the previous headline when none is found. Rewrites, navigation changes, and legacy
+or irregular graphs use the complete scanner. First reads still scale with transcript length; cached append
 refreshes scale with new entries and branch count. Startup and memory-pressure
 retirement can still require worker creation. No schema, stored transcript, data
 retention, or configuration changes are required.
@@ -3006,6 +3020,13 @@ preparation and result publication. Reader cleanup joins started preparation whi
 preserving the original failure. Process-held incognito reads retain their existing
 native lifetime owner. Metadata-change tolerance, missing-session results, stored
 bytes, and update behavior are unchanged.
+
+Personal account labels for chat startup and asynchronous account selection read
+committed summaries in the shared-state read worker, independently of the writer
+queue. The reader checks account ownership and returns no credentials. Requester,
+identity, and source-generation checks still gate publication; synchronous SDK
+compatibility uses the same summary query. Schema, stored bytes, and update
+behavior are unchanged.
 
 Saved-session provider discovery retains its previous synchronous canonical-row
 check only at the final credential-send boundary. Guarded fetch requires that

@@ -33,11 +33,7 @@ export async function withSessionHistoryReadAdmission<T>(
     aborters: Set<() => void>;
     assertCurrent: () => void;
   },
-  run: (
-    admit: ReadAdmission,
-    remainingTime: () => number,
-    lane: SessionHistoryWorkerLane,
-  ) => Promise<T>,
+  run: (admit: ReadAdmission, lane: SessionHistoryWorkerLane) => Promise<T>,
 ): Promise<T> {
   request.assertCurrent();
   const deadline = performance.now() + request.timeoutMs;
@@ -109,7 +105,7 @@ export async function withSessionHistoryReadAdmission<T>(
       prepared?.assertCurrent();
       return reply;
     };
-    outcome = { value: await run(admit, remainingTime, lane) };
+    outcome = { value: await run(admit, lane) };
   } catch (error) {
     outcome = { error };
   }

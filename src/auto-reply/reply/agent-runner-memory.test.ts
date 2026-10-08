@@ -53,6 +53,7 @@ import {
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
+import { refreshSessionEntryFromStore } from "./agent-runner-core.js";
 import {
   runMemoryFlushIfNeeded as runMemoryFlushIfNeededRaw,
   runSessionCompactionIfNeeded as runSessionCompactionIfNeededRaw,
@@ -71,7 +72,9 @@ import {
   withTestModelContextTokens,
   writeTestSessionStore,
 } from "./agent-runner.test-fixtures.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
+import { waitForReplyRunSuccessorAdmission, type ReplyOperation } from "./reply-run-registry.js";
+import { getReplyOperationSessionReader } from "./reply-run-registry.state.js";
+import { admitReplyTurn } from "./reply-turn-admission.js";
 import { createSourceReplyDeliveryRuntime } from "./source-reply-delivery-runtime.js";
 import { createMockReplyOperation } from "./test-helpers.js";
 
@@ -1093,6 +1096,60 @@ describe("runMemoryFlushIfNeeded", () => {
     } finally {
       release.resolve();
       await Promise.allSettled([pending]);
+    }
+  });
+
+  it("refreshes the retained reply reader after preflight accepts a successor", async () => {
+    const scope = sessionScope("agent:main:preflight-successor", "preflight-successor.sqlite");
+    const sessionEntry = createFlushSessionEntry({
+      lifecycleRevision: "preflight-lifecycle",
+      totalTokens: 90_000,
+    });
+    await upsertSessionEntryCore(scope, sessionEntry);
+    const admitted = await admitReplyTurn({ ...scope, kind: "visible", resetTriggered: false });
+    if (admitted.status !== "owned") {
+      throw new Error("Fixture requires retained reply admission");
+    }
+    incrementCompactionCountMock.mockImplementation(incrementCompactionCount);
+    compactEmbeddedAgentSessionMock.mockImplementationOnce(async (_params, host) => {
+      const accepted = await acceptCompactionSuccessor({
+        currentTarget: scope,
+        expectedEntry: {
+          sessionId: sessionEntry.sessionId,
+          lifecycleRevision: sessionEntry.lifecycleRevision,
+          activeWriterRunId: sessionEntry.activeWriterRunId,
+        },
+        assertActive: () => admitted.operation.abortSignal.throwIfAborted(),
+        result: {
+          ok: true,
+          compacted: true,
+          result: { sessionId: "preflight-successor", tokensBefore: 90_000, tokensAfter: 42 },
+        },
+        onCommitted: host.onCommitted,
+      });
+      return {
+        ok: true,
+        compacted: true,
+        result: { sessionId: accepted.sessionId, tokensAfter: 42 },
+      };
+    });
+    try {
+      const compacted = await runDefaultPreflight(sessionEntry, {
+        ...scope,
+        replyOperation: admitted.operation,
+        ...createCompactionLifecycle(admitted.operation),
+      });
+      expect(compacted?.sessionId).toBe("preflight-successor");
+      await expect(
+        refreshSessionEntryFromStore({
+          ...scope,
+          expectedGeneration: compacted,
+          reader: getReplyOperationSessionReader(admitted.operation),
+        }),
+      ).resolves.toMatchObject({ sessionId: "preflight-successor" });
+    } finally {
+      admitted.operation.complete();
+      await waitForReplyRunSuccessorAdmission(scope.sessionKey, null);
     }
   });
 

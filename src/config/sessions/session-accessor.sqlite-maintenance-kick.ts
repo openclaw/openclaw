@@ -484,6 +484,9 @@ async function runPendingMaintenance(
           maintenance,
           ageChanges: pending.changes,
           expected: verify ? result.ageSnapshot : undefined,
+          readOnly: result.readOnlyInput
+            ? { input: result.readOnlyInput, snapshot: result.ageSnapshot }
+            : undefined,
         },
       });
       if (age.kind === "maintenance-age" || age.kind === "maintenance-plan-stale") {

@@ -140,6 +140,7 @@ async function runOwnedGitCommand<
         killProcessTree: options.killProcessTree ?? (args[0] === "fetch" && gitArgs === args),
       }),
     options.signal,
+    options.refMutationDirectory,
   );
 }
 
@@ -150,30 +151,36 @@ async function withGitRefAdmission<
   args: string[],
   run: (args: string[]) => Promise<T>,
   signal?: AbortSignal,
+  refMutationDirectory?: string,
 ): Promise<T> {
   const mutatesRefs =
     args[0] === "fetch" ||
     args[0] === "update-ref" ||
+    args[0] === "merge" ||
+    (args[0] === "symbolic-ref" && args.length === 3 && !args[1]?.startsWith("-")) ||
     (args[0] === "branch" &&
       args.some((arg) => arg === "-d" || arg === "-D" || arg === "--delete"));
   if (!mutatesRefs) {
     return await run(args);
   }
-  const resolved = await run(["rev-parse", "--git-common-dir"]);
-  if (resolved.termination !== "exit" || resolved.code !== 0) {
-    return resolved;
+  let commonDir = refMutationDirectory;
+  if (!commonDir) {
+    const resolved = await run(["rev-parse", "--git-common-dir"]);
+    if (resolved.termination !== "exit" || resolved.code !== 0) {
+      return resolved;
+    }
+    commonDir =
+      typeof resolved.stdout === "string"
+        ? resolved.stdout
+        : decodeWindowsOutputBuffer({
+            buffer: Buffer.from(
+              resolved.stdout.buffer,
+              resolved.stdout.byteOffset,
+              resolved.stdout.byteLength,
+            ),
+            windowsEncoding: resolveWindowsConsoleEncoding(),
+          });
   }
-  const commonDir =
-    typeof resolved.stdout === "string"
-      ? resolved.stdout
-      : decodeWindowsOutputBuffer({
-          buffer: Buffer.from(
-            resolved.stdout.buffer,
-            resolved.stdout.byteOffset,
-            resolved.stdout.byteLength,
-          ),
-          windowsEncoding: resolveWindowsConsoleEncoding(),
-        });
   let entered = false;
   try {
     return await enqueueGitRefMutation(
@@ -227,6 +234,7 @@ export async function runGitBuffered(
       });
     },
     options.signal,
+    options.refMutationDirectory,
   );
 }
 

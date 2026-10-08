@@ -3,7 +3,7 @@ import { invalidateRegisteredAgentDatabasesMemo } from "../../state/openclaw-age
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
-import { readExpiredCronRunEntriesInWorker } from "./session-entry-read-runtime.js";
+import { readExpiredCronRunEntriesInWorker } from "./session-entry-read-maintenance.js";
 import { maintenanceLane } from "./session-transcript-worker-resources.js";
 
 it("checks the captured registry after cron data cleanup", async () => {

@@ -359,7 +359,7 @@ it("keeps cold reads progressing while history searches await the same writer", 
   }
 });
 
-it("hands cold search deadlines to the pool before its host status wait", async () => {
+it("hands admitted read deadlines to the worker pool", async () => {
   observed.preparedDatabase = false;
   const request = input();
   const statusStarted = createDeferredCore();
