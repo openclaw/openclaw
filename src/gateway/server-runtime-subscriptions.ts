@@ -79,12 +79,15 @@ function dispatchEventHandler<TEvent>(params: {
   log: SubsystemLogger;
   failureMessage: string;
   context: Record<string, unknown>;
+  isDeliveryCurrent?: () => boolean;
   onFailure?: (error: unknown) => void;
 }) {
   return runWithRetainedGatewayRootWork(() =>
     params
       .loadHandler()
-      .then((handler) => handler(params.event))
+      .then((handler) =>
+        params.isDeliveryCurrent?.() === false ? undefined : handler(params.event),
+      )
       .then(() => undefined)
       .catch((error: unknown) => {
         params.log.warn(params.failureMessage, { ...params.context, error });
@@ -567,13 +570,12 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
       ? {}
       : undefined;
     const dispatch = dispatchEventHandler<AgentEventRuntimePayload>({
-      loadHandler: async () => {
-        if (terminalPreparation) {
-          await terminalPreparation;
-        }
-        const handler = await agentEventHandlerLoader.load();
-        return (event) => (isDeliveryCurrent() ? handler(event) : undefined);
-      },
+      // An extra async hop lets empty queued finalization overtake reply buffer capture.
+      loadHandler: () =>
+        terminalPreparation
+          ? terminalPreparation.then(agentEventHandlerLoader.load)
+          : agentEventHandlerLoader.load(),
+      isDeliveryCurrent,
       event: evt,
       log: params.log,
       failureMessage: "Agent event dispatch failed",
