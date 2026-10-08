@@ -319,16 +319,8 @@ export function createDispatchReplyOperationCoordinator(params: {
         storePath: params.operationSessionStoreEntry.storePath,
       }));
     }
-    if (phase !== "pre_dispatch") {
-      // The next full reply operation revalidates the persisted session. Drop
-      // the hook-only lease after its queued delivery settles so a waiting
-      // lifecycle mutation cannot commit while that delivery is still active.
-      await releasePreDispatchLifecycleAdmission(() =>
-        waitForReplyDispatcherIdle(params.dispatcher),
-      );
-      if (preDispatchLifecycleInterrupted) {
-        return { status: dispatchReplyOperation ? "aborted" : "busy" };
-      }
+    if (phase !== "pre_dispatch" && preDispatchLifecycleInterrupted) {
+      return { status: dispatchReplyOperation ? "aborted" : "busy" };
     }
     if (dispatchReplyOperation) {
       return { status: "ready" };
@@ -374,6 +366,16 @@ export function createDispatchReplyOperationCoordinator(params: {
       // An embedded owner can outlive its reply-operation registration, including pre-dispatch.
       // Registered owners first retain pre-dispatch admission, then resolve the queue in getReplyFromConfig.
       return { status: "ready" };
+    }
+    if (phase !== "pre_dispatch") {
+      // Queue resolution still writes session metadata. Keep its borrowed lease
+      // until the resolver settles or a full reply operation takes ownership.
+      await releasePreDispatchLifecycleAdmission(() =>
+        waitForReplyDispatcherIdle(params.dispatcher),
+      );
+      if (preDispatchLifecycleInterrupted) {
+        return { status: dispatchReplyOperation ? "aborted" : "busy" };
+      }
     }
     const allowActiveResolution =
       (replyTurnKind === "visible" || params.replyOptions?.internalEventExecution !== undefined) &&
@@ -554,11 +556,16 @@ export function createDispatchReplyOperationCoordinator(params: {
   };
 
   const getDispatchAbortSignal = () => {
-    const operationSignal =
-      dispatchReplyOperation?.abortSignal ?? dispatchLifecycleAbortController?.signal;
-    // The operation mirrors upstream aborts until the backend commits its
-    // terminal outcome, then keeps delivery alive during bounded finalization.
-    return operationSignal ?? params.replyOptions?.abortSignal;
+    // The full operation owns upstream cancellation and terminal delivery settlement.
+    if (dispatchReplyOperation) {
+      return dispatchReplyOperation.abortSignal;
+    }
+    const lifecycleSignal =
+      dispatchLifecycleAbortController?.signal ?? preDispatchLifecycleAbortController?.signal;
+    const upstreamSignal = params.replyOptions?.abortSignal;
+    return lifecycleSignal && upstreamSignal
+      ? AbortSignal.any([lifecycleSignal, upstreamSignal])
+      : (lifecycleSignal ?? upstreamSignal);
   };
 
   const getQueuedFollowupAbortSignal = () =>
