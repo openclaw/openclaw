@@ -1,5 +1,6 @@
 // Approval creation and bounded query transactions, executed in workers.
 import type { DatabaseSync } from "node:sqlite";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import {
@@ -30,7 +31,7 @@ import {
   selectOperatorApprovalRowByLocator,
   decodeOperatorApprovalRow,
   denyCorruptPendingRow,
-  encodePendingOperatorApproval,
+  inputMatchesExistingRow,
   expirePendingRow,
   decodeOperatorApprovalHistoryCursor,
   encodeOperatorApprovalHistoryCursor,
@@ -61,7 +62,7 @@ export function insertOperatorApprovalInDatabase(params: {
     approvalId: id,
     approvalKind: input.kind,
   });
-  requireString(input.runtimeEpoch, "operator approval runtime epoch");
+  const runtimeEpoch = requireString(input.runtimeEpoch, "operator approval runtime epoch");
   if (!isValidTimestamp(input.createdAtMs) || !isValidTimestamp(input.expiresAtMs)) {
     throw new Error("operator approval timestamps must be non-negative safe integers");
   }
@@ -102,7 +103,7 @@ export function insertOperatorApprovalInDatabase(params: {
     if (hasApprovalLocatorNamespaceConflict({ database, id, resolutionRef })) {
       return { outcome: "conflict" };
     }
-    const fields = encodePendingOperatorApproval(input, serialized);
+    const source = input.source ?? {};
     const result = executeSqliteQuerySync(
       database.db,
       stateDb
@@ -110,7 +111,23 @@ export function insertOperatorApprovalInDatabase(params: {
         .values({
           approval_id: id,
           resolution_ref: resolutionRef,
-          ...fields,
+          kind: input.kind,
+          status: "pending",
+          presentation_json: presentationJson,
+          requested_by_device_id: normalizeNullableString(input.requester?.deviceId),
+          requested_by_client_id: normalizeNullableString(input.requester?.clientId),
+          requested_by_device_token_auth: input.requester?.deviceTokenAuth === true ? 1 : 0,
+          reviewer_device_ids_json: reviewerDeviceIdsJson,
+          source_agent_id: normalizeNullableString(source.agentId),
+          source_session_key: normalizeNullableString(source.sessionKey),
+          source_session_id: normalizeNullableString(source.sessionId),
+          source_run_id: normalizeNullableString(source.runId),
+          source_tool_call_id: normalizeNullableString(source.toolCallId),
+          source_tool_name: normalizeNullableString(source.toolName),
+          audience_session_keys_json: audienceSessionKeysJson,
+          runtime_epoch: runtimeEpoch,
+          created_at_ms: input.createdAtMs,
+          expires_at_ms: input.expiresAtMs,
           updated_at_ms: input.createdAtMs,
           decision: null,
           terminal_reason: null,
@@ -150,8 +167,7 @@ export function insertOperatorApprovalInDatabase(params: {
       }
       return { outcome: "inserted", record };
     }
-    const existing: Record<string, unknown> = row;
-    if (!Object.entries(fields).every(([key, value]) => existing[key] === value)) {
+    if (!inputMatchesExistingRow(input, row, serialized)) {
       return { outcome: "conflict" };
     }
     if (executionIdentityBinding) {

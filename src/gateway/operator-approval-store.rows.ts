@@ -14,6 +14,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
+import { operatorApprovalTerminalFields } from "./operator-approval-store.fields.js";
 import type {
   NewOperatorApproval,
   OperatorApprovalDatabase,
@@ -21,7 +22,6 @@ import type {
   OperatorApprovalHistoryCursor,
   OperatorApprovalKind,
   OperatorApprovalRecord,
-  OperatorApprovalResolver,
   OperatorApprovalResolverKind,
   OperatorApprovalRow,
   OperatorApprovalStatus,
@@ -410,24 +410,6 @@ export function matchesExpectedApprovalOwner(params: {
   );
 }
 
-export function operatorApprovalTerminalFields(
-  status: Exclude<OperatorApprovalStatus, "pending">,
-  terminalReason: OperatorApprovalTerminalReason,
-  nowMs: number,
-  decision: OperatorApprovalDecision = "deny",
-  resolver: OperatorApprovalResolver = { kind: "system", id: null },
-) {
-  return {
-    status,
-    decision,
-    terminal_reason: terminalReason,
-    resolved_at_ms: nowMs,
-    resolver_kind: resolver.kind,
-    resolver_id: resolver.id,
-    updated_at_ms: nowMs,
-  };
-}
-
 export function denyCorruptPendingRow(params: {
   database: OpenClawStateDatabase;
   id: string;
@@ -474,32 +456,33 @@ export function requireDecodedRecord(row: OperatorApprovalRow): OperatorApproval
   return record;
 }
 
-export function encodePendingOperatorApproval(
+export function inputMatchesExistingRow(
   input: NewOperatorApproval,
+  row: OperatorApprovalRow,
   serialized: {
     presentationJson: string;
     reviewerDeviceIdsJson: string;
     audienceSessionKeysJson: string;
   },
-) {
+): boolean {
   const source = input.source ?? {};
-  return {
-    status: "pending",
-    kind: input.kind,
-    presentation_json: serialized.presentationJson,
-    requested_by_device_id: normalizeNullableString(input.requester?.deviceId),
-    requested_by_client_id: normalizeNullableString(input.requester?.clientId),
-    requested_by_device_token_auth: input.requester?.deviceTokenAuth === true ? 1 : 0,
-    reviewer_device_ids_json: serialized.reviewerDeviceIdsJson,
-    source_agent_id: normalizeNullableString(source.agentId),
-    source_session_key: normalizeNullableString(source.sessionKey),
-    source_session_id: normalizeNullableString(source.sessionId),
-    source_run_id: normalizeNullableString(source.runId),
-    source_tool_call_id: normalizeNullableString(source.toolCallId),
-    source_tool_name: normalizeNullableString(source.toolName),
-    audience_session_keys_json: serialized.audienceSessionKeysJson,
-    runtime_epoch: input.runtimeEpoch.trim(),
-    created_at_ms: input.createdAtMs,
-    expires_at_ms: input.expiresAtMs,
-  } satisfies Partial<OperatorApprovalRow>;
+  return (
+    row.status === "pending" &&
+    row.kind === input.kind &&
+    row.presentation_json === serialized.presentationJson &&
+    row.requested_by_device_id === normalizeNullableString(input.requester?.deviceId) &&
+    row.requested_by_client_id === normalizeNullableString(input.requester?.clientId) &&
+    row.requested_by_device_token_auth === (input.requester?.deviceTokenAuth === true ? 1 : 0) &&
+    row.reviewer_device_ids_json === serialized.reviewerDeviceIdsJson &&
+    row.source_agent_id === normalizeNullableString(source.agentId) &&
+    row.source_session_key === normalizeNullableString(source.sessionKey) &&
+    row.source_session_id === normalizeNullableString(source.sessionId) &&
+    row.source_run_id === normalizeNullableString(source.runId) &&
+    row.source_tool_call_id === normalizeNullableString(source.toolCallId) &&
+    row.source_tool_name === normalizeNullableString(source.toolName) &&
+    row.audience_session_keys_json === serialized.audienceSessionKeysJson &&
+    row.runtime_epoch === input.runtimeEpoch.trim() &&
+    row.created_at_ms === input.createdAtMs &&
+    row.expires_at_ms === input.expiresAtMs
+  );
 }

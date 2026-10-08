@@ -6,6 +6,7 @@ import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-co
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { mintCronStandingGrantLocked } from "./operator-approval-standing-grants.js";
 import type { CronStandingGrantMintSpec } from "./operator-approval-standing-grants.types.js";
+import { operatorApprovalTerminalFields } from "./operator-approval-store.fields.js";
 import {
   OPERATOR_APPROVAL_TERMINAL_RETENTION_MS,
   requireApprovalId,
@@ -18,7 +19,6 @@ import {
   requireDecodedRecord,
   clampAuditTimestamp,
   isValidTimestamp,
-  operatorApprovalTerminalFields,
 } from "./operator-approval-store.rows.js";
 import type {
   OperatorApprovalDecision,

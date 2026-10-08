@@ -384,8 +384,12 @@ export function createModelAccountConnectService(options: {
       assertRunning(action);
       return { links };
     },
-    linkAsync: (action: ModelAccountConnectWorkerAction, authProfileId: string) =>
-      selectLink(action, authProfileId, false),
+    async linkAsync(
+      action: ModelAccountConnectWorkerAction,
+      authProfileId: string,
+    ): Promise<UsersLinkAuthProfileResult> {
+      return selectLink(action, authProfileId, false);
+    },
     async unlinkAsync(
       action: ModelAccountConnectWorkerAction,
       provider: string,
@@ -456,8 +460,12 @@ export function createModelAccountConnectService(options: {
       assertRunning(action);
       return { providers: [...providers.values()] };
     },
-    selectAsync: (action: ModelAccountConnectWorkerAction, authProfileId: string) =>
-      selectLink(action, authProfileId, true),
+    async selectAsync(
+      action: ModelAccountConnectWorkerAction,
+      authProfileId: string,
+    ): Promise<UsersSelectModelAccountResult> {
+      return selectLink(action, authProfileId, true);
+    },
     async start(
       action: ModelAccountConnectAction,
       provider: string,
