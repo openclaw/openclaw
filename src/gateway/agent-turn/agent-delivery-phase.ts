@@ -93,18 +93,33 @@ export async function resolveAgentDeliveryPhase(params: {
     }
   }
 
-  const wantsDelivery = params.request.deliver === true;
-  const explicitThreadId = normalizeOptionalString(params.recipientThreadId);
-  const turnSourceChannel = normalizeOptionalString(params.recipientChannel);
+  const turnSourceChannel = normalizeMessageChannel(params.recipientChannel);
+  const webchatClient = params.client?.connect && params.isWebchatConnect(params.client.connect);
+  const requestedChannel = normalizeMessageChannel(
+    params.request.replyChannel ?? turnSourceChannel,
+  );
+  // WebChat owns its reply; saved external routes are only a fallback for unbound callers.
+  const sessionOnly =
+    requestedChannel === INTERNAL_MESSAGE_CHANNEL ||
+    (webchatClient &&
+      (!requestedChannel || requestedChannel === "last") &&
+      !params.replyTo &&
+      !params.to);
+  const wantsDelivery = params.request.deliver === true && !sessionOnly;
+  const explicitThreadId = sessionOnly
+    ? undefined
+    : normalizeOptionalString(params.recipientThreadId);
   const deliveryPlan = await resolveAgentDeliveryPlanWithSessionRoute({
     cfg: params.cfgForAgent ?? params.cfg,
     agentId: activeSessionAgentId,
     currentSessionKey: params.resolvedSessionKey,
-    sessionEntry: params.sessionEntry,
-    requestedChannel: params.request.replyChannel ?? params.recipientChannel,
-    explicitTo: params.replyTo || params.to || undefined,
+    sessionEntry: sessionOnly ? undefined : params.sessionEntry,
+    requestedChannel: sessionOnly ? INTERNAL_MESSAGE_CHANNEL : requestedChannel,
+    explicitTo: sessionOnly ? undefined : params.replyTo || params.to || undefined,
     explicitThreadId,
-    accountId: params.request.replyAccountId ?? params.recipientAccountId,
+    accountId: sessionOnly
+      ? undefined
+      : (params.request.replyAccountId ?? params.recipientAccountId),
     wantsDelivery,
     turnSourceChannel,
     turnSourceTo: params.to || undefined,
@@ -218,12 +233,10 @@ export async function resolveAgentDeliveryPhase(params: {
     );
   }
 
-  const normalizedTurnSource = normalizeMessageChannel(turnSourceChannel);
   const turnSourceMessageChannel =
-    normalizedTurnSource &&
-    (isGatewayMessageChannel(normalizedTurnSource) ||
-      isInternalNonDeliveryChannel(normalizedTurnSource))
-      ? normalizedTurnSource
+    turnSourceChannel &&
+    (isGatewayMessageChannel(turnSourceChannel) || isInternalNonDeliveryChannel(turnSourceChannel))
+      ? turnSourceChannel
       : undefined;
   return {
     activeSessionAgentId,
@@ -234,7 +247,7 @@ export async function resolveAgentDeliveryPhase(params: {
     resolvedTo,
     originMessageChannel:
       turnSourceMessageChannel ??
-      (params.client?.connect && params.isWebchatConnect(params.client.connect)
+      (webchatClient
         ? INTERNAL_MESSAGE_CHANNEL
         : resolvedChannel !== INTERNAL_MESSAGE_CHANNEL ||
             deliveryPlan.baseDelivery.channel ||

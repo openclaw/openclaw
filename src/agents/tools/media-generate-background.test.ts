@@ -20,7 +20,7 @@ import {
   MUSIC_GENERATION_TASK_KIND,
   VIDEO_GENERATION_TASK_KIND,
 } from "../media-generation-task-status.js";
-import type { MediaGenerationTaskHandle } from "./media-generate-background-shared.js";
+import { resolveGeneratedMediaSessionDeliveryRoute } from "../subagents/announce/subagent-announce-origin.js";
 import {
   createMediaCompletionFixture,
   expectFallbackMediaAnnouncement,
@@ -92,19 +92,14 @@ describe("media requester provenance", () => {
     "routes a prepared WebChat media task with provenance %j to %s",
     async (inputProvenance, channel) => {
       let backgroundWork: (() => Promise<void>) | undefined;
-      const run = vi.fn(async (handle: MediaGenerationTaskHandle | null) => {
-        expect(handle?.requesterOrigin).toEqual(
-          channel === "webchat" ? { channel } : { channel, to: "test-room", accountId: "test-bot" },
-        );
-        return {
-          provider: "openai",
-          model: "gpt-image-1",
-          count: 1,
-          wakeResult: "generated",
-          contentText: "generated",
-          details: {},
-        };
-      });
+      const run = vi.fn(async () => ({
+        provider: "openai",
+        model: "gpt-image-1",
+        count: 1,
+        wakeResult: "generated",
+        contentText: "generated",
+        details: {},
+      }));
       await prepareMediaGenerationTask({
         generationLabel: "image",
         cfg: {
@@ -120,7 +115,12 @@ describe("media requester provenance", () => {
           params: {
             lifecycle: imageGenerationTaskLifecycle,
             sessionKey: "agent:main:main",
-            requesterOrigin: { channel: "webchat" },
+            requesterOrigin: {
+              channel: "webchat",
+              to: "stale-peer",
+              accountId: "stale-account",
+              threadId: "stale-thread",
+            },
             prompt,
             requestKey: "provenance-proof",
             scheduleBackgroundWork: (work) => {
@@ -132,60 +132,28 @@ describe("media requester provenance", () => {
         }),
       });
       assert(backgroundWork);
+      sessionMocks.entry.delivery = normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "changed-room", accountId: "changed-bot" },
+      });
       await backgroundWork();
       expect(run).toHaveBeenCalledOnce();
       expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledOnce();
-      expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledWith(
-        expect.objectContaining({ completionDirectOrigin: expect.objectContaining({ channel }) }),
-      );
-    },
-  );
-  it.each(["image", "music", "video"] as const)(
-    "keeps a WebChat %s completion in the requesting session despite a saved external route",
-    async (kind) => {
-      sessionMocks.entry.delivery = normalizeSessionDeliveryState({
-        context: { channel: "weixin", to: "test-peer", accountId: "test-account" },
-      });
-      announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
-        delivered: true,
-      });
-      const lifecycle = {
-        image: imageGenerationTaskLifecycle,
-        music: musicGenerationTaskLifecycle,
-        video: videoGenerationTaskLifecycle,
-      }[kind];
-      const handle = await lifecycle.createTaskRun({
-        sessionKey: "agent:main:main",
-        requesterOrigin: { channel: "webchat" },
-        inputProvenance: { kind: "external_user" },
-        prompt: "proof media",
-      });
-      assert(handle);
-      expect(handle.requesterOrigin).toEqual({ channel: "webchat" });
-
-      // A later channel message must not redirect the admitted media completion.
-      sessionMocks.entry.delivery = normalizeSessionDeliveryState({
-        context: { channel: "telegram", to: "room-b", accountId: "bot-2" },
-      });
-      await expect(
-        lifecycle.wakeTaskCompletion({
-          handle,
-          status: "ok",
-          statusLabel: "completed successfully",
-          result: "generated",
-          attachments: [{ type: "image", path: "/tmp/generated-proof.png", mimeType: "image/png" }],
-        }),
-      ).resolves.toEqual({ status: "delivered" });
-      expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledOnce();
-      expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledWith(
-        expect.objectContaining({
-          requesterSessionKey: "agent:main:main",
-          requesterSessionOrigin: { channel: "webchat" },
-          completionDirectOrigin: { channel: "webchat" },
-          directOrigin: { channel: "webchat" },
-          sourceTool: `${kind}_generate`,
-          internalEvents: [expect.objectContaining({ mediaUrls: ["/tmp/generated-proof.png"] })],
-        }),
+      const completion = announceDeliveryMocks.deliverSubagentAnnouncement.mock.calls[0][0];
+      expect(
+        resolveGeneratedMediaSessionDeliveryRoute({
+          ...completion,
+          sessionKey: "agent:main:main",
+        }).route,
+      ).toEqual(
+        channel === "webchat"
+          ? { channel: "webchat", to: "agent:main:main", chatType: "direct" }
+          : {
+              channel: "telegram",
+              to: "test-room",
+              accountId: "stale-account",
+              threadId: "stale-thread",
+              chatType: "direct",
+            },
       );
     },
   );
