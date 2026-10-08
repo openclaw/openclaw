@@ -1237,7 +1237,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/agents/openclaw-tools.swarm.test.ts",
   "src/agents/openclaw-tools.tts-config.test.ts",
   "src/agents/outcome-fallback-runtime-contract.test.ts",
-  "src/agents/prepared-model-catalog-worker.captures.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.chat-metadata.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.custody.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.directory.integration.test.ts",

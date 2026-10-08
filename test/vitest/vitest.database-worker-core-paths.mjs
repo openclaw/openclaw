@@ -929,7 +929,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/prepared-model-catalog-worker.workspace-heap.integration.test.ts",
   "src/agents/prepared-model-runtime.published-resources.test.ts",
   "src/agents/prepared-model-runtime.stale-resources.test.ts",
-  "src/agents/prepared-model-catalog-worker.captures.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.metadata.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.native-renewal.integration.test.ts",
   "src/agents/prepared-model-catalog-worker.pool.integration.test.ts",
