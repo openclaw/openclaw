@@ -4,11 +4,12 @@ import {
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
   ErrorCodes,
+  type ErrorShape,
   errorShape,
   validateModelsListParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
-import { refreshExpiredPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
+import { getPublishedPreparedModelCatalogOwnerSnapshot } from "../../agents/prepared-model-catalog.js";
 import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
 import { applyRemoteModelCatalogUpdate } from "../../agents/prepared-model-runtime.js";
 import { roleScopesAllow } from "../../shared/operator-scope-compat.js";
@@ -30,7 +31,7 @@ import type { GatewayRequestHandlers } from "./types.js";
 import { preparePersonalModelAccountSelection } from "./users-model-account-access.js";
 import { assertValidParams } from "./validation.js";
 
-// Ordinary reads return saved rows while expired provider inventory refreshes in the background.
+// Ordinary reads retain inventory; explicit refresh and lifecycle changes own discovery.
 export const modelsHandlers: GatewayRequestHandlers = {
   "models.list": createPreparedReadHandler(
     async (options) => {
@@ -104,7 +105,10 @@ export const modelsHandlers: GatewayRequestHandlers = {
         };
         assertCurrent();
         if (params.refresh !== true) {
-          refreshExpiredPreparedModelCatalog({ agentId: resolved.agentId, config: cfg });
+          getPublishedPreparedModelCatalogOwnerSnapshot({
+            agentId: resolved.agentId,
+            config: cfg,
+          })?.recheckNativeLogin?.();
         }
         return {
           assertCurrent,
@@ -183,26 +187,22 @@ export const modelsHandlers: GatewayRequestHandlers = {
       }
     },
     (error, { respond }) => {
+      let failure: ErrorShape;
       if (error instanceof UnknownModelCatalogProviderError) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
-        return;
-      }
-      if (error instanceof SessionMutationAuthorizationChangedError) {
-        respond(false, undefined, error.error);
-        return;
-      }
-      if (error instanceof PreparedModelRuntimePublicationSupersededError) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.UNAVAILABLE, error.message, { retryable: true, retryAfterMs: 0 }),
-        );
-        return;
-      }
-      if (!(error instanceof ModelAccountConnectAuthorityError)) {
+        failure = errorShape(ErrorCodes.INVALID_REQUEST, error.message);
+      } else if (error instanceof SessionMutationAuthorizationChangedError) {
+        failure = error.error;
+      } else if (error instanceof PreparedModelRuntimePublicationSupersededError) {
+        failure = errorShape(ErrorCodes.UNAVAILABLE, error.message, {
+          retryable: true,
+          retryAfterMs: 0,
+        });
+      } else if (error instanceof ModelAccountConnectAuthorityError) {
+        failure = errorShape(ErrorCodes.FORBIDDEN, error.message);
+      } else {
         throw error;
       }
-      respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, error.message));
+      respond(false, undefined, failure);
     },
   ),
 };

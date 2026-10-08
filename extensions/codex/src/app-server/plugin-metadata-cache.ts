@@ -145,14 +145,11 @@ export class CodexPluginMetadataCache {
 
   invalidate(appCacheKey: string): void {
     this.generations.set(appCacheKey, (this.generations.get(appCacheKey) ?? 0) + 1);
-    for (const [entryKey, entry] of this.entries) {
-      if (entry.appCacheKey === appCacheKey) {
-        this.entries.delete(entryKey);
-      }
-    }
-    for (const [entryKey, pending] of this.inFlight) {
-      if (pending.appCacheKey === appCacheKey) {
-        this.inFlight.delete(entryKey);
+    for (const cache of [this.entries, this.inFlight]) {
+      for (const [entryKey, entry] of cache) {
+        if (entry.appCacheKey === appCacheKey) {
+          cache.delete(entryKey);
+        }
       }
     }
   }

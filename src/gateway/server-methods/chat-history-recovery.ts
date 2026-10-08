@@ -3,7 +3,7 @@ import {
   resolveActiveEmbeddedRunOwner,
   resolveActiveEmbeddedRunHandleSessionId,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { projectInFlightRunSnapshot } from "../chat-abort.js";
+import { projectInFlightRunSnapshot } from "../chat-inflight-snapshot.js";
 import type { ChatRunState } from "../server-chat-state.js";
 import type { RespondFn } from "./types.js";
 

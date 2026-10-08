@@ -264,15 +264,6 @@ class SmsManager(
       return params.conversationReview && params.includeMms && (hasExplicitPhoneNumber || hasSingleResolvedPhoneNumber)
     }
 
-    internal fun effectiveSearchParams(
-      params: QueryParams,
-      resolvedPhoneNumbers: List<String> = emptyList(),
-    ): QueryParams {
-      if (!shouldUseConversationReviewByPhoneMode(params, resolvedPhoneNumbers)) return params
-      val reviewLimit = maxOf(params.limit, 25)
-      return params.copy(limit = reviewLimit)
-    }
-
     internal fun resolveSearchParams(
       params: QueryParams,
       normalizedPhoneNumber: String?,
@@ -280,7 +271,11 @@ class SmsManager(
     ): QueryParams {
       val effectivePhoneNumber = normalizedPhoneNumber ?: resolvedPhoneNumbers.singleOrNull()
       val normalizedParams = params.copy(phoneNumber = effectivePhoneNumber)
-      return effectiveSearchParams(normalizedParams, resolvedPhoneNumbers)
+      return if (shouldUseConversationReviewByPhoneMode(normalizedParams, resolvedPhoneNumbers)) {
+        normalizedParams.copy(limit = maxOf(params.limit, 25))
+      } else {
+        normalizedParams
+      }
     }
 
     internal fun toByPhoneLookupNumber(phone: String): String = phone.filter { it.isDigit() }

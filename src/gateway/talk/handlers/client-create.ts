@@ -8,10 +8,7 @@ import {
   errorShape,
   validateTalkClientCreateParams,
 } from "../../../../packages/gateway-protocol/src/index.js";
-import {
-  AgentSelectionRequiredError,
-  resolveAgentWorkspaceDir,
-} from "../../../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import { assertSecretOwnerAvailable } from "../../../secrets/runtime-degraded-state.js";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "../../../talk/agent-consult-tool.js";
 import { REALTIME_VOICE_AGENT_CONTROL_TOOL } from "../../../talk/agent-run-control-shared.js";
@@ -34,13 +31,13 @@ import { resolveSandboxedSessionCreation } from "../../operator-session-run.js";
 import type { GatewayRequestHandler } from "../../server-methods/types.js";
 import { assertValidParams } from "../../server-methods/validation.js";
 import { resolveOperatorSessionCreation } from "../../session-creation-provenance.js";
-import { SessionMutationAuthorizationChangedError } from "../../session-sharing.js";
 import { formatForLog } from "../../ws-log.js";
 import { createTalkClientAgentConsultRunner } from "../client-agent-consult.js";
 import {
   createTalkClientGatewayControlOwner,
   resolveTalkAgentConsultAuthority,
 } from "../client-gateway-control.js";
+import { talkRequestError } from "../request-error.js";
 import {
   buildRealtimeInstructions,
   buildRealtimeVoiceLaunchOptions,
@@ -148,6 +145,10 @@ export const createTalkClient: GatewayRequestHandler = async ({
     );
     replacement?.assertCurrent(target);
     const { agentId, sessionKey } = target;
+    const assertTargetCurrent = () => {
+      sessionMutationAuthorization?.assertCurrent();
+      replacement?.assertCurrent(target);
+    };
     const sessionTarget = { agentId, sessionKey: target.canonicalKey, storePath: target.storePath };
     assertSecretOwnerAvailable("capability", "talk:realtime");
     const resolution = resolveConfiguredRealtimeVoiceProvider({
@@ -181,15 +182,10 @@ export const createTalkClient: GatewayRequestHandler = async ({
       sessionKey: target.canonicalKey,
       warn: (message) => context.logGateway.warn(`talk realtime context: ${message}`),
     });
-    sessionMutationAuthorization?.assertCurrent();
-    replacement?.assertCurrent(target);
+    assertTargetCurrent();
     if (resolution.provider.createBrowserSession) {
-      const initialItems = await readTalkRealtimeInitialItems(target, () => {
-        sessionMutationAuthorization?.assertCurrent();
-        replacement?.assertCurrent(target);
-      });
-      sessionMutationAuthorization?.assertCurrent();
-      replacement?.assertCurrent(target);
+      const initialItems = await readTalkRealtimeInitialItems(target, assertTargetCurrent);
+      assertTargetCurrent();
       const controlSource =
         providerCapabilities?.handlesAgentConsult === true ? "delegation" : "transcript";
       const tools =
@@ -327,8 +323,7 @@ export const createTalkClient: GatewayRequestHandler = async ({
       };
       const assertCommitAllowed = () => {
         sessionMutationCommitGuard?.();
-        sessionMutationAuthorization?.assertCurrent();
-        replacement?.assertCurrent(target);
+        assertTargetCurrent();
         gatewayControlOwner?.assertOpen();
       };
       let session: Awaited<ReturnType<typeof resolution.provider.createBrowserSession>> | undefined;
@@ -502,19 +497,6 @@ export const createTalkClient: GatewayRequestHandler = async ({
       `Realtime provider "${resolution.provider.id}" does not support client-owned realtime sessions`,
     );
   } catch (err) {
-    if (err instanceof SessionMutationAuthorizationChangedError) {
-      respond(false, undefined, err.error);
-      return;
-    }
-    respond(
-      false,
-      undefined,
-      errorShape(
-        err instanceof AgentSelectionRequiredError
-          ? ErrorCodes.INVALID_REQUEST
-          : ErrorCodes.UNAVAILABLE,
-        formatForLog(err),
-      ),
-    );
+    respond(false, undefined, talkRequestError(err));
   }
 };

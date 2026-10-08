@@ -425,17 +425,14 @@ async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig): Promi
         out.push(normalizeOptionalString(String(entry)) ?? "");
       }
     }
-    const deduped: DoctorAllowFromList = [];
-    const seen = new Set<string>();
+    const deduped = new Map<string, DoctorAllowFromList[number]>();
     for (const entry of out) {
       const keyValue = normalizeOptionalString(String(entry)) ?? "";
-      if (!keyValue || seen.has(keyValue)) {
-        continue;
+      if (keyValue && !deduped.has(keyValue)) {
+        deduped.set(keyValue, entry);
       }
-      seen.add(keyValue);
-      deduped.push(entry);
     }
-    holder[key] = deduped;
+    holder[key] = [...deduped.values()];
     for (const replacement of replaced.slice(0, 5)) {
       changes.push(
         `- ${sanitizeForLog(pathLabel)}: resolved ${sanitizeForLog(replacement.from)} -> ${sanitizeForLog(replacement.to)}`,

@@ -101,7 +101,6 @@ export function createChatSendReplyDispatch(params: {
     createChatReplySessionReader(session);
   let assistantTranscriptRewriteState: ReturnType<typeof captureTranscriptStart>;
   let agentRunId = clientRunId;
-  let agentTranscriptLifecycleRevision: string | undefined;
   const captureAgentTranscriptStart = (
     runId = clientRunId,
     prepared?: PreparedReplyTranscriptStart | null,
@@ -109,7 +108,6 @@ export function createChatSendReplyDispatch(params: {
     agentRunId = runId;
     const transcriptStart = captureTranscriptStart(prepared);
     assistantTranscriptRewriteState = transcriptStart;
-    agentTranscriptLifecycleRevision = transcriptStart?.lifecycleRevision;
     return transcriptStart !== undefined;
   };
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
@@ -135,7 +133,7 @@ export function createChatSendReplyDispatch(params: {
     const admission = userTurnRecorder.getAdmissionReceipt();
     const transcriptStart = assistantTranscriptRewriteState;
     const runId = agentRunId;
-    const lifecycleRevision = agentTranscriptLifecycleRevision;
+    const lifecycleRevision = transcriptStart?.lifecycleRevision;
     const isRunCurrent = () => {
       const currentAdmission = userTurnRecorder.getAdmissionReceipt();
       if (

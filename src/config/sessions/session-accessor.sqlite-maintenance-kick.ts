@@ -512,6 +512,7 @@ async function runPendingMaintenance(
     // A deadline-probe retry cannot restore a completed pass's write protection.
     activeSessionKeys = [];
     if (isCurrent() && owner.generation === generation) {
+      assertInputsCurrent();
       // Empty finalization has no yield; the verified receipt also owns this deadline.
       nextMaintenanceAt = noFinalization ? verifiedNextAt : await readAge(false);
       if (owner.ageChanges.size > 0) {

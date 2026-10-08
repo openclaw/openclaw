@@ -19,24 +19,21 @@ export function heartbeatExecRouteKey(
     route.threadId == null
       ? undefined
       : plugin?.messaging?.resolveInboundConversation?.({ to: String(route.threadId), isGroup });
-  const scopedTarget = scopedConversation?.conversationId
-    ? plugin?.messaging?.resolveDeliveryTarget?.({
-        conversationId: scopedConversation.conversationId,
-        parentConversationId: scopedConversation.parentConversationId,
-      })
-    : undefined;
+  const resolveTarget = (conversation: typeof scopedConversation) =>
+    conversation?.conversationId
+      ? plugin?.messaging?.resolveDeliveryTarget?.({
+          conversationId: conversation.conversationId,
+          parentConversationId: conversation.parentConversationId,
+        })
+      : undefined;
+  const scopedTarget = resolveTarget(scopedConversation);
   const normalizedThread = scopedTarget?.threadId ?? route.threadId;
   const conversation = plugin?.messaging?.resolveInboundConversation?.({
     to: route.to,
     threadId: normalizedThread,
     isGroup,
   });
-  const target = conversation?.conversationId
-    ? plugin?.messaging?.resolveDeliveryTarget?.({
-        conversationId: conversation.conversationId,
-        parentConversationId: conversation.parentConversationId,
-      })
-    : undefined;
+  const target = resolveTarget(conversation);
   if (
     scopedTarget?.threadId != null &&
     scopedConversation?.conversationId !== conversation?.conversationId

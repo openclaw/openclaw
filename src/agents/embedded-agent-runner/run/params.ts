@@ -7,12 +7,8 @@ import type { CronRuntimeAuthority } from "../../../cron/runtime-authority.js";
 import type { CronScheduledToolCallerOrigin } from "../../../cron/scheduled-tool-policy.js";
 import type { RuntimePluginToolGrant } from "../../../plugins/runtime/tool-grant.js";
 import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
+import type { SkillLibraryAuthoringCapability } from "../../../skills/library/authoring.js";
 import type { ExplicitSkillSelection } from "../../../skills/types.js";
-import type {
-  SkillProposalOrigin,
-  SkillWorkshopProposalMutationBudget,
-  SkillWorkshopRunOptions,
-} from "../../../skills/workshop/types.js";
 import type { ModelFallbackAvailability } from "../../agent-scope.js";
 import type { MemoryFlushToolRunContext } from "../../agent-tools.memory-flush.types.js";
 import type { AssistantErrorTranscript } from "../../assistant-error-transcript.js";
@@ -119,20 +115,12 @@ export type RunEmbeddedAgentParams = {
   retryConnectionErrors?: boolean;
   /** Disable trajectory persistence for auxiliary runs with no durable session owner. */
   disableTrajectory?: boolean;
-  /** Restrict Skill Workshop to a bounded pending-proposal budget for an internal review run. */
-  skillWorkshopProposalOnly?: boolean;
-  /** Mark proposals created by this internal review as autonomous captures. */
-  skillWorkshopAutonomousCapture?: boolean;
-  skillWorkshopUpdateProposals?: boolean;
-  /** Preserve the foreground run as proposal provenance for an internal review run. */
-  skillWorkshopOrigin?: SkillProposalOrigin;
-  /** Run-scoped mutation budget shared across internal runner attempts. */
-  skillWorkshopProposalMutationBudget?: SkillWorkshopProposalMutationBudget;
-  /** Optional state environment for isolated Skill Workshop proposal persistence. */
-  skillWorkshopProposalEnv?: NodeJS.ProcessEnv;
-  /** Bind an operator-requested revision turn to the exact proposal revision they reviewed. */
-  skillWorkshopProposalRevision?: SkillWorkshopRunOptions["proposalRevision"];
-  skillLibraryAuthoring?: SkillWorkshopRunOptions["libraryAuthoring"];
+  /**
+   * Background Workshop review of this conversation: edits of existing skills require a prior
+   * view, and changes credit "review" with this originating session key as their provenance.
+   */
+  skillWorkshopReviewOf?: string;
+  skillLibraryAuthoring?: SkillLibraryAuthoringCapability;
   /** Explicit system prompt mode override for trusted callers. */
   promptMode?: PromptMode;
   /** Keep the message tool available even when a narrow profile would omit it. */
@@ -149,8 +137,6 @@ export type RunEmbeddedAgentParams = {
   sessionFile?: string;
   /** Require file tools to stay within the task workspace without changing exec policy. */
   requireWorkspaceOnly?: true;
-  /** Refuse an enabled sandbox that would redirect a review away from its workspace. */
-  requireWritableSandbox?: true;
   permissionMode?: SessionEntry["permissionMode"];
   sessionRoot?: string;
   /** Context supplied by internal producers, separate from inbound prompt text. */

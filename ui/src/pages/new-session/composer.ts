@@ -124,9 +124,7 @@ function handleComposerKeydown(
     return;
   }
   const hasSubmitModifier = event.metaKey || event.ctrlKey;
-  const isBackgroundShortcut = options.requiresModifier
-    ? hasSubmitModifier && event.shiftKey
-    : hasSubmitModifier && !event.shiftKey;
+  const isBackgroundShortcut = hasSubmitModifier && event.shiftKey;
   const background = Boolean(!event.altKey && isBackgroundShortcut && options.onBackgroundSubmit);
   if (!background && (event.shiftKey || (options.requiresModifier && !hasSubmitModifier))) {
     return;
@@ -287,10 +285,10 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     emojiMenu,
   );
   const menuAnnouncementId = paneDomId(skillMenuHost.paneId, "active-menu-announcement");
-  const ordinaryShortcut = options.requiresModifier ? "Control+Enter Meta+Enter" : "Enter";
-  const backgroundShortcut = options.requiresModifier
-    ? "Control+Shift+Enter Meta+Shift+Enter"
-    : "Control+Enter Meta+Enter";
+  const ordinaryShortcut = options.requiresModifier
+    ? "Control+Enter Meta+Enter"
+    : "Enter Control+Enter Meta+Enter";
+  const backgroundShortcut = "Control+Shift+Enter Meta+Shift+Enter";
   const keyShortcuts = options.onBackgroundSubmit
     ? `${ordinaryShortcut} ${backgroundShortcut}`
     : ordinaryShortcut;

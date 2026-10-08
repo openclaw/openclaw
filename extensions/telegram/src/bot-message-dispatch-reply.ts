@@ -191,13 +191,6 @@ async function flushBufferedFinalAnswer(turn: Turn, currentPayloadVisible = fals
   }
 }
 
-async function stopTelegramReplyLanesAndFlushBufferedFinal(turn: Turn): Promise<void> {
-  await turn.answerLane.stream?.stop();
-  await turn.reasoningLane.stream?.stop();
-  // Both lanes must stop before the buffered flush, keeping the final answer the last visible send.
-  await flushBufferedFinalAnswer(turn);
-}
-
 async function settleTerminalNoVisibleDelivery(
   turn: Turn,
   info: Parameters<NonNullable<Deliver>>[1],
@@ -567,7 +560,10 @@ async function deliverReplyWithNormalization(
   }
 
   if (info.kind === "final") {
-    await stopTelegramReplyLanesAndFlushBufferedFinal(turn);
+    await turn.answerLane.stream?.stop();
+    await turn.reasoningLane.stream?.stop();
+    // Stop both lanes before flushing so the final answer remains the last visible send.
+    await flushBufferedFinalAnswer(turn);
   }
   if (split.suppressedReasoningOnly && !reply.hasMedia) {
     return toTelegramReplyDeliveryResult(turn, false, undefined, { visibleReplySent: false });

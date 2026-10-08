@@ -294,9 +294,12 @@ export function mergeCachedMessageNode(
     (existing.sourceMessage.edit_date !== undefined &&
       existing.sourceMessage.edit_date >
         (incoming.sourceMessage.edit_date ?? incoming.sourceMessage.date));
-  const mergedSourceMessage = preferExisting
-    ? mergeTelegramSourceMessage(existing.sourceMessage, incoming.sourceMessage)
-    : mergeTelegramSourceMessage(incoming.sourceMessage, existing.sourceMessage);
+  const preferred = preferExisting ? existing : incoming;
+  const other = preferExisting ? incoming : existing;
+  const mergedSourceMessage = mergeTelegramSourceMessage(
+    preferred.sourceMessage,
+    other.sourceMessage,
+  );
   const syntheticOutboundFrom =
     existing.senderId === "0" && incoming.sourceMessage.sender_chat
       ? existing.sourceMessage.from
@@ -305,8 +308,6 @@ export function mergeCachedMessageNode(
   const sourceMessage = syntheticOutboundFrom
     ? { ...mergedSourceMessage, from: syntheticOutboundFrom }
     : mergedSourceMessage;
-  const preferred = preferExisting ? existing : incoming;
-  const other = preferExisting ? incoming : existing;
   const promptContextProjectionMarker =
     preferred.promptContextProjectionMarker ?? other.promptContextProjectionMarker;
   const threadBinding =
@@ -319,12 +320,9 @@ export function mergeCachedMessageNode(
           threadBinding?.threadSpec.id ?? preferred.threadId ?? other.threadId,
         );
   const primaryMediaId = resolveTelegramPrimaryMedia(sourceMessage)?.fileRef.file_unique_id;
-  const resolvedMedia =
-    preferred.resolvedMedia?.fileUniqueId === primaryMediaId
-      ? preferred.resolvedMedia
-      : other.resolvedMedia?.fileUniqueId === primaryMediaId
-        ? other.resolvedMedia
-        : undefined;
+  const resolvedMedia = [preferred.resolvedMedia, other.resolvedMedia].find(
+    (media) => media?.fileUniqueId === primaryMediaId,
+  );
   return normalizeMessageNode(sourceMessage, {
     threadId,
     promptContextProjectionMarker,

@@ -32,7 +32,8 @@ const supervisorMock = vi.hoisted(() => ({ spawn: vi.fn() }));
 vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeat: requestHeartbeatMock,
 }));
-vi.mock("../infra/system-events.js", () => ({
+vi.mock(import("../infra/system-events.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   enqueueSystemEventWithReceipt: enqueueSystemEventWithReceiptMock,
 }));
 vi.mock("../process/supervisor/index.js", () => ({

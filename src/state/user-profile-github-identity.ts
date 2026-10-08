@@ -71,23 +71,6 @@ function readGitHubColumns(db: DatabaseSync) {
   return columns;
 }
 
-function parseStoredGitHubIdentity(row: {
-  subject: string | null | undefined;
-  canonical_login: string | null | undefined;
-}): StoredGitHubIdentity | null {
-  const accountId = Number(row.subject);
-  const login = row.canonical_login ? normalizeGitHubLogin(row.canonical_login) : undefined;
-  return login && Number.isSafeInteger(accountId) && accountId > 0 ? { accountId, login } : null;
-}
-
-function toPublicGitHubIdentity(identity: StoredGitHubIdentity): UserProfileGitHubIdentity {
-  return {
-    login: identity.login,
-    profileUrl: `https://github.com/${identity.login}`,
-    avatarUrl: `https://avatars.githubusercontent.com/u/${identity.accountId}?v=4`,
-  };
-}
-
 export function selectStoredGitHubIdentities(
   db: DatabaseSync,
   profileIds?: readonly string[],
@@ -127,15 +110,16 @@ export function selectStoredGitHubIdentities(
     { accounts: StoredGitHubIdentity[]; primaryId: number | null }
   >();
   for (const row of rows) {
-    const identity = parseStoredGitHubIdentity(row);
-    if (!identity) {
+    const accountId = Number(row.subject);
+    const login = row.canonical_login ? normalizeGitHubLogin(row.canonical_login) : undefined;
+    if (!login || !Number.isSafeInteger(accountId) || accountId <= 0) {
       continue;
     }
     const profile = profiles.get(row.profile_id) ?? {
       accounts: [],
       primaryId: row.primary_github_account_id ?? null,
     };
-    profile.accounts.push(identity);
+    profile.accounts.push({ accountId, login });
     profiles.set(row.profile_id, profile);
   }
   return new Map(
@@ -232,11 +216,17 @@ export function selectUserProfileGitHubIdentities(
   db: DatabaseSync,
   profileIds?: readonly string[],
 ): Map<string, UserProfileGitHubIdentity> {
-  return new Map(
-    [...selectStoredGitHubIdentities(db, profileIds)].flatMap(([profileId, { primary }]) =>
-      primary ? [[profileId, toPublicGitHubIdentity(primary)] as const] : [],
-    ),
-  );
+  const identities = new Map<string, UserProfileGitHubIdentity>();
+  for (const [profileId, { primary }] of selectStoredGitHubIdentities(db, profileIds)) {
+    if (primary) {
+      identities.set(profileId, {
+        login: primary.login,
+        profileUrl: `https://github.com/${primary.login}`,
+        avatarUrl: `https://avatars.githubusercontent.com/u/${primary.accountId}?v=4`,
+      });
+    }
+  }
+  return identities;
 }
 
 /** Resolves current verified identities and public-credit preferences without initializing storage. */

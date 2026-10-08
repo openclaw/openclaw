@@ -44,47 +44,6 @@ export function mergeReplyDirectiveResults(
   };
 }
 
-function clearPendingToolMedia(state: PendingToolMediaState) {
-  state.pendingToolMediaUrls = [];
-  state.pendingToolMediaAttachments = [];
-  state.pendingToolMediaTrustByUrl.clear();
-  state.pendingToolAudioAsVoice = false;
-}
-
-function hasReplyMedia(payload: BlockReplyPayload): boolean {
-  return (payload.mediaUrls ?? []).some((url) => url.trim().length > 0);
-}
-
-function readAlignedPendingToolMedia(
-  state: Pick<
-    EmbeddedAgentSubscribeState,
-    "pendingToolMediaUrls" | "pendingToolMediaAttachments" | "pendingToolMediaTrustByUrl"
-  >,
-) {
-  const seen = new Set<string>();
-  const mediaUrls: string[] = [];
-  const attachments: NonNullable<BlockReplyPayload["attachments"]> = [];
-  for (const [index, url] of state.pendingToolMediaUrls.entries()) {
-    if (seen.has(url)) {
-      continue;
-    }
-    seen.add(url);
-    mediaUrls.push(url);
-    const { trustedLocalMedia: _untrustedInput, ...attachment } =
-      state.pendingToolMediaAttachments?.[index] ?? {};
-    attachments.push({
-      ...attachment,
-      ...(state.pendingToolMediaTrustByUrl.get(url) === true ? { trustedLocalMedia: true } : {}),
-    });
-  }
-  return {
-    mediaUrls,
-    attachments: attachments.some((entry) => Object.keys(entry).length > 0)
-      ? attachments
-      : undefined,
-  };
-}
-
 /** Moves queued tool media into a non-reasoning assistant reply payload. */
 export function consumePendingToolMediaIntoReply(
   state: PendingToolMediaState,
@@ -97,7 +56,8 @@ export function consumePendingToolMediaIntoReply(
   if (!pendingMedia) {
     return payload;
   }
-  if (hasReplyMedia(payload)) {
+  let mergedPayload: BlockReplyPayload;
+  if ((payload.mediaUrls ?? []).some((url) => url.trim().length > 0)) {
     // Pending tool media is a fallback delivery queue; explicit final media is
     // the assistant's user-visible selection, while tool output remains in the transcript.
     const metadataByUrl = new Map(
@@ -117,23 +77,25 @@ export function consumePendingToolMediaIntoReply(
       selectedAttachments.every((entry) => Object.keys(entry).length === 0)
         ? payload
         : { ...payload, attachments: selectedAttachments };
-    const selectedPayload =
+    mergedPayload =
       allSelectedMediaIsPending &&
       (payload.mediaUrls ?? []).every(
         (url) => state.pendingToolMediaTrustByUrl.get(url.trim()) === true,
       )
         ? { ...payloadWithMetadata, trustedLocalMedia: true }
         : payloadWithMetadata;
-    clearPendingToolMedia(state);
-    return selectedPayload;
+  } else {
+    mergedPayload = {
+      ...payload,
+      ...pendingMedia,
+      audioAsVoice: payload.audioAsVoice || pendingMedia.audioAsVoice || undefined,
+      ...(payload.trustedLocalMedia ? { trustedLocalMedia: true } : {}),
+    };
   }
-  const mergedPayload: BlockReplyPayload = {
-    ...payload,
-    ...pendingMedia,
-    audioAsVoice: payload.audioAsVoice || pendingMedia.audioAsVoice || undefined,
-    ...(payload.trustedLocalMedia ? { trustedLocalMedia: true } : {}),
-  };
-  clearPendingToolMedia(state);
+  state.pendingToolMediaUrls = [];
+  state.pendingToolMediaAttachments = [];
+  state.pendingToolMediaTrustByUrl.clear();
+  state.pendingToolAudioAsVoice = false;
   return mergedPayload;
 }
 
@@ -171,13 +133,31 @@ export function readPendingToolMediaReply(state: PendingToolMediaState): BlockRe
   if (state.pendingToolMediaUrls.length === 0 && !state.pendingToolAudioAsVoice) {
     return null;
   }
-  const pendingMedia = readAlignedPendingToolMedia(state);
+  const seen = new Set<string>();
+  const mediaUrls: string[] = [];
+  const attachments: NonNullable<BlockReplyPayload["attachments"]> = [];
+  for (const [index, url] of state.pendingToolMediaUrls.entries()) {
+    if (seen.has(url)) {
+      continue;
+    }
+    seen.add(url);
+    mediaUrls.push(url);
+    const { trustedLocalMedia: _untrustedInput, ...attachment } =
+      state.pendingToolMediaAttachments?.[index] ?? {};
+    attachments.push({
+      ...attachment,
+      ...(state.pendingToolMediaTrustByUrl.get(url) === true ? { trustedLocalMedia: true } : {}),
+    });
+  }
+  const alignedAttachments = attachments.some((entry) => Object.keys(entry).length > 0)
+    ? attachments
+    : undefined;
   const allPendingMediaTrusted =
-    pendingMedia.mediaUrls.length > 0 &&
-    pendingMedia.mediaUrls.every((url) => state.pendingToolMediaTrustByUrl.get(url) === true);
+    mediaUrls.length > 0 &&
+    mediaUrls.every((url) => state.pendingToolMediaTrustByUrl.get(url) === true);
   return {
-    mediaUrls: pendingMedia.mediaUrls.length ? pendingMedia.mediaUrls : undefined,
-    attachments: pendingMedia.attachments,
+    mediaUrls: mediaUrls.length ? mediaUrls : undefined,
+    attachments: alignedAttachments,
     audioAsVoice: state.pendingToolAudioAsVoice || undefined,
     ...(allPendingMediaTrusted ? { trustedLocalMedia: true } : {}),
   };

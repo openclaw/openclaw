@@ -1,4 +1,3 @@
-/** Node-host command dispatcher for system commands, approvals, env policy, and plugin commands. */
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -204,11 +203,6 @@ function requireExecApprovalsBaseHash(
   }
 }
 
-function resolveEnvPath(env?: Record<string, string>): string[] {
-  const raw = env?.PATH ?? env?.Path ?? process.env.PATH ?? process.env.Path ?? DEFAULT_NODE_PATH;
-  return raw.split(path.delimiter).filter(Boolean);
-}
-
 function resolveExecutable(bin: string, env?: Record<string, string>) {
   if (bin.includes("/") || bin.includes("\\")) {
     return null;
@@ -226,7 +220,9 @@ function resolveExecutable(bin: string, env?: Record<string, string>) {
           .split(";")
           .map((ext) => normalizeLowercaseStringOrEmpty(ext))
       : [""];
-  for (const dir of resolveEnvPath(env)) {
+  const envPath =
+    env?.PATH ?? env?.Path ?? process.env.PATH ?? process.env.Path ?? DEFAULT_NODE_PATH;
+  for (const dir of envPath.split(path.delimiter).filter(Boolean)) {
     for (const ext of extensions) {
       const candidate = path.join(dir, bin + ext);
       if (fs.existsSync(candidate)) {
@@ -284,7 +280,6 @@ function createNodeHostInvocationClient(
   };
 }
 
-/** Handles one node-host command invocation payload and returns serialized results. */
 export async function handleInvoke(
   frame: NodeInvokeRequestPayload,
   client: NodeHostClient,

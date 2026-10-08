@@ -54,10 +54,7 @@ import {
 import { buildInlineKeyboard, reactMessageTelegram } from "../send.js";
 import { recordSentMessage } from "../sent-message-cache.js";
 import { resolveTelegramTargetChatType } from "../targets.js";
-import {
-  planTelegramTextDeliveryPages,
-  type TelegramTextDeliveryPage,
-} from "../telegram-text-delivery.js";
+import { planTelegramTextDeliveryPages } from "../telegram-text-delivery.js";
 import { emitTelegramMessageSentHooks } from "./delivery.hooks.js";
 import { resolveTelegramReplyId, type TelegramThreadSpec } from "./helpers.js";
 import {
@@ -78,8 +75,6 @@ type TelegramReplyChannelData = {
   };
 };
 
-type ChunkTextFn = (text: string) => TelegramTextDeliveryPage[];
-
 function resolveReplyToForSend(
   params: { replyToId?: number; replyToMode: ReplyToMode },
   progress: DeliveryProgress,
@@ -93,16 +88,6 @@ function markReplyApplied(progress: DeliveryProgress, replyToId?: number): void 
   if (replyToId && !progress.hasReplied) {
     progress.hasReplied = true;
   }
-}
-
-function filterEmptyTelegramTextChunks(chunks: readonly TelegramTextDeliveryPage[]) {
-  // Telegram rejects whitespace-only text payloads; drop them before sendMessage so
-  // hook-mutated or model-emitted empty replies become a no-op instead of a 400.
-  // Rich chunks gate on the rich payload: valid rich content (media/divider HTML)
-  // can have an empty plain projection and must still send.
-  return chunks.filter(
-    (chunk) => chunk.richMessage?.blocks.length || chunk.htmlText?.trim() || chunk.plainText.trim(),
-  );
 }
 
 type TextReplyParams = {
@@ -144,9 +129,10 @@ function createReplyDeliverer(
       agentId: config.ownerAgentId,
     });
   const mediaLoader = config.mediaLoader ?? loadWebMedia;
-  const chunkText: ChunkTextFn = (text) =>
-    planTelegramTextDeliveryPages({
-      text,
+  async function deliverTextReply(params: TextReplyParams): Promise<number | undefined> {
+    const replyProgress = params.progress ?? progress;
+    const chunks = planTelegramTextDeliveryPages({
+      text: params.text,
       maxChars:
         config.richMessages === true
           ? Math.min(config.textLimit, TELEGRAM_RICH_TEXT_LIMIT)
@@ -156,13 +142,13 @@ function createReplyDeliverer(
       richMessages: config.richMessages,
       skipEntityDetection: config.linkPreview === false,
       ...(config.textMode ? { textMode: config.textMode } : {}),
-    });
-
-  async function deliverTextReply(params: TextReplyParams): Promise<number | undefined> {
-    const replyProgress = params.progress ?? progress;
-    const chunks = filterEmptyTelegramTextChunks(chunkText(params.text));
+    }).filter(
+      // Rich media/divider pages may have no plain projection; whitespace-only text must not send.
+      (chunk) =>
+        chunk.richMessage?.blocks.length || chunk.htmlText?.trim() || chunk.plainText.trim(),
+    );
     const suppressReply = chunks.length > 1 && isSingleUseReplyToMode(params.replyToMode);
-    const delivered = await sender.sendText({
+    return sender.sendText({
       pages: chunks,
       context: config.richMessages ? "sendRichMessage" : "sendMessage",
       tracking: {
@@ -232,7 +218,6 @@ function createReplyDeliverer(
         await replyProgress.promptContext?.accept({ messageId, text: plainText });
       },
     });
-    return delivered[0]?.messageId;
   }
 
   async function deliverMediaReply(
@@ -365,7 +350,6 @@ function createReplyDeliverer(
               ),
               kind: "media",
             }),
-            visibleReplySent: true,
           }),
         });
         mediaUrls.push(...batch.map((item) => item.mediaUrl));
@@ -379,20 +363,6 @@ function createReplyDeliverer(
             plainCaption: hasCaption ? plainCaption : undefined,
           });
         };
-        const sendVoiceFallbackText = async (
-          text: string,
-          options: { replyToId?: number; includeQuote?: boolean; replyToMode?: ReplyToMode } = {},
-        ) =>
-          await deliverTextReply({
-            ...params,
-            text,
-            replyToId: options.replyToId,
-            quote: options.includeQuote ? params.quote : undefined,
-            replyToMode: options.replyToMode ?? params.replyToMode,
-            progress: { ...progress, hasReplied: false },
-            quoteOnlyOnFirstChunk: true,
-          });
-
         await config.onVoiceRecording?.();
         try {
           await sendVoiceMedia(mediaParams);
@@ -400,28 +370,19 @@ function createReplyDeliverer(
           if (isChannelPartialDeliveryError(voiceErr)) {
             throw voiceErr;
           }
-          if (isTelegramVoiceMessagesForbiddenError(voiceErr)) {
-            const fallbackText = resolveVoiceFallbackText(params.reply);
+          const voiceForbidden = isTelegramVoiceMessagesForbiddenError(voiceErr);
+          let fallbackText: string | undefined;
+          let fallbackReplyToId: number | undefined;
+          if (voiceForbidden) {
+            fallbackText = resolveVoiceFallbackText(params.reply);
             if (!fallbackText) {
               throw voiceErr;
             }
             logVerbose(
               "telegram sendVoice forbidden (recipient has voice messages blocked in privacy settings); falling back to text",
             );
-            const voiceFallbackReplyTo = resolveReplyToForSend(params, progress);
-            const fallbackMessageId = await sendVoiceFallbackText(fallbackText, {
-              replyToId: voiceFallbackReplyTo,
-              includeQuote: true,
-            });
-            if (fallbackMessageId === undefined) {
-              throw voiceErr;
-            }
-            firstDeliveredMessageId ??= fallbackMessageId;
-            visibleFallbackText = fallbackText;
-            markReplyApplied(progress, voiceFallbackReplyTo);
-            return;
-          }
-          if (isTelegramCaptionTooLongError(voiceErr)) {
+            fallbackReplyToId = resolveReplyToForSend(params, progress);
+          } else if (isTelegramCaptionTooLongError(voiceErr)) {
             logVerbose(
               "telegram sendVoice caption too long; resending voice without caption + text separately",
             );
@@ -429,29 +390,43 @@ function createReplyDeliverer(
             delete noCaptionParams.caption;
             delete noCaptionParams.parse_mode;
             await sendVoiceMedia(noCaptionParams);
-            const fallbackText = resolveVoiceFallbackText(params.reply);
-            if (fallbackText) {
-              try {
-                const fallbackMessageId = await sendVoiceFallbackText(fallbackText, {
-                  replyToMode: "first",
-                });
-                if (fallbackMessageId !== undefined) {
-                  visibleFallbackText = fallbackText;
-                }
-              } catch (fallbackError) {
-                if (
-                  isChannelPartialDeliveryError(fallbackError) ||
-                  !isTelegramEmptyContentError(fallbackError)
-                ) {
-                  throw fallbackError;
-                }
-                visibleFallbackText = "";
-              }
-            }
-            markReplyApplied(progress, replyToMessageId);
-            return;
+            fallbackText = resolveVoiceFallbackText(params.reply);
+          } else {
+            throw voiceErr;
           }
-          throw voiceErr;
+          if (fallbackText) {
+            try {
+              const fallbackMessageId = await deliverTextReply({
+                ...params,
+                text: fallbackText,
+                replyToId: fallbackReplyToId,
+                quote: voiceForbidden ? params.quote : undefined,
+                replyToMode: voiceForbidden ? params.replyToMode : "first",
+                progress: { ...progress, hasReplied: false },
+                quoteOnlyOnFirstChunk: true,
+              });
+              if (voiceForbidden) {
+                if (fallbackMessageId === undefined) {
+                  throw voiceErr;
+                }
+                firstDeliveredMessageId ??= fallbackMessageId;
+              }
+              if (fallbackMessageId !== undefined) {
+                visibleFallbackText = fallbackText;
+              }
+            } catch (fallbackError) {
+              if (
+                voiceForbidden ||
+                isChannelPartialDeliveryError(fallbackError) ||
+                !isTelegramEmptyContentError(fallbackError)
+              ) {
+                throw fallbackError;
+              }
+              visibleFallbackText = "";
+            }
+          }
+          markReplyApplied(progress, voiceForbidden ? fallbackReplyToId : replyToMessageId);
+          return;
         }
       } else {
         await deliverAcceptedMedia({
@@ -622,8 +597,7 @@ async function deliverReplyPlan(
     chatId: params.chatId,
     request: createTelegramReplyRequest(params.runtime),
     warn: (message) => params.runtime.log?.(message),
-    beforeTextPage: params.onPlatformSendDispatch,
-    beforeMedia: params.onPlatformSendDispatch,
+    beforeSend: params.onPlatformSendDispatch,
     assertPlatformSendAuthorized: params.assertPlatformSendAuthorized,
     onMediaAccepted: params.onMediaAccepted,
   });
@@ -824,13 +798,7 @@ async function deliverReplyPlan(
         success: false,
         error: formatErrorMessage(error),
       });
-      sender.fail(
-        error,
-        0,
-        sender.parts.length
-          ? { receipt: buildDeliveryReceipt(), visibleReplySent: true }
-          : undefined,
-      );
+      sender.fail(error, 0, sender.parts.length ? { receipt: buildDeliveryReceipt() } : undefined);
     }
   }
 

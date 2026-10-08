@@ -11,6 +11,8 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import * as chatDisplayProjection from "./chat-display-projection.core.js";
+import { readChatHistoryPageKernel } from "./server-methods/chat-history-page-kernel.js";
+import { prepareChatHistoryResponsePage } from "./server-methods/chat-history-response-page.js";
 import {
   readChatHistoryMessageId,
   readChatHistoryMessageSeq,
@@ -34,6 +36,79 @@ const tailDefaults = {
   max: 1,
   maxBytes: 1024 * 1024,
 };
+
+it.each([
+  { offset: 0, hiddenHead: 0 },
+  { offset: 20, hiddenHead: 160 },
+])(
+  "stops a byte-full history page before reading the remaining rows ($offset, $hiddenHead)",
+  async ({ offset, hiddenHead }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const scope = historyTarget(state, "byte-full-history");
+      const events = Array.from({ length: 400 }, (_, index) => ({
+        type: "message",
+        id: `row-${index}`,
+        parentId: index === 0 ? null : `row-${index - 1}`,
+        message:
+          index >= 400 - hiddenHead
+            ? {
+                role: "assistant",
+                content: "NO_REPLY",
+                providerMetadata: { trace: "x".repeat(7_000) },
+              }
+            : { role: "user", content: `record-${index}: ${"x".repeat(7_000)}` },
+      }));
+      await replaceTranscriptEvents(scope, [
+        { type: "session", version: 3, id: scope.sessionId },
+        ...events,
+      ]);
+      await waitForSessionTranscriptProjection(scope);
+      let readRows = 0;
+      const record = <Page extends { messages: unknown[] }>(page: Page): Page => {
+        readRows += page.messages.length;
+        return page;
+      };
+      const readers = {
+        ...sessionTranscriptReaders,
+        readRecentSessionMessagesWithStatsAsync: async (
+          ...args: Parameters<
+            typeof sessionTranscriptReaders.readRecentSessionMessagesWithStatsAsync
+          >
+        ) =>
+          record(await sessionTranscriptReaders.readRecentSessionMessagesWithStatsAsync(...args)),
+        readSessionMessagesPageWithStatsAsync: async (
+          ...args: Parameters<typeof sessionTranscriptReaders.readSessionMessagesPageWithStatsAsync>
+        ) => record(await sessionTranscriptReaders.readSessionMessagesPageWithStatsAsync(...args)),
+      };
+      const params = {
+        entry: undefined,
+        provider: undefined,
+        sessionId: scope.sessionId,
+        storePath: scope.storePath,
+        sessionAgentId: scope.agentId,
+        canonicalKey: scope.sessionKey,
+        max: 1_000,
+        maxHistoryBytes: 6 * 1024 * 1024,
+        responseHistoryBytes: 512 * 1024,
+        effectiveMaxChars: 8_000,
+        offset,
+        messageId: undefined,
+      };
+      const page = await readChatHistoryPageKernel(params, { readers, readOnly: true });
+      const response = prepareChatHistoryResponsePage(page, params);
+      // A full response needs less than one source chunk, independent of the requested count.
+      expect(readRows).toBeLessThan(hiddenHead ? 300 : 200);
+      expect(response.messages.length).toBeGreaterThan(50);
+      expect(response.messagesBytes).toBeLessThanOrEqual(params.responseHistoryBytes);
+      expect(response.hasMore).toBe(true);
+      const first = 400 - Math.max(offset, hiddenHead) - response.messages.length;
+      expect(response.messages.map(readChatHistoryMessageId)).toEqual(
+        Array.from({ length: response.messages.length }, (_, index) => `row-${first + index}`),
+      );
+      expect(response.nextOffset).toBe(Math.max(offset, hiddenHead) + response.messages.length);
+    });
+  },
+);
 
 it("applies the head byte budget before loading an older malformed row", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

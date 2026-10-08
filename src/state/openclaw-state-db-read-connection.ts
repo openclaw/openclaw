@@ -18,6 +18,10 @@ import { admitSqliteSchema, runSqliteReadOperationSync } from "../infra/sqlite-s
 import { acquireSqliteSnapshotReadToken } from "../infra/sqlite-snapshot-staging.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
 import {
+  createNewerSqliteSchemaVersionError,
+  readSqliteUserVersion,
+} from "../infra/sqlite-user-version.js";
+import {
   registerSqliteCacheExitClose,
   runInSqliteMaintenanceContext,
 } from "../infra/sqlite-wal.js";
@@ -43,6 +47,7 @@ import {
 } from "./openclaw-state-db-cache.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+  OPENCLAW_STATE_SCHEMA_VERSION,
   type OpenClawStateDatabase,
   type OpenClawStateSchemaReadAdmission,
 } from "./openclaw-state-db-contract.js";
@@ -400,9 +405,28 @@ function assertStateReadSchemaForPolicy(
 
 function admitStateReadSchemaFacts(database: DatabaseSync, pathname: string): void {
   try {
-    admitSqliteSchema(database);
+    admitSqliteSchema(database, (userVersion) =>
+      assertSupportedStateSchemaVersion(database, pathname, {
+        userVersion,
+        contentVersion: userVersion,
+      }),
+    );
   } catch (error) {
-    // Catalog admission precedes version validation's legacy-schema diagnostic boundary.
+    // An unreadable newer catalog must not be mistaken for a repair this build can perform.
+    let version: number;
+    try {
+      version = readSqliteUserVersion(database);
+    } catch {
+      throw normalizeOpenClawStateSchemaReadError(error, pathname);
+    }
+    if (version > OPENCLAW_STATE_SCHEMA_VERSION) {
+      throw createNewerSqliteSchemaVersionError(
+        "OpenClaw state database",
+        pathname,
+        version,
+        OPENCLAW_STATE_SCHEMA_VERSION,
+      );
+    }
     throw normalizeOpenClawStateSchemaReadError(error, pathname);
   }
 }

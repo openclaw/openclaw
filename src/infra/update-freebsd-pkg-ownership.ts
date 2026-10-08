@@ -80,13 +80,9 @@ async function readPkgFiles(timeoutMs: number): Promise<string[]> {
     });
   }
   const output = result.stdout.toString("utf8");
-  if (output !== "" && !output.endsWith("\n")) {
-    throw new FreeBsdPkgOwnershipError("pkg-ownership-unavailable", "database", {
-      operation: "pkg query",
-    });
-  }
   const files = output === "" ? [] : output.slice(0, -1).split("\n");
   if (
+    (output !== "" && !output.endsWith("\n")) ||
     files.length > 250_000 ||
     files.some((file) => !path.isAbsolute(file) || containsAsciiControlCharacter(file))
   ) {
@@ -152,15 +148,12 @@ export function createFreeBsdPkgOwnershipInspection(
         let ancestor = directory;
         while (
           !(await readPath("lstat", () =>
-            fs.lstat(ancestor).then(
-              () => true,
-              (error: unknown) => {
-                if (hasNodeErrorCode(error, "ENOENT")) {
-                  return false;
-                }
-                throw error;
-              },
-            ),
+            fs.lstat(ancestor).catch((error: unknown) => {
+              if (hasNodeErrorCode(error, "ENOENT")) {
+                return null;
+              }
+              throw error;
+            }),
           ))
         ) {
           const parent = path.dirname(ancestor);

@@ -22,26 +22,6 @@ import {
   listRuntimeVisibleChannelPlugins,
 } from "./runtime-visible-channels.js";
 
-function resolveAvailableChannel(params: {
-  cfg: OpenClawConfig;
-  channel: string | undefined;
-  agentId?: string;
-}): { channel: string; plugin: ChannelPlugin } | undefined {
-  // Availability belongs to the scoped resolver, not the process-root channel list.
-  if (!params.channel) {
-    return undefined;
-  }
-  // Local agent processes may have only setup metadata for external channels;
-  // explicit activation lets their message tools use the same send path as the CLI.
-  const plugin = resolveOutboundChannelPlugin({
-    channel: params.channel,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    allowBootstrap: true,
-  });
-  return plugin ? { channel: plugin.id, plugin } : undefined;
-}
-
 export function isConfiguredChannel(cfg: OpenClawConfig, channelId: string): boolean {
   const entry = asOptionalRecord(asOptionalRecord(cfg.channels)?.[channelId]);
   return entry !== undefined && entry.enabled !== false;
@@ -184,13 +164,21 @@ export async function resolveMessageChannelSelection(params: {
 }> {
   const normalized = normalizeMessageChannel(params.channel);
   for (const field of ["channel", "fallbackChannel"] as const) {
-    const resolved = resolveAvailableChannel({
-      cfg: params.cfg,
-      channel: field === "channel" ? normalized : normalizeMessageChannel(params[field]),
-      agentId: params.agentId,
+    const cfg = params.cfg;
+    const channel = field === "channel" ? normalized : normalizeMessageChannel(params[field]);
+    const agentId = params.agentId;
+    if (!channel) {
+      continue;
+    }
+    // Explicit activation uses the scoped resolver, including external setup shells.
+    const selectedPlugin = resolveOutboundChannelPlugin({
+      channel,
+      cfg,
+      agentId,
+      allowBootstrap: true,
     });
-    if (resolved) {
-      return resolved;
+    if (selectedPlugin) {
+      return { channel: selectedPlugin.id, plugin: selectedPlugin };
     }
   }
 

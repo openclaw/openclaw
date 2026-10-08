@@ -10,6 +10,7 @@ import {
   waitForWhatsAppSutReactionSequenceToTrigger,
   waitForWhatsAppSutReactionToTrigger,
 } from "./whatsapp-live.observations.js";
+import { createWhatsAppMessageScenario } from "./whatsapp-live.scenario-builders.js";
 
 function createWhatsAppApprovalScenario(
   marker: string,
@@ -30,63 +31,57 @@ function createWhatsAppApprovalScenario(
 }
 
 export const whatsappDeliveryScenarios = {
-  whatsappQaReplyDeliveryShapeScenario: {
+  whatsappQaReplyDeliveryShapeScenario: createWhatsAppMessageScenario({
     posture: "direct-gateway",
-    buildRun: () => {
-      const token = `WHATSAPP_QA_REPLY_SHAPE_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        afterReply: async (_reply, context) => {
-          const quotedTriggerMessageId = requireWhatsAppTriggerMessageId(context);
-          const chunkStartedAt = new Date();
-          const longText = `${token}_LONG_BEGIN\n${"A".repeat(4_500)}\n${token}_LONG_END`;
-          await callWhatsAppGatewaySend(context, {
-            label: "long-reply",
-            message: longText,
-            replyToId: quotedTriggerMessageId,
-          });
-          const firstChunk = await waitForScenarioObservedMessage(context, {
-            observedAfter: chunkStartedAt,
-            diagnosticChecks: [
-              {
-                label: "longBeginMarker",
-                match: (message) => message.text.includes(`${token}_LONG_BEGIN`),
-              },
-              {
-                label: "quotesTrigger",
-                match: (message) => message.quoted?.messageId === quotedTriggerMessageId,
-              },
-            ],
-            match: (message) =>
-              message.text.includes(`${token}_LONG_BEGIN`) &&
-              message.quoted?.messageId === quotedTriggerMessageId,
-          });
-          const secondChunk = await waitForScenarioObservedMessage(context, {
-            observedAfter: chunkStartedAt,
-            diagnosticChecks: [
-              {
-                label: "longEndMarker",
-                match: (message) => message.text.includes(`${token}_LONG_END`),
-              },
-              {
-                label: "quotesTrigger",
-                match: (message) => message.quoted?.messageId === quotedTriggerMessageId,
-              },
-            ],
-            match: (message) =>
-              message.messageId !== firstChunk.messageId &&
-              message.text.includes(`${token}_LONG_END`) &&
-              message.quoted?.messageId === quotedTriggerMessageId,
-          });
-          return `long reply chunked across ${firstChunk.messageId ?? "<first>"} and ${secondChunk.messageId ?? "<second>"}`;
-        },
-        configMode: "allowlist",
-        expectReply: true,
-        input: `Reply with only this exact marker before reply-shape checks: ${token}`,
-        matchText: token,
-        target: "dm",
-      };
-    },
-  },
+    marker: "WHATSAPP_QA_REPLY_SHAPE",
+    buildRun: (token) => ({
+      afterReply: async (_reply, context) => {
+        const quotedTriggerMessageId = requireWhatsAppTriggerMessageId(context);
+        const chunkStartedAt = new Date();
+        const longText = `${token}_LONG_BEGIN\n${"A".repeat(4_500)}\n${token}_LONG_END`;
+        await callWhatsAppGatewaySend(context, {
+          label: "long-reply",
+          message: longText,
+          replyToId: quotedTriggerMessageId,
+        });
+        const firstChunk = await waitForScenarioObservedMessage(context, {
+          observedAfter: chunkStartedAt,
+          diagnosticChecks: [
+            {
+              label: "longBeginMarker",
+              match: (message) => message.text.includes(`${token}_LONG_BEGIN`),
+            },
+            {
+              label: "quotesTrigger",
+              match: (message) => message.quoted?.messageId === quotedTriggerMessageId,
+            },
+          ],
+          match: (message) =>
+            message.text.includes(`${token}_LONG_BEGIN`) &&
+            message.quoted?.messageId === quotedTriggerMessageId,
+        });
+        const secondChunk = await waitForScenarioObservedMessage(context, {
+          observedAfter: chunkStartedAt,
+          diagnosticChecks: [
+            {
+              label: "longEndMarker",
+              match: (message) => message.text.includes(`${token}_LONG_END`),
+            },
+            {
+              label: "quotesTrigger",
+              match: (message) => message.quoted?.messageId === quotedTriggerMessageId,
+            },
+          ],
+          match: (message) =>
+            message.messageId !== firstChunk.messageId &&
+            message.text.includes(`${token}_LONG_END`) &&
+            message.quoted?.messageId === quotedTriggerMessageId,
+        });
+        return `long reply chunked across ${firstChunk.messageId ?? "<first>"} and ${secondChunk.messageId ?? "<second>"}`;
+      },
+      input: `Reply with only this exact marker before reply-shape checks: ${token}`,
+    }),
+  }),
 
   whatsappQaStreamFinalMessageAccountingScenario: {
     posture: "user-path",
@@ -107,59 +102,47 @@ export const whatsappDeliveryScenarios = {
     decision: "deny",
   }),
 
-  whatsappQaStatusReactionsScenario: {
+  whatsappQaStatusReactionsScenario: createWhatsAppMessageScenario({
     posture: "user-path",
     configOverrides: {
       statusReactions: true,
     },
-    buildRun: () => {
-      const token = `WHATSAPP_QA_STATUS_REACTION_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        afterSend: async (context) => {
-          const reaction = await waitForWhatsAppSutReactionToTrigger(context, {
-            expectation: { anyEmoji: true },
-            timeoutMs: 30_000,
-          });
-          return `status reaction ${reaction.reaction?.emoji ?? "<unknown>"} observed`;
-        },
-        configMode: "allowlist",
-        expectReply: true,
-        input: `Reply with only this exact marker after normal processing: ${token}`,
-        matchText: token,
-        target: "dm",
-      };
-    },
-  },
+    marker: "WHATSAPP_QA_STATUS_REACTION",
+    buildRun: (token) => ({
+      afterSend: async (context) => {
+        const reaction = await waitForWhatsAppSutReactionToTrigger(context, {
+          expectation: { anyEmoji: true },
+          timeoutMs: 30_000,
+        });
+        return `status reaction ${reaction.reaction?.emoji ?? "<unknown>"} observed`;
+      },
+      input: `Reply with only this exact marker after normal processing: ${token}`,
+    }),
+  }),
 
-  whatsappQaStatusReactionLifecycleScenario: {
+  whatsappQaStatusReactionLifecycleScenario: createWhatsAppMessageScenario({
     posture: "user-path",
     configOverrides: {
       statusReactions: true,
     },
-    buildRun: () => {
-      const token = `WHATSAPP_QA_STATUS_LIFECYCLE_${randomUUID().slice(0, 8).toUpperCase()}`;
-      return {
-        afterReply: async (_reply, context) => {
-          const reactions = await waitForWhatsAppSutReactionSequenceToTrigger(context, {
-            emojis: ["👀", "✅"],
-            observedAfter: context.requestStartedAt,
-            timeoutMs: 60_000,
-          });
-          for (const reaction of reactions) {
-            context.recordObservedMessage(reaction);
-          }
-          return `status reaction lifecycle observed ${reactions
-            .map((reaction) => reaction.reaction?.emoji ?? "<unknown>")
-            .join(" -> ")}`;
-        },
-        configMode: "allowlist",
-        expectReply: true,
-        input: `Reply with only this exact marker after normal processing: ${token}`,
-        matchText: token,
-        target: "dm",
-      };
-    },
-  },
+    marker: "WHATSAPP_QA_STATUS_LIFECYCLE",
+    buildRun: (token) => ({
+      afterReply: async (_reply, context) => {
+        const reactions = await waitForWhatsAppSutReactionSequenceToTrigger(context, {
+          emojis: ["👀", "✅"],
+          observedAfter: context.requestStartedAt,
+          timeoutMs: 60_000,
+        });
+        for (const reaction of reactions) {
+          context.recordObservedMessage(reaction);
+        }
+        return `status reaction lifecycle observed ${reactions
+          .map((reaction) => reaction.reaction?.emoji ?? "<unknown>")
+          .join(" -> ")}`;
+      },
+      input: `Reply with only this exact marker after normal processing: ${token}`,
+    }),
+  }),
 
   whatsappQaGroupAllowlistBlockScenario: {
     posture: "user-path",

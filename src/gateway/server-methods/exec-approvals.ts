@@ -25,7 +25,10 @@ import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-wo
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import type { NodeSession } from "../node-registry.js";
 import { resolveBaseHashParam } from "./base-hash.js";
-import { captureLocalStateMutationGuard } from "./local-state-owner.js";
+import {
+  captureLocalStateMutationGuard,
+  localStateOwnerChangedError,
+} from "./local-state-owner.js";
 import {
   respondUnavailableOnNodeInvokeErrorWithProvenance,
   parseGatewayPayload,
@@ -101,14 +104,7 @@ function captureExecApprovalsOwnerGuard(
       },
     };
   } catch (error) {
-    options.respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, String(error), {
-        details: { reason: "STATE_OWNER_CHANGED", mutationAccepted: false },
-        retryable: false,
-      }),
-    );
+    options.respond(false, undefined, localStateOwnerChangedError(error));
     return null;
   }
 }

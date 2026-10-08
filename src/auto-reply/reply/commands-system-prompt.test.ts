@@ -14,6 +14,7 @@ import { buildSystemPromptParams } from "../../agents/system-prompt-params.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
+import type { SubsystemLogger } from "../../logging/subsystem.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createSyntheticSourceInfo } from "../../skills/loading/skill-contract.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../../skills/runtime/session-snapshot.js";
@@ -61,9 +62,24 @@ vi.mock("../../infra/os-summary.js", () => ({
   resolveRuntimeOsLabel: resolveRuntimeOsLabelMock,
 }));
 
-vi.mock("../../logging/subsystem.js", () => ({
-  createSubsystemLogger: vi.fn(() => ({ warn: logWarnMock })),
-}));
+vi.mock("../../logging/subsystem.js", async (importOriginal) => {
+  const createLogger = (subsystem: string): SubsystemLogger => ({
+    subsystem,
+    isEnabled: () => false,
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: logWarnMock,
+    error: vi.fn(),
+    fatal: vi.fn(),
+    raw: vi.fn(),
+    child: (name) => createLogger(`${subsystem}/${name}`),
+  });
+  return {
+    ...(await importOriginal<typeof import("../../logging/subsystem.js")>()),
+    createSubsystemLogger: vi.fn(createLogger),
+  };
+});
 
 vi.mock("../../agents/bootstrap-files.js", () => ({
   makeBootstrapWarn: makeBootstrapWarnMock,

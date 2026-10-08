@@ -141,13 +141,6 @@ type SessionHookEvent = {
   sessionKey?: string;
   context?: Record<string, unknown>;
 };
-type PostCompactionSyncParams = {
-  archiveFiles?: string[];
-  reason: string;
-  sessionFiles?: string[];
-  sessions?: Array<{ agentId: string; sessionId: string; sessionKey?: string }>;
-};
-type PostCompactionSync = (params?: unknown) => Promise<void>;
 function plannedCompactionPluginSelections(
   config: OpenClawConfig,
   metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins: [] }),
@@ -1768,49 +1761,6 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
     expect(getMemorySearchManagerMock).not.toHaveBeenCalled();
     expect(sync).not.toHaveBeenCalled();
   });
-
-  it.each(["await", "async"] as const)(
-    "settles post-compaction memory sync in %s mode",
-    async (mode) => {
-      const syncStarted = createDeferred<PostCompactionSyncParams>();
-      const syncRelease = createDeferred();
-      const sync = vi.fn<PostCompactionSync>(async (params) => {
-        syncStarted.resolve(params as PostCompactionSyncParams);
-        await syncRelease.promise;
-      });
-      const managerRequested = createDeferred();
-      const managerGate = createDeferred<{ manager: { sync: PostCompactionSync } }>();
-      getMemorySearchManagerMock.mockImplementation(async () => {
-        managerRequested.resolve(undefined);
-        return mode === "async" ? await managerGate.promise : { manager: { sync } };
-      });
-      let settled = false;
-      const resultPromise = compactTesting.runPostCompactionSideEffects({
-        config: compactionConfig(mode),
-        sessionKey: TEST_SESSION_KEY,
-        sessionFile: TEST_SESSION_FILE,
-      });
-      void resultPromise.then(() => {
-        settled = true;
-      });
-      await managerRequested.promise;
-      if (mode === "async") {
-        await resultPromise;
-        expect(getMemorySearchManagerMock).toHaveBeenCalledTimes(1);
-        expect(settled).toBe(true);
-        expect(sync).not.toHaveBeenCalled();
-        managerGate.resolve({ manager: { sync } });
-      }
-      await expect(syncStarted.promise).resolves.toEqual({
-        archiveFiles: [TEST_SESSION_FILE],
-        reason: "post-compaction",
-      });
-      expect(settled).toBe(mode === "async");
-      syncRelease.resolve(undefined);
-      await resultPromise;
-      expect(settled).toBe(true);
-    },
-  );
 
   registerDirectProviderRefreshTests({
     compactTesting: () => compactTesting,

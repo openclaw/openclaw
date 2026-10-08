@@ -969,6 +969,16 @@ extension View {
     }
 }
 
+/// Defers action construction until SwiftUI evaluates this body, instead of eagerly assembling actions
+/// in every parent-row update. SwiftUI owns when menu content is evaluated.
+struct ChatDeferredContent<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        self.content()
+    }
+}
+
 struct ChatStreamingAssistantText {
     let sourceText: String
     let includesThinking: Bool

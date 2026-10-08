@@ -405,24 +405,6 @@ it("rejects retired authority before evaluating a stale deletion target", async 
   expect(loadSessionEntryReadOnly(f.scope)).toMatchObject({ sessionId: "retained" });
 });
 
-it("reuses warm lifecycle integrity proof without another validation", async () => {
-  const f = fixture();
-  openOpenClawAgentDatabase(f.databaseOptions);
-  const admission = observeColdAdmission(f.databaseOptions.path);
-  const work = own(
-    deleteSessionEntryLifecycle({
-      storePath: f.scope.storePath,
-      target: { canonicalKey: f.scope.sessionKey, storeKeys: [f.scope.sessionKey] },
-      archiveTranscript: false,
-    }),
-  );
-  expect(
-    await Promise.race([admission.entered.promise.then(() => false), work.then(() => true)]),
-  ).toBe(true);
-  await expect(work).resolves.toMatchObject({ deleted: true });
-  expect(admission.parentChecks()).toBe(0);
-});
-
 it("retains the selected state owner while cold deletion waits in the FIFO", async () => {
   const f = fixture();
   const blockerEntered = createDeferred();

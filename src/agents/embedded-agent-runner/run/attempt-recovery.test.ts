@@ -835,7 +835,6 @@ describe("recoverEmbeddedRunAttempt", () => {
     const failoverRetryController = {
       resolveAuthProfileFailureReason: vi.fn(),
       advanceAuthProfile: vi.fn(),
-      advanceRateLimitAuthProfile: vi.fn(),
       maybeMarkAuthProfileFailure: vi.fn(),
       maybeRetryTransient: vi.fn(),
       transientRetryCount: 0,
@@ -915,7 +914,6 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(recovery).toEqual({ action: "proceed" });
     expect(promptFailover).not.toHaveBeenCalled();
     expect(failoverRetryController.advanceAuthProfile).not.toHaveBeenCalled();
-    expect(failoverRetryController.advanceRateLimitAuthProfile).not.toHaveBeenCalled();
     expect(failoverRetryController.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
   });
 });

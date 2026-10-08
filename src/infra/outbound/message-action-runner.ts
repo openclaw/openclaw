@@ -56,7 +56,6 @@ import {
   collectActionMediaSourceHints,
   hydrateAttachmentParamsForAction,
   normalizeSandboxMediaParams,
-  parseInteractiveParam,
   parseJsonMessageParam,
   resolveAttachmentMediaPolicy,
   resolveExtraActionMediaSourceParamKeys,
@@ -525,7 +524,7 @@ async function runMessageActionWithAuthority(
       : undefined);
   parseJsonMessageParam(params, "presentation");
   parseJsonMessageParam(params, "delivery");
-  parseInteractiveParam(params);
+  parseJsonMessageParam(params, "interactive");
 
   const action = input.action;
   enforceMessageActionAllowlist({

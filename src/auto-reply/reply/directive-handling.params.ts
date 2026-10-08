@@ -27,9 +27,7 @@ export type HandleDirectiveOnlyParams = {
   allowedModelKeys: Set<string>;
   modelPolicy?: ModelVisibilityPolicy;
   operatorAuthority?: AdmittedRunOperatorAuthority;
-  allowedModelCatalog: Awaited<
-    ReturnType<typeof import("../../agents/prepared-model-catalog.js").readPreparedModelCatalog>
-  >;
+  allowedModelCatalog: ModelCatalogEntry[];
   thinkingCatalog?: ModelCatalogEntry[];
   resetModelOverride: boolean;
   provider: string;

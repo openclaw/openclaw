@@ -2,7 +2,6 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import {
-  isCurrentActiveWorkerEnvironment,
   workerDisappearanceError,
   type WorkerDispatchPlacement,
 } from "./placement-dispatch-failure.js";
@@ -11,6 +10,7 @@ import type { WorkerSessionPlacementProjection } from "./placement-read-projecti
 import { placementTurnOwner } from "./placement-record.js";
 import type { PlacementRecoveryDeps } from "./placement-recovery-contract.js";
 import type { WorkerSessionTurnClaim } from "./placement-store.js";
+import { isCurrentActiveWorkerEnvironment } from "./placement-target.js";
 import { completeRecoveredWorkspaceTeardown } from "./placement-teardown.js";
 import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.types.js";
 import {
@@ -28,6 +28,7 @@ import { boundedWorkerError } from "./worker-error.js";
 import { verifyReconciledWorkspaceFinal } from "./workspace-finalize.js";
 import { recoverWorkerWorkspaceReconciliation } from "./workspace-reconcile.js";
 import {
+  createWorkspaceResultJournal,
   finalizeWorkspaceResultConflicts,
   resolvePriorWorkspaceResultConflict,
   settleStagedWorkspaceResult,
@@ -434,36 +435,14 @@ export async function recoverPendingWorkspaceResults(
               }
               return;
             }
-            const owner = {
-              sessionId: active.sessionId,
-              environmentId: active.environmentId,
-              ownerEpoch: active.activeOwnerEpoch,
-              placementGeneration: pending.placementGeneration,
-            };
-            const journal = {
-              load: () =>
-                placements.loadWorkspaceReconciliation(owner, undefined, recovery.assertCurrent),
-              begin: (next: Parameters<typeof placements.beginWorkspaceReconciliation>[1]) => {
-                recovery.assertCurrent();
-                return placements.beginWorkspaceReconciliation(owner, next, recovery.assertCurrent);
-              },
-              commit: async (manifestRef: string) => {
-                assertPreservedEnvironment();
-                await placements.updateWorkspaceBaseManifest(
-                  { claim: turnClaim, manifestRef },
-                  recovery.assertCurrent,
-                  currentCheck,
-                );
-              },
-              abort: () => {
-                recovery.assertCurrent();
-                return placements.abortWorkspaceReconciliation(
-                  owner,
-                  undefined,
-                  recovery.assertCurrent,
-                );
-              },
-            };
+            const { adapter: journal } = createWorkspaceResultJournal({
+              placement: { ...active, generation: pending.placementGeneration },
+              placements,
+              turnClaim,
+              assertCurrent: recovery.assertCurrent,
+              assertCommitCurrent: assertPreservedEnvironment,
+              current: currentCheck,
+            });
             if (stagedResultRef) {
               let ownedStagedResultRef = stagedResultRef;
               // A staged result must never be destroyed by environment lifecycle.

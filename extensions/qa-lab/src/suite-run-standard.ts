@@ -15,14 +15,11 @@ import {
 import { captureRuntimeParityCell } from "./runtime-parity.js";
 import type { QaSuiteGatewayHeapSnapshot, QaSuiteGatewayRssSample } from "./suite-artifacts.js";
 import { createQaSuiteEvidenceInvocation } from "./suite-evidence.js";
-import {
-  applyQaSuiteGatewayConfigPatches,
-  collectQaSuiteTransportPolicy,
-  scenarioRequiresControlUi,
-} from "./suite-planning.js";
+import { applyQaSuiteGatewayConfigPatches, scenarioRequiresControlUi } from "./suite-planning.js";
 import { createQaSuiteProgressController } from "./suite-progress.js";
 import { runQaSuiteRoundTripProbe } from "./suite-round-trip.js";
 import { completeQaSuiteRun } from "./suite-run-completion.js";
+import { createQaSuiteRunResources } from "./suite-run-resources.js";
 import { waitForGatewayHealthy, waitForTransportReady } from "./suite-runtime-gateway.js";
 import {
   buildQaGatewayHeapCheckpointRuntimeEnvPatch,
@@ -38,15 +35,12 @@ import type {
   QaSuiteScenarioResult,
 } from "./suite-types.js";
 import {
-  createQaSuiteTransportAdapter,
   buildQaSuiteRuntimeMetrics,
   captureGatewayHeapSnapshotCheckpoint,
   isQaSuiteNestedRun,
-  requireQaSuiteStartLab,
   resolveQaSuiteTransportReadyTimeoutMs,
   runQaFlowSuiteCleanupPlan,
   throwQaSuiteCleanupErrors,
-  waitForQaLabReadyOrStopOwned,
   writeQaSuiteProgress,
 } from "./suite.js";
 import { closeQaWebSessions } from "./web-runtime.js";
@@ -60,7 +54,6 @@ export async function runQaFlowSuiteStandard(
     startedAt,
     repoRoot,
     outputDir,
-    transportId,
     selectedScenarios,
     providerMode,
     primaryModel,
@@ -69,47 +62,14 @@ export async function runQaFlowSuiteStandard(
     enabledPluginIds,
     gatewayConfigPatches,
     gatewayRuntimeOptions,
-    concurrency,
     progressEnabled,
     gatewayHeapCheckpointsEnabled,
   } = context;
   const recording = await createQaSuiteEvidenceInvocation(params, context);
-  const ownsLab = !params?.lab;
-  const startLab = params?.startLab;
   const controlUiEnabled =
     params?.controlUiEnabled ?? selectedScenarios.some(scenarioRequiresControlUi);
-  writeQaSuiteProgress(progressEnabled, "lab start");
-  const lab =
-    params?.lab ??
-    (await requireQaSuiteStartLab(startLab)({
-      repoRoot,
-      host: "127.0.0.1",
-      port: 0,
-      embeddedGateway: "disabled",
-    }));
-  writeQaSuiteProgress(progressEnabled, `lab ready: ${sanitizeQaSuiteProgressValue(lab.baseUrl)}`);
-  await waitForQaLabReadyOrStopOwned({ lab, ownsLab });
-  const transportFactoryResult = await createQaSuiteTransportAdapter({
-    adapterFactories: params?.adapterFactories,
-    channelDriver: params?.channelDriver,
-    channelId: params?.channelId,
-    adapterOptions: {
-      ...params?.adapterOptions,
-      scenarioIds: selectedScenarios.map((scenario) => scenario.id),
-      ...(selectedScenarios.some(
-        (scenario) =>
-          scenario.execution.kind === "flow" && scenario.execution.config?.agentE2e === true,
-      )
-        ? { agentE2e: true }
-        : {}),
-    },
-    cleanupOnFailure: ownsLab ? () => lab.stop() : undefined,
-    outputDir,
-    transportPolicy: collectQaSuiteTransportPolicy(selectedScenarios),
-    state: lab.state,
-    transportId,
-  });
-  const transport = transportFactoryResult.adapter;
+  const { lab, ownsLab, transportFactoryResult, transport, artifactParams } =
+    await createQaSuiteRunResources(params, context, "standard");
   let mock: Awaited<ReturnType<typeof startQaProviderServer>> | undefined;
   const gateway = createQaGatewayChild();
   let env: QaSuiteEnvironment | undefined;
@@ -413,27 +373,14 @@ export async function runQaFlowSuiteStandard(
       const finishedAt = new Date();
       const result = await completeQaSuiteRun(
         {
-          outputDir,
-          startedAt,
+          ...artifactParams,
           finishedAt,
           scenarios,
           metrics,
           recordedEvidence: recording.snapshot(),
-          transport,
-          providerMode,
-          primaryModel,
-          alternateModel,
-          fastMode,
-          concurrency,
-          channel: params?.channelId ?? transport.id,
-          channelDriver: transportFactoryResult.driver,
           transportArtifacts,
           isolatedWorkers: false,
           writeEvidenceFile: params?.writeEvidenceFile,
-          scenarioIds:
-            params?.scenarioIds && params.scenarioIds.length > 0
-              ? selectedScenarios.map((scenario) => scenario.id)
-              : undefined,
         },
         lab,
         progress,

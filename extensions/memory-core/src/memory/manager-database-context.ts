@@ -35,7 +35,7 @@ import {
   openMemoryDatabaseAtPath,
   openMemoryDatabaseReadOnlyAtPath,
 } from "./manager-db.js";
-import { withMemoryIndexMutationGeneration } from "./manager-index-generation-lease.js";
+import { withMemoryIndexGeneration } from "./manager-index-generation-lease.js";
 import type {
   MemoryEmbeddingCacheMutation,
   MemoryPublicationConnection,
@@ -600,7 +600,7 @@ export class MemoryIndexDatabase {
 
   private withSourceMutation<T>(run: () => Promise<T>): Promise<T> {
     return this.writeOptions?.path
-      ? withMemoryIndexMutationGeneration(this.writeOptions.path, run)
+      ? withMemoryIndexGeneration(this.writeOptions.path, "mutation", run)
       : run();
   }
 

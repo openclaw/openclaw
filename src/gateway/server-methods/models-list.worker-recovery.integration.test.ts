@@ -7,6 +7,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { refreshExpiredPreparedModelCatalog } from "../../agents/prepared-model-catalog.js";
 import { getPreparedModelFullCatalogAuth } from "../../agents/prepared-model-runtime-auth.js";
 import {
   getPreparedModelRuntimeSnapshot,
@@ -193,11 +194,15 @@ it("models.list retains a failed renewal before shared worker recovery", async (
           renewalFailed.resolve(event.error);
         }
       });
-      // Arm the held request before making renewal due; a wall-clock TTL can expire
-      // during the initial models.list response, before this observer exists.
+      // The shipped SDK renewal entry point still owns background expiry; Gateway reads stay passive.
       hold = true;
       const renewal = once(events, "request");
       providerFacts.expiresAt = 0;
+      const renewing = refreshExpiredPreparedModelCatalog({
+        agentId: "main",
+        config: original!.config,
+      });
+      expect(renewing?.pendingProviders).toContain(provider);
       const retained = await list();
       expect(retained.models).toEqual(initial.models);
       // Bind waits to the test signal so a stall still reaches held-response and Gateway cleanup.

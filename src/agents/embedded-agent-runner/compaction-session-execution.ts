@@ -93,7 +93,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
     modelId,
     attemptedThinking,
     fail,
-    authStorage,
     modelRegistry,
     apiKeyInfo,
     hasRuntimeAuthExchange,
@@ -269,22 +268,15 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
         // Compaction builds the same embedded system prompt, so it must flow
         // through the same transport/payload shaping stack as normal turns.
         const { effectiveExtraParams, transportApiKey } = await prepareCompactionSessionAgent({
+          ...runtime,
           session,
           llmRuntime: getModelRegistryRuntime(modelRegistry).llmRuntime,
           providerStreamFn,
           sessionId: params.sessionId,
           signal: runAbortController.signal,
-          effectiveModel,
           resolvedApiKey: hasRuntimeAuthExchange ? undefined : apiKeyInfo?.apiKey,
-          authStorage,
           config: params.config,
-          provider,
-          modelId,
           thinkLevel,
-          sessionAgentId,
-          effectiveWorkspace,
-          agentDir,
-          runtimePlan,
         });
         const compactionReplayEnabled = resolveCompactionReplayEligibility(effectiveModel, {
           extraParams: effectiveExtraParams,
