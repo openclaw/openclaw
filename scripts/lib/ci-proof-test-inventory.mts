@@ -1954,7 +1954,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/commands/doctor-config-flow.workspace-persistence.test.ts",
   "src/commands/doctor-config-preflight.admission.process.test.ts",
   "src/commands/doctor-config-preflight.container-upgrade.test.ts",
-  "src/commands/doctor-config-preflight.legacy-owner.process.test.ts",
   "src/commands/doctor-config-preflight.pending-read.test.ts",
   "src/commands/doctor-config-preflight.plugin-deferral.test.ts",
   "src/commands/doctor-config-preflight.plugin-persistence.test.ts",
