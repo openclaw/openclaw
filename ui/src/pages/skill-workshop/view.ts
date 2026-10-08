@@ -209,8 +209,12 @@ function renderLibrary(snapshot: WorkshopSnapshot, props: SkillWorkshopViewProps
                   class="settings-select"
                   aria-label=${t("skillWorkshop.sort.label")}
                   @change=${(event: Event) => {
-                    if (event.currentTarget instanceof HTMLSelectElement) {
-                      props.onSort(event.currentTarget.value as WorkshopSort);
+                    const select = event.currentTarget;
+                    const sort = SORTS.find(
+                      (entry) => select instanceof HTMLSelectElement && entry === select.value,
+                    );
+                    if (sort) {
+                      props.onSort(sort);
                     }
                   }}
                 >
