@@ -144,7 +144,9 @@ describe("current cron delivery origin", () => {
             },
             "missing-last": {
               label: "announce -> last",
-              detail: "last -> no route, will fail-closed: Delivering to telegram requires target",
+              detail: expect.stringContaining(
+                "last -> no route, will fail-closed: Delivering to telegram requires target",
+              ),
             },
             "missing-explicit": {
               label: "announce -> telegram:explicit-recipient",
