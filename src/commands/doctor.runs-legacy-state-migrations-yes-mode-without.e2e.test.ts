@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import type { ProviderPlugin } from "../plugins/types.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   arrangeLegacyStateMigrationTest,
   confirm,
@@ -116,7 +117,7 @@ describe("doctor command", () => {
   }, 30_000);
 
   it("refuses doctor repair mode in Nix before repair side effects", async () => {
-    const previous = process.env.OPENCLAW_NIX_MODE;
+    const savedEnv = captureEnv(["OPENCLAW_NIX_MODE"]);
     process.env.OPENCLAW_NIX_MODE = "1";
     try {
       mockDoctorConfigSnapshot();
@@ -124,18 +125,14 @@ describe("doctor command", () => {
         "OPENCLAW_NIX_MODE=1",
       );
     } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_NIX_MODE;
-      } else {
-        process.env.OPENCLAW_NIX_MODE = previous;
-      }
+      savedEnv.restore();
     }
 
     expect(transformConfigFile).not.toHaveBeenCalled();
   });
 
   it("refuses doctor gateway token generation in Nix before config writes", async () => {
-    const previous = process.env.OPENCLAW_NIX_MODE;
+    const savedEnv = captureEnv(["OPENCLAW_NIX_MODE"]);
     process.env.OPENCLAW_NIX_MODE = "1";
     try {
       mockDoctorConfigSnapshot();
@@ -143,11 +140,7 @@ describe("doctor command", () => {
         doctorCommand(createDoctorRuntime(), { generateGatewayToken: true }),
       ).rejects.toThrow("OPENCLAW_NIX_MODE=1");
     } finally {
-      if (previous === undefined) {
-        delete process.env.OPENCLAW_NIX_MODE;
-      } else {
-        process.env.OPENCLAW_NIX_MODE = previous;
-      }
+      savedEnv.restore();
     }
 
     expect(transformConfigFile).not.toHaveBeenCalled();
@@ -202,18 +195,12 @@ describe("doctor command", () => {
       },
     ]);
 
-    const previousConfigWriteSupport =
-      process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE;
+    const savedEnv = captureEnv(["OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE"]);
     process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE = "1";
     try {
       await doctorCommand(createDoctorRuntime(), { yes: true });
     } finally {
-      if (previousConfigWriteSupport === undefined) {
-        delete process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE;
-      } else {
-        process.env.OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE =
-          previousConfigWriteSupport;
-      }
+      savedEnv.restore();
     }
 
     const committed = await Promise.all(

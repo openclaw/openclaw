@@ -4,6 +4,7 @@ import { resolveConfiguredModelFallbacks } from "../agents/model-selection-resol
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
+import { captureEnv } from "../test-utils/env.js";
 import {
   noteDoctorHookConfigWarnings,
   noteImplicitFallbackClobberWarnings,
@@ -211,18 +212,14 @@ describe("doctor config analysis helpers", () => {
   });
 
   describe("stripUnknownConfigKeys during update", () => {
-    const originalEnv = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+    const savedEnv = captureEnv(["OPENCLAW_UPDATE_IN_PROGRESS"]);
 
     beforeEach(() => {
       delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
     });
 
     afterEach(() => {
-      if (originalEnv !== undefined) {
-        process.env.OPENCLAW_UPDATE_IN_PROGRESS = originalEnv;
-      } else {
-        delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-      }
+      savedEnv.restore();
     });
 
     it("returns input unchanged when OPENCLAW_UPDATE_IN_PROGRESS=1", () => {
