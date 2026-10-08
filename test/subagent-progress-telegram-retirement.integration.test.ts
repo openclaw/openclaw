@@ -16,7 +16,7 @@ import {
 } from "../src/agents/subagents/registry/subagent-progress-draft.test-support.js";
 import { stopSessionResetSubagents } from "../src/auto-reply/reply/session-reset-cleanup.js";
 import { getRuntimeConfig } from "../src/config/config.js";
-import { abortControlledSubagents } from "../src/gateway/server-methods/chat-abort-runtime.js";
+import { abortControlledSubagents } from "../src/gateway/server-methods/chat-abort-descendants.js";
 import { emitAgentEvent } from "../src/infra/agent-events.js";
 
 // Root-owned integration: the subagent registry retires the card Telegram retained.
