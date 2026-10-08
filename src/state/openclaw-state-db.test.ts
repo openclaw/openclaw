@@ -2768,7 +2768,7 @@ describe("openclaw state database", () => {
       ]
     >,
   )(
-    "drops an invalid plugin-index cache during v13 %s when %s is invalid",
+    "quarantines an invalid plugin-index cache during v13 %s when %s is invalid",
     (migrationPath, column, value) => {
       const stateDir = createTempStateDir();
       const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
@@ -2806,7 +2806,7 @@ describe("openclaw state database", () => {
             "SELECT value_json FROM config_machine_state WHERE state_key = 'plugins.installedIndex'",
           )
           .get(),
-      ).toBeUndefined();
+      ).toBeDefined();
       expect(migrated.db.prepare("PRAGMA integrity_check").get()).toEqual({
         integrity_check: "ok",
       });
