@@ -883,32 +883,38 @@ describe("editMessageMatrix mentions", () => {
     expect(getRelations).toHaveBeenCalledTimes(3);
   });
 
-  it("rejects the latest pending encrypted edit", async () => {
+  it.each([false, true])("rejects the latest unreadable edit (pending=%s)", async (pending) => {
     const original = createBundledReplacementEvent("$original");
     delete original.unsigned;
     getEvent.mockResolvedValue(original);
-    const encrypted = new MatrixEvent({
+    let encrypted = new MatrixEvent({
       event_id: "$unreadable",
       sender: original.sender,
       origin_server_ts: 300,
       type: "m.room.encrypted",
       content: { "m.relates_to": { rel_type: "m.replace", event_id: original.event_id } },
     });
+    if (!pending) {
+      encrypted = createMatrixTestDecryptionFailure(encrypted);
+    }
     getRelations.mockResolvedValue({ events: [matrixEventToRaw(encrypted)], nextBatch: null });
     await expect(edit("Hello @alice:example.org")).rejects.toThrow("not fully decrypted");
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("does not mutate a pending encrypted original", async () => {
+  it.each(["failed", "pending"])("does not mutate a %s original", async (mode) => {
     const original = createBundledReplacementEvent("$original");
     delete original.unsigned;
-    const encrypted = new MatrixEvent({
+    let encrypted = new MatrixEvent({
       event_id: original.event_id,
       sender: original.sender,
       origin_server_ts: original.origin_server_ts,
       content: original.content,
       type: "m.room.encrypted",
     });
+    if (mode === "failed") {
+      encrypted = createMatrixTestDecryptionFailure(encrypted);
+    }
     getEvent.mockResolvedValue(matrixEventToRaw(encrypted));
     await expect(edit("Hello")).rejects.toThrow("not fully decrypted");
     expect(sendMessage).not.toHaveBeenCalled();
@@ -953,15 +959,24 @@ describe("editMessageMatrix mentions", () => {
     expect(sentContent()["m.mentions"]).toEqual({});
   });
 
-  it("does not send when relation pagination repeats", async () => {
-    const original = createBundledReplacementEvent("$original");
-    delete original.unsigned;
-    getEvent.mockResolvedValue(original);
-    getRelations.mockResolvedValue({ events: [], nextBatch: "same" });
-    await expect(edit("Hi @alice:example.org")).rejects.toThrow("history could not be fully read");
-    expect(sendMessage).not.toHaveBeenCalled();
-    expect(getRelations.mock.calls.length).toBeLessThanOrEqual(100);
-  });
+  it.each(["repeated", "unbounded"])(
+    "does not send when relation pagination is %s",
+    async (mode) => {
+      const original = createBundledReplacementEvent("$original");
+      delete original.unsigned;
+      getEvent.mockResolvedValue(original);
+      let page = 0;
+      getRelations.mockImplementation(async () => ({
+        events: [],
+        nextBatch: mode === "repeated" ? "same" : String(++page),
+      }));
+      await expect(edit("Hi @alice:example.org")).rejects.toThrow(
+        "history could not be fully read",
+      );
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(getRelations.mock.calls.length).toBeLessThanOrEqual(100);
+    },
+  );
 
   it("does not suppress mentions using a redacted original", async () => {
     getEvent.mockResolvedValue(

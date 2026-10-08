@@ -85,6 +85,47 @@ describe("handleDiscordMessageAction", () => {
     expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
+  it("uses Discord requesterSenderId for guild admin actions and ignores params senderUserId", async () => {
+    const cfg = discordConfig({ channels: true });
+    await handleDiscordMessageAction({
+      action: "channel-delete",
+      params: {
+        channelId: "channel-1",
+        senderUserId: "spoofed-admin-id",
+      },
+      cfg,
+      requesterSenderId: "trusted-sender-id",
+      toolContext: { currentChannelProvider: "discord" },
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "channelDelete",
+        accountId: undefined,
+        channelId: "channel-1",
+        senderUserId: "trusted-sender-id",
+      },
+      cfg,
+    });
+  });
+
+  it("rejects non-Discord requester ids for Discord guild admin actions", async () => {
+    const cfg = discordConfig({ channels: true });
+    await expect(
+      handleDiscordMessageAction({
+        action: "channel-delete",
+        params: {
+          channelId: "channel-1",
+        },
+        cfg,
+        requesterSenderId: "telegram-user-id",
+        toolContext: { currentChannelProvider: "telegram" },
+      }),
+    ).rejects.toThrow("trusted Discord sender identity");
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
   it("keeps no-context Discord guild admin actions on the manual runtime path", async () => {
     const cfg = discordConfig({ channels: true });
     await handleDiscordMessageAction({
@@ -139,6 +180,32 @@ describe("handleDiscordMessageAction", () => {
 
     expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["member-info", "memberInfo", { userId: "user-1", guildId: "guild-1" }],
+    ["role-info", "roleInfo", { guildId: "guild-1" }],
+    ["channel-info", "channelInfo", { channelId: "channel-1" }],
+    ["channel-list", "channelList", { guildId: "guild-1" }],
+    ["voice-status", "voiceStatus", { guildId: "guild-1", userId: "user-1" }],
+    ["event-list", "eventList", { guildId: "guild-1" }],
+  ] as const)(
+    "keeps %s available from non-Discord requesters",
+    async (action, runtimeAction, params) => {
+      const cfg = discordConfig({ channelInfo: true });
+      await handleDiscordMessageAction({
+        action,
+        params,
+        cfg,
+        requesterSenderId: "telegram-user-id",
+        toolContext: { currentChannelProvider: "telegram" },
+      });
+
+      expectDiscordActionCall({
+        payload: { action: runtimeAction, accountId: undefined, ...params },
+        cfg,
+      });
+    },
+  );
 
   it("falls back to Discord toolContext.currentChannelId for reaction targets", async () => {
     const cfg = discordConfig();
@@ -286,8 +353,16 @@ describe("handleDiscordMessageAction", () => {
       params: { to: "channel:c1", message: "hello" },
     },
     {
+      action: "upload-file" as const,
+      params: { to: "channel:c1", filePath: "/tmp/image.png" },
+    },
+    {
       action: "sticker" as const,
       params: { to: "channel:c1", stickerId: ["sticker-1"] },
+    },
+    {
+      action: "thread-reply" as const,
+      params: { threadId: "c1", message: "thread update" },
     },
     {
       action: "thread-create" as const,
@@ -606,6 +681,25 @@ describe("handleDiscordMessageAction", () => {
     expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
+  it("does not use another provider's current target for Discord reactions", async () => {
+    await expect(
+      handleDiscordMessageAction({
+        action: "react",
+        params: {
+          emoji: "ok",
+        },
+        cfg: discordConfig(),
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "user:U1",
+          currentMessageId: "9001",
+        },
+      }),
+    ).rejects.toThrow(/channel target is required/i);
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
   it("rejects reactions when no message id source is available", async () => {
     await expect(
       handleDiscordMessageAction({
@@ -810,8 +904,18 @@ describe("handleDiscordMessageAction", () => {
 
   it.each([
     {
+      name: "keeps an explicitly empty message empty instead of using the caption",
+      params: { message: "", caption: "caption text" },
+      expected: "",
+    },
+    {
       name: "preserves caption indentation and trailing newline",
       params: { caption: "    example();\n" },
+      expected: "    example();\n",
+    },
+    {
+      name: "preserves an explicit padded message over the caption",
+      params: { message: "    example();\n", caption: "caption text" },
       expected: "    example();\n",
     },
     {

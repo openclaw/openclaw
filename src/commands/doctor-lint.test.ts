@@ -296,6 +296,34 @@ describe("runDoctorLintCli", () => {
     }
   });
 
+  it("rejects unknown --only health check ids instead of reporting a false-clean run", async () => {
+    mocks.readConfigFileSnapshot.mockResolvedValue(createTestConfigSnapshot({}));
+
+    const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      const exitCode = await runDoctorLintCli(runtime, {
+        json: true,
+        onlyIds: ["core/doctor/not-a-check"],
+      });
+
+      expect(exitCode).toBe(1);
+      const payload = JSON.parse(String(stdout.mock.calls.at(-1)?.[0]));
+      expect(payload).toMatchObject({
+        ok: false,
+        checksRun: 0,
+        findings: [
+          {
+            checkId: "core/doctor/lint-selection",
+            severity: "error",
+            path: "core/doctor/not-a-check",
+          },
+        ],
+      });
+    } finally {
+      stdout.mockRestore();
+    }
+  });
+
   it("reports disabled Codex plugin routes through doctor lint", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       exists: true,
