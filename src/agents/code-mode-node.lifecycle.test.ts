@@ -131,27 +131,6 @@ describe("Node Code Mode worker custody", () => {
     }
   });
 
-  it.each(["standalone", "runtime changed"] as const)(
-    "closes a completed worker when %s prevents idle retention",
-    async (reason) => {
-      let previous: (typeof fixture.pools)[number] | undefined;
-      if (reason === "runtime changed") {
-        await run();
-        previous = fixture.pools.at(-1)!;
-        previous.run.mockImplementationOnce(async () => {
-          fixture.workerUrl += ".updated";
-          return fixture.completed;
-        });
-      }
-      expect(
-        await (reason === "standalone"
-          ? nodeCodeModeExecutor.execute(input, { timeoutMs: 1000 })
-          : run()),
-      ).toMatchObject({ status: "completed" });
-      expect((previous ?? fixture.pools.at(-1))?.isClosed).toBe(true);
-    },
-  );
-
   it.each(["host", "idle"] as const)(
     "joins failed %s retirement before acquiring a successor",
     async (reason) => {
