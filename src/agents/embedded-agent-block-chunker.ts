@@ -464,42 +464,20 @@ export class EmbeddedBlockChunker {
         breakResult.index = sliceUtf16Safe(view, 0, boundary - removedLength - start).length;
       }
 
-      const breakIdx = breakResult.index;
-      if (breakIdx <= 0) {
+      const consumed = this.#resolveBreakResult({
+        breakResult,
+        reopenPrefix,
+        source,
+        start,
+      });
+      if (consumed === null) {
         continue;
       }
-      const absoluteBreakIdx = start + breakIdx;
-      let chunk = `${reopenPrefix}${source.slice(start, absoluteBreakIdx)}`;
-      let nextStart = absoluteBreakIdx;
-      let nextFence: FenceSplit | undefined;
-      if (!chunk.trim()) {
-        chunk = "";
-        nextStart = skipLeadingNewlines(source, absoluteBreakIdx);
-      } else if (breakResult.fenceSplit) {
-        const fenceSplit = breakResult.fenceSplit;
-        const closeFence = chunk.endsWith("\n")
-          ? fenceSplit.closeFenceLine
-          : `\n${fenceSplit.closeFenceLine}`;
-        chunk += closeFence;
-        const closeFenceStart = findFenceCloseLineStart(source, fenceSplit.fence);
-        if (absoluteBreakIdx === closeFenceStart) {
-          // The synthetic closer already owns this boundary; replaying the source
-          // closer after reopening would publish an empty fenced-code message.
-          nextStart = skipLeadingNewlines(source, fenceSplit.fence.end);
-        } else {
-          nextFence = fenceSplit;
-        }
-      } else {
-        if (absoluteBreakIdx < source.length && /\s/.test(source.charAt(absoluteBreakIdx))) {
-          nextStart += 1;
-        }
-        nextStart = skipLeadingNewlines(source, nextStart);
+      if (consumed.chunk) {
+        emitSourceChunk(consumed.chunk, start, consumed.start);
       }
-      if (chunk) {
-        emitSourceChunk(chunk, start, nextStart);
-      }
-      start = nextStart;
-      reopenFence = nextFence;
+      start = consumed.start;
+      reopenFence = consumed.reopenFence;
 
       const nextLength =
         (reopenFence ? `${reopenFence.reopenFenceLine}\n`.length : 0) + (source.length - start);
@@ -527,16 +505,61 @@ export class EmbeddedBlockChunker {
       !this.#codeContext && reopenFence ? `${reopenFence.reopenFenceLine}\n` : "";
   }
 
+  #resolveBreakResult(params: {
+    breakResult: BreakResult;
+    reopenPrefix: string;
+    source: string;
+    start: number;
+  }): { chunk?: string; start: number; reopenFence?: FenceSplit } | null {
+    const { breakResult, reopenPrefix, source, start } = params;
+    const breakIdx = breakResult.index;
+    if (breakIdx <= 0) {
+      return null;
+    }
+
+    const absoluteBreakIdx = start + breakIdx;
+    let rawChunk = `${reopenPrefix}${source.slice(start, absoluteBreakIdx)}`;
+    if (rawChunk.trim().length === 0) {
+      return { start: skipLeadingNewlines(source, absoluteBreakIdx), reopenFence: undefined };
+    }
+
+    const fenceSplit = breakResult.fenceSplit;
+    if (fenceSplit) {
+      const closeFence = rawChunk.endsWith("\n")
+        ? fenceSplit.closeFenceLine
+        : `\n${fenceSplit.closeFenceLine}`;
+      rawChunk = `${rawChunk}${closeFence}`;
+      const closeFenceStart = findFenceCloseLineStart(source, fenceSplit.fence);
+      if (absoluteBreakIdx === closeFenceStart) {
+        // The synthetic closer already owns this boundary; replaying the source
+        // closer after reopening would publish an empty fenced-code message.
+        return { chunk: rawChunk, start: skipLeadingNewlines(source, fenceSplit.fence.end) };
+      }
+      return { chunk: rawChunk, start: absoluteBreakIdx, reopenFence: fenceSplit };
+    }
+
+    const nextStart =
+      absoluteBreakIdx < source.length && /\s/.test(source.charAt(absoluteBreakIdx))
+        ? absoluteBreakIdx + 1
+        : absoluteBreakIdx;
+    return {
+      chunk: rawChunk,
+      start: skipLeadingNewlines(source, nextStart),
+      reopenFence: undefined,
+    };
+  }
+
   // Forced tails take the first paragraph/newline break; capped windows take the last.
   #pickPreferredBreakIndex(
     buffer: string,
     unsafeSpans: readonly BreakSpan[],
     chunking: BlockReplyChunking,
     reverse: boolean,
-    minChars: number,
-    offset: number,
+    minCharsOverride?: number,
+    offset = 0,
     openFence?: FenceSpan,
   ): BreakResult {
+    const minChars = Math.max(1, Math.floor(minCharsOverride ?? chunking.minChars));
     if (buffer.length < minChars) {
       return { index: -1 };
     }
